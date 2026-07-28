@@ -1,8 +1,8 @@
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, List
 from urllib.parse import unquote
 from fastapi import APIRouter, HTTPException, Query
-from app.upstox_services.fetch_options import options_cache
+from app.upstox_options.fetch_options import options_cache
 from app.services.options_history_service import options_history_cache
 from app.services.indicator_service import indicator_cache
 

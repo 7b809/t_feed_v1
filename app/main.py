@@ -1,245 +1,132 @@
 import os
 import logging
-
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.config import settings
-
 from app.database import (
     connect_to_mongo,
     close_mongo_connection,
     load_upstox_token,
 )
 
-# Routes
+# Route imports
 from app.routes.home_routes import router as home_router
 from app.routes.options_routes import router as options_router
 from app.routes.ema_routes import router as ema_router
-from app.routes.feed_routes import router as feed_router
 
-# WebSocket Routes
-from app.websocket.feed_websocket import router as feed_websocket_router
-
-# Services
-from app.services.daily_refresh_service import refresh_market_data
-from app.scheduler.market_scheduler import market_scheduler
-from app.services.live_market_feed_service import market_feed_service
-from app.services.telegram_service import telegram_service
+# Options cache, batch history & indicator imports
+from app.upstox_options.fetch_options import get_options_contracts, options_cache
+from app.services.options_history_service import (
+    batch_history_service,
+    options_history_cache,
+)
+from app.services.indicator_service import indicator_service
 
 logger = logging.getLogger("uvicorn")
 
 
-# ---------------------------------------------------------------------
-# Initialization
-# ---------------------------------------------------------------------
-
-
 def init_logging():
-    """
-    Ensure log directory exists and initialize logging.
-    """
-
+    """Ensure directory exists and initialize logger config."""
     os.makedirs(settings.LOG_DIR, exist_ok=True)
-
-    logging.basicConfig(
-        level=getattr(
-            logging,
-            settings.LOG_LEVEL.upper(),
-            logging.INFO,
-        )
-    )
+    logging.basicConfig(level=settings.LOG_LEVEL)
 
 
 def init_database():
-    """
-    Initialize MongoDB and load Upstox token.
-    """
-
-    logger.info("Initializing MongoDB...")
-
+    """Synchronous MongoDB initialization steps."""
     connect_to_mongo()
+    load_upstox_token()
 
-    token_loaded = load_upstox_token()
 
-    logger.info("Database initialization completed.")
+def init_options_cache():
+    """
+    Fetches nearest options contracts at startup, populates in-memory cache,
+    runs multi-threaded historical candle cross-checking, and calculates/stores
+    EMA indicators directly in project memory cache.
+    """
+    logger.info("Initializing options contracts cache...")
+    save_flag = getattr(settings, "SAVE_OPTIONS_DATA", False)
 
-    if token_loaded:
-        telegram_service.send_success(
-            title="Database Initialized",
-            message="MongoDB connected and Upstox token loaded into memory.",
+    result = get_options_contracts(
+        instrument_key=getattr(settings, "OPTION_INSTRUMENT_KEY", "NSE_INDEX|Nifty 50"),
+        filter_nearest=True,
+        save_data=save_flag,
+    )
+
+    if result:
+        logger.info(
+            f"Options cache successfully populated! "
+            f"Expiry: {options_cache.get('nearest_expiry')} | "
+            f"Contracts: {options_cache.get('total_contracts')}"
         )
+
+        # Step 1: Trigger batch history loading and candle processing
+        logger.info("Starting historical candle fetch & memory cache pipeline...")
+        history_summary = batch_history_service.process_target_options_history(
+            min_strike=float(getattr(settings, "STRIKE_FROM", 23000)),
+            max_strike=float(getattr(settings, "STRIKE_TO", 25000)),
+            save_files=save_flag,
+        )
+        logger.info(f"History pipeline completed: {history_summary}")
+
+        # Step 2: Calculate and store EMA indicators in memory cache for each contract
+        logger.info("Calculating EMA indicators for cached option instruments...")
+        processed_emas = 0
+
+        for key, contract_data in options_history_cache.items():
+            trading_symbol = contract_data.get("trading_symbol", key)
+
+            # Check multiple potential keys where candles might be stored in contract_data
+            candles = (
+                contract_data.get("candles")
+                or contract_data.get("candle_data")
+                or contract_data.get("data")
+                or []
+            )
+
+            if candles:
+                indicator_service.process_and_cache_contract_ema(
+                    trading_symbol=trading_symbol,
+                    candles=candles,
+                    ema_short=9,
+                    ema_long=21,
+                )
+                processed_emas += 1
+
+        logger.info(
+            f"Successfully calculated and cached EMAs in memory for {processed_emas} instruments!"
+        )
+
     else:
-        telegram_service.send_warning(
-            title="Database Initialized With Warning",
-            message="MongoDB connected, but Upstox token was not loaded.",
-        )
+        logger.warning("Failed to populate options contracts cache at startup.")
 
 
 def load_routes(app: FastAPI):
-    """
-    Register all API and WebSocket routes.
-    """
-
-    # REST APIs
+    """Includes API routers into the FastAPI application."""
     app.include_router(home_router)
     app.include_router(options_router)
     app.include_router(ema_router)
-    app.include_router(feed_router)
-
-    # Custom WebSocket APIs
-    app.include_router(feed_websocket_router)
-
-
-# ---------------------------------------------------------------------
-# Application Lifecycle
-# ---------------------------------------------------------------------
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-
-    logger.info("=" * 80)
-    logger.info("UPSTOX SERVICE STARTING")
-    logger.info("=" * 80)
-
-    telegram_service.send_info(
-        title="Upstox Service Starting",
-        message="Application startup sequence has started.",
-    )
-
-    # ----------------------------------------------------------
-    # Startup
-    # ----------------------------------------------------------
-
-    try:
-        init_logging()
-
-        init_database()
-
-        # ------------------------------------------------------
-        # Initial market refresh on application startup
-        # ------------------------------------------------------
-
-        logger.info("Running initial market refresh...")
-
-        telegram_service.send_info(
-            title="Initial Market Refresh Started",
-            message=(
-                "Refreshing options cache, historical candles, "
-                "indicator cache, and live EMA cache."
-            ),
-        )
-
-        refresh_result = refresh_market_data()
-
-        logger.info(f"Initial refresh completed: {refresh_result}")
-
-        if refresh_result and refresh_result.get("status") == "success":
-            telegram_service.send_success(
-                title="Initial Market Refresh Completed",
-                message="Initial market refresh completed successfully.",
-                details=refresh_result,
-            )
-        else:
-            telegram_service.send_error(
-                title="Initial Market Refresh Failed",
-                message="Initial market refresh did not complete successfully.",
-                details=refresh_result,
-            )
-
-        # ------------------------------------------------------
-        # Start scheduler
-        # ------------------------------------------------------
-
-        await market_scheduler.start()
-
-        logger.info("Market scheduler started.")
-
-        telegram_service.send_success(
-            title="Market Scheduler Started",
-            message=(
-                "Daily refresh, token monitoring, websocket connect, "
-                "and websocket shutdown scheduler has started."
-            ),
-            details={
-                "daily_refresh_time": settings.DAILY_REFRESH_TIME,
-                "websocket_connect_time": settings.WEBSOCKET_CONNECT_TIME,
-                "market_close_time": settings.MARKET_CLOSE_TIME,
-            },
-        )
-
-    except Exception as ex:
-
-        logger.exception(f"Application startup failed: {ex}")
-
-        telegram_service.send_exception(
-            title="Upstox Service Startup Failed",
-            exception=ex,
-            message="Application failed during startup sequence.",
-        )
-
-        raise
-
+    # App startup sequence
+    init_logging()
+    init_database()
+    init_options_cache()
     yield
-
-    # ----------------------------------------------------------
-    # Shutdown
-    # ----------------------------------------------------------
-
-    logger.info("=" * 80)
-    logger.info("UPSTOX SERVICE SHUTTING DOWN")
-    logger.info("=" * 80)
-
-    telegram_service.send_info(
-        title="Upstox Service Shutting Down",
-        message="Application shutdown sequence has started.",
-    )
-
-    try:
-
-        await market_scheduler.stop()
-
-        await market_feed_service.stop()
-
-        close_mongo_connection()
-
-        logger.info("Application shutdown completed.")
-
-        telegram_service.send_success(
-            title="Upstox Service Shutdown Completed",
-            message="Scheduler stopped, websocket stopped, and MongoDB connection closed.",
-        )
-
-    except Exception as ex:
-
-        logger.exception(f"Shutdown error: {ex}")
-
-        telegram_service.send_exception(
-            title="Upstox Service Shutdown Error",
-            exception=ex,
-            message="An error occurred during application shutdown.",
-        )
+    # App shutdown sequence
+    close_mongo_connection()
 
 
-# ---------------------------------------------------------------------
-# FastAPI Application
-# ---------------------------------------------------------------------
+# Initialize FastAPI app
+app = FastAPI(title="Upstox FastAPI Service", lifespan=lifespan)
 
-app = FastAPI(
-    title="Upstox FastAPI Service",
-    lifespan=lifespan,
-)
-
+# Attach routes
 load_routes(app)
 
 
-# ---------------------------------------------------------------------
-# Local Execution
-# ---------------------------------------------------------------------
-
 if __name__ == "__main__":
-
     import uvicorn
 
     uvicorn.run(

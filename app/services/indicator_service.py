@@ -1,18 +1,18 @@
 import logging
 from typing import Dict, Any, List, Optional
-
 import pandas as pd
 
 logger = logging.getLogger("uvicorn")
 
-# Global in-memory cache
+# Global in-memory cache for computed option indicators
+# Structure: { trading_symbol_or_instrument_key: { "trading_symbol": ..., "ema_periods": [9, 21], ... } }
 indicator_cache: Dict[str, Dict[str, Any]] = {}
 
 
 class OptionIndicatorService:
     """
-    Calculates EMA indicators and crossover events
-    and stores them in memory.
+    Service responsible for calculating Technical Indicators (EMA 9, EMA 21, etc.)
+    and EMA Crossovers for cached candle datasets and storing them in project memory cache.
     """
 
     @staticmethod
@@ -22,21 +22,13 @@ class OptionIndicatorService:
         ema_long: int = 21,
     ) -> Dict[str, Any]:
         """
-        Calculate EMA series and crossover events.
+        Processes candle data into a Pandas DataFrame, computes EMAs,
+        identifies crossover events, and returns structured payload.
         """
+        if not candles or len(candles) == 0:
+            return {"total_candles": 0, "total_crossovers": 0, "crossovers": [], "indicator_series": []}
 
-        if not candles:
-            return {
-                "total_candles": 0,
-                "total_crossovers": 0,
-                "crossovers": [],
-                "indicator_series": [],
-                "last_close": None,
-                "last_ema_short": None,
-                "last_ema_long": None,
-                "last_timestamp": None,
-            }
-
+        # Upstox candle standard array format: [timestamp, open, high, low, close, volume, open_interest]
         df = pd.DataFrame(
             candles,
             columns=[
@@ -50,32 +42,33 @@ class OptionIndicatorService:
             ][: len(candles[0])],
         )
 
+        # Ensure close price is float
         df["close"] = df["close"].astype(float)
 
-        short_col = f"ema_{ema_short}"
-        long_col = f"ema_{ema_long}"
-
-        df[short_col] = df["close"].ewm(span=ema_short, adjust=False).mean().round(4)
-
-        df[long_col] = df["close"].ewm(span=ema_long, adjust=False).mean().round(4)
-
-        df["prev_short"] = df[short_col].shift(1)
-        df["prev_long"] = df[long_col].shift(1)
-
-        # Bullish Cross
-        df["bullish_cross"] = (df["prev_short"] < df["prev_long"]) & (
-            df[short_col] >= df[long_col]
+        # Calculate Exponential Moving Averages (EMA)
+        df[f"ema_{ema_short}"] = (
+            df["close"].ewm(span=ema_short, adjust=False).mean().round(4)
+        )
+        df[f"ema_{ema_long}"] = (
+            df["close"].ewm(span=ema_long, adjust=False).mean().round(4)
         )
 
-        # Bearish Cross
+        # Identify Crossovers
+        df["prev_short"] = df[f"ema_{ema_short}"].shift(1)
+        df["prev_long"] = df[f"ema_{ema_long}"].shift(1)
+
+        # Bullish Cross: Short EMA crosses ABOVE Long EMA
+        df["bullish_cross"] = (df["prev_short"] < df["prev_long"]) & (
+            df[f"ema_{ema_short}"] >= df[f"ema_{ema_long}"]
+        )
+
+        # Bearish Cross: Short EMA crosses BELOW Long EMA
         df["bearish_cross"] = (df["prev_short"] > df["prev_long"]) & (
-            df[short_col] <= df[long_col]
+            df[f"ema_{ema_short}"] <= df[f"ema_{ema_long}"]
         )
 
         crossovers = []
-
-        for _, row in df[df["bullish_cross"] | df["bearish_cross"]].iterrows():
-
+        for idx, row in df[df["bullish_cross"] | df["bearish_cross"]].iterrows():
             crossovers.append(
                 {
                     "timestamp": row["timestamp"],
@@ -83,35 +76,24 @@ class OptionIndicatorService:
                         "Bullish Cross" if row["bullish_cross"] else "Bearish Cross"
                     ),
                     "close": row["close"],
-                    short_col: row[short_col],
-                    long_col: row[long_col],
+                    f"ema_{ema_short}": row[f"ema_{ema_short}"],
+                    f"ema_{ema_long}": row[f"ema_{ema_long}"],
                 }
             )
 
-        # Latest crossover first
+        # Reverse crossovers to keep latest crossover first
         crossovers.reverse()
 
+        # Format full EMA history
         indicator_series = df[
-            [
-                "timestamp",
-                "close",
-                short_col,
-                long_col,
-            ]
+            ["timestamp", "close", f"ema_{ema_short}", f"ema_{ema_long}"]
         ].to_dict(orient="records")
-
-        latest = indicator_series[-1]
 
         return {
             "total_candles": len(df),
             "total_crossovers": len(crossovers),
             "crossovers": crossovers,
             "indicator_series": indicator_series,
-            # Latest values for live EMA initialization
-            "last_timestamp": latest.get("timestamp"),
-            "last_close": latest.get("close"),
-            "last_ema_short": latest.get(short_col),
-            "last_ema_long": latest.get(long_col),
         }
 
     def process_and_cache_contract_ema(
@@ -122,50 +104,36 @@ class OptionIndicatorService:
         ema_long: int = 21,
     ) -> Optional[Dict[str, Any]]:
         """
-        Calculates EMA and stores output in memory cache.
+        Calculates EMA for a single contract candle list and stores the output in project memory cache.
         """
-
         try:
-
             results = self.calculate_emas_and_crossovers(
-                candles=candles,
-                ema_short=ema_short,
-                ema_long=ema_long,
+                candles, ema_short=ema_short, ema_long=ema_long
             )
 
             payload = {
                 "trading_symbol": trading_symbol,
-                "ema_periods": [
-                    ema_short,
-                    ema_long,
-                ],
+                "ema_periods": [ema_short, ema_long],
                 **results,
             }
 
+            # Store in project cache memory
             indicator_cache[trading_symbol] = payload
 
             logger.info(
-                f"Successfully calculated and cached EMA " f"for '{trading_symbol}'"
+                f"Successfully calculated and cached EMA data in memory for '{trading_symbol}'"
             )
-
             return payload
 
-        except Exception as ex:
-
-            logger.error(
-                f"Failed to calculate and cache EMA for " f"{trading_symbol}: {ex}"
-            )
-
+        except Exception as e:
+            logger.error(f"Failed to calculate and cache EMA for {trading_symbol}: {e}")
             return None
 
     @staticmethod
-    def get_cached_ema(
-        trading_symbol: str,
-    ) -> Optional[Dict[str, Any]]:
+    def get_cached_ema(trading_symbol: str) -> Optional[Dict[str, Any]]:
         """
-        Returns cached EMA payload.
+        Retrieves computed EMA payload for a contract directly from in-memory cache.
         """
-
         return indicator_cache.get(trading_symbol)
 
     @staticmethod
@@ -173,9 +141,7 @@ class OptionIndicatorService:
         """
         Clears indicator cache.
         """
-
         indicator_cache.clear()
-
         logger.info("Indicator memory cache cleared.")
 
 
