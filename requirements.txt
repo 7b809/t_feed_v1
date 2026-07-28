@@ -1,0 +1,13 @@
+
+fastapi
+uvicorn
+upstox-python-sdk
+pymongo
+python-dotenv
+pydantic
+pydantic-settings
+websockets
+websocket-client
+requests
+pandas
+numpy
