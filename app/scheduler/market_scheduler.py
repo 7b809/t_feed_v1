@@ -22,29 +22,32 @@ logger = logging.getLogger("uvicorn")
 
 class MarketScheduler:
     """
-    Daily Trading Scheduler
+    Daily & Dynamic Trading Scheduler
 
-    Daily Refresh:
-        08:50
+    Scheduled Events:
+        - Daily Refresh: 08:50
+        - WebSocket Connect: 09:10
+        - WebSocket Disconnect: 15:30
 
-    WebSocket Connect:
-        09:10
+    Dynamic Conditions (when ENABLE_DYNAMIC_REFRESH is True):
+        - Token Change Detection: Triggers refresh if database token changes
+        - Interval Auto-Refresh: Triggers refresh every X minutes during trading hours
+        - NIFTY Spot Movement: Triggers refresh when spot price moves >= NIFTY_POINTS_THRESHOLD
 
-    WebSocket Disconnect:
-        15:30
-
-    Token Change Detection:
-        Every scheduler cycle
-
-    Runs Monday-Friday only.
+    Runs Monday-Friday only for dynamic/scheduled execution.
     """
 
     def __init__(self):
         self.running = False
 
+        # Fixed scheduled task trackers
         self.last_refresh_date: Optional[str] = None
         self.last_connect_date: Optional[str] = None
         self.last_disconnect_date: Optional[str] = None
+
+        # Dynamic refresh state trackers
+        self.last_refresh_timestamp: Optional[datetime] = None
+        self.last_refreshed_spot_price: Optional[float] = None
 
     @staticmethod
     def is_trading_day() -> bool:
@@ -52,8 +55,42 @@ class MarketScheduler:
         Monday = 0
         Sunday = 6
         """
-
         return datetime.now().weekday() < 5
+
+    def _is_market_hours(self, current_time_str: str) -> bool:
+        """
+        Checks if current time is within market open and close window.
+        """
+        return (
+            settings.MARKET_OPEN_TIME <= current_time_str <= settings.MARKET_CLOSE_TIME
+        )
+
+    def _get_current_spot_price(self) -> Optional[float]:
+        """
+        Retrieves the latest spot price from market feed service.
+        """
+        try:
+            if hasattr(market_feed_service, "get_latest_spot_price"):
+                return market_feed_service.get_latest_spot_price()
+            elif hasattr(market_feed_service, "latest_spot_price"):
+                return getattr(market_feed_service, "latest_spot_price", None)
+        except Exception as ex:
+            logger.debug(f"Could not retrieve spot price from market feed: {ex}")
+        return None
+
+    def execute_market_refresh(self, reason: str = "Scheduled"):
+        """
+        Wrapper to execute market data refresh and update internal baseline trackers.
+        """
+        logger.info(f"Triggering Market Refresh [Reason: {reason}]...")
+        refresh_market_data()
+
+        # Update dynamic state trackers
+        self.last_refresh_timestamp = datetime.now()
+        spot_price = self._get_current_spot_price()
+        if spot_price:
+            self.last_refreshed_spot_price = spot_price
+            logger.info(f"Updated dynamic refresh baseline spot price: {spot_price}")
 
     async def run_scheduler(self):
 
@@ -68,13 +105,21 @@ class MarketScheduler:
                 now = datetime.now()
 
                 # --------------------------------------------------
-                # Keep token synchronized with MongoDB
+                # Keep token synchronized with MongoDB & detect changes
                 # --------------------------------------------------
 
+                token_changed = False
                 try:
-                    refresh_token_if_changed()
+                    token_changed = refresh_token_if_changed()
                 except Exception as ex:
                     logger.error(f"Token sync failed: {ex}")
+
+                # If token changed and token-driven refresh is enabled, refresh immediately
+                if token_changed and settings.REFRESH_ON_TOKEN_CHANGE:
+                    try:
+                        self.execute_market_refresh(reason="Database Token Updated")
+                    except Exception as ex:
+                        logger.exception(f"Token-change Market Refresh Failed: {ex}")
 
                 # --------------------------------------------------
                 # Skip weekends
@@ -85,11 +130,10 @@ class MarketScheduler:
                     continue
 
                 current_date = now.strftime("%Y-%m-%d")
-
                 current_time = now.strftime("%H:%M")
 
                 # ==================================================
-                # DAILY REFRESH
+                # SCHEDULED DAILY REFRESH
                 # ==================================================
 
                 if (
@@ -97,12 +141,11 @@ class MarketScheduler:
                     and self.last_refresh_date != current_date
                 ):
 
-                    logger.info("Starting Daily Market Refresh...")
+                    logger.info("Starting Scheduled Daily Market Refresh...")
 
                     try:
 
-                        refresh_market_data()
-
+                        self.execute_market_refresh(reason="Daily Morning Schedule")
                         self.last_refresh_date = current_date
 
                         logger.info("Daily Market Refresh Completed.")
@@ -160,7 +203,58 @@ class MarketScheduler:
 
                         logger.exception(f"WebSocket Shutdown Failed: {ex}")
 
-                await asyncio.sleep(20)
+                # ==================================================
+                # DYNAMIC & CONDITIONAL REFRESH CHECKS
+                # ==================================================
+
+                if settings.ENABLE_DYNAMIC_REFRESH and self._is_market_hours(
+                    current_time
+                ):
+
+                    # 1. Interval-based dynamic auto-refresh check
+                    if (
+                        settings.AUTO_REFRESH_INTERVAL_MINUTES > 0
+                        and self.last_refresh_timestamp is not None
+                    ):
+                        elapsed_minutes = (
+                            now - self.last_refresh_timestamp
+                        ).total_seconds() / 60.0
+
+                        if elapsed_minutes >= settings.AUTO_REFRESH_INTERVAL_MINUTES:
+                            try:
+                                self.execute_market_refresh(
+                                    reason=f"Interval ({settings.AUTO_REFRESH_INTERVAL_MINUTES} mins elapsed)"
+                                )
+                            except Exception as ex:
+                                logger.exception(
+                                    f"Interval Dynamic Refresh Failed: {ex}"
+                                )
+
+                    # 2. NIFTY Point Movement Threshold Check
+                    if (
+                        settings.NIFTY_POINTS_THRESHOLD > 0
+                        and self.last_refreshed_spot_price is not None
+                    ):
+                        current_spot = self._get_current_spot_price()
+
+                        if current_spot:
+                            price_diff = abs(
+                                current_spot - self.last_refreshed_spot_price
+                            )
+
+                            if price_diff >= settings.NIFTY_POINTS_THRESHOLD:
+                                try:
+                                    self.execute_market_refresh(
+                                        reason=f"NIFTY moved {price_diff:.2f} pts (Threshold: {settings.NIFTY_POINTS_THRESHOLD})"
+                                    )
+                                except Exception as ex:
+                                    logger.exception(
+                                        f"Spot Movement Dynamic Refresh Failed: {ex}"
+                                    )
+
+                # Use configurable loop interval
+                sleep_interval = getattr(settings, "DYNAMIC_CHECK_INTERVAL_SECONDS", 15)
+                await asyncio.sleep(sleep_interval)
 
             except Exception as ex:
 

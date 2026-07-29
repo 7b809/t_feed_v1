@@ -26,6 +26,8 @@ from app.websocket.websocket_manager import (
     websocket_manager,
 )
 
+from app.services.telegram_service import telegram_service
+
 logger = logging.getLogger("uvicorn")
 
 
@@ -41,7 +43,8 @@ class LiveMarketFeedService:
     4. Store full feed payload in local cache
     5. Publish full ticks to custom websocket subscribers
     6. Forward only option feeds to live EMA/candle engine
-    7. Manage reconnects
+    7. Send Telegram alerts on connection & first tick proof
+    8. Manage reconnects
 
     Important:
     ----------
@@ -61,6 +64,7 @@ class LiveMarketFeedService:
         self.event_loop = None
 
         self.tick_count = 0
+        self.first_tick_received = False
 
     # --------------------------------------------------
     # Helper Methods
@@ -151,11 +155,16 @@ class LiveMarketFeedService:
         logger.info("Upstox WebSocket Connected")
 
         self.connected = True
+        self.first_tick_received = False
 
         instruments = self.get_subscription_instruments()
 
         if not instruments:
             logger.warning("No instrument keys available for subscription.")
+            telegram_service.send_warning(
+                title="Upstox Feed Connected (Warning)",
+                message="WebSocket connected, but no instruments were available to subscribe.",
+            )
             return
 
         try:
@@ -170,8 +179,25 @@ class LiveMarketFeedService:
 
             logger.info("Instrument subscription completed successfully.")
 
+            # Telegram Notification: Successful Feed Connection
+            telegram_service.send_feed_connected(
+                total_subscribed_count=len(instruments),
+                details=f"Subscribed Instruments:\n"
+                + "\n".join(instruments[:10])
+                + (
+                    f"\n...and {len(instruments) - 10} more"
+                    if len(instruments) > 10
+                    else ""
+                ),
+            )
+
         except Exception as ex:
             logger.exception(f"Subscription failed: {ex}")
+            telegram_service.send_exception(
+                title="Upstox Feed Subscription Failed",
+                exception=ex,
+                message="Failed subscribing instruments to Upstox WebSocket.",
+            )
 
     def on_message(self, message):
         """
@@ -193,6 +219,24 @@ class LiveMarketFeedService:
             # Market status / heartbeat messages may not contain feeds.
             if not feeds:
                 return
+
+            # --------------------------------------------------
+            # First Tick Proof Alert via Telegram
+            # --------------------------------------------------
+            if not self.first_tick_received:
+                self.first_tick_received = True
+                first_key = next(iter(feeds.keys()))
+                first_feed = feeds[first_key]
+                logger.info(f"First market tick received for: {first_key}")
+
+                telegram_service.send_first_tick_proof(
+                    instrument_key=first_key,
+                    tick_data={
+                        "instrument_key": first_key,
+                        "current_ts": current_ts,
+                        "sample_feed": first_feed,
+                    },
+                )
 
             for instrument_key, feed_data in feeds.items():
 
@@ -272,6 +316,11 @@ class LiveMarketFeedService:
         self.connected = False
         self.subscribed = False
 
+        telegram_service.send_error(
+            title="Upstox Feed Error",
+            message=f"Upstox WebSocket error occurred: {error}",
+        )
+
     def on_close(self, *args):
         """
         Upstox websocket closed callback.
@@ -281,6 +330,11 @@ class LiveMarketFeedService:
 
         self.connected = False
         self.subscribed = False
+
+        telegram_service.send_warning(
+            title="Upstox Feed Disconnected",
+            message="Upstox WebSocket connection was closed.",
+        )
 
     # --------------------------------------------------
     # Connection Lifecycle
@@ -310,6 +364,10 @@ class LiveMarketFeedService:
 
             if not access_token:
                 logger.error("Access token not available.")
+                telegram_service.send_error(
+                    title="Upstox Feed Connection Failed",
+                    message="Access token is missing or invalid. Cannot connect to Upstox WebSocket.",
+                )
                 return
 
             configuration = upstox_client.Configuration()
@@ -345,6 +403,11 @@ class LiveMarketFeedService:
 
         except Exception as ex:
             logger.exception(f"WebSocket connection failed: {ex}")
+            telegram_service.send_exception(
+                title="Upstox WebSocket Connection Error",
+                exception=ex,
+                message="Failed while establishing Upstox WebSocket connection.",
+            )
 
     async def start(self):
         """
@@ -423,6 +486,7 @@ class LiveMarketFeedService:
             "running": self.running,
             "connected": self.connected,
             "subscribed": self.subscribed,
+            "first_tick_received": self.first_tick_received,
             "subscription_count": len(instruments),
             "subscribed_instruments": instruments,
             "nifty_index_key": self.get_nifty_index_key(),

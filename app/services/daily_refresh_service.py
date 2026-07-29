@@ -1,6 +1,7 @@
 # app/services/daily_refresh_service.py
 
 import logging
+from typing import Dict, Any, Optional
 
 from app.config import settings
 
@@ -71,8 +72,8 @@ def sync_token():
 
 def calculate_all_option_emas():
     """
-    Calculate EMA indicators for all
-    option contracts stored in history cache.
+    Calculate EMA indicators for all option contracts stored in options_history_cache.
+    Handles candle retrieval safely even when 'candles' is omitted from options_history_cache.
     """
 
     processed_emas = 0
@@ -86,20 +87,16 @@ def calculate_all_option_emas():
             instrument_key,
         )
 
-        candles = (
-            contract_data.get("candles")
-            or contract_data.get("candle_data")
-            or contract_data.get("data")
-            or []
+        # Retrieve candles directly if present, or fallback to internal history service
+        candles = contract_data.get("candles") or getattr(
+            batch_history_service.history_service, "candles", []
         )
 
         if not candles:
-
             logger.warning(
                 f"No candles available for "
                 f"{trading_symbol}. Skipping EMA calculation."
             )
-
             continue
 
         result = indicator_service.process_and_cache_contract_ema(
@@ -112,7 +109,7 @@ def calculate_all_option_emas():
         if result:
             processed_emas += 1
 
-    logger.info(f"EMA calculation completed. " f"Processed={processed_emas}")
+    logger.info(f"EMA calculation completed. Processed={processed_emas}")
 
     return processed_emas
 
@@ -127,32 +124,35 @@ def initialize_live_cache():
 
     initialized = live_ema_service.initialize_from_historical_cache()
 
-    logger.info(f"Live EMA cache initialized for " f"{initialized} instruments.")
+    logger.info(f"Live EMA cache initialized for {initialized} instruments.")
 
     return initialized
 
 
-def refresh_market_data():
+def refresh_market_data(
+    min_strike: Optional[float] = None,
+    max_strike: Optional[float] = None,
+    reason: str = "Standard Refresh",
+) -> Dict[str, Any]:
     """
     Complete market refresh process.
 
     Flow:
-
     1. Sync latest token
-    2. Clear caches
+    2. Clear runtime caches
     3. Load latest option contracts
     4. Load historical candles
     5. Calculate EMA indicators
     6. Initialize live EMA cache
 
     Called by:
-
     - Startup
-    - Daily scheduler
+    - Scheduled & Dynamic Refresh Loop
+    - Manual API Endpoint
     """
 
     logger.info("=" * 80)
-    logger.info("STARTING MARKET REFRESH")
+    logger.info(f"STARTING MARKET REFRESH [Reason: {reason}]")
     logger.info("=" * 80)
 
     save_flag = getattr(
@@ -161,27 +161,24 @@ def refresh_market_data():
         False,
     )
 
+    strike_from = min_strike if min_strike is not None else float(settings.STRIKE_FROM)
+    strike_to = max_strike if max_strike is not None else float(settings.STRIKE_TO)
+
     try:
 
         # =====================================================
-        # STEP 1
-        # Sync latest token
+        # STEP 1: Sync latest token
         # =====================================================
-
         sync_token()
 
         # =====================================================
-        # STEP 2
-        # Clear caches
+        # STEP 2: Clear caches
         # =====================================================
-
         clear_all_runtime_caches()
 
         # =====================================================
-        # STEP 3
-        # Load latest option contracts
+        # STEP 3: Load latest option contracts
         # =====================================================
-
         logger.info("Fetching latest option contracts...")
 
         result = get_options_contracts(
@@ -191,9 +188,7 @@ def refresh_market_data():
         )
 
         if not result:
-
             logger.error("Failed to fetch option contracts.")
-
             return {
                 "status": "error",
                 "message": "Failed to fetch option contracts",
@@ -206,52 +201,47 @@ def refresh_market_data():
         )
 
         # =====================================================
-        # STEP 4
-        # Historical candles
+        # STEP 4: Historical candles
         # =====================================================
-
-        logger.info("Loading historical candles...")
+        logger.info(
+            f"Loading historical candles for strike range {strike_from} to {strike_to}..."
+        )
 
         history_summary = batch_history_service.process_target_options_history(
-            min_strike=float(settings.STRIKE_FROM),
-            max_strike=float(settings.STRIKE_TO),
+            min_strike=strike_from,
+            max_strike=strike_to,
             save_files=save_flag,
         )
 
-        logger.info(f"Historical Processing Complete: " f"{history_summary}")
+        logger.info(f"Historical Processing Complete: {history_summary}")
 
         # =====================================================
-        # STEP 5
-        # EMA calculations
+        # STEP 5: EMA calculations
         # =====================================================
-
         total_emas = calculate_all_option_emas()
 
-        logger.info(f"EMA Calculation Completed for " f"{total_emas} instruments")
+        logger.info(f"EMA Calculation Completed for {total_emas} instruments")
 
         # =====================================================
-        # STEP 6
-        # Initialize live cache
+        # STEP 6: Initialize live cache
         # =====================================================
-
         initialized_live = initialize_live_cache()
 
         # =====================================================
         # Summary
         # =====================================================
-
         summary = {
             "status": "success",
+            "refresh_reason": reason,
             "nearest_expiry": options_cache.get("nearest_expiry"),
             "total_contracts": options_cache.get("total_contracts"),
             "history_contracts": len(options_history_cache),
             "ema_contracts": len(indicator_cache),
             "live_contracts": initialized_live,
-            "token_updated_at": (token_state.updated_at),
+            "token_updated_at": token_state.updated_at,
         }
 
-        logger.info(f"Market Refresh Completed Successfully: " f"{summary}")
-
+        logger.info(f"Market Refresh Completed Successfully: {summary}")
         logger.info("=" * 80)
 
         return summary
@@ -262,5 +252,6 @@ def refresh_market_data():
 
         return {
             "status": "error",
+            "reason": reason,
             "message": str(ex),
         }

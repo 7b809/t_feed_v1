@@ -21,6 +21,7 @@ class TelegramService:
     - Info messages
     - Error messages
     - Exception alerts
+    - Market feed connections & first tick verification proofs
 
     Environment variables required:
 
@@ -277,6 +278,35 @@ class TelegramService:
             message=message,
             details=details,
         )
+
+    # --------------------------------------------------
+    # Specialized Market Feed Notification Helpers
+    # --------------------------------------------------
+
+    def send_feed_connected(self, total_subscribed_count: int, details: str = None):
+        """
+        Sends an alert confirming that the Upstox market feed successfully
+        connected and subscribed to the target instruments.
+        """
+        title = "Upstox Feed Connected"
+        message = f"Successfully established WebSocket connection and subscribed to <b>{total_subscribed_count}</b> instruments/strikes."
+        return self.send_success(title=title, message=message, details=details)
+
+    def send_first_tick_proof(self, instrument_key: str, tick_data: dict):
+        """
+        Sends proof alert containing the first incoming tick data for the main Nifty/strike feed.
+        """
+        title = "First Tick Received (Connection Proof)"
+        message = f"Successfully received the first market tick for instrument: <b>{self._safe_text(instrument_key)}</b>"
+
+        # Pretty print tick details dictionary
+        formatted_details = (
+            json.dumps(tick_data, indent=2)
+            if isinstance(tick_data, dict)
+            else str(tick_data)
+        )
+
+        return self.send_info(title=title, message=message, details=formatted_details)
 
 
 telegram_service = TelegramService()

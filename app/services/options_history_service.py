@@ -86,7 +86,7 @@ class OptionsBatchHistoryService:
                 "history_days": result.get("history_days"),
                 "total_candles": result.get("total_candles"),
                 "total_crossovers": result.get("total_crossovers"),
-                "candles": candles,
+                # "candles": candles,  # Omitted from response payload
                 "ema": result.get("ema"),
             }
 

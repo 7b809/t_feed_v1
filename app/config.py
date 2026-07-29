@@ -154,7 +154,7 @@ class Settings:
     )
 
     # ============================================================
-    # Scheduler Settings
+    # Scheduler & Dynamic Refresh Settings
     # ============================================================
 
     DAILY_REFRESH_TIME: str = os.getenv(
@@ -175,6 +175,48 @@ class Settings:
     MARKET_CLOSE_TIME: str = os.getenv(
         "MARKET_CLOSE_TIME",
         "15:30",
+    )
+
+    # Master toggle for dynamic monitoring
+    ENABLE_DYNAMIC_REFRESH: bool = (
+        os.getenv(
+            "ENABLE_DYNAMIC_REFRESH",
+            "true",
+        ).lower()
+        == "true"
+    )
+
+    # Interval-based auto-refresh (in minutes, set 0 to disable)
+    AUTO_REFRESH_INTERVAL_MINUTES: int = int(
+        os.getenv(
+            "AUTO_REFRESH_INTERVAL_MINUTES",
+            "30",
+        )
+    )
+
+    # Spot movement threshold to trigger refresh (e.g., NIFTY moves 300 pts, set 0 to disable)
+    NIFTY_POINTS_THRESHOLD: float = float(
+        os.getenv(
+            "NIFTY_POINTS_THRESHOLD",
+            "300.0",
+        )
+    )
+
+    # Auto-refresh when a new Upstox access token is inserted into DB
+    REFRESH_ON_TOKEN_CHANGE: bool = (
+        os.getenv(
+            "REFRESH_ON_TOKEN_CHANGE",
+            "true",
+        ).lower()
+        == "true"
+    )
+
+    # Frequency (in seconds) for the scheduler to evaluate these dynamic checks
+    DYNAMIC_CHECK_INTERVAL_SECONDS: int = int(
+        os.getenv(
+            "DYNAMIC_CHECK_INTERVAL_SECONDS",
+            "15",
+        )
     )
 
     # ============================================================
