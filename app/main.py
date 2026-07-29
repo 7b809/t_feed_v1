@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.config import settings
+from app.logger import get_file_logger
 
 from app.database import (
     connect_to_mongo,
@@ -27,7 +28,8 @@ from app.scheduler.market_scheduler import market_scheduler
 from app.services.live_market_feed_service import market_feed_service
 from app.services.telegram_service import telegram_service
 
-logger = logging.getLogger("uvicorn")
+# Initialize file logger for this module
+logger = get_file_logger(__file__)
 
 
 # ---------------------------------------------------------------------
@@ -37,9 +39,8 @@ logger = logging.getLogger("uvicorn")
 
 def init_logging():
     """
-    Ensure log directory exists and initialize logging.
+    Ensure log directory exists and initialize logging configuration.
     """
-
     os.makedirs(settings.LOG_DIR, exist_ok=True)
 
     logging.basicConfig(
@@ -47,7 +48,11 @@ def init_logging():
             logging,
             settings.LOG_LEVEL.upper(),
             logging.INFO,
-        )
+        ),
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    )
+    logger.info(
+        f"Logging initialized. Log level: {settings.LOG_LEVEL}, Log directory: {settings.LOG_DIR}"
     )
 
 
@@ -55,7 +60,6 @@ def init_database():
     """
     Initialize MongoDB and load Upstox token.
     """
-
     logger.info("Initializing MongoDB...")
 
     connect_to_mongo()
@@ -80,7 +84,6 @@ def load_routes(app: FastAPI):
     """
     Register all API and WebSocket routes.
     """
-
     # REST APIs
     app.include_router(home_router)
     app.include_router(options_router)
@@ -89,6 +92,8 @@ def load_routes(app: FastAPI):
 
     # Custom WebSocket APIs
     app.include_router(feed_websocket_router)
+
+    logger.info("All routes successfully loaded.")
 
 
 # ---------------------------------------------------------------------

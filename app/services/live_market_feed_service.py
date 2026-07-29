@@ -2,33 +2,34 @@
 
 import asyncio
 import json
-import logging
 import threading
+import os
 from datetime import datetime
 
 import upstox_client
 
+# Import custom logger
+from app.logger import get_file_logger
 from app.database import (
     token_state,
     refresh_token_if_changed,
 )
-
 from app.upstox_services.fetch_options import (
     options_cache,
     NIFTY_INDEX_FEED,
 )
-
 from app.services.feed_cache_service import (
     update_live_feed,
 )
-
 from app.websocket.websocket_manager import (
     websocket_manager,
 )
-
 from app.services.telegram_service import telegram_service
 
-logger = logging.getLogger("uvicorn")
+logger = get_file_logger(__file__)
+
+# Environment variable or hardcoded flag to toggle raw feed logging
+SHOW_FEED_LOGS = False
 
 
 class LiveMarketFeedService:
@@ -74,7 +75,6 @@ class LiveMarketFeedService:
         """
         Returns configured Nifty index instrument key.
         """
-
         return NIFTY_INDEX_FEED.get(
             "instrument_key",
             "NSE_INDEX|Nifty 50",
@@ -84,7 +84,6 @@ class LiveMarketFeedService:
         """
         Check whether instrument is Nifty Index.
         """
-
         return instrument_key == self.get_nifty_index_key()
 
     def get_subscription_instruments(self):
@@ -95,7 +94,6 @@ class LiveMarketFeedService:
         - Nifty Index
         - All filtered option contracts
         """
-
         instruments = []
 
         # Always subscribe to Nifty Index
@@ -106,7 +104,6 @@ class LiveMarketFeedService:
 
         for item in data:
             instrument_key = item.get("instrument_key")
-
             if instrument_key:
                 instruments.append(instrument_key)
 
@@ -125,8 +122,10 @@ class LiveMarketFeedService:
 
         interval=0 means live tick feed.
         """
-
         if not self.event_loop:
+            logger.warning(
+                f"Cannot publish tick for {instrument_key}: event_loop is None"
+            )
             return
 
         try:
@@ -137,10 +136,9 @@ class LiveMarketFeedService:
                 ),
                 self.event_loop,
             )
-
         except Exception as ex:
             logger.error(
-                f"Failed publishing tick to clients for " f"{instrument_key}: {ex}"
+                f"Failed publishing tick to clients for {instrument_key}: {ex}"
             )
 
     # --------------------------------------------------
@@ -151,7 +149,6 @@ class LiveMarketFeedService:
         """
         Called automatically once Upstox websocket connects.
         """
-
         logger.info("Upstox WebSocket Connected")
 
         self.connected = True
@@ -203,7 +200,6 @@ class LiveMarketFeedService:
         """
         Called for every incoming Upstox market feed message.
         """
-
         try:
             if isinstance(message, str):
                 payload = json.loads(message)
@@ -213,7 +209,6 @@ class LiveMarketFeedService:
             self.tick_count += 1
 
             current_ts = payload.get("currentTs")
-
             feeds = payload.get("feeds", {})
 
             # Market status / heartbeat messages may not contain feeds.
@@ -238,30 +233,33 @@ class LiveMarketFeedService:
                     },
                 )
 
+            # Get list of currently active subscribed instruments for debug logging
+            subscribed_instruments = set(self.get_subscription_instruments())
+
             for instrument_key, feed_data in feeds.items():
+
+                # Log tick payload if instrument is part of subscriptions AND logging is enabled
+                if SHOW_FEED_LOGS and instrument_key in subscribed_instruments:
+                    logger.info("[LIVE FEED] %s | %s", instrument_key, feed_data)
 
                 # --------------------------------------------------
                 # 1. Store complete full feed payload in cache
                 # --------------------------------------------------
-
                 try:
                     update_live_feed(
                         instrument_key=instrument_key,
                         feed=feed_data,
                         current_ts=current_ts,
                     )
-
                 except Exception as ex:
                     logger.error(
-                        f"Failed updating live feed cache for "
-                        f"{instrument_key}: {ex}"
+                        f"Failed updating live feed cache for {instrument_key}: {ex}"
                     )
 
                 # --------------------------------------------------
                 # 2. Publish full tick to custom websocket clients
                 #    interval=0 clients receive this payload
                 # --------------------------------------------------
-
                 tick_payload = {
                     "feed_type": "tick",
                     "instrument_key": instrument_key,
@@ -279,14 +277,12 @@ class LiveMarketFeedService:
                 # 3. Nifty Index is live tick only.
                 #    Do NOT send Nifty to EMA/candle engine.
                 # --------------------------------------------------
-
                 if self.is_nifty_index(instrument_key):
                     continue
 
                 # --------------------------------------------------
                 # 4. Forward only option instruments to EMA/candle service
                 # --------------------------------------------------
-
                 try:
                     from app.services.live_ema_service import (
                         live_ema_service,
@@ -297,11 +293,8 @@ class LiveMarketFeedService:
                         feed=feed_data,
                         current_ts=current_ts,
                     )
-
                 except Exception as ex:
-                    logger.error(
-                        f"EMA processing failed for " f"{instrument_key}: {ex}"
-                    )
+                    logger.error(f"EMA processing failed for {instrument_key}: {ex}")
 
         except Exception as ex:
             logger.exception(f"Message processing failed: {ex}")
@@ -310,7 +303,6 @@ class LiveMarketFeedService:
         """
         Upstox websocket error callback.
         """
-
         logger.error(f"WebSocket Error: {error}")
 
         self.connected = False
@@ -325,7 +317,6 @@ class LiveMarketFeedService:
         """
         Upstox websocket closed callback.
         """
-
         logger.warning("Upstox WebSocket Closed")
 
         self.connected = False
@@ -345,18 +336,15 @@ class LiveMarketFeedService:
         Internal websocket bootstrap.
         Runs inside a background thread.
         """
-
         try:
             # ----------------------------------------------
             # Sync token before opening websocket
             # ----------------------------------------------
-
             try:
                 token_changed = refresh_token_if_changed()
 
                 if token_changed:
                     logger.info("Latest Upstox token loaded before websocket startup.")
-
             except Exception as ex:
                 logger.error(f"Token synchronization failed: {ex}")
 
@@ -377,25 +365,10 @@ class LiveMarketFeedService:
 
             self.streamer = upstox_client.MarketDataStreamerV3(api_client)
 
-            self.streamer.on(
-                "open",
-                self.on_open,
-            )
-
-            self.streamer.on(
-                "message",
-                self.on_message,
-            )
-
-            self.streamer.on(
-                "error",
-                self.on_error,
-            )
-
-            self.streamer.on(
-                "close",
-                self.on_close,
-            )
+            self.streamer.on("open", self.on_open)
+            self.streamer.on("message", self.on_message)
+            self.streamer.on("error", self.on_error)
+            self.streamer.on("close", self.on_close)
 
             logger.info("Connecting to Upstox WebSocket...")
 
@@ -413,7 +386,6 @@ class LiveMarketFeedService:
         """
         Start websocket service.
         """
-
         if self.running:
             logger.info("WebSocket service already running.")
             return
@@ -440,7 +412,6 @@ class LiveMarketFeedService:
         """
         Stop websocket service.
         """
-
         logger.info("Stopping Live Market Feed Service...")
 
         try:
@@ -465,7 +436,6 @@ class LiveMarketFeedService:
         """
         Force websocket reconnect.
         """
-
         logger.info("Reconnecting WebSocket...")
 
         await self.stop()
@@ -479,7 +449,6 @@ class LiveMarketFeedService:
         """
         Runtime connection status.
         """
-
         instruments = self.get_subscription_instruments()
 
         return {

@@ -1,18 +1,19 @@
 import json
-import logging
-
+import os
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from app.logger import get_file_logger
 from app.upstox_services.fetch_options import (
     options_cache,
     NIFTY_INDEX_FEED,
 )
 from app.websocket.websocket_manager import websocket_manager
 
-logger = logging.getLogger("uvicorn")
+logger = get_file_logger(__file__)
 
 router = APIRouter()
 
+SHOW_LOGS = False
 
 SUPPORTED_INTERVALS = [0, 1, 3, 5]
 
@@ -21,7 +22,6 @@ def get_nifty_index_key():
     """
     Returns Nifty index instrument key.
     """
-
     return NIFTY_INDEX_FEED.get(
         "instrument_key",
         "NSE_INDEX|Nifty 50",
@@ -34,7 +34,6 @@ def is_nifty_index(
     """
     Checks whether given instrument key is Nifty index.
     """
-
     return instrument_key == get_nifty_index_key()
 
 
@@ -50,13 +49,10 @@ def find_instrument_by_strike(
         ->
         NSE_FO|63935
     """
-
     data = options_cache.get("data", [])
-
     instrument_type = instrument_type.upper().strip()
 
     for contract in data:
-
         if (
             contract.get("strike_price") is not None
             and float(contract.get("strike_price")) == float(strike_price)
@@ -77,7 +73,6 @@ def feed_exists(
     - Nifty index
     - Filtered option instruments
     """
-
     if is_nifty_index(instrument_key):
         return True
 
@@ -96,7 +91,6 @@ def get_feed_metadata(
     """
     Returns feed metadata for subscription acknowledgement.
     """
-
     if is_nifty_index(instrument_key):
         return {
             **NIFTY_INDEX_FEED,
@@ -171,13 +165,14 @@ async def websocket_feed(
         3 = 3 minute candle
         5 = 5 minute candle
     """
-
     await websocket_manager.connect(websocket)
+
+    if SHOW_LOGS:
+        logger.info("[WS CONNECT] New client connected to feed WebSocket")
 
     active_subscriptions = []
 
     try:
-
         await websocket.send_json(
             {
                 "status": "connected",
@@ -215,27 +210,29 @@ async def websocket_feed(
         )
 
         while True:
-
             raw_message = await websocket.receive_text()
+
+            if SHOW_LOGS:
+                logger.info(f"[WS MESSAGE RECEIVED] {raw_message}")
 
             try:
                 request = json.loads(raw_message)
-
             except Exception:
-
                 await websocket.send_json(
                     {
                         "status": "error",
                         "message": "Invalid JSON payload.",
                     }
                 )
-
+                if SHOW_LOGS:
+                    logger.warning(
+                        "[WS ERROR] Invalid JSON payload received from client"
+                    )
                 continue
 
             # --------------------------------------------------
             # Parse interval
             # --------------------------------------------------
-
             try:
                 interval = int(
                     request.get(
@@ -243,27 +240,26 @@ async def websocket_feed(
                         0,
                     )
                 )
-
             except Exception:
-
                 await websocket.send_json(
                     {
                         "status": "error",
                         "message": "interval must be numeric. Allowed values: 0, 1, 3, 5.",
                     }
                 )
-
+                if SHOW_LOGS:
+                    logger.warning("[WS ERROR] Non-numeric interval received")
                 continue
 
             if interval not in SUPPORTED_INTERVALS:
-
                 await websocket.send_json(
                     {
                         "status": "error",
                         "message": "Interval must be one of 0, 1, 3, 5.",
                     }
                 )
-
+                if SHOW_LOGS:
+                    logger.warning(f"[WS ERROR] Unsupported interval: {interval}")
                 continue
 
             instrument_key = request.get("instrument_key")
@@ -271,21 +267,17 @@ async def websocket_feed(
             # --------------------------------------------------
             # Resolve strike + option type
             # --------------------------------------------------
-
             if not instrument_key:
-
                 strike = request.get("strike")
                 option_type = request.get("type")
 
                 if strike is not None and option_type:
-
                     contract = find_instrument_by_strike(
                         strike_price=strike,
                         instrument_type=option_type,
                     )
 
                     if not contract:
-
                         await websocket.send_json(
                             {
                                 "status": "error",
@@ -295,35 +287,41 @@ async def websocket_feed(
                                 ),
                             }
                         )
-
+                        if SHOW_LOGS:
+                            logger.warning(
+                                f"[WS ERROR] Contract not found for strike={strike}, type={option_type}"
+                            )
                         continue
 
                     instrument_key = contract.get("instrument_key")
 
             if not instrument_key:
-
                 await websocket.send_json(
                     {
                         "status": "error",
                         "message": "Provide either instrument_key or strike + type.",
                     }
                 )
-
+                if SHOW_LOGS:
+                    logger.warning(
+                        "[WS ERROR] Missing instrument_key or strike/type parameters"
+                    )
                 continue
 
             # --------------------------------------------------
             # Validate feed exists
             # --------------------------------------------------
-
             if not feed_exists(instrument_key):
-
                 await websocket.send_json(
                     {
                         "status": "error",
                         "message": f"Feed not found: {instrument_key}",
                     }
                 )
-
+                if SHOW_LOGS:
+                    logger.warning(
+                        f"[WS ERROR] Feed not found for instrument: {instrument_key}"
+                    )
                 continue
 
             feed_metadata = get_feed_metadata(instrument_key)
@@ -331,7 +329,6 @@ async def websocket_feed(
             # --------------------------------------------------
             # Subscribe
             # --------------------------------------------------
-
             subscription_key = (
                 instrument_key,
                 interval,
@@ -355,20 +352,21 @@ async def websocket_feed(
                 }
             )
 
-            logger.info(f"WS client subscribed {instrument_key} interval={interval}")
+            if SHOW_LOGS:
+                logger.info(
+                    f"[WS SUBSCRIBED] Client successfully subscribed to "
+                    f"instrument={instrument_key}, interval={interval}"
+                )
 
     except WebSocketDisconnect:
-
-        logger.info("WebSocket client disconnected.")
+        if SHOW_LOGS:
+            logger.info("[WS DISCONNECT] Client disconnected normally")
 
     except Exception as ex:
-
-        logger.exception(f"Feed websocket error: {ex}")
+        logger.exception(f"[WS EXCEPTION] Feed websocket error: {ex}")
 
     finally:
-
         for instrument_key, interval in active_subscriptions:
-
             websocket_manager.unsubscribe(
                 websocket=websocket,
                 instrument_key=instrument_key,
@@ -376,3 +374,5 @@ async def websocket_feed(
             )
 
         await websocket_manager.disconnect(websocket)
+        if SHOW_LOGS:
+            logger.info("[WS CLEANUP] Client connections and subscriptions cleaned up")

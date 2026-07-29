@@ -1,11 +1,16 @@
 import json
-import logging
+import os
 from collections import defaultdict
 from typing import Dict, Set
 
 from fastapi import WebSocket
 
-logger = logging.getLogger("uvicorn")
+from app.logger import get_file_logger
+
+logger = get_file_logger(__file__)
+
+# Flag to control logging output
+SHOW_LOGS = False
 
 
 class WebSocketManager:
@@ -49,7 +54,8 @@ class WebSocketManager:
 
         await websocket.accept()
 
-        logger.info("WebSocket client connected.")
+        if SHOW_LOGS:
+            logger.info("WebSocket client connected.")
 
     async def disconnect(
         self,
@@ -70,7 +76,8 @@ class WebSocketManager:
                     ws_set.remove(websocket)
                     removed += 1
 
-        logger.info(f"Client disconnected. " f"Removed {removed} subscriptions.")
+        if SHOW_LOGS:
+            logger.info(f"Client disconnected. Removed {removed} subscriptions.")
 
     # --------------------------------------------------
     # Subscription Management
@@ -94,7 +101,8 @@ class WebSocketManager:
 
         self.connections[instrument_key][interval].add(websocket)
 
-        logger.info(f"Subscribed: {instrument_key} " f"(interval={interval})")
+        if SHOW_LOGS:
+            logger.info(f"Subscribed: {instrument_key} (interval={interval})")
 
     def unsubscribe(
         self,
@@ -110,7 +118,8 @@ class WebSocketManager:
 
             self.connections[instrument_key][interval].discard(websocket)
 
-            logger.info(f"Unsubscribed: " f"{instrument_key} " f"(interval={interval})")
+            if SHOW_LOGS:
+                logger.info(f"Unsubscribed: {instrument_key} (interval={interval})")
 
         except Exception:
             pass
@@ -149,9 +158,13 @@ class WebSocketManager:
 
                 await websocket.send_json(payload)
 
-            except Exception:
+            except Exception as ex:
 
                 dead_connections.append(websocket)
+                if SHOW_LOGS:
+                    logger.warning(
+                        f"Failed publishing tick to subscriber for {instrument_key}: {ex}"
+                    )
 
         for websocket in dead_connections:
 
@@ -186,9 +199,13 @@ class WebSocketManager:
 
                 await websocket.send_json(candle)
 
-            except Exception:
+            except Exception as ex:
 
                 dead_connections.append(websocket)
+                if SHOW_LOGS:
+                    logger.warning(
+                        f"Failed publishing candle to subscriber for {instrument_key} (interval={interval}): {ex}"
+                    )
 
         for websocket in dead_connections:
 
@@ -223,9 +240,13 @@ class WebSocketManager:
 
                 await websocket.send_text(json.dumps(payload))
 
-            except Exception:
+            except Exception as ex:
 
                 dead_connections.append(websocket)
+                if SHOW_LOGS:
+                    logger.warning(
+                        f"Failed publishing message to subscriber for {instrument_key} (interval={interval}): {ex}"
+                    )
 
         for websocket in dead_connections:
 
@@ -268,7 +289,8 @@ class WebSocketManager:
 
         self.connections.clear()
 
-        logger.info("WebSocket manager cleared.")
+        if SHOW_LOGS:
+            logger.info("WebSocket manager cleared.")
 
 
 websocket_manager = WebSocketManager()
