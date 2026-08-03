@@ -544,5 +544,11 @@ async def debug_find_option(
 
 
 if __name__ == "__main__":
-    logger.info("Starting FastAPI server with WebSockets on http://0.0.0.0:8000 ...")
-    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
+    logger.info("Starting Option Feed Engine...")
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=8000,
+        reload=True,
+        log_level="info",
+    )
