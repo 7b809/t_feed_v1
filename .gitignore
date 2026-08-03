@@ -16,7 +16,7 @@ myenv/
 venv/
 
 
-.env.*
+.env.* 
 .env
 test_logs
 output
