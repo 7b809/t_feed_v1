@@ -4,7 +4,7 @@ __pycache__/
 *$py.class
 combined_output.txt
 *.sqlite3
-wv 
+wv  
 downloads
 logs
 sample_data.txt
