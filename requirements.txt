@@ -1,4 +1,3 @@
-
 fastapi
 uvicorn
 upstox-python-sdk
@@ -11,3 +10,4 @@ websocket-client
 requests
 pandas
 numpy
+apscheduler
