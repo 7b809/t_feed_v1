@@ -2,9 +2,8 @@ import asyncio
 import json
 import uvicorn
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, status
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -14,7 +13,13 @@ from core.logger import get_logger
 from services.option_service import get_options_contracts, options_cache
 from services.token_service import token_service
 from services.upstox_websocket import upstox_streamer
-from ws_feed.broadcaster import broadcaster
+from services.telegram_service import telegram_service
+
+from api.home_routes import router as home_router
+from api.health_routes import router as health_router
+from api.debug_routes import router as debug_router
+from api.refresh_routes import router as refresh_router
+from ws_feed.websocket_routes import router as websocket_router
 
 logger = get_logger(__file__)
 
@@ -27,7 +32,13 @@ def load_and_subscribe_instruments():
 
     if not result:
         logger.error("Failed to load option contracts for subscription.")
-        return
+
+        telegram_service.send_instruments_fetched_message(
+            success=False,
+            error="Failed to load option contracts for subscription.",
+        )
+
+        return None
 
     subscribed_keys = options_cache.get("subscribed_keys", [])
 
@@ -44,33 +55,294 @@ def load_and_subscribe_instruments():
     )
     logger.info("=======================================================")
 
+    telegram_service.send_instruments_fetched_message(
+        success=True,
+        nearest_expiry=options_cache.get("nearest_expiry"),
+        total_contracts=options_cache.get("total_contracts", 0),
+        subscribed_keys_count=len(subscribed_keys),
+        strike_from=getattr(config, "STRIKE_FROM", "N/A"),
+        strike_to=getattr(config, "STRIKE_TO", "N/A"),
+    )
+
+    return result
+
 
 def run_initial_startup():
     """Initial synchronous load when the application starts up."""
     logger.info("Initializing application startup sequence...")
 
-    # 1. Fetch access token from DB into memory
-    token_service.refresh_tokens()
+    telegram_service.send_startup_message(
+        status="started",
+        details="Initial startup sequence started. Refreshing token and loading instruments.",
+    )
 
-    # 2. Fetch option contracts and update subscription keys
-    load_and_subscribe_instruments()
+    try:
+        # 1. Fetch access token from DB into memory
+        token_service.refresh_tokens()
 
-    # 3. Startup cache and sample log
-    current_token = token_service.get_access_token()
-    doc = token_service.get_token_document()
-    cached_data = options_cache.get("data", [])
-    sample_contract = cached_data[0] if cached_data else None
+        current_token = token_service.get_access_token()
+        doc = token_service.get_token_document()
 
-    logger.info("=== Memory Cache State Summary ===")
-    logger.info(f"Access Token: {current_token[:15]}..." if current_token else "No Token")
-    logger.info(f"Token Updated At: {doc.get('updated_at') if doc else 'N/A'}")
-    logger.info(f"Nearest Expiry in Cache: {options_cache.get('nearest_expiry')}")
-    logger.info(f"Total Cached Contracts: {options_cache.get('total_contracts')}")
+        if current_token:
+            telegram_service.send_token_refresh_message(
+                success=True,
+                updated_at=doc.get("updated_at") if doc else "N/A",
+            )
+        else:
+            telegram_service.send_token_refresh_message(
+                success=False,
+                error="No access token found after MongoDB token refresh.",
+            )
 
-    if sample_contract:
-        logger.info(f"Sample Contract:\n{json.dumps(sample_contract, indent=2)}")
-    else:
-        logger.info("Sample Contract: None (Cache Empty)")
+        # 2. Fetch option contracts and update subscription keys
+        result = load_and_subscribe_instruments()
+
+        # 3. Startup cache and sample log
+        cached_data = options_cache.get("data", [])
+        sample_contract = cached_data[0] if cached_data else None
+
+        logger.info("=== Memory Cache State Summary ===")
+        logger.info(
+            f"Access Token: {current_token[:15]}..." if current_token else "No Token"
+        )
+        logger.info(f"Token Updated At: {doc.get('updated_at') if doc else 'N/A'}")
+        logger.info(f"Nearest Expiry in Cache: {options_cache.get('nearest_expiry')}")
+        logger.info(f"Total Cached Contracts: {options_cache.get('total_contracts')}")
+
+        if sample_contract:
+            logger.info(f"Sample Contract:\n{json.dumps(sample_contract, indent=2)}")
+        else:
+            logger.info("Sample Contract: None (Cache Empty)")
+
+        subscribed_keys = options_cache.get("subscribed_keys", [])
+
+        startup_details = (
+            f"Token Available: {'Yes' if current_token else 'No'}\n"
+            f"Token Updated At: {doc.get('updated_at') if doc else 'N/A'}\n"
+            f"Nearest Expiry: {options_cache.get('nearest_expiry')}\n"
+            f"Total Contracts: {options_cache.get('total_contracts')}\n"
+            f"Subscribed Instruments: {len(subscribed_keys)}"
+        )
+
+        if result and current_token and subscribed_keys:
+            telegram_service.send_startup_message(
+                status="completed successfully",
+                details=startup_details,
+            )
+        else:
+            telegram_service.send_startup_message(
+                status="completed with warnings",
+                details=startup_details,
+            )
+
+    except Exception as ex:
+        logger.error(f"Initial startup sequence failed: {type(ex).__name__}: {ex}")
+
+        telegram_service.send_exception_message(
+            title="Initial Startup Failed",
+            exception=ex,
+            context="run_initial_startup",
+        )
+
+        raise
+
+
+def run_daily_market_hard_refresh():
+    """
+    Daily hard refresh workflow.
+
+    Runs from APScheduler thread.
+
+    Steps:
+    1. Refresh token document from MongoDB.
+    2. Load latest token into memory.
+    3. Fetch latest NIFTY option contracts.
+    4. Filter contracts by configured strike range.
+    5. Update options_cache and subscribed_keys.
+    6. Restart Upstox streamer so latest keys are actually subscribed.
+    """
+
+    logger.info("================ DAILY MARKET HARD REFRESH STARTED ================")
+
+    telegram_service.send_message(
+        title="Daily Market Hard Refresh Started",
+        message=(
+            "Daily hard refresh started.\n\n"
+            "Actions:\n"
+            "1. Refresh token from MongoDB\n"
+            "2. Fetch latest instruments\n"
+            "3. Filter configured strike range\n"
+            "4. Update subscription cache\n"
+            "5. Restart Upstox streamer"
+        ),
+        level="REFRESH",
+    )
+
+    refresh_success = False
+
+    try:
+        # 1. Refresh access token document from MongoDB
+        logger.info("Refreshing token document from MongoDB...")
+        token_service.refresh_tokens()
+
+        current_token = token_service.get_access_token()
+        doc = token_service.get_token_document()
+
+        if not current_token:
+            error_message = "Daily hard refresh failed: No access token available."
+            logger.error(error_message)
+
+            telegram_service.send_token_refresh_message(
+                success=False,
+                error=error_message,
+            )
+
+            telegram_service.send_daily_refresh_message(
+                success=False,
+                error=error_message,
+            )
+
+            return
+
+        logger.info("Token refreshed into memory successfully.")
+
+        telegram_service.send_token_refresh_message(
+            success=True,
+            updated_at=doc.get("updated_at") if doc else "N/A",
+        )
+
+        # 2. Fetch latest option contracts and update options_cache
+        logger.info(
+            "Fetching latest option contracts and rebuilding subscription keys..."
+        )
+        result = load_and_subscribe_instruments()
+
+        if not result:
+            error_message = (
+                "Daily hard refresh failed: Instrument fetch returned no result."
+            )
+            logger.error(error_message)
+
+            telegram_service.send_daily_refresh_message(
+                success=False,
+                error=error_message,
+            )
+
+            return
+
+        subscribed_keys = options_cache.get("subscribed_keys", [])
+
+        if not subscribed_keys:
+            error_message = "Daily hard refresh failed: No subscribed keys found after contract reload."
+            logger.error(error_message)
+
+            telegram_service.send_daily_refresh_message(
+                success=False,
+                error=error_message,
+            )
+
+            return
+
+        logger.info(
+            f"Daily hard refresh loaded {len(subscribed_keys)} subscribed instruments."
+        )
+
+        # 3. Restart Upstox streamer on its running FastAPI event loop
+        loop = getattr(upstox_streamer, "loop", None)
+
+        if loop and loop.is_running():
+            logger.info("Scheduling Upstox streamer restart on FastAPI event loop...")
+
+            future = asyncio.run_coroutine_threadsafe(
+                upstox_streamer.restart(),
+                loop,
+            )
+
+            def restart_done_callback(done_future):
+                try:
+                    done_future.result()
+
+                    logger.info("Daily hard refresh streamer restart completed.")
+
+                    telegram_service.send_subscription_message(
+                        success=True,
+                        subscribed_keys_count=len(
+                            options_cache.get("subscribed_keys", [])
+                        ),
+                        feed_mode=getattr(config, "WEBSOCKET_FEED_MODE", "full"),
+                    )
+
+                    telegram_service.send_daily_refresh_message(
+                        success=True,
+                        subscribed_keys_count=len(
+                            options_cache.get("subscribed_keys", [])
+                        ),
+                        nearest_expiry=options_cache.get("nearest_expiry"),
+                    )
+
+                except Exception as ex:
+                    logger.error(
+                        f"Daily hard refresh streamer restart failed: "
+                        f"{type(ex).__name__}: {ex}"
+                    )
+
+                    telegram_service.send_exception_message(
+                        title="Daily Hard Refresh Streamer Restart Failed",
+                        exception=ex,
+                        context="restart_done_callback",
+                    )
+
+                    telegram_service.send_daily_refresh_message(
+                        success=False,
+                        error=f"Streamer restart failed: {type(ex).__name__}: {ex}",
+                    )
+
+            future.add_done_callback(restart_done_callback)
+            refresh_success = True
+
+        else:
+            warning_message = (
+                "Upstox streamer event loop is not available. "
+                "Token and subscription cache were refreshed, "
+                "but streamer restart was skipped."
+            )
+
+            logger.warning(warning_message)
+
+            telegram_service.send_message(
+                title="Daily Refresh Warning",
+                message=warning_message,
+                level="WARNING",
+            )
+
+            telegram_service.send_daily_refresh_message(
+                success=False,
+                error=warning_message,
+            )
+
+    except Exception as ex:
+        logger.error(f"Daily market hard refresh failed: " f"{type(ex).__name__}: {ex}")
+
+        telegram_service.send_exception_message(
+            title="Daily Market Hard Refresh Failed",
+            exception=ex,
+            context="run_daily_market_hard_refresh",
+        )
+
+        telegram_service.send_daily_refresh_message(
+            success=False,
+            error=f"{type(ex).__name__}: {ex}",
+        )
+
+    finally:
+        if refresh_success:
+            logger.info(
+                "Daily hard refresh flow scheduled streamer restart successfully."
+            )
+
+        logger.info(
+            "================ DAILY MARKET HARD REFRESH COMPLETED ================"
+        )
 
 
 def start_scheduler() -> BackgroundScheduler:
@@ -86,29 +358,43 @@ def start_scheduler() -> BackgroundScheduler:
     )
 
     scheduler.add_job(
-        func=load_and_subscribe_instruments,
+        func=run_daily_market_hard_refresh,
         trigger=CronTrigger(
             day_of_week="mon-fri",
             hour=9,
             minute=0,
-            timezone="Asia/Kolkata",
+            timezone=getattr(config, "MARKET_TIMEZONE", "Asia/Kolkata"),
         ),
-        id="options_contracts_daily_job",
+        id="daily_market_hard_refresh_job",
         replace_existing=True,
     )
 
     scheduler.start()
 
+    scheduler_message = (
+        f"Scheduler active.\n\n"
+        f"Token refresh interval: every {config.REFRESH_INTERVAL_MINUTES} minutes\n"
+        f"Daily hard refresh: Mon-Fri at 09:00 AM "
+        f"{getattr(config, 'MARKET_TIMEZONE', 'Asia/Kolkata')}"
+    )
+
     logger.info(
         f"Scheduler active: Token refresh every {config.REFRESH_INTERVAL_MINUTES} mins | "
-        f"Options fetch scheduled for Mon-Fri at 09:00 AM IST."
+        f"Daily market hard refresh scheduled for Mon-Fri at 09:00 AM "
+        f"{getattr(config, 'MARKET_TIMEZONE', 'Asia/Kolkata')}."
+    )
+
+    telegram_service.send_message(
+        title="Scheduler Started",
+        message=scheduler_message,
+        level="INFO",
     )
 
     return scheduler
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def app_lifespan(app: FastAPI):
     """Handles async lifecycle startup/shutdown events for FastAPI."""
     logger.info("Executing lifespan startup sequence...")
 
@@ -120,24 +406,61 @@ async def lifespan(app: FastAPI):
 
         scheduler = start_scheduler()
 
-        # upstox_streamer.start() already creates its own background task
+        # upstox_streamer.start() creates its own background task
         await upstox_streamer.start()
+
+        subscribed_keys = options_cache.get("subscribed_keys", [])
+
+        telegram_service.send_subscription_message(
+            success=True,
+            subscribed_keys_count=len(subscribed_keys),
+            feed_mode=getattr(config, "WEBSOCKET_FEED_MODE", "full"),
+        )
 
         logger.info("Application startup completed successfully.")
 
         yield
 
+    except Exception as ex:
+        logger.error(f"Application startup/runtime failure: {type(ex).__name__}: {ex}")
+
+        telegram_service.send_exception_message(
+            title="Application Startup Runtime Failure",
+            exception=ex,
+            context="app_lifespan",
+        )
+
+        raise
+
     finally:
         logger.info("Executing lifespan shutdown sequence...")
 
-        await upstox_streamer.stop()
+        telegram_service.send_shutdown_message(
+            details="Application shutdown sequence started."
+        )
 
-        if scheduler and scheduler.running:
-            logger.info("Shutting down background scheduler...")
-            scheduler.shutdown()
+        try:
+            await upstox_streamer.stop()
+
+            if scheduler and scheduler.running:
+                logger.info("Shutting down background scheduler...")
+                scheduler.shutdown()
+
+            telegram_service.send_shutdown_message(
+                details="Application shutdown completed successfully."
+            )
+
+        except Exception as ex:
+            logger.error(f"Application shutdown error: {type(ex).__name__}: {ex}")
+
+            telegram_service.send_exception_message(
+                title="Application Shutdown Error",
+                exception=ex,
+                context="app_lifespan shutdown",
+            )
 
 
-app = FastAPI(title="Option Feed Engine", lifespan=lifespan)
+app = FastAPI(title="Option Feed Engine", lifespan=app_lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -147,408 +470,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
-@app.get("/", status_code=status.HTTP_200_OK)
-async def get_health_status():
-    """Returns the application health and system status in JSON format."""
-
-    has_token = bool(token_service.get_access_token())
-    cached_keys_count = len(options_cache.get("subscribed_keys", []))
-
-    connected_clients = (
-        broadcaster.get_active_connections_count()
-        if hasattr(broadcaster, "get_active_connections_count")
-        else 0
-    )
-
-    websocket_running = bool(getattr(upstox_streamer, "is_running", False))
-
-    is_healthy = has_token and cached_keys_count > 0 and websocket_running
-
-    return {
-        "status": "healthy" if is_healthy else "degraded",
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "services": {
-            "token_service": "active" if has_token else "missing_token",
-            "options_cache": (
-                f"loaded ({cached_keys_count} keys)"
-                if cached_keys_count > 0
-                else "empty"
-            ),
-            "websocket_feed": "active" if websocket_running else "inactive",
-        },
-        "metrics": {
-            "subscribed_instruments": cached_keys_count,
-            "connected_ws_clients": connected_clients,
-        },
-    }
-
-
-@app.websocket("/ws")
-@app.websocket("/all-feeds")
-async def websocket_all_feeds(websocket: WebSocket):
-    """WebSocket endpoint returning live market feeds for all loaded contracts."""
-
-    logger.info(f"Incoming websocket request for /all-feeds from {websocket.client}")
-
-    try:
-        await websocket.accept()
-        logger.info("WebSocket accepted for /all-feeds")
-
-        if hasattr(broadcaster, "connect_all_feeds"):
-            await broadcaster.connect_all_feeds(websocket)
-        else:
-            await broadcaster.connect(websocket)
-
-        await websocket.send_json(
-            {
-                "type": "connected",
-                "endpoint": "/all-feeds",
-                "message": "Connected to all feeds websocket. Waiting for live market ticks.",
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "subscribed_instruments": len(options_cache.get("subscribed_keys", [])),
-            }
-        )
-
-        while True:
-            try:
-                client_message = await asyncio.wait_for(
-                    websocket.receive_text(),
-                    timeout=30,
-                )
-
-                if client_message:
-                    await websocket.send_json(
-                        {
-                            "type": "client_message_received",
-                            "message": client_message,
-                            "timestamp": datetime.now(timezone.utc).isoformat(),
-                        }
-                    )
-
-            except asyncio.TimeoutError:
-                await websocket.send_json(
-                    {
-                        "type": "ping",
-                        "endpoint": "/all-feeds",
-                        "message": "WebSocket alive. Waiting for live ticks.",
-                        "timestamp": datetime.now(timezone.utc).isoformat(),
-                    }
-                )
-
-    except WebSocketDisconnect:
-        logger.info("Client disconnected from /all-feeds websocket")
-
-    except Exception as ex:
-        logger.error(f"/all-feeds websocket error: {type(ex).__name__}: {ex}")
-
-    finally:
-        if hasattr(broadcaster, "disconnect_all_feeds"):
-            broadcaster.disconnect_all_feeds(websocket)
-        else:
-            broadcaster.disconnect(websocket)
-
-
-@app.websocket("/option")
-async def websocket_option(
-    websocket: WebSocket,
-    strike: float = Query(..., description="Strike Price, e.g., 24500"),
-    striketype: str = Query(..., description="Option type: ce or pe"),
-):
-    """WebSocket endpoint filtering live feeds by strike price and CE/PE."""
-
-    itype = striketype.upper()
-
-    logger.info(
-        f"Incoming websocket request for /option from {websocket.client}. "
-        f"strike={strike}, striketype={itype}"
-    )
-
-    if itype not in ["CE", "PE"]:
-        try:
-            await websocket.accept()
-            await websocket.send_json(
-                {
-                    "type": "error",
-                    "message": "Invalid striketype. Value must be 'ce' or 'pe'.",
-                    "received": striketype,
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                }
-            )
-            await websocket.close(code=1008, reason="striketype must be 'ce' or 'pe'")
-        except Exception as ex:
-            logger.error(
-                f"Error while closing invalid /option websocket: "
-                f"{type(ex).__name__}: {ex}"
-            )
-        return
-
-    try:
-        await websocket.accept()
-        logger.info(f"WebSocket accepted for /option {strike}_{itype}")
-
-        if hasattr(broadcaster, "connect_option"):
-            await broadcaster.connect_option(
-                websocket,
-                strike_price=strike,
-                instrument_type=itype,
-            )
-        else:
-            await broadcaster.connect(websocket)
-
-        logger.info(f"Option client registered for {strike}_{itype}")
-
-        await websocket.send_json(
-            {
-                "type": "connected",
-                "endpoint": "/option",
-                "strike": strike,
-                "striketype": itype,
-                "message": "Connected to option websocket. Waiting for matching option ticks.",
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            }
-        )
-
-        while True:
-            try:
-                client_message = await asyncio.wait_for(
-                    websocket.receive_text(),
-                    timeout=30,
-                )
-
-                if client_message:
-                    await websocket.send_json(
-                        {
-                            "type": "client_message_received",
-                            "message": client_message,
-                            "timestamp": datetime.now(timezone.utc).isoformat(),
-                        }
-                    )
-
-            except asyncio.TimeoutError:
-                await websocket.send_json(
-                    {
-                        "type": "ping",
-                        "endpoint": "/option",
-                        "strike": strike,
-                        "striketype": itype,
-                        "message": "WebSocket alive. Waiting for matching option ticks.",
-                        "timestamp": datetime.now(timezone.utc).isoformat(),
-                    }
-                )
-
-    except WebSocketDisconnect:
-        logger.info(f"Client disconnected from /option websocket: {strike}_{itype}")
-
-    except Exception as ex:
-        logger.error(
-            f"/option websocket error for {strike}_{itype}: "
-            f"{type(ex).__name__}: {ex}"
-        )
-
-    finally:
-        if hasattr(broadcaster, "disconnect_option"):
-            broadcaster.disconnect_option(websocket, strike, itype)
-        else:
-            broadcaster.disconnect(websocket)
-
-
-@app.get("/test-broadcast")
-async def test_broadcast():
-    """
-    Local debug endpoint.
-    Use this to verify /ws and /all-feeds without depending on Upstox live ticks.
-    """
-
-    sample_tick = {
-        "fullFeed": {
-            "marketFF": {
-                "ltpc": {
-                    "ltp": 24500,
-                    "cp": 24450,
-                    "ltt": 0,
-                    "ltq": 50,
-                },
-                "marketOHLC": {
-                    "ohlc": [
-                        {
-                            "interval": "1d",
-                            "open": 24400,
-                            "high": 24550,
-                            "low": 24350,
-                            "vol": 100000,
-                        }
-                    ]
-                },
-                "atp": 24480,
-                "vtt": 100000,
-                "oi": 0,
-            }
-        }
-    }
-
-    contract_info = {
-        "instrument_key": "NSE_INDEX|Nifty 50",
-        "instrument_type": "INDEX",
-        "strike_price": None,
-        "expiry": None,
-        "trading_symbol": "NIFTY 50",
-        "underlying_type": "INDEX",
-        "underlying_symbol": "NIFTY 50",
-    }
-
-    await broadcaster.broadcast_tick(
-        instrument_key="NSE_INDEX|Nifty 50",
-        tick_raw=sample_tick,
-        contract_info=contract_info,
-    )
-
-    return {
-        "status": "sent",
-        "message": "Test broadcast sent to connected /ws and /all-feeds clients.",
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-    }
-
-
-@app.get("/test-broadcast-option")
-async def test_broadcast_option():
-    """
-    Local debug endpoint for /option clients.
-
-    Connect first to:
-    ws://127.0.0.1:8000/option?strike=24500&striketype=ce
-
-    Then call:
-    http://127.0.0.1:8000/test-broadcast-option
-    """
-
-    sample_tick = {
-        "fullFeed": {
-            "marketFF": {
-                "ltpc": {
-                    "ltp": 120.5,
-                    "cp": 115.0,
-                    "ltt": 0,
-                    "ltq": 75,
-                },
-                "marketOHLC": {
-                    "ohlc": [
-                        {
-                            "interval": "1d",
-                            "open": 110.0,
-                            "high": 130.0,
-                            "low": 100.0,
-                            "vol": 250000,
-                        }
-                    ]
-                },
-                "atp": 118.5,
-                "vtt": 250000,
-                "oi": 500000,
-                "iv": 12.5,
-                "optionGreeks": {
-                    "delta": 0.52,
-                    "theta": -8.2,
-                    "gamma": 0.001,
-                    "vega": 10.4,
-                    "rho": 1.25,
-                },
-                "marketLevel": {
-                    "bidAskQuote": [
-                        {
-                            "bidQ": 100,
-                            "bidP": 120.0,
-                            "askQ": 150,
-                            "askP": 121.0,
-                        }
-                    ]
-                },
-            }
-        }
-    }
-
-    contract_info = {
-        "instrument_key": "TEST_NSE_FO|24500CE",
-        "instrument_type": "CE",
-        "strike_price": 24500.0,
-        "expiry": options_cache.get("nearest_expiry"),
-        "trading_symbol": "NIFTY 24500 CE TEST",
-        "underlying_type": "INDEX",
-        "underlying_symbol": "NIFTY",
-    }
-
-    await broadcaster.broadcast_tick(
-        instrument_key="TEST_NSE_FO|24500CE",
-        tick_raw=sample_tick,
-        contract_info=contract_info,
-    )
-
-    return {
-        "status": "sent",
-        "message": "Test option broadcast sent to connected /option clients for 24500 CE.",
-        "target": "24500.0_CE",
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-    }
-
-
-@app.get("/debug/cache")
-async def debug_cache():
-    """Returns current in-memory cache details for local debugging."""
-
-    cache_data = options_cache.get("data", [])
-
-    return {
-        "nearest_expiry": options_cache.get("nearest_expiry"),
-        "total_contracts": options_cache.get("total_contracts"),
-        "subscribed_keys_count": len(options_cache.get("subscribed_keys", [])),
-        "sample_subscribed_keys": options_cache.get("subscribed_keys", [])[:5],
-        "sample_contract": cache_data[0] if cache_data else None,
-    }
-
-
-@app.get("/debug/find-option")
-async def debug_find_option(
-    strike: float = Query(..., description="Strike Price, e.g., 24500"),
-    striketype: str = Query(..., description="Option type: ce or pe"),
-):
-    """
-    Debug endpoint to verify whether a specific option exists in options_cache.
-
-    Example:
-    http://127.0.0.1:8000/debug/find-option?strike=24500&striketype=ce
-    """
-
-    itype = striketype.upper()
-    cache_data = options_cache.get("data", [])
-
-    matches = []
-
-    for item in cache_data:
-        item_strike = item.get("strike_price")
-        item_type = item.get("instrument_type")
-
-        try:
-            if float(item_strike) == float(strike) and str(item_type).upper() == itype:
-                matches.append(item)
-        except Exception:
-            continue
-
-    return {
-        "search": {
-            "strike": strike,
-            "striketype": itype,
-        },
-        "matches_count": len(matches),
-        "matches": matches,
-    }
+# Register HTTP and WebSocket routes
+app.include_router(home_router)
+app.include_router(health_router)
+app.include_router(debug_router)
+app.include_router(refresh_router)
+app.include_router(websocket_router)
 
 
 if __name__ == "__main__":
-    logger.info("Starting Option Feed Engine...")
-    uvicorn.run(
-        "main:app",
-        host="0.0.0.0",
-        port=8000,
-        reload=True,
-        log_level="info",
-    )
+    logger.info("Starting FastAPI server with WebSockets on http://0.0.0.0:8000 ...")
+    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")

@@ -11,3 +11,4 @@ requests
 pandas
 numpy
 apscheduler
+jinja2

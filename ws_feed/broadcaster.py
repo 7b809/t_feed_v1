@@ -1,6 +1,9 @@
+import asyncio
 import json
 import os
 import logging
+from collections import deque
+from threading import Lock
 from typing import Dict, Any, Set
 
 from fastapi import WebSocket
@@ -22,37 +25,61 @@ LOG_DIR = "logs"
 FEEDS_LOG_PATH = os.path.join(LOG_DIR, "feeds.log")
 MAX_LOG_LINES = 2000
 
+# Thread-safe in-memory feed log buffer
+_feed_log_lock = Lock()
+_feed_log_buffer = deque(maxlen=MAX_LOG_LINES)
+_feed_log_initialized = False
+
+
+def _initialize_feed_log_buffer():
+    """Loads existing feeds.log into memory once, capped to MAX_LOG_LINES."""
+    global _feed_log_initialized
+
+    if _feed_log_initialized:
+        return
+
+    os.makedirs(LOG_DIR, exist_ok=True)
+
+    if os.path.exists(FEEDS_LOG_PATH):
+        try:
+            with open(FEEDS_LOG_PATH, "r", encoding="utf-8") as f:
+                existing_lines = f.readlines()
+
+            for line in existing_lines[-MAX_LOG_LINES:]:
+                _feed_log_buffer.append(line)
+
+        except Exception as ex:
+            logger.error(
+                f"Failed initializing feed log buffer from {FEEDS_LOG_PATH}: "
+                f"{type(ex).__name__}: {ex}"
+            )
+
+    _feed_log_initialized = True
+
 
 def append_raw_feed_log(instrument_key: str, tick_raw: Dict[str, Any]):
     """
     Appends raw feed tick JSON to logs/feeds.log and caps the file at MAX_LOG_LINES.
 
     This writes raw ticks to file only.
-    It does not print raw ticks to console because live feed volume is high.
+    It does not print raw ticks to console.
     """
     try:
-        os.makedirs(LOG_DIR, exist_ok=True)
+        with _feed_log_lock:
+            _initialize_feed_log_buffer()
 
-        lines = []
-        if os.path.exists(FEEDS_LOG_PATH):
-            with open(FEEDS_LOG_PATH, "r", encoding="utf-8") as f:
-                lines = f.readlines()
+            log_entry = json.dumps(
+                {
+                    "instrument_key": instrument_key,
+                    "raw_feed": tick_raw,
+                },
+                default=str,
+            ) + "\n"
 
-        log_entry = json.dumps(
-            {
-                "instrument_key": instrument_key,
-                "raw_feed": tick_raw,
-            },
-            default=str,
-        ) + "\n"
+            _feed_log_buffer.append(log_entry)
 
-        lines.append(log_entry)
-
-        if len(lines) > MAX_LOG_LINES:
-            lines = lines[-MAX_LOG_LINES:]
-
-        with open(FEEDS_LOG_PATH, "w", encoding="utf-8") as f:
-            f.writelines(lines)
+            with open(FEEDS_LOG_PATH, "w", encoding="utf-8") as f:
+                f.writelines(_feed_log_buffer)
 
     except Exception as e:
         logger.error(
@@ -84,19 +111,54 @@ def safe_int(val: Any, default: int = 0) -> int:
         return default
 
 
+def normalize_interval(interval: Any) -> int:
+    """Normalizes interval value. 0 means live tick."""
+    try:
+        return int(interval)
+    except (ValueError, TypeError):
+        return 0
+
+
+def build_option_key(strike_price: float, instrument_type: str, interval: int = 0) -> str:
+    """
+    Builds interval-aware option connection key.
+
+    Examples:
+        24500.0_CE_0
+        24500.0_CE_1
+        24500.0_CE_5
+    """
+    return f"{float(strike_price)}_{str(instrument_type).upper()}_{normalize_interval(interval)}"
+
+
 class Broadcaster:
     """Manages FastAPI WebSocket client connections and broadcasts parsed market ticks."""
 
     def __init__(self):
-        # Global connection pool
+        # Generic live connection pool
         self.active_connections: Set[WebSocket] = set()
 
-        # Categorized connection pools for specialized routes
-        self.all_feeds_connections: Set[WebSocket] = set()
+        # Interval-aware all-feeds connections
+        # Example:
+        # {
+        #   0: {websocket1, websocket2},
+        #   1: {websocket3},
+        #   5: {websocket4}
+        # }
+        self.all_feeds_connections: Dict[int, Set[WebSocket]] = {}
+
+        # Interval-aware option connections
+        # Example:
+        # {
+        #   "24500.0_CE_0": {websocket1},
+        #   "24500.0_CE_1": {websocket2},
+        #   "24500.0_CE_5": {websocket3}
+        # }
         self.option_connections: Dict[str, Set[WebSocket]] = {}
 
         # Counters
         self.broadcast_count = 0
+        self.candle_broadcast_count = 0
         self.sent_count = 0
         self.failed_send_count = 0
 
@@ -106,13 +168,15 @@ class Broadcaster:
         """Returns total active WebSocket clients across all route types."""
         return (
             len(self.active_connections)
-            + len(self.all_feeds_connections)
+            + sum(len(s) for s in self.all_feeds_connections.values())
             + sum(len(s) for s in self.option_connections.values())
         )
 
-    # --- Basic Connection Handlers ---
+    # ========================================================
+    # Basic Connection Handlers
+    # ========================================================
     async def connect(self, websocket: WebSocket):
-        """Tracks a generic client WebSocket connection."""
+        """Tracks a generic live WebSocket connection."""
         self.active_connections.add(websocket)
 
         logger.info(
@@ -122,7 +186,7 @@ class Broadcaster:
         )
 
     def disconnect(self, websocket: WebSocket):
-        """Removes a generic client WebSocket connection on disconnect."""
+        """Removes a generic WebSocket connection."""
         self.active_connections.discard(websocket)
 
         logger.info(
@@ -131,35 +195,52 @@ class Broadcaster:
             f"total_clients={self.get_active_connections_count()}"
         )
 
-    # --- Specialized Connection Handlers ---
-    async def connect_all_feeds(self, websocket: WebSocket):
-        """Tracks connection for /all-feeds endpoint."""
-        self.all_feeds_connections.add(websocket)
+    # ========================================================
+    # All Feeds Connection Handlers
+    # ========================================================
+    async def connect_all_feeds(self, websocket: WebSocket, interval: int = 0):
+        """Tracks connection for /all-feeds endpoint by interval."""
+        interval = normalize_interval(interval)
+
+        if interval not in self.all_feeds_connections:
+            self.all_feeds_connections[interval] = set()
+
+        self.all_feeds_connections[interval].add(websocket)
 
         logger.info(
             f"Client connected to /all-feeds. "
-            f"all_feeds_connections={len(self.all_feeds_connections)}, "
+            f"interval={interval}, "
+            f"clients_for_interval={len(self.all_feeds_connections[interval])}, "
             f"total_clients={self.get_active_connections_count()}"
         )
 
-    def disconnect_all_feeds(self, websocket: WebSocket):
+    def disconnect_all_feeds(self, websocket: WebSocket, interval: int = 0):
         """Removes connection for /all-feeds endpoint."""
-        self.all_feeds_connections.discard(websocket)
+        interval = normalize_interval(interval)
 
-        logger.info(
-            f"Client disconnected from /all-feeds. "
-            f"all_feeds_connections={len(self.all_feeds_connections)}, "
-            f"total_clients={self.get_active_connections_count()}"
-        )
+        if interval in self.all_feeds_connections:
+            self.all_feeds_connections[interval].discard(websocket)
 
+            logger.info(
+                f"Client disconnected from /all-feeds. "
+                f"interval={interval}, "
+                f"remaining_for_interval={len(self.all_feeds_connections[interval])}, "
+                f"total_clients={self.get_active_connections_count()}"
+            )
+
+    # ========================================================
+    # Option Connection Handlers
+    # ========================================================
     async def connect_option(
         self,
         websocket: WebSocket,
         strike_price: float,
         instrument_type: str,
+        interval: int = 0,
     ):
-        """Tracks connection for /option endpoint filtered by strike and CE/PE."""
-        key = f"{float(strike_price)}_{instrument_type.upper()}"
+        """Tracks connection for /option endpoint filtered by strike, CE/PE and interval."""
+        interval = normalize_interval(interval)
+        key = build_option_key(strike_price, instrument_type, interval)
 
         if key not in self.option_connections:
             self.option_connections[key] = set()
@@ -179,9 +260,11 @@ class Broadcaster:
         websocket: WebSocket,
         strike_price: float,
         instrument_type: str,
+        interval: int = 0,
     ):
         """Removes connection for /option endpoint."""
-        key = f"{float(strike_price)}_{instrument_type.upper()}"
+        interval = normalize_interval(interval)
+        key = build_option_key(strike_price, instrument_type, interval)
 
         if key in self.option_connections:
             self.option_connections[key].discard(websocket)
@@ -202,202 +285,282 @@ class Broadcaster:
                 f"Available keys: {list(self.option_connections.keys())}"
             )
 
-    # --- Core Broadcast Engine ---
+    # ========================================================
+    # Tick Parsing Helper
+    # ========================================================
+    def build_live_payload(
+        self,
+        instrument_key: str,
+        tick_raw: Dict[str, Any],
+        contract_info: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Builds normalized live tick payload from Upstox raw feed."""
+
+        raw_feed_obj = tick_raw.get("raw_feed", tick_raw)
+        full_feed = raw_feed_obj.get("fullFeed", raw_feed_obj)
+        ff_wrapper = full_feed.get("ff", full_feed)
+
+        ff = (
+            ff_wrapper.get("marketFF")
+            or ff_wrapper.get("indexFF")
+            or full_feed.get("marketFF")
+            or full_feed.get("indexFF")
+            or full_feed
+        )
+
+        ltpc = ff.get("ltpc") or {}
+        ltp = safe_float(ltpc.get("ltp"))
+        close = safe_float(ltpc.get("cp"))
+        ltt = safe_int(ltpc.get("ltt"))
+        ltq = safe_int(ltpc.get("ltq"))
+
+        if "marketOHLC" in ff:
+            ohlc_list = ff.get("marketOHLC", {}).get("ohlc", [])
+        else:
+            ohlc_list = ff.get("optionOHLC", {}).get("ohlc", [])
+
+        daily_ohlc = next(
+            (item for item in ohlc_list if item.get("interval") == "1d"),
+            {},
+        )
+
+        open_price = safe_float(daily_ohlc.get("open"))
+        high_price = safe_float(daily_ohlc.get("high"))
+        low_price = safe_float(daily_ohlc.get("low"))
+        day_volume = safe_int(daily_ohlc.get("vol")) or safe_int(
+            daily_ohlc.get("volume")
+        )
+
+        atp = safe_float(ff.get("atp"))
+        vtt = safe_int(ff.get("vtt"))
+        oi = safe_int(ff.get("oi"))
+        iv = safe_float(ff.get("iv"))
+        upper_circuit = safe_float(ff.get("uc"))
+        lower_circuit = safe_float(ff.get("lc"))
+
+        greeks_raw = ff.get("optionGreeks")
+        greeks_data = None
+
+        if isinstance(greeks_raw, dict) and greeks_raw:
+            greeks_data = {
+                "iv": iv,
+                "delta": safe_float(greeks_raw.get("delta")),
+                "theta": safe_float(greeks_raw.get("theta")),
+                "gamma": safe_float(greeks_raw.get("gamma")),
+                "vega": safe_float(greeks_raw.get("vega")),
+                "rho": safe_float(greeks_raw.get("rho")),
+            }
+
+        bid_ask = ff.get("marketLevel", {}).get("bidAskQuote", [])
+        market_depth = []
+
+        if isinstance(bid_ask, list):
+            for level in bid_ask[:5]:
+                market_depth.append(
+                    {
+                        "bid_qty": safe_int(level.get("bidQ") or level.get("bq")),
+                        "bid_price": safe_float(level.get("bidP") or level.get("bp")),
+                        "ask_qty": safe_int(level.get("askQ") or level.get("aq")),
+                        "ask_price": safe_float(level.get("askP") or level.get("ap")),
+                    }
+                )
+
+        price_change = round(ltp - close, 2) if (ltp > 0 and close > 0) else 0.0
+        p_change_pct = (
+            round((price_change / close) * 100, 2)
+            if (ltp > 0 and close > 0)
+            else 0.0
+        )
+
+        return {
+            "type": "live_tick",
+            "interval": 0,
+            "instrument_key": instrument_key,
+            "ltp": ltp,
+            "close": close,
+            "change": price_change,
+            "change_pct": p_change_pct,
+            "ltt": ltt,
+            "ltq": ltq,
+            "open": open_price,
+            "high": high_price,
+            "low": low_price,
+            "volume": day_volume or vtt,
+            "atp": atp,
+            "oi": oi,
+            "upper_circuit": upper_circuit,
+            "lower_circuit": lower_circuit,
+            "greeks": greeks_data,
+            "depth": market_depth,
+            "info": contract_info or {},
+        }
+
+    # ========================================================
+    # Core Live Tick Broadcast Engine
+    # ========================================================
     async def broadcast_tick(
         self,
         instrument_key: str,
         tick_raw: Dict[str, Any],
         contract_info: Dict[str, Any],
     ):
-        """Broadcasts parsed market ticks to matching clients."""
+        """
+        Saves raw feed to logs/feeds.log and broadcasts live tick to interval=0 clients.
+        """
 
         self.broadcast_count += 1
 
-        # ------------------------------------------------------------------
-        # Very important:
-        # If no local WebSocket clients are connected, do not write logs,
-        # do not parse ticks, and do not process anything.
-        #
-        # This prevents FastAPI event-loop overload and allows /option
-        # WebSocket handshakes to complete quickly.
-        # ------------------------------------------------------------------
+        # Save all raw feeds to logs/feeds.log, latest 2000 lines only.
+        # Done in a worker thread to avoid blocking FastAPI's event loop.
+        await asyncio.to_thread(append_raw_feed_log, instrument_key, tick_raw)
+
         total_clients = self.get_active_connections_count()
 
         if total_clients == 0:
             return
 
-        # Write raw ticks only when at least one local client is connected.
-        # If this still causes slowness, comment this line also.
-        append_raw_feed_log(instrument_key, tick_raw)
-
         try:
-            # Upstox V3 structural fallback handling:
-            # Handles raw_feed -> fullFeed -> marketFF / indexFF wrapper structure
-            raw_feed_obj = tick_raw.get("raw_feed", tick_raw)
-            full_feed = raw_feed_obj.get("fullFeed", raw_feed_obj)
-            ff_wrapper = full_feed.get("ff", full_feed)
-
-            ff = (
-                ff_wrapper.get("marketFF")
-                or ff_wrapper.get("indexFF")
-                or full_feed.get("marketFF")
-                or full_feed.get("indexFF")
-                or full_feed
+            payload = self.build_live_payload(
+                instrument_key=instrument_key,
+                tick_raw=tick_raw,
+                contract_info=contract_info,
             )
-
-            # 1. Last Traded Price and Close Price
-            ltpc = ff.get("ltpc") or {}
-            ltp = safe_float(ltpc.get("ltp"))
-            close = safe_float(ltpc.get("cp"))
-            ltt = safe_int(ltpc.get("ltt"))
-            ltq = safe_int(ltpc.get("ltq"))
-
-            # 2. Daily OHLC
-            if "marketOHLC" in ff:
-                ohlc_list = ff.get("marketOHLC", {}).get("ohlc", [])
-            else:
-                ohlc_list = ff.get("optionOHLC", {}).get("ohlc", [])
-
-            daily_ohlc = next(
-                (item for item in ohlc_list if item.get("interval") == "1d"),
-                {},
-            )
-
-            open_price = safe_float(daily_ohlc.get("open"))
-            high_price = safe_float(daily_ohlc.get("high"))
-            low_price = safe_float(daily_ohlc.get("low"))
-            day_volume = safe_int(daily_ohlc.get("vol")) or safe_int(
-                daily_ohlc.get("volume")
-            )
-
-            # 3. Extended Feed Details
-            atp = safe_float(ff.get("atp"))
-            vtt = safe_int(ff.get("vtt"))
-            oi = safe_int(ff.get("oi"))
-            iv = safe_float(ff.get("iv"))
-            upper_circuit = safe_float(ff.get("uc"))
-            lower_circuit = safe_float(ff.get("lc"))
-
-            # 4. Option Greeks Extraction
-            greeks_raw = ff.get("optionGreeks")
-            greeks_data = None
-
-            if isinstance(greeks_raw, dict) and greeks_raw:
-                greeks_data = {
-                    "iv": iv,
-                    "delta": safe_float(greeks_raw.get("delta")),
-                    "theta": safe_float(greeks_raw.get("theta")),
-                    "gamma": safe_float(greeks_raw.get("gamma")),
-                    "vega": safe_float(greeks_raw.get("vega")),
-                    "rho": safe_float(greeks_raw.get("rho")),
-                }
-
-            # 5. Market Depth Parsing
-            bid_ask = ff.get("marketLevel", {}).get("bidAskQuote", [])
-            market_depth = []
-
-            if isinstance(bid_ask, list):
-                for level in bid_ask[:5]:
-                    market_depth.append(
-                        {
-                            "bid_qty": safe_int(level.get("bidQ") or level.get("bq")),
-                            "bid_price": safe_float(level.get("bidP") or level.get("bp")),
-                            "ask_qty": safe_int(level.get("askQ") or level.get("aq")),
-                            "ask_price": safe_float(level.get("askP") or level.get("ap")),
-                        }
-                    )
-
-            # Calculations
-            price_change = round(ltp - close, 2) if (ltp > 0 and close > 0) else 0.0
-            p_change_pct = (
-                round((price_change / close) * 100, 2)
-                if (ltp > 0 and close > 0)
-                else 0.0
-            )
-
-            # Construct normalized output payload
-            payload = {
-                "instrument_key": instrument_key,
-                "ltp": ltp,
-                "close": close,
-                "change": price_change,
-                "change_pct": p_change_pct,
-                "ltt": ltt,
-                "ltq": ltq,
-                "open": open_price,
-                "high": high_price,
-                "low": low_price,
-                "volume": day_volume or vtt,
-                "atp": atp,
-                "oi": oi,
-                "upper_circuit": upper_circuit,
-                "lower_circuit": lower_circuit,
-                "greeks": greeks_data,
-                "depth": market_depth,
-                "info": contract_info or {},
-            }
 
             message_str = json.dumps(payload, default=str)
 
-            # A. Dispatch to generic clients and all-feeds clients
-            target_connections = set(self.active_connections) | set(
-                self.all_feeds_connections
-            )
+            # interval=0 means live tick
+            target_connections = set(self.active_connections)
 
-            # B. Dispatch to filtered option clients
+            # All-feeds live clients
+            target_connections |= set(self.all_feeds_connections.get(0, set()))
+
+            # Option live clients
             c_info = contract_info or {}
             strike = c_info.get("strike_price")
             itype = c_info.get("instrument_type")
 
             if strike is not None and itype:
-                option_key = f"{float(strike)}_{str(itype).upper()}"
+                option_key = build_option_key(strike, itype, interval=0)
 
                 if option_key in self.option_connections:
-                    matching_option_clients = self.option_connections[option_key]
-                    target_connections |= set(matching_option_clients)
+                    target_connections |= set(self.option_connections[option_key])
 
             if len(target_connections) == 0:
                 return
 
-            # Send payload to resolved connections
-            dead_connections = set()
-
-            for connection in target_connections:
-                try:
-                    await connection.send_text(message_str)
-                    self.sent_count += 1
-
-                except Exception as send_ex:
-                    self.failed_send_count += 1
-
-                    logger.error(
-                        f"Failed sending payload to WebSocket client: "
-                        f"{type(send_ex).__name__}: {send_ex}"
-                    )
-                    dead_connections.add(connection)
-
-            # Cleanup disconnected clients accurately from their respective pools
-            for dead in dead_connections:
-                if dead in self.active_connections:
-                    self.disconnect(dead)
-
-                if dead in self.all_feeds_connections:
-                    self.disconnect_all_feeds(dead)
-
-                for key, conn_set in list(self.option_connections.items()):
-                    if dead in conn_set:
-                        conn_set.discard(dead)
-
-                        logger.info(
-                            f"Dead client removed from /option pool. "
-                            f"key={key}, remaining={len(conn_set)}"
-                        )
+            await self._send_to_connections(target_connections, message_str)
 
         except Exception as ex:
             logger.error(
                 f"Exception inside broadcast_tick for instrument_key={instrument_key}: "
                 f"{type(ex).__name__}: {ex}"
             )
+
+    # ========================================================
+    # Candle Broadcast Engine
+    # ========================================================
+    async def broadcast_candle(
+        self,
+        instrument_key: str,
+        candle_payload: Dict[str, Any],
+        contract_info: Dict[str, Any],
+        interval: int,
+    ):
+        """
+        Broadcasts candle payload to interval-based clients.
+
+        Expected interval:
+            1, 3, or 5
+        """
+        self.candle_broadcast_count += 1
+        interval = normalize_interval(interval)
+
+        total_clients = self.get_active_connections_count()
+
+        if total_clients == 0:
+            return
+
+        try:
+            payload = {
+                "type": "candle",
+                "interval": interval,
+                "instrument_key": instrument_key,
+                **candle_payload,
+                "info": contract_info or {},
+            }
+
+            message_str = json.dumps(payload, default=str)
+
+            target_connections = set()
+
+            # All-feeds candle clients for this interval
+            target_connections |= set(self.all_feeds_connections.get(interval, set()))
+
+            # Option candle clients for this interval
+            c_info = contract_info or {}
+            strike = c_info.get("strike_price")
+            itype = c_info.get("instrument_type")
+
+            if strike is not None and itype:
+                option_key = build_option_key(strike, itype, interval=interval)
+
+                if option_key in self.option_connections:
+                    target_connections |= set(self.option_connections[option_key])
+
+            if len(target_connections) == 0:
+                return
+
+            await self._send_to_connections(target_connections, message_str)
+
+        except Exception as ex:
+            logger.error(
+                f"Exception inside broadcast_candle for instrument_key={instrument_key}, "
+                f"interval={interval}: {type(ex).__name__}: {ex}"
+            )
+
+    # ========================================================
+    # Send Helper
+    # ========================================================
+    async def _send_to_connections(self, target_connections: Set[WebSocket], message_str: str):
+        """Sends message to resolved WebSocket connections and cleans dead clients."""
+        dead_connections = set()
+
+        for connection in target_connections:
+            try:
+                await connection.send_text(message_str)
+                self.sent_count += 1
+
+            except Exception as send_ex:
+                self.failed_send_count += 1
+
+                logger.error(
+                    f"Failed sending payload to WebSocket client: "
+                    f"{type(send_ex).__name__}: {send_ex}"
+                )
+
+                dead_connections.add(connection)
+
+        for dead in dead_connections:
+            if dead in self.active_connections:
+                self.disconnect(dead)
+
+            for interval, conn_set in list(self.all_feeds_connections.items()):
+                if dead in conn_set:
+                    conn_set.discard(dead)
+
+                    logger.info(
+                        f"Dead client removed from /all-feeds pool. "
+                        f"interval={interval}, remaining={len(conn_set)}"
+                    )
+
+            for key, conn_set in list(self.option_connections.items()):
+                if dead in conn_set:
+                    conn_set.discard(dead)
+
+                    logger.info(
+                        f"Dead client removed from /option pool. "
+                        f"key={key}, remaining={len(conn_set)}"
+                    )
 
 
 broadcaster = Broadcaster()

@@ -1,5 +1,8 @@
 import asyncio
 import json
+from datetime import datetime
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
 import upstox_client
 
 from core import config
@@ -18,6 +21,14 @@ class UpstoxStreamer:
         self.task = None
         self.loop = None
 
+        # Market timezone loaded from core/config.py
+        self.market_timezone = self._load_market_timezone()
+        self.market_time_format = getattr(
+            config,
+            "MARKET_TIME_FORMAT",
+            "%Y-%m-%d %H:%M:%S %Z",
+        )
+
         # Runtime counters. Kept for internal status/debug if needed.
         self.message_count = 0
         self.feed_count = 0
@@ -26,12 +37,40 @@ class UpstoxStreamer:
         self.contract_match_count = 0
         self.contract_miss_count = 0
 
+    def _load_market_timezone(self):
+        """
+        Loads market timezone from config.
+
+        Default:
+            Asia/Kolkata
+
+        Add this in core/config.py:
+            MARKET_TIMEZONE = os.getenv("MARKET_TIMEZONE", "Asia/Kolkata")
+        """
+        timezone_name = getattr(config, "MARKET_TIMEZONE", "Asia/Kolkata")
+
+        try:
+            return ZoneInfo(timezone_name)
+        except ZoneInfoNotFoundError:
+            logger.error(
+                f"Invalid MARKET_TIMEZONE configured: {timezone_name}. "
+                "Falling back to Asia/Kolkata."
+            )
+            return ZoneInfo("Asia/Kolkata")
+
+    def _now_market_time(self) -> str:
+        """Returns current configured market time as formatted string."""
+        return datetime.now(self.market_timezone).strftime(self.market_time_format)
+
     async def start(self):
         """Starts Upstox WebSocket streamer in the background."""
-        logger.info("UpstoxStreamer.start() called")
+        logger.info(f"UpstoxStreamer.start() called at {self._now_market_time()}")
 
         if self.is_running:
-            logger.info("UpstoxStreamer already running. Skipping start.")
+            logger.info(
+                f"UpstoxStreamer already running. Skipping start. "
+                f"market_time={self._now_market_time()}"
+            )
             return
 
         self.is_running = True
@@ -39,49 +78,117 @@ class UpstoxStreamer:
 
         self.task = asyncio.create_task(self._run_loop())
 
-        logger.info("UpstoxStreamer background task created successfully")
+        logger.info(
+            f"UpstoxStreamer background task created successfully. "
+            f"market_time={self._now_market_time()}"
+        )
 
     async def stop(self):
         """Gracefully disconnects the streamer."""
-        logger.info("UpstoxStreamer.stop() called")
+        logger.info(f"UpstoxStreamer.stop() called at {self._now_market_time()}")
 
         self.is_running = False
 
         if self.streamer:
             try:
-                logger.info("Disconnecting Upstox streamer")
+                logger.info(
+                    f"Disconnecting Upstox streamer. "
+                    f"market_time={self._now_market_time()}"
+                )
                 self.streamer.disconnect()
-                logger.info("Upstox streamer disconnected successfully")
-            except Exception as e:
+                logger.info(
+                    f"Upstox streamer disconnected successfully. "
+                    f"market_time={self._now_market_time()}"
+                )
+            except Exception as ex:
                 logger.error(
                     f"Error disconnecting Upstox Streamer: "
-                    f"{type(e).__name__}: {e}"
+                    f"{type(ex).__name__}: {ex}. "
+                    f"market_time={self._now_market_time()}"
                 )
+            finally:
+                self.streamer = None
 
         if self.task:
             try:
-                self.task.cancel()
-                logger.info("Upstox background task cancelled")
-            except Exception as e:
+                current_task = asyncio.current_task()
+
+                if self.task is not current_task:
+                    self.task.cancel()
+
+                    try:
+                        await self.task
+                    except asyncio.CancelledError:
+                        logger.info(
+                            f"Upstox background task cancelled successfully. "
+                            f"market_time={self._now_market_time()}"
+                        )
+                else:
+                    logger.warning(
+                        "UpstoxStreamer.stop() called from inside its own task. "
+                        "Skipping await on same task."
+                    )
+
+            except Exception as ex:
                 logger.error(
                     f"Error cancelling Upstox task: "
-                    f"{type(e).__name__}: {e}"
+                    f"{type(ex).__name__}: {ex}. "
+                    f"market_time={self._now_market_time()}"
                 )
+            finally:
+                self.task = None
+
+    async def restart(self):
+        """
+        Restarts Upstox streamer so latest token and subscription keys are applied.
+
+        Use this after:
+            1. token_service.refresh_tokens()
+            2. get_options_contracts(save_data=True)
+            3. options_cache["subscribed_keys"] is updated
+        """
+        logger.info(f"UpstoxStreamer.restart() called at {self._now_market_time()}")
+
+        try:
+            await self.stop()
+
+            # Small delay to allow SDK websocket cleanup.
+            await asyncio.sleep(2)
+
+            await self.start()
+
+            logger.info(
+                f"UpstoxStreamer restarted successfully with latest "
+                f"subscription keys. market_time={self._now_market_time()}"
+            )
+
+        except Exception as ex:
+            logger.error(
+                f"Failed to restart UpstoxStreamer: "
+                f"{type(ex).__name__}: {ex}. "
+                f"market_time={self._now_market_time()}"
+            )
 
     async def _run_loop(self):
         """Main Upstox connection loop."""
-        logger.info("Entered UpstoxStreamer._run_loop")
+        logger.info(f"Entered UpstoxStreamer._run_loop at {self._now_market_time()}")
 
         while self.is_running:
             access_token = token_service.get_access_token()
 
             if not access_token:
-                logger.warning("No access token found in token_service. Retrying in 10s...")
+                logger.warning(
+                    f"No access token found in token_service. Retrying in 10s. "
+                    f"market_time={self._now_market_time()}"
+                )
                 await asyncio.sleep(10)
                 continue
 
             try:
-                logger.info("Configuring Upstox SDK client")
+                logger.info(
+                    f"Configuring Upstox SDK client. "
+                    f"market_time={self._now_market_time()}"
+                )
 
                 configuration = upstox_client.Configuration()
                 configuration.access_token = access_token
@@ -94,11 +201,17 @@ class UpstoxStreamer:
                 logger.info(f"Subscribed keys count from options_cache: {len(keys)}")
 
                 if not keys:
-                    logger.warning("No instrument keys found in options_cache. Waiting 5s...")
+                    logger.warning(
+                        f"No instrument keys found in options_cache. Waiting 5s. "
+                        f"market_time={self._now_market_time()}"
+                    )
                     await asyncio.sleep(5)
                     continue
 
-                logger.info("Creating Upstox MarketDataStreamerV3 instance")
+                logger.info(
+                    f"Creating Upstox MarketDataStreamerV3 instance. "
+                    f"market_time={self._now_market_time()}"
+                )
 
                 self.streamer = upstox_client.MarketDataStreamerV3(
                     api_client,
@@ -106,10 +219,16 @@ class UpstoxStreamer:
                     mode,
                 )
 
-                logger.info("MarketDataStreamerV3 instance created successfully")
+                logger.info(
+                    f"MarketDataStreamerV3 instance created successfully. "
+                    f"market_time={self._now_market_time()}"
+                )
 
                 def on_open():
-                    logger.info("Connected to Upstox Market Stream V3 WebSocket successfully.")
+                    logger.info(
+                        f"Connected to Upstox Market Stream V3 WebSocket successfully. "
+                        f"market_time={self._now_market_time()}"
+                    )
                     logger.info(f"Subscribed to {len(keys)} instruments.")
 
                 def on_message(message):
@@ -138,43 +257,59 @@ class UpstoxStreamer:
                             except Exception as ex:
                                 logger.error(
                                     f"_process_message future failed: "
-                                    f"{type(ex).__name__}: {ex}"
+                                    f"{type(ex).__name__}: {ex}. "
+                                    f"market_time={self._now_market_time()}"
                                 )
 
                         future.add_done_callback(callback)
 
                     else:
-                        logger.error("Main event loop not available or not running")
+                        logger.error(
+                            f"Main event loop not available or not running. "
+                            f"market_time={self._now_market_time()}"
+                        )
 
                 def on_error(error):
                     logger.error(
                         f"Upstox WebSocket Error: "
-                        f"{type(error).__name__}: {error}"
+                        f"{type(error).__name__}: {error}. "
+                        f"market_time={self._now_market_time()}"
                     )
 
                 def on_close(close_status_code, close_msg):
                     logger.warning(
                         f"Upstox WebSocket Closed: "
-                        f"{close_status_code} - {close_msg}"
+                        f"{close_status_code} - {close_msg}. "
+                        f"market_time={self._now_market_time()}"
                     )
 
-                logger.info("Attaching Upstox event listeners")
+                logger.info(
+                    f"Attaching Upstox event listeners. "
+                    f"market_time={self._now_market_time()}"
+                )
 
                 self.streamer.on("open", on_open)
                 self.streamer.on("message", on_message)
                 self.streamer.on("error", on_error)
                 self.streamer.on("close", on_close)
 
-                logger.info("Upstox event listeners attached successfully")
+                logger.info(
+                    f"Upstox event listeners attached successfully. "
+                    f"market_time={self._now_market_time()}"
+                )
 
                 # Important:
                 # connect() can block, so run it in a thread.
-                logger.info("Starting Upstox Market Stream V3 connection")
+                logger.info(
+                    f"Starting Upstox Market Stream V3 connection. "
+                    f"market_time={self._now_market_time()}"
+                )
                 await asyncio.to_thread(self.streamer.connect)
 
                 logger.warning(
                     "self.streamer.connect() returned. "
-                    "This may mean stream closed or SDK returned control."
+                    "This may mean stream closed or SDK returned control. "
+                    f"market_time={self._now_market_time()}"
                 )
 
                 # Keep loop alive if connect returns.
@@ -183,17 +318,21 @@ class UpstoxStreamer:
                     await asyncio.sleep(30)
 
             except asyncio.CancelledError:
-                logger.warning("Upstox _run_loop task cancelled")
+                logger.warning(
+                    f"Upstox _run_loop task cancelled. "
+                    f"market_time={self._now_market_time()}"
+                )
                 break
 
-            except Exception as e:
+            except Exception as ex:
                 logger.error(
                     f"WebSocket Connection Exception: "
-                    f"{type(e).__name__}: {e}. Reconnecting in 5s..."
+                    f"{type(ex).__name__}: {ex}. Reconnecting in 5s. "
+                    f"market_time={self._now_market_time()}"
                 )
                 await asyncio.sleep(5)
 
-        logger.info("Exiting UpstoxStreamer._run_loop")
+        logger.info(f"Exiting UpstoxStreamer._run_loop at {self._now_market_time()}")
 
     async def _process_message(self, message):
         """Routes decoded ticks to FastAPI WebSocket Broadcaster."""
@@ -214,13 +353,19 @@ class UpstoxStreamer:
                 tick_dict = json.loads(decoded_message)
 
             else:
-                logger.warning(f"Unsupported Upstox message type: {type(message)}")
+                logger.warning(
+                    f"Unsupported Upstox message type: {type(message)}. "
+                    f"market_time={self._now_market_time()}"
+                )
                 return
 
             feeds = tick_dict.get("feeds", {})
 
             if not isinstance(feeds, dict):
-                logger.warning(f"Invalid feeds object type: {type(feeds)}")
+                logger.warning(
+                    f"Invalid feeds object type: {type(feeds)}. "
+                    f"market_time={self._now_market_time()}"
+                )
                 return
 
             if len(feeds) == 0:
@@ -257,19 +402,22 @@ class UpstoxStreamer:
 
                     logger.error(
                         f"Broadcaster failed for key {key}: "
-                        f"{type(b_ex).__name__}: {b_ex}"
+                        f"{type(b_ex).__name__}: {b_ex}. "
+                        f"market_time={self._now_market_time()}"
                     )
 
         except json.JSONDecodeError as json_ex:
             logger.error(
                 f"JSON decode failed in Upstox message: "
-                f"{type(json_ex).__name__}: {json_ex}"
+                f"{type(json_ex).__name__}: {json_ex}. "
+                f"market_time={self._now_market_time()}"
             )
 
         except Exception as ex:
             logger.error(
                 f"Error processing Upstox tick message: "
-                f"{type(ex).__name__}: {ex}"
+                f"{type(ex).__name__}: {ex}. "
+                f"market_time={self._now_market_time()}"
             )
 
 
