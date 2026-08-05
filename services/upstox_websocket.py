@@ -8,7 +8,12 @@ import upstox_client
 from core import config
 from core.logger import get_logger
 from services.token_service import token_service
-from services.option_service import options_cache, get_feed_by_instrument_key
+from services.option_service import (
+    options_cache,
+    get_feed_by_instrument_key,
+    get_subscribed_instrument_keys,
+)
+from services.live_ema_service import live_ema_service
 from ws_feed.broadcaster import broadcaster
 
 logger = get_logger(__file__)
@@ -37,33 +42,100 @@ class UpstoxStreamer:
         self.contract_match_count = 0
         self.contract_miss_count = 0
 
+        # Live EMA counters
+        self.live_ema_processed_count = 0
+        self.live_ema_cross_count = 0
+        self.live_ema_failed_count = 0
+
     def _load_market_timezone(self):
         """
         Loads market timezone from config.
 
         Default:
             Asia/Kolkata
-
-        Add this in core/config.py:
-            MARKET_TIMEZONE = os.getenv("MARKET_TIMEZONE", "Asia/Kolkata")
         """
+
         timezone_name = getattr(config, "MARKET_TIMEZONE", "Asia/Kolkata")
 
         try:
             return ZoneInfo(timezone_name)
+
         except ZoneInfoNotFoundError:
             logger.error(
                 f"Invalid MARKET_TIMEZONE configured: {timezone_name}. "
                 "Falling back to Asia/Kolkata."
             )
+
             return ZoneInfo("Asia/Kolkata")
 
     def _now_market_time(self) -> str:
         """Returns current configured market time as formatted string."""
+
         return datetime.now(self.market_timezone).strftime(self.market_time_format)
+
+    def _should_process_incoming_message(self) -> bool:
+        """
+        Decides whether incoming Upstox messages should be scheduled for processing.
+
+        Old behavior:
+            Process only when local browser/WebSocket clients are connected.
+
+        New behavior:
+            Process if either:
+            1. local WebSocket clients are connected, or
+            2. LIVE_EMA_ENABLED=True
+
+        Reason:
+            Live EMA crossover detection must continue even when no dashboard/browser
+            client is connected.
+        """
+
+        connected_clients = broadcaster.get_active_connections_count()
+
+        if connected_clients > 0:
+            return True
+
+        return bool(getattr(config, "LIVE_EMA_ENABLED", True))
+
+    def get_status(self) -> dict:
+        """
+        Returns current streamer status.
+
+        Useful for health/debug endpoints.
+        """
+
+        live_ema_status = {}
+
+        try:
+            live_ema_status = live_ema_service.get_status()
+        except Exception as ex:
+            live_ema_status = {
+                "status": "error",
+                "error": f"{type(ex).__name__}: {ex}",
+            }
+
+        return {
+            "is_running": self.is_running,
+            "has_streamer": self.streamer is not None,
+            "has_task": self.task is not None,
+            "loop_available": self.loop is not None,
+            "loop_running": bool(self.loop and self.loop.is_running()),
+            "message_count": self.message_count,
+            "feed_count": self.feed_count,
+            "broadcast_success_count": self.broadcast_success_count,
+            "broadcast_failed_count": self.broadcast_failed_count,
+            "contract_match_count": self.contract_match_count,
+            "contract_miss_count": self.contract_miss_count,
+            "live_ema_processed_count": self.live_ema_processed_count,
+            "live_ema_cross_count": self.live_ema_cross_count,
+            "live_ema_failed_count": self.live_ema_failed_count,
+            "live_ema_status": live_ema_status,
+            "market_time": self._now_market_time(),
+        }
 
     async def start(self):
         """Starts Upstox WebSocket streamer in the background."""
+
         logger.info(f"UpstoxStreamer.start() called at {self._now_market_time()}")
 
         if self.is_running:
@@ -85,6 +157,7 @@ class UpstoxStreamer:
 
     async def stop(self):
         """Gracefully disconnects the streamer."""
+
         logger.info(f"UpstoxStreamer.stop() called at {self._now_market_time()}")
 
         self.is_running = False
@@ -95,17 +168,21 @@ class UpstoxStreamer:
                     f"Disconnecting Upstox streamer. "
                     f"market_time={self._now_market_time()}"
                 )
+
                 self.streamer.disconnect()
+
                 logger.info(
                     f"Upstox streamer disconnected successfully. "
                     f"market_time={self._now_market_time()}"
                 )
+
             except Exception as ex:
                 logger.error(
                     f"Error disconnecting Upstox Streamer: "
                     f"{type(ex).__name__}: {ex}. "
                     f"market_time={self._now_market_time()}"
                 )
+
             finally:
                 self.streamer = None
 
@@ -118,11 +195,13 @@ class UpstoxStreamer:
 
                     try:
                         await self.task
+
                     except asyncio.CancelledError:
                         logger.info(
                             f"Upstox background task cancelled successfully. "
                             f"market_time={self._now_market_time()}"
                         )
+
                 else:
                     logger.warning(
                         "UpstoxStreamer.stop() called from inside its own task. "
@@ -135,6 +214,7 @@ class UpstoxStreamer:
                     f"{type(ex).__name__}: {ex}. "
                     f"market_time={self._now_market_time()}"
                 )
+
             finally:
                 self.task = None
 
@@ -146,7 +226,10 @@ class UpstoxStreamer:
             1. token_service.refresh_tokens()
             2. get_options_contracts(save_data=True)
             3. options_cache["subscribed_keys"] is updated
+            4. Historical EMA is calculated
+            5. live_ema_service is initialized from historical EMA summary
         """
+
         logger.info(f"UpstoxStreamer.restart() called at {self._now_market_time()}")
 
         try:
@@ -169,8 +252,11 @@ class UpstoxStreamer:
                 f"market_time={self._now_market_time()}"
             )
 
+            raise
+
     async def _run_loop(self):
         """Main Upstox connection loop."""
+
         logger.info(f"Entered UpstoxStreamer._run_loop at {self._now_market_time()}")
 
         while self.is_running:
@@ -181,6 +267,7 @@ class UpstoxStreamer:
                     f"No access token found in token_service. Retrying in 10s. "
                     f"market_time={self._now_market_time()}"
                 )
+
                 await asyncio.sleep(10)
                 continue
 
@@ -192,9 +279,20 @@ class UpstoxStreamer:
 
                 configuration = upstox_client.Configuration()
                 configuration.access_token = access_token
+
                 api_client = upstox_client.ApiClient(configuration)
 
-                keys = options_cache.get("subscribed_keys", [])
+                # Get current subscription keys safely from option_service helper.
+                try:
+                    keys = get_subscribed_instrument_keys()
+
+                except Exception:
+                    logger.warning(
+                        "get_subscribed_instrument_keys() failed. "
+                        "Falling back to direct options_cache read."
+                    )
+                    keys = options_cache.get("subscribed_keys", [])
+
                 mode = getattr(config, "WEBSOCKET_FEED_MODE", "full")
 
                 logger.info(f"WebSocket feed mode: {mode}")
@@ -205,6 +303,7 @@ class UpstoxStreamer:
                         f"No instrument keys found in options_cache. Waiting 5s. "
                         f"market_time={self._now_market_time()}"
                     )
+
                     await asyncio.sleep(5)
                     continue
 
@@ -229,6 +328,7 @@ class UpstoxStreamer:
                         f"Connected to Upstox Market Stream V3 WebSocket successfully. "
                         f"market_time={self._now_market_time()}"
                     )
+
                     logger.info(f"Subscribed to {len(keys)} instruments.")
 
                 def on_message(message):
@@ -236,13 +336,17 @@ class UpstoxStreamer:
                     Upstox tick callback.
 
                     Important:
-                    If no local WebSocket clients are connected, do not schedule
-                    tick processing on FastAPI event loop. This prevents event-loop
-                    overload and allows /option handshakes to complete quickly.
+                    Old behavior skipped message processing when no local browser/WebSocket
+                    clients were connected.
+
+                    New behavior:
+                    We still process messages when LIVE_EMA_ENABLED=True because live EMA
+                    crossover detection must continue even without UI clients.
                     """
+
                     self.message_count += 1
 
-                    if broadcaster.get_active_connections_count() == 0:
+                    if not self._should_process_incoming_message():
                         return
 
                     if self.loop and self.loop.is_running():
@@ -254,6 +358,7 @@ class UpstoxStreamer:
                         def callback(f):
                             try:
                                 f.result()
+
                             except Exception as ex:
                                 logger.error(
                                     f"_process_message future failed: "
@@ -304,6 +409,7 @@ class UpstoxStreamer:
                     f"Starting Upstox Market Stream V3 connection. "
                     f"market_time={self._now_market_time()}"
                 )
+
                 await asyncio.to_thread(self.streamer.connect)
 
                 logger.warning(
@@ -322,6 +428,7 @@ class UpstoxStreamer:
                     f"Upstox _run_loop task cancelled. "
                     f"market_time={self._now_market_time()}"
                 )
+
                 break
 
             except Exception as ex:
@@ -330,17 +437,16 @@ class UpstoxStreamer:
                     f"{type(ex).__name__}: {ex}. Reconnecting in 5s. "
                     f"market_time={self._now_market_time()}"
                 )
+
                 await asyncio.sleep(5)
 
         logger.info(f"Exiting UpstoxStreamer._run_loop at {self._now_market_time()}")
 
     async def _process_message(self, message):
-        """Routes decoded ticks to FastAPI WebSocket Broadcaster."""
+        """Routes decoded ticks to live EMA service and FastAPI WebSocket Broadcaster."""
+
         try:
-            # Double-check local client count.
-            # If clients disconnected after on_message scheduled this task, skip processing.
-            if broadcaster.get_active_connections_count() == 0:
-                return
+            has_local_clients = broadcaster.get_active_connections_count() > 0
 
             if isinstance(message, dict):
                 tick_dict = message
@@ -357,6 +463,7 @@ class UpstoxStreamer:
                     f"Unsupported Upstox message type: {type(message)}. "
                     f"market_time={self._now_market_time()}"
                 )
+
                 return
 
             feeds = tick_dict.get("feeds", {})
@@ -366,6 +473,7 @@ class UpstoxStreamer:
                     f"Invalid feeds object type: {type(feeds)}. "
                     f"market_time={self._now_market_time()}"
                 )
+
                 return
 
             if len(feeds) == 0:
@@ -377,16 +485,67 @@ class UpstoxStreamer:
                 if not tick_data:
                     continue
 
-                # If all clients disconnected while processing, stop immediately.
-                if broadcaster.get_active_connections_count() == 0:
-                    return
-
                 contract_info = get_feed_by_instrument_key(key)
 
                 if contract_info:
                     self.contract_match_count += 1
+
                 else:
                     self.contract_miss_count += 1
+
+                # --------------------------------------------------------
+                # 1. Process live EMA crossover continuation.
+                # --------------------------------------------------------
+                live_ema_cross_event = None
+
+                try:
+                    if getattr(config, "LIVE_EMA_ENABLED", True):
+                        live_ema_cross_event = live_ema_service.process_live_feed(
+                            instrument_key=key,
+                            tick_data=tick_data,
+                            contract_info=contract_info,
+                        )
+
+                        self.live_ema_processed_count += 1
+
+                        if live_ema_cross_event:
+                            self.live_ema_cross_count += 1
+
+                            logger.info(
+                                f"Live EMA cross event generated for {key}: "
+                                f"{live_ema_cross_event.get('cross_type')} "
+                                f"at {live_ema_cross_event.get('timestamp')}"
+                            )
+
+                except Exception as ema_ex:
+                    self.live_ema_failed_count += 1
+
+                    logger.error(
+                        f"Live EMA processing failed for key {key}: "
+                        f"{type(ema_ex).__name__}: {ema_ex}. "
+                        f"market_time={self._now_market_time()}"
+                    )
+
+                # --------------------------------------------------------
+                # 2. Broadcast live EMA cross event if broadcaster supports it.
+                # --------------------------------------------------------
+                if live_ema_cross_event and has_local_clients:
+                    try:
+                        if hasattr(broadcaster, "broadcast_ema_cross"):
+                            await broadcaster.broadcast_ema_cross(live_ema_cross_event)
+
+                    except Exception as ema_broadcast_ex:
+                        logger.error(
+                            f"Broadcasting live EMA cross failed for key {key}: "
+                            f"{type(ema_broadcast_ex).__name__}: {ema_broadcast_ex}. "
+                            f"market_time={self._now_market_time()}"
+                        )
+
+                # --------------------------------------------------------
+                # 3. Broadcast normal live tick only when local clients exist.
+                # --------------------------------------------------------
+                if not has_local_clients:
+                    continue
 
                 try:
                     await broadcaster.broadcast_tick(

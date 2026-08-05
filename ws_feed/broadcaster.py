@@ -64,6 +64,7 @@ def append_raw_feed_log(instrument_key: str, tick_raw: Dict[str, Any]):
     This writes raw ticks to file only.
     It does not print raw ticks to console.
     """
+
     try:
         with _feed_log_lock:
             _initialize_feed_log_buffer()
@@ -128,6 +129,7 @@ def build_option_key(strike_price: float, instrument_type: str, interval: int = 
         24500.0_CE_1
         24500.0_CE_5
     """
+
     return f"{float(strike_price)}_{str(instrument_type).upper()}_{normalize_interval(interval)}"
 
 
@@ -159,6 +161,7 @@ class Broadcaster:
         # Counters
         self.broadcast_count = 0
         self.candle_broadcast_count = 0
+        self.ema_cross_broadcast_count = 0
         self.sent_count = 0
         self.failed_send_count = 0
 
@@ -166,6 +169,7 @@ class Broadcaster:
 
     def get_active_connections_count(self) -> int:
         """Returns total active WebSocket clients across all route types."""
+
         return (
             len(self.active_connections)
             + sum(len(s) for s in self.all_feeds_connections.values())
@@ -177,6 +181,7 @@ class Broadcaster:
     # ========================================================
     async def connect(self, websocket: WebSocket):
         """Tracks a generic live WebSocket connection."""
+
         self.active_connections.add(websocket)
 
         logger.info(
@@ -187,6 +192,7 @@ class Broadcaster:
 
     def disconnect(self, websocket: WebSocket):
         """Removes a generic WebSocket connection."""
+
         self.active_connections.discard(websocket)
 
         logger.info(
@@ -200,6 +206,7 @@ class Broadcaster:
     # ========================================================
     async def connect_all_feeds(self, websocket: WebSocket, interval: int = 0):
         """Tracks connection for /all-feeds endpoint by interval."""
+
         interval = normalize_interval(interval)
 
         if interval not in self.all_feeds_connections:
@@ -216,6 +223,7 @@ class Broadcaster:
 
     def disconnect_all_feeds(self, websocket: WebSocket, interval: int = 0):
         """Removes connection for /all-feeds endpoint."""
+
         interval = normalize_interval(interval)
 
         if interval in self.all_feeds_connections:
@@ -239,6 +247,7 @@ class Broadcaster:
         interval: int = 0,
     ):
         """Tracks connection for /option endpoint filtered by strike, CE/PE and interval."""
+
         interval = normalize_interval(interval)
         key = build_option_key(strike_price, instrument_type, interval)
 
@@ -263,6 +272,7 @@ class Broadcaster:
         interval: int = 0,
     ):
         """Removes connection for /option endpoint."""
+
         interval = normalize_interval(interval)
         key = build_option_key(strike_price, instrument_type, interval)
 
@@ -366,6 +376,7 @@ class Broadcaster:
                 )
 
         price_change = round(ltp - close, 2) if (ltp > 0 and close > 0) else 0.0
+
         p_change_pct = (
             round((price_change / close) * 100, 2)
             if (ltp > 0 and close > 0)
@@ -457,6 +468,79 @@ class Broadcaster:
             )
 
     # ========================================================
+    # Live EMA Cross Broadcast Engine
+    # ========================================================
+    async def broadcast_ema_cross(self, ema_cross_event: Dict[str, Any]):
+        """
+        Broadcasts live EMA crossover event to connected clients.
+
+        Payload example:
+            {
+                "type": "live_ema_cross",
+                "instrument_key": "NSE_INDEX|Nifty 50",
+                "timestamp": "2026-08-05T09:16:00+05:30",
+                "cross_type": "bullish_cross",
+                "interval_minutes": 1,
+                "close": 24774.3,
+                "ema_fast": 24613.6098,
+                "ema_slow": 24593.3994,
+                "info": {...}
+            }
+        """
+
+        self.ema_cross_broadcast_count += 1
+
+        total_clients = self.get_active_connections_count()
+
+        if total_clients == 0:
+            return
+
+        try:
+            if not isinstance(ema_cross_event, dict):
+                return
+
+            event = dict(ema_cross_event)
+            event["type"] = event.get("type", "live_ema_cross")
+
+            message_str = json.dumps(event, default=str)
+
+            target_connections = set(self.active_connections)
+
+            # Send EMA cross to all /all-feeds clients.
+            for conn_set in self.all_feeds_connections.values():
+                target_connections |= set(conn_set)
+
+            # Send to matching /option clients if option info exists.
+            info = event.get("info") or {}
+            strike = info.get("strike_price")
+            itype = info.get("instrument_type")
+            interval_minutes = normalize_interval(event.get("interval_minutes", 0))
+
+            if strike is not None and itype:
+                # Match exact interval pool first, e.g. 24500.0_CE_1
+                option_key = build_option_key(strike, itype, interval=interval_minutes)
+
+                if option_key in self.option_connections:
+                    target_connections |= set(self.option_connections[option_key])
+
+                # Also send to live interval 0 pool for compatibility.
+                live_option_key = build_option_key(strike, itype, interval=0)
+
+                if live_option_key in self.option_connections:
+                    target_connections |= set(self.option_connections[live_option_key])
+
+            if len(target_connections) == 0:
+                return
+
+            await self._send_to_connections(target_connections, message_str)
+
+        except Exception as ex:
+            logger.error(
+                f"Exception inside broadcast_ema_cross: "
+                f"{type(ex).__name__}: {ex}"
+            )
+
+    # ========================================================
     # Candle Broadcast Engine
     # ========================================================
     async def broadcast_candle(
@@ -472,6 +556,7 @@ class Broadcaster:
         Expected interval:
             1, 3, or 5
         """
+
         self.candle_broadcast_count += 1
         interval = normalize_interval(interval)
 
@@ -523,6 +608,7 @@ class Broadcaster:
     # ========================================================
     async def _send_to_connections(self, target_connections: Set[WebSocket], message_str: str):
         """Sends message to resolved WebSocket connections and cleans dead clients."""
+
         dead_connections = set()
 
         for connection in target_connections:
