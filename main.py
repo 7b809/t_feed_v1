@@ -631,10 +631,29 @@ def start_scheduler() -> BackgroundScheduler:
     return scheduler
 
 
+def log_registered_routes(fastapi_app: FastAPI):
+    """Logs all registered HTTP and WebSocket routes in the application."""
+    routes_list = []
+    for route in fastapi_app.routes:
+        methods = getattr(route, "methods", None)
+        path = getattr(route, "path", str(route))
+        if methods:
+            routes_list.append(f"HTTP {','.join(methods)} -> {path}")
+        else:
+            routes_list.append(f"WS -> {path}")
+
+    logger.info("=== Registered Application Routes ===")
+    for route_str in routes_list:
+        logger.info(f"  {route_str}")
+    logger.info("=====================================")
+
+
 @asynccontextmanager
 async def app_lifespan(app: FastAPI):
     """Handles async lifecycle startup/shutdown events for FastAPI."""
     logger.info("Executing lifespan startup sequence...")
+
+    log_registered_routes(app)
 
     scheduler = None
 
@@ -720,5 +739,3 @@ app.include_router(websocket_router)
 if __name__ == "__main__":
     logger.info("Starting FastAPI server with WebSockets on http://0.0.0.0:8000 ...")
     uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
-    
-    

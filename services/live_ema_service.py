@@ -1,3 +1,4 @@
+import asyncio
 import json
 from collections import deque
 from datetime import datetime
@@ -21,7 +22,8 @@ class LiveEMAService:
     3. Continue EMA 9/21 from historical latest EMA values.
     4. Detect live bullish/bearish EMA crossovers.
     5. Store crossover events in memory.
-    6. Optionally save crossover events to data/live_ema_cross_results.json.
+    6. Broadcast crossover events via optional registered callback.
+    7. Optionally save crossover events to data/live_ema_cross_results.json.
 
     Important:
     - Raw live ticks are not stored.
@@ -62,6 +64,9 @@ class LiveEMAService:
 
         self._lock = Lock()
 
+        # Optional async callback for broadcasting live crossovers
+        self.crossover_callback = None
+
         # Per instrument EMA state.
         self.state = {}
 
@@ -75,6 +80,18 @@ class LiveEMAService:
             f"fast_period={self.fast_period}, "
             f"slow_period={self.slow_period}"
         )
+
+    # ========================================================
+    # Callback Registration
+    # ========================================================
+
+    def register_crossover_callback(self, callback):
+        """
+        Registers an async callback function to handle crossover events in real-time.
+        Expected signature: async def callback(event: dict)
+        """
+        self.crossover_callback = callback
+        logger.info("Registered crossover callback in LiveEMAService.")
 
     # ========================================================
     # Time Helpers
@@ -719,6 +736,16 @@ class LiveEMAService:
         )
 
         self._save_live_events_if_enabled_locked()
+
+        # Trigger registered async callback to broadcast the crossover event
+        if self.crossover_callback:
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(self.crossover_callback(event))
+            except RuntimeError:
+                asyncio.run(self.crossover_callback(event))
+            except Exception as ex:
+                logger.error(f"Failed to execute crossover callback: {ex}")
 
         return event
 

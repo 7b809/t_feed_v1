@@ -140,6 +140,9 @@ class Broadcaster:
         # Generic live connection pool
         self.active_connections: Set[WebSocket] = set()
 
+        # Dedicated EMA crossover event connections pool
+        self.ema_crossover_connections: Set[WebSocket] = set()
+
         # Interval-aware all-feeds connections
         # Example:
         # {
@@ -172,6 +175,7 @@ class Broadcaster:
 
         return (
             len(self.active_connections)
+            + len(self.ema_crossover_connections)
             + sum(len(s) for s in self.all_feeds_connections.values())
             + sum(len(s) for s in self.option_connections.values())
         )
@@ -198,6 +202,31 @@ class Broadcaster:
         logger.info(
             f"Generic WebSocket client disconnected. "
             f"active_connections={len(self.active_connections)}, "
+            f"total_clients={self.get_active_connections_count()}"
+        )
+
+    # ========================================================
+    # EMA Crossover Connection Handlers
+    # ========================================================
+    async def connect_ema_crossover(self, websocket: WebSocket):
+        """Tracks connection for /ws/ema-crossover endpoint."""
+
+        self.ema_crossover_connections.add(websocket)
+
+        logger.info(
+            f"Client connected to /ws/ema-crossover. "
+            f"ema_clients={len(self.ema_crossover_connections)}, "
+            f"total_clients={self.get_active_connections_count()}"
+        )
+
+    def disconnect_ema_crossover(self, websocket: WebSocket):
+        """Removes connection for /ws/ema-crossover endpoint."""
+
+        self.ema_crossover_connections.discard(websocket)
+
+        logger.info(
+            f"Client disconnected from /ws/ema-crossover. "
+            f"remaining_ema_clients={len(self.ema_crossover_connections)}, "
             f"total_clients={self.get_active_connections_count()}"
         )
 
@@ -506,6 +535,9 @@ class Broadcaster:
 
             target_connections = set(self.active_connections)
 
+            # Send EMA cross to dedicated EMA crossover pool
+            target_connections |= set(self.ema_crossover_connections)
+
             # Send EMA cross to all /all-feeds clients.
             for conn_set in self.all_feeds_connections.values():
                 target_connections |= set(conn_set)
@@ -629,6 +661,9 @@ class Broadcaster:
         for dead in dead_connections:
             if dead in self.active_connections:
                 self.disconnect(dead)
+
+            if dead in self.ema_crossover_connections:
+                self.disconnect_ema_crossover(dead)
 
             for interval, conn_set in list(self.all_feeds_connections.items()):
                 if dead in conn_set:
