@@ -29,21 +29,30 @@ class LiveEMAService:
     - Raw live ticks are not stored.
     - Raw historical candles are not needed here.
     - This service works from EMA state only.
+    - Opening Range selected-instrument filtering is not done here.
+      It should be handled by opening_range_service through
+      process_selected_or_ema_cross_alert().
     """
 
     def __init__(self):
         self.enabled = bool(getattr(config, "LIVE_EMA_ENABLED", True))
 
-        self.interval_minutes = int(
-            getattr(config, "LIVE_EMA_INTERVAL_MINUTES", 1)
-        )
+        self.interval_minutes = int(getattr(config, "LIVE_EMA_INTERVAL_MINUTES", 1))
 
         self.fast_period = int(
-            getattr(config, "LIVE_EMA_FAST_PERIOD", getattr(config, "EMA_FAST_PERIOD", 9))
+            getattr(
+                config,
+                "LIVE_EMA_FAST_PERIOD",
+                getattr(config, "EMA_FAST_PERIOD", 9),
+            )
         )
 
         self.slow_period = int(
-            getattr(config, "LIVE_EMA_SLOW_PERIOD", getattr(config, "EMA_SLOW_PERIOD", 21))
+            getattr(
+                config,
+                "LIVE_EMA_SLOW_PERIOD",
+                getattr(config, "EMA_SLOW_PERIOD", 21),
+            )
         )
 
         self.output_file = getattr(
@@ -52,9 +61,7 @@ class LiveEMAService:
             "data/live_ema_cross_results.json",
         )
 
-        self.save_test_file = bool(
-            getattr(config, "LIVE_EMA_SAVE_TEST_FILE", True)
-        )
+        self.save_test_file = bool(getattr(config, "LIVE_EMA_SAVE_TEST_FILE", True))
 
         self.max_events_in_memory = int(
             getattr(config, "LIVE_EMA_MAX_EVENTS_IN_MEMORY", 5000)
@@ -64,7 +71,7 @@ class LiveEMAService:
 
         self._lock = Lock()
 
-        # Optional async callback for broadcasting live crossovers
+        # Optional async callback for broadcasting live crossovers.
         self.crossover_callback = None
 
         # Per instrument EMA state.
@@ -88,8 +95,11 @@ class LiveEMAService:
     def register_crossover_callback(self, callback):
         """
         Registers an async callback function to handle crossover events in real-time.
-        Expected signature: async def callback(event: dict)
+
+        Expected signature:
+            async def callback(event: dict)
         """
+
         self.crossover_callback = callback
         logger.info("Registered crossover callback in LiveEMAService.")
 
@@ -203,7 +213,9 @@ class LiveEMAService:
         skipped_count = 0
 
         if not self.enabled:
-            logger.info("Live EMA initialization skipped because LIVE_EMA_ENABLED=False.")
+            logger.info(
+                "Live EMA initialization skipped because LIVE_EMA_ENABLED=False."
+            )
             return {
                 "initialized": False,
                 "initialized_count": 0,
@@ -214,7 +226,9 @@ class LiveEMAService:
         results = (summary or {}).get("results", {})
 
         if not results:
-            logger.warning("Live EMA initialization skipped. No historical results found.")
+            logger.warning(
+                "Live EMA initialization skipped. No historical results found."
+            )
             return {
                 "initialized": False,
                 "initialized_count": 0,
@@ -253,6 +267,7 @@ class LiveEMAService:
                     "pending_live_candle_ts": None,
                     "aggregation_bucket": None,
                     "aggregation_bucket_start_ts": None,
+                    "aggregation_bucket_start_ms": None,
                     "crossovers": [],
                     "contract_info": item.get("contract_info", {}),
                     "updated_at": self._now_market_time(),
@@ -279,9 +294,11 @@ class LiveEMAService:
         """
         Extracts the feed container from Upstox full feed.
 
-        Supports both:
+        Supports:
             tick_data["ff"]["marketFF"]
             tick_data["ff"]["indexFF"]
+            tick_data["fullFeed"]["ff"]["marketFF"]
+            tick_data["fullFeed"]["ff"]["indexFF"]
         """
 
         if not isinstance(tick_data, dict):
@@ -303,19 +320,31 @@ class LiveEMAService:
 
     def _get_ohlc_list(self, tick_data: dict) -> list:
         """
-        Extracts marketOHLC.ohlc list from Upstox full feed.
+        Extracts OHLC list from Upstox full feed.
+
+        Supports:
+            marketOHLC.ohlc
+            optionOHLC.ohlc
         """
 
         ff = self._get_feed_container(tick_data)
 
-        market_ohlc = ff.get("marketOHLC", {})
-        ohlc_list = market_ohlc.get("ohlc", [])
+        if "marketOHLC" in ff:
+            ohlc_list = ff.get("marketOHLC", {}).get("ohlc", [])
+        elif "optionOHLC" in ff:
+            ohlc_list = ff.get("optionOHLC", {}).get("ohlc", [])
+        else:
+            ohlc_list = []
 
         return ohlc_list if isinstance(ohlc_list, list) else []
 
-    def _find_latest_feed_candle(self, tick_data: dict, interval_tag: str) -> dict | None:
+    def _find_latest_feed_candle(
+        self,
+        tick_data: dict,
+        interval_tag: str,
+    ) -> dict | None:
         """
-        Returns the latest candle from marketOHLC list for requested interval tag.
+        Returns the latest candle from OHLC list for requested interval tag.
 
         Example tags:
             I1
@@ -391,10 +420,7 @@ class LiveEMAService:
 
         multiplier = 2 / (period + 1)
 
-        next_ema = (
-            close_price * multiplier
-            + previous_ema * (1 - multiplier)
-        )
+        next_ema = close_price * multiplier + previous_ema * (1 - multiplier)
 
         return round(next_ema, 4)
 
@@ -485,7 +511,7 @@ class LiveEMAService:
         Floors timestamp to interval bucket start.
 
         Example:
-            09:17 with 5-minute interval -> 09:15 bucket.
+            09:17 with 5-minute interval becomes 09:15 bucket.
         """
 
         interval_ms = interval_minutes * 60 * 1000
@@ -607,10 +633,9 @@ class LiveEMAService:
             if previous_ema_fast is None or previous_ema_slow is None:
                 return None
 
-            # Phase 1:
             # Always consume Upstox I1 candle.
             # If configured interval is 1, process I1 directly.
-            # If configured interval is 5, aggregate I1 into 5-minute candle.
+            # If configured interval is greater than 1, aggregate I1 candles.
             latest_i1_raw = self._find_latest_feed_candle(tick_data, "I1")
 
             if not latest_i1_raw:
@@ -670,6 +695,7 @@ class LiveEMAService:
 
         previous_fast = self._safe_float(state.get("previous_ema_fast"))
         previous_slow = self._safe_float(state.get("previous_ema_slow"))
+        previous_signal = state.get("previous_signal")
 
         current_fast = self._calculate_next_ema(
             close_price=close_price,
@@ -715,8 +741,19 @@ class LiveEMAService:
             "ema_slow": current_slow,
             "previous_ema_fast": previous_fast,
             "previous_ema_slow": previous_slow,
+            "previous_signal": previous_signal,
+            "current_signal": current_signal,
             "source": "live_feed",
             "created_at": self._now_market_time(),
+            "candle": {
+                "timestamp": completed_candle.get("timestamp"),
+                "timestamp_ms": completed_candle.get("timestamp_ms"),
+                "open": completed_candle.get("open"),
+                "high": completed_candle.get("high"),
+                "low": completed_candle.get("low"),
+                "close": completed_candle.get("close"),
+                "volume": completed_candle.get("volume"),
+            },
             "info": contract_info or state.get("contract_info", {}),
         }
 
@@ -737,7 +774,6 @@ class LiveEMAService:
 
         self._save_live_events_if_enabled_locked()
 
-        # Trigger registered async callback to broadcast the crossover event
         if self.crossover_callback:
             try:
                 loop = asyncio.get_running_loop()
@@ -834,7 +870,6 @@ class LiveEMAService:
 
             copied = dict(state)
 
-            # Keep response lighter.
             crossovers = copied.get("crossovers", [])
             copied["crossovers_count"] = len(crossovers)
             copied["recent_crossovers"] = crossovers[-20:]

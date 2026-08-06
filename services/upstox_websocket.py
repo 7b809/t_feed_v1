@@ -14,6 +14,12 @@ from services.option_service import (
     get_subscribed_instrument_keys,
 )
 from services.live_ema_service import live_ema_service
+from services.opening_range_service import (
+    get_opening_range_status,
+    process_live_tick_for_opening_range,
+    process_selected_or_ema_cross_alert,
+    flush_pending_touch_alerts,
+)
 from ws_feed.broadcaster import broadcaster
 
 logger = get_logger(__file__)
@@ -47,6 +53,18 @@ class UpstoxStreamer:
         self.live_ema_cross_count = 0
         self.live_ema_failed_count = 0
 
+        # Selected OR + EMA Telegram counters
+        self.selected_or_ema_alert_processed_count = 0
+        self.selected_or_ema_alert_sent_count = 0
+        self.selected_or_ema_alert_failed_count = 0
+
+        # Opening Range live touch counters
+        self.opening_range_processed_count = 0
+        self.opening_range_touch_count = 0
+        self.opening_range_failed_count = 0
+        self.opening_range_broadcast_count = 0
+        self.opening_range_alert_flush_count = 0
+
     def _load_market_timezone(self):
         """
         Loads market timezone from config.
@@ -77,17 +95,16 @@ class UpstoxStreamer:
         """
         Decides whether incoming Upstox messages should be scheduled for processing.
 
-        Old behavior:
-            Process only when local browser/WebSocket clients are connected.
-
-        New behavior:
-            Process if either:
-            1. local WebSocket clients are connected, or
-            2. LIVE_EMA_ENABLED=True
+        Behavior:
+            Process if any one is true:
+            1. Local WebSocket clients are connected.
+            2. LIVE_EMA_ENABLED=True.
+            3. OPENING_RANGE_TOUCH_ALERT_ENABLED=True.
+            4. OPENING_RANGE_SELECTED_OR_EMA_ALERT_ENABLED=True.
 
         Reason:
-            Live EMA crossover detection must continue even when no dashboard/browser
-            client is connected.
+            Live EMA crossover detection and Opening Range R3/S3 touch detection
+            must continue even when no dashboard/browser client is connected.
         """
 
         connected_clients = broadcaster.get_active_connections_count()
@@ -95,7 +112,16 @@ class UpstoxStreamer:
         if connected_clients > 0:
             return True
 
-        return bool(getattr(config, "LIVE_EMA_ENABLED", True))
+        if bool(getattr(config, "LIVE_EMA_ENABLED", True)):
+            return True
+
+        if bool(getattr(config, "OPENING_RANGE_TOUCH_ALERT_ENABLED", True)):
+            return True
+
+        if bool(getattr(config, "OPENING_RANGE_SELECTED_OR_EMA_ALERT_ENABLED", True)):
+            return True
+
+        return False
 
     def get_status(self) -> dict:
         """
@@ -110,6 +136,16 @@ class UpstoxStreamer:
             live_ema_status = live_ema_service.get_status()
         except Exception as ex:
             live_ema_status = {
+                "status": "error",
+                "error": f"{type(ex).__name__}: {ex}",
+            }
+
+        opening_range_status = {}
+
+        try:
+            opening_range_status = get_opening_range_status()
+        except Exception as ex:
+            opening_range_status = {
                 "status": "error",
                 "error": f"{type(ex).__name__}: {ex}",
             }
@@ -129,7 +165,20 @@ class UpstoxStreamer:
             "live_ema_processed_count": self.live_ema_processed_count,
             "live_ema_cross_count": self.live_ema_cross_count,
             "live_ema_failed_count": self.live_ema_failed_count,
+            "selected_or_ema_alert_processed_count": (
+                self.selected_or_ema_alert_processed_count
+            ),
+            "selected_or_ema_alert_sent_count": (self.selected_or_ema_alert_sent_count),
+            "selected_or_ema_alert_failed_count": (
+                self.selected_or_ema_alert_failed_count
+            ),
             "live_ema_status": live_ema_status,
+            "opening_range_processed_count": self.opening_range_processed_count,
+            "opening_range_touch_count": self.opening_range_touch_count,
+            "opening_range_failed_count": self.opening_range_failed_count,
+            "opening_range_broadcast_count": self.opening_range_broadcast_count,
+            "opening_range_alert_flush_count": self.opening_range_alert_flush_count,
+            "opening_range_status": opening_range_status,
             "market_time": self._now_market_time(),
         }
 
@@ -228,6 +277,7 @@ class UpstoxStreamer:
             3. options_cache["subscribed_keys"] is updated
             4. Historical EMA is calculated
             5. live_ema_service is initialized from historical EMA summary
+            6. Opening Range cache may already be available after 09:18 job
         """
 
         logger.info(f"UpstoxStreamer.restart() called at {self._now_market_time()}")
@@ -335,13 +385,9 @@ class UpstoxStreamer:
                     """
                     Upstox tick callback.
 
-                    Important:
-                    Old behavior skipped message processing when no local browser/WebSocket
-                    clients were connected.
-
-                    New behavior:
-                    We still process messages when LIVE_EMA_ENABLED=True because live EMA
-                    crossover detection must continue even without UI clients.
+                    We process messages when there are local clients, live EMA is enabled,
+                    Opening Range touch alerting is enabled, or selected OR EMA alerting
+                    is enabled.
                     """
 
                     self.message_count += 1
@@ -443,7 +489,13 @@ class UpstoxStreamer:
         logger.info(f"Exiting UpstoxStreamer._run_loop at {self._now_market_time()}")
 
     async def _process_message(self, message):
-        """Routes decoded ticks to live EMA service and FastAPI WebSocket Broadcaster."""
+        """
+        Routes decoded ticks to:
+        1. Live EMA service
+        2. Selected OR instrument EMA Telegram bridge
+        3. Opening Range R3/S3 touch detection
+        4. FastAPI WebSocket broadcaster
+        """
 
         try:
             has_local_clients = broadcaster.get_active_connections_count() > 0
@@ -527,7 +579,73 @@ class UpstoxStreamer:
                     )
 
                 # --------------------------------------------------------
-                # 2. Broadcast live EMA cross event if broadcaster supports it.
+                # 2. Selected OR instrument EMA Telegram bridge.
+                # --------------------------------------------------------
+                if live_ema_cross_event:
+                    try:
+                        self.selected_or_ema_alert_processed_count += 1
+
+                        selected_alert_sent = process_selected_or_ema_cross_alert(
+                            live_ema_cross_event
+                        )
+
+                        if selected_alert_sent:
+                            self.selected_or_ema_alert_sent_count += 1
+
+                            logger.info(
+                                f"Selected OR EMA Telegram alert sent for {key}: "
+                                f"{live_ema_cross_event.get('cross_type')} "
+                                f"at {live_ema_cross_event.get('timestamp')}"
+                            )
+
+                    except Exception as selected_or_ema_ex:
+                        self.selected_or_ema_alert_failed_count += 1
+
+                        logger.error(
+                            f"Selected OR EMA alert processing failed for key {key}: "
+                            f"{type(selected_or_ema_ex).__name__}: "
+                            f"{selected_or_ema_ex}. "
+                            f"market_time={self._now_market_time()}"
+                        )
+
+                # --------------------------------------------------------
+                # 3. Process Opening Range R3/S3 touch detection.
+                # --------------------------------------------------------
+                opening_range_touch_events = []
+
+                try:
+                    if getattr(config, "OPENING_RANGE_TOUCH_ALERT_ENABLED", True):
+                        opening_range_touch_events = (
+                            process_live_tick_for_opening_range(
+                                instrument_key=key,
+                                tick_data=tick_data,
+                                contract_info=contract_info,
+                            )
+                        )
+
+                        self.opening_range_processed_count += 1
+
+                        if opening_range_touch_events:
+                            self.opening_range_touch_count += len(
+                                opening_range_touch_events
+                            )
+
+                            logger.info(
+                                f"Opening Range touch event generated for {key}. "
+                                f"events_count={len(opening_range_touch_events)}"
+                            )
+
+                except Exception as or_ex:
+                    self.opening_range_failed_count += 1
+
+                    logger.error(
+                        f"Opening Range live touch processing failed for key {key}: "
+                        f"{type(or_ex).__name__}: {or_ex}. "
+                        f"market_time={self._now_market_time()}"
+                    )
+
+                # --------------------------------------------------------
+                # 4. Broadcast live EMA cross event if broadcaster supports it.
                 # --------------------------------------------------------
                 if live_ema_cross_event and has_local_clients:
                     try:
@@ -542,7 +660,25 @@ class UpstoxStreamer:
                         )
 
                 # --------------------------------------------------------
-                # 3. Broadcast normal live tick only when local clients exist.
+                # 5. Broadcast Opening Range touch events if clients exist.
+                # --------------------------------------------------------
+                if opening_range_touch_events and has_local_clients:
+                    for or_event in opening_range_touch_events:
+                        try:
+                            if hasattr(broadcaster, "broadcast_opening_range"):
+                                await broadcaster.broadcast_opening_range(or_event)
+                                self.opening_range_broadcast_count += 1
+
+                        except Exception as or_broadcast_ex:
+                            logger.error(
+                                f"Broadcasting Opening Range touch failed for key {key}: "
+                                f"{type(or_broadcast_ex).__name__}: "
+                                f"{or_broadcast_ex}. "
+                                f"market_time={self._now_market_time()}"
+                            )
+
+                # --------------------------------------------------------
+                # 6. Broadcast normal live tick only when local clients exist.
                 # --------------------------------------------------------
                 if not has_local_clients:
                     continue
@@ -564,6 +700,28 @@ class UpstoxStreamer:
                         f"{type(b_ex).__name__}: {b_ex}. "
                         f"market_time={self._now_market_time()}"
                     )
+
+            # ------------------------------------------------------------
+            # 7. Flush pending Opening Range touch Telegram alerts.
+            # ------------------------------------------------------------
+            # In the new selected OR EMA flow, this will only send if
+            # OPENING_RANGE_LEGACY_TOUCH_TELEGRAM_ENABLED=True.
+            try:
+                if getattr(config, "OPENING_RANGE_TOUCH_ALERT_ENABLED", True):
+                    sent = flush_pending_touch_alerts(
+                        force=False,
+                        source="live_tick",
+                    )
+
+                    if sent:
+                        self.opening_range_alert_flush_count += 1
+
+            except Exception as flush_ex:
+                logger.error(
+                    f"Opening Range pending touch alert flush failed: "
+                    f"{type(flush_ex).__name__}: {flush_ex}. "
+                    f"market_time={self._now_market_time()}"
+                )
 
         except json.JSONDecodeError as json_ex:
             logger.error(

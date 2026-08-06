@@ -15,12 +15,16 @@ from services.token_service import token_service
 from services.upstox_websocket import upstox_streamer
 from services.telegram_service import telegram_service
 from services.history_service import fetch_historical_candles_for_all_subscribed
+from services.opening_range_service import calculate_opening_range_for_all_subscribed
 
 from api.home_routes import router as home_router
 from api.health_routes import router as health_router
 from api.debug_routes import router as debug_router
 from api.refresh_routes import router as refresh_router
 from api.history_routes import router as history_router
+from api.opening_range_routes import router as opening_range_router
+from api.ws_docs_routes import router as ws_docs_router
+
 from ws_feed.websocket_routes import router as websocket_router
 
 logger = get_logger(__file__)
@@ -84,7 +88,9 @@ def fetch_startup_historical_candles():
     Live EMA service is initialized from historical EMA summary.
     """
 
-    logger.info("================ STARTUP HISTORICAL EMA CROSSOVER LOAD STARTED ================")
+    logger.info(
+        "================ STARTUP HISTORICAL EMA CROSSOVER LOAD STARTED ================"
+    )
 
     try:
         subscribed_keys = options_cache.get("subscribed_keys", [])
@@ -161,7 +167,9 @@ def fetch_startup_historical_candles():
         return None
 
     finally:
-        logger.info("================ STARTUP HISTORICAL EMA CROSSOVER LOAD COMPLETED ================")
+        logger.info(
+            "================ STARTUP HISTORICAL EMA CROSSOVER LOAD COMPLETED ================"
+        )
 
 
 def fetch_daily_historical_candles():
@@ -179,7 +187,9 @@ def fetch_daily_historical_candles():
     Live EMA service is re-initialized from latest historical EMA summary.
     """
 
-    logger.info("================ DAILY HISTORICAL EMA CROSSOVER LOAD STARTED ================")
+    logger.info(
+        "================ DAILY HISTORICAL EMA CROSSOVER LOAD STARTED ================"
+    )
 
     try:
         subscribed_keys = options_cache.get("subscribed_keys", [])
@@ -256,7 +266,131 @@ def fetch_daily_historical_candles():
         return None
 
     finally:
-        logger.info("================ DAILY HISTORICAL EMA CROSSOVER LOAD COMPLETED ================")
+        logger.info(
+            "================ DAILY HISTORICAL EMA CROSSOVER LOAD COMPLETED ================"
+        )
+
+
+def run_daily_opening_range_fetch():
+    """
+    Scheduled opening range workflow.
+
+    Runs from APScheduler thread.
+
+    Default schedule:
+        Mon-Fri at 09:18 AM Asia/Kolkata
+
+    Purpose:
+    1. Read subscribed instruments from options_cache.
+    2. Fetch today's intraday candles for every subscribed instrument.
+    3. Select first N candles from market open.
+    4. Calculate open, high, low, close, average.
+    5. Calculate R1/S1, R2/S2, R3/S3 and thresholds.
+    6. Backfill scan post-OR candles for already touched R3/S3.
+    7. Save results to data/opening_range_results.json.
+    8. Update in-memory opening range cache.
+    9. Send Telegram alert for max 5 nearest touched instruments if configured.
+    """
+
+    logger.info("================ DAILY OPENING RANGE FETCH STARTED ================")
+
+    telegram_service.send_message(
+        title="Daily Opening Range Fetch Started",
+        message=(
+            "Opening range fetch started.\n\n"
+            "Actions:\n"
+            "1. Read subscribed instruments\n"
+            "2. Fetch today's intraday candles\n"
+            "3. Select opening range candles from market open\n"
+            "4. Calculate open, high, low, close, average\n"
+            "5. Calculate R1/S1, R2/S2, R3/S3 and thresholds\n"
+            "6. Backfill scan for R3/S3 touches before fetch time\n"
+            "7. Save opening range results locally\n"
+            "8. Send top nearest touch alert if any"
+        ),
+        level="REFRESH",
+    )
+
+    try:
+        subscribed_keys = options_cache.get("subscribed_keys", [])
+
+        if not subscribed_keys:
+            warning_message = (
+                "Opening range fetch skipped. "
+                "No subscribed instruments found in options_cache."
+            )
+
+            logger.warning(warning_message)
+
+            telegram_service.send_message(
+                title="Opening Range Fetch Skipped",
+                message=warning_message,
+                level="WARNING",
+            )
+
+            return None
+
+        opening_range_summary = calculate_opening_range_for_all_subscribed(
+            candle_count=getattr(config, "OPENING_RANGE_CANDLE_COUNT", 1),
+            save_data=getattr(config, "OPENING_RANGE_SAVE_FILE", True),
+            max_workers=getattr(config, "OPENING_RANGE_MAX_WORKERS", 5),
+        )
+
+        logger.info(
+            f"Daily opening range fetch completed. "
+            f"status={opening_range_summary.get('status')}, "
+            f"total_instruments={opening_range_summary.get('total_instruments')}, "
+            f"success={opening_range_summary.get('success_count')}, "
+            f"empty={opening_range_summary.get('empty_count')}, "
+            f"insufficient_data={opening_range_summary.get('insufficient_data_count')}, "
+            f"failed={opening_range_summary.get('failed_count')}, "
+            f"backfill_touch_events={opening_range_summary.get('backfill_touch_events_count', 0)}, "
+            f"latest_main_index_ltp={opening_range_summary.get('latest_main_index_ltp')}, "
+            f"output_file={opening_range_summary.get('output_file_path', 'not_saved')}"
+        )
+
+        telegram_service.send_message(
+            title="Daily Opening Range Fetch Completed",
+            message=(
+                f"Status: {opening_range_summary.get('status')}\n"
+                f"Date: {opening_range_summary.get('date')}\n"
+                f"Source: {opening_range_summary.get('source')}\n"
+                f"Interval: {opening_range_summary.get('interval')}\n"
+                f"Intraday Unit: {opening_range_summary.get('unit')}\n"
+                f"Intraday Interval: {opening_range_summary.get('intraday_interval')}\n"
+                f"Opening Range Candles: {opening_range_summary.get('opening_range_candle_count')}\n"
+                f"Market Open Time: {opening_range_summary.get('market_open_time')}\n"
+                f"Opening Range End Time: {opening_range_summary.get('opening_range_end_time')}\n"
+                f"Scheduled Fetch Time: {opening_range_summary.get('scheduled_fetch_time')}\n"
+                f"Total Instruments: {opening_range_summary.get('total_instruments')}\n"
+                f"Success: {opening_range_summary.get('success_count')}\n"
+                f"Empty: {opening_range_summary.get('empty_count')}\n"
+                f"Insufficient Data: {opening_range_summary.get('insufficient_data_count')}\n"
+                f"Failed: {opening_range_summary.get('failed_count')}\n"
+                f"Backfill Touch Events: {opening_range_summary.get('backfill_touch_events_count', 0)}\n"
+                f"Latest NIFTY LTP: {opening_range_summary.get('latest_main_index_ltp')}\n"
+                f"Output File: {opening_range_summary.get('output_file_path', 'not_saved')}"
+            ),
+            level="REFRESH",
+        )
+
+        return opening_range_summary
+
+    except Exception as ex:
+        logger.error(f"Daily opening range fetch failed: {type(ex).__name__}: {ex}")
+
+        telegram_service.send_exception_message(
+            title="Daily Opening Range Fetch Failed",
+            exception=ex,
+            context="run_daily_opening_range_fetch",
+        )
+
+        return None
+
+    finally:
+        logger.info(
+            "================ DAILY OPENING RANGE FETCH COMPLETED ================"
+        )
 
 
 def run_initial_startup():
@@ -607,18 +741,38 @@ def start_scheduler() -> BackgroundScheduler:
         replace_existing=True,
     )
 
+    scheduler.add_job(
+        func=run_daily_opening_range_fetch,
+        trigger=CronTrigger(
+            day_of_week="mon-fri",
+            hour=getattr(config, "OPENING_RANGE_FETCH_HOUR", 9),
+            minute=getattr(config, "OPENING_RANGE_FETCH_MINUTE", 18),
+            timezone=getattr(config, "MARKET_TIMEZONE", "Asia/Kolkata"),
+        ),
+        id="daily_opening_range_fetch_job",
+        replace_existing=True,
+    )
+
     scheduler.start()
 
     scheduler_message = (
         f"Scheduler active.\n\n"
         f"Token refresh interval: every {config.REFRESH_INTERVAL_MINUTES} minutes\n"
         f"Daily hard refresh: Mon-Fri at 09:00 AM "
+        f"{getattr(config, 'MARKET_TIMEZONE', 'Asia/Kolkata')}\n"
+        f"Opening range fetch: Mon-Fri at "
+        f"{getattr(config, 'OPENING_RANGE_FETCH_HOUR', 9):02d}:"
+        f"{getattr(config, 'OPENING_RANGE_FETCH_MINUTE', 18):02d} "
         f"{getattr(config, 'MARKET_TIMEZONE', 'Asia/Kolkata')}"
     )
 
     logger.info(
         f"Scheduler active: Token refresh every {config.REFRESH_INTERVAL_MINUTES} mins | "
         f"Daily market hard refresh scheduled for Mon-Fri at 09:00 AM "
+        f"{getattr(config, 'MARKET_TIMEZONE', 'Asia/Kolkata')} | "
+        f"Opening range fetch scheduled for Mon-Fri at "
+        f"{getattr(config, 'OPENING_RANGE_FETCH_HOUR', 9):02d}:"
+        f"{getattr(config, 'OPENING_RANGE_FETCH_MINUTE', 18):02d} "
         f"{getattr(config, 'MARKET_TIMEZONE', 'Asia/Kolkata')}."
     )
 
@@ -633,18 +787,23 @@ def start_scheduler() -> BackgroundScheduler:
 
 def log_registered_routes(fastapi_app: FastAPI):
     """Logs all registered HTTP and WebSocket routes in the application."""
-    routes_list = []
-    for route in fastapi_app.routes:
-        methods = getattr(route, "methods", None)
-        path = getattr(route, "path", str(route))
-        if methods:
-            routes_list.append(f"HTTP {','.join(methods)} -> {path}")
-        else:
-            routes_list.append(f"WS -> {path}")
 
     logger.info("=== Registered Application Routes ===")
-    for route_str in routes_list:
-        logger.info(f"  {route_str}")
+
+    for route in fastapi_app.routes:
+        path = getattr(route, "path", None)
+
+        if not path:
+            continue
+
+        methods = getattr(route, "methods", None)
+
+        if methods:
+            methods_text = ",".join(sorted(methods))
+            logger.info(f"  HTTP {methods_text} -> {path}")
+        else:
+            logger.info(f"  WS -> {path}")
+
     logger.info("=====================================")
 
 
@@ -733,8 +892,9 @@ app.include_router(health_router)
 app.include_router(debug_router)
 app.include_router(refresh_router)
 app.include_router(history_router)
+app.include_router(opening_range_router)
 app.include_router(websocket_router)
-
+app.include_router(ws_docs_router)
 
 if __name__ == "__main__":
     logger.info("Starting FastAPI server with WebSockets on http://0.0.0.0:8000 ...")

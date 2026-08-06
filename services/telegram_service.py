@@ -15,7 +15,8 @@ class TelegramService:
     Telegram notification service.
 
     Used for sending project lifecycle, scheduler, token, instrument,
-    subscription, refresh, and error notifications to a Telegram chat.
+    subscription, refresh, Opening Range, selected OR instrument,
+    EMA crossover, and error notifications to a Telegram chat.
     """
 
     def __init__(self):
@@ -40,10 +41,12 @@ class TelegramService:
 
     def _load_market_timezone(self):
         """Loads market timezone from config, defaulting to Asia/Kolkata."""
+
         timezone_name = getattr(config, "MARKET_TIMEZONE", "Asia/Kolkata")
 
         try:
             return ZoneInfo(timezone_name)
+
         except ZoneInfoNotFoundError:
             logger.error(
                 f"Invalid MARKET_TIMEZONE configured: {timezone_name}. "
@@ -53,14 +56,17 @@ class TelegramService:
 
     def _now_market_time(self) -> str:
         """Returns current market time as formatted string."""
+
         return datetime.now(self.market_timezone).strftime(self.market_time_format)
 
     def is_configured(self) -> bool:
         """Returns True if Telegram service has required configuration."""
+
         return bool(self.enabled and self.bot_token and self.chat_id and self.api_url)
 
     def _escape(self, value) -> str:
         """Escapes text for Telegram HTML parse mode."""
+
         return html.escape(str(value), quote=False)
 
     def _send_raw_message(self, message: str) -> bool:
@@ -70,6 +76,7 @@ class TelegramService:
         Returns:
             True if message was sent successfully, False otherwise.
         """
+
         if not self.is_configured():
             logger.warning(
                 "Telegram notification skipped. "
@@ -117,8 +124,10 @@ class TelegramService:
         Args:
             title: Notification title.
             message: Notification body.
-            level: INFO, SUCCESS, WARNING, ERROR, STARTUP, REFRESH, SUBSCRIPTION.
+            level: INFO, SUCCESS, WARNING, ERROR, STARTUP, REFRESH,
+                   SUBSCRIPTION, TOKEN, INSTRUMENTS, EMA, OPENING_RANGE.
         """
+
         level_upper = str(level or "INFO").upper()
 
         emoji_map = {
@@ -132,6 +141,9 @@ class TelegramService:
             "TOKEN": "🔐",
             "INSTRUMENTS": "📊",
             "SHUTDOWN": "🛑",
+            "EMA": "📈",
+            "OPENING_RANGE": "🎯",
+            "SELECTED_OR": "🎯",
         }
 
         emoji = emoji_map.get(level_upper, "ℹ️")
@@ -149,8 +161,13 @@ class TelegramService:
 
         return self._send_raw_message(formatted_message)
 
+    # ========================================================
+    # Application Lifecycle Messages
+    # ========================================================
+
     def send_startup_message(self, status: str, details: str = "") -> bool:
         """Sends application startup notification."""
+
         message = f"Application startup status: {status}"
 
         if details:
@@ -164,6 +181,7 @@ class TelegramService:
 
     def send_shutdown_message(self, details: str = "") -> bool:
         """Sends application shutdown notification."""
+
         message = "Application shutdown sequence executed."
 
         if details:
@@ -175,6 +193,10 @@ class TelegramService:
             level="SHUTDOWN",
         )
 
+    # ========================================================
+    # Token / Instrument / Subscription Messages
+    # ========================================================
+
     def send_token_refresh_message(
         self,
         success: bool,
@@ -182,6 +204,7 @@ class TelegramService:
         error: str = "",
     ) -> bool:
         """Sends token refresh notification."""
+
         if success:
             message = "Access token document refreshed successfully from MongoDB."
 
@@ -216,6 +239,7 @@ class TelegramService:
         error: str = "",
     ) -> bool:
         """Sends option instruments fetch notification."""
+
         if success:
             message = (
                 "Option instruments fetched and cache updated successfully.\n\n"
@@ -250,6 +274,7 @@ class TelegramService:
         error: str = "",
     ) -> bool:
         """Sends Upstox subscription or streamer restart notification."""
+
         if success:
             message = (
                 "Upstox streamer subscription is active.\n\n"
@@ -274,6 +299,10 @@ class TelegramService:
             level="ERROR",
         )
 
+    # ========================================================
+    # Refresh Messages
+    # ========================================================
+
     def send_daily_refresh_message(
         self,
         success: bool,
@@ -282,6 +311,7 @@ class TelegramService:
         error: str = "",
     ) -> bool:
         """Sends daily hard refresh notification."""
+
         if success:
             message = (
                 "Daily market hard refresh completed successfully.\n\n"
@@ -306,6 +336,124 @@ class TelegramService:
             level="ERROR",
         )
 
+    # ========================================================
+    # Selected Opening Range + EMA Messages
+    # ========================================================
+
+    def send_selected_or_instrument_message(
+        self,
+        instrument_key: str,
+        symbol: str,
+        level: str,
+        level_value,
+        trigger_field: str,
+        trigger_price,
+        touch_time,
+        source: str,
+        nifty_ltp=None,
+    ) -> bool:
+        """
+        Sends notification when the first R3/S3 touched instrument
+        is permanently selected for the current run/day.
+        """
+
+        message = (
+            "First R3/S3 touched instrument has been selected permanently "
+            "for this run.\n\n"
+            f"Symbol: {symbol}\n"
+            f"Instrument Key: {instrument_key}\n"
+            f"Selected Level: {level}\n"
+            f"Level Value: {level_value}\n"
+            f"Trigger {trigger_field}: {trigger_price}\n"
+            f"Touch Time: {touch_time}\n"
+            f"Source: {source}\n"
+            f"Current NIFTY LTP: {nifty_ltp if nifty_ltp is not None else 'not_available'}"
+        )
+
+        return self.send_message(
+            title="Opening Range Instrument Selected",
+            message=message,
+            level="SELECTED_OR",
+        )
+
+    def send_selected_or_ema_cross_message(
+        self,
+        selected_state: dict,
+        ema_event: dict,
+        nifty_ltp=None,
+    ) -> bool:
+        """
+        Sends Telegram alert when EMA crossover happens for the selected
+        Opening Range instrument only.
+        """
+
+        selected_state = selected_state or {}
+        ema_event = ema_event or {}
+
+        info = selected_state.get("contract_info") or ema_event.get("info") or {}
+
+        live_data = selected_state.get("latest_live_data") or {}
+        levels = selected_state.get("levels") or {}
+
+        symbol = (
+            info.get("trading_symbol")
+            or info.get("instrument_key")
+            or selected_state.get("instrument_key")
+            or ema_event.get("instrument_key")
+        )
+
+        message = (
+            "EMA crossover detected for the permanently selected "
+            "Opening Range instrument.\n\n"
+            "Selected Instrument:\n"
+            f"Symbol: {symbol}\n"
+            f"Instrument Key: {selected_state.get('instrument_key')}\n"
+            f"Selected Level: {selected_state.get('selected_level')}\n"
+            f"Level Value: {selected_state.get('level_value')}\n"
+            f"Trigger {selected_state.get('trigger_field')}: "
+            f"{selected_state.get('trigger_price')}\n"
+            f"Touch Time: {selected_state.get('touch_time')}\n"
+            f"Touch Source: {selected_state.get('touch_source')}\n\n"
+            "EMA Cross Data:\n"
+            f"Cross Type: {ema_event.get('cross_type')}\n"
+            f"Cross Time: {ema_event.get('timestamp')}\n"
+            f"Close: {ema_event.get('close')}\n"
+            f"EMA Fast Period: {ema_event.get('ema_fast_period')}\n"
+            f"EMA Slow Period: {ema_event.get('ema_slow_period')}\n"
+            f"EMA Fast: {ema_event.get('ema_fast')}\n"
+            f"EMA Slow: {ema_event.get('ema_slow')}\n"
+            f"Previous EMA Fast: {ema_event.get('previous_ema_fast')}\n"
+            f"Previous EMA Slow: {ema_event.get('previous_ema_slow')}\n"
+            f"Previous Signal: {ema_event.get('previous_signal')}\n"
+            f"Current Signal: {ema_event.get('current_signal')}\n\n"
+            "Current Live Data:\n"
+            f"Current NIFTY LTP: {nifty_ltp if nifty_ltp is not None else 'not_available'}\n"
+            f"Instrument LTP: {live_data.get('ltp')}\n"
+            f"Instrument High: {live_data.get('high')}\n"
+            f"Instrument Low: {live_data.get('low')}\n"
+            f"Instrument Close: {live_data.get('close')}\n"
+            f"Live Data Time: {live_data.get('timestamp')}\n\n"
+            "Opening Range Levels:\n"
+            f"R1: {levels.get('r1')}\n"
+            f"R2: {levels.get('r2')}\n"
+            f"R3: {levels.get('r3')}\n"
+            f"S1: {levels.get('s1')}\n"
+            f"S2: {levels.get('s2')}\n"
+            f"S3: {levels.get('s3')}\n"
+            f"R3 Threshold: {levels.get('r3_threshold')}\n"
+            f"S3 Threshold: {levels.get('s3_threshold')}"
+        )
+
+        return self.send_message(
+            title="Selected OR Instrument EMA Cross",
+            message=message,
+            level="EMA",
+        )
+
+    # ========================================================
+    # Exception Messages
+    # ========================================================
+
     def send_exception_message(
         self,
         title: str,
@@ -313,6 +461,7 @@ class TelegramService:
         context: str = "",
     ) -> bool:
         """Sends exception notification."""
+
         message = (
             f"Exception Type: {type(exception).__name__}\n"
             f"Exception Message: {exception}"

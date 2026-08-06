@@ -140,8 +140,29 @@ class Broadcaster:
         # Generic live connection pool
         self.active_connections: Set[WebSocket] = set()
 
-        # Dedicated EMA crossover event connections pool
+        # Global EMA crossover event connections pool.
+        # Clients here receive EMA crossover events for all instruments.
         self.ema_crossover_connections: Set[WebSocket] = set()
+
+        # Instrument-specific EMA crossover connections.
+        # Example:
+        # {
+        #   "NSE_INDEX|Nifty 50": {websocket1, websocket2},
+        #   "NSE_FO|41012": {websocket3}
+        # }
+        self.ema_instrument_connections: Dict[str, Set[WebSocket]] = {}
+
+        # Global Opening Range event connections pool.
+        # Clients here receive opening range events for all instruments.
+        self.opening_range_connections: Set[WebSocket] = set()
+
+        # Instrument-specific Opening Range event connections.
+        # Example:
+        # {
+        #   "NSE_INDEX|Nifty 50": {websocket1},
+        #   "NSE_FO|41012": {websocket2}
+        # }
+        self.opening_range_instrument_connections: Dict[str, Set[WebSocket]] = {}
 
         # Interval-aware all-feeds connections
         # Example:
@@ -165,6 +186,7 @@ class Broadcaster:
         self.broadcast_count = 0
         self.candle_broadcast_count = 0
         self.ema_cross_broadcast_count = 0
+        self.opening_range_broadcast_count = 0
         self.sent_count = 0
         self.failed_send_count = 0
 
@@ -176,6 +198,9 @@ class Broadcaster:
         return (
             len(self.active_connections)
             + len(self.ema_crossover_connections)
+            + sum(len(s) for s in self.ema_instrument_connections.values())
+            + len(self.opening_range_connections)
+            + sum(len(s) for s in self.opening_range_instrument_connections.values())
             + sum(len(s) for s in self.all_feeds_connections.values())
             + sum(len(s) for s in self.option_connections.values())
         )
@@ -206,7 +231,7 @@ class Broadcaster:
         )
 
     # ========================================================
-    # EMA Crossover Connection Handlers
+    # Global EMA Crossover Connection Handlers
     # ========================================================
     async def connect_ema_crossover(self, websocket: WebSocket):
         """Tracks connection for /ws/ema-crossover endpoint."""
@@ -229,6 +254,137 @@ class Broadcaster:
             f"remaining_ema_clients={len(self.ema_crossover_connections)}, "
             f"total_clients={self.get_active_connections_count()}"
         )
+
+    # ========================================================
+    # Instrument-Specific EMA Crossover Connection Handlers
+    # ========================================================
+    async def connect_ema_instrument(self, websocket: WebSocket, instrument_key: str):
+        """
+        Tracks connection for one instrument's EMA crossover events.
+
+        Example:
+            instrument_key=NSE_INDEX|Nifty 50
+            instrument_key=NSE_FO|41012
+        """
+
+        if not instrument_key:
+            logger.warning("connect_ema_instrument called without instrument_key.")
+            return
+
+        if instrument_key not in self.ema_instrument_connections:
+            self.ema_instrument_connections[instrument_key] = set()
+
+        self.ema_instrument_connections[instrument_key].add(websocket)
+
+        logger.info(
+            f"Client connected to instrument-specific EMA crossover feed. "
+            f"instrument_key={instrument_key}, "
+            f"clients_for_instrument={len(self.ema_instrument_connections[instrument_key])}, "
+            f"total_clients={self.get_active_connections_count()}"
+        )
+
+    def disconnect_ema_instrument(self, websocket: WebSocket, instrument_key: str):
+        """Removes connection for one instrument's EMA crossover events."""
+
+        if not instrument_key:
+            return
+
+        if instrument_key in self.ema_instrument_connections:
+            self.ema_instrument_connections[instrument_key].discard(websocket)
+
+            logger.info(
+                f"Client disconnected from instrument-specific EMA crossover feed. "
+                f"instrument_key={instrument_key}, "
+                f"remaining={len(self.ema_instrument_connections[instrument_key])}, "
+                f"total_clients={self.get_active_connections_count()}"
+            )
+
+            if len(self.ema_instrument_connections[instrument_key]) == 0:
+                self.ema_instrument_connections.pop(instrument_key, None)
+
+    # ========================================================
+    # Global Opening Range Connection Handlers
+    # ========================================================
+    async def connect_opening_range(self, websocket: WebSocket):
+        """Tracks connection for /ws/opening-range endpoint."""
+
+        self.opening_range_connections.add(websocket)
+
+        logger.info(
+            f"Client connected to /ws/opening-range. "
+            f"opening_range_clients={len(self.opening_range_connections)}, "
+            f"total_clients={self.get_active_connections_count()}"
+        )
+
+    def disconnect_opening_range(self, websocket: WebSocket):
+        """Removes connection for /ws/opening-range endpoint."""
+
+        self.opening_range_connections.discard(websocket)
+
+        logger.info(
+            f"Client disconnected from /ws/opening-range. "
+            f"remaining_opening_range_clients={len(self.opening_range_connections)}, "
+            f"total_clients={self.get_active_connections_count()}"
+        )
+
+    # ========================================================
+    # Instrument-Specific Opening Range Connection Handlers
+    # ========================================================
+    async def connect_opening_range_instrument(
+        self,
+        websocket: WebSocket,
+        instrument_key: str,
+    ):
+        """
+        Tracks connection for one instrument's opening range events.
+
+        Example:
+            instrument_key=NSE_INDEX|Nifty 50
+            instrument_key=NSE_FO|41012
+        """
+
+        if not instrument_key:
+            logger.warning(
+                "connect_opening_range_instrument called without instrument_key."
+            )
+            return
+
+        if instrument_key not in self.opening_range_instrument_connections:
+            self.opening_range_instrument_connections[instrument_key] = set()
+
+        self.opening_range_instrument_connections[instrument_key].add(websocket)
+
+        logger.info(
+            f"Client connected to instrument-specific opening range feed. "
+            f"instrument_key={instrument_key}, "
+            f"clients_for_instrument="
+            f"{len(self.opening_range_instrument_connections[instrument_key])}, "
+            f"total_clients={self.get_active_connections_count()}"
+        )
+
+    def disconnect_opening_range_instrument(
+        self,
+        websocket: WebSocket,
+        instrument_key: str,
+    ):
+        """Removes connection for one instrument's opening range events."""
+
+        if not instrument_key:
+            return
+
+        if instrument_key in self.opening_range_instrument_connections:
+            self.opening_range_instrument_connections[instrument_key].discard(websocket)
+
+            logger.info(
+                f"Client disconnected from instrument-specific opening range feed. "
+                f"instrument_key={instrument_key}, "
+                f"remaining="
+                f"{len(self.opening_range_instrument_connections[instrument_key])}, "
+                f"total_clients={self.get_active_connections_count()}"
+            )
+
+            if len(self.opening_range_instrument_connections[instrument_key]) == 0:
+                self.opening_range_instrument_connections.pop(instrument_key, None)
 
     # ========================================================
     # All Feeds Connection Handlers
@@ -264,6 +420,9 @@ class Broadcaster:
                 f"remaining_for_interval={len(self.all_feeds_connections[interval])}, "
                 f"total_clients={self.get_active_connections_count()}"
             )
+
+            if len(self.all_feeds_connections[interval]) == 0:
+                self.all_feeds_connections.pop(interval, None)
 
     # ========================================================
     # Option Connection Handlers
@@ -317,6 +476,7 @@ class Broadcaster:
 
             if len(self.option_connections[key]) == 0:
                 logger.info(f"Option connection pool empty for key: {key}")
+                self.option_connections.pop(key, None)
 
         else:
             logger.warning(
@@ -503,18 +663,12 @@ class Broadcaster:
         """
         Broadcasts live EMA crossover event to connected clients.
 
-        Payload example:
-            {
-                "type": "live_ema_cross",
-                "instrument_key": "NSE_INDEX|Nifty 50",
-                "timestamp": "2026-08-05T09:16:00+05:30",
-                "cross_type": "bullish_cross",
-                "interval_minutes": 1,
-                "close": 24774.3,
-                "ema_fast": 24613.6098,
-                "ema_slow": 24593.3994,
-                "info": {...}
-            }
+        Sends to:
+        1. Generic active clients
+        2. Global /ws/ema-crossover clients
+        3. Instrument-specific /ws/ema-crossover/instrument clients
+        4. All /all-feeds clients
+        5. Matching /option clients
         """
 
         self.ema_cross_broadcast_count += 1
@@ -535,14 +689,22 @@ class Broadcaster:
 
             target_connections = set(self.active_connections)
 
-            # Send EMA cross to dedicated EMA crossover pool
+            # 1. Send EMA cross to global EMA crossover clients.
             target_connections |= set(self.ema_crossover_connections)
 
-            # Send EMA cross to all /all-feeds clients.
+            # 2. Send EMA cross to instrument-specific EMA crossover clients.
+            instrument_key = event.get("instrument_key")
+
+            if instrument_key:
+                target_connections |= set(
+                    self.ema_instrument_connections.get(instrument_key, set())
+                )
+
+            # 3. Send EMA cross to all /all-feeds clients.
             for conn_set in self.all_feeds_connections.values():
                 target_connections |= set(conn_set)
 
-            # Send to matching /option clients if option info exists.
+            # 4. Send to matching /option clients if option info exists.
             info = event.get("info") or {}
             strike = info.get("strike_price")
             itype = info.get("instrument_type")
@@ -569,6 +731,92 @@ class Broadcaster:
         except Exception as ex:
             logger.error(
                 f"Exception inside broadcast_ema_cross: "
+                f"{type(ex).__name__}: {ex}"
+            )
+
+    # ========================================================
+    # Opening Range Broadcast Engine
+    # ========================================================
+    async def broadcast_opening_range(self, opening_range_event: Dict[str, Any]):
+        """
+        Broadcasts opening range event to connected clients.
+
+        Event types can be:
+            opening_range_levels
+            opening_range_r3_touch
+            opening_range_s3_touch
+            opening_range_r3_threshold_touch
+            opening_range_s3_threshold_touch
+
+        Sends to:
+        1. Generic active clients
+        2. Global /ws/opening-range clients
+        3. Instrument-specific /ws/opening-range/instrument clients
+        4. All /all-feeds clients
+        5. Matching /option clients
+        """
+
+        self.opening_range_broadcast_count += 1
+
+        total_clients = self.get_active_connections_count()
+
+        if total_clients == 0:
+            return
+
+        try:
+            if not isinstance(opening_range_event, dict):
+                return
+
+            event = dict(opening_range_event)
+            event["type"] = event.get("type", "opening_range_levels")
+
+            message_str = json.dumps(event, default=str)
+
+            target_connections = set(self.active_connections)
+
+            # 1. Send to global opening range clients.
+            target_connections |= set(self.opening_range_connections)
+
+            # 2. Send to instrument-specific opening range clients.
+            instrument_key = event.get("instrument_key")
+
+            if instrument_key:
+                target_connections |= set(
+                    self.opening_range_instrument_connections.get(
+                        instrument_key,
+                        set(),
+                    )
+                )
+
+            # 3. Send to all /all-feeds clients.
+            for conn_set in self.all_feeds_connections.values():
+                target_connections |= set(conn_set)
+
+            # 4. Send to matching /option clients if option info exists.
+            info = event.get("info") or event.get("contract_info") or {}
+            strike = info.get("strike_price")
+            itype = info.get("instrument_type")
+            interval = normalize_interval(event.get("interval_minutes", 0))
+
+            if strike is not None and itype:
+                option_key = build_option_key(strike, itype, interval=interval)
+
+                if option_key in self.option_connections:
+                    target_connections |= set(self.option_connections[option_key])
+
+                live_option_key = build_option_key(strike, itype, interval=0)
+
+                if live_option_key in self.option_connections:
+                    target_connections |= set(self.option_connections[live_option_key])
+
+            if len(target_connections) == 0:
+                return
+
+            await self._send_to_connections(target_connections, message_str)
+
+        except Exception as ex:
+            logger.error(
+                f"Exception inside broadcast_opening_range: "
                 f"{type(ex).__name__}: {ex}"
             )
 
@@ -638,7 +886,11 @@ class Broadcaster:
     # ========================================================
     # Send Helper
     # ========================================================
-    async def _send_to_connections(self, target_connections: Set[WebSocket], message_str: str):
+    async def _send_to_connections(
+        self,
+        target_connections: Set[WebSocket],
+        message_str: str,
+    ):
         """Sends message to resolved WebSocket connections and cleans dead clients."""
 
         dead_connections = set()
@@ -665,6 +917,38 @@ class Broadcaster:
             if dead in self.ema_crossover_connections:
                 self.disconnect_ema_crossover(dead)
 
+            for instrument_key, conn_set in list(self.ema_instrument_connections.items()):
+                if dead in conn_set:
+                    conn_set.discard(dead)
+
+                    logger.info(
+                        f"Dead client removed from instrument-specific EMA pool. "
+                        f"instrument_key={instrument_key}, remaining={len(conn_set)}"
+                    )
+
+                    if len(conn_set) == 0:
+                        self.ema_instrument_connections.pop(instrument_key, None)
+
+            if dead in self.opening_range_connections:
+                self.disconnect_opening_range(dead)
+
+            for instrument_key, conn_set in list(
+                self.opening_range_instrument_connections.items()
+            ):
+                if dead in conn_set:
+                    conn_set.discard(dead)
+
+                    logger.info(
+                        f"Dead client removed from instrument-specific opening range pool. "
+                        f"instrument_key={instrument_key}, remaining={len(conn_set)}"
+                    )
+
+                    if len(conn_set) == 0:
+                        self.opening_range_instrument_connections.pop(
+                            instrument_key,
+                            None,
+                        )
+
             for interval, conn_set in list(self.all_feeds_connections.items()):
                 if dead in conn_set:
                     conn_set.discard(dead)
@@ -674,6 +958,9 @@ class Broadcaster:
                         f"interval={interval}, remaining={len(conn_set)}"
                     )
 
+                    if len(conn_set) == 0:
+                        self.all_feeds_connections.pop(interval, None)
+
             for key, conn_set in list(self.option_connections.items()):
                 if dead in conn_set:
                     conn_set.discard(dead)
@@ -682,6 +969,9 @@ class Broadcaster:
                         f"Dead client removed from /option pool. "
                         f"key={key}, remaining={len(conn_set)}"
                     )
+
+                    if len(conn_set) == 0:
+                        self.option_connections.pop(key, None)
 
 
 broadcaster = Broadcaster()
