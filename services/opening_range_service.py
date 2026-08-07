@@ -46,19 +46,19 @@ opening_range_cache = {
     "touch_events_count": 0,
     "pending_touch_events_count": 0,
     "alert_sent_keys_count": 0,
-    "selected_or_instrument": None,
-    "selected_or_ema_alerts_count": 0,
     "data": {},
     "touch_events": [],
-    "selected_or_ema_alerts": [],
     "errors": {},
 }
 
 _touch_lock = Lock()
+
 _pending_touch_events = deque()
+
 _touch_events = deque(
     maxlen=int(getattr(config, "OPENING_RANGE_MAX_EVENTS_IN_MEMORY", 5000))
 )
+
 _alert_sent_keys = set()
 
 _latest_main_index_ltp = None
@@ -66,9 +66,14 @@ _latest_main_index_ltp_source = None
 _latest_main_index_ltp_updated_at = None
 _last_touch_alert_sent_at = None
 
+
 # ============================================================
-# New State: First R3/S3 Touched Instrument Selection
+# Disabled Selected OR Compatibility State
 # ============================================================
+# New requirement:
+# - No first touched instrument should be selected.
+# - No selected OR EMA Telegram alert should be sent.
+# - These objects/functions are kept only for API backward compatibility.
 
 _selected_or_lock = Lock()
 
@@ -89,13 +94,14 @@ _selected_or_instrument_state = {
     "latest_main_index_ltp": None,
     "ema_alerts_count": 0,
     "last_ema_alert": None,
+    "disabled": True,
+    "message": "Selected Opening Range instrument flow is disabled.",
 }
 
 _selected_or_ema_alerts = deque(
     maxlen=int(getattr(config, "OPENING_RANGE_MAX_EVENTS_IN_MEMORY", 5000))
 )
 
-_selected_or_ema_alert_keys = set()
 
 # ============================================================
 # Config Defaults
@@ -207,29 +213,14 @@ DEFAULT_TOUCH_EVENTS_SAVE_TEST_FILE = bool(
     getattr(config, "OPENING_RANGE_TOUCH_EVENTS_SAVE_TEST_FILE", True)
 )
 
-# New flow config
-DEFAULT_FIRST_TOUCH_SELECTION_ENABLED = bool(
-    getattr(config, "OPENING_RANGE_FIRST_TOUCH_SELECTION_ENABLED", True)
-)
-
-DEFAULT_FIRST_TOUCH_SELECTION_SOURCE = getattr(
-    config,
-    "OPENING_RANGE_FIRST_TOUCH_SELECTION_SOURCE",
-    "live_tick",
-)
-
-DEFAULT_SELECTED_OR_EMA_ALERT_ENABLED = bool(
-    getattr(config, "OPENING_RANGE_SELECTED_OR_EMA_ALERT_ENABLED", True)
-)
-
-DEFAULT_SELECTED_OR_TOUCH_NOTIFY_ENABLED = bool(
-    getattr(config, "OPENING_RANGE_SELECTED_OR_TOUCH_NOTIFY_ENABLED", True)
-)
-
-# Set this True only if you still want old R3/S3 touch Telegram batch alerts.
 DEFAULT_LEGACY_TOUCH_TELEGRAM_ENABLED = bool(
     getattr(config, "OPENING_RANGE_LEGACY_TOUCH_TELEGRAM_ENABLED", False)
 )
+
+DEFAULT_EMA_CROSS_INCLUDE_OPENING_RANGE_LEVELS = bool(
+    getattr(config, "EMA_CROSS_INCLUDE_OPENING_RANGE_LEVELS", True)
+)
+
 
 # ============================================================
 # Basic Helpers
@@ -310,9 +301,7 @@ def response_to_dict(api_response: Any) -> dict:
 
 
 def extract_candles_from_response(api_response: Any) -> list:
-    """
-    Extracts candle list from Upstox intraday candle API response.
-    """
+    """Extracts candle list from Upstox intraday candle API response."""
 
     response_dict = response_to_dict(api_response)
     data = response_dict.get("data", {})
@@ -325,9 +314,7 @@ def extract_candles_from_response(api_response: Any) -> list:
 
 
 def parse_candle_timestamp(timestamp_value) -> datetime | None:
-    """
-    Parses Upstox candle timestamp into timezone-aware datetime.
-    """
+    """Parses Upstox candle timestamp into timezone-aware datetime."""
 
     if timestamp_value is None:
         return None
@@ -435,9 +422,7 @@ def serialize_candle(candle: dict) -> dict:
 
 
 def get_subscribed_instrument_keys() -> list:
-    """
-    Returns subscribed instrument keys from options_cache.
-    """
+    """Returns subscribed instrument keys from options_cache."""
 
     subscribed_keys = options_cache.get("subscribed_keys", [])
 
@@ -489,9 +474,7 @@ def is_option_contract(contract_info: dict | None) -> bool:
 
 
 def get_market_open_datetime(target_date=None) -> datetime:
-    """
-    Builds market open datetime in market timezone.
-    """
+    """Builds market open datetime in market timezone."""
 
     market_tz = get_market_timezone()
     now_market = get_now_market_time()
@@ -513,9 +496,7 @@ def get_opening_range_end_datetime(
     candle_count: int = DEFAULT_OPENING_RANGE_CANDLE_COUNT,
     target_date=None,
 ) -> datetime:
-    """
-    Returns OR completion time.
-    """
+    """Returns OR completion time."""
 
     candle_count = max(1, int(candle_count or 1))
     market_open_dt = get_market_open_datetime(target_date=target_date)
@@ -527,15 +508,12 @@ def select_opening_range_candles(
     candles: list,
     candle_count: int = DEFAULT_OPENING_RANGE_CANDLE_COUNT,
 ) -> list:
-    """
-    Selects first N candles from market open.
-    """
+    """Selects first N candles from market open."""
 
     if not candles:
         return []
 
     candle_count = max(1, int(candle_count or 1))
-
     market_open_dt = get_market_open_datetime()
 
     selected = []
@@ -559,9 +537,7 @@ def select_post_opening_range_candles(
     candles: list,
     candle_count: int = DEFAULT_OPENING_RANGE_CANDLE_COUNT,
 ) -> list:
-    """
-    Selects candles after OR completion time.
-    """
+    """Selects candles after OR completion time."""
 
     if not candles:
         return []
@@ -588,9 +564,7 @@ def select_post_opening_range_candles(
 
 
 def calculate_opening_range_levels(selected_candles: list) -> dict:
-    """
-    Calculates opening range levels using Pine Script-compatible formula.
-    """
+    """Calculates opening range levels using Pine Script-compatible formula."""
 
     if not selected_candles:
         return {
@@ -706,10 +680,6 @@ def update_latest_main_index_ltp(
         opening_range_cache["latest_main_index_ltp_source"] = source
         opening_range_cache["latest_main_index_ltp_updated_at"] = updated_at
 
-    with _selected_or_lock:
-        if _selected_or_instrument_state.get("selected"):
-            _selected_or_instrument_state["latest_main_index_ltp"] = value
-
 
 def get_latest_main_index_ltp() -> float | None:
     """Returns latest main index LTP."""
@@ -758,232 +728,18 @@ def create_touch_event(
     }
 
 
-# ============================================================
-# New Helpers: First Touched Instrument Selection
-# ============================================================
-
-
-def is_selected_or_instrument_locked() -> bool:
-    """Returns True if first touched OR instrument is already selected."""
-
-    with _selected_or_lock:
-        return bool(_selected_or_instrument_state.get("selected"))
-
-
-def get_selected_or_instrument_key() -> str | None:
-    """Returns selected OR instrument key."""
-
-    with _selected_or_lock:
-        return _selected_or_instrument_state.get("instrument_key")
-
-
-def get_selected_or_instrument_state() -> dict:
-    """Returns selected OR instrument state."""
-
-    with _selected_or_lock:
-        return dict(_selected_or_instrument_state)
-
-
-def should_select_touch_source(source: str) -> bool:
-    """
-    Decides whether a touch event source can lock first OR instrument.
-
-    Default is live_tick only because requirement asks live data only.
-    """
-
-    selected_source = str(DEFAULT_FIRST_TOUCH_SELECTION_SOURCE or "live_tick").lower()
-    event_source = str(source or "").lower()
-
-    if selected_source in ["all", "any"]:
-        return True
-
-    return event_source == selected_source
-
-
-def get_opening_range_item_for_instrument(instrument_key: str) -> dict | None:
-    """Returns cached opening range item for an instrument."""
-
-    with _opening_range_cache_lock:
-        return opening_range_cache.get("data", {}).get(instrument_key)
-
-
-def update_selected_or_instrument_live_data(
-    instrument_key: str,
-    feed_values: dict,
-    contract_info: dict | None = None,
-):
-    """Updates latest live data for selected instrument."""
-
-    if not instrument_key or not isinstance(feed_values, dict):
-        return
-
-    with _selected_or_lock:
-        if not _selected_or_instrument_state.get("selected"):
-            return
-
-        if _selected_or_instrument_state.get("instrument_key") != instrument_key:
-            return
-
-        _selected_or_instrument_state["latest_live_data"] = {
-            "ltp": safe_float(feed_values.get("ltp")),
-            "high": safe_float(feed_values.get("high")),
-            "low": safe_float(feed_values.get("low")),
-            "close": safe_float(feed_values.get("close")),
-            "timestamp": feed_values.get("timestamp"),
-            "contract_info": contract_info
-            or _selected_or_instrument_state.get("contract_info"),
-            "updated_at": get_now_market_time().isoformat(),
-        }
-
-        _selected_or_instrument_state["latest_main_index_ltp"] = (
-            get_latest_main_index_ltp()
-        )
-
-    with _opening_range_cache_lock:
-        opening_range_cache["selected_or_instrument"] = dict(
-            _selected_or_instrument_state
-        )
-
-
-def send_selected_or_touch_notification(event: dict) -> bool:
-    """Sends one Telegram notification when first OR instrument is locked."""
-
-    if not DEFAULT_SELECTED_OR_TOUCH_NOTIFY_ENABLED:
-        return False
-
-    info = event.get("contract_info") or {}
-    symbol = (
-        info.get("trading_symbol")
-        or info.get("instrument_key")
-        or event.get("instrument_key")
-    )
-
-    message = (
-        "First R3/S3 touched instrument has been selected permanently for this run.\n\n"
-        f"Instrument: {symbol}\n"
-        f"Instrument Key: {event.get('instrument_key')}\n"
-        f"Level: {event.get('level')}\n"
-        f"Level Value: {event.get('level_value')}\n"
-        f"Trigger {event.get('trigger_field')}: {event.get('trigger_price')}\n"
-        f"Touch Time: {event.get('touch_time')}\n"
-        f"Source: {event.get('source')}\n"
-        f"Current NIFTY LTP: {get_latest_main_index_ltp()}"
-    )
-
-    return telegram_service.send_message(
-        title="Opening Range Instrument Selected",
-        message=message,
-        level="REFRESH",
-    )
-
-
-def try_select_first_or_touched_instrument(
-    event: dict,
-    opening_range_item: dict | None = None,
-    latest_live_data: dict | None = None,
-) -> bool:
-    """
-    Permanently selects the first instrument that touches/crosses R3/S3.
-
-    Once selected:
-        - all other instruments are ignored
-        - EMA Telegram alerts are sent only for this selected instrument
-    """
-
-    if not DEFAULT_FIRST_TOUCH_SELECTION_ENABLED:
-        return False
-
-    if not isinstance(event, dict):
-        return False
-
-    if not should_select_touch_source(event.get("source")):
-        return False
-
-    instrument_key = event.get("instrument_key")
-
-    if not instrument_key:
-        return False
-
-    contract_info = event.get("contract_info") or {}
-
-    if DEFAULT_TOUCH_ALERT_OPTIONS_ONLY and not is_option_contract(contract_info):
-        return False
-
-    if opening_range_item is None:
-        opening_range_item = get_opening_range_item_for_instrument(instrument_key)
-
-    with _selected_or_lock:
-        if _selected_or_instrument_state.get("selected"):
-            return _selected_or_instrument_state.get("instrument_key") == instrument_key
-
-        _selected_or_instrument_state["selected"] = True
-        _selected_or_instrument_state["instrument_key"] = instrument_key
-        _selected_or_instrument_state["selected_level"] = event.get("level")
-        _selected_or_instrument_state["level_value"] = event.get("level_value")
-        _selected_or_instrument_state["trigger_price"] = event.get("trigger_price")
-        _selected_or_instrument_state["trigger_field"] = event.get("trigger_field")
-        _selected_or_instrument_state["touch_time"] = event.get("touch_time")
-        _selected_or_instrument_state["touch_source"] = event.get("source")
-        _selected_or_instrument_state["selected_at"] = get_now_market_time().isoformat()
-        _selected_or_instrument_state["contract_info"] = contract_info
-        _selected_or_instrument_state["range"] = (
-            opening_range_item.get("range") if opening_range_item else None
-        )
-        _selected_or_instrument_state["levels"] = (
-            opening_range_item.get("levels") if opening_range_item else None
-        )
-        _selected_or_instrument_state["latest_live_data"] = latest_live_data
-        _selected_or_instrument_state["latest_main_index_ltp"] = (
-            get_latest_main_index_ltp()
-        )
-        _selected_or_instrument_state["ema_alerts_count"] = 0
-        _selected_or_instrument_state["last_ema_alert"] = None
-
-    with _opening_range_cache_lock:
-        opening_range_cache["selected_or_instrument"] = dict(
-            _selected_or_instrument_state
-        )
-
-    logger.info(
-        f"Selected first OR touched instrument permanently. "
-        f"instrument_key={instrument_key}, level={event.get('level')}, "
-        f"touch_time={event.get('touch_time')}, source={event.get('source')}"
-    )
-
-    send_selected_or_touch_notification(event)
-
-    return True
-
-
-def is_event_for_selected_or_instrument(instrument_key: str) -> bool:
-    """Returns True if given instrument is the selected OR instrument."""
-
-    with _selected_or_lock:
-        return (
-            bool(_selected_or_instrument_state.get("selected"))
-            and _selected_or_instrument_state.get("instrument_key") == instrument_key
-        )
-
-
 def should_skip_touch_alert(
     instrument_key: str,
     level: str,
     contract_info: dict | None = None,
 ) -> bool:
-    """Checks whether touch alert should be skipped."""
+    """Checks whether touch event should be skipped."""
 
     if not DEFAULT_TOUCH_ALERT_ENABLED:
         return True
 
     if DEFAULT_TOUCH_ALERT_OPTIONS_ONLY and not is_option_contract(contract_info):
         return True
-
-    with _selected_or_lock:
-        selected = bool(_selected_or_instrument_state.get("selected"))
-        selected_key = _selected_or_instrument_state.get("instrument_key")
-
-        if selected and selected_key != instrument_key:
-            return True
 
     alert_key = build_alert_key(instrument_key, level)
 
@@ -995,7 +751,7 @@ def should_skip_touch_alert(
 
 
 def mark_touch_alert_sent(event: dict):
-    """Marks instrument-level alert as sent."""
+    """Marks instrument-level touch as already tracked."""
 
     alert_key = event.get("alert_key")
 
@@ -1025,6 +781,51 @@ def queue_touch_event(event: dict):
         opening_range_cache["touch_events"] = list(_touch_events)
 
 
+def get_default_touch_status() -> dict:
+    """Returns default touch status."""
+
+    return {
+        "r3_touched": False,
+        "s3_touched": False,
+        "r3_touch_time": None,
+        "s3_touch_time": None,
+        "r3_alert_sent": False,
+        "s3_alert_sent": False,
+        "first_touch_level": None,
+        "first_touch_source": None,
+        "first_touch_time": None,
+        "events": [],
+    }
+
+
+def build_touch_status_from_events(events: list) -> dict:
+    """Builds touch status from detected events."""
+
+    status = get_default_touch_status()
+
+    for event in events:
+        level = str(event.get("level", "")).upper()
+
+        if level == "R3":
+            status["r3_touched"] = True
+            status["r3_touch_time"] = event.get("touch_time")
+            status["r3_alert_sent"] = True
+
+        elif level == "S3":
+            status["s3_touched"] = True
+            status["s3_touch_time"] = event.get("touch_time")
+            status["s3_alert_sent"] = True
+
+        if not status.get("first_touch_level"):
+            status["first_touch_level"] = level
+            status["first_touch_source"] = event.get("source")
+            status["first_touch_time"] = event.get("touch_time")
+
+        status.setdefault("events", []).append(event)
+
+    return status
+
+
 def update_touch_status_in_cache(
     instrument_key: str,
     event: dict,
@@ -1042,27 +843,18 @@ def update_touch_status_in_cache(
 
         touch_status = item.setdefault(
             "touch_status",
-            {
-                "r3_touched": False,
-                "s3_touched": False,
-                "r3_touch_time": None,
-                "s3_touch_time": None,
-                "r3_alert_sent": False,
-                "s3_alert_sent": False,
-                "first_touch_level": None,
-                "first_touch_source": None,
-                "first_touch_time": None,
-                "events": [],
-            },
+            get_default_touch_status(),
         )
 
         if level == "R3":
             touch_status["r3_touched"] = True
             touch_status["r3_touch_time"] = event.get("touch_time")
+            touch_status["r3_alert_sent"] = True
 
         elif level == "S3":
             touch_status["s3_touched"] = True
             touch_status["s3_touch_time"] = event.get("touch_time")
+            touch_status["s3_alert_sent"] = True
 
         if not touch_status.get("first_touch_level"):
             touch_status["first_touch_level"] = level
@@ -1173,14 +965,7 @@ def scan_backfill_touches(
     contract_info: dict,
     candle_count: int,
 ) -> list:
-    """
-    Scans post-OR intraday candles for already touched R3/S3.
-
-    Note:
-        First selected OR instrument defaults to live_tick only.
-        So backfill events are tracked, but they do not lock selected instrument
-        unless OPENING_RANGE_FIRST_TOUCH_SELECTION_SOURCE is set to all or intraday_backfill_scan.
-    """
+    """Scans post-OR intraday candles for already touched R3/S3."""
 
     if not DEFAULT_BACKFILL_SCAN_ENABLED:
         return []
@@ -1203,14 +988,6 @@ def scan_backfill_touches(
 
         for event in detected:
             events.append(event)
-
-            try_select_first_or_touched_instrument(
-                event=event,
-                opening_range_item=get_opening_range_item_for_instrument(
-                    instrument_key
-                ),
-                latest_live_data=None,
-            )
 
             if DEFAULT_TOUCH_ALERT_ONCE_PER_LEVEL:
                 mark_touch_alert_sent(event)
@@ -1295,10 +1072,10 @@ def process_live_tick_for_opening_range(
     Processes live tick for Opening Range R3/S3 touch detection.
 
     New behavior:
-        1. First live option touching/crossing R3/S3 is permanently selected.
-        2. Other instruments are ignored after selection.
-        3. Touch Telegram batch is disabled by default.
-        4. EMA Telegram happens later through process_selected_or_ema_cross_alert().
+    - No first touched instrument is selected.
+    - No other instruments are ignored after touch.
+    - Touch events are tracked for all option instruments.
+    - Legacy Telegram touch alert remains disabled unless explicitly enabled.
     """
 
     if not DEFAULT_LIVE_TOUCH_ALERT_ENABLED:
@@ -1324,13 +1101,6 @@ def process_live_tick_for_opening_range(
     if DEFAULT_TOUCH_ALERT_OPTIONS_ONLY and not is_option_contract(contract_info):
         return []
 
-    with _selected_or_lock:
-        selected = bool(_selected_or_instrument_state.get("selected"))
-        selected_key = _selected_or_instrument_state.get("instrument_key")
-
-    if selected and selected_key != instrument_key:
-        return []
-
     with _opening_range_cache_lock:
         item = opening_range_cache.get("data", {}).get(instrument_key)
 
@@ -1344,12 +1114,6 @@ def process_live_tick_for_opening_range(
 
     if not levels:
         return []
-
-    update_selected_or_instrument_live_data(
-        instrument_key=instrument_key,
-        feed_values=feed_values,
-        contract_info=contract_info,
-    )
 
     r3 = safe_float(levels.get("r3"))
     s3 = safe_float(levels.get("s3"))
@@ -1378,47 +1142,35 @@ def process_live_tick_for_opening_range(
 
     if r3_condition:
         if not should_skip_touch_alert(instrument_key, "R3", contract_info):
-            event = create_touch_event(
-                instrument_key=instrument_key,
-                level="R3",
-                level_value=r3,
-                trigger_price=r3_trigger,
-                trigger_field=r3_field,
-                touch_time=event_time,
-                source="live_tick",
-                contract_info=contract_info,
+            events.append(
+                create_touch_event(
+                    instrument_key=instrument_key,
+                    level="R3",
+                    level_value=r3,
+                    trigger_price=r3_trigger,
+                    trigger_field=r3_field,
+                    touch_time=event_time,
+                    source="live_tick",
+                    contract_info=contract_info,
+                )
             )
-            events.append(event)
 
     if s3_condition:
         if not should_skip_touch_alert(instrument_key, "S3", contract_info):
-            event = create_touch_event(
-                instrument_key=instrument_key,
-                level="S3",
-                level_value=s3,
-                trigger_price=s3_trigger,
-                trigger_field=s3_field,
-                touch_time=event_time,
-                source="live_tick",
-                contract_info=contract_info,
+            events.append(
+                create_touch_event(
+                    instrument_key=instrument_key,
+                    level="S3",
+                    level_value=s3,
+                    trigger_price=s3_trigger,
+                    trigger_field=s3_field,
+                    touch_time=event_time,
+                    source="live_tick",
+                    contract_info=contract_info,
+                )
             )
-            events.append(event)
 
     for event in events:
-        try_select_first_or_touched_instrument(
-            event=event,
-            opening_range_item=item,
-            latest_live_data={
-                "ltp": ltp,
-                "high": high_value,
-                "low": low_value,
-                "close": close_value,
-                "timestamp": event_time,
-                "contract_info": contract_info,
-                "updated_at": get_now_market_time().isoformat(),
-            },
-        )
-
         if DEFAULT_TOUCH_ALERT_ONCE_PER_LEVEL:
             mark_touch_alert_sent(event)
 
@@ -1429,7 +1181,7 @@ def process_live_tick_for_opening_range(
 
 
 # ============================================================
-# Telegram Alert Helpers
+# Legacy Telegram Touch Alert Helpers
 # ============================================================
 
 
@@ -1492,7 +1244,7 @@ def send_touch_events_telegram_alert(
     """
     Sends legacy Telegram alert for max top nearest touch events.
 
-    Disabled by default for new selected-instrument EMA flow.
+    New requirement keeps this disabled by default.
     """
 
     global _last_touch_alert_sent_at
@@ -1547,7 +1299,7 @@ def flush_pending_touch_alerts(force: bool = False, source: str = "live_tick") -
     """
     Flushes pending live touch events into one Telegram message.
 
-    For new flow, this only works if OPENING_RANGE_LEGACY_TOUCH_TELEGRAM_ENABLED=True.
+    This sends only if OPENING_RANGE_LEGACY_TOUCH_TELEGRAM_ENABLED=True.
     """
 
     if not DEFAULT_LEGACY_TOUCH_TELEGRAM_ENABLED:
@@ -1578,180 +1330,124 @@ def flush_pending_touch_alerts(force: bool = False, source: str = "live_tick") -
 
 
 # ============================================================
-# New Telegram Alert: Selected Instrument EMA Cross
+# Disabled Selected OR Compatibility Helpers
 # ============================================================
 
 
-def build_selected_or_ema_alert_key(ema_event: dict) -> str:
-    """Builds duplicate key for selected OR EMA alert."""
+def is_selected_or_instrument_locked() -> bool:
+    """Selected OR flow is disabled."""
 
-    instrument_key = ema_event.get("instrument_key")
-    timestamp = ema_event.get("timestamp")
-    cross_type = ema_event.get("cross_type")
-
-    return f"{instrument_key}_{timestamp}_{cross_type}"
+    return False
 
 
-def format_levels_for_message(levels: dict | None) -> str:
-    """Formats OR levels for Telegram message."""
+def get_selected_or_instrument_key() -> str | None:
+    """Selected OR flow is disabled."""
 
-    if not levels:
-        return "Opening Range Levels: not_available"
-
-    return (
-        "Opening Range Levels:\n"
-        f"R1: {levels.get('r1')}\n"
-        f"R2: {levels.get('r2')}\n"
-        f"R3: {levels.get('r3')}\n"
-        f"S1: {levels.get('s1')}\n"
-        f"S2: {levels.get('s2')}\n"
-        f"S3: {levels.get('s3')}\n"
-        f"R3 Threshold: {levels.get('r3_threshold')}\n"
-        f"S3 Threshold: {levels.get('s3_threshold')}"
-    )
+    return None
 
 
-def send_selected_or_ema_telegram_alert(ema_event: dict, selected_state: dict) -> bool:
-    """Sends Telegram message for EMA cross of selected OR instrument."""
+def get_selected_or_instrument_state() -> dict:
+    """Returns disabled selected OR state for backward compatibility."""
 
-    info = selected_state.get("contract_info") or ema_event.get("info") or {}
-    live_data = selected_state.get("latest_live_data") or {}
-    levels = selected_state.get("levels") or {}
+    with _selected_or_lock:
+        return dict(_selected_or_instrument_state)
 
-    symbol = (
-        info.get("trading_symbol")
-        or info.get("instrument_key")
-        or selected_state.get("instrument_key")
-    )
 
-    message = (
-        "EMA crossover detected for the permanently selected Opening Range instrument.\n\n"
-        "Selected Instrument:\n"
-        f"Symbol: {symbol}\n"
-        f"Instrument Key: {selected_state.get('instrument_key')}\n"
-        f"Selected Level: {selected_state.get('selected_level')}\n"
-        f"Level Value: {selected_state.get('level_value')}\n"
-        f"Trigger {selected_state.get('trigger_field')}: {selected_state.get('trigger_price')}\n"
-        f"Touch Time: {selected_state.get('touch_time')}\n"
-        f"Touch Source: {selected_state.get('touch_source')}\n\n"
-        "EMA Cross Data:\n"
-        f"Cross Type: {ema_event.get('cross_type')}\n"
-        f"Cross Time: {ema_event.get('timestamp')}\n"
-        f"Close: {ema_event.get('close')}\n"
-        f"EMA Fast Period: {ema_event.get('ema_fast_period')}\n"
-        f"EMA Slow Period: {ema_event.get('ema_slow_period')}\n"
-        f"EMA Fast: {ema_event.get('ema_fast')}\n"
-        f"EMA Slow: {ema_event.get('ema_slow')}\n"
-        f"Previous EMA Fast: {ema_event.get('previous_ema_fast')}\n"
-        f"Previous EMA Slow: {ema_event.get('previous_ema_slow')}\n\n"
-        "Current Live Data:\n"
-        f"Current NIFTY LTP: {get_latest_main_index_ltp()}\n"
-        f"Instrument LTP: {live_data.get('ltp')}\n"
-        f"Instrument High: {live_data.get('high')}\n"
-        f"Instrument Low: {live_data.get('low')}\n"
-        f"Instrument Close: {live_data.get('close')}\n"
-        f"Live Data Time: {live_data.get('timestamp')}\n\n"
-        f"{format_levels_for_message(levels)}"
-    )
+def get_selected_or_ema_alerts(limit: int = 100) -> list:
+    """Selected OR EMA alerts are disabled."""
 
-    return telegram_service.send_message(
-        title="Selected OR Instrument EMA Cross",
-        message=message,
-        level="REFRESH",
-    )
+    return []
 
 
 def process_selected_or_ema_cross_alert(ema_event: dict) -> bool:
     """
-    Processes EMA crossover event against selected OR instrument.
+    Selected OR EMA Telegram alert is disabled.
 
-    Call this from upstox_websocket.py after live_ema_service.process_live_feed().
-
-    Rules:
-        1. If no OR instrument is selected yet, ignore.
-        2. If EMA event is not for selected instrument, ignore.
-        3. If same EMA event was already sent, ignore.
-        4. Otherwise send Telegram message.
+    Kept only so older imports do not break during transition.
     """
 
-    if not DEFAULT_SELECTED_OR_EMA_ALERT_ENABLED:
-        return False
+    return False
 
-    if not isinstance(ema_event, dict):
-        return False
 
-    instrument_key = ema_event.get("instrument_key")
+# ============================================================
+# EMA WebSocket Opening Range Enrichment Helper
+# ============================================================
+
+
+def get_opening_range_levels_for_ema_event(instrument_key: str) -> dict:
+    """
+    Returns lightweight Opening Range payload for EMA crossover events.
+
+    Output:
+
+    {
+        "opening_range": {...},
+        "touch_status": {...},
+        "latest_intraday_close": ...,
+        "latest_main_index_ltp": ...,
+        "processed_at": ...
+    }
+    """
+
+    if not DEFAULT_EMA_CROSS_INCLUDE_OPENING_RANGE_LEVELS:
+        return {
+            "opening_range": {},
+            "touch_status": get_default_touch_status(),
+            "latest_intraday_close": None,
+            "latest_main_index_ltp": None,
+            "processed_at": None,
+        }
 
     if not instrument_key:
-        return False
-
-    with _selected_or_lock:
-        selected_state = dict(_selected_or_instrument_state)
-
-    if not selected_state.get("selected"):
-        return False
-
-    if selected_state.get("instrument_key") != instrument_key:
-        return False
-
-    alert_key = build_selected_or_ema_alert_key(ema_event)
-
-    with _selected_or_lock:
-        if alert_key in _selected_or_ema_alert_keys:
-            return False
-
-        _selected_or_ema_alert_keys.add(alert_key)
-
-    sent = send_selected_or_ema_telegram_alert(
-        ema_event=ema_event,
-        selected_state=selected_state,
-    )
-
-    alert_record = {
-        "alert_key": alert_key,
-        "sent": sent,
-        "ema_event": ema_event,
-        "selected_state": selected_state,
-        "created_at": get_now_market_time().isoformat(),
-    }
-
-    with _selected_or_lock:
-        _selected_or_ema_alerts.append(alert_record)
-        _selected_or_instrument_state["ema_alerts_count"] = len(_selected_or_ema_alerts)
-        _selected_or_instrument_state["last_ema_alert"] = alert_record
+        return {
+            "opening_range": {},
+            "touch_status": get_default_touch_status(),
+            "latest_intraday_close": None,
+            "latest_main_index_ltp": None,
+            "processed_at": None,
+        }
 
     with _opening_range_cache_lock:
-        opening_range_cache["selected_or_ema_alerts_count"] = len(
-            _selected_or_ema_alerts
-        )
-        opening_range_cache["selected_or_ema_alerts"] = list(_selected_or_ema_alerts)
-        opening_range_cache["selected_or_instrument"] = dict(
-            _selected_or_instrument_state
-        )
+        item = opening_range_cache.get("data", {}).get(instrument_key)
+        latest_main_index_ltp = opening_range_cache.get("latest_main_index_ltp")
 
-    if sent:
-        logger.info(
-            f"Selected OR EMA Telegram alert sent. "
-            f"instrument_key={instrument_key}, cross_type={ema_event.get('cross_type')}, "
-            f"timestamp={ema_event.get('timestamp')}"
-        )
-    else:
-        logger.warning(
-            f"Selected OR EMA Telegram alert failed. "
-            f"instrument_key={instrument_key}, cross_type={ema_event.get('cross_type')}, "
-            f"timestamp={ema_event.get('timestamp')}"
-        )
+    if not item:
+        return {
+            "opening_range": {},
+            "touch_status": get_default_touch_status(),
+            "latest_intraday_close": None,
+            "latest_main_index_ltp": latest_main_index_ltp,
+            "processed_at": None,
+        }
 
-    return sent
+    levels = item.get("levels") or {}
+
+    compact_levels = {
+        "r1": levels.get("r1"),
+        "s1": levels.get("s1"),
+        "r2": levels.get("r2"),
+        "s2": levels.get("s2"),
+        "r3": levels.get("r3"),
+        "s3": levels.get("s3"),
+        "sub_resistance": levels.get("sub_resistance"),
+        "sub_support": levels.get("sub_support"),
+    }
+
+    return {
+        "opening_range": compact_levels,
+        "touch_status": item.get(
+            "touch_status",
+            get_default_touch_status(),
+        ),
+        "latest_intraday_close": item.get("latest_intraday_close"),
+        "latest_main_index_ltp": latest_main_index_ltp,
+        "processed_at": item.get("processed_at"),
+    }
 
 
-def get_selected_or_ema_alerts(limit: int = 100) -> list:
-    """Returns latest selected OR EMA alerts."""
-
-    limit = max(1, int(limit or 100))
-
-    with _selected_or_lock:
-        return list(_selected_or_ema_alerts)[-limit:]
+# ============================================================
+# Storage Helpers
+# ============================================================
 
 
 def save_touch_events_to_file_if_enabled():
@@ -1772,8 +1468,8 @@ def save_touch_events_to_file_if_enabled():
             "events_count": len(_touch_events),
             "events": list(_touch_events),
             "selected_or_instrument": get_selected_or_instrument_state(),
-            "selected_or_ema_alerts_count": len(_selected_or_ema_alerts),
-            "selected_or_ema_alerts": list(_selected_or_ema_alerts),
+            "selected_or_ema_alerts_count": 0,
+            "selected_or_ema_alerts": [],
         }
 
         with open(file_path, "w", encoding="utf-8") as file:
@@ -1788,6 +1484,21 @@ def save_touch_events_to_file_if_enabled():
         return None
 
 
+def save_opening_range_results_to_file(
+    summary: dict,
+    output_file: str = DEFAULT_OUTPUT_FILE,
+) -> str:
+    """Saves opening range summary to JSON file."""
+
+    file_path = Path(output_file)
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with open(file_path, "w", encoding="utf-8") as file:
+        json.dump(summary, file, indent=4, default=str)
+
+    return str(file_path)
+
+
 # ============================================================
 # Intraday Fetch
 # ============================================================
@@ -1798,9 +1509,7 @@ def fetch_intraday_candles_for_instrument(
     unit: str = DEFAULT_INTRADAY_UNIT,
     interval: str = DEFAULT_INTRADAY_INTERVAL,
 ) -> dict:
-    """
-    Fetches today's intraday candles using Upstox HistoryV3Api.
-    """
+    """Fetches today's intraday candles using Upstox HistoryV3Api."""
 
     try:
         api_instance = upstox_client.HistoryV3Api()
@@ -2014,71 +1723,6 @@ def calculate_opening_range_for_instrument(
     }
 
 
-def get_default_touch_status() -> dict:
-    """Returns default touch status."""
-
-    return {
-        "r3_touched": False,
-        "s3_touched": False,
-        "r3_touch_time": None,
-        "s3_touch_time": None,
-        "r3_alert_sent": False,
-        "s3_alert_sent": False,
-        "first_touch_level": None,
-        "first_touch_source": None,
-        "first_touch_time": None,
-        "events": [],
-    }
-
-
-def build_touch_status_from_events(events: list) -> dict:
-    """Builds touch status from detected events."""
-
-    status = get_default_touch_status()
-
-    for event in events:
-        level = str(event.get("level", "")).upper()
-
-        if level == "R3":
-            status["r3_touched"] = True
-            status["r3_touch_time"] = event.get("touch_time")
-            status["r3_alert_sent"] = True
-
-        elif level == "S3":
-            status["s3_touched"] = True
-            status["s3_touch_time"] = event.get("touch_time")
-            status["s3_alert_sent"] = True
-
-        if not status.get("first_touch_level"):
-            status["first_touch_level"] = level
-            status["first_touch_source"] = event.get("source")
-            status["first_touch_time"] = event.get("touch_time")
-
-        status.setdefault("events", []).append(event)
-
-    return status
-
-
-# ============================================================
-# Save Helper
-# ============================================================
-
-
-def save_opening_range_results_to_file(
-    summary: dict,
-    output_file: str = DEFAULT_OUTPUT_FILE,
-) -> str:
-    """Saves opening range summary to JSON file."""
-
-    file_path = Path(output_file)
-    file_path.parent.mkdir(parents=True, exist_ok=True)
-
-    with open(file_path, "w", encoding="utf-8") as file:
-        json.dump(summary, file, indent=4, default=str)
-
-    return str(file_path)
-
-
 # ============================================================
 # All Subscribed Instruments Opening Range
 # ============================================================
@@ -2089,9 +1733,7 @@ def calculate_opening_range_for_all_subscribed(
     save_data: bool = DEFAULT_SAVE_FILE,
     max_workers: int = DEFAULT_MAX_WORKERS,
 ) -> dict:
-    """
-    Fetches intraday candles and calculates opening range levels for all subscribed instruments.
-    """
+    """Fetches intraday candles and calculates opening range levels for all subscribed instruments."""
 
     if not is_opening_range_enabled():
         logger.info("Opening range calculation skipped because it is disabled.")
@@ -2281,7 +1923,7 @@ def calculate_opening_range_for_all_subscribed(
         "backfill_touch_events_count": total_backfill_touch_events,
         "latest_main_index_ltp": get_latest_main_index_ltp(),
         "selected_or_instrument": get_selected_or_instrument_state(),
-        "selected_or_ema_alerts_count": len(_selected_or_ema_alerts),
+        "selected_or_ema_alerts_count": 0,
         "results": results,
         "backfill_touch_events": backfill_touch_events,
         "errors": errors,
@@ -2323,16 +1965,15 @@ def calculate_opening_range_for_all_subscribed(
         opening_range_cache["insufficient_data_count"] = insufficient_data_count
         opening_range_cache["output_file_path"] = output_file_path
         opening_range_cache["latest_main_index_ltp"] = get_latest_main_index_ltp()
+        opening_range_cache["latest_main_index_ltp_source"] = (
+            _latest_main_index_ltp_source
+        )
+        opening_range_cache["latest_main_index_ltp_updated_at"] = (
+            _latest_main_index_ltp_updated_at
+        )
         opening_range_cache["touch_events_count"] = len(_touch_events)
         opening_range_cache["pending_touch_events_count"] = len(_pending_touch_events)
         opening_range_cache["alert_sent_keys_count"] = len(_alert_sent_keys)
-        opening_range_cache["selected_or_instrument"] = (
-            get_selected_or_instrument_state()
-        )
-        opening_range_cache["selected_or_ema_alerts_count"] = len(
-            _selected_or_ema_alerts
-        )
-        opening_range_cache["selected_or_ema_alerts"] = list(_selected_or_ema_alerts)
         opening_range_cache["data"] = results
         opening_range_cache["touch_events"] = list(_touch_events)
         opening_range_cache["errors"] = errors
@@ -2360,7 +2001,6 @@ def calculate_opening_range_for_all_subscribed(
         f"insufficient_data={insufficient_data_count}, "
         f"failed={failed_count}, "
         f"backfill_touch_events={total_backfill_touch_events}, "
-        f"selected_or_instrument={get_selected_or_instrument_key()}, "
         f"output_file={output_file_path}"
     )
 
@@ -2404,14 +2044,18 @@ def get_opening_range_status() -> dict:
             "latest_main_index_ltp_source": opening_range_cache.get(
                 "latest_main_index_ltp_source"
             ),
+            "latest_main_index_ltp_updated_at": opening_range_cache.get(
+                "latest_main_index_ltp_updated_at"
+            ),
             "touch_events_count": opening_range_cache.get("touch_events_count"),
             "pending_touch_events_count": opening_range_cache.get(
                 "pending_touch_events_count"
             ),
             "alert_sent_keys_count": opening_range_cache.get("alert_sent_keys_count"),
-            "selected_or_instrument": opening_range_cache.get("selected_or_instrument"),
-            "selected_or_ema_alerts_count": opening_range_cache.get(
-                "selected_or_ema_alerts_count"
+            "selected_or_instrument": get_selected_or_instrument_state(),
+            "selected_or_ema_alerts_count": 0,
+            "ema_cross_include_opening_range_levels": (
+                DEFAULT_EMA_CROSS_INCLUDE_OPENING_RANGE_LEVELS
             ),
             "errors": opening_range_cache.get("errors", {}),
         }

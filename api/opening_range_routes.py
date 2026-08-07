@@ -17,6 +17,7 @@ from services.opening_range_service import (
     get_opening_range_pending_touch_events,
     get_selected_or_instrument_state,
     get_selected_or_ema_alerts,
+    get_opening_range_levels_for_ema_event,
 )
 
 logger = get_logger(__file__)
@@ -117,15 +118,31 @@ async def get_opening_range_latest_status():
     - Default scheduled fetch time is 09:18 AM Asia/Kolkata.
     - Default opening range candle is 09:15 to 09:16.
     - Backfill touch scan checks candles after OR completion.
-    - Live touch monitoring checks R3/S3 after opening range levels are available.
-    - New flow selects the first live R3/S3 touched option instrument permanently.
-    - EMA Telegram alerts are sent only for the selected instrument.
+    - Live touch monitoring can track R3/S3 touches for all option instruments.
+    - No Opening Range instrument is permanently selected.
+    - EMA crossover Telegram alerts are disabled.
+    - EMA crossover WebSocket payloads include Opening Range levels when available.
     """
 
     return {
         "status": "success",
         "opening_range_status": get_opening_range_status(),
         "selected_or_instrument": get_selected_or_instrument_state(),
+        "new_flow": {
+            "description": (
+                "Opening Range levels are calculated for all subscribed instruments. "
+                "Every live EMA crossover is broadcast through WebSocket with that "
+                "instrument's Opening Range levels when available. No selected OR "
+                "instrument flow is active."
+            ),
+            "selected_or_flow": "disabled",
+            "selected_or_ema_telegram_alerts": "disabled",
+            "ema_websocket_opening_range_enrichment": getattr(
+                config,
+                "EMA_CROSS_INCLUDE_OPENING_RANGE_LEVELS",
+                True,
+            ),
+        },
         "config": {
             "enabled": getattr(config, "OPENING_RANGE_ENABLED", True),
             "interval": getattr(config, "OPENING_RANGE_INTERVAL", "1minute"),
@@ -160,27 +177,37 @@ async def get_opening_range_latest_status():
             "first_touch_selection_enabled": getattr(
                 config,
                 "OPENING_RANGE_FIRST_TOUCH_SELECTION_ENABLED",
-                True,
+                False,
             ),
             "first_touch_selection_source": getattr(
                 config,
                 "OPENING_RANGE_FIRST_TOUCH_SELECTION_SOURCE",
-                "live_tick",
+                "disabled",
             ),
             "selected_or_touch_notify_enabled": getattr(
                 config,
                 "OPENING_RANGE_SELECTED_OR_TOUCH_NOTIFY_ENABLED",
-                True,
+                False,
             ),
             "selected_or_ema_alert_enabled": getattr(
                 config,
                 "OPENING_RANGE_SELECTED_OR_EMA_ALERT_ENABLED",
-                True,
+                False,
             ),
             "legacy_touch_telegram_enabled": getattr(
                 config,
                 "OPENING_RANGE_LEGACY_TOUCH_TELEGRAM_ENABLED",
                 False,
+            ),
+            "ema_cross_include_opening_range_levels": getattr(
+                config,
+                "EMA_CROSS_INCLUDE_OPENING_RANGE_LEVELS",
+                True,
+            ),
+            "ema_cross_broadcast_without_opening_range": getattr(
+                config,
+                "EMA_CROSS_BROADCAST_WITHOUT_OPENING_RANGE",
+                True,
             ),
             "output_file": getattr(
                 config,
@@ -228,13 +255,13 @@ async def trigger_opening_range_fetch(
     - Calculates open, high, low, close, average.
     - Calculates R1/S1, R2/S2, R3/S3, thresholds.
     - Scans post-OR candles for already touched R3/S3.
-    - Stores summary in memory.
+    - Stores results in memory for every subscribed instrument.
     - Saves to data/opening_range_results.json if enabled.
 
-    New selected OR flow:
-    - Backfill touch events are tracked.
-    - By default, only live_tick can permanently select the first R3/S3 touched instrument.
-    - EMA Telegram alerts are sent only for selected instrument.
+    New flow:
+    - No first touched instrument is selected.
+    - No selected OR EMA Telegram alert is sent.
+    - EMA WebSocket events use this cache to attach OR levels per instrument.
     """
 
     selected_candle_count = candle_count or getattr(
@@ -274,10 +301,15 @@ async def trigger_opening_range_fetch(
             "status": "success",
             "message": (
                 "Opening range intraday candles fetched, levels calculated, "
-                "and R3/S3 backfill touch scan completed."
+                "and R3/S3 backfill touch scan completed for subscribed instruments."
             ),
             "opening_range_results_saved": selected_save_results,
             "selected_or_instrument": get_selected_or_instrument_state(),
+            "ema_websocket_opening_range_enrichment": getattr(
+                config,
+                "EMA_CROSS_INCLUDE_OPENING_RANGE_LEVELS",
+                True,
+            ),
             "summary": summary,
         }
 
@@ -299,8 +331,8 @@ async def get_opening_range_full_cache():
 
     Warning:
     - This can be large because it includes results for all instruments.
-    - It may also include touch events, selected OR instrument state,
-      EMA alert records, and per-instrument touch status.
+    - It may also include touch events and per-instrument touch status.
+    - Selected OR instrument state is retained only as disabled compatibility data.
     """
 
     return {
@@ -324,7 +356,7 @@ async def get_opening_range_instrument(
     ),
     striketype: str = Query(
         default=None,
-        description=("Option type: ce or pe. Optional if instrument_key is provided."),
+        description="Option type: ce or pe. Optional if instrument_key is provided.",
     ),
 ):
     """
@@ -368,6 +400,49 @@ async def get_opening_range_instrument(
     }
 
 
+@router.get("/opening-range/ema-context")
+async def get_opening_range_ema_context(
+    instrument_key: str = Query(
+        default=None,
+        description="Instrument key, e.g. NSE_FO|41012 or NSE_INDEX|Nifty 50",
+    ),
+    strike: float = Query(
+        default=None,
+        description="Option strike price, e.g. 24500. Optional if instrument_key is provided.",
+    ),
+    striketype: str = Query(
+        default=None,
+        description="Option type: ce or pe. Optional if instrument_key is provided.",
+    ),
+):
+    """
+    Returns the Opening Range context that will be attached to an EMA crossover
+    WebSocket event for the given instrument.
+
+    This is useful for testing the new payload enrichment before waiting for
+    a live EMA crossover.
+    """
+
+    resolved_instrument_key = resolve_opening_range_instrument_key(
+        instrument_key=instrument_key,
+        strike=strike,
+        striketype=striketype,
+    )
+
+    context = get_opening_range_levels_for_ema_event(resolved_instrument_key)
+
+    return {
+        "status": "success",
+        "instrument_key": resolved_instrument_key,
+        "input": {
+            "instrument_key": instrument_key,
+            "strike": strike,
+            "striketype": striketype,
+        },
+        "opening_range": context,
+    }
+
+
 @router.post("/opening-range/instrument/fetch")
 async def fetch_opening_range_for_single_instrument(
     instrument_key: str = Query(
@@ -383,7 +458,7 @@ async def fetch_opening_range_for_single_instrument(
     ),
     striketype: str = Query(
         default=None,
-        description=("Option type: ce or pe. Optional if instrument_key is provided."),
+        description="Option type: ce or pe. Optional if instrument_key is provided.",
     ),
     candle_count: int = Query(
         default=None,
@@ -460,23 +535,29 @@ async def fetch_opening_range_for_single_instrument(
 
 
 # ============================================================
-# Selected OR Instrument Routes
+# Selected OR Instrument Compatibility Routes
 # ============================================================
 
 
 @router.get("/opening-range/selected-instrument")
 async def get_selected_opening_range_instrument():
     """
-    Returns the permanently selected Opening Range instrument.
+    Backward-compatible route.
 
     New flow:
-    - The first live option instrument that touches/crosses R3 or S3 is selected.
-    - Other instruments are ignored after selection.
-    - EMA Telegram alerts are sent only for this selected instrument.
+    - Selected Opening Range instrument feature is disabled.
+    - No instrument is permanently locked.
+    - EMA crossovers are broadcast for all instruments through WebSocket.
     """
 
     return {
         "status": "success",
+        "flow": "disabled",
+        "message": (
+            "Selected Opening Range instrument flow is disabled. "
+            "EMA crossovers are broadcast for all instruments with Opening Range "
+            "levels when available."
+        ),
         "selected_or_instrument": get_selected_or_instrument_state(),
     }
 
@@ -491,16 +572,21 @@ async def get_selected_opening_range_ema_alerts(
     ),
 ):
     """
-    Returns EMA alert records for the selected Opening Range instrument.
+    Backward-compatible route.
 
-    These alert records are created when:
-    - an OR instrument has already been selected
-    - a live EMA crossover occurs for that selected instrument
-    - Telegram alert processing is executed
+    New flow:
+    - Selected OR EMA Telegram alerts are disabled.
+    - EMA crossover events are sent through WebSocket only.
     """
 
     return {
         "status": "success",
+        "flow": "disabled",
+        "message": (
+            "Selected OR EMA Telegram alerts are disabled. "
+            "Use /ws/ema-crossover or /ws/ema-crossover/instrument for live EMA "
+            "crossovers enriched with Opening Range levels."
+        ),
         "limit": limit,
         "selected_or_instrument": get_selected_or_instrument_state(),
         "alerts": get_selected_or_ema_alerts(limit=limit),
@@ -527,6 +613,9 @@ async def get_opening_range_touch_events_route(
     Events can come from:
     - intraday_backfill_scan
     - live_tick
+
+    Touch events are tracked for diagnostics/WebSocket use.
+    They do not select a permanent instrument in the new flow.
     """
 
     return {
@@ -539,10 +628,11 @@ async def get_opening_range_touch_events_route(
 @router.get("/opening-range/touch-events/pending")
 async def get_opening_range_pending_touch_events_route():
     """
-    Returns pending Opening Range touch events waiting for Telegram batch flush.
+    Returns pending Opening Range touch events waiting for legacy Telegram batch flush.
 
-    In the new selected OR + EMA flow, pending events are used only if
-    OPENING_RANGE_LEGACY_TOUCH_TELEGRAM_ENABLED=True.
+    New flow:
+    - Legacy touch Telegram is disabled by default.
+    - Pending events are used only if OPENING_RANGE_LEGACY_TOUCH_TELEGRAM_ENABLED=True.
     """
 
     return {
@@ -566,10 +656,10 @@ async def flush_opening_range_pending_touch_events_route(
     """
     Manually flushes pending Opening Range touch events to Telegram.
 
-    Note:
-    - In the new selected OR + EMA flow, this sends only if:
-      OPENING_RANGE_LEGACY_TOUCH_TELEGRAM_ENABLED=True
-    - Recommended new behavior keeps this disabled.
+    This sends only if:
+        OPENING_RANGE_LEGACY_TOUCH_TELEGRAM_ENABLED=True
+
+    Recommended new behavior keeps this disabled.
     """
 
     try:
@@ -785,22 +875,22 @@ async def get_opening_range_config():
             "first_touch_selection_enabled": getattr(
                 config,
                 "OPENING_RANGE_FIRST_TOUCH_SELECTION_ENABLED",
-                True,
+                False,
             ),
             "first_touch_selection_source": getattr(
                 config,
                 "OPENING_RANGE_FIRST_TOUCH_SELECTION_SOURCE",
-                "live_tick",
+                "disabled",
             ),
             "selected_or_touch_notify_enabled": getattr(
                 config,
                 "OPENING_RANGE_SELECTED_OR_TOUCH_NOTIFY_ENABLED",
-                True,
+                False,
             ),
             "selected_or_ema_alert_enabled": getattr(
                 config,
                 "OPENING_RANGE_SELECTED_OR_EMA_ALERT_ENABLED",
-                True,
+                False,
             ),
             "legacy_touch_telegram_enabled": getattr(
                 config,
@@ -810,6 +900,16 @@ async def get_opening_range_config():
             "selected_or_ema_alert_once_per_cross": getattr(
                 config,
                 "OPENING_RANGE_SELECTED_OR_EMA_ALERT_ONCE_PER_CROSS",
+                False,
+            ),
+            "ema_cross_include_opening_range_levels": getattr(
+                config,
+                "EMA_CROSS_INCLUDE_OPENING_RANGE_LEVELS",
+                True,
+            ),
+            "ema_cross_broadcast_without_opening_range": getattr(
+                config,
+                "EMA_CROSS_BROADCAST_WITHOUT_OPENING_RANGE",
                 True,
             ),
         },

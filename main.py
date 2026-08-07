@@ -86,6 +86,12 @@ def fetch_startup_historical_candles():
     Raw candles are not saved.
     EMA crossover results are saved only when TEST_FLAG=True.
     Live EMA service is initialized from historical EMA summary.
+
+    New flow:
+    - Live EMA runs for all subscribed instruments.
+    - Every live EMA crossover can be broadcast through WebSocket.
+    - Opening Range levels are attached to EMA WebSocket events later
+      in the WebSocket processing layer when available.
     """
 
     logger.info(
@@ -185,6 +191,11 @@ def fetch_daily_historical_candles():
     Raw candles are not saved.
     EMA crossover results are saved only when TEST_FLAG=True.
     Live EMA service is re-initialized from latest historical EMA summary.
+
+    New flow:
+    - No selected Opening Range instrument is used.
+    - Live EMA state is maintained for all subscribed instruments.
+    - EMA crossover WebSocket events are broadcast for all instruments.
     """
 
     logger.info(
@@ -289,7 +300,12 @@ def run_daily_opening_range_fetch():
     6. Backfill scan post-OR candles for already touched R3/S3.
     7. Save results to data/opening_range_results.json.
     8. Update in-memory opening range cache.
-    9. Send Telegram alert for max 5 nearest touched instruments if configured.
+
+    New flow:
+    - Opening Range levels are maintained for every subscribed instrument.
+    - No first-touched instrument is permanently selected.
+    - EMA crossover WebSocket events will include the matching instrument's
+      Opening Range levels when available.
     """
 
     logger.info("================ DAILY OPENING RANGE FETCH STARTED ================")
@@ -306,7 +322,7 @@ def run_daily_opening_range_fetch():
             "5. Calculate R1/S1, R2/S2, R3/S3 and thresholds\n"
             "6. Backfill scan for R3/S3 touches before fetch time\n"
             "7. Save opening range results locally\n"
-            "8. Send top nearest touch alert if any"
+            "8. Update in-memory opening range cache for EMA WebSocket enrichment"
         ),
         level="REFRESH",
     )
@@ -402,7 +418,7 @@ def run_initial_startup():
         details=(
             "Initial startup sequence started. "
             "Refreshing token, loading instruments, calculating historical EMA crossover, "
-            "and initializing live EMA state."
+            "and initializing live EMA state for all subscribed instruments."
         ),
     )
 
@@ -456,6 +472,12 @@ def run_initial_startup():
 
         subscribed_keys = options_cache.get("subscribed_keys", [])
 
+        websocket_mode = (
+            "EMA WebSocket events will include Opening Range levels when available."
+            if getattr(config, "EMA_CROSS_INCLUDE_OPENING_RANGE_LEVELS", True)
+            else "EMA WebSocket events will be sent without Opening Range level enrichment."
+        )
+
         startup_details = (
             f"Token Available: {'Yes' if current_token else 'No'}\n"
             f"Token Updated At: {doc.get('updated_at') if doc else 'N/A'}\n"
@@ -469,7 +491,8 @@ def run_initial_startup():
             f"EMA Result File: "
             f"{history_summary.get('ema_results_file_path', 'not_saved') if history_summary else 'not_available'}\n"
             f"Live EMA Initialized: "
-            f"{history_summary.get('live_ema_initialized') if history_summary else 'not_available'}"
+            f"{history_summary.get('live_ema_initialized') if history_summary else 'not_available'}\n"
+            f"EMA WebSocket Mode: {websocket_mode}"
         )
 
         if result and current_token and subscribed_keys:
@@ -510,6 +533,11 @@ def run_daily_market_hard_refresh():
     6. Fetch historical candles and calculate EMA crossover for all subscribed instruments.
     7. Initialize live EMA state from historical EMA summary.
     8. Restart Upstox streamer so latest keys are actually subscribed.
+
+    New flow:
+    - No selected Opening Range instrument is maintained.
+    - EMA crossover events are produced for all subscribed instruments.
+    - EMA crossover WebSocket events can include Opening Range levels for the same instrument.
     """
 
     logger.info("================ DAILY MARKET HARD REFRESH STARTED ================")
@@ -524,7 +552,7 @@ def run_daily_market_hard_refresh():
             "3. Filter configured strike range\n"
             "4. Update subscription cache\n"
             "5. Fetch historical candles and calculate EMA crossover\n"
-            "6. Initialize live EMA state\n"
+            "6. Initialize live EMA state for all instruments\n"
             "7. Restart Upstox streamer"
         ),
         level="REFRESH",
@@ -763,7 +791,9 @@ def start_scheduler() -> BackgroundScheduler:
         f"Opening range fetch: Mon-Fri at "
         f"{getattr(config, 'OPENING_RANGE_FETCH_HOUR', 9):02d}:"
         f"{getattr(config, 'OPENING_RANGE_FETCH_MINUTE', 18):02d} "
-        f"{getattr(config, 'MARKET_TIMEZONE', 'Asia/Kolkata')}"
+        f"{getattr(config, 'MARKET_TIMEZONE', 'Asia/Kolkata')}\n"
+        f"EMA WebSocket OR enrichment: "
+        f"{getattr(config, 'EMA_CROSS_INCLUDE_OPENING_RANGE_LEVELS', True)}"
     )
 
     logger.info(
@@ -773,7 +803,9 @@ def start_scheduler() -> BackgroundScheduler:
         f"Opening range fetch scheduled for Mon-Fri at "
         f"{getattr(config, 'OPENING_RANGE_FETCH_HOUR', 9):02d}:"
         f"{getattr(config, 'OPENING_RANGE_FETCH_MINUTE', 18):02d} "
-        f"{getattr(config, 'MARKET_TIMEZONE', 'Asia/Kolkata')}."
+        f"{getattr(config, 'MARKET_TIMEZONE', 'Asia/Kolkata')} | "
+        f"EMA WebSocket OR enrichment="
+        f"{getattr(config, 'EMA_CROSS_INCLUDE_OPENING_RANGE_LEVELS', True)}."
     )
 
     telegram_service.send_message(

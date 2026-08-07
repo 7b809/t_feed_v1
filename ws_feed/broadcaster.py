@@ -69,13 +69,16 @@ def append_raw_feed_log(instrument_key: str, tick_raw: Dict[str, Any]):
         with _feed_log_lock:
             _initialize_feed_log_buffer()
 
-            log_entry = json.dumps(
-                {
-                    "instrument_key": instrument_key,
-                    "raw_feed": tick_raw,
-                },
-                default=str,
-            ) + "\n"
+            log_entry = (
+                json.dumps(
+                    {
+                        "instrument_key": instrument_key,
+                        "raw_feed": tick_raw,
+                    },
+                    default=str,
+                )
+                + "\n"
+            )
 
             _feed_log_buffer.append(log_entry)
 
@@ -84,14 +87,18 @@ def append_raw_feed_log(instrument_key: str, tick_raw: Dict[str, Any]):
 
     except Exception as e:
         logger.error(
-            f"Failed writing raw feed to {FEEDS_LOG_PATH}: "
-            f"{type(e).__name__}: {e}"
+            f"Failed writing raw feed to {FEEDS_LOG_PATH}: " f"{type(e).__name__}: {e}"
         )
 
 
-# --- Safe Helper Functions ---
+# ============================================================
+# Safe Helper Functions
+# ============================================================
+
+
 def safe_float(val: Any, default: float = 0.0) -> float:
     """Safely converts a value to float without throwing exceptions."""
+
     if val is None:
         return default
 
@@ -103,6 +110,7 @@ def safe_float(val: Any, default: float = 0.0) -> float:
 
 def safe_int(val: Any, default: int = 0) -> int:
     """Safely converts a value to integer without throwing exceptions."""
+
     if val is None:
         return default
 
@@ -114,13 +122,18 @@ def safe_int(val: Any, default: int = 0) -> int:
 
 def normalize_interval(interval: Any) -> int:
     """Normalizes interval value. 0 means live tick."""
+
     try:
         return int(interval)
     except (ValueError, TypeError):
         return 0
 
 
-def build_option_key(strike_price: float, instrument_type: str, interval: int = 0) -> str:
+def build_option_key(
+    strike_price: float,
+    instrument_type: str,
+    interval: int = 0,
+) -> str:
     """
     Builds interval-aware option connection key.
 
@@ -130,11 +143,75 @@ def build_option_key(strike_price: float, instrument_type: str, interval: int = 
         24500.0_CE_5
     """
 
-    return f"{float(strike_price)}_{str(instrument_type).upper()}_{normalize_interval(interval)}"
+    return (
+        f"{float(strike_price)}_"
+        f"{str(instrument_type).upper()}_"
+        f"{normalize_interval(interval)}"
+    )
+
+
+def resolve_contract_info_for_event(event: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Resolves contract info for compact EMA events.
+
+    Compact EMA payload intentionally does not include heavy `info`.
+    But broadcaster still needs strike_price and instrument_type to route
+    EMA events to matching /option WebSocket clients.
+
+    Resolution order:
+    1. event["info"]
+    2. event["contract_info"]
+    3. options_cache lookup by instrument_key using option_service helper
+    """
+
+    if not isinstance(event, dict):
+        return {}
+
+    info = event.get("info") or event.get("contract_info") or {}
+
+    if isinstance(info, dict) and info.get("strike_price") is not None:
+        return info
+
+    instrument_key = event.get("instrument_key")
+
+    if not instrument_key:
+        return info if isinstance(info, dict) else {}
+
+    try:
+        from services.option_service import get_feed_by_instrument_key
+
+        resolved_info = get_feed_by_instrument_key(instrument_key)
+
+        if isinstance(resolved_info, dict):
+            return resolved_info
+
+    except Exception as ex:
+        logger.error(
+            f"Failed resolving contract info for EMA event. "
+            f"instrument_key={instrument_key}, "
+            f"error={type(ex).__name__}: {ex}"
+        )
+
+    return info if isinstance(info, dict) else {}
 
 
 class Broadcaster:
-    """Manages FastAPI WebSocket client connections and broadcasts parsed market ticks."""
+    """
+    Manages FastAPI WebSocket client connections and broadcasts parsed market ticks.
+
+    New flow:
+    - EMA crossover events are broadcast for all instruments.
+    - EMA crossover payload is compact.
+    - EMA crossover payload may include:
+        opening_range
+        touch_status
+        latest_intraday_close
+        latest_main_index_ltp
+        processed_at
+    - Broadcaster preserves and forwards the EMA event as-is.
+    - Broadcaster internally resolves contract info only for routing to /option clients.
+    - No selected OR instrument filtering is performed here.
+    """
 
     def __init__(self):
         # Generic live connection pool
@@ -157,29 +234,12 @@ class Broadcaster:
         self.opening_range_connections: Set[WebSocket] = set()
 
         # Instrument-specific Opening Range event connections.
-        # Example:
-        # {
-        #   "NSE_INDEX|Nifty 50": {websocket1},
-        #   "NSE_FO|41012": {websocket2}
-        # }
         self.opening_range_instrument_connections: Dict[str, Set[WebSocket]] = {}
 
         # Interval-aware all-feeds connections
-        # Example:
-        # {
-        #   0: {websocket1, websocket2},
-        #   1: {websocket3},
-        #   5: {websocket4}
-        # }
         self.all_feeds_connections: Dict[int, Set[WebSocket]] = {}
 
         # Interval-aware option connections
-        # Example:
-        # {
-        #   "24500.0_CE_0": {websocket1},
-        #   "24500.0_CE_1": {websocket2},
-        #   "24500.0_CE_5": {websocket3}
-        # }
         self.option_connections: Dict[str, Set[WebSocket]] = {}
 
         # Counters
@@ -208,6 +268,7 @@ class Broadcaster:
     # ========================================================
     # Basic Connection Handlers
     # ========================================================
+
     async def connect(self, websocket: WebSocket):
         """Tracks a generic live WebSocket connection."""
 
@@ -220,7 +281,7 @@ class Broadcaster:
         )
 
     def disconnect(self, websocket: WebSocket):
-        """Removes a generic WebSocket connection."""
+        """Removes a generic live WebSocket connection."""
 
         self.active_connections.discard(websocket)
 
@@ -233,6 +294,7 @@ class Broadcaster:
     # ========================================================
     # Global EMA Crossover Connection Handlers
     # ========================================================
+
     async def connect_ema_crossover(self, websocket: WebSocket):
         """Tracks connection for /ws/ema-crossover endpoint."""
 
@@ -258,14 +320,9 @@ class Broadcaster:
     # ========================================================
     # Instrument-Specific EMA Crossover Connection Handlers
     # ========================================================
-    async def connect_ema_instrument(self, websocket: WebSocket, instrument_key: str):
-        """
-        Tracks connection for one instrument's EMA crossover events.
 
-        Example:
-            instrument_key=NSE_INDEX|Nifty 50
-            instrument_key=NSE_FO|41012
-        """
+    async def connect_ema_instrument(self, websocket: WebSocket, instrument_key: str):
+        """Tracks connection for one instrument's EMA crossover events."""
 
         if not instrument_key:
             logger.warning("connect_ema_instrument called without instrument_key.")
@@ -305,6 +362,7 @@ class Broadcaster:
     # ========================================================
     # Global Opening Range Connection Handlers
     # ========================================================
+
     async def connect_opening_range(self, websocket: WebSocket):
         """Tracks connection for /ws/opening-range endpoint."""
 
@@ -330,18 +388,13 @@ class Broadcaster:
     # ========================================================
     # Instrument-Specific Opening Range Connection Handlers
     # ========================================================
+
     async def connect_opening_range_instrument(
         self,
         websocket: WebSocket,
         instrument_key: str,
     ):
-        """
-        Tracks connection for one instrument's opening range events.
-
-        Example:
-            instrument_key=NSE_INDEX|Nifty 50
-            instrument_key=NSE_FO|41012
-        """
+        """Tracks connection for one instrument's opening range events."""
 
         if not instrument_key:
             logger.warning(
@@ -389,6 +442,7 @@ class Broadcaster:
     # ========================================================
     # All Feeds Connection Handlers
     # ========================================================
+
     async def connect_all_feeds(self, websocket: WebSocket, interval: int = 0):
         """Tracks connection for /all-feeds endpoint by interval."""
 
@@ -427,6 +481,7 @@ class Broadcaster:
     # ========================================================
     # Option Connection Handlers
     # ========================================================
+
     async def connect_option(
         self,
         websocket: WebSocket,
@@ -487,6 +542,7 @@ class Broadcaster:
     # ========================================================
     # Tick Parsing Helper
     # ========================================================
+
     def build_live_payload(
         self,
         instrument_key: str,
@@ -567,9 +623,7 @@ class Broadcaster:
         price_change = round(ltp - close, 2) if (ltp > 0 and close > 0) else 0.0
 
         p_change_pct = (
-            round((price_change / close) * 100, 2)
-            if (ltp > 0 and close > 0)
-            else 0.0
+            round((price_change / close) * 100, 2) if (ltp > 0 and close > 0) else 0.0
         )
 
         return {
@@ -598,6 +652,7 @@ class Broadcaster:
     # ========================================================
     # Core Live Tick Broadcast Engine
     # ========================================================
+
     async def broadcast_tick(
         self,
         instrument_key: str,
@@ -610,8 +665,6 @@ class Broadcaster:
 
         self.broadcast_count += 1
 
-        # Save all raw feeds to logs/feeds.log, latest 2000 lines only.
-        # Done in a worker thread to avoid blocking FastAPI's event loop.
         await asyncio.to_thread(append_raw_feed_log, instrument_key, tick_raw)
 
         total_clients = self.get_active_connections_count()
@@ -628,13 +681,9 @@ class Broadcaster:
 
             message_str = json.dumps(payload, default=str)
 
-            # interval=0 means live tick
             target_connections = set(self.active_connections)
-
-            # All-feeds live clients
             target_connections |= set(self.all_feeds_connections.get(0, set()))
 
-            # Option live clients
             c_info = contract_info or {}
             strike = c_info.get("strike_price")
             itype = c_info.get("instrument_type")
@@ -659,9 +708,10 @@ class Broadcaster:
     # ========================================================
     # Live EMA Cross Broadcast Engine
     # ========================================================
+
     async def broadcast_ema_cross(self, ema_cross_event: Dict[str, Any]):
         """
-        Broadcasts live EMA crossover event to connected clients.
+        Broadcasts compact live EMA crossover event to connected clients.
 
         Sends to:
         1. Generic active clients
@@ -669,6 +719,10 @@ class Broadcaster:
         3. Instrument-specific /ws/ema-crossover/instrument clients
         4. All /all-feeds clients
         5. Matching /option clients
+
+        Note:
+        Compact EMA payload does not need to include `info`.
+        This method resolves contract info internally only for routing.
         """
 
         self.ema_cross_broadcast_count += 1
@@ -689,10 +743,10 @@ class Broadcaster:
 
             target_connections = set(self.active_connections)
 
-            # 1. Send EMA cross to global EMA crossover clients.
+            # 1. Global EMA crossover clients
             target_connections |= set(self.ema_crossover_connections)
 
-            # 2. Send EMA cross to instrument-specific EMA crossover clients.
+            # 2. Instrument-specific EMA crossover clients
             instrument_key = event.get("instrument_key")
 
             if instrument_key:
@@ -700,25 +754,32 @@ class Broadcaster:
                     self.ema_instrument_connections.get(instrument_key, set())
                 )
 
-            # 3. Send EMA cross to all /all-feeds clients.
+            # 3. All /all-feeds clients
             for conn_set in self.all_feeds_connections.values():
                 target_connections |= set(conn_set)
 
-            # 4. Send to matching /option clients if option info exists.
-            info = event.get("info") or {}
-            strike = info.get("strike_price")
-            itype = info.get("instrument_type")
+            # 4. Matching /option clients
+            resolved_info = resolve_contract_info_for_event(event)
+            strike = resolved_info.get("strike_price")
+            itype = resolved_info.get("instrument_type")
             interval_minutes = normalize_interval(event.get("interval_minutes", 0))
 
             if strike is not None and itype:
-                # Match exact interval pool first, e.g. 24500.0_CE_1
-                option_key = build_option_key(strike, itype, interval=interval_minutes)
+                option_key = build_option_key(
+                    strike,
+                    itype,
+                    interval=interval_minutes,
+                )
 
                 if option_key in self.option_connections:
                     target_connections |= set(self.option_connections[option_key])
 
-                # Also send to live interval 0 pool for compatibility.
-                live_option_key = build_option_key(strike, itype, interval=0)
+                # Also send to live interval 0 option clients for compatibility.
+                live_option_key = build_option_key(
+                    strike,
+                    itype,
+                    interval=0,
+                )
 
                 if live_option_key in self.option_connections:
                     target_connections |= set(self.option_connections[live_option_key])
@@ -730,19 +791,20 @@ class Broadcaster:
 
         except Exception as ex:
             logger.error(
-                f"Exception inside broadcast_ema_cross: "
-                f"{type(ex).__name__}: {ex}"
+                f"Exception inside broadcast_ema_cross: " f"{type(ex).__name__}: {ex}"
             )
 
     # ========================================================
     # Opening Range Broadcast Engine
     # ========================================================
+
     async def broadcast_opening_range(self, opening_range_event: Dict[str, Any]):
         """
         Broadcasts opening range event to connected clients.
 
         Event types can be:
             opening_range_levels
+            opening_range_touch
             opening_range_r3_touch
             opening_range_s3_touch
             opening_range_r3_threshold_touch
@@ -774,10 +836,8 @@ class Broadcaster:
 
             target_connections = set(self.active_connections)
 
-            # 1. Send to global opening range clients.
             target_connections |= set(self.opening_range_connections)
 
-            # 2. Send to instrument-specific opening range clients.
             instrument_key = event.get("instrument_key")
 
             if instrument_key:
@@ -788,11 +848,9 @@ class Broadcaster:
                     )
                 )
 
-            # 3. Send to all /all-feeds clients.
             for conn_set in self.all_feeds_connections.values():
                 target_connections |= set(conn_set)
 
-            # 4. Send to matching /option clients if option info exists.
             info = event.get("info") or event.get("contract_info") or {}
             strike = info.get("strike_price")
             itype = info.get("instrument_type")
@@ -823,6 +881,7 @@ class Broadcaster:
     # ========================================================
     # Candle Broadcast Engine
     # ========================================================
+
     async def broadcast_candle(
         self,
         instrument_key: str,
@@ -858,10 +917,8 @@ class Broadcaster:
 
             target_connections = set()
 
-            # All-feeds candle clients for this interval
             target_connections |= set(self.all_feeds_connections.get(interval, set()))
 
-            # Option candle clients for this interval
             c_info = contract_info or {}
             strike = c_info.get("strike_price")
             itype = c_info.get("instrument_type")
@@ -886,6 +943,7 @@ class Broadcaster:
     # ========================================================
     # Send Helper
     # ========================================================
+
     async def _send_to_connections(
         self,
         target_connections: Set[WebSocket],
@@ -917,7 +975,9 @@ class Broadcaster:
             if dead in self.ema_crossover_connections:
                 self.disconnect_ema_crossover(dead)
 
-            for instrument_key, conn_set in list(self.ema_instrument_connections.items()):
+            for instrument_key, conn_set in list(
+                self.ema_instrument_connections.items()
+            ):
                 if dead in conn_set:
                     conn_set.discard(dead)
 

@@ -13,6 +13,7 @@ from services.history_service import (
     historical_candles_cache,
 )
 from services.live_ema_service import live_ema_service
+from services.opening_range_service import get_opening_range_levels_for_ema_event
 
 logger = get_logger(__file__)
 
@@ -22,6 +23,7 @@ router = APIRouter()
 # ============================================================
 # Instrument Resolution Helper
 # ============================================================
+
 
 def resolve_instrument_key(
     instrument_key: str | None = None,
@@ -97,8 +99,81 @@ def resolve_instrument_key(
 
 
 # ============================================================
+# EMA Event Enrichment Helper
+# ============================================================
+
+
+def enrich_ema_event_with_opening_range(event: dict) -> dict:
+    """
+    Adds compact Opening Range context to a live EMA crossover event.
+
+    This mirrors the WebSocket enrichment done in services/upstox_websocket.py.
+
+    Expected compact output:
+
+    {
+        "type": "live_ema_cross",
+        "instrument_key": "...",
+        "timestamp": "...",
+        "cross_type": "...",
+        "interval_minutes": 1,
+        "close": ...,
+        "current_signal": "...",
+        "source": "live_feed",
+        "created_at": "...",
+        "opening_range": {
+            "r1": ...,
+            "s1": ...,
+            "r2": ...,
+            "s2": ...,
+            "r3": ...,
+            "s3": ...,
+            "sub_resistance": ...,
+            "sub_support": ...
+        },
+        "touch_status": {...},
+        "latest_intraday_close": ...,
+        "latest_main_index_ltp": ...,
+        "processed_at": "..."
+    }
+    """
+
+    if not isinstance(event, dict):
+        return event
+
+    enriched_event = dict(event)
+    instrument_key = enriched_event.get("instrument_key")
+
+    try:
+        opening_range_payload = get_opening_range_levels_for_ema_event(instrument_key)
+
+        if isinstance(opening_range_payload, dict):
+            enriched_event.update(opening_range_payload)
+
+    except Exception as ex:
+        logger.error(
+            f"Opening Range enrichment failed for EMA event. "
+            f"instrument_key={instrument_key}, "
+            f"error={type(ex).__name__}: {ex}"
+        )
+
+        enriched_event.update(
+            {
+                "opening_range": {},
+                "touch_status": {},
+                "latest_intraday_close": None,
+                "latest_main_index_ltp": None,
+                "processed_at": None,
+            }
+        )
+
+    return enriched_event
+
+
+# ============================================================
 # Historical EMA Routes
 # ============================================================
+
 
 @router.get("/history/status")
 async def get_history_status():
@@ -111,6 +186,11 @@ async def get_history_status():
     - EMA/crossover results are kept in memory.
     - If TEST_FLAG=True, EMA/crossover results are saved in data folder.
     - Live EMA service is initialized from historical EMA output.
+
+    New flow:
+    - Live EMA runs for all initialized instruments.
+    - EMA crossover Telegram alerts are disabled.
+    - EMA crossover WebSocket events are enriched with compact Opening Range levels.
     """
 
     return {
@@ -118,6 +198,16 @@ async def get_history_status():
         "historical_candle_status": get_historical_candles_status(),
         "live_ema_status": live_ema_service.get_status(),
         "test_flag": getattr(config, "TEST_FLAG", False),
+        "new_flow": {
+            "selected_or_filtering": "disabled",
+            "telegram_ema_alerts": "disabled",
+            "ema_cross_include_opening_range_levels": getattr(
+                config,
+                "EMA_CROSS_INCLUDE_OPENING_RANGE_LEVELS",
+                True,
+            ),
+            "ema_payload_mode": "compact",
+        },
         "ema_config": {
             "fast_period": getattr(config, "EMA_FAST_PERIOD", 9),
             "slow_period": getattr(config, "EMA_SLOW_PERIOD", 21),
@@ -137,6 +227,12 @@ async def get_history_status():
                 "LIVE_EMA_OUTPUT_FILE",
                 "data/live_ema_cross_results.json",
             ),
+            "include_opening_range_levels": getattr(
+                config,
+                "EMA_CROSS_INCLUDE_OPENING_RANGE_LEVELS",
+                True,
+            ),
+            "payload_mode": "compact",
         },
     }
 
@@ -173,7 +269,7 @@ async def trigger_history_fetch(
     """
     Manually triggers historical candle fetch for all subscribed instruments.
 
-    New behavior:
+    Behavior:
     - Fetches historical candles for all subscribed instruments.
     - Does not save raw candle files.
     - Calculates EMA 9 and EMA 21 using all fetched candles.
@@ -182,10 +278,10 @@ async def trigger_history_fetch(
     - Saves EMA/crossover results only if save_results=True or TEST_FLAG=True.
     - Initializes live EMA continuation state from historical EMA values.
 
-    Important:
-    - It should be called after instruments are loaded.
-    - Historical candle API does not require access token.
-    - One failed instrument will not stop the whole fetch.
+    New flow:
+    - Live EMA continuation is initialized for all valid instruments.
+    - No selected Opening Range instrument filtering is used.
+    - No EMA Telegram alert is sent.
     """
 
     selected_interval = interval or getattr(
@@ -238,6 +334,9 @@ async def trigger_history_fetch(
             "raw_candles_saved": False,
             "ema_results_saved": selected_save_results,
             "live_ema_initialized": summary.get("live_ema_initialized"),
+            "selected_or_filtering": "disabled",
+            "telegram_ema_alerts": "disabled",
+            "live_ema_payload_mode": "compact",
             "summary": summary,
         }
 
@@ -267,10 +366,7 @@ async def fetch_history_for_single_instrument(
     ),
     striketype: str = Query(
         default=None,
-        description=(
-            "Option type: ce or pe. "
-            "Optional if instrument_key is provided."
-        ),
+        description=("Option type: ce or pe. Optional if instrument_key is provided."),
     ),
     interval: str = Query(
         default=None,
@@ -380,9 +476,7 @@ async def get_history_cache():
             "last_run_at": historical_candles_cache.get("last_run_at"),
             "from_date": historical_candles_cache.get("from_date"),
             "to_date": historical_candles_cache.get("to_date"),
-            "intraday_today_used": historical_candles_cache.get(
-                "intraday_today_used"
-            ),
+            "intraday_today_used": historical_candles_cache.get("intraday_today_used"),
             "interval": historical_candles_cache.get("interval"),
             "total_instruments": historical_candles_cache.get("total_instruments"),
             "success_count": historical_candles_cache.get("success_count"),
@@ -523,6 +617,19 @@ async def get_history_config():
                 "LIVE_EMA_MAX_EVENTS_IN_MEMORY",
                 5000,
             ),
+            "live_ema_payload_mode": "compact",
+            "ema_cross_include_opening_range_levels": getattr(
+                config,
+                "EMA_CROSS_INCLUDE_OPENING_RANGE_LEVELS",
+                True,
+            ),
+            "ema_cross_broadcast_without_opening_range": getattr(
+                config,
+                "EMA_CROSS_BROADCAST_WITHOUT_OPENING_RANGE",
+                True,
+            ),
+            "selected_or_filtering": "disabled",
+            "telegram_ema_alerts": "disabled",
         },
     }
 
@@ -530,6 +637,7 @@ async def get_history_config():
 # ============================================================
 # Live EMA Routes
 # ============================================================
+
 
 @router.get("/history/live-ema/status")
 async def get_live_ema_status():
@@ -540,6 +648,14 @@ async def get_live_ema_status():
     return {
         "status": "success",
         "live_ema_status": live_ema_service.get_status(),
+        "ema_cross_include_opening_range_levels": getattr(
+            config,
+            "EMA_CROSS_INCLUDE_OPENING_RANGE_LEVELS",
+            True,
+        ),
+        "payload_mode": "compact",
+        "selected_or_filtering": "disabled",
+        "telegram_ema_alerts": "disabled",
     }
 
 
@@ -551,17 +667,37 @@ async def get_live_ema_events(
         le=1000,
         description="Number of latest live EMA crossover events to return.",
     ),
+    include_opening_range: bool = Query(
+        default=True,
+        description=(
+            "If true, each compact EMA event is enriched with compact Opening Range "
+            "levels for the same instrument when available."
+        ),
+    ),
 ):
     """
     Returns recent live EMA crossover events.
 
     Events are generated only when live feed candles produce EMA 9/21 crossovers.
+
+    New flow:
+    - Events are compact.
+    - Events are not filtered by selected Opening Range instrument.
+    - Telegram EMA alerts are disabled.
+    - When include_opening_range=true, each event includes compact Opening Range context.
     """
+
+    events = live_ema_service.get_events(limit=limit)
+
+    if include_opening_range:
+        events = [enrich_ema_event_with_opening_range(event) for event in events]
 
     return {
         "status": "success",
         "limit": limit,
-        "events": live_ema_service.get_events(limit=limit),
+        "include_opening_range": include_opening_range,
+        "payload_mode": "compact",
+        "events": events,
     }
 
 
@@ -580,10 +716,11 @@ async def get_live_ema_instrument_state(
     ),
     striketype: str = Query(
         default=None,
-        description=(
-            "Option type: ce or pe. "
-            "Optional if instrument_key is provided."
-        ),
+        description=("Option type: ce or pe. Optional if instrument_key is provided."),
+    ),
+    include_opening_range: bool = Query(
+        default=True,
+        description="If true, state and recent crossover events include compact Opening Range context.",
     ),
 ):
     """
@@ -612,9 +749,52 @@ async def get_live_ema_instrument_state(
             ),
         )
 
+    if include_opening_range:
+        try:
+            opening_range_payload = get_opening_range_levels_for_ema_event(
+                resolved_instrument_key
+            )
+
+            if isinstance(opening_range_payload, dict):
+                state.update(opening_range_payload)
+
+        except Exception as ex:
+            logger.error(
+                f"Opening Range enrichment failed for live EMA state. "
+                f"instrument_key={resolved_instrument_key}, "
+                f"error={type(ex).__name__}: {ex}"
+            )
+
+            state.update(
+                {
+                    "opening_range": {},
+                    "touch_status": {},
+                    "latest_intraday_close": None,
+                    "latest_main_index_ltp": None,
+                    "processed_at": None,
+                }
+            )
+
+        recent_crossovers = state.get("recent_crossovers", [])
+
+        if recent_crossovers:
+            state["recent_crossovers"] = [
+                enrich_ema_event_with_opening_range(event)
+                for event in recent_crossovers
+            ]
+
+        last_crossover = state.get("last_crossover")
+
+        if last_crossover:
+            state["last_crossover"] = enrich_ema_event_with_opening_range(
+                last_crossover
+            )
+
     return {
         "status": "success",
         "instrument_key": resolved_instrument_key,
+        "include_opening_range": include_opening_range,
+        "payload_mode": "compact",
         "input": {
             "instrument_key": instrument_key,
             "strike": strike,
@@ -625,10 +805,49 @@ async def get_live_ema_instrument_state(
 
 
 @router.get("/history/live-ema/instruments")
-async def get_all_live_ema_instrument_summaries():
+async def get_all_live_ema_instrument_summaries(
+    include_opening_range: bool = Query(
+        default=False,
+        description=(
+            "If true, each instrument summary includes compact Opening Range context. "
+            "Can be large if many instruments are tracked."
+        ),
+    ),
+):
     """
     Returns lightweight live EMA summaries for all tracked instruments.
+
+    By default, Opening Range context is not attached to keep this endpoint light.
     """
+
+    data = live_ema_service.get_all_instrument_summaries()
+
+    if include_opening_range:
+        for instrument_key, item in data.items():
+            try:
+                opening_range_payload = get_opening_range_levels_for_ema_event(
+                    instrument_key
+                )
+
+                if isinstance(opening_range_payload, dict):
+                    item.update(opening_range_payload)
+
+            except Exception as ex:
+                logger.error(
+                    f"Opening Range enrichment failed for instrument summary. "
+                    f"instrument_key={instrument_key}, "
+                    f"error={type(ex).__name__}: {ex}"
+                )
+
+                item.update(
+                    {
+                        "opening_range": {},
+                        "touch_status": {},
+                        "latest_intraday_close": None,
+                        "latest_main_index_ltp": None,
+                        "processed_at": None,
+                    }
+                )
 
     return {
         "status": "success",
@@ -636,7 +855,9 @@ async def get_all_live_ema_instrument_summaries():
             "tracked_instruments",
             0,
         ),
-        "data": live_ema_service.get_all_instrument_summaries(),
+        "include_opening_range": include_opening_range,
+        "payload_mode": "compact",
+        "data": data,
     }
 
 
@@ -668,4 +889,10 @@ async def get_live_ema_results_file_status():
         "live_ema_save_test_file": getattr(config, "LIVE_EMA_SAVE_TEST_FILE", True),
         "live_ema_results_file_exists": file_path.exists(),
         "live_ema_results_file_path": str(file_path),
+        "payload_mode": "compact",
+        "note": (
+            "Saved file contains compact live EMA events as generated by "
+            "live_ema_service. Compact Opening Range enrichment is applied at "
+            "API/WebSocket response time."
+        ),
     }

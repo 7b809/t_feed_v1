@@ -15,8 +15,12 @@ class TelegramService:
     Telegram notification service.
 
     Used for sending project lifecycle, scheduler, token, instrument,
-    subscription, refresh, Opening Range, selected OR instrument,
-    EMA crossover, and error notifications to a Telegram chat.
+    subscription, refresh, Opening Range job status, and error notifications.
+
+    New requirement:
+    - Do not send selected Opening Range instrument Telegram alerts.
+    - Do not send EMA crossover Telegram alerts.
+    - EMA crossover events should be sent through WebSocket only.
     """
 
     def __init__(self):
@@ -143,7 +147,6 @@ class TelegramService:
             "SHUTDOWN": "🛑",
             "EMA": "📈",
             "OPENING_RANGE": "🎯",
-            "SELECTED_OR": "🎯",
         }
 
         emoji = emoji_map.get(level_upper, "ℹ️")
@@ -337,7 +340,7 @@ class TelegramService:
         )
 
     # ========================================================
-    # Selected Opening Range + EMA Messages
+    # Disabled Selected Opening Range + EMA Compatibility
     # ========================================================
 
     def send_selected_or_instrument_message(
@@ -353,28 +356,24 @@ class TelegramService:
         nifty_ltp=None,
     ) -> bool:
         """
-        Sends notification when the first R3/S3 touched instrument
-        is permanently selected for the current run/day.
+        Disabled.
+
+        Previous behavior:
+            Send Telegram notification when the first R3/S3 touched instrument
+            was permanently selected.
+
+        New requirement:
+            No instrument should be permanently selected.
+            No selected Opening Range Telegram notification should be sent.
         """
 
-        message = (
-            "First R3/S3 touched instrument has been selected permanently "
-            "for this run.\n\n"
-            f"Symbol: {symbol}\n"
-            f"Instrument Key: {instrument_key}\n"
-            f"Selected Level: {level}\n"
-            f"Level Value: {level_value}\n"
-            f"Trigger {trigger_field}: {trigger_price}\n"
-            f"Touch Time: {touch_time}\n"
-            f"Source: {source}\n"
-            f"Current NIFTY LTP: {nifty_ltp if nifty_ltp is not None else 'not_available'}"
+        logger.info(
+            "Selected OR instrument Telegram notification skipped because "
+            "selected OR flow is disabled. "
+            f"instrument_key={instrument_key}, symbol={symbol}, level={level}"
         )
 
-        return self.send_message(
-            title="Opening Range Instrument Selected",
-            message=message,
-            level="SELECTED_OR",
-        )
+        return False
 
     def send_selected_or_ema_cross_message(
         self,
@@ -383,72 +382,28 @@ class TelegramService:
         nifty_ltp=None,
     ) -> bool:
         """
-        Sends Telegram alert when EMA crossover happens for the selected
-        Opening Range instrument only.
+        Disabled.
+
+        Previous behavior:
+            Send Telegram alert when EMA crossover happened for the selected
+            Opening Range instrument.
+
+        New requirement:
+            EMA crossover alerts should be sent through WebSocket only.
+            No selected OR EMA Telegram alert should be sent.
         """
 
-        selected_state = selected_state or {}
         ema_event = ema_event or {}
 
-        info = selected_state.get("contract_info") or ema_event.get("info") or {}
-
-        live_data = selected_state.get("latest_live_data") or {}
-        levels = selected_state.get("levels") or {}
-
-        symbol = (
-            info.get("trading_symbol")
-            or info.get("instrument_key")
-            or selected_state.get("instrument_key")
-            or ema_event.get("instrument_key")
+        logger.info(
+            "Selected OR EMA Telegram notification skipped because "
+            "selected OR EMA alert flow is disabled. "
+            f"instrument_key={ema_event.get('instrument_key')}, "
+            f"cross_type={ema_event.get('cross_type')}, "
+            f"timestamp={ema_event.get('timestamp')}"
         )
 
-        message = (
-            "EMA crossover detected for the permanently selected "
-            "Opening Range instrument.\n\n"
-            "Selected Instrument:\n"
-            f"Symbol: {symbol}\n"
-            f"Instrument Key: {selected_state.get('instrument_key')}\n"
-            f"Selected Level: {selected_state.get('selected_level')}\n"
-            f"Level Value: {selected_state.get('level_value')}\n"
-            f"Trigger {selected_state.get('trigger_field')}: "
-            f"{selected_state.get('trigger_price')}\n"
-            f"Touch Time: {selected_state.get('touch_time')}\n"
-            f"Touch Source: {selected_state.get('touch_source')}\n\n"
-            "EMA Cross Data:\n"
-            f"Cross Type: {ema_event.get('cross_type')}\n"
-            f"Cross Time: {ema_event.get('timestamp')}\n"
-            f"Close: {ema_event.get('close')}\n"
-            f"EMA Fast Period: {ema_event.get('ema_fast_period')}\n"
-            f"EMA Slow Period: {ema_event.get('ema_slow_period')}\n"
-            f"EMA Fast: {ema_event.get('ema_fast')}\n"
-            f"EMA Slow: {ema_event.get('ema_slow')}\n"
-            f"Previous EMA Fast: {ema_event.get('previous_ema_fast')}\n"
-            f"Previous EMA Slow: {ema_event.get('previous_ema_slow')}\n"
-            f"Previous Signal: {ema_event.get('previous_signal')}\n"
-            f"Current Signal: {ema_event.get('current_signal')}\n\n"
-            "Current Live Data:\n"
-            f"Current NIFTY LTP: {nifty_ltp if nifty_ltp is not None else 'not_available'}\n"
-            f"Instrument LTP: {live_data.get('ltp')}\n"
-            f"Instrument High: {live_data.get('high')}\n"
-            f"Instrument Low: {live_data.get('low')}\n"
-            f"Instrument Close: {live_data.get('close')}\n"
-            f"Live Data Time: {live_data.get('timestamp')}\n\n"
-            "Opening Range Levels:\n"
-            f"R1: {levels.get('r1')}\n"
-            f"R2: {levels.get('r2')}\n"
-            f"R3: {levels.get('r3')}\n"
-            f"S1: {levels.get('s1')}\n"
-            f"S2: {levels.get('s2')}\n"
-            f"S3: {levels.get('s3')}\n"
-            f"R3 Threshold: {levels.get('r3_threshold')}\n"
-            f"S3 Threshold: {levels.get('s3_threshold')}"
-        )
-
-        return self.send_message(
-            title="Selected OR Instrument EMA Cross",
-            message=message,
-            level="EMA",
-        )
+        return False
 
     # ========================================================
     # Exception Messages

@@ -1,6 +1,6 @@
 # Live Option Feed Engine
 
-A FastAPI-based live market feed engine for NIFTY option contracts using the Upstox WebSocket feed. The application fetches NIFTY option contracts, subscribes to the NIFTY index and filtered option instruments, receives live ticks from Upstox, normalizes incoming feed data, calculates historical and live EMA crossover signals, calculates Opening Range levels, monitors R3/S3 touches, selects the first live R3/S3 touched option instrument permanently for the current run, and sends Telegram EMA crossover alerts only for that selected instrument.
+A FastAPI-based live market feed engine for NIFTY option contracts using the Upstox WebSocket feed. The application fetches NIFTY option contracts, subscribes to the NIFTY index and filtered option instruments, receives live ticks from Upstox, normalizes incoming feed data, calculates historical and live EMA crossover signals, calculates Opening Range levels for all subscribed instruments, monitors R3/S3 touches, and broadcasts EMA crossover events through WebSockets with the matching instrument's Opening Range levels when available.
 
 The project has evolved from a static single-option dashboard into a route-segregated FastAPI application with:
 
@@ -16,18 +16,19 @@ The project has evolved from a static single-option dashboard into a route-segre
 - Opening Range R1/S1, R2/S2, R3/S3 level generation for all subscribed instruments
 - Opening Range backfill scan to catch R3/S3 touches that happened before 09:18 AM
 - Live Opening Range R3/S3 touch monitoring from Upstox ticks after levels are available
-- First live option instrument touching/crossing R3 or S3 is selected permanently for the current run/day
-- EMA crossover Telegram alerts are sent only for the selected Opening Range instrument
-- Optional legacy Telegram alert for grouped R3/S3 touch events, disabled by default for the new flow
+- EMA crossover WebSocket payloads enriched with Opening Range range and levels for the same instrument
+- No first touched instrument selection
+- No selected Opening Range EMA Telegram alerts
+- Optional legacy Telegram alert for grouped R3/S3 touch events, disabled by default
 - Scheduled daily hard refresh at 09:00 AM IST, Monday to Friday
 - Manual hard refresh API and dashboard button
-- Telegram notifications for startup, refresh, subscription, token, instruments, historical EMA, Opening Range, selected OR instrument, selected OR EMA cross, shutdown, and errors
+- Telegram notifications for startup, refresh, subscription, token, instruments, historical EMA, Opening Range job status, shutdown, and errors
 
 ---
 
 ## Project Purpose
 
-This project acts as a local live option feed gateway, EMA crossover signal engine, and Opening Range selected-instrument alert engine.
+This project acts as a local live option feed gateway, EMA crossover signal engine, and Opening Range WebSocket enrichment engine.
 
 It handles:
 
@@ -46,17 +47,14 @@ It handles:
 13. Calculating Opening Range levels using Upstox intraday candles.
 14. Backfill-scanning post-Opening Range candles for already touched R3/S3 levels.
 15. Monitoring live ticks after Opening Range generation for R3/S3 touches.
-16. Selecting the first live option instrument that touches/crosses R3 or S3.
-17. Ignoring all other instruments after the first selected OR instrument is locked.
-18. Sending Telegram messages for EMA crossovers only for the selected OR instrument.
-19. Including EMA cross data, current NIFTY LTP, selected instrument live data, and OR levels in Telegram.
-20. Rendering a browser dashboard through FastAPI templates.
-21. Showing live NIFTY index data in the dashboard header.
-22. Showing nearest CE and PE option cards based on live NIFTY LTP.
-23. Supporting automatic scheduled hard refresh.
-24. Supporting manual hard refresh through an API and UI button.
-25. Sending Telegram alerts for important lifecycle events and failures.
-26. Providing debug, health, history, live EMA, Opening Range, selected OR instrument, and selected OR EMA alert status endpoints for local testing.
+16. Enriching each EMA crossover WebSocket event with the same instrument's Opening Range context.
+17. Rendering a browser dashboard through FastAPI templates.
+18. Showing live NIFTY index data in the dashboard header.
+19. Showing nearest CE and PE option cards based on live NIFTY LTP.
+20. Supporting automatic scheduled hard refresh.
+21. Supporting manual hard refresh through an API and UI button.
+22. Sending Telegram alerts for important lifecycle events and failures.
+23. Providing debug, health, history, live EMA, Opening Range, and WebSocket documentation endpoints for local testing.
 
 ---
 
@@ -64,14 +62,14 @@ It handles:
 
 ```text
 t_feed_v1-ws-feed/
-│
+|
 ├── main.py
 ├── requirements.txt
 ├── Procfile
 ├── run.bat
 ├── .env
 ├── README.md
-│
+|
 ├── api/
 │   ├── __init__.py
 │   ├── home_routes.py
@@ -81,18 +79,18 @@ t_feed_v1-ws-feed/
 │   ├── history_routes.py
 │   ├── opening_range_routes.py
 │   └── ws_docs_routes.py
-│
+|
 ├── core/
 │   ├── config.py
 │   └── logger.py
-│
+|
 ├── data/
 │   ├── nearest_nifty_option_contracts.json
 │   ├── ema_cross_results.json
 │   ├── live_ema_cross_results.json
 │   ├── opening_range_results.json
 │   └── opening_range_touch_events.json
-│
+|
 ├── services/
 │   ├── option_service.py
 │   ├── telegram_service.py
@@ -101,10 +99,10 @@ t_feed_v1-ws-feed/
 │   ├── live_ema_service.py
 │   ├── opening_range_service.py
 │   └── upstox_websocket.py
-│
+|
 ├── templates/
 │   └── index.html
-│
+|
 └── ws_feed/
     ├── __init__.py
     ├── broadcaster.py
@@ -135,7 +133,7 @@ Responsibilities:
 - Recalculates historical EMA during daily hard refresh.
 - Schedules Opening Range calculation at 09:18 AM IST.
 - Restarts Upstox streamer after refresh.
-- Sends Telegram notifications for startup, scheduler, refresh, historical EMA, Opening Range, selected OR instrument, selected OR EMA cross, subscription, errors, and shutdown.
+- Sends Telegram notifications for startup, scheduler, refresh, historical EMA, Opening Range job status, subscription, errors, and shutdown.
 - Stops streamer and scheduler during shutdown.
 
 Registered route modules:
@@ -189,26 +187,20 @@ Mon-Fri 09:18 AM IST
     -> calculate Opening Range levels from first N candles from 09:15
     -> scan post-OR intraday candles for already touched R3/S3
     -> save Opening Range results locally
-    -> store results in memory
+    -> store results in memory per instrument
     -> keep R3/S3 touch events in memory
-    -> wait for live_tick to select first R3/S3 touched option instrument by default
+    -> use cached Opening Range levels to enrich EMA crossover WebSocket payloads
 ```
 
-Selected OR + EMA alert flow:
+EMA + Opening Range WebSocket flow:
 
 ```text
-After Opening Range levels are ready:
+After historical EMA state and Opening Range cache are ready:
     live tick arrives
-    -> update NIFTY LTP if tick is NIFTY index
-    -> check option tick against cached R3/S3
-    -> first live option instrument touching/crossing R3 or S3 is locked permanently
-    -> optional Telegram: selected OR instrument locked
-    -> ignore all other instruments after lock
-    -> continue live EMA processing for all subscribed instruments
-    -> if EMA crossover belongs to selected OR instrument
-        -> send Telegram message with EMA cross data, NIFTY LTP, instrument live data, and OR levels
-    -> if EMA crossover belongs to any other instrument
-        -> ignore for Telegram selected OR alert
+    -> live_ema_service processes completed I1 candle
+    -> if EMA 9/21 crossover happens, event is created
+    -> upstox_websocket enriches event with Opening Range context using instrument_key
+    -> broadcaster sends enriched EMA event to connected WebSocket clients
 ```
 
 ---
@@ -296,19 +288,32 @@ GET  /history/live-ema/instruments
 GET  /history/live-ema/file
 ```
 
+### `GET /history/live-ema/events`
+
+Returns recent live EMA crossover events.
+
+Example:
+
+```text
+GET http://127.0.0.1:8000/history/live-ema/events?limit=100&include_opening_range=true
+```
+
+When `include_opening_range=true`, each EMA event is enriched with Opening Range context for the same instrument.
+
 ---
 
 ## Opening Range Routes
 
 ### `api/opening_range_routes.py`
 
-Contains Opening Range calculation, cache, file, R3/S3 touch event APIs, and selected OR instrument APIs.
+Contains Opening Range calculation, cache, file, R3/S3 touch event APIs, and compatibility routes for the disabled selected OR flow.
 
 ```text
 GET  /opening-range/status
 POST /opening-range/fetch
 GET  /opening-range/cache
 GET  /opening-range/instrument
+GET  /opening-range/ema-context
 POST /opening-range/instrument/fetch
 GET  /opening-range/selected-instrument
 GET  /opening-range/selected-instrument/ema-alerts
@@ -321,7 +326,7 @@ GET  /opening-range/config
 
 ### `GET /opening-range/status`
 
-Returns latest Opening Range calculation status, latest main index LTP, touch event counts, selected OR instrument state, and selected OR EMA alert counts.
+Returns latest Opening Range calculation status, latest main index LTP, touch event counts, and new flow details.
 
 ### `POST /opening-range/fetch`
 
@@ -343,11 +348,11 @@ Behavior:
 - Stores summary in memory.
 - Saves to `data/opening_range_results.json` if enabled.
 - Tracks backfill touch events.
-- By default, backfill events do not permanently select the OR instrument because selection source is `live_tick`.
+- Does not select or lock any instrument.
 
 ### `GET /opening-range/cache`
 
-Returns full Opening Range cache including selected OR instrument state and selected OR EMA alert records.
+Returns full Opening Range cache.
 
 ### `GET /opening-range/instrument`
 
@@ -361,29 +366,41 @@ http://127.0.0.1:8000/opening-range/instrument?instrument_key=NSE_FO%7C41012
 http://127.0.0.1:8000/opening-range/instrument?strike=24500&striketype=ce
 ```
 
+### `GET /opening-range/ema-context`
+
+Returns the Opening Range context that will be attached to an EMA crossover WebSocket event for the given instrument.
+
+Example:
+
+```text
+GET http://127.0.0.1:8000/opening-range/ema-context?strike=24500&striketype=ce
+```
+
 ### `POST /opening-range/instrument/fetch`
 
 Fetches intraday candles and calculates Opening Range for one instrument for testing/debugging.
 
 ### `GET /opening-range/selected-instrument`
 
-Returns the permanently selected Opening Range instrument.
+Backward-compatible route.
 
-Selection rule:
+New behavior:
 
 ```text
-First live option instrument that touches/crosses R3 or S3 is selected permanently.
-All other instruments are ignored after selection.
+Selected Opening Range instrument flow is disabled.
+No instrument is permanently locked.
+EMA crossovers are broadcast for all instruments with Opening Range levels when available.
 ```
 
 ### `GET /opening-range/selected-instrument/ema-alerts`
 
-Returns selected OR instrument EMA alert records.
+Backward-compatible route.
 
-Example:
+New behavior:
 
 ```text
-http://127.0.0.1:8000/opening-range/selected-instrument/ema-alerts?limit=100
+Selected OR EMA Telegram alerts are disabled.
+Use /ws/ema-crossover or /ws/ema-crossover/instrument for live EMA crossovers enriched with Opening Range levels.
 ```
 
 ### `GET /opening-range/touch-events`
@@ -403,11 +420,13 @@ intraday_backfill_scan
 live_tick
 ```
 
+Touch events are tracked for diagnostics and optional WebSocket broadcasting. They do not select a permanent instrument.
+
 ### `GET /opening-range/touch-events/pending`
 
 Returns pending Opening Range touch events waiting for legacy Telegram batch flush.
 
-In the new selected OR + EMA flow, pending events are used only if:
+Pending events are used only if:
 
 ```python
 OPENING_RANGE_LEGACY_TOUCH_TELEGRAM_ENABLED = True
@@ -423,15 +442,7 @@ Example:
 POST http://127.0.0.1:8000/opening-range/touch-events/flush?force=true
 ```
 
-Recommended new behavior keeps legacy touch Telegram disabled.
-
-### `GET /opening-range/file`
-
-Checks whether Opening Range output file and touch events output file exist.
-
-### `GET /opening-range/config`
-
-Returns Opening Range, backfill scan, live touch alert, selected OR instrument, and selected OR EMA alert configuration.
+Recommended behavior keeps legacy touch Telegram disabled.
 
 ---
 
@@ -457,6 +468,12 @@ WS /ws/opening-range/instrument?strike=24500&striketype=ce
 
 Both routes connect a client to all subscribed instruments.
 
+They can receive:
+
+- Live ticks
+- EMA crossover events
+- Opening Range touch events
+
 ### `/option`
 
 Connects a client to a specific option based on strike and option type.
@@ -470,6 +487,17 @@ ws://127.0.0.1:8000/option?strike=24500&striketype=ce
 ### `/ws/ema-crossover`
 
 Dedicated global WebSocket endpoint for live EMA crossover events for all instruments.
+
+Each EMA crossover event may include:
+
+```json
+"opening_range": {
+  "available": true,
+  "range": {},
+  "levels": {},
+  "touch_status": {}
+}
+```
 
 ### `/ws/ema-crossover/instrument`
 
@@ -535,6 +563,8 @@ Dashboard feed behavior:
 Browser
     -> connects to /all-feeds
     -> receives NIFTY index ticks and option ticks
+    -> receives EMA crossover events if present
+    -> receives Opening Range touch events if present
     -> updates NIFTY header
     -> stores CE/PE option ticks in memory
     -> sorts options by distance from live NIFTY LTP
@@ -594,12 +624,15 @@ OPENING_RANGE_LIVE_TOUCH_ALERT_ENABLED = True
 OPENING_RANGE_TOUCH_CHECK_MODE = "high_low"
 OPENING_RANGE_TOUCH_EVENTS_OUTPUT_FILE = "data/opening_range_touch_events.json"
 
-OPENING_RANGE_FIRST_TOUCH_SELECTION_ENABLED = True
-OPENING_RANGE_FIRST_TOUCH_SELECTION_SOURCE = "live_tick"
-OPENING_RANGE_SELECTED_OR_TOUCH_NOTIFY_ENABLED = True
-OPENING_RANGE_SELECTED_OR_EMA_ALERT_ENABLED = True
+OPENING_RANGE_FIRST_TOUCH_SELECTION_ENABLED = False
+OPENING_RANGE_FIRST_TOUCH_SELECTION_SOURCE = "disabled"
+OPENING_RANGE_SELECTED_OR_TOUCH_NOTIFY_ENABLED = False
+OPENING_RANGE_SELECTED_OR_EMA_ALERT_ENABLED = False
 OPENING_RANGE_LEGACY_TOUCH_TELEGRAM_ENABLED = False
-OPENING_RANGE_SELECTED_OR_EMA_ALERT_ONCE_PER_CROSS = True
+OPENING_RANGE_SELECTED_OR_EMA_ALERT_ONCE_PER_CROSS = False
+
+EMA_CROSS_INCLUDE_OPENING_RANGE_LEVELS = True
+EMA_CROSS_BROADCAST_WITHOUT_OPENING_RANGE = True
 ```
 
 ---
@@ -631,12 +664,13 @@ Responsibilities:
 - Detects bullish and bearish EMA 9/21 crossovers.
 - Stores live EMA cross events in memory.
 - Optionally saves events to `data/live_ema_cross_results.json` when `TEST_FLAG=True`.
-- Broadcasts EMA cross events if callbacks or WebSocket clients are available.
 - Adds event details such as previous signal, current signal, previous EMA values, and candle data.
+- Does not select an Opening Range instrument.
+- Does not send Telegram alerts.
 
 ### `services/opening_range_service.py`
 
-Calculates Opening Range levels, monitors R3/S3 touches, selects the first live touched instrument, and sends EMA-based Telegram alerts for the selected instrument.
+Calculates Opening Range levels, monitors R3/S3 touches, and provides Opening Range context for EMA WebSocket enrichment.
 
 Responsibilities:
 
@@ -645,15 +679,14 @@ Responsibilities:
 - Calculates open, high, low, close, average.
 - Calculates R1/S1, R2/S2, R3/S3 and thresholds.
 - Scans post-OR intraday candles for R3/S3 touches that happened before 09:18.
-- Stores Opening Range results in memory.
+- Stores Opening Range results in memory per instrument.
 - Saves Opening Range summary to `data/opening_range_results.json`.
 - Tracks latest NIFTY index LTP.
 - Processes live ticks after 09:18 for R3/S3 touches.
-- Permanently selects the first live option instrument that touches/crosses R3 or S3.
-- Ignores all other instruments after selected OR instrument is locked.
-- Stores latest live data for the selected instrument.
-- Processes EMA crossover events and sends Telegram only when EMA cross belongs to selected OR instrument.
-- Provides selected OR instrument state and selected OR EMA alert records through APIs.
+- Tracks touch events for diagnostics and optional WebSocket use.
+- Provides `get_opening_range_levels_for_ema_event(instrument_key)` for EMA payload enrichment.
+- Does not select a permanent OR instrument.
+- Does not send selected OR EMA Telegram alerts.
 - Optionally saves touch events to `data/opening_range_touch_events.json` when `TEST_FLAG=True`.
 
 Opening Range formula:
@@ -683,46 +716,27 @@ Backfill edge case:
 If R3/S3 touched between OR completion and 09:18 AM,
 the 09:18 intraday scan detects it and stores the event.
 
-By default:
-    OPENING_RANGE_FIRST_TOUCH_SELECTION_SOURCE = "live_tick"
-
-So backfill touch does not permanently select the instrument unless selection source is changed to:
-    "intraday_backfill_scan"
-    "all"
-    "any"
+Backfill touch does not select or lock the instrument.
 ```
 
-Live selected OR flow:
+Live touch flow:
 
 ```text
 After OR levels are available:
     live tick arrives
     -> update NIFTY LTP if index tick
     -> check option tick against cached R3/S3
-    -> if no selected instrument exists and option touches/crosses R3 or S3
-        -> select this instrument permanently
-        -> send optional selected-instrument Telegram notification
-    -> if selected instrument already exists and this tick belongs to another instrument
-        -> ignore for OR selection
-    -> if selected instrument tick arrives
-        -> keep latest live data updated
+    -> store touch event if R3/S3 is touched
+    -> do not lock or select any instrument
 ```
 
-Selected OR EMA flow:
+EMA enrichment flow:
 
 ```text
 Live EMA crossover event generated
-    -> check selected OR instrument state
-    -> if selected instrument is not available, ignore
-    -> if EMA event instrument is not selected instrument, ignore
-    -> if same EMA cross was already alerted, ignore
-    -> send Telegram message containing:
-        - selected instrument details
-        - selected R3/S3 touch details
-        - EMA cross data
-        - current NIFTY LTP
-        - selected instrument live LTP/high/low/close
-        - Opening Range R1/S1/R2/S2/R3/S3 levels
+    -> upstox_websocket calls get_opening_range_levels_for_ema_event(instrument_key)
+    -> opening_range is attached to EMA event
+    -> broadcaster sends enriched event through WebSocket
 ```
 
 ### `services/upstox_websocket.py`
@@ -738,8 +752,8 @@ Responsibilities:
 - Receives tick messages.
 - Sends decoded feed ticks to `broadcaster.broadcast_tick()`.
 - Sends full-feed candle data to `live_ema_service.process_live_feed()`.
+- Enriches live EMA cross events with Opening Range context.
 - Sends live ticks to `opening_range_service.process_live_tick_for_opening_range()`.
-- Sends live EMA cross events to `opening_range_service.process_selected_or_ema_cross_alert()`.
 - Broadcasts EMA crossover events through `broadcaster.broadcast_ema_cross()`.
 - Broadcasts Opening Range touch events through `broadcaster.broadcast_opening_range()`.
 - Flushes pending Opening Range touch Telegram alerts only if legacy touch Telegram is enabled.
@@ -750,7 +764,7 @@ Important behavior:
 - Normal live tick broadcasting is skipped when no local clients are connected.
 - Live EMA processing can continue even when no UI clients are connected if `LIVE_EMA_ENABLED=True`.
 - Opening Range touch monitoring can continue even when no UI clients are connected if `OPENING_RANGE_TOUCH_ALERT_ENABLED=True`.
-- Selected OR EMA alert processing can continue even when no UI clients are connected if `OPENING_RANGE_SELECTED_OR_EMA_ALERT_ENABLED=True`.
+- EMA Opening Range enrichment can continue even when no UI clients are connected if enabled.
 
 ### `services/telegram_service.py`
 
@@ -763,15 +777,19 @@ Telegram events include:
 - Instrument fetch success or failure
 - Historical EMA fetch success or failure
 - Opening Range calculation success or failure
-- Selected Opening Range instrument notification
-- Selected OR instrument EMA crossover alerts
-- Optional legacy Opening Range R3/S3 touch alerts
 - Scheduler started
 - Daily hard refresh started, success, or failure
 - Manual hard refresh started, success, or failure
 - Upstox subscription active or failure
 - Application shutdown started or completed
 - Exceptions and runtime failures
+
+Disabled Telegram events:
+
+```text
+Selected Opening Range instrument notification
+Selected OR instrument EMA crossover alerts
+```
 
 ---
 
@@ -801,6 +819,8 @@ broadcast_ema_cross()
 broadcast_opening_range()
 broadcast_candle()
 ```
+
+The broadcaster preserves and forwards complete EMA event payloads, including `opening_range` when it is attached upstream.
 
 ---
 
@@ -833,7 +853,7 @@ broadcast_candle()
 }
 ```
 
-### Live EMA Crossover Payload
+### Live EMA Crossover Payload With Opening Range
 
 ```json
 {
@@ -866,6 +886,61 @@ broadcast_candle()
     "instrument_type": "CE",
     "strike_price": 24500.0,
     "trading_symbol": "NIFTY 24500 CE"
+  },
+  "opening_range": {
+    "available": true,
+    "instrument_key": "NSE_FO|41012",
+    "date": "2026-08-06",
+    "source": "intraday_api",
+    "interval": "1minute",
+    "range": {
+      "open": 121.5,
+      "high": 126.0,
+      "low": 120.0,
+      "close": 124.0,
+      "average": 123.0
+    },
+    "levels": {
+      "r1": 124.5,
+      "s1": 121.5,
+      "r2": 129.0,
+      "s2": 117.0,
+      "r3": 132.0,
+      "s3": 114.0,
+      "r3_threshold": 130.5,
+      "s3_threshold": 115.5
+    },
+    "touch_status": {
+      "r3_touched": false,
+      "s3_touched": false,
+      "first_touch_level": null,
+      "first_touch_source": null,
+      "first_touch_time": null,
+      "events": []
+    }
+  }
+}
+```
+
+### Live EMA Crossover Payload Without Opening Range
+
+```json
+{
+  "type": "live_ema_cross",
+  "instrument_key": "NSE_FO|41012",
+  "timestamp": "2026-08-05T09:16:00+05:30",
+  "cross_type": "bullish_cross",
+  "interval_minutes": 1,
+  "close": 124.5,
+  "ema_fast": 123.8,
+  "ema_slow": 122.9,
+  "opening_range": {
+    "available": false,
+    "instrument_key": "NSE_FO|41012",
+    "message": "Opening Range levels are not available for this instrument.",
+    "range": null,
+    "levels": null,
+    "touch_status": null
   }
 }
 ```
@@ -901,39 +976,6 @@ Possible Opening Range touch sources:
 ```text
 intraday_backfill_scan
 live_tick
-```
-
-### Selected OR Instrument State
-
-```json
-{
-  "selected": true,
-  "instrument_key": "NSE_FO|41012",
-  "selected_level": "R3",
-  "level_value": 126.75,
-  "trigger_price": 128.5,
-  "trigger_field": "high",
-  "touch_time": "2026-08-06T09:18:05+05:30",
-  "touch_source": "live_tick",
-  "selected_at": "2026-08-06T09:18:06+05:30",
-  "contract_info": {
-    "instrument_type": "CE",
-    "strike_price": 24600.0,
-    "trading_symbol": "NIFTY 24600 CE"
-  },
-  "range": {},
-  "levels": {},
-  "latest_live_data": {
-    "ltp": 128.5,
-    "high": 128.5,
-    "low": 121.5,
-    "close": 127.0,
-    "timestamp": "2026-08-06T09:18:00+05:30"
-  },
-  "latest_main_index_ltp": 24580.25,
-  "ema_alerts_count": 1,
-  "last_ema_alert": {}
-}
 ```
 
 ---
@@ -976,124 +1018,48 @@ Performs:
 4. Scan post-OR candles for R3/S3 touches before 09:18
 5. Save Opening Range results to data/opening_range_results.json
 6. Store touch events in memory
-7. Wait for live tick to select first R3/S3 touched option instrument by default
+7. Keep Opening Range cache available for EMA WebSocket enrichment
 ```
 
 ---
 
 ## Telegram Alert Behavior
 
-### New default behavior: Selected OR instrument + EMA cross
+### Active Telegram behavior
 
-Rules:
-
-```text
-1. First live option instrument that touches/crosses R3 or S3 is selected permanently.
-2. After selection, all other instruments are ignored for selected OR Telegram flow.
-3. EMA crossover alerts are sent only for the selected instrument.
-4. Each EMA cross event is protected from duplicate sends using:
-   instrument_key + timestamp + cross_type
-5. Telegram message includes:
-   - selected instrument details
-   - selected R3/S3 touch details
-   - EMA cross data
-   - current NIFTY LTP
-   - selected instrument live LTP/high/low/close
-   - Opening Range levels
-```
-
-Example:
+Telegram is used for lifecycle and operational notifications:
 
 ```text
-09:18:05 - 24500 CE touches R3
-09:18:10 - 24600 CE touches R3
-09:19:00 - 24600 CE EMA bullish cross
-09:19:30 - 24500 CE EMA bullish cross
-09:24:00 - 24500 CE EMA bearish cross
+startup
+shutdown
+token refresh
+instrument fetch
+subscription status
+historical EMA fetch status
+Opening Range fetch status
+daily hard refresh
+manual hard refresh
+exceptions and runtime failures
 ```
 
-Expected behavior:
+### Disabled Telegram behavior
 
-```text
-24500 CE is selected permanently because it touched R3 first.
-24600 CE is ignored even though its EMA crossed first.
-Telegram sent at 09:19:30 for 24500 CE bullish cross.
-Telegram sent at 09:24:00 for 24500 CE bearish cross.
-```
-
-Example selected OR EMA Telegram content:
-
-```text
-Selected OR Instrument EMA Cross
-
-EMA crossover detected for the permanently selected Opening Range instrument.
-
-Selected Instrument:
-Symbol: NIFTY 24500 CE
-Instrument Key: NSE_FO|41012
-Selected Level: R3
-Level Value: 126.75
-Trigger high: 128.5
-Touch Time: 2026-08-06T09:18:05+05:30
-Touch Source: live_tick
-
-EMA Cross Data:
-Cross Type: bullish_cross
-Cross Time: 2026-08-06T09:21:00+05:30
-Close: 124.5
-EMA Fast Period: 9
-EMA Slow Period: 21
-EMA Fast: 123.8
-EMA Slow: 122.9
-Previous EMA Fast: 122.1
-Previous EMA Slow: 122.4
-Previous Signal: bearish
-Current Signal: bullish
-
-Current Live Data:
-Current NIFTY LTP: 24580.25
-Instrument LTP: 128.5
-Instrument High: 129.0
-Instrument Low: 121.4
-Instrument Close: 127.0
-Live Data Time: 2026-08-06T09:21:00+05:30
-
-Opening Range Levels:
-R1: ...
-R2: ...
-R3: ...
-S1: ...
-S2: ...
-S3: ...
-R3 Threshold: ...
-S3 Threshold: ...
-```
-
-### Legacy touch alert behavior
-
-Legacy R3/S3 touch batch alerts are disabled by default for the new flow.
+The following are disabled in the new flow:
 
 ```python
+OPENING_RANGE_FIRST_TOUCH_SELECTION_ENABLED = False
+OPENING_RANGE_SELECTED_OR_TOUCH_NOTIFY_ENABLED = False
+OPENING_RANGE_SELECTED_OR_EMA_ALERT_ENABLED = False
 OPENING_RANGE_LEGACY_TOUCH_TELEGRAM_ENABLED = False
 ```
 
-If enabled, the old grouped Telegram behavior can still send max nearest touched instruments:
+Meaning:
 
 ```text
-If 15 instruments touch R3/S3 together:
-    -> rank touched option instruments by abs(strike_price - NIFTY_LTP)
-    -> select nearest 5 only
-    -> send one Telegram message
-```
-
-Duplicate prevention:
-
-```text
-Same instrument + same level touch event is tracked once per day/run.
-Example:
-    24500 CE R3 -> tracked once
-    24500 CE R3 again -> skipped
-    24500 CE S3 later -> allowed once
+No first touched instrument is selected.
+No selected OR instrument Telegram notification is sent.
+No selected OR EMA crossover Telegram alert is sent.
+Legacy grouped R3/S3 touch Telegram alert is disabled by default.
 ```
 
 ---
@@ -1253,6 +1219,12 @@ POST http://127.0.0.1:8000/history/fetch?interval=1minute&history_days=10&save_r
 GET http://127.0.0.1:8000/history/live-ema/status
 ```
 
+### Live EMA Events With Opening Range
+
+```text
+GET http://127.0.0.1:8000/history/live-ema/events?limit=100&include_opening_range=true
+```
+
 ### Opening Range Manual Fetch
 
 ```text
@@ -1265,16 +1237,10 @@ POST http://127.0.0.1:8000/opening-range/fetch?candle_count=1&save_results=true&
 GET http://127.0.0.1:8000/opening-range/status
 ```
 
-### Selected OR Instrument Status
+### Opening Range EMA Context
 
 ```text
-GET http://127.0.0.1:8000/opening-range/selected-instrument
-```
-
-### Selected OR Instrument EMA Alerts
-
-```text
-GET http://127.0.0.1:8000/opening-range/selected-instrument/ema-alerts?limit=100
+GET http://127.0.0.1:8000/opening-range/ema-context?strike=24500&striketype=ce
 ```
 
 ### Opening Range Touch Events
@@ -1354,20 +1320,18 @@ For production deployments, avoid using `--reload`.
 - Live EMA continuation depends on successful historical EMA initialization.
 - Opening Range levels are generated from intraday API candles, not from raw live ticks.
 - Opening Range backfill scan covers R3/S3 touches that happen before 09:18.
-- By default, backfill touch events do not permanently select the OR instrument.
-- By default, only `live_tick` can permanently select the first R3/S3 touched option instrument.
-- After one selected OR instrument is locked, other instruments are ignored for selected OR Telegram flow.
-- EMA Telegram alerts are sent only for selected OR instrument.
-- The same EMA cross is protected from duplicate Telegram sends using instrument key, timestamp, and cross type.
+- Backfill touch events do not permanently select any OR instrument.
+- Live touch events do not permanently select any OR instrument.
+- EMA Telegram alerts are disabled in the new flow.
 - Legacy Opening Range touch Telegram alerts are disabled by default.
 - Global EMA WebSocket receives all crossover events.
-- Instrument-specific EMA WebSocket receives only the selected instrument's crossover events.
+- Instrument-specific EMA WebSocket receives only the resolved instrument's crossover events.
+- EMA WebSocket payloads include Opening Range levels when available.
 - Global Opening Range WebSocket receives all Opening Range events.
-- Instrument-specific Opening Range WebSocket receives only selected instrument events.
+- Instrument-specific Opening Range WebSocket receives only resolved instrument events.
 - If no local WebSocket clients are connected, normal tick broadcasting is skipped to reduce event-loop load.
 - If `LIVE_EMA_ENABLED=True`, live EMA processing can continue even when no dashboard client is connected.
 - If `OPENING_RANGE_TOUCH_ALERT_ENABLED=True`, Opening Range live touch monitoring can continue even when no dashboard client is connected.
-- If `OPENING_RANGE_SELECTED_OR_EMA_ALERT_ENABLED=True`, selected OR EMA Telegram alert processing can continue even when no dashboard client is connected.
 - Telegram notifications are optional and controlled by `TELEGRAM_ENABLED`.
 
 ---
@@ -1399,15 +1363,14 @@ This README reflects the current version of the project where:
 - Manual refresh is available through `/refresh/manual`.
 - Daily refresh runs Mon-Fri at 09:00 AM IST.
 - Daily Opening Range fetch runs Mon-Fri at 09:18 AM IST.
-- Telegram notifications are integrated through `services/telegram_service.py`.
+- Telegram notifications are integrated through `services/telegram_service.py` for lifecycle and operational status.
 - Historical EMA 9/21 crossover calculation is integrated through `services/history_service.py`.
 - Live EMA continuation is integrated through `services/live_ema_service.py`.
-- Opening Range calculation, R3/S3 touch tracking, first touched instrument selection, and selected OR EMA alerting are integrated through `services/opening_range_service.py`.
-- Upstox live tick processing bridges EMA cross events into selected OR EMA Telegram alerts through `services/upstox_websocket.py`.
+- Opening Range calculation, R3/S3 touch tracking, and EMA Opening Range context provider are integrated through `services/opening_range_service.py`.
+- Upstox live tick processing enriches EMA cross events with Opening Range levels through `services/upstox_websocket.py`.
 - Global EMA crossover streaming is available through `/ws/ema-crossover`.
 - Instrument-specific EMA crossover streaming is available through `/ws/ema-crossover/instrument`.
 - Global Opening Range streaming is available through `/ws/opening-range`.
 - Instrument-specific Opening Range streaming is available through `/ws/opening-range/instrument`.
-- Selected OR instrument status is available through `/opening-range/selected-instrument`.
-- Selected OR EMA alert records are available through `/opening-range/selected-instrument/ema-alerts`.
+- Selected OR instrument routes are retained only for backward compatibility and return disabled state.
 - Dashboard displays live NIFTY 50 and nearest CE/PE option cards from `/all-feeds`.

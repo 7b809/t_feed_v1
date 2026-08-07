@@ -16,6 +16,7 @@ router = APIRouter()
 # Helper: Resolve Instrument Key
 # ============================================================
 
+
 def resolve_instrument_key(
     instrument_key: str | None = None,
     strike: float | None = None,
@@ -62,7 +63,6 @@ def resolve_instrument_key(
     return None
 
 
-# Backward-compatible alias for EMA route readability
 def resolve_ema_instrument_key(
     instrument_key: str | None = None,
     strike: float | None = None,
@@ -76,7 +76,6 @@ def resolve_ema_instrument_key(
     )
 
 
-# Opening range route readability
 def resolve_opening_range_instrument_key(
     instrument_key: str | None = None,
     strike: float | None = None,
@@ -94,10 +93,19 @@ def resolve_opening_range_instrument_key(
 # All Feeds WebSocket
 # ============================================================
 
+
 @router.websocket("/ws")
 @router.websocket("/all-feeds")
 async def websocket_all_feeds(websocket: WebSocket):
-    """WebSocket endpoint returning live market feeds for all loaded contracts."""
+    """
+    WebSocket endpoint returning live market feeds for all loaded contracts.
+
+    This can also receive:
+    - live EMA crossover events
+    - Opening Range touch events
+
+    EMA crossover events may include opening_range context.
+    """
 
     logger.info(f"Incoming websocket request for /all-feeds from {websocket.client}")
 
@@ -114,9 +122,13 @@ async def websocket_all_feeds(websocket: WebSocket):
             {
                 "type": "connected",
                 "endpoint": "/all-feeds",
-                "message": "Connected to all feeds websocket. Waiting for live market ticks.",
+                "message": (
+                    "Connected to all feeds websocket. Waiting for live ticks, "
+                    "EMA crossover events, and Opening Range events."
+                ),
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "subscribed_instruments": len(options_cache.get("subscribed_keys", [])),
+                "ema_opening_range_enrichment": True,
             }
         )
 
@@ -142,7 +154,10 @@ async def websocket_all_feeds(websocket: WebSocket):
                     {
                         "type": "ping",
                         "endpoint": "/all-feeds",
-                        "message": "WebSocket alive. Waiting for live ticks.",
+                        "message": (
+                            "WebSocket alive. Waiting for live ticks, EMA crossover "
+                            "events, and Opening Range events."
+                        ),
                         "timestamp": datetime.now(timezone.utc).isoformat(),
                     }
                 )
@@ -164,13 +179,23 @@ async def websocket_all_feeds(websocket: WebSocket):
 # Option WebSocket
 # ============================================================
 
+
 @router.websocket("/option")
 async def websocket_option(
     websocket: WebSocket,
     strike: float = Query(..., description="Strike Price, e.g., 24500"),
     striketype: str = Query(..., description="Option type: ce or pe"),
 ):
-    """WebSocket endpoint filtering live feeds by strike price and CE/PE."""
+    """
+    WebSocket endpoint filtering live feeds by strike price and CE/PE.
+
+    This endpoint can receive:
+    - matching live option ticks
+    - matching EMA crossover events
+    - matching Opening Range events
+
+    EMA crossover events may include opening_range context.
+    """
 
     itype = str(striketype).upper()
 
@@ -220,8 +245,12 @@ async def websocket_option(
                 "endpoint": "/option",
                 "strike": strike,
                 "striketype": itype,
-                "message": "Connected to option websocket. Waiting for matching option ticks.",
+                "message": (
+                    "Connected to option websocket. Waiting for matching option ticks, "
+                    "EMA crossover events, and Opening Range events."
+                ),
                 "timestamp": datetime.now(timezone.utc).isoformat(),
+                "ema_opening_range_enrichment": True,
             }
         )
 
@@ -251,7 +280,10 @@ async def websocket_option(
                         "endpoint": "/option",
                         "strike": strike,
                         "striketype": itype,
-                        "message": "WebSocket alive. Waiting for matching option ticks.",
+                        "message": (
+                            "WebSocket alive. Waiting for matching option ticks, "
+                            "EMA crossover events, and Opening Range events."
+                        ),
                         "timestamp": datetime.now(timezone.utc).isoformat(),
                     }
                 )
@@ -276,12 +308,17 @@ async def websocket_option(
 # Global EMA Crossover WebSocket
 # ============================================================
 
+
 @router.websocket("/ws/ema-crossover")
 async def websocket_ema_crossover(websocket: WebSocket):
     """
     Dedicated WebSocket endpoint streaming real-time EMA crossover events.
 
-    This receives EMA crossover events for all instruments.
+    New flow:
+    - Receives EMA crossover events for all initialized instruments.
+    - Events are not filtered by selected Opening Range instrument.
+    - Each event may include opening_range range and levels when available.
+    - Telegram EMA alerts are disabled.
     """
 
     logger.info(
@@ -301,8 +338,15 @@ async def websocket_ema_crossover(websocket: WebSocket):
             {
                 "type": "connected",
                 "endpoint": "/ws/ema-crossover",
-                "message": "Connected to EMA Crossover feed. Waiting for crossover signals.",
+                "message": (
+                    "Connected to EMA Crossover feed. Waiting for EMA crossover "
+                    "signals enriched with Opening Range levels when available."
+                ),
                 "timestamp": datetime.now(timezone.utc).isoformat(),
+                "scope": "all_instruments",
+                "ema_opening_range_enrichment": True,
+                "selected_or_filtering": "disabled",
+                "telegram_ema_alerts": "disabled",
             }
         )
 
@@ -328,7 +372,10 @@ async def websocket_ema_crossover(websocket: WebSocket):
                     {
                         "type": "ping",
                         "endpoint": "/ws/ema-crossover",
-                        "message": "WebSocket alive. Waiting for EMA crossover signals.",
+                        "message": (
+                            "WebSocket alive. Waiting for EMA crossover signals "
+                            "with Opening Range context."
+                        ),
                         "timestamp": datetime.now(timezone.utc).isoformat(),
                     }
                 )
@@ -349,6 +396,7 @@ async def websocket_ema_crossover(websocket: WebSocket):
 # ============================================================
 # Instrument-Specific EMA Crossover WebSocket
 # ============================================================
+
 
 @router.websocket("/ws/ema-crossover/instrument")
 async def websocket_ema_crossover_instrument(
@@ -374,6 +422,11 @@ async def websocket_ema_crossover_instrument(
         /ws/ema-crossover/instrument?instrument_key=NSE_FO%7C41012
         /ws/ema-crossover/instrument?strike=24500&striketype=ce
         /ws/ema-crossover/instrument?strike=24500&striketype=pe
+
+    New flow:
+    - Streams EMA crossover events only for the resolved instrument.
+    - Event payload may include opening_range levels for the same instrument.
+    - No selected OR filtering is applied.
     """
 
     resolved_instrument_key = resolve_ema_instrument_key(
@@ -447,7 +500,8 @@ async def websocket_ema_crossover_instrument(
                 "endpoint": "/ws/ema-crossover/instrument",
                 "message": (
                     "Connected to instrument-specific EMA crossover feed. "
-                    "Waiting for crossover signals."
+                    "Waiting for EMA crossover signals enriched with Opening Range "
+                    "levels when available."
                 ),
                 "instrument_key": resolved_instrument_key,
                 "input": {
@@ -456,6 +510,10 @@ async def websocket_ema_crossover_instrument(
                     "striketype": striketype,
                 },
                 "timestamp": datetime.now(timezone.utc).isoformat(),
+                "scope": "single_instrument",
+                "ema_opening_range_enrichment": True,
+                "selected_or_filtering": "disabled",
+                "telegram_ema_alerts": "disabled",
             }
         )
 
@@ -485,7 +543,7 @@ async def websocket_ema_crossover_instrument(
                         "instrument_key": resolved_instrument_key,
                         "message": (
                             "WebSocket alive. Waiting for instrument-specific "
-                            "EMA crossover signals."
+                            "EMA crossover signals with Opening Range context."
                         ),
                         "timestamp": datetime.now(timezone.utc).isoformat(),
                     }
@@ -517,12 +575,16 @@ async def websocket_ema_crossover_instrument(
 # Global Opening Range WebSocket
 # ============================================================
 
+
 @router.websocket("/ws/opening-range")
 async def websocket_opening_range(websocket: WebSocket):
     """
     Dedicated WebSocket endpoint streaming Opening Range events.
 
-    This receives Opening Range events for all instruments.
+    New flow:
+    - Receives Opening Range events for all instruments.
+    - Touch events do not permanently select any instrument.
+    - EMA events are handled separately through /ws/ema-crossover.
     """
 
     logger.info(
@@ -543,9 +605,12 @@ async def websocket_opening_range(websocket: WebSocket):
                 "type": "connected",
                 "endpoint": "/ws/opening-range",
                 "message": (
-                    "Connected to Opening Range feed. Waiting for opening range events."
+                    "Connected to Opening Range feed. Waiting for Opening Range "
+                    "events for all instruments."
                 ),
                 "timestamp": datetime.now(timezone.utc).isoformat(),
+                "scope": "all_instruments",
+                "selected_or_filtering": "disabled",
             }
         )
 
@@ -593,6 +658,7 @@ async def websocket_opening_range(websocket: WebSocket):
 # Instrument-Specific Opening Range WebSocket
 # ============================================================
 
+
 @router.websocket("/ws/opening-range/instrument")
 async def websocket_opening_range_instrument(
     websocket: WebSocket,
@@ -617,6 +683,10 @@ async def websocket_opening_range_instrument(
         /ws/opening-range/instrument?instrument_key=NSE_FO%7C41012
         /ws/opening-range/instrument?strike=24500&striketype=ce
         /ws/opening-range/instrument?strike=24500&striketype=pe
+
+    New flow:
+    - Streams Opening Range events only for the resolved instrument.
+    - This does not mean the instrument is selected permanently.
     """
 
     resolved_instrument_key = resolve_opening_range_instrument_key(
@@ -690,7 +760,7 @@ async def websocket_opening_range_instrument(
                 "endpoint": "/ws/opening-range/instrument",
                 "message": (
                     "Connected to instrument-specific Opening Range feed. "
-                    "Waiting for opening range events."
+                    "Waiting for Opening Range events."
                 ),
                 "instrument_key": resolved_instrument_key,
                 "input": {
@@ -699,6 +769,8 @@ async def websocket_opening_range_instrument(
                     "striketype": striketype,
                 },
                 "timestamp": datetime.now(timezone.utc).isoformat(),
+                "scope": "single_instrument",
+                "selected_or_filtering": "disabled",
             }
         )
 

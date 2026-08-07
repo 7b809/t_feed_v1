@@ -20,18 +20,20 @@ class LiveEMAService:
     1. Initialize EMA state from historical EMA summary.
     2. Read live full-mode Upstox feed candles.
     3. Continue EMA 9/21 from historical latest EMA values.
-    4. Detect live bullish/bearish EMA crossovers.
-    5. Store crossover events in memory.
+    4. Detect live bullish/bearish EMA crossovers for all initialized instruments.
+    5. Store compact crossover events in memory.
     6. Broadcast crossover events via optional registered callback.
-    7. Optionally save crossover events to data/live_ema_cross_results.json.
+    7. Optionally save compact crossover events to data/live_ema_cross_results.json.
 
     Important:
     - Raw live ticks are not stored.
     - Raw historical candles are not needed here.
     - This service works from EMA state only.
-    - Opening Range selected-instrument filtering is not done here.
-      It should be handled by opening_range_service through
-      process_selected_or_ema_cross_alert().
+    - This service does not select an Opening Range instrument.
+    - This service does not send Telegram alerts.
+    - Opening Range enrichment is handled outside this service in
+      services/upstox_websocket.py before WebSocket broadcast.
+    - Live EMA crossover payload is intentionally compact to reduce WebSocket load.
     """
 
     def __init__(self):
@@ -77,7 +79,7 @@ class LiveEMAService:
         # Per instrument EMA state.
         self.state = {}
 
-        # Recent live EMA crossover events.
+        # Recent compact live EMA crossover events.
         self.cross_events = deque(maxlen=self.max_events_in_memory)
 
         logger.info(
@@ -94,7 +96,7 @@ class LiveEMAService:
 
     def register_crossover_callback(self, callback):
         """
-        Registers an async callback function to handle crossover events in real-time.
+        Registers an async callback function to handle crossover events in real time.
 
         Expected signature:
             async def callback(event: dict)
@@ -108,7 +110,7 @@ class LiveEMAService:
     # ========================================================
 
     def _load_market_timezone(self):
-        """Loads market timezone from config, defaults to Asia/Kolkata."""
+        """Loads market timezone from config, defaulting to Asia/Kolkata."""
 
         timezone_name = getattr(config, "MARKET_TIMEZONE", "Asia/Kolkata")
 
@@ -144,9 +146,7 @@ class LiveEMAService:
             return None
 
     def _epoch_ms_to_datetime(self, ts_value) -> datetime | None:
-        """
-        Converts epoch milliseconds to datetime object in market timezone.
-        """
+        """Converts epoch milliseconds to datetime object in market timezone."""
 
         try:
             ts_ms = int(ts_value)
@@ -414,12 +414,9 @@ class LiveEMAService:
         previous_ema: float,
         period: int,
     ) -> float:
-        """
-        Calculates next EMA value from previous EMA and current close.
-        """
+        """Calculates next EMA value from previous EMA and current close."""
 
         multiplier = 2 / (period + 1)
-
         next_ema = close_price * multiplier + previous_ema * (1 - multiplier)
 
         return round(next_ema, 4)
@@ -431,9 +428,7 @@ class LiveEMAService:
         current_fast: float,
         current_slow: float,
     ) -> str | None:
-        """
-        Detects EMA crossover type.
-        """
+        """Detects EMA crossover type."""
 
         if previous_fast <= previous_slow and current_fast > current_slow:
             return "bullish_cross"
@@ -444,9 +439,7 @@ class LiveEMAService:
         return None
 
     def _get_signal(self, ema_fast: float, ema_slow: float) -> str:
-        """
-        Returns current EMA signal.
-        """
+        """Returns current EMA signal."""
 
         if ema_fast > ema_slow:
             return "bullish"
@@ -611,7 +604,7 @@ class LiveEMAService:
         Processes one live Upstox full-mode feed tick.
 
         Returns:
-            crossover event dict when EMA cross happens.
+            compact crossover event dict when EMA cross happens.
             None otherwise.
         """
 
@@ -633,9 +626,6 @@ class LiveEMAService:
             if previous_ema_fast is None or previous_ema_slow is None:
                 return None
 
-            # Always consume Upstox I1 candle.
-            # If configured interval is 1, process I1 directly.
-            # If configured interval is greater than 1, aggregate I1 candles.
             latest_i1_raw = self._find_latest_feed_candle(tick_data, "I1")
 
             if not latest_i1_raw:
@@ -695,7 +685,6 @@ class LiveEMAService:
 
         previous_fast = self._safe_float(state.get("previous_ema_fast"))
         previous_slow = self._safe_float(state.get("previous_ema_slow"))
-        previous_signal = state.get("previous_signal")
 
         current_fast = self._calculate_next_ema(
             close_price=close_price,
@@ -735,26 +724,9 @@ class LiveEMAService:
             "cross_type": cross_type,
             "interval_minutes": self.interval_minutes,
             "close": close_price,
-            "ema_fast_period": self.fast_period,
-            "ema_slow_period": self.slow_period,
-            "ema_fast": current_fast,
-            "ema_slow": current_slow,
-            "previous_ema_fast": previous_fast,
-            "previous_ema_slow": previous_slow,
-            "previous_signal": previous_signal,
             "current_signal": current_signal,
             "source": "live_feed",
             "created_at": self._now_market_time(),
-            "candle": {
-                "timestamp": completed_candle.get("timestamp"),
-                "timestamp_ms": completed_candle.get("timestamp_ms"),
-                "open": completed_candle.get("open"),
-                "high": completed_candle.get("high"),
-                "low": completed_candle.get("low"),
-                "close": completed_candle.get("close"),
-                "volume": completed_candle.get("volume"),
-            },
-            "info": contract_info or state.get("contract_info", {}),
         }
 
         state["last_crossover"] = event
@@ -768,8 +740,7 @@ class LiveEMAService:
             f"cross_type={cross_type}, "
             f"timestamp={candle_ts}, "
             f"close={close_price}, "
-            f"ema_fast={current_fast}, "
-            f"ema_slow={current_slow}"
+            f"current_signal={current_signal}"
         )
 
         self._save_live_events_if_enabled_locked()
@@ -791,7 +762,7 @@ class LiveEMAService:
 
     def _save_live_events_if_enabled_locked(self):
         """
-        Saves live EMA cross events to file if enabled.
+        Saves compact live EMA cross events to file if enabled.
 
         Lock must already be held by caller.
         """
@@ -829,9 +800,7 @@ class LiveEMAService:
     # ========================================================
 
     def get_status(self) -> dict:
-        """
-        Returns live EMA service status.
-        """
+        """Returns live EMA service status."""
 
         with self._lock:
             return {
@@ -844,13 +813,15 @@ class LiveEMAService:
                 "output_file": self.output_file,
                 "save_test_file": self.save_test_file,
                 "max_events_in_memory": self.max_events_in_memory,
+                "payload_mode": "compact",
+                "opening_range_enrichment": "handled_in_upstox_websocket",
+                "selected_or_filtering": "disabled",
+                "telegram_alerts": "disabled",
                 "updated_at": self._now_market_time(),
             }
 
     def get_events(self, limit: int = 100) -> list:
-        """
-        Returns latest live EMA crossover events.
-        """
+        """Returns latest compact live EMA crossover events."""
 
         limit = max(1, int(limit or 100))
 
@@ -858,9 +829,7 @@ class LiveEMAService:
             return list(self.cross_events)[-limit:]
 
     def get_instrument_state(self, instrument_key: str) -> dict | None:
-        """
-        Returns live EMA state for one instrument.
-        """
+        """Returns live EMA state for one instrument."""
 
         with self._lock:
             state = self.state.get(instrument_key)
@@ -878,9 +847,7 @@ class LiveEMAService:
             return copied
 
     def get_all_instrument_summaries(self) -> dict:
-        """
-        Returns lightweight state summary for all instruments.
-        """
+        """Returns lightweight state summary for all instruments."""
 
         with self._lock:
             output = {}
