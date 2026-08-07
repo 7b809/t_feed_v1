@@ -1,0 +1,2111 @@
+
+================================================================================
+2026-08-07 14:30:57
+{
+    "type": "connected",
+    "endpoint": "/ws/ema-crossover",
+    "message": "Connected to EMA Crossover feed. Waiting for EMA crossover signals enriched with Opening Range levels when available.",
+    "timestamp": "2026-08-07T09:00:56.828982+00:00",
+    "scope": "all_instruments",
+    "ema_opening_range_enrichment": true,
+    "selected_or_filtering": "disabled",
+    "telegram_ema_alerts": "disabled"
+}
+
+================================================================================
+2026-08-07 14:31:03
+{
+    "type": "live_ema_cross",
+    "instrument_key": "NSE_FO|40950",
+    "timestamp": "2026-08-07T14:29:00+05:30",
+    "cross_type": "bullish_cross",
+    "interval_minutes": 1,
+    "close": 1.15,
+    "current_signal": "bullish",
+    "source": "live_feed",
+    "created_at": "2026-08-07T14:31:03.239525+05:30",
+    "opening_range": {
+        "r1": 1.3375,
+        "s1": 1.2125,
+        "r2": 1.525,
+        "s2": 1.025,
+        "r3": 1.65,
+        "s3": 0.9,
+        "sub_resistance": 1.3375,
+        "sub_support": 1.2125
+    },
+    "touch_status": {
+        "r3_touched": false,
+        "s3_touched": false,
+        "r3_touch_time": null,
+        "s3_touch_time": null,
+        "r3_alert_sent": false,
+        "s3_alert_sent": false,
+        "first_touch_level": null,
+        "first_touch_source": null,
+        "first_touch_time": null,
+        "events": []
+    },
+    "latest_intraday_close": 1.2,
+    "latest_main_index_ltp": 24531.25,
+    "processed_at": "2026-08-07T09:18:04.066186+05:30"
+}
+
+================================================================================
+2026-08-07 14:31:27
+{
+    "type": "ping",
+    "endpoint": "/ws/ema-crossover",
+    "message": "WebSocket alive. Waiting for EMA crossover signals with Opening Range context.",
+    "timestamp": "2026-08-07T09:01:26.829762+00:00"
+}
+
+================================================================================
+2026-08-07 14:31:57
+{
+    "type": "ping",
+    "endpoint": "/ws/ema-crossover",
+    "message": "WebSocket alive. Waiting for EMA crossover signals with Opening Range context.",
+    "timestamp": "2026-08-07T09:01:56.830403+00:00"
+}
+
+================================================================================
+2026-08-07 14:32:03
+{
+    "type": "live_ema_cross",
+    "instrument_key": "NSE_FO|40962",
+    "timestamp": "2026-08-07T14:30:00+05:30",
+    "cross_type": "bullish_cross",
+    "interval_minutes": 1,
+    "close": 1.45,
+    "current_signal": "bullish",
+    "source": "live_feed",
+    "created_at": "2026-08-07T14:32:02.826771+05:30",
+    "opening_range": {
+        "r1": 1.675,
+        "s1": 1.525,
+        "r2": 1.9,
+        "s2": 1.3,
+        "r3": 2.05,
+        "s3": 1.15,
+        "sub_resistance": 1.675,
+        "sub_support": 1.525
+    },
+    "touch_status": {
+        "r3_touched": false,
+        "s3_touched": false,
+        "r3_touch_time": null,
+        "s3_touch_time": null,
+        "r3_alert_sent": false,
+        "s3_alert_sent": false,
+        "first_touch_level": null,
+        "first_touch_source": null,
+        "first_touch_time": null,
+        "events": []
+    },
+    "latest_intraday_close": 1.5,
+    "latest_main_index_ltp": 24528.6,
+    "processed_at": "2026-08-07T09:18:04.506207+05:30"
+}
+
+================================================================================
+2026-08-07 14:32:27
+{
+    "type": "ping",
+    "endpoint": "/ws/ema-crossover",
+    "message": "WebSocket alive. Waiting for EMA crossover signals with Opening Range context.",
+    "timestamp": "2026-08-07T09:02:26.830961+00:00"
+}
+
+================================================================================
+2026-08-07 14:32:57
+{
+    "type": "ping",
+    "endpoint": "/ws/ema-crossover",
+    "message": "WebSocket alive. Waiting for EMA crossover signals with Opening Range context.",
+    "timestamp": "2026-08-07T09:02:56.831726+00:00"
+}
+
+================================================================================
+2026-08-07 14:33:27
+{
+    "type": "ping",
+    "endpoint": "/ws/ema-crossover",
+    "message": "WebSocket alive. Waiting for EMA crossover signals with Opening Range context.",
+    "timestamp": "2026-08-07T09:03:26.832401+00:00"
+}
+
+================================================================================
+2026-08-07 14:33:34
+{
+    "type": "live_ema_cross",
+    "instrument_key": "NSE_FO|40956",
+    "timestamp": "2026-08-07T14:31:00+05:30",
+    "cross_type": "bullish_cross",
+    "interval_minutes": 1,
+    "close": 1.3,
+    "current_signal": "bullish",
+    "source": "live_feed",
+    "created_at": "2026-08-07T14:33:34.446173+05:30",
+    "opening_range": {
+        "r1": 1.525,
+        "s1": 1.375,
+        "r2": 1.75,
+        "s2": 1.15,
+        "r3": 1.9,
+        "s3": 1.0,
+        "sub_resistance": 1.525,
+        "sub_support": 1.375
+    },
+    "touch_status": {
+        "r3_touched": false,
+        "s3_touched": false,
+        "r3_touch_time": null,
+        "s3_touch_time": null,
+        "r3_alert_sent": false,
+        "s3_alert_sent": false,
+        "first_touch_level": null,
+        "first_touch_source": null,
+        "first_touch_time": null,
+        "events": []
+    },
+    "latest_intraday_close": 1.3,
+    "latest_main_index_ltp": 24543.55,
+    "processed_at": "2026-08-07T09:18:04.129738+05:30"
+}
+
+================================================================================
+2026-08-07 14:33:57
+{
+    "type": "ping",
+    "endpoint": "/ws/ema-crossover",
+    "message": "WebSocket alive. Waiting for EMA crossover signals with Opening Range context.",
+    "timestamp": "2026-08-07T09:03:56.833177+00:00"
+}
+
+================================================================================
+2026-08-07 14:34:00
+{
+    "type": "live_ema_cross",
+    "instrument_key": "NSE_FO|41024",
+    "timestamp": "2026-08-07T14:32:00+05:30",
+    "cross_type": "bearish_cross",
+    "interval_minutes": 1,
+    "close": 196.35,
+    "current_signal": "bearish",
+    "source": "live_feed",
+    "created_at": "2026-08-07T14:34:00.371480+05:30",
+    "opening_range": {
+        "r1": 175.4375,
+        "s1": 166.4125,
+        "r2": 188.975,
+        "s2": 152.875,
+        "r3": 198.0,
+        "s3": 143.85,
+        "sub_resistance": 175.4375,
+        "sub_support": 166.4125
+    },
+    "touch_status": {
+        "r3_touched": true,
+        "s3_touched": false,
+        "r3_touch_time": "2026-08-07T11:03:00+05:30",
+        "s3_touch_time": null,
+        "r3_alert_sent": true,
+        "s3_alert_sent": false,
+        "first_touch_level": "R3",
+        "first_touch_source": "live_tick",
+        "first_touch_time": "2026-08-07T11:03:00+05:30",
+        "events": [
+            {
+                "type": "opening_range_touch",
+                "instrument_key": "NSE_FO|41024",
+                "level": "R3",
+                "level_value": 198.0,
+                "trigger_price": 199.5,
+                "trigger_field": "high",
+                "touch_time": "2026-08-07T11:03:00+05:30",
+                "source": "live_tick",
+                "date": "2026-08-07",
+                "main_index_ltp": 24555.65,
+                "distance_from_index": 144.35,
+                "alert_key": "NSE_FO|41024_R3",
+                "contract_info": {
+                    "instrument_key": "NSE_FO|41024",
+                    "instrument_type": "PE",
+                    "strike_price": 24700.0,
+                    "expiry": "2026-08-11",
+                    "trading_symbol": "NIFTY 24700 PE 11 AUG 26",
+                    "underlying_type": "INDEX",
+                    "underlying_symbol": "NIFTY",
+                    "supported_intervals": [
+                        0,
+                        1,
+                        3,
+                        5
+                    ]
+                },
+                "candle": null,
+                "created_at": "2026-08-07T11:04:00.393022+05:30"
+            }
+        ]
+    },
+    "latest_intraday_close": 173.2,
+    "latest_main_index_ltp": 24545.9,
+    "processed_at": "2026-08-07T09:18:03.228181+05:30"
+}
+
+================================================================================
+2026-08-07 14:34:00
+{
+    "type": "live_ema_cross",
+    "instrument_key": "NSE_FO|41006",
+    "timestamp": "2026-08-07T14:32:00+05:30",
+    "cross_type": "bearish_cross",
+    "interval_minutes": 1,
+    "close": 41.7,
+    "current_signal": "bearish",
+    "source": "live_feed",
+    "created_at": "2026-08-07T14:34:00.395592+05:30",
+    "opening_range": {
+        "r1": 42.775,
+        "s1": 35.025,
+        "r2": 54.4,
+        "s2": 23.4,
+        "r3": 62.15,
+        "s3": 15.65,
+        "sub_resistance": 42.775,
+        "sub_support": 35.025
+    },
+    "touch_status": {
+        "r3_touched": false,
+        "s3_touched": false,
+        "r3_touch_time": null,
+        "s3_touch_time": null,
+        "r3_alert_sent": false,
+        "s3_alert_sent": false,
+        "first_touch_level": null,
+        "first_touch_source": null,
+        "first_touch_time": null,
+        "events": []
+    },
+    "latest_intraday_close": 37.9,
+    "latest_main_index_ltp": 24545.9,
+    "processed_at": "2026-08-07T09:18:05.715300+05:30"
+}
+
+================================================================================
+2026-08-07 14:34:00
+{
+    "type": "live_ema_cross",
+    "instrument_key": "NSE_FO|41030",
+    "timestamp": "2026-08-07T14:32:00+05:30",
+    "cross_type": "bearish_cross",
+    "interval_minutes": 1,
+    "close": 310.25,
+    "current_signal": "bearish",
+    "source": "live_feed",
+    "created_at": "2026-08-07T14:34:00.403426+05:30",
+    "opening_range": {
+        "r1": 283.775,
+        "s1": 261.925,
+        "r2": 316.55,
+        "s2": 229.15,
+        "r3": 338.4,
+        "s3": 207.3,
+        "sub_resistance": 283.775,
+        "sub_support": 261.925
+    },
+    "touch_status": {
+        "r3_touched": false,
+        "s3_touched": false,
+        "r3_touch_time": null,
+        "s3_touch_time": null,
+        "r3_alert_sent": false,
+        "s3_alert_sent": false,
+        "first_touch_level": null,
+        "first_touch_source": null,
+        "first_touch_time": null,
+        "events": []
+    },
+    "latest_intraday_close": 278.1,
+    "latest_main_index_ltp": 24545.9,
+    "processed_at": "2026-08-07T09:18:01.630919+05:30"
+}
+
+================================================================================
+2026-08-07 14:34:00
+{
+    "type": "live_ema_cross",
+    "instrument_key": "NSE_FO|41004",
+    "timestamp": "2026-08-07T14:32:00+05:30",
+    "cross_type": "bearish_cross",
+    "interval_minutes": 1,
+    "close": 31.8,
+    "current_signal": "bearish",
+    "source": "live_feed",
+    "created_at": "2026-08-07T14:34:00.582830+05:30",
+    "opening_range": {
+        "r1": 28.3,
+        "s1": 24.8,
+        "r2": 33.55,
+        "s2": 19.55,
+        "r3": 37.05,
+        "s3": 16.05,
+        "sub_resistance": 28.3,
+        "sub_support": 24.8
+    },
+    "touch_status": {
+        "r3_touched": true,
+        "s3_touched": false,
+        "r3_touch_time": "2026-08-07T11:04:00+05:30",
+        "s3_touch_time": null,
+        "r3_alert_sent": true,
+        "s3_alert_sent": false,
+        "first_touch_level": "R3",
+        "first_touch_source": "live_tick",
+        "first_touch_time": "2026-08-07T11:04:00+05:30",
+        "events": [
+            {
+                "type": "opening_range_touch",
+                "instrument_key": "NSE_FO|41004",
+                "level": "R3",
+                "level_value": 37.05,
+                "trigger_price": 37.65,
+                "trigger_field": "high",
+                "touch_time": "2026-08-07T11:04:00+05:30",
+                "source": "live_tick",
+                "date": "2026-08-07",
+                "main_index_ltp": 24555.8,
+                "distance_from_index": 255.8,
+                "alert_key": "NSE_FO|41004_R3",
+                "contract_info": {
+                    "instrument_key": "NSE_FO|41004",
+                    "instrument_type": "PE",
+                    "strike_price": 24300.0,
+                    "expiry": "2026-08-11",
+                    "trading_symbol": "NIFTY 24300 PE 11 AUG 26",
+                    "underlying_type": "INDEX",
+                    "underlying_symbol": "NIFTY",
+                    "supported_intervals": [
+                        0,
+                        1,
+                        3,
+                        5
+                    ]
+                },
+                "candle": null,
+                "created_at": "2026-08-07T11:05:00.380057+05:30"
+            }
+        ]
+    },
+    "latest_intraday_close": 29.35,
+    "latest_main_index_ltp": 24545.9,
+    "processed_at": "2026-08-07T09:18:05.526603+05:30"
+}
+
+================================================================================
+2026-08-07 14:34:00
+{
+    "type": "live_ema_cross",
+    "instrument_key": "NSE_FO|41008",
+    "timestamp": "2026-08-07T14:32:00+05:30",
+    "cross_type": "bearish_cross",
+    "interval_minutes": 1,
+    "close": 54.1,
+    "current_signal": "bearish",
+    "source": "live_feed",
+    "created_at": "2026-08-07T14:34:00.615830+05:30",
+    "opening_range": {
+        "r1": 51.35,
+        "s1": 42.95,
+        "r2": 63.95,
+        "s2": 30.35,
+        "r3": 72.35,
+        "s3": 21.95,
+        "sub_resistance": 51.35,
+        "sub_support": 42.95
+    },
+    "touch_status": {
+        "r3_touched": false,
+        "s3_touched": false,
+        "r3_touch_time": null,
+        "s3_touch_time": null,
+        "r3_alert_sent": false,
+        "s3_alert_sent": false,
+        "first_touch_level": null,
+        "first_touch_source": null,
+        "first_touch_time": null,
+        "events": []
+    },
+    "latest_intraday_close": 48.85,
+    "latest_main_index_ltp": 24545.9,
+    "processed_at": "2026-08-07T09:18:03.041843+05:30"
+}
+
+================================================================================
+2026-08-07 14:34:00
+{
+    "type": "live_ema_cross",
+    "instrument_key": "NSE_FO|41012",
+    "timestamp": "2026-08-07T14:32:00+05:30",
+    "cross_type": "bearish_cross",
+    "interval_minutes": 1,
+    "close": 88.15,
+    "current_signal": "bearish",
+    "source": "live_feed",
+    "created_at": "2026-08-07T14:34:00.629998+05:30",
+    "opening_range": {
+        "r1": 79.9,
+        "s1": 71.7,
+        "r2": 92.2,
+        "s2": 59.4,
+        "r3": 100.4,
+        "s3": 51.2,
+        "sub_resistance": 79.9,
+        "sub_support": 71.7
+    },
+    "touch_status": {
+        "r3_touched": false,
+        "s3_touched": false,
+        "r3_touch_time": null,
+        "s3_touch_time": null,
+        "r3_alert_sent": false,
+        "s3_alert_sent": false,
+        "first_touch_level": null,
+        "first_touch_source": null,
+        "first_touch_time": null,
+        "events": []
+    },
+    "latest_intraday_close": 77.8,
+    "latest_main_index_ltp": 24545.9,
+    "processed_at": "2026-08-07T09:18:06.151427+05:30"
+}
+
+================================================================================
+2026-08-07 14:34:00
+{
+    "type": "live_ema_cross",
+    "instrument_key": "NSE_FO|41016",
+    "timestamp": "2026-08-07T14:32:00+05:30",
+    "cross_type": "bearish_cross",
+    "interval_minutes": 1,
+    "close": 134.75,
+    "current_signal": "bearish",
+    "source": "live_feed",
+    "created_at": "2026-08-07T14:34:00.634348+05:30",
+    "opening_range": {
+        "r1": 134.275,
+        "s1": 115.925,
+        "r2": 161.8,
+        "s2": 88.4,
+        "r3": 180.15,
+        "s3": 70.05,
+        "sub_resistance": 134.275,
+        "sub_support": 115.925
+    },
+    "touch_status": {
+        "r3_touched": false,
+        "s3_touched": false,
+        "r3_touch_time": null,
+        "s3_touch_time": null,
+        "r3_alert_sent": false,
+        "s3_alert_sent": false,
+        "first_touch_level": null,
+        "first_touch_source": null,
+        "first_touch_time": null,
+        "events": []
+    },
+    "latest_intraday_close": 118.6,
+    "latest_main_index_ltp": 24545.9,
+    "processed_at": "2026-08-07T09:18:03.139230+05:30"
+}
+
+================================================================================
+2026-08-07 14:34:00
+{
+    "type": "live_ema_cross",
+    "instrument_key": "NSE_FO|41010",
+    "timestamp": "2026-08-07T14:32:00+05:30",
+    "cross_type": "bearish_cross",
+    "interval_minutes": 1,
+    "close": 69.85,
+    "current_signal": "bearish",
+    "source": "live_feed",
+    "created_at": "2026-08-07T14:34:00.645080+05:30",
+    "opening_range": {
+        "r1": 64.6375,
+        "s1": 56.6125,
+        "r2": 76.675,
+        "s2": 44.575,
+        "r3": 84.7,
+        "s3": 36.55,
+        "sub_resistance": 64.6375,
+        "sub_support": 56.6125
+    },
+    "touch_status": {
+        "r3_touched": false,
+        "s3_touched": false,
+        "r3_touch_time": null,
+        "s3_touch_time": null,
+        "r3_alert_sent": false,
+        "s3_alert_sent": false,
+        "first_touch_level": null,
+        "first_touch_source": null,
+        "first_touch_time": null,
+        "events": []
+    },
+    "latest_intraday_close": 61.9,
+    "latest_main_index_ltp": 24545.9,
+    "processed_at": "2026-08-07T09:18:05.923061+05:30"
+}
+
+================================================================================
+2026-08-07 14:34:00
+{
+    "type": "live_ema_cross",
+    "instrument_key": "NSE_FO|41014",
+    "timestamp": "2026-08-07T14:32:00+05:30",
+    "cross_type": "bearish_cross",
+    "interval_minutes": 1,
+    "close": 109.75,
+    "current_signal": "bearish",
+    "source": "live_feed",
+    "created_at": "2026-08-07T14:34:00.655006+05:30",
+    "opening_range": {
+        "r1": 106.7375,
+        "s1": 92.9125,
+        "r2": 127.475,
+        "s2": 72.175,
+        "r3": 141.3,
+        "s3": 58.35,
+        "sub_resistance": 106.7375,
+        "sub_support": 92.9125
+    },
+    "touch_status": {
+        "r3_touched": false,
+        "s3_touched": false,
+        "r3_touch_time": null,
+        "s3_touch_time": null,
+        "r3_alert_sent": false,
+        "s3_alert_sent": false,
+        "first_touch_level": null,
+        "first_touch_source": null,
+        "first_touch_time": null,
+        "events": []
+    },
+    "latest_intraday_close": 97.2,
+    "latest_main_index_ltp": 24545.9,
+    "processed_at": "2026-08-07T09:18:06.153423+05:30"
+}
+
+================================================================================
+2026-08-07 14:34:00
+{
+    "type": "live_ema_cross",
+    "instrument_key": "NSE_FO|41036",
+    "timestamp": "2026-08-07T14:32:00+05:30",
+    "cross_type": "bearish_cross",
+    "interval_minutes": 1,
+    "close": 397.65,
+    "current_signal": "bearish",
+    "source": "live_feed",
+    "created_at": "2026-08-07T14:34:00.656987+05:30",
+    "opening_range": {
+        "r1": 369.1375,
+        "s1": 355.5125,
+        "r2": 389.575,
+        "s2": 335.075,
+        "r3": 403.2,
+        "s3": 321.45,
+        "sub_resistance": 369.1375,
+        "sub_support": 355.5125
+    },
+    "touch_status": {
+        "r3_touched": true,
+        "s3_touched": false,
+        "r3_touch_time": "2026-08-07T12:11:00+05:30",
+        "s3_touch_time": null,
+        "r3_alert_sent": true,
+        "s3_alert_sent": false,
+        "first_touch_level": "R3",
+        "first_touch_source": "live_tick",
+        "first_touch_time": "2026-08-07T12:11:00+05:30",
+        "events": [
+            {
+                "type": "opening_range_touch",
+                "instrument_key": "NSE_FO|41036",
+                "level": "R3",
+                "level_value": 403.2,
+                "trigger_price": 403.2,
+                "trigger_field": "high",
+                "touch_time": "2026-08-07T12:11:00+05:30",
+                "source": "live_tick",
+                "date": "2026-08-07",
+                "main_index_ltp": 24549.3,
+                "distance_from_index": 400.7,
+                "alert_key": "NSE_FO|41036_R3",
+                "contract_info": {
+                    "instrument_key": "NSE_FO|41036",
+                    "instrument_type": "PE",
+                    "strike_price": 24950.0,
+                    "expiry": "2026-08-11",
+                    "trading_symbol": "NIFTY 24950 PE 11 AUG 26",
+                    "underlying_type": "INDEX",
+                    "underlying_symbol": "NIFTY",
+                    "supported_intervals": [
+                        0,
+                        1,
+                        3,
+                        5
+                    ]
+                },
+                "candle": null,
+                "created_at": "2026-08-07T12:12:07.723918+05:30"
+            }
+        ]
+    },
+    "latest_intraday_close": 360.25,
+    "latest_main_index_ltp": 24545.9,
+    "processed_at": "2026-08-07T09:18:01.719637+05:30"
+}
+
+================================================================================
+2026-08-07 14:34:00
+{
+    "type": "live_ema_cross",
+    "instrument_key": "NSE_FO|41032",
+    "timestamp": "2026-08-07T14:32:00+05:30",
+    "cross_type": "bearish_cross",
+    "interval_minutes": 1,
+    "close": 352.9,
+    "current_signal": "bearish",
+    "source": "live_feed",
+    "created_at": "2026-08-07T14:34:00.683245+05:30",
+    "opening_range": {
+        "r1": 338.125,
+        "s1": 317.375,
+        "r2": 369.25,
+        "s2": 286.25,
+        "r3": 390.0,
+        "s3": 265.5,
+        "sub_resistance": 338.125,
+        "sub_support": 317.375
+    },
+    "touch_status": {
+        "r3_touched": false,
+        "s3_touched": false,
+        "r3_touch_time": null,
+        "s3_touch_time": null,
+        "r3_alert_sent": false,
+        "s3_alert_sent": false,
+        "first_touch_level": null,
+        "first_touch_source": null,
+        "first_touch_time": null,
+        "events": []
+    },
+    "latest_intraday_close": 318.55,
+    "latest_main_index_ltp": 24547.0,
+    "processed_at": "2026-08-07T09:18:04.037504+05:30"
+}
+
+================================================================================
+2026-08-07 14:34:01
+{
+    "type": "live_ema_cross",
+    "instrument_key": "NSE_FO|41019",
+    "timestamp": "2026-08-07T14:32:00+05:30",
+    "cross_type": "bearish_cross",
+    "interval_minutes": 1,
+    "close": 164.0,
+    "current_signal": "bearish",
+    "source": "live_feed",
+    "created_at": "2026-08-07T14:34:00.835347+05:30",
+    "opening_range": {
+        "r1": 166.725,
+        "s1": 143.575,
+        "r2": 201.45,
+        "s2": 108.85,
+        "r3": 224.6,
+        "s3": 85.7,
+        "sub_resistance": 166.725,
+        "sub_support": 143.575
+    },
+    "touch_status": {
+        "r3_touched": false,
+        "s3_touched": false,
+        "r3_touch_time": null,
+        "s3_touch_time": null,
+        "r3_alert_sent": false,
+        "s3_alert_sent": false,
+        "first_touch_level": null,
+        "first_touch_source": null,
+        "first_touch_time": null,
+        "events": []
+    },
+    "latest_intraday_close": 144.35,
+    "latest_main_index_ltp": 24546.75,
+    "processed_at": "2026-08-07T09:18:06.184804+05:30"
+}
+
+================================================================================
+2026-08-07 14:34:01
+{
+    "type": "live_ema_cross",
+    "instrument_key": "NSE_FO|41026",
+    "timestamp": "2026-08-07T14:32:00+05:30",
+    "cross_type": "bearish_cross",
+    "interval_minutes": 1,
+    "close": 231.9,
+    "current_signal": "bearish",
+    "source": "live_feed",
+    "created_at": "2026-08-07T14:34:01.277219+05:30",
+    "opening_range": {
+        "r1": 205.1625,
+        "s1": 186.1875,
+        "r2": 233.625,
+        "s2": 157.725,
+        "r3": 252.6,
+        "s3": 138.75,
+        "sub_resistance": 205.1625,
+        "sub_support": 186.1875
+    },
+    "touch_status": {
+        "r3_touched": false,
+        "s3_touched": false,
+        "r3_touch_time": null,
+        "s3_touch_time": null,
+        "r3_alert_sent": false,
+        "s3_alert_sent": false,
+        "first_touch_level": null,
+        "first_touch_source": null,
+        "first_touch_time": null,
+        "events": []
+    },
+    "latest_intraday_close": 205.0,
+    "latest_main_index_ltp": 24547.0,
+    "processed_at": "2026-08-07T09:18:03.275527+05:30"
+}
+
+================================================================================
+2026-08-07 14:34:01
+{
+    "type": "live_ema_cross",
+    "instrument_key": "NSE_FO|41038",
+    "timestamp": "2026-08-07T14:32:00+05:30",
+    "cross_type": "bearish_cross",
+    "interval_minutes": 1,
+    "close": 444.0,
+    "current_signal": "bearish",
+    "source": "live_feed",
+    "created_at": "2026-08-07T14:34:01.292740+05:30",
+    "opening_range": {
+        "r1": 413.3,
+        "s1": 399.9,
+        "r2": 433.4,
+        "s2": 379.8,
+        "r3": 446.8,
+        "s3": 366.4,
+        "sub_resistance": 413.3,
+        "sub_support": 399.9
+    },
+    "touch_status": {
+        "r3_touched": true,
+        "s3_touched": false,
+        "r3_touch_time": "2026-08-07T12:09:00+05:30",
+        "s3_touch_time": null,
+        "r3_alert_sent": true,
+        "s3_alert_sent": false,
+        "first_touch_level": "R3",
+        "first_touch_source": "live_tick",
+        "first_touch_time": "2026-08-07T12:09:00+05:30",
+        "events": [
+            {
+                "type": "opening_range_touch",
+                "instrument_key": "NSE_FO|41038",
+                "level": "R3",
+                "level_value": 446.8,
+                "trigger_price": 446.8,
+                "trigger_field": "high",
+                "touch_time": "2026-08-07T12:09:00+05:30",
+                "source": "live_tick",
+                "date": "2026-08-07",
+                "main_index_ltp": 24551.45,
+                "distance_from_index": 448.55,
+                "alert_key": "NSE_FO|41038_R3",
+                "contract_info": {
+                    "instrument_key": "NSE_FO|41038",
+                    "instrument_type": "PE",
+                    "strike_price": 25000.0,
+                    "expiry": "2026-08-11",
+                    "trading_symbol": "NIFTY 25000 PE 11 AUG 26",
+                    "underlying_type": "INDEX",
+                    "underlying_symbol": "NIFTY",
+                    "supported_intervals": [
+                        0,
+                        1,
+                        3,
+                        5
+                    ]
+                },
+                "candle": null,
+                "created_at": "2026-08-07T12:10:00.379623+05:30"
+            }
+        ]
+    },
+    "latest_intraday_close": 404.0,
+    "latest_main_index_ltp": 24547.0,
+    "processed_at": "2026-08-07T09:18:04.044946+05:30"
+}
+
+================================================================================
+2026-08-07 14:34:20
+{
+    "type": "live_ema_cross",
+    "instrument_key": "NSE_FO|40991",
+    "timestamp": "2026-08-07T14:32:00+05:30",
+    "cross_type": "bullish_cross",
+    "interval_minutes": 1,
+    "close": 573.35,
+    "current_signal": "bullish",
+    "source": "live_feed",
+    "created_at": "2026-08-07T14:34:20.626147+05:30",
+    "opening_range": {
+        "r1": 624.9125,
+        "s1": 610.7375,
+        "r2": 646.175,
+        "s2": 589.475,
+        "r3": 660.35,
+        "s3": 575.3,
+        "sub_resistance": 624.9125,
+        "sub_support": 610.7375
+    },
+    "touch_status": {
+        "r3_touched": false,
+        "s3_touched": true,
+        "r3_touch_time": null,
+        "s3_touch_time": "2026-08-07T12:09:00+05:30",
+        "r3_alert_sent": false,
+        "s3_alert_sent": true,
+        "first_touch_level": "S3",
+        "first_touch_source": "live_tick",
+        "first_touch_time": "2026-08-07T12:09:00+05:30",
+        "events": [
+            {
+                "type": "opening_range_touch",
+                "instrument_key": "NSE_FO|40991",
+                "level": "S3",
+                "level_value": 575.3,
+                "trigger_price": 575.0,
+                "trigger_field": "low",
+                "touch_time": "2026-08-07T12:09:00+05:30",
+                "source": "live_tick",
+                "date": "2026-08-07",
+                "main_index_ltp": 24551.6,
+                "distance_from_index": 551.6,
+                "alert_key": "NSE_FO|40991_S3",
+                "contract_info": {
+                    "instrument_key": "NSE_FO|40991",
+                    "instrument_type": "CE",
+                    "strike_price": 24000.0,
+                    "expiry": "2026-08-11",
+                    "trading_symbol": "NIFTY 24000 CE 11 AUG 26",
+                    "underlying_type": "INDEX",
+                    "underlying_symbol": "NIFTY",
+                    "supported_intervals": [
+                        0,
+                        1,
+                        3,
+                        5
+                    ]
+                },
+                "candle": null,
+                "created_at": "2026-08-07T12:10:04.874954+05:30"
+            }
+        ]
+    },
+    "latest_intraday_close": 619.9,
+    "latest_main_index_ltp": 24546.2,
+    "processed_at": "2026-08-07T09:18:04.988068+05:30"
+}
+
+================================================================================
+2026-08-07 14:34:27
+{
+    "type": "ping",
+    "endpoint": "/ws/ema-crossover",
+    "message": "WebSocket alive. Waiting for EMA crossover signals with Opening Range context.",
+    "timestamp": "2026-08-07T09:04:26.833778+00:00"
+}
+
+================================================================================
+2026-08-07 14:34:57
+{
+    "type": "ping",
+    "endpoint": "/ws/ema-crossover",
+    "message": "WebSocket alive. Waiting for EMA crossover signals with Opening Range context.",
+    "timestamp": "2026-08-07T09:04:56.834696+00:00"
+}
+
+================================================================================
+2026-08-07 14:35:00
+{
+    "type": "live_ema_cross",
+    "instrument_key": "NSE_FO|41013",
+    "timestamp": "2026-08-07T14:33:00+05:30",
+    "cross_type": "bullish_cross",
+    "interval_minutes": 1,
+    "close": 127.1,
+    "current_signal": "bullish",
+    "source": "live_feed",
+    "created_at": "2026-08-07T14:35:00.568225+05:30",
+    "opening_range": {
+        "r1": 159.1125,
+        "s1": 140.4375,
+        "r2": 187.125,
+        "s2": 112.425,
+        "r3": 205.8,
+        "s3": 93.75,
+        "sub_resistance": 159.1125,
+        "sub_support": 140.4375
+    },
+    "touch_status": {
+        "r3_touched": false,
+        "s3_touched": false,
+        "r3_touch_time": null,
+        "s3_touch_time": null,
+        "r3_alert_sent": false,
+        "s3_alert_sent": false,
+        "first_touch_level": null,
+        "first_touch_source": null,
+        "first_touch_time": null,
+        "events": []
+    },
+    "latest_intraday_close": 162.1,
+    "latest_main_index_ltp": 24543.45,
+    "processed_at": "2026-08-07T09:18:03.043419+05:30"
+}
+
+================================================================================
+2026-08-07 14:35:00
+{
+    "type": "live_ema_cross",
+    "instrument_key": "NSE_FO|41017",
+    "timestamp": "2026-08-07T14:33:00+05:30",
+    "cross_type": "bullish_cross",
+    "interval_minutes": 1,
+    "close": 81.35,
+    "current_signal": "bullish",
+    "source": "live_feed",
+    "created_at": "2026-08-07T14:35:00.570549+05:30",
+    "opening_range": {
+        "r1": 115.0,
+        "s1": 95.0,
+        "r2": 145.0,
+        "s2": 65.0,
+        "r3": 165.0,
+        "s3": 45.0,
+        "sub_resistance": 115.0,
+        "sub_support": 95.0
+    },
+    "touch_status": {
+        "r3_touched": false,
+        "s3_touched": false,
+        "r3_touch_time": null,
+        "s3_touch_time": null,
+        "r3_alert_sent": false,
+        "s3_alert_sent": false,
+        "first_touch_level": null,
+        "first_touch_source": null,
+        "first_touch_time": null,
+        "events": []
+    },
+    "latest_intraday_close": 109.15,
+    "latest_main_index_ltp": 24543.45,
+    "processed_at": "2026-08-07T09:18:06.174620+05:30"
+}
+
+================================================================================
+2026-08-07 14:35:00
+{
+    "type": "live_ema_cross",
+    "instrument_key": "NSE_FO|41011",
+    "timestamp": "2026-08-07T14:33:00+05:30",
+    "cross_type": "bullish_cross",
+    "interval_minutes": 1,
+    "close": 155.7,
+    "current_signal": "bullish",
+    "source": "live_feed",
+    "created_at": "2026-08-07T14:35:00.572752+05:30",
+    "opening_range": {
+        "r1": 190.925,
+        "s1": 172.775,
+        "r2": 218.15,
+        "s2": 145.55,
+        "r3": 236.3,
+        "s3": 127.4,
+        "sub_resistance": 190.925,
+        "sub_support": 172.775
+    },
+    "touch_status": {
+        "r3_touched": false,
+        "s3_touched": false,
+        "r3_touch_time": null,
+        "s3_touch_time": null,
+        "r3_alert_sent": false,
+        "s3_alert_sent": false,
+        "first_touch_level": null,
+        "first_touch_source": null,
+        "first_touch_time": null,
+        "events": []
+    },
+    "latest_intraday_close": 192.7,
+    "latest_main_index_ltp": 24543.45,
+    "processed_at": "2026-08-07T09:18:06.007290+05:30"
+}
+
+================================================================================
+2026-08-07 14:35:00
+{
+    "type": "live_ema_cross",
+    "instrument_key": "NSE_FO|41028",
+    "timestamp": "2026-08-07T14:33:00+05:30",
+    "cross_type": "bearish_cross",
+    "interval_minutes": 1,
+    "close": 267.5,
+    "current_signal": "bearish",
+    "source": "live_feed",
+    "created_at": "2026-08-07T14:35:00.619466+05:30",
+    "opening_range": {
+        "r1": 248.7875,
+        "s1": 230.2625,
+        "r2": 276.575,
+        "s2": 202.475,
+        "r3": 295.1,
+        "s3": 183.95,
+        "sub_resistance": 248.7875,
+        "sub_support": 230.2625
+    },
+    "touch_status": {
+        "r3_touched": false,
+        "s3_touched": false,
+        "r3_touch_time": null,
+        "s3_touch_time": null,
+        "r3_alert_sent": false,
+        "s3_alert_sent": false,
+        "first_touch_level": null,
+        "first_touch_source": null,
+        "first_touch_time": null,
+        "events": []
+    },
+    "latest_intraday_close": 240.25,
+    "latest_main_index_ltp": 24543.45,
+    "processed_at": "2026-08-07T09:18:01.274878+05:30"
+}
+
+================================================================================
+2026-08-07 14:35:01
+{
+    "type": "live_ema_cross",
+    "instrument_key": "NSE_FO|41003",
+    "timestamp": "2026-08-07T14:33:00+05:30",
+    "cross_type": "bullish_cross",
+    "interval_minutes": 1,
+    "close": 299.45,
+    "current_signal": "bullish",
+    "source": "live_feed",
+    "created_at": "2026-08-07T14:35:00.837510+05:30",
+    "opening_range": {
+        "r1": 361.2125,
+        "s1": 333.6375,
+        "r2": 402.575,
+        "s2": 292.275,
+        "r3": 430.15,
+        "s3": 264.7,
+        "sub_resistance": 361.2125,
+        "sub_support": 333.6375
+    },
+    "touch_status": {
+        "r3_touched": false,
+        "s3_touched": false,
+        "r3_touch_time": null,
+        "s3_touch_time": null,
+        "r3_alert_sent": false,
+        "s3_alert_sent": false,
+        "first_touch_level": null,
+        "first_touch_source": null,
+        "first_touch_time": null,
+        "events": []
+    },
+    "latest_intraday_close": 343.35,
+    "latest_main_index_ltp": 24543.9,
+    "processed_at": "2026-08-07T09:18:05.478625+05:30"
+}
+
+================================================================================
+2026-08-07 14:35:01
+{
+    "type": "live_ema_cross",
+    "instrument_key": "NSE_FO|41009",
+    "timestamp": "2026-08-07T14:33:00+05:30",
+    "cross_type": "bullish_cross",
+    "interval_minutes": 1,
+    "close": 187.2,
+    "current_signal": "bullish",
+    "source": "live_feed",
+    "created_at": "2026-08-07T14:35:00.983779+05:30",
+    "opening_range": {
+        "r1": 225.675,
+        "s1": 207.325,
+        "r2": 253.2,
+        "s2": 179.8,
+        "r3": 271.55,
+        "s3": 161.45,
+        "sub_resistance": 225.675,
+        "sub_support": 207.325
+    },
+    "touch_status": {
+        "r3_touched": false,
+        "s3_touched": false,
+        "r3_touch_time": null,
+        "s3_touch_time": null,
+        "r3_alert_sent": false,
+        "s3_alert_sent": false,
+        "first_touch_level": null,
+        "first_touch_source": null,
+        "first_touch_time": null,
+        "events": []
+    },
+    "latest_intraday_close": 226.8,
+    "latest_main_index_ltp": 24543.9,
+    "processed_at": "2026-08-07T09:18:05.908219+05:30"
+}
+
+================================================================================
+2026-08-07 14:35:01
+{
+    "type": "live_ema_cross",
+    "instrument_key": "NSE_FO|41001",
+    "timestamp": "2026-08-07T14:33:00+05:30",
+    "cross_type": "bullish_cross",
+    "interval_minutes": 1,
+    "close": 341.2,
+    "current_signal": "bullish",
+    "source": "live_feed",
+    "created_at": "2026-08-07T14:35:01.275987+05:30",
+    "opening_range": {
+        "r1": 386.6625,
+        "s1": 368.8875,
+        "r2": 413.325,
+        "s2": 342.225,
+        "r3": 431.1,
+        "s3": 324.45,
+        "sub_resistance": 386.6625,
+        "sub_support": 368.8875
+    },
+    "touch_status": {
+        "r3_touched": false,
+        "s3_touched": true,
+        "r3_touch_time": null,
+        "s3_touch_time": "2026-08-07T14:15:00+05:30",
+        "r3_alert_sent": false,
+        "s3_alert_sent": true,
+        "first_touch_level": "S3",
+        "first_touch_source": "live_tick",
+        "first_touch_time": "2026-08-07T14:15:00+05:30",
+        "events": [
+            {
+                "type": "opening_range_touch",
+                "instrument_key": "NSE_FO|41001",
+                "level": "S3",
+                "level_value": 324.45,
+                "trigger_price": 323.2,
+                "trigger_field": "low",
+                "touch_time": "2026-08-07T14:15:00+05:30",
+                "source": "live_tick",
+                "date": "2026-08-07",
+                "main_index_ltp": 24529.45,
+                "distance_from_index": 279.45,
+                "alert_key": "NSE_FO|41001_S3",
+                "contract_info": {
+                    "instrument_key": "NSE_FO|41001",
+                    "instrument_type": "CE",
+                    "strike_price": 24250.0,
+                    "expiry": "2026-08-11",
+                    "trading_symbol": "NIFTY 24250 CE 11 AUG 26",
+                    "underlying_type": "INDEX",
+                    "underlying_symbol": "NIFTY",
+                    "supported_intervals": [
+                        0,
+                        1,
+                        3,
+                        5
+                    ]
+                },
+                "candle": null,
+                "created_at": "2026-08-07T14:16:01.432145+05:30"
+            }
+        ]
+    },
+    "latest_intraday_close": 384.35,
+    "latest_main_index_ltp": 24543.5,
+    "processed_at": "2026-08-07T09:18:05.443688+05:30"
+}
+
+================================================================================
+2026-08-07 14:35:01
+{
+    "type": "live_ema_cross",
+    "instrument_key": "NSE_FO|41007",
+    "timestamp": "2026-08-07T14:33:00+05:30",
+    "cross_type": "bullish_cross",
+    "interval_minutes": 1,
+    "close": 222.35,
+    "current_signal": "bullish",
+    "source": "live_feed",
+    "created_at": "2026-08-07T14:35:01.426590+05:30",
+    "opening_range": {
+        "r1": 262.475,
+        "s1": 243.625,
+        "r2": 290.75,
+        "s2": 215.35,
+        "r3": 309.6,
+        "s3": 196.5,
+        "sub_resistance": 262.475,
+        "sub_support": 243.625
+    },
+    "touch_status": {
+        "r3_touched": false,
+        "s3_touched": false,
+        "r3_touch_time": null,
+        "s3_touch_time": null,
+        "r3_alert_sent": false,
+        "s3_alert_sent": false,
+        "first_touch_level": null,
+        "first_touch_source": null,
+        "first_touch_time": null,
+        "events": []
+    },
+    "latest_intraday_close": 263.7,
+    "latest_main_index_ltp": 24543.5,
+    "processed_at": "2026-08-07T09:18:05.893324+05:30"
+}
+
+================================================================================
+2026-08-07 14:35:07
+{
+    "type": "live_ema_cross",
+    "instrument_key": "NSE_FO|40999",
+    "timestamp": "2026-08-07T14:33:00+05:30",
+    "cross_type": "bullish_cross",
+    "interval_minutes": 1,
+    "close": 385.35,
+    "current_signal": "bullish",
+    "source": "live_feed",
+    "created_at": "2026-08-07T14:35:06.843557+05:30",
+    "opening_range": {
+        "r1": 433.3125,
+        "s1": 415.2375,
+        "r2": 460.425,
+        "s2": 388.125,
+        "r3": 478.5,
+        "s3": 370.05,
+        "sub_resistance": 433.3125,
+        "sub_support": 415.2375
+    },
+    "touch_status": {
+        "r3_touched": false,
+        "s3_touched": true,
+        "r3_touch_time": null,
+        "s3_touch_time": "2026-08-07T14:12:00+05:30",
+        "r3_alert_sent": false,
+        "s3_alert_sent": true,
+        "first_touch_level": "S3",
+        "first_touch_source": "live_tick",
+        "first_touch_time": "2026-08-07T14:12:00+05:30",
+        "events": [
+            {
+                "type": "opening_range_touch",
+                "instrument_key": "NSE_FO|40999",
+                "level": "S3",
+                "level_value": 370.05,
+                "trigger_price": 368.9,
+                "trigger_field": "low",
+                "touch_time": "2026-08-07T14:12:00+05:30",
+                "source": "live_tick",
+                "date": "2026-08-07",
+                "main_index_ltp": 24527.1,
+                "distance_from_index": 327.1,
+                "alert_key": "NSE_FO|40999_S3",
+                "contract_info": {
+                    "instrument_key": "NSE_FO|40999",
+                    "instrument_type": "CE",
+                    "strike_price": 24200.0,
+                    "expiry": "2026-08-11",
+                    "trading_symbol": "NIFTY 24200 CE 11 AUG 26",
+                    "underlying_type": "INDEX",
+                    "underlying_symbol": "NIFTY",
+                    "supported_intervals": [
+                        0,
+                        1,
+                        3,
+                        5
+                    ]
+                },
+                "candle": null,
+                "created_at": "2026-08-07T14:13:08.020008+05:30"
+            }
+        ]
+    },
+    "latest_intraday_close": 431.0,
+    "latest_main_index_ltp": 24542.0,
+    "processed_at": "2026-08-07T09:18:05.418965+05:30"
+}
+
+================================================================================
+2026-08-07 14:35:08
+{
+    "type": "live_ema_cross",
+    "instrument_key": "NSE_FO|41005",
+    "timestamp": "2026-08-07T14:33:00+05:30",
+    "cross_type": "bullish_cross",
+    "interval_minutes": 1,
+    "close": 258.9,
+    "current_signal": "bullish",
+    "source": "live_feed",
+    "created_at": "2026-08-07T14:35:08.182437+05:30",
+    "opening_range": {
+        "r1": 302.575,
+        "s1": 283.425,
+        "r2": 331.3,
+        "s2": 254.7,
+        "r3": 350.45,
+        "s3": 235.55,
+        "sub_resistance": 302.575,
+        "sub_support": 283.425
+    },
+    "touch_status": {
+        "r3_touched": false,
+        "s3_touched": false,
+        "r3_touch_time": null,
+        "s3_touch_time": null,
+        "r3_alert_sent": false,
+        "s3_alert_sent": false,
+        "first_touch_level": null,
+        "first_touch_source": null,
+        "first_touch_time": null,
+        "events": []
+    },
+    "latest_intraday_close": 302.15,
+    "latest_main_index_ltp": 24543.2,
+    "processed_at": "2026-08-07T09:18:05.658358+05:30"
+}
+
+================================================================================
+2026-08-07 14:35:14
+{
+    "type": "live_ema_cross",
+    "instrument_key": "NSE_FO|40956",
+    "timestamp": "2026-08-07T14:33:00+05:30",
+    "cross_type": "bearish_cross",
+    "interval_minutes": 1,
+    "close": 1.2,
+    "current_signal": "bearish",
+    "source": "live_feed",
+    "created_at": "2026-08-07T14:35:13.891813+05:30",
+    "opening_range": {
+        "r1": 1.525,
+        "s1": 1.375,
+        "r2": 1.75,
+        "s2": 1.15,
+        "r3": 1.9,
+        "s3": 1.0,
+        "sub_resistance": 1.525,
+        "sub_support": 1.375
+    },
+    "touch_status": {
+        "r3_touched": false,
+        "s3_touched": false,
+        "r3_touch_time": null,
+        "s3_touch_time": null,
+        "r3_alert_sent": false,
+        "s3_alert_sent": false,
+        "first_touch_level": null,
+        "first_touch_source": null,
+        "first_touch_time": null,
+        "events": []
+    },
+    "latest_intraday_close": 1.3,
+    "latest_main_index_ltp": 24543.25,
+    "processed_at": "2026-08-07T09:18:04.129738+05:30"
+}
+
+================================================================================
+2026-08-07 14:35:27
+{
+    "type": "ping",
+    "endpoint": "/ws/ema-crossover",
+    "message": "WebSocket alive. Waiting for EMA crossover signals with Opening Range context.",
+    "timestamp": "2026-08-07T09:05:26.835201+00:00"
+}
+
+================================================================================
+2026-08-07 14:35:57
+{
+    "type": "ping",
+    "endpoint": "/ws/ema-crossover",
+    "message": "WebSocket alive. Waiting for EMA crossover signals with Opening Range context.",
+    "timestamp": "2026-08-07T09:05:56.836397+00:00"
+}
+
+================================================================================
+2026-08-07 14:36:17
+{
+    "type": "live_ema_cross",
+    "instrument_key": "NSE_FO|40997",
+    "timestamp": "2026-08-07T14:33:00+05:30",
+    "cross_type": "bullish_cross",
+    "interval_minutes": 1,
+    "close": 431.0,
+    "current_signal": "bullish",
+    "source": "live_feed",
+    "created_at": "2026-08-07T14:36:17.191332+05:30",
+    "opening_range": {
+        "r1": 476.55,
+        "s1": 469.65,
+        "r2": 486.9,
+        "s2": 459.3,
+        "r3": 493.8,
+        "s3": 452.4,
+        "sub_resistance": 476.55,
+        "sub_support": 469.65
+    },
+    "touch_status": {
+        "r3_touched": true,
+        "s3_touched": true,
+        "r3_touch_time": "2026-08-07T09:23:00+05:30",
+        "s3_touch_time": "2026-08-07T10:30:00+05:30",
+        "r3_alert_sent": true,
+        "s3_alert_sent": true,
+        "first_touch_level": "R3",
+        "first_touch_source": "live_tick",
+        "first_touch_time": "2026-08-07T09:23:00+05:30",
+        "events": [
+            {
+                "type": "opening_range_touch",
+                "instrument_key": "NSE_FO|40997",
+                "level": "R3",
+                "level_value": 493.8,
+                "trigger_price": 495.0,
+                "trigger_field": "high",
+                "touch_time": "2026-08-07T09:23:00+05:30",
+                "source": "live_tick",
+                "date": "2026-08-07",
+                "main_index_ltp": 24614.85,
+                "distance_from_index": 464.85,
+                "alert_key": "NSE_FO|40997_R3",
+                "contract_info": {
+                    "instrument_key": "NSE_FO|40997",
+                    "instrument_type": "CE",
+                    "strike_price": 24150.0,
+                    "expiry": "2026-08-11",
+                    "trading_symbol": "NIFTY 24150 CE 11 AUG 26",
+                    "underlying_type": "INDEX",
+                    "underlying_symbol": "NIFTY",
+                    "supported_intervals": [
+                        0,
+                        1,
+                        3,
+                        5
+                    ]
+                },
+                "candle": null,
+                "created_at": "2026-08-07T09:24:07.279073+05:30"
+            },
+            {
+                "type": "opening_range_touch",
+                "instrument_key": "NSE_FO|40997",
+                "level": "S3",
+                "level_value": 452.4,
+                "trigger_price": 452.4,
+                "trigger_field": "low",
+                "touch_time": "2026-08-07T10:30:00+05:30",
+                "source": "live_tick",
+                "date": "2026-08-07",
+                "main_index_ltp": 24568.1,
+                "distance_from_index": 418.1,
+                "alert_key": "NSE_FO|40997_S3",
+                "contract_info": {
+                    "instrument_key": "NSE_FO|40997",
+                    "instrument_type": "CE",
+                    "strike_price": 24150.0,
+                    "expiry": "2026-08-11",
+                    "trading_symbol": "NIFTY 24150 CE 11 AUG 26",
+                    "underlying_type": "INDEX",
+                    "underlying_symbol": "NIFTY",
+                    "supported_intervals": [
+                        0,
+                        1,
+                        3,
+                        5
+                    ]
+                },
+                "candle": null,
+                "created_at": "2026-08-07T10:31:03.224630+05:30"
+            }
+        ]
+    },
+    "latest_intraday_close": 487.55,
+    "latest_main_index_ltp": 24543.65,
+    "processed_at": "2026-08-07T09:18:04.994329+05:30"
+}
+
+================================================================================
+2026-08-07 14:36:27
+{
+    "type": "ping",
+    "endpoint": "/ws/ema-crossover",
+    "message": "WebSocket alive. Waiting for EMA crossover signals with Opening Range context.",
+    "timestamp": "2026-08-07T09:06:26.837175+00:00"
+}
+
+================================================================================
+2026-08-07 14:36:49
+{
+    "type": "live_ema_cross",
+    "instrument_key": "NSE_FO|40995",
+    "timestamp": "2026-08-07T14:33:00+05:30",
+    "cross_type": "bullish_cross",
+    "interval_minutes": 1,
+    "close": 476.65,
+    "current_signal": "bullish",
+    "source": "live_feed",
+    "created_at": "2026-08-07T14:36:49.439789+05:30",
+    "opening_range": {
+        "r1": 527.725,
+        "s1": 511.175,
+        "r2": 552.55,
+        "s2": 486.35,
+        "r3": 569.1,
+        "s3": 469.8,
+        "sub_resistance": 527.725,
+        "sub_support": 511.175
+    },
+    "touch_status": {
+        "r3_touched": false,
+        "s3_touched": true,
+        "r3_touch_time": null,
+        "s3_touch_time": "2026-08-07T14:06:00+05:30",
+        "r3_alert_sent": false,
+        "s3_alert_sent": true,
+        "first_touch_level": "S3",
+        "first_touch_source": "live_tick",
+        "first_touch_time": "2026-08-07T14:06:00+05:30",
+        "events": [
+            {
+                "type": "opening_range_touch",
+                "instrument_key": "NSE_FO|40995",
+                "level": "S3",
+                "level_value": 469.8,
+                "trigger_price": 465.0,
+                "trigger_field": "low",
+                "touch_time": "2026-08-07T14:06:00+05:30",
+                "source": "live_tick",
+                "date": "2026-08-07",
+                "main_index_ltp": 24537.6,
+                "distance_from_index": 437.6,
+                "alert_key": "NSE_FO|40995_S3",
+                "contract_info": {
+                    "instrument_key": "NSE_FO|40995",
+                    "instrument_type": "CE",
+                    "strike_price": 24100.0,
+                    "expiry": "2026-08-11",
+                    "trading_symbol": "NIFTY 24100 CE 11 AUG 26",
+                    "underlying_type": "INDEX",
+                    "underlying_symbol": "NIFTY",
+                    "supported_intervals": [
+                        0,
+                        1,
+                        3,
+                        5
+                    ]
+                },
+                "candle": null,
+                "created_at": "2026-08-07T14:07:02.471865+05:30"
+            }
+        ]
+    },
+    "latest_intraday_close": 521.5,
+    "latest_main_index_ltp": 24544.25,
+    "processed_at": "2026-08-07T09:18:01.187189+05:30"
+}
+
+================================================================================
+2026-08-07 14:36:57
+{
+    "type": "ping",
+    "endpoint": "/ws/ema-crossover",
+    "message": "WebSocket alive. Waiting for EMA crossover signals with Opening Range context.",
+    "timestamp": "2026-08-07T09:06:56.838392+00:00"
+}
+
+================================================================================
+2026-08-07 14:37:00
+{
+    "type": "live_ema_cross",
+    "instrument_key": "NSE_FO|41020",
+    "timestamp": "2026-08-07T14:35:00+05:30",
+    "cross_type": "bullish_cross",
+    "interval_minutes": 1,
+    "close": 63.0,
+    "current_signal": "bullish",
+    "source": "live_feed",
+    "created_at": "2026-08-07T14:37:00.556817+05:30",
+    "opening_range": {
+        "r1": 84.0,
+        "s1": 68.0,
+        "r2": 108.0,
+        "s2": 44.0,
+        "r3": 124.0,
+        "s3": 28.0,
+        "sub_resistance": 84.0,
+        "sub_support": 68.0
+    },
+    "touch_status": {
+        "r3_touched": false,
+        "s3_touched": false,
+        "r3_touch_time": null,
+        "s3_touch_time": null,
+        "r3_alert_sent": false,
+        "s3_alert_sent": false,
+        "first_touch_level": null,
+        "first_touch_source": null,
+        "first_touch_time": null,
+        "events": []
+    },
+    "latest_intraday_close": 87.95,
+    "latest_main_index_ltp": 24543.75,
+    "processed_at": "2026-08-07T09:18:01.198901+05:30"
+}
+
+================================================================================
+2026-08-07 14:37:00
+{
+    "type": "live_ema_cross",
+    "instrument_key": "NSE_FO|41015",
+    "timestamp": "2026-08-07T14:35:00+05:30",
+    "cross_type": "bullish_cross",
+    "interval_minutes": 1,
+    "close": 101.0,
+    "current_signal": "bullish",
+    "source": "live_feed",
+    "created_at": "2026-08-07T14:37:00.607961+05:30",
+    "opening_range": {
+        "r1": 131.4,
+        "s1": 115.4,
+        "r2": 155.4,
+        "s2": 91.4,
+        "r3": 171.4,
+        "s3": 75.4,
+        "sub_resistance": 131.4,
+        "sub_support": 115.4
+    },
+    "touch_status": {
+        "r3_touched": false,
+        "s3_touched": false,
+        "r3_touch_time": null,
+        "s3_touch_time": null,
+        "r3_alert_sent": false,
+        "s3_alert_sent": false,
+        "first_touch_level": null,
+        "first_touch_source": null,
+        "first_touch_time": null,
+        "events": []
+    },
+    "latest_intraday_close": 133.65,
+    "latest_main_index_ltp": 24543.75,
+    "processed_at": "2026-08-07T09:18:03.057553+05:30"
+}
+
+================================================================================
+2026-08-07 14:37:00
+{
+    "type": "live_ema_cross",
+    "instrument_key": "NSE_INDEX|Nifty 50",
+    "timestamp": "2026-08-07T14:35:00+05:30",
+    "cross_type": "bullish_cross",
+    "interval_minutes": 1,
+    "close": 24543.25,
+    "current_signal": "bullish",
+    "source": "live_feed",
+    "created_at": "2026-08-07T14:37:00.644723+05:30",
+    "opening_range": {
+        "r1": 24576.6375,
+        "s1": 24545.0125,
+        "r2": 24624.075,
+        "s2": 24497.575,
+        "r3": 24655.7,
+        "s3": 24465.95,
+        "sub_resistance": 24576.6375,
+        "sub_support": 24545.0125
+    },
+    "touch_status": {
+        "r3_touched": false,
+        "s3_touched": false,
+        "r3_touch_time": null,
+        "s3_touch_time": null,
+        "r3_alert_sent": false,
+        "s3_alert_sent": false,
+        "first_touch_level": null,
+        "first_touch_source": null,
+        "first_touch_time": null,
+        "events": []
+    },
+    "latest_intraday_close": 24593.9,
+    "latest_main_index_ltp": 24543.75,
+    "processed_at": "2026-08-07T09:18:00.670941+05:30"
+}
+
+================================================================================
+2026-08-07 14:37:06
+{
+    "type": "live_ema_cross",
+    "instrument_key": "NSE_FO|40958",
+    "timestamp": "2026-08-07T14:35:00+05:30",
+    "cross_type": "bullish_cross",
+    "interval_minutes": 1,
+    "close": 1.3,
+    "current_signal": "bullish",
+    "source": "live_feed",
+    "created_at": "2026-08-07T14:37:06.393628+05:30",
+    "opening_range": {
+        "r1": 1.6625,
+        "s1": 1.3875,
+        "r2": 2.075,
+        "s2": 0.975,
+        "r3": 2.35,
+        "s3": 0.7,
+        "sub_resistance": 1.6625,
+        "sub_support": 1.3875
+    },
+    "touch_status": {
+        "r3_touched": false,
+        "s3_touched": false,
+        "r3_touch_time": null,
+        "s3_touch_time": null,
+        "r3_alert_sent": false,
+        "s3_alert_sent": false,
+        "first_touch_level": null,
+        "first_touch_source": null,
+        "first_touch_time": null,
+        "events": []
+    },
+    "latest_intraday_close": 1.35,
+    "latest_main_index_ltp": 24543.45,
+    "processed_at": "2026-08-07T09:18:04.201857+05:30"
+}
+
+================================================================================
+2026-08-07 14:37:10
+{
+    "type": "live_ema_cross",
+    "instrument_key": "NSE_FO|40950",
+    "timestamp": "2026-08-07T14:35:00+05:30",
+    "cross_type": "bearish_cross",
+    "interval_minutes": 1,
+    "close": 1.05,
+    "current_signal": "bearish",
+    "source": "live_feed",
+    "created_at": "2026-08-07T14:37:09.828498+05:30",
+    "opening_range": {
+        "r1": 1.3375,
+        "s1": 1.2125,
+        "r2": 1.525,
+        "s2": 1.025,
+        "r3": 1.65,
+        "s3": 0.9,
+        "sub_resistance": 1.3375,
+        "sub_support": 1.2125
+    },
+    "touch_status": {
+        "r3_touched": false,
+        "s3_touched": false,
+        "r3_touch_time": null,
+        "s3_touch_time": null,
+        "r3_alert_sent": false,
+        "s3_alert_sent": false,
+        "first_touch_level": null,
+        "first_touch_source": null,
+        "first_touch_time": null,
+        "events": []
+    },
+    "latest_intraday_close": 1.2,
+    "latest_main_index_ltp": 24543.25,
+    "processed_at": "2026-08-07T09:18:04.066186+05:30"
+}
+
+================================================================================
+2026-08-07 14:37:27
+{
+    "type": "ping",
+    "endpoint": "/ws/ema-crossover",
+    "message": "WebSocket alive. Waiting for EMA crossover signals with Opening Range context.",
+    "timestamp": "2026-08-07T09:07:26.839510+00:00"
+}
+
+================================================================================
+2026-08-07 14:37:57
+{
+    "type": "ping",
+    "endpoint": "/ws/ema-crossover",
+    "message": "WebSocket alive. Waiting for EMA crossover signals with Opening Range context.",
+    "timestamp": "2026-08-07T09:07:56.840259+00:00"
+}
+
+================================================================================
+2026-08-07 14:38:00
+{
+    "type": "live_ema_cross",
+    "instrument_key": "NSE_FO|40958",
+    "timestamp": "2026-08-07T14:36:00+05:30",
+    "cross_type": "bearish_cross",
+    "interval_minutes": 1,
+    "close": 1.25,
+    "current_signal": "bearish",
+    "source": "live_feed",
+    "created_at": "2026-08-07T14:38:00.662482+05:30",
+    "opening_range": {
+        "r1": 1.6625,
+        "s1": 1.3875,
+        "r2": 2.075,
+        "s2": 0.975,
+        "r3": 2.35,
+        "s3": 0.7,
+        "sub_resistance": 1.6625,
+        "sub_support": 1.3875
+    },
+    "touch_status": {
+        "r3_touched": false,
+        "s3_touched": false,
+        "r3_touch_time": null,
+        "s3_touch_time": null,
+        "r3_alert_sent": false,
+        "s3_alert_sent": false,
+        "first_touch_level": null,
+        "first_touch_source": null,
+        "first_touch_time": null,
+        "events": []
+    },
+    "latest_intraday_close": 1.35,
+    "latest_main_index_ltp": 24540.7,
+    "processed_at": "2026-08-07T09:18:04.201857+05:30"
+}
+
+================================================================================
+2026-08-07 14:38:01
+{
+    "type": "live_ema_cross",
+    "instrument_key": "NSE_FO|41025",
+    "timestamp": "2026-08-07T14:36:00+05:30",
+    "cross_type": "bullish_cross",
+    "interval_minutes": 1,
+    "close": 48.2,
+    "current_signal": "bullish",
+    "source": "live_feed",
+    "created_at": "2026-08-07T14:38:01.147078+05:30",
+    "opening_range": {
+        "r1": 66.4,
+        "s1": 52.7,
+        "r2": 86.95,
+        "s2": 32.15,
+        "r3": 100.65,
+        "s3": 18.45,
+        "sub_resistance": 66.4,
+        "sub_support": 52.7
+    },
+    "touch_status": {
+        "r3_touched": false,
+        "s3_touched": false,
+        "r3_touch_time": null,
+        "s3_touch_time": null,
+        "r3_alert_sent": false,
+        "s3_alert_sent": false,
+        "first_touch_level": null,
+        "first_touch_source": null,
+        "first_touch_time": null,
+        "events": []
+    },
+    "latest_intraday_close": 70.15,
+    "latest_main_index_ltp": 24541.05,
+    "processed_at": "2026-08-07T09:18:06.351142+05:30"
+}
+
+================================================================================
+2026-08-07 14:38:27
+{
+    "type": "ping",
+    "endpoint": "/ws/ema-crossover",
+    "message": "WebSocket alive. Waiting for EMA crossover signals with Opening Range context.",
+    "timestamp": "2026-08-07T09:08:26.840717+00:00"
+}
+
+================================================================================
+2026-08-07 14:38:57
+{
+    "type": "ping",
+    "endpoint": "/ws/ema-crossover",
+    "message": "WebSocket alive. Waiting for EMA crossover signals with Opening Range context.",
+    "timestamp": "2026-08-07T09:08:56.841757+00:00"
+}
+
+================================================================================
+2026-08-07 14:39:01
+{
+    "type": "live_ema_cross",
+    "instrument_key": "NSE_FO|41029",
+    "timestamp": "2026-08-07T14:37:00+05:30",
+    "cross_type": "bullish_cross",
+    "interval_minutes": 1,
+    "close": 27.4,
+    "current_signal": "bullish",
+    "source": "live_feed",
+    "created_at": "2026-08-07T14:39:00.981138+05:30",
+    "opening_range": {
+        "r1": 40.55,
+        "s1": 32.85,
+        "r2": 52.1,
+        "s2": 21.3,
+        "r3": 59.8,
+        "s3": 13.6,
+        "sub_resistance": 40.55,
+        "sub_support": 32.85
+    },
+    "touch_status": {
+        "r3_touched": false,
+        "s3_touched": false,
+        "r3_touch_time": null,
+        "s3_touch_time": null,
+        "r3_alert_sent": false,
+        "s3_alert_sent": false,
+        "first_touch_level": null,
+        "first_touch_source": null,
+        "first_touch_time": null,
+        "events": []
+    },
+    "latest_intraday_close": 42.45,
+    "latest_main_index_ltp": 24539.7,
+    "processed_at": "2026-08-07T09:18:01.369947+05:30"
+}
+
+================================================================================
+2026-08-07 14:39:05
+{
+    "type": "live_ema_cross",
+    "instrument_key": "NSE_FO|40958",
+    "timestamp": "2026-08-07T14:37:00+05:30",
+    "cross_type": "bullish_cross",
+    "interval_minutes": 1,
+    "close": 1.3,
+    "current_signal": "bullish",
+    "source": "live_feed",
+    "created_at": "2026-08-07T14:39:05.497951+05:30",
+    "opening_range": {
+        "r1": 1.6625,
+        "s1": 1.3875,
+        "r2": 2.075,
+        "s2": 0.975,
+        "r3": 2.35,
+        "s3": 0.7,
+        "sub_resistance": 1.6625,
+        "sub_support": 1.3875
+    },
+    "touch_status": {
+        "r3_touched": false,
+        "s3_touched": false,
+        "r3_touch_time": null,
+        "s3_touch_time": null,
+        "r3_alert_sent": false,
+        "s3_alert_sent": false,
+        "first_touch_level": null,
+        "first_touch_source": null,
+        "first_touch_time": null,
+        "events": []
+    },
+    "latest_intraday_close": 1.35,
+    "latest_main_index_ltp": 24540.0,
+    "processed_at": "2026-08-07T09:18:04.201857+05:30"
+}
+
+================================================================================
+2026-08-07 14:39:27
+{
+    "type": "ping",
+    "endpoint": "/ws/ema-crossover",
+    "message": "WebSocket alive. Waiting for EMA crossover signals with Opening Range context.",
+    "timestamp": "2026-08-07T09:09:26.842225+00:00"
+}
+
+================================================================================
+2026-08-07 14:39:57
+{
+    "type": "ping",
+    "endpoint": "/ws/ema-crossover",
+    "message": "WebSocket alive. Waiting for EMA crossover signals with Opening Range context.",
+    "timestamp": "2026-08-07T09:09:56.843343+00:00"
+}
+
+================================================================================
+2026-08-07 14:40:27
+{
+    "type": "ping",
+    "endpoint": "/ws/ema-crossover",
+    "message": "WebSocket alive. Waiting for EMA crossover signals with Opening Range context.",
+    "timestamp": "2026-08-07T09:10:26.844514+00:00"
+}
+
+================================================================================
+2026-08-07 14:40:57
+{
+    "type": "ping",
+    "endpoint": "/ws/ema-crossover",
+    "message": "WebSocket alive. Waiting for EMA crossover signals with Opening Range context.",
+    "timestamp": "2026-08-07T09:10:56.844827+00:00"
+}
+
+================================================================================
+2026-08-07 14:41:00
+{
+    "type": "live_ema_cross",
+    "instrument_key": "NSE_INDEX|Nifty 50",
+    "timestamp": "2026-08-07T14:39:00+05:30",
+    "cross_type": "bearish_cross",
+    "interval_minutes": 1,
+    "close": 24537.1,
+    "current_signal": "bearish",
+    "source": "live_feed",
+    "created_at": "2026-08-07T14:41:00.378451+05:30",
+    "opening_range": {
+        "r1": 24576.6375,
+        "s1": 24545.0125,
+        "r2": 24624.075,
+        "s2": 24497.575,
+        "r3": 24655.7,
+        "s3": 24465.95,
+        "sub_resistance": 24576.6375,
+        "sub_support": 24545.0125
+    },
+    "touch_status": {
+        "r3_touched": false,
+        "s3_touched": false,
+        "r3_touch_time": null,
+        "s3_touch_time": null,
+        "r3_alert_sent": false,
+        "s3_alert_sent": false,
+        "first_touch_level": null,
+        "first_touch_source": null,
+        "first_touch_time": null,
+        "events": []
+    },
+    "latest_intraday_close": 24593.9,
+    "latest_main_index_ltp": 24539.0,
+    "processed_at": "2026-08-07T09:18:00.670941+05:30"
+}
