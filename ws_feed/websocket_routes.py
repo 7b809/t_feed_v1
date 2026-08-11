@@ -69,6 +69,7 @@ def resolve_ema_instrument_key(
     striketype: str | None = None,
 ) -> str | None:
     """Resolves EMA crossover instrument key."""
+
     return resolve_instrument_key(
         instrument_key=instrument_key,
         strike=strike,
@@ -82,6 +83,21 @@ def resolve_opening_range_instrument_key(
     striketype: str | None = None,
 ) -> str | None:
     """Resolves Opening Range instrument key."""
+
+    return resolve_instrument_key(
+        instrument_key=instrument_key,
+        strike=strike,
+        striketype=striketype,
+    )
+
+
+def resolve_or_ema_strategy_instrument_key(
+    instrument_key: str | None = None,
+    strike: float | None = None,
+    striketype: str | None = None,
+) -> str | None:
+    """Resolves OR + EMA strategy instrument key."""
+
     return resolve_instrument_key(
         instrument_key=instrument_key,
         strike=strike,
@@ -101,8 +117,10 @@ async def websocket_all_feeds(websocket: WebSocket):
     WebSocket endpoint returning live market feeds for all loaded contracts.
 
     This can also receive:
+    - live ticks
     - live EMA crossover events
     - Opening Range touch events
+    - optional OR + EMA strategy events
 
     EMA crossover events may include opening_range context.
     """
@@ -124,11 +142,14 @@ async def websocket_all_feeds(websocket: WebSocket):
                 "endpoint": "/all-feeds",
                 "message": (
                     "Connected to all feeds websocket. Waiting for live ticks, "
-                    "EMA crossover events, and Opening Range events."
+                    "EMA crossover events, Opening Range events, and optional "
+                    "OR + EMA strategy events."
                 ),
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "subscribed_instruments": len(options_cache.get("subscribed_keys", [])),
                 "ema_opening_range_enrichment": True,
+                "or_ema_strategy_events": "optional",
+                "or_ema_strategy_selection": "first_touch_same_time_nearest_to_nifty",
             }
         )
 
@@ -156,7 +177,7 @@ async def websocket_all_feeds(websocket: WebSocket):
                         "endpoint": "/all-feeds",
                         "message": (
                             "WebSocket alive. Waiting for live ticks, EMA crossover "
-                            "events, and Opening Range events."
+                            "events, Opening Range events, and optional strategy events."
                         ),
                         "timestamp": datetime.now(timezone.utc).isoformat(),
                     }
@@ -193,8 +214,7 @@ async def websocket_option(
     - matching live option ticks
     - matching EMA crossover events
     - matching Opening Range events
-
-    EMA crossover events may include opening_range context.
+    - optional matching OR + EMA strategy events
     """
 
     itype = str(striketype).upper()
@@ -217,11 +237,13 @@ async def websocket_option(
                 }
             )
             await websocket.close(code=1008, reason="striketype must be 'ce' or 'pe'")
+
         except Exception as ex:
             logger.error(
                 f"Error while closing invalid /option websocket: "
                 f"{type(ex).__name__}: {ex}"
             )
+
         return
 
     try:
@@ -247,10 +269,12 @@ async def websocket_option(
                 "striketype": itype,
                 "message": (
                     "Connected to option websocket. Waiting for matching option ticks, "
-                    "EMA crossover events, and Opening Range events."
+                    "EMA crossover events, Opening Range events, and optional "
+                    "OR + EMA strategy events."
                 ),
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "ema_opening_range_enrichment": True,
+                "or_ema_strategy_events": "optional",
             }
         )
 
@@ -282,7 +306,8 @@ async def websocket_option(
                         "striketype": itype,
                         "message": (
                             "WebSocket alive. Waiting for matching option ticks, "
-                            "EMA crossover events, and Opening Range events."
+                            "EMA crossover events, Opening Range events, and optional "
+                            "strategy events."
                         ),
                         "timestamp": datetime.now(timezone.utc).isoformat(),
                     }
@@ -316,9 +341,10 @@ async def websocket_ema_crossover(websocket: WebSocket):
 
     New flow:
     - Receives EMA crossover events for all initialized instruments.
-    - Events are not filtered by selected Opening Range instrument.
-    - Each event may include opening_range range and levels when available.
+    - Events are not filtered by legacy selected Opening Range instrument.
+    - Each event may include opening_range levels when available.
     - Telegram EMA alerts are disabled.
+    - OR + EMA strategy alerting is handled separately.
     """
 
     logger.info(
@@ -347,6 +373,7 @@ async def websocket_ema_crossover(websocket: WebSocket):
                 "ema_opening_range_enrichment": True,
                 "selected_or_filtering": "disabled",
                 "telegram_ema_alerts": "disabled",
+                "or_ema_strategy_alerts": "handled_separately",
             }
         )
 
@@ -416,17 +443,6 @@ async def websocket_ema_crossover_instrument(
 ):
     """
     Dedicated WebSocket endpoint for one instrument's live EMA crossover events.
-
-    Supports:
-        /ws/ema-crossover/instrument?instrument_key=NSE_INDEX%7CNifty%2050
-        /ws/ema-crossover/instrument?instrument_key=NSE_FO%7C41012
-        /ws/ema-crossover/instrument?strike=24500&striketype=ce
-        /ws/ema-crossover/instrument?strike=24500&striketype=pe
-
-    New flow:
-    - Streams EMA crossover events only for the resolved instrument.
-    - Event payload may include opening_range levels for the same instrument.
-    - No selected OR filtering is applied.
     """
 
     resolved_instrument_key = resolve_ema_instrument_key(
@@ -583,8 +599,8 @@ async def websocket_opening_range(websocket: WebSocket):
 
     New flow:
     - Receives Opening Range events for all instruments.
-    - Touch events do not permanently select any instrument.
-    - EMA events are handled separately through /ws/ema-crossover.
+    - Touch events do not use legacy selected OR lock.
+    - OR + EMA strategy selected touch is handled separately.
     """
 
     logger.info(
@@ -611,6 +627,7 @@ async def websocket_opening_range(websocket: WebSocket):
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "scope": "all_instruments",
                 "selected_or_filtering": "disabled",
+                "or_ema_strategy_selection": "handled_separately",
             }
         )
 
@@ -677,16 +694,6 @@ async def websocket_opening_range_instrument(
 ):
     """
     Dedicated WebSocket endpoint for one instrument's Opening Range events.
-
-    Supports:
-        /ws/opening-range/instrument?instrument_key=NSE_INDEX%7CNifty%2050
-        /ws/opening-range/instrument?instrument_key=NSE_FO%7C41012
-        /ws/opening-range/instrument?strike=24500&striketype=ce
-        /ws/opening-range/instrument?strike=24500&striketype=pe
-
-    New flow:
-    - Streams Opening Range events only for the resolved instrument.
-    - This does not mean the instrument is selected permanently.
     """
 
     resolved_instrument_key = resolve_opening_range_instrument_key(
@@ -821,6 +828,263 @@ async def websocket_opening_range_instrument(
     finally:
         if hasattr(broadcaster, "disconnect_opening_range_instrument"):
             broadcaster.disconnect_opening_range_instrument(
+                websocket=websocket,
+                instrument_key=resolved_instrument_key,
+            )
+        else:
+            broadcaster.disconnect(websocket)
+
+
+# ============================================================
+# Global OR + EMA Strategy WebSocket
+# ============================================================
+
+
+@router.websocket("/ws/or-ema-strategy")
+async def websocket_or_ema_strategy(websocket: WebSocket):
+    """
+    Dedicated WebSocket endpoint streaming OR + EMA strategy events.
+
+    Strategy selection rule:
+    - First eligible touch wins.
+    - If multiple eligible instruments touch at the same timestamp/candle,
+      nearest strike to current NIFTY spot wins.
+    - Only selected touched instrument can trigger strategy confirmation.
+    - Non-selected touches are retained for debug only.
+    """
+
+    logger.info(
+        f"Incoming websocket request for /ws/or-ema-strategy from {websocket.client}"
+    )
+
+    try:
+        await websocket.accept()
+        logger.info("WebSocket accepted for /ws/or-ema-strategy")
+
+        if hasattr(broadcaster, "connect_or_ema_strategy"):
+            await broadcaster.connect_or_ema_strategy(websocket)
+        else:
+            await broadcaster.connect(websocket)
+
+        await websocket.send_json(
+            {
+                "type": "connected",
+                "endpoint": "/ws/or-ema-strategy",
+                "message": (
+                    "Connected to OR + EMA Strategy feed. Waiting for strategy "
+                    "selection and alert events."
+                ),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "scope": "all_instruments",
+                "selection_mode": "first_touch_same_time_nearest_to_nifty",
+                "telegram_alerts": "enabled_when_configured",
+            }
+        )
+
+        while True:
+            try:
+                client_message = await asyncio.wait_for(
+                    websocket.receive_text(),
+                    timeout=30,
+                )
+
+                if client_message:
+                    await websocket.send_json(
+                        {
+                            "type": "client_message_received",
+                            "endpoint": "/ws/or-ema-strategy",
+                            "message": client_message,
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                        }
+                    )
+
+            except asyncio.TimeoutError:
+                await websocket.send_json(
+                    {
+                        "type": "ping",
+                        "endpoint": "/ws/or-ema-strategy",
+                        "message": (
+                            "WebSocket alive. Waiting for OR + EMA strategy events."
+                        ),
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    }
+                )
+
+    except WebSocketDisconnect:
+        logger.info("Client disconnected from /ws/or-ema-strategy websocket")
+
+    except Exception as ex:
+        logger.error(f"/ws/or-ema-strategy websocket error: {type(ex).__name__}: {ex}")
+
+    finally:
+        if hasattr(broadcaster, "disconnect_or_ema_strategy"):
+            broadcaster.disconnect_or_ema_strategy(websocket)
+        else:
+            broadcaster.disconnect(websocket)
+
+
+# ============================================================
+# Instrument-Specific OR + EMA Strategy WebSocket
+# ============================================================
+
+
+@router.websocket("/ws/or-ema-strategy/instrument")
+async def websocket_or_ema_strategy_instrument(
+    websocket: WebSocket,
+    instrument_key: str = Query(
+        default=None,
+        description="Instrument key, e.g. NSE_FO|41012 or NSE_INDEX|Nifty 50",
+    ),
+    strike: float = Query(
+        default=None,
+        description="Option strike price, e.g. 24500. Optional if instrument_key is provided.",
+    ),
+    striketype: str = Query(
+        default=None,
+        description="Option type: ce or pe. Optional if instrument_key is provided.",
+    ),
+):
+    """
+    Dedicated WebSocket endpoint for one instrument's OR + EMA strategy events.
+
+    Supports:
+        /ws/or-ema-strategy/instrument?instrument_key=NSE_FO%7C41012
+        /ws/or-ema-strategy/instrument?strike=24500&striketype=ce
+        /ws/or-ema-strategy/instrument?strike=24500&striketype=pe
+    """
+
+    resolved_instrument_key = resolve_or_ema_strategy_instrument_key(
+        instrument_key=instrument_key,
+        strike=strike,
+        striketype=striketype,
+    )
+
+    logger.info(
+        f"Incoming websocket request for /ws/or-ema-strategy/instrument from "
+        f"{websocket.client}. "
+        f"instrument_key={instrument_key}, "
+        f"strike={strike}, "
+        f"striketype={striketype}, "
+        f"resolved_instrument_key={resolved_instrument_key}"
+    )
+
+    if not resolved_instrument_key:
+        try:
+            await websocket.accept()
+
+            await websocket.send_json(
+                {
+                    "type": "error",
+                    "endpoint": "/ws/or-ema-strategy/instrument",
+                    "message": (
+                        "Unable to resolve instrument. Provide either instrument_key "
+                        "or valid strike + striketype."
+                    ),
+                    "input": {
+                        "instrument_key": instrument_key,
+                        "strike": strike,
+                        "striketype": striketype,
+                    },
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                }
+            )
+
+            await websocket.close(
+                code=1008,
+                reason="Unable to resolve OR EMA strategy instrument",
+            )
+
+        except Exception as ex:
+            logger.error(
+                f"Error while closing unresolved OR EMA strategy instrument websocket: "
+                f"{type(ex).__name__}: {ex}"
+            )
+
+        return
+
+    try:
+        await websocket.accept()
+
+        logger.info(
+            f"WebSocket accepted for /ws/or-ema-strategy/instrument. "
+            f"resolved_instrument_key={resolved_instrument_key}"
+        )
+
+        if hasattr(broadcaster, "connect_or_ema_strategy_instrument"):
+            await broadcaster.connect_or_ema_strategy_instrument(
+                websocket=websocket,
+                instrument_key=resolved_instrument_key,
+            )
+        else:
+            await broadcaster.connect(websocket)
+
+        await websocket.send_json(
+            {
+                "type": "connected",
+                "endpoint": "/ws/or-ema-strategy/instrument",
+                "message": (
+                    "Connected to instrument-specific OR + EMA Strategy feed. "
+                    "Waiting for strategy events."
+                ),
+                "instrument_key": resolved_instrument_key,
+                "input": {
+                    "instrument_key": instrument_key,
+                    "strike": strike,
+                    "striketype": striketype,
+                },
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "scope": "single_instrument",
+                "selection_mode": "first_touch_same_time_nearest_to_nifty",
+            }
+        )
+
+        while True:
+            try:
+                client_message = await asyncio.wait_for(
+                    websocket.receive_text(),
+                    timeout=30,
+                )
+
+                if client_message:
+                    await websocket.send_json(
+                        {
+                            "type": "client_message_received",
+                            "endpoint": "/ws/or-ema-strategy/instrument",
+                            "instrument_key": resolved_instrument_key,
+                            "message": client_message,
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                        }
+                    )
+
+            except asyncio.TimeoutError:
+                await websocket.send_json(
+                    {
+                        "type": "ping",
+                        "endpoint": "/ws/or-ema-strategy/instrument",
+                        "instrument_key": resolved_instrument_key,
+                        "message": (
+                            "WebSocket alive. Waiting for instrument-specific "
+                            "OR + EMA strategy events."
+                        ),
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    }
+                )
+
+    except WebSocketDisconnect:
+        logger.info(
+            f"Client disconnected from /ws/or-ema-strategy/instrument websocket. "
+            f"instrument_key={resolved_instrument_key}"
+        )
+
+    except Exception as ex:
+        logger.error(
+            f"/ws/or-ema-strategy/instrument websocket error for "
+            f"{resolved_instrument_key}: {type(ex).__name__}: {ex}"
+        )
+
+    finally:
+        if hasattr(broadcaster, "disconnect_or_ema_strategy_instrument"):
+            broadcaster.disconnect_or_ema_strategy_instrument(
                 websocket=websocket,
                 instrument_key=resolved_instrument_key,
             )

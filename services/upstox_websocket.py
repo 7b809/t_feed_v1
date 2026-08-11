@@ -19,6 +19,8 @@ from services.opening_range_service import (
     process_live_tick_for_opening_range,
     get_opening_range_levels_for_ema_event,
     flush_pending_touch_alerts,
+    process_or_touch_ema_strategy_confirmation,
+    get_or_ema_strategy_status,
 )
 from ws_feed.broadcaster import broadcaster
 
@@ -56,6 +58,12 @@ class UpstoxStreamer:
         # EMA + Opening Range enrichment counters
         self.ema_opening_range_enriched_count = 0
         self.ema_opening_range_enrichment_failed_count = 0
+
+        # OR touch + EMA strategy counters
+        self.or_ema_strategy_processed_count = 0
+        self.or_ema_strategy_alert_count = 0
+        self.or_ema_strategy_no_match_count = 0
+        self.or_ema_strategy_failed_count = 0
 
         # Kept only for backward-compatible status response.
         # Selected OR EMA Telegram flow is removed/disabled.
@@ -106,10 +114,12 @@ class UpstoxStreamer:
             2. LIVE_EMA_ENABLED=True.
             3. OPENING_RANGE_TOUCH_ALERT_ENABLED=True.
             4. EMA_CROSS_INCLUDE_OPENING_RANGE_LEVELS=True.
+            5. OR_EMA_STRATEGY_ALERT_ENABLED=True.
 
         Reason:
-            Live EMA crossover detection and Opening Range touch detection
-            must continue even when no dashboard/browser client is connected.
+            Live EMA crossover detection, Opening Range touch detection,
+            and OR touch + EMA strategy alerts must continue even when no
+            dashboard/browser client is connected.
         """
 
         connected_clients = broadcaster.get_active_connections_count()
@@ -124,6 +134,9 @@ class UpstoxStreamer:
             return True
 
         if bool(getattr(config, "EMA_CROSS_INCLUDE_OPENING_RANGE_LEVELS", True)):
+            return True
+
+        if bool(getattr(config, "OR_EMA_STRATEGY_ALERT_ENABLED", True)):
             return True
 
         return False
@@ -155,6 +168,16 @@ class UpstoxStreamer:
                 "error": f"{type(ex).__name__}: {ex}",
             }
 
+        or_ema_strategy_status = {}
+
+        try:
+            or_ema_strategy_status = get_or_ema_strategy_status()
+        except Exception as ex:
+            or_ema_strategy_status = {
+                "status": "error",
+                "error": f"{type(ex).__name__}: {ex}",
+            }
+
         return {
             "is_running": self.is_running,
             "has_streamer": self.streamer is not None,
@@ -174,6 +197,11 @@ class UpstoxStreamer:
             "ema_opening_range_enrichment_failed_count": (
                 self.ema_opening_range_enrichment_failed_count
             ),
+            "or_ema_strategy_processed_count": self.or_ema_strategy_processed_count,
+            "or_ema_strategy_alert_count": self.or_ema_strategy_alert_count,
+            "or_ema_strategy_no_match_count": self.or_ema_strategy_no_match_count,
+            "or_ema_strategy_failed_count": self.or_ema_strategy_failed_count,
+            "or_ema_strategy_status": or_ema_strategy_status,
             "selected_or_ema_alert_processed_count": (
                 self.selected_or_ema_alert_processed_count
             ),
@@ -192,6 +220,11 @@ class UpstoxStreamer:
             "ema_cross_include_opening_range_levels": getattr(
                 config,
                 "EMA_CROSS_INCLUDE_OPENING_RANGE_LEVELS",
+                True,
+            ),
+            "or_ema_strategy_alert_enabled": getattr(
+                config,
+                "OR_EMA_STRATEGY_ALERT_ENABLED",
                 True,
             ),
             "market_time": self._now_market_time(),
@@ -347,7 +380,6 @@ class UpstoxStreamer:
 
                 api_client = upstox_client.ApiClient(configuration)
 
-                # Get current subscription keys safely from option_service helper.
                 try:
                     keys = get_subscribed_instrument_keys()
 
@@ -401,7 +433,8 @@ class UpstoxStreamer:
                     Upstox tick callback.
 
                     We process messages when there are local clients, live EMA is enabled,
-                    Opening Range touch tracking is enabled, or EMA OR enrichment is enabled.
+                    Opening Range touch tracking is enabled, EMA OR enrichment is enabled,
+                    or OR + EMA strategy alerts are enabled.
                     """
 
                     self.message_count += 1
@@ -463,8 +496,6 @@ class UpstoxStreamer:
                     f"market_time={self._now_market_time()}"
                 )
 
-                # Important:
-                # connect() can block, so run it in a thread.
                 logger.info(
                     f"Starting Upstox Market Stream V3 connection. "
                     f"market_time={self._now_market_time()}"
@@ -478,8 +509,6 @@ class UpstoxStreamer:
                     f"market_time={self._now_market_time()}"
                 )
 
-                # Keep loop alive if connect returns.
-                # No heartbeat logs here to avoid console noise.
                 while self.is_running:
                     await asyncio.sleep(30)
 
@@ -509,34 +538,6 @@ class UpstoxStreamer:
     ) -> dict:
         """
         Adds compact Opening Range payload to EMA crossover event.
-
-        Final WebSocket payload shape:
-
-        {
-            "type": "live_ema_cross",
-            "instrument_key": "...",
-            "timestamp": "...",
-            "cross_type": "...",
-            "interval_minutes": 1,
-            "close": ...,
-            "current_signal": "...",
-            "source": "live_feed",
-            "created_at": "...",
-            "opening_range": {
-                "r1": ...,
-                "s1": ...,
-                "r2": ...,
-                "s2": ...,
-                "r3": ...,
-                "s3": ...,
-                "sub_resistance": ...,
-                "sub_support": ...
-            },
-            "touch_status": {...},
-            "latest_intraday_close": ...,
-            "latest_main_index_ltp": ...,
-            "processed_at": "..."
-        }
         """
 
         if not isinstance(live_ema_cross_event, dict):
@@ -586,18 +587,70 @@ class UpstoxStreamer:
 
         return live_ema_cross_event
 
+    def _process_or_ema_strategy_confirmation(
+        self,
+        live_ema_cross_event: dict,
+    ):
+        """
+        Processes OR touch + EMA strategy confirmation.
+
+        This runs after:
+            1. EMA cross is generated.
+            2. EMA event is enriched with Opening Range data.
+            3. Opening Range live touch processing has already run for this tick.
+
+        Telegram alert can be sent even when there are no WebSocket clients.
+        """
+
+        if not live_ema_cross_event:
+            return None
+
+        if not bool(getattr(config, "OR_EMA_STRATEGY_ALERT_ENABLED", True)):
+            return None
+
+        try:
+            self.or_ema_strategy_processed_count += 1
+
+            strategy_result = process_or_touch_ema_strategy_confirmation(
+                live_ema_cross_event
+            )
+
+            if strategy_result:
+                self.or_ema_strategy_alert_count += 1
+
+                logger.info(
+                    f"OR EMA strategy confirmation processed. "
+                    f"instrument_key={live_ema_cross_event.get('instrument_key')}, "
+                    f"cross_type={live_ema_cross_event.get('cross_type')}, "
+                    f"result_status={strategy_result.get('status')}"
+                )
+
+            else:
+                self.or_ema_strategy_no_match_count += 1
+
+            return strategy_result
+
+        except Exception as ex:
+            self.or_ema_strategy_failed_count += 1
+
+            logger.error(
+                f"OR EMA strategy confirmation failed. "
+                f"instrument_key={live_ema_cross_event.get('instrument_key')}, "
+                f"cross_type={live_ema_cross_event.get('cross_type')}, "
+                f"error={type(ex).__name__}: {ex}. "
+                f"market_time={self._now_market_time()}"
+            )
+
+            return None
+
     async def _process_message(self, message):
         """
         Routes decoded ticks to:
         1. Live EMA service
         2. EMA event Opening Range enrichment
-        3. Opening Range R3/S3 touch detection
-        4. FastAPI WebSocket broadcaster
-
-        New requirement:
-        - No selected OR instrument Telegram alert.
-        - Every EMA crossover is eligible for WebSocket broadcast.
-        - Every EMA crossover payload includes compact Opening Range levels when available.
+        3. Opening Range S2/S3/R2/R3 touch detection
+        4. OR touch + EMA strategy Telegram confirmation
+        5. FastAPI WebSocket broadcaster
         """
 
         try:
@@ -644,7 +697,6 @@ class UpstoxStreamer:
 
                 if contract_info:
                     self.contract_match_count += 1
-
                 else:
                     self.contract_miss_count += 1
 
@@ -689,7 +741,7 @@ class UpstoxStreamer:
                     )
 
                 # --------------------------------------------------------
-                # 2. Process Opening Range R3/S3 touch detection.
+                # 2. Process Opening Range S2/S3/R2/R3 touch detection.
                 # --------------------------------------------------------
                 opening_range_touch_events = []
 
@@ -725,7 +777,15 @@ class UpstoxStreamer:
                     )
 
                 # --------------------------------------------------------
-                # 3. Broadcast live EMA cross event if clients exist.
+                # 3. Process OR touch + EMA strategy confirmation.
+                # --------------------------------------------------------
+                if live_ema_cross_event:
+                    self._process_or_ema_strategy_confirmation(
+                        live_ema_cross_event=live_ema_cross_event,
+                    )
+
+                # --------------------------------------------------------
+                # 4. Broadcast live EMA cross event if clients exist.
                 # --------------------------------------------------------
                 if live_ema_cross_event and has_local_clients:
                     try:
@@ -740,7 +800,7 @@ class UpstoxStreamer:
                         )
 
                 # --------------------------------------------------------
-                # 4. Broadcast Opening Range touch events if clients exist.
+                # 5. Broadcast Opening Range touch events if clients exist.
                 # --------------------------------------------------------
                 if opening_range_touch_events and has_local_clients:
                     for or_event in opening_range_touch_events:
@@ -758,7 +818,7 @@ class UpstoxStreamer:
                             )
 
                 # --------------------------------------------------------
-                # 5. Broadcast normal live tick only when local clients exist.
+                # 6. Broadcast normal live tick only when local clients exist.
                 # --------------------------------------------------------
                 if not has_local_clients:
                     continue
@@ -782,7 +842,7 @@ class UpstoxStreamer:
                     )
 
             # ------------------------------------------------------------
-            # 6. Flush pending Opening Range touch Telegram alerts.
+            # 7. Flush pending Opening Range touch Telegram alerts.
             # ------------------------------------------------------------
             # This sends only if OPENING_RANGE_LEGACY_TOUCH_TELEGRAM_ENABLED=True.
             # New requirement keeps legacy Telegram touch alerts disabled.
