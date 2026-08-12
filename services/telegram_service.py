@@ -15,12 +15,19 @@ class TelegramService:
     Telegram notification service.
 
     Used for sending project lifecycle, scheduler, token, instrument,
-    subscription, refresh, Opening Range job status, and error notifications.
+    subscription, refresh, Opening Range job status, isolated instrument
+    selection, isolated EMA crossover alerts, shutdown, and error notifications.
 
-    New requirement:
-    - Do not send selected Opening Range instrument Telegram alerts.
-    - Do not send EMA crossover Telegram alerts.
-    - EMA crossover events should be sent through WebSocket only.
+    Current behavior:
+    - Normal main-flow Telegram notifications remain unchanged.
+    - Sends Telegram notification when one Opening Range instrument is isolated.
+    - Sends EMA Telegram alerts only for the isolated instrument.
+    - Other instruments can continue live EMA processing and WebSocket broadcast,
+      but should not trigger Telegram EMA alerts.
+
+    Live EMA calculation mode:
+    - LIVE_EMA_CALCULATION_MODE=False means completed candle close based EMA.
+    - LIVE_EMA_CALCULATION_MODE=True means live tick/LTP based EMA.
     """
 
     def __init__(self):
@@ -72,6 +79,33 @@ class TelegramService:
         """Escapes text for Telegram HTML parse mode."""
 
         return html.escape(str(value), quote=False)
+
+    def _get_live_ema_calculation_mode(self) -> str:
+        """
+        Returns configured live EMA calculation mode.
+
+        LIVE_EMA_CALCULATION_MODE=False:
+            candle_close
+
+        LIVE_EMA_CALCULATION_MODE=True:
+            tick_ltp
+        """
+
+        tick_based_mode = bool(getattr(config, "LIVE_EMA_CALCULATION_MODE", False))
+
+        return "tick_ltp" if tick_based_mode else "candle_close"
+
+    def _get_live_ema_calculation_mode_description(
+        self, mode: str | None = None
+    ) -> str:
+        """Returns readable description for EMA calculation mode."""
+
+        mode = mode or self._get_live_ema_calculation_mode()
+
+        if mode == "tick_ltp":
+            return "Live tick/LTP based EMA cross detection"
+
+        return "Completed candle close based EMA cross detection"
 
     def _send_raw_message(self, message: str) -> bool:
         """
@@ -340,7 +374,7 @@ class TelegramService:
         )
 
     # ========================================================
-    # Disabled Selected Opening Range + EMA Compatibility
+    # Opening Range Isolated Instrument Messages
     # ========================================================
 
     def send_selected_or_instrument_message(
@@ -354,56 +388,283 @@ class TelegramService:
         touch_time,
         source: str,
         nifty_ltp=None,
+        strike_price=None,
+        instrument_type=None,
+        reference_average=None,
+        average_window=None,
     ) -> bool:
         """
-        Disabled.
+        Sends Telegram notification when an Opening Range instrument is isolated.
 
-        Previous behavior:
-            Send Telegram notification when the first R3/S3 touched instrument
-            was permanently selected.
-
-        New requirement:
-            No instrument should be permanently selected.
-            No selected Opening Range Telegram notification should be sent.
+        Selection logic is handled outside this service:
+        - Average +/- configured window.
+        - R3/S3 priority before R2/S2.
+        - Nearest strike to Opening Range average.
+        - Day-level isolated instrument.
         """
 
-        logger.info(
-            "Selected OR instrument Telegram notification skipped because "
-            "selected OR flow is disabled. "
-            f"instrument_key={instrument_key}, symbol={symbol}, level={level}"
+        if not bool(
+            getattr(config, "OPENING_RANGE_ISOLATED_INSTRUMENT_NOTIFY_ENABLED", True)
+        ):
+            logger.info(
+                "Isolated instrument Telegram notification skipped because "
+                "OPENING_RANGE_ISOLATED_INSTRUMENT_NOTIFY_ENABLED=False."
+            )
+            return False
+
+        strike_text = strike_price if strike_price is not None else "N/A"
+        type_text = str(instrument_type or "N/A").upper()
+
+        window_text = "not_available"
+
+        if isinstance(average_window, dict):
+            window_text = (
+                f"{average_window.get('final_lower')} to "
+                f"{average_window.get('final_upper')}"
+            )
+
+        ema_mode = self._get_live_ema_calculation_mode()
+        ema_mode_description = self._get_live_ema_calculation_mode_description(ema_mode)
+
+        message = (
+            "Opening Range instrument isolated for EMA Telegram alerts.\n\n"
+            f"Instrument: {strike_text} {type_text}\n"
+            f"Symbol: {symbol}\n"
+            f"Instrument Key: {instrument_key}\n"
+            f"Selected Level: {level}\n"
+            f"Level Value: {level_value}\n"
+            f"Trigger {trigger_field}: {trigger_price}\n"
+            f"Touch Time: {touch_time}\n"
+            f"Touch Source: {source}\n"
+            f"Reference Average: {reference_average}\n"
+            f"Average Window: {window_text}\n"
+            f"NIFTY LTP: {nifty_ltp if nifty_ltp is not None else 'not_available'}\n"
+            f"EMA Calculation Mode: {ema_mode}\n"
+            f"EMA Mode Description: {ema_mode_description}\n\n"
+            "From now, Telegram EMA alerts will be sent only for this isolated instrument."
         )
 
-        return False
+        return self.send_message(
+            title="Opening Range Instrument Isolated",
+            message=message,
+            level="OPENING_RANGE",
+        )
 
     def send_selected_or_ema_cross_message(
         self,
         selected_state: dict,
         ema_event: dict,
         nifty_ltp=None,
+        suggested_order_instruments: list | None = None,
     ) -> bool:
         """
-        Disabled.
+        Sends EMA crossover Telegram alert for isolated instrument only.
 
-        Previous behavior:
-            Send Telegram alert when EMA crossover happened for the selected
-            Opening Range instrument.
+        Alert format:
+            {strike value} CE/PE - crosses {levelname} - At {current nifty live point}
 
-        New requirement:
-            EMA crossover alerts should be sent through WebSocket only.
-            No selected OR EMA Telegram alert should be sent.
+        Then EMA details:
+            bullish/bearish cross, candle/tick price, candle/tick time, EMA values.
+
+        Then nearest order instruments:
+            bullish cross -> CE instruments
+            bearish cross -> PE instruments
+            nearest strikes around current NIFTY spot.
         """
 
+        if not bool(getattr(config, "EMA_ISOLATED_INSTRUMENT_TELEGRAM_ENABLED", True)):
+            logger.info(
+                "Isolated EMA Telegram notification skipped because "
+                "EMA_ISOLATED_INSTRUMENT_TELEGRAM_ENABLED=False."
+            )
+            return False
+
+        selected_state = selected_state or {}
         ema_event = ema_event or {}
 
-        logger.info(
-            "Selected OR EMA Telegram notification skipped because "
-            "selected OR EMA alert flow is disabled. "
-            f"instrument_key={ema_event.get('instrument_key')}, "
-            f"cross_type={ema_event.get('cross_type')}, "
-            f"timestamp={ema_event.get('timestamp')}"
+        contract_info = (
+            selected_state.get("contract_info")
+            or ema_event.get("contract_info")
+            or ema_event.get("info")
+            or {}
         )
 
-        return False
+        strike = contract_info.get("strike_price", "N/A")
+        instrument_type = str(contract_info.get("instrument_type", "N/A")).upper()
+
+        selected_level = selected_state.get("selected_level", "N/A")
+        instrument_key = ema_event.get("instrument_key") or selected_state.get(
+            "instrument_key"
+        )
+
+        cross_type = ema_event.get("cross_type", "N/A")
+        current_signal = ema_event.get("current_signal", "N/A")
+        close_price = ema_event.get("close")
+        event_timestamp = ema_event.get("timestamp")
+
+        ema_fast = ema_event.get("ema_fast")
+        ema_slow = ema_event.get("ema_slow")
+        previous_ema_fast = ema_event.get("previous_ema_fast")
+        previous_ema_slow = ema_event.get("previous_ema_slow")
+
+        ema_fast_period = ema_event.get(
+            "ema_fast_period",
+            getattr(config, "LIVE_EMA_FAST_PERIOD", 9),
+        )
+        ema_slow_period = ema_event.get(
+            "ema_slow_period",
+            getattr(config, "LIVE_EMA_SLOW_PERIOD", 21),
+        )
+
+        ema_mode = ema_event.get(
+            "ema_calculation_mode",
+            self._get_live_ema_calculation_mode(),
+        )
+
+        ema_mode_description = self._get_live_ema_calculation_mode_description(ema_mode)
+
+        source = ema_event.get("source", "live_feed")
+
+        if ema_mode == "tick_ltp":
+            price_label = "Live Tick LTP"
+            time_label = "Tick Time"
+        else:
+            price_label = "EMA Candle Close"
+            time_label = "EMA Candle Time"
+
+        nifty_text = nifty_ltp if nifty_ltp is not None else "NIFTY_LTP_NOT_AVAILABLE"
+
+        header = (
+            f"{strike} {instrument_type} - crosses {selected_level} - At {nifty_text}"
+        )
+
+        order_details_text = self._format_suggested_order_instruments(
+            suggested_order_instruments or []
+        )
+
+        message = (
+            f"{header}\n\n"
+            "EMA Cross Details:\n"
+            f"Cross Type: {cross_type}\n"
+            f"Signal: {current_signal}\n"
+            f"EMA Calculation Mode: {ema_mode}\n"
+            f"EMA Mode Description: {ema_mode_description}\n"
+            f"Source: {source}\n"
+            f"{price_label}: {close_price}\n"
+            f"{time_label}: {event_timestamp}\n"
+            f"EMA Fast Period: {ema_fast_period}\n"
+            f"EMA Slow Period: {ema_slow_period}\n"
+            f"EMA Fast: {ema_fast}\n"
+            f"EMA Slow: {ema_slow}\n"
+            f"Previous EMA Fast: {previous_ema_fast}\n"
+            f"Previous EMA Slow: {previous_ema_slow}\n"
+            f"Instrument Key: {instrument_key}\n\n"
+            f"{order_details_text}"
+        )
+
+        return self.send_message(
+            title="Isolated Instrument EMA Alert",
+            message=message,
+            level="EMA",
+        )
+
+    def send_isolated_instrument_message(
+        self,
+        isolated_state: dict,
+    ) -> bool:
+        """
+        Convenience wrapper for isolated instrument notification.
+
+        This allows opening_range_service.py to pass the full isolated state
+        instead of individual fields.
+        """
+
+        isolated_state = isolated_state or {}
+        contract_info = isolated_state.get("contract_info") or {}
+
+        symbol = (
+            contract_info.get("trading_symbol")
+            or contract_info.get("instrument_key")
+            or isolated_state.get("instrument_key")
+            or "N/A"
+        )
+
+        return self.send_selected_or_instrument_message(
+            instrument_key=isolated_state.get("instrument_key"),
+            symbol=symbol,
+            level=isolated_state.get("selected_level"),
+            level_value=isolated_state.get("level_value"),
+            trigger_field=isolated_state.get("trigger_field"),
+            trigger_price=isolated_state.get("trigger_price"),
+            touch_time=isolated_state.get("touch_time"),
+            source=isolated_state.get("touch_source"),
+            nifty_ltp=isolated_state.get("latest_main_index_ltp"),
+            strike_price=contract_info.get("strike_price"),
+            instrument_type=contract_info.get("instrument_type"),
+            reference_average=isolated_state.get("reference_average"),
+            average_window=isolated_state.get("average_window"),
+        )
+
+    def send_isolated_ema_cross_message(
+        self,
+        isolated_state: dict,
+        ema_event: dict,
+        nifty_ltp=None,
+        suggested_order_instruments: list | None = None,
+    ) -> bool:
+        """
+        Convenience wrapper for isolated instrument EMA alert.
+        """
+
+        return self.send_selected_or_ema_cross_message(
+            selected_state=isolated_state,
+            ema_event=ema_event,
+            nifty_ltp=nifty_ltp,
+            suggested_order_instruments=suggested_order_instruments,
+        )
+
+    # ========================================================
+    # Formatting Helpers
+    # ========================================================
+
+    def _format_suggested_order_instruments(
+        self,
+        suggested_order_instruments: list,
+    ) -> str:
+        """
+        Formats nearest CE/PE instruments for EMA alert.
+
+        Example:
+            Nearest Instrument Details:
+            - 24300PE - 120rs
+            - 24350PE - 135rs
+            - 24400PE - 150rs
+        """
+
+        if not suggested_order_instruments:
+            return "Nearest Instrument Details: not_available"
+
+        lines = ["Nearest Instrument Details:"]
+
+        for item in suggested_order_instruments:
+            if not isinstance(item, dict):
+                continue
+
+            strike = item.get("strike_price", "N/A")
+            instrument_type = str(item.get("instrument_type", "N/A")).upper()
+            live_ltp = item.get("live_ltp")
+
+            if live_ltp is None:
+                price_text = "ltp_not_available"
+            else:
+                price_text = f"{live_ltp}rs"
+
+            lines.append(f"- {strike}{instrument_type} - {price_text}")
+
+        if len(lines) == 1:
+            return "Nearest Instrument Details: not_available"
+
+        return "\n".join(lines)
 
     # ========================================================
     # Exception Messages

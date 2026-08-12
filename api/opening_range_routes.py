@@ -18,13 +18,54 @@ from services.opening_range_service import (
     get_selected_or_instrument_state,
     get_selected_or_ema_alerts,
     get_opening_range_levels_for_ema_event,
-    get_or_ema_strategy_status,
-    get_or_ema_strategy_cache,
+    get_opening_range_dashboard_summary,
 )
 
 logger = get_logger(__file__)
 
 router = APIRouter()
+
+
+# ============================================================
+# Live EMA Mode Helper
+# ============================================================
+
+
+def get_live_ema_calculation_mode_text() -> str:
+    """
+    Returns configured live EMA calculation mode.
+
+    LIVE_EMA_CALCULATION_MODE = False
+        completed candle close based EMA calculation.
+
+    LIVE_EMA_CALCULATION_MODE = True
+        live tick/LTP based EMA calculation.
+    """
+
+    return (
+        "tick_ltp"
+        if bool(getattr(config, "LIVE_EMA_CALCULATION_MODE", False))
+        else "candle_close"
+    )
+
+
+def get_live_ema_calculation_mode_payload() -> dict:
+    """
+    Returns live EMA mode payload for API responses.
+    """
+
+    flag = bool(getattr(config, "LIVE_EMA_CALCULATION_MODE", False))
+    mode = get_live_ema_calculation_mode_text()
+
+    return {
+        "flag": flag,
+        "mode": mode,
+        "description": (
+            "live tick/LTP based EMA calculation"
+            if flag
+            else "completed candle close based EMA calculation"
+        ),
+    }
 
 
 # ============================================================
@@ -114,64 +155,35 @@ def resolve_opening_range_instrument_key(
 async def get_opening_range_latest_status():
     """
     Returns latest opening range calculation status.
-
-    Notes:
-    - Opening Range is calculated from Upstox intraday candles.
-    - Default scheduled fetch time is 09:18 AM Asia/Kolkata.
-    - Default opening range candle is 09:15 to 09:16.
-    - Backfill touch scan checks candles after OR completion.
-    - Live touch monitoring can track S2/S3/R2/R3 touches for option instruments.
-    - Old selected OR instrument flow is disabled.
-    - New OR + EMA strategy selection rule:
-        1. First touched instrument is selected.
-        2. If multiple instruments touch at the same timestamp/candle,
-           nearest strike to current NIFTY spot is selected.
-        3. Only selected touched instrument waits for EMA confirmation.
-        4. Non-selected touched instruments are retained for debug only.
     """
 
-    strategy_status = get_or_ema_strategy_status()
+    isolated_state = get_selected_or_instrument_state()
 
     return {
         "status": "success",
         "opening_range_status": get_opening_range_status(),
-        "selected_or_instrument": get_selected_or_instrument_state(),
-        "or_ema_strategy_status": strategy_status,
-        "strategy_selection": {
-            "mode": "first_touch_same_time_nearest_to_nifty",
-            "description": (
-                "First touched eligible instrument is selected. If multiple eligible "
-                "instruments touch configured levels at the same timestamp/candle, "
-                "the instrument whose strike is nearest to current NIFTY spot is selected. "
-                "Only the selected instrument can trigger the OR + EMA Telegram alert."
-            ),
-            "selected_touch": strategy_status.get("selected_touch"),
-            "selected_touch_key": strategy_status.get("selected_touch_key"),
-            "selected_instrument_key": strategy_status.get("selected_instrument_key"),
-            "selected_level": strategy_status.get("selected_level"),
-            "selected_reason": strategy_status.get("selected_reason"),
-            "selected_at": strategy_status.get("selected_at"),
-        },
+        "isolated_instrument": isolated_state,
+        "selected_or_instrument": isolated_state,
+        "live_ema_calculation": get_live_ema_calculation_mode_payload(),
         "new_flow": {
             "description": (
                 "Opening Range levels are calculated for all subscribed instruments. "
-                "EMA crossover events are broadcast through WebSocket with that "
-                "instrument's Opening Range levels when available. The legacy selected "
-                "OR flow is disabled. The new OR + EMA strategy uses a selected touch "
-                "model where first touch wins, and same-time multiple touches are resolved "
-                "by nearest strike to NIFTY spot."
+                "The system monitors R2/R3/S2/S3 touches. After an eligible touch, "
+                "one instrument is isolated using level priority and nearest strike "
+                "to Opening Range average. Live EMA continues for all instruments, "
+                "but Telegram EMA alerts are sent only for the isolated instrument."
             ),
-            "selected_or_flow": "disabled",
-            "selected_or_ema_telegram_alerts": "disabled",
-            "or_ema_strategy_selection": "first_touch_same_time_nearest_to_nifty",
+            "selected_or_flow": "mapped_to_isolated_instrument_flow",
+            "isolated_instrument_flow": "enabled",
+            "live_ema_calculation": get_live_ema_calculation_mode_payload(),
+            "isolated_ema_telegram_alerts": getattr(
+                config,
+                "EMA_ISOLATED_INSTRUMENT_TELEGRAM_ENABLED",
+                True,
+            ),
             "ema_websocket_opening_range_enrichment": getattr(
                 config,
                 "EMA_CROSS_INCLUDE_OPENING_RANGE_LEVELS",
-                True,
-            ),
-            "or_ema_strategy_alert_enabled": getattr(
-                config,
-                "OR_EMA_STRATEGY_ALERT_ENABLED",
                 True,
             ),
         },
@@ -206,30 +218,50 @@ async def get_opening_range_latest_status():
                 "OPENING_RANGE_LIVE_TOUCH_ALERT_ENABLED",
                 True,
             ),
-            "first_touch_selection_enabled": getattr(
+            "isolation_enabled": getattr(
                 config,
-                "OPENING_RANGE_FIRST_TOUCH_SELECTION_ENABLED",
-                False,
+                "OPENING_RANGE_ISOLATED_INSTRUMENT_ENABLED",
+                True,
             ),
-            "first_touch_selection_source": getattr(
+            "isolation_average_window_points": getattr(
                 config,
-                "OPENING_RANGE_FIRST_TOUCH_SELECTION_SOURCE",
-                "disabled",
+                "OPENING_RANGE_ISOLATION_AVERAGE_WINDOW_POINTS",
+                500.0,
             ),
-            "selected_or_touch_notify_enabled": getattr(
+            "isolation_touch_levels": getattr(
                 config,
-                "OPENING_RANGE_SELECTED_OR_TOUCH_NOTIFY_ENABLED",
-                False,
+                "OPENING_RANGE_ISOLATION_TOUCH_LEVELS",
+                ["R2", "R3", "S2", "S3"],
             ),
-            "selected_or_ema_alert_enabled": getattr(
+            "isolation_priority_levels": getattr(
                 config,
-                "OPENING_RANGE_SELECTED_OR_EMA_ALERT_ENABLED",
-                False,
+                "OPENING_RANGE_ISOLATION_PRIORITY_LEVELS",
+                ["R3", "S3", "R2", "S2"],
+            ),
+            "isolation_lock_for_day": getattr(
+                config,
+                "OPENING_RANGE_ISOLATION_LOCK_FOR_DAY",
+                True,
+            ),
+            "isolation_allow_priority_upgrade": getattr(
+                config,
+                "OPENING_RANGE_ISOLATION_ALLOW_PRIORITY_UPGRADE",
+                True,
+            ),
+            "isolated_instrument_notify_enabled": getattr(
+                config,
+                "OPENING_RANGE_ISOLATED_INSTRUMENT_NOTIFY_ENABLED",
+                True,
             ),
             "legacy_touch_telegram_enabled": getattr(
                 config,
                 "OPENING_RANGE_LEGACY_TOUCH_TELEGRAM_ENABLED",
                 False,
+            ),
+            "ema_isolated_instrument_telegram_enabled": getattr(
+                config,
+                "EMA_ISOLATED_INSTRUMENT_TELEGRAM_ENABLED",
+                True,
             ),
             "ema_cross_include_opening_range_levels": getattr(
                 config,
@@ -241,61 +273,12 @@ async def get_opening_range_latest_status():
                 "EMA_CROSS_BROADCAST_WITHOUT_OPENING_RANGE",
                 True,
             ),
-            "or_ema_strategy_alert_enabled": getattr(
+            "live_ema_calculation_mode_flag": getattr(
                 config,
-                "OR_EMA_STRATEGY_ALERT_ENABLED",
-                True,
+                "LIVE_EMA_CALCULATION_MODE",
+                False,
             ),
-            "or_ema_strategy_strike_window_points": getattr(
-                config,
-                "OR_EMA_STRATEGY_STRIKE_WINDOW_POINTS",
-                500,
-            ),
-            "or_ema_strategy_touch_levels": getattr(
-                config,
-                "OR_EMA_STRATEGY_TOUCH_LEVELS",
-                ["S2", "S3", "R2", "R3"],
-            ),
-            "or_ema_strategy_touch_check_mode": getattr(
-                config,
-                "OR_EMA_STRATEGY_TOUCH_CHECK_MODE",
-                "high_low",
-            ),
-            "or_ema_strategy_selection_mode": getattr(
-                config,
-                "OR_EMA_STRATEGY_SELECTION_MODE",
-                "first_touch_same_time_nearest",
-            ),
-            "or_ema_strategy_lock_after_first_selection": getattr(
-                config,
-                "OR_EMA_STRATEGY_LOCK_AFTER_FIRST_SELECTION",
-                True,
-            ),
-            "or_ema_strategy_nearest_strike_count": getattr(
-                config,
-                "OR_EMA_STRATEGY_NEAREST_STRIKE_COUNT",
-                3,
-            ),
-            "or_ema_strategy_bullish_option_type": getattr(
-                config,
-                "OR_EMA_STRATEGY_BULLISH_OPTION_TYPE",
-                "CE",
-            ),
-            "or_ema_strategy_bullish_strike_mode": getattr(
-                config,
-                "OR_EMA_STRATEGY_BULLISH_STRIKE_MODE",
-                "equal_or_below",
-            ),
-            "or_ema_strategy_bearish_option_type": getattr(
-                config,
-                "OR_EMA_STRATEGY_BEARISH_OPTION_TYPE",
-                "PE",
-            ),
-            "or_ema_strategy_bearish_strike_mode": getattr(
-                config,
-                "OR_EMA_STRATEGY_BEARISH_STRIKE_MODE",
-                "equal_or_above",
-            ),
+            "live_ema_calculation_mode": get_live_ema_calculation_mode_text(),
             "output_file": getattr(
                 config,
                 "OPENING_RANGE_OUTPUT_FILE",
@@ -303,6 +286,34 @@ async def get_opening_range_latest_status():
             ),
         },
     }
+
+
+@router.get("/opening-range/dashboard")
+async def get_opening_range_dashboard(
+    touch_limit: int = Query(
+        default=100,
+        ge=1,
+        le=1000,
+        description="Number of recent Opening Range touch events.",
+    ),
+    alert_limit: int = Query(
+        default=100,
+        ge=1,
+        le=1000,
+        description="Number of recent isolated EMA alert records.",
+    ),
+):
+    """
+    Returns compact dashboard data for isolated EMA dashboard.
+
+    Used by:
+        templates/isolated_ema_dashboard.html
+    """
+
+    return get_opening_range_dashboard_summary(
+        touch_limit=touch_limit,
+        alert_limit=alert_limit,
+    )
 
 
 @router.post("/opening-range/fetch")
@@ -335,18 +346,6 @@ async def trigger_opening_range_fetch(
 ):
     """
     Manually triggers opening range calculation for all subscribed instruments.
-
-    Behavior:
-    - Fetches today's intraday candles using Upstox HistoryV3Api.
-    - Selects first N candles from market open.
-    - Calculates open, high, low, close, average.
-    - Calculates R1/S1, R2/S2, R3/S3.
-    - Scans post-OR candles for already touched S2/S3/R2/R3.
-    - Stores results in memory for every subscribed instrument.
-    - Builds OR + EMA strategy universe using NIFTY OR average +/- configured points.
-    - Applies strategy selection rule:
-        first touch wins; same-time touches use nearest strike to NIFTY.
-    - Saves to data/opening_range_results.json if enabled.
     """
 
     selected_candle_count = candle_count or getattr(
@@ -371,7 +370,8 @@ async def trigger_opening_range_fetch(
         f"Manual opening range fetch requested. "
         f"candle_count={selected_candle_count}, "
         f"save_results={selected_save_results}, "
-        f"max_workers={selected_max_workers}"
+        f"max_workers={selected_max_workers}, "
+        f"live_ema_calculation_mode={get_live_ema_calculation_mode_text()}"
     )
 
     try:
@@ -382,21 +382,29 @@ async def trigger_opening_range_fetch(
             max_workers=selected_max_workers,
         )
 
+        isolated_state = get_selected_or_instrument_state()
+
         return {
             "status": "success",
             "message": (
                 "Opening range intraday candles fetched, levels calculated, "
-                "touch scan completed, strategy universe updated, and selected "
-                "touch rule applied."
+                "R2/R3/S2/S3 backfill touch scan completed, and isolated "
+                "instrument selection evaluated for subscribed instruments."
             ),
             "opening_range_results_saved": selected_save_results,
-            "selected_or_instrument": get_selected_or_instrument_state(),
+            "isolated_instrument": isolated_state,
+            "selected_or_instrument": isolated_state,
+            "live_ema_calculation": get_live_ema_calculation_mode_payload(),
             "ema_websocket_opening_range_enrichment": getattr(
                 config,
                 "EMA_CROSS_INCLUDE_OPENING_RANGE_LEVELS",
                 True,
             ),
-            "or_ema_strategy_status": get_or_ema_strategy_status(),
+            "isolated_ema_telegram_alerts_enabled": getattr(
+                config,
+                "EMA_ISOLATED_INSTRUMENT_TELEGRAM_ENABLED",
+                True,
+            ),
             "summary": summary,
         }
 
@@ -415,16 +423,11 @@ async def trigger_opening_range_fetch(
 async def get_opening_range_full_cache():
     """
     Returns full opening range cache.
-
-    Warning:
-    - This can be large because it includes results for all instruments.
-    - It may include touch events and per-instrument touch status.
-    - It may include OR + EMA strategy cache snapshots.
-    - Selected OR instrument state is retained only as disabled compatibility data.
     """
 
     return {
         "status": "success",
+        "live_ema_calculation": get_live_ema_calculation_mode_payload(),
         "cache": get_opening_range_cache(),
     }
 
@@ -479,6 +482,7 @@ async def get_opening_range_instrument(
             "strike": strike,
             "striketype": striketype,
         },
+        "live_ema_calculation": get_live_ema_calculation_mode_payload(),
         "result": result,
     }
 
@@ -519,6 +523,7 @@ async def get_opening_range_ema_context(
             "strike": strike,
             "striketype": striketype,
         },
+        "live_ema_calculation": get_live_ema_calculation_mode_payload(),
         "opening_range": context,
     }
 
@@ -589,6 +594,7 @@ async def fetch_opening_range_for_single_instrument(
                 "striketype": striketype,
                 "candle_count": candle_count,
             },
+            "live_ema_calculation": get_live_ema_calculation_mode_payload(),
             "result": result,
         }
 
@@ -610,329 +616,7 @@ async def fetch_opening_range_for_single_instrument(
 
 
 # ============================================================
-# OR + EMA Strategy Routes
-# ============================================================
-
-
-@router.get("/opening-range/strategy/status")
-async def get_opening_range_strategy_status():
-    """
-    Returns compact OR touch + EMA strategy status.
-
-    Shows:
-    - NIFTY OR average
-    - eligible strike range
-    - eligible instrument count
-    - all touched candidate count
-    - selected touched instrument
-    - selected reason
-    - sent alert count
-    - nearest strike selection rules
-    """
-
-    strategy_status = get_or_ema_strategy_status()
-
-    return {
-        "status": "success",
-        "selection_mode": "first_touch_same_time_nearest_to_nifty",
-        "strategy_status": strategy_status,
-        "selected": {
-            "selected_touch": strategy_status.get("selected_touch"),
-            "selected_touch_key": strategy_status.get("selected_touch_key"),
-            "selected_instrument_key": strategy_status.get("selected_instrument_key"),
-            "selected_level": strategy_status.get("selected_level"),
-            "selected_reason": strategy_status.get("selected_reason"),
-            "selected_at": strategy_status.get("selected_at"),
-        },
-    }
-
-
-@router.get("/opening-range/strategy/selected")
-async def get_opening_range_strategy_selected():
-    """
-    Returns the currently selected OR + EMA strategy touch.
-
-    Selection rule:
-    - First eligible touch is selected.
-    - If multiple eligible touches happen at the same timestamp/candle,
-      nearest strike to current NIFTY spot is selected.
-    - Only selected touch can trigger Telegram alert after EMA confirmation.
-    """
-
-    strategy_cache = get_or_ema_strategy_cache()
-
-    return {
-        "status": "success",
-        "selection_mode": "first_touch_same_time_nearest_to_nifty",
-        "selected_touch": strategy_cache.get("selected_touch"),
-        "selected_touch_key": strategy_cache.get("selected_touch_key"),
-        "selected_instrument_key": strategy_cache.get("selected_instrument_key"),
-        "selected_level": strategy_cache.get("selected_level"),
-        "selected_reason": strategy_cache.get("selected_reason"),
-        "selected_at": strategy_cache.get("selected_at"),
-    }
-
-
-@router.get("/opening-range/strategy/cache")
-async def get_opening_range_strategy_cache(
-    include_latest_ticks: bool = Query(
-        default=False,
-        description="If true, include latest live tick cache. Can be large.",
-    ),
-):
-    """
-    Returns full OR touch + EMA strategy cache.
-
-    Warning:
-    - This can be large if include_latest_ticks=true.
-    """
-
-    strategy_cache = get_or_ema_strategy_cache()
-
-    if not include_latest_ticks:
-        strategy_cache.pop("latest_ticks", None)
-
-    return {
-        "status": "success",
-        "include_latest_ticks": include_latest_ticks,
-        "strategy_cache": strategy_cache,
-    }
-
-
-@router.get("/opening-range/strategy/eligible-instruments")
-async def get_opening_range_strategy_eligible_instruments(
-    option_type: str = Query(
-        default=None,
-        description="Optional filter: ce or pe.",
-    ),
-    limit: int = Query(
-        default=500,
-        ge=1,
-        le=5000,
-        description="Maximum number of eligible instruments to return.",
-    ),
-):
-    """
-    Returns eligible instruments built from:
-
-        NIFTY Opening Range average +/- OR_EMA_STRATEGY_STRIKE_WINDOW_POINTS
-
-    The range is clamped by STRIKE_FROM and STRIKE_TO.
-    """
-
-    strategy_cache = get_or_ema_strategy_cache()
-    eligible = strategy_cache.get("eligible_instruments", {})
-
-    selected_option_type = str(option_type or "").upper()
-
-    instruments = list(eligible.values())
-
-    if selected_option_type in ["CE", "PE"]:
-        instruments = [
-            item
-            for item in instruments
-            if str(item.get("instrument_type", "")).upper() == selected_option_type
-        ]
-
-    instruments = instruments[:limit]
-
-    return {
-        "status": "success",
-        "option_type": selected_option_type if selected_option_type else None,
-        "limit": limit,
-        "or_average": strategy_cache.get("or_average"),
-        "strike_from": strategy_cache.get("strike_from"),
-        "strike_to": strategy_cache.get("strike_to"),
-        "eligible_count": len(eligible),
-        "returned_count": len(instruments),
-        "eligible_instruments": instruments,
-    }
-
-
-@router.get("/opening-range/strategy/touched-instruments")
-async def get_opening_range_strategy_touched_instruments(
-    instrument_key: str = Query(
-        default=None,
-        description="Optional instrument key filter.",
-    ),
-    level: str = Query(
-        default=None,
-        description="Optional level filter: S2, S3, R2, R3.",
-    ),
-    selected_only: bool = Query(
-        default=False,
-        description="If true, return only the selected touch record.",
-    ),
-    limit: int = Query(
-        default=500,
-        ge=1,
-        le=5000,
-        description="Maximum number of touched records to return.",
-    ),
-):
-    """
-    Returns instruments that touched/crossed strategy levels.
-
-    Important:
-    - All touched instruments are kept for debug.
-    - Only selected touch is used for EMA confirmation.
-    - Non-selected touches do not trigger Telegram strategy alert.
-    """
-
-    strategy_cache = get_or_ema_strategy_cache()
-
-    if selected_only:
-        selected_touch = strategy_cache.get("selected_touch")
-
-        return {
-            "status": "success",
-            "selected_only": True,
-            "selection_mode": "first_touch_same_time_nearest_to_nifty",
-            "selected_touch": selected_touch,
-            "records": [selected_touch] if selected_touch else [],
-        }
-
-    touched = strategy_cache.get("touched_instruments", {})
-    records = list(touched.values())
-
-    if instrument_key:
-        records = [
-            item for item in records if item.get("instrument_key") == instrument_key
-        ]
-
-    selected_level = str(level or "").upper()
-
-    if selected_level in ["S2", "S3", "R2", "R3"]:
-        records = [
-            item
-            for item in records
-            if str(item.get("level", "")).upper() == selected_level
-        ]
-
-    records = records[-limit:]
-
-    return {
-        "status": "success",
-        "selected_only": False,
-        "selection_mode": "first_touch_same_time_nearest_to_nifty",
-        "instrument_key": instrument_key,
-        "level": selected_level if selected_level else None,
-        "limit": limit,
-        "touched_count": len(touched),
-        "returned_count": len(records),
-        "selected_touch_key": strategy_cache.get("selected_touch_key"),
-        "selected_instrument_key": strategy_cache.get("selected_instrument_key"),
-        "selected_level": strategy_cache.get("selected_level"),
-        "selected_reason": strategy_cache.get("selected_reason"),
-        "touched_instruments": records,
-    }
-
-
-@router.get("/opening-range/strategy/alerts")
-async def get_opening_range_strategy_alerts(
-    instrument_key: str = Query(
-        default=None,
-        description="Optional instrument key filter.",
-    ),
-    cross_type: str = Query(
-        default=None,
-        description="Optional cross type filter: bullish_cross or bearish_cross.",
-    ),
-    limit: int = Query(
-        default=500,
-        ge=1,
-        le=5000,
-        description="Maximum number of alert records to return.",
-    ),
-):
-    """
-    Returns OR touch + EMA strategy alert records.
-
-    Alerts are created only when:
-    - one eligible touch is selected
-    - selected instrument later produces live EMA crossover
-    - duplicate prevention allows the alert
-    """
-
-    strategy_cache = get_or_ema_strategy_cache()
-    alerts = strategy_cache.get("alerts_sent", {})
-
-    records = list(alerts.values())
-
-    if instrument_key:
-        records = [
-            item for item in records if item.get("instrument_key") == instrument_key
-        ]
-
-    selected_cross_type = str(cross_type or "").lower()
-
-    if selected_cross_type:
-        records = [
-            item
-            for item in records
-            if str(item.get("cross_type", "")).lower() == selected_cross_type
-        ]
-
-    records = records[-limit:]
-
-    return {
-        "status": "success",
-        "instrument_key": instrument_key,
-        "cross_type": selected_cross_type if selected_cross_type else None,
-        "limit": limit,
-        "alerts_count": len(alerts),
-        "returned_count": len(records),
-        "selected_instrument_key": strategy_cache.get("selected_instrument_key"),
-        "selected_level": strategy_cache.get("selected_level"),
-        "alerts": records,
-    }
-
-
-@router.get("/opening-range/strategy/latest-ticks")
-async def get_opening_range_strategy_latest_ticks(
-    instrument_key: str = Query(
-        default=None,
-        description="Optional instrument key filter.",
-    ),
-    limit: int = Query(
-        default=500,
-        ge=1,
-        le=5000,
-        description="Maximum number of latest ticks to return.",
-    ),
-):
-    """
-    Returns latest live tick snapshots stored by the strategy engine.
-
-    Useful for checking nearest strike live data availability.
-    """
-
-    strategy_cache = get_or_ema_strategy_cache()
-    latest_ticks = strategy_cache.get("latest_ticks", {})
-
-    if instrument_key:
-        tick = latest_ticks.get(instrument_key)
-
-        return {
-            "status": "success",
-            "instrument_key": instrument_key,
-            "found": tick is not None,
-            "latest_tick": tick,
-        }
-
-    records = list(latest_ticks.values())[-limit:]
-
-    return {
-        "status": "success",
-        "limit": limit,
-        "latest_ticks_count": len(latest_ticks),
-        "returned_count": len(records),
-        "latest_ticks": records,
-    }
-
-
-# ============================================================
-# Selected OR Instrument Compatibility Routes
+# Isolated Instrument Compatibility Routes
 # ============================================================
 
 
@@ -940,23 +624,21 @@ async def get_opening_range_strategy_latest_ticks(
 async def get_selected_opening_range_instrument():
     """
     Backward-compatible route.
-
-    New flow:
-    - Legacy selected Opening Range instrument feature is disabled.
-    - New OR + EMA strategy selected touch is available at:
-      /opening-range/strategy/selected
     """
+
+    isolated_state = get_selected_or_instrument_state()
 
     return {
         "status": "success",
-        "flow": "disabled",
+        "flow": "isolated_instrument",
         "message": (
-            "Legacy selected Opening Range instrument flow is disabled. "
-            "Use /opening-range/strategy/selected for the new OR + EMA strategy "
-            "selected touched instrument."
+            "Selected OR compatibility route now returns isolated Opening Range "
+            "instrument state. EMA Telegram alerts are sent only for the isolated "
+            "instrument, while WebSocket EMA events can still be broadcast for all instruments."
         ),
-        "selected_or_instrument": get_selected_or_instrument_state(),
-        "or_ema_strategy_selected": get_or_ema_strategy_cache().get("selected_touch"),
+        "live_ema_calculation": get_live_ema_calculation_mode_payload(),
+        "selected_or_instrument": isolated_state,
+        "isolated_instrument": isolated_state,
     }
 
 
@@ -966,31 +648,65 @@ async def get_selected_opening_range_ema_alerts(
         default=100,
         ge=1,
         le=1000,
-        description="Number of latest selected OR instrument EMA alert records.",
+        description="Number of latest isolated instrument EMA alert records.",
     ),
 ):
     """
     Backward-compatible route.
+    """
 
-    New flow:
-    - Legacy selected OR EMA Telegram alerts are disabled.
-    - New strategy alerts are available at:
-      /opening-range/strategy/alerts
+    isolated_state = get_selected_or_instrument_state()
+
+    return {
+        "status": "success",
+        "flow": "isolated_instrument",
+        "message": (
+            "Returns EMA Telegram alert records for the isolated Opening Range "
+            "instrument. Other instruments may produce EMA WebSocket events, but "
+            "do not produce Telegram EMA alerts."
+        ),
+        "limit": limit,
+        "live_ema_calculation": get_live_ema_calculation_mode_payload(),
+        "selected_or_instrument": isolated_state,
+        "isolated_instrument": isolated_state,
+        "alerts": get_selected_or_ema_alerts(limit=limit),
+    }
+
+
+@router.get("/opening-range/isolated-instrument")
+async def get_isolated_opening_range_instrument():
+    """
+    Returns current isolated Opening Range instrument state.
     """
 
     return {
         "status": "success",
-        "flow": "disabled",
-        "message": (
-            "Legacy selected OR EMA Telegram alerts are disabled. "
-            "Use /opening-range/strategy/alerts for OR touch + EMA strategy alerts."
-        ),
+        "flow": "isolated_instrument",
+        "live_ema_calculation": get_live_ema_calculation_mode_payload(),
+        "isolated_instrument": get_selected_or_instrument_state(),
+    }
+
+
+@router.get("/opening-range/isolated-instrument/ema-alerts")
+async def get_isolated_opening_range_ema_alerts(
+    limit: int = Query(
+        default=100,
+        ge=1,
+        le=1000,
+        description="Number of latest isolated instrument EMA alert records.",
+    ),
+):
+    """
+    Returns latest EMA Telegram alert records for the isolated instrument.
+    """
+
+    return {
+        "status": "success",
+        "flow": "isolated_instrument",
         "limit": limit,
-        "selected_or_instrument": get_selected_or_instrument_state(),
+        "live_ema_calculation": get_live_ema_calculation_mode_payload(),
+        "isolated_instrument": get_selected_or_instrument_state(),
         "alerts": get_selected_or_ema_alerts(limit=limit),
-        "or_ema_strategy_alerts": list(
-            get_or_ema_strategy_cache().get("alerts_sent", {}).values()
-        )[-limit:],
     }
 
 
@@ -1005,24 +721,19 @@ async def get_opening_range_touch_events_route(
         default=100,
         ge=1,
         le=1000,
-        description="Number of latest opening range touch events to return.",
+        description="Number of latest opening range R2/R3/S2/S3 touch events to return.",
     ),
 ):
     """
-    Returns recent Opening Range touch events.
-
-    Events can come from:
-    - intraday_backfill_scan
-    - live_tick
-
-    Touch events are tracked for diagnostics/WebSocket use.
-    They do not use the legacy selected OR flow.
+    Returns recent Opening Range R2/R3/S2/S3 touch events.
     """
 
     return {
         "status": "success",
         "limit": limit,
+        "live_ema_calculation": get_live_ema_calculation_mode_payload(),
         "events": get_opening_range_touch_events(limit=limit),
+        "isolated_instrument": get_selected_or_instrument_state(),
     }
 
 
@@ -1030,8 +741,6 @@ async def get_opening_range_touch_events_route(
 async def get_opening_range_pending_touch_events_route():
     """
     Returns pending Opening Range touch events waiting for legacy Telegram batch flush.
-
-    Legacy touch Telegram is disabled by default.
     """
 
     return {
@@ -1041,6 +750,7 @@ async def get_opening_range_pending_touch_events_route():
             "OPENING_RANGE_LEGACY_TOUCH_TELEGRAM_ENABLED",
             False,
         ),
+        "live_ema_calculation": get_live_ema_calculation_mode_payload(),
         "pending_events": get_opening_range_pending_touch_events(),
     }
 
@@ -1054,9 +764,6 @@ async def flush_opening_range_pending_touch_events_route(
 ):
     """
     Manually flushes pending Opening Range touch events to Telegram.
-
-    This sends only if:
-        OPENING_RANGE_LEGACY_TOUCH_TELEGRAM_ENABLED=True
     """
 
     try:
@@ -1076,6 +783,7 @@ async def flush_opening_range_pending_touch_events_route(
             "status": "success",
             "telegram_sent": sent,
             "legacy_touch_telegram_enabled": legacy_enabled,
+            "live_ema_calculation": get_live_ema_calculation_mode_payload(),
             "message": (
                 "Pending touch events flushed to Telegram."
                 if sent
@@ -1106,9 +814,6 @@ async def flush_opening_range_pending_touch_events_route(
 async def get_opening_range_file_status():
     """
     Checks whether opening range output file exists.
-
-    Default output:
-        data/opening_range_results.json
     """
 
     output_file = getattr(
@@ -1127,8 +832,17 @@ async def get_opening_range_file_status():
 
     touch_events_file_path = Path(touch_events_file)
 
+    isolated_file = getattr(
+        config,
+        "OPENING_RANGE_ISOLATED_INSTRUMENT_OUTPUT_FILE",
+        "data/isolated_opening_range_instrument.json",
+    )
+
+    isolated_file_path = Path(isolated_file)
+
     return {
         "status": "success",
+        "live_ema_calculation": get_live_ema_calculation_mode_payload(),
         "opening_range_file_exists": file_path.exists(),
         "opening_range_file_path": str(file_path),
         "save_file_enabled": getattr(config, "OPENING_RANGE_SAVE_FILE", True),
@@ -1139,6 +853,8 @@ async def get_opening_range_file_status():
             "OPENING_RANGE_TOUCH_EVENTS_SAVE_TEST_FILE",
             True,
         ),
+        "isolated_instrument_file_exists": isolated_file_path.exists(),
+        "isolated_instrument_file_path": str(isolated_file_path),
     }
 
 
@@ -1150,6 +866,7 @@ async def get_opening_range_config():
 
     return {
         "status": "success",
+        "live_ema_calculation": get_live_ema_calculation_mode_payload(),
         "config": {
             "enabled": getattr(config, "OPENING_RANGE_ENABLED", True),
             "interval": getattr(config, "OPENING_RANGE_INTERVAL", "1minute"),
@@ -1209,16 +926,6 @@ async def get_opening_range_config():
                 "OPENING_RANGE_TOUCH_ALERT_ENABLED",
                 True,
             ),
-            "touch_alert_max_instruments": getattr(
-                config,
-                "OPENING_RANGE_TOUCH_ALERT_MAX_INSTRUMENTS",
-                5,
-            ),
-            "touch_alert_batch_seconds": getattr(
-                config,
-                "OPENING_RANGE_TOUCH_ALERT_BATCH_SECONDS",
-                10,
-            ),
             "touch_alert_once_per_level": getattr(
                 config,
                 "OPENING_RANGE_TOUCH_ALERT_ONCE_PER_LEVEL",
@@ -1227,26 +934,6 @@ async def get_opening_range_config():
             "touch_alert_options_only": getattr(
                 config,
                 "OPENING_RANGE_TOUCH_ALERT_OPTIONS_ONLY",
-                True,
-            ),
-            "touch_alert_sort_by_nearest_index": getattr(
-                config,
-                "OPENING_RANGE_TOUCH_ALERT_SORT_BY_NEAREST_INDEX",
-                True,
-            ),
-            "touch_alert_main_index_key": getattr(
-                config,
-                "OPENING_RANGE_TOUCH_ALERT_MAIN_INDEX_KEY",
-                getattr(config, "MAIN_NIFTY_SECURITY", "NSE_INDEX|Nifty 50"),
-            ),
-            "backfill_touch_alert_enabled": getattr(
-                config,
-                "OPENING_RANGE_BACKFILL_TOUCH_ALERT_ENABLED",
-                True,
-            ),
-            "live_touch_alert_enabled": getattr(
-                config,
-                "OPENING_RANGE_LIVE_TOUCH_ALERT_ENABLED",
                 True,
             ),
             "touch_check_mode": getattr(
@@ -1269,25 +956,75 @@ async def get_opening_range_config():
                 "OPENING_RANGE_TOUCH_EVENTS_SAVE_TEST_FILE",
                 True,
             ),
+            "isolation_enabled": getattr(
+                config,
+                "OPENING_RANGE_ISOLATED_INSTRUMENT_ENABLED",
+                True,
+            ),
+            "isolation_average_window_points": getattr(
+                config,
+                "OPENING_RANGE_ISOLATION_AVERAGE_WINDOW_POINTS",
+                500.0,
+            ),
+            "isolation_touch_levels": getattr(
+                config,
+                "OPENING_RANGE_ISOLATION_TOUCH_LEVELS",
+                ["R2", "R3", "S2", "S3"],
+            ),
+            "isolation_priority_levels": getattr(
+                config,
+                "OPENING_RANGE_ISOLATION_PRIORITY_LEVELS",
+                ["R3", "S3", "R2", "S2"],
+            ),
+            "isolation_lock_for_day": getattr(
+                config,
+                "OPENING_RANGE_ISOLATION_LOCK_FOR_DAY",
+                True,
+            ),
+            "isolation_allow_priority_upgrade": getattr(
+                config,
+                "OPENING_RANGE_ISOLATION_ALLOW_PRIORITY_UPGRADE",
+                True,
+            ),
+            "isolation_allow_backfill_touch": getattr(
+                config,
+                "OPENING_RANGE_ISOLATION_ALLOW_BACKFILL_TOUCH",
+                True,
+            ),
+            "isolation_allow_live_touch": getattr(
+                config,
+                "OPENING_RANGE_ISOLATION_ALLOW_LIVE_TOUCH",
+                True,
+            ),
+            "isolation_options_only": getattr(
+                config,
+                "OPENING_RANGE_ISOLATION_OPTIONS_ONLY",
+                True,
+            ),
+            "isolated_instrument_notify_enabled": getattr(
+                config,
+                "OPENING_RANGE_ISOLATED_INSTRUMENT_NOTIFY_ENABLED",
+                True,
+            ),
             "first_touch_selection_enabled": getattr(
                 config,
                 "OPENING_RANGE_FIRST_TOUCH_SELECTION_ENABLED",
-                False,
+                True,
             ),
             "first_touch_selection_source": getattr(
                 config,
                 "OPENING_RANGE_FIRST_TOUCH_SELECTION_SOURCE",
-                "disabled",
+                "average_window_level_priority",
             ),
             "selected_or_touch_notify_enabled": getattr(
                 config,
                 "OPENING_RANGE_SELECTED_OR_TOUCH_NOTIFY_ENABLED",
-                False,
+                True,
             ),
             "selected_or_ema_alert_enabled": getattr(
                 config,
                 "OPENING_RANGE_SELECTED_OR_EMA_ALERT_ENABLED",
-                False,
+                True,
             ),
             "legacy_touch_telegram_enabled": getattr(
                 config,
@@ -1309,117 +1046,96 @@ async def get_opening_range_config():
                 "EMA_CROSS_BROADCAST_WITHOUT_OPENING_RANGE",
                 True,
             ),
-            "or_ema_strategy": {
-                "alert_enabled": getattr(
-                    config,
-                    "OR_EMA_STRATEGY_ALERT_ENABLED",
-                    True,
-                ),
-                "strike_window_points": getattr(
-                    config,
-                    "OR_EMA_STRATEGY_STRIKE_WINDOW_POINTS",
-                    500,
-                ),
-                "touch_levels": getattr(
-                    config,
-                    "OR_EMA_STRATEGY_TOUCH_LEVELS",
-                    ["S2", "S3", "R2", "R3"],
-                ),
-                "touch_check_mode": getattr(
-                    config,
-                    "OR_EMA_STRATEGY_TOUCH_CHECK_MODE",
-                    "high_low",
-                ),
-                "selection_mode": getattr(
-                    config,
-                    "OR_EMA_STRATEGY_SELECTION_MODE",
-                    "first_touch_same_time_nearest",
-                ),
-                "lock_after_first_selection": getattr(
-                    config,
-                    "OR_EMA_STRATEGY_LOCK_AFTER_FIRST_SELECTION",
-                    True,
-                ),
-                "store_non_selected_touches": getattr(
-                    config,
-                    "OR_EMA_STRATEGY_STORE_NON_SELECTED_TOUCHES",
-                    True,
-                ),
-                "options_only": getattr(
-                    config,
-                    "OR_EMA_STRATEGY_OPTIONS_ONLY",
-                    True,
-                ),
-                "store_live_tick_cache": getattr(
-                    config,
-                    "OR_EMA_STRATEGY_STORE_LIVE_TICK_CACHE",
-                    True,
-                ),
-                "nearest_strike_count": getattr(
-                    config,
-                    "OR_EMA_STRATEGY_NEAREST_STRIKE_COUNT",
-                    3,
-                ),
-                "bullish_option_type": getattr(
-                    config,
-                    "OR_EMA_STRATEGY_BULLISH_OPTION_TYPE",
-                    "CE",
-                ),
-                "bearish_option_type": getattr(
-                    config,
-                    "OR_EMA_STRATEGY_BEARISH_OPTION_TYPE",
-                    "PE",
-                ),
-                "bullish_strike_mode": getattr(
-                    config,
-                    "OR_EMA_STRATEGY_BULLISH_STRIKE_MODE",
-                    "equal_or_below",
-                ),
-                "bearish_strike_mode": getattr(
-                    config,
-                    "OR_EMA_STRATEGY_BEARISH_STRIKE_MODE",
-                    "equal_or_above",
-                ),
-                "confirm_same_instrument": getattr(
-                    config,
-                    "OR_EMA_STRATEGY_CONFIRM_SAME_INSTRUMENT",
-                    True,
-                ),
-                "alert_once_per_touch_and_cross": getattr(
-                    config,
-                    "OR_EMA_STRATEGY_ALERT_ONCE_PER_TOUCH_AND_CROSS",
-                    True,
-                ),
-                "max_touched_instruments": getattr(
-                    config,
-                    "OR_EMA_STRATEGY_MAX_TOUCHED_INSTRUMENTS",
-                    2000,
-                ),
-                "max_alerts_in_memory": getattr(
-                    config,
-                    "OR_EMA_STRATEGY_MAX_ALERTS_IN_MEMORY",
-                    2000,
-                ),
-                "include_nearest_live_data": getattr(
-                    config,
-                    "OR_EMA_STRATEGY_INCLUDE_NEAREST_LIVE_DATA",
-                    True,
-                ),
-                "include_touched_instrument_live_data": getattr(
-                    config,
-                    "OR_EMA_STRATEGY_INCLUDE_TOUCHED_INSTRUMENT_LIVE_DATA",
-                    True,
-                ),
-                "telegram_title": getattr(
-                    config,
-                    "OR_EMA_STRATEGY_TELEGRAM_TITLE",
-                    "OR Touch + EMA Cross Strategy Alert",
-                ),
-                "telegram_level": getattr(
-                    config,
-                    "OR_EMA_STRATEGY_TELEGRAM_LEVEL",
-                    "OPENING_RANGE",
-                ),
-            },
+            "ema_isolated_instrument_telegram_enabled": getattr(
+                config,
+                "EMA_ISOLATED_INSTRUMENT_TELEGRAM_ENABLED",
+                True,
+            ),
+            "ema_isolated_alert_every_cross": getattr(
+                config,
+                "EMA_ISOLATED_ALERT_EVERY_CROSS",
+                True,
+            ),
+            "ema_alert_bullish_option_type": getattr(
+                config,
+                "EMA_ALERT_BULLISH_OPTION_TYPE",
+                "CE",
+            ),
+            "ema_alert_bearish_option_type": getattr(
+                config,
+                "EMA_ALERT_BEARISH_OPTION_TYPE",
+                "PE",
+            ),
+            "ema_alert_strike_step": getattr(
+                config,
+                "EMA_ALERT_STRIKE_STEP",
+                50,
+            ),
+            "ema_alert_nearest_strike_count": getattr(
+                config,
+                "EMA_ALERT_NEAREST_STRIKE_COUNT",
+                3,
+            ),
+            "ema_alert_nearest_strike_offsets": getattr(
+                config,
+                "EMA_ALERT_NEAREST_STRIKE_OFFSETS",
+                [-50, 0, 50],
+            ),
+            "ema_alert_order_strikes_clamp_to_filter_range": getattr(
+                config,
+                "EMA_ALERT_ORDER_STRIKES_CLAMP_TO_FILTER_RANGE",
+                True,
+            ),
+            "ema_alert_include_order_instrument_ltp": getattr(
+                config,
+                "EMA_ALERT_INCLUDE_ORDER_INSTRUMENT_LTP",
+                True,
+            ),
+            "ema_alert_max_order_instruments": getattr(
+                config,
+                "EMA_ALERT_MAX_ORDER_INSTRUMENTS",
+                3,
+            ),
+            "live_ema_enabled": getattr(
+                config,
+                "LIVE_EMA_ENABLED",
+                True,
+            ),
+            "live_ema_calculation_mode_flag": getattr(
+                config,
+                "LIVE_EMA_CALCULATION_MODE",
+                False,
+            ),
+            "live_ema_calculation_mode": get_live_ema_calculation_mode_text(),
+            "live_ema_calculation_mode_description": (
+                "live tick/LTP based EMA calculation"
+                if bool(getattr(config, "LIVE_EMA_CALCULATION_MODE", False))
+                else "completed candle close based EMA calculation"
+            ),
+            "live_ema_interval_minutes": getattr(
+                config,
+                "LIVE_EMA_INTERVAL_MINUTES",
+                1,
+            ),
+            "live_ema_fast_period": getattr(
+                config,
+                "LIVE_EMA_FAST_PERIOD",
+                getattr(config, "EMA_FAST_PERIOD", 9),
+            ),
+            "live_ema_slow_period": getattr(
+                config,
+                "LIVE_EMA_SLOW_PERIOD",
+                getattr(config, "EMA_SLOW_PERIOD", 21),
+            ),
+            "live_ema_tick_alert_once_per_direction": getattr(
+                config,
+                "LIVE_EMA_TICK_ALERT_ONCE_PER_DIRECTION",
+                True,
+            ),
+            "live_ema_tick_min_price_change": getattr(
+                config,
+                "LIVE_EMA_TICK_MIN_PRICE_CHANGE",
+                0.0,
+            ),
         },
     }

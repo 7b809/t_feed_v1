@@ -1,536 +1,590 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Live Option Feed Engine</title>
-  <style>
-    :root {
-      --bg: #0f172a;
-      --card-bg: #1e293b;
-      --border: #334155;
-      --text: #f8fafc;
-      --text-muted: #94a3b8;
-      --green: #22c55e;
-      --red: #ef4444;
-      --accent: #3b82f6;
-      --yellow: #f59e0b;
-    }
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Live Option Feed Engine</title>
 
-    body {
-      margin: 0;
-      padding: 20px;
-      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-      background-color: var(--bg);
-      color: var(--text);
-    }
+    <style>
+      :root {
+        --bg: #0f172a;
+        --card-bg: #1e293b;
+        --border: #334155;
+        --text: #f8fafc;
+        --text-muted: #94a3b8;
+        --green: #22c55e;
+        --red: #ef4444;
+        --accent: #3b82f6;
+        --yellow: #f59e0b;
+        --purple: #a78bfa;
+      }
 
-    header {
-      display: flex;
-      justify-content: space-between;
-      align-items: flex-start;
-      margin-bottom: 20px;
-      padding-bottom: 15px;
-      border-bottom: 1px solid var(--border);
-      gap: 16px;
-    }
-
-    h1, h2, h3 {
-      margin: 0;
-    }
-
-    .header-left {
-      display: flex;
-      flex-direction: column;
-      gap: 12px;
-    }
-
-    .header-actions {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      flex-wrap: wrap;
-      justify-content: flex-end;
-    }
-
-    .status-badge {
-      padding: 6px 12px;
-      border-radius: 20px;
-      font-size: 0.85rem;
-      font-weight: bold;
-      white-space: nowrap;
-    }
-
-    .connected {
-      background: rgba(34, 197, 94, 0.2);
-      color: var(--green);
-      border: 1px solid var(--green);
-    }
-
-    .disconnected {
-      background: rgba(239, 68, 68, 0.2);
-      color: var(--red);
-      border: 1px solid var(--red);
-    }
-
-    .refreshing {
-      background: rgba(245, 158, 11, 0.2);
-      color: var(--yellow);
-      border: 1px solid var(--yellow);
-    }
-
-    .refresh-success {
-      background: rgba(34, 197, 94, 0.2);
-      color: var(--green);
-      border: 1px solid var(--green);
-    }
-
-    .refresh-error {
-      background: rgba(239, 68, 68, 0.2);
-      color: var(--red);
-      border: 1px solid var(--red);
-    }
-
-    .refresh-button {
-      border: 1px solid var(--accent);
-      background: rgba(59, 130, 246, 0.18);
-      color: var(--text);
-      padding: 7px 12px;
-      border-radius: 8px;
-      cursor: pointer;
-      font-size: 0.85rem;
-      font-weight: 700;
-      transition: background 0.2s ease, opacity 0.2s ease;
-    }
-
-    .refresh-button:hover {
-      background: rgba(59, 130, 246, 0.35);
-    }
-
-    .refresh-button:disabled {
-      opacity: 0.55;
-      cursor: not-allowed;
-    }
-
-    .nifty-card {
-      background: var(--card-bg);
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 12px 16px;
-      min-width: 280px;
-      max-width: 420px;
-    }
-
-    .nifty-title {
-      font-size: 0.85rem;
-      color: var(--text-muted);
-      margin-bottom: 4px;
-    }
-
-    .nifty-ltp {
-      font-size: 1.8rem;
-      font-weight: 800;
-      margin-bottom: 4px;
-    }
-
-    .nifty-meta {
-      display: flex;
-      justify-content: space-between;
-      gap: 12px;
-      font-size: 0.82rem;
-      color: var(--text-muted);
-      flex-wrap: wrap;
-    }
-
-    .panel {
-      background: var(--card-bg);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 20px;
-      margin-bottom: 20px;
-    }
-
-    .refresh-panel {
-      display: none;
-    }
-
-    .refresh-panel.visible {
-      display: block;
-    }
-
-    .refresh-message {
-      font-size: 0.9rem;
-      color: var(--text-muted);
-      margin-top: 8px;
-      white-space: pre-wrap;
-    }
-
-    .options-layout {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 20px;
-    }
-
-    .option-section-title {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      gap: 12px;
-      margin-bottom: 12px;
-    }
-
-    .option-section-title small {
-      color: var(--text-muted);
-      font-size: 0.82rem;
-    }
-
-    .options-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-      gap: 15px;
-    }
-
-    .card {
-      background: #0f172a;
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      padding: 15px;
-      position: relative;
-    }
-
-    .card.atm {
-      border-color: var(--accent);
-      box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.35);
-    }
-
-    .symbol {
-      font-weight: bold;
-      font-size: 1rem;
-    }
-
-    .strike-label {
-      font-size: 0.8rem;
-      color: var(--text-muted);
-      margin-top: 2px;
-    }
-
-    .ltp {
-      font-size: 1.4rem;
-      font-weight: bold;
-      margin: 8px 0;
-    }
-
-    .up {
-      color: var(--green);
-    }
-
-    .down {
-      color: var(--red);
-    }
-
-    .details-row {
-      display: flex;
-      justify-content: space-between;
-      font-size: 0.82rem;
-      color: var(--text-muted);
-      margin-top: 4px;
-      gap: 8px;
-    }
-
-    .greeks-box {
-      margin-top: 10px;
-      padding-top: 8px;
-      border-top: 1px dashed var(--border);
-      font-size: 0.8rem;
-    }
-
-    .empty-state {
-      color: var(--text-muted);
-      font-size: 0.9rem;
-      padding: 14px;
-      border: 1px dashed var(--border);
-      border-radius: 8px;
-      background: rgba(15, 23, 42, 0.5);
-    }
-
-    @media (max-width: 1000px) {
-      .options-layout {
-        grid-template-columns: 1fr;
+      body {
+        margin: 0;
+        padding: 20px;
+        font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+        background-color: var(--bg);
+        color: var(--text);
       }
 
       header {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        margin-bottom: 20px;
+        padding-bottom: 15px;
+        border-bottom: 1px solid var(--border);
+        gap: 16px;
+      }
+
+      h1,
+      h2,
+      h3 {
+        margin: 0;
+      }
+
+      .header-left {
+        display: flex;
         flex-direction: column;
+        gap: 12px;
       }
 
       .header-actions {
-        justify-content: flex-start;
-      }
-    }
-  </style>
-</head>
-<body>
-
-  <header>
-    <div class="header-left">
-      <h1>Option Feed Dashboard</h1>
-
-      <div class="nifty-card">
-        <div class="nifty-title">Main Index</div>
-        <div id="nifty-ltp" class="nifty-ltp">NIFTY 50 ₹ --.--</div>
-        <div class="nifty-meta">
-          <span id="nifty-change">Change: --</span>
-          <span id="nifty-ohlc">O: -- | H: -- | L: --</span>
-          <span id="nifty-updated">Updated: --</span>
-        </div>
-      </div>
-    </div>
-
-    <div class="header-actions">
-      <button id="manual-refresh-btn" class="refresh-button" onclick="triggerManualRefresh()">
-        Hard Refresh
-      </button>
-
-      <span id="refresh-status" class="status-badge disconnected">
-        Refresh: Idle
-      </span>
-
-      <span id="status-all" class="status-badge disconnected">/all-feeds: Off</span>
-    </div>
-  </header>
-
-  <div id="refresh-panel" class="panel refresh-panel">
-    <h2>Manual Refresh Status</h2>
-    <div id="refresh-message" class="refresh-message">
-      No manual refresh triggered yet.
-    </div>
-  </div>
-
-  <div class="panel">
-    <div class="option-section-title">
-      <h2>Nearest CE / PE Options</h2>
-      <small>
-        Based on live NIFTY LTP:
-        <b id="atm-reference">--</b>
-      </small>
-    </div>
-
-    <div class="options-layout">
-      <div>
-        <div class="option-section-title">
-          <h3>Nearest CE Cards</h3>
-          <small id="ce-count">0 active</small>
-        </div>
-        <div id="ce-container" class="options-grid"></div>
-      </div>
-
-      <div>
-        <div class="option-section-title">
-          <h3>Nearest PE Cards</h3>
-          <small id="pe-count">0 active</small>
-        </div>
-        <div id="pe-container" class="options-grid"></div>
-      </div>
-    </div>
-  </div>
-
-  <script>
-    const wsProtocol = window.location.protocol === "https:" ? "wss" : "ws";
-    const wsHost = `${wsProtocol}://${window.location.host}`;
-    const apiHost = `${window.location.protocol}//${window.location.host}`;
-
-    const optionFeedsStore = new Map();
-
-    let niftyTick = null;
-    const nearestCardsPerSide = 6;
-
-    function connectAllFeeds() {
-      const ws = new WebSocket(`${wsHost}/all-feeds`);
-      const statusBadge = document.getElementById("status-all");
-
-      ws.onopen = () => {
-        statusBadge.className = "status-badge connected";
-        statusBadge.textContent = "/all-feeds: Live";
-      };
-
-      ws.onmessage = (event) => {
-        const tick = JSON.parse(event.data);
-
-        if (tick.type === "connected" || tick.type === "ping") {
-          return;
-        }
-
-        if (tick.type === "error") {
-          console.error("All feeds error:", tick);
-          return;
-        }
-
-        if (!tick.instrument_key) {
-          return;
-        }
-
-        if (isNiftyIndexTick(tick)) {
-          niftyTick = tick;
-          updateNiftyHeader(tick);
-          renderNearestOptionCards();
-          return;
-        }
-
-        if (isOptionTick(tick)) {
-          optionFeedsStore.set(tick.instrument_key, tick);
-          renderNearestOptionCards();
-        }
-      };
-
-      ws.onerror = (event) => {
-        console.error("All-feeds websocket error:", event);
-      };
-
-      ws.onclose = () => {
-        statusBadge.className = "status-badge disconnected";
-        statusBadge.textContent = "/all-feeds: Disconnected";
-        setTimeout(connectAllFeeds, 3000);
-      };
-    }
-
-    function isNiftyIndexTick(tick) {
-      const info = tick.info || {};
-      const key = String(tick.instrument_key || "");
-      const symbol = String(info.trading_symbol || info.underlying_symbol || "");
-
-      return (
-        String(info.instrument_type || "").toUpperCase() === "INDEX" ||
-        key.includes("NSE_INDEX|Nifty 50") ||
-        symbol.toUpperCase().includes("NIFTY 50")
-      );
-    }
-
-    function isOptionTick(tick) {
-      const instrumentType = String(tick.info?.instrument_type || "").toUpperCase();
-      return instrumentType === "CE" || instrumentType === "PE";
-    }
-
-    function formatNumber(value, decimals = 2) {
-      const numberValue = Number(value || 0);
-      return numberValue.toFixed(decimals);
-    }
-
-    function formatInteger(value) {
-      const numberValue = Number(value || 0);
-      return numberValue.toLocaleString();
-    }
-
-    function getChangeClass(value) {
-      return Number(value || 0) >= 0 ? "up" : "down";
-    }
-
-    function updateNiftyHeader(tick) {
-      const ltp = Number(tick.ltp || 0);
-      const change = Number(tick.change || 0);
-      const changePct = Number(tick.change_pct || 0);
-      const changeClass = getChangeClass(change);
-
-      const niftyLtp = document.getElementById("nifty-ltp");
-      niftyLtp.className = `nifty-ltp ${changeClass}`;
-      niftyLtp.textContent = `NIFTY 50 ₹${formatNumber(ltp)}`;
-
-      document.getElementById("nifty-change").innerHTML =
-        `Change: <span class="${changeClass}">${change >= 0 ? "+" : ""}${formatNumber(change)} (${formatNumber(changePct)}%)</span>`;
-
-      document.getElementById("nifty-ohlc").textContent =
-        `O: ${formatNumber(tick.open)} | H: ${formatNumber(tick.high)} | L: ${formatNumber(tick.low)}`;
-
-      document.getElementById("nifty-updated").textContent =
-        `Updated: ${new Date().toLocaleTimeString()}`;
-
-      document.getElementById("atm-reference").textContent =
-        `₹${formatNumber(ltp)}`;
-    }
-
-    function getNearestOptions(optionType) {
-      if (!niftyTick || !Number(niftyTick.ltp || 0)) {
-        return [];
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+        justify-content: flex-end;
       }
 
-      const niftyLtp = Number(niftyTick.ltp || 0);
+      .status-badge {
+        padding: 6px 12px;
+        border-radius: 20px;
+        font-size: 0.85rem;
+        font-weight: bold;
+        white-space: nowrap;
+      }
 
-      return Array.from(optionFeedsStore.values())
-        .filter((tick) => {
-          const info = tick.info || {};
-          return String(info.instrument_type || "").toUpperCase() === optionType;
-        })
-        .filter((tick) => tick.info?.strike_price !== null && tick.info?.strike_price !== undefined)
-        .sort((a, b) => {
-          const strikeA = Number(a.info?.strike_price || 0);
-          const strikeB = Number(b.info?.strike_price || 0);
+      .connected {
+        background: rgba(34, 197, 94, 0.2);
+        color: var(--green);
+        border: 1px solid var(--green);
+      }
 
-          const distanceA = Math.abs(strikeA - niftyLtp);
-          const distanceB = Math.abs(strikeB - niftyLtp);
+      .disconnected {
+        background: rgba(239, 68, 68, 0.2);
+        color: var(--red);
+        border: 1px solid var(--red);
+      }
 
-          if (distanceA !== distanceB) {
-            return distanceA - distanceB;
+      .refreshing {
+        background: rgba(245, 158, 11, 0.2);
+        color: var(--yellow);
+        border: 1px solid var(--yellow);
+      }
+
+      .refresh-success {
+        background: rgba(34, 197, 94, 0.2);
+        color: var(--green);
+        border: 1px solid var(--green);
+      }
+
+      .refresh-error {
+        background: rgba(239, 68, 68, 0.2);
+        color: var(--red);
+        border: 1px solid var(--red);
+      }
+
+      .refresh-button {
+        border: 1px solid var(--accent);
+        background: rgba(59, 130, 246, 0.18);
+        color: var(--text);
+        padding: 7px 12px;
+        border-radius: 8px;
+        cursor: pointer;
+        font-size: 0.85rem;
+        font-weight: 700;
+        transition:
+          background 0.2s ease,
+          opacity 0.2s ease;
+      }
+
+      .refresh-button:hover {
+        background: rgba(59, 130, 246, 0.35);
+      }
+
+      .refresh-button:disabled {
+        opacity: 0.55;
+        cursor: not-allowed;
+      }
+
+      .dashboard-button {
+        border: 1px solid var(--purple);
+        background: rgba(167, 139, 250, 0.18);
+        color: var(--text);
+        padding: 7px 12px;
+        border-radius: 8px;
+        cursor: pointer;
+        font-size: 0.85rem;
+        font-weight: 700;
+        transition:
+          background 0.2s ease,
+          opacity 0.2s ease;
+      }
+
+      .dashboard-button:hover {
+        background: rgba(167, 139, 250, 0.35);
+      }
+
+      .nifty-card {
+        background: var(--card-bg);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 12px 16px;
+        min-width: 280px;
+        max-width: 420px;
+      }
+
+      .nifty-title {
+        font-size: 0.85rem;
+        color: var(--text-muted);
+        margin-bottom: 4px;
+      }
+
+      .nifty-ltp {
+        font-size: 1.8rem;
+        font-weight: 800;
+        margin-bottom: 4px;
+      }
+
+      .nifty-meta {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        font-size: 0.82rem;
+        color: var(--text-muted);
+        flex-wrap: wrap;
+      }
+
+      .panel {
+        background: var(--card-bg);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 20px;
+        margin-bottom: 20px;
+      }
+
+      .refresh-panel {
+        display: none;
+      }
+
+      .refresh-panel.visible {
+        display: block;
+      }
+
+      .refresh-message {
+        font-size: 0.9rem;
+        color: var(--text-muted);
+        margin-top: 8px;
+        white-space: pre-wrap;
+      }
+
+      .options-layout {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 20px;
+      }
+
+      .option-section-title {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 12px;
+      }
+
+      .option-section-title small {
+        color: var(--text-muted);
+        font-size: 0.82rem;
+      }
+
+      .options-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+        gap: 15px;
+      }
+
+      .card {
+        background: #0f172a;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 15px;
+        position: relative;
+      }
+
+      .card.atm {
+        border-color: var(--accent);
+        box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.35);
+      }
+
+      .symbol {
+        font-weight: bold;
+        font-size: 1rem;
+      }
+
+      .strike-label {
+        font-size: 0.8rem;
+        color: var(--text-muted);
+        margin-top: 2px;
+      }
+
+      .ltp {
+        font-size: 1.4rem;
+        font-weight: bold;
+        margin: 8px 0;
+      }
+
+      .up {
+        color: var(--green);
+      }
+
+      .down {
+        color: var(--red);
+      }
+
+      .details-row {
+        display: flex;
+        justify-content: space-between;
+        font-size: 0.82rem;
+        color: var(--text-muted);
+        margin-top: 4px;
+        gap: 8px;
+      }
+
+      .greeks-box {
+        margin-top: 10px;
+        padding-top: 8px;
+        border-top: 1px dashed var(--border);
+        font-size: 0.8rem;
+      }
+
+      .empty-state {
+        color: var(--text-muted);
+        font-size: 0.9rem;
+        padding: 14px;
+        border: 1px dashed var(--border);
+        border-radius: 8px;
+        background: rgba(15, 23, 42, 0.5);
+      }
+
+      @media (max-width: 1000px) {
+        .options-layout {
+          grid-template-columns: 1fr;
+        }
+
+        header {
+          flex-direction: column;
+        }
+
+        .header-actions {
+          justify-content: flex-start;
+        }
+      }
+    </style>
+  </head>
+
+  <body>
+    <header>
+      <div class="header-left">
+        <h1>Option Feed Dashboard</h1>
+
+        <div class="nifty-card">
+          <div class="nifty-title">Main Index</div>
+          <div id="nifty-ltp" class="nifty-ltp">NIFTY 50 ₹ --.--</div>
+          <div class="nifty-meta">
+            <span id="nifty-change">Change: --</span>
+            <span id="nifty-ohlc">O: -- | H: -- | L: --</span>
+            <span id="nifty-updated">Updated: --</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="header-actions">
+        <button
+          id="isolated-dashboard-btn"
+          class="dashboard-button"
+          onclick="openIsolatedDashboard()"
+        >
+          Isolated EMA Dashboard
+        </button>
+
+        <button
+          id="manual-refresh-btn"
+          class="refresh-button"
+          onclick="triggerManualRefresh()"
+        >
+          Hard Refresh
+        </button>
+
+        <span id="refresh-status" class="status-badge disconnected">
+          Refresh: Idle
+        </span>
+
+        <span id="status-all" class="status-badge disconnected"
+          >/all-feeds: Off</span
+        >
+      </div>
+    </header>
+
+    <div id="refresh-panel" class="panel refresh-panel">
+      <h2>Manual Refresh Status</h2>
+      <div id="refresh-message" class="refresh-message">
+        No manual refresh triggered yet.
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="option-section-title">
+        <h2>Nearest CE / PE Options</h2>
+        <small>
+          Based on live NIFTY LTP:
+          <b id="atm-reference">--</b>
+        </small>
+      </div>
+
+      <div class="options-layout">
+        <div>
+          <div class="option-section-title">
+            <h3>Nearest CE Cards</h3>
+            <small id="ce-count">0 active</small>
+          </div>
+          <div id="ce-container" class="options-grid"></div>
+        </div>
+
+        <div>
+          <div class="option-section-title">
+            <h3>Nearest PE Cards</h3>
+            <small id="pe-count">0 active</small>
+          </div>
+          <div id="pe-container" class="options-grid"></div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const wsProtocol = window.location.protocol === "https:" ? "wss" : "ws";
+      const wsHost = `${wsProtocol}://${window.location.host}`;
+      const apiHost = `${window.location.protocol}//${window.location.host}`;
+
+      const optionFeedsStore = new Map();
+
+      let niftyTick = null;
+      const nearestCardsPerSide = 6;
+
+      function openIsolatedDashboard() {
+        window.location.href = `${apiHost}/isolated-dashboard`;
+      }
+
+      function connectAllFeeds() {
+        const ws = new WebSocket(`${wsHost}/all-feeds`);
+        const statusBadge = document.getElementById("status-all");
+
+        ws.onopen = () => {
+          statusBadge.className = "status-badge connected";
+          statusBadge.textContent = "/all-feeds: Live";
+        };
+
+        ws.onmessage = (event) => {
+          const tick = JSON.parse(event.data);
+
+          if (tick.type === "connected" || tick.type === "ping") {
+            return;
           }
 
-          return strikeA - strikeB;
-        })
-        .slice(0, nearestCardsPerSide);
-    }
+          if (tick.type === "error") {
+            console.error("All feeds error:", tick);
+            return;
+          }
 
-    function renderNearestOptionCards() {
-      const ceContainer = document.getElementById("ce-container");
-      const peContainer = document.getElementById("pe-container");
+          if (!tick.instrument_key) {
+            return;
+          }
 
-      const nearestCE = getNearestOptions("CE");
-      const nearestPE = getNearestOptions("PE");
+          if (isNiftyIndexTick(tick)) {
+            niftyTick = tick;
+            updateNiftyHeader(tick);
+            renderNearestOptionCards();
+            return;
+          }
 
-      document.getElementById("ce-count").textContent = `${nearestCE.length} active`;
-      document.getElementById("pe-count").textContent = `${nearestPE.length} active`;
+          if (isOptionTick(tick)) {
+            optionFeedsStore.set(tick.instrument_key, tick);
+            renderNearestOptionCards();
+          }
+        };
 
-      renderOptionCards(ceContainer, nearestCE, "CE");
-      renderOptionCards(peContainer, nearestPE, "PE");
-    }
+        ws.onerror = (event) => {
+          console.error("All-feeds websocket error:", event);
+        };
 
-    function renderOptionCards(container, ticks, optionType) {
-      container.innerHTML = "";
+        ws.onclose = () => {
+          statusBadge.className = "status-badge disconnected";
+          statusBadge.textContent = "/all-feeds: Disconnected";
+          setTimeout(connectAllFeeds, 3000);
+        };
+      }
 
-      if (!niftyTick) {
-        container.innerHTML = `
+      function isNiftyIndexTick(tick) {
+        const info = tick.info || {};
+        const key = String(tick.instrument_key || "");
+        const symbol = String(
+          info.trading_symbol || info.underlying_symbol || "",
+        );
+
+        return (
+          String(info.instrument_type || "").toUpperCase() === "INDEX" ||
+          key.includes("NSE_INDEX|Nifty 50") ||
+          symbol.toUpperCase().includes("NIFTY 50")
+        );
+      }
+
+      function isOptionTick(tick) {
+        const instrumentType = String(
+          tick.info?.instrument_type || "",
+        ).toUpperCase();
+        return instrumentType === "CE" || instrumentType === "PE";
+      }
+
+      function formatNumber(value, decimals = 2) {
+        const numberValue = Number(value || 0);
+        return numberValue.toFixed(decimals);
+      }
+
+      function formatInteger(value) {
+        const numberValue = Number(value || 0);
+        return numberValue.toLocaleString();
+      }
+
+      function getChangeClass(value) {
+        return Number(value || 0) >= 0 ? "up" : "down";
+      }
+
+      function updateNiftyHeader(tick) {
+        const ltp = Number(tick.ltp || 0);
+        const change = Number(tick.change || 0);
+        const changePct = Number(tick.change_pct || 0);
+        const changeClass = getChangeClass(change);
+
+        const niftyLtp = document.getElementById("nifty-ltp");
+        niftyLtp.className = `nifty-ltp ${changeClass}`;
+        niftyLtp.textContent = `NIFTY 50 ₹${formatNumber(ltp)}`;
+
+        document.getElementById("nifty-change").innerHTML =
+          `Change: <span class="${changeClass}">${change >= 0 ? "+" : ""}${formatNumber(change)} (${formatNumber(changePct)}%)</span>`;
+
+        document.getElementById("nifty-ohlc").textContent =
+          `O: ${formatNumber(tick.open)} | H: ${formatNumber(tick.high)} | L: ${formatNumber(tick.low)}`;
+
+        document.getElementById("nifty-updated").textContent =
+          `Updated: ${new Date().toLocaleTimeString()}`;
+
+        document.getElementById("atm-reference").textContent =
+          `₹${formatNumber(ltp)}`;
+      }
+
+      function getNearestOptions(optionType) {
+        if (!niftyTick || !Number(niftyTick.ltp || 0)) {
+          return [];
+        }
+
+        const niftyLtp = Number(niftyTick.ltp || 0);
+
+        return Array.from(optionFeedsStore.values())
+          .filter((tick) => {
+            const info = tick.info || {};
+            return (
+              String(info.instrument_type || "").toUpperCase() === optionType
+            );
+          })
+          .filter(
+            (tick) =>
+              tick.info?.strike_price !== null &&
+              tick.info?.strike_price !== undefined,
+          )
+          .sort((a, b) => {
+            const strikeA = Number(a.info?.strike_price || 0);
+            const strikeB = Number(b.info?.strike_price || 0);
+
+            const distanceA = Math.abs(strikeA - niftyLtp);
+            const distanceB = Math.abs(strikeB - niftyLtp);
+
+            if (distanceA !== distanceB) {
+              return distanceA - distanceB;
+            }
+
+            return strikeA - strikeB;
+          })
+          .slice(0, nearestCardsPerSide);
+      }
+
+      function renderNearestOptionCards() {
+        const ceContainer = document.getElementById("ce-container");
+        const peContainer = document.getElementById("pe-container");
+
+        const nearestCE = getNearestOptions("CE");
+        const nearestPE = getNearestOptions("PE");
+
+        document.getElementById("ce-count").textContent =
+          `${nearestCE.length} active`;
+        document.getElementById("pe-count").textContent =
+          `${nearestPE.length} active`;
+
+        renderOptionCards(ceContainer, nearestCE, "CE");
+        renderOptionCards(peContainer, nearestPE, "PE");
+      }
+
+      function renderOptionCards(container, ticks, optionType) {
+        container.innerHTML = "";
+
+        if (!niftyTick) {
+          container.innerHTML = `
           <div class="empty-state">
             Waiting for live NIFTY 50 tick to calculate nearest ${optionType} strikes.
           </div>
         `;
-        return;
-      }
+          return;
+        }
 
-      if (!ticks.length) {
-        container.innerHTML = `
+        if (!ticks.length) {
+          container.innerHTML = `
           <div class="empty-state">
             Waiting for ${optionType} option ticks from /all-feeds.
           </div>
         `;
-        return;
-      }
+          return;
+        }
 
-      const niftyLtp = Number(niftyTick.ltp || 0);
+        const niftyLtp = Number(niftyTick.ltp || 0);
 
-      ticks.forEach((tick, index) => {
-        const info = tick.info || {};
-        const strike = Number(info.strike_price || 0);
-        const symbol = info.trading_symbol || tick.instrument_key;
-        const distance = Math.abs(strike - niftyLtp);
+        ticks.forEach((tick, index) => {
+          const info = tick.info || {};
+          const strike = Number(info.strike_price || 0);
+          const symbol = info.trading_symbol || tick.instrument_key;
+          const distance = Math.abs(strike - niftyLtp);
 
-        const change = Number(tick.change || 0);
-        const changePct = Number(tick.change_pct || 0);
-        const ltp = Number(tick.ltp || 0);
-        const changeClass = getChangeClass(change);
+          const change = Number(tick.change || 0);
+          const changePct = Number(tick.change_pct || 0);
+          const ltp = Number(tick.ltp || 0);
+          const changeClass = getChangeClass(change);
 
-        const card = document.createElement("div");
-        card.className = index === 0 ? "card atm" : "card";
+          const card = document.createElement("div");
+          card.className = index === 0 ? "card atm" : "card";
 
-        const greeks = tick.greeks || {};
-        const rawIv = Number(greeks.iv || 0);
-        const ivPct = rawIv <= 1.0 ? rawIv * 100 : rawIv;
+          const greeks = tick.greeks || {};
+          const rawIv = Number(greeks.iv || 0);
+          const ivPct = rawIv <= 1.0 ? rawIv * 100 : rawIv;
 
-        card.innerHTML = `
+          card.innerHTML = `
           <div class="symbol">${symbol}</div>
           <div class="strike-label">
             Strike: ${formatNumber(strike, 0)}
@@ -574,150 +628,150 @@
           </div>
         `;
 
-        container.appendChild(card);
-      });
-    }
-
-    function setRefreshUi(state, message) {
-      const statusBadge = document.getElementById("refresh-status");
-      const refreshPanel = document.getElementById("refresh-panel");
-      const refreshMessage = document.getElementById("refresh-message");
-      const refreshButton = document.getElementById("manual-refresh-btn");
-
-      refreshPanel.classList.add("visible");
-      refreshMessage.textContent = message || "";
-
-      if (state === "running") {
-        statusBadge.className = "status-badge refreshing";
-        statusBadge.textContent = "Refresh: Running";
-        refreshButton.disabled = true;
-        refreshButton.textContent = "Refreshing...";
-      } else if (state === "success") {
-        statusBadge.className = "status-badge refresh-success";
-        statusBadge.textContent = "Refresh: Success";
-        refreshButton.disabled = false;
-        refreshButton.textContent = "Hard Refresh";
-      } else if (state === "failed") {
-        statusBadge.className = "status-badge refresh-error";
-        statusBadge.textContent = "Refresh: Failed";
-        refreshButton.disabled = false;
-        refreshButton.textContent = "Hard Refresh";
-      } else {
-        statusBadge.className = "status-badge disconnected";
-        statusBadge.textContent = "Refresh: Idle";
-        refreshButton.disabled = false;
-        refreshButton.textContent = "Hard Refresh";
-      }
-    }
-
-    async function loadRefreshStatus() {
-      try {
-        const response = await fetch(`${apiHost}/refresh/status`, {
-          method: "GET",
-          headers: {
-            "Accept": "application/json"
-          }
+          container.appendChild(card);
         });
+      }
 
-        if (!response.ok) {
+      function setRefreshUi(state, message) {
+        const statusBadge = document.getElementById("refresh-status");
+        const refreshPanel = document.getElementById("refresh-panel");
+        const refreshMessage = document.getElementById("refresh-message");
+        const refreshButton = document.getElementById("manual-refresh-btn");
+
+        refreshPanel.classList.add("visible");
+        refreshMessage.textContent = message || "";
+
+        if (state === "running") {
+          statusBadge.className = "status-badge refreshing";
+          statusBadge.textContent = "Refresh: Running";
+          refreshButton.disabled = true;
+          refreshButton.textContent = "Refreshing...";
+        } else if (state === "success") {
+          statusBadge.className = "status-badge refresh-success";
+          statusBadge.textContent = "Refresh: Success";
+          refreshButton.disabled = false;
+          refreshButton.textContent = "Hard Refresh";
+        } else if (state === "failed") {
+          statusBadge.className = "status-badge refresh-error";
+          statusBadge.textContent = "Refresh: Failed";
+          refreshButton.disabled = false;
+          refreshButton.textContent = "Hard Refresh";
+        } else {
+          statusBadge.className = "status-badge disconnected";
+          statusBadge.textContent = "Refresh: Idle";
+          refreshButton.disabled = false;
+          refreshButton.textContent = "Hard Refresh";
+        }
+      }
+
+      async function loadRefreshStatus() {
+        try {
+          const response = await fetch(`${apiHost}/refresh/status`, {
+            method: "GET",
+            headers: {
+              Accept: "application/json",
+            },
+          });
+
+          if (!response.ok) {
+            return;
+          }
+
+          const data = await response.json();
+
+          if (data.manual_refresh_running) {
+            setRefreshUi(
+              "running",
+              "Manual refresh is currently running.\nPlease wait until it completes.",
+            );
+            return;
+          }
+
+          const last = data.last_manual_refresh || {};
+
+          if (last.status === "success") {
+            setRefreshUi(
+              "success",
+              `Last manual refresh completed successfully.\n\n` +
+                `Time: ${last.timestamp || "N/A"}\n` +
+                `Nearest Expiry: ${last.nearest_expiry || "N/A"}\n` +
+                `Subscribed Instruments: ${last.subscribed_instruments || 0}\n` +
+                `Message: ${last.message || "N/A"}`,
+            );
+          } else if (last.status === "failed") {
+            setRefreshUi(
+              "failed",
+              `Last manual refresh failed.\n\n` +
+                `Time: ${last.timestamp || "N/A"}\n` +
+                `Nearest Expiry: ${last.nearest_expiry || "N/A"}\n` +
+                `Subscribed Instruments: ${last.subscribed_instruments || 0}\n` +
+                `Message: ${last.message || "N/A"}`,
+            );
+          }
+        } catch (error) {
+          console.error("Failed to load refresh status:", error);
+        }
+      }
+
+      async function triggerManualRefresh() {
+        const confirmed = window.confirm(
+          "This will refresh token, fetch fresh instruments, update subscription keys, and restart the Upstox streamer. Continue?",
+        );
+
+        if (!confirmed) {
           return;
         }
 
-        const data = await response.json();
+        setRefreshUi(
+          "running",
+          "Manual hard refresh started.\nRefreshing token, fetching instruments, and restarting streamer...",
+        );
 
-        if (data.manual_refresh_running) {
-          setRefreshUi(
-            "running",
-            "Manual refresh is currently running.\nPlease wait until it completes."
-          );
-          return;
-        }
+        try {
+          const response = await fetch(`${apiHost}/refresh/manual`, {
+            method: "POST",
+            headers: {
+              Accept: "application/json",
+            },
+          });
 
-        const last = data.last_manual_refresh || {};
+          const data = await response.json();
 
-        if (last.status === "success") {
+          if (!response.ok) {
+            const errorMessage =
+              data.detail || data.message || "Manual refresh failed.";
+
+            setRefreshUi(
+              "failed",
+              `Manual hard refresh failed.\n\n${errorMessage}`,
+            );
+
+            return;
+          }
+
           setRefreshUi(
             "success",
-            `Last manual refresh completed successfully.\n\n` +
-            `Time: ${last.timestamp || "N/A"}\n` +
-            `Nearest Expiry: ${last.nearest_expiry || "N/A"}\n` +
-            `Subscribed Instruments: ${last.subscribed_instruments || 0}\n` +
-            `Message: ${last.message || "N/A"}`
+            `Manual hard refresh completed successfully.\n\n` +
+              `Started At: ${data.started_at || "N/A"}\n` +
+              `Completed At: ${data.completed_at || "N/A"}\n` +
+              `Nearest Expiry: ${data.nearest_expiry || "N/A"}\n` +
+              `Total Contracts: ${data.total_contracts || 0}\n` +
+              `Subscribed Instruments: ${data.subscribed_instruments || 0}\n` +
+              `Feed Mode: ${data.feed_mode || "N/A"}`,
           );
-        } else if (last.status === "failed") {
-          setRefreshUi(
-            "failed",
-            `Last manual refresh failed.\n\n` +
-            `Time: ${last.timestamp || "N/A"}\n` +
-            `Nearest Expiry: ${last.nearest_expiry || "N/A"}\n` +
-            `Subscribed Instruments: ${last.subscribed_instruments || 0}\n` +
-            `Message: ${last.message || "N/A"}`
-          );
-        }
-      } catch (error) {
-        console.error("Failed to load refresh status:", error);
-      }
-    }
-
-    async function triggerManualRefresh() {
-      const confirmed = window.confirm(
-        "This will refresh token, fetch fresh instruments, update subscription keys, and restart the Upstox streamer. Continue?"
-      );
-
-      if (!confirmed) {
-        return;
-      }
-
-      setRefreshUi(
-        "running",
-        "Manual hard refresh started.\nRefreshing token, fetching instruments, and restarting streamer..."
-      );
-
-      try {
-        const response = await fetch(`${apiHost}/refresh/manual`, {
-          method: "POST",
-          headers: {
-            "Accept": "application/json"
-          }
-        });
-
-        const data = await response.json();
-
-        if (!response.ok) {
-          const errorMessage = data.detail || data.message || "Manual refresh failed.";
+        } catch (error) {
+          console.error("Manual hard refresh request failed:", error);
 
           setRefreshUi(
             "failed",
-            `Manual hard refresh failed.\n\n${errorMessage}`
+            `Manual hard refresh request failed.\n\n${error}`,
           );
-
-          return;
         }
-
-        setRefreshUi(
-          "success",
-          `Manual hard refresh completed successfully.\n\n` +
-          `Started At: ${data.started_at || "N/A"}\n` +
-          `Completed At: ${data.completed_at || "N/A"}\n` +
-          `Nearest Expiry: ${data.nearest_expiry || "N/A"}\n` +
-          `Total Contracts: ${data.total_contracts || 0}\n` +
-          `Subscribed Instruments: ${data.subscribed_instruments || 0}\n` +
-          `Feed Mode: ${data.feed_mode || "N/A"}`
-        );
-
-      } catch (error) {
-        console.error("Manual hard refresh request failed:", error);
-
-        setRefreshUi(
-          "failed",
-          `Manual hard refresh request failed.\n\n${error}`
-        );
       }
-    }
 
-    connectAllFeeds();
-    loadRefreshStatus();
-    renderNearestOptionCards();
-  </script>
-</body>
+      connectAllFeeds();
+      loadRefreshStatus();
+      renderNearestOptionCards();
+    </script>
+  </body>
 </html>

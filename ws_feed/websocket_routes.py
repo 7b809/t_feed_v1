@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
 
+from core import config
 from core.logger import get_logger
 from services.option_service import options_cache
 from ws_feed.broadcaster import broadcaster
@@ -10,6 +11,46 @@ from ws_feed.broadcaster import broadcaster
 logger = get_logger(__file__)
 
 router = APIRouter()
+
+
+# ============================================================
+# Helper: Live EMA Calculation Mode
+# ============================================================
+
+
+def get_live_ema_calculation_mode_text() -> str:
+    """
+    Returns configured live EMA calculation mode.
+
+    LIVE_EMA_CALCULATION_MODE = False
+        completed candle close based EMA calculation.
+
+    LIVE_EMA_CALCULATION_MODE = True
+        live tick/LTP based EMA calculation.
+    """
+
+    return (
+        "tick_ltp"
+        if bool(getattr(config, "LIVE_EMA_CALCULATION_MODE", False))
+        else "candle_close"
+    )
+
+
+def get_live_ema_calculation_mode_payload() -> dict:
+    """Returns live EMA calculation mode payload for websocket connection messages."""
+
+    flag = bool(getattr(config, "LIVE_EMA_CALCULATION_MODE", False))
+    mode = get_live_ema_calculation_mode_text()
+
+    return {
+        "flag": flag,
+        "mode": mode,
+        "description": (
+            "live tick/LTP based EMA calculation"
+            if flag
+            else "completed candle close based EMA calculation"
+        ),
+    }
 
 
 # ============================================================
@@ -91,20 +132,6 @@ def resolve_opening_range_instrument_key(
     )
 
 
-def resolve_or_ema_strategy_instrument_key(
-    instrument_key: str | None = None,
-    strike: float | None = None,
-    striketype: str | None = None,
-) -> str | None:
-    """Resolves OR + EMA strategy instrument key."""
-
-    return resolve_instrument_key(
-        instrument_key=instrument_key,
-        strike=strike,
-        striketype=striketype,
-    )
-
-
 # ============================================================
 # All Feeds WebSocket
 # ============================================================
@@ -116,13 +143,17 @@ async def websocket_all_feeds(websocket: WebSocket):
     """
     WebSocket endpoint returning live market feeds for all loaded contracts.
 
-    This can also receive:
-    - live ticks
+    This can receive:
+    - live tick events
     - live EMA crossover events
     - Opening Range touch events
-    - optional OR + EMA strategy events
 
-    EMA crossover events may include opening_range context.
+    Current flow:
+    - EMA calculation runs for all initialized instruments.
+    - EMA calculation mode is controlled by LIVE_EMA_CALCULATION_MODE.
+    - EMA WebSocket events are broadcast for all instruments.
+    - Telegram EMA alerts are restricted to the isolated Opening Range instrument.
+    - EMA crossover events may include Opening Range context and isolated instrument state.
     """
 
     logger.info(f"Incoming websocket request for /all-feeds from {websocket.client}")
@@ -142,14 +173,23 @@ async def websocket_all_feeds(websocket: WebSocket):
                 "endpoint": "/all-feeds",
                 "message": (
                     "Connected to all feeds websocket. Waiting for live ticks, "
-                    "EMA crossover events, Opening Range events, and optional "
-                    "OR + EMA strategy events."
+                    "EMA crossover events, and Opening Range events."
                 ),
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "subscribed_instruments": len(options_cache.get("subscribed_keys", [])),
-                "ema_opening_range_enrichment": True,
-                "or_ema_strategy_events": "optional",
-                "or_ema_strategy_selection": "first_touch_same_time_nearest_to_nifty",
+                "live_ema_calculation": get_live_ema_calculation_mode_payload(),
+                "ema_opening_range_enrichment": getattr(
+                    config,
+                    "EMA_CROSS_INCLUDE_OPENING_RANGE_LEVELS",
+                    True,
+                ),
+                "ema_broadcast_scope": "all_instruments",
+                "opening_range_isolated_instrument_flow": getattr(
+                    config,
+                    "OPENING_RANGE_ISOLATED_INSTRUMENT_ENABLED",
+                    True,
+                ),
+                "telegram_ema_alerts": "isolated_instrument_only",
             }
         )
 
@@ -167,6 +207,7 @@ async def websocket_all_feeds(websocket: WebSocket):
                             "endpoint": "/all-feeds",
                             "message": client_message,
                             "timestamp": datetime.now(timezone.utc).isoformat(),
+                            "live_ema_calculation": get_live_ema_calculation_mode_payload(),
                         }
                     )
 
@@ -177,9 +218,10 @@ async def websocket_all_feeds(websocket: WebSocket):
                         "endpoint": "/all-feeds",
                         "message": (
                             "WebSocket alive. Waiting for live ticks, EMA crossover "
-                            "events, Opening Range events, and optional strategy events."
+                            "events, and Opening Range events."
                         ),
                         "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "live_ema_calculation": get_live_ema_calculation_mode_payload(),
                     }
                 )
 
@@ -214,7 +256,12 @@ async def websocket_option(
     - matching live option ticks
     - matching EMA crossover events
     - matching Opening Range events
-    - optional matching OR + EMA strategy events
+
+    Current flow:
+    - EMA event broadcast routing still works for matching option clients.
+    - EMA calculation mode is controlled by LIVE_EMA_CALCULATION_MODE.
+    - Telegram EMA alerts are not sent from this WebSocket route.
+    - Telegram EMA alerts are sent only for the isolated Opening Range instrument.
     """
 
     itype = str(striketype).upper()
@@ -237,13 +284,11 @@ async def websocket_option(
                 }
             )
             await websocket.close(code=1008, reason="striketype must be 'ce' or 'pe'")
-
         except Exception as ex:
             logger.error(
                 f"Error while closing invalid /option websocket: "
                 f"{type(ex).__name__}: {ex}"
             )
-
         return
 
     try:
@@ -269,12 +314,17 @@ async def websocket_option(
                 "striketype": itype,
                 "message": (
                     "Connected to option websocket. Waiting for matching option ticks, "
-                    "EMA crossover events, Opening Range events, and optional "
-                    "OR + EMA strategy events."
+                    "EMA crossover events, and Opening Range events."
                 ),
                 "timestamp": datetime.now(timezone.utc).isoformat(),
-                "ema_opening_range_enrichment": True,
-                "or_ema_strategy_events": "optional",
+                "live_ema_calculation": get_live_ema_calculation_mode_payload(),
+                "ema_opening_range_enrichment": getattr(
+                    config,
+                    "EMA_CROSS_INCLUDE_OPENING_RANGE_LEVELS",
+                    True,
+                ),
+                "ema_broadcast_scope": "matching_option_and_all_feeds",
+                "telegram_ema_alerts": "isolated_instrument_only",
             }
         )
 
@@ -294,6 +344,7 @@ async def websocket_option(
                             "striketype": itype,
                             "message": client_message,
                             "timestamp": datetime.now(timezone.utc).isoformat(),
+                            "live_ema_calculation": get_live_ema_calculation_mode_payload(),
                         }
                     )
 
@@ -306,10 +357,10 @@ async def websocket_option(
                         "striketype": itype,
                         "message": (
                             "WebSocket alive. Waiting for matching option ticks, "
-                            "EMA crossover events, Opening Range events, and optional "
-                            "strategy events."
+                            "EMA crossover events, and Opening Range events."
                         ),
                         "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "live_ema_calculation": get_live_ema_calculation_mode_payload(),
                     }
                 )
 
@@ -339,12 +390,13 @@ async def websocket_ema_crossover(websocket: WebSocket):
     """
     Dedicated WebSocket endpoint streaming real-time EMA crossover events.
 
-    New flow:
+    Current flow:
     - Receives EMA crossover events for all initialized instruments.
-    - Events are not filtered by legacy selected Opening Range instrument.
-    - Each event may include opening_range levels when available.
-    - Telegram EMA alerts are disabled.
-    - OR + EMA strategy alerting is handled separately.
+    - Events are not filtered by isolated instrument.
+    - EMA calculation mode is controlled by LIVE_EMA_CALCULATION_MODE.
+    - Each event may include Opening Range levels for the same instrument.
+    - Each event may also include isolated instrument state.
+    - Telegram EMA alerts are restricted to the isolated Opening Range instrument.
     """
 
     logger.info(
@@ -370,10 +422,19 @@ async def websocket_ema_crossover(websocket: WebSocket):
                 ),
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "scope": "all_instruments",
-                "ema_opening_range_enrichment": True,
-                "selected_or_filtering": "disabled",
-                "telegram_ema_alerts": "disabled",
-                "or_ema_strategy_alerts": "handled_separately",
+                "live_ema_calculation": get_live_ema_calculation_mode_payload(),
+                "ema_opening_range_enrichment": getattr(
+                    config,
+                    "EMA_CROSS_INCLUDE_OPENING_RANGE_LEVELS",
+                    True,
+                ),
+                "isolated_instrument_filtering": "not_applied_to_websocket",
+                "telegram_ema_alerts": "isolated_instrument_only",
+                "opening_range_isolated_instrument_flow": getattr(
+                    config,
+                    "OPENING_RANGE_ISOLATED_INSTRUMENT_ENABLED",
+                    True,
+                ),
             }
         )
 
@@ -391,6 +452,7 @@ async def websocket_ema_crossover(websocket: WebSocket):
                             "endpoint": "/ws/ema-crossover",
                             "message": client_message,
                             "timestamp": datetime.now(timezone.utc).isoformat(),
+                            "live_ema_calculation": get_live_ema_calculation_mode_payload(),
                         }
                     )
 
@@ -404,6 +466,7 @@ async def websocket_ema_crossover(websocket: WebSocket):
                             "with Opening Range context."
                         ),
                         "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "live_ema_calculation": get_live_ema_calculation_mode_payload(),
                     }
                 )
 
@@ -443,6 +506,19 @@ async def websocket_ema_crossover_instrument(
 ):
     """
     Dedicated WebSocket endpoint for one instrument's live EMA crossover events.
+
+    Supports:
+        /ws/ema-crossover/instrument?instrument_key=NSE_INDEX%7CNifty%2050
+        /ws/ema-crossover/instrument?instrument_key=NSE_FO%7C41012
+        /ws/ema-crossover/instrument?strike=24500&striketype=ce
+        /ws/ema-crossover/instrument?strike=24500&striketype=pe
+
+    Current flow:
+    - Streams EMA crossover events only for the resolved instrument.
+    - EMA calculation mode is controlled by LIVE_EMA_CALCULATION_MODE.
+    - Event payload may include Opening Range levels for the same instrument.
+    - Telegram EMA alerts are sent only if this resolved instrument is also
+      the isolated instrument of the day.
     """
 
     resolved_instrument_key = resolve_ema_instrument_key(
@@ -527,9 +603,14 @@ async def websocket_ema_crossover_instrument(
                 },
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "scope": "single_instrument",
-                "ema_opening_range_enrichment": True,
-                "selected_or_filtering": "disabled",
-                "telegram_ema_alerts": "disabled",
+                "live_ema_calculation": get_live_ema_calculation_mode_payload(),
+                "ema_opening_range_enrichment": getattr(
+                    config,
+                    "EMA_CROSS_INCLUDE_OPENING_RANGE_LEVELS",
+                    True,
+                ),
+                "isolated_instrument_filtering": "not_applied_to_websocket",
+                "telegram_ema_alerts": "only_if_this_instrument_is_isolated",
             }
         )
 
@@ -548,6 +629,7 @@ async def websocket_ema_crossover_instrument(
                             "instrument_key": resolved_instrument_key,
                             "message": client_message,
                             "timestamp": datetime.now(timezone.utc).isoformat(),
+                            "live_ema_calculation": get_live_ema_calculation_mode_payload(),
                         }
                     )
 
@@ -562,6 +644,7 @@ async def websocket_ema_crossover_instrument(
                             "EMA crossover signals with Opening Range context."
                         ),
                         "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "live_ema_calculation": get_live_ema_calculation_mode_payload(),
                     }
                 )
 
@@ -597,10 +680,12 @@ async def websocket_opening_range(websocket: WebSocket):
     """
     Dedicated WebSocket endpoint streaming Opening Range events.
 
-    New flow:
+    Current flow:
     - Receives Opening Range events for all instruments.
-    - Touch events do not use legacy selected OR lock.
-    - OR + EMA strategy selected touch is handled separately.
+    - Touch events can be used for isolated instrument selection.
+    - R3/S3 has priority before R2/S2 for isolation.
+    - If multiple qualify, nearest strike to Opening Range average wins.
+    - EMA events are handled separately through /ws/ema-crossover.
     """
 
     logger.info(
@@ -626,8 +711,23 @@ async def websocket_opening_range(websocket: WebSocket):
                 ),
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "scope": "all_instruments",
-                "selected_or_filtering": "disabled",
-                "or_ema_strategy_selection": "handled_separately",
+                "live_ema_calculation": get_live_ema_calculation_mode_payload(),
+                "isolated_instrument_flow": getattr(
+                    config,
+                    "OPENING_RANGE_ISOLATED_INSTRUMENT_ENABLED",
+                    True,
+                ),
+                "touch_levels_for_isolation": getattr(
+                    config,
+                    "OPENING_RANGE_ISOLATION_TOUCH_LEVELS",
+                    ["R2", "R3", "S2", "S3"],
+                ),
+                "priority_levels": getattr(
+                    config,
+                    "OPENING_RANGE_ISOLATION_PRIORITY_LEVELS",
+                    ["R3", "S3", "R2", "S2"],
+                ),
+                "telegram_ema_alerts": "isolated_instrument_only",
             }
         )
 
@@ -645,6 +745,7 @@ async def websocket_opening_range(websocket: WebSocket):
                             "endpoint": "/ws/opening-range",
                             "message": client_message,
                             "timestamp": datetime.now(timezone.utc).isoformat(),
+                            "live_ema_calculation": get_live_ema_calculation_mode_payload(),
                         }
                     )
 
@@ -655,6 +756,7 @@ async def websocket_opening_range(websocket: WebSocket):
                         "endpoint": "/ws/opening-range",
                         "message": "WebSocket alive. Waiting for Opening Range events.",
                         "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "live_ema_calculation": get_live_ema_calculation_mode_payload(),
                     }
                 )
 
@@ -694,6 +796,18 @@ async def websocket_opening_range_instrument(
 ):
     """
     Dedicated WebSocket endpoint for one instrument's Opening Range events.
+
+    Supports:
+        /ws/opening-range/instrument?instrument_key=NSE_INDEX%7CNifty%2050
+        /ws/opening-range/instrument?instrument_key=NSE_FO%7C41012
+        /ws/opening-range/instrument?strike=24500&striketype=ce
+        /ws/opening-range/instrument?strike=24500&striketype=pe
+
+    Current flow:
+    - Streams Opening Range events only for the resolved instrument.
+    - This does not automatically mean the instrument is isolated.
+    - Isolation is decided by Opening Range service based on level priority,
+      average window, and nearest strike rule.
     """
 
     resolved_instrument_key = resolve_opening_range_instrument_key(
@@ -777,7 +891,13 @@ async def websocket_opening_range_instrument(
                 },
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "scope": "single_instrument",
-                "selected_or_filtering": "disabled",
+                "live_ema_calculation": get_live_ema_calculation_mode_payload(),
+                "isolated_instrument_flow": getattr(
+                    config,
+                    "OPENING_RANGE_ISOLATED_INSTRUMENT_ENABLED",
+                    True,
+                ),
+                "telegram_ema_alerts": "only_if_this_instrument_is_isolated",
             }
         )
 
@@ -796,6 +916,7 @@ async def websocket_opening_range_instrument(
                             "instrument_key": resolved_instrument_key,
                             "message": client_message,
                             "timestamp": datetime.now(timezone.utc).isoformat(),
+                            "live_ema_calculation": get_live_ema_calculation_mode_payload(),
                         }
                     )
 
@@ -810,6 +931,7 @@ async def websocket_opening_range_instrument(
                             "Opening Range events."
                         ),
                         "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "live_ema_calculation": get_live_ema_calculation_mode_payload(),
                     }
                 )
 
@@ -828,263 +950,6 @@ async def websocket_opening_range_instrument(
     finally:
         if hasattr(broadcaster, "disconnect_opening_range_instrument"):
             broadcaster.disconnect_opening_range_instrument(
-                websocket=websocket,
-                instrument_key=resolved_instrument_key,
-            )
-        else:
-            broadcaster.disconnect(websocket)
-
-
-# ============================================================
-# Global OR + EMA Strategy WebSocket
-# ============================================================
-
-
-@router.websocket("/ws/or-ema-strategy")
-async def websocket_or_ema_strategy(websocket: WebSocket):
-    """
-    Dedicated WebSocket endpoint streaming OR + EMA strategy events.
-
-    Strategy selection rule:
-    - First eligible touch wins.
-    - If multiple eligible instruments touch at the same timestamp/candle,
-      nearest strike to current NIFTY spot wins.
-    - Only selected touched instrument can trigger strategy confirmation.
-    - Non-selected touches are retained for debug only.
-    """
-
-    logger.info(
-        f"Incoming websocket request for /ws/or-ema-strategy from {websocket.client}"
-    )
-
-    try:
-        await websocket.accept()
-        logger.info("WebSocket accepted for /ws/or-ema-strategy")
-
-        if hasattr(broadcaster, "connect_or_ema_strategy"):
-            await broadcaster.connect_or_ema_strategy(websocket)
-        else:
-            await broadcaster.connect(websocket)
-
-        await websocket.send_json(
-            {
-                "type": "connected",
-                "endpoint": "/ws/or-ema-strategy",
-                "message": (
-                    "Connected to OR + EMA Strategy feed. Waiting for strategy "
-                    "selection and alert events."
-                ),
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "scope": "all_instruments",
-                "selection_mode": "first_touch_same_time_nearest_to_nifty",
-                "telegram_alerts": "enabled_when_configured",
-            }
-        )
-
-        while True:
-            try:
-                client_message = await asyncio.wait_for(
-                    websocket.receive_text(),
-                    timeout=30,
-                )
-
-                if client_message:
-                    await websocket.send_json(
-                        {
-                            "type": "client_message_received",
-                            "endpoint": "/ws/or-ema-strategy",
-                            "message": client_message,
-                            "timestamp": datetime.now(timezone.utc).isoformat(),
-                        }
-                    )
-
-            except asyncio.TimeoutError:
-                await websocket.send_json(
-                    {
-                        "type": "ping",
-                        "endpoint": "/ws/or-ema-strategy",
-                        "message": (
-                            "WebSocket alive. Waiting for OR + EMA strategy events."
-                        ),
-                        "timestamp": datetime.now(timezone.utc).isoformat(),
-                    }
-                )
-
-    except WebSocketDisconnect:
-        logger.info("Client disconnected from /ws/or-ema-strategy websocket")
-
-    except Exception as ex:
-        logger.error(f"/ws/or-ema-strategy websocket error: {type(ex).__name__}: {ex}")
-
-    finally:
-        if hasattr(broadcaster, "disconnect_or_ema_strategy"):
-            broadcaster.disconnect_or_ema_strategy(websocket)
-        else:
-            broadcaster.disconnect(websocket)
-
-
-# ============================================================
-# Instrument-Specific OR + EMA Strategy WebSocket
-# ============================================================
-
-
-@router.websocket("/ws/or-ema-strategy/instrument")
-async def websocket_or_ema_strategy_instrument(
-    websocket: WebSocket,
-    instrument_key: str = Query(
-        default=None,
-        description="Instrument key, e.g. NSE_FO|41012 or NSE_INDEX|Nifty 50",
-    ),
-    strike: float = Query(
-        default=None,
-        description="Option strike price, e.g. 24500. Optional if instrument_key is provided.",
-    ),
-    striketype: str = Query(
-        default=None,
-        description="Option type: ce or pe. Optional if instrument_key is provided.",
-    ),
-):
-    """
-    Dedicated WebSocket endpoint for one instrument's OR + EMA strategy events.
-
-    Supports:
-        /ws/or-ema-strategy/instrument?instrument_key=NSE_FO%7C41012
-        /ws/or-ema-strategy/instrument?strike=24500&striketype=ce
-        /ws/or-ema-strategy/instrument?strike=24500&striketype=pe
-    """
-
-    resolved_instrument_key = resolve_or_ema_strategy_instrument_key(
-        instrument_key=instrument_key,
-        strike=strike,
-        striketype=striketype,
-    )
-
-    logger.info(
-        f"Incoming websocket request for /ws/or-ema-strategy/instrument from "
-        f"{websocket.client}. "
-        f"instrument_key={instrument_key}, "
-        f"strike={strike}, "
-        f"striketype={striketype}, "
-        f"resolved_instrument_key={resolved_instrument_key}"
-    )
-
-    if not resolved_instrument_key:
-        try:
-            await websocket.accept()
-
-            await websocket.send_json(
-                {
-                    "type": "error",
-                    "endpoint": "/ws/or-ema-strategy/instrument",
-                    "message": (
-                        "Unable to resolve instrument. Provide either instrument_key "
-                        "or valid strike + striketype."
-                    ),
-                    "input": {
-                        "instrument_key": instrument_key,
-                        "strike": strike,
-                        "striketype": striketype,
-                    },
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                }
-            )
-
-            await websocket.close(
-                code=1008,
-                reason="Unable to resolve OR EMA strategy instrument",
-            )
-
-        except Exception as ex:
-            logger.error(
-                f"Error while closing unresolved OR EMA strategy instrument websocket: "
-                f"{type(ex).__name__}: {ex}"
-            )
-
-        return
-
-    try:
-        await websocket.accept()
-
-        logger.info(
-            f"WebSocket accepted for /ws/or-ema-strategy/instrument. "
-            f"resolved_instrument_key={resolved_instrument_key}"
-        )
-
-        if hasattr(broadcaster, "connect_or_ema_strategy_instrument"):
-            await broadcaster.connect_or_ema_strategy_instrument(
-                websocket=websocket,
-                instrument_key=resolved_instrument_key,
-            )
-        else:
-            await broadcaster.connect(websocket)
-
-        await websocket.send_json(
-            {
-                "type": "connected",
-                "endpoint": "/ws/or-ema-strategy/instrument",
-                "message": (
-                    "Connected to instrument-specific OR + EMA Strategy feed. "
-                    "Waiting for strategy events."
-                ),
-                "instrument_key": resolved_instrument_key,
-                "input": {
-                    "instrument_key": instrument_key,
-                    "strike": strike,
-                    "striketype": striketype,
-                },
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "scope": "single_instrument",
-                "selection_mode": "first_touch_same_time_nearest_to_nifty",
-            }
-        )
-
-        while True:
-            try:
-                client_message = await asyncio.wait_for(
-                    websocket.receive_text(),
-                    timeout=30,
-                )
-
-                if client_message:
-                    await websocket.send_json(
-                        {
-                            "type": "client_message_received",
-                            "endpoint": "/ws/or-ema-strategy/instrument",
-                            "instrument_key": resolved_instrument_key,
-                            "message": client_message,
-                            "timestamp": datetime.now(timezone.utc).isoformat(),
-                        }
-                    )
-
-            except asyncio.TimeoutError:
-                await websocket.send_json(
-                    {
-                        "type": "ping",
-                        "endpoint": "/ws/or-ema-strategy/instrument",
-                        "instrument_key": resolved_instrument_key,
-                        "message": (
-                            "WebSocket alive. Waiting for instrument-specific "
-                            "OR + EMA strategy events."
-                        ),
-                        "timestamp": datetime.now(timezone.utc).isoformat(),
-                    }
-                )
-
-    except WebSocketDisconnect:
-        logger.info(
-            f"Client disconnected from /ws/or-ema-strategy/instrument websocket. "
-            f"instrument_key={resolved_instrument_key}"
-        )
-
-    except Exception as ex:
-        logger.error(
-            f"/ws/or-ema-strategy/instrument websocket error for "
-            f"{resolved_instrument_key}: {type(ex).__name__}: {ex}"
-        )
-
-    finally:
-        if hasattr(broadcaster, "disconnect_or_ema_strategy_instrument"):
-            broadcaster.disconnect_or_ema_strategy_instrument(
                 websocket=websocket,
                 instrument_key=resolved_instrument_key,
             )

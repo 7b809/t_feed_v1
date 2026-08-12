@@ -87,7 +87,7 @@ def append_raw_feed_log(instrument_key: str, tick_raw: Dict[str, Any]):
 
     except Exception as e:
         logger.error(
-            f"Failed writing raw feed to {FEEDS_LOG_PATH}: {type(e).__name__}: {e}"
+            f"Failed writing raw feed to {FEEDS_LOG_PATH}: " f"{type(e).__name__}: {e}"
         )
 
 
@@ -152,14 +152,15 @@ def build_option_key(
 
 def resolve_contract_info_for_event(event: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Resolves contract info for compact EMA, Opening Range, and strategy events.
+    Resolves contract info for EMA and Opening Range events.
 
     Resolution order:
     1. event["info"]
     2. event["contract_info"]
-    3. event["touch_record"]["contract_info"]
-    4. event["alert"]["touch_record"]["contract_info"]
-    5. options_cache lookup by instrument_key using option_service helper
+    3. options_cache lookup by instrument_key using option_service helper
+
+    This is used only for WebSocket routing to matching /option clients.
+    It does not alter the event payload.
     """
 
     if not isinstance(event, dict):
@@ -167,31 +168,10 @@ def resolve_contract_info_for_event(event: Dict[str, Any]) -> Dict[str, Any]:
 
     info = event.get("info") or event.get("contract_info") or {}
 
-    if not info:
-        touch_record = event.get("touch_record") or {}
-
-        if isinstance(touch_record, dict):
-            info = touch_record.get("contract_info") or {}
-
-    if not info:
-        alert = event.get("alert") or {}
-
-        if isinstance(alert, dict):
-            touch_record = alert.get("touch_record") or {}
-
-            if isinstance(touch_record, dict):
-                info = touch_record.get("contract_info") or {}
-
     if isinstance(info, dict) and info.get("strike_price") is not None:
         return info
 
     instrument_key = event.get("instrument_key")
-
-    if not instrument_key:
-        alert = event.get("alert") or {}
-
-        if isinstance(alert, dict):
-            instrument_key = alert.get("instrument_key")
 
     if not instrument_key:
         return info if isinstance(info, dict) else {}
@@ -219,34 +199,38 @@ class Broadcaster:
     Manages FastAPI WebSocket client connections and broadcasts parsed market ticks.
 
     Current flow:
-    - Live ticks are broadcast to /all-feeds and matching /option clients.
+    - Live ticks are broadcast to generic, all-feeds, and matching option clients.
     - EMA crossover events are broadcast for all instruments.
-    - Opening Range events are broadcast for all instruments.
-    - OR + EMA strategy events can optionally be broadcast to strategy clients.
-    - No legacy selected OR instrument filtering is performed here.
+    - Opening Range touch events are broadcast for all instruments.
+    - No EMA event is filtered by isolated instrument here.
+    - Isolated instrument Telegram alert filtering is handled outside this broadcaster.
+    - EMA payload may include:
+        opening_range
+        touch_status
+        latest_intraday_close
+        latest_main_index_ltp
+        isolated_instrument
+        EMA details
+        contract_info
+    - Broadcaster preserves and forwards the EMA event as-is.
+    - Broadcaster internally resolves contract info only for routing to /option clients.
     """
 
     def __init__(self):
         # Generic live connection pool
         self.active_connections: Set[WebSocket] = set()
 
-        # Global EMA crossover event connections pool
+        # Global EMA crossover event connections pool.
         self.ema_crossover_connections: Set[WebSocket] = set()
 
-        # Instrument-specific EMA crossover connections
+        # Instrument-specific EMA crossover connections.
         self.ema_instrument_connections: Dict[str, Set[WebSocket]] = {}
 
-        # Global Opening Range event connections pool
+        # Global Opening Range event connections pool.
         self.opening_range_connections: Set[WebSocket] = set()
 
-        # Instrument-specific Opening Range event connections
+        # Instrument-specific Opening Range event connections.
         self.opening_range_instrument_connections: Dict[str, Set[WebSocket]] = {}
-
-        # Global OR + EMA strategy connections
-        self.or_ema_strategy_connections: Set[WebSocket] = set()
-
-        # Instrument-specific OR + EMA strategy connections
-        self.or_ema_strategy_instrument_connections: Dict[str, Set[WebSocket]] = {}
 
         # Interval-aware all-feeds connections
         self.all_feeds_connections: Dict[int, Set[WebSocket]] = {}
@@ -259,7 +243,6 @@ class Broadcaster:
         self.candle_broadcast_count = 0
         self.ema_cross_broadcast_count = 0
         self.opening_range_broadcast_count = 0
-        self.or_ema_strategy_broadcast_count = 0
         self.sent_count = 0
         self.failed_send_count = 0
 
@@ -274,8 +257,6 @@ class Broadcaster:
             + sum(len(s) for s in self.ema_instrument_connections.values())
             + len(self.opening_range_connections)
             + sum(len(s) for s in self.opening_range_instrument_connections.values())
-            + len(self.or_ema_strategy_connections)
-            + sum(len(s) for s in self.or_ema_strategy_instrument_connections.values())
             + sum(len(s) for s in self.all_feeds_connections.values())
             + sum(len(s) for s in self.option_connections.values())
         )
@@ -351,7 +332,8 @@ class Broadcaster:
         logger.info(
             f"Client connected to instrument-specific EMA crossover feed. "
             f"instrument_key={instrument_key}, "
-            f"clients_for_instrument={len(self.ema_instrument_connections[instrument_key])}, "
+            f"clients_for_instrument="
+            f"{len(self.ema_instrument_connections[instrument_key])}, "
             f"total_clients={self.get_active_connections_count()}"
         )
 
@@ -409,7 +391,7 @@ class Broadcaster:
         websocket: WebSocket,
         instrument_key: str,
     ):
-        """Tracks connection for one instrument's opening range events."""
+        """Tracks connection for one instrument's Opening Range events."""
 
         if not instrument_key:
             logger.warning(
@@ -435,7 +417,7 @@ class Broadcaster:
         websocket: WebSocket,
         instrument_key: str,
     ):
-        """Removes connection for one instrument's opening range events."""
+        """Removes connection for one instrument's Opening Range events."""
 
         if not instrument_key:
             return
@@ -453,88 +435,6 @@ class Broadcaster:
 
             if len(self.opening_range_instrument_connections[instrument_key]) == 0:
                 self.opening_range_instrument_connections.pop(instrument_key, None)
-
-    # ========================================================
-    # Global OR + EMA Strategy Connection Handlers
-    # ========================================================
-
-    async def connect_or_ema_strategy(self, websocket: WebSocket):
-        """Tracks connection for global OR + EMA strategy events."""
-
-        self.or_ema_strategy_connections.add(websocket)
-
-        logger.info(
-            f"Client connected to OR EMA strategy feed. "
-            f"strategy_clients={len(self.or_ema_strategy_connections)}, "
-            f"total_clients={self.get_active_connections_count()}"
-        )
-
-    def disconnect_or_ema_strategy(self, websocket: WebSocket):
-        """Removes connection for global OR + EMA strategy events."""
-
-        self.or_ema_strategy_connections.discard(websocket)
-
-        logger.info(
-            f"Client disconnected from OR EMA strategy feed. "
-            f"remaining_strategy_clients={len(self.or_ema_strategy_connections)}, "
-            f"total_clients={self.get_active_connections_count()}"
-        )
-
-    # ========================================================
-    # Instrument-Specific OR + EMA Strategy Connection Handlers
-    # ========================================================
-
-    async def connect_or_ema_strategy_instrument(
-        self,
-        websocket: WebSocket,
-        instrument_key: str,
-    ):
-        """Tracks connection for one instrument's OR + EMA strategy events."""
-
-        if not instrument_key:
-            logger.warning(
-                "connect_or_ema_strategy_instrument called without instrument_key."
-            )
-            return
-
-        if instrument_key not in self.or_ema_strategy_instrument_connections:
-            self.or_ema_strategy_instrument_connections[instrument_key] = set()
-
-        self.or_ema_strategy_instrument_connections[instrument_key].add(websocket)
-
-        logger.info(
-            f"Client connected to instrument-specific OR EMA strategy feed. "
-            f"instrument_key={instrument_key}, "
-            f"clients_for_instrument="
-            f"{len(self.or_ema_strategy_instrument_connections[instrument_key])}, "
-            f"total_clients={self.get_active_connections_count()}"
-        )
-
-    def disconnect_or_ema_strategy_instrument(
-        self,
-        websocket: WebSocket,
-        instrument_key: str,
-    ):
-        """Removes connection for one instrument's OR + EMA strategy events."""
-
-        if not instrument_key:
-            return
-
-        if instrument_key in self.or_ema_strategy_instrument_connections:
-            self.or_ema_strategy_instrument_connections[instrument_key].discard(
-                websocket
-            )
-
-            logger.info(
-                f"Client disconnected from instrument-specific OR EMA strategy feed. "
-                f"instrument_key={instrument_key}, "
-                f"remaining="
-                f"{len(self.or_ema_strategy_instrument_connections[instrument_key])}, "
-                f"total_clients={self.get_active_connections_count()}"
-            )
-
-            if len(self.or_ema_strategy_instrument_connections[instrument_key]) == 0:
-                self.or_ema_strategy_instrument_connections.pop(instrument_key, None)
 
     # ========================================================
     # All Feeds Connection Handlers
@@ -720,9 +620,7 @@ class Broadcaster:
         price_change = round(ltp - close, 2) if (ltp > 0 and close > 0) else 0.0
 
         p_change_pct = (
-            round((price_change / close) * 100, 2)
-            if (ltp > 0 and close > 0)
-            else 0.0
+            round((price_change / close) * 100, 2) if (ltp > 0 and close > 0) else 0.0
         )
 
         return {
@@ -758,7 +656,9 @@ class Broadcaster:
         tick_raw: Dict[str, Any],
         contract_info: Dict[str, Any],
     ):
-        """Saves raw feed to logs/feeds.log and broadcasts live tick to interval=0 clients."""
+        """
+        Saves raw feed to logs/feeds.log and broadcasts live tick to interval=0 clients.
+        """
 
         self.broadcast_count += 1
 
@@ -807,7 +707,21 @@ class Broadcaster:
     # ========================================================
 
     async def broadcast_ema_cross(self, ema_cross_event: Dict[str, Any]):
-        """Broadcasts compact live EMA crossover event to connected clients."""
+        """
+        Broadcasts live EMA crossover event to connected clients.
+
+        Sends to:
+        1. Generic active clients
+        2. Global /ws/ema-crossover clients
+        3. Instrument-specific /ws/ema-crossover/instrument clients
+        4. All /all-feeds clients
+        5. Matching /option clients
+
+        Important:
+        - This method does not filter by isolated instrument.
+        - Telegram alert filtering is handled outside broadcaster.
+        - Event payload is forwarded as-is.
+        """
 
         self.ema_cross_broadcast_count += 1
 
@@ -822,10 +736,16 @@ class Broadcaster:
 
             event = dict(ema_cross_event)
             event["type"] = event.get("type", "live_ema_cross")
+            event["broadcast_scope"] = event.get("broadcast_scope", "all_instruments")
+            event["telegram_alert_scope"] = event.get(
+                "telegram_alert_scope",
+                "isolated_instrument_only",
+            )
 
             message_str = json.dumps(event, default=str)
 
             target_connections = set(self.active_connections)
+
             target_connections |= set(self.ema_crossover_connections)
 
             instrument_key = event.get("instrument_key")
@@ -877,7 +797,26 @@ class Broadcaster:
     # ========================================================
 
     async def broadcast_opening_range(self, opening_range_event: Dict[str, Any]):
-        """Broadcasts opening range event to connected clients."""
+        """
+        Broadcasts Opening Range event to connected clients.
+
+        Event types can be:
+            opening_range_levels
+            opening_range_touch
+            opening_range_r2_touch
+            opening_range_s2_touch
+            opening_range_r3_touch
+            opening_range_s3_touch
+            opening_range_r3_threshold_touch
+            opening_range_s3_threshold_touch
+
+        Sends to:
+        1. Generic active clients
+        2. Global /ws/opening-range clients
+        3. Instrument-specific /ws/opening-range/instrument clients
+        4. All /all-feeds clients
+        5. Matching /option clients
+        """
 
         self.opening_range_broadcast_count += 1
 
@@ -892,10 +831,12 @@ class Broadcaster:
 
             event = dict(opening_range_event)
             event["type"] = event.get("type", "opening_range_levels")
+            event["broadcast_scope"] = event.get("broadcast_scope", "all_instruments")
 
             message_str = json.dumps(event, default=str)
 
             target_connections = set(self.active_connections)
+
             target_connections |= set(self.opening_range_connections)
 
             instrument_key = event.get("instrument_key")
@@ -903,82 +844,6 @@ class Broadcaster:
             if instrument_key:
                 target_connections |= set(
                     self.opening_range_instrument_connections.get(
-                        instrument_key,
-                        set(),
-                    )
-                )
-
-            for conn_set in self.all_feeds_connections.values():
-                target_connections |= set(conn_set)
-
-            info = event.get("info") or event.get("contract_info") or {}
-            strike = info.get("strike_price")
-            itype = info.get("instrument_type")
-            interval = normalize_interval(event.get("interval_minutes", 0))
-
-            if strike is not None and itype:
-                option_key = build_option_key(strike, itype, interval=interval)
-
-                if option_key in self.option_connections:
-                    target_connections |= set(self.option_connections[option_key])
-
-                live_option_key = build_option_key(strike, itype, interval=0)
-
-                if live_option_key in self.option_connections:
-                    target_connections |= set(self.option_connections[live_option_key])
-
-            if len(target_connections) == 0:
-                return
-
-            await self._send_to_connections(target_connections, message_str)
-
-        except Exception as ex:
-            logger.error(
-                f"Exception inside broadcast_opening_range: "
-                f"{type(ex).__name__}: {ex}"
-            )
-
-    # ========================================================
-    # OR + EMA Strategy Broadcast Engine
-    # ========================================================
-
-    async def broadcast_or_ema_strategy(self, strategy_event: Dict[str, Any]):
-        """
-        Broadcasts OR touch + EMA strategy event to connected clients.
-
-        This is optional. Telegram alerts work even if this method is not used.
-        """
-
-        self.or_ema_strategy_broadcast_count += 1
-
-        total_clients = self.get_active_connections_count()
-
-        if total_clients == 0:
-            return
-
-        try:
-            if not isinstance(strategy_event, dict):
-                return
-
-            event = dict(strategy_event)
-            event["type"] = event.get("type", "or_ema_strategy_alert")
-
-            message_str = json.dumps(event, default=str)
-
-            target_connections = set(self.active_connections)
-            target_connections |= set(self.or_ema_strategy_connections)
-
-            instrument_key = event.get("instrument_key")
-
-            if not instrument_key:
-                alert = event.get("alert") or {}
-
-                if isinstance(alert, dict):
-                    instrument_key = alert.get("instrument_key")
-
-            if instrument_key:
-                target_connections |= set(
-                    self.or_ema_strategy_instrument_connections.get(
                         instrument_key,
                         set(),
                     )
@@ -1010,7 +875,7 @@ class Broadcaster:
 
         except Exception as ex:
             logger.error(
-                f"Exception inside broadcast_or_ema_strategy: "
+                f"Exception inside broadcast_opening_range: "
                 f"{type(ex).__name__}: {ex}"
             )
 
@@ -1052,6 +917,7 @@ class Broadcaster:
             message_str = json.dumps(payload, default=str)
 
             target_connections = set()
+
             target_connections |= set(self.all_feeds_connections.get(interval, set()))
 
             c_info = contract_info or {}
@@ -1140,26 +1006,6 @@ class Broadcaster:
 
                     if len(conn_set) == 0:
                         self.opening_range_instrument_connections.pop(
-                            instrument_key,
-                            None,
-                        )
-
-            if dead in self.or_ema_strategy_connections:
-                self.disconnect_or_ema_strategy(dead)
-
-            for instrument_key, conn_set in list(
-                self.or_ema_strategy_instrument_connections.items()
-            ):
-                if dead in conn_set:
-                    conn_set.discard(dead)
-
-                    logger.info(
-                        f"Dead client removed from instrument-specific OR EMA strategy pool. "
-                        f"instrument_key={instrument_key}, remaining={len(conn_set)}"
-                    )
-
-                    if len(conn_set) == 0:
-                        self.or_ema_strategy_instrument_connections.pop(
                             instrument_key,
                             None,
                         )

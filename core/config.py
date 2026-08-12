@@ -18,17 +18,15 @@ REFRESH_INTERVAL_MINUTES = 60
 # ============================================================
 # Telegram Notification Configuration
 # ============================================================
-# Telegram can still be used for startup, token refresh, scheduler,
-# instrument load, refresh, shutdown, and error notifications.
+# Telegram is used for normal main flow notifications:
+# startup, token refresh, scheduler, instrument load, refresh,
+# subscription, Opening Range job, shutdown, and errors.
 #
-# Requirement:
-# - Do not send legacy selected Opening Range instrument Telegram alerts.
-# - Do not send generic EMA crossover Telegram alerts.
-# - Generic EMA crossover events should go through WebSocket only.
-#
-# Strategy requirement:
-# - OR touch + EMA confirmation alerts can be sent separately using
-#   OR_EMA_STRATEGY_ALERT_ENABLED.
+# New isolated instrument requirement:
+# - Send Telegram notification when one Opening Range instrument is isolated.
+# - Send Telegram EMA crossover alerts only for the isolated instrument.
+# - Other instruments can continue EMA calculation and WebSocket broadcast,
+#   but should not send Telegram EMA alerts.
 
 TELEGRAM_ENABLED = os.getenv("TELEGRAM_ENABLED", "false").lower() == "true"
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -96,14 +94,11 @@ HISTORICAL_CANDLE_REQUEST_SLEEP_SECONDS = 0.15
 # ============================================================
 # Opening Range Configuration
 # ============================================================
-# Requirement:
-# - Opening Range should be calculated for every subscribed instrument.
-# - Opening Range levels should be cached per instrument.
-# - EMA crossover WebSocket events should include the matching instrument's
-#   Opening Range range and levels when available.
-# - Legacy selected Opening Range instrument flow remains disabled.
+# Opening Range is calculated for every subscribed instrument.
+# Opening Range levels are cached per instrument.
+# EMA crossover WebSocket events can include the matching instrument's
+# Opening Range range and levels when available.
 
-# Enables scheduled opening range calculation using Upstox intraday candle API.
 OPENING_RANGE_ENABLED = True
 
 # Opening range candle interval.
@@ -149,11 +144,9 @@ OPENING_RANGE_MAX_EVENTS_IN_MEMORY = 5000
 # ============================================================
 # Opening Range Backfill Touch Scan Configuration
 # ============================================================
-# Backfill scan is useful for diagnostics and strategy edge cases.
-# It covers the case where S2/S3/R2/R3 was already touched before
-# the scheduled 09:18 opening range job completed.
+# Backfill scan detects R2/R3/S2/S3 touches that may have already happened
+# between Opening Range completion and the scheduled 09:18 fetch.
 
-# Enables checking already completed intraday candles after the opening range window.
 OPENING_RANGE_BACKFILL_TOUCH_SCAN_ENABLED = True
 
 # Backfill scan source:
@@ -169,20 +162,19 @@ OPENING_RANGE_BACKFILL_TOUCH_SCAN_SOURCE = "intraday_api"
 # ============================================================
 # Opening Range Live Touch Event Configuration
 # ============================================================
-# Requirement:
-# - Touch monitoring may continue for WebSocket/debug visibility.
-# - Legacy Telegram touch batch alerts are disabled.
-# - Legacy first touched selected instrument flow remains disabled.
+# Live touch monitoring continues after Opening Range levels are ready.
+# Touch events are used for diagnostics, WebSocket visibility,
+# and isolated instrument selection.
 
-# Enables live touch monitoring after opening range levels are available.
+# Enables live R2/R3/S2/S3 touch monitoring after opening range levels are available.
 OPENING_RANGE_TOUCH_ALERT_ENABLED = True
 
-# Maximum instruments to include in one Telegram alert.
-# Legacy behavior only. Kept for backward compatibility.
+# Maximum instruments to include in one legacy grouped Telegram alert.
+# Kept for backward compatibility only.
 OPENING_RANGE_TOUCH_ALERT_MAX_INSTRUMENTS = 5
 
 # Batch window in seconds.
-# Legacy behavior only. Kept for backward compatibility.
+# Kept for backward compatibility only.
 OPENING_RANGE_TOUCH_ALERT_BATCH_SECONDS = 10
 
 # Avoid duplicate touch event tracking for the same instrument and same level.
@@ -193,30 +185,28 @@ OPENING_RANGE_TOUCH_ALERT_ONCE_PER_LEVEL = True
 OPENING_RANGE_TOUCH_ALERT_OPTIONS_ONLY = True
 
 # Use latest main index LTP to rank touched instruments by nearest strike.
-# Legacy behavior only.
 OPENING_RANGE_TOUCH_ALERT_SORT_BY_NEAREST_INDEX = True
 
 # Main index key used for nearest strike calculation and NIFTY LTP tracking.
 OPENING_RANGE_TOUCH_ALERT_MAIN_INDEX_KEY = MAIN_NIFTY_SECURITY
 
-# Backfill touch events can be detected and stored, but legacy Telegram sending
-# is disabled by OPENING_RANGE_LEGACY_TOUCH_TELEGRAM_ENABLED = False.
+# Backfill touch events can be detected and stored.
 OPENING_RANGE_BACKFILL_TOUCH_ALERT_ENABLED = True
 
-# If true, process live touches after OR levels are generated.
+# If true, process live R2/R3/S2/S3 touches after OR levels are generated.
 OPENING_RANGE_LIVE_TOUCH_ALERT_ENABLED = True
 
 # Touch check mode.
 # "high_low" means:
-#   R levels touched if high >= level
-#   S levels touched if low <= level
+#   Resistance touched if high >= level
+#   Support touched if low <= level
 # "ltp" means:
-#   R levels touched if ltp >= level
-#   S levels touched if ltp <= level
+#   Resistance touched if ltp >= level
+#   Support touched if ltp <= level
 # Recommended: high_low
 OPENING_RANGE_TOUCH_CHECK_MODE = "high_low"
 
-# Keep this true to store touch state inside opening range cache.
+# Keep this true to store R2/R3/S2/S3 touch state inside opening range cache.
 OPENING_RANGE_STORE_TOUCH_STATUS = True
 
 # Optional output file for touch events if test/debug file saving is needed.
@@ -227,41 +217,92 @@ OPENING_RANGE_TOUCH_EVENTS_SAVE_TEST_FILE = True
 
 
 # ============================================================
-# Opening Range Selected Instrument Configuration
+# Opening Range Isolated Instrument Configuration
 # ============================================================
-# Requirement:
-# - Disable legacy first touch selected instrument logic.
-# - Disable legacy selected OR touch Telegram notification.
-# - Disable legacy selected OR EMA Telegram alert.
-# - Every instrument remains eligible for EMA crossover WebSocket broadcast.
-# - EMA WebSocket payload should include that instrument's Opening Range levels.
+# New requirement:
+# - After Opening Range is ready, take Opening Range average.
+# - Build average +/- 500 points strike window.
+# - Clamp the window inside STRIKE_FROM and STRIKE_TO.
+# - Monitor only eligible option instruments inside this window.
+# - If R3/S3 is touched, isolate nearest R3/S3 instrument to average.
+# - If no R3/S3 touch exists, use R2/S2 and isolate nearest instrument to average.
+# - Once isolated, lock that instrument for the trading day.
+# - Live EMA still runs for all instruments.
+# - Telegram EMA alerts are sent only for the isolated instrument.
 
-# Disabled. Legacy selected OR instrument flow should not be used.
-OPENING_RANGE_FIRST_TOUCH_SELECTION_ENABLED = False
+OPENING_RANGE_ISOLATED_INSTRUMENT_ENABLED = True
 
-# Kept only for backward compatibility.
-OPENING_RANGE_FIRST_TOUCH_SELECTION_SOURCE = "disabled"
+# Around Opening Range average, consider strikes within +/- this value.
+# Example:
+#   OR average = 24570
+#   window = 24570 +/- 500
+#   final range is clamped inside STRIKE_FROM and STRIKE_TO.
+OPENING_RANGE_ISOLATION_AVERAGE_WINDOW_POINTS = 500.0
 
-# Disabled. Do not send Telegram when any instrument touches R3/S3 through legacy flow.
-OPENING_RANGE_SELECTED_OR_TOUCH_NOTIFY_ENABLED = False
+# Only these Opening Range levels are eligible for isolation.
+OPENING_RANGE_ISOLATION_TOUCH_LEVELS = ["R2", "R3", "S2", "S3"]
 
-# Disabled. Do not send Telegram for legacy selected OR EMA cross.
-OPENING_RANGE_SELECTED_OR_EMA_ALERT_ENABLED = False
+# Level priority for choosing isolated instrument.
+# R3/S3 gets higher priority than R2/S2.
+# If multiple instruments exist in same priority group, nearest strike to OR average wins.
+OPENING_RANGE_ISOLATION_PRIORITY_LEVELS = ["R3", "S3", "R2", "S2"]
 
-# Disabled. Do not send old grouped Opening Range touch Telegram alerts.
+# Once one instrument is selected, keep it locked for the trading day.
+OPENING_RANGE_ISOLATION_LOCK_FOR_DAY = True
+
+# Send Telegram notification when instrument is isolated.
+OPENING_RANGE_ISOLATED_INSTRUMENT_NOTIFY_ENABLED = True
+
+# Include backfill touches also for isolation.
+# This covers the case where R2/R3/S2/S3 was touched before 09:18.
+OPENING_RANGE_ISOLATION_ALLOW_BACKFILL_TOUCH = True
+
+# Include live tick touches also for isolation after 09:18.
+OPENING_RANGE_ISOLATION_ALLOW_LIVE_TOUCH = True
+
+# Restrict isolation only to option instruments.
+OPENING_RANGE_ISOLATION_OPTIONS_ONLY = True
+
+# Save isolated instrument state to file only when TEST_FLAG=True if implemented.
+OPENING_RANGE_ISOLATED_INSTRUMENT_OUTPUT_FILE = "data/isolated_opening_range_instrument.json"
+
+# Reset isolated instrument daily based on market date.
+OPENING_RANGE_ISOLATION_RESET_DAILY = True
+
+
+# ============================================================
+# Backward-Compatible Selected Instrument Configuration
+# ============================================================
+# Existing selected OR names are retained for compatibility.
+# New implementation should map selected OR behavior to isolated instrument behavior.
+
+# Enabled now because isolated instrument selection is required.
+OPENING_RANGE_FIRST_TOUCH_SELECTION_ENABLED = True
+
+# New source name for clarity.
+OPENING_RANGE_FIRST_TOUCH_SELECTION_SOURCE = "average_window_level_priority"
+
+# Send Telegram when isolated instrument is selected.
+OPENING_RANGE_SELECTED_OR_TOUCH_NOTIFY_ENABLED = True
+
+# Send Telegram EMA crossover alerts only for isolated instrument.
+OPENING_RANGE_SELECTED_OR_EMA_ALERT_ENABLED = True
+
+# Old grouped touch Telegram alerts are still disabled.
+# We only want selected/isolated instrument notifications and isolated EMA alerts.
 OPENING_RANGE_LEGACY_TOUCH_TELEGRAM_ENABLED = False
 
-# Disabled by behavior because selected OR EMA alerts are disabled.
-# Kept only for backward compatibility with existing code references.
+# If True, send only one alert per cross type.
+# Requirement says every EMA cross of isolated instrument should alert,
+# so keep this False.
 OPENING_RANGE_SELECTED_OR_EMA_ALERT_ONCE_PER_CROSS = False
 
 
 # ============================================================
 # EMA + Opening Range WebSocket Enrichment Configuration
 # ============================================================
-# Requirement:
-# - For every live EMA crossover event, attach Opening Range details
-#   of the same instrument before broadcasting through WebSocket.
+# For every live EMA crossover event, attach Opening Range details
+# of the same instrument before broadcasting through WebSocket.
 
 EMA_CROSS_INCLUDE_OPENING_RANGE_LEVELS = True
 
@@ -271,21 +312,141 @@ EMA_CROSS_BROADCAST_WITHOUT_OPENING_RANGE = True
 
 
 # ============================================================
-# Opening Range Touch + EMA Strategy Alert Configuration
+# Isolated Instrument EMA Telegram Alert Configuration
 # ============================================================
-# Strategy requirement:
-# 1. After Opening Range is calculated, read NIFTY Opening Range average.
-# 2. Build eligible strike universe using:
-#       NIFTY opening range average +/- OR_EMA_STRATEGY_STRIKE_WINDOW_POINTS
-# 3. Clamp that range using STRIKE_FROM and STRIKE_TO.
-# 4. During live ticks, check only eligible option instruments.
-# 5. If eligible option instruments touch/cross configured OR levels:
-#       - If only one instrument touches, select that instrument.
-#       - If multiple instruments touch at same timestamp/candle,
-#         select the strike nearest to current NIFTY spot.
-#       - If another instrument touches later, keep it only for debug.
-# 6. Only the selected touched instrument waits for live EMA confirmation.
-# 7. When selected instrument gets EMA cross, send Telegram strategy alert
-#    with nearest strike live data.
+# Live EMA calculation continues for all subscribed instruments.
+# Telegram EMA alert is sent only when:
+#   1. An isolated instrument is selected for the day.
+#   2. EMA crossover belongs to that isolated instrument.
+#   3. The isolated instrument has touched/crossed eligible OR level.
+
+EMA_ISOLATED_INSTRUMENT_TELEGRAM_ENABLED = True
+
+# Send every EMA crossover alert for the isolated instrument.
+EMA_ISOLATED_ALERT_EVERY_CROSS = True
+
+# Required Telegram alert format concept:
+#   {strike value} CE/PE - crosses {levelname} - At {current nifty live point}
+#   EMA Cross: bullish/bearish
+#   EMA candle close: ...
+#   EMA candle timestamp: ...
+#   Nearest instrument details:
+#      24350PE - 135rs
+EMA_ISOLATED_ALERT_INCLUDE_LEVEL_NAME = True
+EMA_ISOLATED_ALERT_INCLUDE_NIFTY_LTP = True
+EMA_ISOLATED_ALERT_INCLUDE_EMA_DETAILS = True
+EMA_ISOLATED_ALERT_INCLUDE_NEAREST_ORDER_INSTRUMENTS = True
+
+# Order side rule:
+#   bullish EMA cross  -> use CE instruments
+#   bearish EMA cross  -> use PE instruments
+EMA_ALERT_BULLISH_OPTION_TYPE = "CE"
+EMA_ALERT_BEARISH_OPTION_TYPE = "PE"
+
+# Strike step for NIFTY options.
+EMA_ALERT_STRIKE_STEP = 50
+
+# For order suggestion, use three nearest strikes around current NIFTY spot.
+# Example:
+#   NIFTY = 24333
+#   nearest 50-point strikes can be 24300, 24350, 24400.
+EMA_ALERT_NEAREST_STRIKE_COUNT = 3
+
+# Offsets around nearest rounded strike.
+# With STRIKE_STEP=50, this gives:
+#   nearest - 50
+#   nearest
+#   nearest + 50
+EMA_ALERT_NEAREST_STRIKE_OFFSETS = [-50, 0, 50]
+
+# Clamp suggested order strikes inside configured STRIKE_FROM and STRIKE_TO.
+EMA_ALERT_ORDER_STRIKES_CLAMP_TO_FILTER_RANGE = True
+
+# Include live price/LTP for suggested CE/PE instruments when available.
+EMA_ALERT_INCLUDE_ORDER_INSTRUMENT_LTP = True
+
+# If suggested instrument live price is unavailable, still show the strike and type.
+EMA_ALERT_SHOW_ORDER_INSTRUMENT_WHEN_LTP_MISSING = True
+
+# Maximum number of suggested instruments to append in Telegram message.
+EMA_ALERT_MAX_ORDER_INSTRUMENTS = 3
+
+
+# ============================================================
+# Test / Debug Configuration
+# ============================================================
+
+# If True, EMA cross result JSON files are saved under data/.
+# If False, results are only kept in memory.
+TEST_FLAG = False
+
+
+# ============================================================
+# Historical EMA Crossover Configuration
+# ============================================================
+
+EMA_FAST_PERIOD = 9
+EMA_SLOW_PERIOD = 21
+
+# Historical EMA crossover result output file.
+# Raw candles are not saved here, only EMA/crossover summary.
+EMA_CROSS_OUTPUT_FILE = "data/ema_cross_results.json"
+
+
+# ============================================================
+# Live EMA Crossover Configuration
+# ============================================================
+# Live EMA should run for all subscribed instruments.
+# Every EMA crossover can still be broadcast through WebSocket.
+# Telegram alerting is restricted to isolated instrument only.
+
+# Enables live EMA continuation from historical EMA state.
+LIVE_EMA_ENABLED = True
+
+# Live EMA calculation mode flag.
 #
-# This is separate from old selected OR 
+# False = candle based EMA calculation.
+#         Uses completed 1-minute I1 candle close.
+#         This is the current/default stable behavior.
+#
+# True  = tick based EMA calculation.
+#         Uses every incoming live LTP tick.
+#         This gives faster signals but can be noisier.
+#
+# In both modes:
+# - EMA runs for all subscribed instruments.
+# - WebSocket EMA events can be broadcast for all instruments.
+# - Telegram EMA alerts are sent only for the isolated instrument.
+LIVE_EMA_CALCULATION_MODE = False
+
+# Live EMA interval in minutes.
+# Used only when LIVE_EMA_CALCULATION_MODE=False.
+# Phase 1 recommended value: 1
+# This uses Upstox full-feed marketOHLC interval "I1".
+LIVE_EMA_INTERVAL_MINUTES = 1
+
+# Live EMA periods.
+# Usually same as historical EMA periods.
+LIVE_EMA_FAST_PERIOD = 9
+LIVE_EMA_SLOW_PERIOD = 21
+
+# Tick-based EMA duplicate alert control.
+# Used only when LIVE_EMA_CALCULATION_MODE=True.
+# If True, avoids repeated same-direction tick cross alerts until direction changes again.
+LIVE_EMA_TICK_ALERT_ONCE_PER_DIRECTION = True
+
+# Tick-based EMA minimum LTP movement filter.
+# Used only when LIVE_EMA_CALCULATION_MODE=True.
+# 0 means process every tick LTP.
+# Example: 0.05 means ignore tick EMA recalculation if LTP changed less than 0.05.
+LIVE_EMA_TICK_MIN_PRICE_CHANGE = 0.0
+
+# Save live EMA cross events to file only if TEST_FLAG=True
+# and LIVE_EMA_SAVE_TEST_FILE=True.
+LIVE_EMA_SAVE_TEST_FILE = True
+
+# Live EMA crossover event output file.
+LIVE_EMA_OUTPUT_FILE = "data/live_ema_cross_results.json"
+
+# Maximum number of live EMA cross events to keep in memory.
+LIVE_EMA_MAX_EVENTS_IN_MEMORY = 5000

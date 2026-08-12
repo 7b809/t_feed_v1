@@ -14,8 +14,8 @@ file.txt
 *.so
 myenv/
 venv/
-
-
+ 
+ 
 .env.* 
 .env
 test_logs

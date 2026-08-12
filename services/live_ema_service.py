@@ -18,26 +18,37 @@ class LiveEMAService:
 
     Purpose:
     1. Initialize EMA state from historical EMA summary.
-    2. Read live full-mode Upstox feed candles.
-    3. Continue EMA 9/21 from historical latest EMA values.
+    2. Continue EMA 9/21 from historical latest EMA values.
+    3. Support two live EMA calculation modes:
+       - LIVE_EMA_CALCULATION_MODE=False:
+         completed 1-minute candle close based EMA calculation.
+       - LIVE_EMA_CALCULATION_MODE=True:
+         live tick/LTP based EMA calculation.
     4. Detect live bullish/bearish EMA crossovers for all initialized instruments.
-    5. Store compact crossover events in memory.
+    5. Store crossover events in memory.
     6. Broadcast crossover events via optional registered callback.
-    7. Optionally save compact crossover events to data/live_ema_cross_results.json.
+    7. Optionally save crossover events to data/live_ema_cross_results.json.
 
     Important:
     - Raw live ticks are not stored.
     - Raw historical candles are not needed here.
     - This service works from EMA state only.
-    - This service does not select an Opening Range instrument.
+    - Live EMA continues for all initialized instruments.
+    - This service does not isolate instruments.
     - This service does not send Telegram alerts.
-    - Opening Range enrichment is handled outside this service in
-      services/upstox_websocket.py before WebSocket broadcast.
-    - Live EMA crossover payload is intentionally compact to reduce WebSocket load.
+    - Opening Range enrichment and isolated instrument Telegram alerting
+      are handled outside this service in services/upstox_websocket.py and
+      services/opening_range_service.py.
     """
 
     def __init__(self):
         self.enabled = bool(getattr(config, "LIVE_EMA_ENABLED", True))
+
+        # False = completed 1-minute candle close mode.
+        # True = live tick/LTP mode.
+        self.tick_based_mode = bool(getattr(config, "LIVE_EMA_CALCULATION_MODE", False))
+
+        self.calculation_mode = "tick_ltp" if self.tick_based_mode else "candle_close"
 
         self.interval_minutes = int(getattr(config, "LIVE_EMA_INTERVAL_MINUTES", 1))
 
@@ -69,6 +80,14 @@ class LiveEMAService:
             getattr(config, "LIVE_EMA_MAX_EVENTS_IN_MEMORY", 5000)
         )
 
+        self.tick_alert_once_per_direction = bool(
+            getattr(config, "LIVE_EMA_TICK_ALERT_ONCE_PER_DIRECTION", True)
+        )
+
+        self.tick_min_price_change = float(
+            getattr(config, "LIVE_EMA_TICK_MIN_PRICE_CHANGE", 0.0)
+        )
+
         self.market_timezone = self._load_market_timezone()
 
         self._lock = Lock()
@@ -79,15 +98,19 @@ class LiveEMAService:
         # Per instrument EMA state.
         self.state = {}
 
-        # Recent compact live EMA crossover events.
+        # Recent live EMA crossover events.
         self.cross_events = deque(maxlen=self.max_events_in_memory)
 
         logger.info(
             f"LiveEMAService initialized. "
             f"enabled={self.enabled}, "
+            f"calculation_mode={self.calculation_mode}, "
+            f"tick_based_mode={self.tick_based_mode}, "
             f"interval_minutes={self.interval_minutes}, "
             f"fast_period={self.fast_period}, "
-            f"slow_period={self.slow_period}"
+            f"slow_period={self.slow_period}, "
+            f"tick_alert_once_per_direction={self.tick_alert_once_per_direction}, "
+            f"tick_min_price_change={self.tick_min_price_change}"
         )
 
     # ========================================================
@@ -188,25 +211,6 @@ class LiveEMAService:
     def initialize_from_history_summary(self, summary: dict) -> dict:
         """
         Initializes live EMA state from historical EMA summary.
-
-        Expected summary shape:
-
-        {
-            "results": {
-                "NSE_INDEX|Nifty 50": {
-                    "status": "success",
-                    "ema_result": {
-                        "latest_timestamp": "...",
-                        "latest_close": 24774.3,
-                        "latest_ema_fast": 24613.6098,
-                        "latest_ema_slow": 24593.3994,
-                        "latest_signal": "bullish",
-                        "last_crossover": {...}
-                    },
-                    "contract_info": {...}
-                }
-            }
-        }
         """
 
         initialized_count = 0
@@ -249,19 +253,27 @@ class LiveEMAService:
                     skipped_count += 1
                     continue
 
+                latest_close = self._safe_float(ema_result.get("latest_close"))
+
                 self.state[instrument_key] = {
                     "instrument_key": instrument_key,
                     "initialized": True,
                     "source": "historical_ema",
+                    "calculation_mode": self.calculation_mode,
+                    "tick_based_mode": self.tick_based_mode,
                     "interval_minutes": self.interval_minutes,
                     "fast_period": self.fast_period,
                     "slow_period": self.slow_period,
                     "previous_ema_fast": self._safe_float(latest_ema_fast),
                     "previous_ema_slow": self._safe_float(latest_ema_slow),
                     "previous_signal": ema_result.get("latest_signal"),
-                    "latest_close": ema_result.get("latest_close"),
+                    "latest_close": latest_close,
                     "last_historical_timestamp": ema_result.get("latest_timestamp"),
                     "last_processed_candle_ts": ema_result.get("latest_timestamp"),
+                    "last_processed_tick_ts": None,
+                    "last_processed_tick_ltp": None,
+                    "last_tick_cross_type": None,
+                    "last_tick_signal": ema_result.get("latest_signal"),
                     "last_crossover": ema_result.get("last_crossover"),
                     "pending_live_candle": None,
                     "pending_live_candle_ts": None,
@@ -277,13 +289,16 @@ class LiveEMAService:
 
         logger.info(
             f"Live EMA state initialized from historical summary. "
-            f"initialized_count={initialized_count}, skipped_count={skipped_count}"
+            f"initialized_count={initialized_count}, skipped_count={skipped_count}, "
+            f"calculation_mode={self.calculation_mode}"
         )
 
         return {
             "initialized": initialized_count > 0,
             "initialized_count": initialized_count,
             "skipped_count": skipped_count,
+            "calculation_mode": self.calculation_mode,
+            "tick_based_mode": self.tick_based_mode,
         }
 
     # ========================================================
@@ -372,17 +387,6 @@ class LiveEMAService:
     def _normalize_feed_candle(self, candle: dict) -> dict | None:
         """
         Converts Upstox OHLC candle dictionary to internal normalized candle.
-
-        Output:
-            {
-                "timestamp": "2026-08-05T09:15:00+05:30",
-                "timestamp_ms": 1725875940000,
-                "open": 100,
-                "high": 110,
-                "low": 95,
-                "close": 105,
-                "volume": 2000
-            }
         """
 
         if not isinstance(candle, dict):
@@ -402,6 +406,48 @@ class LiveEMAService:
             "low": self._safe_float(candle.get("low")),
             "close": self._safe_float(candle.get("close")),
             "volume": self._safe_int(candle.get("volume") or candle.get("vol")),
+        }
+
+    def _extract_ltp_tick(self, tick_data: dict) -> dict | None:
+        """
+        Extracts live LTP from Upstox full feed for tick-based EMA.
+
+        Output:
+            {
+                "timestamp": "...",
+                "timestamp_ms": ...,
+                "ltp": ...,
+                "ltq": ...,
+                "ltt": ...
+            }
+        """
+
+        ff = self._get_feed_container(tick_data)
+
+        if not ff:
+            return None
+
+        ltpc = ff.get("ltpc") or {}
+
+        ltp = self._safe_float(ltpc.get("ltp"))
+        ltq = self._safe_int(ltpc.get("ltq"))
+        ltt = self._safe_int(ltpc.get("ltt"))
+
+        if ltp <= 0:
+            return None
+
+        timestamp_ms = ltt if ltt > 0 else None
+        timestamp = self._epoch_ms_to_iso(timestamp_ms) if timestamp_ms else None
+
+        if not timestamp:
+            timestamp = self._now_market_time()
+
+        return {
+            "timestamp": timestamp,
+            "timestamp_ms": timestamp_ms,
+            "ltp": ltp,
+            "ltq": ltq,
+            "ltt": ltt,
         }
 
     # ========================================================
@@ -460,15 +506,6 @@ class LiveEMAService:
     ) -> dict | None:
         """
         Uses candle timestamp change as candle completion rule.
-
-        Flow:
-        - First I1 candle received:
-            store as pending, do not process.
-        - Same timestamp received:
-            update pending, do not process.
-        - New timestamp received:
-            previous pending candle is completed.
-            return previous pending candle for EMA calculation.
         """
 
         latest_ts = latest_candle.get("timestamp")
@@ -517,12 +554,6 @@ class LiveEMAService:
     ) -> dict | None:
         """
         Aggregates completed I1 candles into configured interval candle.
-
-        Returns completed aggregated candle when bucket changes.
-
-        Example for 5 minute:
-            09:15, 09:16, 09:17, 09:18, 09:19 are accumulated.
-            When 09:20 candle arrives, 09:15 bucket is completed.
         """
 
         interval_minutes = int(self.interval_minutes)
@@ -603,8 +634,14 @@ class LiveEMAService:
         """
         Processes one live Upstox full-mode feed tick.
 
+        If LIVE_EMA_CALCULATION_MODE=False:
+            Uses completed 1-minute candle close.
+
+        If LIVE_EMA_CALCULATION_MODE=True:
+            Uses every incoming live LTP tick.
+
         Returns:
-            compact crossover event dict when EMA cross happens.
+            EMA crossover event dict when EMA cross happens.
             None otherwise.
         """
 
@@ -626,38 +663,185 @@ class LiveEMAService:
             if previous_ema_fast is None or previous_ema_slow is None:
                 return None
 
-            latest_i1_raw = self._find_latest_feed_candle(tick_data, "I1")
+            if self.tick_based_mode:
+                return self._process_tick_mode_locked(
+                    instrument_key=instrument_key,
+                    state=state,
+                    tick_data=tick_data,
+                    contract_info=contract_info,
+                )
 
-            if not latest_i1_raw:
-                return None
-
-            latest_i1_candle = self._normalize_feed_candle(latest_i1_raw)
-
-            if not latest_i1_candle:
-                return None
-
-            completed_i1_candle = self._accept_live_candle_and_get_completed(
-                state,
-                latest_i1_candle,
-            )
-
-            if not completed_i1_candle:
-                return None
-
-            completed_target_candle = self._process_aggregation_bucket(
-                state,
-                completed_i1_candle,
-            )
-
-            if not completed_target_candle:
-                return None
-
-            return self._process_completed_candle_locked(
+            return self._process_candle_mode_locked(
                 instrument_key=instrument_key,
                 state=state,
-                completed_candle=completed_target_candle,
+                tick_data=tick_data,
                 contract_info=contract_info,
             )
+
+    def _process_candle_mode_locked(
+        self,
+        instrument_key: str,
+        state: dict,
+        tick_data: dict,
+        contract_info: dict | None = None,
+    ) -> dict | None:
+        """
+        Processes completed 1-minute candle close based EMA.
+
+        Lock must already be held by caller.
+        """
+
+        latest_i1_raw = self._find_latest_feed_candle(tick_data, "I1")
+
+        if not latest_i1_raw:
+            return None
+
+        latest_i1_candle = self._normalize_feed_candle(latest_i1_raw)
+
+        if not latest_i1_candle:
+            return None
+
+        completed_i1_candle = self._accept_live_candle_and_get_completed(
+            state,
+            latest_i1_candle,
+        )
+
+        if not completed_i1_candle:
+            return None
+
+        completed_target_candle = self._process_aggregation_bucket(
+            state,
+            completed_i1_candle,
+        )
+
+        if not completed_target_candle:
+            return None
+
+        return self._process_completed_candle_locked(
+            instrument_key=instrument_key,
+            state=state,
+            completed_candle=completed_target_candle,
+            contract_info=contract_info,
+        )
+
+    def _process_tick_mode_locked(
+        self,
+        instrument_key: str,
+        state: dict,
+        tick_data: dict,
+        contract_info: dict | None = None,
+    ) -> dict | None:
+        """
+        Processes live tick/LTP based EMA.
+
+        Lock must already be held by caller.
+        """
+
+        tick = self._extract_ltp_tick(tick_data)
+
+        if not tick:
+            return None
+
+        ltp = self._safe_float(tick.get("ltp"))
+        tick_ts = tick.get("timestamp")
+        tick_ts_ms = tick.get("timestamp_ms")
+
+        if not tick_ts or ltp <= 0:
+            return None
+
+        last_tick_ltp = state.get("last_processed_tick_ltp")
+
+        if (
+            last_tick_ltp is not None
+            and self.tick_min_price_change > 0
+            and abs(ltp - self._safe_float(last_tick_ltp)) < self.tick_min_price_change
+        ):
+            return None
+
+        previous_fast = self._safe_float(state.get("previous_ema_fast"))
+        previous_slow = self._safe_float(state.get("previous_ema_slow"))
+        previous_signal = state.get("previous_signal")
+
+        current_fast = self._calculate_next_ema(
+            close_price=ltp,
+            previous_ema=previous_fast,
+            period=self.fast_period,
+        )
+
+        current_slow = self._calculate_next_ema(
+            close_price=ltp,
+            previous_ema=previous_slow,
+            period=self.slow_period,
+        )
+
+        cross_type = self._detect_cross(
+            previous_fast=previous_fast,
+            previous_slow=previous_slow,
+            current_fast=current_fast,
+            current_slow=current_slow,
+        )
+
+        current_signal = self._get_signal(current_fast, current_slow)
+
+        state["previous_ema_fast"] = current_fast
+        state["previous_ema_slow"] = current_slow
+        state["previous_signal"] = current_signal
+        state["latest_close"] = ltp
+        state["last_processed_tick_ts"] = tick_ts
+        state["last_processed_tick_ltp"] = ltp
+        state["updated_at"] = self._now_market_time()
+
+        if not cross_type:
+            return None
+
+        if self.tick_alert_once_per_direction:
+            last_tick_cross_type = state.get("last_tick_cross_type")
+
+            if last_tick_cross_type == cross_type:
+                return None
+
+            state["last_tick_cross_type"] = cross_type
+
+        resolved_contract_info = contract_info or state.get("contract_info", {})
+
+        event = {
+            "type": "live_ema_cross",
+            "instrument_key": instrument_key,
+            "timestamp": tick_ts,
+            "timestamp_ms": tick_ts_ms,
+            "cross_type": cross_type,
+            "interval_minutes": 0,
+            "close": ltp,
+            "ltp": ltp,
+            "ema_fast_period": self.fast_period,
+            "ema_slow_period": self.slow_period,
+            "ema_fast": current_fast,
+            "ema_slow": current_slow,
+            "previous_ema_fast": previous_fast,
+            "previous_ema_slow": previous_slow,
+            "previous_signal": previous_signal,
+            "current_signal": current_signal,
+            "source": "live_tick",
+            "ema_calculation_mode": "tick_ltp",
+            "created_at": self._now_market_time(),
+            "tick": {
+                "timestamp": tick_ts,
+                "timestamp_ms": tick_ts_ms,
+                "ltp": ltp,
+                "ltq": tick.get("ltq"),
+                "ltt": tick.get("ltt"),
+            },
+            "candle": None,
+            "contract_info": resolved_contract_info,
+            "info": resolved_contract_info,
+            "telegram_alert_scope": "isolated_instrument_only",
+        }
+
+        return self._record_and_emit_event_locked(
+            instrument_key=instrument_key,
+            state=state,
+            event=event,
+        )
 
     def _process_completed_candle_locked(
         self,
@@ -685,6 +869,7 @@ class LiveEMAService:
 
         previous_fast = self._safe_float(state.get("previous_ema_fast"))
         previous_slow = self._safe_float(state.get("previous_ema_slow"))
+        previous_signal = state.get("previous_signal")
 
         current_fast = self._calculate_next_ema(
             close_price=close_price,
@@ -717,17 +902,59 @@ class LiveEMAService:
         if not cross_type:
             return None
 
+        resolved_contract_info = contract_info or state.get("contract_info", {})
+
         event = {
             "type": "live_ema_cross",
             "instrument_key": instrument_key,
             "timestamp": candle_ts,
+            "timestamp_ms": completed_candle.get("timestamp_ms"),
             "cross_type": cross_type,
             "interval_minutes": self.interval_minutes,
             "close": close_price,
+            "ema_fast_period": self.fast_period,
+            "ema_slow_period": self.slow_period,
+            "ema_fast": current_fast,
+            "ema_slow": current_slow,
+            "previous_ema_fast": previous_fast,
+            "previous_ema_slow": previous_slow,
+            "previous_signal": previous_signal,
             "current_signal": current_signal,
             "source": "live_feed",
+            "ema_calculation_mode": "candle_close",
             "created_at": self._now_market_time(),
+            "candle": {
+                "timestamp": completed_candle.get("timestamp"),
+                "timestamp_ms": completed_candle.get("timestamp_ms"),
+                "open": completed_candle.get("open"),
+                "high": completed_candle.get("high"),
+                "low": completed_candle.get("low"),
+                "close": completed_candle.get("close"),
+                "volume": completed_candle.get("volume"),
+            },
+            "tick": None,
+            "contract_info": resolved_contract_info,
+            "info": resolved_contract_info,
+            "telegram_alert_scope": "isolated_instrument_only",
         }
+
+        return self._record_and_emit_event_locked(
+            instrument_key=instrument_key,
+            state=state,
+            event=event,
+        )
+
+    def _record_and_emit_event_locked(
+        self,
+        instrument_key: str,
+        state: dict,
+        event: dict,
+    ) -> dict:
+        """
+        Stores and emits EMA crossover event.
+
+        Lock must already be held by caller.
+        """
 
         state["last_crossover"] = event
         state.setdefault("crossovers", []).append(event)
@@ -737,10 +964,13 @@ class LiveEMAService:
         logger.info(
             f"Live EMA crossover detected. "
             f"instrument_key={instrument_key}, "
-            f"cross_type={cross_type}, "
-            f"timestamp={candle_ts}, "
-            f"close={close_price}, "
-            f"current_signal={current_signal}"
+            f"cross_type={event.get('cross_type')}, "
+            f"timestamp={event.get('timestamp')}, "
+            f"close={event.get('close')}, "
+            f"ema_fast={event.get('ema_fast')}, "
+            f"ema_slow={event.get('ema_slow')}, "
+            f"current_signal={event.get('current_signal')}, "
+            f"ema_calculation_mode={event.get('ema_calculation_mode')}"
         )
 
         self._save_live_events_if_enabled_locked()
@@ -762,7 +992,7 @@ class LiveEMAService:
 
     def _save_live_events_if_enabled_locked(self):
         """
-        Saves compact live EMA cross events to file if enabled.
+        Saves live EMA cross events to file if enabled.
 
         Lock must already be held by caller.
         """
@@ -779,11 +1009,14 @@ class LiveEMAService:
 
             payload = {
                 "generated_at": self._now_market_time(),
+                "calculation_mode": self.calculation_mode,
+                "tick_based_mode": self.tick_based_mode,
                 "interval_minutes": self.interval_minutes,
                 "fast_period": self.fast_period,
                 "slow_period": self.slow_period,
                 "events_count": len(self.cross_events),
                 "events": list(self.cross_events),
+                "telegram_alert_scope": "isolated_instrument_only",
             }
 
             with open(file_path, "w", encoding="utf-8") as file:
@@ -805,6 +1038,13 @@ class LiveEMAService:
         with self._lock:
             return {
                 "enabled": self.enabled,
+                "live_ema_calculation_mode_flag": self.tick_based_mode,
+                "calculation_mode": self.calculation_mode,
+                "mode_description": (
+                    "tick_ltp based EMA calculation"
+                    if self.tick_based_mode
+                    else "completed candle close based EMA calculation"
+                ),
                 "interval_minutes": self.interval_minutes,
                 "fast_period": self.fast_period,
                 "slow_period": self.slow_period,
@@ -813,15 +1053,18 @@ class LiveEMAService:
                 "output_file": self.output_file,
                 "save_test_file": self.save_test_file,
                 "max_events_in_memory": self.max_events_in_memory,
-                "payload_mode": "compact",
+                "tick_alert_once_per_direction": self.tick_alert_once_per_direction,
+                "tick_min_price_change": self.tick_min_price_change,
+                "payload_mode": "enriched_ema_details",
                 "opening_range_enrichment": "handled_in_upstox_websocket",
-                "selected_or_filtering": "disabled",
-                "telegram_alerts": "disabled",
+                "isolated_instrument_selection": "handled_in_opening_range_service",
+                "telegram_alerts": "isolated_instrument_only",
+                "all_instruments_ema_processing": True,
                 "updated_at": self._now_market_time(),
             }
 
     def get_events(self, limit: int = 100) -> list:
-        """Returns latest compact live EMA crossover events."""
+        """Returns latest live EMA crossover events."""
 
         limit = max(1, int(limit or 100))
 
@@ -856,6 +1099,14 @@ class LiveEMAService:
                 output[instrument_key] = {
                     "instrument_key": instrument_key,
                     "initialized": state.get("initialized"),
+                    "calculation_mode": state.get(
+                        "calculation_mode",
+                        self.calculation_mode,
+                    ),
+                    "tick_based_mode": state.get(
+                        "tick_based_mode",
+                        self.tick_based_mode,
+                    ),
                     "interval_minutes": state.get("interval_minutes"),
                     "previous_ema_fast": state.get("previous_ema_fast"),
                     "previous_ema_slow": state.get("previous_ema_slow"),
@@ -863,6 +1114,8 @@ class LiveEMAService:
                     "latest_close": state.get("latest_close"),
                     "last_historical_timestamp": state.get("last_historical_timestamp"),
                     "last_processed_candle_ts": state.get("last_processed_candle_ts"),
+                    "last_processed_tick_ts": state.get("last_processed_tick_ts"),
+                    "last_processed_tick_ltp": state.get("last_processed_tick_ltp"),
                     "last_crossover": state.get("last_crossover"),
                     "crossovers_count": len(state.get("crossovers", [])),
                     "updated_at": state.get("updated_at"),

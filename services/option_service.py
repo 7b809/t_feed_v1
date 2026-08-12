@@ -13,6 +13,7 @@ from services.token_service import token_service
 # File-specific logger (logs to logs/option_service.log)
 logger = get_logger(__file__)
 
+
 # ============================================================
 # Thread-Safe Runtime Cache
 # ============================================================
@@ -24,7 +25,12 @@ options_cache = {
     "total_contracts": 0,
     "subscribed_keys": [],
     "data": [],
+
+    # Fast lookup indexes rebuilt whenever option contracts are refreshed.
+    "contracts_by_key": {},
+    "contracts_by_strike_type": {},
 }
+
 
 # ============================================================
 # Feed Constants
@@ -59,16 +65,42 @@ SUPPORTED_INTERVALS = OPTION_SUPPORTED_INTERVALS
 # ============================================================
 
 def safe_float(value, default: float = 0.0) -> float:
-    """Safely converts value to float."""
+    """Safely converts a value to float."""
 
     try:
         if value is None:
             return default
-
         return float(value)
-
     except Exception:
         return default
+
+
+def safe_int(value, default: int = 0) -> int:
+    """Safely converts a value to int."""
+
+    try:
+        if value is None:
+            return default
+        return int(value)
+    except Exception:
+        return default
+
+
+def normalize_option_type(option_type: str | None) -> str | None:
+    """Normalizes option type to CE or PE."""
+
+    if not option_type:
+        return None
+
+    value = str(option_type).strip().upper()
+
+    if value in ["CE", "CALL"]:
+        return "CE"
+
+    if value in ["PE", "PUT"]:
+        return "PE"
+
+    return None
 
 
 def parse_expiry_date(expiry_val) -> date | None:
@@ -101,9 +133,11 @@ def clean_contract_data(item: dict) -> dict:
     exp_date = parse_expiry_date(item.get("expiry"))
     expiry_str = exp_date.strftime("%Y-%m-%d") if exp_date else str(item.get("expiry"))
 
+    instrument_type = normalize_option_type(item.get("instrument_type"))
+
     return {
         "instrument_key": item.get("instrument_key"),
-        "instrument_type": item.get("instrument_type"),
+        "instrument_type": instrument_type or item.get("instrument_type"),
         "strike_price": item.get("strike_price"),
         "expiry": expiry_str,
         "trading_symbol": item.get("trading_symbol"),
@@ -111,6 +145,92 @@ def clean_contract_data(item: dict) -> dict:
         "underlying_symbol": item.get("underlying_symbol"),
     }
 
+
+def build_strike_type_key(strike_price, instrument_type: str) -> str | None:
+    """
+    Builds lookup key for strike + CE/PE.
+
+    Example:
+        24500.0_CE
+    """
+
+    option_type = normalize_option_type(instrument_type)
+
+    if strike_price is None or not option_type:
+        return None
+
+    try:
+        return f"{float(strike_price)}_{option_type}"
+    except Exception:
+        return None
+
+
+def round_to_nearest_strike(value, strike_step: int | None = None) -> int:
+    """
+    Rounds a spot value to nearest configured strike step.
+
+    Example:
+        value=24333, strike_step=50 -> 24350
+    """
+
+    step = safe_int(
+        strike_step,
+        safe_int(getattr(config, "EMA_ALERT_STRIKE_STEP", 50), 50),
+    )
+
+    if step <= 0:
+        step = 50
+
+    spot = safe_float(value)
+
+    return int(round(spot / step) * step)
+
+
+def clamp_strike_to_filter_range(strike_value: float) -> float:
+    """
+    Clamps strike inside configured STRIKE_FROM and STRIKE_TO.
+    """
+
+    strike_from = safe_float(getattr(config, "STRIKE_FROM", strike_value))
+    strike_to = safe_float(getattr(config, "STRIKE_TO", strike_value))
+
+    return max(strike_from, min(float(strike_value), strike_to))
+
+
+def is_strike_inside_filter_range(strike_value) -> bool:
+    """
+    Returns True if strike is inside global configured filter range.
+    """
+
+    if strike_value is None:
+        return False
+
+    strike = safe_float(strike_value)
+
+    strike_from = safe_float(getattr(config, "STRIKE_FROM", 0.0))
+    strike_to = safe_float(getattr(config, "STRIKE_TO", 0.0))
+
+    return strike_from <= strike <= strike_to
+
+
+def is_strike_inside_window(strike_value, lower_limit, upper_limit) -> bool:
+    """
+    Returns True if strike is inside provided window.
+    """
+
+    if strike_value is None:
+        return False
+
+    strike = safe_float(strike_value)
+    lower = safe_float(lower_limit)
+    upper = safe_float(upper_limit)
+
+    return lower <= strike <= upper
+
+
+# ============================================================
+# Contract Filtering Helpers
+# ============================================================
 
 def get_nearest_expiry_contracts(contracts: list) -> tuple[str | None, list]:
     """
@@ -165,6 +285,53 @@ def get_nearest_expiry_contracts(contracts: list) -> tuple[str | None, list]:
     return nearest_date_str, matching_contracts
 
 
+def _build_cache_indexes(data: list) -> tuple[dict, dict]:
+    """
+    Builds fast lookup indexes from cached contract data.
+
+    Returns:
+        contracts_by_key
+        contracts_by_strike_type
+    """
+
+    contracts_by_key = {}
+    contracts_by_strike_type = {}
+
+    for item in data or []:
+        if not isinstance(item, dict):
+            continue
+
+        instrument_key = item.get("instrument_key")
+
+        if instrument_key:
+            contracts_by_key[instrument_key] = item.copy()
+
+        strike_type_key = build_strike_type_key(
+            item.get("strike_price"),
+            item.get("instrument_type"),
+        )
+
+        if strike_type_key:
+            contracts_by_strike_type[strike_type_key] = item.copy()
+
+    return contracts_by_key, contracts_by_strike_type
+
+
+def _refresh_cache_indexes_locked():
+    """
+    Rebuilds option cache lookup indexes.
+
+    Caller must hold _cache_lock.
+    """
+
+    data = options_cache.get("data", [])
+
+    contracts_by_key, contracts_by_strike_type = _build_cache_indexes(data)
+
+    options_cache["contracts_by_key"] = contracts_by_key
+    options_cache["contracts_by_strike_type"] = contracts_by_strike_type
+
+
 # ============================================================
 # Thread-Safe Cache Helpers
 # ============================================================
@@ -190,7 +357,7 @@ def get_cached_option_contracts() -> list:
     """
 
     with _cache_lock:
-        return list(options_cache.get("data", []))
+        return [item.copy() for item in options_cache.get("data", [])]
 
 
 def get_all_cached_instruments() -> list:
@@ -203,10 +370,10 @@ def get_all_cached_instruments() -> list:
     """
 
     with _cache_lock:
-        cached_data = list(options_cache.get("data", []))
+        cached_data = [item.copy() for item in options_cache.get("data", [])]
 
     return [
-        NIFTY_INDEX_FEED,
+        NIFTY_INDEX_FEED.copy(),
         *cached_data,
     ]
 
@@ -218,7 +385,8 @@ def get_contract_info_by_instrument_key(instrument_key: str) -> dict | None:
     Used by:
         - Historical candle service
         - Debug/status helpers
-        - Any future candle preload logic
+        - Opening Range service
+        - EMA Telegram alert order suggestion logic
     """
 
     main_key = getattr(config, "MAIN_NIFTY_SECURITY", "NSE_INDEX|Nifty 50")
@@ -227,6 +395,13 @@ def get_contract_info_by_instrument_key(instrument_key: str) -> dict | None:
         return NIFTY_INDEX_FEED.copy()
 
     with _cache_lock:
+        contracts_by_key = options_cache.get("contracts_by_key", {})
+
+        item = contracts_by_key.get(instrument_key)
+
+        if item:
+            return item.copy()
+
         cached_data = list(options_cache.get("data", []))
 
     for item in cached_data:
@@ -236,339 +411,309 @@ def get_contract_info_by_instrument_key(instrument_key: str) -> dict | None:
     return None
 
 
-# ============================================================
-# Strategy / Option Lookup Helpers
-# ============================================================
-
-def get_option_contracts_by_type(option_type: str) -> list:
-    """
-    Returns cached option contracts filtered by CE or PE.
-
-    Example:
-        get_option_contracts_by_type("CE")
-    """
-
-    option_type = str(option_type or "").upper()
-
-    if option_type not in ["CE", "PE"]:
-        return []
-
-    with _cache_lock:
-        cached_data = list(options_cache.get("data", []))
-
-    return [
-        item.copy()
-        for item in cached_data
-        if str(item.get("instrument_type", "")).upper() == option_type
-    ]
-
-
-def get_option_contracts_by_strike_window(
-    strike_from: float,
-    strike_to: float,
-    option_type: str | None = None,
-) -> list:
-    """
-    Returns cached option contracts within a strike window.
-
-    Args:
-        strike_from:
-            Lower strike boundary.
-
-        strike_to:
-            Upper strike boundary.
-
-        option_type:
-            Optional CE or PE filter.
-
-    Example:
-        get_option_contracts_by_strike_window(24000, 25000)
-        get_option_contracts_by_strike_window(24000, 25000, "CE")
-    """
-
-    try:
-        strike_from = float(strike_from)
-        strike_to = float(strike_to)
-
-    except Exception:
-        logger.error(
-            f"Invalid strike window. strike_from={strike_from}, strike_to={strike_to}"
-        )
-        return []
-
-    if strike_from > strike_to:
-        strike_from, strike_to = strike_to, strike_from
-
-    selected_option_type = str(option_type or "").upper()
-
-    with _cache_lock:
-        cached_data = list(options_cache.get("data", []))
-
-    output = []
-
-    for item in cached_data:
-        try:
-            strike = safe_float(item.get("strike_price"))
-            item_type = str(item.get("instrument_type", "")).upper()
-
-            if item_type not in ["CE", "PE"]:
-                continue
-
-            if selected_option_type in ["CE", "PE"] and item_type != selected_option_type:
-                continue
-
-            if strike_from <= strike <= strike_to:
-                output.append(item.copy())
-
-        except Exception:
-            continue
-
-    output.sort(
-        key=lambda item: (
-            safe_float(item.get("strike_price")),
-            str(item.get("instrument_type", "")),
-        )
-    )
-
-    return output
-
-
-def get_option_contract_by_strike_and_type(
+def get_contract_info_by_strike_type(
     strike_price: float,
-    option_type: str,
+    instrument_type: str,
 ) -> dict | None:
     """
-    Returns one cached option contract by exact strike and CE/PE type.
+    Returns cached option contract by strike and CE/PE.
 
     Example:
-        get_option_contract_by_strike_and_type(24500, "CE")
+        get_contract_info_by_strike_type(24500, "CE")
     """
 
-    option_type = str(option_type or "").upper()
+    option_type = normalize_option_type(instrument_type)
 
-    if option_type not in ["CE", "PE"]:
+    if strike_price is None or not option_type:
         return None
 
-    target_strike = safe_float(strike_price)
+    strike_type_key = build_strike_type_key(strike_price, option_type)
+
+    if not strike_type_key:
+        return None
 
     with _cache_lock:
+        item = options_cache.get("contracts_by_strike_type", {}).get(strike_type_key)
+
+        if item:
+            return item.copy()
+
         cached_data = list(options_cache.get("data", []))
 
-    for item in cached_data:
-        try:
-            item_strike = safe_float(item.get("strike_price"))
-            item_type = str(item.get("instrument_type", "")).upper()
-
-            if item_strike == target_strike and item_type == option_type:
-                return item.copy()
-
-        except Exception:
-            continue
+    for contract in cached_data:
+        if (
+            safe_float(contract.get("strike_price")) == safe_float(strike_price)
+            and normalize_option_type(contract.get("instrument_type")) == option_type
+        ):
+            return contract.copy()
 
     return None
 
 
-def get_nearest_option_contracts_by_spot(
-    spot: float,
-    option_type: str,
-    count: int = 3,
-    mode: str = "nearest_around_spot",
-    strike_from: float | None = None,
-    strike_to: float | None = None,
+def get_option_contracts_in_strike_window(
+    lower_limit: float,
+    upper_limit: float,
+    option_types: list[str] | None = None,
 ) -> list:
     """
-    Returns nearest option contracts based on current NIFTY spot.
+    Returns cached option contracts inside given strike window.
 
-    Args:
-        spot:
-            Current NIFTY spot.
-
-        option_type:
-            CE or PE.
-
-        count:
-            Number of contracts to return.
-
-        mode:
-            nearest_around_spot:
-                Sort by absolute distance from spot.
-
-            equal_or_below:
-                Return strikes <= spot, nearest first.
-                Example:
-                    spot=24648
-                    returns 24600, 24550, 24500
-
-            equal_or_above:
-                Return strikes >= spot, nearest first.
-                Example:
-                    spot=24648
-                    returns 24650, 24700, 24750
-
-        strike_from:
-            Optional lower strike boundary.
-
-        strike_to:
-            Optional upper strike boundary.
-
-    Returns:
-        List of contract dictionaries with an added distance_from_spot field.
+    Used for isolated instrument selection based on:
+        Opening Range average +/- configured window points.
     """
 
-    spot = safe_float(spot)
+    normalized_types = None
 
-    if spot <= 0:
-        return []
-
-    option_type = str(option_type or "").upper()
-
-    if option_type not in ["CE", "PE"]:
-        return []
-
-    try:
-        count = max(1, int(count or 3))
-    except Exception:
-        count = 3
-
-    mode = str(mode or "nearest_around_spot").lower()
-
-    with _cache_lock:
-        cached_data = list(options_cache.get("data", []))
-
-    candidates = []
-
-    for item in cached_data:
-        try:
-            item_type = str(item.get("instrument_type", "")).upper()
-
-            if item_type != option_type:
-                continue
-
-            strike = safe_float(item.get("strike_price"))
-
-            if strike <= 0:
-                continue
-
-            if strike_from is not None and strike < safe_float(strike_from):
-                continue
-
-            if strike_to is not None and strike > safe_float(strike_to):
-                continue
-
-            item_copy = item.copy()
-            item_copy["distance_from_spot"] = round(abs(strike - spot), 4)
-
-            candidates.append(item_copy)
-
-        except Exception:
-            continue
-
-    if mode == "equal_or_below":
-        filtered = [
-            item
-            for item in candidates
-            if safe_float(item.get("strike_price")) <= spot
-        ]
-
-        filtered.sort(
-            key=lambda item: safe_float(item.get("strike_price")),
-            reverse=True,
-        )
-
-    elif mode == "equal_or_above":
-        filtered = [
-            item
-            for item in candidates
-            if safe_float(item.get("strike_price")) >= spot
-        ]
-
-        filtered.sort(
-            key=lambda item: safe_float(item.get("strike_price")),
-        )
-
-    else:
-        filtered = candidates
-        filtered.sort(
-            key=lambda item: (
-                safe_float(item.get("distance_from_spot")),
-                safe_float(item.get("strike_price")),
-            )
-        )
-
-    return filtered[:count]
-
-
-def get_strategy_eligible_option_contracts(
-    opening_range_average: float,
-    window_points: float = 500,
-    option_type: str | None = None,
-) -> dict:
-    """
-    Builds strategy eligible option list based on Opening Range average.
-
-    Formula:
-        raw_from = opening_range_average - window_points
-        raw_to = opening_range_average + window_points
-
-        final_from = max(STRIKE_FROM, raw_from)
-        final_to = min(STRIKE_TO, raw_to)
-
-    Example:
-        Opening Range average = 24560
-        window = 500
-        raw = 24060 to 25060
-
-        STRIKE_TO = 25000
-        final = 24060 to 25000
-    """
-
-    avg = safe_float(opening_range_average)
-    window_points = safe_float(window_points, default=500)
-
-    if avg <= 0:
-        return {
-            "status": "failed",
-            "message": "Invalid opening_range_average.",
-            "opening_range_average": opening_range_average,
-            "window_points": window_points,
-            "strike_from": None,
-            "strike_to": None,
-            "contracts_count": 0,
-            "contracts": [],
+    if option_types:
+        normalized_types = {
+            normalize_option_type(item)
+            for item in option_types
+            if normalize_option_type(item)
         }
 
-    raw_from = avg - window_points
-    raw_to = avg + window_points
+    lower = safe_float(lower_limit)
+    upper = safe_float(upper_limit)
 
-    strike_from = max(
-        safe_float(getattr(config, "STRIKE_FROM", raw_from)),
-        raw_from,
+    with _cache_lock:
+        cached_data = [item.copy() for item in options_cache.get("data", [])]
+
+    output = []
+
+    for item in cached_data:
+        strike = item.get("strike_price")
+        option_type = normalize_option_type(item.get("instrument_type"))
+
+        if strike is None or not option_type:
+            continue
+
+        if normalized_types and option_type not in normalized_types:
+            continue
+
+        if is_strike_inside_window(strike, lower, upper):
+            output.append(item)
+
+    return output
+
+
+def get_option_contracts_in_average_window(
+    average_value: float,
+    window_points: float | None = None,
+    option_types: list[str] | None = None,
+) -> dict:
+    """
+    Returns option contracts inside Opening Range average +/- window,
+    clamped to global STRIKE_FROM and STRIKE_TO.
+
+    Example:
+        average=24570
+        window=500
+        raw range = 24070 to 25070
+        config range = 23000 to 25000
+        final range = 24070 to 25000
+    """
+
+    window = safe_float(
+        window_points,
+        safe_float(
+            getattr(config, "OPENING_RANGE_ISOLATION_AVERAGE_WINDOW_POINTS", 500.0),
+            500.0,
+        ),
     )
 
-    strike_to = min(
-        safe_float(getattr(config, "STRIKE_TO", raw_to)),
-        raw_to,
-    )
+    average = safe_float(average_value)
 
-    contracts = get_option_contracts_by_strike_window(
-        strike_from=strike_from,
-        strike_to=strike_to,
-        option_type=option_type,
+    configured_from = safe_float(getattr(config, "STRIKE_FROM", 0.0))
+    configured_to = safe_float(getattr(config, "STRIKE_TO", 0.0))
+
+    raw_lower = average - window
+    raw_upper = average + window
+
+    final_lower = max(configured_from, raw_lower)
+    final_upper = min(configured_to, raw_upper)
+
+    contracts = get_option_contracts_in_strike_window(
+        lower_limit=final_lower,
+        upper_limit=final_upper,
+        option_types=option_types,
     )
 
     return {
-        "status": "success",
-        "message": "Strategy eligible option contracts resolved.",
-        "opening_range_average": round(avg, 4),
-        "window_points": round(window_points, 4),
-        "raw_strike_from": round(raw_from, 4),
-        "raw_strike_to": round(raw_to, 4),
-        "strike_from": round(strike_from, 4),
-        "strike_to": round(strike_to, 4),
-        "option_type": str(option_type).upper() if option_type else None,
+        "average": average,
+        "window_points": window,
+        "configured_from": configured_from,
+        "configured_to": configured_to,
+        "raw_lower": raw_lower,
+        "raw_upper": raw_upper,
+        "final_lower": final_lower,
+        "final_upper": final_upper,
         "contracts_count": len(contracts),
         "contracts": contracts,
     }
+
+
+def get_nearest_contract_to_average(
+    contracts: list,
+    average_value: float,
+) -> dict | None:
+    """
+    From given contracts, returns contract nearest to average based on strike price.
+    """
+
+    if not contracts:
+        return None
+
+    average = safe_float(average_value)
+
+    valid_contracts = [
+        item
+        for item in contracts
+        if isinstance(item, dict) and item.get("strike_price") is not None
+    ]
+
+    if not valid_contracts:
+        return None
+
+    return min(
+        valid_contracts,
+        key=lambda item: abs(safe_float(item.get("strike_price")) - average),
+    ).copy()
+
+
+# ============================================================
+# EMA Alert Order Instrument Helpers
+# ============================================================
+
+def get_order_option_type_for_ema_cross(cross_type: str) -> str | None:
+    """
+    Resolves order option type from EMA cross.
+
+    Requirement:
+        bullish cross -> CE
+        bearish cross -> PE
+    """
+
+    cross_text = str(cross_type or "").lower()
+
+    if "bullish" in cross_text:
+        return normalize_option_type(
+            getattr(config, "EMA_ALERT_BULLISH_OPTION_TYPE", "CE")
+        )
+
+    if "bearish" in cross_text:
+        return normalize_option_type(
+            getattr(config, "EMA_ALERT_BEARISH_OPTION_TYPE", "PE")
+        )
+
+    return None
+
+
+def build_nearest_order_strikes(
+    current_nifty_ltp: float,
+    strike_step: int | None = None,
+    offsets: list[int] | None = None,
+    clamp_to_filter_range: bool | None = None,
+):
+    """
+        Builds nearest order strike list around current NIFTY spot.
+
+        Example:
+            current_nifty_ltp = 24333
+            strike_step = 50
+            nearest rounded strike = 24350
+            offsets = [-50, 0, 50]
+            output = [24300, 24350, 24400]
+        """
+
+    step = safe_int(
+        strike_step,
+        safe_int(getattr(config, "EMA_ALERT_STRIKE_STEP", 50), 50),
+    )
+
+    if step <= 0:
+        step = 50
+
+    selected_offsets = offsets
+
+    if selected_offsets is None:
+        selected_offsets = getattr(
+            config,
+            "EMA_ALERT_NEAREST_STRIKE_OFFSETS",
+            [-50, 0, 50],
+        )
+
+    should_clamp = (
+        bool(clamp_to_filter_range)
+        if clamp_to_filter_range is not None
+        else bool(getattr(config, "EMA_ALERT_ORDER_STRIKES_CLAMP_TO_FILTER_RANGE", True))
+    )
+
+    nearest = round_to_nearest_strike(current_nifty_ltp, step)
+
+    output = []
+
+    for offset in selected_offsets:
+        strike = nearest + safe_int(offset)
+
+        if should_clamp:
+            strike = int(clamp_strike_to_filter_range(strike))
+
+        if strike not in output and is_strike_inside_filter_range(strike):
+            output.append(strike)
+
+    return output
+
+
+def get_nearest_order_instruments_for_ema_cross(
+    current_nifty_ltp: float,
+    cross_type: str,
+) -> list:
+    """
+    Returns nearest cached CE/PE option instruments for Telegram EMA alert.
+
+    Requirement:
+        bullish EMA cross -> CE instruments
+        bearish EMA cross -> PE instruments
+
+    The live LTP is not maintained in option_service.
+    Later, upstox_websocket/opening_range_service can attach live price if available.
+    """
+
+    option_type = get_order_option_type_for_ema_cross(cross_type)
+
+    if not option_type:
+        return []
+
+    strikes = build_nearest_order_strikes(current_nifty_ltp)
+
+    output = []
+
+    for strike in strikes:
+        contract = get_contract_info_by_strike_type(strike, option_type)
+
+        if not contract:
+            output.append(
+                {
+                    "strike_price": float(strike),
+                    "instrument_type": option_type,
+                    "instrument_key": None,
+                    "trading_symbol": f"NIFTY {strike} {option_type}",
+                    "available": False,
+                    "live_ltp": None,
+                }
+            )
+            continue
+
+        output.append(
+            {
+                **contract,
+                "available": True,
+                "live_ltp": None,
+            }
+        )
+
+    max_items = safe_int(getattr(config, "EMA_ALERT_MAX_ORDER_INSTRUMENTS", 3), 3)
+
+    return output[:max_items]
 
 
 # ============================================================
@@ -586,7 +731,7 @@ def get_available_feeds() -> list:
     ]
 
     with _cache_lock:
-        cached_data = list(options_cache.get("data", []))
+        cached_data = [item.copy() for item in options_cache.get("data", [])]
 
     for item in cached_data:
         feeds.append(
@@ -611,6 +756,16 @@ def get_feed_by_instrument_key(instrument_key: str) -> dict | None:
         }
 
     with _cache_lock:
+        contracts_by_key = options_cache.get("contracts_by_key", {})
+
+        item = contracts_by_key.get(instrument_key)
+
+        if item:
+            return {
+                **item,
+                "supported_intervals": OPTION_SUPPORTED_INTERVALS,
+            }
+
         cached_data = list(options_cache.get("data", []))
 
     for item in cached_data:
@@ -728,16 +883,25 @@ def get_options_contracts(
 
         keys_to_subscribe = list(dict.fromkeys([instrument_key] + option_keys))
 
-        # Update cache safely with lock
+        # Build indexes before updating cache.
+        contracts_by_key, contracts_by_strike_type = _build_cache_indexes(
+            final_output.get("data", [])
+        )
+
+        # Update cache safely with lock.
         with _cache_lock:
             options_cache["nearest_expiry"] = final_output.get("nearest_expiry")
             options_cache["total_contracts"] = final_output.get("total_contracts", 0)
             options_cache["subscribed_keys"] = keys_to_subscribe
             options_cache["data"] = final_output.get("data", [])
+            options_cache["contracts_by_key"] = contracts_by_key
+            options_cache["contracts_by_strike_type"] = contracts_by_strike_type
 
         logger.info(
             f"Updated global options cache. "
-            f"Total keys to subscribe: {len(keys_to_subscribe)}"
+            f"Total keys to subscribe: {len(keys_to_subscribe)}, "
+            f"contracts_by_key={len(contracts_by_key)}, "
+            f"contracts_by_strike_type={len(contracts_by_strike_type)}"
         )
 
         if save_data:
@@ -764,6 +928,33 @@ def get_options_contracts(
             f"{type(ex).__name__}: {ex}"
         )
         return None
+
+
+# ============================================================
+# Debug / Summary Helpers
+# ============================================================
+
+def get_options_cache_summary() -> dict:
+    """
+    Returns lightweight option cache summary.
+    """
+
+    with _cache_lock:
+        return {
+            "nearest_expiry": options_cache.get("nearest_expiry"),
+            "total_contracts": options_cache.get("total_contracts"),
+            "subscribed_keys_count": len(options_cache.get("subscribed_keys", [])),
+            "contracts_by_key_count": len(options_cache.get("contracts_by_key", {})),
+            "contracts_by_strike_type_count": len(
+                options_cache.get("contracts_by_strike_type", {})
+            ),
+            "sample_subscribed_keys": options_cache.get("subscribed_keys", [])[:5],
+            "sample_contract": (
+                options_cache.get("data", [None])[0]
+                if options_cache.get("data")
+                else None
+            ),
+        }
 
 
 # # Manual local test execution keep this comments for testing purpose

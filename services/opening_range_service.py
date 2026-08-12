@@ -13,10 +13,15 @@ from upstox_client.rest import ApiException
 
 from core import config
 from core.logger import get_logger
-from services.option_service import options_cache
+from services.option_service import (
+    options_cache,
+    get_contract_info_by_instrument_key,
+    get_nearest_order_instruments_for_ema_cross,
+)
 from services.telegram_service import telegram_service
 
 logger = get_logger(__file__)
+
 
 # ============================================================
 # Thread-Safe Runtime Cache
@@ -46,33 +51,14 @@ opening_range_cache = {
     "touch_events_count": 0,
     "pending_touch_events_count": 0,
     "alert_sent_keys_count": 0,
+    "isolated_instrument": None,
+    "isolated_instrument_selected": False,
+    "isolated_instrument_selected_at": None,
+    "isolated_instrument_selection_reason": None,
+    "isolated_ema_alerts_count": 0,
     "data": {},
     "touch_events": [],
     "errors": {},
-    # ========================================================
-    # OR + EMA Strategy Runtime State
-    # ========================================================
-    # ========================================================
-    # OR + EMA Strategy Runtime State
-    # ========================================================
-    "strategy_enabled": True,
-    "strategy_or_average": None,
-    "strategy_strike_from": None,
-    "strategy_strike_to": None,
-    "strategy_eligible_count": 0,
-    "strategy_eligible_instruments": {},
-    # All touched candidates, including non-selected debug-only touches.
-    "strategy_touched_count": 0,
-    "strategy_touched_instruments": {},
-    # Final selected touch used for EMA confirmation.
-    "strategy_selected_touch": None,
-    "strategy_selected_touch_key": None,
-    "strategy_selected_instrument_key": None,
-    "strategy_selected_level": None,
-    "strategy_selected_reason": None,
-    "strategy_selected_at": None,
-    "strategy_alerts_sent_count": 0,
-    "strategy_alerts_sent": {},
 }
 
 _touch_lock = Lock()
@@ -90,35 +76,13 @@ _latest_main_index_ltp_source = None
 _latest_main_index_ltp_updated_at = None
 _last_touch_alert_sent_at = None
 
-
-# ============================================================
-# OR + EMA Strategy Runtime Cache
-# ============================================================
-
-_or_ema_strategy_lock = Lock()
-
-_or_ema_strategy_cache = {
-    "or_average": None,
-    "strike_from": None,
-    "strike_to": None,
-    "eligible_instruments": {},
-    # All raw touch candidates for debug.
-    "touched_instruments": {},
-    # Final selected touch for strategy EMA confirmation.
-    "selected_touch": None,
-    "selected_touch_key": None,
-    "selected_instrument_key": None,
-    "selected_level": None,
-    "selected_reason": None,
-    "selected_at": None,
-    "alerts_sent": {},
-    "latest_ticks": {},
-    "last_updated_at": None,
-}
+# Latest live LTP by instrument is used for Telegram nearest order details.
+_latest_ltp_by_instrument = {}
+_latest_ltp_updated_at_by_instrument = {}
 
 
 # ============================================================
-# Disabled Selected OR Compatibility State
+# Isolated Instrument State
 # ============================================================
 
 _selected_or_lock = Lock()
@@ -133,6 +97,11 @@ _selected_or_instrument_state = {
     "touch_time": None,
     "touch_source": None,
     "selected_at": None,
+    "selection_priority": None,
+    "selection_reason": None,
+    "reference_average": None,
+    
+    "average_window": None,
     "contract_info": None,
     "range": None,
     "levels": None,
@@ -140,8 +109,9 @@ _selected_or_instrument_state = {
     "latest_main_index_ltp": None,
     "ema_alerts_count": 0,
     "last_ema_alert": None,
-    "disabled": True,
-    "message": "Selected Opening Range instrument flow is disabled.",
+    "disabled": False,
+    
+    "message": "No isolated Opening Range instrument selected yet.",
 }
 
 _selected_or_ema_alerts = deque(
@@ -166,39 +136,24 @@ DEFAULT_OPENING_RANGE_CANDLE_COUNT = int(
 )
 
 DEFAULT_MARKET_OPEN_HOUR = int(getattr(config, "OPENING_RANGE_MARKET_OPEN_HOUR", 9))
-
 DEFAULT_MARKET_OPEN_MINUTE = int(
     getattr(config, "OPENING_RANGE_MARKET_OPEN_MINUTE", 15)
 )
 
 DEFAULT_FETCH_HOUR = int(getattr(config, "OPENING_RANGE_FETCH_HOUR", 9))
-
 DEFAULT_FETCH_MINUTE = int(getattr(config, "OPENING_RANGE_FETCH_MINUTE", 18))
 
-DEFAULT_INTRADAY_UNIT = getattr(
-    config,
-    "OPENING_RANGE_INTRADAY_UNIT",
-    "minutes",
-)
-
-DEFAULT_INTRADAY_INTERVAL = getattr(
-    config,
-    "OPENING_RANGE_INTRADAY_INTERVAL",
-    "1",
-)
+DEFAULT_INTRADAY_UNIT = getattr(config, "OPENING_RANGE_INTRADAY_UNIT", "minutes")
+DEFAULT_INTRADAY_INTERVAL = getattr(config, "OPENING_RANGE_INTRADAY_INTERVAL", "1")
 
 DEFAULT_MAX_WORKERS = int(getattr(config, "OPENING_RANGE_MAX_WORKERS", 5))
-
 DEFAULT_SLEEP_SECONDS = float(
     getattr(config, "OPENING_RANGE_REQUEST_SLEEP_SECONDS", 0.15)
 )
 
 DEFAULT_SAVE_FILE = bool(getattr(config, "OPENING_RANGE_SAVE_FILE", True))
-
 DEFAULT_OUTPUT_FILE = getattr(
-    config,
-    "OPENING_RANGE_OUTPUT_FILE",
-    "data/opening_range_results.json",
+    config, "OPENING_RANGE_OUTPUT_FILE", "data/opening_range_results.json"
 )
 
 DEFAULT_BACKFILL_SCAN_ENABLED = bool(
@@ -243,11 +198,7 @@ DEFAULT_MAIN_INDEX_KEY = getattr(
     getattr(config, "MAIN_NIFTY_SECURITY", "NSE_INDEX|Nifty 50"),
 )
 
-DEFAULT_TOUCH_CHECK_MODE = getattr(
-    config,
-    "OPENING_RANGE_TOUCH_CHECK_MODE",
-    "high_low",
-)
+DEFAULT_TOUCH_CHECK_MODE = getattr(config, "OPENING_RANGE_TOUCH_CHECK_MODE", "high_low")
 
 DEFAULT_TOUCH_EVENTS_OUTPUT_FILE = getattr(
     config,
@@ -267,137 +218,63 @@ DEFAULT_EMA_CROSS_INCLUDE_OPENING_RANGE_LEVELS = bool(
     getattr(config, "EMA_CROSS_INCLUDE_OPENING_RANGE_LEVELS", True)
 )
 
-# ============================================================
-# OR + EMA Strategy Config Defaults
-# ============================================================
-
-DEFAULT_OR_EMA_STRATEGY_ENABLED = bool(
-    getattr(config, "OR_EMA_STRATEGY_ALERT_ENABLED", True)
+DEFAULT_ISOLATION_ENABLED = bool(
+    getattr(config, "OPENING_RANGE_ISOLATED_INSTRUMENT_ENABLED", True)
 )
 
-DEFAULT_OR_EMA_STRATEGY_WINDOW_POINTS = int(
-    getattr(config, "OR_EMA_STRATEGY_STRIKE_WINDOW_POINTS", 500)
+DEFAULT_ISOLATION_WINDOW_POINTS = float(
+    getattr(config, "OPENING_RANGE_ISOLATION_AVERAGE_WINDOW_POINTS", 500.0)
 )
 
-DEFAULT_OR_EMA_STRATEGY_TOUCH_LEVELS = [
+DEFAULT_ISOLATION_TOUCH_LEVELS = [
     str(item).upper()
     for item in getattr(
         config,
-        "OR_EMA_STRATEGY_TOUCH_LEVELS",
-        ["S2", "S3", "R2", "R3"],
+        "OPENING_RANGE_ISOLATION_TOUCH_LEVELS",
+        ["R2", "R3", "S2", "S3"],
     )
 ]
 
-DEFAULT_OR_EMA_STRATEGY_TOUCH_CHECK_MODE = getattr(
-    config,
-    "OR_EMA_STRATEGY_TOUCH_CHECK_MODE",
-    "high_low",
+DEFAULT_ISOLATION_PRIORITY_LEVELS = [
+    str(item).upper()
+    for item in getattr(
+        config,
+        "OPENING_RANGE_ISOLATION_PRIORITY_LEVELS",
+        ["R3", "S3", "R2", "S2"],
+    )
+]
+
+DEFAULT_ISOLATION_LOCK_FOR_DAY = bool(
+    getattr(config, "OPENING_RANGE_ISOLATION_LOCK_FOR_DAY", True)
 )
 
-DEFAULT_OR_EMA_STRATEGY_OPTIONS_ONLY = bool(
-    getattr(config, "OR_EMA_STRATEGY_OPTIONS_ONLY", True)
+DEFAULT_ISOLATION_ALLOW_PRIORITY_UPGRADE = bool(
+    getattr(config, "OPENING_RANGE_ISOLATION_ALLOW_PRIORITY_UPGRADE", True)
 )
 
-DEFAULT_OR_EMA_STRATEGY_STORE_LIVE_TICK_CACHE = bool(
-    getattr(config, "OR_EMA_STRATEGY_STORE_LIVE_TICK_CACHE", True)
+DEFAULT_ISOLATED_NOTIFY_ENABLED = bool(
+    getattr(config, "OPENING_RANGE_ISOLATED_INSTRUMENT_NOTIFY_ENABLED", True)
 )
 
-DEFAULT_OR_EMA_STRATEGY_NEAREST_STRIKE_COUNT = int(
-    getattr(config, "OR_EMA_STRATEGY_NEAREST_STRIKE_COUNT", 3)
+DEFAULT_ISOLATION_ALLOW_BACKFILL_TOUCH = bool(
+    getattr(config, "OPENING_RANGE_ISOLATION_ALLOW_BACKFILL_TOUCH", True)
 )
 
-DEFAULT_OR_EMA_STRATEGY_BULLISH_OPTION_TYPE = str(
-    getattr(config, "OR_EMA_STRATEGY_BULLISH_OPTION_TYPE", "CE")
-).upper()
-
-DEFAULT_OR_EMA_STRATEGY_BEARISH_OPTION_TYPE = str(
-    getattr(config, "OR_EMA_STRATEGY_BEARISH_OPTION_TYPE", "PE")
-).upper()
-
-DEFAULT_OR_EMA_STRATEGY_BULLISH_STRIKE_MODE = getattr(
-    config,
-    "OR_EMA_STRATEGY_BULLISH_STRIKE_MODE",
-    "equal_or_below",
+DEFAULT_ISOLATION_ALLOW_LIVE_TOUCH = bool(
+    getattr(config, "OPENING_RANGE_ISOLATION_ALLOW_LIVE_TOUCH", True)
 )
 
-DEFAULT_OR_EMA_STRATEGY_BEARISH_STRIKE_MODE = getattr(
-    config,
-    "OR_EMA_STRATEGY_BEARISH_STRIKE_MODE",
-    "equal_or_above",
+DEFAULT_ISOLATION_OPTIONS_ONLY = bool(
+    getattr(config, "OPENING_RANGE_ISOLATION_OPTIONS_ONLY", True)
 )
 
-DEFAULT_OR_EMA_STRATEGY_CONFIRM_SAME_INSTRUMENT = bool(
-    getattr(config, "OR_EMA_STRATEGY_CONFIRM_SAME_INSTRUMENT", True)
+DEFAULT_EMA_ISOLATED_TELEGRAM_ENABLED = bool(
+    getattr(config, "EMA_ISOLATED_INSTRUMENT_TELEGRAM_ENABLED", True)
 )
 
-DEFAULT_OR_EMA_STRATEGY_ALERT_ONCE_PER_TOUCH_AND_CROSS = bool(
-    getattr(config, "OR_EMA_STRATEGY_ALERT_ONCE_PER_TOUCH_AND_CROSS", True)
+DEFAULT_LIVE_EMA_CALCULATION_MODE = bool(
+    getattr(config, "LIVE_EMA_CALCULATION_MODE", False)
 )
-
-DEFAULT_OR_EMA_STRATEGY_MAX_TOUCHED_INSTRUMENTS = int(
-    getattr(config, "OR_EMA_STRATEGY_MAX_TOUCHED_INSTRUMENTS", 2000)
-)
-
-DEFAULT_OR_EMA_STRATEGY_MAX_ALERTS_IN_MEMORY = int(
-    getattr(config, "OR_EMA_STRATEGY_MAX_ALERTS_IN_MEMORY", 2000)
-)
-
-DEFAULT_OR_EMA_STRATEGY_INCLUDE_NEAREST_LIVE_DATA = bool(
-    getattr(config, "OR_EMA_STRATEGY_INCLUDE_NEAREST_LIVE_DATA", True)
-)
-
-DEFAULT_OR_EMA_STRATEGY_INCLUDE_TOUCHED_LIVE_DATA = bool(
-    getattr(config, "OR_EMA_STRATEGY_INCLUDE_TOUCHED_INSTRUMENT_LIVE_DATA", True)
-)
-
-DEFAULT_OR_EMA_STRATEGY_TELEGRAM_TITLE = getattr(
-    config,
-    "OR_EMA_STRATEGY_TELEGRAM_TITLE",
-    "OR Touch + EMA Cross Strategy Alert",
-)
-
-DEFAULT_OR_EMA_STRATEGY_TELEGRAM_LEVEL = getattr(
-    config,
-    "OR_EMA_STRATEGY_TELEGRAM_LEVEL",
-    "OPENING_RANGE",
-)
-
-DEFAULT_OR_EMA_STRATEGY_SELECTION_MODE = getattr(
-    config,
-    "OR_EMA_STRATEGY_SELECTION_MODE",
-    "first_touch_same_time_nearest",
-)
-
-DEFAULT_OR_EMA_STRATEGY_LOCK_AFTER_FIRST_SELECTION = bool(
-    getattr(config, "OR_EMA_STRATEGY_LOCK_AFTER_FIRST_SELECTION", True)
-)
-
-DEFAULT_OR_EMA_STRATEGY_STORE_NON_SELECTED_TOUCHES = bool(
-    getattr(config, "OR_EMA_STRATEGY_STORE_NON_SELECTED_TOUCHES", True)
-)
-
-DEFAULT_OR_EMA_STRATEGY_USE_NIFTY_SPOT_FOR_SELECTION = bool(
-    getattr(config, "OR_EMA_STRATEGY_USE_NIFTY_SPOT_FOR_SELECTION", True)
-)
-
-DEFAULT_OR_EMA_STRATEGY_FALLBACK_TO_EVENT_DISTANCE = bool(
-    getattr(config, "OR_EMA_STRATEGY_FALLBACK_TO_EVENT_DISTANCE", True)
-)
-
-DEFAULT_OR_EMA_STRATEGY_UNKNOWN_DISTANCE_VALUE = float(
-    getattr(config, "OR_EMA_STRATEGY_UNKNOWN_DISTANCE_VALUE", 999999999.0)
-)
-
-DEFAULT_OR_EMA_STRATEGY_SAME_TIME_COMPARE_MODE = getattr(
-    config,
-    "OR_EMA_STRATEGY_SAME_TIME_COMPARE_MODE",
-    "exact_timestamp",
-)
-
-DEFAULT_OR_EMA_STRATEGY_CONFIRM_SELECTED_ONLY = bool(
-    getattr(config, "OR_EMA_STRATEGY_CONFIRM_SELECTED_ONLY", True)
-)
-
 # ============================================================
 # Basic Helpers
 # ============================================================
@@ -405,18 +282,15 @@ DEFAULT_OR_EMA_STRATEGY_CONFIRM_SELECTED_ONLY = bool(
 
 def is_opening_range_enabled() -> bool:
     """Returns whether opening range calculation is enabled."""
-
     return bool(getattr(config, "OPENING_RANGE_ENABLED", True))
 
 
 def get_market_timezone():
     """Loads market timezone from config."""
-
     timezone_name = getattr(config, "MARKET_TIMEZONE", "Asia/Kolkata")
 
     try:
         return ZoneInfo(timezone_name)
-
     except ZoneInfoNotFoundError:
         logger.error(
             f"Invalid MARKET_TIMEZONE configured: {timezone_name}. "
@@ -427,13 +301,24 @@ def get_market_timezone():
 
 def get_now_market_time() -> datetime:
     """Returns current datetime in configured market timezone."""
-
     return datetime.now(get_market_timezone())
+
+
+def get_live_ema_calculation_mode_text() -> str:
+    """
+    Returns configured live EMA calculation mode.
+
+    LIVE_EMA_CALCULATION_MODE = False
+        completed candle close based EMA calculation.
+
+    LIVE_EMA_CALCULATION_MODE = True
+        live tick/LTP based EMA calculation.
+    """
+    return "tick_ltp" if DEFAULT_LIVE_EMA_CALCULATION_MODE else "candle_close"
 
 
 def safe_float(value, default: float = 0.0) -> float:
     """Safely converts value to float."""
-
     try:
         if value is None:
             return default
@@ -444,7 +329,6 @@ def safe_float(value, default: float = 0.0) -> float:
 
 def safe_int(value, default: int = 0) -> int:
     """Safely converts value to int."""
-
     try:
         if value is None:
             return default
@@ -455,7 +339,6 @@ def safe_int(value, default: int = 0) -> int:
 
 def response_to_dict(api_response: Any) -> dict:
     """Converts Upstox SDK response object to dictionary safely."""
-
     if api_response is None:
         return {}
 
@@ -473,7 +356,6 @@ def response_to_dict(api_response: Any) -> dict:
 
 def extract_candles_from_response(api_response: Any) -> list:
     """Extracts candle list from Upstox intraday candle API response."""
-
     response_dict = response_to_dict(api_response)
     data = response_dict.get("data", {})
 
@@ -486,7 +368,6 @@ def extract_candles_from_response(api_response: Any) -> list:
 
 def parse_candle_timestamp(timestamp_value) -> datetime | None:
     """Parses Upstox candle timestamp into timezone-aware datetime."""
-
     if timestamp_value is None:
         return None
 
@@ -494,10 +375,7 @@ def parse_candle_timestamp(timestamp_value) -> datetime | None:
 
     try:
         if isinstance(timestamp_value, (int, float)):
-            return datetime.fromtimestamp(
-                int(timestamp_value) / 1000,
-                tz=market_tz,
-            )
+            return datetime.fromtimestamp(int(timestamp_value) / 1000, tz=market_tz)
 
         text = str(timestamp_value).strip()
 
@@ -505,10 +383,7 @@ def parse_candle_timestamp(timestamp_value) -> datetime | None:
             return None
 
         if text.isdigit():
-            return datetime.fromtimestamp(
-                int(text) / 1000,
-                tz=market_tz,
-            )
+            return datetime.fromtimestamp(int(text) / 1000, tz=market_tz)
 
         parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
 
@@ -530,7 +405,6 @@ def normalize_candle(candle: list) -> dict | None:
     Expected candle shape:
         [timestamp, open, high, low, close, volume, oi]
     """
-
     if not isinstance(candle, list) or len(candle) < 5:
         return None
 
@@ -553,7 +427,6 @@ def normalize_candle(candle: list) -> dict | None:
 
 def normalize_candles(candles: list) -> list:
     """Normalizes, filters, deduplicates, and sorts candle arrays."""
-
     normalized = []
 
     for candle in candles:
@@ -580,7 +453,6 @@ def normalize_candles(candles: list) -> list:
 
 def serialize_candle(candle: dict) -> dict:
     """Serializes normalized candle for JSON output."""
-
     return {
         "timestamp": candle.get("timestamp"),
         "open": candle.get("open"),
@@ -594,7 +466,6 @@ def serialize_candle(candle: dict) -> dict:
 
 def get_subscribed_instrument_keys() -> list:
     """Returns subscribed instrument keys from options_cache."""
-
     subscribed_keys = options_cache.get("subscribed_keys", [])
 
     if not subscribed_keys:
@@ -605,7 +476,6 @@ def get_subscribed_instrument_keys() -> list:
 
 def get_contract_info_by_key(instrument_key: str) -> dict:
     """Returns contract metadata for an instrument key."""
-
     main_key = getattr(config, "MAIN_NIFTY_SECURITY", "NSE_INDEX|Nifty 50")
 
     if instrument_key == main_key:
@@ -619,6 +489,11 @@ def get_contract_info_by_key(instrument_key: str) -> dict:
             "underlying_symbol": "NIFTY 50",
         }
 
+    resolved = get_contract_info_by_instrument_key(instrument_key)
+
+    if resolved:
+        return resolved
+
     for item in options_cache.get("data", []):
         if item.get("instrument_key") == instrument_key:
             return item
@@ -630,7 +505,6 @@ def get_contract_info_by_key(instrument_key: str) -> dict:
 
 def is_option_contract(contract_info: dict | None) -> bool:
     """Returns True if contract is CE or PE option."""
-
     if not contract_info:
         return False
 
@@ -639,22 +513,34 @@ def is_option_contract(contract_info: dict | None) -> bool:
     return instrument_type in ["CE", "PE"]
 
 
-def trim_dict_to_max_size(data: dict, max_size: int) -> dict:
-    """Keeps dictionary size within max size by removing oldest inserted keys."""
+def update_latest_ltp_for_instrument(
+    instrument_key: str,
+    ltp,
+    updated_at: str | None = None,
+):
+    """Stores latest live LTP by instrument for Telegram suggested instruments."""
+    if not instrument_key:
+        return
 
-    if not isinstance(data, dict):
-        return {}
+    value = safe_float(ltp)
 
-    try:
-        max_size = max(1, int(max_size))
-    except Exception:
-        max_size = 1000
+    if value <= 0:
+        return
 
-    while len(data) > max_size:
-        first_key = next(iter(data))
-        data.pop(first_key, None)
+    updated_at = updated_at or get_now_market_time().isoformat()
 
-    return data
+    with _touch_lock:
+        _latest_ltp_by_instrument[instrument_key] = value
+        _latest_ltp_updated_at_by_instrument[instrument_key] = updated_at
+
+
+def get_latest_ltp_for_instrument(instrument_key: str) -> float | None:
+    """Returns latest cached live LTP for an instrument."""
+    if not instrument_key:
+        return None
+
+    with _touch_lock:
+        return _latest_ltp_by_instrument.get(instrument_key)
 
 
 # ============================================================
@@ -664,7 +550,6 @@ def trim_dict_to_max_size(data: dict, max_size: int) -> dict:
 
 def get_market_open_datetime(target_date=None) -> datetime:
     """Builds market open datetime in market timezone."""
-
     market_tz = get_market_timezone()
     now_market = get_now_market_time()
 
@@ -686,7 +571,6 @@ def get_opening_range_end_datetime(
     target_date=None,
 ) -> datetime:
     """Returns OR completion time."""
-
     candle_count = max(1, int(candle_count or 1))
     market_open_dt = get_market_open_datetime(target_date=target_date)
 
@@ -698,7 +582,6 @@ def select_opening_range_candles(
     candle_count: int = DEFAULT_OPENING_RANGE_CANDLE_COUNT,
 ) -> list:
     """Selects first N candles from market open."""
-
     if not candles:
         return []
 
@@ -727,12 +610,10 @@ def select_post_opening_range_candles(
     candle_count: int = DEFAULT_OPENING_RANGE_CANDLE_COUNT,
 ) -> list:
     """Selects candles after OR completion time."""
-
     if not candles:
         return []
 
     or_end_dt = get_opening_range_end_datetime(candle_count=candle_count)
-
     post_or_candles = []
 
     for candle in candles:
@@ -754,7 +635,6 @@ def select_post_opening_range_candles(
 
 def calculate_opening_range_levels(selected_candles: list) -> dict:
     """Calculates opening range levels using Pine Script-compatible formula."""
-
     if not selected_candles:
         return {
             "status": "empty",
@@ -818,816 +698,17 @@ def calculate_opening_range_levels(selected_candles: list) -> dict:
 
 
 # ============================================================
-# OR + EMA Strategy Helpers
-# ============================================================
-
-
-def build_or_ema_strategy_universe(results: dict):
-    """
-    Builds eligible option universe using NIFTY Opening Range average.
-
-    Formula:
-        eligible_from = max(STRIKE_FROM, nifty_or_average - window)
-        eligible_to = min(STRIKE_TO, nifty_or_average + window)
-    """
-
-    if not DEFAULT_OR_EMA_STRATEGY_ENABLED:
-        return
-
-    if not isinstance(results, dict):
-        return
-
-    nifty_result = results.get(DEFAULT_MAIN_INDEX_KEY)
-
-    if not nifty_result:
-        logger.warning(
-            "OR EMA strategy universe skipped. "
-            f"NIFTY result not found for key={DEFAULT_MAIN_INDEX_KEY}"
-        )
-        return
-
-    if nifty_result.get("status") != "success":
-        logger.warning(
-            "OR EMA strategy universe skipped. "
-            f"NIFTY OR status={nifty_result.get('status')}"
-        )
-        return
-
-    range_data = nifty_result.get("range") or {}
-    or_average = safe_float(range_data.get("average"))
-
-    if or_average <= 0:
-        logger.warning("OR EMA strategy universe skipped. Invalid NIFTY OR average.")
-        return
-
-    strike_from_config = safe_float(getattr(config, "STRIKE_FROM", 0))
-    strike_to_config = safe_float(getattr(config, "STRIKE_TO", 999999))
-
-    raw_from = or_average - DEFAULT_OR_EMA_STRATEGY_WINDOW_POINTS
-    raw_to = or_average + DEFAULT_OR_EMA_STRATEGY_WINDOW_POINTS
-
-    strike_from = max(strike_from_config, raw_from)
-    strike_to = min(strike_to_config, raw_to)
-
-    eligible = {}
-
-    for item in options_cache.get("data", []):
-        if not isinstance(item, dict):
-            continue
-
-        instrument_key = item.get("instrument_key")
-        instrument_type = str(item.get("instrument_type", "")).upper()
-        strike = safe_float(item.get("strike_price"))
-
-        if not instrument_key:
-            continue
-
-        if instrument_type not in ["CE", "PE"]:
-            continue
-
-        if strike_from <= strike <= strike_to:
-            eligible[instrument_key] = {
-                "instrument_key": instrument_key,
-                "strike_price": strike,
-                "instrument_type": instrument_type,
-                "trading_symbol": item.get("trading_symbol"),
-                "expiry": item.get("expiry"),
-                "contract_info": item,
-            }
-
-    with _or_ema_strategy_lock:
-        _or_ema_strategy_cache["or_average"] = round(or_average, 4)
-        _or_ema_strategy_cache["strike_from"] = round(strike_from, 4)
-        _or_ema_strategy_cache["strike_to"] = round(strike_to, 4)
-        _or_ema_strategy_cache["eligible_instruments"] = eligible
-        _or_ema_strategy_cache["touched_instruments"] = {}
-
-        _or_ema_strategy_cache["selected_touch"] = None
-        _or_ema_strategy_cache["selected_touch_key"] = None
-        _or_ema_strategy_cache["selected_instrument_key"] = None
-        _or_ema_strategy_cache["selected_level"] = None
-        _or_ema_strategy_cache["selected_reason"] = None
-        _or_ema_strategy_cache["selected_at"] = None
-
-        _or_ema_strategy_cache["alerts_sent"] = {}
-        _or_ema_strategy_cache["last_updated_at"] = get_now_market_time().isoformat()
-
-    with _opening_range_cache_lock:
-        opening_range_cache["strategy_enabled"] = DEFAULT_OR_EMA_STRATEGY_ENABLED
-        opening_range_cache["strategy_or_average"] = round(or_average, 4)
-        opening_range_cache["strategy_strike_from"] = round(strike_from, 4)
-        opening_range_cache["strategy_strike_to"] = round(strike_to, 4)
-        opening_range_cache["strategy_eligible_count"] = len(eligible)
-        opening_range_cache["strategy_eligible_instruments"] = eligible
-        opening_range_cache["strategy_touched_count"] = 0
-        opening_range_cache["strategy_touched_instruments"] = {}
-        opening_range_cache["strategy_alerts_sent_count"] = 0
-        opening_range_cache["strategy_alerts_sent"] = {}
-        opening_range_cache["strategy_selected_touch"] = None
-        opening_range_cache["strategy_selected_touch_key"] = None
-        opening_range_cache["strategy_selected_instrument_key"] = None
-        opening_range_cache["strategy_selected_level"] = None
-        opening_range_cache["strategy_selected_reason"] = None
-        opening_range_cache["strategy_selected_at"] = None
-
-    logger.info(
-        f"OR EMA strategy universe built. "
-        f"or_average={or_average}, "
-        f"strike_from={strike_from}, "
-        f"strike_to={strike_to}, "
-        f"eligible_count={len(eligible)}"
-    )
-
-
-def store_strategy_latest_tick(
-    instrument_key: str,
-    feed_values: dict,
-    contract_info: dict | None = None,
-):
-    """Stores latest live tick for Telegram nearest strike details."""
-
-    if not DEFAULT_OR_EMA_STRATEGY_ENABLED:
-        return
-
-    if not DEFAULT_OR_EMA_STRATEGY_STORE_LIVE_TICK_CACHE:
-        return
-
-    if not instrument_key:
-        return
-
-    contract_info = contract_info or get_contract_info_by_key(instrument_key)
-
-    tick_snapshot = {
-        "instrument_key": instrument_key,
-        "ltp": safe_float(feed_values.get("ltp")),
-        "high": safe_float(feed_values.get("high")),
-        "low": safe_float(feed_values.get("low")),
-        "close": safe_float(feed_values.get("close")),
-        "timestamp": feed_values.get("timestamp"),
-        "contract_info": contract_info or {},
-        "updated_at": get_now_market_time().isoformat(),
-    }
-
-    with _or_ema_strategy_lock:
-        latest_ticks = _or_ema_strategy_cache.setdefault("latest_ticks", {})
-        latest_ticks[instrument_key] = tick_snapshot
-
-        if len(latest_ticks) > 10000:
-            _or_ema_strategy_cache["latest_ticks"] = trim_dict_to_max_size(
-                latest_ticks,
-                10000,
-            )
-
-
-def is_strategy_eligible_instrument(instrument_key: str, contract_info: dict) -> bool:
-    """Checks whether instrument is inside OR average +/- configured range."""
-
-    if not DEFAULT_OR_EMA_STRATEGY_ENABLED:
-        return False
-
-    if DEFAULT_OR_EMA_STRATEGY_OPTIONS_ONLY and not is_option_contract(contract_info):
-        return False
-
-    with _or_ema_strategy_lock:
-        eligible = _or_ema_strategy_cache.get("eligible_instruments", {})
-        return instrument_key in eligible
-
-
-def build_strategy_touch_key(instrument_key: str, level: str) -> str:
-    """Builds strategy touch key."""
-
-    return f"{instrument_key}_{str(level).upper()}"
-
-
-def build_strategy_alert_key(
-    instrument_key: str,
-    level: str,
-    cross_type: str,
-) -> str:
-    """Builds strategy alert duplicate key."""
-
-    return f"{instrument_key}_{str(level).upper()}_{str(cross_type).lower()}"
-
-
-def get_strategy_touch_distance(event: dict) -> float:
-    """
-    Calculates distance between touched option strike and current NIFTY spot.
-
-    Selection rule:
-    - Lower distance is better.
-    - Prefer current NIFTY spot.
-    - If not available, fallback to event distance_from_index.
-    - If both unavailable, return large configured value.
-    """
-
-    if not isinstance(event, dict):
-        return DEFAULT_OR_EMA_STRATEGY_UNKNOWN_DISTANCE_VALUE
-
-    contract_info = event.get("contract_info") or {}
-    strike_price = safe_float(contract_info.get("strike_price"))
-
-    nifty_spot = 0.0
-
-    if DEFAULT_OR_EMA_STRATEGY_USE_NIFTY_SPOT_FOR_SELECTION:
-        nifty_spot = safe_float(
-            event.get("main_index_ltp") or get_latest_main_index_ltp()
-        )
-
-    if strike_price > 0 and nifty_spot > 0:
-        return abs(strike_price - nifty_spot)
-
-    if DEFAULT_OR_EMA_STRATEGY_FALLBACK_TO_EVENT_DISTANCE:
-        event_distance = event.get("distance_from_index")
-
-        if event_distance is not None:
-            return safe_float(
-                event_distance,
-                default=DEFAULT_OR_EMA_STRATEGY_UNKNOWN_DISTANCE_VALUE,
-            )
-
-    return DEFAULT_OR_EMA_STRATEGY_UNKNOWN_DISTANCE_VALUE
-
-
-def is_same_strategy_touch_time(existing_touch: dict, current_touch: dict) -> bool:
-    """
-    Returns True if two touch records should be treated as same-time touches.
-
-    Current mode:
-    - exact_timestamp
-    """
-
-    if not existing_touch or not current_touch:
-        return False
-
-    existing_time = existing_touch.get("touch_time")
-    current_time = current_touch.get("touch_time")
-
-    if DEFAULT_OR_EMA_STRATEGY_SAME_TIME_COMPARE_MODE == "exact_timestamp":
-        return bool(existing_time and current_time and existing_time == current_time)
-
-    return bool(existing_time and current_time and existing_time == current_time)
-
-
-def update_strategy_selection_cache_fields():
-    """Syncs selected strategy fields into opening_range_cache."""
-
-    with _opening_range_cache_lock:
-        opening_range_cache["strategy_touched_count"] = len(
-            _or_ema_strategy_cache.get("touched_instruments", {})
-        )
-        opening_range_cache["strategy_touched_instruments"] = dict(
-            _or_ema_strategy_cache.get("touched_instruments", {})
-        )
-
-        opening_range_cache["strategy_selected_touch"] = _or_ema_strategy_cache.get(
-            "selected_touch"
-        )
-        opening_range_cache["strategy_selected_touch_key"] = _or_ema_strategy_cache.get(
-            "selected_touch_key"
-        )
-        opening_range_cache["strategy_selected_instrument_key"] = (
-            _or_ema_strategy_cache.get("selected_instrument_key")
-        )
-        opening_range_cache["strategy_selected_level"] = _or_ema_strategy_cache.get(
-            "selected_level"
-        )
-        opening_range_cache["strategy_selected_reason"] = _or_ema_strategy_cache.get(
-            "selected_reason"
-        )
-        opening_range_cache["strategy_selected_at"] = _or_ema_strategy_cache.get(
-            "selected_at"
-        )
-
-
-def track_strategy_touch(event: dict):
-    """
-    Stores OR + EMA strategy touch candidate.
-
-    New selection behavior:
-    1. If no selected touch exists, select this event.
-    2. If selected touch exists with same touch_time, compare distance to NIFTY spot.
-       Select nearest strike.
-    3. If selected touch already exists from an earlier time, keep later touches only
-       for debug and do not use them for EMA confirmation.
-    """
-
-    if not DEFAULT_OR_EMA_STRATEGY_ENABLED:
-        return
-
-    if not isinstance(event, dict):
-        return
-
-    instrument_key = event.get("instrument_key")
-    level = str(event.get("level", "")).upper()
-    contract_info = event.get("contract_info") or {}
-
-    if level not in DEFAULT_OR_EMA_STRATEGY_TOUCH_LEVELS:
-        return
-
-    if not instrument_key:
-        return
-
-    if not is_strategy_eligible_instrument(instrument_key, contract_info):
-        return
-
-    touch_key = build_strategy_touch_key(instrument_key, level)
-    selection_distance = get_strategy_touch_distance(event)
-
-    touch_payload = {
-        "touch_key": touch_key,
-        "instrument_key": instrument_key,
-        "level": level,
-        "level_value": event.get("level_value"),
-        "trigger_price": event.get("trigger_price"),
-        "trigger_field": event.get("trigger_field"),
-        "touch_time": event.get("touch_time"),
-        "source": event.get("source"),
-        "main_index_ltp": event.get("main_index_ltp"),
-        "distance_from_index": event.get("distance_from_index"),
-        "selection_distance": round(selection_distance, 4),
-        "contract_info": contract_info,
-        "event": event,
-        "created_at": get_now_market_time().isoformat(),
-    }
-
-    selected_now = False
-    selected_reason = None
-
-    with _or_ema_strategy_lock:
-        touched = _or_ema_strategy_cache.setdefault("touched_instruments", {})
-
-        if DEFAULT_OR_EMA_STRATEGY_STORE_NON_SELECTED_TOUCHES:
-            if touch_key not in touched:
-                touched[touch_key] = touch_payload
-
-            _or_ema_strategy_cache["touched_instruments"] = trim_dict_to_max_size(
-                touched,
-                DEFAULT_OR_EMA_STRATEGY_MAX_TOUCHED_INSTRUMENTS,
-            )
-
-        selected_touch = _or_ema_strategy_cache.get("selected_touch")
-
-        # Case 1: no selected touch yet.
-        if not selected_touch:
-            selected_now = True
-            selected_reason = "first_touch"
-
-            _or_ema_strategy_cache["selected_touch"] = touch_payload
-            _or_ema_strategy_cache["selected_touch_key"] = touch_key
-            _or_ema_strategy_cache["selected_instrument_key"] = instrument_key
-            _or_ema_strategy_cache["selected_level"] = level
-            _or_ema_strategy_cache["selected_reason"] = selected_reason
-            _or_ema_strategy_cache["selected_at"] = get_now_market_time().isoformat()
-
-        else:
-            same_time = is_same_strategy_touch_time(
-                existing_touch=selected_touch,
-                current_touch=touch_payload,
-            )
-
-            existing_distance = safe_float(
-                selected_touch.get("selection_distance"),
-                default=DEFAULT_OR_EMA_STRATEGY_UNKNOWN_DISTANCE_VALUE,
-            )
-
-            current_distance = safe_float(
-                touch_payload.get("selection_distance"),
-                default=DEFAULT_OR_EMA_STRATEGY_UNKNOWN_DISTANCE_VALUE,
-            )
-
-            # Case 2: same timestamp/candle, choose nearest to NIFTY spot.
-            if same_time and current_distance < existing_distance:
-                selected_now = True
-                selected_reason = "same_time_nearest_to_nifty"
-
-                _or_ema_strategy_cache["selected_touch"] = touch_payload
-                _or_ema_strategy_cache["selected_touch_key"] = touch_key
-                _or_ema_strategy_cache["selected_instrument_key"] = instrument_key
-                _or_ema_strategy_cache["selected_level"] = level
-                _or_ema_strategy_cache["selected_reason"] = selected_reason
-                _or_ema_strategy_cache["selected_at"] = (
-                    get_now_market_time().isoformat()
-                )
-
-            # Case 3: later touches are debug-only.
-            # Do nothing for selection.
-
-    update_strategy_selection_cache_fields()
-
-    logger.info(
-        f"OR EMA strategy touch processed. "
-        f"instrument_key={instrument_key}, "
-        f"level={level}, "
-        f"touch_key={touch_key}, "
-        f"selection_distance={round(selection_distance, 4)}, "
-        f"selected_now={selected_now}, "
-        f"selected_reason={selected_reason}"
-    )
-
-
-def get_touched_strategy_records_for_instrument(instrument_key: str) -> list:
-    """Returns strategy touch records matching an instrument."""
-
-    if not instrument_key:
-        return []
-
-    with _or_ema_strategy_lock:
-        touched = _or_ema_strategy_cache.get("touched_instruments", {})
-
-        return [
-            item
-            for item in touched.values()
-            if item.get("instrument_key") == instrument_key
-        ]
-
-
-def get_latest_tick_snapshot(instrument_key: str) -> dict | None:
-    """Returns latest stored live tick for an instrument."""
-
-    if not instrument_key:
-        return None
-
-    with _or_ema_strategy_lock:
-        return _or_ema_strategy_cache.get("latest_ticks", {}).get(instrument_key)
-
-
-def get_nearest_strategy_contracts(
-    nifty_spot: float,
-    option_type: str,
-    count: int,
-    mode: str,
-) -> list:
-    """Returns nearest CE/PE contracts based on current NIFTY spot."""
-
-    nifty_spot = safe_float(nifty_spot)
-
-    if nifty_spot <= 0:
-        return []
-
-    option_type = str(option_type or "").upper()
-    count = max(1, int(count or 3))
-
-    candidates = []
-
-    for item in options_cache.get("data", []):
-        if not isinstance(item, dict):
-            continue
-
-        instrument_type = str(item.get("instrument_type", "")).upper()
-
-        if instrument_type != option_type:
-            continue
-
-        strike = safe_float(item.get("strike_price"))
-
-        if strike <= 0:
-            continue
-
-        candidate = {
-            "instrument_key": item.get("instrument_key"),
-            "instrument_type": instrument_type,
-            "strike_price": strike,
-            "trading_symbol": item.get("trading_symbol"),
-            "expiry": item.get("expiry"),
-            "distance": abs(strike - nifty_spot),
-            "contract_info": item,
-        }
-
-        candidates.append(candidate)
-
-    if mode == "equal_or_below":
-        filtered = [item for item in candidates if item["strike_price"] <= nifty_spot]
-        filtered.sort(key=lambda item: item["strike_price"], reverse=True)
-
-    elif mode == "equal_or_above":
-        filtered = [item for item in candidates if item["strike_price"] >= nifty_spot]
-        filtered.sort(key=lambda item: item["strike_price"])
-
-    elif mode == "nearest_around_spot":
-        filtered = candidates
-        filtered.sort(key=lambda item: item["distance"])
-
-    else:
-        filtered = candidates
-        filtered.sort(key=lambda item: item["distance"])
-
-    selected = filtered[:count]
-
-    for item in selected:
-        latest_tick = get_latest_tick_snapshot(item.get("instrument_key"))
-        item["latest_tick"] = latest_tick
-
-    return selected
-
-
-def format_strategy_contract_line(index: int, item: dict) -> str:
-    """Formats nearest live data line for Telegram."""
-
-    latest_tick = item.get("latest_tick") or {}
-
-    ltp = latest_tick.get("ltp")
-    high = latest_tick.get("high")
-    low = latest_tick.get("low")
-    close = latest_tick.get("close")
-    timestamp = latest_tick.get("timestamp")
-
-    return (
-        f"{index}. {item.get('strike_price')} {item.get('instrument_type')}\n"
-        f"   Symbol: {item.get('trading_symbol') or item.get('instrument_key')}\n"
-        f"   LTP: {ltp if ltp is not None else 'N/A'}\n"
-        f"   High: {high if high is not None else 'N/A'}\n"
-        f"   Low: {low if low is not None else 'N/A'}\n"
-        f"   Close: {close if close is not None else 'N/A'}\n"
-        f"   Updated: {timestamp if timestamp else 'N/A'}"
-    )
-
-
-def send_or_ema_strategy_telegram_alert(
-    touch_record: dict,
-    ema_event: dict,
-    nearest_contracts: list,
-    nifty_spot: float | None,
-) -> bool:
-    """Sends Telegram alert for OR touch + EMA cross confirmation."""
-
-    touch_info = touch_record or {}
-    ema_event = ema_event or {}
-    contract_info = touch_info.get("contract_info") or {}
-
-    strike = contract_info.get("strike_price", "N/A")
-    instrument_type = str(contract_info.get("instrument_type", "N/A")).upper()
-    symbol = (
-        contract_info.get("trading_symbol")
-        or contract_info.get("instrument_key")
-        or touch_info.get("instrument_key")
-    )
-
-    level = touch_info.get("level")
-    cross_type = ema_event.get("cross_type")
-    cross_text = str(cross_type or "").replace("_", " ").title()
-
-    touched_live = get_latest_tick_snapshot(touch_info.get("instrument_key"))
-
-    touched_live_text = "N/A"
-
-    if touched_live:
-        touched_live_text = (
-            f"LTP: {touched_live.get('ltp')}, "
-            f"High: {touched_live.get('high')}, "
-            f"Low: {touched_live.get('low')}, "
-            f"Close: {touched_live.get('close')}, "
-            f"Updated: {touched_live.get('timestamp')}"
-        )
-
-    nearest_lines = [
-        format_strategy_contract_line(index + 1, item)
-        for index, item in enumerate(nearest_contracts or [])
-    ]
-
-    nearest_text = "\n\n".join(nearest_lines) if nearest_lines else "N/A"
-
-    message = (
-        f"{strike} {instrument_type} - {level} touch completed\n"
-        f"{cross_text} detected\n"
-        f"NIFTY Current Spot: {nifty_spot if nifty_spot is not None else 'N/A'}\n\n"
-        f"Touch Details:\n"
-        f"Symbol: {symbol}\n"
-        f"Level: {level}\n"
-        f"Level Value: {touch_info.get('level_value')}\n"
-        f"Trigger Field: {touch_info.get('trigger_field')}\n"
-        f"Trigger Price: {touch_info.get('trigger_price')}\n"
-        f"Touch Time: {touch_info.get('touch_time')}\n"
-        f"Touch Source: {touch_info.get('source')}\n"
-        f"Distance From Index: {touch_info.get('distance_from_index')}\n\n"
-        f"EMA Details:\n"
-        f"EMA Instrument: {ema_event.get('instrument_key')}\n"
-        f"Cross Type: {cross_type}\n"
-        f"Current Signal: {ema_event.get('current_signal')}\n"
-        f"EMA Close: {ema_event.get('close')}\n"
-        f"EMA Candle Time: {ema_event.get('timestamp')}\n"
-        f"Created At: {ema_event.get('created_at')}\n\n"
-        f"Touched Instrument Live Data:\n"
-        f"{touched_live_text}\n\n"
-        f"Nearest Live Data:\n"
-        f"{nearest_text}"
-    )
-
-    return telegram_service.send_message(
-        title=DEFAULT_OR_EMA_STRATEGY_TELEGRAM_TITLE,
-        message=message,
-        level=DEFAULT_OR_EMA_STRATEGY_TELEGRAM_LEVEL,
-    )
-
-
-def process_or_touch_ema_strategy_confirmation(ema_event: dict) -> dict | None:
-    """
-    Called after a live EMA crossover is generated.
-
-    New behavior:
-    - Only selected touched instrument can trigger strategy Telegram alert.
-    - Non-selected touched instruments are ignored for EMA confirmation.
-    """
-
-    if not DEFAULT_OR_EMA_STRATEGY_ENABLED:
-        return None
-
-    if not isinstance(ema_event, dict):
-        return None
-
-    instrument_key = ema_event.get("instrument_key")
-    cross_type = str(ema_event.get("cross_type", "")).lower()
-
-    if not instrument_key or not cross_type:
-        return None
-
-    with _or_ema_strategy_lock:
-        selected_touch = _or_ema_strategy_cache.get("selected_touch")
-        selected_instrument_key = _or_ema_strategy_cache.get("selected_instrument_key")
-
-    if not selected_touch:
-        return None
-
-    if DEFAULT_OR_EMA_STRATEGY_CONFIRM_SELECTED_ONLY:
-        if instrument_key != selected_instrument_key:
-            logger.info(
-                f"OR EMA strategy confirmation ignored for non-selected instrument. "
-                f"ema_instrument={instrument_key}, "
-                f"selected_instrument={selected_instrument_key}, "
-                f"cross_type={cross_type}"
-            )
-            return None
-
-    if "bullish" in cross_type:
-        option_type = DEFAULT_OR_EMA_STRATEGY_BULLISH_OPTION_TYPE
-        strike_mode = DEFAULT_OR_EMA_STRATEGY_BULLISH_STRIKE_MODE
-
-    elif "bearish" in cross_type:
-        option_type = DEFAULT_OR_EMA_STRATEGY_BEARISH_OPTION_TYPE
-        strike_mode = DEFAULT_OR_EMA_STRATEGY_BEARISH_STRIKE_MODE
-
-    else:
-        return None
-
-    nifty_spot = get_latest_main_index_ltp()
-
-    nearest_contracts = []
-
-    if DEFAULT_OR_EMA_STRATEGY_INCLUDE_NEAREST_LIVE_DATA:
-        nearest_contracts = get_nearest_strategy_contracts(
-            nifty_spot=nifty_spot,
-            option_type=option_type,
-            count=DEFAULT_OR_EMA_STRATEGY_NEAREST_STRIKE_COUNT,
-            mode=strike_mode,
-        )
-
-    level = selected_touch.get("level")
-
-    alert_key = build_strategy_alert_key(
-        instrument_key=instrument_key,
-        level=level,
-        cross_type=cross_type,
-    )
-
-    with _or_ema_strategy_lock:
-        already_sent = alert_key in _or_ema_strategy_cache.get("alerts_sent", {})
-
-    if DEFAULT_OR_EMA_STRATEGY_ALERT_ONCE_PER_TOUCH_AND_CROSS and already_sent:
-        return None
-
-    sent = send_or_ema_strategy_telegram_alert(
-        touch_record=selected_touch,
-        ema_event=ema_event,
-        nearest_contracts=nearest_contracts,
-        nifty_spot=nifty_spot,
-    )
-
-    alert_record = {
-        "alert_key": alert_key,
-        "sent": sent,
-        "instrument_key": instrument_key,
-        "level": level,
-        "cross_type": cross_type,
-        "nifty_spot": nifty_spot,
-        "nearest_contracts": nearest_contracts,
-        "touch_record": selected_touch,
-        "ema_event": ema_event,
-        "selection_mode": DEFAULT_OR_EMA_STRATEGY_SELECTION_MODE,
-        "selected_touch_key": _or_ema_strategy_cache.get("selected_touch_key"),
-        "selected_reason": _or_ema_strategy_cache.get("selected_reason"),
-        "created_at": get_now_market_time().isoformat(),
-    }
-
-    with _or_ema_strategy_lock:
-        alerts_sent = _or_ema_strategy_cache.setdefault("alerts_sent", {})
-        alerts_sent[alert_key] = alert_record
-
-        _or_ema_strategy_cache["alerts_sent"] = trim_dict_to_max_size(
-            alerts_sent,
-            DEFAULT_OR_EMA_STRATEGY_MAX_ALERTS_IN_MEMORY,
-        )
-
-    with _opening_range_cache_lock:
-        opening_range_cache["strategy_alerts_sent_count"] = len(
-            _or_ema_strategy_cache.get("alerts_sent", {})
-        )
-        opening_range_cache["strategy_alerts_sent"] = dict(
-            _or_ema_strategy_cache.get("alerts_sent", {})
-        )
-
-    logger.info(
-        f"OR EMA selected strategy alert processed. "
-        f"alert_key={alert_key}, sent={sent}, "
-        f"selected_instrument={selected_instrument_key}"
-    )
-
-    return {
-        "status": "processed",
-        "selection_mode": DEFAULT_OR_EMA_STRATEGY_SELECTION_MODE,
-        "instrument_key": instrument_key,
-        "cross_type": cross_type,
-        "alert": alert_record,
-    }
-
-
-def get_or_ema_strategy_status() -> dict:
-    """Returns OR + EMA strategy status."""
-
-    with _or_ema_strategy_lock:
-        return {
-            "enabled": DEFAULT_OR_EMA_STRATEGY_ENABLED,
-            "selection_mode": DEFAULT_OR_EMA_STRATEGY_SELECTION_MODE,
-            "lock_after_first_selection": DEFAULT_OR_EMA_STRATEGY_LOCK_AFTER_FIRST_SELECTION,
-            "confirm_selected_only": DEFAULT_OR_EMA_STRATEGY_CONFIRM_SELECTED_ONLY,
-            "store_non_selected_touches": DEFAULT_OR_EMA_STRATEGY_STORE_NON_SELECTED_TOUCHES,
-            "or_average": _or_ema_strategy_cache.get("or_average"),
-            "strike_from": _or_ema_strategy_cache.get("strike_from"),
-            "strike_to": _or_ema_strategy_cache.get("strike_to"),
-            "eligible_count": len(
-                _or_ema_strategy_cache.get("eligible_instruments", {})
-            ),
-            "touched_count": len(_or_ema_strategy_cache.get("touched_instruments", {})),
-            "selected_touch": _or_ema_strategy_cache.get("selected_touch"),
-            "selected_touch_key": _or_ema_strategy_cache.get("selected_touch_key"),
-            "selected_instrument_key": _or_ema_strategy_cache.get(
-                "selected_instrument_key"
-            ),
-            "selected_level": _or_ema_strategy_cache.get("selected_level"),
-            "selected_reason": _or_ema_strategy_cache.get("selected_reason"),
-            "selected_at": _or_ema_strategy_cache.get("selected_at"),
-            "alerts_sent_count": len(_or_ema_strategy_cache.get("alerts_sent", {})),
-            "latest_ticks_count": len(_or_ema_strategy_cache.get("latest_ticks", {})),
-            "last_updated_at": _or_ema_strategy_cache.get("last_updated_at"),
-            "touch_levels": DEFAULT_OR_EMA_STRATEGY_TOUCH_LEVELS,
-            "nearest_strike_count": DEFAULT_OR_EMA_STRATEGY_NEAREST_STRIKE_COUNT,
-            "bullish_option_type": DEFAULT_OR_EMA_STRATEGY_BULLISH_OPTION_TYPE,
-            "bullish_strike_mode": DEFAULT_OR_EMA_STRATEGY_BULLISH_STRIKE_MODE,
-            "bearish_option_type": DEFAULT_OR_EMA_STRATEGY_BEARISH_OPTION_TYPE,
-            "bearish_strike_mode": DEFAULT_OR_EMA_STRATEGY_BEARISH_STRIKE_MODE,
-        }
-
-
-def get_or_ema_strategy_cache() -> dict:
-    """Returns full OR + EMA strategy cache."""
-
-    with _or_ema_strategy_lock:
-        return {
-            "or_average": _or_ema_strategy_cache.get("or_average"),
-            "strike_from": _or_ema_strategy_cache.get("strike_from"),
-            "strike_to": _or_ema_strategy_cache.get("strike_to"),
-            "eligible_instruments": dict(
-                _or_ema_strategy_cache.get("eligible_instruments", {})
-            ),
-            "touched_instruments": dict(
-                _or_ema_strategy_cache.get("touched_instruments", {})
-            ),
-            "selected_touch": _or_ema_strategy_cache.get("selected_touch"),
-            "selected_touch_key": _or_ema_strategy_cache.get("selected_touch_key"),
-            "selected_instrument_key": _or_ema_strategy_cache.get(
-                "selected_instrument_key"
-            ),
-            "selected_level": _or_ema_strategy_cache.get("selected_level"),
-            "selected_reason": _or_ema_strategy_cache.get("selected_reason"),
-            "selected_at": _or_ema_strategy_cache.get("selected_at"),
-            "alerts_sent": dict(_or_ema_strategy_cache.get("alerts_sent", {})),
-            "latest_ticks": dict(_or_ema_strategy_cache.get("latest_ticks", {})),
-            "last_updated_at": _or_ema_strategy_cache.get("last_updated_at"),
-        }
-
-
-# ============================================================
 # Touch Event Helpers
 # ============================================================
 
 
 def build_alert_key(instrument_key: str, level: str) -> str:
     """Builds unique alert key for duplicate prevention."""
-
     return f"{instrument_key}_{str(level).upper()}"
 
 
 def calculate_distance_from_index(strike_price, index_ltp) -> float | None:
     """Calculates distance of option strike from latest NIFTY index LTP."""
-
     try:
         if strike_price is None or index_ltp is None:
             return None
@@ -1644,7 +725,6 @@ def update_latest_main_index_ltp(
     updated_at: str | None = None,
 ):
     """Updates latest main index LTP used for nearest strike ranking."""
-
     global _latest_main_index_ltp
     global _latest_main_index_ltp_source
     global _latest_main_index_ltp_updated_at
@@ -1669,9 +749,30 @@ def update_latest_main_index_ltp(
 
 def get_latest_main_index_ltp() -> float | None:
     """Returns latest main index LTP."""
-
     with _touch_lock:
         return _latest_main_index_ltp
+
+
+def get_default_touch_status() -> dict:
+    """Returns default touch status."""
+    return {
+        "r2_touched": False,
+        "s2_touched": False,
+        "r3_touched": False,
+        "s3_touched": False,
+        "r2_touch_time": None,
+        "s2_touch_time": None,
+        "r3_touch_time": None,
+        "s3_touch_time": None,
+        "r2_alert_sent": False,
+        "s2_alert_sent": False,
+        "r3_alert_sent": False,
+        "s3_alert_sent": False,
+        "first_touch_level": None,
+        "first_touch_source": None,
+        "first_touch_time": None,
+        "events": [],
+    }
 
 
 def create_touch_event(
@@ -1685,8 +786,7 @@ def create_touch_event(
     contract_info: dict,
     candle: dict | None = None,
 ) -> dict:
-    """Creates normalized Opening Range touch event."""
-
+    """Creates normalized Opening Range R2/R3/S2/S3 touch event."""
     index_ltp = get_latest_main_index_ltp()
     strike_price = contract_info.get("strike_price") if contract_info else None
 
@@ -1720,14 +820,18 @@ def should_skip_touch_alert(
     contract_info: dict | None = None,
 ) -> bool:
     """Checks whether touch event should be skipped."""
-
     if not DEFAULT_TOUCH_ALERT_ENABLED:
         return True
 
     if DEFAULT_TOUCH_ALERT_OPTIONS_ONLY and not is_option_contract(contract_info):
         return True
 
-    alert_key = build_alert_key(instrument_key, level)
+    level_upper = str(level).upper()
+
+    if level_upper not in DEFAULT_ISOLATION_TOUCH_LEVELS:
+        return True
+
+    alert_key = build_alert_key(instrument_key, level_upper)
 
     with _touch_lock:
         if DEFAULT_TOUCH_ALERT_ONCE_PER_LEVEL and alert_key in _alert_sent_keys:
@@ -1738,7 +842,6 @@ def should_skip_touch_alert(
 
 def mark_touch_alert_sent(event: dict):
     """Marks instrument-level touch as already tracked."""
-
     alert_key = event.get("alert_key")
 
     if not alert_key:
@@ -1750,7 +853,6 @@ def mark_touch_alert_sent(event: dict):
 
 def queue_touch_event(event: dict):
     """Queues touch event for internal tracking and optional legacy Telegram alert."""
-
     if not isinstance(event, dict):
         return
 
@@ -1767,42 +869,18 @@ def queue_touch_event(event: dict):
         opening_range_cache["touch_events"] = list(_touch_events)
 
 
-def get_default_touch_status() -> dict:
-    """Returns default touch status."""
-
-    return {
-        "r2_touched": False,
-        "s2_touched": False,
-        "r3_touched": False,
-        "s3_touched": False,
-        "r2_touch_time": None,
-        "s2_touch_time": None,
-        "r3_touch_time": None,
-        "s3_touch_time": None,
-        "r2_alert_sent": False,
-        "s2_alert_sent": False,
-        "r3_alert_sent": False,
-        "s3_alert_sent": False,
-        "first_touch_level": None,
-        "first_touch_source": None,
-        "first_touch_time": None,
-        "events": [],
-    }
-
-
 def build_touch_status_from_events(events: list) -> dict:
     """Builds touch status from detected events."""
-
     status = get_default_touch_status()
 
     for event in events:
         level = str(event.get("level", "")).upper()
-        level_lower = level.lower()
+        lower_level = level.lower()
 
         if level in ["R2", "S2", "R3", "S3"]:
-            status[f"{level_lower}_touched"] = True
-            status[f"{level_lower}_touch_time"] = event.get("touch_time")
-            status[f"{level_lower}_alert_sent"] = True
+            status[f"{lower_level}_touched"] = True
+            status[f"{lower_level}_touch_time"] = event.get("touch_time")
+            status[f"{lower_level}_alert_sent"] = True
 
         if not status.get("first_touch_level"):
             status["first_touch_level"] = level
@@ -1819,9 +897,8 @@ def update_touch_status_in_cache(
     event: dict,
 ):
     """Updates touch status for one instrument inside opening_range_cache."""
-
     level = str(event.get("level", "")).upper()
-    level_lower = level.lower()
+    lower_level = level.lower()
 
     with _opening_range_cache_lock:
         data = opening_range_cache.get("data", {})
@@ -1836,9 +913,9 @@ def update_touch_status_in_cache(
         )
 
         if level in ["R2", "S2", "R3", "S3"]:
-            touch_status[f"{level_lower}_touched"] = True
-            touch_status[f"{level_lower}_touch_time"] = event.get("touch_time")
-            touch_status[f"{level_lower}_alert_sent"] = True
+            touch_status[f"{lower_level}_touched"] = True
+            touch_status[f"{lower_level}_touch_time"] = event.get("touch_time")
+            touch_status[f"{lower_level}_alert_sent"] = True
 
         if not touch_status.get("first_touch_level"):
             touch_status["first_touch_level"] = level
@@ -1852,41 +929,365 @@ def update_touch_status_in_cache(
         opening_range_cache["data"] = data
 
 
-def evaluate_level_touch(
-    level: str,
-    level_value: float,
-    high_value: float,
-    low_value: float,
-    close_value: float,
-    ltp_value: float,
-    mode: str,
-) -> tuple[bool, float, str]:
-    """Evaluates whether one OR level is touched."""
+# ============================================================
+# Isolated Instrument Selection Helpers
+# ============================================================
 
-    level = str(level).upper()
-    mode = str(mode or "high_low").lower()
 
-    if level_value <= 0:
-        return False, 0.0, "none"
+def get_level_priority(level: str) -> int:
+    """
+    Returns priority rank for touched level.
 
-    if mode == "ltp":
-        if level.startswith("R"):
-            return ltp_value >= level_value, ltp_value, "ltp"
+    Lower value means higher priority.
+    Example:
+        R3/S3 before R2/S2.
+    """
+    level_upper = str(level or "").upper()
 
-        if level.startswith("S"):
-            return ltp_value <= level_value, ltp_value, "ltp"
+    try:
+        return DEFAULT_ISOLATION_PRIORITY_LEVELS.index(level_upper)
+    except ValueError:
+        return 999
 
-    if level.startswith("R"):
-        trigger = high_value if high_value > 0 else close_value
-        field = "high" if high_value > 0 else "close"
-        return trigger >= level_value, trigger, field
 
-    if level.startswith("S"):
-        trigger = low_value if low_value > 0 else close_value
-        field = "low" if low_value > 0 else "close"
-        return trigger <= level_value, trigger, field
+def get_reference_opening_range_average() -> float | None:
+    """
+    Returns the reference Opening Range average used for isolation.
 
-    return False, 0.0, "none"
+    Preference:
+        1. Main index Opening Range average.
+        2. Latest main index LTP.
+    """
+    with _opening_range_cache_lock:
+        main_item = opening_range_cache.get("data", {}).get(DEFAULT_MAIN_INDEX_KEY)
+
+        if main_item:
+            range_payload = main_item.get("range") or {}
+            avg = range_payload.get("average")
+
+            if avg is not None:
+                return safe_float(avg)
+
+        latest_ltp = opening_range_cache.get("latest_main_index_ltp")
+
+    if latest_ltp is not None:
+        return safe_float(latest_ltp)
+
+    return get_latest_main_index_ltp()
+
+
+def build_average_window(reference_average: float) -> dict:
+    """Builds average +/- window clamped by configured strike filter range."""
+    strike_from = safe_float(getattr(config, "STRIKE_FROM", 0.0))
+    strike_to = safe_float(getattr(config, "STRIKE_TO", 999999.0))
+
+    raw_lower = reference_average - DEFAULT_ISOLATION_WINDOW_POINTS
+    raw_upper = reference_average + DEFAULT_ISOLATION_WINDOW_POINTS
+
+    final_lower = max(strike_from, raw_lower)
+    final_upper = min(strike_to, raw_upper)
+
+    return {
+        "reference_average": reference_average,
+        "window_points": DEFAULT_ISOLATION_WINDOW_POINTS,
+        "raw_lower": raw_lower,
+        "raw_upper": raw_upper,
+        "configured_from": strike_from,
+        "configured_to": strike_to,
+        "final_lower": final_lower,
+        "final_upper": final_upper,
+    }
+
+
+def is_event_eligible_for_isolation(event: dict) -> tuple[bool, str]:
+    """Checks whether a touch event can be used for isolated instrument selection."""
+    if not DEFAULT_ISOLATION_ENABLED:
+        return False, "isolation_disabled"
+
+    if not isinstance(event, dict):
+        return False, "invalid_event"
+
+    level = str(event.get("level", "")).upper()
+
+    if level not in DEFAULT_ISOLATION_TOUCH_LEVELS:
+        return False, "level_not_eligible"
+
+    source = str(event.get("source", ""))
+
+    if (
+        source == "intraday_backfill_scan"
+        and not DEFAULT_ISOLATION_ALLOW_BACKFILL_TOUCH
+    ):
+        return False, "backfill_selection_disabled"
+
+    if source == "live_tick" and not DEFAULT_ISOLATION_ALLOW_LIVE_TOUCH:
+        return False, "live_selection_disabled"
+
+    contract_info = event.get("contract_info") or {}
+
+    if DEFAULT_ISOLATION_OPTIONS_ONLY and not is_option_contract(contract_info):
+        return False, "not_option_contract"
+
+    strike = contract_info.get("strike_price")
+
+    if strike is None:
+        return False, "missing_strike"
+
+    reference_average = get_reference_opening_range_average()
+
+    if reference_average is None or reference_average <= 0:
+        return False, "reference_average_not_available"
+
+    window = build_average_window(reference_average)
+    strike_value = safe_float(strike)
+
+    if not (window["final_lower"] <= strike_value <= window["final_upper"]):
+        return False, "strike_outside_average_window"
+
+    return True, "eligible"
+
+
+def choose_best_isolation_event(events: list) -> dict | None:
+    """
+    Chooses the best isolation event using:
+        1. Level priority: R3/S3 before R2/S2.
+        2. Nearest strike to Opening Range average.
+    """
+    if not events:
+        return None
+
+    reference_average = get_reference_opening_range_average()
+
+    if reference_average is None or reference_average <= 0:
+        return None
+
+    eligible_events = []
+
+    for event in events:
+        eligible, _reason = is_event_eligible_for_isolation(event)
+
+        if not eligible:
+            continue
+
+        info = event.get("contract_info") or {}
+        strike = safe_float(info.get("strike_price"))
+        level = str(event.get("level", "")).upper()
+
+        eligible_events.append(
+            {
+                "event": event,
+                "priority": get_level_priority(level),
+                "distance_to_average": abs(strike - reference_average),
+                "strike": strike,
+            }
+        )
+
+    if not eligible_events:
+        return None
+
+    selected = min(
+        eligible_events,
+        key=lambda item: (
+            item["priority"],
+            item["distance_to_average"],
+            item["strike"],
+        ),
+    )
+
+    return selected["event"]
+
+
+def should_replace_isolated_instrument(new_event: dict) -> bool:
+    """
+    Determines whether new event can replace currently isolated instrument.
+
+    Default behavior:
+        - If nothing selected, select.
+        - If already selected and lock-for-day is enabled, do not replace.
+        - But if priority upgrade is enabled, R3/S3 can replace R2/S2.
+    """
+    with _selected_or_lock:
+        already_selected = bool(_selected_or_instrument_state.get("selected"))
+        current_priority = _selected_or_instrument_state.get("selection_priority")
+
+    if not already_selected:
+        return True
+
+    if not DEFAULT_ISOLATION_LOCK_FOR_DAY:
+        return True
+
+    if not DEFAULT_ISOLATION_ALLOW_PRIORITY_UPGRADE:
+        return False
+
+    new_priority = get_level_priority(new_event.get("level"))
+
+    if current_priority is None:
+        return False
+
+    return new_priority < int(current_priority)
+
+
+def format_isolated_instrument_title(state: dict) -> str:
+    """Builds isolated instrument notification title."""
+    info = state.get("contract_info") or {}
+    strike = info.get("strike_price", "N/A")
+    option_type = str(info.get("instrument_type", "N/A")).upper()
+    level = state.get("selected_level")
+
+    return f"{strike} {option_type} isolated after {level} touch"
+
+
+def send_isolated_instrument_notification(state: dict) -> bool:
+    """Sends Telegram notification when instrument is isolated."""
+    if not DEFAULT_ISOLATED_NOTIFY_ENABLED:
+        return False
+
+    info = state.get("contract_info") or {}
+    strike = info.get("strike_price", "N/A")
+    option_type = str(info.get("instrument_type", "N/A")).upper()
+    symbol = info.get("trading_symbol") or info.get("instrument_key") or "N/A"
+
+    ema_mode = get_live_ema_calculation_mode_text()
+
+    if ema_mode == "tick_ltp":
+        ema_mode_description = "Live tick/LTP based EMA cross detection"
+    else:
+        ema_mode_description = "Completed candle close based EMA cross detection"
+
+    message = (
+        f"Instrument Selected for EMA Alerts\n\n"
+        f"Instrument: {strike} {option_type}\n"
+        f"Symbol: {symbol}\n"
+        f"Instrument Key: {state.get('instrument_key')}\n"
+        f"Selected Level: {state.get('selected_level')}\n"
+        f"Level Value: {state.get('level_value')}\n"
+        f"Trigger {state.get('trigger_field')}: {state.get('trigger_price')}\n"
+        f"Touch Time: {state.get('touch_time')}\n"
+        f"Touch Source: {state.get('touch_source')}\n"
+        f"Reference Average: {state.get('reference_average')}\n"
+        f"Latest NIFTY LTP: {state.get('latest_main_index_ltp')}\n"
+        f"EMA Calculation Mode: {ema_mode}\n"
+        f"EMA Mode Description: {ema_mode_description}\n\n"
+        f"From now, Telegram EMA alerts will be sent only for this isolated instrument."
+    )
+
+    return telegram_service.send_message(
+        title="Opening Range Instrument Isolated",
+        message=message,
+        level="OPENING_RANGE",
+    )
+
+
+def isolate_instrument_from_event(event: dict) -> bool:
+    """
+    Isolates one instrument from a touch event.
+
+    Selection rule:
+        - R3/S3 priority before R2/S2.
+        - Nearest to Opening Range average.
+        - Lock selected instrument for the day unless priority upgrade is allowed.
+    """
+    if not event:
+        return False
+
+    eligible, reason = is_event_eligible_for_isolation(event)
+
+    if not eligible:
+        logger.info(
+            f"Isolation skipped. reason={reason}, "
+            f"instrument_key={event.get('instrument_key')}, "
+            f"level={event.get('level')}"
+        )
+        return False
+
+    if not should_replace_isolated_instrument(event):
+        return False
+
+    instrument_key = event.get("instrument_key")
+    contract_info = event.get("contract_info") or get_contract_info_by_key(
+        instrument_key
+    )
+
+    reference_average = get_reference_opening_range_average()
+    average_window = (
+        build_average_window(reference_average) if reference_average else None
+    )
+
+    with _opening_range_cache_lock:
+        item = opening_range_cache.get("data", {}).get(instrument_key, {})
+
+    state = {
+        "selected": True,
+        "instrument_key": instrument_key,
+        "selected_level": str(event.get("level", "")).upper(),
+        "level_value": event.get("level_value"),
+        "trigger_price": event.get("trigger_price"),
+        "trigger_field": event.get("trigger_field"),
+        "touch_time": event.get("touch_time"),
+        "touch_source": event.get("source"),
+        "selected_at": get_now_market_time().isoformat(),
+        "selection_priority": get_level_priority(event.get("level")),
+        "selection_reason": "level_priority_nearest_to_opening_range_average",
+        "reference_average": reference_average,
+        "average_window": average_window,
+        "contract_info": contract_info,
+        "range": item.get("range"),
+        "levels": item.get("levels"),
+        "latest_live_data": {
+            "ltp": get_latest_ltp_for_instrument(instrument_key),
+        },
+        "latest_main_index_ltp": get_latest_main_index_ltp(),
+        "live_ema_calculation_mode_flag": DEFAULT_LIVE_EMA_CALCULATION_MODE,
+        "live_ema_calculation_mode": get_live_ema_calculation_mode_text(),
+        "ema_alerts_count": 0,
+        "last_ema_alert": None,
+        "disabled": False,
+        "message": "Opening Range instrument isolated for EMA Telegram alerts.",
+    }
+
+    with _selected_or_lock:
+        previous_alert_count = _selected_or_instrument_state.get("ema_alerts_count", 0)
+        state["ema_alerts_count"] = previous_alert_count
+        _selected_or_instrument_state.clear()
+        _selected_or_instrument_state.update(state)
+
+    with _opening_range_cache_lock:
+        opening_range_cache["isolated_instrument"] = dict(state)
+        opening_range_cache["isolated_instrument_selected"] = True
+        opening_range_cache["isolated_instrument_selected_at"] = state.get(
+            "selected_at"
+        )
+        opening_range_cache["isolated_instrument_selection_reason"] = state.get(
+            "selection_reason"
+        )
+
+    logger.info(
+        f"Opening Range isolated instrument selected. "
+        f"instrument_key={instrument_key}, "
+        f"level={state.get('selected_level')}, "
+        f"strike={contract_info.get('strike_price')}, "
+        f"type={contract_info.get('instrument_type')}, "
+        f"reference_average={reference_average}"
+    )
+
+    send_isolated_instrument_notification(state)
+
+    return True
+
+
+def try_isolate_from_touch_events(events: list) -> bool:
+    """Chooses best event from a list and isolates instrument if applicable."""
+    best_event = choose_best_isolation_event(events)
+
+    if not best_event:
+        return False
+
+    return isolate_instrument_from_event(best_event)
+
+
+# ============================================================
+# Touch Detection
+# ============================================================
 
 
 def detect_touch_from_candle(
@@ -1896,55 +1297,88 @@ def detect_touch_from_candle(
     contract_info: dict,
     source: str,
 ) -> list:
-    """Detects S2/S3/R2/R3 touch from intraday candle high/low."""
-
+    """Detects R2/R3/S2/S3 touch from intraday candle high/low."""
     if not candle or not levels:
         return []
 
     events = []
 
-    candle_high = safe_float(candle.get("high"))
-    candle_low = safe_float(candle.get("low"))
-    candle_close = safe_float(candle.get("close"))
-    candle_time = candle.get("timestamp") or get_now_market_time().isoformat()
-
-    level_mapping = {
-        "R2": safe_float(levels.get("r2")),
-        "R3": safe_float(levels.get("r3")),
-        "S2": safe_float(levels.get("s2")),
-        "S3": safe_float(levels.get("s3")),
+    level_map = {
+        "R2": {
+            "value": safe_float(levels.get("r2")),
+            "condition_field": "high",
+            "trigger": safe_float(candle.get("high")),
+            "fallback": safe_float(candle.get("close")),
+            "direction": "above",
+        },
+        "R3": {
+            "value": safe_float(levels.get("r3")),
+            "condition_field": "high",
+            "trigger": safe_float(candle.get("high")),
+            "fallback": safe_float(candle.get("close")),
+            "direction": "above",
+        },
+        "S2": {
+            "value": safe_float(levels.get("s2")),
+            "condition_field": "low",
+            "trigger": safe_float(candle.get("low")),
+            "fallback": safe_float(candle.get("close")),
+            "direction": "below",
+        },
+        "S3": {
+            "value": safe_float(levels.get("s3")),
+            "condition_field": "low",
+            "trigger": safe_float(candle.get("low")),
+            "fallback": safe_float(candle.get("close")),
+            "direction": "below",
+        },
     }
 
-    for level_name, level_value in level_mapping.items():
-        if level_name not in DEFAULT_OR_EMA_STRATEGY_TOUCH_LEVELS:
+    candle_time = candle.get("timestamp") or get_now_market_time().isoformat()
+
+    for level_name, item in level_map.items():
+        if level_name not in DEFAULT_ISOLATION_TOUCH_LEVELS:
             continue
 
-        touched, trigger_price, trigger_field = evaluate_level_touch(
-            level=level_name,
-            level_value=level_value,
-            high_value=candle_high,
-            low_value=candle_low,
-            close_value=candle_close,
-            ltp_value=candle_close,
-            mode=DEFAULT_TOUCH_CHECK_MODE,
+        level_value = item["value"]
+
+        if level_value <= 0:
+            continue
+
+        trigger_price = item["trigger"]
+        trigger_field = item["condition_field"]
+
+        if trigger_price <= 0:
+            trigger_price = item["fallback"]
+            trigger_field = "close"
+
+        if trigger_price <= 0:
+            continue
+
+        if item["direction"] == "above":
+            touched = trigger_price >= level_value
+        else:
+            touched = trigger_price <= level_value
+
+        if not touched:
+            continue
+
+        if should_skip_touch_alert(instrument_key, level_name, contract_info):
+            continue
+
+        events.append(
+            create_touch_event(
+                instrument_key=instrument_key,
+                level=level_name,
+                level_value=level_value,
+                trigger_price=trigger_price,
+                trigger_field=trigger_field,
+                touch_time=candle_time,
+                source=source,
+                contract_info=contract_info,
+                candle=candle,
+            )
         )
-
-        if touched:
-            if not should_skip_touch_alert(instrument_key, level_name, contract_info):
-                event = create_touch_event(
-                    instrument_key=instrument_key,
-                    level=level_name,
-                    level_value=level_value,
-                    trigger_price=trigger_price,
-                    trigger_field=trigger_field,
-                    touch_time=candle_time,
-                    source=source,
-                    contract_info=contract_info,
-                    candle=candle,
-                )
-
-                events.append(event)
-                track_strategy_touch(event)
 
     return events
 
@@ -1956,8 +1390,7 @@ def scan_backfill_touches(
     contract_info: dict,
     candle_count: int,
 ) -> list:
-    """Scans post-OR intraday candles for already touched levels."""
-
+    """Scans post-OR intraday candles for already touched R2/R3/S2/S3."""
     if not DEFAULT_BACKFILL_SCAN_ENABLED:
         return []
 
@@ -1989,8 +1422,7 @@ def scan_backfill_touches(
 
 
 def extract_feed_values(tick_data: dict) -> dict:
-    """Extracts ltp/high/low from Upstox full feed."""
-
+    """Extracts ltp/high/low/close from Upstox full feed."""
     if not isinstance(tick_data, dict):
         return {}
 
@@ -2060,39 +1492,40 @@ def process_live_tick_for_opening_range(
     contract_info: dict | None = None,
 ) -> list:
     """
-    Processes live tick for Opening Range touch detection.
+    Processes live tick for Opening Range R2/R3/S2/S3 touch detection.
 
     New behavior:
-    - Checks S2/S3/R2/R3.
-    - Tracks touched eligible instruments for OR + EMA strategy confirmation.
-    - No selected OR instrument is locked.
+    - Touches are tracked for all option instruments.
+    - Best eligible touch can isolate one instrument for the day.
+    - EMA calculation continues for all instruments.
+    - Telegram EMA alerts are sent only for isolated instrument.
     """
-
     if not DEFAULT_LIVE_TOUCH_ALERT_ENABLED:
         return []
 
     if not instrument_key or not isinstance(tick_data, dict):
         return []
 
-    if not contract_info:
-        contract_info = get_contract_info_by_key(instrument_key)
-
     feed_values = extract_feed_values(tick_data)
     ltp = safe_float(feed_values.get("ltp"))
+    updated_at = feed_values.get("timestamp")
 
-    store_strategy_latest_tick(
+    update_latest_ltp_for_instrument(
         instrument_key=instrument_key,
-        feed_values=feed_values,
-        contract_info=contract_info,
+        ltp=ltp,
+        updated_at=updated_at,
     )
 
     if instrument_key == DEFAULT_MAIN_INDEX_KEY and ltp > 0:
         update_latest_main_index_ltp(
             ltp=ltp,
             source="live_tick",
-            updated_at=feed_values.get("timestamp"),
+            updated_at=updated_at,
         )
         return []
+
+    if not contract_info:
+        contract_info = get_contract_info_by_key(instrument_key)
 
     if DEFAULT_TOUCH_ALERT_OPTIONS_ONLY and not is_option_contract(contract_info):
         return []
@@ -2111,53 +1544,29 @@ def process_live_tick_for_opening_range(
     if not levels:
         return []
 
-    high_value = safe_float(feed_values.get("high"))
-    low_value = safe_float(feed_values.get("low"))
-    close_value = safe_float(feed_values.get("close"), default=ltp)
-    event_time = feed_values.get("timestamp") or get_now_market_time().isoformat()
-
-    events = []
-
-    level_mapping = {
-        "R2": safe_float(levels.get("r2")),
-        "R3": safe_float(levels.get("r3")),
-        "S2": safe_float(levels.get("s2")),
-        "S3": safe_float(levels.get("s3")),
+    pseudo_candle = {
+        "timestamp": feed_values.get("timestamp") or get_now_market_time().isoformat(),
+        "open": 0.0,
+        "high": feed_values.get("high"),
+        "low": feed_values.get("low"),
+        "close": feed_values.get("close") or feed_values.get("ltp"),
+        "volume": 0,
+        "oi": 0,
     }
 
-    for level_name, level_value in level_mapping.items():
-        if level_name not in DEFAULT_OR_EMA_STRATEGY_TOUCH_LEVELS:
-            continue
+    if DEFAULT_TOUCH_CHECK_MODE == "ltp":
+        ltp_value = safe_float(feed_values.get("ltp"))
+        pseudo_candle["high"] = ltp_value
+        pseudo_candle["low"] = ltp_value
+        pseudo_candle["close"] = ltp_value
 
-        touched, trigger_price, trigger_field = evaluate_level_touch(
-            level=level_name,
-            level_value=level_value,
-            high_value=high_value,
-            low_value=low_value,
-            close_value=close_value,
-            ltp_value=ltp,
-            mode=DEFAULT_OR_EMA_STRATEGY_TOUCH_CHECK_MODE,
-        )
-
-        if not touched:
-            continue
-
-        if should_skip_touch_alert(instrument_key, level_name, contract_info):
-            continue
-
-        event = create_touch_event(
-            instrument_key=instrument_key,
-            level=level_name,
-            level_value=level_value,
-            trigger_price=trigger_price,
-            trigger_field=trigger_field,
-            touch_time=event_time,
-            source="live_tick",
-            contract_info=contract_info,
-        )
-
-        events.append(event)
-        track_strategy_touch(event)
+    events = detect_touch_from_candle(
+        instrument_key=instrument_key,
+        candle=pseudo_candle,
+        levels=levels,
+        contract_info=contract_info,
+        source="live_tick",
+    )
 
     for event in events:
         if DEFAULT_TOUCH_ALERT_ONCE_PER_LEVEL:
@@ -2165,6 +1574,9 @@ def process_live_tick_for_opening_range(
 
         update_touch_status_in_cache(instrument_key, event)
         queue_touch_event(event)
+
+    if events:
+        try_isolate_from_touch_events(events)
 
     return events
 
@@ -2176,7 +1588,6 @@ def process_live_tick_for_opening_range(
 
 def get_sorted_touch_events_for_alert(events: list) -> list:
     """Sorts touch events by distance from latest NIFTY index LTP."""
-
     if not events:
         return []
 
@@ -2196,7 +1607,6 @@ def get_sorted_touch_events_for_alert(events: list) -> list:
 
 def format_touch_event_line(index: int, event: dict) -> str:
     """Formats one touch event for Telegram."""
-
     info = event.get("contract_info") or {}
 
     strike = info.get("strike_price", "N/A")
@@ -2230,8 +1640,7 @@ def send_touch_events_telegram_alert(
     source: str,
     force: bool = False,
 ) -> bool:
-    """Sends legacy Telegram alert for touch events if enabled."""
-
+    """Sends legacy grouped Telegram touch alert only if enabled."""
     global _last_touch_alert_sent_at
 
     if not DEFAULT_LEGACY_TOUCH_TELEGRAM_ENABLED:
@@ -2281,8 +1690,7 @@ def send_touch_events_telegram_alert(
 
 
 def flush_pending_touch_alerts(force: bool = False, source: str = "live_tick") -> bool:
-    """Flushes pending live touch events into one Telegram message."""
-
+    """Flushes pending touch events into one Telegram message if legacy enabled."""
     if not DEFAULT_LEGACY_TOUCH_TELEGRAM_ENABLED:
         return False
 
@@ -2311,39 +1719,234 @@ def flush_pending_touch_alerts(force: bool = False, source: str = "live_tick") -
 
 
 # ============================================================
-# Disabled Selected OR Compatibility Helpers
+# Selected / Isolated Instrument Compatibility Helpers
 # ============================================================
 
 
 def is_selected_or_instrument_locked() -> bool:
-    """Selected OR flow is disabled."""
-
-    return False
+    """Returns True if isolated instrument is selected."""
+    with _selected_or_lock:
+        return bool(_selected_or_instrument_state.get("selected"))
 
 
 def get_selected_or_instrument_key() -> str | None:
-    """Selected OR flow is disabled."""
-
-    return None
+    """Returns isolated instrument key."""
+    with _selected_or_lock:
+        return _selected_or_instrument_state.get("instrument_key")
 
 
 def get_selected_or_instrument_state() -> dict:
-    """Returns disabled selected OR state for backward compatibility."""
-
+    """Returns isolated instrument state."""
     with _selected_or_lock:
         return dict(_selected_or_instrument_state)
 
 
 def get_selected_or_ema_alerts(limit: int = 100) -> list:
-    """Selected OR EMA alerts are disabled."""
+    """Returns isolated instrument EMA alerts."""
+    limit = max(1, int(limit or 100))
 
-    return []
+    with _selected_or_lock:
+        return list(_selected_or_ema_alerts)[-limit:]
+
+
+# ============================================================
+# Isolated EMA Telegram Alert Helpers
+# ============================================================
+
+
+def get_suggested_order_instruments_for_ema(cross_type: str) -> list:
+    """
+    Returns three nearest CE/PE instruments around current NIFTY LTP.
+
+    Rule:
+        bullish cross -> CE
+        bearish cross -> PE
+    """
+    nifty_ltp = get_latest_main_index_ltp()
+
+    if not nifty_ltp or nifty_ltp <= 0:
+        return []
+
+    instruments = get_nearest_order_instruments_for_ema_cross(
+        current_nifty_ltp=nifty_ltp,
+        cross_type=cross_type,
+    )
+
+    output = []
+
+    for item in instruments:
+        instrument_key = item.get("instrument_key")
+        live_ltp = get_latest_ltp_for_instrument(instrument_key)
+
+        output.append(
+            {
+                **item,
+                "live_ltp": live_ltp,
+            }
+        )
+
+    return output
+
+
+def format_suggested_order_instruments(instruments: list) -> str:
+    """Formats suggested instruments for Telegram message."""
+    if not instruments:
+        return "Nearest Instrument Details: not_available"
+
+    lines = ["Nearest Instrument Details:"]
+
+    for item in instruments:
+        strike = item.get("strike_price", "N/A")
+        option_type = str(item.get("instrument_type", "N/A")).upper()
+        live_ltp = item.get("live_ltp")
+
+        if live_ltp is None:
+            price_text = "ltp_not_available"
+        else:
+            price_text = f"{live_ltp}rs"
+
+        lines.append(f"- {strike}{option_type} - {price_text}")
+
+    return "\n".join(lines)
 
 
 def process_selected_or_ema_cross_alert(ema_event: dict) -> bool:
-    """Selected OR EMA Telegram alert is disabled."""
+    """
+    Sends Telegram EMA alert only for isolated instrument.
 
-    return False
+    Requirement:
+        - EMA runs for all instruments.
+        - Telegram alert is only for isolated instrument.
+        - EMA calculation mode can be:
+            candle_close -> completed candle close based EMA.
+            tick_ltp     -> live tick/LTP based EMA.
+        - Alert contains selected level, current NIFTY LTP, EMA details,
+          and nearest CE/PE instrument suggestions.
+    """
+    if not DEFAULT_EMA_ISOLATED_TELEGRAM_ENABLED:
+        return False
+
+    if not isinstance(ema_event, dict):
+        return False
+
+    with _selected_or_lock:
+        selected_state = dict(_selected_or_instrument_state)
+
+    if not selected_state.get("selected"):
+        return False
+
+    isolated_key = selected_state.get("instrument_key")
+    event_key = ema_event.get("instrument_key")
+
+    if not isolated_key or isolated_key != event_key:
+        return False
+
+    contract_info = selected_state.get("contract_info") or {}
+    strike = contract_info.get("strike_price", "N/A")
+    option_type = str(contract_info.get("instrument_type", "N/A")).upper()
+    selected_level = selected_state.get("selected_level", "N/A")
+
+    nifty_ltp = get_latest_main_index_ltp()
+
+    cross_type = ema_event.get("cross_type", "N/A")
+    current_signal = ema_event.get("current_signal", "N/A")
+    close_price = ema_event.get("close")
+    event_timestamp = ema_event.get("timestamp")
+
+    ema_fast = ema_event.get("ema_fast")
+    ema_slow = ema_event.get("ema_slow")
+    previous_ema_fast = ema_event.get("previous_ema_fast")
+    previous_ema_slow = ema_event.get("previous_ema_slow")
+
+    ema_fast_period = ema_event.get(
+        "ema_fast_period",
+        getattr(config, "LIVE_EMA_FAST_PERIOD", 9),
+    )
+    ema_slow_period = ema_event.get(
+        "ema_slow_period",
+        getattr(config, "LIVE_EMA_SLOW_PERIOD", 21),
+    )
+
+    ema_calculation_mode = ema_event.get(
+        "ema_calculation_mode",
+        get_live_ema_calculation_mode_text(),
+    )
+
+    source = ema_event.get("source", "live_feed")
+
+    if ema_calculation_mode == "tick_ltp":
+        price_label = "Live Tick LTP"
+        time_label = "Tick Time"
+        mode_description = "Live tick/LTP based EMA cross detection"
+    else:
+        price_label = "EMA Candle Close"
+        time_label = "EMA Candle Time"
+        mode_description = "Completed candle close based EMA cross detection"
+
+    suggested_instruments = get_suggested_order_instruments_for_ema(cross_type)
+    suggested_text = format_suggested_order_instruments(suggested_instruments)
+
+    header = (
+        f"{strike} {option_type} - crosses {selected_level} - "
+        f"At {nifty_ltp if nifty_ltp is not None else 'NIFTY_LTP_NOT_AVAILABLE'}"
+    )
+
+    message = (
+        f"{header}\n\n"
+        f"EMA Cross Details:\n"
+        f"Cross Type: {cross_type}\n"
+        f"Signal: {current_signal}\n"
+        f"EMA Calculation Mode: {ema_calculation_mode}\n"
+        f"EMA Mode Description: {mode_description}\n"
+        f"Source: {source}\n"
+        f"{price_label}: {close_price}\n"
+        f"{time_label}: {event_timestamp}\n"
+        f"EMA Fast Period: {ema_fast_period}\n"
+        f"EMA Slow Period: {ema_slow_period}\n"
+        f"EMA Fast: {ema_fast}\n"
+        f"EMA Slow: {ema_slow}\n"
+        f"Previous EMA Fast: {previous_ema_fast}\n"
+        f"Previous EMA Slow: {previous_ema_slow}\n"
+        f"Instrument Key: {event_key}\n\n"
+        f"{suggested_text}"
+    )
+
+    alert_record = {
+        "type": "isolated_instrument_ema_alert",
+        "instrument_key": event_key,
+        "contract_info": contract_info,
+        "selected_level": selected_level,
+        "nifty_ltp": nifty_ltp,
+        "ema_calculation_mode": ema_calculation_mode,
+        "ema_mode_description": mode_description,
+        "ema_event": dict(ema_event),
+        "suggested_order_instruments": suggested_instruments,
+        "created_at": get_now_market_time().isoformat(),
+    }
+
+    sent = telegram_service.send_message(
+        title="Isolated Instrument EMA Alert",
+        message=message,
+        level="EMA",
+    )
+
+    if sent:
+        with _selected_or_lock:
+            _selected_or_ema_alerts.append(alert_record)
+            _selected_or_instrument_state["ema_alerts_count"] = (
+                int(_selected_or_instrument_state.get("ema_alerts_count", 0)) + 1
+            )
+            _selected_or_instrument_state["last_ema_alert"] = alert_record
+
+        with _opening_range_cache_lock:
+            opening_range_cache["isolated_ema_alerts_count"] = len(
+                _selected_or_ema_alerts
+            )
+            opening_range_cache["isolated_instrument"] = dict(
+                _selected_or_instrument_state
+            )
+
+    return sent
 
 
 # ============================================================
@@ -2352,8 +1955,9 @@ def process_selected_or_ema_cross_alert(ema_event: dict) -> bool:
 
 
 def get_opening_range_levels_for_ema_event(instrument_key: str) -> dict:
-    """Returns lightweight Opening Range payload for EMA crossover events."""
-
+    """
+    Returns lightweight Opening Range payload for EMA crossover events.
+    """
     if not DEFAULT_EMA_CROSS_INCLUDE_OPENING_RANGE_LEVELS:
         return {
             "opening_range": {},
@@ -2361,6 +1965,7 @@ def get_opening_range_levels_for_ema_event(instrument_key: str) -> dict:
             "latest_intraday_close": None,
             "latest_main_index_ltp": None,
             "processed_at": None,
+            "isolated_instrument": get_selected_or_instrument_state(),
         }
 
     if not instrument_key:
@@ -2370,6 +1975,7 @@ def get_opening_range_levels_for_ema_event(instrument_key: str) -> dict:
             "latest_intraday_close": None,
             "latest_main_index_ltp": None,
             "processed_at": None,
+            "isolated_instrument": get_selected_or_instrument_state(),
         }
 
     with _opening_range_cache_lock:
@@ -2383,6 +1989,7 @@ def get_opening_range_levels_for_ema_event(instrument_key: str) -> dict:
             "latest_intraday_close": None,
             "latest_main_index_ltp": latest_main_index_ltp,
             "processed_at": None,
+            "isolated_instrument": get_selected_or_instrument_state(),
         }
 
     levels = item.get("levels") or {}
@@ -2400,13 +2007,11 @@ def get_opening_range_levels_for_ema_event(instrument_key: str) -> dict:
 
     return {
         "opening_range": compact_levels,
-        "touch_status": item.get(
-            "touch_status",
-            get_default_touch_status(),
-        ),
+        "touch_status": item.get("touch_status", get_default_touch_status()),
         "latest_intraday_close": item.get("latest_intraday_close"),
         "latest_main_index_ltp": latest_main_index_ltp,
         "processed_at": item.get("processed_at"),
+        "isolated_instrument": get_selected_or_instrument_state(),
     }
 
 
@@ -2417,7 +2022,6 @@ def get_opening_range_levels_for_ema_event(instrument_key: str) -> dict:
 
 def save_touch_events_to_file_if_enabled():
     """Saves touch events to file only if TEST_FLAG=True."""
-
     if not bool(getattr(config, "TEST_FLAG", False)):
         return None
 
@@ -2430,12 +2034,13 @@ def save_touch_events_to_file_if_enabled():
 
         payload = {
             "generated_at": get_now_market_time().isoformat(),
+            "live_ema_calculation_mode_flag": DEFAULT_LIVE_EMA_CALCULATION_MODE,
+            "live_ema_calculation_mode": get_live_ema_calculation_mode_text(),
             "events_count": len(_touch_events),
             "events": list(_touch_events),
-            "selected_or_instrument": get_selected_or_instrument_state(),
-            "selected_or_ema_alerts_count": 0,
-            "selected_or_ema_alerts": [],
-            "or_ema_strategy": get_or_ema_strategy_cache(),
+            "isolated_instrument": get_selected_or_instrument_state(),
+            "isolated_ema_alerts_count": len(_selected_or_ema_alerts),
+            "isolated_ema_alerts": list(_selected_or_ema_alerts),
         }
 
         with open(file_path, "w", encoding="utf-8") as file:
@@ -2455,7 +2060,6 @@ def save_opening_range_results_to_file(
     output_file: str = DEFAULT_OUTPUT_FILE,
 ) -> str:
     """Saves opening range summary to JSON file."""
-
     file_path = Path(output_file)
     file_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -2476,7 +2080,6 @@ def fetch_intraday_candles_for_instrument(
     interval: str = DEFAULT_INTRADAY_INTERVAL,
 ) -> dict:
     """Fetches today's intraday candles using Upstox HistoryV3Api."""
-
     try:
         api_instance = upstox_client.HistoryV3Api()
 
@@ -2555,8 +2158,10 @@ def calculate_opening_range_for_instrument(
     instrument_key: str,
     candle_count: int = DEFAULT_OPENING_RANGE_CANDLE_COUNT,
 ) -> dict:
-    """Fetches intraday candles for one instrument and calculates opening range levels."""
-
+    """
+    Fetches intraday candles for one instrument and calculates opening range levels.
+    Also scans post-OR candles for already touched R2/R3/S2/S3.
+    """
     processed_at = get_now_market_time().isoformat()
     contract_info = get_contract_info_by_key(instrument_key)
 
@@ -2697,7 +2302,6 @@ def calculate_opening_range_for_all_subscribed(
     max_workers: int = DEFAULT_MAX_WORKERS,
 ) -> dict:
     """Fetches intraday candles and calculates opening range levels for all subscribed instruments."""
-
     if not is_opening_range_enabled():
         logger.info("Opening range calculation skipped because it is disabled.")
 
@@ -2812,13 +2416,10 @@ def calculate_opening_range_for_all_subscribed(
 
                 if result_status == "success":
                     success_count += 1
-
                 elif result_status == "empty":
                     empty_count += 1
-
                 elif result_status == "insufficient_data":
                     insufficient_data_count += 1
-
                 else:
                     failed_count += 1
                     errors[instrument_key] = result.get("error") or result.get(
@@ -2863,32 +2464,44 @@ def calculate_opening_range_for_all_subscribed(
     else:
         overall_status = "failed"
 
-    # ========================================================
-    # Build strategy universe after OR results are ready.
-    # ========================================================
-    # Important:
-    # During per-instrument backfill scan, strategy eligible universe may not
-    # be ready yet. So first build the eligible universe from NIFTY OR average,
-    # then re-process all backfill touches to apply:
-    #
-    #   1. first touch wins
-    #   2. same timestamp/candle touches choose nearest strike to NIFTY spot
-    #   3. later touches are stored only for debug
-    # ========================================================
+    # Update cache before selecting isolated instrument from backfill events.
+    with _opening_range_cache_lock:
+        opening_range_cache["last_run_at"] = completed_at
+        opening_range_cache["date"] = current_date
+        opening_range_cache["status"] = overall_status
+        opening_range_cache["message"] = "Opening range calculation completed."
+        opening_range_cache["source"] = "intraday_api"
+        opening_range_cache["interval"] = DEFAULT_OPENING_RANGE_INTERVAL
+        opening_range_cache["opening_range_candle_count"] = candle_count
+        opening_range_cache["market_open_time"] = (
+            f"{DEFAULT_MARKET_OPEN_HOUR:02d}:{DEFAULT_MARKET_OPEN_MINUTE:02d}"
+        )
+        opening_range_cache["fetch_time"] = (
+            f"{DEFAULT_FETCH_HOUR:02d}:{DEFAULT_FETCH_MINUTE:02d}"
+        )
+        opening_range_cache["total_instruments"] = total_instruments
+        opening_range_cache["success_count"] = success_count
+        opening_range_cache["failed_count"] = failed_count
+        opening_range_cache["empty_count"] = empty_count
+        opening_range_cache["insufficient_data_count"] = insufficient_data_count
+        opening_range_cache["latest_main_index_ltp"] = get_latest_main_index_ltp()
+        opening_range_cache["latest_main_index_ltp_source"] = (
+            _latest_main_index_ltp_source
+        )
+        opening_range_cache["latest_main_index_ltp_updated_at"] = (
+            _latest_main_index_ltp_updated_at
+        )
+        opening_range_cache["touch_events_count"] = len(_touch_events)
+        opening_range_cache["pending_touch_events_count"] = len(_pending_touch_events)
+        opening_range_cache["alert_sent_keys_count"] = len(_alert_sent_keys)
+        opening_range_cache["data"] = results
+        opening_range_cache["touch_events"] = list(_touch_events)
+        opening_range_cache["errors"] = errors
 
-    build_or_ema_strategy_universe(results)
-
-    for event in backfill_touch_events:
-        try:
-            track_strategy_touch(event)
-
-        except Exception as strategy_ex:
-            logger.error(
-                f"Failed applying OR EMA strategy selection for backfill event: "
-                f"{type(strategy_ex).__name__}: {strategy_ex}"
-            )
-
-    strategy_status_after_selection = get_or_ema_strategy_status()
+    # Important: choose isolated instrument after all backfill events are collected,
+    # so R3/S3 priority can win over R2/S2.
+    if backfill_touch_events:
+        try_isolate_from_touch_events(backfill_touch_events)
 
     summary = {
         "status": overall_status,
@@ -2901,9 +2514,9 @@ def calculate_opening_range_for_all_subscribed(
         "unit": DEFAULT_INTRADAY_UNIT,
         "intraday_interval": DEFAULT_INTRADAY_INTERVAL,
         "opening_range_candle_count": candle_count,
-        "market_open_time": (
-            f"{DEFAULT_MARKET_OPEN_HOUR:02d}:{DEFAULT_MARKET_OPEN_MINUTE:02d}"
-        ),
+        "market_open_time": f"{DEFAULT_MARKET_OPEN_HOUR:02d}:{DEFAULT_MARKET_OPEN_MINUTE:02d}",
+        "live_ema_calculation_mode_flag": DEFAULT_LIVE_EMA_CALCULATION_MODE,
+        "live_ema_calculation_mode": get_live_ema_calculation_mode_text(),
         "opening_range_end_time": get_opening_range_end_datetime(
             candle_count=candle_count
         ).strftime("%H:%M"),
@@ -2917,9 +2530,8 @@ def calculate_opening_range_for_all_subscribed(
         "backfill_touch_scan_enabled": DEFAULT_BACKFILL_SCAN_ENABLED,
         "backfill_touch_events_count": total_backfill_touch_events,
         "latest_main_index_ltp": get_latest_main_index_ltp(),
-        "selected_or_instrument": get_selected_or_instrument_state(),
-        "selected_or_ema_alerts_count": 0,
-        "or_ema_strategy": strategy_status_after_selection,
+        "isolated_instrument": get_selected_or_instrument_state(),
+        "isolated_ema_alerts_count": len(_selected_or_ema_alerts),
         "results": results,
         "backfill_touch_events": backfill_touch_events,
         "errors": errors,
@@ -2945,82 +2557,12 @@ def calculate_opening_range_for_all_subscribed(
         logger.info("Opening range result file not saved because save_data=False.")
 
     with _opening_range_cache_lock:
-        opening_range_cache["last_run_at"] = completed_at
-        opening_range_cache["date"] = current_date
-        opening_range_cache["status"] = overall_status
-        opening_range_cache["message"] = summary.get("message")
-        opening_range_cache["source"] = "intraday_api"
-        opening_range_cache["interval"] = DEFAULT_OPENING_RANGE_INTERVAL
-        opening_range_cache["opening_range_candle_count"] = candle_count
-        opening_range_cache["market_open_time"] = summary.get("market_open_time")
-        opening_range_cache["fetch_time"] = summary.get("scheduled_fetch_time")
-        opening_range_cache["total_instruments"] = total_instruments
-        opening_range_cache["success_count"] = success_count
-        opening_range_cache["failed_count"] = failed_count
-        opening_range_cache["empty_count"] = empty_count
-        opening_range_cache["insufficient_data_count"] = insufficient_data_count
         opening_range_cache["output_file_path"] = output_file_path
-        opening_range_cache["latest_main_index_ltp"] = get_latest_main_index_ltp()
-        opening_range_cache["latest_main_index_ltp_source"] = (
-            _latest_main_index_ltp_source
+        opening_range_cache["isolated_instrument"] = get_selected_or_instrument_state()
+        opening_range_cache["isolated_instrument_selected"] = bool(
+            get_selected_or_instrument_state().get("selected")
         )
-        opening_range_cache["latest_main_index_ltp_updated_at"] = (
-            _latest_main_index_ltp_updated_at
-        )
-        opening_range_cache["touch_events_count"] = len(_touch_events)
-        opening_range_cache["pending_touch_events_count"] = len(_pending_touch_events)
-        opening_range_cache["alert_sent_keys_count"] = len(_alert_sent_keys)
-        opening_range_cache["data"] = results
-        opening_range_cache["touch_events"] = list(_touch_events)
-        opening_range_cache["errors"] = errors
-
-        strategy_cache = get_or_ema_strategy_cache()
-
-        opening_range_cache["strategy_enabled"] = DEFAULT_OR_EMA_STRATEGY_ENABLED
-        opening_range_cache["strategy_or_average"] = strategy_cache.get("or_average")
-        opening_range_cache["strategy_strike_from"] = strategy_cache.get("strike_from")
-        opening_range_cache["strategy_strike_to"] = strategy_cache.get("strike_to")
-        opening_range_cache["strategy_eligible_count"] = len(
-            strategy_cache.get("eligible_instruments", {})
-        )
-        opening_range_cache["strategy_eligible_instruments"] = strategy_cache.get(
-            "eligible_instruments",
-            {},
-        )
-
-        opening_range_cache["strategy_touched_count"] = len(
-            strategy_cache.get("touched_instruments", {})
-        )
-        opening_range_cache["strategy_touched_instruments"] = strategy_cache.get(
-            "touched_instruments",
-            {},
-        )
-
-        # Selected strategy touch fields.
-        opening_range_cache["strategy_selected_touch"] = strategy_cache.get(
-            "selected_touch"
-        )
-        opening_range_cache["strategy_selected_touch_key"] = strategy_cache.get(
-            "selected_touch_key"
-        )
-        opening_range_cache["strategy_selected_instrument_key"] = strategy_cache.get(
-            "selected_instrument_key"
-        )
-        opening_range_cache["strategy_selected_level"] = strategy_cache.get(
-            "selected_level"
-        )
-        opening_range_cache["strategy_selected_reason"] = strategy_cache.get(
-            "selected_reason"
-        )
-        opening_range_cache["strategy_selected_at"] = strategy_cache.get("selected_at")
-
-        opening_range_cache["strategy_alerts_sent_count"] = len(
-            strategy_cache.get("alerts_sent", {})
-        )
-        opening_range_cache["strategy_alerts_sent"] = strategy_cache.get(
-            "alerts_sent",
-            {},
-        )
+        opening_range_cache["isolated_ema_alerts_count"] = len(_selected_or_ema_alerts)
 
     if (
         DEFAULT_BACKFILL_TOUCH_ALERT_ENABLED
@@ -3045,7 +2587,7 @@ def calculate_opening_range_for_all_subscribed(
         f"insufficient_data={insufficient_data_count}, "
         f"failed={failed_count}, "
         f"backfill_touch_events={total_backfill_touch_events}, "
-        f"strategy={get_or_ema_strategy_status()}, "
+        f"isolated_selected={get_selected_or_instrument_state().get('selected')}, "
         f"output_file={output_file_path}"
     )
 
@@ -3063,7 +2605,6 @@ def calculate_opening_range_for_all_subscribed(
 
 def get_opening_range_status() -> dict:
     """Returns latest opening range status summary."""
-
     with _opening_range_cache_lock:
         return {
             "last_run_at": opening_range_cache.get("last_run_at"),
@@ -3097,28 +2638,158 @@ def get_opening_range_status() -> dict:
                 "pending_touch_events_count"
             ),
             "alert_sent_keys_count": opening_range_cache.get("alert_sent_keys_count"),
-            "selected_or_instrument": get_selected_or_instrument_state(),
-            "selected_or_ema_alerts_count": 0,
+            "isolated_instrument": get_selected_or_instrument_state(),
+            "isolated_instrument_selected": bool(
+                get_selected_or_instrument_state().get("selected")
+            ),
+            "isolated_ema_alerts_count": len(_selected_or_ema_alerts),
             "ema_cross_include_opening_range_levels": (
                 DEFAULT_EMA_CROSS_INCLUDE_OPENING_RANGE_LEVELS
             ),
-            "or_ema_strategy": get_or_ema_strategy_status(),
+            "live_ema_calculation": {
+                "flag": DEFAULT_LIVE_EMA_CALCULATION_MODE,
+                "mode": get_live_ema_calculation_mode_text(),
+                "description": (
+                    "live tick/LTP based EMA calculation"
+                    if DEFAULT_LIVE_EMA_CALCULATION_MODE
+                    else "completed candle close based EMA calculation"
+                ),
+            },
+            "isolation_config": {
+                "enabled": DEFAULT_ISOLATION_ENABLED,
+                "window_points": DEFAULT_ISOLATION_WINDOW_POINTS,
+                "touch_levels": DEFAULT_ISOLATION_TOUCH_LEVELS,
+                "priority_levels": DEFAULT_ISOLATION_PRIORITY_LEVELS,
+                "lock_for_day": DEFAULT_ISOLATION_LOCK_FOR_DAY,
+                "allow_priority_upgrade": DEFAULT_ISOLATION_ALLOW_PRIORITY_UPGRADE,
+            },
             "errors": opening_range_cache.get("errors", {}),
         }
 
 
 def get_opening_range_cache() -> dict:
     """Returns full opening range cache."""
+    with _opening_range_cache_lock:
+        cache_copy = dict(opening_range_cache)
+
+    cache_copy["isolated_instrument"] = get_selected_or_instrument_state()
+    cache_copy["isolated_ema_alerts_count"] = len(_selected_or_ema_alerts)
+    cache_copy["live_ema_calculation_mode_flag"] = DEFAULT_LIVE_EMA_CALCULATION_MODE
+    cache_copy["live_ema_calculation_mode"] = get_live_ema_calculation_mode_text()
+    cache_copy["live_ema_calculation"] = {
+        "flag": DEFAULT_LIVE_EMA_CALCULATION_MODE,
+        "mode": get_live_ema_calculation_mode_text(),
+        "description": (
+            "live tick/LTP based EMA calculation"
+            if DEFAULT_LIVE_EMA_CALCULATION_MODE
+            else "completed candle close based EMA calculation"
+        ),
+    }
+
+    return cache_copy
+
+
+def get_opening_range_dashboard_summary(
+    touch_limit: int = 100,
+    alert_limit: int = 100,
+) -> dict:
+    """
+    Returns compact dashboard data for isolated EMA dashboard.
+
+    Includes:
+    - Opening Range status
+    - Isolated instrument state
+    - Latest isolated EMA alerts
+    - Recent Opening Range touch events
+    - Live EMA calculation mode
+    - Basic cache summary
+    """
+
+    touch_limit = max(1, int(touch_limit or 100))
+    alert_limit = max(1, int(alert_limit or 100))
 
     with _opening_range_cache_lock:
-        return dict(opening_range_cache)
+        cache_snapshot = dict(opening_range_cache)
+        latest_main_index_ltp = opening_range_cache.get("latest_main_index_ltp")
+        latest_main_index_ltp_source = opening_range_cache.get(
+            "latest_main_index_ltp_source"
+        )
+        latest_main_index_ltp_updated_at = opening_range_cache.get(
+            "latest_main_index_ltp_updated_at"
+        )
+
+    isolated_state = get_selected_or_instrument_state()
+    isolated_key = isolated_state.get("instrument_key")
+
+    isolated_opening_range_context = {}
+
+    if isolated_key:
+        try:
+            isolated_opening_range_context = get_opening_range_levels_for_ema_event(
+                isolated_key
+            )
+        except Exception as ex:
+            isolated_opening_range_context = {
+                "status": "error",
+                "error": f"{type(ex).__name__}: {ex}",
+            }
+
+    recent_touch_events = get_opening_range_touch_events(limit=touch_limit)
+    isolated_ema_alerts = get_selected_or_ema_alerts(limit=alert_limit)
+
+    return {
+        "status": "success",
+        "generated_at": get_now_market_time().isoformat(),
+        "date": get_now_market_time().date().isoformat(),
+        "live_ema_calculation": {
+            "flag": DEFAULT_LIVE_EMA_CALCULATION_MODE,
+            "mode": get_live_ema_calculation_mode_text(),
+            "description": (
+                "live tick/LTP based EMA calculation"
+                if DEFAULT_LIVE_EMA_CALCULATION_MODE
+                else "completed candle close based EMA calculation"
+            ),
+        },
+        "opening_range_status": get_opening_range_status(),
+        "isolated_instrument": isolated_state,
+        "selected_or_instrument": isolated_state,
+        "isolated_opening_range_context": isolated_opening_range_context,
+        "isolated_ema_alerts_count": len(_selected_or_ema_alerts),
+        "isolated_ema_alerts": isolated_ema_alerts,
+        "recent_touch_events_count": len(recent_touch_events),
+        "recent_touch_events": recent_touch_events,
+        "latest_main_index_ltp": latest_main_index_ltp,
+        "latest_main_index_ltp_source": latest_main_index_ltp_source,
+        "latest_main_index_ltp_updated_at": latest_main_index_ltp_updated_at,
+        "cache_summary": {
+            "last_run_at": cache_snapshot.get("last_run_at"),
+            "date": cache_snapshot.get("date"),
+            "status": cache_snapshot.get("status"),
+            "message": cache_snapshot.get("message"),
+            "source": cache_snapshot.get("source"),
+            "interval": cache_snapshot.get("interval"),
+            "opening_range_candle_count": cache_snapshot.get(
+                "opening_range_candle_count"
+            ),
+            "total_instruments": cache_snapshot.get("total_instruments"),
+            "success_count": cache_snapshot.get("success_count"),
+            "failed_count": cache_snapshot.get("failed_count"),
+            "empty_count": cache_snapshot.get("empty_count"),
+            "insufficient_data_count": cache_snapshot.get("insufficient_data_count"),
+            "touch_events_count": cache_snapshot.get("touch_events_count"),
+            "pending_touch_events_count": cache_snapshot.get(
+                "pending_touch_events_count"
+            ),
+            "alert_sent_keys_count": cache_snapshot.get("alert_sent_keys_count"),
+            "output_file_path": cache_snapshot.get("output_file_path"),
+        },
+    }
 
 
 def get_opening_range_for_instrument_from_cache(
     instrument_key: str,
 ) -> dict | None:
     """Returns opening range result for one instrument from cache."""
-
     with _opening_range_cache_lock:
         data = opening_range_cache.get("data", {})
         return data.get(instrument_key)
@@ -3126,7 +2797,6 @@ def get_opening_range_for_instrument_from_cache(
 
 def get_opening_range_touch_events(limit: int = 100) -> list:
     """Returns latest opening range touch events."""
-
     limit = max(1, int(limit or 100))
 
     with _touch_lock:
@@ -3135,6 +2805,5 @@ def get_opening_range_touch_events(limit: int = 100) -> list:
 
 def get_opening_range_pending_touch_events() -> list:
     """Returns pending touch events."""
-
     with _touch_lock:
         return list(_pending_touch_events)
