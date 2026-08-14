@@ -651,3 +651,7 @@ class TelegramTokenBot:
 
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=10)
+
+
+# Singleton instance shared across the application
+telegram_token_bot = TelegramTokenBot()
