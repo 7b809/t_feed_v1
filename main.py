@@ -563,27 +563,19 @@ def run_initial_startup():
 
         startup_details = (
             f"Token Available: {'Yes' if current_token else 'No'}\n"
-            f"Token Updated At: {doc.get('updated_at') if doc else 'N/A'}\n"
             f"Nearest Expiry: {options_cache.get('nearest_expiry')}\n"
             f"Total Contracts: {options_cache.get('total_contracts')}\n"
             f"Subscribed Instruments: {len(subscribed_keys)}\n"
-            f"Historical EMA Status: "
+            f"Historical EMA: "
             f"{history_summary.get('status') if history_summary else 'not_available'}\n"
-            f"Historical Total Candles: "
+            f"Historical Candles: "
             f"{history_summary.get('total_candles') if history_summary else 0}\n"
-            f"EMA Result File: "
-            f"{history_summary.get('ema_results_file_path', 'not_saved') if history_summary else 'not_available'}\n"
             f"Live EMA Initialized: "
             f"{history_summary.get('live_ema_initialized') if history_summary else 'not_available'}\n"
-            f"Live EMA Calculation Mode: {get_live_ema_calculation_mode_text()}\n"
-            f"Live EMA Mode Description: {get_live_ema_calculation_mode_description()}\n"
-            f"EMA WebSocket Mode: {websocket_mode}\n"
-            f"Opening Range Isolated Instrument Flow: {isolated_flow}\n"
-            f"EMA Telegram Alert Scope: isolated instrument only\n"
-            f"{get_ema_order_side_rule_text()}\n"
-            f"Isolated EMA Dashboard: /isolated-dashboard"
+            f"EMA Mode: {get_live_ema_calculation_mode_text()}\n"
+            f"EMA WebSocket: {websocket_mode}\n"
+            f"Dashboard: /isolated-dashboard"
         )
-
         if result and current_token and subscribed_keys:
             telegram_service.send_startup_message(
                 status="completed successfully",
@@ -877,30 +869,19 @@ def start_scheduler() -> BackgroundScheduler:
     scheduler.start()
 
     scheduler_message = (
-        f"Scheduler active.\n\n"
-        f"Token refresh interval: every {config.REFRESH_INTERVAL_MINUTES} minutes\n"
-        f"Upstox token validity check: every "
-        f"{get_token_monitor_interval_minutes()} minutes\n"
-        f"Telegram token commands enabled: "
+        "Scheduler active.\n\n"
+        f"Token refresh: Every {config.REFRESH_INTERVAL_MINUTES} minutes\n"
+        f"Token check: Every {get_token_monitor_interval_minutes()} minutes\n"
+        f"Telegram commands: "
         f"{getattr(config, 'TELEGRAM_TOKEN_BOT_ENABLED', True)}\n"
-        f"Daily hard refresh: Mon-Fri at 09:00 AM "
+        f"Daily refresh: 09:00 AM "
         f"{getattr(config, 'MARKET_TIMEZONE', 'Asia/Kolkata')}\n"
-        f"Opening range fetch: Mon-Fri at "
+        f"Opening Range: "
         f"{getattr(config, 'OPENING_RANGE_FETCH_HOUR', 9):02d}:"
-        f"{getattr(config, 'OPENING_RANGE_FETCH_MINUTE', 18):02d} "
-        f"{getattr(config, 'MARKET_TIMEZONE', 'Asia/Kolkata')}\n"
-        f"EMA WebSocket OR enrichment: "
-        f"{getattr(config, 'EMA_CROSS_INCLUDE_OPENING_RANGE_LEVELS', True)}\n"
-        f"Opening Range isolated instrument flow: "
-        f"{getattr(config, 'OPENING_RANGE_ISOLATED_INSTRUMENT_ENABLED', True)}\n"
-        f"Isolated EMA Telegram alerts: "
-        f"{getattr(config, 'EMA_ISOLATED_INSTRUMENT_TELEGRAM_ENABLED', True)}\n"
-        f"Live EMA Calculation Mode: {get_live_ema_calculation_mode_text()}\n"
-        f"Live EMA Mode Description: {get_live_ema_calculation_mode_description()}\n"
-        f"{get_ema_order_side_rule_text()}\n"
-        f"Isolated EMA Dashboard: /isolated-dashboard"
+        f"{getattr(config, 'OPENING_RANGE_FETCH_MINUTE', 18):02d}\n"
+        f"EMA Mode: {get_live_ema_calculation_mode_text()}\n"
+        f"Dashboard: /isolated_dashboard"
     )
-
     logger.info(
         f"Scheduler active: Token refresh every {config.REFRESH_INTERVAL_MINUTES} mins | "
         f"Upstox token validity check every {get_token_monitor_interval_minutes()} mins | "

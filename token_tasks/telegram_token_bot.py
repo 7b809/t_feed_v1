@@ -411,15 +411,15 @@ class TelegramTokenBot:
 
         self._send_message(
             "Available token commands:\n\n"
-            "/save-token or /save_token\n"
+            "/save_token\n"
             "Save new Upstox access token. Bot will ask you to paste the token next.\n\n"
-            "/token-status or /token_status\n"
+            "/token_status\n"
             "Show masked token document status.\n\n"
             "/profile\n"
             "Get Upstox profile raw response using current token.\n\n"
             "/funds\n"
             "Get Upstox funds and margin raw response using current token.\n\n"
-            "/token-check or /token_check\n"
+            "/token_check\n"
             "Immediately validate token using Upstox profile API.",
             level="INFO",
         )
@@ -492,16 +492,7 @@ class TelegramTokenBot:
         profile_data = profile.get("data", {}) if isinstance(profile, dict) else {}
 
         self._send_message(
-            "New Upstox access token saved successfully.\n\n"
-            f"Document ID: {saved_doc.get('_id')}\n"
-            f"Created At: {saved_doc.get('created_at')}\n"
-            f"Updated At: {saved_doc.get('updated_at')}\n"
-            f"Token: {saved_doc.get('access_token')}\n"
-            f"Profile User ID: {profile_data.get('user_id')}\n"
-            f"Profile User Name: {profile_data.get('user_name')}\n"
-            f"Broker: {profile_data.get('broker')}\n"
-            f"Is Active: {profile_data.get('is_active')}\n"
-            f"Token message deleted: {deleted}",
+            "New Upstox access token saved successfully.",
             level="SUCCESS",
         )
 
