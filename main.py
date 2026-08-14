@@ -19,6 +19,12 @@ from services.telegram_service import telegram_service
 from services.history_service import fetch_historical_candles_for_all_subscribed
 from services.opening_range_service import calculate_opening_range_for_all_subscribed
 
+from token_tasks.token_monitor import (
+    check_upstox_token_validity,
+    get_token_monitor_interval_minutes,
+)
+from token_tasks.telegram_token_bot import telegram_token_bot
+
 from api.home_routes import router as home_router
 from api.health_routes import router as health_router
 from api.debug_routes import router as debug_router
@@ -66,8 +72,25 @@ def get_live_ema_calculation_mode_description() -> str:
     return "completed candle close based EMA calculation"
 
 
+def get_ema_order_side_rule_text() -> str:
+    """
+    Returns readable EMA Telegram order-side rule.
+
+    Current rule:
+        bullish_cross -> same side as isolated instrument
+        bearish_cross -> opposite side of isolated instrument
+    """
+
+    return (
+        "EMA Order Side Rule: bullish_cross uses the same option side as the "
+        "isolated instrument; bearish_cross uses the opposite option side of "
+        "the isolated instrument."
+    )
+
+
 def load_and_subscribe_instruments():
     """Fetches option contracts, updates memory cache, and logs subscription details."""
+
     logger.info("Executing contract load and subscription workflow...")
 
     result = get_options_contracts(save_data=True)
@@ -118,6 +141,9 @@ def fetch_startup_historical_candles():
     - EMA calculation mode is controlled by LIVE_EMA_CALCULATION_MODE.
     - Every live EMA crossover can be broadcast through WebSocket.
     - Telegram EMA alerts are restricted to the isolated Opening Range instrument only.
+    - Suggested Telegram order side is dynamic:
+        bullish_cross -> same side as isolated instrument
+        bearish_cross -> opposite side of isolated instrument
     """
 
     logger.info(
@@ -160,7 +186,8 @@ def fetch_startup_historical_candles():
             f"failed={history_summary.get('failed_count')}, "
             f"total_candles={history_summary.get('total_candles')}, "
             f"live_ema_initialized={history_summary.get('live_ema_initialized')}, "
-            f"live_ema_calculation_mode={get_live_ema_calculation_mode_text()}"
+            f"live_ema_calculation_mode={get_live_ema_calculation_mode_text()}, "
+            f"ema_order_side_rule=dynamic_isolated_instrument_side"
         )
 
         telegram_service.send_message(
@@ -182,7 +209,8 @@ def fetch_startup_historical_candles():
                 f"Live EMA Initialized: {history_summary.get('live_ema_initialized')}\n"
                 f"Live EMA Calculation Mode: {get_live_ema_calculation_mode_text()}\n"
                 f"Live EMA Mode Description: {get_live_ema_calculation_mode_description()}\n"
-                f"Telegram EMA Alert Scope: isolated instrument only"
+                f"Telegram EMA Alert Scope: isolated instrument only\n"
+                f"{get_ema_order_side_rule_text()}"
             ),
             level="INFO",
         )
@@ -217,6 +245,9 @@ def fetch_daily_historical_candles():
     - EMA calculation mode is controlled by LIVE_EMA_CALCULATION_MODE.
     - EMA crossover WebSocket events are broadcast for all instruments.
     - Telegram EMA alerts are sent only for the isolated Opening Range instrument.
+    - Suggested Telegram order side is dynamic:
+        bullish_cross -> same side as isolated instrument
+        bearish_cross -> opposite side of isolated instrument
     """
 
     logger.info(
@@ -259,7 +290,8 @@ def fetch_daily_historical_candles():
             f"failed={history_summary.get('failed_count')}, "
             f"total_candles={history_summary.get('total_candles')}, "
             f"live_ema_initialized={history_summary.get('live_ema_initialized')}, "
-            f"live_ema_calculation_mode={get_live_ema_calculation_mode_text()}"
+            f"live_ema_calculation_mode={get_live_ema_calculation_mode_text()}, "
+            f"ema_order_side_rule=dynamic_isolated_instrument_side"
         )
 
         telegram_service.send_message(
@@ -281,7 +313,8 @@ def fetch_daily_historical_candles():
                 f"Live EMA Initialized: {history_summary.get('live_ema_initialized')}\n"
                 f"Live EMA Calculation Mode: {get_live_ema_calculation_mode_text()}\n"
                 f"Live EMA Mode Description: {get_live_ema_calculation_mode_description()}\n"
-                f"Telegram EMA Alert Scope: isolated instrument only"
+                f"Telegram EMA Alert Scope: isolated instrument only\n"
+                f"{get_ema_order_side_rule_text()}"
             ),
             level="REFRESH",
         )
@@ -318,6 +351,9 @@ def run_daily_opening_range_fetch():
     - One instrument can be isolated based on R3/S3 priority, then R2/S2,
       nearest to Opening Range average.
     - Telegram EMA alerts are sent only for the isolated instrument.
+    - Suggested Telegram order side is dynamic:
+        bullish_cross -> same side as isolated instrument
+        bearish_cross -> opposite side of isolated instrument
     """
 
     logger.info("================ DAILY OPENING RANGE FETCH STARTED ================")
@@ -341,9 +377,12 @@ def run_daily_opening_range_fetch():
             "- Clamp inside configured strike range\n"
             "- R3/S3 priority before R2/S2\n"
             "- If multiple qualify, choose nearest strike to average\n"
-            "- EMA Telegram alerts only for isolated instrument\n\n"
+            "- EMA Telegram alerts only for isolated instrument\n"
+            "- bullish_cross uses same side as isolated instrument\n"
+            "- bearish_cross uses opposite side of isolated instrument\n\n"
             f"Live EMA Calculation Mode: {get_live_ema_calculation_mode_text()}\n"
-            f"Live EMA Mode Description: {get_live_ema_calculation_mode_description()}"
+            f"Live EMA Mode Description: {get_live_ema_calculation_mode_description()}\n"
+            f"{get_ema_order_side_rule_text()}"
         ),
         level="REFRESH",
     )
@@ -390,6 +429,7 @@ def run_daily_opening_range_fetch():
             f"isolated_instrument_key={isolated_state.get('instrument_key')}, "
             f"isolated_level={isolated_state.get('selected_level')}, "
             f"live_ema_calculation_mode={get_live_ema_calculation_mode_text()}, "
+            f"ema_order_side_rule=dynamic_isolated_instrument_side, "
             f"output_file={opening_range_summary.get('output_file_path', 'not_saved')}"
         )
 
@@ -419,6 +459,7 @@ def run_daily_opening_range_fetch():
                 f"Isolated EMA Alerts Count: {opening_range_summary.get('isolated_ema_alerts_count', 0)}\n"
                 f"Live EMA Calculation Mode: {get_live_ema_calculation_mode_text()}\n"
                 f"Live EMA Mode Description: {get_live_ema_calculation_mode_description()}\n"
+                f"{get_ema_order_side_rule_text()}\n"
                 f"Output File: {opening_range_summary.get('output_file_path', 'not_saved')}"
             ),
             level="REFRESH",
@@ -445,6 +486,7 @@ def run_daily_opening_range_fetch():
 
 def run_initial_startup():
     """Initial synchronous load when the application starts up."""
+
     logger.info("Initializing application startup sequence...")
 
     telegram_service.send_startup_message(
@@ -455,7 +497,8 @@ def run_initial_startup():
             "and initializing live EMA state for all subscribed instruments. "
             "Opening Range isolated instrument selection will run after Opening Range fetch.\n\n"
             f"Live EMA Calculation Mode: {get_live_ema_calculation_mode_text()}\n"
-            f"Live EMA Mode Description: {get_live_ema_calculation_mode_description()}"
+            f"Live EMA Mode Description: {get_live_ema_calculation_mode_description()}\n"
+            f"{get_ema_order_side_rule_text()}"
         ),
     )
 
@@ -537,6 +580,7 @@ def run_initial_startup():
             f"EMA WebSocket Mode: {websocket_mode}\n"
             f"Opening Range Isolated Instrument Flow: {isolated_flow}\n"
             f"EMA Telegram Alert Scope: isolated instrument only\n"
+            f"{get_ema_order_side_rule_text()}\n"
             f"Isolated EMA Dashboard: /isolated-dashboard"
         )
 
@@ -572,6 +616,9 @@ def run_daily_market_hard_refresh():
     - EMA calculation mode is controlled by LIVE_EMA_CALCULATION_MODE.
     - Opening Range later isolates one instrument based on R2/R3/S2/S3 touch logic.
     - Telegram EMA alerts are sent only for that isolated instrument.
+    - Suggested Telegram order side is dynamic:
+        bullish_cross -> same side as isolated instrument
+        bearish_cross -> opposite side of isolated instrument
     """
 
     logger.info("================ DAILY MARKET HARD REFRESH STARTED ================")
@@ -591,7 +638,8 @@ def run_daily_market_hard_refresh():
             "Note: EMA calculation runs for all instruments. "
             "Telegram EMA alerts are restricted to the isolated Opening Range instrument.\n\n"
             f"Live EMA Calculation Mode: {get_live_ema_calculation_mode_text()}\n"
-            f"Live EMA Mode Description: {get_live_ema_calculation_mode_description()}"
+            f"Live EMA Mode Description: {get_live_ema_calculation_mode_description()}\n"
+            f"{get_ema_order_side_rule_text()}"
         ),
         level="REFRESH",
     )
@@ -676,7 +724,8 @@ def run_daily_market_hard_refresh():
                 f"total_candles={history_summary.get('total_candles')}, "
                 f"ema_result_file={history_summary.get('ema_results_file_path', 'not_saved')}, "
                 f"live_ema_initialized={history_summary.get('live_ema_initialized')}, "
-                f"live_ema_calculation_mode={get_live_ema_calculation_mode_text()}"
+                f"live_ema_calculation_mode={get_live_ema_calculation_mode_text()}, "
+                f"ema_order_side_rule=dynamic_isolated_instrument_side"
             )
         else:
             logger.warning(
@@ -782,6 +831,7 @@ def run_daily_market_hard_refresh():
 
 def start_scheduler() -> BackgroundScheduler:
     """Configures and starts background cron/interval tasks."""
+
     scheduler = BackgroundScheduler()
 
     scheduler.add_job(
@@ -789,6 +839,14 @@ def start_scheduler() -> BackgroundScheduler:
         trigger="interval",
         minutes=config.REFRESH_INTERVAL_MINUTES,
         id="token_refresh_job",
+        replace_existing=True,
+    )
+
+    scheduler.add_job(
+        func=check_upstox_token_validity,
+        trigger="interval",
+        minutes=get_token_monitor_interval_minutes(),
+        id="upstox_token_validity_check_job",
         replace_existing=True,
     )
 
@@ -821,6 +879,10 @@ def start_scheduler() -> BackgroundScheduler:
     scheduler_message = (
         f"Scheduler active.\n\n"
         f"Token refresh interval: every {config.REFRESH_INTERVAL_MINUTES} minutes\n"
+        f"Upstox token validity check: every "
+        f"{get_token_monitor_interval_minutes()} minutes\n"
+        f"Telegram token commands enabled: "
+        f"{getattr(config, 'TELEGRAM_TOKEN_BOT_ENABLED', True)}\n"
         f"Daily hard refresh: Mon-Fri at 09:00 AM "
         f"{getattr(config, 'MARKET_TIMEZONE', 'Asia/Kolkata')}\n"
         f"Opening range fetch: Mon-Fri at "
@@ -835,11 +897,15 @@ def start_scheduler() -> BackgroundScheduler:
         f"{getattr(config, 'EMA_ISOLATED_INSTRUMENT_TELEGRAM_ENABLED', True)}\n"
         f"Live EMA Calculation Mode: {get_live_ema_calculation_mode_text()}\n"
         f"Live EMA Mode Description: {get_live_ema_calculation_mode_description()}\n"
+        f"{get_ema_order_side_rule_text()}\n"
         f"Isolated EMA Dashboard: /isolated-dashboard"
     )
 
     logger.info(
         f"Scheduler active: Token refresh every {config.REFRESH_INTERVAL_MINUTES} mins | "
+        f"Upstox token validity check every {get_token_monitor_interval_minutes()} mins | "
+        f"Telegram token commands="
+        f"{getattr(config, 'TELEGRAM_TOKEN_BOT_ENABLED', True)} | "
         f"Daily market hard refresh scheduled for Mon-Fri at 09:00 AM "
         f"{getattr(config, 'MARKET_TIMEZONE', 'Asia/Kolkata')} | "
         f"Opening range fetch scheduled for Mon-Fri at "
@@ -852,7 +918,8 @@ def start_scheduler() -> BackgroundScheduler:
         f"{getattr(config, 'OPENING_RANGE_ISOLATED_INSTRUMENT_ENABLED', True)} | "
         f"Isolated EMA Telegram="
         f"{getattr(config, 'EMA_ISOLATED_INSTRUMENT_TELEGRAM_ENABLED', True)} | "
-        f"Live EMA mode={get_live_ema_calculation_mode_text()}."
+        f"Live EMA mode={get_live_ema_calculation_mode_text()} | "
+        f"EMA order side rule=dynamic_isolated_instrument_side."
     )
 
     telegram_service.send_message(
@@ -889,6 +956,7 @@ def log_registered_routes(fastapi_app: FastAPI):
 @asynccontextmanager
 async def app_lifespan(app: FastAPI):
     """Handles async lifecycle startup/shutdown events for FastAPI."""
+
     logger.info("Executing lifespan startup sequence...")
 
     log_registered_routes(app)
@@ -900,6 +968,8 @@ async def app_lifespan(app: FastAPI):
         await loop.run_in_executor(None, run_initial_startup)
 
         scheduler = start_scheduler()
+
+        telegram_token_bot.start()
 
         await upstox_streamer.start()
 
@@ -934,6 +1004,8 @@ async def app_lifespan(app: FastAPI):
         )
 
         try:
+            telegram_token_bot.stop()
+
             await upstox_streamer.stop()
 
             if scheduler and scheduler.running:

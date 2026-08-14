@@ -11,7 +11,8 @@ MONGO_URI = os.getenv("MONGO_URL")
 MONGO_DB = os.getenv("MONGO_DB")
 TOKENS_COLLECTION = os.getenv("TOKENS_COLLECTION")
 
-# Token refresh interval in minutes
+# Token refresh interval in minutes.
+# Existing token refresh workflow.
 REFRESH_INTERVAL_MINUTES = 60
 
 
@@ -22,16 +23,95 @@ REFRESH_INTERVAL_MINUTES = 60
 # startup, token refresh, scheduler, instrument load, refresh,
 # subscription, Opening Range job, shutdown, and errors.
 #
-# New isolated instrument requirement:
+# Isolated instrument requirement:
 # - Send Telegram notification when one Opening Range instrument is isolated.
 # - Send Telegram EMA crossover alerts only for the isolated instrument.
 # - Other instruments can continue EMA calculation and WebSocket broadcast,
 #   but should not send Telegram EMA alerts.
+# - EMA alert order side is dynamic:
+#     bullish_cross -> same side as isolated instrument
+#     bearish_cross -> opposite side of isolated instrument
+#
+# Token bot requirement:
+# - Telegram bot can receive /save-token, /token-status, /profile, /funds.
+# - /save-token expects the next Telegram message to contain the raw Upstox token.
+# - Raw token message should be deleted after processing.
+# - Token commands should be restricted to TELEGRAM_CHAT_ID.
 
 TELEGRAM_ENABLED = os.getenv("TELEGRAM_ENABLED", "false").lower() == "true"
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 TELEGRAM_TIMEOUT_SECONDS = int(os.getenv("TELEGRAM_TIMEOUT_SECONDS", "10"))
+
+
+# ============================================================
+# Upstox Token Monitor Configuration
+# ============================================================
+# Separate background task for validating the current Upstox access token.
+#
+# Current token MongoDB document format:
+# {
+#   "_id": "upstox_access_token",
+#   "access_token": "eyJ0eXAiOiJK...",
+#   "created_at": "2026-08-13T07:16:44.000000+05:30",
+#   "updated_at": "2026-08-13T07:16:44.000000+05:30"
+# }
+#
+# Token validation logic:
+# - Read token document from MongoDB.
+# - Call Upstox get_profile API using the current token.
+# - If profile API returns success, token is considered valid.
+# - If profile API fails, token is considered expired, invalid, or corrupted.
+# - Send Telegram alert asking user to save new token.
+#
+# Telegram command flow:
+# - /save-token:
+#     Bot asks user to paste raw token in next message.
+#     Bot deletes raw token message after receiving it.
+#     Bot validates token using get_profile.
+#     Bot saves token to MongoDB if valid.
+#
+# - /token-status:
+#     Bot returns masked token status and validation metadata.
+#
+# - /profile:
+#     Bot calls Upstox profile API and returns raw response to Telegram.
+#
+# - /funds:
+#     Bot calls Upstox funds and margin API and returns raw response to Telegram.
+
+UPSTOX_TOKEN_DOC_ID = os.getenv(
+    "UPSTOX_TOKEN_DOC_ID",
+    "upstox_access_token",
+)
+
+# Background token validity check interval.
+# Default: every 30 minutes.
+UPSTOX_TOKEN_CHECK_INTERVAL_MINUTES = int(
+    os.getenv("UPSTOX_TOKEN_CHECK_INTERVAL_MINUTES", "30")
+)
+
+# Enable or disable Telegram token command bot.
+TELEGRAM_TOKEN_BOT_ENABLED = (
+    os.getenv("TELEGRAM_TOKEN_BOT_ENABLED", "true").lower() == "true"
+)
+
+# Telegram polling interval in seconds.
+# Used between polling failures or loop waits.
+TELEGRAM_TOKEN_BOT_POLL_SECONDS = int(
+    os.getenv("TELEGRAM_TOKEN_BOT_POLL_SECONDS", "3")
+)
+
+# Telegram long polling timeout in seconds.
+TELEGRAM_TOKEN_BOT_LONG_POLL_TIMEOUT = int(
+    os.getenv("TELEGRAM_TOKEN_BOT_LONG_POLL_TIMEOUT", "20")
+)
+
+# Restrict token commands only to TELEGRAM_CHAT_ID.
+# Strongly recommended to keep True.
+TELEGRAM_TOKEN_BOT_RESTRICT_TO_CHAT = (
+    os.getenv("TELEGRAM_TOKEN_BOT_RESTRICT_TO_CHAT", "true").lower() == "true"
+)
 
 
 # ============================================================
@@ -219,7 +299,7 @@ OPENING_RANGE_TOUCH_EVENTS_SAVE_TEST_FILE = True
 # ============================================================
 # Opening Range Isolated Instrument Configuration
 # ============================================================
-# New requirement:
+# Requirement:
 # - After Opening Range is ready, take Opening Range average.
 # - Build average +/- 500 points strike window.
 # - Clamp the window inside STRIKE_FROM and STRIKE_TO.
@@ -229,6 +309,9 @@ OPENING_RANGE_TOUCH_EVENTS_SAVE_TEST_FILE = True
 # - Once isolated, lock that instrument for the trading day.
 # - Live EMA still runs for all instruments.
 # - Telegram EMA alerts are sent only for the isolated instrument.
+# - EMA alert order side is decided dynamically:
+#     bullish_cross -> same side as isolated instrument
+#     bearish_cross -> opposite side of isolated instrument
 
 OPENING_RANGE_ISOLATED_INSTRUMENT_ENABLED = True
 
@@ -250,6 +333,13 @@ OPENING_RANGE_ISOLATION_PRIORITY_LEVELS = ["R3", "S3", "R2", "S2"]
 # Once one instrument is selected, keep it locked for the trading day.
 OPENING_RANGE_ISOLATION_LOCK_FOR_DAY = True
 
+# Allow higher-priority level to upgrade existing isolated instrument.
+# Example:
+#   Existing isolated instrument came from R2/S2.
+#   Later R3/S3 qualifies.
+#   If True, higher-priority R3/S3 can replace R2/S2.
+OPENING_RANGE_ISOLATION_ALLOW_PRIORITY_UPGRADE = True
+
 # Send Telegram notification when instrument is isolated.
 OPENING_RANGE_ISOLATED_INSTRUMENT_NOTIFY_ENABLED = True
 
@@ -264,7 +354,9 @@ OPENING_RANGE_ISOLATION_ALLOW_LIVE_TOUCH = True
 OPENING_RANGE_ISOLATION_OPTIONS_ONLY = True
 
 # Save isolated instrument state to file only when TEST_FLAG=True if implemented.
-OPENING_RANGE_ISOLATED_INSTRUMENT_OUTPUT_FILE = "data/isolated_opening_range_instrument.json"
+OPENING_RANGE_ISOLATED_INSTRUMENT_OUTPUT_FILE = (
+    "data/isolated_opening_range_instrument.json"
+)
 
 # Reset isolated instrument daily based on market date.
 OPENING_RANGE_ISOLATION_RESET_DAILY = True
@@ -319,6 +411,21 @@ EMA_CROSS_BROADCAST_WITHOUT_OPENING_RANGE = True
 #   1. An isolated instrument is selected for the day.
 #   2. EMA crossover belongs to that isolated instrument.
 #   3. The isolated instrument has touched/crossed eligible OR level.
+#
+# New dynamic order side rule:
+#   bullish_cross:
+#       Select current NIFTY spot based instruments using the same
+#       option side as the isolated instrument.
+#
+#   bearish_cross:
+#       Select current NIFTY spot based instruments using the opposite
+#       option side of the isolated instrument.
+#
+# Examples:
+#   Isolated CE + bullish_cross -> suggest CE instruments near NIFTY spot.
+#   Isolated CE + bearish_cross -> suggest PE instruments near NIFTY spot.
+#   Isolated PE + bullish_cross -> suggest PE instruments near NIFTY spot.
+#   Isolated PE + bearish_cross -> suggest CE instruments near NIFTY spot.
 
 EMA_ISOLATED_INSTRUMENT_TELEGRAM_ENABLED = True
 
@@ -330,6 +437,8 @@ EMA_ISOLATED_ALERT_EVERY_CROSS = True
 #   EMA Cross: bullish/bearish
 #   EMA candle close: ...
 #   EMA candle timestamp: ...
+#   Isolated Instrument Type: CE/PE
+#   Suggested Order Side: CE/PE
 #   Nearest instrument details:
 #      24350PE - 135rs
 EMA_ISOLATED_ALERT_INCLUDE_LEVEL_NAME = True
@@ -337,9 +446,11 @@ EMA_ISOLATED_ALERT_INCLUDE_NIFTY_LTP = True
 EMA_ISOLATED_ALERT_INCLUDE_EMA_DETAILS = True
 EMA_ISOLATED_ALERT_INCLUDE_NEAREST_ORDER_INSTRUMENTS = True
 
-# Order side rule:
-#   bullish EMA cross  -> use CE instruments
-#   bearish EMA cross  -> use PE instruments
+# Backward-compatible fallback only.
+# These are used only when isolated instrument type is unavailable.
+# Normal expected flow should use:
+#   bullish_cross -> isolated instrument side
+#   bearish_cross -> opposite side of isolated instrument
 EMA_ALERT_BULLISH_OPTION_TYPE = "CE"
 EMA_ALERT_BEARISH_OPTION_TYPE = "PE"
 
@@ -417,6 +528,9 @@ LIVE_EMA_ENABLED = True
 # - EMA runs for all subscribed instruments.
 # - WebSocket EMA events can be broadcast for all instruments.
 # - Telegram EMA alerts are sent only for the isolated instrument.
+# - Suggested order side follows the dynamic isolated-side rule:
+#     bullish_cross -> same side as isolated instrument
+#     bearish_cross -> opposite side of isolated instrument
 LIVE_EMA_CALCULATION_MODE = False
 
 # Live EMA interval in minutes.

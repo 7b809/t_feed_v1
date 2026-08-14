@@ -14,7 +14,8 @@ file.txt
 *.so
 myenv/
 venv/
- 
+ files.txt
+ t.txt
  
 .env.* 
 .env

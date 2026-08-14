@@ -1,7 +1,0 @@
-CREATE:
-templates/isolated_ema_dashboard.html
-
-MODIFY:
-main.py
-api/opening_range_routes.py
-services/opening_range_service.py

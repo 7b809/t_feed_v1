@@ -28,6 +28,10 @@ class TelegramService:
     Live EMA calculation mode:
     - LIVE_EMA_CALCULATION_MODE=False means completed candle close based EMA.
     - LIVE_EMA_CALCULATION_MODE=True means live tick/LTP based EMA.
+
+    Order-side display behavior:
+    - Opening Range service and Option service decide suggested order side.
+    - Telegram service only displays isolated side, suggested side, and instruments.
     """
 
     def __init__(self):
@@ -96,7 +100,8 @@ class TelegramService:
         return "tick_ltp" if tick_based_mode else "candle_close"
 
     def _get_live_ema_calculation_mode_description(
-        self, mode: str | None = None
+        self,
+        mode: str | None = None,
     ) -> str:
         """Returns readable description for EMA calculation mode."""
 
@@ -415,6 +420,11 @@ class TelegramService:
         strike_text = strike_price if strike_price is not None else "N/A"
         type_text = str(instrument_type or "N/A").upper()
 
+        if type_text == "CALL":
+            type_text = "CE"
+        elif type_text == "PUT":
+            type_text = "PE"
+
         window_text = "not_available"
 
         if isinstance(average_window, dict):
@@ -460,16 +470,23 @@ class TelegramService:
         """
         Sends EMA crossover Telegram alert for isolated instrument only.
 
-        Alert format:
-            {strike value} CE/PE - crosses {levelname} - At {current nifty live point}
+        This service does not decide CE/PE order side.
+        Order side is decided before this method is called.
 
-        Then EMA details:
-            bullish/bearish cross, candle/tick price, candle/tick time, EMA values.
+        Expected order-side rule from opening_range_service/option_service:
+            bullish_cross:
+                Same side as isolated instrument.
 
-        Then nearest order instruments:
-            bullish cross -> CE instruments
-            bearish cross -> PE instruments
-            nearest strikes around current NIFTY spot.
+            bearish_cross:
+                Opposite side of isolated instrument.
+
+        Examples:
+            Isolated CE + bullish_cross -> suggested CE instruments.
+            Isolated CE + bearish_cross -> suggested PE instruments.
+            Isolated PE + bullish_cross -> suggested PE instruments.
+            Isolated PE + bearish_cross -> suggested CE instruments.
+
+        Suggested strikes are selected around current NIFTY spot/LTP.
         """
 
         if not bool(getattr(config, "EMA_ISOLATED_INSTRUMENT_TELEGRAM_ENABLED", True)):
@@ -481,6 +498,7 @@ class TelegramService:
 
         selected_state = selected_state or {}
         ema_event = ema_event or {}
+        suggested_order_instruments = suggested_order_instruments or []
 
         contract_info = (
             selected_state.get("contract_info")
@@ -490,9 +508,18 @@ class TelegramService:
         )
 
         strike = contract_info.get("strike_price", "N/A")
-        instrument_type = str(contract_info.get("instrument_type", "N/A")).upper()
+
+        isolated_instrument_type = (
+            str(contract_info.get("instrument_type", "N/A")).strip().upper()
+        )
+
+        if isolated_instrument_type == "CALL":
+            isolated_instrument_type = "CE"
+        elif isolated_instrument_type == "PUT":
+            isolated_instrument_type = "PE"
 
         selected_level = selected_state.get("selected_level", "N/A")
+
         instrument_key = ema_event.get("instrument_key") or selected_state.get(
             "instrument_key"
         )
@@ -534,12 +561,51 @@ class TelegramService:
 
         nifty_text = nifty_ltp if nifty_ltp is not None else "NIFTY_LTP_NOT_AVAILABLE"
 
+        suggested_order_option_type = None
+
+        for item in suggested_order_instruments:
+            if not isinstance(item, dict):
+                continue
+
+            candidate_type = str(item.get("instrument_type", "")).strip().upper()
+
+            if candidate_type in ["CE", "CALL"]:
+                suggested_order_option_type = "CE"
+                break
+
+            if candidate_type in ["PE", "PUT"]:
+                suggested_order_option_type = "PE"
+                break
+
+        suggested_order_type_text = (
+            suggested_order_option_type
+            if suggested_order_option_type
+            else "not_available"
+        )
+
+        cross_text = str(cross_type or "").strip().lower()
+
+        if "bullish" in cross_text:
+            order_side_rule = (
+                "Bullish cross uses the same side as the isolated instrument."
+            )
+        elif "bearish" in cross_text:
+            order_side_rule = (
+                "Bearish cross uses the opposite side of the isolated instrument."
+            )
+        else:
+            order_side_rule = (
+                "Order side could not be resolved because EMA cross type is unknown."
+            )
+
         header = (
-            f"{strike} {instrument_type} - crosses {selected_level} - At {nifty_text}"
+            f"{strike} {isolated_instrument_type} - "
+            f"crosses {selected_level} - "
+            f"At {nifty_text}"
         )
 
         order_details_text = self._format_suggested_order_instruments(
-            suggested_order_instruments or []
+            suggested_order_instruments
         )
 
         message = (
@@ -547,6 +613,9 @@ class TelegramService:
             "EMA Cross Details:\n"
             f"Cross Type: {cross_type}\n"
             f"Signal: {current_signal}\n"
+            f"Isolated Instrument Type: {isolated_instrument_type}\n"
+            f"Suggested Order Side: {suggested_order_type_text}\n"
+            f"Order Side Rule: {order_side_rule}\n"
             f"EMA Calculation Mode: {ema_mode}\n"
             f"EMA Mode Description: {ema_mode_description}\n"
             f"Source: {source}\n"
@@ -560,6 +629,15 @@ class TelegramService:
             f"Previous EMA Slow: {previous_ema_slow}\n"
             f"Instrument Key: {instrument_key}\n\n"
             f"{order_details_text}"
+        )
+
+        logger.info(
+            f"Sending isolated EMA Telegram message. "
+            f"instrument_key={instrument_key}, "
+            f"cross_type={cross_type}, "
+            f"isolated_instrument_type={isolated_instrument_type}, "
+            f"suggested_order_option_type={suggested_order_option_type}, "
+            f"suggested_instruments_count={len(suggested_order_instruments)}"
         )
 
         return self.send_message(

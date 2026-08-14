@@ -68,6 +68,88 @@ def get_live_ema_calculation_mode_payload() -> dict:
     }
 
 
+def get_ema_order_side_rule_payload() -> dict:
+    """
+    Returns EMA alert order-side rule payload.
+
+    Current requirement:
+        bullish_cross -> same side as isolated instrument
+        bearish_cross -> opposite side of isolated instrument
+
+    Fallback behavior:
+        If isolated instrument type is unavailable, option_service may use
+        EMA_ALERT_BULLISH_OPTION_TYPE and EMA_ALERT_BEARISH_OPTION_TYPE.
+    """
+
+    return {
+        "mode": "dynamic_isolated_instrument_side",
+        "description": (
+            "EMA alert suggested order instruments are selected from current "
+            "NIFTY spot based strikes. The option side is dynamic: bullish_cross "
+            "uses the same side as the isolated instrument, while bearish_cross "
+            "uses the opposite side of the isolated instrument."
+        ),
+        "rules": {
+            "bullish_cross": "same_side_as_isolated_instrument",
+            "bearish_cross": "opposite_side_of_isolated_instrument",
+        },
+        "examples": [
+            {
+                "isolated_instrument_type": "CE",
+                "cross_type": "bullish_cross",
+                "suggested_order_side": "CE",
+            },
+            {
+                "isolated_instrument_type": "CE",
+                "cross_type": "bearish_cross",
+                "suggested_order_side": "PE",
+            },
+            {
+                "isolated_instrument_type": "PE",
+                "cross_type": "bullish_cross",
+                "suggested_order_side": "PE",
+            },
+            {
+                "isolated_instrument_type": "PE",
+                "cross_type": "bearish_cross",
+                "suggested_order_side": "CE",
+            },
+        ],
+        "strike_selection": {
+            "basis": "current_nifty_spot_ltp",
+            "strike_step": getattr(config, "EMA_ALERT_STRIKE_STEP", 50),
+            "offsets": getattr(
+                config,
+                "EMA_ALERT_NEAREST_STRIKE_OFFSETS",
+                [-50, 0, 50],
+            ),
+            "max_order_instruments": getattr(
+                config,
+                "EMA_ALERT_MAX_ORDER_INSTRUMENTS",
+                3,
+            ),
+            "clamp_to_filter_range": getattr(
+                config,
+                "EMA_ALERT_ORDER_STRIKES_CLAMP_TO_FILTER_RANGE",
+                True,
+            ),
+        },
+        "fallback": {
+            "used_only_when_isolated_instrument_type_missing": True,
+            "bullish_option_type": getattr(
+                config,
+                "EMA_ALERT_BULLISH_OPTION_TYPE",
+                "CE",
+            ),
+            "bearish_option_type": getattr(
+                config,
+                "EMA_ALERT_BEARISH_OPTION_TYPE",
+                "PE",
+            ),
+        },
+    }
+
+
 # ============================================================
 # Instrument Resolution Helper
 # ============================================================
@@ -165,17 +247,22 @@ async def get_opening_range_latest_status():
         "isolated_instrument": isolated_state,
         "selected_or_instrument": isolated_state,
         "live_ema_calculation": get_live_ema_calculation_mode_payload(),
+        "ema_order_side_rule": get_ema_order_side_rule_payload(),
         "new_flow": {
             "description": (
                 "Opening Range levels are calculated for all subscribed instruments. "
                 "The system monitors R2/R3/S2/S3 touches. After an eligible touch, "
                 "one instrument is isolated using level priority and nearest strike "
                 "to Opening Range average. Live EMA continues for all instruments, "
-                "but Telegram EMA alerts are sent only for the isolated instrument."
+                "but Telegram EMA alerts are sent only for the isolated instrument. "
+                "For Telegram EMA suggested order instruments, bullish_cross uses "
+                "the same option side as the isolated instrument and bearish_cross "
+                "uses the opposite option side."
             ),
             "selected_or_flow": "mapped_to_isolated_instrument_flow",
             "isolated_instrument_flow": "enabled",
             "live_ema_calculation": get_live_ema_calculation_mode_payload(),
+            "ema_order_side_rule": get_ema_order_side_rule_payload(),
             "isolated_ema_telegram_alerts": getattr(
                 config,
                 "EMA_ISOLATED_INSTRUMENT_TELEGRAM_ENABLED",
@@ -263,6 +350,7 @@ async def get_opening_range_latest_status():
                 "EMA_ISOLATED_INSTRUMENT_TELEGRAM_ENABLED",
                 True,
             ),
+            "ema_order_side_rule": get_ema_order_side_rule_payload(),
             "ema_cross_include_opening_range_levels": getattr(
                 config,
                 "EMA_CROSS_INCLUDE_OPENING_RANGE_LEVELS",
@@ -395,6 +483,7 @@ async def trigger_opening_range_fetch(
             "isolated_instrument": isolated_state,
             "selected_or_instrument": isolated_state,
             "live_ema_calculation": get_live_ema_calculation_mode_payload(),
+            "ema_order_side_rule": get_ema_order_side_rule_payload(),
             "ema_websocket_opening_range_enrichment": getattr(
                 config,
                 "EMA_CROSS_INCLUDE_OPENING_RANGE_LEVELS",
@@ -428,6 +517,7 @@ async def get_opening_range_full_cache():
     return {
         "status": "success",
         "live_ema_calculation": get_live_ema_calculation_mode_payload(),
+        "ema_order_side_rule": get_ema_order_side_rule_payload(),
         "cache": get_opening_range_cache(),
     }
 
@@ -483,6 +573,7 @@ async def get_opening_range_instrument(
             "striketype": striketype,
         },
         "live_ema_calculation": get_live_ema_calculation_mode_payload(),
+        "ema_order_side_rule": get_ema_order_side_rule_payload(),
         "result": result,
     }
 
@@ -524,6 +615,7 @@ async def get_opening_range_ema_context(
             "striketype": striketype,
         },
         "live_ema_calculation": get_live_ema_calculation_mode_payload(),
+        "ema_order_side_rule": get_ema_order_side_rule_payload(),
         "opening_range": context,
     }
 
@@ -595,6 +687,7 @@ async def fetch_opening_range_for_single_instrument(
                 "candle_count": candle_count,
             },
             "live_ema_calculation": get_live_ema_calculation_mode_payload(),
+            "ema_order_side_rule": get_ema_order_side_rule_payload(),
             "result": result,
         }
 
@@ -634,9 +727,13 @@ async def get_selected_opening_range_instrument():
         "message": (
             "Selected OR compatibility route now returns isolated Opening Range "
             "instrument state. EMA Telegram alerts are sent only for the isolated "
-            "instrument, while WebSocket EMA events can still be broadcast for all instruments."
+            "instrument, while WebSocket EMA events can still be broadcast for all "
+            "instruments. EMA alert suggested order side is dynamic: bullish_cross "
+            "uses the same side as the isolated instrument and bearish_cross uses "
+            "the opposite side."
         ),
         "live_ema_calculation": get_live_ema_calculation_mode_payload(),
+        "ema_order_side_rule": get_ema_order_side_rule_payload(),
         "selected_or_instrument": isolated_state,
         "isolated_instrument": isolated_state,
     }
@@ -663,10 +760,12 @@ async def get_selected_opening_range_ema_alerts(
         "message": (
             "Returns EMA Telegram alert records for the isolated Opening Range "
             "instrument. Other instruments may produce EMA WebSocket events, but "
-            "do not produce Telegram EMA alerts."
+            "do not produce Telegram EMA alerts. Suggested order side follows "
+            "the dynamic isolated-side rule."
         ),
         "limit": limit,
         "live_ema_calculation": get_live_ema_calculation_mode_payload(),
+        "ema_order_side_rule": get_ema_order_side_rule_payload(),
         "selected_or_instrument": isolated_state,
         "isolated_instrument": isolated_state,
         "alerts": get_selected_or_ema_alerts(limit=limit),
@@ -683,6 +782,7 @@ async def get_isolated_opening_range_instrument():
         "status": "success",
         "flow": "isolated_instrument",
         "live_ema_calculation": get_live_ema_calculation_mode_payload(),
+        "ema_order_side_rule": get_ema_order_side_rule_payload(),
         "isolated_instrument": get_selected_or_instrument_state(),
     }
 
@@ -705,6 +805,7 @@ async def get_isolated_opening_range_ema_alerts(
         "flow": "isolated_instrument",
         "limit": limit,
         "live_ema_calculation": get_live_ema_calculation_mode_payload(),
+        "ema_order_side_rule": get_ema_order_side_rule_payload(),
         "isolated_instrument": get_selected_or_instrument_state(),
         "alerts": get_selected_or_ema_alerts(limit=limit),
     }
@@ -732,6 +833,7 @@ async def get_opening_range_touch_events_route(
         "status": "success",
         "limit": limit,
         "live_ema_calculation": get_live_ema_calculation_mode_payload(),
+        "ema_order_side_rule": get_ema_order_side_rule_payload(),
         "events": get_opening_range_touch_events(limit=limit),
         "isolated_instrument": get_selected_or_instrument_state(),
     }
@@ -751,6 +853,7 @@ async def get_opening_range_pending_touch_events_route():
             False,
         ),
         "live_ema_calculation": get_live_ema_calculation_mode_payload(),
+        "ema_order_side_rule": get_ema_order_side_rule_payload(),
         "pending_events": get_opening_range_pending_touch_events(),
     }
 
@@ -784,6 +887,7 @@ async def flush_opening_range_pending_touch_events_route(
             "telegram_sent": sent,
             "legacy_touch_telegram_enabled": legacy_enabled,
             "live_ema_calculation": get_live_ema_calculation_mode_payload(),
+            "ema_order_side_rule": get_ema_order_side_rule_payload(),
             "message": (
                 "Pending touch events flushed to Telegram."
                 if sent
@@ -843,6 +947,7 @@ async def get_opening_range_file_status():
     return {
         "status": "success",
         "live_ema_calculation": get_live_ema_calculation_mode_payload(),
+        "ema_order_side_rule": get_ema_order_side_rule_payload(),
         "opening_range_file_exists": file_path.exists(),
         "opening_range_file_path": str(file_path),
         "save_file_enabled": getattr(config, "OPENING_RANGE_SAVE_FILE", True),
@@ -867,6 +972,7 @@ async def get_opening_range_config():
     return {
         "status": "success",
         "live_ema_calculation": get_live_ema_calculation_mode_payload(),
+        "ema_order_side_rule": get_ema_order_side_rule_payload(),
         "config": {
             "enabled": getattr(config, "OPENING_RANGE_ENABLED", True),
             "interval": getattr(config, "OPENING_RANGE_INTERVAL", "1minute"),
@@ -1056,12 +1162,13 @@ async def get_opening_range_config():
                 "EMA_ISOLATED_ALERT_EVERY_CROSS",
                 True,
             ),
-            "ema_alert_bullish_option_type": getattr(
+            "ema_order_side_rule": get_ema_order_side_rule_payload(),
+            "ema_alert_bullish_option_type_fallback": getattr(
                 config,
                 "EMA_ALERT_BULLISH_OPTION_TYPE",
                 "CE",
             ),
-            "ema_alert_bearish_option_type": getattr(
+            "ema_alert_bearish_option_type_fallback": getattr(
                 config,
                 "EMA_ALERT_BEARISH_OPTION_TYPE",
                 "PE",

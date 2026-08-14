@@ -10,7 +10,7 @@ from core import config
 from core.logger import get_logger
 from services.token_service import token_service
 
-# File-specific logger (logs to logs/option_service.log)
+# File-specific logger logs to logs/option_service.log
 logger = get_logger(__file__)
 
 
@@ -25,7 +25,6 @@ options_cache = {
     "total_contracts": 0,
     "subscribed_keys": [],
     "data": [],
-
     # Fast lookup indexes rebuilt whenever option contracts are refreshed.
     "contracts_by_key": {},
     "contracts_by_strike_type": {},
@@ -47,14 +46,14 @@ NIFTY_INDEX_FEED = {
 }
 
 # Nifty index is only for live tick websocket feed.
-NIFTY_SUPPORTED_INTERVALS = [0]  # Live Tick only
+NIFTY_SUPPORTED_INTERVALS = [0]
 
 # Option contracts support live ticks and candle intervals.
 OPTION_SUPPORTED_INTERVALS = [
-    0,  # Live Tick
-    1,  # 1 Minute
-    3,  # 3 Minute
-    5,  # 5 Minute
+    0,
+    1,
+    3,
+    5,
 ]
 
 SUPPORTED_INTERVALS = OPTION_SUPPORTED_INTERVALS
@@ -63,6 +62,7 @@ SUPPORTED_INTERVALS = OPTION_SUPPORTED_INTERVALS
 # ============================================================
 # Basic Helpers
 # ============================================================
+
 
 def safe_float(value, default: float = 0.0) -> float:
     """Safely converts a value to float."""
@@ -99,6 +99,26 @@ def normalize_option_type(option_type: str | None) -> str | None:
 
     if value in ["PE", "PUT"]:
         return "PE"
+
+    return None
+
+
+def get_opposite_option_type(option_type: str | None) -> str | None:
+    """
+    Returns the opposite option type.
+
+    Examples:
+        CE -> PE
+        PE -> CE
+    """
+
+    normalized_type = normalize_option_type(option_type)
+
+    if normalized_type == "CE":
+        return "PE"
+
+    if normalized_type == "PE":
+        return "CE"
 
     return None
 
@@ -148,7 +168,7 @@ def clean_contract_data(item: dict) -> dict:
 
 def build_strike_type_key(strike_price, instrument_type: str) -> str | None:
     """
-    Builds lookup key for strike + CE/PE.
+    Builds lookup key for strike plus CE/PE.
 
     Example:
         24500.0_CE
@@ -232,6 +252,7 @@ def is_strike_inside_window(strike_value, lower_limit, upper_limit) -> bool:
 # Contract Filtering Helpers
 # ============================================================
 
+
 def get_nearest_expiry_contracts(contracts: list) -> tuple[str | None, list]:
     """
     Find nearest expiry contracts and filter by configured strike range
@@ -266,7 +287,6 @@ def get_nearest_expiry_contracts(contracts: list) -> tuple[str | None, list]:
         if parse_expiry_date(item.get("expiry")) == nearest_date
     ]
 
-    # Filter strike range if defined in core/config.py
     if hasattr(config, "STRIKE_FROM") and hasattr(config, "STRIKE_TO"):
         try:
             strike_from = float(config.STRIKE_FROM)
@@ -335,6 +355,7 @@ def _refresh_cache_indexes_locked():
 # ============================================================
 # Thread-Safe Cache Helpers
 # ============================================================
+
 
 def get_subscribed_instrument_keys() -> list:
     """
@@ -583,13 +604,16 @@ def get_nearest_contract_to_average(
 # EMA Alert Order Instrument Helpers
 # ============================================================
 
+
 def get_order_option_type_for_ema_cross(cross_type: str) -> str | None:
     """
-    Resolves order option type from EMA cross.
+    Backward-compatible order option type resolver.
 
-    Requirement:
-        bullish cross -> CE
-        bearish cross -> PE
+    Old behavior:
+        bullish_cross -> CE
+        bearish_cross -> PE
+
+    This is kept as fallback when isolated instrument type is not available.
     """
 
     cross_text = str(cross_type or "").lower()
@@ -607,6 +631,40 @@ def get_order_option_type_for_ema_cross(cross_type: str) -> str | None:
     return None
 
 
+def get_order_option_type_for_isolated_ema_cross(
+    cross_type: str,
+    isolated_instrument_type: str | None,
+) -> str | None:
+    """
+    Resolves order option type using isolated instrument side.
+
+    New requirement:
+        bullish_cross -> same side as isolated instrument
+        bearish_cross -> opposite side of isolated instrument
+
+    Examples:
+        isolated CE + bullish_cross -> CE
+        isolated CE + bearish_cross -> PE
+        isolated PE + bullish_cross -> PE
+        isolated PE + bearish_cross -> CE
+    """
+
+    isolated_type = normalize_option_type(isolated_instrument_type)
+
+    if not isolated_type:
+        return None
+
+    cross_text = str(cross_type or "").lower()
+
+    if "bullish" in cross_text:
+        return isolated_type
+
+    if "bearish" in cross_text:
+        return get_opposite_option_type(isolated_type)
+
+    return None
+
+
 def build_nearest_order_strikes(
     current_nifty_ltp: float,
     strike_step: int | None = None,
@@ -614,15 +672,15 @@ def build_nearest_order_strikes(
     clamp_to_filter_range: bool | None = None,
 ):
     """
-        Builds nearest order strike list around current NIFTY spot.
+    Builds nearest order strike list around current NIFTY spot.
 
-        Example:
-            current_nifty_ltp = 24333
-            strike_step = 50
-            nearest rounded strike = 24350
-            offsets = [-50, 0, 50]
-            output = [24300, 24350, 24400]
-        """
+    Example:
+        current_nifty_ltp = 24333
+        strike_step = 50
+        nearest rounded strike = 24350
+        offsets = [-50, 0, 50]
+        output = [24300, 24350, 24400]
+    """
 
     step = safe_int(
         strike_step,
@@ -644,7 +702,9 @@ def build_nearest_order_strikes(
     should_clamp = (
         bool(clamp_to_filter_range)
         if clamp_to_filter_range is not None
-        else bool(getattr(config, "EMA_ALERT_ORDER_STRIKES_CLAMP_TO_FILTER_RANGE", True))
+        else bool(
+            getattr(config, "EMA_ALERT_ORDER_STRIKES_CLAMP_TO_FILTER_RANGE", True)
+        )
     )
 
     nearest = round_to_nearest_strike(current_nifty_ltp, step)
@@ -666,19 +726,29 @@ def build_nearest_order_strikes(
 def get_nearest_order_instruments_for_ema_cross(
     current_nifty_ltp: float,
     cross_type: str,
+    isolated_instrument_type: str | None = None,
 ) -> list:
     """
     Returns nearest cached CE/PE option instruments for Telegram EMA alert.
 
-    Requirement:
-        bullish EMA cross -> CE instruments
-        bearish EMA cross -> PE instruments
+    New requirement:
+        bullish_cross -> same side as isolated instrument
+        bearish_cross -> opposite side of isolated instrument
 
-    The live LTP is not maintained in option_service.
-    Later, upstox_websocket/opening_range_service can attach live price if available.
+    Fallback behavior when isolated_instrument_type is not supplied:
+        bullish_cross -> CE
+        bearish_cross -> PE
+
+    Strike selection is always based on current NIFTY spot.
     """
 
-    option_type = get_order_option_type_for_ema_cross(cross_type)
+    if isolated_instrument_type:
+        option_type = get_order_option_type_for_isolated_ema_cross(
+            cross_type=cross_type,
+            isolated_instrument_type=isolated_instrument_type,
+        )
+    else:
+        option_type = get_order_option_type_for_ema_cross(cross_type)
 
     if not option_type:
         return []
@@ -719,6 +789,7 @@ def get_nearest_order_instruments_for_ema_cross(
 # ============================================================
 # Feed Discovery Helpers
 # ============================================================
+
 
 def get_available_feeds() -> list:
     """Returns all feeds available to client websocket consumers."""
@@ -798,6 +869,7 @@ def is_valid_feed_interval(instrument_key: str, interval: int) -> bool:
 # Upstox Options Fetch
 # ============================================================
 
+
 def get_options_contracts(
     instrument_key: str = None,
     expiry_date: str = None,
@@ -838,9 +910,7 @@ def get_options_contracts(
         )
 
         response_dict = (
-            api_response.to_dict()
-            if hasattr(api_response, "to_dict")
-            else api_response
+            api_response.to_dict() if hasattr(api_response, "to_dict") else api_response
         )
 
         all_contracts = response_dict.get("data", [])
@@ -874,7 +944,6 @@ def get_options_contracts(
                 "data": cleaned_all,
             }
 
-        # Extract keys to subscribe: Index Key + Filtered Option Keys
         option_keys = [
             item["instrument_key"]
             for item in final_output.get("data", [])
@@ -883,12 +952,10 @@ def get_options_contracts(
 
         keys_to_subscribe = list(dict.fromkeys([instrument_key] + option_keys))
 
-        # Build indexes before updating cache.
         contracts_by_key, contracts_by_strike_type = _build_cache_indexes(
             final_output.get("data", [])
         )
 
-        # Update cache safely with lock.
         with _cache_lock:
             options_cache["nearest_expiry"] = final_output.get("nearest_expiry")
             options_cache["total_contracts"] = final_output.get("total_contracts", 0)
@@ -933,6 +1000,7 @@ def get_options_contracts(
 # ============================================================
 # Debug / Summary Helpers
 # ============================================================
+
 
 def get_options_cache_summary() -> dict:
     """
