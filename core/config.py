@@ -320,7 +320,7 @@ OPENING_RANGE_ISOLATED_INSTRUMENT_ENABLED = True
 #   OR average = 24570
 #   window = 24570 +/- 500
 #   final range is clamped inside STRIKE_FROM and STRIKE_TO.
-OPENING_RANGE_ISOLATION_AVERAGE_WINDOW_POINTS = 500.0
+OPENING_RANGE_ISOLATION_AVERAGE_WINDOW_POINTS = 700.0
 
 # Only these Opening Range levels are eligible for isolation.
 OPENING_RANGE_ISOLATION_TOUCH_LEVELS = ["R2", "R3", "S2", "S3"]
@@ -328,7 +328,7 @@ OPENING_RANGE_ISOLATION_TOUCH_LEVELS = ["R2", "R3", "S2", "S3"]
 # Level priority for choosing isolated instrument.
 # R3/S3 gets higher priority than R2/S2.
 # If multiple instruments exist in same priority group, nearest strike to OR average wins.
-OPENING_RANGE_ISOLATION_PRIORITY_LEVELS = ["R3", "S3", "R2", "S2"]
+OPENING_RANGE_ISOLATION_PRIORITY_LEVELS = ["S3", "R3", "S2", "R2"]
 
 # Once one instrument is selected, keep it locked for the trading day.
 OPENING_RANGE_ISOLATION_LOCK_FOR_DAY = True
@@ -531,7 +531,7 @@ LIVE_EMA_ENABLED = True
 # - Suggested order side follows the dynamic isolated-side rule:
 #     bullish_cross -> same side as isolated instrument
 #     bearish_cross -> opposite side of isolated instrument
-LIVE_EMA_CALCULATION_MODE = False
+LIVE_EMA_CALCULATION_MODE = True
 
 # Live EMA interval in minutes.
 # Used only when LIVE_EMA_CALCULATION_MODE=False.

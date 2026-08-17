@@ -1137,50 +1137,363 @@ def format_isolated_instrument_title(state: dict) -> str:
     return f"{strike} {option_type} isolated after {level} touch"
 
 
+def get_isolated_strike_metadata(
+    selected_level: str,
+    strike_price=None,
+) -> dict:
+    """
+    Builds directional isolated/opposite strike metadata based on
+    the selected Opening Range level.
+
+    Rules:
+        R2/R3:
+            Isolated strike = PUT / PE / RESISTANCE / RED
+            Opposite strike = CALL / CE / SUPPORT / GREEN
+
+        S2/S3:
+            Isolated strike = CALL / CE / SUPPORT / GREEN
+            Opposite strike = PUT / PE / RESISTANCE / RED
+
+    Telegram normal text messages do not support custom background colors,
+    so colored square emojis are used.
+    """
+    selected_level = str(selected_level or "").strip().upper()
+
+    if selected_level in {"R2", "R3"}:
+        isolated_name = "PUT"
+        isolated_type = "PE"
+        isolated_indicator = "🟥"
+        isolated_context = "RESISTANCE"
+
+        opposite_name = "CALL"
+        opposite_type = "CE"
+        opposite_indicator = "🟩"
+        opposite_context = "SUPPORT"
+
+        directional_context = "RESISTANCE"
+
+    elif selected_level in {"S2", "S3"}:
+        isolated_name = "CALL"
+        isolated_type = "CE"
+        isolated_indicator = "🟩"
+        isolated_context = "SUPPORT"
+
+        opposite_name = "PUT"
+        opposite_type = "PE"
+        opposite_indicator = "🟥"
+        opposite_context = "RESISTANCE"
+
+        directional_context = "SUPPORT"
+
+    else:
+        isolated_name = "UNKNOWN"
+        isolated_type = "N/A"
+        isolated_indicator = "⬜"
+        isolated_context = "NEUTRAL"
+
+        opposite_name = "UNKNOWN"
+        opposite_type = "N/A"
+        opposite_indicator = "⬜"
+        opposite_context = "NEUTRAL"
+
+        directional_context = "NEUTRAL"
+
+    if strike_price not in {None, "N/A"}:
+        isolated_symbol = f"NIFTY {strike_price} {isolated_type}"
+        opposite_symbol = f"NIFTY {strike_price} {opposite_type}"
+    else:
+        isolated_symbol = f"NIFTY {isolated_type}"
+        opposite_symbol = f"NIFTY {opposite_type}"
+
+    return {
+        "isolated_name": isolated_name,
+        "isolated_type": isolated_type,
+        "isolated_indicator": isolated_indicator,
+        "isolated_context": isolated_context,
+        "isolated_symbol": isolated_symbol,
+
+        "opposite_name": opposite_name,
+        "opposite_type": opposite_type,
+        "opposite_indicator": opposite_indicator,
+        "opposite_context": opposite_context,
+        "opposite_symbol": opposite_symbol,
+
+        "directional_context": directional_context,
+    }
+
+
 def send_isolated_instrument_notification(state: dict) -> bool:
-    """Sends Telegram notification when instrument is isolated."""
+    """
+    Sends Telegram notification when an instrument is isolated.
+
+    Directional strike metadata rules:
+
+        R2/R3:
+            Isolated strike = PUT / PE / RESISTANCE
+            Opposite strike = CALL / CE / SUPPORT
+
+        S2/S3:
+            Isolated strike = CALL / CE / SUPPORT
+            Opposite strike = PUT / PE / RESISTANCE
+
+    The actual selected option contract is displayed separately so that
+    the selected instrument and directional metadata are not confused.
+    """
     if not DEFAULT_ISOLATED_NOTIFY_ENABLED:
+        return False
+
+    if not isinstance(state, dict):
+        logger.warning(
+            "Isolated instrument Telegram notification skipped because "
+            "state is invalid."
+        )
         return False
 
     info = state.get("contract_info") or {}
 
+    # --------------------------------------------------------
+    # Actual selected instrument information
+    # --------------------------------------------------------
+
+    instrument_key = state.get("instrument_key", "N/A")
     strike = info.get("strike_price", "N/A")
-    option_type = str(info.get("instrument_type", "N/A")).upper()
+    expiry = info.get("expiry", "N/A")
 
-    if option_type == "CALL":
-        option_type = "CE"
-    elif option_type == "PUT":
-        option_type = "PE"
+    trading_symbol = (
+        info.get("trading_symbol")
+        or info.get("tradingsymbol")
+        or instrument_key
+    )
 
-    selected_level = state.get("selected_level", "N/A")
+    raw_option_type = str(
+        info.get("instrument_type", "N/A")
+    ).strip().upper()
+
+    if raw_option_type in {"CALL", "CE"}:
+        actual_option_type = "CE"
+        actual_option_name = "CALL"
+    elif raw_option_type in {"PUT", "PE"}:
+        actual_option_type = "PE"
+        actual_option_name = "PUT"
+    else:
+        actual_option_type = raw_option_type or "N/A"
+        actual_option_name = "UNKNOWN"
+
+    if strike not in {None, "N/A"}:
+        actual_selected_symbol = f"NIFTY {strike} {actual_option_type}"
+    else:
+        actual_selected_symbol = f"NIFTY {actual_option_type}"
+
+    # --------------------------------------------------------
+    # Opening Range selection information
+    # --------------------------------------------------------
+
+    selected_level = str(
+        state.get("selected_level", "N/A")
+    ).strip().upper()
+
     trigger_price = state.get("trigger_price", "N/A")
+    trigger_field = state.get("trigger_field", "N/A")
     level_value = state.get("level_value", "N/A")
+    touch_source = state.get("touch_source", "N/A")
+
     nifty_ltp = state.get("latest_main_index_ltp")
+    reference_average = state.get("reference_average")
 
     touch_time = state.get("touch_time")
+
+    # --------------------------------------------------------
+    # Touch time formatting
+    # --------------------------------------------------------
+
     short_touch_time = touch_time
 
     try:
         if touch_time:
-            short_touch_time = str(touch_time).split("T")[-1][:5]
+            parsed_touch_time = parse_candle_timestamp(touch_time)
+
+            if parsed_touch_time:
+                short_touch_time = parsed_touch_time.strftime(
+                    "%I:%M:%S %p"
+                )
+            else:
+                short_touch_time = str(touch_time).split("T")[-1][:8]
+
     except Exception:
         short_touch_time = touch_time
 
-    message = (
-        f"{strike} {option_type} selected after {selected_level} touch\n\n"
-        f"Touch Price: {trigger_price}\n"
-        f"Level Value: {level_value}\n"
-        f"NIFTY: {nifty_ltp if nifty_ltp is not None else 'not_available'}\n"
-        f"Touch Time: {short_touch_time}\n\n"
-        f"EMA Telegram alerts will now be sent only for this instrument."
+    # --------------------------------------------------------
+    # Trading date formatting
+    # --------------------------------------------------------
+
+    trading_date = get_now_market_time().strftime("%d-%b-%Y")
+
+    if touch_time:
+        try:
+            parsed_touch_time = parse_candle_timestamp(touch_time)
+
+            if parsed_touch_time:
+                trading_date = parsed_touch_time.strftime("%d-%b-%Y")
+
+        except Exception:
+            pass
+
+    # --------------------------------------------------------
+    # Distance calculation
+    # --------------------------------------------------------
+
+    strike_distance = None
+
+    try:
+        if (
+            strike not in {None, "N/A"}
+            and reference_average not in {None, "N/A"}
+        ):
+            strike_distance = abs(
+                safe_float(strike) - safe_float(reference_average)
+            )
+
+    except Exception:
+        strike_distance = None
+
+    # --------------------------------------------------------
+    # Build directional strike metadata from selected level
+    # --------------------------------------------------------
+
+    strike_metadata = get_isolated_strike_metadata(
+        selected_level=selected_level,
+        strike_price=strike,
     )
 
-    return telegram_service.send_message(
-        title="Opening Range Instrument Isolated",
+    isolated_name = strike_metadata["isolated_name"]
+    isolated_type = strike_metadata["isolated_type"]
+    isolated_indicator = strike_metadata["isolated_indicator"]
+    isolated_context = strike_metadata["isolated_context"]
+    isolated_symbol = strike_metadata["isolated_symbol"]
+
+    opposite_name = strike_metadata["opposite_name"]
+    opposite_type = strike_metadata["opposite_type"]
+    opposite_indicator = strike_metadata["opposite_indicator"]
+    opposite_context = strike_metadata["opposite_context"]
+    opposite_symbol = strike_metadata["opposite_symbol"]
+
+    directional_context = strike_metadata["directional_context"]
+
+    # --------------------------------------------------------
+    # Display formatting
+    # --------------------------------------------------------
+
+    nifty_text = (
+        f"{safe_float(nifty_ltp):,.2f}"
+        if nifty_ltp is not None
+        else "not_available"
+    )
+
+    reference_average_text = (
+        f"{safe_float(reference_average):,.2f}"
+        if reference_average is not None
+        else "not_available"
+    )
+
+    distance_text = (
+        f"{strike_distance:,.2f} points"
+        if strike_distance is not None
+        else "not_available"
+    )
+
+    strike_text = (
+        f"{safe_float(strike):,.0f}"
+        if strike not in {None, "N/A"}
+        else "N/A"
+    )
+
+    level_value_text = (
+        f"{safe_float(level_value):,.2f}"
+        if level_value not in {None, "N/A"}
+        else "N/A"
+    )
+
+    trigger_price_text = (
+        f"{safe_float(trigger_price):,.2f}"
+        if trigger_price not in {None, "N/A"}
+        else "N/A"
+    )
+
+    # --------------------------------------------------------
+    # Telegram message
+    # --------------------------------------------------------
+
+    message = (
+        f"Trading Date: {trading_date}\n"
+        f"Selected Contract: {actual_selected_symbol}\n"
+        f"Selected Contract Type: "
+        f"{actual_option_name} ({actual_option_type})\n"
+        f"Trading Symbol: {trading_symbol}\n"
+        f"Instrument Key: {instrument_key}\n"
+        f"Expiry: {expiry}\n\n"
+
+        f"Selected Level: {selected_level}\n"
+        f"Level Value: {level_value_text}\n"
+        f"Trigger Price: {trigger_price_text}\n"
+        f"Trigger Field: {str(trigger_field).upper()}\n"
+        f"Touch Time: {short_touch_time}\n"
+        f"Touch Source: {touch_source}\n\n"
+
+        f"Strike Price: {strike_text}\n"
+        f"NIFTY LTP: {nifty_text}\n"
+        f"Reference Average: {reference_average_text}\n"
+        f"Distance From Average: {distance_text}\n\n"
+
+        f"📌 STRIKE METADATA\n\n"
+
+        f"{isolated_indicator} ISOLATED STRIKE: "
+        f"{isolated_name} - {isolated_context}\n"
+
+        f"{opposite_indicator} OPPOSITE STRIKE: "
+        f"{opposite_name} - {opposite_context}\n\n"
+
+        f"Isolated Strike Type: {isolated_type}\n"
+        f"Opposite Strike Type: {opposite_type}\n"
+        f"Isolated Symbol: {isolated_symbol}\n"
+        f"Opposite Symbol: {opposite_symbol}\n"
+        f"Directional Context: {directional_context}\n"
+        f"Selection Reason: {selected_level} TOUCH\n\n"
+
+        f"Isolation Status: 🔒 LOCKED\n"
+        f"EMA Monitoring: ✅ ACTIVE\n"
+        f"Telegram EMA Alerts: "
+        f"✅ ENABLED FOR ISOLATED INSTRUMENT"
+    )
+
+    # --------------------------------------------------------
+    # Send Telegram notification
+    # --------------------------------------------------------
+
+    sent = telegram_service.send_message(
+        title="🎯 ISOLATED INSTRUMENT SELECTED",
         message=message,
         level="OPENING_RANGE",
     )
 
+    if sent:
+        logger.info(
+            f"Isolated instrument Telegram notification sent. "
+            f"instrument_key={instrument_key}, "
+            f"strike={strike}, "
+            f"actual_option_type={actual_option_type}, "
+            f"directional_isolated_type={isolated_type}, "
+            f"directional_opposite_type={opposite_type}, "
+            f"selected_level={selected_level}, "
+            f"directional_context={directional_context}"
+        )
+    else:
+        logger.warning(
+            f"Failed to send isolated instrument Telegram notification. "
+            f"instrument_key={instrument_key}, "
+            f"selected_level={selected_level}"
+        )
+
+    return sent
 
 def isolate_instrument_from_event(event: dict) -> bool:
     """
