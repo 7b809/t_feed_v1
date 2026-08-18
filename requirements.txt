@@ -13,3 +13,8 @@ numpy
 apscheduler
 jinja2
 upstox-auth-pro
+
+playwright
+pyotp
+requests
+
