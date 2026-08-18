@@ -17,7 +17,10 @@ from services.option_service import (
     options_cache,
     get_contract_info_by_instrument_key,
     get_nearest_order_instruments_for_ema_cross,
+    get_budget_order_instruments_for_ema_cross,
+    update_contract_live_ltp,
 )
+
 from services.telegram_service import telegram_service
 
 logger = get_logger(__file__)
@@ -231,7 +234,7 @@ DEFAULT_ISOLATION_TOUCH_LEVELS = [
     for item in getattr(
         config,
         "OPENING_RANGE_ISOLATION_TOUCH_LEVELS",
-        ["R2", "R3", "S2", "S3"],
+        ["S3", "R3", "S2", "R2"],
     )
 ]
 
@@ -240,7 +243,7 @@ DEFAULT_ISOLATION_PRIORITY_LEVELS = [
     for item in getattr(
         config,
         "OPENING_RANGE_ISOLATION_PRIORITY_LEVELS",
-        ["R3", "S3", "R2", "S2"],
+        ["S3", "R3", "S2", "R2"],
     )
 ]
 
@@ -275,6 +278,8 @@ DEFAULT_EMA_ISOLATED_TELEGRAM_ENABLED = bool(
 DEFAULT_LIVE_EMA_CALCULATION_MODE = bool(
     getattr(config, "LIVE_EMA_CALCULATION_MODE", False)
 )
+
+
 # ============================================================
 # Basic Helpers
 # ============================================================
@@ -513,12 +518,70 @@ def is_option_contract(contract_info: dict | None) -> bool:
     return instrument_type in ["CE", "PE"]
 
 
+def normalize_option_type(value) -> str | None:
+    """Normalizes option type to CE or PE."""
+    text = str(value or "").strip().upper()
+
+    if text in ["CE", "CALL"]:
+        return "CE"
+
+    if text in ["PE", "PUT"]:
+        return "PE"
+
+    return None
+
+
+def get_isolated_role_from_level(level: str) -> str:
+    """
+    Returns isolated instrument role based on selected level.
+
+    S2/S3 -> SUPPORT
+    R2/R3 -> RESISTANCE
+    """
+    level_upper = str(level or "").strip().upper()
+
+    support_levels = [
+        str(item).upper()
+        for item in getattr(
+            config,
+            "OPENING_RANGE_ISOLATED_SUPPORT_LEVELS",
+            ["S2", "S3"],
+        )
+    ]
+
+    resistance_levels = [
+        str(item).upper()
+        for item in getattr(
+            config,
+            "OPENING_RANGE_ISOLATED_RESISTANCE_LEVELS",
+            ["R2", "R3"],
+        )
+    ]
+
+    if level_upper in support_levels:
+        return getattr(config, "OPENING_RANGE_ISOLATED_SUPPORT_ROLE_TEXT", "SUPPORT")
+
+    if level_upper in resistance_levels:
+        return getattr(
+            config,
+            "OPENING_RANGE_ISOLATED_RESISTANCE_ROLE_TEXT",
+            "RESISTANCE",
+        )
+
+    return "not_available"
+
+
 def update_latest_ltp_for_instrument(
     instrument_key: str,
     ltp,
     updated_at: str | None = None,
 ):
-    """Stores latest live LTP by instrument for Telegram suggested instruments."""
+    """
+    Stores latest live LTP by instrument for Telegram suggested instruments.
+
+    Also updates option_service.options_cache so budget range instrument lookup can
+    find instruments by live_ltp.
+    """
     if not instrument_key:
         return
 
@@ -532,6 +595,14 @@ def update_latest_ltp_for_instrument(
     with _touch_lock:
         _latest_ltp_by_instrument[instrument_key] = value
         _latest_ltp_updated_at_by_instrument[instrument_key] = updated_at
+
+    try:
+        update_contract_live_ltp(instrument_key, value)
+    except Exception as ex:
+        logger.warning(
+            f"Failed updating option_service live LTP cache. "
+            f"instrument_key={instrument_key}, error={type(ex).__name__}: {ex}"
+        )
 
 
 def get_latest_ltp_for_instrument(instrument_key: str) -> float | None:
@@ -940,7 +1011,7 @@ def get_level_priority(level: str) -> int:
 
     Lower value means higher priority.
     Example:
-        R3/S3 before R2/S2.
+        S3 first, then R3, then S2, then R2.
     """
     level_upper = str(level or "").upper()
 
@@ -992,6 +1063,8 @@ def build_average_window(reference_average: float) -> dict:
         "window_points": DEFAULT_ISOLATION_WINDOW_POINTS,
         "raw_lower": raw_lower,
         "raw_upper": raw_upper,
+        "eligible_lower": raw_lower,
+        "eligible_upper": raw_upper,
         "configured_from": strike_from,
         "configured_to": strike_to,
         "final_lower": final_lower,
@@ -1050,7 +1123,7 @@ def is_event_eligible_for_isolation(event: dict) -> tuple[bool, str]:
 def choose_best_isolation_event(events: list) -> dict | None:
     """
     Chooses the best isolation event using:
-        1. Level priority: R3/S3 before R2/S2.
+        1. Level priority: S3, R3, S2, R2.
         2. Nearest strike to Opening Range average.
     """
     if not events:
@@ -1104,7 +1177,7 @@ def should_replace_isolated_instrument(new_event: dict) -> bool:
     Default behavior:
         - If nothing selected, select.
         - If already selected and lock-for-day is enabled, do not replace.
-        - But if priority upgrade is enabled, R3/S3 can replace R2/S2.
+        - If priority upgrade is enabled, higher-priority level can replace lower-priority level.
     """
     with _selected_or_lock:
         already_selected = bool(_selected_or_instrument_state.get("selected"))
@@ -1137,370 +1210,25 @@ def format_isolated_instrument_title(state: dict) -> str:
     return f"{strike} {option_type} isolated after {level} touch"
 
 
-def get_isolated_strike_metadata(
-    selected_level: str,
-    strike_price=None,
-) -> dict:
-    """
-    Builds directional isolated/opposite strike metadata based on
-    the selected Opening Range level.
-
-    Rules:
-        R2/R3:
-            Isolated strike = PUT / PE / RESISTANCE / RED
-            Opposite strike = CALL / CE / SUPPORT / GREEN
-
-        S2/S3:
-            Isolated strike = CALL / CE / SUPPORT / GREEN
-            Opposite strike = PUT / PE / RESISTANCE / RED
-
-    Telegram normal text messages do not support custom background colors,
-    so colored square emojis are used.
-    """
-    selected_level = str(selected_level or "").strip().upper()
-
-    if selected_level in {"R2", "R3"}:
-        isolated_name = "PUT"
-        isolated_type = "PE"
-        isolated_indicator = "🟥"
-        isolated_context = "RESISTANCE"
-
-        opposite_name = "CALL"
-        opposite_type = "CE"
-        opposite_indicator = "🟩"
-        opposite_context = "SUPPORT"
-
-        directional_context = "RESISTANCE"
-
-    elif selected_level in {"S2", "S3"}:
-        isolated_name = "CALL"
-        isolated_type = "CE"
-        isolated_indicator = "🟩"
-        isolated_context = "SUPPORT"
-
-        opposite_name = "PUT"
-        opposite_type = "PE"
-        opposite_indicator = "🟥"
-        opposite_context = "RESISTANCE"
-
-        directional_context = "SUPPORT"
-
-    else:
-        isolated_name = "UNKNOWN"
-        isolated_type = "N/A"
-        isolated_indicator = "⬜"
-        isolated_context = "NEUTRAL"
-
-        opposite_name = "UNKNOWN"
-        opposite_type = "N/A"
-        opposite_indicator = "⬜"
-        opposite_context = "NEUTRAL"
-
-        directional_context = "NEUTRAL"
-
-    if strike_price not in {None, "N/A"}:
-        isolated_symbol = f"NIFTY {strike_price} {isolated_type}"
-        opposite_symbol = f"NIFTY {strike_price} {opposite_type}"
-    else:
-        isolated_symbol = f"NIFTY {isolated_type}"
-        opposite_symbol = f"NIFTY {opposite_type}"
-
-    return {
-        "isolated_name": isolated_name,
-        "isolated_type": isolated_type,
-        "isolated_indicator": isolated_indicator,
-        "isolated_context": isolated_context,
-        "isolated_symbol": isolated_symbol,
-
-        "opposite_name": opposite_name,
-        "opposite_type": opposite_type,
-        "opposite_indicator": opposite_indicator,
-        "opposite_context": opposite_context,
-        "opposite_symbol": opposite_symbol,
-
-        "directional_context": directional_context,
-    }
-
-
 def send_isolated_instrument_notification(state: dict) -> bool:
     """
-    Sends Telegram notification when an instrument is isolated.
+    Sends Telegram notification when instrument is isolated.
 
-    Directional strike metadata rules:
-
-        R2/R3:
-            Isolated strike = PUT / PE / RESISTANCE
-            Opposite strike = CALL / CE / SUPPORT
-
-        S2/S3:
-            Isolated strike = CALL / CE / SUPPORT
-            Opposite strike = PUT / PE / RESISTANCE
-
-    The actual selected option contract is displayed separately so that
-    the selected instrument and directional metadata are not confused.
+    Uses telegram_service.send_isolated_instrument_message so the new detailed
+    role based message format is applied.
     """
     if not DEFAULT_ISOLATED_NOTIFY_ENABLED:
         return False
 
-    if not isinstance(state, dict):
-        logger.warning(
-            "Isolated instrument Telegram notification skipped because "
-            "state is invalid."
-        )
-        return False
+    return telegram_service.send_isolated_instrument_message(state)
 
-    info = state.get("contract_info") or {}
-
-    # --------------------------------------------------------
-    # Actual selected instrument information
-    # --------------------------------------------------------
-
-    instrument_key = state.get("instrument_key", "N/A")
-    strike = info.get("strike_price", "N/A")
-    expiry = info.get("expiry", "N/A")
-
-    trading_symbol = (
-        info.get("trading_symbol")
-        or info.get("tradingsymbol")
-        or instrument_key
-    )
-
-    raw_option_type = str(
-        info.get("instrument_type", "N/A")
-    ).strip().upper()
-
-    if raw_option_type in {"CALL", "CE"}:
-        actual_option_type = "CE"
-        actual_option_name = "CALL"
-    elif raw_option_type in {"PUT", "PE"}:
-        actual_option_type = "PE"
-        actual_option_name = "PUT"
-    else:
-        actual_option_type = raw_option_type or "N/A"
-        actual_option_name = "UNKNOWN"
-
-    if strike not in {None, "N/A"}:
-        actual_selected_symbol = f"NIFTY {strike} {actual_option_type}"
-    else:
-        actual_selected_symbol = f"NIFTY {actual_option_type}"
-
-    # --------------------------------------------------------
-    # Opening Range selection information
-    # --------------------------------------------------------
-
-    selected_level = str(
-        state.get("selected_level", "N/A")
-    ).strip().upper()
-
-    trigger_price = state.get("trigger_price", "N/A")
-    trigger_field = state.get("trigger_field", "N/A")
-    level_value = state.get("level_value", "N/A")
-    touch_source = state.get("touch_source", "N/A")
-
-    nifty_ltp = state.get("latest_main_index_ltp")
-    reference_average = state.get("reference_average")
-
-    touch_time = state.get("touch_time")
-
-    # --------------------------------------------------------
-    # Touch time formatting
-    # --------------------------------------------------------
-
-    short_touch_time = touch_time
-
-    try:
-        if touch_time:
-            parsed_touch_time = parse_candle_timestamp(touch_time)
-
-            if parsed_touch_time:
-                short_touch_time = parsed_touch_time.strftime(
-                    "%I:%M:%S %p"
-                )
-            else:
-                short_touch_time = str(touch_time).split("T")[-1][:8]
-
-    except Exception:
-        short_touch_time = touch_time
-
-    # --------------------------------------------------------
-    # Trading date formatting
-    # --------------------------------------------------------
-
-    trading_date = get_now_market_time().strftime("%d-%b-%Y")
-
-    if touch_time:
-        try:
-            parsed_touch_time = parse_candle_timestamp(touch_time)
-
-            if parsed_touch_time:
-                trading_date = parsed_touch_time.strftime("%d-%b-%Y")
-
-        except Exception:
-            pass
-
-    # --------------------------------------------------------
-    # Distance calculation
-    # --------------------------------------------------------
-
-    strike_distance = None
-
-    try:
-        if (
-            strike not in {None, "N/A"}
-            and reference_average not in {None, "N/A"}
-        ):
-            strike_distance = abs(
-                safe_float(strike) - safe_float(reference_average)
-            )
-
-    except Exception:
-        strike_distance = None
-
-    # --------------------------------------------------------
-    # Build directional strike metadata from selected level
-    # --------------------------------------------------------
-
-    strike_metadata = get_isolated_strike_metadata(
-        selected_level=selected_level,
-        strike_price=strike,
-    )
-
-    isolated_name = strike_metadata["isolated_name"]
-    isolated_type = strike_metadata["isolated_type"]
-    isolated_indicator = strike_metadata["isolated_indicator"]
-    isolated_context = strike_metadata["isolated_context"]
-    isolated_symbol = strike_metadata["isolated_symbol"]
-
-    opposite_name = strike_metadata["opposite_name"]
-    opposite_type = strike_metadata["opposite_type"]
-    opposite_indicator = strike_metadata["opposite_indicator"]
-    opposite_context = strike_metadata["opposite_context"]
-    opposite_symbol = strike_metadata["opposite_symbol"]
-
-    directional_context = strike_metadata["directional_context"]
-
-    # --------------------------------------------------------
-    # Display formatting
-    # --------------------------------------------------------
-
-    nifty_text = (
-        f"{safe_float(nifty_ltp):,.2f}"
-        if nifty_ltp is not None
-        else "not_available"
-    )
-
-    reference_average_text = (
-        f"{safe_float(reference_average):,.2f}"
-        if reference_average is not None
-        else "not_available"
-    )
-
-    distance_text = (
-        f"{strike_distance:,.2f} points"
-        if strike_distance is not None
-        else "not_available"
-    )
-
-    strike_text = (
-        f"{safe_float(strike):,.0f}"
-        if strike not in {None, "N/A"}
-        else "N/A"
-    )
-
-    level_value_text = (
-        f"{safe_float(level_value):,.2f}"
-        if level_value not in {None, "N/A"}
-        else "N/A"
-    )
-
-    trigger_price_text = (
-        f"{safe_float(trigger_price):,.2f}"
-        if trigger_price not in {None, "N/A"}
-        else "N/A"
-    )
-
-    # --------------------------------------------------------
-    # Telegram message
-    # --------------------------------------------------------
-
-    message = (
-        f"Trading Date: {trading_date}\n"
-        f"Selected Contract: {actual_selected_symbol}\n"
-        f"Selected Contract Type: "
-        f"{actual_option_name} ({actual_option_type})\n"
-        f"Trading Symbol: {trading_symbol}\n"
-        f"Instrument Key: {instrument_key}\n"
-        f"Expiry: {expiry}\n\n"
-
-        f"Selected Level: {selected_level}\n"
-        f"Level Value: {level_value_text}\n"
-        f"Trigger Price: {trigger_price_text}\n"
-        f"Trigger Field: {str(trigger_field).upper()}\n"
-        f"Touch Time: {short_touch_time}\n"
-        f"Touch Source: {touch_source}\n\n"
-
-        f"Strike Price: {strike_text}\n"
-        f"NIFTY LTP: {nifty_text}\n"
-        f"Reference Average: {reference_average_text}\n"
-        f"Distance From Average: {distance_text}\n\n"
-
-        f"📌 STRIKE METADATA\n\n"
-
-        f"{isolated_indicator} ISOLATED STRIKE: "
-        f"{isolated_name} - {isolated_context}\n"
-
-        f"{opposite_indicator} OPPOSITE STRIKE: "
-        f"{opposite_name} - {opposite_context}\n\n"
-
-        f"Isolated Strike Type: {isolated_type}\n"
-        f"Opposite Strike Type: {opposite_type}\n"
-        f"Isolated Symbol: {isolated_symbol}\n"
-        f"Opposite Symbol: {opposite_symbol}\n"
-        f"Directional Context: {directional_context}\n"
-        f"Selection Reason: {selected_level} TOUCH\n\n"
-
-        f"Isolation Status: 🔒 LOCKED\n"
-        f"EMA Monitoring: ✅ ACTIVE\n"
-        f"Telegram EMA Alerts: "
-        f"✅ ENABLED FOR ISOLATED INSTRUMENT"
-    )
-
-    # --------------------------------------------------------
-    # Send Telegram notification
-    # --------------------------------------------------------
-
-    sent = telegram_service.send_message(
-        title="🎯 ISOLATED INSTRUMENT SELECTED",
-        message=message,
-        level="OPENING_RANGE",
-    )
-
-    if sent:
-        logger.info(
-            f"Isolated instrument Telegram notification sent. "
-            f"instrument_key={instrument_key}, "
-            f"strike={strike}, "
-            f"actual_option_type={actual_option_type}, "
-            f"directional_isolated_type={isolated_type}, "
-            f"directional_opposite_type={opposite_type}, "
-            f"selected_level={selected_level}, "
-            f"directional_context={directional_context}"
-        )
-    else:
-        logger.warning(
-            f"Failed to send isolated instrument Telegram notification. "
-            f"instrument_key={instrument_key}, "
-            f"selected_level={selected_level}"
-        )
-
-    return sent
 
 def isolate_instrument_from_event(event: dict) -> bool:
     """
     Isolates one instrument from a touch event.
 
     Selection rule:
-        - R3/S3 priority before R2/S2.
+        - S3, R3, S2, R2 priority.
         - Nearest to Opening Range average.
         - Lock selected instrument for the day unless priority upgrade is allowed.
     """
@@ -1533,10 +1261,12 @@ def isolate_instrument_from_event(event: dict) -> bool:
     with _opening_range_cache_lock:
         item = opening_range_cache.get("data", {}).get(instrument_key, {})
 
+    selected_level = str(event.get("level", "")).upper()
+
     state = {
         "selected": True,
         "instrument_key": instrument_key,
-        "selected_level": str(event.get("level", "")).upper(),
+        "selected_level": selected_level,
         "level_value": event.get("level_value"),
         "trigger_price": event.get("trigger_price"),
         "trigger_field": event.get("trigger_field"),
@@ -1550,6 +1280,7 @@ def isolate_instrument_from_event(event: dict) -> bool:
         "contract_info": contract_info,
         "range": item.get("range"),
         "levels": item.get("levels"),
+        "isolated_instrument_role": get_isolated_role_from_level(selected_level),
         "latest_live_data": {
             "ltp": get_latest_ltp_for_instrument(instrument_key),
         },
@@ -1584,6 +1315,7 @@ def isolate_instrument_from_event(event: dict) -> bool:
         f"level={state.get('selected_level')}, "
         f"strike={contract_info.get('strike_price')}, "
         f"type={contract_info.get('instrument_type')}, "
+        f"isolated_role={state.get('isolated_instrument_role')}, "
         f"reference_average={reference_average}"
     )
 
@@ -2129,9 +1861,17 @@ def get_suggested_order_instruments_for_ema(
 
         instrument_key = item.get("instrument_key")
 
-        live_ltp = (
+        cached_live_ltp = (
             get_latest_ltp_for_instrument(instrument_key) if instrument_key else None
         )
+
+        live_ltp = cached_live_ltp
+
+        if live_ltp is None:
+            live_ltp = item.get("live_ltp")
+
+        if live_ltp is None:
+            live_ltp = item.get("ltp")
 
         output.append(
             {
@@ -2143,15 +1883,47 @@ def get_suggested_order_instruments_for_ema(
     return output
 
 
+def get_budget_order_instruments_for_isolated_ema(
+    cross_type: str,
+    isolated_instrument_type: str | None = None,
+) -> list:
+    """
+    Returns budget range option instruments around current NIFTY LTP.
+
+    Rule:
+        bullish_cross -> same side as isolated instrument
+        bearish_cross -> opposite side of isolated instrument
+
+    Filter:
+        LTP between EMA_ALERT_BUDGET_MIN_PRICE and EMA_ALERT_BUDGET_MAX_PRICE.
+        If multiple instruments exist, option_service sorts nearest to current NIFTY LTP.
+    """
+
+    nifty_ltp = get_latest_main_index_ltp()
+
+    if not nifty_ltp or nifty_ltp <= 0:
+        logger.warning(
+            "Budget EMA order instruments could not be resolved because "
+            "latest NIFTY LTP is not available."
+        )
+        return []
+
+    return get_budget_order_instruments_for_ema_cross(
+        current_nifty_ltp=nifty_ltp,
+        cross_type=cross_type,
+        isolated_instrument_type=isolated_instrument_type,
+    )
+
+
 def format_suggested_order_instruments(
     instruments: list,
 ) -> str:
     """Formats suggested instruments for Telegram message."""
 
     if not instruments:
-        return "Nearest Instrument Details: not_available"
+        return "Nearest Order Instruments: not_available"
 
-    lines = ["Nearest Instrument Details:"]
+    lines = ["Nearest Order Instruments:"]
 
     for item in instruments:
         if not isinstance(item, dict):
@@ -2165,12 +1937,12 @@ def format_suggested_order_instruments(
         if live_ltp is None:
             price_text = "ltp_not_available"
         else:
-            price_text = f"{live_ltp}rs"
+            price_text = f"{live_ltp} rs"
 
-        lines.append(f"- {strike}{option_type} - {price_text}")
+        lines.append(f"- NIFTY {strike} {option_type} - {price_text}")
 
     if len(lines) == 1:
-        return "Nearest Instrument Details: not_available"
+        return "Nearest Order Instruments: not_available"
 
     return "\n".join(lines)
 
@@ -2244,13 +2016,6 @@ def should_skip_isolated_ema_alert_for_minute_direction(
     This means:
         Same minute + same direction -> skip.
         Same minute + opposite direction -> allow.
-
-    Example:
-        09:43 bullish -> send
-        09:43 bullish -> skip
-        09:43 bearish -> send
-        09:43 bearish -> skip
-        09:44 bullish -> send
     """
 
     global _selected_or_ema_alert_minute_date
@@ -2284,8 +2049,10 @@ def process_selected_or_ema_cross_alert(
         bullish_cross -> same side as isolated instrument
         bearish_cross -> opposite side of isolated instrument
 
-    Telegram message is intentionally short and readable.
-    Full EMA details are still saved in alert_record.
+    New message flow:
+        - Telegram formatting is handled by telegram_service.
+        - Nearest order instruments are passed to telegram_service.
+        - Budget range order instruments are also passed to telegram_service.
     """
 
     if not DEFAULT_EMA_ISOLATED_TELEGRAM_ENABLED:
@@ -2307,30 +2074,12 @@ def process_selected_or_ema_cross_alert(
         return False
 
     contract_info = selected_state.get("contract_info") or {}
-    strike = contract_info.get("strike_price", "N/A")
-
     isolated_instrument_type = get_isolated_instrument_type_from_state(selected_state)
 
-    option_type = isolated_instrument_type if isolated_instrument_type else "N/A"
-
-    selected_level = selected_state.get(
-        "selected_level",
-        "N/A",
-    )
-
+    selected_level = selected_state.get("selected_level", "N/A")
     nifty_ltp = get_latest_main_index_ltp()
-
-    cross_type = ema_event.get(
-        "cross_type",
-        "N/A",
-    )
-
-    current_signal = ema_event.get(
-        "current_signal",
-        "N/A",
-    )
-
-    close_price = ema_event.get("close")
+    cross_type = ema_event.get("cross_type", "N/A")
+    current_signal = ema_event.get("current_signal", "N/A")
     event_timestamp = ema_event.get("timestamp")
 
     if DEFAULT_LIVE_EMA_CALCULATION_MODE:
@@ -2355,39 +2104,24 @@ def process_selected_or_ema_cross_alert(
         minute_alert_key = None
         alert_direction = normalize_ema_cross_direction(ema_event)
 
-    ema_fast = ema_event.get("ema_fast")
-    ema_slow = ema_event.get("ema_slow")
-    previous_ema_fast = ema_event.get("previous_ema_fast")
-    previous_ema_slow = ema_event.get("previous_ema_slow")
-
-    ema_fast_period = ema_event.get(
-        "ema_fast_period",
-        getattr(config, "LIVE_EMA_FAST_PERIOD", 9),
-    )
-
-    ema_slow_period = ema_event.get(
-        "ema_slow_period",
-        getattr(config, "LIVE_EMA_SLOW_PERIOD", 21),
-    )
-
     ema_calculation_mode = ema_event.get(
         "ema_calculation_mode",
         get_live_ema_calculation_mode_text(),
     )
 
-    source = ema_event.get(
-        "source",
-        "live_feed",
-    )
+    source = ema_event.get("source", "live_feed")
 
     if ema_calculation_mode == "tick_ltp":
-        price_label = "Live Tick LTP"
         mode_description = "Live tick/LTP based EMA cross detection"
     else:
-        price_label = "EMA Close"
         mode_description = "Completed candle close based EMA cross detection"
 
     suggested_instruments = get_suggested_order_instruments_for_ema(
+        cross_type=cross_type,
+        isolated_instrument_type=isolated_instrument_type,
+    )
+
+    budget_instruments = get_budget_order_instruments_for_isolated_ema(
         cross_type=cross_type,
         isolated_instrument_type=isolated_instrument_type,
     )
@@ -2397,33 +2131,6 @@ def process_selected_or_ema_cross_alert(
     if suggested_instruments:
         suggested_order_option_type = suggested_instruments[0].get("instrument_type")
 
-    suggested_order_type_display = (
-        suggested_order_option_type if suggested_order_option_type else "not_available"
-    )
-
-    suggested_text = format_suggested_order_instruments(suggested_instruments)
-
-    signal_text = str(current_signal or cross_type or "N/A").upper()
-
-    short_event_time = event_timestamp
-
-    try:
-        if event_timestamp:
-            short_event_time = str(event_timestamp).split("T")[-1][:5]
-    except Exception:
-        short_event_time = event_timestamp
-
-    message = (
-        f"{strike} {option_type} | {selected_level} | "
-        f"NIFTY {nifty_ltp if nifty_ltp is not None else 'N/A'}\n\n"
-        f"Signal: {signal_text}\n"
-        f"Order Side: {suggested_order_type_display}\n"
-        f"{price_label}: {close_price}\n"
-        f"EMA Time: {short_event_time}\n"
-        f"Instrument: {event_key}\n\n"
-        f"{suggested_text}"
-    )
-
     alert_record = {
         "type": "isolated_instrument_ema_alert",
         "instrument_key": event_key,
@@ -2431,6 +2138,7 @@ def process_selected_or_ema_cross_alert(
         "selected_level": selected_level,
         "nifty_ltp": nifty_ltp,
         "isolated_instrument_type": isolated_instrument_type,
+        "isolated_instrument_role": get_isolated_role_from_level(selected_level),
         "suggested_order_option_type": suggested_order_option_type,
         "order_side_rule": (
             "bullish_cross uses isolated instrument side; "
@@ -2442,18 +2150,25 @@ def process_selected_or_ema_cross_alert(
         "ema_mode_description": mode_description,
         "ema_event": dict(ema_event),
         "suggested_order_instruments": suggested_instruments,
+        "budget_order_instruments": budget_instruments,
         "debug_details": {
             "cross_type": cross_type,
             "current_signal": current_signal,
             "source": source,
-            "close_price": close_price,
+            "close_price": ema_event.get("close"),
             "event_timestamp": event_timestamp,
-            "ema_fast_period": ema_fast_period,
-            "ema_slow_period": ema_slow_period,
-            "ema_fast": ema_fast,
-            "ema_slow": ema_slow,
-            "previous_ema_fast": previous_ema_fast,
-            "previous_ema_slow": previous_ema_slow,
+            "ema_fast_period": ema_event.get(
+                "ema_fast_period",
+                getattr(config, "LIVE_EMA_FAST_PERIOD", 9),
+            ),
+            "ema_slow_period": ema_event.get(
+                "ema_slow_period",
+                getattr(config, "LIVE_EMA_SLOW_PERIOD", 21),
+            ),
+            "ema_fast": ema_event.get("ema_fast"),
+            "ema_slow": ema_event.get("ema_slow"),
+            "previous_ema_fast": ema_event.get("previous_ema_fast"),
+            "previous_ema_slow": ema_event.get("previous_ema_slow"),
         },
         "created_at": get_now_market_time().isoformat(),
     }
@@ -2462,15 +2177,18 @@ def process_selected_or_ema_cross_alert(
         f"Processing isolated EMA Telegram alert. "
         f"instrument_key={event_key}, "
         f"cross_type={cross_type}, "
-        f"signal={signal_text}, "
         f"isolated_instrument_type={isolated_instrument_type}, "
-        f"suggested_order_option_type={suggested_order_option_type}"
+        f"suggested_order_option_type={suggested_order_option_type}, "
+        f"suggested_count={len(suggested_instruments)}, "
+        f"budget_count={len(budget_instruments)}"
     )
 
-    sent = telegram_service.send_message(
-        title="Isolated Instrument EMA Alert",
-        message=message,
-        level="EMA",
+    sent = telegram_service.send_isolated_ema_cross_message(
+        isolated_state=selected_state,
+        ema_event=ema_event,
+        nifty_ltp=nifty_ltp,
+        suggested_order_instruments=suggested_instruments,
+        budget_order_instruments=budget_instruments,
     )
 
     if sent:
@@ -3051,7 +2769,7 @@ def calculate_opening_range_for_all_subscribed(
         opening_range_cache["errors"] = errors
 
     # Important: choose isolated instrument after all backfill events are collected,
-    # so R3/S3 priority can win over R2/S2.
+    # so S3/R3 priority can win over S2/R2.
     if backfill_touch_events:
         try_isolate_from_touch_events(backfill_touch_events)
 

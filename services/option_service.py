@@ -248,6 +248,86 @@ def is_strike_inside_window(strike_value, lower_limit, upper_limit) -> bool:
     return lower <= strike <= upper
 
 
+def extract_live_ltp_from_contract(contract: dict):
+    """
+    Extracts live LTP from a contract dictionary.
+
+    Supported keys:
+        live_ltp
+        ltp
+        last_price
+        last_traded_price
+        close
+    """
+
+    if not isinstance(contract, dict):
+        return None
+
+    for key in [
+        "live_ltp",
+        "ltp",
+        "last_price",
+        "last_traded_price",
+        "close",
+    ]:
+        value = contract.get(key)
+
+        if value is None:
+            continue
+
+        try:
+            return float(value)
+        except Exception:
+            continue
+
+    return None
+
+
+def update_contract_live_ltp(instrument_key: str, live_ltp) -> bool:
+    """
+    Updates live_ltp for a cached option contract.
+
+    This is useful because option contract API response does not normally contain
+    live price. Call this from live tick processing when a tick arrives.
+
+    Args:
+        instrument_key: Upstox instrument key.
+        live_ltp: Latest traded price.
+
+    Returns:
+        True if cache was updated, False otherwise.
+    """
+
+    if not instrument_key:
+        return False
+
+    try:
+        ltp_value = float(live_ltp)
+    except Exception:
+        return False
+
+    updated = False
+
+    with _cache_lock:
+        data = options_cache.get("data", [])
+
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+
+            if item.get("instrument_key") == instrument_key:
+                item["live_ltp"] = ltp_value
+                item["ltp"] = ltp_value
+                item["live_ltp_updated_at"] = datetime.now().isoformat()
+                updated = True
+                break
+
+        if updated:
+            _refresh_cache_indexes_locked()
+
+    return updated
+
+
 # ============================================================
 # Contract Filtering Helpers
 # ============================================================
@@ -777,13 +857,172 @@ def get_nearest_order_instruments_for_ema_cross(
             {
                 **contract,
                 "available": True,
-                "live_ltp": None,
+                "live_ltp": extract_live_ltp_from_contract(contract),
             }
         )
 
     max_items = safe_int(getattr(config, "EMA_ALERT_MAX_ORDER_INSTRUMENTS", 3), 3)
 
     return output[:max_items]
+
+
+def get_budget_order_instruments_by_option_type(
+    current_nifty_ltp: float,
+    option_type: str,
+    min_price: float | None = None,
+    max_price: float | None = None,
+    max_items: int | None = None,
+) -> list:
+    """
+    Returns budget range option instruments for Telegram EMA alert.
+
+    Requirement:
+        - Use suggested order side only.
+        - LTP should be between configured budget min and max.
+        - If multiple instruments are present, choose nearest strikes to current NIFTY LTP.
+    """
+
+    if not bool(getattr(config, "EMA_ALERT_BUDGET_ORDER_ENABLED", False)):
+        return []
+
+    selected_option_type = normalize_option_type(option_type)
+
+    if not selected_option_type:
+        return []
+
+    budget_min = safe_float(
+        min_price,
+        safe_float(getattr(config, "EMA_ALERT_BUDGET_MIN_PRICE", 20.0), 20.0),
+    )
+
+    budget_max = safe_float(
+        max_price,
+        safe_float(getattr(config, "EMA_ALERT_BUDGET_MAX_PRICE", 30.0), 30.0),
+    )
+
+    if budget_min > budget_max:
+        budget_min, budget_max = budget_max, budget_min
+
+    selected_max_items = safe_int(
+        max_items,
+        safe_int(getattr(config, "EMA_ALERT_BUDGET_MAX_INSTRUMENTS", 3), 3),
+    )
+
+    if selected_max_items <= 0:
+        selected_max_items = 3
+
+    should_clamp = bool(
+        getattr(config, "EMA_ALERT_BUDGET_CLAMP_TO_FILTER_RANGE", True)
+    )
+
+    with _cache_lock:
+        cached_data = [item.copy() for item in options_cache.get("data", [])]
+
+    candidates = []
+
+    for contract in cached_data:
+        if not isinstance(contract, dict):
+            continue
+
+        contract_type = normalize_option_type(contract.get("instrument_type"))
+
+        if contract_type != selected_option_type:
+            continue
+
+        strike = contract.get("strike_price")
+
+        if strike is None:
+            continue
+
+        if should_clamp and not is_strike_inside_filter_range(strike):
+            continue
+
+        live_ltp = extract_live_ltp_from_contract(contract)
+
+        if live_ltp is None:
+            continue
+
+        if not (budget_min <= live_ltp <= budget_max):
+            continue
+
+        distance_from_nifty = abs(safe_float(strike) - safe_float(current_nifty_ltp))
+
+        candidates.append(
+            {
+                **contract,
+                "available": True,
+                "live_ltp": live_ltp,
+                "budget_min_price": budget_min,
+                "budget_max_price": budget_max,
+                "distance_from_nifty": distance_from_nifty,
+                "selection_reason": (
+                    f"LTP between {budget_min} and {budget_max}, "
+                    "sorted nearest to current NIFTY LTP."
+                ),
+            }
+        )
+
+    sort_by_nearest = bool(
+        getattr(config, "EMA_ALERT_BUDGET_SORT_BY_NEAREST_NIFTY", True)
+    )
+
+    if sort_by_nearest:
+        candidates.sort(
+            key=lambda item: (
+                safe_float(item.get("distance_from_nifty")),
+                safe_float(item.get("strike_price")),
+            )
+        )
+    else:
+        candidates.sort(
+            key=lambda item: (
+                safe_float(item.get("live_ltp")),
+                safe_float(item.get("strike_price")),
+            )
+        )
+
+    return candidates[:selected_max_items]
+
+
+def get_budget_order_instruments_for_ema_cross(
+    current_nifty_ltp: float,
+    cross_type: str,
+    isolated_instrument_type: str | None = None,
+    min_price: float | None = None,
+    max_price: float | None = None,
+    max_items: int | None = None,
+) -> list:
+    """
+    Returns budget range instruments for an isolated EMA cross.
+
+    Order side rule:
+        bullish_cross -> same side as isolated instrument
+        bearish_cross -> opposite side of isolated instrument
+
+    Fallback:
+        If isolated instrument type is missing:
+            bullish_cross -> EMA_ALERT_BULLISH_OPTION_TYPE
+            bearish_cross -> EMA_ALERT_BEARISH_OPTION_TYPE
+    """
+
+    if isolated_instrument_type:
+        option_type = get_order_option_type_for_isolated_ema_cross(
+            cross_type=cross_type,
+            isolated_instrument_type=isolated_instrument_type,
+        )
+    else:
+        option_type = get_order_option_type_for_ema_cross(cross_type)
+
+    if not option_type:
+        return []
+
+    return get_budget_order_instruments_by_option_type(
+        current_nifty_ltp=current_nifty_ltp,
+        option_type=option_type,
+        min_price=min_price,
+        max_price=max_price,
+        max_items=max_items,
+    )
 
 
 # ============================================================
