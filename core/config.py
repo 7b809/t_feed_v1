@@ -547,7 +547,7 @@ LIVE_EMA_SLOW_PERIOD = 21
 # Tick-based EMA duplicate alert control.
 # Used only when LIVE_EMA_CALCULATION_MODE=True.
 # If True, avoids repeated same-direction tick cross alerts until direction changes again.
-LIVE_EMA_TICK_ALERT_ONCE_PER_DIRECTION = True
+LIVE_EMA_TICK_ALERT_ONCE_PER_DIRECTION = False
 
 # Tick-based EMA minimum LTP movement filter.
 # Used only when LIVE_EMA_CALCULATION_MODE=True.
