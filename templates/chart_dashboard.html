@@ -1417,8 +1417,20 @@
         const low = Number(firstCandle.low);
         const open = Number(firstCandle.open);
         const close = Number(firstCandle.close);
+
         const average = (high + low) / 2;
-        const range = high - low;
+        const upperDelta = high - average; // (high - avg)
+        const lowerDelta = average - low; // (avg - low)
+
+        // Resistance Levels
+        const r1 = high;
+        const r2 = r1 + upperDelta;
+        const r3 = r2 + upperDelta;
+
+        // Support Levels
+        const s1 = low;
+        const s2 = s1 - lowerDelta;
+        const s3 = s2 - lowerDelta;
 
         return {
           open,
@@ -1426,12 +1438,12 @@
           low,
           close,
           average,
-          r1: high + range,
-          r2: high + range * 2,
-          r3: high + range * 3,
-          s1: low - range,
-          s2: low - range * 2,
-          s3: low - range * 3,
+          r1,
+          r2,
+          r3,
+          s1,
+          s2,
+          s3,
         };
       }
 
@@ -1513,8 +1525,9 @@
           const dayEndTime = Number(group[group.length - 1].time);
           const levels = calculateFirstCandleLevels(firstCandle);
 
+          // Base Levels
           addDailyLevelSegment(
-            "High",
+            "High (R1)",
             levels.high,
             dayStartTime,
             dayEndTime,
@@ -1522,7 +1535,7 @@
             2,
           );
           addDailyLevelSegment(
-            "Low",
+            "Low (S1)",
             levels.low,
             dayStartTime,
             dayEndTime,
@@ -1538,22 +1551,15 @@
             1,
           );
 
-          // addDailyLevelSegment(
-          //   "R1",
-          //   levels.r1,
-          //   dayStartTime,
-          //   dayEndTime,
-          //   "#26c6da",
-          //   1,
-          // );
-          // addDailyLevelSegment(
-          //   "R2",
-          //   levels.r2,
-          //   dayStartTime,
-          //   dayEndTime,
-          //   "#ff9800",
-          //   1,
-          // );
+          // Resistance Levels
+          addDailyLevelSegment(
+            "R2",
+            levels.r2,
+            dayStartTime,
+            dayEndTime,
+            "#ff9800",
+            1,
+          );
           addDailyLevelSegment(
             "R3",
             levels.r3,
@@ -1563,22 +1569,15 @@
             1,
           );
 
-          // addDailyLevelSegment(
-          //   "S1",
-          //   levels.s1,
-          //   dayStartTime,
-          //   dayEndTime,
-          //   "#26c6da",
-          //   1,
-          // );
-          // addDailyLevelSegment(
-          //   "S2",
-          //   levels.s2,
-          //   dayStartTime,
-          //   dayEndTime,
-          //   "#ab47bc",
-          //   1,
-          // );
+          // Support Levels
+          addDailyLevelSegment(
+            "S2",
+            levels.s2,
+            dayStartTime,
+            dayEndTime,
+            "#ab47bc",
+            1,
+          );
           addDailyLevelSegment(
             "S3",
             levels.s3,
@@ -2167,6 +2166,38 @@
         }
       }
 
+      function applyAutoFitRange(instrumentType) {
+        if (!candleSeries) return;
+
+        const isIndex = String(instrumentType || "").toUpperCase() === "INDEX";
+
+        // Index uses 300 points auto-fit spread; Options use 50 points
+        const minRangePoints = isIndex ? 300 : 50;
+
+        candleSeries.applyOptions({
+          autoscaleInfoProvider: (original) => {
+            const res = original();
+            if (!res || !res.priceRange) return res;
+
+            let { minValue, maxValue } = res.priceRange;
+            const currentRange = maxValue - minValue;
+
+            if (currentRange < minRangePoints) {
+              const mid = (maxValue + minValue) / 2;
+              minValue = mid - minRangePoints / 2;
+              maxValue = mid + minRangePoints / 2;
+            }
+
+            return {
+              priceRange: {
+                minValue,
+                maxValue,
+              },
+            };
+          },
+        });
+      }
+
       async function loadChart() {
         const instrumentKey = instrumentSelect.value;
         const interval = intervalSelect.value;
@@ -2212,6 +2243,9 @@
 
           currentCandles = normalized.candles;
           currentVolumes = normalized.volumes;
+
+          // Apply auto-fit scale range based on instrument type (INDEX vs CE/PE)
+          applyAutoFitRange(selected?.instrument_type);
 
           candleSeries.setData(currentCandles);
           volumeSeries.setData(currentVolumes);
