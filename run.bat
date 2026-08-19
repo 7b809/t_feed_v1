@@ -8,30 +8,54 @@ echo ================================================
 echo.
 
 REM ==================================================
-REM Check/Create Virtual Environment
+REM Check Virtual Environment
 REM ==================================================
 
-if not exist "myenv\Scripts\python.exe" (
-    echo Virtual environment not found.
+if exist "myenv" (
+    echo Virtual environment found.
+    echo Assuming required packages are already installed.
     echo.
+) else (
+    echo Virtual environment not found.
     echo Creating virtual environment...
     echo.
 
     python -m venv myenv
 
     if errorlevel 1 (
-        echo.
         echo ERROR: Failed to create virtual environment.
-        echo Make sure Python is installed and available in PATH.
         pause
         exit /b 1
     )
 
     echo.
-    echo Virtual environment created successfully.
+    echo Activating virtual environment...
+    call "myenv\Scripts\activate.bat"
+
     echo.
-) else (
-    echo Virtual environment already exists.
+    echo Upgrading pip...
+    python -m pip install --upgrade pip
+
+    if errorlevel 1 (
+        echo ERROR: Failed to upgrade pip.
+        pause
+        exit /b 1
+    )
+
+    if exist "requirements.txt" (
+        echo.
+        echo Installing required packages...
+        python -m pip install -r requirements.txt
+
+        if errorlevel 1 (
+            echo ERROR: Failed to install required packages.
+            pause
+            exit /b 1
+        )
+    )
+
+    echo.
+    echo Environment setup completed.
     echo.
 )
 
@@ -43,7 +67,6 @@ echo Activating virtual environment...
 call "myenv\Scripts\activate.bat"
 
 if errorlevel 1 (
-    echo.
     echo ERROR: Failed to activate virtual environment.
     pause
     exit /b 1
@@ -54,47 +77,6 @@ echo Python:
 where python
 python --version
 echo.
-
-REM ==================================================
-REM Install/Update Required Packages
-REM ==================================================
-
-if exist "requirements.txt" (
-    echo ================================================
-    echo Installing required packages...
-    echo ================================================
-    echo.
-
-    python -m pip install --upgrade pip
-
-    if errorlevel 1 (
-        echo.
-        echo ERROR: Failed to upgrade pip.
-        pause
-        exit /b 1
-    )
-
-    echo.
-    echo Installing requirements.txt...
-    echo.
-
-    python -m pip install -r requirements.txt
-
-    if errorlevel 1 (
-        echo.
-        echo ERROR: Failed to install required packages.
-        pause
-        exit /b 1
-    )
-
-    echo.
-    echo Required packages installed successfully.
-    echo.
-) else (
-    echo WARNING: requirements.txt not found.
-    echo Skipping package installation.
-    echo.
-)
 
 REM ==================================================
 REM Start FastAPI / Uvicorn

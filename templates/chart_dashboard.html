@@ -1,0 +1,2413 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Instrument Candle Chart | Opening Range Levels</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+    <style>
+      :root {
+        --bg: #07111f;
+        --panel: #0d1b2f;
+        --panel-light: #10243f;
+        --panel-hover: #143052;
+        --text: #e6edf7;
+        --muted: #8ea3bd;
+        --border: rgba(255, 255, 255, 0.08);
+        --green: #00c853;
+        --red: #ff5252;
+        --blue: #2979ff;
+        --orange: #ffb300;
+        --purple: #ab47bc;
+        --white: #ffffff;
+        --cyan: #26c6da;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font-family: "Segoe UI", Arial, sans-serif;
+        overflow: hidden;
+      }
+
+      .page {
+        width: 100vw;
+        height: 100vh;
+        display: flex;
+        flex-direction: column;
+        background:
+          radial-gradient(
+            circle at top left,
+            rgba(41, 121, 255, 0.12),
+            transparent 32%
+          ),
+          radial-gradient(
+            circle at bottom right,
+            rgba(0, 200, 83, 0.08),
+            transparent 30%
+          ),
+          var(--bg);
+      }
+
+      .topbar {
+        min-height: 72px;
+        padding: 14px 20px;
+        border-bottom: 1px solid var(--border);
+        background: linear-gradient(
+          90deg,
+          rgba(7, 17, 31, 0.96),
+          rgba(16, 36, 63, 0.96)
+        );
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+      }
+
+      .title-block h1 {
+        margin: 0;
+        font-size: 22px;
+        font-weight: 700;
+        letter-spacing: 0.2px;
+      }
+
+      .title-block p {
+        margin: 4px 0 0;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .status-pill {
+        min-width: 170px;
+        text-align: center;
+        padding: 8px 12px;
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        font-size: 12px;
+        color: var(--muted);
+        background: rgba(255, 255, 255, 0.04);
+        white-space: nowrap;
+      }
+
+      .status-pill.ok {
+        color: #a5d6a7;
+        border-color: rgba(0, 200, 83, 0.35);
+        background: rgba(0, 200, 83, 0.1);
+      }
+
+      .status-pill.error {
+        color: #ffab91;
+        border-color: rgba(255, 82, 82, 0.35);
+        background: rgba(255, 82, 82, 0.1);
+      }
+
+      .status-pill.live {
+        color: #80d8ff;
+        border-color: rgba(38, 198, 218, 0.35);
+        background: rgba(38, 198, 218, 0.1);
+      }
+
+      .controls {
+        padding: 14px 20px;
+        display: grid;
+        grid-template-columns: minmax(320px, 1fr) 150px 190px 180px 150px 150px;
+        gap: 12px;
+        background: rgba(13, 27, 47, 0.94);
+        border-bottom: 1px solid var(--border);
+      }
+
+      select,
+      button,
+      input {
+        width: 100%;
+        border: 1px solid var(--border);
+        border-radius: 9px;
+        background: var(--panel-light);
+        color: var(--text);
+        padding: 10px 12px;
+        font-size: 14px;
+        outline: none;
+      }
+
+      select:focus,
+      button:focus,
+      input:focus {
+        border-color: rgba(41, 121, 255, 0.75);
+        box-shadow: 0 0 0 3px rgba(41, 121, 255, 0.16);
+      }
+
+      button {
+        cursor: pointer;
+        background: var(--blue);
+        border-color: var(--blue);
+        font-weight: 700;
+      }
+
+      button.secondary {
+        background: var(--panel-light);
+        border-color: var(--border);
+      }
+
+      button:hover {
+        filter: brightness(1.08);
+      }
+
+      .instrument-search-wrap {
+        position: relative;
+        width: 100%;
+      }
+
+      #instrumentSelect {
+        display: none;
+      }
+
+      .suggestions-box {
+        position: absolute;
+        top: 46px;
+        left: 0;
+        right: 0;
+        z-index: 9999;
+        max-height: 340px;
+        overflow-y: auto;
+        display: none;
+        background: #0d1b2f;
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        box-shadow: 0 14px 34px rgba(0, 0, 0, 0.35);
+      }
+
+      .suggestion-item {
+        padding: 10px 12px;
+        cursor: pointer;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+      }
+
+      .suggestion-item:last-child {
+        border-bottom: none;
+      }
+
+      .suggestion-item:hover,
+      .suggestion-item.active {
+        background: var(--panel-hover);
+      }
+
+      .suggestion-title {
+        color: var(--text);
+        font-size: 13px;
+        font-weight: 700;
+      }
+
+      .suggestion-meta {
+        color: var(--muted);
+        font-size: 11px;
+        margin-top: 3px;
+      }
+
+      .suggestion-empty {
+        padding: 10px 12px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .content {
+        flex: 1;
+        min-height: 0;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 360px;
+      }
+
+      .chart-area {
+        position: relative;
+        min-width: 0;
+        min-height: 0;
+        border-right: 1px solid var(--border);
+      }
+
+      #chart {
+        width: 100%;
+        height: 100%;
+      }
+
+      .chart-overlay {
+        position: absolute;
+        top: 14px;
+        left: 14px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        z-index: 5;
+        pointer-events: none;
+      }
+
+      .chip {
+        padding: 6px 9px;
+        border-radius: 999px;
+        font-size: 11px;
+        color: var(--muted);
+        border: 1px solid var(--border);
+        background: rgba(0, 0, 0, 0.42);
+        backdrop-filter: blur(8px);
+      }
+
+      .chip.live {
+        color: #80d8ff;
+        border-color: rgba(38, 198, 218, 0.35);
+        background: rgba(38, 198, 218, 0.12);
+      }
+
+      .chip.error {
+        color: #ffab91;
+        border-color: rgba(255, 82, 82, 0.35);
+        background: rgba(255, 82, 82, 0.12);
+      }
+
+      .loading-box {
+        position: absolute;
+        top: 58px;
+        left: 14px;
+        z-index: 10;
+        display: none;
+        padding: 11px 13px;
+        border-radius: 10px;
+        border: 1px solid var(--border);
+        color: var(--muted);
+        background: rgba(0, 0, 0, 0.66);
+        font-size: 13px;
+      }
+
+      .side-panel {
+        min-height: 0;
+        overflow-y: auto;
+        background: rgba(13, 27, 47, 0.94);
+        padding: 16px;
+      }
+
+      .card {
+        background: rgba(16, 36, 63, 0.88);
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        padding: 14px;
+        margin-bottom: 14px;
+        box-shadow: 0 6px 22px rgba(0, 0, 0, 0.14);
+      }
+
+      .card h3 {
+        margin: 0 0 11px;
+        font-size: 15px;
+        font-weight: 700;
+        color: var(--text);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+      }
+
+      .subtext {
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.45;
+      }
+
+      .kv {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 7px 0;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+        font-size: 13px;
+      }
+
+      .kv:last-child {
+        border-bottom: none;
+      }
+
+      .kv span:first-child {
+        color: var(--muted);
+      }
+
+      .kv strong {
+        text-align: right;
+        font-weight: 700;
+        color: var(--text);
+        word-break: break-word;
+      }
+
+      .level-dot {
+        width: 9px;
+        height: 9px;
+        display: inline-block;
+        border-radius: 50%;
+        margin-right: 7px;
+        vertical-align: middle;
+      }
+
+      .dot-high,
+      .dot-low {
+        background: var(--orange);
+      }
+
+      .dot-avg {
+        background: var(--white);
+      }
+
+      .dot-r1 {
+        background: var(--cyan);
+      }
+
+      .dot-r2 {
+        background: var(--orange);
+      }
+
+      .dot-r3 {
+        background: var(--red);
+      }
+
+      .dot-s1 {
+        background: var(--cyan);
+      }
+
+      .dot-s2 {
+        background: var(--purple);
+      }
+
+      .dot-s3 {
+        background: var(--green);
+      }
+
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        padding: 4px 7px;
+        border-radius: 7px;
+        font-size: 11px;
+        color: #8bb8ff;
+        background: rgba(41, 121, 255, 0.16);
+        border: 1px solid rgba(41, 121, 255, 0.32);
+      }
+
+      .badge.live {
+        color: #80d8ff;
+        background: rgba(38, 198, 218, 0.12);
+        border-color: rgba(38, 198, 218, 0.32);
+      }
+
+      .error-text {
+        color: #ffab91;
+        font-size: 13px;
+        line-height: 1.45;
+      }
+
+      .success-text {
+        color: #a5d6a7;
+        font-size: 13px;
+        line-height: 1.45;
+      }
+
+      .muted {
+        color: var(--muted);
+      }
+
+      @media (max-width: 1100px) {
+        body {
+          overflow: auto;
+        }
+
+        .page {
+          min-height: 100vh;
+          height: auto;
+        }
+
+        .controls {
+          grid-template-columns: 1fr 1fr;
+        }
+
+        .content {
+          grid-template-columns: 1fr;
+        }
+
+        .chart-area {
+          height: 620px;
+          border-right: none;
+          border-bottom: 1px solid var(--border);
+        }
+
+        .side-panel {
+          overflow: visible;
+        }
+      }
+
+      @media (max-width: 720px) {
+        .topbar {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+
+        .status-pill {
+          width: 100%;
+        }
+
+        .controls {
+          grid-template-columns: 1fr;
+        }
+
+        .chart-area {
+          height: 560px;
+        }
+      }
+    </style>
+  </head>
+
+  <body>
+    <div class="page">
+      <header class="topbar">
+        <div class="title-block">
+          <h1>Instrument Candle Chart</h1>
+          <p>
+            Search by strike or option side. Example: 24500ce, 24500 call,
+            24500pe, 24500 put. Default loads last 7 days and scroll-left loads
+            previous 7 days.
+          </p>
+        </div>
+        <div id="connectionStatus" class="status-pill">
+          Loading instruments...
+        </div>
+      </header>
+
+      <section class="controls">
+        <div class="instrument-search-wrap">
+          <input
+            id="instrumentSearch"
+            type="text"
+            placeholder="Type strike or symbol, e.g. 24500ce, 24500 call, 24500 put"
+            autocomplete="off"
+          />
+          <div id="instrumentSuggestions" class="suggestions-box"></div>
+
+          <select id="instrumentSelect">
+            <option value="">Loading instruments...</option>
+          </select>
+        </div>
+
+        <select id="optionSideSelect">
+          <option value="ALL">All Sides</option>
+          <option value="CE">Call CE</option>
+          <option value="PE">Put PE</option>
+          <option value="INDEX">Index</option>
+        </select>
+
+        <select id="timezoneSelect">
+          <option value="Asia/Kolkata" selected>India IST</option>
+          <option value="LOCAL">Browser Local</option>
+          <option value="UTC">UTC</option>
+        </select>
+
+        <select id="intervalSelect">
+          <option value="1minute">1 Minute</option>
+          <option value="3minute">3 Minute</option>
+          <option value="5minute">5 Minute</option>
+          <option value="15minute">15 Minute</option>
+          <option value="30minute">30 Minute</option>
+        </select>
+
+        <button id="loadBtn">Load Chart</button>
+        <button id="fitBtn" class="secondary">Fit Chart</button>
+      </section>
+
+      <main class="content">
+        <section class="chart-area">
+          <div class="chart-overlay">
+            <div id="selectedChip" class="chip">No instrument selected</div>
+            <div id="sideChip" class="chip">Side: All</div>
+            <div id="timezoneChip" class="chip">TZ: India IST</div>
+            <div id="intervalChip" class="chip">Interval: 1minute</div>
+            <div id="historyChip" class="chip">History: 7 days</div>
+            <div id="orChip" class="chip">OR: Not loaded</div>
+            <div id="wsChip" class="chip">WS: Disconnected</div>
+            <div id="ltpChip" class="chip">LTP: -</div>
+          </div>
+
+          <div id="loadingBox" class="loading-box">Loading chart...</div>
+          <div id="chart"></div>
+        </section>
+
+        <aside class="side-panel">
+          <div class="card">
+            <h3>
+              Selected Instrument
+              <span class="badge">Chart</span>
+            </h3>
+            <div id="instrumentInfo" class="subtext">
+              Select an instrument to load candlestick data.
+            </div>
+          </div>
+
+          <div class="card">
+            <h3>
+              Live WebSocket
+              <span class="badge live">Live</span>
+            </h3>
+            <div id="wsInfo" class="subtext">
+              WebSocket will connect after selecting an instrument.
+            </div>
+          </div>
+
+          <div class="card">
+            <h3>
+              Opening Range Levels
+              <span class="badge">Overlay</span>
+            </h3>
+            <div id="orInfo" class="subtext">
+              Opening Range values will appear after chart load.
+            </div>
+          </div>
+
+          <div class="card">
+            <h3>
+              Touch Status
+              <span class="badge">OR</span>
+            </h3>
+            <div id="touchInfo" class="subtext">
+              R2/R3/S2/S3 touch status will appear when available.
+            </div>
+          </div>
+
+          <div class="card">
+            <h3>
+              Chart Status
+              <span class="badge">Status</span>
+            </h3>
+            <div id="chartStatus" class="subtext">Waiting for selection.</div>
+          </div>
+        </aside>
+      </main>
+    </div>
+
+    <script src="https://unpkg.com/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js"></script>
+
+    <script>
+      let chart = null;
+      let candleSeries = null;
+      let volumeSeries = null;
+      let livePriceLine = null;
+
+      let priceLines = [];
+      let dailyLevelSeries = [];
+      let instruments = [];
+
+      let liveWs = null;
+      let activeInstrumentKey = null;
+      let activeWebSocketPath = null;
+      let activeWsMode = null;
+
+      let currentCandles = [];
+      let currentVolumes = [];
+      let lastLiveTick = null;
+
+      let searchThrottleTimer = null;
+      let activeSuggestionIndex = -1;
+      let currentSuggestionItems = [];
+
+      let isLoadingMoreCandles = false;
+      let lazyLoadEnabled = false;
+      let loadedFromDate = null;
+      let loadedToDate = null;
+      let historicalWindowDays = 7;
+
+      const instrumentSearch = document.getElementById("instrumentSearch");
+      const instrumentSuggestions = document.getElementById(
+        "instrumentSuggestions",
+      );
+      const instrumentSelect = document.getElementById("instrumentSelect");
+      const optionSideSelect = document.getElementById("optionSideSelect");
+      const timezoneSelect = document.getElementById("timezoneSelect");
+      const intervalSelect = document.getElementById("intervalSelect");
+
+      const loadBtn = document.getElementById("loadBtn");
+      const fitBtn = document.getElementById("fitBtn");
+
+      const connectionStatus = document.getElementById("connectionStatus");
+      const loadingBox = document.getElementById("loadingBox");
+
+      const selectedChip = document.getElementById("selectedChip");
+      const sideChip = document.getElementById("sideChip");
+      const timezoneChip = document.getElementById("timezoneChip");
+      const intervalChip = document.getElementById("intervalChip");
+      const historyChip = document.getElementById("historyChip");
+      const orChip = document.getElementById("orChip");
+      const wsChip = document.getElementById("wsChip");
+      const ltpChip = document.getElementById("ltpChip");
+
+      const instrumentInfo = document.getElementById("instrumentInfo");
+      const wsInfo = document.getElementById("wsInfo");
+      const orInfo = document.getElementById("orInfo");
+      const touchInfo = document.getElementById("touchInfo");
+      const chartStatus = document.getElementById("chartStatus");
+
+      function setStatus(text, mode) {
+        connectionStatus.textContent = text;
+        connectionStatus.classList.remove("ok", "error", "live");
+
+        if (mode === "ok") {
+          connectionStatus.classList.add("ok");
+        }
+
+        if (mode === "error") {
+          connectionStatus.classList.add("error");
+        }
+
+        if (mode === "live") {
+          connectionStatus.classList.add("live");
+        }
+      }
+
+      function setWsChip(text, mode) {
+        wsChip.textContent = text;
+        wsChip.classList.remove("live", "error");
+
+        if (mode === "live") {
+          wsChip.classList.add("live");
+        }
+
+        if (mode === "error") {
+          wsChip.classList.add("error");
+        }
+      }
+
+      function showLoading(show, message) {
+        loadingBox.textContent = message || "Loading chart...";
+        loadingBox.style.display = show ? "block" : "none";
+      }
+
+      function formatValue(value) {
+        if (value === null || value === undefined || value === "") {
+          return "-";
+        }
+
+        const num = Number(value);
+
+        if (Number.isNaN(num)) {
+          return String(value);
+        }
+
+        return num.toFixed(2);
+      }
+
+      function formatSymbol(value) {
+        if (value === null || value === undefined || value === "") {
+          return "-";
+        }
+
+        return String(value);
+      }
+
+      function renderKeyValues(container, rows) {
+        container.innerHTML = rows
+          .map(
+            (row) => `
+              <div class="kv">
+                <span>${row.label}</span>
+                <strong>${row.value}</strong>
+              </div>
+            `,
+          )
+          .join("");
+      }
+
+      function getSelectedTimezone() {
+        return String(timezoneSelect.value || "Asia/Kolkata");
+      }
+
+      function getTimezoneLabel() {
+        const timezone = getSelectedTimezone();
+
+        if (timezone === "Asia/Kolkata") {
+          return "India IST";
+        }
+
+        if (timezone === "UTC") {
+          return "UTC";
+        }
+
+        return "Browser Local";
+      }
+
+      function getEffectiveTimezone() {
+        const timezone = getSelectedTimezone();
+
+        if (timezone === "LOCAL") {
+          return Intl.DateTimeFormat().resolvedOptions().timeZone;
+        }
+
+        return timezone;
+      }
+
+      function getTimezoneOffsetMinutes(timestampSeconds) {
+        const timezone = getSelectedTimezone();
+
+        if (timezone === "Asia/Kolkata") {
+          return 330;
+        }
+
+        if (timezone === "UTC") {
+          return 0;
+        }
+
+        const date = new Date(timestampSeconds * 1000);
+        return -date.getTimezoneOffset();
+      }
+
+      function formatDateInTimeZone(dateObject, timeZone) {
+        const parts = new Intl.DateTimeFormat("en-GB", {
+          timeZone,
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+        }).formatToParts(dateObject);
+
+        const year = parts.find((part) => part.type === "year")?.value;
+        const month = parts.find((part) => part.type === "month")?.value;
+        const day = parts.find((part) => part.type === "day")?.value;
+
+        return `${year}-${month}-${day}`;
+      }
+
+      function getTodayDateText() {
+        return formatDateInTimeZone(new Date(), getEffectiveTimezone());
+      }
+
+      function addDaysToDate(dateText, days) {
+        const dateObject = new Date(`${dateText}T00:00:00`);
+        dateObject.setDate(dateObject.getDate() + days);
+        return formatDateInTimeZone(dateObject, getEffectiveTimezone());
+      }
+
+      function subtractDaysFromDate(dateText, days) {
+        return addDaysToDate(dateText, -days);
+      }
+
+      function getInitialFromDateText() {
+        return subtractDaysFromDate(
+          getTodayDateText(),
+          historicalWindowDays - 1,
+        );
+      }
+
+      function formatChartTime(timeValue) {
+        let timestampSeconds = null;
+
+        if (typeof timeValue === "number") {
+          timestampSeconds = timeValue;
+        } else if (timeValue && typeof timeValue === "object") {
+          const year = timeValue.year;
+          const month = timeValue.month;
+          const day = timeValue.day;
+
+          if (year && month && day) {
+            timestampSeconds = Math.floor(
+              Date.UTC(year, month - 1, day, 0, 0, 0) / 1000,
+            );
+          }
+        }
+
+        if (!timestampSeconds) {
+          return "";
+        }
+
+        const timezone = getSelectedTimezone();
+        const date = new Date(timestampSeconds * 1000);
+
+        if (timezone === "LOCAL") {
+          return date.toLocaleString([], {
+            hour: "2-digit",
+            minute: "2-digit",
+            day: "2-digit",
+            month: "short",
+          });
+        }
+
+        return new Intl.DateTimeFormat("en-IN", {
+          timeZone: timezone,
+          hour: "2-digit",
+          minute: "2-digit",
+          day: "2-digit",
+          month: "short",
+          hour12: false,
+        }).format(date);
+      }
+
+      function applyChartTimezoneOptions() {
+        timezoneChip.textContent = `TZ: ${getTimezoneLabel()}`;
+
+        if (!chart) {
+          return;
+        }
+
+        chart.applyOptions({
+          localization: {
+            priceFormatter: (price) => Number(price).toFixed(2),
+            timeFormatter: formatChartTime,
+          },
+          timeScale: {
+            borderColor: "rgba(255,255,255,0.12)",
+            timeVisible: true,
+            secondsVisible: false,
+            tickMarkFormatter: formatChartTime,
+          },
+        });
+      }
+
+      function normalizeSearchText(value) {
+        return String(value || "")
+          .toLowerCase()
+          .replace(/\s+/g, "")
+          .replace(/call/g, "ce")
+          .replace(/put/g, "pe")
+          .replace(/-/g, "")
+          .replace(/_/g, "");
+      }
+
+      function debounceSearch(callback, delay = 180) {
+        clearTimeout(searchThrottleTimer);
+        searchThrottleTimer = setTimeout(callback, delay);
+      }
+
+      function getSelectedSide() {
+        return String(optionSideSelect.value || "ALL").toUpperCase();
+      }
+
+      function itemPassesSideFilter(item) {
+        const selectedSide = getSelectedSide();
+        const itemType = String(item.instrument_type || "").toUpperCase();
+
+        if (selectedSide === "ALL") {
+          return true;
+        }
+
+        if (selectedSide === "INDEX") {
+          return itemType === "INDEX";
+        }
+
+        return itemType === selectedSide;
+      }
+
+      function getStrikeText(item) {
+        if (item.strike_price === null || item.strike_price === undefined) {
+          return "";
+        }
+
+        const numberValue = Number(item.strike_price);
+
+        if (Number.isNaN(numberValue)) {
+          return String(item.strike_price);
+        }
+
+        return String(parseInt(numberValue, 10));
+      }
+
+      function buildInstrumentSearchText(item) {
+        const strike = getStrikeText(item);
+        const type = String(item.instrument_type || "").toLowerCase();
+        const display = String(item.display_name || "");
+        const symbol = String(item.trading_symbol || "");
+        const key = String(item.instrument_key || "");
+        const sideWords =
+          type === "ce"
+            ? "call ce"
+            : type === "pe"
+              ? "put pe"
+              : type === "index"
+                ? "index nifty"
+                : "";
+
+        return normalizeSearchText(
+          `${strike}${type} ${strike} ${type} ${strike}${sideWords} ${display} ${symbol} ${key}`,
+        );
+      }
+
+      function scoreInstrumentMatch(item, query) {
+        const normalizedQuery = normalizeSearchText(query);
+
+        if (!itemPassesSideFilter(item)) {
+          return 0;
+        }
+
+        if (!normalizedQuery) {
+          return 10;
+        }
+
+        const strike = getStrikeText(item);
+        const type = String(item.instrument_type || "").toLowerCase();
+        const exactStrikeType = normalizeSearchText(`${strike}${type}`);
+        const searchText = buildInstrumentSearchText(item);
+
+        if (exactStrikeType === normalizedQuery) {
+          return 100;
+        }
+
+        if (exactStrikeType.startsWith(normalizedQuery)) {
+          return 90;
+        }
+
+        if (searchText.includes(normalizedQuery)) {
+          return 70;
+        }
+
+        if (strike && normalizedQuery.includes(strike)) {
+          return 50;
+        }
+
+        return 0;
+      }
+
+      function getRecommendedInstruments(query) {
+        return instruments
+          .map((item) => ({
+            item,
+            score: scoreInstrumentMatch(item, query),
+          }))
+          .filter((entry) => entry.score > 0)
+          .sort((a, b) => {
+            if (b.score !== a.score) {
+              return b.score - a.score;
+            }
+
+            const aStrike = Number(a.item.strike_price || 0);
+            const bStrike = Number(b.item.strike_price || 0);
+
+            return aStrike - bStrike;
+          })
+          .slice(0, 25)
+          .map((entry) => entry.item);
+      }
+
+      function hideInstrumentSuggestions() {
+        instrumentSuggestions.style.display = "none";
+        instrumentSuggestions.innerHTML = "";
+        activeSuggestionIndex = -1;
+        currentSuggestionItems = [];
+      }
+
+      function renderInstrumentSuggestions(query) {
+        const matches = getRecommendedInstruments(query);
+        currentSuggestionItems = matches;
+        activeSuggestionIndex = -1;
+
+        if (!matches.length) {
+          instrumentSuggestions.innerHTML = `
+            <div class="suggestion-empty">
+              No matching instruments found for "${query}".
+            </div>
+          `;
+          instrumentSuggestions.style.display = "block";
+          return;
+        }
+
+        instrumentSuggestions.innerHTML = matches
+          .map((item, index) => {
+            const title =
+              item.display_name || item.trading_symbol || item.instrument_key;
+            const meta = [
+              item.instrument_type || "-",
+              item.strike_price ? `Strike ${item.strike_price}` : null,
+              item.expiry ? `Expiry ${item.expiry}` : null,
+              item.instrument_key,
+            ]
+              .filter(Boolean)
+              .join(" | ");
+
+            return `
+              <div class="suggestion-item" data-index="${index}">
+                <div class="suggestion-title">${title}</div>
+                <div class="suggestion-meta">${meta}</div>
+              </div>
+            `;
+          })
+          .join("");
+
+        instrumentSuggestions.style.display = "block";
+      }
+
+      function updateActiveSuggestion(direction) {
+        if (!currentSuggestionItems.length) {
+          return;
+        }
+
+        activeSuggestionIndex += direction;
+
+        if (activeSuggestionIndex < 0) {
+          activeSuggestionIndex = currentSuggestionItems.length - 1;
+        }
+
+        if (activeSuggestionIndex >= currentSuggestionItems.length) {
+          activeSuggestionIndex = 0;
+        }
+
+        const nodes =
+          instrumentSuggestions.querySelectorAll(".suggestion-item");
+
+        nodes.forEach((node) => node.classList.remove("active"));
+
+        const activeNode = nodes[activeSuggestionIndex];
+
+        if (activeNode) {
+          activeNode.classList.add("active");
+          activeNode.scrollIntoView({
+            block: "nearest",
+          });
+        }
+      }
+
+      function selectRecommendedInstrument(item) {
+        if (!item || !item.instrument_key) {
+          return;
+        }
+
+        instrumentSelect.value = item.instrument_key;
+        instrumentSearch.value =
+          item.display_name || item.trading_symbol || item.instrument_key;
+
+        selectedChip.textContent =
+          item.display_name || item.trading_symbol || item.instrument_key;
+
+        hideInstrumentSuggestions();
+        loadChart();
+      }
+
+      function toChartTime(value) {
+        const parsedDate = new Date(value);
+        const seconds = Math.floor(parsedDate.getTime() / 1000);
+
+        if (Number.isNaN(seconds)) {
+          return value;
+        }
+
+        return seconds;
+      }
+
+      function getSelectedInstrument() {
+        const instrumentKey = instrumentSelect.value;
+        return (
+          instruments.find((item) => item.instrument_key === instrumentKey) ||
+          null
+        );
+      }
+
+      function intervalToSeconds(interval) {
+        const text = String(interval || "1minute").toLowerCase();
+
+        if (text.includes("30")) {
+          return 30 * 60;
+        }
+
+        if (text.includes("15")) {
+          return 15 * 60;
+        }
+
+        if (text.includes("5")) {
+          return 5 * 60;
+        }
+
+        if (text.includes("3")) {
+          return 3 * 60;
+        }
+
+        return 60;
+      }
+
+      function getBucketTime(timestampSeconds, interval) {
+        const intervalSeconds = intervalToSeconds(interval);
+        const timezoneOffsetSeconds =
+          getTimezoneOffsetMinutes(timestampSeconds) * 60;
+
+        return (
+          Math.floor(
+            (timestampSeconds + timezoneOffsetSeconds) / intervalSeconds,
+          ) *
+            intervalSeconds -
+          timezoneOffsetSeconds
+        );
+      }
+
+      function getCurrentTimestampSeconds(payload) {
+        const possibleValues = [
+          payload.timestamp,
+          payload.created_at,
+          payload.time,
+          payload.ltt,
+        ];
+
+        for (const value of possibleValues) {
+          if (!value) {
+            continue;
+          }
+
+          if (typeof value === "number") {
+            if (value > 1000000000000) {
+              return Math.floor(value / 1000);
+            }
+
+            if (value > 1000000000) {
+              return Math.floor(value);
+            }
+          }
+
+          const parsed = Date.parse(value);
+          if (!Number.isNaN(parsed)) {
+            return Math.floor(parsed / 1000);
+          }
+        }
+
+        return Math.floor(Date.now() / 1000);
+      }
+
+      function getTickPrice(payload) {
+        const values = [
+          payload.ltp,
+          payload.close,
+          payload.last_price,
+          payload.price,
+        ];
+
+        for (const value of values) {
+          const numberValue = Number(value);
+          if (!Number.isNaN(numberValue) && numberValue > 0) {
+            return numberValue;
+          }
+        }
+
+        return null;
+      }
+
+      function getTickVolume(payload) {
+        const values = [payload.volume, payload.vol, payload.vtt];
+
+        for (const value of values) {
+          const numberValue = Number(value);
+          if (!Number.isNaN(numberValue) && numberValue >= 0) {
+            return numberValue;
+          }
+        }
+
+        return 0;
+      }
+
+      function initChart() {
+        const chartElement = document.getElementById("chart");
+
+        chart = LightweightCharts.createChart(chartElement, {
+          width: chartElement.clientWidth,
+          height: chartElement.clientHeight,
+          layout: {
+            background: {
+              color: "#07111f",
+            },
+            textColor: "#d8e1ef",
+          },
+          grid: {
+            vertLines: {
+              color: "rgba(255,255,255,0.05)",
+            },
+            horzLines: {
+              color: "rgba(255,255,255,0.05)",
+            },
+          },
+          crosshair: {
+            mode: LightweightCharts.CrosshairMode.Normal,
+          },
+          rightPriceScale: {
+            borderColor: "rgba(255,255,255,0.12)",
+            scaleMargins: {
+              top: 0.08,
+              bottom: 0.22,
+            },
+          },
+          timeScale: {
+            borderColor: "rgba(255,255,255,0.12)",
+            timeVisible: true,
+            secondsVisible: false,
+            tickMarkFormatter: formatChartTime,
+          },
+          localization: {
+            priceFormatter: (price) => Number(price).toFixed(2),
+            timeFormatter: formatChartTime,
+          },
+        });
+
+        candleSeries = chart.addCandlestickSeries({
+          upColor: "#00c853",
+          downColor: "#ff5252",
+          borderUpColor: "#00c853",
+          borderDownColor: "#ff5252",
+          wickUpColor: "#00c853",
+          wickDownColor: "#ff5252",
+        });
+
+        volumeSeries = chart.addHistogramSeries({
+          color: "rgba(41,121,255,0.35)",
+          priceFormat: {
+            type: "volume",
+          },
+          priceScaleId: "",
+        });
+
+        volumeSeries.priceScale().applyOptions({
+          scaleMargins: {
+            top: 0.82,
+            bottom: 0,
+          },
+        });
+
+        chart.timeScale().subscribeVisibleLogicalRangeChange((logicalRange) => {
+          if (!logicalRange || !lazyLoadEnabled) {
+            return;
+          }
+
+          if (logicalRange.from < 10) {
+            loadPreviousCandleWindow();
+          }
+        });
+
+        window.addEventListener("resize", () => {
+          chart.applyOptions({
+            width: chartElement.clientWidth,
+            height: chartElement.clientHeight,
+          });
+        });
+
+        applyChartTimezoneOptions();
+      }
+
+      function clearPriceLines() {
+        for (const line of priceLines) {
+          try {
+            candleSeries.removePriceLine(line);
+          } catch (error) {
+            console.warn("Price line remove failed", error);
+          }
+        }
+
+        priceLines = [];
+      }
+
+      function clearLivePriceLine() {
+        if (livePriceLine) {
+          try {
+            candleSeries.removePriceLine(livePriceLine);
+          } catch (error) {
+            console.warn("Live price line remove failed", error);
+          }
+        }
+
+        livePriceLine = null;
+      }
+
+      function clearDailyOpeningLevels() {
+        for (const series of dailyLevelSeries) {
+          try {
+            chart.removeSeries(series);
+          } catch (error) {
+            console.warn("Daily level series remove failed", error);
+          }
+        }
+
+        dailyLevelSeries = [];
+      }
+
+      function updateLivePriceLine(price) {
+        if (
+          price === null ||
+          price === undefined ||
+          Number.isNaN(Number(price))
+        ) {
+          return;
+        }
+
+        clearLivePriceLine();
+
+        livePriceLine = candleSeries.createPriceLine({
+          price: Number(price),
+          color: "#80d8ff",
+          lineWidth: 2,
+          lineStyle: LightweightCharts.LineStyle.Dashed,
+          axisLabelVisible: true,
+          title: "LTP",
+        });
+      }
+
+      function addPriceLine(title, price, color, lineStyle) {
+        if (
+          price === null ||
+          price === undefined ||
+          Number.isNaN(Number(price))
+        ) {
+          return;
+        }
+
+        const formattedPrice = formatValue(price);
+
+        const line = candleSeries.createPriceLine({
+          price: Number(price),
+          color: color,
+          lineWidth: 2,
+          lineStyle: lineStyle || LightweightCharts.LineStyle.Solid,
+          axisLabelVisible: true,
+          title: `${title} ${formattedPrice}`,
+        });
+
+        priceLines.push(line);
+      }
+
+      function getLevel(levels, primaryKey, fallbackKey) {
+        if (!levels) {
+          return null;
+        }
+
+        if (levels[primaryKey] !== undefined && levels[primaryKey] !== null) {
+          return levels[primaryKey];
+        }
+
+        if (
+          fallbackKey &&
+          levels[fallbackKey] !== undefined &&
+          levels[fallbackKey] !== null
+        ) {
+          return levels[fallbackKey];
+        }
+
+        return null;
+      }
+
+      function getDateKeyForTimestamp(timestampSeconds) {
+        const timeZone = getEffectiveTimezone();
+
+        return formatDateInTimeZone(
+          new Date(timestampSeconds * 1000),
+          timeZone,
+        );
+      }
+
+      function groupCandlesByDay(candles) {
+        const groups = new Map();
+
+        for (const candle of candles) {
+          const key = getDateKeyForTimestamp(Number(candle.time));
+
+          if (!groups.has(key)) {
+            groups.set(key, []);
+          }
+
+          groups.get(key).push(candle);
+        }
+
+        for (const group of groups.values()) {
+          group.sort((a, b) => Number(a.time) - Number(b.time));
+        }
+
+        return groups;
+      }
+
+      function calculateFirstCandleLevels(firstCandle) {
+        const high = Number(firstCandle.high);
+        const low = Number(firstCandle.low);
+        const open = Number(firstCandle.open);
+        const close = Number(firstCandle.close);
+        const average = (high + low) / 2;
+        const range = high - low;
+
+        return {
+          open,
+          high,
+          low,
+          close,
+          average,
+          r1: high + range,
+          r2: high + range * 2,
+          r3: high + range * 3,
+          s1: low - range,
+          s2: low - range * 2,
+          s3: low - range * 3,
+        };
+      }
+
+      function addDailyLevelSegment(
+        label,
+        price,
+        startTime,
+        endTime,
+        color,
+        lineWidth = 1,
+      ) {
+        if (
+          price === null ||
+          price === undefined ||
+          Number.isNaN(Number(price))
+        ) {
+          return;
+        }
+
+        const formattedPrice = formatValue(price);
+        const labelText = `${label} ${formattedPrice}`;
+
+        const series = chart.addLineSeries({
+          color,
+          lineWidth,
+          priceLineVisible: false,
+
+          // IMPORTANT:
+          // prevents labels from appearing on right price scale
+          lastValueVisible: false,
+
+          crosshairMarkerVisible: false,
+        });
+
+        series.setData([
+          {
+            time: startTime,
+            value: Number(price),
+          },
+          {
+            time: endTime,
+            value: Number(price),
+          },
+        ]);
+
+        try {
+          series.setMarkers([
+            {
+              time: startTime,
+              position: "inBar",
+              color,
+              shape: "circle",
+              text: labelText,
+            },
+          ]);
+        } catch (error) {
+          console.warn("Daily level marker failed", error);
+        }
+
+        dailyLevelSeries.push(series);
+      }
+
+      function renderDailyOpeningLevels(candles) {
+        clearDailyOpeningLevels();
+
+        if (!candles || !candles.length) {
+          return;
+        }
+
+        const groups = groupCandlesByDay(candles);
+
+        for (const group of groups.values()) {
+          if (!group.length) {
+            continue;
+          }
+
+          const firstCandle = group[0];
+          const dayStartTime = Number(group[0].time);
+          const dayEndTime = Number(group[group.length - 1].time);
+          const levels = calculateFirstCandleLevels(firstCandle);
+
+          addDailyLevelSegment(
+            "High",
+            levels.high,
+            dayStartTime,
+            dayEndTime,
+            "#ffb300",
+            2,
+          );
+          addDailyLevelSegment(
+            "Low",
+            levels.low,
+            dayStartTime,
+            dayEndTime,
+            "#ffb300",
+            2,
+          );
+          addDailyLevelSegment(
+            "Average",
+            levels.average,
+            dayStartTime,
+            dayEndTime,
+            "#ffffff",
+            1,
+          );
+
+          // addDailyLevelSegment(
+          //   "R1",
+          //   levels.r1,
+          //   dayStartTime,
+          //   dayEndTime,
+          //   "#26c6da",
+          //   1,
+          // );
+          // addDailyLevelSegment(
+          //   "R2",
+          //   levels.r2,
+          //   dayStartTime,
+          //   dayEndTime,
+          //   "#ff9800",
+          //   1,
+          // );
+          addDailyLevelSegment(
+            "R3",
+            levels.r3,
+            dayStartTime,
+            dayEndTime,
+            "#ff5252",
+            1,
+          );
+
+          // addDailyLevelSegment(
+          //   "S1",
+          //   levels.s1,
+          //   dayStartTime,
+          //   dayEndTime,
+          //   "#26c6da",
+          //   1,
+          // );
+          // addDailyLevelSegment(
+          //   "S2",
+          //   levels.s2,
+          //   dayStartTime,
+          //   dayEndTime,
+          //   "#ab47bc",
+          //   1,
+          // );
+          addDailyLevelSegment(
+            "S3",
+            levels.s3,
+            dayStartTime,
+            dayEndTime,
+            "#00c853",
+            1,
+          );
+        }
+      }
+
+      function normalizeRawCandles(rawCandles) {
+        const candles = rawCandles
+          .map((item) => ({
+            time: toChartTime(item.time),
+            open: Number(item.open),
+            high: Number(item.high),
+            low: Number(item.low),
+            close: Number(item.close),
+          }))
+          .filter(
+            (item) =>
+              item.time !== null &&
+              item.time !== undefined &&
+              !Number.isNaN(item.open) &&
+              !Number.isNaN(item.high) &&
+              !Number.isNaN(item.low) &&
+              !Number.isNaN(item.close),
+          );
+
+        const volumes = rawCandles
+          .map((item) => ({
+            time: toChartTime(item.time),
+            value: Number(item.volume || 0),
+            color:
+              Number(item.close) >= Number(item.open)
+                ? "rgba(0,200,83,0.35)"
+                : "rgba(255,82,82,0.35)",
+          }))
+          .filter((item) => item.time !== null && item.time !== undefined);
+
+        return {
+          candles,
+          volumes,
+        };
+      }
+
+      function mergeCandles(existingCandles, newCandles) {
+        const map = new Map();
+
+        for (const candle of existingCandles) {
+          map.set(Number(candle.time), candle);
+        }
+
+        for (const candle of newCandles) {
+          map.set(Number(candle.time), candle);
+        }
+
+        return Array.from(map.values()).sort(
+          (a, b) => Number(a.time) - Number(b.time),
+        );
+      }
+
+      function mergeVolumes(existingVolumes, newVolumes) {
+        const map = new Map();
+
+        for (const volume of existingVolumes) {
+          map.set(Number(volume.time), volume);
+        }
+
+        for (const volume of newVolumes) {
+          map.set(Number(volume.time), volume);
+        }
+
+        return Array.from(map.values()).sort(
+          (a, b) => Number(a.time) - Number(b.time),
+        );
+      }
+
+      async function loadInstruments() {
+        try {
+          setStatus("Loading instruments...", null);
+
+          const response = await fetch("/chart/instruments");
+          const data = await response.json();
+
+          if (data.status !== "success") {
+            throw new Error(
+              data.detail || data.message || "Unable to load instruments.",
+            );
+          }
+
+          instruments = data.instruments || [];
+          instrumentSelect.innerHTML = "";
+
+          if (!instruments.length) {
+            instrumentSelect.innerHTML = `<option value="">No instruments available</option>`;
+            instrumentSearch.placeholder = "No instruments available";
+            setStatus("No instruments found", "error");
+            return;
+          }
+
+          const placeholder = document.createElement("option");
+          placeholder.value = "";
+          placeholder.textContent = "Select instrument";
+          instrumentSelect.appendChild(placeholder);
+
+          for (const item of instruments) {
+            const option = document.createElement("option");
+            option.value = item.instrument_key;
+            option.textContent =
+              item.display_name || item.trading_symbol || item.instrument_key;
+            instrumentSelect.appendChild(option);
+          }
+
+          instrumentSearch.placeholder =
+            "Type strike/symbol, e.g. 24500ce, 24500 call, 24500 put";
+
+          setStatus(`${instruments.length} instruments available`, "ok");
+        } catch (error) {
+          setStatus("Instrument load failed", "error");
+          chartStatus.innerHTML = `<div class="error-text">${error.message}</div>`;
+        }
+      }
+
+      async function loadCandles(
+        instrumentKey,
+        interval,
+        fromDate = null,
+        toDate = null,
+        days = historicalWindowDays,
+      ) {
+        const params = new URLSearchParams();
+
+        params.set("instrument_key", instrumentKey);
+        params.set("interval", interval);
+        params.set("mode", "historical");
+        params.set("days", String(days));
+
+        if (fromDate) {
+          params.set("from_date", fromDate);
+        }
+
+        if (toDate) {
+          params.set("to_date", toDate);
+        }
+
+        const response = await fetch(`/chart/candles?${params.toString()}`);
+        const data = await response.json();
+
+        if (!response.ok || data.status !== "success") {
+          throw new Error(
+            data.detail || data.message || "Unable to load candles.",
+          );
+        }
+
+        return data;
+      }
+
+      async function loadOpeningRange(instrumentKey) {
+        const url = `/opening-range/ema-context?instrument_key=${encodeURIComponent(instrumentKey)}`;
+        const response = await fetch(url);
+        const data = await response.json();
+
+        if (!response.ok || data.status !== "success") {
+          return null;
+        }
+
+        return data.opening_range || null;
+      }
+
+      function renderSelectedInstrument(selected, instrumentKey) {
+        const websocket = selected?.chart_websocket || {};
+
+        renderKeyValues(instrumentInfo, [
+          {
+            label: "Display",
+            value: formatSymbol(
+              selected?.display_name ||
+                selected?.trading_symbol ||
+                instrumentKey,
+            ),
+          },
+          {
+            label: "Instrument Key",
+            value: formatSymbol(instrumentKey),
+          },
+          {
+            label: "Type",
+            value: formatSymbol(selected?.instrument_type),
+          },
+          {
+            label: "Strike",
+            value: formatSymbol(selected?.strike_price),
+          },
+          {
+            label: "Expiry",
+            value: formatSymbol(selected?.expiry),
+          },
+          {
+            label: "WS Mode",
+            value: formatSymbol(websocket.mode),
+          },
+        ]);
+      }
+
+      function renderWebSocketInfo(websocket, connected) {
+        renderKeyValues(wsInfo, [
+          {
+            label: "Status",
+            value: connected ? "Connected" : "Disconnected",
+          },
+          {
+            label: "Mode",
+            value: formatSymbol(websocket?.mode),
+          },
+          {
+            label: "Path",
+            value: formatSymbol(websocket?.path),
+          },
+          {
+            label: "Endpoint",
+            value: formatSymbol(websocket?.endpoint),
+          },
+        ]);
+      }
+
+      function renderOpeningRange(openingRange) {
+        clearPriceLines();
+
+        const range = openingRange?.range || {};
+
+        if (
+          !openingRange ||
+          openingRange.available === false ||
+          range.high === undefined ||
+          range.low === undefined ||
+          range.average === undefined
+        ) {
+          orChip.textContent = "OR: Not available";
+          orInfo.innerHTML = `
+            <div class="error-text">
+              Opening Range is not available for this instrument.
+              Daily first-candle levels are still plotted directly on the chart.
+            </div>
+          `;
+          touchInfo.innerHTML = `<div class="muted">No touch status available.</div>`;
+          return;
+        }
+
+        const levels = openingRange.levels || {};
+        const touchStatus = openingRange.touch_status || {};
+
+        const r1 = getLevel(levels, "r1", "sub_resistance");
+        const r2 = getLevel(levels, "r2", "resistance2");
+        const r3 = getLevel(levels, "r3", "resistance3");
+        const s1 = getLevel(levels, "s1", "sub_support");
+        const s2 = getLevel(levels, "s2", "support2");
+        const s3 = getLevel(levels, "s3", "support3");
+
+        addPriceLine(
+          "OR High",
+          range.high,
+          "#ffb300",
+          LightweightCharts.LineStyle.Solid,
+        );
+        addPriceLine(
+          "OR Low",
+          range.low,
+          "#ffb300",
+          LightweightCharts.LineStyle.Solid,
+        );
+        addPriceLine(
+          "OR Avg",
+          range.average,
+          "#ffffff",
+          LightweightCharts.LineStyle.Dotted,
+        );
+
+        addPriceLine("R1", r1, "#26c6da", LightweightCharts.LineStyle.Dotted);
+        addPriceLine("R2", r2, "#ff9800", LightweightCharts.LineStyle.Solid);
+        addPriceLine("R3", r3, "#ff5252", LightweightCharts.LineStyle.Solid);
+
+        addPriceLine("S1", s1, "#26c6da", LightweightCharts.LineStyle.Dotted);
+        addPriceLine("S2", s2, "#ab47bc", LightweightCharts.LineStyle.Solid);
+        addPriceLine("S3", s3, "#00c853", LightweightCharts.LineStyle.Solid);
+
+        orChip.textContent = "OR: Available";
+
+        orInfo.innerHTML = `
+  <div class="kv">
+    <span>Date</span>
+    <strong>${formatSymbol(openingRange.date)}</strong>
+  </div>
+
+  <div class="kv">
+    <span>Opening Range</span>
+    <strong>
+      ${formatValue(range.low)}
+      →
+      ${formatValue(range.high)}
+    </strong>
+  </div>
+
+  <div class="kv">
+    <span>Average</span>
+    <strong>${formatValue(range.average)}</strong>
+  </div>
+
+  <div class="kv">
+    <span>Open</span>
+    <strong>${formatValue(range.open)}</strong>
+  </div>
+
+  <div class="kv">
+    <span>Close</span>
+    <strong>${formatValue(range.close)}</strong>
+  </div>
+
+  <div class="kv">
+    <span>Levels</span>
+    <strong>Displayed on chart</strong>
+  </div>
+`;
+        renderKeyValues(touchInfo, [
+          {
+            label: "R3 Touched",
+            value: touchStatus.r3_touched ? "Yes" : "No",
+          },
+          {
+            label: "S3 Touched",
+            value: touchStatus.s3_touched ? "Yes" : "No",
+          },
+          {
+            label: "First Touch Level",
+            value: formatSymbol(touchStatus.first_touch_level),
+          },
+          {
+            label: "First Touch Source",
+            value: formatSymbol(touchStatus.first_touch_source),
+          },
+          {
+            label: "First Touch Time",
+            value: formatSymbol(touchStatus.first_touch_time),
+          },
+          {
+            label: "Events",
+            value: Array.isArray(touchStatus.events)
+              ? touchStatus.events.length
+              : 0,
+          },
+        ]);
+      }
+
+      function disconnectLiveWebSocket() {
+        if (liveWs) {
+          try {
+            liveWs.onopen = null;
+            liveWs.onmessage = null;
+            liveWs.onerror = null;
+            liveWs.onclose = null;
+            liveWs.close();
+          } catch (error) {
+            console.warn("WebSocket close failed", error);
+          }
+        }
+
+        liveWs = null;
+        activeInstrumentKey = null;
+        activeWebSocketPath = null;
+        activeWsMode = null;
+
+        setWsChip("WS: Disconnected", null);
+      }
+
+      function buildFullWebSocketUrl(path) {
+        const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+        return `${protocol}//${window.location.host}${path}`;
+      }
+
+      function shouldUseMessageForChart(payload) {
+        if (!payload || typeof payload !== "object") {
+          return false;
+        }
+
+        if (payload.type && payload.type !== "live_tick") {
+          return false;
+        }
+
+        if (activeWsMode === "all_feeds_filter") {
+          return payload.instrument_key === activeInstrumentKey;
+        }
+
+        return true;
+      }
+
+      function updateChartFromLiveTick(payload) {
+        if (!shouldUseMessageForChart(payload)) {
+          return;
+        }
+
+        const price = getTickPrice(payload);
+
+        if (price === null) {
+          return;
+        }
+
+        const interval = intervalSelect.value;
+        const timestampSeconds = getCurrentTimestampSeconds(payload);
+        const bucketTime = getBucketTime(timestampSeconds, interval);
+        const volume = getTickVolume(payload);
+
+        let lastCandle = currentCandles[currentCandles.length - 1];
+
+        if (!lastCandle || bucketTime > Number(lastCandle.time)) {
+          lastCandle = {
+            time: bucketTime,
+            open: price,
+            high: price,
+            low: price,
+            close: price,
+          };
+
+          currentCandles.push(lastCandle);
+
+          currentVolumes.push({
+            time: bucketTime,
+            value: volume,
+            color: "rgba(0,200,83,0.35)",
+          });
+        } else {
+          lastCandle.high = Math.max(Number(lastCandle.high), price);
+          lastCandle.low = Math.min(Number(lastCandle.low), price);
+          lastCandle.close = price;
+
+          const lastVolume = currentVolumes[currentVolumes.length - 1];
+
+          if (
+            lastVolume &&
+            Number(lastVolume.time) === Number(lastCandle.time)
+          ) {
+            lastVolume.value = Math.max(Number(lastVolume.value || 0), volume);
+            lastVolume.color =
+              Number(lastCandle.close) >= Number(lastCandle.open)
+                ? "rgba(0,200,83,0.35)"
+                : "rgba(255,82,82,0.35)";
+          }
+        }
+
+        candleSeries.update(lastCandle);
+
+        const lastVolume = currentVolumes[currentVolumes.length - 1];
+
+        if (lastVolume) {
+          volumeSeries.update(lastVolume);
+        }
+
+        updateLivePriceLine(price);
+
+        lastLiveTick = payload;
+        ltpChip.textContent = `LTP: ${formatValue(price)}`;
+
+        chartStatus.innerHTML = `
+          <div class="success-text">Live tick received.</div>
+          <div class="kv"><span>LTP</span><strong>${formatValue(price)}</strong></div>
+          <div class="kv"><span>Tick Time</span><strong>${formatSymbol(payload.timestamp || payload.created_at || payload.ltt)}</strong></div>
+          <div class="kv"><span>Instrument Key</span><strong>${formatSymbol(payload.instrument_key)}</strong></div>
+          <div class="kv"><span>Interval</span><strong>${formatSymbol(interval)}</strong></div>
+        `;
+      }
+
+      function connectLiveWebSocket(selected, candleData) {
+        disconnectLiveWebSocket();
+
+        const websocket =
+          candleData?.live_chart?.websocket ||
+          candleData?.contract_info?.chart_websocket ||
+          selected?.chart_websocket ||
+          null;
+
+        renderWebSocketInfo(websocket, false);
+
+        if (!websocket || websocket.enabled === false || !websocket.path) {
+          setWsChip("WS: Not available", "error");
+          wsInfo.innerHTML = `
+            <div class="error-text">
+              WebSocket path is not available for this instrument.
+            </div>
+          `;
+          return;
+        }
+
+        activeInstrumentKey =
+          selected?.instrument_key || candleData.instrument_key;
+        activeWebSocketPath = websocket.path;
+        activeWsMode = websocket.mode;
+
+        const wsUrl = buildFullWebSocketUrl(websocket.path);
+
+        setWsChip("WS: Connecting", null);
+        renderWebSocketInfo(websocket, false);
+
+        liveWs = new WebSocket(wsUrl);
+
+        liveWs.onopen = () => {
+          setWsChip("WS: Live", "live");
+          setStatus("Live chart connected", "live");
+          renderWebSocketInfo(websocket, true);
+        };
+
+        liveWs.onmessage = (event) => {
+          try {
+            const payload = JSON.parse(event.data);
+            updateChartFromLiveTick(payload);
+          } catch (error) {
+            console.warn("Invalid WebSocket payload", error, event.data);
+          }
+        };
+
+        liveWs.onerror = () => {
+          setWsChip("WS: Error", "error");
+          setStatus("Live WebSocket error", "error");
+        };
+
+        liveWs.onclose = () => {
+          setWsChip("WS: Disconnected", null);
+        };
+      }
+
+      async function loadPreviousCandleWindow() {
+        if (isLoadingMoreCandles) {
+          return;
+        }
+
+        if (!instrumentSelect.value || !loadedFromDate) {
+          return;
+        }
+
+        isLoadingMoreCandles = true;
+        showLoading(true, "Loading previous 7 days...");
+
+        try {
+          const instrumentKey = instrumentSelect.value;
+          const interval = intervalSelect.value;
+
+          const previousToDate = subtractDaysFromDate(loadedFromDate, 1);
+          const previousFromDate = subtractDaysFromDate(
+            previousToDate,
+            historicalWindowDays - 1,
+          );
+
+          const candleData = await loadCandles(
+            instrumentKey,
+            interval,
+            previousFromDate,
+            previousToDate,
+            historicalWindowDays,
+          );
+
+          const rawCandles = candleData.candles || [];
+          const normalized = normalizeRawCandles(rawCandles);
+
+          currentCandles = mergeCandles(currentCandles, normalized.candles);
+          currentVolumes = mergeVolumes(currentVolumes, normalized.volumes);
+
+          candleSeries.setData(currentCandles);
+          volumeSeries.setData(currentVolumes);
+
+          loadedFromDate = previousFromDate;
+
+          renderDailyOpeningLevels(currentCandles);
+
+          historyChip.textContent = `History: ${loadedFromDate} to ${loadedToDate}`;
+
+          chartStatus.innerHTML = `
+            <div class="success-text">Previous 7 days loaded.</div>
+            <div class="kv"><span>Loaded From</span><strong>${loadedFromDate}</strong></div>
+            <div class="kv"><span>Loaded To</span><strong>${loadedToDate}</strong></div>
+            <div class="kv"><span>Total Candles</span><strong>${currentCandles.length}</strong></div>
+          `;
+        } catch (error) {
+          chartStatus.innerHTML = `<div class="error-text">${error.message}</div>`;
+        } finally {
+          isLoadingMoreCandles = false;
+          showLoading(false);
+        }
+      }
+
+      async function loadChart() {
+        const instrumentKey = instrumentSelect.value;
+        const interval = intervalSelect.value;
+        const selected = getSelectedInstrument();
+
+        if (!instrumentKey) {
+          chartStatus.innerHTML = `<div class="error-text">Please select an instrument first.</div>`;
+          return;
+        }
+
+        lazyLoadEnabled = false;
+
+        selectedChip.textContent =
+          selected?.display_name || selected?.trading_symbol || instrumentKey;
+        sideChip.textContent = `Side: ${optionSideSelect.value}`;
+        timezoneChip.textContent = `TZ: ${getTimezoneLabel()}`;
+        intervalChip.textContent = `Interval: ${interval}`;
+        historyChip.textContent = "History: loading...";
+        ltpChip.textContent = "LTP: -";
+
+        showLoading(
+          true,
+          "Loading last 7 days candles and Opening Range levels...",
+        );
+        disconnectLiveWebSocket();
+        clearLivePriceLine();
+        clearDailyOpeningLevels();
+
+        try {
+          loadedToDate = getTodayDateText();
+          loadedFromDate = getInitialFromDateText();
+
+          const candleData = await loadCandles(
+            instrumentKey,
+            interval,
+            loadedFromDate,
+            loadedToDate,
+            historicalWindowDays,
+          );
+
+          const rawCandles = candleData.candles || [];
+          const normalized = normalizeRawCandles(rawCandles);
+
+          currentCandles = normalized.candles;
+          currentVolumes = normalized.volumes;
+
+          candleSeries.setData(currentCandles);
+          volumeSeries.setData(currentVolumes);
+
+          renderDailyOpeningLevels(currentCandles);
+
+          if (currentCandles.length) {
+            chart.timeScale().fitContent();
+          }
+
+          renderSelectedInstrument(selected, instrumentKey);
+
+          const openingRange = await loadOpeningRange(instrumentKey);
+          renderOpeningRange(openingRange);
+
+          historyChip.textContent = `History: ${loadedFromDate} to ${loadedToDate}`;
+
+          chartStatus.innerHTML = `
+            <div class="success-text">Chart loaded successfully. Connecting live WebSocket...</div>
+            <div class="kv"><span>Candles</span><strong>${candleData.candles_count}</strong></div>
+            <div class="kv"><span>Loaded From</span><strong>${loadedFromDate}</strong></div>
+            <div class="kv"><span>Loaded To</span><strong>${loadedToDate}</strong></div>
+            <div class="kv"><span>Side Filter</span><strong>${optionSideSelect.value}</strong></div>
+            <div class="kv"><span>Timezone</span><strong>${getTimezoneLabel()}</strong></div>
+            <div class="kv"><span>Interval</span><strong>${interval}</strong></div>
+            <div class="kv"><span>Instrument</span><strong>${formatSymbol(selected?.instrument_type)}</strong></div>
+            <div class="kv"><span>OR Available</span><strong>${openingRange && openingRange.available !== false ? "Yes" : "No"}</strong></div>
+            <div class="kv"><span>Generated At</span><strong>${formatSymbol(candleData.generated_at)}</strong></div>
+          `;
+
+          connectLiveWebSocket(selected, candleData);
+
+          setTimeout(() => {
+            lazyLoadEnabled = true;
+          }, 1000);
+        } catch (error) {
+          chartStatus.innerHTML = `<div class="error-text">${error.message}</div>`;
+          orChip.textContent = "OR: Not loaded";
+          historyChip.textContent = "History: failed";
+          setStatus("Chart load failed", "error");
+        } finally {
+          showLoading(false);
+        }
+      }
+
+      loadBtn.addEventListener("click", loadChart);
+
+      fitBtn.addEventListener("click", () => {
+        if (chart) {
+          chart.timeScale().fitContent();
+        }
+      });
+
+      optionSideSelect.addEventListener("change", () => {
+        sideChip.textContent = `Side: ${optionSideSelect.value}`;
+        hideInstrumentSuggestions();
+
+        if (instrumentSearch.value) {
+          renderInstrumentSuggestions(instrumentSearch.value);
+        }
+      });
+
+      timezoneSelect.addEventListener("change", () => {
+        applyChartTimezoneOptions();
+
+        if (currentCandles.length) {
+          renderDailyOpeningLevels(currentCandles);
+        }
+
+        if (instrumentSelect.value) {
+          chart.timeScale().fitContent();
+        }
+      });
+
+      instrumentSearch.addEventListener("input", () => {
+        const query = instrumentSearch.value;
+
+        debounceSearch(() => {
+          renderInstrumentSuggestions(query);
+        }, 180);
+      });
+
+      instrumentSearch.addEventListener("focus", () => {
+        renderInstrumentSuggestions(instrumentSearch.value);
+      });
+
+      instrumentSearch.addEventListener("keydown", (event) => {
+        if (event.key === "ArrowDown") {
+          event.preventDefault();
+          updateActiveSuggestion(1);
+          return;
+        }
+
+        if (event.key === "ArrowUp") {
+          event.preventDefault();
+          updateActiveSuggestion(-1);
+          return;
+        }
+
+        if (event.key === "Enter") {
+          event.preventDefault();
+
+          if (
+            activeSuggestionIndex >= 0 &&
+            currentSuggestionItems[activeSuggestionIndex]
+          ) {
+            selectRecommendedInstrument(
+              currentSuggestionItems[activeSuggestionIndex],
+            );
+            return;
+          }
+
+          const firstMatch = getRecommendedInstruments(
+            instrumentSearch.value,
+          )[0];
+
+          if (firstMatch) {
+            selectRecommendedInstrument(firstMatch);
+          }
+
+          return;
+        }
+
+        if (event.key === "Escape") {
+          hideInstrumentSuggestions();
+        }
+      });
+
+      instrumentSuggestions.addEventListener("click", (event) => {
+        const itemNode = event.target.closest(".suggestion-item");
+
+        if (!itemNode) {
+          return;
+        }
+
+        const index = Number(itemNode.dataset.index);
+        const item = currentSuggestionItems[index];
+
+        selectRecommendedInstrument(item);
+      });
+
+      document.addEventListener("click", (event) => {
+        if (
+          !instrumentSearch.contains(event.target) &&
+          !instrumentSuggestions.contains(event.target)
+        ) {
+          hideInstrumentSuggestions();
+        }
+      });
+
+      instrumentSelect.addEventListener("change", () => {
+        const selected = getSelectedInstrument();
+
+        if (selected) {
+          instrumentSearch.value =
+            selected.display_name ||
+            selected.trading_symbol ||
+            selected.instrument_key;
+
+          selectedChip.textContent =
+            selected.display_name ||
+            selected.trading_symbol ||
+            selected.instrument_key;
+
+          loadChart();
+        } else {
+          selectedChip.textContent = "No instrument selected";
+          disconnectLiveWebSocket();
+        }
+      });
+
+      intervalSelect.addEventListener("change", () => {
+        intervalChip.textContent = `Interval: ${intervalSelect.value}`;
+
+        if (instrumentSelect.value) {
+          loadChart();
+        }
+      });
+
+      window.addEventListener("beforeunload", () => {
+        disconnectLiveWebSocket();
+      });
+
+      if (typeof LightweightCharts === "undefined") {
+        setStatus("Chart library failed to load", "error");
+        chartStatus.innerHTML = `
+          <div class="error-text">
+            Lightweight Charts library failed to load.
+            Check CDN access or serve lightweight-charts locally from /static.
+          </div>
+        `;
+      } else {
+        initChart();
+        applyChartTimezoneOptions();
+        loadInstruments();
+      }
+    </script>
+  </body>
+</html>

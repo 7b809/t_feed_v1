@@ -58,9 +58,11 @@
         gap: 10px;
         flex-wrap: wrap;
         margin-top: 14px;
+        align-items: center;
       }
 
-      button {
+      button,
+      select {
         border: 1px solid var(--border);
         background: var(--bg-soft);
         color: var(--text-main);
@@ -68,9 +70,11 @@
         border-radius: 8px;
         cursor: pointer;
         font-size: 13px;
+        outline: none;
       }
 
-      button:hover {
+      button:hover,
+      select:hover {
         background: #334155;
       }
 
@@ -93,6 +97,10 @@
         margin: 0 0 12px;
         font-size: 17px;
         color: #f8fafc;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
       }
 
       .col-3 {
@@ -125,6 +133,7 @@
         font-size: 12px;
         font-weight: bold;
         border: 1px solid transparent;
+        white-space: nowrap;
       }
 
       .badge-green {
@@ -278,6 +287,56 @@
         line-height: 1.5;
       }
 
+      .chart-card {
+        min-height: 720px;
+      }
+
+      .chart-toolbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        flex-wrap: wrap;
+        margin-bottom: 12px;
+      }
+
+      .chart-toolbar-left,
+      .chart-toolbar-right {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+
+      .chart-wrap {
+        width: 100%;
+        height: 580px;
+        background: #020617;
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        overflow: hidden;
+        position: relative;
+      }
+
+      #isolatedChart {
+        width: 100%;
+        height: 100%;
+      }
+
+      .chart-loading {
+        position: absolute;
+        top: 14px;
+        left: 14px;
+        z-index: 5;
+        background: rgba(2, 6, 23, 0.86);
+        border: 1px solid var(--border);
+        color: var(--text-muted);
+        border-radius: 10px;
+        padding: 9px 12px;
+        font-size: 12px;
+        display: none;
+      }
+
       @media (max-width: 1100px) {
         .col-3,
         .col-6 {
@@ -286,6 +345,10 @@
 
         .grid-two {
           grid-template-columns: 1fr;
+        }
+
+        .chart-wrap {
+          height: 520px;
         }
       }
     </style>
@@ -296,7 +359,8 @@
       <h1>Isolated EMA Dashboard</h1>
       <p>
         Tracks today's isolated Opening Range instrument, EMA mode, EMA alerts,
-        live EMA crossover events, and Opening Range touch events.
+        live EMA crossover events, Opening Range touch events, and selected
+        isolated instrument chart.
       </p>
 
       <div class="toolbar">
@@ -327,6 +391,11 @@
         <div>
           <span id="orWsDot" class="status-dot"></span>
           <span id="orWsStatus">OR WS disconnected</span>
+        </div>
+        <br />
+        <div>
+          <span id="chartWsDot" class="status-dot"></span>
+          <span id="chartWsStatus">Chart WS disconnected</span>
         </div>
         <p class="muted small" id="lastUpdated">Last updated: -</p>
       </section>
@@ -417,6 +486,40 @@
         </div>
       </section>
 
+      <section class="card col-12 chart-card">
+        <h2>
+          Isolated Instrument Candle Chart
+          <span id="isoChartStatus" class="badge badge-blue">Waiting</span>
+        </h2>
+
+        <div class="chart-toolbar">
+          <div class="chart-toolbar-left">
+            <button onclick="loadIsolatedChart(true)">
+              Load Isolated Chart
+            </button>
+            <button onclick="fitIsolatedChart()">Fit Chart</button>
+            <select id="isoChartInterval" onchange="loadIsolatedChart(true)">
+              <option value="1minute">1 Minute</option>
+              <option value="3minute">3 Minute</option>
+              <option value="5minute">5 Minute</option>
+              <option value="15minute">15 Minute</option>
+              <option value="30minute">30 Minute</option>
+            </select>
+          </div>
+
+          <div class="chart-toolbar-right">
+            <span class="muted small" id="isoChartMeta">
+              No isolated instrument selected.
+            </span>
+          </div>
+        </div>
+
+        <div class="chart-wrap">
+          <div id="isoChartLoading" class="chart-loading">Loading chart...</div>
+          <div id="isolatedChart"></div>
+        </div>
+      </section>
+
       <section class="card col-12">
         <h2>Isolated EMA Alert History</h2>
         <div class="table-wrap">
@@ -487,6 +590,8 @@
       </section>
     </main>
 
+    <script src="https://unpkg.com/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js"></script>
+
     <script>
       const state = {
         autoRefresh: true,
@@ -494,9 +599,28 @@
         refreshTimer: null,
         emaSocket: null,
         orSocket: null,
+        chartSocket: null,
         liveEvents: [],
         maxLiveEvents: 50,
       };
+
+      const isoChartState = {
+        chart: null,
+        candleSeries: null,
+        volumeSeries: null,
+        emaFastSeries: null,
+        emaSlowSeries: null,
+        livePriceLine: null,
+        selectedLevelLine: null,
+        candles: [],
+        volumes: [],
+        emaMarkers: [],
+        activeInstrumentKey: null,
+        activeInterval: "1minute",
+        lastLoadedInstrumentKey: null,
+      };
+
+      let latestDashboardData = null;
 
       function apiBase() {
         return window.location.origin;
@@ -530,14 +654,52 @@
       }
 
       function setWsStatus(kind, ok, text) {
-        const dotId = kind === "ema" ? "emaWsDot" : "orWsDot";
-        const statusId = kind === "ema" ? "emaWsStatus" : "orWsStatus";
+        const dotId =
+          kind === "ema"
+            ? "emaWsDot"
+            : kind === "or"
+              ? "orWsDot"
+              : "chartWsDot";
+
+        const statusId =
+          kind === "ema"
+            ? "emaWsStatus"
+            : kind === "or"
+              ? "orWsStatus"
+              : "chartWsStatus";
 
         const dot = document.getElementById(dotId);
         const status = document.getElementById(statusId);
 
-        dot.className = ok ? "status-dot ok" : "status-dot";
-        status.textContent = text;
+        if (dot) {
+          dot.className = ok ? "status-dot ok" : "status-dot";
+        }
+
+        if (status) {
+          status.textContent = text;
+        }
+      }
+
+      function setIsoChartStatus(text, type = "blue") {
+        const el = document.getElementById("isoChartStatus");
+
+        if (!el) {
+          return;
+        }
+
+        el.className = `badge badge-${type}`;
+        el.textContent = text;
+      }
+
+      function showIsoChartLoading(show, text = "Loading chart...") {
+        const el = document.getElementById("isoChartLoading");
+
+        if (!el) {
+          return;
+        }
+
+        el.textContent = text;
+        el.style.display = show ? "block" : "none";
       }
 
       function badge(text, type) {
@@ -593,14 +755,674 @@
         );
       }
 
-      function renderDashboard(data) {
-        const openingStatus = data.opening_range_status || {};
-        const isolated =
-          data.isolated_instrument ||
-          data.selected_or_instrument ||
-          openingStatus.isolated_instrument ||
-          {};
+      function getIsolatedFromData(data) {
+        const openingStatus = data?.opening_range_status || {};
 
+        return (
+          data?.isolated_instrument ||
+          data?.selected_or_instrument ||
+          openingStatus.isolated_instrument ||
+          {}
+        );
+      }
+
+      function formatNumber(value) {
+        const num = Number(value);
+
+        if (Number.isNaN(num)) {
+          return safe(value);
+        }
+
+        return num.toFixed(2);
+      }
+
+      function toChartTime(value) {
+        const seconds = Math.floor(new Date(value).getTime() / 1000);
+
+        if (Number.isNaN(seconds)) {
+          return null;
+        }
+
+        return seconds;
+      }
+
+      function intervalToSeconds(interval) {
+        const text = String(interval || "1minute").toLowerCase();
+
+        if (text.includes("30")) {
+          return 30 * 60;
+        }
+
+        if (text.includes("15")) {
+          return 15 * 60;
+        }
+
+        if (text.includes("5")) {
+          return 5 * 60;
+        }
+
+        if (text.includes("3")) {
+          return 3 * 60;
+        }
+
+        return 60;
+      }
+
+      function getBucketTime(timestampSeconds, interval) {
+        const intervalSeconds = intervalToSeconds(interval);
+        return Math.floor(timestampSeconds / intervalSeconds) * intervalSeconds;
+      }
+
+      function initIsolatedChart() {
+        const chartElement = document.getElementById("isolatedChart");
+
+        if (!chartElement || isoChartState.chart) {
+          return;
+        }
+
+        isoChartState.chart = LightweightCharts.createChart(chartElement, {
+          width: chartElement.clientWidth,
+          height: chartElement.clientHeight,
+          layout: {
+            background: {
+              color: "#020617",
+            },
+            textColor: "#e5e7eb",
+          },
+          grid: {
+            vertLines: {
+              color: "rgba(255,255,255,0.05)",
+            },
+            horzLines: {
+              color: "rgba(255,255,255,0.05)",
+            },
+          },
+          crosshair: {
+            mode: LightweightCharts.CrosshairMode.Normal,
+          },
+          rightPriceScale: {
+            borderColor: "rgba(255,255,255,0.15)",
+            scaleMargins: {
+              top: 0.08,
+              bottom: 0.22,
+            },
+          },
+          timeScale: {
+            borderColor: "rgba(255,255,255,0.15)",
+            timeVisible: true,
+            secondsVisible: false,
+          },
+          localization: {
+            priceFormatter: (price) => Number(price).toFixed(2),
+          },
+        });
+
+        isoChartState.candleSeries = isoChartState.chart.addCandlestickSeries({
+          upColor: "#22c55e",
+          downColor: "#ef4444",
+          borderUpColor: "#22c55e",
+          borderDownColor: "#ef4444",
+          wickUpColor: "#22c55e",
+          wickDownColor: "#ef4444",
+        });
+
+        isoChartState.volumeSeries = isoChartState.chart.addHistogramSeries({
+          color: "rgba(56,189,248,0.35)",
+          priceFormat: {
+            type: "volume",
+          },
+          priceScaleId: "",
+        });
+
+        isoChartState.volumeSeries.priceScale().applyOptions({
+          scaleMargins: {
+            top: 0.82,
+            bottom: 0,
+          },
+        });
+
+        isoChartState.emaFastSeries = isoChartState.chart.addLineSeries({
+          color: "#38bdf8",
+          lineWidth: 2,
+          priceLineVisible: false,
+          lastValueVisible: true,
+          title: "EMA 9",
+        });
+
+        isoChartState.emaSlowSeries = isoChartState.chart.addLineSeries({
+          color: "#a78bfa",
+          lineWidth: 2,
+          priceLineVisible: false,
+          lastValueVisible: true,
+          title: "EMA 21",
+        });
+
+        window.addEventListener("resize", () => {
+          isoChartState.chart.applyOptions({
+            width: chartElement.clientWidth,
+            height: chartElement.clientHeight,
+          });
+        });
+      }
+
+      function fitIsolatedChart() {
+        if (isoChartState.chart) {
+          isoChartState.chart.timeScale().fitContent();
+        }
+      }
+
+      function calculateEma(candles, period) {
+        const result = [];
+        const multiplier = 2 / (period + 1);
+        let ema = null;
+
+        for (const candle of candles) {
+          const close = Number(candle.close);
+
+          if (Number.isNaN(close)) {
+            continue;
+          }
+
+          if (ema === null) {
+            ema = close;
+          } else {
+            ema = close * multiplier + ema * (1 - multiplier);
+          }
+
+          result.push({
+            time: candle.time,
+            value: ema,
+          });
+        }
+
+        return result;
+      }
+
+      function clearIsolatedChartLines() {
+        if (!isoChartState.candleSeries) {
+          return;
+        }
+
+        if (isoChartState.livePriceLine) {
+          try {
+            isoChartState.candleSeries.removePriceLine(
+              isoChartState.livePriceLine,
+            );
+          } catch (error) {
+            console.warn("Live line remove failed", error);
+          }
+        }
+
+        if (isoChartState.selectedLevelLine) {
+          try {
+            isoChartState.candleSeries.removePriceLine(
+              isoChartState.selectedLevelLine,
+            );
+          } catch (error) {
+            console.warn("Selected level line remove failed", error);
+          }
+        }
+
+        isoChartState.livePriceLine = null;
+        isoChartState.selectedLevelLine = null;
+      }
+
+      function renderIsolatedSelectedLevel(isolated) {
+        if (!isoChartState.candleSeries) {
+          return;
+        }
+
+        if (isoChartState.selectedLevelLine) {
+          try {
+            isoChartState.candleSeries.removePriceLine(
+              isoChartState.selectedLevelLine,
+            );
+          } catch (error) {
+            console.warn("Selected level line remove failed", error);
+          }
+        }
+
+        const levelValue = Number(isolated?.level_value);
+
+        if (Number.isNaN(levelValue)) {
+          return;
+        }
+
+        const levelName = isolated?.selected_level || "Selected Level";
+
+        isoChartState.selectedLevelLine =
+          isoChartState.candleSeries.createPriceLine({
+            price: levelValue,
+            color: "#eab308",
+            lineWidth: 2,
+            lineStyle: LightweightCharts.LineStyle.Solid,
+            axisLabelVisible: true,
+            title: `${levelName} ${levelValue.toFixed(2)}`,
+          });
+      }
+
+      function normalizeHistoricalCandles(rawCandles) {
+        const candles = rawCandles
+          .map((item) => ({
+            time: toChartTime(item.time),
+            open: Number(item.open),
+            high: Number(item.high),
+            low: Number(item.low),
+            close: Number(item.close),
+          }))
+          .filter(
+            (item) =>
+              item.time &&
+              !Number.isNaN(item.open) &&
+              !Number.isNaN(item.high) &&
+              !Number.isNaN(item.low) &&
+              !Number.isNaN(item.close),
+          );
+
+        const volumes = rawCandles
+          .map((item) => {
+            const time = toChartTime(item.time);
+
+            return {
+              time,
+              value: Number(item.volume || 0),
+              color:
+                Number(item.close) >= Number(item.open)
+                  ? "rgba(34,197,94,0.35)"
+                  : "rgba(239,68,68,0.35)",
+            };
+          })
+          .filter((item) => item.time);
+
+        return {
+          candles,
+          volumes,
+        };
+      }
+
+      async function loadIsolatedChart(force = false) {
+        initIsolatedChart();
+
+        if (!latestDashboardData) {
+          setIsoChartStatus("No Data", "yellow");
+          document.getElementById("isoChartMeta").textContent =
+            "Dashboard data is not loaded yet.";
+          return;
+        }
+
+        const isolated = getIsolatedFromData(latestDashboardData);
+
+        if (!isolated || !isolated.instrument_key) {
+          setIsoChartStatus("No Instrument", "yellow");
+          document.getElementById("isoChartMeta").textContent =
+            "No isolated instrument is selected yet.";
+          return;
+        }
+
+        const intervalSelect = document.getElementById("isoChartInterval");
+        const interval = intervalSelect ? intervalSelect.value : "1minute";
+        const instrumentKey = isolated.instrument_key;
+
+        if (
+          !force &&
+          isoChartState.lastLoadedInstrumentKey === instrumentKey &&
+          isoChartState.activeInterval === interval
+        ) {
+          return;
+        }
+
+        setIsoChartStatus("Loading", "yellow");
+        showIsoChartLoading(true, "Loading isolated chart candles...");
+
+        try {
+          isoChartState.activeInstrumentKey = instrumentKey;
+          isoChartState.activeInterval = interval;
+          isoChartState.lastLoadedInstrumentKey = instrumentKey;
+          isoChartState.emaMarkers = [];
+
+          clearIsolatedChartLines();
+
+          const params = new URLSearchParams();
+          params.set("instrument_key", instrumentKey);
+          params.set("interval", interval);
+          params.set("mode", "historical");
+          params.set("days", "7");
+
+          const response = await fetch(`/chart/candles?${params.toString()}`);
+          const candleData = await response.json();
+
+          if (!response.ok || candleData.status !== "success") {
+            throw new Error(
+              candleData.detail ||
+                candleData.message ||
+                "Unable to load isolated chart candles.",
+            );
+          }
+
+          const normalized = normalizeHistoricalCandles(
+            candleData.candles || [],
+          );
+
+          isoChartState.candles = normalized.candles;
+          isoChartState.volumes = normalized.volumes;
+
+          isoChartState.candleSeries.setData(isoChartState.candles);
+          isoChartState.volumeSeries.setData(isoChartState.volumes);
+          isoChartState.emaFastSeries.setData(
+            calculateEma(isoChartState.candles, 9),
+          );
+          isoChartState.emaSlowSeries.setData(
+            calculateEma(isoChartState.candles, 21),
+          );
+          isoChartState.candleSeries.setMarkers([]);
+
+          renderIsolatedSelectedLevel(isolated);
+          fitIsolatedChart();
+
+          connectIsolatedTickWebSocket(isolated, candleData);
+
+          setIsoChartStatus("Loaded", "green");
+          document.getElementById("isoChartMeta").textContent =
+            `${isoChartState.candles.length} candles loaded | ${instrumentKey} | ${interval}`;
+        } catch (error) {
+          console.error(error);
+          setIsoChartStatus("Error", "red");
+          document.getElementById("isoChartMeta").textContent = error.message;
+        } finally {
+          showIsoChartLoading(false);
+        }
+      }
+
+      function buildIsolatedWebSocketPath(isolated, candleData) {
+        const websocket =
+          candleData?.live_chart?.websocket ||
+          candleData?.contract_info?.chart_websocket ||
+          isolated?.contract_info?.chart_websocket ||
+          null;
+
+        if (websocket && websocket.path) {
+          return websocket.path;
+        }
+
+        const info = isolated?.contract_info || {};
+        const instrumentType = String(info.instrument_type || "").toUpperCase();
+        const strike = info.strike_price;
+
+        if (instrumentType === "CE" || instrumentType === "PE") {
+          const strikeInt = parseInt(Number(strike), 10);
+
+          if (!Number.isNaN(strikeInt)) {
+            return `/option?strike=${strikeInt}&striketype=${instrumentType.toLowerCase()}`;
+          }
+        }
+
+        return null;
+      }
+
+      function connectIsolatedTickWebSocket(isolated, candleData) {
+        if (state.chartSocket) {
+          try {
+            state.chartSocket.onopen = null;
+            state.chartSocket.onmessage = null;
+            state.chartSocket.onerror = null;
+            state.chartSocket.onclose = null;
+            state.chartSocket.close();
+          } catch (error) {
+            console.warn("Chart WS close failed", error);
+          }
+        }
+
+        const path = buildIsolatedWebSocketPath(isolated, candleData);
+
+        if (!path) {
+          setWsStatus("chart", false, "Chart WS not available");
+          return;
+        }
+
+        const url = `${wsBase()}${path}`;
+
+        try {
+          state.chartSocket = new WebSocket(url);
+
+          state.chartSocket.onopen = () => {
+            setWsStatus("chart", true, "Chart WS connected");
+          };
+
+          state.chartSocket.onmessage = (event) => {
+            try {
+              const payload = JSON.parse(event.data);
+              updateIsolatedChartFromTick(payload);
+            } catch (error) {
+              console.warn("Chart WS parse error", error);
+            }
+          };
+
+          state.chartSocket.onerror = () => {
+            setWsStatus("chart", false, "Chart WS error");
+          };
+
+          state.chartSocket.onclose = () => {
+            setWsStatus("chart", false, "Chart WS disconnected");
+          };
+        } catch (error) {
+          console.error(error);
+          setWsStatus("chart", false, "Chart WS failed");
+        }
+      }
+
+      function getTickPrice(payload) {
+        const values = [
+          payload?.ltp,
+          payload?.close,
+          payload?.last_price,
+          payload?.price,
+        ];
+
+        for (const value of values) {
+          const numberValue = Number(value);
+
+          if (!Number.isNaN(numberValue) && numberValue > 0) {
+            return numberValue;
+          }
+        }
+
+        return null;
+      }
+
+      function getTickVolume(payload) {
+        const values = [payload?.volume, payload?.vol, payload?.vtt];
+
+        for (const value of values) {
+          const numberValue = Number(value);
+
+          if (!Number.isNaN(numberValue) && numberValue >= 0) {
+            return numberValue;
+          }
+        }
+
+        return 0;
+      }
+
+      function getTickTimestampSeconds(payload) {
+        const values = [
+          payload?.timestamp,
+          payload?.created_at,
+          payload?.time,
+          payload?.ltt,
+        ];
+
+        for (const value of values) {
+          if (!value) {
+            continue;
+          }
+
+          if (typeof value === "number") {
+            if (value > 1000000000000) {
+              return Math.floor(value / 1000);
+            }
+
+            if (value > 1000000000) {
+              return Math.floor(value);
+            }
+          }
+
+          const parsed = Date.parse(value);
+
+          if (!Number.isNaN(parsed)) {
+            return Math.floor(parsed / 1000);
+          }
+        }
+
+        return Math.floor(Date.now() / 1000);
+      }
+
+      function updateIsolatedChartFromTick(payload) {
+        if (!isoChartState.candleSeries || !payload) {
+          return;
+        }
+
+        if (
+          payload.instrument_key &&
+          isoChartState.activeInstrumentKey &&
+          payload.instrument_key !== isoChartState.activeInstrumentKey
+        ) {
+          return;
+        }
+
+        const price = getTickPrice(payload);
+
+        if (price === null) {
+          return;
+        }
+
+        const timestampSeconds = getTickTimestampSeconds(payload);
+        const bucketTime = getBucketTime(
+          timestampSeconds,
+          isoChartState.activeInterval,
+        );
+        const volume = getTickVolume(payload);
+
+        let lastCandle =
+          isoChartState.candles[isoChartState.candles.length - 1];
+
+        if (!lastCandle || bucketTime > Number(lastCandle.time)) {
+          lastCandle = {
+            time: bucketTime,
+            open: price,
+            high: price,
+            low: price,
+            close: price,
+          };
+
+          isoChartState.candles.push(lastCandle);
+
+          isoChartState.volumes.push({
+            time: bucketTime,
+            value: volume,
+            color: "rgba(34,197,94,0.35)",
+          });
+        } else {
+          lastCandle.high = Math.max(Number(lastCandle.high), price);
+          lastCandle.low = Math.min(Number(lastCandle.low), price);
+          lastCandle.close = price;
+
+          const lastVolume =
+            isoChartState.volumes[isoChartState.volumes.length - 1];
+
+          if (
+            lastVolume &&
+            Number(lastVolume.time) === Number(lastCandle.time)
+          ) {
+            lastVolume.value = Math.max(Number(lastVolume.value || 0), volume);
+            lastVolume.color =
+              Number(lastCandle.close) >= Number(lastCandle.open)
+                ? "rgba(34,197,94,0.35)"
+                : "rgba(239,68,68,0.35)";
+          }
+        }
+
+        isoChartState.candleSeries.update(lastCandle);
+
+        const lastVolume =
+          isoChartState.volumes[isoChartState.volumes.length - 1];
+
+        if (lastVolume) {
+          isoChartState.volumeSeries.update(lastVolume);
+        }
+
+        isoChartState.emaFastSeries.setData(
+          calculateEma(isoChartState.candles, 9),
+        );
+        isoChartState.emaSlowSeries.setData(
+          calculateEma(isoChartState.candles, 21),
+        );
+
+        if (isoChartState.livePriceLine) {
+          try {
+            isoChartState.candleSeries.removePriceLine(
+              isoChartState.livePriceLine,
+            );
+          } catch (error) {
+            console.warn("LTP line remove failed", error);
+          }
+        }
+
+        isoChartState.livePriceLine =
+          isoChartState.candleSeries.createPriceLine({
+            price,
+            color: "#38bdf8",
+            lineWidth: 2,
+            lineStyle: LightweightCharts.LineStyle.Dashed,
+            axisLabelVisible: true,
+            title: `LTP ${price.toFixed(2)}`,
+          });
+      }
+
+      function plotEmaCrossOnChart(payload) {
+        if (!isoChartState.candleSeries || !payload) {
+          return;
+        }
+
+        if (
+          isoChartState.activeInstrumentKey &&
+          payload.instrument_key &&
+          payload.instrument_key !== isoChartState.activeInstrumentKey
+        ) {
+          return;
+        }
+
+        const eventTime =
+          payload.timestamp ||
+          payload.created_at ||
+          payload.time ||
+          new Date().toISOString();
+
+        const markerTime = toChartTime(eventTime);
+
+        if (!markerTime) {
+          return;
+        }
+
+        const crossType = String(payload.cross_type || "").toLowerCase();
+        const isBullish = crossType.includes("bullish");
+
+        isoChartState.emaMarkers.push({
+          time: markerTime,
+          position: isBullish ? "belowBar" : "aboveBar",
+          color: isBullish ? "#22c55e" : "#ef4444",
+          shape: isBullish ? "arrowUp" : "arrowDown",
+          text: isBullish ? "EMA Bull" : "EMA Bear",
+        });
+
+        isoChartState.emaMarkers = isoChartState.emaMarkers.slice(-100);
+        isoChartState.candleSeries.setMarkers(isoChartState.emaMarkers);
+      }
+
+      function renderDashboard(data) {
+        latestDashboardData = data;
+
+        const openingStatus = data.opening_range_status || {};
+        const isolated = getIsolatedFromData(data);
         const emaMode = getLiveEmaMode(data);
 
         setText("emaModeMetric", emaMode.mode);
@@ -655,6 +1477,10 @@
 
         renderAlerts(data.isolated_ema_alerts || []);
         renderTouchEvents(data.recent_touch_events || []);
+
+        if (selected && isolated.instrument_key) {
+          loadIsolatedChart(false);
+        }
       }
 
       function renderAlerts(alerts) {
@@ -684,18 +1510,18 @@
               : badge(crossType, "red");
 
             return `
-                        <tr>
-                            <td>${escapeHtml(safe(record.created_at || event.timestamp))}</td>
-                            <td>${escapeHtml(safe(info.strike_price))} ${escapeHtml(safe(info.instrument_type))}</td>
-                            <td>${escapeHtml(safe(record.selected_level))}</td>
-                            <td>${crossBadge}</td>
-                            <td>${modeBadge}</td>
-                            <td>${escapeHtml(safe(event.close || event.ltp))}</td>
-                            <td>${escapeHtml(safe(event.ema_fast))}</td>
-                            <td>${escapeHtml(safe(event.ema_slow))}</td>
-                            <td>${escapeHtml(safe(record.nifty_ltp))}</td>
-                        </tr>
-                    `;
+              <tr>
+                <td>${escapeHtml(safe(record.created_at || event.timestamp))}</td>
+                <td>${escapeHtml(safe(info.strike_price))} ${escapeHtml(safe(info.instrument_type))}</td>
+                <td>${escapeHtml(safe(record.selected_level))}</td>
+                <td>${crossBadge}</td>
+                <td>${modeBadge}</td>
+                <td>${escapeHtml(safe(event.close || event.ltp))}</td>
+                <td>${escapeHtml(safe(event.ema_fast))}</td>
+                <td>${escapeHtml(safe(event.ema_slow))}</td>
+                <td>${escapeHtml(safe(record.nifty_ltp))}</td>
+              </tr>
+            `;
           })
           .join("");
       }
@@ -719,15 +1545,15 @@
               : badge(level, "red");
 
             return `
-                        <tr>
-                            <td>${escapeHtml(safe(event.touch_time || event.created_at))}</td>
-                            <td>${escapeHtml(safe(info.strike_price))} ${escapeHtml(safe(info.instrument_type))}</td>
-                            <td>${levelBadge}</td>
-                            <td>${escapeHtml(safe(event.trigger_field))}: ${escapeHtml(safe(event.trigger_price))}</td>
-                            <td>${escapeHtml(safe(event.source))}</td>
-                            <td>${escapeHtml(safe(event.main_index_ltp))}</td>
-                        </tr>
-                    `;
+              <tr>
+                <td>${escapeHtml(safe(event.touch_time || event.created_at))}</td>
+                <td>${escapeHtml(safe(info.strike_price))} ${escapeHtml(safe(info.instrument_type))}</td>
+                <td>${levelBadge}</td>
+                <td>${escapeHtml(safe(event.trigger_field))}: ${escapeHtml(safe(event.trigger_price))}</td>
+                <td>${escapeHtml(safe(event.source))}</td>
+                <td>${escapeHtml(safe(event.main_index_ltp))}</td>
+              </tr>
+            `;
           })
           .join("");
       }
@@ -800,16 +1626,16 @@
 
         if (!state.liveEvents.length) {
           list.innerHTML = `
-                    <div class="event-item">
-                        <div class="event-title">
-                            <strong>No live events yet</strong>
-                            <span class="muted small">waiting...</span>
-                        </div>
-                        <div class="event-body">
-                            Connects to /ws/ema-crossover and /ws/opening-range.
-                        </div>
-                    </div>
-                `;
+            <div class="event-item">
+              <div class="event-title">
+                <strong>No live events yet</strong>
+                <span class="muted small">waiting...</span>
+              </div>
+              <div class="event-body">
+                Connects to /ws/ema-crossover and /ws/opening-range.
+              </div>
+            </div>
+          `;
           return;
         }
 
@@ -832,21 +1658,21 @@
                 : `Trigger: ${safe(p.trigger_field)} ${safe(p.trigger_price)}`;
 
             return `
-                        <div class="event-item">
-                            <div class="event-title">
-                                <strong>${kindBadge} ${escapeHtml(title)}</strong>
-                                <span class="muted small">${escapeHtml(safe(item.time))}</span>
-                            </div>
-                            <div class="event-body">
-                                ${escapeHtml(price)}<br />
-                                Timestamp: ${escapeHtml(safe(p.timestamp || p.touch_time || p.created_at))}<br />
-                                <details>
-                                    <summary>Raw payload</summary>
-                                    <pre>${escapeHtml(JSON.stringify(p, null, 2))}</pre>
-                                </details>
-                            </div>
-                        </div>
-                    `;
+              <div class="event-item">
+                <div class="event-title">
+                  <strong>${kindBadge} ${escapeHtml(title)}</strong>
+                  <span class="muted small">${escapeHtml(safe(item.time))}</span>
+                </div>
+                <div class="event-body">
+                  ${escapeHtml(price)}<br />
+                  Timestamp: ${escapeHtml(safe(p.timestamp || p.touch_time || p.created_at))}<br />
+                  <details>
+                    <summary>Raw payload</summary>
+                    <pre>${escapeHtml(JSON.stringify(p, null, 2))}</pre>
+                  </details>
+                </div>
+              </div>
+            `;
           })
           .join("");
       }
@@ -880,6 +1706,7 @@
 
               if (payload.type === "live_ema_cross") {
                 addLiveEvent("EMA", payload);
+                plotEmaCrossOnChart(payload);
                 loadDashboard();
               }
             } catch (error) {
@@ -965,10 +1792,37 @@
       }
 
       document.addEventListener("DOMContentLoaded", () => {
+        initIsolatedChart();
         loadDashboard();
         setupAutoRefresh();
         connectEmaWebSocket();
         connectOpeningRangeWebSocket();
+      });
+
+      window.addEventListener("beforeunload", () => {
+        if (state.chartSocket) {
+          try {
+            state.chartSocket.close();
+          } catch (error) {
+            console.warn("Chart WS close failed", error);
+          }
+        }
+
+        if (state.emaSocket) {
+          try {
+            state.emaSocket.close();
+          } catch (error) {
+            console.warn("EMA WS close failed", error);
+          }
+        }
+
+        if (state.orSocket) {
+          try {
+            state.orSocket.close();
+          } catch (error) {
+            console.warn("OR WS close failed", error);
+          }
+        }
       });
     </script>
   </body>

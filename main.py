@@ -31,6 +31,7 @@ from api.debug_routes import router as debug_router
 from api.refresh_routes import router as refresh_router
 from api.history_routes import router as history_router
 from api.opening_range_routes import router as opening_range_router
+from api.chart_routes import router as chart_router
 from api.ws_docs_routes import router as ws_docs_router
 
 from ws_feed.websocket_routes import router as websocket_router
@@ -574,8 +575,11 @@ def run_initial_startup():
             f"{history_summary.get('live_ema_initialized') if history_summary else 'not_available'}\n"
             f"EMA Mode: {get_live_ema_calculation_mode_text()}\n"
             f"EMA WebSocket: {websocket_mode}\n"
-            f"Dashboard: /isolated-dashboard"
+            f"Opening Range Isolation: {isolated_flow}\n"
+            f"Dashboard: /isolated-dashboard\n"
+            f"Chart Dashboard: /chart"
         )
+
         if result and current_token and subscribed_keys:
             telegram_service.send_startup_message(
                 status="completed successfully",
@@ -1063,6 +1067,7 @@ app.include_router(debug_router)
 app.include_router(refresh_router)
 app.include_router(history_router)
 app.include_router(opening_range_router)
+app.include_router(chart_router)
 app.include_router(websocket_router)
 app.include_router(ws_docs_router)
 

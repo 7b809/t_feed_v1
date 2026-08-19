@@ -311,6 +311,14 @@
 
       <div class="header-actions">
         <button
+          id="main-chart-btn"
+          class="dashboard-button"
+          onclick="openMainChart()"
+        >
+          Main Chart
+        </button>
+
+        <button
           id="isolated-dashboard-btn"
           class="dashboard-button"
           onclick="openIsolatedDashboard()"
@@ -330,9 +338,9 @@
           Refresh: Idle
         </span>
 
-        <span id="status-all" class="status-badge disconnected"
-          >/all-feeds: Off</span
-        >
+        <span id="status-all" class="status-badge disconnected">
+          /all-feeds: Off
+        </span>
       </div>
     </header>
 
@@ -383,6 +391,10 @@
 
       function openIsolatedDashboard() {
         window.location.href = `${apiHost}/isolated-dashboard`;
+      }
+
+      function openMainChart() {
+        window.location.href = `${apiHost}/chart`;
       }
 
       function connectAllFeeds() {
