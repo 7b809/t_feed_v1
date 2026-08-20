@@ -21,6 +21,8 @@ from services.opening_range_service import (
     process_selected_or_ema_cross_alert,
     flush_pending_touch_alerts,
 )
+from services.telegram_service import send_telegram_message
+from services.order_place import place_order
 from ws_feed.broadcaster import broadcaster
 
 logger = get_logger(__file__)
@@ -110,22 +112,6 @@ class UpstoxStreamer:
     def _should_process_incoming_message(self) -> bool:
         """
         Decides whether incoming Upstox messages should be scheduled for processing.
-
-        Process if any one is true:
-        1. Local WebSocket clients are connected.
-        2. LIVE_EMA_ENABLED=True.
-        3. OPENING_RANGE_TOUCH_ALERT_ENABLED=True.
-        4. EMA_CROSS_INCLUDE_OPENING_RANGE_LEVELS=True.
-        5. EMA_ISOLATED_INSTRUMENT_TELEGRAM_ENABLED=True.
-
-        Reason:
-            Live EMA, Opening Range touch monitoring, isolated instrument selection,
-            and isolated EMA Telegram alerts must continue even when no local
-            browser/dashboard client is connected.
-
-        EMA mode:
-            LIVE_EMA_CALCULATION_MODE=False means completed candle close based EMA.
-            LIVE_EMA_CALCULATION_MODE=True means live tick/LTP based EMA.
         """
 
         connected_clients = broadcaster.get_active_connections_count()
@@ -150,8 +136,6 @@ class UpstoxStreamer:
     def get_status(self) -> dict:
         """
         Returns current streamer status.
-
-        Useful for health/debug endpoints.
         """
 
         live_ema_status = {}
@@ -231,6 +215,7 @@ class UpstoxStreamer:
                 "EMA_ISOLATED_INSTRUMENT_TELEGRAM_ENABLED",
                 True,
             ),
+            "place_order_enabled": getattr(config, "PLACE_ORDER_ENABLED", False),
             "market_time": self._now_market_time(),
         }
 
@@ -440,18 +425,6 @@ class UpstoxStreamer:
                     )
 
                 def on_message(message):
-                    """
-                    Upstox tick callback.
-
-                    We process messages even without local clients because live EMA,
-                    Opening Range touch detection, isolated instrument selection,
-                    and isolated EMA Telegram alerts must continue in background.
-
-                    EMA mode is handled inside live_ema_service:
-                        LIVE_EMA_CALCULATION_MODE=False -> candle_close mode
-                        LIVE_EMA_CALCULATION_MODE=True  -> tick_ltp mode
-                    """
-
                     self.message_count += 1
 
                     if not self._should_process_incoming_message():
@@ -553,8 +526,6 @@ class UpstoxStreamer:
     ) -> dict:
         """
         Adds compact Opening Range payload to EMA crossover event.
-
-        This also adds isolated instrument state when available.
         """
 
         if not isinstance(live_ema_cross_event, dict):
@@ -606,10 +577,12 @@ class UpstoxStreamer:
 
     def _process_isolated_ema_telegram_alert(self, live_ema_cross_event: dict):
         """
-        Sends Telegram EMA alert only if this EMA event belongs to the currently
-        isolated Opening Range instrument.
+        Sends Telegram EMA alert and places order in parallel if configured.
 
-        Actual filtering is handled inside opening_range_service.
+        Order Placement Conditions:
+        - PLACE_ORDER_ENABLED must be True in config (defaults to False).
+        - Calculates Stop Loss = Lowest Wick (Candle Low) - 5 Points.
+        - Includes full instrument details: Strike Price, Strike Type, Symbol.
         """
 
         if not live_ema_cross_event:
@@ -621,6 +594,7 @@ class UpstoxStreamer:
         try:
             self.selected_or_ema_alert_processed_count += 1
 
+            # 1. Send Primary EMA Telegram Alert
             sent = process_selected_or_ema_cross_alert(live_ema_cross_event)
 
             if sent:
@@ -630,37 +604,154 @@ class UpstoxStreamer:
                     f"Isolated instrument EMA Telegram alert sent. "
                     f"instrument_key={live_ema_cross_event.get('instrument_key')}, "
                     f"cross_type={live_ema_cross_event.get('cross_type')}, "
-                    f"timestamp={live_ema_cross_event.get('timestamp')}, "
-                    f"ema_calculation_mode={live_ema_cross_event.get('ema_calculation_mode')}"
+                    f"timestamp={live_ema_cross_event.get('timestamp')}"
                 )
+
+            # 2. Check PLACE_ORDER_ENABLED setting (Defaults to False)
+            is_place_order_enabled = bool(getattr(config, "PLACE_ORDER_ENABLED", False))
+
+            if not is_place_order_enabled:
+                logger.info(
+                    "Order placement skipped: PLACE_ORDER_ENABLED is set to False in config."
+                )
+                return
+
+            # 3. Extract key details & instrument metadata
+            instrument_key = live_ema_cross_event.get("instrument_key")
+
+            # Fetch option details (strike_price, option_type, trading_symbol)
+            contract_info = get_feed_by_instrument_key(instrument_key) or {}
+            trading_symbol = (
+                contract_info.get("trading_symbol")
+                or live_ema_cross_event.get("trading_symbol")
+                or "N/A"
+            )
+            strike_price = (
+                contract_info.get("strike_price")
+                or live_ema_cross_event.get("strike_price")
+                or "N/A"
+            )
+            strike_type = (
+                contract_info.get("option_type")
+                or contract_info.get("strike_type")
+                or live_ema_cross_event.get("option_type")
+                or live_ema_cross_event.get("strike_type")
+                or "N/A"
+            )
+
+            candle_data = (
+                live_ema_cross_event.get("candle")
+                or live_ema_cross_event.get("candle_data")
+                or {}
+            )
+
+            candle_low = (
+                candle_data.get("low")
+                or live_ema_cross_event.get("candle_low")
+                or live_ema_cross_event.get("low")
+            )
+
+            if not instrument_key or candle_low is None:
+                warning_msg = (
+                    f"⚠️ <b>[ORDER SKIPPED]</b> Missing required payload values.\n"
+                    f"<b>Symbol:</b> <code>{trading_symbol}</code>\n"
+                    f"<b>Instrument:</b> <code>{instrument_key}</code>\n"
+                    f"<b>Strike Price:</b> <code>{strike_price}</code>\n"
+                    f"<b>Strike Type:</b> <code>{strike_type}</code>\n"
+                    f"<b>Candle Low:</b> <code>{candle_low}</code>"
+                )
+                logger.warning(warning_msg)
+                send_telegram_message(warning_msg)
+                return
+
+            # Calculate Stop Loss: Candle Low - 5 Points
+            calculated_sl = round(float(candle_low) - 5.0, 2)
+            quantity = getattr(config, "DEFAULT_ORDER_QUANTITY", 65)
+
+            # 4. Telegram Notification BEFORE Placing Order
+            pre_order_msg = (
+                f"🚀 <b>[PLACING ORDER]</b> Initiating Upstox Order...\n"
+                f"<b>Symbol:</b> <code>{trading_symbol}</code>\n"
+                f"<b>Instrument:</b> <code>{instrument_key}</code>\n"
+                f"<b>Strike Price:</b> <code>{strike_price}</code>\n"
+                f"<b>Strike Type:</b> <code>{strike_type}</code>\n"
+                f"<b>Candle Low:</b> <code>{candle_low}</code>\n"
+                f"<b>SL Trigger Price:</b> <code>{calculated_sl}</code>\n"
+                f"<b>Quantity:</b> <code>{quantity}</code>"
+            )
+            send_telegram_message(pre_order_msg)
+
+            # 5. Place Order via Upstox API
+            order_result = place_order(
+                instrument_key=instrument_key,
+                stop_loss=calculated_sl,
+                quantity=quantity,
+                order_type="SL-M",
+                transaction_type="BUY",
+            )
+
+            # 6. Telegram Notification AFTER Placing Order
+            if order_result.get("status") == "success":
+                api_data = order_result.get("api_response", {})
+                order_id = (
+                    api_data.get("order_id")
+                    if isinstance(api_data, dict)
+                    else getattr(api_data, "order_id", "N/A")
+                )
+
+                post_order_msg = (
+                    f"✅ <b>[ORDER SUCCESS]</b> Order placed successfully!\n"
+                    f"<b>Order ID:</b> <code>{order_id}</code>\n"
+                    f"<b>Symbol:</b> <code>{trading_symbol}</code>\n"
+                    f"<b>Instrument:</b> <code>{instrument_key}</code>\n"
+                    f"<b>Strike Price:</b> <code>{strike_price}</code>\n"
+                    f"<b>Strike Type:</b> <code>{strike_type}</code>\n"
+                    f"<b>SL Trigger:</b> <code>{calculated_sl}</code>"
+                )
+                logger.info(post_order_msg)
+                send_telegram_message(post_order_msg)
+            else:
+                err_msg = order_result.get("message", "Unknown error")
+                post_order_msg = (
+                    f"❌ <b>[ORDER FAILED]</b> Order rejected by API.\n"
+                    f"<b>Symbol:</b> <code>{trading_symbol}</code>\n"
+                    f"<b>Instrument:</b> <code>{instrument_key}</code>\n"
+                    f"<b>Strike Price:</b> <code>{strike_price}</code>\n"
+                    f"<b>Strike Type:</b> <code>{strike_type}</code>\n"
+                    f"<b>Reason:</b> {err_msg}"
+                )
+                logger.error(post_order_msg)
+                send_telegram_message(post_order_msg)
 
         except Exception as ex:
             self.selected_or_ema_alert_failed_count += 1
+            error_details = f"{type(ex).__name__}: {str(ex)}"
 
             logger.error(
-                f"Isolated instrument EMA Telegram alert processing failed. "
-                f"instrument_key={live_ema_cross_event.get('instrument_key')}, "
-                f"error={type(ex).__name__}: {ex}. "
-                f"market_time={self._now_market_time()}"
+                f"Isolated instrument EMA alert or order execution error: {error_details}"
             )
+
+            # Extract details safely for exception message
+            inst_key = live_ema_cross_event.get("instrument_key", "N/A")
+            c_info = get_feed_by_instrument_key(inst_key) or {}
+
+            # Send Telegram Exception Notification
+            exception_msg = (
+                f"🚨 <b>[ORDER EXECUTION ERROR]</b> An exception occurred!\n"
+                f"<b>Symbol:</b> <code>{c_info.get('trading_symbol', 'N/A')}</code>\n"
+                f"<b>Instrument:</b> <code>{inst_key}</code>\n"
+                f"<b>Strike Price:</b> <code>{c_info.get('strike_price', 'N/A')}</code>\n"
+                f"<b>Strike Type:</b> <code>{c_info.get('option_type', c_info.get('strike_type', 'N/A'))}</code>\n"
+                f"<b>Error Details:</b> <code>{error_details}</code>"
+            )
+            try:
+                send_telegram_message(exception_msg)
+            except Exception as tg_ex:
+                logger.error(f"Failed to send exception Telegram message: {tg_ex}")
 
     async def _process_message(self, message):
         """
-        Routes decoded ticks to:
-        1. Live EMA service for all initialized instruments.
-        2. Opening Range R2/R3/S2/S3 touch detection.
-        3. Isolated instrument selection from touched levels.
-        4. EMA event Opening Range enrichment.
-        5. Isolated instrument EMA Telegram alerting.
-        6. FastAPI WebSocket broadcaster.
-
-        Current behavior:
-        - EMA calculation continues for all instruments.
-        - EMA calculation mode is controlled by LIVE_EMA_CALCULATION_MODE.
-        - Opening Range detects R2/R3/S2/S3 touches.
-        - One instrument can be isolated for the day.
-        - Telegram EMA alert is sent only for that isolated instrument.
-        - WebSocket EMA events can still be broadcast for all instruments.
+        Routes decoded ticks to services and handlers.
         """
 
         try:
@@ -710,12 +801,7 @@ class UpstoxStreamer:
                 else:
                     self.contract_miss_count += 1
 
-                # --------------------------------------------------------
-                # 1. Process live EMA crossover continuation first.
-                # --------------------------------------------------------
-                # Actual EMA source is controlled inside live_ema_service:
-                # LIVE_EMA_CALCULATION_MODE=False -> completed candle close.
-                # LIVE_EMA_CALCULATION_MODE=True  -> live tick/LTP.
+                # 1. Process live EMA crossover continuation
                 live_ema_cross_event = None
 
                 try:
@@ -740,9 +826,7 @@ class UpstoxStreamer:
                         f"market_time={self._now_market_time()}"
                     )
 
-                # --------------------------------------------------------
-                # 2. Process Opening Range R2/R3/S2/S3 touch detection.
-                # --------------------------------------------------------
+                # 2. Process Opening Range touch detection
                 opening_range_touch_events = []
 
                 try:
@@ -776,9 +860,7 @@ class UpstoxStreamer:
                         f"market_time={self._now_market_time()}"
                     )
 
-                # --------------------------------------------------------
-                # 3. Enrich and alert EMA event after OR processing.
-                # --------------------------------------------------------
+                # 3. Enrich and alert EMA event after OR processing
                 if live_ema_cross_event:
                     live_ema_cross_event = self._enrich_ema_event_with_opening_range(
                         instrument_key=key,
@@ -795,9 +877,7 @@ class UpstoxStreamer:
 
                     self._process_isolated_ema_telegram_alert(live_ema_cross_event)
 
-                # --------------------------------------------------------
-                # 4. Broadcast live EMA cross event if clients exist.
-                # --------------------------------------------------------
+                # 4. Broadcast live EMA cross event if clients exist
                 if live_ema_cross_event and has_local_clients:
                     try:
                         if hasattr(broadcaster, "broadcast_ema_cross"):
@@ -810,9 +890,7 @@ class UpstoxStreamer:
                             f"market_time={self._now_market_time()}"
                         )
 
-                # --------------------------------------------------------
-                # 5. Broadcast Opening Range touch events if clients exist.
-                # --------------------------------------------------------
+                # 5. Broadcast Opening Range touch events if clients exist
                 if opening_range_touch_events and has_local_clients:
                     for or_event in opening_range_touch_events:
                         try:
@@ -828,9 +906,7 @@ class UpstoxStreamer:
                                 f"market_time={self._now_market_time()}"
                             )
 
-                # --------------------------------------------------------
-                # 6. Broadcast normal live tick only when local clients exist.
-                # --------------------------------------------------------
+                # 6. Broadcast normal live tick only when local clients exist
                 if not has_local_clients:
                     continue
 
@@ -852,11 +928,7 @@ class UpstoxStreamer:
                         f"market_time={self._now_market_time()}"
                     )
 
-            # ------------------------------------------------------------
-            # 7. Flush pending Opening Range touch Telegram alerts.
-            # ------------------------------------------------------------
-            # This sends only if OPENING_RANGE_LEGACY_TOUCH_TELEGRAM_ENABLED=True.
-            # New requirement keeps legacy grouped Telegram alerts disabled.
+            # 7. Flush pending Opening Range touch Telegram alerts
             try:
                 if getattr(config, "OPENING_RANGE_TOUCH_ALERT_ENABLED", True):
                     sent = flush_pending_touch_alerts(

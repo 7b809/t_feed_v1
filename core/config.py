@@ -11,6 +11,8 @@ MONGO_URI = os.getenv("MONGO_URL")
 MONGO_DB = os.getenv("MONGO_DB")
 TOKENS_COLLECTION = os.getenv("TOKENS_COLLECTION")
 
+PLACE_ORDER_ENABLED = True
+
 # Token refresh interval in minutes.
 # Existing token refresh workflow.
 REFRESH_INTERVAL_MINUTES = 60
