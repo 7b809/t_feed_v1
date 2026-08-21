@@ -15,7 +15,7 @@ file.txt
 myenv/
 venv/
  files.txt
- t.txt
+ t.txt 
  
 .env.* 
 .env
