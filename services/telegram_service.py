@@ -1091,6 +1091,17 @@ class TelegramService:
 
         return "\n".join(lines)
 
+    def send_telegram_message(
+        title: str,
+        message: str,
+        level: str = "INFO",
+    ) -> bool:
+        return telegram_service.send_message(
+            title=title,
+            message=message,
+            level=level,
+        )
+
     # ========================================================
     # Exception Messages
     # ========================================================
