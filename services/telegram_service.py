@@ -1130,3 +1130,16 @@ class TelegramService:
 
 
 telegram_service = TelegramService()
+
+
+def send_telegram_message(
+    title: str,
+    message: str,
+    level: str = "INFO",
+) -> bool:
+    """Standalone module helper to send telegram messages."""
+    return telegram_service.send_message(
+        title=title,
+        message=message,
+        level=level,
+    )
