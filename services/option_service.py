@@ -879,7 +879,9 @@ def get_budget_order_instruments_by_option_type(
     Requirement:
         - Use suggested order side only.
         - LTP should be between configured budget min and max.
-        - If multiple instruments are present, choose nearest strikes to current NIFTY LTP.
+        - If multiple instruments are present, choose the lowest option LTP.
+        - If two instruments have the same LTP, use strike price as
+          the secondary sorting key.
     """
 
     if not bool(getattr(config, "EMA_ALERT_BUDGET_ORDER_ENABLED", False)):
@@ -892,12 +894,18 @@ def get_budget_order_instruments_by_option_type(
 
     budget_min = safe_float(
         min_price,
-        safe_float(getattr(config, "EMA_ALERT_BUDGET_MIN_PRICE", 20.0), 20.0),
+        safe_float(
+            getattr(config, "EMA_ALERT_BUDGET_MIN_PRICE", 20.0),
+            20.0,
+        ),
     )
 
     budget_max = safe_float(
         max_price,
-        safe_float(getattr(config, "EMA_ALERT_BUDGET_MAX_PRICE", 30.0), 30.0),
+        safe_float(
+            getattr(config, "EMA_ALERT_BUDGET_MAX_PRICE", 30.0),
+            30.0,
+        ),
     )
 
     if budget_min > budget_max:
@@ -905,14 +913,21 @@ def get_budget_order_instruments_by_option_type(
 
     selected_max_items = safe_int(
         max_items,
-        safe_int(getattr(config, "EMA_ALERT_BUDGET_MAX_INSTRUMENTS", 3), 3),
+        safe_int(
+            getattr(config, "EMA_ALERT_BUDGET_MAX_INSTRUMENTS", 3),
+            3,
+        ),
     )
 
     if selected_max_items <= 0:
         selected_max_items = 3
 
     should_clamp = bool(
-        getattr(config, "EMA_ALERT_BUDGET_CLAMP_TO_FILTER_RANGE", True)
+        getattr(
+            config,
+            "EMA_ALERT_BUDGET_CLAMP_TO_FILTER_RANGE",
+            True,
+        )
     )
 
     with _cache_lock:
@@ -926,6 +941,7 @@ def get_budget_order_instruments_by_option_type(
 
         contract_type = normalize_option_type(contract.get("instrument_type"))
 
+        # Only use the suggested CE/PE side.
         if contract_type != selected_option_type:
             continue
 
@@ -934,6 +950,7 @@ def get_budget_order_instruments_by_option_type(
         if strike is None:
             continue
 
+        # Respect configured strike filter range.
         if should_clamp and not is_strike_inside_filter_range(strike):
             continue
 
@@ -942,6 +959,7 @@ def get_budget_order_instruments_by_option_type(
         if live_ltp is None:
             continue
 
+        # Only include instruments inside the configured budget range.
         if not (budget_min <= live_ltp <= budget_max):
             continue
 
@@ -957,29 +975,33 @@ def get_budget_order_instruments_by_option_type(
                 "distance_from_nifty": distance_from_nifty,
                 "selection_reason": (
                     f"LTP between {budget_min} and {budget_max}, "
-                    "sorted nearest to current NIFTY LTP."
+                    "sorted by lowest option LTP."
                 ),
             }
         )
 
-    sort_by_nearest = bool(
-        getattr(config, "EMA_ALERT_BUDGET_SORT_BY_NEAREST_NIFTY", True)
-    )
+    # ============================================================
+    # NEW SELECTION RULE
+    # ============================================================
+    # Select the lowest-priced option within the budget range.
+    #
+    # Example:
+    #   NIFTY 24100 PE -> 27.95
+    #   NIFTY 24050 PE -> 20.40
+    #
+    # Result:
+    #   NIFTY 24050 PE -> 20.40  <-- first/selected instrument
+    #
+    # Strike price is used only as a tie-breaker when two
+    # instruments have the same LTP.
+    # ============================================================
 
-    if sort_by_nearest:
-        candidates.sort(
-            key=lambda item: (
-                safe_float(item.get("distance_from_nifty")),
-                safe_float(item.get("strike_price")),
-            )
+    candidates.sort(
+        key=lambda item: (
+            safe_float(item.get("live_ltp")),
+            safe_float(item.get("strike_price")),
         )
-    else:
-        candidates.sort(
-            key=lambda item: (
-                safe_float(item.get("live_ltp")),
-                safe_float(item.get("strike_price")),
-            )
-        )
+    )
 
     return candidates[:selected_max_items]
 

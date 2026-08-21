@@ -575,69 +575,226 @@ class UpstoxStreamer:
 
         return live_ema_cross_event
 
-    def _process_isolated_ema_telegram_alert(self, live_ema_cross_event: dict):
+    def _process_isolated_ema_telegram_alert(
+        self,
+        live_ema_cross_event: dict,
+    ):
         """
-        Sends Telegram EMA alert and places order in parallel if configured.
+        Sends Telegram EMA alert and places ONE order on the selected
+        budget-range instrument when order placement is enabled.
 
         Order Placement Conditions:
-        - PLACE_ORDER_ENABLED must be True in config (defaults to False).
-        - Calculates Stop Loss = Lowest Wick (Candle Low) - 5 Points.
-        - Includes full instrument details: Strike Price, Strike Type, Symbol.
+            - PLACE_ORDER_ENABLED must be True in config.
+            - The EMA alert must belong to the isolated instrument.
+            - The suggested order side is determined by the EMA cross:
+                * bullish_cross -> same side as isolated instrument
+                * bearish_cross -> opposite side of isolated instrument
+            - Budget candidates are filtered using the configured budget range.
+            - Budget candidates are sorted by LOWEST option LTP.
+            - The FIRST budget candidate is selected for the actual order.
+            - Exactly ONE order is submitted for one EMA alert.
+            - Stop Loss is calculated as:
+                candle_low - min(candle_low * 5%, SL_THRESHOLD)
+
+        Important:
+            The EMA-crossing instrument itself is NOT automatically used
+            for order placement.
+
+            Example:
+                EMA isolated instrument:
+                    NIFTY 23950 CE
+
+                bearish_cross:
+                    Suggested side = PE
+
+                Budget candidates:
+                    NIFTY 24100 PE = 27.95
+                    NIFTY 24050 PE = 20.40
+
+                Selected order:
+                    NIFTY 24050 PE = 20.40
         """
 
         if not live_ema_cross_event:
             return
 
-        if not bool(getattr(config, "EMA_ISOLATED_INSTRUMENT_TELEGRAM_ENABLED", True)):
+        if not bool(
+            getattr(
+                config,
+                "EMA_ISOLATED_INSTRUMENT_TELEGRAM_ENABLED",
+                True,
+            )
+        ):
             return
 
         try:
             self.selected_or_ema_alert_processed_count += 1
 
-            # 1. Send Primary EMA Telegram Alert
-            sent = process_selected_or_ema_cross_alert(live_ema_cross_event)
+            # ============================================================
+            # 1. Process primary isolated EMA Telegram alert
+            #
+            # process_selected_or_ema_cross_alert() now returns:
+            #
+            # {
+            #     "sent": bool,
+            #     "selected_order_instrument": dict | None,
+            # }
+            # ============================================================
+
+            alert_result = process_selected_or_ema_cross_alert(live_ema_cross_event)
+
+            # Safety: support unexpected/legacy return values.
+            if isinstance(alert_result, dict):
+                sent = bool(alert_result.get("sent", False))
+
+                selected_order_instrument = alert_result.get(
+                    "selected_order_instrument"
+                )
+            else:
+                # Backward-compatible fallback.
+                sent = bool(alert_result)
+                selected_order_instrument = None
 
             if sent:
                 self.selected_or_ema_alert_sent_count += 1
 
                 logger.info(
-                    f"Isolated instrument EMA Telegram alert sent. "
-                    f"instrument_key={live_ema_cross_event.get('instrument_key')}, "
-                    f"cross_type={live_ema_cross_event.get('cross_type')}, "
-                    f"timestamp={live_ema_cross_event.get('timestamp')}"
+                    "Isolated instrument EMA Telegram alert sent. "
+                    f"instrument_key="
+                    f"{live_ema_cross_event.get('instrument_key')}, "
+                    f"cross_type="
+                    f"{live_ema_cross_event.get('cross_type')}, "
+                    f"timestamp="
+                    f"{live_ema_cross_event.get('timestamp')}, "
+                    f"selected_order_instrument="
+                    f"{(
+                        selected_order_instrument.get('instrument_key')
+                        if isinstance(selected_order_instrument, dict)
+                        else None
+                    )}, "
+                    f"selected_order_symbol="
+                    f"{(
+                        selected_order_instrument.get('trading_symbol')
+                        if isinstance(selected_order_instrument, dict)
+                        else None
+                    )}, "
+                    f"selected_order_ltp="
+                    f"{(
+                        selected_order_instrument.get('live_ltp')
+                        if isinstance(selected_order_instrument, dict)
+                        else None
+                    )}"
                 )
 
-            # 2. Check PLACE_ORDER_ENABLED setting (Defaults to False)
-            is_place_order_enabled = bool(getattr(config, "PLACE_ORDER_ENABLED", False))
+            # ============================================================
+            # 2. Check PLACE_ORDER_ENABLED
+            # ============================================================
+
+            is_place_order_enabled = bool(
+                getattr(
+                    config,
+                    "PLACE_ORDER_ENABLED",
+                    False,
+                )
+            )
 
             if not is_place_order_enabled:
                 logger.info(
-                    "Order placement skipped: PLACE_ORDER_ENABLED is set to False in config."
+                    "Order placement skipped: "
+                    "PLACE_ORDER_ENABLED is set to False in config."
                 )
                 return
 
-            # 3. Extract key details & instrument metadata
-            instrument_key = live_ema_cross_event.get("instrument_key")
+            # ============================================================
+            # 3. Validate selected budget instrument
+            #
+            # IMPORTANT:
+            # Do NOT use:
+            #
+            #     live_ema_cross_event["instrument_key"]
+            #
+            # for the order.
+            #
+            # We now use the first/lowest-LTP budget instrument selected
+            # by option_service.py.
+            # ============================================================
 
-            # Fetch option details (strike_price, option_type, trading_symbol)
+            if not isinstance(
+                selected_order_instrument,
+                dict,
+            ):
+                warning_msg = (
+                    "⚠️ <b>[ORDER SKIPPED]</b> "
+                    "No eligible budget-range order instrument "
+                    "was selected.\n"
+                    f"<b>EMA Instrument:</b> "
+                    f"<code>{live_ema_cross_event.get('instrument_key')}</code>\n"
+                    f"<b>EMA Cross:</b> "
+                    f"<code>{live_ema_cross_event.get('cross_type')}</code>\n"
+                    "<b>Reason:</b> "
+                    "No instrument matched the suggested option side "
+                    "and configured budget price range."
+                )
+
+                logger.warning(warning_msg)
+                send_telegram_message(warning_msg)
+                return
+
+            # ============================================================
+            # 4. Extract SELECTED ORDER instrument key
+            # ============================================================
+
+            instrument_key = selected_order_instrument.get(
+                "instrument_key"
+            ) or selected_order_instrument.get("instrument_token")
+
+            if not instrument_key:
+                warning_msg = (
+                    "⚠️ <b>[ORDER SKIPPED]</b> "
+                    "Selected budget instrument has no instrument key.\n"
+                    f"<b>Selected Symbol:</b> "
+                    f"<code>{selected_order_instrument.get('trading_symbol', 'N/A')}</code>\n"
+                    f"<b>Selected LTP:</b> "
+                    f"<code>{selected_order_instrument.get('live_ltp', 'N/A')}</code>"
+                )
+
+                logger.warning(warning_msg)
+                send_telegram_message(warning_msg)
+                return
+
+            # ============================================================
+            # 5. Fetch selected order instrument metadata
+            # ============================================================
+
             contract_info = get_feed_by_instrument_key(instrument_key) or {}
+
             trading_symbol = (
-                contract_info.get("trading_symbol")
-                or live_ema_cross_event.get("trading_symbol")
+                selected_order_instrument.get("trading_symbol")
+                or contract_info.get("trading_symbol")
                 or "N/A"
             )
+
             strike_price = (
-                contract_info.get("strike_price")
-                or live_ema_cross_event.get("strike_price")
+                selected_order_instrument.get("strike_price")
+                or contract_info.get("strike_price")
                 or "N/A"
             )
+
             strike_type = (
-                contract_info.get("option_type")
+                selected_order_instrument.get("option_type")
+                or selected_order_instrument.get("instrument_type")
+                or contract_info.get("option_type")
                 or contract_info.get("strike_type")
-                or live_ema_cross_event.get("option_type")
-                or live_ema_cross_event.get("strike_type")
                 or "N/A"
             )
+
+            selected_ltp = selected_order_instrument.get("live_ltp")
+
+            # ============================================================
+            # 6. Get EMA candle data
+            #
+            # The SL is based on the EMA event candle low.
+            # ============================================================
 
             candle_data = (
                 live_ema_cross_event.get("candle")
@@ -651,37 +808,177 @@ class UpstoxStreamer:
                 or live_ema_cross_event.get("low")
             )
 
-            if not instrument_key or candle_low is None:
+            if candle_low is None:
                 warning_msg = (
-                    f"⚠️ <b>[ORDER SKIPPED]</b> Missing required payload values.\n"
-                    f"<b>Symbol:</b> <code>{trading_symbol}</code>\n"
-                    f"<b>Instrument:</b> <code>{instrument_key}</code>\n"
-                    f"<b>Strike Price:</b> <code>{strike_price}</code>\n"
-                    f"<b>Strike Type:</b> <code>{strike_type}</code>\n"
-                    f"<b>Candle Low:</b> <code>{candle_low}</code>"
+                    "⚠️ <b>[ORDER SKIPPED]</b> "
+                    "Missing candle low required for Stop Loss.\n"
+                    f"<b>Selected Symbol:</b> "
+                    f"<code>{trading_symbol}</code>\n"
+                    f"<b>Selected Instrument:</b> "
+                    f"<code>{instrument_key}</code>\n"
+                    f"<b>Selected LTP:</b> "
+                    f"<code>{selected_ltp}</code>\n"
+                    f"<b>Candle Low:</b> "
+                    f"<code>{candle_low}</code>"
                 )
+
                 logger.warning(warning_msg)
                 send_telegram_message(warning_msg)
                 return
 
-            # Calculate Stop Loss: Candle Low - 5 Points
-            calculated_sl = round(float(candle_low) - 5.0, 2)
-            quantity = getattr(config, "DEFAULT_ORDER_QUANTITY", 65)
+            # ============================================================
+            # 7. Validate candle low
+            # ============================================================
 
-            # 4. Telegram Notification BEFORE Placing Order
-            pre_order_msg = (
-                f"🚀 <b>[PLACING ORDER]</b> Initiating Upstox Order...\n"
-                f"<b>Symbol:</b> <code>{trading_symbol}</code>\n"
-                f"<b>Instrument:</b> <code>{instrument_key}</code>\n"
-                f"<b>Strike Price:</b> <code>{strike_price}</code>\n"
-                f"<b>Strike Type:</b> <code>{strike_type}</code>\n"
-                f"<b>Candle Low:</b> <code>{candle_low}</code>\n"
-                f"<b>SL Trigger Price:</b> <code>{calculated_sl}</code>\n"
-                f"<b>Quantity:</b> <code>{quantity}</code>"
+            try:
+                candle_low_float = float(candle_low)
+            except (TypeError, ValueError):
+                candle_low_float = None
+
+            if candle_low_float is None or candle_low_float <= 0:
+                warning_msg = (
+                    "⚠️ <b>[ORDER SKIPPED]</b> "
+                    "Invalid candle low for Stop Loss calculation.\n"
+                    f"<b>Selected Symbol:</b> "
+                    f"<code>{trading_symbol}</code>\n"
+                    f"<b>Instrument:</b> "
+                    f"<code>{instrument_key}</code>\n"
+                    f"<b>Candle Low:</b> "
+                    f"<code>{candle_low}</code>"
+                )
+
+                logger.warning(warning_msg)
+                send_telegram_message(warning_msg)
+                return
+
+            # ============================================================
+            # 8. Calculate Stop Loss
+            #
+            # New rule:
+            #
+            #     SL distance = min(
+            #         candle_low * 5%,
+            #         SL_THRESHOLD
+            #     )
+            #
+            #     calculated_sl = candle_low - sl_distance
+            #
+            # Example:
+            #     candle_low = 3.70
+            #     5% = 0.185
+            #     SL ≈ 3.52
+            #
+            # This prevents the old negative SL problem caused by:
+            #
+            #     candle_low - 5
+            # ============================================================
+
+            sl_threshold = float(
+                getattr(
+                    config,
+                    "SL_THRESHOLD",
+                    5.0,
+                )
             )
+
+            sl_distance = min(
+                candle_low_float * 0.05,
+                sl_threshold,
+            )
+
+            calculated_sl = round(
+                candle_low_float - sl_distance,
+                2,
+            )
+
+            # Final safety check.
+            if calculated_sl <= 0:
+                warning_msg = (
+                    "⚠️ <b>[ORDER SKIPPED]</b> "
+                    "Calculated Stop Loss is not valid.\n"
+                    f"<b>Selected Symbol:</b> "
+                    f"<code>{trading_symbol}</code>\n"
+                    f"<b>Instrument:</b> "
+                    f"<code>{instrument_key}</code>\n"
+                    f"<b>Candle Low:</b> "
+                    f"<code>{candle_low_float}</code>\n"
+                    f"<b>SL Distance:</b> "
+                    f"<code>{sl_distance}</code>\n"
+                    f"<b>Calculated SL:</b> "
+                    f"<code>{calculated_sl}</code>"
+                )
+
+                logger.warning(warning_msg)
+                send_telegram_message(warning_msg)
+                return
+
+            # ============================================================
+            # 9. Quantity
+            # ============================================================
+
+            quantity = getattr(
+                config,
+                "DEFAULT_ORDER_QUANTITY",
+                65,
+            )
+
+            # ============================================================
+            # 10. Log selected instrument
+            # ============================================================
+
+            logger.info(
+                "Selected budget-range instrument for order. "
+                f"EMA instrument="
+                f"{live_ema_cross_event.get('instrument_key')}, "
+                f"selected_order_instrument={instrument_key}, "
+                f"selected_symbol={trading_symbol}, "
+                f"selected_ltp={selected_ltp}, "
+                f"option_type={strike_type}, "
+                f"cross_type="
+                f"{live_ema_cross_event.get('cross_type')}"
+            )
+
+            # ============================================================
+            # 11. Telegram notification BEFORE placing order
+            # ============================================================
+
+            pre_order_msg = (
+                f"🚀 <b>[PLACING ORDER]</b> "
+                f"Initiating Upstox Order...\n"
+                f"<b>EMA Instrument:</b> "
+                f"<code>{live_ema_cross_event.get('instrument_key')}</code>\n"
+                f"<b>EMA Cross:</b> "
+                f"<code>{live_ema_cross_event.get('cross_type', 'N/A')}</code>\n"
+                f"<b>Selected Order Symbol:</b> "
+                f"<code>{trading_symbol}</code>\n"
+                f"<b>Selected Order Instrument:</b> "
+                f"<code>{instrument_key}</code>\n"
+                f"<b>Selected Order LTP:</b> "
+                f"<code>{selected_ltp}</code>\n"
+                f"<b>Strike Price:</b> "
+                f"<code>{strike_price}</code>\n"
+                f"<b>Strike Type:</b> "
+                f"<code>{strike_type}</code>\n"
+                f"<b>Candle Low:</b> "
+                f"<code>{candle_low_float}</code>\n"
+                f"<b>SL Distance:</b> "
+                f"<code>{sl_distance}</code>\n"
+                f"<b>SL Trigger Price:</b> "
+                f"<code>{calculated_sl}</code>\n"
+                f"<b>Quantity:</b> "
+                f"<code>{quantity}</code>"
+            )
+
             send_telegram_message(pre_order_msg)
 
-            # 5. Place Order via Upstox API
+            # ============================================================
+            # 12. Place exactly ONE order
+            #
+            # IMPORTANT:
+            # This is now the SELECTED budget instrument, not the
+            # original EMA-crossing instrument.
+            # ============================================================
+
             order_result = place_order(
                 instrument_key=instrument_key,
                 stop_loss=calculated_sl,
@@ -690,64 +987,124 @@ class UpstoxStreamer:
                 transaction_type="BUY",
             )
 
-            # 6. Telegram Notification AFTER Placing Order
+            # ============================================================
+            # 13. Telegram notification AFTER placing order
+            # ============================================================
+
             if order_result.get("status") == "success":
-                api_data = order_result.get("api_response", {})
+                api_data = order_result.get(
+                    "api_response",
+                    {},
+                )
+
                 order_id = (
                     api_data.get("order_id")
                     if isinstance(api_data, dict)
-                    else getattr(api_data, "order_id", "N/A")
+                    else getattr(
+                        api_data,
+                        "order_id",
+                        "N/A",
+                    )
                 )
 
                 post_order_msg = (
-                    f"✅ <b>[ORDER SUCCESS]</b> Order placed successfully!\n"
-                    f"<b>Order ID:</b> <code>{order_id}</code>\n"
-                    f"<b>Symbol:</b> <code>{trading_symbol}</code>\n"
-                    f"<b>Instrument:</b> <code>{instrument_key}</code>\n"
-                    f"<b>Strike Price:</b> <code>{strike_price}</code>\n"
-                    f"<b>Strike Type:</b> <code>{strike_type}</code>\n"
-                    f"<b>SL Trigger:</b> <code>{calculated_sl}</code>"
+                    f"✅ <b>[ORDER SUCCESS]</b> "
+                    f"Order placed successfully!\n"
+                    f"<b>Order ID:</b> "
+                    f"<code>{order_id}</code>\n"
+                    f"<b>EMA Instrument:</b> "
+                    f"<code>{live_ema_cross_event.get('instrument_key')}</code>\n"
+                    f"<b>Selected Order Symbol:</b> "
+                    f"<code>{trading_symbol}</code>\n"
+                    f"<b>Selected Order Instrument:</b> "
+                    f"<code>{instrument_key}</code>\n"
+                    f"<b>Selected Order LTP:</b> "
+                    f"<code>{selected_ltp}</code>\n"
+                    f"<b>Strike Price:</b> "
+                    f"<code>{strike_price}</code>\n"
+                    f"<b>Strike Type:</b> "
+                    f"<code>{strike_type}</code>\n"
+                    f"<b>SL Trigger:</b> "
+                    f"<code>{calculated_sl}</code>"
                 )
+
                 logger.info(post_order_msg)
                 send_telegram_message(post_order_msg)
+
             else:
-                err_msg = order_result.get("message", "Unknown error")
-                post_order_msg = (
-                    f"❌ <b>[ORDER FAILED]</b> Order rejected by API.\n"
-                    f"<b>Symbol:</b> <code>{trading_symbol}</code>\n"
-                    f"<b>Instrument:</b> <code>{instrument_key}</code>\n"
-                    f"<b>Strike Price:</b> <code>{strike_price}</code>\n"
-                    f"<b>Strike Type:</b> <code>{strike_type}</code>\n"
-                    f"<b>Reason:</b> {err_msg}"
+                err_msg = order_result.get(
+                    "message",
+                    "Unknown error",
                 )
+
+                post_order_msg = (
+                    f"❌ <b>[ORDER FAILED]</b> "
+                    f"Order rejected by API.\n"
+                    f"<b>EMA Instrument:</b> "
+                    f"<code>{live_ema_cross_event.get('instrument_key')}</code>\n"
+                    f"<b>Selected Order Symbol:</b> "
+                    f"<code>{trading_symbol}</code>\n"
+                    f"<b>Selected Order Instrument:</b> "
+                    f"<code>{instrument_key}</code>\n"
+                    f"<b>Selected Order LTP:</b> "
+                    f"<code>{selected_ltp}</code>\n"
+                    f"<b>Strike Price:</b> "
+                    f"<code>{strike_price}</code>\n"
+                    f"<b>Strike Type:</b> "
+                    f"<code>{strike_type}</code>\n"
+                    f"<b>SL Trigger:</b> "
+                    f"<code>{calculated_sl}</code>\n"
+                    f"<b>Reason:</b> "
+                    f"{err_msg}"
+                )
+
                 logger.error(post_order_msg)
                 send_telegram_message(post_order_msg)
 
         except Exception as ex:
             self.selected_or_ema_alert_failed_count += 1
+
             error_details = f"{type(ex).__name__}: {str(ex)}"
 
             logger.error(
-                f"Isolated instrument EMA alert or order execution error: {error_details}"
+                "Isolated instrument EMA alert or "
+                f"order execution error: {error_details}"
             )
 
-            # Extract details safely for exception message
-            inst_key = live_ema_cross_event.get("instrument_key", "N/A")
+            # ------------------------------------------------------------
+            # Safely extract original EMA instrument details
+            # ------------------------------------------------------------
+
+            inst_key = live_ema_cross_event.get(
+                "instrument_key",
+                "N/A",
+            )
+
             c_info = get_feed_by_instrument_key(inst_key) or {}
 
-            # Send Telegram Exception Notification
+            # ------------------------------------------------------------
+            # Exception Telegram notification
+            # ------------------------------------------------------------
+
             exception_msg = (
-                f"🚨 <b>[ORDER EXECUTION ERROR]</b> An exception occurred!\n"
-                f"<b>Symbol:</b> <code>{c_info.get('trading_symbol', 'N/A')}</code>\n"
-                f"<b>Instrument:</b> <code>{inst_key}</code>\n"
-                f"<b>Strike Price:</b> <code>{c_info.get('strike_price', 'N/A')}</code>\n"
-                f"<b>Strike Type:</b> <code>{c_info.get('option_type', c_info.get('strike_type', 'N/A'))}</code>\n"
-                f"<b>Error Details:</b> <code>{error_details}</code>"
+                f"🚨 <b>[ORDER EXECUTION ERROR]</b> "
+                f"An exception occurred!\n"
+                f"<b>EMA Symbol:</b> "
+                f"<code>{c_info.get('trading_symbol', 'N/A')}</code>\n"
+                f"<b>EMA Instrument:</b> "
+                f"<code>{inst_key}</code>\n"
+                f"<b>Strike Price:</b> "
+                f"<code>{c_info.get('strike_price', 'N/A')}</code>\n"
+                f"<b>Strike Type:</b> "
+                f"<code>{c_info.get('option_type', c_info.get('strike_type', 'N/A'))}</code>\n"
+                f"<b>Error Details:</b> "
+                f"<code>{error_details}</code>"
             )
+
             try:
                 send_telegram_message(exception_msg)
             except Exception as tg_ex:
-                logger.error(f"Failed to send exception Telegram message: {tg_ex}")
+                logger.error("Failed to send exception " f"Telegram message: {tg_ex}")
 
     async def _process_message(self, message):
         """

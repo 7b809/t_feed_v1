@@ -2041,7 +2041,7 @@ def should_skip_isolated_ema_alert_for_minute_direction(
 
 def process_selected_or_ema_cross_alert(
     ema_event: dict,
-) -> bool:
+) -> dict:
     """
     Sends Telegram EMA alert only for isolated instrument.
 
@@ -2049,46 +2049,90 @@ def process_selected_or_ema_cross_alert(
         bullish_cross -> same side as isolated instrument
         bearish_cross -> opposite side of isolated instrument
 
-    New message flow:
-        - Telegram formatting is handled by telegram_service.
-        - Nearest order instruments are passed to telegram_service.
-        - Budget range order instruments are also passed to telegram_service.
+    Budget order selection:
+        - Use suggested order side only.
+        - LTP must be inside configured budget range.
+        - Lowest option LTP is selected first.
+        - budget_order_instruments[0] is the selected order instrument.
+
+    Return value:
+        {
+            "sent": bool,
+            "selected_order_instrument": dict | None,
+        }
+
+    The selected order instrument is returned so the caller
+    (upstox_websocket.py) can place the actual order on the
+    selected budget instrument instead of blindly ordering the
+    isolated EMA-crossing instrument.
     """
 
     if not DEFAULT_EMA_ISOLATED_TELEGRAM_ENABLED:
-        return False
+        return {
+            "sent": False,
+            "selected_order_instrument": None,
+        }
 
     if not isinstance(ema_event, dict):
-        return False
+        return {
+            "sent": False,
+            "selected_order_instrument": None,
+        }
 
     with _selected_or_lock:
         selected_state = dict(_selected_or_instrument_state)
 
     if not selected_state.get("selected"):
-        return False
+        return {
+            "sent": False,
+            "selected_order_instrument": None,
+        }
 
     isolated_key = selected_state.get("instrument_key")
     event_key = ema_event.get("instrument_key")
 
     if not isolated_key or isolated_key != event_key:
-        return False
+        return {
+            "sent": False,
+            "selected_order_instrument": None,
+        }
 
     contract_info = selected_state.get("contract_info") or {}
+
     isolated_instrument_type = get_isolated_instrument_type_from_state(selected_state)
 
-    selected_level = selected_state.get("selected_level", "N/A")
+    selected_level = selected_state.get(
+        "selected_level",
+        "N/A",
+    )
+
     nifty_ltp = get_latest_main_index_ltp()
-    cross_type = ema_event.get("cross_type", "N/A")
-    current_signal = ema_event.get("current_signal", "N/A")
+
+    cross_type = ema_event.get(
+        "cross_type",
+        "N/A",
+    )
+
+    current_signal = ema_event.get(
+        "current_signal",
+        "N/A",
+    )
+
     event_timestamp = ema_event.get("timestamp")
 
+    # ------------------------------------------------------------
+    # Duplicate protection for tick/LTP based EMA mode
+    # ------------------------------------------------------------
+
     if DEFAULT_LIVE_EMA_CALCULATION_MODE:
-        skip_alert, minute_alert_key, alert_direction = (
-            should_skip_isolated_ema_alert_for_minute_direction(
-                instrument_key=event_key,
-                ema_event=ema_event,
-                timestamp_value=event_timestamp,
-            )
+        (
+            skip_alert,
+            minute_alert_key,
+            alert_direction,
+        ) = should_skip_isolated_ema_alert_for_minute_direction(
+            instrument_key=event_key,
+            ema_event=ema_event,
+            timestamp_value=event_timestamp,
         )
 
         if skip_alert:
@@ -2099,37 +2143,85 @@ def process_selected_or_ema_cross_alert(
                 f"minute_alert_key={minute_alert_key}, "
                 f"direction={alert_direction}"
             )
-            return False
+
+            return {
+                "sent": False,
+                "selected_order_instrument": None,
+            }
+
     else:
         minute_alert_key = None
         alert_direction = normalize_ema_cross_direction(ema_event)
+
+    # ------------------------------------------------------------
+    # EMA calculation mode
+    # ------------------------------------------------------------
 
     ema_calculation_mode = ema_event.get(
         "ema_calculation_mode",
         get_live_ema_calculation_mode_text(),
     )
 
-    source = ema_event.get("source", "live_feed")
+    source = ema_event.get(
+        "source",
+        "live_feed",
+    )
 
     if ema_calculation_mode == "tick_ltp":
         mode_description = "Live tick/LTP based EMA cross detection"
     else:
         mode_description = "Completed candle close based EMA cross detection"
 
+    # ------------------------------------------------------------
+    # Suggested order instruments
+    #
+    # bullish_cross:
+    #     same option side as isolated instrument
+    #
+    # bearish_cross:
+    #     opposite option side
+    # ------------------------------------------------------------
+
     suggested_instruments = get_suggested_order_instruments_for_ema(
         cross_type=cross_type,
         isolated_instrument_type=isolated_instrument_type,
     )
+
+    # ------------------------------------------------------------
+    # Budget instruments
+    #
+    # option_service.py now sorts these by LOWEST LTP.
+    #
+    # Therefore:
+    #
+    # budget_instruments[0]
+    #
+    # is the selected lowest-priced instrument inside the
+    # configured budget range.
+    # ------------------------------------------------------------
 
     budget_instruments = get_budget_order_instruments_for_isolated_ema(
         cross_type=cross_type,
         isolated_instrument_type=isolated_instrument_type,
     )
 
+    selected_order_instrument = None
+
+    if budget_instruments:
+        selected_order_instrument = dict(budget_instruments[0])
+
+    # ------------------------------------------------------------
+    # Suggested order option type
+    # ------------------------------------------------------------
+
     suggested_order_option_type = None
 
     if suggested_instruments:
         suggested_order_option_type = suggested_instruments[0].get("instrument_type")
+
+    # ------------------------------------------------------------
+    # Alert record
+    # ------------------------------------------------------------
 
     alert_record = {
         "type": "isolated_instrument_ema_alert",
@@ -2137,9 +2229,9 @@ def process_selected_or_ema_cross_alert(
         "contract_info": contract_info,
         "selected_level": selected_level,
         "nifty_ltp": nifty_ltp,
-        "isolated_instrument_type": isolated_instrument_type,
-        "isolated_instrument_role": get_isolated_role_from_level(selected_level),
-        "suggested_order_option_type": suggested_order_option_type,
+        "isolated_instrument_type": (isolated_instrument_type),
+        "isolated_instrument_role": (get_isolated_role_from_level(selected_level)),
+        "suggested_order_option_type": (suggested_order_option_type),
         "order_side_rule": (
             "bullish_cross uses isolated instrument side; "
             "bearish_cross uses opposite side"
@@ -2149,8 +2241,13 @@ def process_selected_or_ema_cross_alert(
         "ema_calculation_mode": ema_calculation_mode,
         "ema_mode_description": mode_description,
         "ema_event": dict(ema_event),
-        "suggested_order_instruments": suggested_instruments,
-        "budget_order_instruments": budget_instruments,
+        "suggested_order_instruments": (suggested_instruments),
+        "budget_order_instruments": (budget_instruments),
+        # --------------------------------------------------------
+        # NEW:
+        # Explicitly store the selected lowest-LTP instrument.
+        # --------------------------------------------------------
+        "selected_order_instrument": (selected_order_instrument),
         "debug_details": {
             "cross_type": cross_type,
             "current_signal": current_signal,
@@ -2159,19 +2256,31 @@ def process_selected_or_ema_cross_alert(
             "event_timestamp": event_timestamp,
             "ema_fast_period": ema_event.get(
                 "ema_fast_period",
-                getattr(config, "LIVE_EMA_FAST_PERIOD", 9),
+                getattr(
+                    config,
+                    "LIVE_EMA_FAST_PERIOD",
+                    9,
+                ),
             ),
             "ema_slow_period": ema_event.get(
                 "ema_slow_period",
-                getattr(config, "LIVE_EMA_SLOW_PERIOD", 21),
+                getattr(
+                    config,
+                    "LIVE_EMA_SLOW_PERIOD",
+                    21,
+                ),
             ),
             "ema_fast": ema_event.get("ema_fast"),
             "ema_slow": ema_event.get("ema_slow"),
             "previous_ema_fast": ema_event.get("previous_ema_fast"),
             "previous_ema_slow": ema_event.get("previous_ema_slow"),
         },
-        "created_at": get_now_market_time().isoformat(),
+        "created_at": (get_now_market_time().isoformat()),
     }
+
+    # ------------------------------------------------------------
+    # Logging
+    # ------------------------------------------------------------
 
     logger.info(
         f"Processing isolated EMA Telegram alert. "
@@ -2180,8 +2289,30 @@ def process_selected_or_ema_cross_alert(
         f"isolated_instrument_type={isolated_instrument_type}, "
         f"suggested_order_option_type={suggested_order_option_type}, "
         f"suggested_count={len(suggested_instruments)}, "
-        f"budget_count={len(budget_instruments)}"
+        f"budget_count={len(budget_instruments)}, "
+        f"selected_order_instrument="
+        f"{(
+            selected_order_instrument.get('instrument_key')
+            if selected_order_instrument
+            else None
+        )}, "
+        f"selected_order_symbol="
+        f"{(
+            selected_order_instrument.get('trading_symbol')
+            if selected_order_instrument
+            else None
+        )}, "
+        f"selected_order_ltp="
+        f"{(
+            selected_order_instrument.get('live_ltp')
+            if selected_order_instrument
+            else None
+        )}"
     )
+
+    # ------------------------------------------------------------
+    # Send Telegram alert
+    # ------------------------------------------------------------
 
     sent = telegram_service.send_isolated_ema_cross_message(
         isolated_state=selected_state,
@@ -2190,6 +2321,10 @@ def process_selected_or_ema_cross_alert(
         suggested_order_instruments=suggested_instruments,
         budget_order_instruments=budget_instruments,
     )
+
+    # ------------------------------------------------------------
+    # Save alert state
+    # ------------------------------------------------------------
 
     if sent:
         with _selected_or_lock:
@@ -2216,7 +2351,15 @@ def process_selected_or_ema_cross_alert(
                 _selected_or_instrument_state
             )
 
-    return sent
+    # ------------------------------------------------------------
+    # IMPORTANT:
+    # Return both Telegram status and the selected order instrument.
+    # ------------------------------------------------------------
+
+    return {
+        "sent": sent,
+        "selected_order_instrument": (selected_order_instrument),
+    }
 
 
 # ============================================================

@@ -12,6 +12,9 @@ MONGO_DB = os.getenv("MONGO_DB")
 TOKENS_COLLECTION = os.getenv("TOKENS_COLLECTION")
 
 PLACE_ORDER_ENABLED = True
+SL_THRESHOLD=5.0
+
+
 
 # Token refresh interval in minutes.
 # Existing token refresh workflow.
