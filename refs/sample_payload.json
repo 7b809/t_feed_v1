@@ -1,0 +1,133 @@
+{
+  "type": "isolated_ema_alert",
+  "alert_title": "Isolated EMA Bullish Cross Alert",
+  "alert_scope": "isolated_instrument_only",
+  "telegram_alert": true,
+  "instrument_key": "NSE_FO|41012",
+  "instrument": {
+    "instrument_key": "NSE_FO|41012",
+    "trading_symbol": "NIFTY 24500 CE",
+    "instrument_type": "CE",
+    "strike_price": 24500.0,
+    "expiry": "2026-08-27",
+    "live_ltp": 135.4
+  },
+  "isolated_instrument": {
+    "selected": true,
+    "instrument_key": "NSE_FO|41012",
+    "instrument_type": "CE",
+    "strike_price": 24500.0,
+    "selected_level": "S3",
+    "level_value": 118.6,
+    "trigger_price": 117.95,
+    "trigger_field": "low",
+    "touch_source": "live_tick",
+    "touch_time": "2026-08-22T09:28:00+05:30",
+    "role": "SUPPORT",
+    "reference_average": 132.5,
+    "latest_main_index_ltp": 24520.5
+  },
+  "opposite_instrument": {
+    "instrument_type": "PE",
+    "trading_symbol": "NIFTY 24500 PE",
+    "strike_price": 24500.0,
+    "role": "RESISTANCE-LIKE"
+  },
+  "ema_event": {
+    "type": "live_ema_cross",
+    "cross_type": "bullish_cross",
+    "current_signal": "bullish",
+    "previous_signal": "bearish",
+    "ema_calculation_mode": "candle_close",
+    "interval_minutes": 1,
+    "timestamp": "2026-08-22T10:15:00+05:30",
+    "timestamp_ms": 1787373900000,
+    "close": 135.4,
+    "ema_fast_period": 9,
+    "ema_slow_period": 21,
+    "ema_fast": 133.85,
+    "ema_slow": 132.9,
+    "previous_ema_fast": 131.75,
+    "previous_ema_slow": 132.15,
+    "source": "live_feed",
+    "created_at": "2026-08-22T10:16:02+05:30",
+    "candle": {
+      "timestamp": "2026-08-22T10:15:00+05:30",
+      "timestamp_ms": 1787373900000,
+      "open": 130.2,
+      "high": 137.1,
+      "low": 129.65,
+      "close": 135.4,
+      "volume": 182500
+    },
+    "tick": null
+  },
+  "opening_range": {
+    "available": true,
+    "date": "2026-08-22",
+    "interval": "1minute",
+    "range": {
+      "open": 130.1,
+      "high": 138.4,
+      "low": 126.6,
+      "close": 132.8,
+      "average": 132.5
+    },
+    "levels": {
+      "r1": 135.45,
+      "s1": 129.55,
+      "r2": 144.3,
+      "s2": 120.7,
+      "r3": 150.2,
+      "s3": 114.8,
+      "r3_threshold": 147.25,
+      "s3_threshold": 117.75
+    },
+    "touch_status": {
+      "r2_touched": false,
+      "r3_touched": false,
+      "s2_touched": true,
+      "s3_touched": true,
+      "first_touch_level": "S3",
+      "first_touch_source": "live_tick",
+      "first_touch_time": "2026-08-22T09:28:00+05:30"
+    }
+  },
+  "order_suggestion": {
+    "rule": "same_side_as_isolated_instrument",
+    "suggested_order_side": "CE",
+    "selection_basis": "current_nifty_spot_ltp",
+    "nifty_ltp": 24520.5,
+    "nearest_order_instruments": [
+      {
+        "instrument_key": "NSE_FO|41012",
+        "trading_symbol": "NIFTY 24500 CE",
+        "strike_price": 24500.0,
+        "instrument_type": "CE",
+        "available": true,
+        "live_ltp": 135.4
+      }
+    ],
+    "budget_range": {
+      "enabled": true,
+      "minimum_price": 20.0,
+      "maximum_price": 30.0,
+      "instrument_type": "CE",
+      "instruments": [
+        {
+          "instrument_key": "NSE_FO|41026",
+          "trading_symbol": "NIFTY 24850 CE",
+          "strike_price": 24850.0,
+          "instrument_type": "CE",
+          "live_ltp": 27.4,
+          "distance_from_nifty": 329.5
+        }
+      ]
+    }
+  },
+  "telegram": {
+    "enabled": true,
+    "sent": true,
+    "sent_at": "2026-08-22T10:16:03+05:30"
+  }
+}
