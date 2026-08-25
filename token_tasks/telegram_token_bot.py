@@ -576,8 +576,8 @@ class TelegramTokenBot:
         self._send_message(
             "Telegram token bot started.\n\n"
             "Commands:\n"
-            "/save-token or /save_token\n"
-            "/token-status or /token_status\n"
+            "/save_token\n"
+            "/token_status\n"
             "/profile\n"
             "/funds\n"
             "/token-check or /token_check",
