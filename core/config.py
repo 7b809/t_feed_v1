@@ -6,7 +6,7 @@ load_dotenv()
 # ============================================================
 # MongoDB Configuration
 # ============================================================
-
+UPSTOX_ALGO_APP = os.getenv("UPSTOX_ALGO_APP")
 MONGO_URI = os.getenv("MONGO_URL")
 MONGO_DB = os.getenv("MONGO_DB")
 TOKENS_COLLECTION = os.getenv("TOKENS_COLLECTION")

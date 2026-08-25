@@ -1,7 +1,7 @@
 import html
 from datetime import datetime
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
-
+from concurrent.futures import ThreadPoolExecutor
 import requests
 
 from core import config
@@ -98,6 +98,49 @@ class TelegramService:
         tick_based_mode = bool(getattr(config, "LIVE_EMA_CALCULATION_MODE", False))
 
         return "tick_ltp" if tick_based_mode else "candle_close"
+
+    def _send_algo_app_json(self, payload: dict) -> bool:
+        url = getattr(config, "UPSTOX_ALGO_APP", None)
+
+        if not url:
+            logger.warning("UPSTOX_ALGO_APP is not configured.")
+            return False
+
+        try:
+            response = requests.post(
+                url,
+                json=payload,
+                timeout=5,
+            )
+
+            if response.status_code not in (200, 201, 202):
+                logger.error(
+                    f"Algo app JSON send failed. "
+                    f"status_code={response.status_code}, response={response.text}"
+                )
+                return False
+
+            try:
+                result = response.json()
+            except ValueError:
+                logger.error(f"Algo app returned non-JSON response: {response.text}")
+                return False
+
+            if result.get("status") != "success":
+                logger.error(f"Algo app rejected payload. response={result}")
+                return False
+
+            logger.info(
+                f"Raw EMA JSON sent to algo app successfully. "
+                f"id={result.get('id')}, "
+                f"mode={result.get('mode')}"
+            )
+
+            return True
+
+        except Exception as ex:
+            logger.error(f"Algo app JSON send exception: " f"{type(ex).__name__}: {ex}")
+            return False
 
     def _get_live_ema_calculation_mode_description(
         self,
@@ -639,12 +682,45 @@ class TelegramService:
             f"suggested_order_option_type={suggested_order_option_type}, "
             f"suggested_instruments_count={len(suggested_order_instruments)}"
         )
+        algo_payload = {
+            "alert_type": "isolated_ema_cross",
+            "instrument_key": instrument_key,
+            "strike": strike,
+            "isolated_instrument_type": isolated_instrument_type,
+            "selected_level": selected_level,
+            "cross_type": cross_type,
+            "current_signal": current_signal,
+            "suggested_order_option_type": suggested_order_option_type,
+            "order_side_rule": order_side_rule,
+            "ema_calculation_mode": ema_mode,
+            "price": close_price,
+            "timestamp": event_timestamp,
+            "nifty_ltp": nifty_ltp,
+            "suggested_order_instruments": suggested_order_instruments,
+        }
 
-        return self.send_message(
-            title="Isolated Instrument EMA Alert",
-            message=message,
-            level="EMA",
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            telegram_future = executor.submit(
+                self.send_message,
+                title="Isolated Instrument EMA Alert",
+                message=message,
+                level="EMA",
+            )
+
+            algo_future = executor.submit(
+                self._send_algo_app_json,
+                algo_payload,
+            )
+
+            telegram_sent = telegram_future.result()
+            algo_sent = algo_future.result()
+
+        logger.info(
+            f"EMA alert delivery status: "
+            f"telegram={telegram_sent}, algo_app={algo_sent}"
         )
+
+        return telegram_sent
 
     def send_isolated_instrument_message(
         self,
