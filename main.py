@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
-
+from api.logs_api import router as logs_router
 from core import config
 from core.logger import get_logger
 from services.option_service import get_options_contracts, options_cache
@@ -1305,7 +1305,7 @@ app.include_router(history_router)
 app.include_router(opening_range_router)
 app.include_router(websocket_router)
 app.include_router(ws_docs_router)
-
+app.include_router(logs_router)
 
 # ============================================================
 # APPLICATION STARTUP / DAILY MARKET INITIALIZATION
