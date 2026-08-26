@@ -16,7 +16,7 @@ myenv/
 venv/
  files.txt
  t.txt
- 
+ large_files.json
 .env.* 
 .env
 test_logs

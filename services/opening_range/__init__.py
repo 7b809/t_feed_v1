@@ -1,50 +1,38 @@
 """
-Backward-compatible Opening Range service wrapper.
+Opening Range service package.
 
-The Opening Range implementation has been moved into the modular
-package:
+This module is the public compatibility layer for the modular
+Opening Range implementation.
 
-    services/opening_range/
+Application code should normally import Opening Range functions from:
 
-This file is retained temporarily so existing application files that
-still use imports such as:
-
-    from services.opening_range_service import (
+    from services.opening_range import (
         calculate_opening_range_for_all_subscribed,
         process_live_tick_for_opening_range,
+        process_selected_or_ema_cross_alert,
+        get_opening_range_status,
     )
 
-continue to work without modification.
-
-Important
----------
-
-Do not define runtime state, locks, caches, configuration constants, or
-business logic in this file.
-
-All mutable Opening Range runtime state must be owned exclusively by:
-
-    services/opening_range/state.py
-
-All new application code should preferably import from:
-
-    services.opening_range
+Internal Opening Range modules should import directly from the specific
+module they depend on instead of importing from this package-level file.
+That rule helps prevent circular imports.
 """
 
 # ============================================================
-# Main Opening Range Calculation
+# Main Opening Range Calculation Service
 # ============================================================
 
-from .opening_range import (
+from . import (
     calculate_opening_range_for_all_subscribed,
     calculate_opening_range_for_instrument,
 )
+
 
 # ============================================================
 # Candle and Instrument Helpers
 # ============================================================
 
-from services.opening_range.candle_utils import (
+from .candle_utils import (
     extract_candles_from_response,
     get_contract_info_by_key,
     get_live_ema_calculation_mode_text,
@@ -67,27 +55,30 @@ from services.opening_range.candle_utils import (
     serialize_candle,
 )
 
+
 # ============================================================
 # Intraday Candle Fetch
 # ============================================================
 
-from services.opening_range.intraday import (
+from .intraday import (
     fetch_intraday_candles_for_instrument,
 )
 
+
 # ============================================================
-# Opening Range Formula
+# Opening Range Level Calculation
 # ============================================================
 
-from services.opening_range.range_calculator import (
+from .range_calculator import (
     calculate_opening_range_levels,
 )
 
+
 # ============================================================
-# Live Touch Processing
+# Live Tick and Touch Processing
 # ============================================================
 
-from services.opening_range.live_touch import (
+from .live_touch import (
     build_alert_key,
     build_touch_status_from_events,
     calculate_distance_from_index,
@@ -105,11 +96,12 @@ from services.opening_range.live_touch import (
     update_touch_status_in_cache,
 )
 
+
 # ============================================================
-# Latest Instrument LTP and Legacy Touch Alerts
+# Touch Event and Latest LTP Helpers
 # ============================================================
 
-from services.opening_range.touch_events import (
+from .touch_events import (
     flush_pending_touch_alerts,
     format_touch_event_line,
     get_latest_ltp_for_instrument,
@@ -118,11 +110,12 @@ from services.opening_range.touch_events import (
     update_latest_ltp_for_instrument,
 )
 
+
 # ============================================================
-# Isolated Instrument Selection
+# Isolated Instrument Processing
 # ============================================================
 
-from services.opening_range.isolation import (
+from .isolation import (
     build_average_window,
     choose_best_isolation_event,
     format_isolated_instrument_title,
@@ -135,11 +128,12 @@ from services.opening_range.isolation import (
     try_isolate_from_touch_events,
 )
 
+
 # ============================================================
 # Isolated Instrument EMA Alerts
 # ============================================================
 
-from services.opening_range.ema_alerts import (
+from .ema_alerts import (
     format_suggested_order_instruments,
     get_ema_alert_minute_bucket,
     get_isolated_instrument_type_from_state,
@@ -154,11 +148,12 @@ from services.opening_range.ema_alerts import (
     should_skip_isolated_ema_alert_for_minute_direction,
 )
 
+
 # ============================================================
 # Opening Range Status and Dashboard
 # ============================================================
 
-from services.opening_range.status import (
+from .status import (
     get_opening_range_cache,
     get_opening_range_dashboard_summary,
     get_opening_range_for_instrument_from_cache,
@@ -167,63 +162,15 @@ from services.opening_range.status import (
     get_opening_range_touch_events,
 )
 
+
 # ============================================================
-# Opening Range Storage
+# Storage Helpers
 # ============================================================
 
-from services.opening_range.storage import (
+from .storage import (
     save_opening_range_results_to_file,
     save_touch_events_to_file_if_enabled,
 )
-
-# ============================================================
-# Shared Runtime State Compatibility
-# ============================================================
-
-from services.opening_range.state import (
-    alert_sent_keys,
-    opening_range_cache,
-    opening_range_cache_lock,
-    pending_touch_events,
-    selected_or_ema_alerts,
-    selected_or_ema_alert_minute_keys,
-    selected_or_instrument_state,
-    selected_or_lock,
-    touch_events,
-    touch_lock,
-)
-
-# ============================================================
-# Old Underscore-Prefixed State Aliases
-# ============================================================
-
-"""
-These aliases are retained for older project code that directly imports
-the original underscore-prefixed mutable state objects.
-
-New application code should not use these aliases.
-
-Prefer status and state helper functions such as:
-
-    get_opening_range_cache()
-    get_opening_range_status()
-    get_selected_or_instrument_state()
-    get_opening_range_touch_events()
-"""
-
-_opening_range_cache_lock = opening_range_cache_lock
-_touch_lock = touch_lock
-_selected_or_lock = selected_or_lock
-
-_pending_touch_events = pending_touch_events
-_touch_events = touch_events
-_alert_sent_keys = alert_sent_keys
-
-_selected_or_instrument_state = selected_or_instrument_state
-
-_selected_or_ema_alerts = selected_or_ema_alerts
-
-_selected_or_ema_alert_minute_keys = selected_or_ema_alert_minute_keys
 
 
 # ============================================================
@@ -231,9 +178,10 @@ _selected_or_ema_alert_minute_keys = selected_or_ema_alert_minute_keys
 # ============================================================
 
 __all__ = [
-    # Main calculation
+    # Main calculation service
     "calculate_opening_range_for_instrument",
     "calculate_opening_range_for_all_subscribed",
+
     # Basic helpers
     "is_opening_range_enabled",
     "get_market_timezone",
@@ -247,21 +195,26 @@ __all__ = [
     "normalize_candle",
     "normalize_candles",
     "serialize_candle",
+
     # Candle selection
     "get_market_open_datetime",
     "get_opening_range_end_datetime",
     "select_opening_range_candles",
     "select_post_opening_range_candles",
+
     # Instrument helpers
     "get_subscribed_instrument_keys",
     "get_contract_info_by_key",
     "normalize_option_type",
     "is_option_contract",
-    # Intraday fetch
+
+    # Intraday
     "fetch_intraday_candles_for_instrument",
+
     # Range calculation
     "calculate_opening_range_levels",
-    # Touch event helpers
+
+    # Live touch processing
     "build_alert_key",
     "calculate_distance_from_index",
     "update_latest_main_index_ltp",
@@ -273,20 +226,20 @@ __all__ = [
     "queue_touch_event",
     "build_touch_status_from_events",
     "update_touch_status_in_cache",
-    # Touch detection
     "detect_touch_from_candle",
     "scan_backfill_touches",
     "extract_feed_values",
     "process_live_tick_for_opening_range",
-    # Instrument LTP
+
+    # Latest instrument LTP and touch alerts
     "update_latest_ltp_for_instrument",
     "get_latest_ltp_for_instrument",
-    # Legacy Telegram touch alerts
     "get_sorted_touch_events_for_alert",
     "format_touch_event_line",
     "send_touch_events_telegram_alert",
     "flush_pending_touch_alerts",
-    # Isolated instrument selection
+
+    # Isolated instrument
     "get_level_priority",
     "get_reference_opening_range_average",
     "build_average_window",
@@ -297,7 +250,8 @@ __all__ = [
     "send_isolated_instrument_notification",
     "isolate_instrument_from_event",
     "try_isolate_from_touch_events",
-    # Isolated EMA helpers
+
+    # Isolated EMA alerts
     "is_selected_or_instrument_locked",
     "get_selected_or_instrument_key",
     "get_selected_or_instrument_state",
@@ -310,6 +264,7 @@ __all__ = [
     "should_skip_isolated_ema_alert_for_minute_direction",
     "process_selected_or_ema_cross_alert",
     "get_opening_range_levels_for_ema_event",
+
     # Status and dashboard
     "get_opening_range_status",
     "get_opening_range_cache",
@@ -317,28 +272,8 @@ __all__ = [
     "get_opening_range_for_instrument_from_cache",
     "get_opening_range_touch_events",
     "get_opening_range_pending_touch_events",
+
     # Storage
     "save_opening_range_results_to_file",
     "save_touch_events_to_file_if_enabled",
-    # Shared mutable compatibility state
-    "opening_range_cache",
-    "opening_range_cache_lock",
-    "touch_lock",
-    "touch_events",
-    "pending_touch_events",
-    "alert_sent_keys",
-    "selected_or_lock",
-    "selected_or_instrument_state",
-    "selected_or_ema_alerts",
-    "selected_or_ema_alert_minute_keys",
-    # Legacy aliases
-    "_opening_range_cache_lock",
-    "_touch_lock",
-    "_selected_or_lock",
-    "_pending_touch_events",
-    "_touch_events",
-    "_alert_sent_keys",
-    "_selected_or_instrument_state",
-    "_selected_or_ema_alerts",
-    "_selected_or_ema_alert_minute_keys",
 ]
