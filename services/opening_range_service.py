@@ -6,8 +6,7 @@ package:
 
     services/opening_range/
 
-This file is retained temporarily so existing application files that
-still use imports such as:
+This file remains temporarily so existing application files using:
 
     from services.opening_range_service import (
         calculate_opening_range_for_all_subscribed,
@@ -22,20 +21,23 @@ Important
 Do not define runtime state, locks, caches, configuration constants, or
 business logic in this file.
 
-All mutable Opening Range runtime state must be owned exclusively by:
+All mutable Opening Range runtime state is owned exclusively by:
 
     services/opening_range/state.py
 
 All new application code should preferably import from:
 
     services.opening_range
+
+This compatibility wrapper imports public functions directly from their
+owning modules to minimize circular-import risk.
 """
 
 # ============================================================
 # Main Opening Range Calculation
 # ============================================================
 
-from .opening_range import (
+from .opening_range.service import (
     calculate_opening_range_for_all_subscribed,
     calculate_opening_range_for_instrument,
 )
@@ -44,7 +46,7 @@ from .opening_range import (
 # Candle and Instrument Helpers
 # ============================================================
 
-from services.opening_range.candle_utils import (
+from .opening_range.candle_utils import (
     extract_candles_from_response,
     get_contract_info_by_key,
     get_live_ema_calculation_mode_text,
@@ -71,7 +73,7 @@ from services.opening_range.candle_utils import (
 # Intraday Candle Fetch
 # ============================================================
 
-from services.opening_range.intraday import (
+from .opening_range.intraday import (
     fetch_intraday_candles_for_instrument,
 )
 
@@ -79,7 +81,7 @@ from services.opening_range.intraday import (
 # Opening Range Formula
 # ============================================================
 
-from services.opening_range.range_calculator import (
+from .opening_range.range_calculator import (
     calculate_opening_range_levels,
 )
 
@@ -87,7 +89,7 @@ from services.opening_range.range_calculator import (
 # Live Touch Processing
 # ============================================================
 
-from services.opening_range.live_touch import (
+from .opening_range.live_touch import (
     build_alert_key,
     build_touch_status_from_events,
     calculate_distance_from_index,
@@ -109,7 +111,7 @@ from services.opening_range.live_touch import (
 # Latest Instrument LTP and Legacy Touch Alerts
 # ============================================================
 
-from services.opening_range.touch_events import (
+from .opening_range.touch_events import (
     flush_pending_touch_alerts,
     format_touch_event_line,
     get_latest_ltp_for_instrument,
@@ -122,7 +124,7 @@ from services.opening_range.touch_events import (
 # Isolated Instrument Selection
 # ============================================================
 
-from services.opening_range.isolation import (
+from .opening_range.isolation import (
     build_average_window,
     choose_best_isolation_event,
     format_isolated_instrument_title,
@@ -139,7 +141,7 @@ from services.opening_range.isolation import (
 # Isolated Instrument EMA Alerts
 # ============================================================
 
-from services.opening_range.ema_alerts import (
+from .opening_range.ema_alerts import (
     format_suggested_order_instruments,
     get_ema_alert_minute_bucket,
     get_isolated_instrument_type_from_state,
@@ -158,7 +160,7 @@ from services.opening_range.ema_alerts import (
 # Opening Range Status and Dashboard
 # ============================================================
 
-from services.opening_range.status import (
+from .opening_range.status import (
     get_opening_range_cache,
     get_opening_range_dashboard_summary,
     get_opening_range_for_instrument_from_cache,
@@ -171,16 +173,31 @@ from services.opening_range.status import (
 # Opening Range Storage
 # ============================================================
 
-from services.opening_range.storage import (
+from .opening_range.storage import (
     save_opening_range_results_to_file,
     save_touch_events_to_file_if_enabled,
+)
+
+# ============================================================
+# Shared Runtime State Management
+# ============================================================
+
+from .opening_range.state import (
+    ensure_current_market_day,
+    get_latest_main_index_ltp_snapshot,
+    get_opening_range_cache_snapshot,
+    get_selected_or_ema_alerts_snapshot,
+    get_selected_or_state_snapshot,
+    get_touch_state_snapshot,
+    reset_all_opening_range_state,
+    synchronize_cache_counters,
 )
 
 # ============================================================
 # Shared Runtime State Compatibility
 # ============================================================
 
-from services.opening_range.state import (
+from .opening_range.state import (
     alert_sent_keys,
     opening_range_cache,
     opening_range_cache_lock,
@@ -198,17 +215,23 @@ from services.opening_range.state import (
 # ============================================================
 
 """
-These aliases are retained for older project code that directly imports
-the original underscore-prefixed mutable state objects.
+These aliases are retained only for older project code that directly
+imports the original underscore-prefixed mutable state objects.
 
-New application code should not use these aliases.
-
-Prefer status and state helper functions such as:
+New code should use status and state helper functions such as:
 
     get_opening_range_cache()
     get_opening_range_status()
     get_selected_or_instrument_state()
     get_opening_range_touch_events()
+
+Important:
+
+These aliases are safe for mutable objects such as dictionaries, sets,
+deques, and locks because those objects are modified in place.
+
+Reassigned scalar state is intentionally not re-exported here because
+directly importing scalar values can produce stale references.
 """
 
 _opening_range_cache_lock = opening_range_cache_lock
@@ -320,6 +343,15 @@ __all__ = [
     # Storage
     "save_opening_range_results_to_file",
     "save_touch_events_to_file_if_enabled",
+    # Runtime state management
+    "ensure_current_market_day",
+    "reset_all_opening_range_state",
+    "synchronize_cache_counters",
+    "get_opening_range_cache_snapshot",
+    "get_touch_state_snapshot",
+    "get_selected_or_state_snapshot",
+    "get_selected_or_ema_alerts_snapshot",
+    "get_latest_main_index_ltp_snapshot",
     # Shared mutable compatibility state
     "opening_range_cache",
     "opening_range_cache_lock",

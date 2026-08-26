@@ -16,17 +16,34 @@ Application code should normally import Opening Range functions from:
 Internal Opening Range modules should import directly from the specific
 module they depend on instead of importing from this package-level file.
 That rule helps prevent circular imports.
+
+Required package structure:
+
+    services/
+        opening_range/
+            __init__.py
+            service.py
+            constants.py
+            state.py
+            candle_utils.py
+            intraday.py
+            range_calculator.py
+            live_touch.py
+            touch_events.py
+            isolation.py
+            ema_alerts.py
+            status.py
+            storage.py
 """
 
 # ============================================================
 # Main Opening Range Calculation Service
 # ============================================================
 
-from . import (
+from .service import (
     calculate_opening_range_for_all_subscribed,
     calculate_opening_range_for_instrument,
 )
-
 
 # ============================================================
 # Candle and Instrument Helpers
@@ -55,7 +72,6 @@ from .candle_utils import (
     serialize_candle,
 )
 
-
 # ============================================================
 # Intraday Candle Fetch
 # ============================================================
@@ -64,7 +80,6 @@ from .intraday import (
     fetch_intraday_candles_for_instrument,
 )
 
-
 # ============================================================
 # Opening Range Level Calculation
 # ============================================================
@@ -72,7 +87,6 @@ from .intraday import (
 from .range_calculator import (
     calculate_opening_range_levels,
 )
-
 
 # ============================================================
 # Live Tick and Touch Processing
@@ -96,7 +110,6 @@ from .live_touch import (
     update_touch_status_in_cache,
 )
 
-
 # ============================================================
 # Touch Event and Latest LTP Helpers
 # ============================================================
@@ -109,7 +122,6 @@ from .touch_events import (
     send_touch_events_telegram_alert,
     update_latest_ltp_for_instrument,
 )
-
 
 # ============================================================
 # Isolated Instrument Processing
@@ -127,7 +139,6 @@ from .isolation import (
     should_replace_isolated_instrument,
     try_isolate_from_touch_events,
 )
-
 
 # ============================================================
 # Isolated Instrument EMA Alerts
@@ -148,7 +159,6 @@ from .ema_alerts import (
     should_skip_isolated_ema_alert_for_minute_direction,
 )
 
-
 # ============================================================
 # Opening Range Status and Dashboard
 # ============================================================
@@ -162,7 +172,6 @@ from .status import (
     get_opening_range_touch_events,
 )
 
-
 # ============================================================
 # Storage Helpers
 # ============================================================
@@ -172,6 +181,20 @@ from .storage import (
     save_touch_events_to_file_if_enabled,
 )
 
+# ============================================================
+# Shared Runtime State Helpers
+# ============================================================
+
+from .state import (
+    ensure_current_market_day,
+    get_latest_main_index_ltp_snapshot,
+    get_opening_range_cache_snapshot,
+    get_selected_or_ema_alerts_snapshot,
+    get_selected_or_state_snapshot,
+    get_touch_state_snapshot,
+    reset_all_opening_range_state,
+    synchronize_cache_counters,
+)
 
 # ============================================================
 # Public API
@@ -181,7 +204,6 @@ __all__ = [
     # Main calculation service
     "calculate_opening_range_for_instrument",
     "calculate_opening_range_for_all_subscribed",
-
     # Basic helpers
     "is_opening_range_enabled",
     "get_market_timezone",
@@ -195,25 +217,20 @@ __all__ = [
     "normalize_candle",
     "normalize_candles",
     "serialize_candle",
-
     # Candle selection
     "get_market_open_datetime",
     "get_opening_range_end_datetime",
     "select_opening_range_candles",
     "select_post_opening_range_candles",
-
     # Instrument helpers
     "get_subscribed_instrument_keys",
     "get_contract_info_by_key",
     "normalize_option_type",
     "is_option_contract",
-
-    # Intraday
+    # Intraday candle fetch
     "fetch_intraday_candles_for_instrument",
-
-    # Range calculation
+    # Opening Range calculation
     "calculate_opening_range_levels",
-
     # Live touch processing
     "build_alert_key",
     "calculate_distance_from_index",
@@ -230,16 +247,15 @@ __all__ = [
     "scan_backfill_touches",
     "extract_feed_values",
     "process_live_tick_for_opening_range",
-
-    # Latest instrument LTP and touch alerts
+    # Latest instrument LTP
     "update_latest_ltp_for_instrument",
     "get_latest_ltp_for_instrument",
+    # Legacy touch Telegram alerts
     "get_sorted_touch_events_for_alert",
     "format_touch_event_line",
     "send_touch_events_telegram_alert",
     "flush_pending_touch_alerts",
-
-    # Isolated instrument
+    # Isolated instrument processing
     "get_level_priority",
     "get_reference_opening_range_average",
     "build_average_window",
@@ -250,7 +266,6 @@ __all__ = [
     "send_isolated_instrument_notification",
     "isolate_instrument_from_event",
     "try_isolate_from_touch_events",
-
     # Isolated EMA alerts
     "is_selected_or_instrument_locked",
     "get_selected_or_instrument_key",
@@ -264,7 +279,6 @@ __all__ = [
     "should_skip_isolated_ema_alert_for_minute_direction",
     "process_selected_or_ema_cross_alert",
     "get_opening_range_levels_for_ema_event",
-
     # Status and dashboard
     "get_opening_range_status",
     "get_opening_range_cache",
@@ -272,8 +286,15 @@ __all__ = [
     "get_opening_range_for_instrument_from_cache",
     "get_opening_range_touch_events",
     "get_opening_range_pending_touch_events",
-
     # Storage
     "save_opening_range_results_to_file",
     "save_touch_events_to_file_if_enabled",
+    # Runtime state management
+    "ensure_current_market_day",
+    "reset_all_opening_range_state",
+    "synchronize_cache_counters",
+    "get_opening_range_cache_snapshot",
+    "get_touch_state_snapshot",
+    "get_selected_or_state_snapshot",
+    "get_selected_or_ema_alerts_snapshot",
 ]
