@@ -2,7 +2,9 @@ import asyncio
 import json
 import uvicorn
 from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -484,8 +486,213 @@ def run_daily_opening_range_fetch():
         )
 
 
+def _get_market_now() -> datetime:
+    """
+    Returns current datetime in the configured market timezone.
+    Falls back to Asia/Kolkata if the configured timezone is invalid.
+    """
+    timezone_name = getattr(config, "MARKET_TIMEZONE", "Asia/Kolkata")
+
+    try:
+        timezone = ZoneInfo(timezone_name)
+    except Exception:
+        timezone = ZoneInfo("Asia/Kolkata")
+
+    return datetime.now(timezone)
+
+
+def _is_weekday_market_day() -> bool:
+    """Returns True when the current market date is Monday-Friday."""
+    return _get_market_now().weekday() < 5
+
+
+def _is_opening_range_fetch_time_passed() -> bool:
+    """
+    Returns True when today's configured Opening Range scheduled fetch time
+    has already passed in the configured market timezone.
+    """
+    now_market = _get_market_now()
+
+    scheduled_hour = int(getattr(config, "OPENING_RANGE_FETCH_HOUR", 9))
+    scheduled_minute = int(getattr(config, "OPENING_RANGE_FETCH_MINUTE", 18))
+
+    scheduled_time = now_market.replace(
+        hour=scheduled_hour,
+        minute=scheduled_minute,
+        second=0,
+        microsecond=0,
+    )
+
+    return now_market >= scheduled_time
+
+
+def _is_todays_opening_range_already_saved() -> bool:
+    """
+    Checks whether today's Opening Range result is already saved successfully.
+
+    The Opening Range service saves the calculation summary to the configured
+    OPENING_RANGE_OUTPUT_FILE. The summary contains the calculation date and
+    status, so this prevents a normal application restart later in the day
+    from unnecessarily recalculating today's Opening Range.
+    """
+    output_file = Path(
+        getattr(
+            config,
+            "OPENING_RANGE_OUTPUT_FILE",
+            "data/opening_range_results.json",
+        )
+    )
+
+    if not output_file.exists():
+        return False
+
+    try:
+        with output_file.open("r", encoding="utf-8") as file:
+            saved_summary = json.load(file)
+
+        if not isinstance(saved_summary, dict):
+            return False
+
+        today = _get_market_now().date().isoformat()
+        saved_date = str(saved_summary.get("date") or "")
+        saved_status = str(saved_summary.get("status") or "").lower()
+
+        success_count = int(saved_summary.get("success_count") or 0)
+        total_instruments = int(saved_summary.get("total_instruments") or 0)
+
+        return (
+            saved_date == today
+            and saved_status == "success"
+            and total_instruments > 0
+            and success_count > 0
+        )
+
+    except Exception as ex:
+        logger.warning(
+            "Could not verify today's saved Opening Range result. "
+            "Startup catch-up will continue. error=%s: %s",
+            type(ex).__name__,
+            ex,
+        )
+        return False
+
+
+def run_startup_opening_range_catchup() -> dict | None:
+    """
+    Performs the Opening Range startup catch-up when the application starts
+    after today's scheduled Opening Range job has already passed.
+
+    Normal behavior:
+        - Before 09:18 AM: do nothing and wait for the scheduled job.
+        - At/after 09:18 AM: check today's saved result.
+        - If today's result already exists successfully: do nothing.
+        - Otherwise: immediately run today's Opening Range calculation.
+
+    This is intentionally separate from the scheduled Opening Range function
+    so the same calculation workflow is used by both the scheduler and the
+    startup catch-up.
+    """
+    now_market = _get_market_now()
+
+    logger.info(
+        "Startup Opening Range catch-up check. " "market_datetime=%s",
+        now_market.isoformat(),
+    )
+
+    if not _is_weekday_market_day():
+        logger.info(
+            "Startup Opening Range catch-up skipped. "
+            "Today is not a Monday-Friday market day."
+        )
+        return None
+
+    if not _is_opening_range_fetch_time_passed():
+        logger.info(
+            "Startup Opening Range catch-up not required. "
+            "Configured Opening Range fetch time has not passed yet."
+        )
+        return None
+
+    if _is_todays_opening_range_already_saved():
+        logger.info(
+            "Startup Opening Range catch-up skipped. "
+            "Today's Opening Range result is already saved successfully."
+        )
+        return None
+
+    logger.info(
+        "Startup Opening Range catch-up required. "
+        "Today's scheduled Opening Range job has already passed and "
+        "today's successful Opening Range result was not found."
+    )
+
+    telegram_service.send_message(
+        title="Startup Opening Range Catch-up Started",
+        message=(
+            "Application started after today's scheduled Opening Range fetch time.\n\n"
+            "Startup catch-up is now running today's Opening Range calculation "
+            "instead of waiting for the next trading day's 09:18 AM job.\n\n"
+            f"Market Date: {now_market.date().isoformat()}\n"
+            f"Current Market Time: {now_market.strftime('%H:%M:%S')}\n"
+            f"Scheduled Fetch Time: "
+            f"{getattr(config, 'OPENING_RANGE_FETCH_HOUR', 9):02d}:"
+            f"{getattr(config, 'OPENING_RANGE_FETCH_MINUTE', 18):02d}\n"
+            "Duplicate protection: enabled"
+        ),
+        level="REFRESH",
+    )
+
+    try:
+        summary = run_daily_opening_range_fetch()
+
+        if summary:
+            logger.info(
+                "Startup Opening Range catch-up completed. "
+                "status=%s, date=%s, success=%s, failed=%s, "
+                "isolated_selected=%s",
+                summary.get("status"),
+                summary.get("date"),
+                summary.get("success_count"),
+                summary.get("failed_count"),
+                bool((summary.get("isolated_instrument") or {}).get("selected")),
+            )
+
+        return summary
+
+    except Exception as ex:
+        logger.error(
+            "Startup Opening Range catch-up failed: %s: %s",
+            type(ex).__name__,
+            ex,
+        )
+
+        telegram_service.send_exception_message(
+            title="Startup Opening Range Catch-up Failed",
+            exception=ex,
+            context="run_startup_opening_range_catchup",
+        )
+
+        return None
+
+
 def run_initial_startup():
-    """Initial synchronous load when the application starts up."""
+    """
+    Initial synchronous load when the application starts up.
+
+    Startup lifecycle:
+    1. Refresh Upstox token from MongoDB.
+    2. Fetch latest option contracts.
+    3. Apply configured strike range and rebuild subscriptions.
+    4. Fetch historical candles for all subscribed instruments.
+    5. Calculate historical EMA crossover state.
+    6. Initialize live EMA state.
+    7. Check whether today's Opening Range scheduled job has already passed.
+    8. If it has passed and today's successful Opening Range result is missing,
+       immediately perform the Opening Range catch-up.
+    9. If today's Opening Range already exists, do not duplicate the calculation.
+    10. Return control to application startup so scheduler and live streaming
+        can continue normally.
+    """
 
     logger.info("Initializing application startup sequence...")
 
@@ -522,9 +729,29 @@ def run_initial_startup():
         result = load_and_subscribe_instruments()
 
         history_summary = None
+        opening_range_catchup_summary = None
 
         if result:
             history_summary = fetch_startup_historical_candles()
+
+            # ========================================================
+            # STARTUP OPENING RANGE CATCH-UP
+            # ========================================================
+            # The normal Opening Range job is scheduled for 09:18 AM.
+            # If the application starts/restarts after 09:18 AM, APScheduler
+            # does not guarantee that the already-missed job will execute.
+            #
+            # Therefore:
+            # - Before 09:18 AM -> wait for the normal scheduled job.
+            # - After 09:18 AM -> check today's saved Opening Range result.
+            # - If today's result is missing -> fetch Opening Range immediately.
+            # - If today's result already exists successfully -> do nothing.
+            #
+            # This prevents a startup after 09:18 AM from waiting until the
+            # next trading day while also preventing unnecessary duplicate
+            # Opening Range calculations during normal restarts.
+            # ========================================================
+            opening_range_catchup_summary = run_startup_opening_range_catchup()
         else:
             logger.warning(
                 "Skipping startup historical EMA crossover fetch because instrument load failed."
@@ -570,6 +797,8 @@ def run_initial_startup():
             f"{history_summary.get('status') if history_summary else 'not_available'}\n"
             f"Historical Candles: "
             f"{history_summary.get('total_candles') if history_summary else 0}\n"
+            f"Startup Opening Range Catch-up: "
+            f"{'completed' if opening_range_catchup_summary else 'not_required'}\n"
             f"Live EMA Initialized: "
             f"{history_summary.get('live_ema_initialized') if history_summary else 'not_available'}\n"
             f"EMA Mode: {get_live_ema_calculation_mode_text()}\n"
@@ -822,7 +1051,18 @@ def run_daily_market_hard_refresh():
 
 
 def start_scheduler() -> BackgroundScheduler:
-    """Configures and starts background cron/interval tasks."""
+    """
+    Configures and starts background cron/interval tasks.
+
+    Scheduled daily lifecycle:
+    - 09:00 AM IST, Monday-Friday:
+      daily market hard refresh.
+    - 09:18 AM IST, Monday-Friday:
+      Opening Range fetch.
+    - Application startup after 09:18 AM:
+      startup catch-up checks for today's Opening Range before the scheduler
+      starts waiting for future scheduled executions.
+    """
 
     scheduler = BackgroundScheduler()
 
@@ -1067,6 +1307,122 @@ app.include_router(websocket_router)
 app.include_router(ws_docs_router)
 
 
-if __name__ == "__main__":
-    logger.info("Starting FastAPI server with WebSockets on http://0.0.0.0:8000 ...")
-    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
+# ============================================================
+# APPLICATION STARTUP / DAILY MARKET INITIALIZATION
+# ============================================================
+#
+# This comment block documents the expected lifecycle for testing,
+# debugging, maintenance, and future feature work.
+#
+# APPLICATION STARTUP:
+#
+# 1. Refresh Upstox token from MongoDB.
+#
+# 2. Fetch latest option contracts.
+#
+# 3. Apply configured strike range and rebuild subscriptions.
+#
+# 4. Fetch historical candles for all subscribed instruments.
+#
+# 5. Calculate historical EMA crossover state.
+#
+# 6. Initialize live EMA state.
+#
+# 7. Check the current market date/time.
+#
+# 8. Check whether today's configured Opening Range fetch time has passed.
+#
+# 9. If the application starts BEFORE the Opening Range scheduled time:
+#    - Do not fetch Opening Range immediately.
+#    - Wait for the normal scheduled 09:18 AM job.
+#
+# 10. If the application starts AFTER the Opening Range scheduled time:
+#     - Check the saved Opening Range result file.
+#     - Verify that today's date is present.
+#     - Verify that the saved result status is successful.
+#
+# 11. If today's Opening Range result is NOT available:
+#     - Automatically run the Opening Range fetch during startup.
+#     - Do not wait for the next trading day's 09:18 AM job.
+#
+# 12. If today's Opening Range result IS already available:
+#     - Skip the startup catch-up.
+#     - Avoid unnecessary duplicate Opening Range calculations.
+#
+# DAILY 09:00 HARD REFRESH:
+#
+# 13. Refresh token from MongoDB.
+#
+# 14. Fetch latest instruments.
+#
+# 15. Filter the configured strike range.
+#
+# 16. Rebuild the subscription cache.
+#
+# 17. Fetch historical candles.
+#
+# 18. Recalculate EMA crossover state.
+#
+# 19. Initialize live EMA state.
+#
+# 20. Restart the Upstox streamer with refreshed subscriptions.
+#
+# DAILY 09:18 OPENING RANGE:
+#
+# 21. Read subscribed instruments.
+#
+# 22. Fetch today's intraday candles.
+#
+# 23. Select the configured Opening Range candles.
+#
+# 24. Calculate Opening Range OHLC and average.
+#
+# 25. Calculate R1/S1, R2/S2, R3/S3 and thresholds.
+#
+# 26. Backfill-scan R2/R3/S2/S3 touches that occurred before the
+#     Opening Range fetch.
+#
+# 27. Evaluate isolated instrument selection.
+#
+# 28. Save Opening Range results.
+#
+# 29. Update the in-memory Opening Range cache.
+#
+# 30. Make Opening Range levels available for EMA WebSocket enrichment.
+#
+# LIVE PROCESSING:
+#
+# 31. Continue live Upstox tick processing.
+#
+# 32. Continue live EMA calculation for all subscribed instruments.
+#
+# 33. Continue live Opening Range touch monitoring after OR levels exist.
+#
+# 34. Keep isolated-instrument EMA Telegram alert rules active.
+#
+# STARTUP CATCH-UP TEST CASES:
+#
+# 35. Start application before 09:18 AM:
+#     Expected -> no startup Opening Range fetch.
+#
+# 36. Start application after 09:18 AM with no today's OR result:
+#     Expected -> startup Opening Range fetch runs automatically.
+#
+# 37. Restart application after 09:18 AM with today's OR result already saved:
+#     Expected -> startup catch-up is skipped.
+#
+# 38. Start application on Saturday/Sunday:
+#     Expected -> startup Opening Range catch-up is skipped.
+#
+# 39. Start application after 09:18 AM when OR result file is invalid:
+#     Expected -> startup catch-up attempts a fresh Opening Range fetch.
+#
+# 40. If startup catch-up fails:
+#     Expected -> application reports the failure through logs/Telegram
+#     and the normal scheduled job remains registered for future execution.
+#
+# ============================================================
+
+# if __name__ == "__main__":
+#     logger.info("Starting FastAPI server with WebSockets on http://0.0.0.0:8000 ...")
+#     uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")

@@ -580,7 +580,7 @@ class TelegramTokenBot:
             "/token_status\n"
             "/profile\n"
             "/funds\n"
-            "/token-check or /token_check",
+            "/token_check",
             level="INFO",
         )
 
