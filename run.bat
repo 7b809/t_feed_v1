@@ -59,42 +59,6 @@ REM ==================================================
 REM Install/Update Required Packages
 REM ==================================================
 
-if exist "requirements.txt" (
-    echo ================================================
-    echo Installing required packages...
-    echo ================================================
-    echo.
-
-    python -m pip install --upgrade pip
-
-    if errorlevel 1 (
-        echo.
-        echo ERROR: Failed to upgrade pip.
-        pause
-        exit /b 1
-    )
-
-    echo.
-    echo Installing requirements.txt...
-    echo.
-
-    python -m pip install -r requirements.txt
-
-    if errorlevel 1 (
-        echo.
-        echo ERROR: Failed to install required packages.
-        pause
-        exit /b 1
-    )
-
-    echo.
-    echo Required packages installed successfully.
-    echo.
-) else (
-    echo WARNING: requirements.txt not found.
-    echo Skipping package installation.
-    echo.
-)
 
 REM ==================================================
 REM Start FastAPI / Uvicorn

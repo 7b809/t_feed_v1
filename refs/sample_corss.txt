@@ -1,0 +1,28 @@
+📈 Isolated Instrument EMA Alert
+
+24500 CE - crosses R3 - At 24582.40
+
+EMA Cross Details:
+Cross Type: bullish_cross
+Signal: bullish
+Isolated Instrument Type: CE
+Suggested Order Side: CE
+EMA Calculation Mode: candle_close
+EMA Candle Close: 136.25
+EMA Candle Low: 130.25
+
+EMA Candle Time: 2026-08-25T10:21:00+05:30
+
+Instrument Key: NSE_FO|41012
+
+Nearest Instrument Details:
+- 24500CE (candleclose points,  candle-low points) - 136.25rs
+- 24550CE - 108.40rs
+- 24600CE - 84.75rs
+
+Budget Range Instrument Details: -> here user will give start and end range like 20rs to 30rs range instruments 
+- 24200CE (candleclose points, candle-low points) - 136.25rs 
+like that budget range max 2 instruments we need to filter
+
+Level: EMA
+Time: 2026-08-25 10:21:05 IST

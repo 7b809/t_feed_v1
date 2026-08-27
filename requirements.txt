@@ -12,3 +12,5 @@ pandas
 numpy
 apscheduler
 jinja2
+dnspython
+tzdata

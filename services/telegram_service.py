@@ -1,5 +1,6 @@
 import html
 from datetime import datetime
+from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import requests
@@ -17,10 +18,15 @@ class TelegramService:
         self.enabled = config.TELEGRAM_ENABLED
 
         self.timeout_seconds = int(
-            getattr(config, "TELEGRAM_TIMEOUT_SECONDS", 10)
+            getattr(
+                config,
+                "TELEGRAM_TIMEOUT_SECONDS",
+                10,
+            )
         )
 
         self.market_timezone = self._load_market_timezone()
+
         self.market_time_format = getattr(
             config,
             "MARKET_TIME_FORMAT",
@@ -28,18 +34,16 @@ class TelegramService:
         )
 
         self.api_url = (
-            f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
+            f"https://api.telegram.org/" f"bot{self.bot_token}/sendMessage"
             if self.bot_token
             else None
         )
 
-    # ========================================================
-    # Time / Configuration
-    # ========================================================
+    # ============================================================
+    # Time and Configuration
+    # ============================================================
 
-    def _load_market_timezone(self):
-        """Loads market timezone from config, defaulting to Asia/Kolkata."""
-
+    def _load_market_timezone(self) -> ZoneInfo:
         timezone_name = getattr(
             config,
             "MARKET_TIMEZONE",
@@ -48,68 +52,109 @@ class TelegramService:
 
         try:
             return ZoneInfo(timezone_name)
-
         except ZoneInfoNotFoundError:
             logger.error(
-                f"Invalid MARKET_TIMEZONE configured: {timezone_name}. "
-                "Falling back to Asia/Kolkata."
+                "Invalid MARKET_TIMEZONE configured: %s. "
+                "Falling back to Asia/Kolkata.",
+                timezone_name,
             )
 
             return ZoneInfo("Asia/Kolkata")
 
     def _now_market_time(self) -> str:
-        """Returns current market time as formatted string."""
-
-        return datetime.now(
-            self.market_timezone
-        ).strftime(
-            self.market_time_format
-        )
+        return datetime.now(self.market_timezone).strftime(self.market_time_format)
 
     def is_configured(self) -> bool:
-        """Returns True if Telegram service has required configuration."""
+        return bool(self.enabled and self.bot_token and self.chat_id and self.api_url)
 
-        return bool(
-            self.enabled
-            and self.bot_token
-            and self.chat_id
-            and self.api_url
-        )
-
-    # ========================================================
+    # ============================================================
     # Formatting Helpers
-    # ========================================================
+    # ============================================================
 
-    def _escape(self, value) -> str:
-        """Escapes text for Telegram HTML parse mode."""
-
+    def _escape(
+        self,
+        value: Any,
+    ) -> str:
         return html.escape(
             str(value),
             quote=False,
         )
 
-    def _get_live_ema_calculation_mode(self) -> str:
-        """
-        Returns configured live EMA calculation mode.
+    def _safe_float(
+        self,
+        value: Any,
+    ) -> float | None:
+        try:
+            if value is None:
+                return None
 
-        LIVE_EMA_CALCULATION_MODE=False:
-            candle_close
+            return float(value)
+        except (
+            TypeError,
+            ValueError,
+            OverflowError,
+        ):
+            return None
 
-        LIVE_EMA_CALCULATION_MODE=True:
-            tick_ltp
-        """
+    def _format_numeric_value(
+        self,
+        value: Any,
+        unavailable_text: str = "not_available",
+        decimal_places: int | None = None,
+    ) -> str:
+        numeric_value = self._safe_float(value)
 
-        tick_based_mode = bool(
-            getattr(
-                config,
-                "LIVE_EMA_CALCULATION_MODE",
-                False,
-            )
-        )
+        if numeric_value is None:
+            if value is None:
+                return unavailable_text
 
+            text = str(value).strip()
+
+            return text if text else unavailable_text
+
+        if decimal_places is not None:
+            return f"{numeric_value:.{decimal_places}f}"
+
+        if numeric_value.is_integer():
+            return str(int(numeric_value))
+
+        return f"{numeric_value:.4f}".rstrip("0").rstrip(".")
+
+    def _normalize_option_type(
+        self,
+        option_type: Any,
+    ) -> str | None:
+        if option_type is None:
+            return None
+
+        normalized = str(option_type).strip().upper()
+
+        if normalized in {
+            "CE",
+            "CALL",
+        }:
+            return "CE"
+
+        if normalized in {
+            "PE",
+            "PUT",
+        }:
+            return "PE"
+
+        return None
+
+    def _get_live_ema_calculation_mode(
+        self,
+    ) -> str:
         return (
             "tick_ltp"
-            if tick_based_mode
+            if bool(
+                getattr(
+                    config,
+                    "LIVE_EMA_CALCULATION_MODE",
+                    False,
+                )
+            )
             else "candle_close"
         )
 
@@ -117,25 +162,16 @@ class TelegramService:
         self,
         mode: str | None = None,
     ) -> str:
-        """Returns readable description for EMA calculation mode."""
+        selected_mode = mode or self._get_live_ema_calculation_mode()
 
-        mode = (
-            mode
-            or self._get_live_ema_calculation_mode()
-        )
+        if selected_mode == "tick_ltp":
+            return "Live tick/LTP based EMA cross " "detection"
 
-        if mode == "tick_ltp":
-            return (
-                "Live tick/LTP based EMA cross detection"
-            )
+        return "Completed candle close based EMA " "cross detection"
 
-        return (
-            "Completed candle close based EMA cross detection"
-        )
-
-    # ========================================================
-    # Raw Telegram Send
-    # ========================================================
+    # ============================================================
+    # Raw Telegram Delivery
+    # ============================================================
 
     def _send_raw_message(
         self,
@@ -145,32 +181,14 @@ class TelegramService:
         notification_level: str = "INFO",
         notification_context: str = "",
     ) -> bool:
-        """
-        Sends raw HTML message to Telegram.
-
-        Returns:
-            True if message was sent successfully.
-            False otherwise.
-
-        notification_title / notification_level / notification_context
-        are used only for diagnostics and logging.
-        """
-
-        # ----------------------------------------------------
-        # Configuration Check
-        # ----------------------------------------------------
-
         if not self.is_configured():
-
             logger.warning(
                 "Telegram notification skipped. "
                 "service_configured=False, "
-                "title=%s, "
-                "level=%s, "
-                "context=%s",
+                "title=%s, level=%s, context=%s",
                 notification_title,
                 notification_level,
-                notification_context or "not_available",
+                (notification_context or "not_available"),
             )
 
             return False
@@ -182,89 +200,65 @@ class TelegramService:
             "disable_web_page_preview": True,
         }
 
-        # ----------------------------------------------------
-        # Send Telegram Message
-        # ----------------------------------------------------
-
         logger.info(
-            "Sending Telegram notification. "
-            "title=%s, "
-            "level=%s, "
-            "context=%s",
+            "Sending Telegram notification. " "title=%s, level=%s, context=%s",
             notification_title,
             notification_level,
-            notification_context or "not_available",
+            (notification_context or "not_available"),
         )
 
         try:
-
             response = requests.post(
                 self.api_url,
                 json=payload,
                 timeout=self.timeout_seconds,
             )
 
-            # ------------------------------------------------
-            # Failed HTTP Response
-            # ------------------------------------------------
-
             if response.status_code != 200:
-
                 logger.error(
                     "Telegram notification failed. "
-                    "title=%s, "
-                    "level=%s, "
-                    "context=%s, "
-                    "status_code=%s, "
+                    "title=%s, level=%s, "
+                    "context=%s, status_code=%s, "
                     "response=%s",
                     notification_title,
                     notification_level,
-                    notification_context or "not_available",
+                    (notification_context or "not_available"),
                     response.status_code,
                     response.text,
                 )
 
                 return False
 
-            # ------------------------------------------------
-            # Successful Telegram Send
-            # ------------------------------------------------
-
             logger.info(
-                "Telegram notification sent successfully. "
-                "title=%s, "
-                "level=%s, "
-                "context=%s, "
-                "status_code=%s",
+                "Telegram notification sent. "
+                "title=%s, level=%s, "
+                "context=%s, status_code=%s",
                 notification_title,
                 notification_level,
-                notification_context or "not_available",
+                (notification_context or "not_available"),
                 response.status_code,
             )
 
             return True
 
         except Exception as ex:
-
             logger.error(
                 "Telegram notification exception. "
-                "title=%s, "
-                "level=%s, "
-                "context=%s, "
-                "exception_type=%s, "
+                "title=%s, level=%s, "
+                "context=%s, exception_type=%s, "
                 "error=%s",
                 notification_title,
                 notification_level,
-                notification_context or "not_available",
+                (notification_context or "not_available"),
                 type(ex).__name__,
                 ex,
             )
 
             return False
 
-    # ========================================================
-    # Generic Telegram Message
-    # ========================================================
+    # ============================================================
+    # Generic Message
+    # ============================================================
 
     def send_message(
         self,
@@ -273,31 +267,7 @@ class TelegramService:
         level: str = "INFO",
         notification_context: str = "",
     ) -> bool:
-        """
-        Sends a formatted Telegram notification.
-
-        Args:
-            title:
-                Notification title.
-
-            message:
-                Notification body.
-
-            level:
-                INFO, SUCCESS, WARNING, ERROR, STARTUP,
-                REFRESH, SUBSCRIPTION, TOKEN, INSTRUMENTS,
-                EMA, OPENING_RANGE.
-
-            notification_context:
-                Optional diagnostic context.
-
-                This is NOT sent to Telegram.
-                It is only written to telegram_service.log.
-        """
-
-        level_upper = str(
-            level or "INFO"
-        ).upper()
+        level_upper = str(level or "INFO").upper()
 
         emoji_map = {
             "INFO": "ℹ️",
@@ -321,40 +291,34 @@ class TelegramService:
 
         safe_title = self._escape(title)
         safe_message = self._escape(message)
-        market_time = self._escape(
-            self._now_market_time()
-        )
+
+        market_time = self._escape(self._now_market_time())
 
         formatted_message = (
             f"{emoji} <b>{safe_title}</b>\n\n"
             f"{safe_message}\n\n"
             f"<b>Level:</b> "
             f"{self._escape(level_upper)}\n"
-            f"<b>Time:</b> "
-            f"{market_time}"
+            f"<b>Time:</b> {market_time}"
         )
 
         return self._send_raw_message(
             formatted_message,
             notification_title=title,
             notification_level=level_upper,
-            notification_context=notification_context,
+            notification_context=(notification_context),
         )
 
-    # ========================================================
+    # ============================================================
     # Application Lifecycle Messages
-    # ========================================================
+    # ============================================================
 
     def send_startup_message(
         self,
         status: str,
         details: str = "",
     ) -> bool:
-        """Sends application startup notification."""
-
-        message = (
-            f"Application startup status: {status}"
-        )
+        message = f"Application startup status: {status}"
 
         if details:
             message += f"\n\n{details}"
@@ -363,18 +327,14 @@ class TelegramService:
             title="Option Feed Engine Startup",
             message=message,
             level="STARTUP",
-            notification_context="application_startup",
+            notification_context=("application_startup"),
         )
 
     def send_shutdown_message(
         self,
         details: str = "",
     ) -> bool:
-        """Sends application shutdown notification."""
-
-        message = (
-            "Application shutdown sequence executed."
-        )
+        message = "Application shutdown sequence executed."
 
         if details:
             message += f"\n\n{details}"
@@ -383,43 +343,33 @@ class TelegramService:
             title="Option Feed Engine Shutdown",
             message=message,
             level="SHUTDOWN",
-            notification_context="application_shutdown",
+            notification_context=("application_shutdown"),
         )
 
-    # ========================================================
-    # Token / Instrument / Subscription Messages
-    # ========================================================
+    # ============================================================
+    # Token Messages
+    # ============================================================
 
     def send_token_refresh_message(
         self,
         success: bool,
-        updated_at=None,
+        updated_at: Any = None,
         error: str = "",
     ) -> bool:
-        """Sends token refresh notification."""
-
         if success:
-
-            message = (
-                "Access token document refreshed "
-                "successfully from MongoDB."
-            )
+            message = "Access token document refreshed " "successfully from MongoDB."
 
             if updated_at:
-                message += (
-                    f"\nToken Updated At: {updated_at}"
-                )
+                message += f"\nToken Updated At: {updated_at}"
 
             return self.send_message(
                 title="Token Refresh Successful",
                 message=message,
                 level="TOKEN",
-                notification_context="token_refresh_success",
+                notification_context=("token_refresh_success"),
             )
 
-        message = (
-            "Access token refresh failed."
-        )
+        message = "Access token refresh failed."
 
         if error:
             message += f"\nError: {error}"
@@ -428,29 +378,31 @@ class TelegramService:
             title="Token Refresh Failed",
             message=message,
             level="ERROR",
-            notification_context="token_refresh_failed",
+            notification_context=("token_refresh_failed"),
         )
+
+    # ============================================================
+    # Instrument Messages
+    # ============================================================
 
     def send_instruments_fetched_message(
         self,
         success: bool,
-        nearest_expiry=None,
-        total_contracts=0,
-        subscribed_keys_count=0,
-        strike_from=None,
-        strike_to=None,
+        nearest_expiry: Any = None,
+        total_contracts: int = 0,
+        subscribed_keys_count: int = 0,
+        strike_from: Any = None,
+        strike_to: Any = None,
         error: str = "",
     ) -> bool:
-        """Sends option instruments fetch notification."""
-
         if success:
-
             message = (
                 "Option instruments fetched and cache "
                 "updated successfully.\n\n"
                 f"Nearest Expiry: {nearest_expiry}\n"
                 f"Total Contracts: {total_contracts}\n"
-                f"Subscribed Keys: {subscribed_keys_count}\n"
+                f"Subscribed Keys: "
+                f"{subscribed_keys_count}\n"
                 f"Strike Range: "
                 f"{strike_from} to {strike_to}"
             )
@@ -459,12 +411,10 @@ class TelegramService:
                 title="Instruments Fetch Successful",
                 message=message,
                 level="INSTRUMENTS",
-                notification_context="instruments_fetch_success",
+                notification_context=("instruments_fetch_success"),
             )
 
-        message = (
-            "Option instruments fetch failed."
-        )
+        message = "Option instruments fetch failed."
 
         if error:
             message += f"\nError: {error}"
@@ -473,22 +423,24 @@ class TelegramService:
             title="Instruments Fetch Failed",
             message=message,
             level="ERROR",
-            notification_context="instruments_fetch_failed",
+            notification_context=("instruments_fetch_failed"),
         )
+
+    # ============================================================
+    # Subscription Messages
+    # ============================================================
 
     def send_subscription_message(
         self,
         success: bool,
-        subscribed_keys_count=0,
-        feed_mode=None,
+        subscribed_keys_count: int = 0,
+        feed_mode: Any = None,
         error: str = "",
     ) -> bool:
-        """Sends Upstox subscription or streamer restart notification."""
-
         if success:
-
             message = (
-                "Upstox streamer subscription is active.\n\n"
+                "Upstox streamer subscription is "
+                "active.\n\n"
                 f"Subscribed Instruments: "
                 f"{subscribed_keys_count}\n"
                 f"Feed Mode: {feed_mode}"
@@ -498,12 +450,10 @@ class TelegramService:
                 title="Feed Subscription Successful",
                 message=message,
                 level="SUBSCRIPTION",
-                notification_context="feed_subscription_success",
+                notification_context=("feed_subscription_success"),
             )
 
-        message = (
-            "Upstox feed subscription failed."
-        )
+        message = "Upstox feed subscription failed."
 
         if error:
             message += f"\nError: {error}"
@@ -512,24 +462,21 @@ class TelegramService:
             title="Feed Subscription Failed",
             message=message,
             level="ERROR",
-            notification_context="feed_subscription_failed",
+            notification_context=("feed_subscription_failed"),
         )
 
-    # ========================================================
+    # ============================================================
     # Refresh Messages
-    # ========================================================
+    # ============================================================
 
     def send_daily_refresh_message(
         self,
         success: bool,
-        subscribed_keys_count=0,
-        nearest_expiry=None,
+        subscribed_keys_count: int = 0,
+        nearest_expiry: Any = None,
         error: str = "",
     ) -> bool:
-        """Sends daily hard refresh notification."""
-
         if success:
-
             message = (
                 "Daily market hard refresh completed "
                 "successfully.\n\n"
@@ -539,15 +486,13 @@ class TelegramService:
             )
 
             return self.send_message(
-                title="Daily Market Hard Refresh Successful",
+                title=("Daily Market Hard Refresh " "Successful"),
                 message=message,
                 level="REFRESH",
-                notification_context="daily_refresh_success",
+                notification_context=("daily_refresh_success"),
             )
 
-        message = (
-            "Daily market hard refresh failed."
-        )
+        message = "Daily market hard refresh failed."
 
         if error:
             message += f"\nError: {error}"
@@ -556,49 +501,29 @@ class TelegramService:
             title="Daily Market Hard Refresh Failed",
             message=message,
             level="ERROR",
-            notification_context="daily_refresh_failed",
+            notification_context=("daily_refresh_failed"),
         )
 
-    # ========================================================
-    # Opening Range Isolated Instrument Messages
-    # ========================================================
+    # ============================================================
+    # Isolated Instrument Messages
+    # ============================================================
 
     def send_selected_or_instrument_message(
         self,
         instrument_key: str,
         symbol: str,
         level: str,
-        level_value,
+        level_value: Any,
         trigger_field: str,
-        trigger_price,
-        touch_time,
+        trigger_price: Any,
+        touch_time: Any,
         source: str,
-        nifty_ltp=None,
-        strike_price=None,
-        instrument_type=None,
-        reference_average=None,
-        average_window=None,
+        nifty_ltp: Any = None,
+        strike_price: Any = None,
+        instrument_type: Any = None,
+        reference_average: Any = None,
+        average_window: dict | None = None,
     ) -> bool:
-        """
-        Sends Telegram notification when an Opening Range
-        instrument is isolated.
-
-        Selection logic is handled outside this service:
-
-        - Average +/- configured window.
-        - R3/S3 priority before R2/S2.
-        - Nearest strike to Opening Range average.
-        - Day-level isolated instrument.
-
-        This method now provides detailed Telegram-service
-        logging so we can verify exactly whether this alert
-        was sent.
-        """
-
-        # ----------------------------------------------------
-        # Feature Flag
-        # ----------------------------------------------------
-
         if not bool(
             getattr(
                 config,
@@ -606,128 +531,55 @@ class TelegramService:
                 True,
             )
         ):
-
             logger.info(
-                "Isolated instrument Telegram notification skipped. "
-                "reason=OPENING_RANGE_ISOLATED_INSTRUMENT_NOTIFY_ENABLED=False, "
-                "instrument_key=%s, "
-                "level=%s, "
-                "strike=%s, "
-                "instrument_type=%s",
+                "Isolated instrument Telegram alert " "skipped. instrument_key=%s",
                 instrument_key,
-                level,
-                strike_price,
-                instrument_type,
             )
 
             return False
 
-        # ----------------------------------------------------
-        # Normalize Instrument Details
-        # ----------------------------------------------------
+        strike_text = strike_price if strike_price is not None else "N/A"
 
-        strike_text = (
-            strike_price
-            if strike_price is not None
-            else "N/A"
-        )
-
-        type_text = str(
-            instrument_type or "N/A"
-        ).upper()
-
-        if type_text == "CALL":
-            type_text = "CE"
-
-        elif type_text == "PUT":
-            type_text = "PE"
+        type_text = self._normalize_option_type(instrument_type) or "N/A"
 
         window_text = "not_available"
 
         if isinstance(average_window, dict):
-
             window_text = (
                 f"{average_window.get('final_lower')} "
                 f"to "
                 f"{average_window.get('final_upper')}"
             )
 
-        ema_mode = (
-            self._get_live_ema_calculation_mode()
-        )
-
-        ema_mode_description = (
-            self._get_live_ema_calculation_mode_description(
-                ema_mode
-            )
-        )
-
-        # ----------------------------------------------------
-        # Build Telegram Message
-        # ----------------------------------------------------
+        ema_mode = self._get_live_ema_calculation_mode()
 
         message = (
             "Opening Range instrument isolated for "
-            "EMA Telegram alerts.\n\n"
-            f"Instrument: {strike_text} {type_text}\n"
+            "EMA alerts.\n\n"
+            f"Instrument: {strike_text} "
+            f"{type_text}\n"
             f"Symbol: {symbol}\n"
             f"Instrument Key: {instrument_key}\n"
             f"Selected Level: {level}\n"
             f"Level Value: {level_value}\n"
-            f"Trigger {trigger_field}: {trigger_price}\n"
+            f"Trigger {trigger_field}: "
+            f"{trigger_price}\n"
             f"Touch Time: {touch_time}\n"
             f"Touch Source: {source}\n"
-            f"Reference Average: {reference_average}\n"
+            f"Reference Average: "
+            f"{reference_average}\n"
             f"Average Window: {window_text}\n"
             f"NIFTY LTP: "
             f"{nifty_ltp if nifty_ltp is not None else 'not_available'}\n"
-            f"EMA Calculation Mode: {ema_mode}\n"
-            f"EMA Mode Description: "
-            f"{ema_mode_description}\n\n"
-            "From now, Telegram EMA alerts will be "
-            "sent only for this isolated instrument."
+            f"EMA Calculation Mode: {ema_mode}"
         )
-
-        # ----------------------------------------------------
-        # IMPORTANT DEBUG LOG
-        # ----------------------------------------------------
-
-        logger.info(
-            "Sending isolated instrument Telegram alert. "
-            "instrument_key=%s, "
-            "symbol=%s, "
-            "selected_level=%s, "
-            "level_value=%s, "
-            "trigger_field=%s, "
-            "trigger_price=%s, "
-            "touch_time=%s, "
-            "touch_source=%s, "
-            "strike=%s, "
-            "instrument_type=%s, "
-            "reference_average=%s",
-            instrument_key,
-            symbol,
-            level,
-            level_value,
-            trigger_field,
-            trigger_price,
-            touch_time,
-            source,
-            strike_text,
-            type_text,
-            reference_average,
-        )
-
-        # ----------------------------------------------------
-        # Send
-        # ----------------------------------------------------
 
         result = self.send_message(
-            title="Opening Range Instrument Isolated",
+            title=("Opening Range Instrument Isolated"),
             message=message,
             level="OPENING_RANGE",
             notification_context=(
-                "isolated_instrument"
+                f"isolated_instrument"
                 f"|instrument_key={instrument_key}"
                 f"|strike={strike_text}"
                 f"|type={type_text}"
@@ -735,69 +587,189 @@ class TelegramService:
             ),
         )
 
-        # ----------------------------------------------------
-        # Result Log
-        # ----------------------------------------------------
-
         if result:
-
             logger.info(
-                "Isolated instrument Telegram alert "
-                "sent successfully. "
-                "instrument_key=%s, "
-                "strike=%s, "
-                "instrument_type=%s, "
-                "level=%s",
+                "Isolated instrument Telegram alert " "sent. instrument_key=%s",
                 instrument_key,
-                strike_text,
-                type_text,
-                level,
             )
-
         else:
-
             logger.error(
-                "Isolated instrument Telegram alert "
-                "FAILED. "
-                "instrument_key=%s, "
-                "strike=%s, "
-                "instrument_type=%s, "
-                "level=%s",
+                "Isolated instrument Telegram alert " "failed. instrument_key=%s",
                 instrument_key,
-                strike_text,
-                type_text,
-                level,
             )
 
         return result
 
-    # ========================================================
-    # Isolated Instrument EMA Alert
-    # ========================================================
+    # ============================================================
+    # EMA Instrument Formatting
+    # ============================================================
+
+    def _format_suggested_order_instruments(
+        self,
+        suggested_order_instruments: list,
+    ) -> str:
+        if not suggested_order_instruments:
+            return "Nearest Instrument Details:\n" "- not_available"
+
+        decimal_places = int(
+            getattr(
+                config,
+                "EMA_ISOLATED_ALERT_PRICE_DECIMAL_PLACES",
+                2,
+            )
+        )
+
+        lines = ["Nearest Instrument Details:"]
+
+        for item in suggested_order_instruments:
+            if not isinstance(item, dict):
+                continue
+
+            strike = self._format_numeric_value(
+                item.get("strike_price"),
+                unavailable_text="N/A",
+            )
+
+            instrument_type = (
+                self._normalize_option_type(
+                    item.get("instrument_type") or item.get("option_type")
+                )
+                or "N/A"
+            )
+
+            live_ltp = item.get("live_ltp")
+
+            if live_ltp is None:
+                price_text = "ltp_not_available"
+            else:
+                price_text = f"{self._format_numeric_value(
+                        live_ltp,
+                        decimal_places=decimal_places,
+                    )}rs"
+
+            is_isolated = bool(item.get("is_isolated_instrument"))
+
+            if is_isolated:
+                candle_close = self._format_numeric_value(
+                    item.get("ema_candle_close"),
+                    unavailable_text="N/A",
+                    decimal_places=(decimal_places),
+                )
+
+                candle_low = self._format_numeric_value(
+                    item.get("ema_candle_low"),
+                    unavailable_text="N/A",
+                    decimal_places=(decimal_places),
+                )
+
+                movement = self._format_numeric_value(
+                    item.get("close_minus_low_points"),
+                    unavailable_text="N/A",
+                    decimal_places=(decimal_places),
+                )
+
+                lines.append(
+                    f"- {strike}{instrument_type} "
+                    f"(Close: {candle_close}, "
+                    f"Low: {candle_low}, "
+                    f"Move: {movement} pts) "
+                    f"- {price_text}"
+                )
+            else:
+                lines.append(f"- {strike}{instrument_type} " f"- {price_text}")
+
+        if len(lines) == 1:
+            lines.append("- not_available")
+
+        return "\n".join(lines)
+
+    def _format_budget_range_instruments(
+        self,
+        budget_range_instruments: list,
+        suggested_order_side: str | None = None,
+    ) -> str:
+        decimal_places = int(
+            getattr(
+                config,
+                "EMA_ISOLATED_ALERT_PRICE_DECIMAL_PLACES",
+                2,
+            )
+        )
+
+        minimum_price = self._format_numeric_value(
+            getattr(
+                config,
+                "EMA_ALERT_BUDGET_MIN_PRICE",
+                20.0,
+            ),
+            decimal_places=decimal_places,
+        )
+
+        maximum_price = self._format_numeric_value(
+            getattr(
+                config,
+                "EMA_ALERT_BUDGET_MAX_PRICE",
+                30.0,
+            ),
+            decimal_places=decimal_places,
+        )
+
+        option_type = self._normalize_option_type(suggested_order_side) or "option"
+
+        lines = [
+            (
+                "Budget Range Instrument Details "
+                f"({minimum_price}rs to "
+                f"{maximum_price}rs):"
+            )
+        ]
+
+        if not budget_range_instruments:
+            lines.append(f"- No matching {option_type} " f"instruments")
+
+            return "\n".join(lines)
+
+        for item in budget_range_instruments:
+            if not isinstance(item, dict):
+                continue
+
+            strike = self._format_numeric_value(
+                item.get("strike_price"),
+                unavailable_text="N/A",
+            )
+
+            instrument_type = (
+                self._normalize_option_type(
+                    item.get("instrument_type") or item.get("option_type")
+                )
+                or option_type
+            )
+
+            live_ltp = self._format_numeric_value(
+                item.get("live_ltp"),
+                unavailable_text=("ltp_not_available"),
+                decimal_places=decimal_places,
+            )
+
+            lines.append(f"- {strike}{instrument_type} " f"- {live_ltp}rs")
+
+        if len(lines) == 1:
+            lines.append(f"- No matching {option_type} " f"instruments")
+
+        return "\n".join(lines)
+
+    # ============================================================
+    # Isolated EMA Alert
+    # ============================================================
 
     def send_selected_or_ema_cross_message(
         self,
         selected_state: dict,
         ema_event: dict,
-        nifty_ltp=None,
+        nifty_ltp: Any = None,
         suggested_order_instruments: list | None = None,
+        budget_range_instruments: list | None = None,
     ) -> bool:
-        """
-        Sends EMA crossover Telegram alert for isolated
-        instrument only.
-
-        This service does not decide CE/PE order side.
-        Order side is decided before this method is called.
-
-        Expected order-side rule:
-
-            bullish_cross:
-                Same side as isolated instrument.
-
-            bearish_cross:
-                Opposite side of isolated instrument.
-        """
-
         if not bool(
             getattr(
                 config,
@@ -805,19 +777,16 @@ class TelegramService:
                 True,
             )
         ):
-
-            logger.info(
-                "Isolated EMA Telegram notification skipped because "
-                "EMA_ISOLATED_INSTRUMENT_TELEGRAM_ENABLED=False."
-            )
+            logger.info("Isolated EMA Telegram alert skipped.")
 
             return False
 
         selected_state = selected_state or {}
         ema_event = ema_event or {}
-        suggested_order_instruments = (
-            suggested_order_instruments or []
-        )
+
+        suggested_order_instruments = suggested_order_instruments or []
+
+        budget_range_instruments = budget_range_instruments or []
 
         contract_info = (
             selected_state.get("contract_info")
@@ -831,227 +800,236 @@ class TelegramService:
             "N/A",
         )
 
-        isolated_instrument_type = str(
-            contract_info.get(
-                "instrument_type",
-                "N/A",
+        isolated_instrument_type = (
+            self._normalize_option_type(
+                contract_info.get("instrument_type") or contract_info.get("option_type")
             )
-        ).strip().upper()
-
-        if isolated_instrument_type == "CALL":
-            isolated_instrument_type = "CE"
-
-        elif isolated_instrument_type == "PUT":
-            isolated_instrument_type = "PE"
-
-        selected_level = selected_state.get(
-            "selected_level",
-            "N/A",
+            or "N/A"
         )
+
+        selected_level = selected_state.get("selected_level") or "N/A"
 
         instrument_key = (
             ema_event.get("instrument_key")
             or selected_state.get("instrument_key")
+            or "not_available"
         )
 
-        cross_type = ema_event.get(
-            "cross_type",
-            "N/A",
+        cross_type = ema_event.get("cross_type") or "N/A"
+
+        current_signal = (
+            ema_event.get("current_signal") or ema_event.get("signal") or "N/A"
         )
 
-        current_signal = ema_event.get(
-            "current_signal",
-            "N/A",
+        ema_mode = (
+            ema_event.get("ema_calculation_mode")
+            or self._get_live_ema_calculation_mode()
         )
 
-        close_price = ema_event.get(
-            "close"
+        candle = ema_event.get("candle") or {}
+
+        if not isinstance(candle, dict):
+            candle = {}
+
+        candle_close = (
+            candle.get("close")
+            if candle.get("close") is not None
+            else ema_event.get("close")
         )
 
-        event_timestamp = ema_event.get(
-            "timestamp"
+        candle_low = candle.get("low")
+
+        candle_time = (
+            candle.get("timestamp") or ema_event.get("timestamp") or "not_available"
         )
 
-        ema_fast = ema_event.get(
-            "ema_fast"
-        )
+        close_value = self._safe_float(candle_close)
 
-        ema_slow = ema_event.get(
-            "ema_slow"
-        )
+        low_value = self._safe_float(candle_low)
 
-        previous_ema_fast = ema_event.get(
-            "previous_ema_fast"
-        )
+        close_low_movement = None
 
-        previous_ema_slow = ema_event.get(
-            "previous_ema_slow"
-        )
-
-        ema_fast_period = ema_event.get(
-            "ema_fast_period",
-            getattr(
-                config,
-                "LIVE_EMA_FAST_PERIOD",
-                9,
-            ),
-        )
-
-        ema_slow_period = ema_event.get(
-            "ema_slow_period",
-            getattr(
-                config,
-                "LIVE_EMA_SLOW_PERIOD",
-                21,
-            ),
-        )
-
-        ema_mode = ema_event.get(
-            "ema_calculation_mode",
-            self._get_live_ema_calculation_mode(),
-        )
-
-        ema_mode_description = (
-            self._get_live_ema_calculation_mode_description(
-                ema_mode
-            )
-        )
-
-        source = ema_event.get(
-            "source",
-            "live_feed",
-        )
-
-        if ema_mode == "tick_ltp":
-
-            price_label = "Live Tick LTP"
-            time_label = "Tick Time"
-
-        else:
-
-            price_label = "EMA Candle Close"
-            time_label = "EMA Candle Time"
-
-        nifty_text = (
-            nifty_ltp
-            if nifty_ltp is not None
-            else "NIFTY_LTP_NOT_AVAILABLE"
-        )
+        if close_value is not None and low_value is not None:
+            close_low_movement = close_value - low_value
 
         suggested_order_option_type = None
 
         for item in suggested_order_instruments:
-
             if not isinstance(item, dict):
                 continue
 
-            candidate_type = str(
-                item.get(
-                    "instrument_type",
+            suggested_order_option_type = self._normalize_option_type(
+                item.get("instrument_type") or item.get("option_type")
+            )
+
+            if suggested_order_option_type:
+                break
+
+        if not suggested_order_option_type:
+            cross_text = str(cross_type).lower()
+
+            if "bullish" in cross_text:
+                suggested_order_option_type = isolated_instrument_type
+
+            elif "bearish" in cross_text:
+                if isolated_instrument_type == "CE":
+                    suggested_order_option_type = "PE"
+
+                elif isolated_instrument_type == "PE":
+                    suggested_order_option_type = "CE"
+
+        suggested_order_side = suggested_order_option_type or "not_available"
+
+        decimal_places = int(
+            getattr(
+                config,
+                "EMA_ISOLATED_ALERT_PRICE_DECIMAL_PLACES",
+                2,
+            )
+        )
+
+        strike_text = self._format_numeric_value(
+            strike,
+            unavailable_text="N/A",
+        )
+
+        nifty_text = self._format_numeric_value(
+            nifty_ltp,
+            unavailable_text="N/A",
+            decimal_places=decimal_places,
+        )
+
+        close_text = self._format_numeric_value(
+            candle_close,
+            unavailable_text="N/A",
+            decimal_places=decimal_places,
+        )
+
+        low_text = self._format_numeric_value(
+            candle_low,
+            unavailable_text="N/A",
+            decimal_places=decimal_places,
+        )
+
+        movement_text = self._format_numeric_value(
+            close_low_movement,
+            unavailable_text="N/A",
+            decimal_places=decimal_places,
+        )
+
+        nearest_text = self._format_suggested_order_instruments(
+            suggested_order_instruments
+        )
+
+        budget_text = self._format_budget_range_instruments(
+            budget_range_instruments,
+            suggested_order_side,
+        )
+
+        message_lines = [
+            (
+                f"{strike_text} "
+                f"{isolated_instrument_type} "
+                f"- crosses {selected_level} "
+                f"- At {nifty_text}"
+            ),
+            "",
+            "EMA Cross Details:",
+            f"Cross Type: {cross_type}",
+            f"Signal: {current_signal}",
+            ("Isolated Instrument Type: " f"{isolated_instrument_type}"),
+            ("Suggested Order Side: " f"{suggested_order_side}"),
+            ("EMA Calculation Mode: " f"{ema_mode}"),
+        ]
+
+        if bool(
+            getattr(
+                config,
+                "EMA_ISOLATED_ALERT_INCLUDE_CANDLE_CLOSE",
+                True,
+            )
+        ):
+            message_lines.append(f"EMA Candle Close: {close_text}")
+
+        if bool(
+            getattr(
+                config,
+                "EMA_ISOLATED_ALERT_INCLUDE_CANDLE_LOW",
+                True,
+            )
+        ):
+            message_lines.append(f"EMA Candle Low: {low_text}")
+
+        if bool(
+            getattr(
+                config,
+                "EMA_ISOLATED_ALERT_INCLUDE_CLOSE_LOW_DIFFERENCE",
+                True,
+            )
+        ):
+            message_lines.append("EMA Close-Low Movement: " f"{movement_text} points")
+
+        if bool(
+            getattr(
+                config,
+                "EMA_ISOLATED_ALERT_INCLUDE_CANDLE_TIME",
+                True,
+            )
+        ):
+            message_lines.extend(
+                [
                     "",
-                )
-            ).strip().upper()
-
-            if candidate_type in [
-                "CE",
-                "CALL",
-            ]:
-
-                suggested_order_option_type = "CE"
-                break
-
-            if candidate_type in [
-                "PE",
-                "PUT",
-            ]:
-
-                suggested_order_option_type = "PE"
-                break
-
-        suggested_order_type_text = (
-            suggested_order_option_type
-            if suggested_order_option_type
-            else "not_available"
-        )
-
-        cross_text = str(
-            cross_type or ""
-        ).strip().lower()
-
-        if "bullish" in cross_text:
-
-            order_side_rule = (
-                "Bullish cross uses the same side "
-                "as the isolated instrument."
+                    ("EMA Candle Time: " f"{candle_time}"),
+                ]
             )
 
-        elif "bearish" in cross_text:
-
-            order_side_rule = (
-                "Bearish cross uses the opposite side "
-                "of the isolated instrument."
-            )
-
-        else:
-
-            order_side_rule = (
-                "Order side could not be resolved because "
-                "EMA cross type is unknown."
-            )
-
-        header = (
-            f"{strike} "
-            f"{isolated_instrument_type} - "
-            f"crosses {selected_level} - "
-            f"At {nifty_text}"
+        message_lines.extend(
+            [
+                "",
+                ("Instrument Key: " f"{instrument_key}"),
+            ]
         )
 
-        order_details_text = (
-            self._format_suggested_order_instruments(
-                suggested_order_instruments
+        if bool(
+            getattr(
+                config,
+                "EMA_ISOLATED_ALERT_INCLUDE_NEAREST_ORDER_INSTRUMENTS",
+                True,
             )
-        )
+        ):
+            message_lines.extend(
+                [
+                    "",
+                    nearest_text,
+                ]
+            )
 
-        message = (
-            f"{header}\n\n"
-            "EMA Cross Details:\n"
-            f"Cross Type: {cross_type}\n"
-            f"Signal: {current_signal}\n"
-            f"Isolated Instrument Type: "
-            f"{isolated_instrument_type}\n"
-            f"Suggested Order Side: "
-            f"{suggested_order_type_text}\n"
-            f"Order Side Rule: "
-            f"{order_side_rule}\n"
-            f"EMA Calculation Mode: "
-            f"{ema_mode}\n"
-            f"EMA Mode Description: "
-            f"{ema_mode_description}\n"
-            f"Source: {source}\n"
-            f"{price_label}: {close_price}\n"
-            f"{time_label}: {event_timestamp}\n"
-            f"EMA Fast Period: {ema_fast_period}\n"
-            f"EMA Slow Period: {ema_slow_period}\n"
-            f"EMA Fast: {ema_fast}\n"
-            f"EMA Slow: {ema_slow}\n"
-            f"Previous EMA Fast: {previous_ema_fast}\n"
-            f"Previous EMA Slow: {previous_ema_slow}\n"
-            f"Instrument Key: {instrument_key}\n\n"
-            f"{order_details_text}"
-        )
+        if bool(
+            getattr(
+                config,
+                "EMA_ISOLATED_ALERT_INCLUDE_BUDGET_INSTRUMENTS",
+                True,
+            )
+        ):
+            message_lines.extend(
+                [
+                    "",
+                    budget_text,
+                ]
+            )
+
+        message = "\n".join(message_lines)
 
         logger.info(
-            "Sending isolated EMA Telegram message. "
-            "instrument_key=%s, "
-            "cross_type=%s, "
-            "isolated_instrument_type=%s, "
-            "suggested_order_option_type=%s, "
-            "suggested_instruments_count=%s",
+            "Sending isolated EMA alert. "
+            "instrument_key=%s, cross_type=%s, "
+            "order_side=%s, nearest_count=%s, "
+            "budget_count=%s",
             instrument_key,
             cross_type,
-            isolated_instrument_type,
-            suggested_order_option_type,
+            suggested_order_side,
             len(suggested_order_instruments),
+            len(budget_range_instruments),
         )
 
         result = self.send_message(
@@ -1059,212 +1037,132 @@ class TelegramService:
             message=message,
             level="EMA",
             notification_context=(
-                "isolated_ema"
+                f"isolated_ema"
                 f"|instrument_key={instrument_key}"
                 f"|cross_type={cross_type}"
             ),
         )
 
         if result:
-
             logger.info(
-                "Isolated EMA Telegram alert sent successfully. "
-                "instrument_key=%s, "
-                "cross_type=%s",
+                "Isolated EMA Telegram alert sent. " "instrument_key=%s",
                 instrument_key,
-                cross_type,
             )
-
         else:
-
             logger.error(
-                "Isolated EMA Telegram alert FAILED. "
-                "instrument_key=%s, "
-                "cross_type=%s",
+                "Isolated EMA Telegram alert failed. " "instrument_key=%s",
                 instrument_key,
-                cross_type,
             )
 
         return result
 
-    # ========================================================
-    # Convenience Wrapper
-    # ========================================================
+    def send_isolated_ema_payload(
+        self,
+        payload: dict,
+    ) -> bool:
+        if not isinstance(payload, dict):
+            return False
+
+        instrument = payload.get("instrument") or {}
+
+        opening_range = payload.get("opening_range") or {}
+
+        market_snapshot = payload.get("market_snapshot") or {}
+
+        ema_data = payload.get("ema") or {}
+
+        order_suggestion = payload.get("order_suggestion") or {}
+
+        candle = ema_data.get("candle") or {}
+
+        selected_state = {
+            "instrument_key": (instrument.get("instrument_key")),
+            "selected_level": (opening_range.get("selected_level")),
+            "contract_info": {
+                **instrument,
+                "instrument_type": (instrument.get("instrument_type")),
+            },
+        }
+
+        ema_event = {
+            **ema_data,
+            "instrument_key": (instrument.get("instrument_key")),
+            "cross_type": (ema_data.get("cross_type")),
+            "current_signal": (
+                ema_data.get("current_signal") or ema_data.get("signal")
+            ),
+            "ema_calculation_mode": (ema_data.get("calculation_mode")),
+            "close": candle.get("close"),
+            "timestamp": (candle.get("timestamp") or ema_data.get("timestamp")),
+            "candle": candle,
+        }
+
+        budget_filter = order_suggestion.get("budget_filter") or {}
+
+        return self.send_selected_or_ema_cross_message(
+            selected_state=selected_state,
+            ema_event=ema_event,
+            nifty_ltp=(market_snapshot.get("nifty_ltp")),
+            suggested_order_instruments=(
+                order_suggestion.get("nearest_instruments") or []
+            ),
+            budget_range_instruments=(budget_filter.get("instruments") or []),
+        )
+
+    # ============================================================
+    # Compatibility Wrappers
+    # ============================================================
 
     def send_isolated_instrument_message(
         self,
         isolated_state: dict,
     ) -> bool:
-        """
-        Convenience wrapper for isolated instrument notification.
+        isolated_state = isolated_state or {}
 
-        Allows opening_range_service.py to pass the full
-        isolated state instead of individual fields.
-        """
-
-        isolated_state = (
-            isolated_state or {}
-        )
-
-        contract_info = (
-            isolated_state.get(
-                "contract_info"
-            )
-            or {}
-        )
+        contract_info = isolated_state.get("contract_info") or {}
 
         symbol = (
-            contract_info.get(
-                "trading_symbol"
-            )
-            or contract_info.get(
-                "instrument_key"
-            )
-            or isolated_state.get(
-                "instrument_key"
-            )
+            contract_info.get("trading_symbol")
+            or contract_info.get("instrument_key")
+            or isolated_state.get("instrument_key")
             or "N/A"
         )
 
         return self.send_selected_or_instrument_message(
-            instrument_key=isolated_state.get(
-                "instrument_key"
-            ),
+            instrument_key=(isolated_state.get("instrument_key")),
             symbol=symbol,
-            level=isolated_state.get(
-                "selected_level"
-            ),
-            level_value=isolated_state.get(
-                "level_value"
-            ),
-            trigger_field=isolated_state.get(
-                "trigger_field"
-            ),
-            trigger_price=isolated_state.get(
-                "trigger_price"
-            ),
-            touch_time=isolated_state.get(
-                "touch_time"
-            ),
-            source=isolated_state.get(
-                "touch_source"
-            ),
-            nifty_ltp=isolated_state.get(
-                "latest_main_index_ltp"
-            ),
-            strike_price=contract_info.get(
-                "strike_price"
-            ),
-            instrument_type=contract_info.get(
-                "instrument_type"
-            ),
-            reference_average=isolated_state.get(
-                "reference_average"
-            ),
-            average_window=isolated_state.get(
-                "average_window"
-            ),
+            level=(isolated_state.get("selected_level")),
+            level_value=(isolated_state.get("level_value")),
+            trigger_field=(isolated_state.get("trigger_field")),
+            trigger_price=(isolated_state.get("trigger_price")),
+            touch_time=(isolated_state.get("touch_time")),
+            source=(isolated_state.get("touch_source")),
+            nifty_ltp=(isolated_state.get("latest_main_index_ltp")),
+            strike_price=(contract_info.get("strike_price")),
+            instrument_type=(contract_info.get("instrument_type")),
+            reference_average=(isolated_state.get("reference_average")),
+            average_window=(isolated_state.get("average_window")),
         )
 
     def send_isolated_ema_cross_message(
         self,
         isolated_state: dict,
         ema_event: dict,
-        nifty_ltp=None,
+        nifty_ltp: Any = None,
         suggested_order_instruments: list | None = None,
+        budget_range_instruments: list | None = None,
     ) -> bool:
-        """
-        Convenience wrapper for isolated instrument EMA alert.
-        """
-
         return self.send_selected_or_ema_cross_message(
             selected_state=isolated_state,
             ema_event=ema_event,
             nifty_ltp=nifty_ltp,
-            suggested_order_instruments=suggested_order_instruments,
+            suggested_order_instruments=(suggested_order_instruments),
+            budget_range_instruments=(budget_range_instruments),
         )
 
-    # ========================================================
-    # Formatting Helpers
-    # ========================================================
-
-    def _format_suggested_order_instruments(
-        self,
-        suggested_order_instruments: list,
-    ) -> str:
-        """
-        Formats nearest CE/PE instruments for EMA alert.
-
-        Example:
-
-            Nearest Instrument Details:
-            - 24300PE - 120rs
-            - 24350PE - 135rs
-            - 24400PE - 150rs
-        """
-
-        if not suggested_order_instruments:
-
-            return (
-                "Nearest Instrument Details: "
-                "not_available"
-            )
-
-        lines = [
-            "Nearest Instrument Details:"
-        ]
-
-        for item in suggested_order_instruments:
-
-            if not isinstance(item, dict):
-                continue
-
-            strike = item.get(
-                "strike_price",
-                "N/A",
-            )
-
-            instrument_type = str(
-                item.get(
-                    "instrument_type",
-                    "N/A",
-                )
-            ).upper()
-
-            live_ltp = item.get(
-                "live_ltp"
-            )
-
-            if live_ltp is None:
-
-                price_text = (
-                    "ltp_not_available"
-                )
-
-            else:
-
-                price_text = (
-                    f"{live_ltp}rs"
-                )
-
-            lines.append(
-                f"- {strike}"
-                f"{instrument_type}"
-                f" - {price_text}"
-            )
-
-        if len(lines) == 1:
-
-            return (
-                "Nearest Instrument Details: "
-                "not_available"
-            )
-
-        return "\n".join(lines)
-
-    # ========================================================
+    # ============================================================
     # Exception Messages
-    # ========================================================
+    # ============================================================
 
     def send_exception_message(
         self,
@@ -1272,36 +1170,27 @@ class TelegramService:
         exception: Exception,
         context: str = "",
     ) -> bool:
-        """Sends exception notification."""
-
         message = (
             f"Exception Type: "
             f"{type(exception).__name__}\n"
-            f"Exception Message: "
-            f"{exception}"
+            f"Exception Message: {exception}"
         )
 
         if context:
-
-            message = (
-                f"Context: {context}\n\n"
-                f"{message}"
-            )
+            message = f"Context: {context}\n\n" f"{message}"
 
         return self.send_message(
             title=title,
             message=message,
             level="ERROR",
             notification_context=(
-                f"exception|context={context}"
-                if context
-                else "exception"
+                f"exception|context={context}" if context else "exception"
             ),
         )
 
 
 # ============================================================
-# Global Telegram Service Instance
+# Service Instance
 # ============================================================
 
 telegram_service = TelegramService()
