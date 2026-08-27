@@ -136,9 +136,9 @@ def check_upstox_token_validity(
 
     message = (
         "Current Upstox access token looks expired, invalid, or corrupted.\n\n"
-        "Please use Telegram command /save-token and then paste the latest "
+        "Please use Telegram command /save_token and then paste the latest "
         "raw Upstox access token.\n\n"
-        f"Validation Error: {error}"
+        f"Validation Error: {str(error)[:25]}"
     )
 
     logger.error(message)
