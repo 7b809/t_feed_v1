@@ -530,6 +530,52 @@ OPENING_RANGE_ISOLATION_TOUCH_LEVELS = [
     if value.strip()
 ]
 
+# ============================================================
+# Opening Range Isolation Configuration
+# ============================================================
+
+OPENING_RANGE_ISOLATED_INSTRUMENT_ENABLED = (
+    os.getenv(
+        "OPENING_RANGE_ISOLATED_INSTRUMENT_ENABLED",
+        "true",
+    ).lower()
+    == "true"
+)
+
+OPENING_RANGE_ISOLATION_AVERAGE_WINDOW_POINTS = float(
+    os.getenv(
+        "OPENING_RANGE_ISOLATION_AVERAGE_WINDOW_POINTS",
+        "500.0",
+    )
+)
+
+# Re-selection rule:
+# The currently isolated instrument remains locked while its
+# strike is within +/- this distance from the Opening Range average.
+#
+# Example:
+#   OR average = 24055
+#   re-selection distance = 150
+#   valid isolated strike range = 23905 to 24205
+#
+# If the current isolated instrument moves outside this range,
+# a new eligible priority-level touch can replace it.
+OPENING_RANGE_ISOLATION_RESELECT_DISTANCE_POINTS = float(
+    os.getenv(
+        "OPENING_RANGE_ISOLATION_RESELECT_DISTANCE_POINTS",
+        "200.0",
+    )
+)
+
+OPENING_RANGE_ISOLATION_TOUCH_LEVELS = [
+    value.strip().upper()
+    for value in os.getenv(
+        "OPENING_RANGE_ISOLATION_TOUCH_LEVELS",
+        "S3,R3,S2,R2",
+    ).split(",")
+    if value.strip()
+]
+
 OPENING_RANGE_ISOLATION_PRIORITY_LEVELS = [
     value.strip().upper()
     for value in os.getenv(
@@ -538,6 +584,23 @@ OPENING_RANGE_ISOLATION_PRIORITY_LEVELS = [
     ).split(",")
     if value.strip()
 ]
+
+OPENING_RANGE_ISOLATION_LOCK_FOR_DAY = (
+    os.getenv(
+        "OPENING_RANGE_ISOLATION_LOCK_FOR_DAY",
+        "true",
+    ).lower()
+    == "true"
+)
+
+OPENING_RANGE_ISOLATION_ALLOW_PRIORITY_UPGRADE = (
+    os.getenv(
+        "OPENING_RANGE_ISOLATION_ALLOW_PRIORITY_UPGRADE",
+        "true",
+    ).lower()
+    == "true"
+)
+
 
 OPENING_RANGE_ISOLATION_LOCK_FOR_DAY = (
     os.getenv(

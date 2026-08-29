@@ -13,6 +13,11 @@ Selection rules:
 5. The selected instrument can remain locked for the trading day.
 6. A higher-priority event can replace the selected instrument when
    priority upgrades are enabled.
+7. If the currently isolated instrument is outside the configured
+   re-selection distance from the Opening Range average, a new
+   eligible priority-level touch can replace it.
+8. After a replacement, the new instrument becomes the isolated
+   instrument and the same re-selection rule applies again.
 
 All mutable runtime data is stored in state.py.
 """
@@ -43,6 +48,7 @@ from .constants import (
     DEFAULT_ISOLATION_LOCK_FOR_DAY,
     DEFAULT_ISOLATION_OPTIONS_ONLY,
     DEFAULT_ISOLATION_PRIORITY_LEVELS,
+    DEFAULT_ISOLATION_RESELECT_DISTANCE_POINTS,
     DEFAULT_ISOLATION_TOUCH_LEVELS,
     DEFAULT_ISOLATION_WINDOW_POINTS,
     DEFAULT_LIVE_EMA_CALCULATION_MODE,
@@ -400,49 +406,281 @@ def choose_best_isolation_event(
     return selected["event"]
 
 
+# ============================================================
+# Re-selection / Lock Helpers
+# ============================================================
+
+
+def get_current_isolated_instrument_range_status() -> tuple[
+    bool,
+    str,
+    float | None,
+    float | None,
+    float | None,
+]:
+    """
+    Checks whether the currently isolated instrument is inside
+    the configured re-selection distance from the Opening Range
+    average.
+
+    Returns:
+
+        (
+            within_range,
+            reason,
+            strike,
+            reference_average,
+            distance_from_average,
+        )
+
+    Example:
+
+        Opening Range average = 24055
+        Re-selection distance = 150
+
+        Valid range:
+
+            23905 <= strike <= 24205
+    """
+    runtime_state.ensure_current_market_day()
+
+    with runtime_state.selected_or_lock:
+        selected_state = deepcopy(runtime_state.selected_or_instrument_state)
+
+    if not isinstance(selected_state, dict):
+        return (
+            False,
+            "current_selection_state_invalid",
+            None,
+            None,
+            None,
+        )
+
+    if not selected_state.get("selected"):
+        return (
+            False,
+            "no_current_selection",
+            None,
+            None,
+            None,
+        )
+
+    contract_info = selected_state.get("contract_info") or {}
+
+    if not isinstance(contract_info, dict):
+        contract_info = {}
+
+    strike = safe_float(
+        contract_info.get("strike_price"),
+        default=0.0,
+    )
+
+    if strike <= 0:
+        return (
+            False,
+            "current_strike_not_available",
+            None,
+            None,
+            None,
+        )
+
+    # Always use the current Opening Range average as the
+    # reference. This is important for the re-selection rule.
+    reference_average = get_reference_opening_range_average()
+
+    if reference_average is None or reference_average <= 0:
+        return (
+            False,
+            "reference_average_not_available",
+            strike,
+            None,
+            None,
+        )
+
+    reselect_distance = max(
+        0.0,
+        safe_float(
+            DEFAULT_ISOLATION_RESELECT_DISTANCE_POINTS,
+            default=150.0,
+        ),
+    )
+
+    distance_from_average = abs(strike - reference_average)
+
+    if distance_from_average <= reselect_distance:
+        return (
+            True,
+            "within_reselection_range",
+            strike,
+            reference_average,
+            distance_from_average,
+        )
+
+    return (
+        False,
+        "outside_reselection_range",
+        strike,
+        reference_average,
+        distance_from_average,
+    )
+
+
 def should_replace_isolated_instrument(
     new_event: dict,
 ) -> bool:
     """
-    Determines whether a new event can replace the selected instrument.
+    Determines whether a new event can replace the selected
+    instrument.
 
     Rules:
 
-        Nothing selected:
-            Allow selection.
+        1. Nothing selected:
+           Allow selection.
 
-        Lock-for-day disabled:
-            Allow replacement.
+        2. Lock-for-day disabled:
+           Allow replacement.
 
-        Lock-for-day enabled and priority upgrade disabled:
-            Reject replacement.
+        3. Current isolated instrument is outside
+           +/- DEFAULT_ISOLATION_RESELECT_DISTANCE_POINTS
+           from the Opening Range average:
+           Allow replacement with a new eligible instrument.
 
-        Priority upgrade enabled:
-            Replace only when the new level has a strictly higher
-            priority than the current level.
+        4. Current isolated instrument is still inside the
+           re-selection range:
+           Preserve the existing lock behavior.
+
+        5. When priority upgrade is enabled and the current
+           instrument is still inside the range:
+           Only a strictly higher-priority level can replace it.
+
+        6. The exact same instrument cannot be re-selected
+           as a replacement.
     """
     if not isinstance(new_event, dict):
         return False
 
     runtime_state.ensure_current_market_day()
 
+    new_instrument_key = str(new_event.get("instrument_key") or "").strip()
+
     with runtime_state.selected_or_lock:
-        already_selected = bool(
-            runtime_state.selected_or_instrument_state.get("selected")
-        )
+        current_state = deepcopy(runtime_state.selected_or_instrument_state)
 
-        current_priority = runtime_state.selected_or_instrument_state.get(
-            "selection_priority"
-        )
+    already_selected = bool(current_state.get("selected"))
 
-        current_level = runtime_state.selected_or_instrument_state.get("selected_level")
+    current_instrument_key = str(current_state.get("instrument_key") or "").strip()
 
+    current_priority = current_state.get("selection_priority")
+
+    current_level = current_state.get("selected_level")
+
+    # --------------------------------------------------------
+    # No existing selection.
+    # --------------------------------------------------------
     if not already_selected:
         return True
 
+    # --------------------------------------------------------
+    # Never replace an instrument with the exact same
+    # instrument key.
+    # --------------------------------------------------------
+    if (
+        new_instrument_key
+        and current_instrument_key
+        and new_instrument_key == current_instrument_key
+    ):
+        logger.info(
+            "Isolation replacement skipped. "
+            "instrument_key=%s, level=%s, "
+            "reason=same_as_current_selection",
+            new_instrument_key,
+            new_event.get("level"),
+        )
+        return False
+
+    # --------------------------------------------------------
+    # Existing behavior when lock-for-day is disabled.
+    # --------------------------------------------------------
     if not DEFAULT_ISOLATION_LOCK_FOR_DAY:
+        logger.info(
+            "Isolation replacement allowed. "
+            "reason=lock_for_day_disabled, "
+            "current_instrument_key=%s, "
+            "new_instrument_key=%s, "
+            "new_level=%s",
+            current_instrument_key,
+            new_instrument_key,
+            new_event.get("level"),
+        )
         return True
 
+    # --------------------------------------------------------
+    # NEW RULE:
+    #
+    # If current isolated strike is outside the configured
+    # +/- reselection distance from the Opening Range average,
+    # the current lock becomes invalid.
+    # --------------------------------------------------------
+    (
+        current_within_range,
+        range_reason,
+        current_strike,
+        reference_average,
+        distance_from_average,
+    ) = get_current_isolated_instrument_range_status()
+
+    if range_reason == "outside_reselection_range":
+        logger.info(
+            "Isolation re-selection allowed. "
+            "Current isolated instrument is outside "
+            "reselection range. "
+            "current_instrument_key=%s, "
+            "current_strike=%s, "
+            "reference_average=%s, "
+            "distance_from_average=%s, "
+            "reselection_distance=%s, "
+            "new_instrument_key=%s, "
+            "new_level=%s",
+            current_instrument_key,
+            current_strike,
+            reference_average,
+            distance_from_average,
+            DEFAULT_ISOLATION_RESELECT_DISTANCE_POINTS,
+            new_instrument_key,
+            new_event.get("level"),
+        )
+
+        return True
+
+    # --------------------------------------------------------
+    # If the current selection cannot be safely evaluated,
+    # do not accidentally unlock it.
+    # --------------------------------------------------------
+    if not current_within_range:
+        logger.warning(
+            "Isolation replacement blocked because the "
+            "current isolated instrument range could not "
+            "be safely determined. "
+            "reason=%s, "
+            "current_instrument_key=%s, "
+            "current_strike=%s, "
+            "reference_average=%s, "
+            "new_instrument_key=%s, "
+            "new_level=%s",
+            range_reason,
+            current_instrument_key,
+            current_strike,
+            reference_average,
+            new_instrument_key,
+            new_event.get("level"),
+        )
+
+        return False
+
+    # --------------------------------------------------------
+    # Existing priority-upgrade behavior is preserved while
+    # the current instrument is still inside +/-150.
+    # --------------------------------------------------------
     if not DEFAULT_ISOLATION_ALLOW_PRIORITY_UPGRADE:
         return False
 
@@ -456,7 +694,26 @@ def should_replace_isolated_instrument(
         default=999,
     )
 
-    return new_priority < normalized_current_priority
+    if new_priority < normalized_current_priority:
+        logger.info(
+            "Isolation priority upgrade allowed. "
+            "current_instrument_key=%s, "
+            "current_level=%s, "
+            "current_priority=%s, "
+            "new_instrument_key=%s, "
+            "new_level=%s, "
+            "new_priority=%s",
+            current_instrument_key,
+            current_level,
+            normalized_current_priority,
+            new_instrument_key,
+            new_event.get("level"),
+            new_priority,
+        )
+
+        return True
+
+    return False
 
 
 # ============================================================
@@ -551,7 +808,7 @@ def send_isolated_instrument_notification(
     try:
         return bool(
             telegram_service.send_message(
-                title=("Opening Range Instrument Isolated"),
+                title="Opening Range Instrument Isolated",
                 message=message,
                 level="OPENING_RANGE",
             )
@@ -581,11 +838,16 @@ def isolate_instrument_from_event(
     Selection rules:
 
         R3 and S3 can have priority over R2 and S2.
-        The strike must be inside the average window.
-        A selected instrument remains locked for the day unless a
-        configured priority upgrade is allowed.
+        The strike must be inside the configured average window.
+        A selected instrument remains locked while it is within
+        the configured re-selection distance from the Opening
+        Range average.
 
-    A Telegram notification failure does not undo the selection.
+        If the selected instrument is outside that distance,
+        a new eligible touch event can replace it.
+
+        A Telegram notification failure does not undo the
+        selection.
     """
     if not isinstance(event, dict) or not event:
         return False
@@ -687,7 +949,7 @@ def isolate_instrument_from_event(
         "ema_alerts_count": 0,
         "last_ema_alert": None,
         "disabled": False,
-        "message": ("Opening Range instrument isolated for " "EMA Telegram alerts."),
+        "message": ("Opening Range instrument isolated " "for EMA Telegram alerts."),
     }
 
     with runtime_state.selected_or_lock:
@@ -707,8 +969,10 @@ def isolate_instrument_from_event(
             "last_ema_alert"
         )
 
-        # Preserve EMA alert count only when the same instrument is
-        # selected again. A replacement instrument starts with zero.
+        # Preserve EMA alert count only when the same
+        # instrument is selected again.
+        #
+        # A replacement instrument starts with zero.
         if previous_instrument_key == instrument_key:
             new_selected_state["ema_alerts_count"] = previous_alert_count
 
@@ -774,7 +1038,8 @@ def try_isolate_from_touch_events(
     """
     Chooses the best eligible event and isolates its instrument.
 
-    Returns True only when an instrument is newly selected or replaced.
+    Returns True only when an instrument is newly selected
+    or replaced.
     """
     if not isinstance(events, list) or not events:
         return False
@@ -798,6 +1063,7 @@ __all__ = [
     "build_average_window",
     "is_event_eligible_for_isolation",
     "choose_best_isolation_event",
+    "get_current_isolated_instrument_range_status",
     "should_replace_isolated_instrument",
     "format_isolated_instrument_title",
     "send_isolated_instrument_notification",

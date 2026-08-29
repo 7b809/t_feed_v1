@@ -767,7 +767,11 @@ def build_nearest_order_strikes(
     offsets: list[int] | None = None,
     clamp_to_filter_range: bool | None = None,
 ) -> list[int]:
-    step = safe_int(strike_step, safe_int(config, "EMA_ALERT_STRIKE_STEP", 50), 50)
+
+    step = safe_int(
+        strike_step,
+        getattr(config, "EMA_ALERT_STRIKE_STEP", 50),
+    )
 
     if step <= 0:
         step = 50
