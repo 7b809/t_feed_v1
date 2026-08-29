@@ -20,7 +20,7 @@ class TelegramTokenBot:
     Telegram command listener for Upstox token management.
 
     Supported typed commands:
-        /save-token
+        /save_token
         /token-status
         /profile
         /funds
@@ -178,7 +178,7 @@ class TelegramTokenBot:
         Normalizes command.
 
         Supports:
-            /save-token
+            /save_token
             /save_token
             /token-status
             /token_status
@@ -303,7 +303,7 @@ class TelegramTokenBot:
 
     def _handle_save_token_command(self, chat_id):
         """
-        Starts save-token flow.
+        Starts save_token flow.
         """
 
         self._pending_save_token_chats.add(str(chat_id))
@@ -356,7 +356,7 @@ class TelegramTokenBot:
         if not token:
             self._send_message(
                 "No Upstox token found in MongoDB.\n\n"
-                "Use /save-token or /save_token first.",
+                "Use /save_token first.",
                 level="WARNING",
             )
             return
@@ -391,7 +391,7 @@ class TelegramTokenBot:
         if not token:
             self._send_message(
                 "No Upstox token found in MongoDB.\n\n"
-                "Use /save-token or /save_token first.",
+                "Use /save_token or /save_token first.",
                 level="WARNING",
             )
             return
@@ -431,7 +431,7 @@ class TelegramTokenBot:
         text: str,
     ):
         """
-        Handles next message after /save-token.
+        Handles next message after /save_token.
 
         Flow:
             1. Delete raw token message immediately.
@@ -453,7 +453,7 @@ class TelegramTokenBot:
 
         if not raw_token:
             self._send_message(
-                "Token message was empty. Please try /save-token again.",
+                "Token message was empty. Please try /save_token again.",
                 level="WARNING",
             )
             return
@@ -461,7 +461,7 @@ class TelegramTokenBot:
         if len(raw_token) < 50:
             self._send_message(
                 "Token looks too short and was not saved.\n\n"
-                "Please try /save-token again with the full Upstox access token.",
+                "Please try /save_token again with the full Upstox access token.",
                 level="WARNING",
             )
             return
@@ -532,7 +532,7 @@ class TelegramTokenBot:
 
         command = self._normalize_command(text)
 
-        if command in ["/save-token", "/save_token"]:
+        if command in ["/save_token", "/save_token"]:
             self._handle_save_token_command(chat_id)
             return
 

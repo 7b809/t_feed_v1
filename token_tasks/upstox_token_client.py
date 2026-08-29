@@ -71,7 +71,7 @@ class UpstoxTokenClient:
         - Telegram /token-status command
         - Telegram /profile command
         - Telegram /funds command
-        - Telegram /save-token validation flow
+        - Telegram /save_token validation flow
 
     Token validation logic:
         - Call get_profile(api_version="2.0")

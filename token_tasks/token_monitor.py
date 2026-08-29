@@ -63,7 +63,7 @@ def check_upstox_token_validity(
     if not token:
         message = (
             "Upstox access token is missing in MongoDB.\n\n"
-            "Please use Telegram command /save-token and then paste the latest "
+            "Please use Telegram command /save_token and then paste the latest "
             "raw Upstox access token."
         )
 

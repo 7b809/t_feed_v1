@@ -24,7 +24,7 @@ class TokenStore:
 
     Behavior:
         - Reads current Upstox token from MongoDB.
-        - Saves new token from Telegram /save-token flow.
+        - Saves new token from Telegram /save_token flow.
         - Updates validation status after background token checks.
         - Never returns or logs the raw token.
     """
@@ -138,7 +138,7 @@ class TokenStore:
         Saves new Upstox access token to MongoDB.
 
         Requirement:
-            When user sends a new token through Telegram /save-token:
+            When user sends a new token through Telegram /save_token:
                 - Save raw token in MongoDB.
                 - Set created_at to current datetime.
                 - Set updated_at to current datetime.
@@ -210,7 +210,7 @@ class TokenStore:
         Used by:
             - Background token monitor.
             - Manual Telegram /profile validation.
-            - Telegram /save-token validation flow.
+            - Telegram /save_token validation flow.
         """
 
         now_text = self.now_iso()
