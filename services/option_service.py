@@ -1,4 +1,5 @@
 import json
+from copy import deepcopy
 from datetime import date, datetime
 from pathlib import Path
 from threading import Lock
@@ -13,11 +14,6 @@ from services.token_service import token_service
 
 logger = get_logger(__file__)
 
-
-# ============================================================
-# Runtime Cache
-# ============================================================
-
 _cache_lock = Lock()
 
 options_cache = {
@@ -28,11 +24,6 @@ options_cache = {
     "contracts_by_key": {},
     "contracts_by_strike_type": {},
 }
-
-
-# ============================================================
-# Feed Constants
-# ============================================================
 
 NIFTY_INDEX_FEED = {
     "instrument_key": getattr(
@@ -49,20 +40,8 @@ NIFTY_INDEX_FEED = {
 }
 
 NIFTY_SUPPORTED_INTERVALS = [0]
-
-OPTION_SUPPORTED_INTERVALS = [
-    0,
-    1,
-    3,
-    5,
-]
-
+OPTION_SUPPORTED_INTERVALS = [0, 1, 3, 5]
 SUPPORTED_INTERVALS = OPTION_SUPPORTED_INTERVALS
-
-
-# ============================================================
-# Value Helpers
-# ============================================================
 
 
 def safe_float(
@@ -72,7 +51,6 @@ def safe_float(
     try:
         if value is None:
             return default
-
         return float(value)
     except (
         TypeError,
@@ -88,7 +66,6 @@ def safe_optional_float(
     try:
         if value is None:
             return None
-
         return float(value)
     except (
         TypeError,
@@ -105,7 +82,6 @@ def safe_int(
     try:
         if value is None:
             return default
-
         return int(value)
     except (
         TypeError,
@@ -123,16 +99,10 @@ def normalize_option_type(
 
     value = str(option_type).strip().upper()
 
-    if value in {
-        "CE",
-        "CALL",
-    }:
+    if value in {"CE", "CALL"}:
         return "CE"
 
-    if value in {
-        "PE",
-        "PUT",
-    }:
+    if value in {"PE", "PUT"}:
         return "PE"
 
     return None
@@ -167,7 +137,6 @@ def parse_expiry_date(
     if isinstance(expiry_value, str):
         try:
             date_part = expiry_value.split()[0]
-
             return datetime.strptime(
                 date_part,
                 "%Y-%m-%d",
@@ -180,6 +149,22 @@ def parse_expiry_date(
             )
 
     return None
+
+
+def normalize_timestamp(
+    value: Any,
+) -> str | None:
+    if value is None:
+        return None
+
+    if isinstance(value, datetime):
+        return value.isoformat()
+
+    if isinstance(value, date):
+        return value.isoformat()
+
+    normalized = str(value).strip()
+    return normalized or None
 
 
 def clean_contract_data(
@@ -201,11 +186,15 @@ def clean_contract_data(
         "instrument_key": item.get("instrument_key"),
         "instrument_type": (instrument_type or item.get("instrument_type")),
         "option_type": instrument_type,
-        "strike_price": item.get("strike_price"),
+        "strike_price": safe_optional_float(item.get("strike_price")),
         "expiry": expiry_text,
         "trading_symbol": item.get("trading_symbol"),
         "underlying_type": item.get("underlying_type"),
         "underlying_symbol": item.get("underlying_symbol"),
+        "lot_size": safe_int(
+            item.get("lot_size"),
+            0,
+        ),
     }
 
 
@@ -219,7 +208,7 @@ def build_strike_type_key(
         return None
 
     try:
-        return f"{float(strike_price)}_" f"{option_type}"
+        return f"{float(strike_price)}_{option_type}"
     except (
         TypeError,
         ValueError,
@@ -248,7 +237,6 @@ def round_to_nearest_strike(
         step = 50
 
     spot = safe_float(value)
-
     return int(round(spot / step) * step)
 
 
@@ -322,9 +310,190 @@ def is_strike_inside_window(
     return lower <= strike <= upper
 
 
-# ============================================================
-# Contract Filtering
-# ============================================================
+def normalize_candle(
+    candle: Any,
+) -> dict | None:
+    if not isinstance(candle, dict):
+        return None
+
+    timestamp = (
+        candle.get("timestamp")
+        or candle.get("time")
+        or candle.get("ts")
+        or candle.get("start_time")
+    )
+
+    open_price = safe_optional_float(candle.get("open"))
+    high_price = safe_optional_float(candle.get("high"))
+    low_price = safe_optional_float(candle.get("low"))
+    close_price = safe_optional_float(candle.get("close"))
+
+    volume = safe_optional_float(candle.get("volume"))
+
+    if volume is None:
+        volume = safe_optional_float(candle.get("vol"))
+
+    close_minus_low = safe_optional_float(candle.get("close_minus_low_points"))
+
+    if close_minus_low is None and close_price is not None and low_price is not None:
+        close_minus_low = round(
+            close_price - low_price,
+            4,
+        )
+
+    high_minus_low = safe_optional_float(candle.get("high_minus_low_points"))
+
+    if high_minus_low is None and high_price is not None and low_price is not None:
+        high_minus_low = round(
+            high_price - low_price,
+            4,
+        )
+
+    normalized = {
+        "timestamp": normalize_timestamp(timestamp),
+        "open": open_price,
+        "high": high_price,
+        "low": low_price,
+        "close": close_price,
+        "volume": volume,
+        "close_minus_low_points": close_minus_low,
+        "high_minus_low_points": high_minus_low,
+    }
+
+    return {key: value for key, value in normalized.items() if value is not None}
+
+
+def extract_market_snapshot(
+    raw_market_data: Any,
+) -> dict:
+    empty_snapshot = {
+        "live_ltp": None,
+        "live_ltp_updated_at": None,
+        "candle": None,
+    }
+
+    if raw_market_data is None:
+        return empty_snapshot
+
+    if isinstance(
+        raw_market_data,
+        (int, float),
+    ):
+        return {
+            "live_ltp": safe_optional_float(raw_market_data),
+            "live_ltp_updated_at": None,
+            "candle": None,
+        }
+
+    if not isinstance(raw_market_data, dict):
+        return empty_snapshot
+
+    live_ltp = safe_optional_float(raw_market_data.get("live_ltp"))
+
+    if live_ltp is None:
+        live_ltp = safe_optional_float(raw_market_data.get("ltp"))
+
+    if live_ltp is None:
+        live_ltp = safe_optional_float(raw_market_data.get("close"))
+
+    candle = raw_market_data.get("candle")
+
+    if not isinstance(candle, dict):
+        candle = raw_market_data.get("latest_candle")
+
+    if not isinstance(candle, dict):
+        candle = raw_market_data.get("completed_candle")
+
+    if not isinstance(candle, dict):
+        has_candle_fields = any(
+            key in raw_market_data
+            for key in (
+                "open",
+                "high",
+                "low",
+                "close",
+                "volume",
+                "vol",
+            )
+        )
+
+        if has_candle_fields:
+            candle = raw_market_data
+
+    normalized_candle = normalize_candle(candle)
+
+    if live_ltp is None and normalized_candle:
+        live_ltp = safe_optional_float(normalized_candle.get("close"))
+
+    updated_at = (
+        raw_market_data.get("live_ltp_updated_at")
+        or raw_market_data.get("updated_at")
+        or raw_market_data.get("timestamp")
+        or raw_market_data.get("time")
+    )
+
+    return {
+        "live_ltp": live_ltp,
+        "live_ltp_updated_at": normalize_timestamp(updated_at),
+        "candle": normalized_candle,
+    }
+
+
+def get_instrument_market_snapshot(
+    instrument_key: str | None,
+    market_data_by_instrument: dict[str, Any] | None,
+) -> dict:
+    if not instrument_key:
+        return extract_market_snapshot(None)
+
+    if not isinstance(
+        market_data_by_instrument,
+        dict,
+    ):
+        return extract_market_snapshot(None)
+
+    raw_market_data = market_data_by_instrument.get(str(instrument_key))
+
+    return extract_market_snapshot(raw_market_data)
+
+
+def build_enriched_order_instrument(
+    contract: dict,
+    option_type: str,
+    market_data_by_instrument: dict[str, Any] | None = None,
+    isolated_instrument_key: str | None = None,
+    available: bool = True,
+) -> dict:
+    instrument_key = str(contract.get("instrument_key") or "").strip() or None
+
+    market_snapshot = get_instrument_market_snapshot(
+        instrument_key=instrument_key,
+        market_data_by_instrument=(market_data_by_instrument),
+    )
+
+    isolated_key = str(isolated_instrument_key or "").strip()
+
+    return {
+        "instrument_key": instrument_key,
+        "trading_symbol": contract.get("trading_symbol"),
+        "instrument_type": option_type,
+        "option_type": option_type,
+        "strike_price": safe_optional_float(contract.get("strike_price")),
+        "expiry": contract.get("expiry"),
+        "underlying_symbol": contract.get("underlying_symbol"),
+        "underlying_type": contract.get("underlying_type"),
+        "lot_size": safe_int(
+            contract.get("lot_size"),
+            0,
+        ),
+        "available": bool(available and instrument_key),
+        "live_ltp": market_snapshot.get("live_ltp"),
+        "live_ltp_updated_at": (market_snapshot.get("live_ltp_updated_at")),
+        "candle": deepcopy(market_snapshot.get("candle")),
+        "is_isolated_instrument": bool(
+            isolated_key and instrument_key and instrument_key == isolated_key
+        ),
+    }
 
 
 def get_nearest_expiry_contracts(
@@ -347,11 +516,9 @@ def get_nearest_expiry_contracts(
 
     if not valid_expiries:
         logger.warning("No valid future expiry dates found.")
-
         return None, []
 
     nearest_date = min(valid_expiries)
-
     nearest_date_text = nearest_date.strftime("%Y-%m-%d")
 
     matching_contracts = [
@@ -388,10 +555,7 @@ def get_nearest_expiry_contracts(
         )
     ]
 
-    return (
-        nearest_date_text,
-        matching_contracts,
-    )
+    return nearest_date_text, matching_contracts
 
 
 def _build_cache_indexes(
@@ -424,24 +588,14 @@ def _build_cache_indexes(
 
 
 def _refresh_cache_indexes_locked() -> None:
-    data = options_cache.get(
-        "data",
-        [],
-    )
-
     (
         contracts_by_key,
         contracts_by_strike_type,
-    ) = _build_cache_indexes(data)
+    ) = _build_cache_indexes(options_cache.get("data", []))
 
     options_cache["contracts_by_key"] = contracts_by_key
 
     options_cache["contracts_by_strike_type"] = contracts_by_strike_type
-
-
-# ============================================================
-# Cache Access
-# ============================================================
 
 
 def get_subscribed_instrument_keys() -> list:
@@ -510,7 +664,9 @@ def get_contract_info_by_instrument_key(
         if not isinstance(item, dict):
             continue
 
-        if str(item.get("instrument_key") or "").strip() == normalized_key:
+        cached_key = str(item.get("instrument_key") or "").strip()
+
+        if cached_key == normalized_key:
             return item.copy()
 
     return None
@@ -583,12 +739,9 @@ def get_option_contracts_in_strike_window(
 
     lower = safe_float(lower_limit)
     upper = safe_float(upper_limit)
-
-    cached_data = get_cached_option_contracts()
-
     output = []
 
-    for item in cached_data:
+    for item in get_cached_option_contracts():
         strike = item.get("strike_price")
 
         option_type = normalize_option_type(
@@ -705,11 +858,6 @@ def get_nearest_contract_to_average(
     return nearest_contract.copy()
 
 
-# ============================================================
-# EMA Order Side
-# ============================================================
-
-
 def get_order_option_type_for_ema_cross(
     cross_type: str,
 ) -> str | None:
@@ -756,21 +904,19 @@ def get_order_option_type_for_isolated_ema_cross(
     return None
 
 
-# ============================================================
-# EMA Nearest Instruments
-# ============================================================
-
-
 def build_nearest_order_strikes(
     current_nifty_ltp: float,
     strike_step: int | None = None,
     offsets: list[int] | None = None,
     clamp_to_filter_range: bool | None = None,
-) -> list[int]:
-
+) -> list:
     step = safe_int(
         strike_step,
-        getattr(config, "EMA_ALERT_STRIKE_STEP", 50),
+        getattr(
+            config,
+            "EMA_ALERT_STRIKE_STEP",
+            50,
+        ),
     )
 
     if step <= 0:
@@ -822,6 +968,9 @@ def get_nearest_order_instruments_for_ema_cross(
     current_nifty_ltp: float,
     cross_type: str,
     isolated_instrument_type: str | None = None,
+    market_data_by_instrument: dict[str, Any] | None = None,
+    isolated_instrument_key: str | None = None,
+    include_unavailable: bool = True,
 ) -> list:
     if isolated_instrument_type:
         option_type = get_order_option_type_for_isolated_ema_cross(
@@ -845,28 +994,37 @@ def get_nearest_order_instruments_for_ema_cross(
         )
 
         if not contract:
+            if not include_unavailable:
+                continue
+
             output.append(
                 {
-                    "strike_price": float(strike),
-                    "instrument_type": option_type,
-                    "option_type": option_type,
                     "instrument_key": None,
                     "trading_symbol": (f"NIFTY {strike} " f"{option_type}"),
+                    "instrument_type": option_type,
+                    "option_type": option_type,
+                    "strike_price": float(strike),
+                    "expiry": options_cache.get("nearest_expiry"),
+                    "underlying_symbol": "NIFTY",
+                    "underlying_type": "INDEX",
+                    "lot_size": 0,
                     "available": False,
                     "live_ltp": None,
+                    "live_ltp_updated_at": None,
+                    "candle": None,
+                    "is_isolated_instrument": False,
                 }
             )
-
             continue
 
         output.append(
-            {
-                **contract,
-                "instrument_type": option_type,
-                "option_type": option_type,
-                "available": True,
-                "live_ltp": None,
-            }
+            build_enriched_order_instrument(
+                contract=contract,
+                option_type=option_type,
+                market_data_by_instrument=(market_data_by_instrument),
+                isolated_instrument_key=(isolated_instrument_key),
+                available=True,
+            )
         )
 
     max_items = safe_int(
@@ -878,12 +1036,10 @@ def get_nearest_order_instruments_for_ema_cross(
         3,
     )
 
+    if max_items <= 0:
+        return []
+
     return output[:max_items]
-
-
-# ============================================================
-# EMA Budget Instruments
-# ============================================================
 
 
 def get_budget_range_order_instruments(
@@ -896,6 +1052,8 @@ def get_budget_range_order_instruments(
     subscribed_only: bool | None = None,
     sort_mode: str | None = None,
     inclusive: bool | None = None,
+    market_data_by_instrument: dict[str, Any] | None = None,
+    isolated_instrument_key: str | None = None,
 ) -> list:
     if not bool(
         getattr(
@@ -915,7 +1073,26 @@ def get_budget_range_order_instruments(
         ltp_by_instrument,
         dict,
     ):
-        return []
+        ltp_by_instrument = {}
+
+    combined_market_data = {}
+
+    if isinstance(
+        market_data_by_instrument,
+        dict,
+    ):
+        combined_market_data.update(market_data_by_instrument)
+
+    for instrument_key, raw_value in ltp_by_instrument.items():
+        existing_value = combined_market_data.get(instrument_key)
+
+        if isinstance(existing_value, dict) and isinstance(raw_value, dict):
+            combined_market_data[instrument_key] = {
+                **existing_value,
+                **raw_value,
+            }
+        elif existing_value is None:
+            combined_market_data[instrument_key] = raw_value
 
     min_price = (
         safe_float(minimum_price)
@@ -943,6 +1120,12 @@ def get_budget_range_order_instruments(
         )
     )
 
+    if min_price > max_price:
+        min_price, max_price = (
+            max_price,
+            min_price,
+        )
+
     max_items = (
         safe_int(maximum_instruments)
         if maximum_instruments is not None
@@ -955,6 +1138,9 @@ def get_budget_range_order_instruments(
             2,
         )
     )
+
+    if max_items <= 0:
+        return []
 
     use_subscribed_only = (
         bool(subscribed_only)
@@ -1033,12 +1219,12 @@ def get_budget_range_order_instruments(
         if contract_option_type != normalized_option_type:
             continue
 
-        raw_ltp = ltp_by_instrument.get(instrument_key)
+        market_snapshot = get_instrument_market_snapshot(
+            instrument_key=instrument_key,
+            market_data_by_instrument=(combined_market_data),
+        )
 
-        if isinstance(raw_ltp, dict):
-            raw_ltp = raw_ltp.get("ltp")
-
-        live_ltp = safe_optional_float(raw_ltp)
+        live_ltp = safe_optional_float(market_snapshot.get("live_ltp"))
 
         if live_ltp is None:
             continue
@@ -1058,12 +1244,16 @@ def get_budget_range_order_instruments(
         if nifty_ltp is not None and strike_price is not None:
             distance_from_nifty = abs(strike_price - nifty_ltp)
 
-        candidates.append(
+        enriched = build_enriched_order_instrument(
+            contract=contract,
+            option_type=contract_option_type,
+            market_data_by_instrument=(combined_market_data),
+            isolated_instrument_key=(isolated_instrument_key),
+            available=True,
+        )
+
+        enriched.update(
             {
-                **contract,
-                "instrument_type": (contract_option_type),
-                "option_type": (contract_option_type),
-                "live_ltp": live_ltp,
                 "within_budget": True,
                 "minimum_budget_price": min_price,
                 "maximum_budget_price": max_price,
@@ -1071,6 +1261,8 @@ def get_budget_range_order_instruments(
                 "distance_from_nifty": (distance_from_nifty),
             }
         )
+
+        candidates.append(enriched)
 
     if selected_sort_mode == "nearest_to_nifty":
         candidates.sort(
@@ -1095,9 +1287,10 @@ def get_budget_range_order_instruments(
     elif selected_sort_mode == "price_ascending":
         candidates.sort(
             key=lambda item: (
-                item.get(
-                    "live_ltp",
-                    float("inf"),
+                (
+                    item.get("live_ltp")
+                    if item.get("live_ltp") is not None
+                    else float("inf")
                 ),
                 (
                     item.get("strike_price")
@@ -1110,10 +1303,7 @@ def get_budget_range_order_instruments(
     elif selected_sort_mode == "price_descending":
         candidates.sort(
             key=lambda item: (
-                -item.get(
-                    "live_ltp",
-                    0.0,
-                ),
+                -(item.get("live_ltp") if item.get("live_ltp") is not None else 0.0),
                 (
                     item.get("strike_price")
                     if item.get("strike_price") is not None
@@ -1143,11 +1333,6 @@ def get_budget_range_order_instruments(
         )
 
     return candidates[:max_items]
-
-
-# ============================================================
-# Feed Discovery
-# ============================================================
 
 
 def get_available_feeds() -> list:
@@ -1217,11 +1402,6 @@ def is_valid_feed_interval(
     return interval in OPTION_SUPPORTED_INTERVALS
 
 
-# ============================================================
-# Upstox Options Fetch
-# ============================================================
-
-
 def get_options_contracts(
     instrument_key: str | None = None,
     expiry_date: str | None = None,
@@ -1240,15 +1420,12 @@ def get_options_contracts(
 
     if not access_token:
         logger.error("Failed to retrieve access token.")
-
         return None
 
     configuration = upstox_client.Configuration()
-
     configuration.access_token = access_token
 
     api_client = upstox_client.ApiClient(configuration)
-
     api_instance = upstox_client.OptionsApi(api_client)
 
     try:
@@ -1290,7 +1467,7 @@ def get_options_contracts(
                     "status",
                     "success",
                 ),
-                "nearest_expiry": (nearest_expiry),
+                "nearest_expiry": nearest_expiry,
                 "total_contracts": len(filtered_contracts),
                 "data": filtered_contracts,
             }
@@ -1403,7 +1580,6 @@ def get_options_contracts(
                 str(ex),
             ),
         )
-
         return None
 
     except Exception as ex:
@@ -1412,13 +1588,7 @@ def get_options_contracts(
             type(ex).__name__,
             ex,
         )
-
         return None
-
-
-# ============================================================
-# Cache Summary
-# ============================================================
 
 
 def get_options_cache_summary() -> dict:
@@ -1429,8 +1599,8 @@ def get_options_cache_summary() -> dict:
         )
 
         return {
-            "nearest_expiry": (options_cache.get("nearest_expiry")),
-            "total_contracts": (options_cache.get("total_contracts")),
+            "nearest_expiry": options_cache.get("nearest_expiry"),
+            "total_contracts": options_cache.get("total_contracts"),
             "subscribed_keys_count": len(
                 options_cache.get(
                     "subscribed_keys",
@@ -1459,10 +1629,6 @@ def get_options_cache_summary() -> dict:
         }
 
 
-# ============================================================
-# Public API
-# ============================================================
-
 __all__ = [
     "options_cache",
     "NIFTY_INDEX_FEED",
@@ -1475,12 +1641,17 @@ __all__ = [
     "normalize_option_type",
     "get_opposite_option_type",
     "parse_expiry_date",
+    "normalize_timestamp",
     "clean_contract_data",
     "build_strike_type_key",
     "round_to_nearest_strike",
     "clamp_strike_to_filter_range",
     "is_strike_inside_filter_range",
     "is_strike_inside_window",
+    "normalize_candle",
+    "extract_market_snapshot",
+    "get_instrument_market_snapshot",
+    "build_enriched_order_instrument",
     "get_nearest_expiry_contracts",
     "get_subscribed_instrument_keys",
     "get_cached_option_contracts",
@@ -1502,42 +1673,3 @@ __all__ = [
     "get_options_contracts",
     "get_options_cache_summary",
 ]
-
-
-# ============================================================
-# Manual Test
-# ============================================================
-
-# if __name__ == "__main__":
-#     logger.info(
-#         "Executing option contracts fetch and filtering..."
-#     )
-#
-#     result = get_options_contracts(
-#         instrument_key="NSE_INDEX|Nifty 50",
-#         output_filename=(
-#             "data/nearest_nifty_option_contracts.json"
-#         ),
-#         filter_nearest=True,
-#         save_data=True,
-#     )
-#
-#     if result:
-#         print("\n--- Processed Options Contracts ---")
-#         print(
-#             "Target Expiry Date:",
-#             result.get("nearest_expiry"),
-#         )
-#         print(
-#             "Total Contracts:",
-#             result.get("total_contracts"),
-#         )
-#
-#         if result.get("data"):
-#             print("Sample Contract Format:")
-#             print(
-#                 json.dumps(
-#                     result["data"][0],
-#                     indent=4,
-#                 )
-#             )

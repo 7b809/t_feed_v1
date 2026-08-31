@@ -1,0 +1,38 @@
+
+# ============================================================
+# Manual Test
+# ============================================================
+
+# if __name__ == "__main__":
+#     logger.info(
+#         "Executing option contracts fetch and filtering..."
+#     )
+#
+#     result = get_options_contracts(
+#         instrument_key="NSE_INDEX|Nifty 50",
+#         output_filename=(
+#             "data/nearest_nifty_option_contracts.json"
+#         ),
+#         filter_nearest=True,
+#         save_data=True,
+#     )
+#
+#     if result:
+#         print("\n--- Processed Options Contracts ---")
+#         print(
+#             "Target Expiry Date:",
+#             result.get("nearest_expiry"),
+#         )
+#         print(
+#             "Total Contracts:",
+#             result.get("total_contracts"),
+#         )
+#
+#         if result.get("data"):
+#             print("Sample Contract Format:")
+#             print(
+#                 json.dumps(
+#                     result["data"][0],
+#                     indent=4,
+#                 )
+#             )

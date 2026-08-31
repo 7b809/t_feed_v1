@@ -1,25 +1,12 @@
-.env
-core/config.py
-main.py
-requirements.txt
-README.md
+services/option_service.py
 
 services/opening_range/ema_alerts.py
-services/opening_range/state.py
-services/opening_range/constants.py
-services/option_service.py
-services/telegram_service.py
-services/upstox_websocket.py
 
-api/opening_range_routes.py
-
-
-----------------------
-
+services/ema_alert_payload_service.py
 
 services/algo_app_service.py
-services/ema_alert_payload_service.py
+
 api/algo_app_routes.py
 
-
+core/config.py
 

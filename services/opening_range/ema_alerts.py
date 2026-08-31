@@ -6,8 +6,13 @@ from core import config
 from core.logger import get_logger
 from services.algo_app_service import algo_app_service
 from services.option_service import (
+    get_budget_range_order_instruments,
     get_nearest_order_instruments_for_ema_cross,
+    normalize_candle,
     options_cache,
+)
+from services.ema_alert_payload_service import (
+    ema_alert_payload_service,
 )
 from services.telegram_service import telegram_service
 
@@ -36,6 +41,93 @@ logger = get_logger(__file__)
 def is_selected_or_instrument_locked() -> bool:
     with state.selected_or_lock:
         return bool(state.selected_or_instrument_state.get("selected"))
+
+
+def get_instrument_candle_from_snapshot(
+    snapshot: dict,
+) -> dict | None:
+    if not isinstance(snapshot, dict):
+        return None
+
+    candle = snapshot.get("candle")
+
+    if not isinstance(candle, dict):
+        candle = snapshot.get("latest_candle")
+
+    if not isinstance(candle, dict):
+        candle = snapshot.get("completed_candle")
+
+    if not isinstance(candle, dict):
+        return None
+
+    return normalize_candle(candle)
+
+
+def get_instrument_market_data(
+    instrument_key: str,
+) -> dict:
+    normalized_key = str(instrument_key or "").strip()
+
+    if not normalized_key:
+        return {
+            "ltp": None,
+            "live_ltp": None,
+            "updated_at": None,
+            "live_ltp_updated_at": None,
+            "candle": None,
+        }
+
+    snapshot = state.get_latest_instrument_ltp_snapshot(normalized_key)
+
+    if not isinstance(snapshot, dict):
+        snapshot = {}
+
+    live_ltp = _safe_float(
+        snapshot.get("live_ltp"),
+        default=_safe_float(
+            snapshot.get("ltp"),
+            default=_safe_float(snapshot.get("close")),
+        ),
+    )
+
+    updated_at = (
+        snapshot.get("live_ltp_updated_at")
+        or snapshot.get("updated_at")
+        or snapshot.get("timestamp")
+    )
+
+    return {
+        "ltp": live_ltp,
+        "live_ltp": live_ltp,
+        "updated_at": updated_at,
+        "live_ltp_updated_at": updated_at,
+        "candle": get_instrument_candle_from_snapshot(snapshot),
+    }
+
+
+def build_market_data_by_instrument() -> dict:
+    contracts = options_cache.get(
+        "data",
+        [],
+    )
+
+    if not isinstance(contracts, list):
+        return {}
+
+    output = {}
+
+    for contract in contracts:
+        if not isinstance(contract, dict):
+            continue
+
+        instrument_key = str(contract.get("instrument_key") or "").strip()
+
+        if not instrument_key:
+            continue
+
+        output[instrument_key] = get_instrument_market_data(instrument_key)
+
+    return output
 
 
 def get_selected_or_instrument_key() -> str | None:
@@ -238,13 +330,15 @@ def extract_ema_candle_details(
 def get_suggested_order_instruments_for_ema(
     cross_type: str,
     isolated_instrument_type: str | None = None,
+    isolated_instrument_key: str | None = None,
+    market_data_by_instrument: dict[str, Any] | None = None,
 ) -> list:
     nifty_ltp = state.get_latest_main_index_ltp_value()
 
     if nifty_ltp is None or nifty_ltp <= 0:
         logger.warning(
-            "Suggested EMA instruments could not be resolved "
-            "because NIFTY LTP is unavailable."
+            "Suggested EMA instruments could not be "
+            "resolved because NIFTY LTP is unavailable."
         )
         return []
 
@@ -252,11 +346,20 @@ def get_suggested_order_instruments_for_ema(
 
     normalized_isolated_type = normalize_option_type(isolated_instrument_type)
 
+    if not isinstance(
+        market_data_by_instrument,
+        dict,
+    ):
+        market_data_by_instrument = build_market_data_by_instrument()
+
     try:
         instruments = get_nearest_order_instruments_for_ema_cross(
             current_nifty_ltp=nifty_ltp,
             cross_type=normalized_cross_type,
             isolated_instrument_type=(normalized_isolated_type),
+            market_data_by_instrument=(market_data_by_instrument),
+            isolated_instrument_key=(isolated_instrument_key),
+            include_unavailable=True,
         )
     except Exception as ex:
         logger.error(
@@ -271,7 +374,10 @@ def get_suggested_order_instruments_for_ema(
         )
         return []
 
-    if not isinstance(instruments, (list, tuple)):
+    if not isinstance(
+        instruments,
+        (list, tuple),
+    ):
         return []
 
     output = []
@@ -280,18 +386,7 @@ def get_suggested_order_instruments_for_ema(
         if not isinstance(item, dict):
             continue
 
-        instrument = dict(item)
-
-        instrument_key = instrument.get("instrument_key")
-
-        live_ltp = None
-        live_ltp_updated_at = None
-
-        if instrument_key:
-            ltp_snapshot = state.get_latest_instrument_ltp_snapshot(instrument_key)
-
-            live_ltp = ltp_snapshot.get("ltp")
-            live_ltp_updated_at = ltp_snapshot.get("updated_at")
+        instrument = deepcopy(item)
 
         option_type = normalize_option_type(
             instrument.get("instrument_type") or instrument.get("option_type")
@@ -300,13 +395,31 @@ def get_suggested_order_instruments_for_ema(
         if option_type:
             instrument["instrument_type"] = option_type
 
-        instrument["live_ltp"] = _safe_float(live_ltp)
+            instrument["option_type"] = option_type
 
-        instrument["live_ltp_updated_at"] = live_ltp_updated_at
+        instrument_key = str(instrument.get("instrument_key") or "").strip()
+
+        instrument["is_isolated_instrument"] = bool(
+            instrument_key
+            and isolated_instrument_key
+            and instrument_key == str(isolated_instrument_key).strip()
+        )
+
+        instrument["candle"] = normalize_candle(instrument.get("candle"))
 
         output.append(instrument)
 
-    maximum_instruments = int(config.EMA_ALERT_MAX_ORDER_INSTRUMENTS)
+    maximum_instruments = max(
+        0,
+        safe_int(
+            getattr(
+                config,
+                "EMA_ALERT_MAX_ORDER_INSTRUMENTS",
+                3,
+            ),
+            default=3,
+        ),
+    )
 
     return output[:maximum_instruments]
 
@@ -355,6 +468,8 @@ def enrich_nearest_instruments(
 ) -> list:
     output = []
 
+    normalized_isolated_key = str(isolated_instrument_key or "").strip()
+
     for item in instruments:
         if not isinstance(item, dict):
             continue
@@ -363,18 +478,28 @@ def enrich_nearest_instruments(
 
         instrument_key = str(instrument.get("instrument_key") or "").strip()
 
-        is_isolated = bool(instrument_key and instrument_key == isolated_instrument_key)
+        is_isolated = bool(
+            instrument_key
+            and normalized_isolated_key
+            and instrument_key == normalized_isolated_key
+        )
 
         instrument["is_isolated_instrument"] = is_isolated
 
-        if is_isolated:
-            instrument["ema_candle_close"] = ema_candle.get("close")
+        instrument["candle"] = normalize_candle(instrument.get("candle"))
 
-            instrument["ema_candle_low"] = ema_candle.get("low")
+        if is_isolated and not instrument.get("candle"):
+            instrument["candle"] = normalize_candle(ema_candle)
 
-            instrument["close_minus_low_points"] = ema_candle.get(
-                "close_minus_low_points"
-            )
+        candidate_candle = instrument.get("candle") or {}
+
+        instrument["ema_candle_close"] = candidate_candle.get("close")
+
+        instrument["ema_candle_low"] = candidate_candle.get("low")
+
+        instrument["close_minus_low_points"] = candidate_candle.get(
+            "close_minus_low_points"
+        )
 
         output.append(instrument)
 
@@ -387,7 +512,14 @@ def format_suggested_order_instruments(
     if not isinstance(instruments, list) or not instruments:
         return "Nearest Instrument Details:\n" "- not_available"
 
-    decimal_places = int(config.EMA_ISOLATED_ALERT_PRICE_DECIMAL_PLACES)
+    decimal_places = safe_int(
+        getattr(
+            config,
+            "EMA_ISOLATED_ALERT_PRICE_DECIMAL_PLACES",
+            2,
+        ),
+        default=2,
+    )
 
     lines = ["Nearest Instrument Details:"]
 
@@ -402,44 +534,45 @@ def format_suggested_order_instruments(
 
         live_ltp = item.get("live_ltp")
 
-        if live_ltp is None:
-            price_text = "ltp_not_available"
-        else:
-            price_text = f"{_format_numeric_value(
+        price_text = (
+            "ltp_not_available" if live_ltp is None else (f"{_format_numeric_value(
                     live_ltp,
                     decimal_places=decimal_places,
-                )}rs"
+                )}rs")
+        )
 
-        is_isolated = bool(item.get("is_isolated_instrument"))
+        candle = item.get("candle") or {}
 
-        if is_isolated:
-            close_value = _format_numeric_value(
-                item.get("ema_candle_close"),
-                unavailable_text="N/A",
-                decimal_places=decimal_places,
-            )
+        if not isinstance(candle, dict):
+            candle = {}
 
-            low_value = _format_numeric_value(
-                item.get("ema_candle_low"),
-                unavailable_text="N/A",
-                decimal_places=decimal_places,
-            )
+        close_value = _format_numeric_value(
+            candle.get("close"),
+            unavailable_text="N/A",
+            decimal_places=decimal_places,
+        )
 
-            movement_value = _format_numeric_value(
-                item.get("close_minus_low_points"),
-                unavailable_text="N/A",
-                decimal_places=decimal_places,
-            )
+        low_value = _format_numeric_value(
+            candle.get("low"),
+            unavailable_text="N/A",
+            decimal_places=decimal_places,
+        )
 
-            lines.append(
-                f"- {option_label} "
-                f"(Close: {close_value}, "
-                f"Low: {low_value}, "
-                f"Move: {movement_value} pts) "
-                f"- {price_text}"
-            )
-        else:
-            lines.append(f"- {option_label} - {price_text}")
+        movement_value = _format_numeric_value(
+            candle.get("close_minus_low_points"),
+            unavailable_text="N/A",
+            decimal_places=decimal_places,
+        )
+
+        isolated_text = " [ISOLATED]" if item.get("is_isolated_instrument") else ""
+
+        lines.append(
+            f"- {option_label}{isolated_text} "
+            f"(Close: {close_value}, "
+            f"Low: {low_value}, "
+            f"Move: {movement_value} pts) "
+            f"- {price_text}"
+        )
 
     if len(lines) == 1:
         lines.append("- not_available")
@@ -455,8 +588,16 @@ def format_suggested_order_instruments(
 def get_budget_range_instruments_for_ema(
     order_option_type: str | None,
     nifty_ltp: float | None,
+    isolated_instrument_key: str | None = None,
+    market_data_by_instrument: dict[str, Any] | None = None,
 ) -> list:
-    if not config.EMA_ALERT_BUDGET_RANGE_ENABLED:
+    if not bool(
+        getattr(
+            config,
+            "EMA_ALERT_BUDGET_RANGE_ENABLED",
+            True,
+        )
+    ):
         return []
 
     normalized_option_type = normalize_option_type(order_option_type)
@@ -464,179 +605,108 @@ def get_budget_range_instruments_for_ema(
     if not normalized_option_type:
         return []
 
-    minimum_price = float(config.EMA_ALERT_BUDGET_MIN_PRICE)
+    if not isinstance(
+        market_data_by_instrument,
+        dict,
+    ):
+        market_data_by_instrument = build_market_data_by_instrument()
 
-    maximum_price = float(config.EMA_ALERT_BUDGET_MAX_PRICE)
-
-    maximum_instruments = int(config.EMA_ALERT_BUDGET_MAX_INSTRUMENTS)
-
-    subscribed_only = bool(config.EMA_ALERT_BUDGET_SUBSCRIBED_ONLY)
-
-    require_live_ltp = bool(config.EMA_ALERT_BUDGET_REQUIRE_LIVE_LTP)
-
-    inclusive = bool(config.EMA_ALERT_BUDGET_RANGE_INCLUSIVE)
-
-    subscribed_keys = set(options_cache.get("subscribed_keys", []))
-
-    contracts = options_cache.get("data", [])
-
-    if not isinstance(contracts, list):
+    try:
+        instruments = get_budget_range_order_instruments(
+            option_type=normalized_option_type,
+            ltp_by_instrument=(market_data_by_instrument),
+            market_data_by_instrument=(market_data_by_instrument),
+            current_nifty_ltp=nifty_ltp,
+            minimum_price=getattr(
+                config,
+                "EMA_ALERT_BUDGET_MIN_PRICE",
+                20.0,
+            ),
+            maximum_price=getattr(
+                config,
+                "EMA_ALERT_BUDGET_MAX_PRICE",
+                30.0,
+            ),
+            maximum_instruments=getattr(
+                config,
+                "EMA_ALERT_BUDGET_MAX_INSTRUMENTS",
+                2,
+            ),
+            subscribed_only=getattr(
+                config,
+                "EMA_ALERT_BUDGET_SUBSCRIBED_ONLY",
+                True,
+            ),
+            sort_mode=getattr(
+                config,
+                "EMA_ALERT_BUDGET_SORT_MODE",
+                "nearest_to_budget_midpoint",
+            ),
+            inclusive=getattr(
+                config,
+                "EMA_ALERT_BUDGET_RANGE_INCLUSIVE",
+                True,
+            ),
+            isolated_instrument_key=(isolated_instrument_key),
+        )
+    except Exception as ex:
+        logger.error(
+            "Failed resolving budget EMA instruments. "
+            "option_type=%s, nifty_ltp=%s, "
+            "error=%s: %s",
+            normalized_option_type,
+            nifty_ltp,
+            type(ex).__name__,
+            ex,
+        )
         return []
 
-    budget_midpoint = (minimum_price + maximum_price) / 2
+    if not isinstance(instruments, list):
+        return []
 
-    candidates = []
+    output = []
 
-    for contract in contracts:
-        if not isinstance(contract, dict):
+    for item in instruments:
+        if not isinstance(item, dict):
             continue
 
-        instrument_key = str(contract.get("instrument_key") or "").strip()
+        instrument = deepcopy(item)
 
-        if not instrument_key:
-            continue
+        instrument["candle"] = normalize_candle(instrument.get("candle"))
 
-        if subscribed_only and instrument_key not in subscribed_keys:
-            continue
+        output.append(instrument)
 
-        contract_option_type = normalize_option_type(
-            contract.get("instrument_type") or contract.get("option_type")
-        )
-
-        if contract_option_type != normalized_option_type:
-            continue
-
-        ltp_snapshot = state.get_latest_instrument_ltp_snapshot(instrument_key)
-
-        live_ltp = _safe_float(ltp_snapshot.get("ltp"))
-
-        if require_live_ltp and live_ltp is None:
-            continue
-
-        if live_ltp is None:
-            continue
-
-        if inclusive:
-            within_range = minimum_price <= live_ltp <= maximum_price
-        else:
-            within_range = minimum_price < live_ltp < maximum_price
-
-        if not within_range:
-            continue
-
-        strike_price = _safe_float(contract.get("strike_price"))
-
-        distance_from_nifty = None
-
-        if strike_price is not None and nifty_ltp is not None:
-            distance_from_nifty = abs(strike_price - nifty_ltp)
-
-        candidate = {
-            "instrument_key": instrument_key,
-            "instrument_type": (contract_option_type),
-            "option_type": contract_option_type,
-            "strike_price": strike_price,
-            "trading_symbol": contract.get("trading_symbol"),
-            "expiry": contract.get("expiry"),
-            "live_ltp": live_ltp,
-            "live_ltp_updated_at": (ltp_snapshot.get("updated_at")),
-            "minimum_budget_price": minimum_price,
-            "maximum_budget_price": maximum_price,
-            "within_budget": True,
-            "distance_from_budget_midpoint": abs(live_ltp - budget_midpoint),
-            "distance_from_nifty": (distance_from_nifty),
-        }
-
-        candidates.append(candidate)
-
-    sort_mode = (
-        str(config.EMA_ALERT_BUDGET_SORT_MODE or "nearest_to_budget_midpoint")
-        .strip()
-        .lower()
-    )
-
-    if sort_mode == "nearest_to_nifty":
-        candidates.sort(
-            key=lambda item: (
-                (
-                    item.get("distance_from_nifty")
-                    if item.get("distance_from_nifty") is not None
-                    else float("inf")
-                ),
-                item.get("distance_from_budget_midpoint"),
-                (
-                    item.get("strike_price")
-                    if item.get("strike_price") is not None
-                    else float("inf")
-                ),
-            )
-        )
-
-    elif sort_mode == "price_ascending":
-        candidates.sort(
-            key=lambda item: (
-                (
-                    item.get("live_ltp")
-                    if item.get("live_ltp") is not None
-                    else float("inf")
-                ),
-                (
-                    item.get("strike_price")
-                    if item.get("strike_price") is not None
-                    else float("inf")
-                ),
-            )
-        )
-
-    elif sort_mode == "price_descending":
-        candidates.sort(
-            key=lambda item: (
-                (
-                    -item.get("live_ltp")
-                    if item.get("live_ltp") is not None
-                    else float("inf")
-                ),
-                (
-                    item.get("strike_price")
-                    if item.get("strike_price") is not None
-                    else float("inf")
-                ),
-            )
-        )
-
-    else:
-        candidates.sort(
-            key=lambda item: (
-                item.get("distance_from_budget_midpoint"),
-                (
-                    item.get("distance_from_nifty")
-                    if item.get("distance_from_nifty") is not None
-                    else float("inf")
-                ),
-                (
-                    item.get("strike_price")
-                    if item.get("strike_price") is not None
-                    else float("inf")
-                ),
-            )
-        )
-
-    return candidates[:maximum_instruments]
+    return output
 
 
 def format_budget_range_instruments(
     instruments: list,
     order_option_type: str | None,
 ) -> str:
-    decimal_places = int(config.EMA_ISOLATED_ALERT_PRICE_DECIMAL_PLACES)
+    decimal_places = safe_int(
+        getattr(
+            config,
+            "EMA_ISOLATED_ALERT_PRICE_DECIMAL_PLACES",
+            2,
+        ),
+        default=2,
+    )
 
     minimum_price = _format_numeric_value(
-        config.EMA_ALERT_BUDGET_MIN_PRICE,
+        getattr(
+            config,
+            "EMA_ALERT_BUDGET_MIN_PRICE",
+            20.0,
+        ),
         decimal_places=decimal_places,
     )
 
     maximum_price = _format_numeric_value(
-        config.EMA_ALERT_BUDGET_MAX_PRICE,
+        getattr(
+            config,
+            "EMA_ALERT_BUDGET_MAX_PRICE",
+            30.0,
+        ),
         decimal_places=decimal_places,
     )
 
@@ -653,8 +723,7 @@ def format_budget_range_instruments(
     ]
 
     if not isinstance(instruments, list) or not instruments:
-        lines.append(f"- No matching {option_type_text} instruments")
-
+        lines.append(f"- No matching " f"{option_type_text} instruments")
         return "\n".join(lines)
 
     for item in instruments:
@@ -668,14 +737,45 @@ def format_budget_range_instruments(
 
         live_ltp = _format_numeric_value(
             item.get("live_ltp"),
-            unavailable_text="ltp_not_available",
+            unavailable_text=("ltp_not_available"),
             decimal_places=decimal_places,
         )
 
-        lines.append(f"- {option_label} - {live_ltp}rs")
+        candle = item.get("candle") or {}
+
+        if not isinstance(candle, dict):
+            candle = {}
+
+        close_value = _format_numeric_value(
+            candle.get("close"),
+            unavailable_text="N/A",
+            decimal_places=decimal_places,
+        )
+
+        low_value = _format_numeric_value(
+            candle.get("low"),
+            unavailable_text="N/A",
+            decimal_places=decimal_places,
+        )
+
+        movement_value = _format_numeric_value(
+            candle.get("close_minus_low_points"),
+            unavailable_text="N/A",
+            decimal_places=decimal_places,
+        )
+
+        isolated_text = " [ISOLATED]" if item.get("is_isolated_instrument") else ""
+
+        lines.append(
+            f"- {option_label}{isolated_text} "
+            f"(Close: {close_value}, "
+            f"Low: {low_value}, "
+            f"Move: {movement_value} pts) "
+            f"- {live_ltp}rs"
+        )
 
     if len(lines) == 1:
-        lines.append(f"- No matching {option_type_text} instruments")
+        lines.append(f"- No matching " f"{option_type_text} instruments")
 
     return "\n".join(lines)
 
@@ -829,8 +929,6 @@ def _dispatch_algo_app_payload(
 # ============================================================
 # Canonical EMA Alert Payload
 # ============================================================
-
-
 def build_isolated_ema_alert_payload(
     ema_event: dict,
     selected_state: dict,
@@ -843,26 +941,88 @@ def build_isolated_ema_alert_payload(
     minute_alert_key: str | None,
     alert_direction: str,
 ) -> dict:
+    if not isinstance(ema_event, dict):
+        ema_event = {}
+
+    if not isinstance(selected_state, dict):
+        selected_state = {}
+
+    if not isinstance(contract_info, dict):
+        contract_info = {}
+
+    if not isinstance(suggested_instruments, list):
+        suggested_instruments = []
+
+    if not isinstance(budget_instruments, list):
+        budget_instruments = []
+
+    if not isinstance(ema_candle, dict):
+        ema_candle = {}
+
     now_market = get_now_market_time()
 
-    instrument_key = str(ema_event.get("instrument_key") or "").strip()
+    instrument_key = str(
+        ema_event.get("instrument_key")
+        or selected_state.get("instrument_key")
+        or contract_info.get("instrument_key")
+        or ""
+    ).strip()
 
     strike_price = _safe_float(contract_info.get("strike_price"))
 
-    selected_level = selected_state.get("selected_level") or "N/A"
+    normalized_isolated_type = normalize_option_type(
+        isolated_instrument_type
+        or contract_info.get("instrument_type")
+        or contract_info.get("option_type")
+    )
 
-    event_timestamp = ema_candle.get("timestamp") or _format_market_timestamp(
-        ema_event.get("timestamp")
+    normalized_order_side = normalize_option_type(suggested_order_option_type)
+
+    selected_level = (
+        selected_state.get("selected_level") or selected_state.get("level") or "N/A"
+    )
+
+    normalized_ema_candle = normalize_candle(ema_candle)
+
+    if not normalized_ema_candle:
+        normalized_ema_candle = extract_ema_candle_details(ema_event)
+
+    event_timestamp = normalized_ema_candle.get(
+        "timestamp"
+    ) or _format_market_timestamp(ema_event.get("timestamp"))
+
+    normalized_direction = (
+        str(alert_direction or normalize_ema_cross_direction(ema_event) or "unknown")
+        .strip()
+        .lower()
     )
 
     event_id = (
-        f"EMA-{instrument_key.replace('|', '-')}-"
+        f"EMA-"
+        f"{instrument_key.replace('|', '-')}-"
         f"{now_market.strftime('%Y%m%dT%H%M%S')}-"
-        f"{alert_direction}-"
+        f"{normalized_direction}-"
         f"{uuid4().hex[:8]}"
     )
 
     nifty_ltp = state.get_latest_main_index_ltp_value()
+
+    isolated_snapshot = (
+        state.get_latest_instrument_ltp_snapshot(instrument_key)
+        if instrument_key
+        else {}
+    )
+
+    if not isinstance(isolated_snapshot, dict):
+        isolated_snapshot = {}
+
+    isolated_instrument_ltp = _safe_float(
+        isolated_snapshot.get("live_ltp"),
+        default=_safe_float(
+            isolated_snapshot.get("ltp"),
+            default=_safe_float(normalized_ema_candle.get("close")),
+        ),
+    )
 
     ema_calculation_mode = (
         str(
@@ -876,34 +1036,204 @@ def build_isolated_ema_alert_payload(
         .lower()
     )
 
+    normalized_nearest_instruments = []
+
+    for item in suggested_instruments:
+        if not isinstance(item, dict):
+            continue
+
+        instrument = deepcopy(item)
+
+        item_key = str(instrument.get("instrument_key") or "").strip()
+
+        item_option_type = normalize_option_type(
+            instrument.get("instrument_type") or instrument.get("option_type")
+        )
+
+        item_candle = normalize_candle(instrument.get("candle"))
+
+        if not item_candle and item_key and item_key == instrument_key:
+            item_candle = deepcopy(normalized_ema_candle)
+
+        item_live_ltp = _safe_float(instrument.get("live_ltp"))
+
+        if item_live_ltp is None and item_candle:
+            item_live_ltp = _safe_float(item_candle.get("close"))
+
+        item_is_isolated = bool(
+            item_key and instrument_key and item_key == instrument_key
+        )
+
+        normalized_instrument = {
+            "instrument_key": (item_key or None),
+            "trading_symbol": instrument.get("trading_symbol"),
+            "instrument_type": item_option_type,
+            "option_type": item_option_type,
+            "strike_price": _safe_float(instrument.get("strike_price")),
+            "expiry": instrument.get("expiry"),
+            "underlying_symbol": instrument.get("underlying_symbol"),
+            "underlying_type": instrument.get("underlying_type"),
+            "lot_size": safe_int(
+                instrument.get("lot_size"),
+                default=0,
+            ),
+            "available": bool(
+                instrument.get(
+                    "available",
+                    bool(item_key),
+                )
+            ),
+            "live_ltp": item_live_ltp,
+            "live_ltp_updated_at": (
+                instrument.get("live_ltp_updated_at") or instrument.get("updated_at")
+            ),
+            "candle": deepcopy(item_candle),
+            "is_isolated_instrument": (item_is_isolated),
+        }
+
+        normalized_nearest_instruments.append(normalized_instrument)
+
+    normalized_budget_instruments = []
+
+    for item in budget_instruments:
+        if not isinstance(item, dict):
+            continue
+
+        instrument = deepcopy(item)
+
+        item_key = str(instrument.get("instrument_key") or "").strip()
+
+        item_option_type = normalize_option_type(
+            instrument.get("instrument_type") or instrument.get("option_type")
+        )
+
+        item_candle = normalize_candle(instrument.get("candle"))
+
+        if not item_candle and item_key and item_key == instrument_key:
+            item_candle = deepcopy(normalized_ema_candle)
+
+        item_live_ltp = _safe_float(instrument.get("live_ltp"))
+
+        if item_live_ltp is None and item_candle:
+            item_live_ltp = _safe_float(item_candle.get("close"))
+
+        item_is_isolated = bool(
+            item_key and instrument_key and item_key == instrument_key
+        )
+
+        normalized_instrument = {
+            "instrument_key": (item_key or None),
+            "trading_symbol": instrument.get("trading_symbol"),
+            "instrument_type": item_option_type,
+            "option_type": item_option_type,
+            "strike_price": _safe_float(instrument.get("strike_price")),
+            "expiry": instrument.get("expiry"),
+            "underlying_symbol": instrument.get("underlying_symbol"),
+            "underlying_type": instrument.get("underlying_type"),
+            "lot_size": safe_int(
+                instrument.get("lot_size"),
+                default=0,
+            ),
+            "available": bool(
+                instrument.get(
+                    "available",
+                    bool(item_key),
+                )
+            ),
+            "live_ltp": item_live_ltp,
+            "live_ltp_updated_at": (
+                instrument.get("live_ltp_updated_at") or instrument.get("updated_at")
+            ),
+            "candle": deepcopy(item_candle),
+            "is_isolated_instrument": (item_is_isolated),
+            "within_budget": bool(
+                instrument.get(
+                    "within_budget",
+                    True,
+                )
+            ),
+            "minimum_budget_price": _safe_float(
+                instrument.get("minimum_budget_price"),
+                default=_safe_float(
+                    getattr(
+                        config,
+                        "EMA_ALERT_BUDGET_MIN_PRICE",
+                        20.0,
+                    )
+                ),
+            ),
+            "maximum_budget_price": _safe_float(
+                instrument.get("maximum_budget_price"),
+                default=_safe_float(
+                    getattr(
+                        config,
+                        "EMA_ALERT_BUDGET_MAX_PRICE",
+                        30.0,
+                    )
+                ),
+            ),
+            "distance_from_budget_midpoint": (
+                _safe_float(instrument.get("distance_from_budget_midpoint"))
+            ),
+            "distance_from_nifty": _safe_float(instrument.get("distance_from_nifty")),
+        }
+
+        normalized_budget_instruments.append(normalized_instrument)
+
     payload = {
-        "schema_version": (config.ALGO_APP_PAYLOAD_SCHEMA_VERSION),
-        "event_id": (event_id if config.ALGO_APP_INCLUDE_EVENT_ID else None),
+        "schema_version": getattr(
+            config,
+            "ALGO_APP_PAYLOAD_SCHEMA_VERSION",
+            "1.0",
+        ),
+        "event_id": (
+            event_id
+            if bool(
+                getattr(
+                    config,
+                    "ALGO_APP_INCLUDE_EVENT_ID",
+                    True,
+                )
+            )
+            else None
+        ),
         "event_type": ("isolated_instrument_ema_alert"),
-        "source": config.ALGO_APP_SOURCE_NAME,
+        "source": getattr(
+            config,
+            "ALGO_APP_SOURCE_NAME",
+            "option_feed_engine",
+        ),
         "market": "NSE",
-        "timezone": config.MARKET_TIMEZONE,
+        "timezone": getattr(
+            config,
+            "MARKET_TIMEZONE",
+            "Asia/Kolkata",
+        ),
         "created_at": now_market.isoformat(),
         "instrument": {
             "instrument_key": instrument_key,
-            "trading_symbol": (contract_info.get("trading_symbol")),
-            "underlying_symbol": (
-                contract_info.get(
-                    "underlying_symbol",
-                    "NIFTY",
-                )
-            ),
-            "instrument_type": (isolated_instrument_type),
+            "trading_symbol": contract_info.get("trading_symbol"),
+            "underlying_symbol": (contract_info.get("underlying_symbol") or "NIFTY"),
+            "underlying_type": contract_info.get("underlying_type"),
+            "instrument_type": (normalized_isolated_type),
+            "option_type": (normalized_isolated_type),
             "strike_price": strike_price,
             "expiry": contract_info.get("expiry"),
+            "lot_size": safe_int(
+                contract_info.get("lot_size"),
+                default=0,
+            ),
+            "live_ltp": (isolated_instrument_ltp),
             "isolated": True,
         },
         "opening_range": {
             "selected_level": selected_level,
-            "level_value": (
+            "selected_level_value": _safe_float(
                 selected_state.get("level_value")
                 or selected_state.get("selected_level_value")
             ),
+            "trigger_price": _safe_float(selected_state.get("trigger_price")),
+            "trigger_field": (selected_state.get("trigger_field")),
             "touch_source": (
                 selected_state.get("touch_source")
                 or selected_state.get("selection_source")
@@ -911,70 +1241,160 @@ def build_isolated_ema_alert_payload(
             "touch_time": (
                 selected_state.get("touch_time") or selected_state.get("selected_at")
             ),
+            "selected_at": (selected_state.get("selected_at")),
+            "selection_priority": (selected_state.get("selection_priority")),
             "selection_reason": (selected_state.get("selection_reason")),
+            "reference_average": _safe_float(selected_state.get("reference_average")),
+            "average_window": deepcopy(selected_state.get("average_window")),
+            "range": deepcopy(selected_state.get("range")),
+            "levels": deepcopy(selected_state.get("levels")),
         },
         "market_snapshot": {
             "nifty_ltp": nifty_ltp,
-            "isolated_instrument_ltp": (ema_candle.get("close")),
+            "isolated_instrument_ltp": (isolated_instrument_ltp),
+            "snapshot_at": (now_market.isoformat()),
         },
         "ema": {
-            "cross_type": (ema_event.get("cross_type")),
-            "signal": (ema_event.get("current_signal") or alert_direction),
+            "cross_type": ema_event.get("cross_type"),
+            "direction": normalized_direction,
+            "signal": (ema_event.get("current_signal") or normalized_direction),
             "calculation_mode": (ema_calculation_mode),
             "fast_period": safe_int(
                 ema_event.get(
                     "ema_fast_period",
-                    config.LIVE_EMA_FAST_PERIOD,
+                    getattr(
+                        config,
+                        "LIVE_EMA_FAST_PERIOD",
+                        9,
+                    ),
                 ),
-                default=config.LIVE_EMA_FAST_PERIOD,
+                default=getattr(
+                    config,
+                    "LIVE_EMA_FAST_PERIOD",
+                    9,
+                ),
             ),
             "slow_period": safe_int(
                 ema_event.get(
                     "ema_slow_period",
-                    config.LIVE_EMA_SLOW_PERIOD,
+                    getattr(
+                        config,
+                        "LIVE_EMA_SLOW_PERIOD",
+                        21,
+                    ),
                 ),
-                default=config.LIVE_EMA_SLOW_PERIOD,
+                default=getattr(
+                    config,
+                    "LIVE_EMA_SLOW_PERIOD",
+                    21,
+                ),
             ),
             "fast_value": _safe_float(ema_event.get("ema_fast")),
             "slow_value": _safe_float(ema_event.get("ema_slow")),
             "previous_fast_value": _safe_float(ema_event.get("previous_ema_fast")),
             "previous_slow_value": _safe_float(ema_event.get("previous_ema_slow")),
-            "previous_signal": (ema_event.get("previous_signal")),
-            "current_signal": (ema_event.get("current_signal")),
+            "previous_signal": ema_event.get("previous_signal"),
+            "current_signal": ema_event.get("current_signal"),
+            "price": _safe_float(
+                ema_event.get(
+                    "close",
+                    ema_event.get("ltp"),
+                )
+            ),
             "source": ema_event.get("source"),
             "timestamp": event_timestamp,
-            "candle": deepcopy(ema_candle),
+            "candle": deepcopy(normalized_ema_candle),
         },
         "order_suggestion": {
             "rule": ("bullish_same_side_" "bearish_opposite_side"),
-            "isolated_instrument_type": (isolated_instrument_type),
-            "suggested_order_side": (suggested_order_option_type),
-            "nearest_instruments": deepcopy(suggested_instruments),
+            "isolated_instrument_type": (normalized_isolated_type),
+            "suggested_order_side": (normalized_order_side),
+            "nearest_instruments": (normalized_nearest_instruments),
             "budget_filter": {
-                "enabled": (config.EMA_ALERT_BUDGET_RANGE_ENABLED),
-                "minimum_price": (config.EMA_ALERT_BUDGET_MIN_PRICE),
-                "maximum_price": (config.EMA_ALERT_BUDGET_MAX_PRICE),
-                "maximum_instruments": (config.EMA_ALERT_BUDGET_MAX_INSTRUMENTS),
-                "sort_mode": (config.EMA_ALERT_BUDGET_SORT_MODE),
-                "matched_count": len(budget_instruments),
-                "instruments": deepcopy(budget_instruments),
+                "enabled": bool(
+                    getattr(
+                        config,
+                        "EMA_ALERT_BUDGET_RANGE_ENABLED",
+                        True,
+                    )
+                ),
+                "minimum_price": _safe_float(
+                    getattr(
+                        config,
+                        "EMA_ALERT_BUDGET_MIN_PRICE",
+                        20.0,
+                    )
+                ),
+                "maximum_price": _safe_float(
+                    getattr(
+                        config,
+                        "EMA_ALERT_BUDGET_MAX_PRICE",
+                        30.0,
+                    )
+                ),
+                "maximum_instruments": safe_int(
+                    getattr(
+                        config,
+                        "EMA_ALERT_BUDGET_MAX_INSTRUMENTS",
+                        2,
+                    ),
+                    default=2,
+                ),
+                "sort_mode": str(
+                    getattr(
+                        config,
+                        "EMA_ALERT_BUDGET_SORT_MODE",
+                        "nearest_to_budget_midpoint",
+                    )
+                )
+                .strip()
+                .lower(),
+                "matched_count": len(normalized_budget_instruments),
+                "instruments": (normalized_budget_instruments),
             },
         },
         "duplicate_control": {
-            "minute_alert_key": minute_alert_key,
-            "direction": alert_direction,
+            "minute_alert_key": (minute_alert_key),
+            "direction": normalized_direction,
         },
         "raw_ema_event": deepcopy(ema_event),
     }
 
-    if not config.EMA_ALGO_PAYLOAD_INCLUDE_OPENING_RANGE:
-        payload.pop("opening_range", None)
+    if not bool(
+        getattr(
+            config,
+            "EMA_ALGO_PAYLOAD_INCLUDE_OPENING_RANGE",
+            True,
+        )
+    ):
+        payload.pop(
+            "opening_range",
+            None,
+        )
 
-    if not config.EMA_ALGO_PAYLOAD_INCLUDE_EMA_VALUES:
-        payload["ema"].pop("fast_period", None)
-        payload["ema"].pop("slow_period", None)
-        payload["ema"].pop("fast_value", None)
-        payload["ema"].pop("slow_value", None)
+    if not bool(
+        getattr(
+            config,
+            "EMA_ALGO_PAYLOAD_INCLUDE_EMA_VALUES",
+            True,
+        )
+    ):
+        payload["ema"].pop(
+            "fast_period",
+            None,
+        )
+        payload["ema"].pop(
+            "slow_period",
+            None,
+        )
+        payload["ema"].pop(
+            "fast_value",
+            None,
+        )
+        payload["ema"].pop(
+            "slow_value",
+            None,
+        )
         payload["ema"].pop(
             "previous_fast_value",
             None,
@@ -984,16 +1404,81 @@ def build_isolated_ema_alert_payload(
             None,
         )
 
-    if not config.EMA_ALGO_PAYLOAD_INCLUDE_CANDLE:
-        payload["ema"].pop("candle", None)
+    if not bool(
+        getattr(
+            config,
+            "EMA_ALGO_PAYLOAD_INCLUDE_CANDLE",
+            True,
+        )
+    ):
+        payload["ema"].pop(
+            "candle",
+            None,
+        )
 
-    if not config.EMA_ALGO_PAYLOAD_INCLUDE_NEAREST_INSTRUMENTS:
+    if not bool(
+        getattr(
+            config,
+            "EMA_ALGO_PAYLOAD_INCLUDE_NEAREST_INSTRUMENTS",
+            True,
+        )
+    ):
         payload["order_suggestion"]["nearest_instruments"] = []
 
-    if not config.EMA_ALGO_PAYLOAD_INCLUDE_BUDGET_INSTRUMENTS:
+    include_nearest_candles = bool(
+        getattr(
+            config,
+            "EMA_ALGO_PAYLOAD_INCLUDE_NEAREST_INSTRUMENT_CANDLES",
+            True,
+        )
+    )
+
+    if not include_nearest_candles:
+        for instrument in payload["order_suggestion"]["nearest_instruments"]:
+            if isinstance(instrument, dict):
+                instrument.pop(
+                    "candle",
+                    None,
+                )
+
+    if not bool(
+        getattr(
+            config,
+            "EMA_ALGO_PAYLOAD_INCLUDE_BUDGET_INSTRUMENTS",
+            True,
+        )
+    ):
         payload["order_suggestion"]["budget_filter"]["instruments"] = []
 
         payload["order_suggestion"]["budget_filter"]["matched_count"] = 0
+
+    include_budget_candles = bool(
+        getattr(
+            config,
+            "EMA_ALGO_PAYLOAD_INCLUDE_BUDGET_INSTRUMENT_CANDLES",
+            True,
+        )
+    )
+
+    if not include_budget_candles:
+        for instrument in payload["order_suggestion"]["budget_filter"]["instruments"]:
+            if isinstance(instrument, dict):
+                instrument.pop(
+                    "candle",
+                    None,
+                )
+
+    if not bool(
+        getattr(
+            config,
+            "EMA_ALGO_PAYLOAD_INCLUDE_RAW_EMA_EVENT",
+            True,
+        )
+    ):
+        payload.pop(
+            "raw_ema_event",
+            None,
+        )
 
     return payload
 
@@ -1144,7 +1629,13 @@ def process_selected_or_ema_cross_alert(
 
     telegram_enabled = bool(DEFAULT_EMA_ISOLATED_TELEGRAM_ENABLED)
 
-    algo_enabled = bool(config.ALGO_APP_ENABLED)
+    algo_enabled = bool(
+        getattr(
+            config,
+            "ALGO_APP_ENABLED",
+            False,
+        )
+    )
 
     if not telegram_enabled and not algo_enabled:
         return False
@@ -1153,6 +1644,13 @@ def process_selected_or_ema_cross_alert(
 
     selected_state = get_selected_or_instrument_state()
 
+    if not isinstance(selected_state, dict):
+        logger.warning(
+            "Isolated EMA alert skipped because "
+            "selected instrument state is invalid."
+        )
+        return False
+
     if not selected_state.get("selected"):
         return False
 
@@ -1160,7 +1658,17 @@ def process_selected_or_ema_cross_alert(
 
     event_key = str(ema_event.get("instrument_key") or "").strip()
 
-    if not isolated_key or not event_key or isolated_key != event_key:
+    if not isolated_key or not event_key:
+        logger.warning(
+            "Isolated EMA alert skipped because "
+            "instrument key is unavailable. "
+            "isolated_key=%s, event_key=%s",
+            isolated_key or None,
+            event_key or None,
+        )
+        return False
+
+    if isolated_key != event_key:
         return False
 
     contract_info = selected_state.get("contract_info") or {}
@@ -1168,15 +1676,62 @@ def process_selected_or_ema_cross_alert(
     if not isinstance(contract_info, dict):
         contract_info = {}
 
+    if not contract_info:
+        contracts_by_key = options_cache.get(
+            "contracts_by_key",
+            {},
+        )
+
+        if isinstance(contracts_by_key, dict):
+            cached_contract = contracts_by_key.get(event_key)
+
+            if isinstance(cached_contract, dict):
+                contract_info = deepcopy(cached_contract)
+
     isolated_instrument_type = get_isolated_instrument_type_from_state(selected_state)
+
+    if not isolated_instrument_type:
+        isolated_instrument_type = normalize_option_type(
+            contract_info.get("instrument_type") or contract_info.get("option_type")
+        )
 
     cross_type = str(ema_event.get("cross_type") or "").strip()
 
-    event_timestamp = ema_event.get("timestamp")
-
-    minute_alert_key = None
+    if not cross_type:
+        logger.warning(
+            "Isolated EMA alert skipped because "
+            "cross_type is unavailable. "
+            "instrument_key=%s",
+            event_key,
+        )
+        return False
 
     alert_direction = normalize_ema_cross_direction(ema_event)
+
+    if alert_direction not in {
+        "bullish",
+        "bearish",
+    }:
+        logger.warning(
+            "Isolated EMA alert skipped because "
+            "direction could not be resolved. "
+            "instrument_key=%s, cross_type=%s, "
+            "current_signal=%s",
+            event_key,
+            cross_type,
+            ema_event.get("current_signal"),
+        )
+        return False
+
+    event_candle = ema_event.get("candle")
+
+    if not isinstance(event_candle, dict):
+        event_candle = {}
+
+    event_timestamp = ema_event.get("timestamp") or event_candle.get("timestamp")
+
+    minute_alert_key = None
+    duplicate_key_reserved = False
 
     if DEFAULT_LIVE_EMA_CALCULATION_MODE:
         (
@@ -1198,168 +1753,364 @@ def process_selected_or_ema_cross_alert(
                 minute_alert_key,
                 alert_direction,
             )
+            return False
+
+        duplicate_key_reserved = bool(minute_alert_key)
+
+    try:
+        ema_candle = extract_ema_candle_details(ema_event)
+
+        if not isinstance(ema_candle, dict):
+            ema_candle = {}
+
+        market_data_by_instrument = build_market_data_by_instrument()
+
+        if not isinstance(
+            market_data_by_instrument,
+            dict,
+        ):
+            market_data_by_instrument = {}
+
+        isolated_market_data = market_data_by_instrument.get(event_key)
+
+        if not isinstance(
+            isolated_market_data,
+            dict,
+        ):
+            isolated_market_data = {}
+
+        isolated_ltp = _safe_float(
+            isolated_market_data.get("live_ltp"),
+            default=_safe_float(
+                isolated_market_data.get("ltp"),
+                default=_safe_float(ema_candle.get("close")),
+            ),
+        )
+
+        isolated_updated_at = (
+            isolated_market_data.get("live_ltp_updated_at")
+            or isolated_market_data.get("updated_at")
+            or event_timestamp
+        )
+
+        isolated_candle = isolated_market_data.get("candle")
+
+        if not isinstance(
+            isolated_candle,
+            dict,
+        ):
+            isolated_candle = deepcopy(ema_candle)
+
+        market_data_by_instrument[event_key] = {
+            **isolated_market_data,
+            "ltp": isolated_ltp,
+            "live_ltp": isolated_ltp,
+            "updated_at": (isolated_updated_at),
+            "live_ltp_updated_at": (isolated_updated_at),
+            "candle": isolated_candle,
+        }
+
+        suggested_instruments = get_suggested_order_instruments_for_ema(
+            cross_type=cross_type,
+            isolated_instrument_type=(isolated_instrument_type),
+            isolated_instrument_key=(event_key),
+            market_data_by_instrument=(market_data_by_instrument),
+        )
+
+        if not isinstance(
+            suggested_instruments,
+            list,
+        ):
+            suggested_instruments = []
+
+        suggested_order_option_type = get_suggested_order_option_type(
+            instruments=(suggested_instruments),
+            cross_type=cross_type,
+            isolated_instrument_type=(isolated_instrument_type),
+        )
+
+        enriched_nearest_instruments = enrich_nearest_instruments(
+            instruments=(suggested_instruments),
+            isolated_instrument_key=(event_key),
+            ema_candle=ema_candle,
+        )
+
+        if not isinstance(
+            enriched_nearest_instruments,
+            list,
+        ):
+            enriched_nearest_instruments = []
+
+        nifty_ltp = state.get_latest_main_index_ltp_value()
+
+        budget_instruments = get_budget_range_instruments_for_ema(
+            order_option_type=(suggested_order_option_type),
+            nifty_ltp=nifty_ltp,
+            isolated_instrument_key=(event_key),
+            market_data_by_instrument=(market_data_by_instrument),
+        )
+
+        if not isinstance(
+            budget_instruments,
+            list,
+        ):
+            budget_instruments = []
+
+        payload = ema_alert_payload_service.build_isolated_ema_alert_payload(
+            ema_event=ema_event,
+            selected_state=selected_state,
+            contract_info=contract_info,
+            isolated_instrument_type=(isolated_instrument_type),
+            suggested_order_option_type=(suggested_order_option_type),
+            suggested_instruments=(enriched_nearest_instruments),
+            budget_instruments=(budget_instruments),
+            ema_candle=ema_candle,
+            minute_alert_key=(minute_alert_key),
+            alert_direction=(alert_direction),
+            nifty_ltp=nifty_ltp,
+        )
+
+        if not isinstance(payload, dict):
+            logger.error(
+                "Isolated EMA payload builder returned "
+                "an invalid result. "
+                "instrument_key=%s",
+                event_key,
+            )
+
+            if duplicate_key_reserved and minute_alert_key:
+                state.release_ema_minute_key(minute_alert_key)
 
             return False
 
-    ema_candle = extract_ema_candle_details(ema_event)
-
-    suggested_instruments = get_suggested_order_instruments_for_ema(
-        cross_type=cross_type,
-        isolated_instrument_type=(isolated_instrument_type),
-    )
-
-    suggested_order_option_type = get_suggested_order_option_type(
-        instruments=suggested_instruments,
-        cross_type=cross_type,
-        isolated_instrument_type=(isolated_instrument_type),
-    )
-
-    enriched_nearest_instruments = enrich_nearest_instruments(
-        instruments=suggested_instruments,
-        isolated_instrument_key=event_key,
-        ema_candle=ema_candle,
-    )
-
-    nifty_ltp = state.get_latest_main_index_ltp_value()
-
-    budget_instruments = get_budget_range_instruments_for_ema(
-        order_option_type=(suggested_order_option_type),
-        nifty_ltp=nifty_ltp,
-    )
-
-    payload = build_isolated_ema_alert_payload(
-        ema_event=ema_event,
-        selected_state=selected_state,
-        contract_info=contract_info,
-        isolated_instrument_type=(isolated_instrument_type),
-        suggested_order_option_type=(suggested_order_option_type),
-        suggested_instruments=(enriched_nearest_instruments),
-        budget_instruments=(budget_instruments),
-        ema_candle=ema_candle,
-        minute_alert_key=minute_alert_key,
-        alert_direction=alert_direction,
-    )
-
-    telegram_message = build_isolated_ema_telegram_message(payload)
-
-    logger.info(
-        "Processing isolated EMA alert. "
-        "event_id=%s, instrument_key=%s, "
-        "cross_type=%s, signal=%s, "
-        "isolated_type=%s, order_side=%s, "
-        "budget_matches=%s",
-        payload.get("event_id"),
-        event_key,
-        cross_type,
-        alert_direction,
-        isolated_instrument_type,
-        suggested_order_option_type,
-        len(budget_instruments),
-    )
-
-    telegram_sent = False
-    algo_dispatched = False
-
-    if telegram_enabled:
-        telegram_sent = _send_telegram_message(
-            title="Isolated Instrument EMA Alert",
-            message=telegram_message,
-            level="EMA",
+        order_suggestion = payload.get(
+            "order_suggestion",
+            {},
         )
 
-    if algo_enabled:
-        algo_dispatched = _dispatch_algo_app_payload(payload)
+        if not isinstance(
+            order_suggestion,
+            dict,
+        ):
+            order_suggestion = {}
 
-    if telegram_enabled and not telegram_sent and minute_alert_key:
-        state.release_ema_minute_key(minute_alert_key)
+        payload_nearest_instruments = order_suggestion.get(
+            "nearest_instruments",
+            [],
+        )
 
-    delivery_record = {
-        "telegram": {
-            "enabled": telegram_enabled,
-            "attempted": telegram_enabled,
-            "success": telegram_sent,
-        },
-        "algo_app": {
-            "enabled": algo_enabled,
-            "attempted": algo_enabled,
-            "dispatched": algo_dispatched,
-        },
-    }
+        if not isinstance(
+            payload_nearest_instruments,
+            list,
+        ):
+            payload_nearest_instruments = []
 
-    alert_record = {
-        "type": ("isolated_instrument_ema_alert"),
-        "event_id": payload.get("event_id"),
-        "instrument_key": event_key,
-        "contract_info": deepcopy(contract_info),
-        "selected_level": (selected_state.get("selected_level")),
-        "nifty_ltp": nifty_ltp,
-        "isolated_instrument_type": (isolated_instrument_type),
-        "suggested_order_option_type": (suggested_order_option_type),
-        "minute_alert_key": minute_alert_key,
-        "alert_direction": alert_direction,
-        "ema_calculation_mode": (payload.get("ema", {}).get("calculation_mode")),
-        "ema_event": deepcopy(ema_event),
-        "ema_candle": deepcopy(ema_candle),
-        "suggested_order_instruments": deepcopy(enriched_nearest_instruments),
-        "budget_range_instruments": deepcopy(budget_instruments),
-        "payload": deepcopy(payload),
-        "delivery": delivery_record,
-        "created_at": (get_now_market_time().isoformat()),
-    }
+        budget_filter_payload = order_suggestion.get(
+            "budget_filter",
+            {},
+        )
 
-    delivery_accepted = bool(telegram_sent or algo_dispatched)
+        if not isinstance(
+            budget_filter_payload,
+            dict,
+        ):
+            budget_filter_payload = {}
 
-    if delivery_accepted:
-        with state.selected_or_lock:
-            state.selected_or_ema_alerts.append(alert_record)
+        payload_budget_instruments = budget_filter_payload.get(
+            "instruments",
+            [],
+        )
 
-            current_alert_count = safe_int(
-                state.selected_or_instrument_state.get(
-                    "ema_alerts_count",
-                    0,
-                ),
-                default=0,
-            )
+        if not isinstance(
+            payload_budget_instruments,
+            list,
+        ):
+            payload_budget_instruments = []
 
-            state.selected_or_instrument_state["ema_alerts_count"] = (
-                current_alert_count + 1
-            )
+        budget_match_count = safe_int(
+            budget_filter_payload.get(
+                "matched_count",
+                len(payload_budget_instruments),
+            ),
+            default=len(payload_budget_instruments),
+        )
 
-            state.selected_or_instrument_state["last_ema_alert"] = alert_record
+        telegram_message = build_isolated_ema_telegram_message(payload)
 
-            selected_state_snapshot = deepcopy(state.selected_or_instrument_state)
-
-            isolated_ema_alert_count = len(state.selected_or_ema_alerts)
-
-        with state.opening_range_cache_lock:
-            state.opening_range_cache["isolated_ema_alerts_count"] = (
-                isolated_ema_alert_count
-            )
-
-            state.opening_range_cache["isolated_instrument"] = selected_state_snapshot
-
-            state.opening_range_cache["isolated_instrument_selected"] = bool(
-                selected_state_snapshot.get("selected")
-            )
-
-            state.opening_range_cache["isolated_instrument_selected_at"] = (
-                selected_state_snapshot.get("selected_at")
-            )
-
-            state.opening_range_cache["isolated_instrument_selection_reason"] = (
-                selected_state_snapshot.get("selection_reason")
-            )
-
-    if not delivery_accepted:
-        logger.warning(
-            "Isolated EMA alert was not accepted by "
-            "Telegram or Algo App. "
-            "instrument_key=%s, event_id=%s",
-            event_key,
+        logger.info(
+            "Processing isolated EMA alert. "
+            "event_id=%s, instrument_key=%s, "
+            "cross_type=%s, direction=%s, "
+            "isolated_type=%s, order_side=%s, "
+            "nearest_instruments=%s, "
+            "budget_matches=%s",
             payload.get("event_id"),
+            event_key,
+            cross_type,
+            alert_direction,
+            isolated_instrument_type,
+            suggested_order_option_type,
+            len(payload_nearest_instruments),
+            budget_match_count,
         )
 
-    return delivery_accepted
+        telegram_sent = False
+        algo_dispatched = False
+
+        if telegram_enabled:
+            telegram_sent = _send_telegram_message(
+                title=("Isolated Instrument " "EMA Alert"),
+                message=telegram_message,
+                level="EMA",
+            )
+
+        if algo_enabled:
+            algo_dispatched = _dispatch_algo_app_payload(payload)
+
+        delivery_accepted = bool(telegram_sent or algo_dispatched)
+
+        if not delivery_accepted and duplicate_key_reserved and minute_alert_key:
+            state.release_ema_minute_key(minute_alert_key)
+
+        delivery_record = {
+            "telegram": {
+                "enabled": telegram_enabled,
+                "attempted": (telegram_enabled),
+                "success": telegram_sent,
+            },
+            "algo_app": {
+                "enabled": algo_enabled,
+                "attempted": algo_enabled,
+                "dispatched": (algo_dispatched),
+                "delivery_mode": (
+                    "background"
+                    if bool(
+                        getattr(
+                            config,
+                            "ALGO_APP_SEND_IN_BACKGROUND",
+                            True,
+                        )
+                    )
+                    else "synchronous"
+                ),
+            },
+        }
+
+        alert_record = {
+            "type": ("isolated_instrument_ema_alert"),
+            "event_id": payload.get("event_id"),
+            "instrument_key": event_key,
+            "contract_info": deepcopy(contract_info),
+            "selected_level": (selected_state.get("selected_level")),
+            "nifty_ltp": nifty_ltp,
+            "isolated_instrument_type": (isolated_instrument_type),
+            "suggested_order_option_type": (suggested_order_option_type),
+            "minute_alert_key": (minute_alert_key),
+            "alert_direction": (alert_direction),
+            "ema_calculation_mode": (
+                payload.get(
+                    "ema",
+                    {},
+                ).get("calculation_mode")
+            ),
+            "ema_event": deepcopy(ema_event),
+            "ema_candle": deepcopy(ema_candle),
+            "suggested_order_instruments": (deepcopy(payload_nearest_instruments)),
+            "budget_range_instruments": (deepcopy(payload_budget_instruments)),
+            "payload": deepcopy(payload),
+            "delivery": delivery_record,
+            "created_at": (get_now_market_time().isoformat()),
+        }
+
+        if delivery_accepted:
+            with state.selected_or_lock:
+                state.selected_or_ema_alerts.append(alert_record)
+
+                current_alert_count = safe_int(
+                    state.selected_or_instrument_state.get(
+                        "ema_alerts_count",
+                        0,
+                    ),
+                    default=0,
+                )
+
+                state.selected_or_instrument_state["ema_alerts_count"] = (
+                    current_alert_count + 1
+                )
+
+                state.selected_or_instrument_state["last_ema_alert"] = alert_record
+
+                selected_state_snapshot = deepcopy(state.selected_or_instrument_state)
+
+                isolated_ema_alert_count = len(state.selected_or_ema_alerts)
+
+            with state.opening_range_cache_lock:
+                state.opening_range_cache["isolated_ema_alerts_count"] = (
+                    isolated_ema_alert_count
+                )
+
+                state.opening_range_cache["isolated_instrument"] = (
+                    selected_state_snapshot
+                )
+
+                state.opening_range_cache["isolated_instrument_selected"] = bool(
+                    selected_state_snapshot.get("selected")
+                )
+
+                state.opening_range_cache["isolated_instrument_selected_at"] = (
+                    selected_state_snapshot.get("selected_at")
+                )
+
+                state.opening_range_cache["isolated_instrument_selection_reason"] = (
+                    selected_state_snapshot.get("selection_reason")
+                )
+
+            logger.info(
+                "Isolated EMA alert accepted. "
+                "event_id=%s, instrument_key=%s, "
+                "telegram_sent=%s, "
+                "algo_dispatched=%s",
+                payload.get("event_id"),
+                event_key,
+                telegram_sent,
+                algo_dispatched,
+            )
+        else:
+            logger.warning(
+                "Isolated EMA alert was not accepted "
+                "by Telegram or Algo App. "
+                "instrument_key=%s, event_id=%s",
+                event_key,
+                payload.get("event_id"),
+            )
+
+        return delivery_accepted
+
+    except Exception as ex:
+        if duplicate_key_reserved and minute_alert_key:
+            try:
+                state.release_ema_minute_key(minute_alert_key)
+            except Exception as release_ex:
+                logger.error(
+                    "Failed releasing isolated EMA "
+                    "duplicate key after processing "
+                    "failure. key=%s, error=%s: %s",
+                    minute_alert_key,
+                    type(release_ex).__name__,
+                    release_ex,
+                )
+
+        logger.error(
+            "Isolated EMA alert processing failed. "
+            "instrument_key=%s, cross_type=%s, "
+            "error=%s: %s",
+            event_key,
+            cross_type,
+            type(ex).__name__,
+            ex,
+        )
+
+        return False
 
 
 # ============================================================

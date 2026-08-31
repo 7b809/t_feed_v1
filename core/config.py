@@ -4,6 +4,11 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+# Hard Coded Configs
+
+OPENING_RANGE_ISOLATION_ALLOW_PRIORITY_UPGRADE = True
+ALGO_TELE_APP = True
+
 # ============================================================
 # MongoDB Configuration
 # ============================================================
@@ -521,34 +526,6 @@ OPENING_RANGE_ISOLATION_AVERAGE_WINDOW_POINTS = float(
     )
 )
 
-OPENING_RANGE_ISOLATION_TOUCH_LEVELS = [
-    value.strip().upper()
-    for value in os.getenv(
-        "OPENING_RANGE_ISOLATION_TOUCH_LEVELS",
-        "R2,R3,S2,S3",
-    ).split(",")
-    if value.strip()
-]
-
-# ============================================================
-# Opening Range Isolation Configuration
-# ============================================================
-
-OPENING_RANGE_ISOLATED_INSTRUMENT_ENABLED = (
-    os.getenv(
-        "OPENING_RANGE_ISOLATED_INSTRUMENT_ENABLED",
-        "true",
-    ).lower()
-    == "true"
-)
-
-OPENING_RANGE_ISOLATION_AVERAGE_WINDOW_POINTS = float(
-    os.getenv(
-        "OPENING_RANGE_ISOLATION_AVERAGE_WINDOW_POINTS",
-        "500.0",
-    )
-)
-
 # Re-selection rule:
 # The currently isolated instrument remains locked while its
 # strike is within +/- this distance from the Opening Range average.
@@ -560,6 +537,7 @@ OPENING_RANGE_ISOLATION_AVERAGE_WINDOW_POINTS = float(
 #
 # If the current isolated instrument moves outside this range,
 # a new eligible priority-level touch can replace it.
+
 OPENING_RANGE_ISOLATION_RESELECT_DISTANCE_POINTS = float(
     os.getenv(
         "OPENING_RANGE_ISOLATION_RESELECT_DISTANCE_POINTS",
@@ -571,7 +549,7 @@ OPENING_RANGE_ISOLATION_TOUCH_LEVELS = [
     value.strip().upper()
     for value in os.getenv(
         "OPENING_RANGE_ISOLATION_TOUCH_LEVELS",
-        "S3,R3,S2,R2",
+        "S3,R3",
     ).split(",")
     if value.strip()
 ]
@@ -580,7 +558,7 @@ OPENING_RANGE_ISOLATION_PRIORITY_LEVELS = [
     value.strip().upper()
     for value in os.getenv(
         "OPENING_RANGE_ISOLATION_PRIORITY_LEVELS",
-        "S3,R3,S2,R2",
+        "S3,R3",
     ).split(",")
     if value.strip()
 ]
@@ -593,30 +571,7 @@ OPENING_RANGE_ISOLATION_LOCK_FOR_DAY = (
     == "true"
 )
 
-OPENING_RANGE_ISOLATION_ALLOW_PRIORITY_UPGRADE = (
-    os.getenv(
-        "OPENING_RANGE_ISOLATION_ALLOW_PRIORITY_UPGRADE",
-        "true",
-    ).lower()
-    == "true"
-)
 
-
-OPENING_RANGE_ISOLATION_LOCK_FOR_DAY = (
-    os.getenv(
-        "OPENING_RANGE_ISOLATION_LOCK_FOR_DAY",
-        "true",
-    ).lower()
-    == "true"
-)
-
-OPENING_RANGE_ISOLATION_ALLOW_PRIORITY_UPGRADE = (
-    os.getenv(
-        "OPENING_RANGE_ISOLATION_ALLOW_PRIORITY_UPGRADE",
-        "true",
-    ).lower()
-    == "true"
-)
 
 OPENING_RANGE_ISOLATED_INSTRUMENT_NOTIFY_ENABLED = (
     os.getenv(
@@ -1139,4 +1094,49 @@ LIVE_EMA_MAX_EVENTS_IN_MEMORY = int(
         "LIVE_EMA_MAX_EVENTS_IN_MEMORY",
         "5000",
     )
+)
+
+
+ALGO_APP_BACKGROUND_QUEUE_COUNTS_AS_ACCEPTED = (
+    os.getenv(
+        "ALGO_APP_BACKGROUND_QUEUE_COUNTS_AS_ACCEPTED",
+        "true",
+    ).lower()
+    == "true"
+)
+
+ALGO_APP_BACKGROUND_MAX_WORKERS = int(
+    os.getenv(
+        "ALGO_APP_BACKGROUND_MAX_WORKERS",
+        "2",
+    )
+)
+
+if ALGO_APP_BACKGROUND_MAX_WORKERS < 1:
+    ALGO_APP_BACKGROUND_MAX_WORKERS = 1
+
+
+EMA_ALGO_PAYLOAD_INCLUDE_NEAREST_INSTRUMENT_CANDLES = (
+    os.getenv(
+        "EMA_ALGO_PAYLOAD_INCLUDE_NEAREST_INSTRUMENT_CANDLES",
+        "true",
+    ).lower()
+    == "true"
+)
+
+EMA_ALGO_PAYLOAD_INCLUDE_BUDGET_INSTRUMENT_CANDLES = (
+    os.getenv(
+        "EMA_ALGO_PAYLOAD_INCLUDE_BUDGET_INSTRUMENT_CANDLES",
+        "true",
+    ).lower()
+    == "true"
+)
+
+
+EMA_ALGO_PAYLOAD_INCLUDE_RAW_EMA_EVENT = (
+    os.getenv(
+        "EMA_ALGO_PAYLOAD_INCLUDE_RAW_EMA_EVENT",
+        "true",
+    ).lower()
+    == "true"
 )

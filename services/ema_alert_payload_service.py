@@ -11,11 +11,6 @@ from core.logger import get_logger
 logger = get_logger(__file__)
 
 
-# ============================================================
-# Value Helpers
-# ============================================================
-
-
 def safe_float(
     value: Any,
     default: float | None = None,
@@ -164,11 +159,6 @@ def get_suggested_order_side(
     return None
 
 
-# ============================================================
-# Time Helpers
-# ============================================================
-
-
 def get_market_timezone() -> ZoneInfo:
     timezone_name = str(
         getattr(
@@ -257,11 +247,6 @@ def normalize_timestamp(
         return text
 
 
-# ============================================================
-# JSON Helpers
-# ============================================================
-
-
 def make_json_safe(
     value: Any,
 ) -> Any:
@@ -317,11 +302,6 @@ def clean_optional_values(
     return value
 
 
-# ============================================================
-# Event Helpers
-# ============================================================
-
-
 def get_live_ema_calculation_mode() -> str:
     return (
         "tick_ltp"
@@ -372,9 +352,99 @@ def build_event_id(
     )
 
 
-# ============================================================
-# Candle Payload
-# ============================================================
+def normalize_candle_payload(
+    candle: Any,
+    fallback_event: dict | None = None,
+) -> dict | None:
+    fallback_event = fallback_event if isinstance(fallback_event, dict) else {}
+
+    if not isinstance(candle, dict):
+        candle = {}
+
+    if not candle and not fallback_event:
+        return None
+
+    open_price = safe_float(
+        candle.get(
+            "open",
+            fallback_event.get("open"),
+        )
+    )
+
+    high_price = safe_float(
+        candle.get(
+            "high",
+            fallback_event.get("high"),
+        )
+    )
+
+    low_price = safe_float(
+        candle.get(
+            "low",
+            fallback_event.get("low"),
+        )
+    )
+
+    close_price = safe_float(
+        candle.get(
+            "close",
+            fallback_event.get(
+                "close",
+                fallback_event.get("ltp"),
+            ),
+        )
+    )
+
+    volume = safe_float(
+        candle.get(
+            "volume",
+            candle.get(
+                "vol",
+                fallback_event.get("volume"),
+            ),
+        )
+    )
+
+    timestamp = (
+        candle.get("timestamp")
+        or candle.get("time")
+        or candle.get("ts")
+        or candle.get("start_time")
+        or fallback_event.get("timestamp")
+        or fallback_event.get("ts")
+    )
+
+    close_minus_low = safe_float(candle.get("close_minus_low_points"))
+
+    if close_minus_low is None and close_price is not None and low_price is not None:
+        close_minus_low = round(
+            close_price - low_price,
+            4,
+        )
+
+    high_minus_low = safe_float(candle.get("high_minus_low_points"))
+
+    if high_minus_low is None and high_price is not None and low_price is not None:
+        high_minus_low = round(
+            high_price - low_price,
+            4,
+        )
+
+    normalized = {
+        "timestamp": normalize_timestamp(timestamp),
+        "open": open_price,
+        "high": high_price,
+        "low": low_price,
+        "close": close_price,
+        "volume": volume,
+        "close_minus_low_points": (close_minus_low),
+        "high_minus_low_points": (high_minus_low),
+    }
+
+    if not any(value is not None for value in normalized.values()):
+        return None
+
+    return normalized
 
 
 def extract_ema_candle(
@@ -393,100 +463,26 @@ def extract_ema_candle(
     if not isinstance(market_ohlc, dict):
         market_ohlc = {}
 
-    open_price = safe_float(
-        candle.get(
-            "open",
-            ema_event.get("open"),
-        )
-    )
-
-    high_price = safe_float(
-        candle.get(
-            "high",
-            ema_event.get("high"),
-        )
-    )
-
-    low_price = safe_float(
-        candle.get(
-            "low",
-            ema_event.get("low"),
-        )
-    )
-
-    close_price = safe_float(
-        candle.get(
-            "close",
-            ema_event.get(
-                "close",
-                ema_event.get("ltp"),
-            ),
-        )
-    )
-
-    volume = safe_float(
-        candle.get(
-            "volume",
-            ema_event.get("volume"),
-        )
-    )
-
-    candle_timestamp = (
-        candle.get("timestamp")
-        or candle.get("ts")
-        or ema_event.get("timestamp")
-        or ema_event.get("ts")
-    )
-
-    if open_price is None:
-        open_price = safe_float(market_ohlc.get("open"))
-
-    if high_price is None:
-        high_price = safe_float(market_ohlc.get("high"))
-
-    if low_price is None:
-        low_price = safe_float(market_ohlc.get("low"))
-
-    if close_price is None:
-        close_price = safe_float(market_ohlc.get("close"))
-
-    if volume is None:
-        volume = safe_float(market_ohlc.get("volume"))
-
-    if candle_timestamp is None:
-        candle_timestamp = market_ohlc.get("timestamp") or market_ohlc.get("ts")
-
-    close_minus_low = None
-
-    if close_price is not None and low_price is not None:
-        close_minus_low = round(
-            close_price - low_price,
-            4,
-        )
-
-    high_minus_low = None
-
-    if high_price is not None and low_price is not None:
-        high_minus_low = round(
-            high_price - low_price,
-            4,
-        )
-
-    return {
-        "timestamp": normalize_timestamp(candle_timestamp),
-        "open": open_price,
-        "high": high_price,
-        "low": low_price,
-        "close": close_price,
-        "volume": volume,
-        "close_minus_low_points": (close_minus_low),
-        "high_minus_low_points": (high_minus_low),
+    merged_fallback = {
+        **market_ohlc,
+        **ema_event,
     }
 
+    normalized = normalize_candle_payload(
+        candle=candle,
+        fallback_event=merged_fallback,
+    )
 
-# ============================================================
-# Instrument Payload
-# ============================================================
+    return normalized or {
+        "timestamp": None,
+        "open": None,
+        "high": None,
+        "low": None,
+        "close": None,
+        "volume": None,
+        "close_minus_low_points": None,
+        "high_minus_low_points": None,
+    }
 
 
 def build_instrument_payload(
@@ -497,6 +493,9 @@ def build_instrument_payload(
 ) -> dict:
     if not isinstance(contract_info, dict):
         contract_info = {}
+
+    if not isinstance(ema_candle, dict):
+        ema_candle = {}
 
     option_type = normalize_option_type(
         isolated_instrument_type
@@ -512,19 +511,14 @@ def build_instrument_payload(
         "instrument_type": option_type,
         "option_type": option_type,
         "strike_price": safe_float(contract_info.get("strike_price")),
-        "expiry": (contract_info.get("expiry")),
+        "expiry": contract_info.get("expiry"),
         "lot_size": safe_int(
             contract_info.get("lot_size"),
             default=0,
         ),
         "isolated": True,
-        "live_ltp": ema_candle.get("close"),
+        "live_ltp": safe_float(ema_candle.get("close")),
     }
-
-
-# ============================================================
-# Opening Range Payload
-# ============================================================
 
 
 def build_opening_range_payload(
@@ -550,9 +544,18 @@ def build_opening_range_payload(
     if not isinstance(selected_levels, dict):
         selected_levels = {}
 
+    event_levels = (
+        event_opening_range.get("levels")
+        if isinstance(
+            event_opening_range.get("levels"),
+            dict,
+        )
+        else event_opening_range
+    )
+
     levels = {
         **selected_levels,
-        **event_opening_range,
+        **event_levels,
     }
 
     return {
@@ -592,11 +595,6 @@ def build_opening_range_payload(
     }
 
 
-# ============================================================
-# EMA Payload
-# ============================================================
-
-
 def build_ema_payload(
     ema_event: dict,
     ema_candle: dict,
@@ -604,6 +602,9 @@ def build_ema_payload(
 ) -> dict:
     if not isinstance(ema_event, dict):
         ema_event = {}
+
+    if not isinstance(ema_candle, dict):
+        ema_candle = {}
 
     calculation_mode = (
         str(
@@ -650,7 +651,7 @@ def build_ema_payload(
     )
 
     return {
-        "cross_type": (ema_event.get("cross_type")),
+        "cross_type": ema_event.get("cross_type"),
         "direction": alert_direction,
         "signal": (ema_event.get("current_signal") or alert_direction),
         "previous_signal": (ema_event.get("previous_signal")),
@@ -677,42 +678,81 @@ def build_ema_payload(
     }
 
 
-# ============================================================
-# Order Instrument Payload
-# ============================================================
-
-
 def normalize_order_instrument(
     instrument: dict,
 ) -> dict:
     if not isinstance(instrument, dict):
         return {}
 
+    instrument_key = str(instrument.get("instrument_key") or "").strip()
+
     option_type = normalize_option_type(
         instrument.get("instrument_type") or instrument.get("option_type")
     )
 
+    candle = normalize_candle_payload(
+        instrument.get("candle")
+        or instrument.get("latest_candle")
+        or instrument.get("completed_candle")
+    )
+
+    live_ltp = safe_float(
+        instrument.get("live_ltp"),
+        default=safe_float(instrument.get("ltp")),
+    )
+
+    if live_ltp is None and isinstance(candle, dict):
+        live_ltp = safe_float(candle.get("close"))
+
     return {
-        "instrument_key": (instrument.get("instrument_key")),
+        "instrument_key": (instrument_key or None),
         "trading_symbol": (instrument.get("trading_symbol")),
+        "underlying_symbol": (instrument.get("underlying_symbol")),
+        "underlying_type": (instrument.get("underlying_type")),
         "instrument_type": option_type,
         "option_type": option_type,
         "strike_price": safe_float(instrument.get("strike_price")),
         "expiry": instrument.get("expiry"),
+        "lot_size": safe_int(
+            instrument.get("lot_size"),
+            default=0,
+        ),
         "available": bool(
             instrument.get(
                 "available",
-                bool(instrument.get("instrument_key")),
+                bool(instrument_key),
             )
         ),
-        "live_ltp": safe_float(instrument.get("live_ltp")),
+        "live_ltp": live_ltp,
         "live_ltp_updated_at": (
-            normalize_timestamp(instrument.get("live_ltp_updated_at"))
+            normalize_timestamp(
+                instrument.get("live_ltp_updated_at") or instrument.get("updated_at")
+            )
         ),
+        "candle": deepcopy(candle),
         "is_isolated_instrument": bool(instrument.get("is_isolated_instrument")),
-        "ema_candle_close": safe_float(instrument.get("ema_candle_close")),
-        "ema_candle_low": safe_float(instrument.get("ema_candle_low")),
-        "close_minus_low_points": safe_float(instrument.get("close_minus_low_points")),
+        "ema_candle_close": safe_float(
+            instrument.get("ema_candle_close"),
+            default=(
+                safe_float(candle.get("close")) if isinstance(candle, dict) else None
+            ),
+        ),
+        "ema_candle_low": safe_float(
+            instrument.get("ema_candle_low"),
+            default=(
+                safe_float(candle.get("low")) if isinstance(candle, dict) else None
+            ),
+        ),
+        "close_minus_low_points": (
+            safe_float(
+                instrument.get("close_minus_low_points"),
+                default=(
+                    safe_float(candle.get("close_minus_low_points"))
+                    if isinstance(candle, dict)
+                    else None
+                ),
+            )
+        ),
         "within_budget": bool(
             instrument.get(
                 "within_budget",
@@ -819,11 +859,6 @@ def build_order_suggestion_payload(
     }
 
 
-# ============================================================
-# Delivery Metadata
-# ============================================================
-
-
 def build_delivery_metadata() -> dict:
     return {
         "telegram": {
@@ -850,11 +885,6 @@ def build_delivery_metadata() -> dict:
             "success": False,
         },
     }
-
-
-# ============================================================
-# Canonical Payload
-# ============================================================
 
 
 def build_isolated_ema_alert_payload(
@@ -919,21 +949,16 @@ def build_isolated_ema_alert_payload(
         resolved_isolated_type,
     )
 
-    resolved_candle = (
-        deepcopy(ema_candle)
-        if isinstance(ema_candle, dict)
-        else extract_ema_candle(ema_event)
-    )
+    if isinstance(ema_candle, dict):
+        resolved_candle = normalize_candle_payload(
+            ema_candle,
+            fallback_event=ema_event,
+        )
+    else:
+        resolved_candle = extract_ema_candle(ema_event)
 
-    resolved_candle = {
-        **extract_ema_candle(
-            {
-                **ema_event,
-                "candle": resolved_candle,
-            }
-        ),
-        **resolved_candle,
-    }
+    if not resolved_candle:
+        resolved_candle = extract_ema_candle(ema_event)
 
     event_timestamp = resolved_candle.get("timestamp") or ema_event.get("timestamp")
 
@@ -950,6 +975,15 @@ def build_isolated_ema_alert_payload(
             default=safe_float(selected_state.get("latest_main_index_ltp")),
         ),
     )
+
+    order_suggestion = build_order_suggestion_payload(
+        isolated_instrument_type=(resolved_isolated_type),
+        suggested_order_option_type=(resolved_order_side),
+        suggested_instruments=(suggested_instruments or []),
+        budget_instruments=(budget_instruments or []),
+    )
+
+    now_market = get_market_datetime()
 
     payload = {
         "schema_version": str(
@@ -986,14 +1020,12 @@ def build_isolated_ema_alert_payload(
                 "Asia/Kolkata",
             )
         ),
-        "created_at": (get_market_datetime().isoformat()),
-        "instrument": (
-            build_instrument_payload(
-                instrument_key=instrument_key,
-                contract_info=(selected_contract_info),
-                isolated_instrument_type=(resolved_isolated_type),
-                ema_candle=resolved_candle,
-            )
+        "created_at": now_market.isoformat(),
+        "instrument": build_instrument_payload(
+            instrument_key=instrument_key,
+            contract_info=(selected_contract_info),
+            isolated_instrument_type=(resolved_isolated_type),
+            ema_candle=resolved_candle,
         ),
         "opening_range": (
             build_opening_range_payload(
@@ -1004,22 +1036,17 @@ def build_isolated_ema_alert_payload(
         "market_snapshot": {
             "nifty_ltp": resolved_nifty_ltp,
             "isolated_instrument_ltp": (resolved_candle.get("close")),
-            "latest_intraday_close": safe_float(ema_event.get("latest_intraday_close")),
-            "snapshot_at": (get_market_datetime().isoformat()),
+            "latest_intraday_close": (
+                safe_float(ema_event.get("latest_intraday_close"))
+            ),
+            "snapshot_at": (now_market.isoformat()),
         },
         "ema": build_ema_payload(
             ema_event=ema_event,
             ema_candle=resolved_candle,
             alert_direction=direction,
         ),
-        "order_suggestion": (
-            build_order_suggestion_payload(
-                isolated_instrument_type=(resolved_isolated_type),
-                suggested_order_option_type=(resolved_order_side),
-                suggested_instruments=(suggested_instruments or []),
-                budget_instruments=(budget_instruments or []),
-            )
-        ),
+        "order_suggestion": order_suggestion,
         "duplicate_control": {
             "minute_alert_key": (minute_alert_key),
             "direction": direction,
@@ -1052,35 +1079,18 @@ def build_isolated_ema_alert_payload(
             {},
         )
 
-        ema_payload.pop(
+        for field_name in (
             "fast_period",
-            None,
-        )
-
-        ema_payload.pop(
             "slow_period",
-            None,
-        )
-
-        ema_payload.pop(
             "fast_value",
-            None,
-        )
-
-        ema_payload.pop(
             "slow_value",
-            None,
-        )
-
-        ema_payload.pop(
             "previous_fast_value",
-            None,
-        )
-
-        ema_payload.pop(
             "previous_slow_value",
-            None,
-        )
+        ):
+            ema_payload.pop(
+                field_name,
+                None,
+            )
 
     if not bool(
         getattr(
@@ -1112,6 +1122,28 @@ def build_isolated_ema_alert_payload(
     if not bool(
         getattr(
             config,
+            "EMA_ALGO_PAYLOAD_INCLUDE_NEAREST_INSTRUMENT_CANDLES",
+            True,
+        )
+    ):
+        nearest_instruments = payload.get(
+            "order_suggestion",
+            {},
+        ).get(
+            "nearest_instruments",
+            [],
+        )
+
+        for instrument in nearest_instruments:
+            if isinstance(instrument, dict):
+                instrument.pop(
+                    "candle",
+                    None,
+                )
+
+    if not bool(
+        getattr(
+            config,
             "EMA_ALGO_PAYLOAD_INCLUDE_BUDGET_INSTRUMENTS",
             True,
         )
@@ -1125,7 +1157,37 @@ def build_isolated_ema_alert_payload(
         )
 
         budget_filter["matched_count"] = 0
+
         budget_filter["instruments"] = []
+
+    if not bool(
+        getattr(
+            config,
+            "EMA_ALGO_PAYLOAD_INCLUDE_BUDGET_INSTRUMENT_CANDLES",
+            True,
+        )
+    ):
+        budget_instruments_payload = (
+            payload.get(
+                "order_suggestion",
+                {},
+            )
+            .get(
+                "budget_filter",
+                {},
+            )
+            .get(
+                "instruments",
+                [],
+            )
+        )
+
+        for instrument in budget_instruments_payload:
+            if isinstance(instrument, dict):
+                instrument.pop(
+                    "candle",
+                    None,
+                )
 
     if not bool(
         getattr(
@@ -1139,12 +1201,19 @@ def build_isolated_ema_alert_payload(
             None,
         )
 
+    if not bool(
+        getattr(
+            config,
+            "EMA_ALGO_PAYLOAD_INCLUDE_RAW_EMA_EVENT",
+            True,
+        )
+    ):
+        payload.pop(
+            "raw_ema_event",
+            None,
+        )
+
     return make_json_safe(clean_optional_values(payload))
-
-
-# ============================================================
-# Payload Service
-# ============================================================
 
 
 class EmaAlertPayloadService:
@@ -1172,7 +1241,7 @@ class EmaAlertPayloadService:
             budget_instruments=(budget_instruments),
             ema_candle=ema_candle,
             minute_alert_key=(minute_alert_key),
-            alert_direction=alert_direction,
+            alert_direction=(alert_direction),
             nifty_ltp=nifty_ltp,
         )
 
@@ -1181,6 +1250,9 @@ class EmaAlertPayloadService:
         ema_event: dict,
     ) -> dict:
         return extract_ema_candle(ema_event)
+
+    def normalize_order_instrument(        self,        instrument: dict,    ) -> dict:
+        return normalize_order_instrument(instrument)
 
     def get_suggested_order_side(
         self,
@@ -1216,6 +1288,7 @@ __all__ = [
     "clean_optional_values",
     "get_live_ema_calculation_mode",
     "build_event_id",
+    "normalize_candle_payload",
     "extract_ema_candle",
     "build_instrument_payload",
     "build_opening_range_payload",
