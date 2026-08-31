@@ -6,8 +6,6 @@ load_dotenv()
 
 # Hard Coded Configs
 
-OPENING_RANGE_ISOLATION_ALLOW_PRIORITY_UPGRADE = True
-ALGO_TELE_APP = True
 
 # ============================================================
 # MongoDB Configuration
@@ -545,6 +543,13 @@ OPENING_RANGE_ISOLATION_RESELECT_DISTANCE_POINTS = float(
     )
 )
 
+OPENING_RANGE_ISOLATION_ALLOW_PRIORITY_UPGRADE = (
+    os.getenv("OPENING_RANGE_ISOLATION_ALLOW_PRIORITY_UPGRADE", "True").lower()
+    == "true"
+)
+
+ALGO_TELE_APP = os.getenv("ALGO_TELE_APP", "True").lower() == "true"
+
 OPENING_RANGE_ISOLATION_TOUCH_LEVELS = [
     value.strip().upper()
     for value in os.getenv(
@@ -570,7 +575,6 @@ OPENING_RANGE_ISOLATION_LOCK_FOR_DAY = (
     ).lower()
     == "true"
 )
-
 
 
 OPENING_RANGE_ISOLATED_INSTRUMENT_NOTIFY_ENABLED = (
