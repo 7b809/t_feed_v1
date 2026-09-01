@@ -878,14 +878,14 @@ EMA_ALERT_BUDGET_RANGE_ENABLED = (
 EMA_ALERT_BUDGET_MIN_PRICE = float(
     os.getenv(
         "EMA_ALERT_BUDGET_MIN_PRICE",
-        "20.0",
+        "200.0",
     )
 )
 
 EMA_ALERT_BUDGET_MAX_PRICE = float(
     os.getenv(
         "EMA_ALERT_BUDGET_MAX_PRICE",
-        "30.0",
+        "300.0",
     )
 )
 

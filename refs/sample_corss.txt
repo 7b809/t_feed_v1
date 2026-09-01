@@ -1,28 +1,388 @@
 📈 Isolated Instrument EMA Alert
 
-24500 CE - crosses R3 - At 24582.40
+24050 CE - crosses R2 - At 24055.80
 
 EMA Cross Details:
-Cross Type: bullish_cross
-Signal: bullish
+Cross Type: bearish_cross
+Signal: bearish
 Isolated Instrument Type: CE
-Suggested Order Side: CE
+Suggested Order Side: PE
 EMA Calculation Mode: candle_close
-EMA Candle Close: 136.25
-EMA Candle Low: 130.25
+Underlying Spot: 24055.80
+Expiry: 2026-09-02
+Option Source: upstox_option_chain
+EMA Candle Close: 108.45
+EMA Candle Low: 104.20
+EMA Close-Low Movement: 4.25 points
 
-EMA Candle Time: 2026-08-25T10:21:00+05:30
+EMA Candle Time: 2026-09-02T10:31:00+05:30
 
-Instrument Key: NSE_FO|41012
+Instrument Key: NSE_FO|46987
 
-Nearest Instrument Details:
-- 24500CE (candleclose points,  candle-low points) - 136.25rs
-- 24550CE - 108.40rs
-- 24600CE - 84.75rs
+Nearest Option Chain Instruments:
+- 24000PE
+  LTP: 42.50rs
+  Bid/Ask: 42.45/42.55
+  OI: 8543210
+  Volume: 32547980
 
-Budget Range Instrument Details: -> here user will give start and end range like 20rs to 30rs range instruments 
-- 24200CE (candleclose points, candle-low points) - 136.25rs 
-like that budget range max 2 instruments we need to filter
+- 24050PE
+  LTP: 68.25rs
+  Bid/Ask: 68.20/68.30
+  OI: 10456780
+  Volume: 46123850
+
+- 24100PE
+  LTP: 101.75rs
+  Bid/Ask: 101.70/101.85
+  OI: 8923450
+  Volume: 29874120
+
+Budget Range Option Chain Instruments (200.00rs to 300.00rs):
+- 24250PE
+  LTP: 248.30rs
+  Bid/Ask: 248.20/248.45
+  OI: 3254680
+
+- 24300PE
+  LTP: 296.75rs
+  Bid/Ask: 296.60/296.90
+  OI: 2189540
 
 Level: EMA
-Time: 2026-08-25 10:21:05 IST
+Time: 2026-09-02 10:31:05 IST
+
+{
+  "schema_version": "1.0",
+  "event_id": "EMA-NSE_FO-46987-20260902T103100-bearish-a1b2c3d4",
+  "event_type": "isolated_instrument_ema_alert",
+  "source": "option_feed_engine",
+  "market": "NSE",
+  "timezone": "Asia/Kolkata",
+  "created_at": "2026-09-02T10:31:05+05:30",
+  "instrument": {
+    "instrument_key": "NSE_FO|46987",
+    "trading_symbol": "NIFTY 24050 CE 02 SEP 26",
+    "underlying_symbol": "NIFTY",
+    "underlying_type": "INDEX",
+    "instrument_type": "CE",
+    "option_type": "CE",
+    "strike_price": 24050.0,
+    "expiry": "2026-09-02",
+    "lot_size": 65,
+    "live_ltp": 108.45,
+    "isolated": true
+  },
+  "opening_range": {
+    "available": true,
+    "selected_level": "R2",
+    "selected_level_value": 107.8,
+    "trigger_price": 108.1,
+    "trigger_field": "high",
+    "touch_time": "2026-09-02T10:29:00+05:30",
+    "touch_source": "live_tick",
+    "selected_at": "2026-09-02T10:29:02+05:30",
+    "selection_priority": 1,
+    "selection_reason": "R2 touch detected",
+    "reference_average": 106.75,
+    "average_window": {
+      "final_lower": 105.5,
+      "final_upper": 108.0
+    },
+    "range": {
+      "high": 110.2,
+      "low": 96.4
+    },
+    "levels": {
+      "r1": 103.5,
+      "s1": 99.1,
+      "r2": 107.8,
+      "s2": 94.8,
+      "r3": 112.1,
+      "s3": 90.5,
+      "sub_resistance": 105.65,
+      "sub_support": 96.95
+    },
+    "touch_status": {},
+    "processed_at": "2026-09-02T10:29:02+05:30"
+  },
+  "market_snapshot": {
+    "nifty_ltp": 24055.8,
+    "underlying_spot_price": 24055.8,
+    "isolated_instrument_ltp": 108.45,
+    "latest_intraday_close": 24055.8,
+    "option_chain_expiry": "2026-09-02",
+    "option_data_source": "upstox_option_chain",
+    "snapshot_at": "2026-09-02T10:31:05+05:30"
+  },
+  "ema": {
+    "cross_type": "bearish_cross",
+    "direction": "bearish",
+    "signal": "bearish",
+    "previous_signal": "bullish",
+    "current_signal": "bearish",
+    "calculation_mode": "candle_close",
+    "fast_period": 9,
+    "slow_period": 21,
+    "fast_value": 107.95,
+    "slow_value": 108.2,
+    "previous_fast_value": 108.3,
+    "previous_slow_value": 108.15,
+    "price": 108.45,
+    "source": "live_feed",
+    "timestamp": "2026-09-02T10:31:00+05:30",
+    "candle": {
+      "timestamp": "2026-09-02T10:31:00+05:30",
+      "open": 109.2,
+      "high": 109.5,
+      "low": 104.2,
+      "close": 108.45,
+      "volume": 325650,
+      "close_minus_low_points": 4.25,
+      "high_minus_low_points": 5.3
+    }
+  },
+  "order_suggestion": {
+    "rule": "bullish_same_side_bearish_opposite_side",
+    "isolated_instrument_type": "CE",
+    "suggested_order_side": "PE",
+    "data_source": "upstox_option_chain",
+    "underlying_spot_price": 24055.8,
+    "expiry_date": "2026-09-02",
+    "expiry_source": "options_cache",
+    "nearest_strikes": [
+      24000.0,
+      24050.0,
+      24100.0
+    ],
+    "nearest_instruments": [
+      {
+        "instrument_key": "NSE_FO|57001",
+        "trading_symbol": "NIFTY 24000 PE 02 SEP 26",
+        "underlying_symbol": "NIFTY",
+        "underlying_type": "INDEX",
+        "instrument_type": "PE",
+        "option_type": "PE",
+        "strike_price": 24000.0,
+        "expiry": "2026-09-02",
+        "lot_size": 65,
+        "available": true,
+        "ltp": 42.5,
+        "live_ltp": 42.5,
+        "close_price": 38.15,
+        "pcr": 1.42,
+        "underlying_spot_price": 24055.8,
+        "market_data": {
+          "ltp": 42.5,
+          "volume": 32547980,
+          "oi": 8543210,
+          "close_price": 38.15,
+          "bid_price": 42.45,
+          "bid_qty": 1560,
+          "ask_price": 42.55,
+          "ask_qty": 2080,
+          "prev_oi": 7821450
+        },
+        "option_greeks": {
+          "vega": 2.41,
+          "theta": -5.72,
+          "gamma": 0.0018,
+          "delta": -0.38,
+          "iv": 14.65,
+          "pop": 61.2
+        },
+        "data_source": "upstox_option_chain",
+        "is_isolated_instrument": false
+      },
+      {
+        "instrument_key": "NSE_FO|57003",
+        "trading_symbol": "NIFTY 24050 PE 02 SEP 26",
+        "underlying_symbol": "NIFTY",
+        "underlying_type": "INDEX",
+        "instrument_type": "PE",
+        "option_type": "PE",
+        "strike_price": 24050.0,
+        "expiry": "2026-09-02",
+        "lot_size": 65,
+        "available": true,
+        "ltp": 68.25,
+        "live_ltp": 68.25,
+        "close_price": 62.4,
+        "pcr": 1.18,
+        "underlying_spot_price": 24055.8,
+        "market_data": {
+          "ltp": 68.25,
+          "volume": 46123850,
+          "oi": 10456780,
+          "close_price": 62.4,
+          "bid_price": 68.2,
+          "bid_qty": 2470,
+          "ask_price": 68.3,
+          "ask_qty": 1950,
+          "prev_oi": 9523475
+        },
+        "option_greeks": {
+          "vega": 3.08,
+          "theta": -6.85,
+          "gamma": 0.0021,
+          "delta": -0.49,
+          "iv": 13.9,
+          "pop": 50.5
+        },
+        "data_source": "upstox_option_chain",
+        "is_isolated_instrument": false
+      },
+      {
+        "instrument_key": "NSE_FO|57005",
+        "trading_symbol": "NIFTY 24100 PE 02 SEP 26",
+        "underlying_symbol": "NIFTY",
+        "underlying_type": "INDEX",
+        "instrument_type": "PE",
+        "option_type": "PE",
+        "strike_price": 24100.0,
+        "expiry": "2026-09-02",
+        "lot_size": 65,
+        "available": true,
+        "ltp": 101.75,
+        "live_ltp": 101.75,
+        "close_price": 94.6,
+        "pcr": 0.95,
+        "underlying_spot_price": 24055.8,
+        "market_data": {
+          "ltp": 101.75,
+          "volume": 29874120,
+          "oi": 8923450,
+          "close_price": 94.6,
+          "bid_price": 101.7,
+          "bid_qty": 1170,
+          "ask_price": 101.85,
+          "ask_qty": 1430,
+          "prev_oi": 8012540
+        },
+        "option_greeks": {
+          "vega": 2.89,
+          "theta": -6.2,
+          "gamma": 0.0019,
+          "delta": -0.61,
+          "iv": 14.2,
+          "pop": 39.1
+        },
+        "data_source": "upstox_option_chain",
+        "is_isolated_instrument": false
+      }
+    ],
+    "budget_filter": {
+      "enabled": true,
+      "minimum_price": 200.0,
+      "maximum_price": 300.0,
+      "maximum_instruments": 2,
+      "sort_mode": "nearest_price",
+      "range_inclusive": true,
+      "matched_count": 2,
+      "data_source": "upstox_option_chain",
+      "instruments": [
+        {
+          "instrument_key": "NSE_FO|57011",
+          "trading_symbol": "NIFTY 24250 PE 02 SEP 26",
+          "underlying_symbol": "NIFTY",
+          "underlying_type": "INDEX",
+          "instrument_type": "PE",
+          "option_type": "PE",
+          "strike_price": 24250.0,
+          "expiry": "2026-09-02",
+          "lot_size": 65,
+          "available": true,
+          "ltp": 248.3,
+          "live_ltp": 248.3,
+          "close_price": 237.85,
+          "pcr": 0.81,
+          "underlying_spot_price": 24055.8,
+          "market_data": {
+            "ltp": 248.3,
+            "volume": 18745620,
+            "oi": 3254680,
+            "close_price": 237.85,
+            "bid_price": 248.2,
+            "bid_qty": 780,
+            "ask_price": 248.45,
+            "ask_qty": 975,
+            "prev_oi": 2947830
+          },
+          "option_greeks": {
+            "vega": 1.95,
+            "theta": -4.8,
+            "gamma": 0.0012,
+            "delta": -0.83,
+            "iv": 15.1,
+            "pop": 17.5
+          },
+          "data_source": "upstox_option_chain",
+          "is_isolated_instrument": false
+        },
+        {
+          "instrument_key": "NSE_FO|57013",
+          "trading_symbol": "NIFTY 24300 PE 02 SEP 26",
+          "underlying_symbol": "NIFTY",
+          "underlying_type": "INDEX",
+          "instrument_type": "PE",
+          "option_type": "PE",
+          "strike_price": 24300.0,
+          "expiry": "2026-09-02",
+          "lot_size": 65,
+          "available": true,
+          "ltp": 296.75,
+          "live_ltp": 296.75,
+          "close_price": 285.4,
+          "pcr": 0.74,
+          "underlying_spot_price": 24055.8,
+          "market_data": {
+            "ltp": 296.75,
+            "volume": 13568920,
+            "oi": 2189540,
+            "close_price": 285.4,
+            "bid_price": 296.6,
+            "bid_qty": 650,
+            "ask_price": 296.9,
+            "ask_qty": 845,
+            "prev_oi": 2014780
+          },
+          "option_greeks": {
+            "vega": 1.62,
+            "theta": -4.2,
+            "gamma": 0.001,
+            "delta": -0.89,
+            "iv": 15.7,
+            "pop": 11.2
+          },
+          "data_source": "upstox_option_chain",
+          "is_isolated_instrument": false
+        }
+      ]
+    }
+  },
+  "duplicate_control": {
+    "minute_alert_key": "NSE_FO|46987_2026-09-02T10:31_bearish",
+    "direction": "bearish"
+  },
+  "raw_ema_event": {
+    "type": "live_ema_cross",
+    "instrument_key": "NSE_FO|46987",
+    "cross_type": "bearish_cross",
+    "previous_signal": "bullish",
+    "current_signal": "bearish",
+    "ema_fast": 107.95,
+    "ema_slow": 108.2,
+    "previous_ema_fast": 108.3,
+    "previous_ema_slow": 108.15,
+    "timestamp": "2026-09-02T10:31:00+05:30",
+    "source": "live_feed",
+    "candle": {
+      "timestamp": "2026-09-02T10:31:00+05:30",
+      "open": 109.2,
+      "high": 109.5,
+      "low": 104.2,
+      "close": 108.45,
+      "volume": 325650
+    }
+  }
+}

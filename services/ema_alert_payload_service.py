@@ -723,7 +723,20 @@ def normalize_order_instrument(
                 bool(instrument_key),
             )
         ),
+        # ==========================================
+        # Option Chain Data
+        # ==========================================
+        "ltp": safe_float(instrument.get("ltp")),
         "live_ltp": live_ltp,
+        "close_price": safe_float(instrument.get("close_price")),
+        "pcr": safe_float(instrument.get("pcr")),
+        "underlying_spot_price": safe_float(instrument.get("underlying_spot_price")),
+        "market_data": deepcopy(instrument.get("market_data") or {}),
+        "option_greeks": deepcopy(instrument.get("option_greeks") or {}),
+        "data_source": instrument.get("data_source"),
+        # ==========================================
+        # Existing Fields
+        # ==========================================
         "live_ltp_updated_at": (
             normalize_timestamp(
                 instrument.get("live_ltp_updated_at") or instrument.get("updated_at")
@@ -743,15 +756,13 @@ def normalize_order_instrument(
                 safe_float(candle.get("low")) if isinstance(candle, dict) else None
             ),
         ),
-        "close_minus_low_points": (
-            safe_float(
-                instrument.get("close_minus_low_points"),
-                default=(
-                    safe_float(candle.get("close_minus_low_points"))
-                    if isinstance(candle, dict)
-                    else None
-                ),
-            )
+        "close_minus_low_points": safe_float(
+            instrument.get("close_minus_low_points"),
+            default=(
+                safe_float(candle.get("close_minus_low_points"))
+                if isinstance(candle, dict)
+                else None
+            ),
         ),
         "within_budget": bool(
             instrument.get(
@@ -761,8 +772,8 @@ def normalize_order_instrument(
         ),
         "minimum_budget_price": safe_float(instrument.get("minimum_budget_price")),
         "maximum_budget_price": safe_float(instrument.get("maximum_budget_price")),
-        "distance_from_budget_midpoint": (
-            safe_float(instrument.get("distance_from_budget_midpoint"))
+        "distance_from_budget_midpoint": safe_float(
+            instrument.get("distance_from_budget_midpoint")
         ),
         "distance_from_nifty": safe_float(instrument.get("distance_from_nifty")),
     }
@@ -1251,7 +1262,10 @@ class EmaAlertPayloadService:
     ) -> dict:
         return extract_ema_candle(ema_event)
 
-    def normalize_order_instrument(        self,        instrument: dict,    ) -> dict:
+    def normalize_order_instrument(
+        self,
+        instrument: dict,
+    ) -> dict:
         return normalize_order_instrument(instrument)
 
     def get_suggested_order_side(

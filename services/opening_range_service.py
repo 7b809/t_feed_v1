@@ -142,14 +142,17 @@ from .opening_range.isolation import (
 # ============================================================
 
 from .opening_range.ema_alerts import (
+    enrich_option_chain_instruments,
+    format_budget_range_instruments,
     format_suggested_order_instruments,
     get_ema_alert_minute_bucket,
     get_isolated_instrument_type_from_state,
     get_opening_range_levels_for_ema_event,
+    get_option_chain_instruments_for_ema,
     get_selected_or_ema_alerts,
     get_selected_or_instrument_key,
     get_selected_or_instrument_state,
-    get_suggested_order_instruments_for_ema,
+    get_suggested_order_option_type,
     is_selected_or_instrument_locked,
     normalize_ema_cross_direction,
     process_selected_or_ema_cross_alert,
@@ -243,7 +246,6 @@ _touch_events = touch_events
 _alert_sent_keys = alert_sent_keys
 
 _selected_or_instrument_state = selected_or_instrument_state
-
 _selected_or_ema_alerts = selected_or_ema_alerts
 
 _selected_or_ema_alert_minute_keys = selected_or_ema_alert_minute_keys
@@ -326,8 +328,11 @@ __all__ = [
     "get_selected_or_instrument_state",
     "get_selected_or_ema_alerts",
     "get_isolated_instrument_type_from_state",
-    "get_suggested_order_instruments_for_ema",
+    "get_suggested_order_option_type",
+    "get_option_chain_instruments_for_ema",
+    "enrich_option_chain_instruments",
     "format_suggested_order_instruments",
+    "format_budget_range_instruments",
     "normalize_ema_cross_direction",
     "get_ema_alert_minute_bucket",
     "should_skip_isolated_ema_alert_for_minute_direction",
