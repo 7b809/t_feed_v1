@@ -34,7 +34,7 @@ class TelegramService:
         )
 
         self.api_url = (
-            f"https://api.telegram.org/" f"bot{self.bot_token}/sendMessage"
+            f"https://api.telegram.org/bot" f"{self.bot_token}/sendMessage"
             if self.bot_token
             else None
         )
@@ -63,6 +63,9 @@ class TelegramService:
 
     def _now_market_time(self) -> str:
         return datetime.now(self.market_timezone).strftime(self.market_time_format)
+
+    def _now_short_market_time(self) -> str:
+        return datetime.now(self.market_timezone).strftime("%I:%M:%S %p %Z")
 
     def is_configured(self) -> bool:
         return bool(self.enabled and self.bot_token and self.chat_id and self.api_url)
@@ -120,6 +123,72 @@ class TelegramService:
 
         return f"{numeric_value:.4f}".rstrip("0").rstrip(".")
 
+    def _format_rupee(
+        self,
+        value: Any,
+        unavailable_text: str = "N/A",
+        include_sign: bool = False,
+    ) -> str:
+        numeric_value = self._safe_float(value)
+
+        if numeric_value is None:
+            return unavailable_text
+
+        if include_sign and numeric_value > 0:
+            return f"+₹{numeric_value:,.2f}"
+
+        if numeric_value < 0:
+            return f"-₹{abs(numeric_value):,.2f}"
+
+        return f"₹{numeric_value:,.2f}"
+
+    def _format_price_without_currency(
+        self,
+        value: Any,
+        unavailable_text: str = "N/A",
+    ) -> str:
+        numeric_value = self._safe_float(value)
+
+        if numeric_value is None:
+            return unavailable_text
+
+        return f"{numeric_value:,.2f}"
+
+    def _format_indian_quantity(
+        self,
+        value: Any,
+        unavailable_text: str = "N/A",
+    ) -> str:
+        numeric_value = self._safe_float(value)
+
+        if numeric_value is None:
+            return unavailable_text
+
+        is_negative = numeric_value < 0
+        integer_value = abs(int(numeric_value))
+        digits = str(integer_value)
+
+        if len(digits) <= 3:
+            formatted = digits
+        else:
+            last_three = digits[-3:]
+            remaining = digits[:-3]
+            groups = []
+
+            while remaining:
+                groups.insert(
+                    0,
+                    remaining[-2:],
+                )
+                remaining = remaining[:-2]
+
+            formatted = ",".join(groups) + "," + last_three
+
+        if is_negative:
+            return f"-{formatted}"
+
+        return formatted
+
     def _normalize_option_type(
         self,
         option_type: Any,
@@ -132,16 +201,156 @@ class TelegramService:
         if normalized in {
             "CE",
             "CALL",
+            "C",
         }:
             return "CE"
 
         if normalized in {
             "PE",
             "PUT",
+            "P",
         }:
             return "PE"
 
         return None
+
+    def _format_cross_type_display(
+        self,
+        cross_type: Any,
+    ) -> str:
+        normalized = str(cross_type or "").strip().lower()
+
+        if normalized == "bullish_cross":
+            return "Bullish Cross"
+
+        if normalized == "bearish_cross":
+            return "Bearish Cross"
+
+        if not normalized:
+            return "N/A"
+
+        return normalized.replace(
+            "_",
+            " ",
+        ).title()
+
+    def _format_signal_display(
+        self,
+        signal: Any,
+    ) -> str:
+        normalized = str(signal or "").strip().lower()
+
+        if normalized == "bullish":
+            return "Bullish"
+
+        if normalized == "bearish":
+            return "Bearish"
+
+        if not normalized:
+            return "N/A"
+
+        return normalized.replace(
+            "_",
+            " ",
+        ).title()
+
+    def _format_ema_mode_display(
+        self,
+        mode: Any,
+    ) -> str:
+        normalized = str(mode or "").strip().lower()
+
+        if normalized == "candle_close":
+            return "Candle Close"
+
+        if normalized == "tick_ltp":
+            return "Live Tick / LTP"
+
+        if not normalized:
+            return "N/A"
+
+        return normalized.replace(
+            "_",
+            " ",
+        ).title()
+
+    def _format_short_market_time(
+        self,
+        value: Any,
+        unavailable_text: str = "N/A",
+        include_seconds: bool = False,
+    ) -> str:
+        if value is None:
+            return unavailable_text
+
+        parsed_datetime = None
+
+        if isinstance(value, datetime):
+            parsed_datetime = value
+        else:
+            text = str(value).strip()
+
+            if not text:
+                return unavailable_text
+
+            normalized_text = text.replace(
+                "Z",
+                "+00:00",
+            )
+
+            try:
+                parsed_datetime = datetime.fromisoformat(normalized_text)
+            except ValueError:
+                supported_formats = (
+                    "%Y-%m-%d %H:%M:%S",
+                    "%Y-%m-%dT%H:%M:%S",
+                    "%Y-%m-%d %H:%M",
+                    "%Y-%m-%dT%H:%M",
+                )
+
+                for date_format in supported_formats:
+                    try:
+                        parsed_datetime = datetime.strptime(
+                            text,
+                            date_format,
+                        )
+                        break
+                    except ValueError:
+                        continue
+
+        if parsed_datetime is None:
+            return str(value)
+
+        if parsed_datetime.tzinfo is None:
+            parsed_datetime = parsed_datetime.replace(tzinfo=self.market_timezone)
+        else:
+            parsed_datetime = parsed_datetime.astimezone(self.market_timezone)
+
+        time_format = "%I:%M:%S %p" if include_seconds else "%I:%M %p"
+
+        return parsed_datetime.strftime(time_format)
+
+    def _get_number_badge(
+        self,
+        index: int,
+    ) -> str:
+        badges = {
+            1: "1️⃣",
+            2: "2️⃣",
+            3: "3️⃣",
+            4: "4️⃣",
+            5: "5️⃣",
+            6: "6️⃣",
+            7: "7️⃣",
+            8: "8️⃣",
+            9: "9️⃣",
+            10: "🔟",
+        }
+
+        return badges.get(
+            index,
+            f"{index}.",
+        )
 
     def _get_live_ema_calculation_mode(
         self,
@@ -291,7 +500,6 @@ class TelegramService:
 
         safe_title = self._escape(title)
         safe_message = self._escape(message)
-
         market_time = self._escape(self._now_market_time())
 
         formatted_message = (
@@ -306,7 +514,7 @@ class TelegramService:
             formatted_message,
             notification_title=title,
             notification_level=level_upper,
-            notification_context=(notification_context),
+            notification_context=notification_context,
         )
 
     # ============================================================
@@ -327,7 +535,7 @@ class TelegramService:
             title="Option Feed Engine Startup",
             message=message,
             level="STARTUP",
-            notification_context=("application_startup"),
+            notification_context="application_startup",
         )
 
     def send_shutdown_message(
@@ -343,7 +551,7 @@ class TelegramService:
             title="Option Feed Engine Shutdown",
             message=message,
             level="SHUTDOWN",
-            notification_context=("application_shutdown"),
+            notification_context="application_shutdown",
         )
 
     # ============================================================
@@ -575,7 +783,7 @@ class TelegramService:
         )
 
         result = self.send_message(
-            title=("Opening Range Instrument Isolated"),
+            title="Opening Range Instrument Isolated",
             message=message,
             level="OPENING_RANGE",
             notification_context=(
@@ -607,139 +815,30 @@ class TelegramService:
     def _format_suggested_order_instruments(
         self,
         suggested_order_instruments: list,
+        suggested_order_side: str | None = None,
     ) -> str:
-        if not suggested_order_instruments:
-            return "Nearest Option Chain Instruments:\n" "- not_available"
+        option_type = self._normalize_option_type(suggested_order_side) or "OPTION"
 
-        decimal_places = int(
-            getattr(
-                config,
-                "EMA_ISOLATED_ALERT_PRICE_DECIMAL_PLACES",
-                2,
-            )
-        )
+        valid_instruments = [
+            item for item in suggested_order_instruments if isinstance(item, dict)
+        ]
 
-        lines = ["Nearest Option Chain Instruments:"]
+        lines = [f"📍 <b>NEAREST " f"{self._escape(option_type)} " f"CONTRACTS</b>"]
 
-        for item in suggested_order_instruments:
-            if not isinstance(item, dict):
-                continue
-
-            strike = self._format_numeric_value(
-                item.get("strike_price"),
-                unavailable_text="N/A",
-            )
-
-            instrument_type = (
-                self._normalize_option_type(
-                    item.get("instrument_type") or item.get("option_type")
-                )
-                or "N/A"
-            )
-
-            market_data = item.get(
-                "market_data",
-                {},
-            )
-
-            if not isinstance(
-                market_data,
-                dict,
-            ):
-                market_data = {}
-
-            ltp = self._format_numeric_value(
-                item.get("ltp"),
-                unavailable_text="N/A",
-                decimal_places=decimal_places,
-            )
-
-            bid_price = self._format_numeric_value(
-                market_data.get("bid_price"),
-                unavailable_text="N/A",
-                decimal_places=decimal_places,
-            )
-
-            ask_price = self._format_numeric_value(
-                market_data.get("ask_price"),
-                unavailable_text="N/A",
-                decimal_places=decimal_places,
-            )
-
-            oi = self._format_numeric_value(
-                market_data.get("oi"),
-                unavailable_text="N/A",
-            )
-
-            volume = self._format_numeric_value(
-                market_data.get("volume"),
-                unavailable_text="N/A",
-            )
-
-            isolated_text = " [ISOLATED]" if item.get("is_isolated_instrument") else ""
-
+        if not valid_instruments:
             lines.extend(
                 [
-                    f"- {strike}{instrument_type}{isolated_text}",
-                    f"  LTP: {ltp}rs",
-                    f"  Bid/Ask: {bid_price}/{ask_price}",
-                    f"  OI: {oi}",
-                    f"  Volume: {volume}",
+                    "",
+                    "No matching instruments available.",
                 ]
             )
 
-        return "\n".join(lines)
-
-    def _format_budget_range_instruments(
-        self,
-        budget_range_instruments: list,
-        suggested_order_side: str | None = None,
-    ) -> str:
-        decimal_places = int(
-            getattr(
-                config,
-                "EMA_ISOLATED_ALERT_PRICE_DECIMAL_PLACES",
-                2,
-            )
-        )
-
-        minimum_price = self._format_numeric_value(
-            getattr(
-                config,
-                "EMA_ALERT_BUDGET_MIN_PRICE",
-                20.0,
-            ),
-            decimal_places=decimal_places,
-        )
-
-        maximum_price = self._format_numeric_value(
-            getattr(
-                config,
-                "EMA_ALERT_BUDGET_MAX_PRICE",
-                30.0,
-            ),
-            decimal_places=decimal_places,
-        )
-
-        option_type = self._normalize_option_type(suggested_order_side) or "option"
-
-        lines = [
-            (
-                "Budget Range Option Chain Instruments "
-                f"({minimum_price}rs to "
-                f"{maximum_price}rs):"
-            )
-        ]
-
-        if not budget_range_instruments:
-            lines.append(f"- No matching {option_type} instruments")
-
             return "\n".join(lines)
 
-        for item in budget_range_instruments:
-            if not isinstance(item, dict):
-                continue
-
+        for index, item in enumerate(
+            valid_instruments,
+            start=1,
+        ):
             strike = self._format_numeric_value(
                 item.get("strike_price"),
                 unavailable_text="N/A",
@@ -757,43 +856,122 @@ class TelegramService:
                 {},
             )
 
-            if not isinstance(
-                market_data,
-                dict,
-            ):
+            if not isinstance(market_data, dict):
                 market_data = {}
 
-            ltp = self._format_numeric_value(
-                item.get("ltp"),
-                unavailable_text="N/A",
-                decimal_places=decimal_places,
+            ltp_value = (
+                item.get("ltp") if item.get("ltp") is not None else item.get("live_ltp")
             )
 
-            bid_price = self._format_numeric_value(
-                market_data.get("bid_price"),
-                unavailable_text="N/A",
-                decimal_places=decimal_places,
-            )
+            if ltp_value is None:
+                ltp_value = market_data.get("ltp")
 
-            ask_price = self._format_numeric_value(
-                market_data.get("ask_price"),
-                unavailable_text="N/A",
-                decimal_places=decimal_places,
-            )
+            volume_value = market_data.get("volume")
 
-            oi = self._format_numeric_value(
-                market_data.get("oi"),
-                unavailable_text="N/A",
-            )
+            if volume_value is None:
+                volume_value = item.get("volume")
 
-            isolated_text = " [ISOLATED]" if item.get("is_isolated_instrument") else ""
+            badge = self._get_number_badge(index)
 
             lines.extend(
                 [
-                    f"- {strike}{instrument_type}{isolated_text}",
-                    f"  LTP: {ltp}rs",
-                    f"  Bid/Ask: {bid_price}/{ask_price}",
-                    f"  OI: {oi}",
+                    "",
+                    (
+                        f"{badge} "
+                        f"<b>{self._escape(strike)} "
+                        f"{self._escape(instrument_type)}</b>"
+                    ),
+                    (f"   💰 LTP     : " f"{self._format_rupee(ltp_value)}"),
+                    (
+                        f"   📊 Volume  : "
+                        f"{self._format_indian_quantity(volume_value)}"
+                    ),
+                ]
+            )
+
+        return "\n".join(lines)
+
+    def _format_budget_range_instruments(
+        self,
+        budget_range_instruments: list,
+        suggested_order_side: str | None = None,
+    ) -> str:
+        minimum_price = getattr(
+            config,
+            "EMA_ALERT_BUDGET_MIN_PRICE",
+            20.0,
+        )
+
+        maximum_price = getattr(
+            config,
+            "EMA_ALERT_BUDGET_MAX_PRICE",
+            30.0,
+        )
+
+        option_type = self._normalize_option_type(suggested_order_side) or "OPTION"
+
+        valid_instruments = [
+            item for item in budget_range_instruments if isinstance(item, dict)
+        ]
+
+        lines = [
+            "💵 <b>BUDGET MATCHES</b>",
+            (
+                f"Range: "
+                f"{self._format_rupee(minimum_price)} "
+                f"to "
+                f"{self._format_rupee(maximum_price)}"
+            ),
+        ]
+
+        if not valid_instruments:
+            lines.extend(
+                [
+                    "",
+                    (f"No matching " f"{self._escape(option_type)} " f"instruments."),
+                ]
+            )
+
+            return "\n".join(lines)
+
+        for item in valid_instruments:
+            strike = self._format_numeric_value(
+                item.get("strike_price"),
+                unavailable_text="N/A",
+            )
+
+            instrument_type = (
+                self._normalize_option_type(
+                    item.get("instrument_type") or item.get("option_type")
+                )
+                or option_type
+            )
+
+            market_data = item.get(
+                "market_data",
+                {},
+            )
+
+            if not isinstance(market_data, dict):
+                market_data = {}
+
+            ltp_value = (
+                item.get("ltp") if item.get("ltp") is not None else item.get("live_ltp")
+            )
+
+            if ltp_value is None:
+                ltp_value = market_data.get("ltp")
+
+            lines.extend(
+                [
+                    "",
+                    (
+                        f"✅ "
+                        f"<b>{self._escape(strike)} "
+                        f"{self._escape(instrument_type)}</b>"
+                        f"  •  "
+                        f"<b>{self._format_rupee(ltp_value)}</b>"
+                    ),
                 ]
             )
 
@@ -822,12 +1000,27 @@ class TelegramService:
 
             return False
 
-        selected_state = selected_state or {}
-        ema_event = ema_event or {}
+        selected_state = selected_state if isinstance(selected_state, dict) else {}
 
-        suggested_order_instruments = suggested_order_instruments or []
+        ema_event = ema_event if isinstance(ema_event, dict) else {}
 
-        budget_range_instruments = budget_range_instruments or []
+        suggested_order_instruments = (
+            suggested_order_instruments
+            if isinstance(
+                suggested_order_instruments,
+                list,
+            )
+            else []
+        )
+
+        budget_range_instruments = (
+            budget_range_instruments
+            if isinstance(
+                budget_range_instruments,
+                list,
+            )
+            else []
+        )
 
         contract_info = (
             selected_state.get("contract_info")
@@ -835,6 +1028,9 @@ class TelegramService:
             or ema_event.get("info")
             or {}
         )
+
+        if not isinstance(contract_info, dict):
+            contract_info = {}
 
         strike = contract_info.get(
             "strike_price",
@@ -864,6 +1060,7 @@ class TelegramService:
 
         ema_mode = (
             ema_event.get("ema_calculation_mode")
+            or ema_event.get("calculation_mode")
             or self._get_live_ema_calculation_mode()
         )
 
@@ -880,9 +1077,7 @@ class TelegramService:
 
         candle_low = candle.get("low")
 
-        candle_time = (
-            candle.get("timestamp") or ema_event.get("timestamp") or "not_available"
-        )
+        candle_time = candle.get("timestamp") or ema_event.get("timestamp")
 
         close_value = self._safe_float(candle_close)
 
@@ -906,87 +1101,51 @@ class TelegramService:
             if suggested_order_option_type:
                 break
 
-        if not suggested_order_option_type:
-            cross_text = str(cross_type).lower()
+        cross_text = str(cross_type).strip().lower()
 
+        if not suggested_order_option_type:
             if "bullish" in cross_text:
                 suggested_order_option_type = isolated_instrument_type
 
             elif "bearish" in cross_text:
                 if isolated_instrument_type == "CE":
                     suggested_order_option_type = "PE"
-
                 elif isolated_instrument_type == "PE":
                     suggested_order_option_type = "CE"
 
-        suggested_order_side = suggested_order_option_type or "not_available"
-
-        decimal_places = int(
-            getattr(
-                config,
-                "EMA_ISOLATED_ALERT_PRICE_DECIMAL_PLACES",
-                2,
-            )
-        )
+        suggested_order_side = suggested_order_option_type or "N/A"
 
         strike_text = self._format_numeric_value(
             strike,
             unavailable_text="N/A",
         )
 
-        nifty_text = self._format_numeric_value(
+        nifty_text = self._format_price_without_currency(
             nifty_ltp,
             unavailable_text="N/A",
-            decimal_places=decimal_places,
         )
 
-        close_text = self._format_numeric_value(
-            candle_close,
-            unavailable_text="N/A",
-            decimal_places=decimal_places,
+        cross_type_display = self._format_cross_type_display(cross_type)
+
+        signal_display = self._format_signal_display(current_signal)
+
+        ema_mode_display = self._format_ema_mode_display(ema_mode)
+
+        direction_text = (
+            "BULLISH"
+            if "bullish" in cross_text
+            else ("BEARISH" if "bearish" in cross_text else signal_display.upper())
         )
 
-        low_text = self._format_numeric_value(
-            candle_low,
-            unavailable_text="N/A",
-            decimal_places=decimal_places,
+        direction_icon = (
+            "📈"
+            if direction_text == "BULLISH"
+            else ("📉" if direction_text == "BEARISH" else "📊")
         )
-
-        movement_text = self._format_numeric_value(
-            close_low_movement,
-            unavailable_text="N/A",
-            decimal_places=decimal_places,
-        )
-
-        # ==========================================
-        # Option Chain Metadata
-        # ==========================================
-
-        option_chain_reference = None
-
-        if suggested_order_instruments:
-            option_chain_reference = suggested_order_instruments[0]
-        elif budget_range_instruments:
-            option_chain_reference = budget_range_instruments[0]
-
-        if not isinstance(
-            option_chain_reference,
-            dict,
-        ):
-            option_chain_reference = {}
-
-        underlying_spot_price = self._format_numeric_value(
-            option_chain_reference.get("underlying_spot_price"),
-            unavailable_text="N/A",
-            decimal_places=decimal_places,
-        )
-
-        option_chain_expiry = option_chain_reference.get("expiry") or "N/A"
-
-        option_chain_source = option_chain_reference.get("data_source") or "N/A"
 
         nearest_text = self._format_suggested_order_instruments(
-            suggested_order_instruments
+            suggested_order_instruments,
+            suggested_order_side,
         )
 
         budget_text = self._format_budget_range_instruments(
@@ -995,22 +1154,26 @@ class TelegramService:
         )
 
         message_lines = [
-            (
-                f"{strike_text} "
-                f"{isolated_instrument_type} "
-                f"- crosses {selected_level} "
-                f"- At {nifty_text}"
-            ),
+            "🚨 <b>ISOLATED EMA SIGNAL</b>",
+            "━━━━━━━━━━━━━━━━━━━━━━",
             "",
-            "EMA Cross Details:",
-            f"Cross Type: {cross_type}",
-            f"Signal: {current_signal}",
-            ("Isolated Instrument Type: " f"{isolated_instrument_type}"),
-            ("Suggested Order Side: " f"{suggested_order_side}"),
-            ("EMA Calculation Mode: " f"{ema_mode}"),
-            ("Underlying Spot: " f"{underlying_spot_price}"),
-            ("Expiry: " f"{option_chain_expiry}"),
-            ("Option Source: " f"{option_chain_source}"),
+            (
+                f"📌 <b>{self._escape(strike_text)} "
+                f"{self._escape(isolated_instrument_type)}"
+                f"  •  "
+                f"{self._escape(direction_text)}</b>"
+            ),
+            (f"{direction_icon} Crossed " f"<b>{self._escape(selected_level)}</b>"),
+            (f"💹 NIFTY SPOT: " f"<b>{self._escape(nifty_text)}</b>"),
+            "",
+            "🎯 <b>TRADE DIRECTION</b>",
+            (f"├ Isolated Side : " f"<b>{self._escape(isolated_instrument_type)}</b>"),
+            (f"├ Suggested Side: " f"<b>{self._escape(suggested_order_side)}</b>"),
+            (f"├ Cross Type    : " f"{self._escape(cross_type_display)}"),
+            (f"└ Signal        : " f"{self._escape(signal_display)}"),
+            "",
+            "📊 <b>EMA CANDLE</b>",
+            (f"├ Mode      : " f"{self._escape(ema_mode_display)}"),
         ]
 
         if bool(
@@ -1020,7 +1183,9 @@ class TelegramService:
                 True,
             )
         ):
-            message_lines.append(f"EMA Candle Close: {close_text}")
+            message_lines.append(
+                f"├ Close     : " f"{self._format_rupee(candle_close)}"
+            )
 
         if bool(
             getattr(
@@ -1029,7 +1194,7 @@ class TelegramService:
                 True,
             )
         ):
-            message_lines.append(f"EMA Candle Low: {low_text}")
+            message_lines.append(f"├ Low       : " f"{self._format_rupee(candle_low)}")
 
         if bool(
             getattr(
@@ -1038,7 +1203,10 @@ class TelegramService:
                 True,
             )
         ):
-            message_lines.append(f"EMA Close-Low Movement: " f"{movement_text} points")
+            message_lines.append(f"├ Movement  : " f"{self._format_rupee(
+                    close_low_movement,
+                    include_sign=True,
+                )}")
 
         if bool(
             getattr(
@@ -1047,17 +1215,19 @@ class TelegramService:
                 True,
             )
         ):
-            message_lines.extend(
-                [
-                    "",
-                    f"EMA Candle Time: {candle_time}",
-                ]
-            )
+            message_lines.append(f"└ Time      : " f"{self._escape(
+                    self._format_short_market_time(
+                        candle_time
+                    )
+                )}")
+        else:
+            message_lines.append(f"└ Time      : N/A")
 
         message_lines.extend(
             [
                 "",
-                f"Instrument Key: {instrument_key}",
+                "🔑 <b>INSTRUMENT</b>",
+                self._escape(instrument_key),
             ]
         )
 
@@ -1089,6 +1259,16 @@ class TelegramService:
                 ]
             )
 
+        message_lines.extend(
+            [
+                "",
+                "━━━━━━━━━━━━━━━━━━━━━━",
+                (f"🕒 Alert Time: " f"<b>{self._escape(
+                        self._now_short_market_time()
+                    )}</b>"),
+            ]
+        )
+
         message = "\n".join(message_lines)
 
         logger.info(
@@ -1103,10 +1283,10 @@ class TelegramService:
             len(budget_range_instruments),
         )
 
-        result = self.send_message(
-            title="Isolated Instrument EMA Alert",
-            message=message,
-            level="EMA",
+        result = self._send_raw_message(
+            message,
+            notification_title=("Isolated EMA Signal"),
+            notification_level="EMA",
             notification_context=(
                 f"isolated_ema"
                 f"|instrument_key={instrument_key}"

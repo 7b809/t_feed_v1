@@ -399,14 +399,13 @@ DEFAULT_ISOLATION_WINDOW_POINTS = max(
     0.0,
     _config_float(
         "OPENING_RANGE_ISOLATION_AVERAGE_WINDOW_POINTS",
-        500.0,
+        300.0,
     ),
 )
 
 DEFAULT_ISOLATION_TOUCH_LEVELS = _config_string_list(
     name="OPENING_RANGE_ISOLATION_TOUCH_LEVELS",
     default=[
-        "S3",
         "R3",
     ],
     uppercase=True,
@@ -415,7 +414,6 @@ DEFAULT_ISOLATION_TOUCH_LEVELS = _config_string_list(
 DEFAULT_ISOLATION_PRIORITY_LEVELS = _config_string_list(
     name="OPENING_RANGE_ISOLATION_PRIORITY_LEVELS",
     default=[
-        "S3",
         "R3",
         
     ],

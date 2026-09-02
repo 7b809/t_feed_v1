@@ -1092,41 +1092,43 @@ def build_isolated_ema_alert_payload(
         )
 
         normalized_instrument = {
-            "instrument_key": (item_key or None),
-            "trading_symbol": instrument.get("trading_symbol"),
-            "instrument_type": item_option_type,
-            "option_type": item_option_type,
-            "strike_price": _safe_float(instrument.get("strike_price")),
-            "expiry": instrument.get("expiry"),
-            "underlying_symbol": instrument.get("underlying_symbol"),
-            "underlying_type": instrument.get("underlying_type"),
-            "lot_size": safe_int(
-                instrument.get("lot_size"),
-                default=0,
-            ),
-            "available": bool(
-                instrument.get(
-                    "available",
-                    bool(item_key),
-                )
-            ),
-            # Option Chain Data
-            "ltp": _safe_float(instrument.get("ltp")),
-            "live_ltp": item_live_ltp,
-            "close_price": _safe_float(instrument.get("close_price")),
-            "pcr": _safe_float(instrument.get("pcr")),
-            "underlying_spot_price": _safe_float(
-                instrument.get("underlying_spot_price")
-            ),
-            "market_data": deepcopy(instrument.get("market_data")),
-            "option_greeks": deepcopy(instrument.get("option_greeks")),
-            "data_source": instrument.get("data_source"),
-            "live_ltp_updated_at": (
-                instrument.get("live_ltp_updated_at") or instrument.get("updated_at")
-            ),
-            "candle": deepcopy(item_candle),
-            "is_isolated_instrument": (item_is_isolated),
-        }
+    "instrument_key": (item_key or None),
+    "option_type": item_option_type,
+    "strike_price": _safe_float(
+        instrument.get("strike_price")
+    ),
+    "trading_symbol": instrument.get(
+        "trading_symbol"
+    ),
+    "lot_size": safe_int(
+        instrument.get("lot_size"),
+        default=0,
+    ),
+    "underlying_key": instrument.get(
+        "underlying_key"
+    ),
+    "underlying_spot_price": _safe_float(
+        instrument.get("underlying_spot_price")
+    ),
+    "pcr": _safe_float(
+        instrument.get("pcr")
+    ),
+    "ltp": _safe_float(
+        instrument.get("ltp")
+    ),
+    "close_price": _safe_float(
+        instrument.get("close_price")
+    ),
+    "option_greeks": deepcopy(
+        instrument.get("option_greeks")
+    ),
+    "data_source": instrument.get(
+        "data_source"
+    ),
+    "is_isolated_instrument": (
+        item_is_isolated
+    ),
+}
         normalized_nearest_instruments.append(normalized_instrument)
 
     normalized_budget_instruments = []
@@ -1161,42 +1163,43 @@ def build_isolated_ema_alert_payload(
         )
 
         normalized_instrument = {
-            "instrument_key": (item_key or None),
-            "trading_symbol": instrument.get("trading_symbol"),
-            "instrument_type": item_option_type,
-            "option_type": item_option_type,
-            "strike_price": _safe_float(instrument.get("strike_price")),
-            "expiry": instrument.get("expiry"),
-            "underlying_symbol": instrument.get("underlying_symbol"),
-            "underlying_type": instrument.get("underlying_type"),
-            "lot_size": safe_int(
-                instrument.get("lot_size"),
-                default=0,
-            ),
-            "available": bool(
-                instrument.get(
-                    "available",
-                    bool(item_key),
-                )
-            ),
-            # Option Chain Data
-            "ltp": _safe_float(instrument.get("ltp")),
-            "live_ltp": item_live_ltp,
-            "close_price": _safe_float(instrument.get("close_price")),
-            "pcr": _safe_float(instrument.get("pcr")),
-            "underlying_spot_price": _safe_float(
-                instrument.get("underlying_spot_price")
-            ),
-            "market_data": deepcopy(instrument.get("market_data")),
-            "option_greeks": deepcopy(instrument.get("option_greeks")),
-            "data_source": instrument.get("data_source"),
-            "live_ltp_updated_at": (
-                instrument.get("live_ltp_updated_at") or instrument.get("updated_at")
-            ),
-            "candle": deepcopy(item_candle),
-            "is_isolated_instrument": (item_is_isolated),
-        }
-
+    "instrument_key": (item_key or None),
+    "option_type": item_option_type,
+    "strike_price": _safe_float(
+        instrument.get("strike_price")
+    ),
+    "trading_symbol": instrument.get(
+        "trading_symbol"
+    ),
+    "lot_size": safe_int(
+        instrument.get("lot_size"),
+        default=0,
+    ),
+    "underlying_key": instrument.get(
+        "underlying_key"
+    ),
+    "underlying_spot_price": _safe_float(
+        instrument.get("underlying_spot_price")
+    ),
+    "pcr": _safe_float(
+        instrument.get("pcr")
+    ),
+    "ltp": _safe_float(
+        instrument.get("ltp")
+    ),
+    "close_price": _safe_float(
+        instrument.get("close_price")
+    ),
+    "option_greeks": deepcopy(
+        instrument.get("option_greeks")
+    ),
+    "data_source": instrument.get(
+        "data_source"
+    ),
+    "is_isolated_instrument": (
+        item_is_isolated
+    ),
+}
         normalized_budget_instruments.append(normalized_instrument)
 
     payload = {
@@ -1274,56 +1277,28 @@ def build_isolated_ema_alert_payload(
             "snapshot_at": (now_market.isoformat()),
         },
         "ema": {
-            "cross_type": ema_event.get("cross_type"),
-            "direction": normalized_direction,
-            "signal": (ema_event.get("current_signal") or normalized_direction),
-            "calculation_mode": (ema_calculation_mode),
-            "fast_period": safe_int(
-                ema_event.get(
-                    "ema_fast_period",
-                    getattr(
-                        config,
-                        "LIVE_EMA_FAST_PERIOD",
-                        9,
-                    ),
-                ),
-                default=getattr(
-                    config,
-                    "LIVE_EMA_FAST_PERIOD",
-                    9,
-                ),
-            ),
-            "slow_period": safe_int(
-                ema_event.get(
-                    "ema_slow_period",
-                    getattr(
-                        config,
-                        "LIVE_EMA_SLOW_PERIOD",
-                        21,
-                    ),
-                ),
-                default=getattr(
-                    config,
-                    "LIVE_EMA_SLOW_PERIOD",
-                    21,
-                ),
-            ),
-            "fast_value": _safe_float(ema_event.get("ema_fast")),
-            "slow_value": _safe_float(ema_event.get("ema_slow")),
-            "previous_fast_value": _safe_float(ema_event.get("previous_ema_fast")),
-            "previous_slow_value": _safe_float(ema_event.get("previous_ema_slow")),
-            "previous_signal": ema_event.get("previous_signal"),
-            "current_signal": ema_event.get("current_signal"),
-            "price": _safe_float(
-                ema_event.get(
-                    "close",
-                    ema_event.get("ltp"),
-                )
-            ),
-            "source": ema_event.get("source"),
-            "timestamp": event_timestamp,
-            "candle": deepcopy(normalized_ema_candle),
-        },
+    "cross_type": ema_event.get("cross_type"),
+    "calculation_mode": ema_calculation_mode,
+    "previous_signal": ema_event.get("previous_signal"),
+    "current_signal": ema_event.get("current_signal"),
+    "price": _safe_float(
+        ema_event.get(
+            "close",
+            ema_event.get("ltp"),
+        )
+    ),
+    "source": ema_event.get("source"),
+    "timestamp": event_timestamp,
+    "candle": {
+        "timestamp": normalized_ema_candle.get("timestamp"),
+        "open": _safe_float(normalized_ema_candle.get("open")),
+        "high": _safe_float(normalized_ema_candle.get("high")),
+        "low": _safe_float(normalized_ema_candle.get("low")),
+        "close": _safe_float(normalized_ema_candle.get("close")),
+        "volume": _safe_float(normalized_ema_candle.get("volume")),
+    }
+},
+
         "order_suggestion": {
             "rule": ("bullish_same_side_" "bearish_opposite_side"),
             "isolated_instrument_type": (normalized_isolated_type),

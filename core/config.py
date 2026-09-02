@@ -554,7 +554,7 @@ OPENING_RANGE_ISOLATION_TOUCH_LEVELS = [
     value.strip().upper()
     for value in os.getenv(
         "OPENING_RANGE_ISOLATION_TOUCH_LEVELS",
-        "S3,R3",
+        "R3",
     ).split(",")
     if value.strip()
 ]
@@ -563,7 +563,7 @@ OPENING_RANGE_ISOLATION_PRIORITY_LEVELS = [
     value.strip().upper()
     for value in os.getenv(
         "OPENING_RANGE_ISOLATION_PRIORITY_LEVELS",
-        "S3,R3",
+        "R3",
     ).split(",")
     if value.strip()
 ]
@@ -878,14 +878,14 @@ EMA_ALERT_BUDGET_RANGE_ENABLED = (
 EMA_ALERT_BUDGET_MIN_PRICE = float(
     os.getenv(
         "EMA_ALERT_BUDGET_MIN_PRICE",
-        "200.0",
+        "50.0",
     )
 )
 
 EMA_ALERT_BUDGET_MAX_PRICE = float(
     os.getenv(
         "EMA_ALERT_BUDGET_MAX_PRICE",
-        "300.0",
+        "120.0",
     )
 )
 
