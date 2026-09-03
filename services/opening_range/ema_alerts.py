@@ -1,7 +1,7 @@
 from copy import deepcopy
 from typing import Any
 from uuid import uuid4
-
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from core import config
 from core.logger import get_logger
 from services.algo_app_service import algo_app_service
@@ -124,6 +124,149 @@ def _safe_float(
         return default
 
 
+def _format_price_value(
+    value: Any,
+    unavailable_text: str = "N/A",
+    decimal_places: int | None = None,
+) -> str:
+    if value is None:
+        return unavailable_text
+
+    if decimal_places is None:
+        decimal_places = safe_int(
+            getattr(
+                config,
+                "EMA_ISOLATED_ALERT_PRICE_DECIMAL_PLACES",
+                2,
+            ),
+            default=2,
+        )
+
+    decimal_places = max(
+        0,
+        decimal_places,
+    )
+
+    try:
+        numeric_value = float(value)
+    except (
+        TypeError,
+        ValueError,
+        OverflowError,
+    ):
+        return unavailable_text
+
+    return f"₹{numeric_value:.{decimal_places}f}"
+
+
+def _format_volume_value(
+    value: Any,
+    unavailable_text: str = "N/A",
+) -> str:
+    if value is None:
+        return unavailable_text
+
+    try:
+        numeric_value = int(float(value))
+    except (
+        TypeError,
+        ValueError,
+        OverflowError,
+    ):
+        return unavailable_text
+
+    if numeric_value < 0:
+        return unavailable_text
+
+    return f"{numeric_value:,}"
+
+
+def _format_cross_type_text(
+    value: Any,
+    unavailable_text: str = "N/A",
+) -> str:
+    normalized_value = str(value or "").strip().lower()
+
+    cross_type_mapping = {
+        "bullish": "Bullish",
+        "bullish_cross": "Bullish Cross",
+        "buy": "Bullish Cross",
+        "long": "Bullish Cross",
+        "up": "Bullish Cross",
+        "bearish": "Bearish",
+        "bearish_cross": "Bearish Cross",
+        "sell": "Bearish Cross",
+        "short": "Bearish Cross",
+        "down": "Bearish Cross",
+    }
+
+    if normalized_value in cross_type_mapping:
+        return cross_type_mapping[normalized_value]
+
+    if not normalized_value:
+        return unavailable_text
+
+    return normalized_value.replace(
+        "_",
+        " ",
+    ).title()
+
+
+def _get_ema_alert_icon(
+    direction: Any = None,
+    cross_type: Any = None,
+) -> str:
+    normalized_direction = str(direction or "").strip().lower()
+
+    normalized_cross_type = str(cross_type or "").strip().lower()
+
+    combined_value = f"{normalized_direction} " f"{normalized_cross_type}"
+
+    if "bullish" in combined_value:
+        return "📈"
+
+    if "bearish" in combined_value:
+        return "📉"
+
+    return "📊"
+
+
+def _format_telegram_timestamp(
+    timestamp_value: Any,
+    unavailable_text: str = "N/A",
+) -> str:
+    parsed_timestamp = parse_candle_timestamp(timestamp_value)
+
+    if parsed_timestamp is None:
+        if timestamp_value is None:
+            return unavailable_text
+
+        timestamp_text = str(timestamp_value).strip()
+
+        return timestamp_text if timestamp_text else unavailable_text
+
+    market_timezone_name = str(
+        getattr(
+            config,
+            "MARKET_TIMEZONE",
+            "Asia/Kolkata",
+        )
+        or "Asia/Kolkata"
+    ).strip()
+
+    try:
+        market_timezone = ZoneInfo(market_timezone_name)
+    except ZoneInfoNotFoundError:
+        market_timezone = ZoneInfo("Asia/Kolkata")
+
+    if parsed_timestamp.tzinfo is None:
+        parsed_timestamp = parsed_timestamp.replace(tzinfo=market_timezone)
+    else:
+        parsed_timestamp = parsed_timestamp.astimezone(market_timezone)
+
+    return parsed_timestamp.strftime("%d %b %Y, %I:%M %p IST")
+
+
 def _format_market_timestamp(
     timestamp_value: Any,
 ) -> str | None:
@@ -135,21 +278,6 @@ def _format_market_timestamp(
 
         text = str(timestamp_value).strip()
         return text if text else None
-
-    return parsed_timestamp.isoformat()
-
-
-def _format_telegram_timestamp(
-    timestamp_value: Any,
-) -> str:
-    parsed_timestamp = parse_candle_timestamp(timestamp_value)
-
-    if parsed_timestamp is None:
-        if timestamp_value is None:
-            return "not_available"
-
-        text = str(timestamp_value).strip()
-        return text if text else "not_available"
 
     return parsed_timestamp.isoformat()
 
@@ -167,7 +295,7 @@ def _format_option_label(
 
     option_type_text = normalized_option_type if normalized_option_type else "N/A"
 
-    return f"{formatted_strike}{option_type_text}"
+    return f"{formatted_strike} {option_type_text}"
 
 
 # ============================================================
@@ -575,27 +703,25 @@ def format_suggested_order_instruments(
 ) -> str:
     """
     Formats nearest option-chain instruments for Telegram.
+
+    Displays the option label, LTP, and volume.
     """
+    if not isinstance(instruments, list) or not instruments:
+        return "Nearest Option-Chain Instruments:\n" "- not_available"
 
-    if (
-        not isinstance(
-            instruments,
-            list,
-        )
-        or not instruments
-    ):
-        return "Nearest Instrument Details:\n" "- not_available"
-
-    decimal_places = safe_int(
-        getattr(
-            config,
-            "EMA_ISOLATED_ALERT_PRICE_DECIMAL_PLACES",
-            2,
+    decimal_places = max(
+        0,
+        safe_int(
+            getattr(
+                config,
+                "EMA_ISOLATED_ALERT_PRICE_DECIMAL_PLACES",
+                2,
+            ),
+            default=2,
         ),
-        default=2,
     )
 
-    lines = ["Nearest Option-Chain Instruments:"]
+    formatted_instruments = []
 
     for item in instruments:
         if not isinstance(item, dict):
@@ -603,13 +729,10 @@ def format_suggested_order_instruments(
 
         option_label = _format_option_label(
             item.get("strike_price"),
-            item.get("option_type") or item.get("instrument_type"),
+            (item.get("option_type") or item.get("instrument_type")),
         )
 
-        market_data = item.get(
-            "market_data",
-            {},
-        )
+        market_data = item.get("market_data") or {}
 
         if not isinstance(market_data, dict):
             market_data = {}
@@ -619,122 +742,90 @@ def format_suggested_order_instruments(
             default=_safe_float(market_data.get("ltp")),
         )
 
-        bid_price = _safe_float(market_data.get("bid_price"))
+        volume = _safe_float(
+            item.get("volume"),
+            default=_safe_float(market_data.get("volume")),
+        )
 
-        ask_price = _safe_float(market_data.get("ask_price"))
-
-        open_interest = _safe_float(market_data.get("oi"))
-
-        volume = _safe_float(market_data.get("volume"))
-
-        ltp_text = _format_numeric_value(
+        ltp_text = _format_price_value(
             option_ltp,
-            unavailable_text="N/A",
             decimal_places=decimal_places,
         )
 
-        bid_text = _format_numeric_value(
-            bid_price,
-            unavailable_text="N/A",
-            decimal_places=decimal_places,
-        )
-
-        ask_text = _format_numeric_value(
-            ask_price,
-            unavailable_text="N/A",
-            decimal_places=decimal_places,
-        )
-
-        oi_text = _format_numeric_value(
-            open_interest,
-            unavailable_text="N/A",
-        )
-
-        volume_text = _format_numeric_value(
-            volume,
-            unavailable_text="N/A",
-        )
+        volume_text = _format_volume_value(volume)
 
         isolated_text = " [ISOLATED]" if item.get("is_isolated_instrument") else ""
 
-        lines.extend(
-            [
-                f"- {option_label}{isolated_text}",
-                f"  LTP: {ltp_text}rs",
-                (f"  Bid/Ask: " f"{bid_text}/{ask_text}"),
-                f"  OI: {oi_text}",
-                f"  Volume: {volume_text}",
-            ]
+        formatted_instruments.append(
+            "\n".join(
+                [
+                    f"- {option_label}{isolated_text}",
+                    f"  LTP: {ltp_text}",
+                    f"  Volume: {volume_text}",
+                ]
+            )
         )
 
-    if len(lines) == 1:
-        lines.append("- not_available")
+    if not formatted_instruments:
+        return "Nearest Option-Chain Instruments:\n" "- not_available"
 
-    return "\n".join(lines)
+    return "Nearest Option-Chain Instruments:\n" + "\n\n".join(formatted_instruments)
 
 
 # ============================================================
 # Budget Range Instruments
 # ============================================================
-
-
 def format_budget_range_instruments(
     instruments: list,
     order_option_type: str | None,
 ) -> str:
     """
     Formats budget-range option-chain instruments for Telegram.
-    """
 
-    decimal_places = safe_int(
-        getattr(
-            config,
-            "EMA_ISOLATED_ALERT_PRICE_DECIMAL_PLACES",
-            2,
+    Displays the option label and LTP.
+    """
+    decimal_places = max(
+        0,
+        safe_int(
+            getattr(
+                config,
+                "EMA_ISOLATED_ALERT_PRICE_DECIMAL_PLACES",
+                2,
+            ),
+            default=2,
         ),
-        default=2,
     )
 
-    minimum_price = _format_numeric_value(
+    minimum_price = _format_price_value(
         getattr(
             config,
             "EMA_ALERT_BUDGET_MIN_PRICE",
-            20.0,
+            50.0,
         ),
         decimal_places=decimal_places,
     )
 
-    maximum_price = _format_numeric_value(
+    maximum_price = _format_price_value(
         getattr(
             config,
             "EMA_ALERT_BUDGET_MAX_PRICE",
-            30.0,
+            120.0,
         ),
         decimal_places=decimal_places,
     )
-
     normalized_option_type = normalize_option_type(order_option_type)
 
     option_type_text = normalized_option_type if normalized_option_type else "option"
 
-    lines = [
-        (
-            "Budget Range Option-Chain Instruments "
-            f"({minimum_price}rs to "
-            f"{maximum_price}rs):"
-        )
-    ]
+    heading = (
+        "Budget Range Option-Chain Instruments "
+        f"({minimum_price} to {maximum_price}):"
+    )
 
-    if (
-        not isinstance(
-            instruments,
-            list,
-        )
-        or not instruments
-    ):
-        lines.append(f"- No matching {option_type_text} instruments")
+    if not isinstance(instruments, list) or not instruments:
+        return f"{heading}\n" f"- No matching {option_type_text} instruments"
 
-        return "\n".join(lines)
+    formatted_instruments = []
 
     for item in instruments:
         if not isinstance(item, dict):
@@ -742,13 +833,10 @@ def format_budget_range_instruments(
 
         option_label = _format_option_label(
             item.get("strike_price"),
-            item.get("option_type") or item.get("instrument_type"),
+            (item.get("option_type") or item.get("instrument_type")),
         )
 
-        market_data = item.get(
-            "market_data",
-            {},
-        )
+        market_data = item.get("market_data") or {}
 
         if not isinstance(market_data, dict):
             market_data = {}
@@ -758,50 +846,26 @@ def format_budget_range_instruments(
             default=_safe_float(market_data.get("ltp")),
         )
 
-        bid_price = _safe_float(market_data.get("bid_price"))
-
-        ask_price = _safe_float(market_data.get("ask_price"))
-
-        open_interest = _safe_float(market_data.get("oi"))
-
-        ltp_text = _format_numeric_value(
+        ltp_text = _format_price_value(
             option_ltp,
-            unavailable_text="N/A",
             decimal_places=decimal_places,
-        )
-
-        bid_text = _format_numeric_value(
-            bid_price,
-            unavailable_text="N/A",
-            decimal_places=decimal_places,
-        )
-
-        ask_text = _format_numeric_value(
-            ask_price,
-            unavailable_text="N/A",
-            decimal_places=decimal_places,
-        )
-
-        oi_text = _format_numeric_value(
-            open_interest,
-            unavailable_text="N/A",
         )
 
         isolated_text = " [ISOLATED]" if item.get("is_isolated_instrument") else ""
 
-        lines.extend(
-            [
-                f"- {option_label}{isolated_text}",
-                f"  LTP: {ltp_text}rs",
-                (f"  Bid/Ask: " f"{bid_text}/{ask_text}"),
-                f"  OI: {oi_text}",
-            ]
+        formatted_instruments.append(
+            "\n".join(
+                [
+                    f"- {option_label}{isolated_text}",
+                    f"  LTP: {ltp_text}",
+                ]
+            )
         )
 
-    if len(lines) == 1:
-        lines.append(f"- No matching {option_type_text} instruments")
+    if not formatted_instruments:
+        return f"{heading}\n" f"- No matching {option_type_text} instruments"
 
-    return "\n".join(lines)
+    return f"{heading}\n" + "\n\n".join(formatted_instruments)
 
 
 # ============================================================
@@ -1092,43 +1156,26 @@ def build_isolated_ema_alert_payload(
         )
 
         normalized_instrument = {
-    "instrument_key": (item_key or None),
-    "option_type": item_option_type,
-    "strike_price": _safe_float(
-        instrument.get("strike_price")
-    ),
-    "trading_symbol": instrument.get(
-        "trading_symbol"
-    ),
-    "lot_size": safe_int(
-        instrument.get("lot_size"),
-        default=0,
-    ),
-    "underlying_key": instrument.get(
-        "underlying_key"
-    ),
-    "underlying_spot_price": _safe_float(
-        instrument.get("underlying_spot_price")
-    ),
-    "pcr": _safe_float(
-        instrument.get("pcr")
-    ),
-    "ltp": _safe_float(
-        instrument.get("ltp")
-    ),
-    "close_price": _safe_float(
-        instrument.get("close_price")
-    ),
-    "option_greeks": deepcopy(
-        instrument.get("option_greeks")
-    ),
-    "data_source": instrument.get(
-        "data_source"
-    ),
-    "is_isolated_instrument": (
-        item_is_isolated
-    ),
-}
+            "instrument_key": (item_key or None),
+            "option_type": item_option_type,
+            "strike_price": _safe_float(instrument.get("strike_price")),
+            "trading_symbol": instrument.get("trading_symbol"),
+            "lot_size": safe_int(
+                instrument.get("lot_size"),
+                default=0,
+            ),
+            "underlying_key": instrument.get("underlying_key"),
+            "underlying_spot_price": _safe_float(
+                instrument.get("underlying_spot_price")
+            ),
+            "pcr": _safe_float(instrument.get("pcr")),
+            "ltp": item_live_ltp,
+            "live_ltp": item_live_ltp,
+            "close_price": _safe_float(instrument.get("close_price")),
+            "option_greeks": deepcopy(instrument.get("option_greeks")),
+            "data_source": instrument.get("data_source"),
+            "is_isolated_instrument": (item_is_isolated),
+        }
         normalized_nearest_instruments.append(normalized_instrument)
 
     normalized_budget_instruments = []
@@ -1163,43 +1210,26 @@ def build_isolated_ema_alert_payload(
         )
 
         normalized_instrument = {
-    "instrument_key": (item_key or None),
-    "option_type": item_option_type,
-    "strike_price": _safe_float(
-        instrument.get("strike_price")
-    ),
-    "trading_symbol": instrument.get(
-        "trading_symbol"
-    ),
-    "lot_size": safe_int(
-        instrument.get("lot_size"),
-        default=0,
-    ),
-    "underlying_key": instrument.get(
-        "underlying_key"
-    ),
-    "underlying_spot_price": _safe_float(
-        instrument.get("underlying_spot_price")
-    ),
-    "pcr": _safe_float(
-        instrument.get("pcr")
-    ),
-    "ltp": _safe_float(
-        instrument.get("ltp")
-    ),
-    "close_price": _safe_float(
-        instrument.get("close_price")
-    ),
-    "option_greeks": deepcopy(
-        instrument.get("option_greeks")
-    ),
-    "data_source": instrument.get(
-        "data_source"
-    ),
-    "is_isolated_instrument": (
-        item_is_isolated
-    ),
-}
+            "instrument_key": (item_key or None),
+            "option_type": item_option_type,
+            "strike_price": _safe_float(instrument.get("strike_price")),
+            "trading_symbol": instrument.get("trading_symbol"),
+            "lot_size": safe_int(
+                instrument.get("lot_size"),
+                default=0,
+            ),
+            "underlying_key": instrument.get("underlying_key"),
+            "underlying_spot_price": _safe_float(
+                instrument.get("underlying_spot_price")
+            ),
+            "pcr": _safe_float(instrument.get("pcr")),
+            "ltp": item_live_ltp,
+            "live_ltp": item_live_ltp,
+            "close_price": _safe_float(instrument.get("close_price")),
+            "option_greeks": deepcopy(instrument.get("option_greeks")),
+            "data_source": instrument.get("data_source"),
+            "is_isolated_instrument": (item_is_isolated),
+        }
         normalized_budget_instruments.append(normalized_instrument)
 
     payload = {
@@ -1277,28 +1307,27 @@ def build_isolated_ema_alert_payload(
             "snapshot_at": (now_market.isoformat()),
         },
         "ema": {
-    "cross_type": ema_event.get("cross_type"),
-    "calculation_mode": ema_calculation_mode,
-    "previous_signal": ema_event.get("previous_signal"),
-    "current_signal": ema_event.get("current_signal"),
-    "price": _safe_float(
-        ema_event.get(
-            "close",
-            ema_event.get("ltp"),
-        )
-    ),
-    "source": ema_event.get("source"),
-    "timestamp": event_timestamp,
-    "candle": {
-        "timestamp": normalized_ema_candle.get("timestamp"),
-        "open": _safe_float(normalized_ema_candle.get("open")),
-        "high": _safe_float(normalized_ema_candle.get("high")),
-        "low": _safe_float(normalized_ema_candle.get("low")),
-        "close": _safe_float(normalized_ema_candle.get("close")),
-        "volume": _safe_float(normalized_ema_candle.get("volume")),
-    }
-},
-
+            "cross_type": ema_event.get("cross_type"),
+            "calculation_mode": ema_calculation_mode,
+            "previous_signal": ema_event.get("previous_signal"),
+            "current_signal": ema_event.get("current_signal"),
+            "price": _safe_float(
+                ema_event.get(
+                    "close",
+                    ema_event.get("ltp"),
+                )
+            ),
+            "source": ema_event.get("source"),
+            "timestamp": event_timestamp,
+            "candle": {
+                "timestamp": normalized_ema_candle.get("timestamp"),
+                "open": _safe_float(normalized_ema_candle.get("open")),
+                "high": _safe_float(normalized_ema_candle.get("high")),
+                "low": _safe_float(normalized_ema_candle.get("low")),
+                "close": _safe_float(normalized_ema_candle.get("close")),
+                "volume": _safe_float(normalized_ema_candle.get("volume")),
+            },
+        },
         "order_suggestion": {
             "rule": ("bullish_same_side_" "bearish_opposite_side"),
             "isolated_instrument_type": (normalized_isolated_type),
@@ -1316,14 +1345,14 @@ def build_isolated_ema_alert_payload(
                     getattr(
                         config,
                         "EMA_ALERT_BUDGET_MIN_PRICE",
-                        20.0,
+                        50.0,
                     )
                 ),
                 "maximum_price": _safe_float(
                     getattr(
                         config,
                         "EMA_ALERT_BUDGET_MAX_PRICE",
-                        30.0,
+                        120.0,
                     )
                 ),
                 "maximum_instruments": safe_int(
@@ -1480,28 +1509,63 @@ def build_isolated_ema_alert_payload(
 # ============================================================
 # Telegram Message Formatting
 # ============================================================
-
-
 def build_isolated_ema_telegram_message(
     payload: dict,
 ) -> str:
-    decimal_places = int(config.EMA_ISOLATED_ALERT_PRICE_DECIMAL_PLACES)
+    if not isinstance(payload, dict):
+        payload = {}
+
+    decimal_places = max(
+        0,
+        safe_int(
+            getattr(
+                config,
+                "EMA_ISOLATED_ALERT_PRICE_DECIMAL_PLACES",
+                2,
+            ),
+            default=2,
+        ),
+    )
 
     instrument = payload.get("instrument") or {}
     opening_range = payload.get("opening_range") or {}
     market_snapshot = payload.get("market_snapshot") or {}
     ema_data = payload.get("ema") or {}
     order_suggestion = payload.get("order_suggestion") or {}
+
+    if not isinstance(instrument, dict):
+        instrument = {}
+
+    if not isinstance(opening_range, dict):
+        opening_range = {}
+
+    if not isinstance(market_snapshot, dict):
+        market_snapshot = {}
+
+    if not isinstance(ema_data, dict):
+        ema_data = {}
+
+    if not isinstance(order_suggestion, dict):
+        order_suggestion = {}
+
     candle = ema_data.get("candle") or {}
+
+    if not isinstance(candle, dict):
+        candle = {}
 
     strike = _format_numeric_value(
         instrument.get("strike_price"),
         unavailable_text="N/A",
     )
 
-    option_type = normalize_option_type(instrument.get("instrument_type")) or "N/A"
+    option_type = (
+        normalize_option_type(
+            instrument.get("instrument_type") or instrument.get("option_type")
+        )
+        or "N/A"
+    )
 
-    selected_level = opening_range.get("selected_level") or "N/A"
+    selected_level = str(opening_range.get("selected_level") or "N/A").strip().upper()
 
     nifty_ltp = _format_numeric_value(
         market_snapshot.get("nifty_ltp"),
@@ -1509,111 +1573,179 @@ def build_isolated_ema_telegram_message(
         decimal_places=decimal_places,
     )
 
-    cross_type = ema_data.get("cross_type") or "N/A"
+    cross_type = _format_cross_type_text(ema_data.get("cross_type"))
 
-    signal = str(ema_data.get("signal") or "N/A").lower()
+    raw_signal = ema_data.get("current_signal") or ema_data.get("signal") or "N/A"
+
+    signal = str(raw_signal).strip()
+
+    if not signal or signal.lower() in {
+        "n/a",
+        "na",
+        "none",
+        "null",
+        "not_available",
+        "unknown",
+    }:
+        signal = "N/A"
+    else:
+        signal = signal.replace(
+            "_",
+            " ",
+        ).title()
 
     suggested_order_side = (
-        normalize_option_type(order_suggestion.get("suggested_order_side"))
-        or "not_available"
+        normalize_option_type(order_suggestion.get("suggested_order_side")) or "N/A"
     )
 
-    calculation_mode = ema_data.get("calculation_mode") or "not_available"
+    raw_calculation_mode = str(ema_data.get("calculation_mode") or "").strip()
 
-    candle_close = _format_numeric_value(
+    if raw_calculation_mode:
+        calculation_mode = (
+            raw_calculation_mode.replace("_", " ").title().replace("Ltp", "LTP")
+        )
+    else:
+        calculation_mode = "N/A"
+
+    candle_close = _format_price_value(
         candle.get("close"),
-        unavailable_text="N/A",
         decimal_places=decimal_places,
     )
 
-    candle_low = _format_numeric_value(
+    candle_low = _format_price_value(
         candle.get("low"),
-        unavailable_text="N/A",
         decimal_places=decimal_places,
     )
+
+    close_minus_low = _safe_float(candle.get("close_minus_low_points"))
+
+    if close_minus_low is None:
+        close_value = _safe_float(candle.get("close"))
+
+        low_value = _safe_float(candle.get("low"))
+
+        if close_value is not None and low_value is not None:
+            close_minus_low = round(
+                close_value - low_value,
+                decimal_places,
+            )
 
     close_low_movement = _format_numeric_value(
-        candle.get("close_minus_low_points"),
+        close_minus_low,
         unavailable_text="N/A",
         decimal_places=decimal_places,
     )
 
-    candle_time = (
-        candle.get("timestamp") or ema_data.get("timestamp") or "not_available"
+    candle_time = _format_telegram_timestamp(
+        candle.get("timestamp") or ema_data.get("timestamp")
     )
 
-    instrument_key = instrument.get("instrument_key") or "not_available"
+    instrument_key = str(instrument.get("instrument_key") or "not_available").strip()
 
-    nearest_text = format_suggested_order_instruments(
-        order_suggestion.get("nearest_instruments") or []
-    )
+    message_sections = [
+        f"{strike} {option_type} " f"| {selected_level} Cross " f"| NIFTY {nifty_ltp}"
+    ]
 
-    budget_filter = order_suggestion.get("budget_filter") or {}
-
-    budget_text = format_budget_range_instruments(
-        budget_filter.get("instruments") or [],
-        suggested_order_side,
-    )
-
-    lines = [
-        (f"{strike} {option_type} " f"- crosses {selected_level} " f"- At {nifty_ltp}"),
-        "",
+    ema_detail_lines = [
         "EMA Cross Details:",
         f"Cross Type: {cross_type}",
         f"Signal: {signal}",
-        ("Isolated Instrument Type: " f"{option_type}"),
-        ("Suggested Order Side: " f"{suggested_order_side}"),
-        ("EMA Calculation Mode: " f"{calculation_mode}"),
+        f"Isolated Instrument Type: {option_type}",
+        f"Suggested Order Side: {suggested_order_side}",
+        f"EMA Calculation Mode: {calculation_mode}",
     ]
 
-    if config.EMA_ISOLATED_ALERT_INCLUDE_CANDLE_CLOSE:
-        lines.append(f"EMA Candle Close: {candle_close}")
+    if bool(
+        getattr(
+            config,
+            "EMA_ISOLATED_ALERT_INCLUDE_CANDLE_CLOSE",
+            True,
+        )
+    ):
+        ema_detail_lines.append(f"EMA Candle Close: {candle_close}")
 
-    if config.EMA_ISOLATED_ALERT_INCLUDE_CANDLE_LOW:
-        lines.append(f"EMA Candle Low: {candle_low}")
+    if bool(
+        getattr(
+            config,
+            "EMA_ISOLATED_ALERT_INCLUDE_CANDLE_LOW",
+            True,
+        )
+    ):
+        ema_detail_lines.append(f"EMA Candle Low: {candle_low}")
 
-    if config.EMA_ISOLATED_ALERT_INCLUDE_CLOSE_LOW_DIFFERENCE:
-        lines.append("EMA Close-Low Movement: " f"{close_low_movement} points")
+    if bool(
+        getattr(
+            config,
+            "EMA_ISOLATED_ALERT_INCLUDE_CLOSE_LOW_DIFFERENCE",
+            True,
+        )
+    ):
+        if close_low_movement == "N/A":
+            movement_text = "N/A"
+        else:
+            movement_text = f"{close_low_movement} points"
 
-    if config.EMA_ISOLATED_ALERT_INCLUDE_CANDLE_TIME:
-        lines.extend(
-            [
-                "",
-                f"EMA Candle Time: {candle_time}",
-            ]
+        ema_detail_lines.append("EMA Close-Low Movement: " f"{movement_text}")
+
+    message_sections.append("\n".join(ema_detail_lines))
+
+    if bool(
+        getattr(
+            config,
+            "EMA_ISOLATED_ALERT_INCLUDE_CANDLE_TIME",
+            True,
+        )
+    ):
+        message_sections.append("EMA Candle Time:\n" f"{candle_time}")
+
+    message_sections.append("Instrument Key:\n" f"{instrument_key}")
+
+    if bool(
+        getattr(
+            config,
+            "EMA_ISOLATED_ALERT_INCLUDE_NEAREST_ORDER_INSTRUMENTS",
+            True,
+        )
+    ):
+        nearest_instruments = order_suggestion.get("nearest_instruments") or []
+
+        nearest_text = format_suggested_order_instruments(nearest_instruments)
+
+        if nearest_text:
+            message_sections.append(nearest_text)
+
+    if bool(
+        getattr(
+            config,
+            "EMA_ISOLATED_ALERT_INCLUDE_BUDGET_INSTRUMENTS",
+            True,
+        )
+    ):
+        budget_filter = order_suggestion.get("budget_filter") or {}
+
+        if not isinstance(budget_filter, dict):
+            budget_filter = {}
+
+        budget_instruments = budget_filter.get("instruments") or []
+
+        budget_text = format_budget_range_instruments(
+            budget_instruments,
+            suggested_order_side,
         )
 
-    lines.extend(
-        [
-            "",
-            f"Instrument Key: {instrument_key}",
-        ]
+        if budget_text:
+            message_sections.append(budget_text)
+
+    return "\n\n".join(
+        section.strip()
+        for section in message_sections
+        if isinstance(section, str) and section.strip()
     )
-
-    if config.EMA_ISOLATED_ALERT_INCLUDE_NEAREST_ORDER_INSTRUMENTS:
-        lines.extend(
-            [
-                "",
-                nearest_text,
-            ]
-        )
-
-    if config.EMA_ISOLATED_ALERT_INCLUDE_BUDGET_INSTRUMENTS:
-        lines.extend(
-            [
-                "",
-                budget_text,
-            ]
-        )
-
-    return "\n".join(lines)
 
 
 # ============================================================
 # Isolated EMA Alert Processing
 # ============================================================
-
-
 def process_selected_or_ema_cross_alert(
     ema_event: dict,
 ) -> bool:
@@ -1623,7 +1755,6 @@ def process_selected_or_ema_cross_alert(
     One option-chain request is made per accepted EMA alert.
     The result is reused for Telegram and Algo App delivery.
     """
-
     if not isinstance(ema_event, dict):
         logger.warning("Isolated EMA alert skipped because " "ema_event is invalid.")
         return False
@@ -1724,6 +1855,13 @@ def process_selected_or_ema_cross_alert(
         )
         return False
 
+    alert_icon = _get_ema_alert_icon(
+        direction=alert_direction,
+        cross_type=cross_type,
+    )
+
+    telegram_title = f"{alert_icon} Isolated Instrument EMA Alert"
+
     event_candle = ema_event.get("candle")
 
     if not isinstance(event_candle, dict):
@@ -1764,9 +1902,6 @@ def process_selected_or_ema_cross_alert(
         if not isinstance(ema_candle, dict):
             ema_candle = {}
 
-        # Resolve CE or PE using:
-        # bullish = same isolated side
-        # bearish = opposite isolated side
         suggested_order_option_type = get_suggested_order_option_type(
             instruments=[],
             cross_type=cross_type,
@@ -1788,12 +1923,24 @@ def process_selected_or_ema_cross_alert(
 
             return False
 
-        # Important:
-        # Only one Upstox option-chain request per EMA alert.
         option_chain_selection = get_option_chain_instruments_for_ema(
             cross_type=cross_type,
             isolated_instrument_type=(isolated_instrument_type),
         )
+
+        if not isinstance(
+            option_chain_selection,
+            dict,
+        ):
+            option_chain_selection = {
+                "status": "failed",
+                "success": False,
+                "nearest_instruments": [],
+                "nearest_strikes": [],
+                "budget_instruments": [],
+                "budget_range": {},
+                "error": ("Invalid option-chain selection result."),
+            }
 
         suggested_instruments = option_chain_selection.get(
             "nearest_instruments",
@@ -1818,13 +1965,13 @@ def process_selected_or_ema_cross_alert(
             budget_instruments = []
 
         enriched_nearest_instruments = enrich_option_chain_instruments(
-            instruments=(suggested_instruments),
-            isolated_instrument_key=(event_key),
+            instruments=suggested_instruments,
+            isolated_instrument_key=event_key,
         )
 
         enriched_budget_instruments = enrich_option_chain_instruments(
-            instruments=(budget_instruments),
-            isolated_instrument_key=(event_key),
+            instruments=budget_instruments,
+            isolated_instrument_key=event_key,
         )
 
         option_chain_spot_price = _safe_float(
@@ -1845,8 +1992,8 @@ def process_selected_or_ema_cross_alert(
             suggested_instruments=(enriched_nearest_instruments),
             budget_instruments=(enriched_budget_instruments),
             ema_candle=ema_candle,
-            minute_alert_key=(minute_alert_key),
-            alert_direction=(alert_direction),
+            minute_alert_key=minute_alert_key,
+            alert_direction=alert_direction,
         )
 
         if not isinstance(payload, dict):
@@ -1866,14 +2013,9 @@ def process_selected_or_ema_cross_alert(
             {},
         )
 
-        if not isinstance(
-            order_suggestion,
-            dict,
-        ):
+        if not isinstance(order_suggestion, dict):
             order_suggestion = {}
 
-        # Add option-chain metadata to the shared payload.
-        # The same payload is delivered to Algo App.
         order_suggestion["data_source"] = option_chain_selection.get("data_source")
 
         order_suggestion["underlying_spot_price"] = option_chain_spot_price
@@ -1915,17 +2057,15 @@ def process_selected_or_ema_cross_alert(
 
         budget_filter_payload.update(
             {
-                "enabled": (
-                    option_chain_budget.get(
-                        "enabled",
-                        bool(
-                            getattr(
-                                config,
-                                "EMA_ALERT_BUDGET_RANGE_ENABLED",
-                                True,
-                            )
-                        ),
-                    )
+                "enabled": option_chain_budget.get(
+                    "enabled",
+                    bool(
+                        getattr(
+                            config,
+                            "EMA_ALERT_BUDGET_RANGE_ENABLED",
+                            True,
+                        )
+                    ),
                 ),
                 "minimum_price": (
                     option_chain_budget.get(
@@ -1933,7 +2073,7 @@ def process_selected_or_ema_cross_alert(
                         getattr(
                             config,
                             "EMA_ALERT_BUDGET_MIN_PRICE",
-                            20.0,
+                            50.0,
                         ),
                     )
                 ),
@@ -1943,7 +2083,7 @@ def process_selected_or_ema_cross_alert(
                         getattr(
                             config,
                             "EMA_ALERT_BUDGET_MAX_PRICE",
-                            30.0,
+                            120.0,
                         ),
                     )
                 ),
@@ -1963,7 +2103,7 @@ def process_selected_or_ema_cross_alert(
                         getattr(
                             config,
                             "EMA_ALERT_BUDGET_SORT_MODE",
-                            "nearest_price",
+                            "nearest_to_budget_midpoint",
                         ),
                     )
                 ),
@@ -1988,10 +2128,7 @@ def process_selected_or_ema_cross_alert(
             {},
         )
 
-        if not isinstance(
-            market_snapshot,
-            dict,
-        ):
+        if not isinstance(market_snapshot, dict):
             market_snapshot = {}
 
         market_snapshot["nifty_ltp"] = nifty_ltp
@@ -2034,7 +2171,7 @@ def process_selected_or_ema_cross_alert(
 
         if telegram_enabled:
             telegram_sent = _send_telegram_message(
-                title=("Isolated Instrument " "EMA Alert"),
+                title=telegram_title,
                 message=telegram_message,
                 level="EMA",
             )
@@ -2052,6 +2189,7 @@ def process_selected_or_ema_cross_alert(
                 "enabled": telegram_enabled,
                 "attempted": telegram_enabled,
                 "success": telegram_sent,
+                "title": telegram_title,
             },
             "algo_app": {
                 "enabled": algo_enabled,
@@ -2080,8 +2218,9 @@ def process_selected_or_ema_cross_alert(
             "nifty_ltp": nifty_ltp,
             "isolated_instrument_type": (isolated_instrument_type),
             "suggested_order_option_type": (suggested_order_option_type),
-            "minute_alert_key": (minute_alert_key),
-            "alert_direction": (alert_direction),
+            "minute_alert_key": minute_alert_key,
+            "alert_direction": alert_direction,
+            "telegram_title": telegram_title,
             "ema_calculation_mode": (
                 payload.get(
                     "ema",
@@ -2099,47 +2238,7 @@ def process_selected_or_ema_cross_alert(
         }
 
         if delivery_accepted:
-            with state.selected_or_lock:
-                state.selected_or_ema_alerts.append(alert_record)
-
-                current_alert_count = safe_int(
-                    state.selected_or_instrument_state.get(
-                        "ema_alerts_count",
-                        0,
-                    ),
-                    default=0,
-                )
-
-                state.selected_or_instrument_state["ema_alerts_count"] = (
-                    current_alert_count + 1
-                )
-
-                state.selected_or_instrument_state["last_ema_alert"] = alert_record
-
-                selected_state_snapshot = deepcopy(state.selected_or_instrument_state)
-
-                isolated_ema_alert_count = len(state.selected_or_ema_alerts)
-
-            with state.opening_range_cache_lock:
-                state.opening_range_cache["isolated_ema_alerts_count"] = (
-                    isolated_ema_alert_count
-                )
-
-                state.opening_range_cache["isolated_instrument"] = (
-                    selected_state_snapshot
-                )
-
-                state.opening_range_cache["isolated_instrument_selected"] = bool(
-                    selected_state_snapshot.get("selected")
-                )
-
-                state.opening_range_cache["isolated_instrument_selected_at"] = (
-                    selected_state_snapshot.get("selected_at")
-                )
-
-                state.opening_range_cache["isolated_instrument_selection_reason"] = (
-                    selected_state_snapshot.get("selection_reason")
-                )
+            state.append_selected_or_ema_alert(alert_record)
 
             logger.info(
                 "Isolated EMA alert accepted. "
@@ -2151,7 +2250,6 @@ def process_selected_or_ema_cross_alert(
                 telegram_sent,
                 algo_dispatched,
             )
-
         else:
             logger.warning(
                 "Isolated EMA alert was not accepted "
@@ -2167,7 +2265,6 @@ def process_selected_or_ema_cross_alert(
         if duplicate_key_reserved and minute_alert_key:
             try:
                 state.release_ema_minute_key(minute_alert_key)
-
             except Exception as release_ex:
                 logger.error(
                     "Failed releasing isolated EMA "

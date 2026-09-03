@@ -1629,6 +1629,43 @@ def get_options_cache_summary() -> dict:
         }
 
 
+def get_chart_instruments() -> list:
+    instruments = []
+
+    instruments.append(
+        {
+            "instrument_key": NIFTY_INDEX_FEED.get("instrument_key"),
+            "trading_symbol": NIFTY_INDEX_FEED.get("trading_symbol"),
+            "instrument_type": "INDEX",
+            "strike_price": None,
+            "expiry": None,
+        }
+    )
+
+    for contract in get_cached_option_contracts():
+        instruments.append(
+            {
+                "instrument_key": contract.get("instrument_key"),
+                "trading_symbol": contract.get("trading_symbol"),
+                "instrument_type": contract.get("instrument_type"),
+                "option_type": contract.get("option_type"),
+                "strike_price": contract.get("strike_price"),
+                "expiry": contract.get("expiry"),
+            }
+        )
+
+    return instruments
+
+
+def get_chart_instrument(
+    instrument_key: str,
+) -> dict | None:
+    if not instrument_key:
+        return None
+
+    return get_contract_info_by_instrument_key(instrument_key)
+
+
 __all__ = [
     "options_cache",
     "NIFTY_INDEX_FEED",
@@ -1672,4 +1709,6 @@ __all__ = [
     "is_valid_feed_interval",
     "get_options_contracts",
     "get_options_cache_summary",
+    "get_chart_instruments",
+    "get_chart_instrument",
 ]

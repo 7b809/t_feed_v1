@@ -1,19 +1,8 @@
 """
 Opening Range status, cache, and dashboard helpers.
 
-This module provides read-only access to:
-
-1. Opening Range calculation status.
-2. The complete Opening Range cache.
-3. Dashboard summary data.
-4. One instrument's cached Opening Range result.
-5. Recent touch events.
-6. Pending legacy Telegram touch events.
-
-All mutable runtime state is owned by state.py.
-
-The functions in this module return deep copies so API callers cannot
-accidentally modify live process state.
+This module provides read-only access to Opening Range runtime state.
+Returned values are deep copies so callers cannot modify live state.
 """
 
 from copy import deepcopy
@@ -28,9 +17,7 @@ from .candle_utils import (
 )
 from .constants import (
     DEFAULT_EMA_CROSS_INCLUDE_OPENING_RANGE_LEVELS,
-    DEFAULT_ISOLATION_ALLOW_PRIORITY_UPGRADE,
     DEFAULT_ISOLATION_ENABLED,
-    DEFAULT_ISOLATION_LOCK_FOR_DAY,
     DEFAULT_ISOLATION_PRIORITY_LEVELS,
     DEFAULT_ISOLATION_TOUCH_LEVELS,
     DEFAULT_ISOLATION_WINDOW_POINTS,
@@ -43,11 +30,6 @@ from .ema_alerts import (
 )
 
 logger = get_logger(__file__)
-
-
-# ============================================================
-# Internal Helpers
-# ============================================================
 
 
 def _normalize_limit(
@@ -79,24 +61,44 @@ def _get_live_ema_calculation_payload() -> dict:
     }
 
 
-def _get_isolation_config_payload() -> dict:
-    """Builds the isolated-instrument configuration payload."""
+def _get_isolation_config_payload(
+    isolated_state: dict | None = None,
+) -> dict:
+    """Builds the isolated-instrument policy payload."""
+    if not isinstance(isolated_state, dict):
+        isolated_state = runtime_state.get_selected_or_state_snapshot()
+
+    selected = bool(isolated_state.get("selected"))
+
+    locked_for_market_day = bool(
+        isolated_state.get(
+            "locked_for_market_day",
+            selected,
+        )
+    )
+
     return {
         "enabled": DEFAULT_ISOLATION_ENABLED,
         "window_points": DEFAULT_ISOLATION_WINDOW_POINTS,
         "touch_levels": list(DEFAULT_ISOLATION_TOUCH_LEVELS),
         "priority_levels": list(DEFAULT_ISOLATION_PRIORITY_LEVELS),
-        "lock_for_day": DEFAULT_ISOLATION_LOCK_FOR_DAY,
-        "allow_priority_upgrade": (DEFAULT_ISOLATION_ALLOW_PRIORITY_UPGRADE),
+        "selection_policy": ("first_eligible_instrument_locked_for_market_day"),
+        "replacement_enabled": False,
+        "distance_reselection_enabled": False,
+        "priority_upgrade_enabled": False,
+        "selected": selected,
+        "locked_for_market_day": (locked_for_market_day),
+        "reset_policy": "next_market_day",
     }
 
 
-def _get_runtime_snapshots() -> tuple[dict, dict, dict]:
+def _get_runtime_snapshots() -> tuple[
+    dict,
+    dict,
+    dict,
+]:
     """
     Returns cache, touch, and isolated-instrument snapshots.
-
-    Each snapshot is created under its corresponding lock. Locks are
-    not held simultaneously, which reduces deadlock risk.
     """
     cache_snapshot = runtime_state.get_opening_range_cache_snapshot()
 
@@ -111,17 +113,9 @@ def _get_runtime_snapshots() -> tuple[dict, dict, dict]:
     )
 
 
-# ============================================================
-# Status Helpers
-# ============================================================
-
-
 def get_opening_range_status() -> dict:
     """
     Returns the latest Opening Range status summary.
-
-    This is a compact status response and does not include the complete
-    per-instrument data cache.
     """
     runtime_state.ensure_current_market_day()
 
@@ -132,6 +126,15 @@ def get_opening_range_status() -> dict:
     ) = _get_runtime_snapshots()
 
     isolated_ema_alerts_count = len(runtime_state.get_selected_or_ema_alerts_snapshot())
+
+    isolated_selected = bool(isolated_state.get("selected"))
+
+    isolated_locked = bool(
+        isolated_state.get(
+            "locked_for_market_day",
+            isolated_selected,
+        )
+    )
 
     return {
         "last_run_at": cache_snapshot.get("last_run_at"),
@@ -175,23 +178,27 @@ def get_opening_range_status() -> dict:
             )
         ),
         "isolated_instrument": isolated_state,
-        "isolated_instrument_selected": bool(isolated_state.get("selected")),
+        "isolated_instrument_selected": (isolated_selected),
+        "isolated_instrument_locked_for_market_day": (isolated_locked),
+        "isolated_instrument_replacement_enabled": False,
         "isolated_ema_alerts_count": (isolated_ema_alerts_count),
         "ema_cross_include_opening_range_levels": (
             DEFAULT_EMA_CROSS_INCLUDE_OPENING_RANGE_LEVELS
         ),
         "live_ema_calculation": (_get_live_ema_calculation_payload()),
-        "isolation_config": (_get_isolation_config_payload()),
-        "errors": deepcopy(cache_snapshot.get("errors", {})),
+        "isolation_config": (_get_isolation_config_payload(isolated_state)),
+        "errors": deepcopy(
+            cache_snapshot.get(
+                "errors",
+                {},
+            )
+        ),
     }
 
 
 def get_opening_range_cache() -> dict:
     """
     Returns a deep copy of the complete Opening Range cache.
-
-    Additional runtime fields are synchronized into the returned copy.
-    The underlying shared cache is not exposed directly.
     """
     runtime_state.ensure_current_market_day()
 
@@ -205,9 +212,22 @@ def get_opening_range_cache() -> dict:
 
     live_ema_payload = _get_live_ema_calculation_payload()
 
+    isolated_selected = bool(isolated_state.get("selected"))
+
+    isolated_locked = bool(
+        isolated_state.get(
+            "locked_for_market_day",
+            isolated_selected,
+        )
+    )
+
     cache_copy["isolated_instrument"] = isolated_state
 
-    cache_copy["isolated_instrument_selected"] = bool(isolated_state.get("selected"))
+    cache_copy["isolated_instrument_selected"] = isolated_selected
+
+    cache_copy["isolated_instrument_locked_for_market_day"] = isolated_locked
+
+    cache_copy["isolated_instrument_replacement_enabled"] = False
 
     cache_copy["isolated_ema_alerts_count"] = len(isolated_ema_alerts)
 
@@ -221,7 +241,7 @@ def get_opening_range_cache() -> dict:
         DEFAULT_EMA_CROSS_INCLUDE_OPENING_RANGE_LEVELS
     )
 
-    cache_copy["isolation_config"] = _get_isolation_config_payload()
+    cache_copy["isolation_config"] = _get_isolation_config_payload(isolated_state)
 
     return cache_copy
 
@@ -232,17 +252,6 @@ def get_opening_range_dashboard_summary(
 ) -> dict:
     """
     Returns compact data for the isolated EMA dashboard.
-
-    Includes:
-
-        Opening Range status
-        Isolated instrument state
-        Isolated instrument Opening Range context
-        Latest isolated EMA alerts
-        Recent Opening Range touch events
-        Latest main-index LTP
-        Live EMA calculation mode
-        Basic cache summary
     """
     normalized_touch_limit = _normalize_limit(
         touch_limit,
@@ -266,7 +275,13 @@ def get_opening_range_dashboard_summary(
 
     isolated_state = get_selected_or_instrument_state()
 
+    if not isinstance(isolated_state, dict):
+        isolated_state = {}
+
     isolated_ema_alerts = get_selected_or_ema_alerts(limit=normalized_alert_limit)
+
+    if not isinstance(isolated_ema_alerts, list):
+        isolated_ema_alerts = []
 
     isolated_key = isolated_state.get("instrument_key")
 
@@ -293,7 +308,12 @@ def get_opening_range_dashboard_summary(
                 "error": error_message,
             }
 
-    recent_touch_events = deepcopy(touch_snapshot.get("events", []))
+    recent_touch_events = deepcopy(
+        touch_snapshot.get(
+            "events",
+            [],
+        )
+    )
 
     latest_main_index_ltp = touch_snapshot.get("latest_main_index_ltp")
 
@@ -301,6 +321,15 @@ def get_opening_range_dashboard_summary(
 
     latest_main_index_ltp_updated_at = touch_snapshot.get(
         "latest_main_index_ltp_updated_at"
+    )
+
+    isolated_selected = bool(isolated_state.get("selected"))
+
+    isolated_locked = bool(
+        isolated_state.get(
+            "locked_for_market_day",
+            isolated_selected,
+        )
     )
 
     return {
@@ -311,11 +340,15 @@ def get_opening_range_dashboard_summary(
         "opening_range_status": (get_opening_range_status()),
         "isolated_instrument": isolated_state,
         "selected_or_instrument": deepcopy(isolated_state),
+        "isolated_instrument_selected": (isolated_selected),
+        "isolated_instrument_locked_for_market_day": (isolated_locked),
+        "isolated_instrument_replacement_enabled": False,
+        "isolation_config": (_get_isolation_config_payload(isolated_state)),
         "isolated_opening_range_context": (isolated_opening_range_context),
         "isolated_ema_alerts_count": len(isolated_ema_alerts),
         "isolated_ema_alerts": (isolated_ema_alerts),
         "recent_touch_events_count": len(recent_touch_events),
-        "recent_touch_events": recent_touch_events,
+        "recent_touch_events": (recent_touch_events),
         "latest_main_index_ltp": (latest_main_index_ltp),
         "latest_main_index_ltp_source": (latest_main_index_ltp_source),
         "latest_main_index_ltp_updated_at": (latest_main_index_ltp_updated_at),
@@ -330,9 +363,9 @@ def get_opening_range_dashboard_summary(
                 cache_snapshot.get("opening_range_candle_count")
             ),
             "total_instruments": (cache_snapshot.get("total_instruments")),
-            "success_count": cache_snapshot.get("success_count"),
-            "failed_count": cache_snapshot.get("failed_count"),
-            "empty_count": cache_snapshot.get("empty_count"),
+            "success_count": (cache_snapshot.get("success_count")),
+            "failed_count": (cache_snapshot.get("failed_count")),
+            "empty_count": (cache_snapshot.get("empty_count")),
             "insufficient_data_count": (cache_snapshot.get("insufficient_data_count")),
             "touch_events_count": (
                 touch_snapshot.get(
@@ -353,6 +386,9 @@ def get_opening_range_dashboard_summary(
                 )
             ),
             "output_file_path": (cache_snapshot.get("output_file_path")),
+            "isolated_instrument_selected": (isolated_selected),
+            "isolated_instrument_locked_for_market_day": (isolated_locked),
+            "isolated_instrument_replacement_enabled": False,
         },
     }
 
@@ -361,9 +397,7 @@ def get_opening_range_for_instrument_from_cache(
     instrument_key: str,
 ) -> dict | None:
     """
-    Returns the cached Opening Range result for one instrument.
-
-    A deep copy is returned so callers cannot modify the live cache.
+    Returns one instrument's cached Opening Range result.
     """
     if instrument_key is None:
         return None
@@ -397,9 +431,6 @@ def get_opening_range_touch_events(
 ) -> list:
     """
     Returns the latest Opening Range touch events.
-
-    Events are returned in their existing chronological order. When a
-    limit is supplied, the most recent events are selected.
     """
     normalized_limit = _normalize_limit(
         limit,
@@ -410,15 +441,17 @@ def get_opening_range_touch_events(
 
     touch_snapshot = runtime_state.get_touch_state_snapshot(limit=normalized_limit)
 
-    return deepcopy(touch_snapshot.get("events", []))
+    return deepcopy(
+        touch_snapshot.get(
+            "events",
+            [],
+        )
+    )
 
 
 def get_opening_range_pending_touch_events() -> list:
     """
     Returns pending legacy Telegram touch events.
-
-    A deep copy is returned. Reading this function does not remove
-    events from the pending queue.
     """
     runtime_state.ensure_current_market_day()
 
@@ -430,11 +463,6 @@ def get_opening_range_pending_touch_events() -> list:
             [],
         )
     )
-
-
-# ============================================================
-# Public API
-# ============================================================
 
 
 __all__ = [

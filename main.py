@@ -10,7 +10,7 @@ from apscheduler.triggers.cron import CronTrigger
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-
+from api.chart_routes import router as chart_router
 from api.instrument_routes import router as instrument_router
 from api.algo_app_routes import router as algo_app_router
 from api.debug_routes import router as debug_router
@@ -1409,6 +1409,7 @@ app.include_router(refresh_router)
 app.include_router(history_router)
 app.include_router(opening_range_router)
 app.include_router(algo_app_router)
+app.include_router(chart_router)
 app.include_router(websocket_router)
 app.include_router(ws_docs_router)
 app.include_router(logs_router)

@@ -1,0 +1,27 @@
+1. services/__init__.py            (NEW)
+
+2. services/chart_service.py       (NEW)
+
+3. templates/chart.html            (NEW)
+
+4. api/chart_routes.py                   (NEW)
+
+5. main.py                               (MODIFY)
+
+6. services/options_service.py           (MODIFY)
+
+7. templates/instrument_list.html  (NEW)
+
+8. api/chart_routes.py                   (MODIFY FOR LIST PAGE)
+
+9. templates/base.html                   (MODIFY)
+
+10. services/token_service.py            (VERIFY ONLY)
+
+11. services/candle_service.py     (FUTURE)
+
+12. services/indicator_service.py  (FUTURE)
+
+13. services/chart_cache.py        (FUTURE)
+
+14. services/upstox_streamer.py          (LIVE CHART FUTURE)

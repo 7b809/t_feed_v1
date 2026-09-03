@@ -1,777 +1,1870 @@
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Live Option Feed Engine</title>
+{% extends "base.html" %}
 
-    <style>
-      :root {
-        --bg: #0f172a;
-        --card-bg: #1e293b;
-        --border: #334155;
-        --text: #f8fafc;
-        --text-muted: #94a3b8;
-        --green: #22c55e;
-        --red: #ef4444;
-        --accent: #3b82f6;
-        --yellow: #f59e0b;
-        --purple: #a78bfa;
-      }
+{% block title %}Trading Dashboard | Live Option Feed{% endblock %}
 
-      body {
+{% block head %}
+<style>
+    :root {
+        --primary: #0d6efd;
+        --success: #198754;
+        --danger: #dc3545;
+        --warning: #ffc107;
+        --info: #0dcaf0;
+        --purple: #6f42c1;
+        --light-bg: #f5f7fb;
+        --card-border: #e5e7eb;
+        --text-dark: #212529;
+        --muted: #6c757d;
+    }
+
+    body {
+        background: var(--light-bg);
+        color: var(--text-dark);
+    }
+
+    .dashboard-wrapper {
+        min-height: calc(100vh - 64px);
+        padding: 24px;
+    }
+
+    /* Page Header */
+    .dashboard-header {
+        background: linear-gradient(135deg, #0d6efd, #4f8dfd);
+        color: #fff;
+        border-radius: 18px;
+        padding: 24px;
+        margin-bottom: 24px;
+        box-shadow: 0 8px 25px rgba(13, 110, 253, 0.15);
+    }
+
+    .dashboard-title {
+        font-size: 1.75rem;
+        font-weight: 700;
+        margin-bottom: 5px;
+    }
+
+    .dashboard-subtitle {
+        opacity: 0.9;
+        font-size: 0.9rem;
+    }
+
+    /* NIFTY Card */
+    .nifty-card {
+        background: #fff;
+        color: var(--text-dark);
+        border: 0;
+        border-radius: 15px;
+        padding: 18px 20px;
+        min-width: 280px;
+        box-shadow: 0 5px 18px rgba(0, 0, 0, 0.08);
+    }
+
+    .nifty-title {
+        font-size: 0.8rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        color: var(--muted);
+        margin-bottom: 3px;
+    }
+
+    .nifty-ltp {
+        font-size: 1.75rem;
+        font-weight: 800;
+        margin-bottom: 6px;
+    }
+
+    .nifty-meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px 16px;
+        font-size: 0.75rem;
+        color: var(--muted);
+    }
+
+    /* Status badges */
+    .status-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 7px 12px;
+        border-radius: 50px;
+        font-size: 0.75rem;
+        font-weight: 700;
+        white-space: nowrap;
+    }
+
+    .status-badge::before {
+        content: "";
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: currentColor;
+    }
+
+    .connected {
+        background: #d1e7dd;
+        color: #146c43;
+    }
+
+    .disconnected {
+        background: #f8d7da;
+        color: #b02a37;
+    }
+
+    .refreshing {
+        background: #fff3cd;
+        color: #997404;
+    }
+
+    .refresh-success {
+        background: #d1e7dd;
+        color: #146c43;
+    }
+
+    .refresh-error {
+        background: #f8d7da;
+        color: #b02a37;
+    }
+
+    /* Buttons */
+    .dashboard-action {
+        border-radius: 10px;
+        padding: 9px 15px;
+        font-size: 0.8rem;
+        font-weight: 600;
+    }
+
+    /* Main panels */
+    .dashboard-panel {
+        background: #fff;
+        border: 1px solid var(--card-border);
+        border-radius: 16px;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.04);
+        margin-bottom: 24px;
+    }
+
+    .panel-header {
+        padding: 18px 20px;
+        border-bottom: 1px solid var(--card-border);
+    }
+
+    .panel-title {
+        font-size: 1.1rem;
+        font-weight: 700;
         margin: 0;
-        padding: 20px;
-        font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
-        background-color: var(--bg);
-        color: var(--text);
-      }
+    }
 
-      header {
+    .panel-subtitle {
+        color: var(--muted);
+        font-size: 0.78rem;
+        margin-top: 3px;
+    }
+
+    .panel-body {
+        padding: 20px;
+    }
+
+    /* Refresh panel */
+    .refresh-panel {
+        display: none;
+    }
+
+    .refresh-panel.visible {
+        display: block;
+    }
+
+    .refresh-message {
+        white-space: pre-wrap;
+        font-size: 0.85rem;
+        color: var(--muted);
+        line-height: 1.7;
+        background: #f8f9fa;
+        padding: 14px;
+        border-radius: 10px;
+    }
+
+    /* Option sections */
+    .option-section {
+        height: 100%;
+        background: #f8f9fa;
+        border: 1px solid var(--card-border);
+        border-radius: 14px;
+        padding: 16px;
+    }
+
+    .option-section.ce-section {
+        border-top: 4px solid var(--success);
+    }
+
+    .option-section.pe-section {
+        border-top: 4px solid var(--danger);
+    }
+
+    .option-section-header {
         display: flex;
         justify-content: space-between;
-        align-items: flex-start;
-        margin-bottom: 20px;
-        padding-bottom: 15px;
-        border-bottom: 1px solid var(--border);
-        gap: 16px;
-      }
-
-      h1,
-      h2,
-      h3 {
-        margin: 0;
-      }
-
-      .header-left {
-        display: flex;
-        flex-direction: column;
-        gap: 12px;
-      }
-
-      .header-actions {
-        display: flex;
         align-items: center;
         gap: 10px;
-        flex-wrap: wrap;
-        justify-content: flex-end;
-      }
+        margin-bottom: 15px;
+    }
 
-      .status-badge {
-        padding: 6px 12px;
-        border-radius: 20px;
-        font-size: 0.85rem;
-        font-weight: bold;
-        white-space: nowrap;
-      }
-
-      .connected {
-        background: rgba(34, 197, 94, 0.2);
-        color: var(--green);
-        border: 1px solid var(--green);
-      }
-
-      .disconnected {
-        background: rgba(239, 68, 68, 0.2);
-        color: var(--red);
-        border: 1px solid var(--red);
-      }
-
-      .refreshing {
-        background: rgba(245, 158, 11, 0.2);
-        color: var(--yellow);
-        border: 1px solid var(--yellow);
-      }
-
-      .refresh-success {
-        background: rgba(34, 197, 94, 0.2);
-        color: var(--green);
-        border: 1px solid var(--green);
-      }
-
-      .refresh-error {
-        background: rgba(239, 68, 68, 0.2);
-        color: var(--red);
-        border: 1px solid var(--red);
-      }
-
-      .refresh-button {
-        border: 1px solid var(--accent);
-        background: rgba(59, 130, 246, 0.18);
-        color: var(--text);
-        padding: 7px 12px;
-        border-radius: 8px;
-        cursor: pointer;
-        font-size: 0.85rem;
-        font-weight: 700;
-        transition:
-          background 0.2s ease,
-          opacity 0.2s ease;
-      }
-
-      .refresh-button:hover {
-        background: rgba(59, 130, 246, 0.35);
-      }
-
-      .refresh-button:disabled {
-        opacity: 0.55;
-        cursor: not-allowed;
-      }
-
-      .dashboard-button {
-        border: 1px solid var(--purple);
-        background: rgba(167, 139, 250, 0.18);
-        color: var(--text);
-        padding: 7px 12px;
-        border-radius: 8px;
-        cursor: pointer;
-        font-size: 0.85rem;
-        font-weight: 700;
-        transition:
-          background 0.2s ease,
-          opacity 0.2s ease;
-      }
-
-      .dashboard-button:hover {
-        background: rgba(167, 139, 250, 0.35);
-      }
-
-      .nifty-card {
-        background: var(--card-bg);
-        border: 1px solid var(--border);
-        border-radius: 10px;
-        padding: 12px 16px;
-        min-width: 280px;
-        max-width: 420px;
-      }
-
-      .nifty-title {
-        font-size: 0.85rem;
-        color: var(--text-muted);
-        margin-bottom: 4px;
-      }
-
-      .nifty-ltp {
-        font-size: 1.8rem;
-        font-weight: 800;
-        margin-bottom: 4px;
-      }
-
-      .nifty-meta {
+    .option-section-title {
         display: flex;
-        justify-content: space-between;
-        gap: 12px;
-        font-size: 0.82rem;
-        color: var(--text-muted);
-        flex-wrap: wrap;
-      }
+        align-items: center;
+        gap: 9px;
+        font-size: 1rem;
+        font-weight: 700;
+        margin: 0;
+    }
 
-      .panel {
-        background: var(--card-bg);
-        border: 1px solid var(--border);
-        border-radius: 8px;
-        padding: 20px;
-        margin-bottom: 20px;
-      }
+    .option-icon {
+        width: 32px;
+        height: 32px;
+        border-radius: 9px;
+        display: inline-flex;
+        justify-content: center;
+        align-items: center;
+        font-weight: 800;
+        font-size: 0.75rem;
+    }
 
-      .refresh-panel {
-        display: none;
-      }
+    .ce-icon {
+        background: #d1e7dd;
+        color: #146c43;
+    }
 
-      .refresh-panel.visible {
-        display: block;
-      }
+    .pe-icon {
+        background: #f8d7da;
+        color: #b02a37;
+    }
 
-      .refresh-message {
-        font-size: 0.9rem;
-        color: var(--text-muted);
-        margin-top: 8px;
-        white-space: pre-wrap;
-      }
+    .active-count {
+        font-size: 0.72rem;
+        color: var(--muted);
+        background: #fff;
+        border: 1px solid var(--card-border);
+        padding: 5px 9px;
+        border-radius: 20px;
+    }
 
-      .options-layout {
+    /* Option cards */
+    .options-grid {
         display: grid;
-        grid-template-columns: 1fr 1fr;
-        gap: 20px;
-      }
+        grid-template-columns: repeat(auto-fill, minmax(235px, 1fr));
+        gap: 14px;
+    }
 
-      .option-section-title {
+    .option-card {
+        background: #fff;
+        border: 1px solid var(--card-border);
+        border-radius: 13px;
+        padding: 15px;
+        position: relative;
+        overflow: hidden;
+        transition:
+            transform 0.2s ease,
+            box-shadow 0.2s ease,
+            border-color 0.2s ease;
+    }
+
+    .option-card:hover {
+        transform: translateY(-3px);
+        box-shadow: 0 8px 22px rgba(0, 0, 0, 0.08);
+        border-color: #b8c4d1;
+    }
+
+    .option-card.atm {
+        border: 2px solid var(--primary);
+        box-shadow: 0 5px 18px rgba(13, 110, 253, 0.12);
+    }
+
+    .atm-ribbon {
+        position: absolute;
+        top: 10px;
+        right: -28px;
+        background: var(--primary);
+        color: #fff;
+        font-size: 0.6rem;
+        font-weight: 700;
+        padding: 4px 30px;
+        transform: rotate(45deg);
+    }
+
+    .option-symbol {
+        font-weight: 800;
+        font-size: 0.95rem;
+        padding-right: 45px;
+        word-break: break-word;
+    }
+
+    .strike-label {
+        color: var(--muted);
+        font-size: 0.72rem;
+        margin-top: 4px;
+    }
+
+    .option-ltp {
+        font-size: 1.45rem;
+        font-weight: 800;
+        margin: 12px 0;
+    }
+
+    .up {
+        color: var(--success) !important;
+    }
+
+    .down {
+        color: var(--danger) !important;
+    }
+
+    .option-row {
         display: flex;
         justify-content: space-between;
         align-items: center;
-        gap: 12px;
-        margin-bottom: 12px;
-      }
-
-      .option-section-title small {
-        color: var(--text-muted);
-        font-size: 0.82rem;
-      }
-
-      .options-grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-        gap: 15px;
-      }
-
-      .card {
-        background: #0f172a;
-        border: 1px solid var(--border);
-        border-radius: 6px;
-        padding: 15px;
-        position: relative;
-      }
-
-      .card.atm {
-        border-color: var(--accent);
-        box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.35);
-      }
-
-      .symbol {
-        font-weight: bold;
-        font-size: 1rem;
-      }
-
-      .strike-label {
-        font-size: 0.8rem;
-        color: var(--text-muted);
-        margin-top: 2px;
-      }
-
-      .ltp {
-        font-size: 1.4rem;
-        font-weight: bold;
-        margin: 8px 0;
-      }
-
-      .up {
-        color: var(--green);
-      }
-
-      .down {
-        color: var(--red);
-      }
-
-      .details-row {
-        display: flex;
-        justify-content: space-between;
-        font-size: 0.82rem;
-        color: var(--text-muted);
-        margin-top: 4px;
         gap: 8px;
-      }
+        padding: 5px 0;
+        font-size: 0.75rem;
+    }
 
-      .greeks-box {
+    .option-row-label {
+        color: var(--muted);
+    }
+
+    .greeks-box {
         margin-top: 10px;
-        padding-top: 8px;
-        border-top: 1px dashed var(--border);
+        padding-top: 10px;
+        border-top: 1px dashed #dee2e6;
+    }
+
+    .greeks-title {
+        font-size: 0.68rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        color: var(--muted);
+        margin-bottom: 4px;
+    }
+
+    /* Empty state */
+    .empty-state {
+        padding: 25px 15px;
+        text-align: center;
+        color: var(--muted);
+        background: #fff;
+        border: 1px dashed #ced4da;
+        border-radius: 10px;
         font-size: 0.8rem;
-      }
+    }
 
-      .empty-state {
-        color: var(--text-muted);
-        font-size: 0.9rem;
-        padding: 14px;
-        border: 1px dashed var(--border);
-        border-radius: 8px;
-        background: rgba(15, 23, 42, 0.5);
-      }
-
-      @media (max-width: 1000px) {
-        .options-layout {
-          grid-template-columns: 1fr;
+    /* Responsive */
+    @media (max-width: 992px) {
+        .dashboard-wrapper {
+            padding: 16px;
         }
 
-        header {
-          flex-direction: column;
+        .dashboard-header {
+            padding: 20px;
+        }
+    }
+
+    @media (max-width: 576px) {
+        .dashboard-wrapper {
+            padding: 10px;
         }
 
-        .header-actions {
-          justify-content: flex-start;
+        .dashboard-title {
+            font-size: 1.35rem;
         }
-      }
-    </style>
-  </head>
 
-  <body>
-    <header>
-      <div class="header-left">
-        <h1>Option Feed Dashboard</h1>
+        .nifty-card {
+            min-width: 100%;
+        }
 
-        <div class="nifty-card">
-          <div class="nifty-title">Main Index</div>
-          <div id="nifty-ltp" class="nifty-ltp">NIFTY 50 ₹ --.--</div>
-          <div class="nifty-meta">
-            <span id="nifty-change">Change: --</span>
-            <span id="nifty-ohlc">O: -- | H: -- | L: --</span>
-            <span id="nifty-updated">Updated: --</span>
-          </div>
+        .options-grid {
+            grid-template-columns: 1fr;
+        }
+
+        .panel-body {
+            padding: 12px;
+        }
+
+        .option-section {
+            padding: 12px;
+        }
+    }
+</style>
+{% endblock %}
+
+
+{% block content %}
+
+<div class="dashboard-wrapper">
+
+    <!-- ========================================================= -->
+    <!-- HEADER -->
+    <!-- ========================================================= -->
+
+    <div class="dashboard-header">
+
+        <div class="row align-items-center g-4">
+
+            <div class="col-lg-5">
+
+                <div class="dashboard-title">
+                    <i class="bi bi-graph-up-arrow me-2"></i>
+                    Option Feed Dashboard
+                </div>
+
+                <div class="dashboard-subtitle">
+                    Live NIFTY 50 options monitoring and market feed
+                </div>
+
+            </div>
+
+            <div class="col-lg-7">
+
+                <div class="d-flex justify-content-lg-end">
+
+                    <div class="nifty-card">
+
+                        <div class="nifty-title">
+                            <i class="bi bi-bar-chart-fill me-1"></i>
+                            Main Index
+                        </div>
+
+                        <div id="nifty-ltp" class="nifty-ltp">
+                            NIFTY 50 ₹ --.--
+                        </div>
+
+                        <div class="nifty-meta">
+
+                            <span id="nifty-change">
+                                Change: --
+                            </span>
+
+                            <span id="nifty-ohlc">
+                                O: -- | H: -- | L: --
+                            </span>
+
+                            <span id="nifty-updated">
+                                Updated: --
+                            </span>
+
+                        </div>
+
+                    </div>
+
+                </div>
+
+            </div>
+
         </div>
-      </div>
 
-      <div class="header-actions">
-        <button
-          id="isolated-dashboard-btn"
-          class="dashboard-button"
-          onclick="openIsolatedDashboard()"
-        >
-          Isolated EMA Dashboard
-        </button>
-
-        <button
-          id="manual-refresh-btn"
-          class="refresh-button"
-          onclick="triggerManualRefresh()"
-        >
-          Hard Refresh
-        </button>
-
-        <span id="refresh-status" class="status-badge disconnected">
-          Refresh: Idle
-        </span>
-
-        <span id="status-all" class="status-badge disconnected"
-          >/all-feeds: Off</span
-        >
-      </div>
-    </header>
-
-    <div id="refresh-panel" class="panel refresh-panel">
-      <h2>Manual Refresh Status</h2>
-      <div id="refresh-message" class="refresh-message">
-        No manual refresh triggered yet.
-      </div>
     </div>
 
-    <div class="panel">
-      <div class="option-section-title">
-        <h2>Nearest CE / PE Options</h2>
-        <small>
-          Based on live NIFTY LTP:
-          <b id="atm-reference">--</b>
-        </small>
-      </div>
 
-      <div class="options-layout">
-        <div>
-          <div class="option-section-title">
-            <h3>Nearest CE Cards</h3>
-            <small id="ce-count">0 active</small>
-          </div>
-          <div id="ce-container" class="options-grid"></div>
+    <!-- ========================================================= -->
+    <!-- ACTION / STATUS BAR -->
+    <!-- ========================================================= -->
+
+    <div class="dashboard-panel">
+
+        <div class="panel-body">
+
+            <div class="row align-items-center g-3">
+
+                <div class="col-lg-6">
+
+                    <div class="d-flex flex-wrap gap-2">
+
+                        <button
+                            id="isolated-dashboard-btn"
+                            type="button"
+                            class="btn btn-primary dashboard-action"
+                            onclick="openIsolatedDashboard()"
+                        >
+                            <i class="bi bi-grid-3x3-gap-fill me-1"></i>
+                            Isolated EMA Dashboard
+                        </button>
+
+                        <button
+                            id="manual-refresh-btn"
+                            type="button"
+                            class="btn btn-outline-primary dashboard-action"
+                            onclick="triggerManualRefresh()"
+                        >
+                            <i class="bi bi-arrow-clockwise me-1"></i>
+                            Hard Refresh
+                        </button>
+
+                    </div>
+
+                </div>
+
+                <div class="col-lg-6">
+
+                    <div class="d-flex flex-wrap justify-content-lg-end gap-2">
+
+                        <span
+                            id="refresh-status"
+                            class="status-badge disconnected"
+                        >
+                            Refresh: Idle
+                        </span>
+
+                        <span
+                            id="status-all"
+                            class="status-badge disconnected"
+                        >
+                            /all-feeds: Off
+                        </span>
+
+                    </div>
+
+                </div>
+
+            </div>
+
         </div>
 
-        <div>
-          <div class="option-section-title">
-            <h3>Nearest PE Cards</h3>
-            <small id="pe-count">0 active</small>
-          </div>
-          <div id="pe-container" class="options-grid"></div>
-        </div>
-      </div>
     </div>
 
-    <script>
-      const wsProtocol = window.location.protocol === "https:" ? "wss" : "ws";
-      const wsHost = `${wsProtocol}://${window.location.host}`;
-      const apiHost = `${window.location.protocol}//${window.location.host}`;
 
-      const optionFeedsStore = new Map();
+    <!-- ========================================================= -->
+    <!-- REFRESH STATUS -->
+    <!-- ========================================================= -->
 
-      let niftyTick = null;
-      const nearestCardsPerSide = 6;
+    <div
+        id="refresh-panel"
+        class="dashboard-panel refresh-panel"
+    >
 
-      function openIsolatedDashboard() {
-        window.location.href = `${apiHost}/isolated-dashboard`;
-      }
+        <div class="panel-header">
 
-      function connectAllFeeds() {
-        const ws = new WebSocket(`${wsHost}/all-feeds`);
-        const statusBadge = document.getElementById("status-all");
+            <div class="d-flex align-items-center gap-2">
+
+                <i class="bi bi-arrow-repeat text-primary fs-5"></i>
+
+                <div>
+
+                    <h2 class="panel-title">
+                        Manual Refresh Status
+                    </h2>
+
+                    <div class="panel-subtitle">
+                        Latest instrument and streamer refresh information
+                    </div>
+
+                </div>
+
+            </div>
+
+        </div>
+
+        <div class="panel-body">
+
+            <div
+                id="refresh-message"
+                class="refresh-message"
+            >
+                No manual refresh triggered yet.
+            </div>
+
+        </div>
+
+    </div>
+
+
+    <!-- ========================================================= -->
+    <!-- OPTIONS PANEL -->
+    <!-- ========================================================= -->
+
+    <div class="dashboard-panel">
+
+        <div class="panel-header">
+
+            <div class="row align-items-center g-3">
+
+                <div class="col-md-7">
+
+                    <div class="d-flex align-items-center gap-2">
+
+                        <div
+                            class="rounded-3 bg-primary-subtle text-primary d-flex align-items-center justify-content-center"
+                            style="width:40px;height:40px;"
+                        >
+                            <i class="bi bi-lightning-charge-fill"></i>
+                        </div>
+
+                        <div>
+
+                            <h2 class="panel-title">
+                                Nearest CE / PE Options
+                            </h2>
+
+                            <div class="panel-subtitle">
+                                Live options closest to the current NIFTY 50 price
+                            </div>
+
+                        </div>
+
+                    </div>
+
+                </div>
+
+                <div class="col-md-5">
+
+                    <div class="text-md-end">
+
+                        <span class="text-muted small">
+                            ATM Reference
+                        </span>
+
+                        <div
+                            id="atm-reference"
+                            class="fw-bold text-primary"
+                        >
+                            --
+                        </div>
+
+                    </div>
+
+                </div>
+
+            </div>
+
+        </div>
+
+
+        <div class="panel-body">
+
+            <div class="row g-4">
+
+                <!-- ================================================= -->
+                <!-- CALL OPTIONS -->
+                <!-- ================================================= -->
+
+                <div class="col-xl-6">
+
+                    <div class="option-section ce-section">
+
+                        <div class="option-section-header">
+
+                            <h3 class="option-section-title">
+
+                                <span class="option-icon ce-icon">
+                                    CE
+                                </span>
+
+                                Nearest Call Options
+
+                            </h3>
+
+                            <span
+                                id="ce-count"
+                                class="active-count"
+                            >
+                                0 active
+                            </span>
+
+                        </div>
+
+                        <div
+                            id="ce-container"
+                            class="options-grid"
+                        ></div>
+
+                    </div>
+
+                </div>
+
+
+                <!-- ================================================= -->
+                <!-- PUT OPTIONS -->
+                <!-- ================================================= -->
+
+                <div class="col-xl-6">
+
+                    <div class="option-section pe-section">
+
+                        <div class="option-section-header">
+
+                            <h3 class="option-section-title">
+
+                                <span class="option-icon pe-icon">
+                                    PE
+                                </span>
+
+                                Nearest Put Options
+
+                            </h3>
+
+                            <span
+                                id="pe-count"
+                                class="active-count"
+                            >
+                                0 active
+                            </span>
+
+                        </div>
+
+                        <div
+                            id="pe-container"
+                            class="options-grid"
+                        ></div>
+
+                    </div>
+
+                </div>
+
+            </div>
+
+        </div>
+
+    </div>
+
+</div>
+
+
+{% endblock %}
+
+
+{% block scripts %}
+
+<script>
+    /*
+     * ============================================================
+     * LIVE FEED CONFIGURATION
+     * ============================================================
+     */
+
+    const wsProtocol =
+        window.location.protocol === "https:" ? "wss" : "ws";
+
+    const wsHost =
+        `${wsProtocol}://${window.location.host}`;
+
+    const apiHost =
+        `${window.location.protocol}//${window.location.host}`;
+
+
+    const optionFeedsStore = new Map();
+
+    let niftyTick = null;
+
+    const nearestCardsPerSide = 6;
+
+
+    /*
+     * ============================================================
+     * ISOLATED DASHBOARD
+     * ============================================================
+     */
+
+    function openIsolatedDashboard() {
+
+        window.location.href =
+            `${apiHost}/isolated-dashboard`;
+
+    }
+
+
+    /*
+     * ============================================================
+     * WEBSOCKET - ALL FEEDS
+     * ============================================================
+     */
+
+    function connectAllFeeds() {
+
+        const ws =
+            new WebSocket(`${wsHost}/all-feeds`);
+
+        const statusBadge =
+            document.getElementById("status-all");
+
 
         ws.onopen = () => {
-          statusBadge.className = "status-badge connected";
-          statusBadge.textContent = "/all-feeds: Live";
+
+            statusBadge.className =
+                "status-badge connected";
+
+            statusBadge.textContent =
+                "/all-feeds: Live";
+
         };
+
 
         ws.onmessage = (event) => {
-          const tick = JSON.parse(event.data);
 
-          if (tick.type === "connected" || tick.type === "ping") {
-            return;
-          }
+            const tick =
+                JSON.parse(event.data);
 
-          if (tick.type === "error") {
-            console.error("All feeds error:", tick);
-            return;
-          }
 
-          if (!tick.instrument_key) {
-            return;
-          }
-
-          if (isNiftyIndexTick(tick)) {
-            niftyTick = tick;
-            updateNiftyHeader(tick);
-            renderNearestOptionCards();
-            return;
-          }
-
-          if (isOptionTick(tick)) {
-            optionFeedsStore.set(tick.instrument_key, tick);
-            renderNearestOptionCards();
-          }
-        };
-
-        ws.onerror = (event) => {
-          console.error("All-feeds websocket error:", event);
-        };
-
-        ws.onclose = () => {
-          statusBadge.className = "status-badge disconnected";
-          statusBadge.textContent = "/all-feeds: Disconnected";
-          setTimeout(connectAllFeeds, 3000);
-        };
-      }
-
-      function isNiftyIndexTick(tick) {
-        const info = tick.info || {};
-        const key = String(tick.instrument_key || "");
-        const symbol = String(
-          info.trading_symbol || info.underlying_symbol || "",
-        );
-
-        return (
-          String(info.instrument_type || "").toUpperCase() === "INDEX" ||
-          key.includes("NSE_INDEX|Nifty 50") ||
-          symbol.toUpperCase().includes("NIFTY 50")
-        );
-      }
-
-      function isOptionTick(tick) {
-        const instrumentType = String(
-          tick.info?.instrument_type || "",
-        ).toUpperCase();
-        return instrumentType === "CE" || instrumentType === "PE";
-      }
-
-      function formatNumber(value, decimals = 2) {
-        const numberValue = Number(value || 0);
-        return numberValue.toFixed(decimals);
-      }
-
-      function formatInteger(value) {
-        const numberValue = Number(value || 0);
-        return numberValue.toLocaleString();
-      }
-
-      function getChangeClass(value) {
-        return Number(value || 0) >= 0 ? "up" : "down";
-      }
-
-      function updateNiftyHeader(tick) {
-        const ltp = Number(tick.ltp || 0);
-        const change = Number(tick.change || 0);
-        const changePct = Number(tick.change_pct || 0);
-        const changeClass = getChangeClass(change);
-
-        const niftyLtp = document.getElementById("nifty-ltp");
-        niftyLtp.className = `nifty-ltp ${changeClass}`;
-        niftyLtp.textContent = `NIFTY 50 ₹${formatNumber(ltp)}`;
-
-        document.getElementById("nifty-change").innerHTML =
-          `Change: <span class="${changeClass}">${change >= 0 ? "+" : ""}${formatNumber(change)} (${formatNumber(changePct)}%)</span>`;
-
-        document.getElementById("nifty-ohlc").textContent =
-          `O: ${formatNumber(tick.open)} | H: ${formatNumber(tick.high)} | L: ${formatNumber(tick.low)}`;
-
-        document.getElementById("nifty-updated").textContent =
-          `Updated: ${new Date().toLocaleTimeString()}`;
-
-        document.getElementById("atm-reference").textContent =
-          `₹${formatNumber(ltp)}`;
-      }
-
-      function getNearestOptions(optionType) {
-        if (!niftyTick || !Number(niftyTick.ltp || 0)) {
-          return [];
-        }
-
-        const niftyLtp = Number(niftyTick.ltp || 0);
-
-        return Array.from(optionFeedsStore.values())
-          .filter((tick) => {
-            const info = tick.info || {};
-            return (
-              String(info.instrument_type || "").toUpperCase() === optionType
-            );
-          })
-          .filter(
-            (tick) =>
-              tick.info?.strike_price !== null &&
-              tick.info?.strike_price !== undefined,
-          )
-          .sort((a, b) => {
-            const strikeA = Number(a.info?.strike_price || 0);
-            const strikeB = Number(b.info?.strike_price || 0);
-
-            const distanceA = Math.abs(strikeA - niftyLtp);
-            const distanceB = Math.abs(strikeB - niftyLtp);
-
-            if (distanceA !== distanceB) {
-              return distanceA - distanceB;
+            if (
+                tick.type === "connected" ||
+                tick.type === "ping"
+            ) {
+                return;
             }
 
-            return strikeA - strikeB;
-          })
-          .slice(0, nearestCardsPerSide);
-      }
 
-      function renderNearestOptionCards() {
-        const ceContainer = document.getElementById("ce-container");
-        const peContainer = document.getElementById("pe-container");
+            if (tick.type === "error") {
 
-        const nearestCE = getNearestOptions("CE");
-        const nearestPE = getNearestOptions("PE");
+                console.error(
+                    "All feeds error:",
+                    tick
+                );
 
-        document.getElementById("ce-count").textContent =
-          `${nearestCE.length} active`;
-        document.getElementById("pe-count").textContent =
-          `${nearestPE.length} active`;
+                return;
+            }
 
-        renderOptionCards(ceContainer, nearestCE, "CE");
-        renderOptionCards(peContainer, nearestPE, "PE");
-      }
 
-      function renderOptionCards(container, ticks, optionType) {
+            if (!tick.instrument_key) {
+                return;
+            }
+
+
+            /*
+             * NIFTY INDEX
+             */
+
+            if (isNiftyIndexTick(tick)) {
+
+                niftyTick = tick;
+
+                updateNiftyHeader(tick);
+
+                renderNearestOptionCards();
+
+                return;
+            }
+
+
+            /*
+             * OPTION FEEDS
+             */
+
+            if (isOptionTick(tick)) {
+
+                optionFeedsStore.set(
+                    tick.instrument_key,
+                    tick
+                );
+
+                renderNearestOptionCards();
+
+            }
+
+        };
+
+
+        ws.onerror = (event) => {
+
+            console.error(
+                "All-feeds websocket error:",
+                event
+            );
+
+        };
+
+
+        ws.onclose = () => {
+
+            statusBadge.className =
+                "status-badge disconnected";
+
+            statusBadge.textContent =
+                "/all-feeds: Disconnected";
+
+            setTimeout(
+                connectAllFeeds,
+                3000
+            );
+
+        };
+
+    }
+
+
+    /*
+     * ============================================================
+     * NIFTY DETECTION
+     * ============================================================
+     */
+
+    function isNiftyIndexTick(tick) {
+
+        const info =
+            tick.info || {};
+
+        const key =
+            String(
+                tick.instrument_key || ""
+            );
+
+        const symbol =
+            String(
+                info.trading_symbol ||
+                info.underlying_symbol ||
+                ""
+            );
+
+
+        return (
+
+            String(
+                info.instrument_type || ""
+            ).toUpperCase() === "INDEX"
+
+            ||
+
+            key.includes(
+                "NSE_INDEX|Nifty 50"
+            )
+
+            ||
+
+            symbol
+                .toUpperCase()
+                .includes("NIFTY 50")
+
+        );
+
+    }
+
+
+    /*
+     * ============================================================
+     * OPTION DETECTION
+     * ============================================================
+     */
+
+    function isOptionTick(tick) {
+
+        const instrumentType =
+            String(
+                tick.info?.instrument_type || ""
+            ).toUpperCase();
+
+
+        return (
+            instrumentType === "CE" ||
+            instrumentType === "PE"
+        );
+
+    }
+
+
+    /*
+     * ============================================================
+     * NUMBER FORMATTERS
+     * ============================================================
+     */
+
+    function formatNumber(
+        value,
+        decimals = 2
+    ) {
+
+        const numberValue =
+            Number(value || 0);
+
+        return numberValue.toFixed(
+            decimals
+        );
+
+    }
+
+
+    function formatInteger(value) {
+
+        const numberValue =
+            Number(value || 0);
+
+        return numberValue.toLocaleString();
+
+    }
+
+
+    function getChangeClass(value) {
+
+        return Number(value || 0) >= 0
+            ? "up"
+            : "down";
+
+    }
+
+
+    /*
+     * ============================================================
+     * NIFTY HEADER
+     * ============================================================
+     */
+
+    function updateNiftyHeader(tick) {
+
+        const ltp =
+            Number(tick.ltp || 0);
+
+        const change =
+            Number(tick.change || 0);
+
+        const changePct =
+            Number(tick.change_pct || 0);
+
+        const changeClass =
+            getChangeClass(change);
+
+
+        const niftyLtp =
+            document.getElementById(
+                "nifty-ltp"
+            );
+
+
+        niftyLtp.className =
+            `nifty-ltp ${changeClass}`;
+
+
+        niftyLtp.textContent =
+            `NIFTY 50 ₹${formatNumber(ltp)}`;
+
+
+        document.getElementById(
+            "nifty-change"
+        ).innerHTML = `
+
+            Change:
+            <span class="${changeClass} fw-bold">
+
+                ${change >= 0 ? "+" : ""}
+                ${formatNumber(change)}
+                (${formatNumber(changePct)}%)
+
+            </span>
+        `;
+
+
+        document.getElementById(
+            "nifty-ohlc"
+        ).textContent =
+
+            `O: ${formatNumber(tick.open)}
+             | H: ${formatNumber(tick.high)}
+             | L: ${formatNumber(tick.low)}`;
+
+
+        document.getElementById(
+            "nifty-updated"
+        ).textContent =
+
+            `Updated: ${new Date()
+                .toLocaleTimeString()}`;
+
+
+        document.getElementById(
+            "atm-reference"
+        ).textContent =
+            `₹${formatNumber(ltp)}`;
+
+    }
+
+
+    /*
+     * ============================================================
+     * GET NEAREST OPTIONS
+     * ============================================================
+     */
+
+    function getNearestOptions(
+        optionType
+    ) {
+
+        if (
+            !niftyTick ||
+            !Number(niftyTick.ltp || 0)
+        ) {
+
+            return [];
+
+        }
+
+
+        const niftyLtp =
+            Number(niftyTick.ltp || 0);
+
+
+        return Array.from(
+            optionFeedsStore.values()
+        )
+
+            .filter((tick) => {
+
+                const info =
+                    tick.info || {};
+
+                return (
+
+                    String(
+                        info.instrument_type || ""
+                    ).toUpperCase()
+                    === optionType
+
+                );
+
+            })
+
+            .filter((tick) =>
+
+                tick.info?.strike_price !== null &&
+                tick.info?.strike_price !== undefined
+
+            )
+
+            .sort((a, b) => {
+
+                const strikeA =
+                    Number(
+                        a.info?.strike_price || 0
+                    );
+
+                const strikeB =
+                    Number(
+                        b.info?.strike_price || 0
+                    );
+
+
+                const distanceA =
+                    Math.abs(
+                        strikeA - niftyLtp
+                    );
+
+                const distanceB =
+                    Math.abs(
+                        strikeB - niftyLtp
+                    );
+
+
+                if (
+                    distanceA !== distanceB
+                ) {
+
+                    return (
+                        distanceA -
+                        distanceB
+                    );
+
+                }
+
+
+                return (
+                    strikeA -
+                    strikeB
+                );
+
+            })
+
+            .slice(
+                0,
+                nearestCardsPerSide
+            );
+
+    }
+
+
+    /*
+     * ============================================================
+     * RENDER OPTION CARDS
+     * ============================================================
+     */
+
+    function renderNearestOptionCards() {
+
+        const ceContainer =
+            document.getElementById(
+                "ce-container"
+            );
+
+        const peContainer =
+            document.getElementById(
+                "pe-container"
+            );
+
+
+        const nearestCE =
+            getNearestOptions("CE");
+
+        const nearestPE =
+            getNearestOptions("PE");
+
+
+        document.getElementById(
+            "ce-count"
+        ).textContent =
+            `${nearestCE.length} active`;
+
+
+        document.getElementById(
+            "pe-count"
+        ).textContent =
+            `${nearestPE.length} active`;
+
+
+        renderOptionCards(
+            ceContainer,
+            nearestCE,
+            "CE"
+        );
+
+
+        renderOptionCards(
+            peContainer,
+            nearestPE,
+            "PE"
+        );
+
+    }
+
+
+    function renderOptionCards(
+        container,
+        ticks,
+        optionType
+    ) {
+
         container.innerHTML = "";
 
+
         if (!niftyTick) {
-          container.innerHTML = `
-          <div class="empty-state">
-            Waiting for live NIFTY 50 tick to calculate nearest ${optionType} strikes.
-          </div>
-        `;
-          return;
+
+            container.innerHTML = `
+
+                <div class="empty-state">
+
+                    <i class="bi bi-hourglass-split fs-4 d-block mb-2"></i>
+
+                    Waiting for live NIFTY 50 tick
+                    to calculate nearest
+                    ${optionType} strikes.
+
+                </div>
+
+            `;
+
+            return;
+
         }
+
 
         if (!ticks.length) {
-          container.innerHTML = `
-          <div class="empty-state">
-            Waiting for ${optionType} option ticks from /all-feeds.
-          </div>
-        `;
-          return;
+
+            container.innerHTML = `
+
+                <div class="empty-state">
+
+                    <i class="bi bi-broadcast fs-4 d-block mb-2"></i>
+
+                    Waiting for ${optionType}
+                    option ticks from
+                    /all-feeds.
+
+                </div>
+
+            `;
+
+            return;
+
         }
 
-        const niftyLtp = Number(niftyTick.ltp || 0);
 
-        ticks.forEach((tick, index) => {
-          const info = tick.info || {};
-          const strike = Number(info.strike_price || 0);
-          const symbol = info.trading_symbol || tick.instrument_key;
-          const distance = Math.abs(strike - niftyLtp);
+        const niftyLtp =
+            Number(niftyTick.ltp || 0);
 
-          const change = Number(tick.change || 0);
-          const changePct = Number(tick.change_pct || 0);
-          const ltp = Number(tick.ltp || 0);
-          const changeClass = getChangeClass(change);
 
-          const card = document.createElement("div");
-          card.className = index === 0 ? "card atm" : "card";
+        ticks.forEach(
+            (tick, index) => {
 
-          const greeks = tick.greeks || {};
-          const rawIv = Number(greeks.iv || 0);
-          const ivPct = rawIv <= 1.0 ? rawIv * 100 : rawIv;
+                const info =
+                    tick.info || {};
 
-          card.innerHTML = `
-          <div class="symbol">${symbol}</div>
-          <div class="strike-label">
-            Strike: ${formatNumber(strike, 0)}
-            | Distance from NIFTY: ${formatNumber(distance)}
-            ${index === 0 ? "| Nearest" : ""}
-          </div>
 
-          <div class="ltp ${changeClass}">₹${formatNumber(ltp)}</div>
+                const strike =
+                    Number(
+                        info.strike_price || 0
+                    );
 
-          <div class="details-row">
-            <span>Change</span>
-            <span class="${changeClass}">
-              ${change >= 0 ? "+" : ""}${formatNumber(change)}
-              (${formatNumber(changePct)}%)
-            </span>
-          </div>
 
-          <div class="details-row">
-            <span>OHLC</span>
-            <span>O: ${formatNumber(tick.open)} | H: ${formatNumber(tick.high)} | L: ${formatNumber(tick.low)}</span>
-          </div>
+                const symbol =
+                    info.trading_symbol ||
+                    tick.instrument_key;
 
-          <div class="details-row">
-            <span>Volume / OI</span>
-            <span>${formatInteger(tick.volume)} / ${formatInteger(tick.oi)}</span>
-          </div>
 
-          <div class="greeks-box">
-            <div class="details-row">
-              <span>IV</span>
-              <span>${formatNumber(ivPct)}%</span>
-            </div>
-            <div class="details-row">
-              <span>Delta</span>
-              <span>${formatNumber(greeks.delta, 4)}</span>
-            </div>
-            <div class="details-row">
-              <span>Theta</span>
-              <span>${formatNumber(greeks.theta, 4)}</span>
-            </div>
-          </div>
-        `;
+                const distance =
+                    Math.abs(
+                        strike - niftyLtp
+                    );
 
-          container.appendChild(card);
-        });
-      }
 
-      function setRefreshUi(state, message) {
-        const statusBadge = document.getElementById("refresh-status");
-        const refreshPanel = document.getElementById("refresh-panel");
-        const refreshMessage = document.getElementById("refresh-message");
-        const refreshButton = document.getElementById("manual-refresh-btn");
+                const change =
+                    Number(
+                        tick.change || 0
+                    );
 
-        refreshPanel.classList.add("visible");
-        refreshMessage.textContent = message || "";
+
+                const changePct =
+                    Number(
+                        tick.change_pct || 0
+                    );
+
+
+                const ltp =
+                    Number(
+                        tick.ltp || 0
+                    );
+
+
+                const changeClass =
+                    getChangeClass(change);
+
+
+                const card =
+                    document.createElement(
+                        "div"
+                    );
+
+
+                card.className =
+                    index === 0
+                        ? "option-card atm"
+                        : "option-card";
+
+
+                const greeks =
+                    tick.greeks || {};
+
+
+                const rawIv =
+                    Number(
+                        greeks.iv || 0
+                    );
+
+
+                const ivPct =
+                    rawIv <= 1.0
+                        ? rawIv * 100
+                        : rawIv;
+
+
+                card.innerHTML = `
+
+                    ${
+                        index === 0
+                            ? `<div class="atm-ribbon">NEAREST</div>`
+                            : ""
+                    }
+
+                    <div class="option-symbol">
+                        ${symbol}
+                    </div>
+
+
+                    <div class="strike-label">
+
+                        Strike:
+                        <strong>
+                            ${formatNumber(strike, 0)}
+                        </strong>
+
+                        <span class="mx-1">•</span>
+
+                        Distance:
+                        ${formatNumber(distance)}
+
+                    </div>
+
+
+                    <div class="option-ltp ${changeClass}">
+                        ₹${formatNumber(ltp)}
+                    </div>
+
+
+                    <div class="option-row">
+
+                        <span class="option-row-label">
+                            Change
+                        </span>
+
+                        <span class="${changeClass} fw-bold">
+
+                            ${change >= 0 ? "+" : ""}
+                            ${formatNumber(change)}
+                            (${formatNumber(changePct)}%)
+
+                        </span>
+
+                    </div>
+
+
+                    <div class="option-row">
+
+                        <span class="option-row-label">
+                            OHLC
+                        </span>
+
+                        <span class="text-end">
+
+                            O: ${formatNumber(tick.open)}
+                            |
+                            H: ${formatNumber(tick.high)}
+                            |
+                            L: ${formatNumber(tick.low)}
+
+                        </span>
+
+                    </div>
+
+
+                    <div class="option-row">
+
+                        <span class="option-row-label">
+                            Volume
+                        </span>
+
+                        <span>
+                            ${formatInteger(tick.volume)}
+                        </span>
+
+                    </div>
+
+
+                    <div class="option-row">
+
+                        <span class="option-row-label">
+                            Open Interest
+                        </span>
+
+                        <span>
+                            ${formatInteger(tick.oi)}
+                        </span>
+
+                    </div>
+
+
+                    <div class="greeks-box">
+
+                        <div class="greeks-title">
+                            Option Greeks
+                        </div>
+
+
+                        <div class="option-row">
+
+                            <span class="option-row-label">
+                                IV
+                            </span>
+
+                            <span>
+                                ${formatNumber(ivPct)}%
+                            </span>
+
+                        </div>
+
+
+                        <div class="option-row">
+
+                            <span class="option-row-label">
+                                Delta
+                            </span>
+
+                            <span>
+                                ${formatNumber(
+                                    greeks.delta,
+                                    4
+                                )}
+                            </span>
+
+                        </div>
+
+
+                        <div class="option-row">
+
+                            <span class="option-row-label">
+                                Theta
+                            </span>
+
+                            <span>
+                                ${formatNumber(
+                                    greeks.theta,
+                                    4
+                                )}
+                            </span>
+
+                        </div>
+
+                    </div>
+
+                `;
+
+
+                container.appendChild(
+                    card
+                );
+
+            }
+        );
+
+    }
+
+
+    /*
+     * ============================================================
+     * REFRESH UI
+     * ============================================================
+     */
+
+    function setRefreshUi(
+        state,
+        message
+    ) {
+
+        const statusBadge =
+            document.getElementById(
+                "refresh-status"
+            );
+
+
+        const refreshPanel =
+            document.getElementById(
+                "refresh-panel"
+            );
+
+
+        const refreshMessage =
+            document.getElementById(
+                "refresh-message"
+            );
+
+
+        const refreshButton =
+            document.getElementById(
+                "manual-refresh-btn"
+            );
+
+
+        refreshPanel.classList.add(
+            "visible"
+        );
+
+
+        refreshMessage.textContent =
+            message || "";
+
 
         if (state === "running") {
-          statusBadge.className = "status-badge refreshing";
-          statusBadge.textContent = "Refresh: Running";
-          refreshButton.disabled = true;
-          refreshButton.textContent = "Refreshing...";
-        } else if (state === "success") {
-          statusBadge.className = "status-badge refresh-success";
-          statusBadge.textContent = "Refresh: Success";
-          refreshButton.disabled = false;
-          refreshButton.textContent = "Hard Refresh";
-        } else if (state === "failed") {
-          statusBadge.className = "status-badge refresh-error";
-          statusBadge.textContent = "Refresh: Failed";
-          refreshButton.disabled = false;
-          refreshButton.textContent = "Hard Refresh";
-        } else {
-          statusBadge.className = "status-badge disconnected";
-          statusBadge.textContent = "Refresh: Idle";
-          refreshButton.disabled = false;
-          refreshButton.textContent = "Hard Refresh";
-        }
-      }
 
-      async function loadRefreshStatus() {
+            statusBadge.className =
+                "status-badge refreshing";
+
+            statusBadge.textContent =
+                "Refresh: Running";
+
+            refreshButton.disabled =
+                true;
+
+            refreshButton.innerHTML = `
+                <span
+                    class="spinner-border spinner-border-sm me-1"
+                    role="status"
+                ></span>
+                Refreshing...
+            `;
+
+        }
+
+        else if (state === "success") {
+
+            statusBadge.className =
+                "status-badge refresh-success";
+
+            statusBadge.textContent =
+                "Refresh: Success";
+
+            refreshButton.disabled =
+                false;
+
+            refreshButton.innerHTML = `
+                <i class="bi bi-arrow-clockwise me-1"></i>
+                Hard Refresh
+            `;
+
+        }
+
+        else if (state === "failed") {
+
+            statusBadge.className =
+                "status-badge refresh-error";
+
+            statusBadge.textContent =
+                "Refresh: Failed";
+
+            refreshButton.disabled =
+                false;
+
+            refreshButton.innerHTML = `
+                <i class="bi bi-arrow-clockwise me-1"></i>
+                Hard Refresh
+            `;
+
+        }
+
+        else {
+
+            statusBadge.className =
+                "status-badge disconnected";
+
+            statusBadge.textContent =
+                "Refresh: Idle";
+
+            refreshButton.disabled =
+                false;
+
+            refreshButton.innerHTML = `
+                <i class="bi bi-arrow-clockwise me-1"></i>
+                Hard Refresh
+            `;
+
+        }
+
+    }
+
+
+    /*
+     * ============================================================
+     * LOAD REFRESH STATUS
+     * ============================================================
+     */
+
+    async function loadRefreshStatus() {
+
         try {
-          const response = await fetch(`${apiHost}/refresh/status`, {
-            method: "GET",
-            headers: {
-              Accept: "application/json",
-            },
-          });
 
-          if (!response.ok) {
-            return;
-          }
+            const response =
+                await fetch(
+                    `${apiHost}/refresh/status`,
+                    {
+                        method: "GET",
+                        headers: {
+                            Accept:
+                                "application/json"
+                        }
+                    }
+                );
 
-          const data = await response.json();
 
-          if (data.manual_refresh_running) {
-            setRefreshUi(
-              "running",
-              "Manual refresh is currently running.\nPlease wait until it completes.",
-            );
-            return;
-          }
+            if (!response.ok) {
+                return;
+            }
 
-          const last = data.last_manual_refresh || {};
 
-          if (last.status === "success") {
-            setRefreshUi(
-              "success",
-              `Last manual refresh completed successfully.\n\n` +
-                `Time: ${last.timestamp || "N/A"}\n` +
-                `Nearest Expiry: ${last.nearest_expiry || "N/A"}\n` +
-                `Subscribed Instruments: ${last.subscribed_instruments || 0}\n` +
-                `Message: ${last.message || "N/A"}`,
-            );
-          } else if (last.status === "failed") {
-            setRefreshUi(
-              "failed",
-              `Last manual refresh failed.\n\n` +
-                `Time: ${last.timestamp || "N/A"}\n` +
-                `Nearest Expiry: ${last.nearest_expiry || "N/A"}\n` +
-                `Subscribed Instruments: ${last.subscribed_instruments || 0}\n` +
-                `Message: ${last.message || "N/A"}`,
-            );
-          }
-        } catch (error) {
-          console.error("Failed to load refresh status:", error);
+            const data =
+                await response.json();
+
+
+            if (
+                data.manual_refresh_running
+            ) {
+
+                setRefreshUi(
+                    "running",
+                    "Manual refresh is currently running.\nPlease wait until it completes."
+                );
+
+                return;
+
+            }
+
+
+            const last =
+                data.last_manual_refresh || {};
+
+
+            if (
+                last.status === "success"
+            ) {
+
+                setRefreshUi(
+
+                    "success",
+
+                    `Last manual refresh completed successfully.
+
+Time: ${last.timestamp || "N/A"}
+Nearest Expiry: ${last.nearest_expiry || "N/A"}
+Subscribed Instruments: ${last.subscribed_instruments || 0}
+Message: ${last.message || "N/A"}`
+
+                );
+
+            }
+
+            else if (
+                last.status === "failed"
+            ) {
+
+                setRefreshUi(
+
+                    "failed",
+
+                    `Last manual refresh failed.
+
+Time: ${last.timestamp || "N/A"}
+Nearest Expiry: ${last.nearest_expiry || "N/A"}
+Subscribed Instruments: ${last.subscribed_instruments || 0}
+Message: ${last.message || "N/A"}`
+
+                );
+
+            }
+
         }
-      }
 
-      async function triggerManualRefresh() {
-        const confirmed = window.confirm(
-          "This will refresh token, fetch fresh instruments, update subscription keys, and restart the Upstox streamer. Continue?",
-        );
+        catch (error) {
+
+            console.error(
+                "Failed to load refresh status:",
+                error
+            );
+
+        }
+
+    }
+
+
+    /*
+     * ============================================================
+     * MANUAL HARD REFRESH
+     * ============================================================
+     */
+
+    async function triggerManualRefresh() {
+
+        const confirmed =
+            window.confirm(
+
+                "This will refresh token, fetch fresh instruments, update subscription keys, and restart the Upstox streamer. Continue?"
+
+            );
+
 
         if (!confirmed) {
-          return;
+            return;
         }
+
 
         setRefreshUi(
-          "running",
-          "Manual hard refresh started.\nRefreshing token, fetching instruments, and restarting streamer...",
+
+            "running",
+
+            "Manual hard refresh started.\nRefreshing token, fetching instruments, and restarting streamer..."
+
         );
 
+
         try {
-          const response = await fetch(`${apiHost}/refresh/manual`, {
-            method: "POST",
-            headers: {
-              Accept: "application/json",
-            },
-          });
 
-          const data = await response.json();
+            const response =
+                await fetch(
+                    `${apiHost}/refresh/manual`,
+                    {
+                        method: "POST",
+                        headers: {
+                            Accept:
+                                "application/json"
+                        }
+                    }
+                );
 
-          if (!response.ok) {
-            const errorMessage =
-              data.detail || data.message || "Manual refresh failed.";
+
+            const data =
+                await response.json();
+
+
+            if (!response.ok) {
+
+                const errorMessage =
+                    data.detail ||
+                    data.message ||
+                    "Manual refresh failed.";
+
+
+                setRefreshUi(
+
+                    "failed",
+
+                    `Manual hard refresh failed.
+
+${errorMessage}`
+
+                );
+
+                return;
+
+            }
+
 
             setRefreshUi(
-              "failed",
-              `Manual hard refresh failed.\n\n${errorMessage}`,
+
+                "success",
+
+                `Manual hard refresh completed successfully.
+
+Started At: ${data.started_at || "N/A"}
+Completed At: ${data.completed_at || "N/A"}
+Nearest Expiry: ${data.nearest_expiry || "N/A"}
+Total Contracts: ${data.total_contracts || 0}
+Subscribed Instruments: ${data.subscribed_instruments || 0}
+Feed Mode: ${data.feed_mode || "N/A"}`
+
             );
 
-            return;
-          }
-
-          setRefreshUi(
-            "success",
-            `Manual hard refresh completed successfully.\n\n` +
-              `Started At: ${data.started_at || "N/A"}\n` +
-              `Completed At: ${data.completed_at || "N/A"}\n` +
-              `Nearest Expiry: ${data.nearest_expiry || "N/A"}\n` +
-              `Total Contracts: ${data.total_contracts || 0}\n` +
-              `Subscribed Instruments: ${data.subscribed_instruments || 0}\n` +
-              `Feed Mode: ${data.feed_mode || "N/A"}`,
-          );
-        } catch (error) {
-          console.error("Manual hard refresh request failed:", error);
-
-          setRefreshUi(
-            "failed",
-            `Manual hard refresh request failed.\n\n${error}`,
-          );
         }
-      }
 
-      connectAllFeeds();
-      loadRefreshStatus();
-      renderNearestOptionCards();
-    </script>
-  </body>
-</html>
+        catch (error) {
+
+            console.error(
+                "Manual hard refresh request failed:",
+                error
+            );
+
+
+            setRefreshUi(
+
+                "failed",
+
+                `Manual hard refresh request failed.
+
+${error}`
+
+            );
+
+        }
+
+    }
+
+
+    /*
+     * ============================================================
+     * INITIALIZE DASHBOARD
+     * ============================================================
+     */
+
+    connectAllFeeds();
+
+    loadRefreshStatus();
+
+    renderNearestOptionCards();
+
+</script>
+
+{% endblock %}

@@ -11,10 +11,6 @@ from .constants import (
     DEFAULT_MAX_EVENTS_IN_MEMORY,
 )
 
-# ============================================================
-# Locks
-# ============================================================
-
 opening_range_cache_lock = RLock()
 touch_lock = RLock()
 selected_or_lock = RLock()
@@ -22,11 +18,6 @@ selected_or_lock = RLock()
 _opening_range_cache_lock = opening_range_cache_lock
 _touch_lock = touch_lock
 _selected_or_lock = selected_or_lock
-
-
-# ============================================================
-# Date Helpers
-# ============================================================
 
 
 def _get_market_timezone() -> ZoneInfo:
@@ -72,11 +63,6 @@ def normalize_state_date(
         return get_state_market_date()
 
 
-# ============================================================
-# Default State Builders
-# ============================================================
-
-
 def build_default_opening_range_cache(
     state_date: str | None = None,
 ) -> dict:
@@ -110,6 +96,7 @@ def build_default_opening_range_cache(
         "isolated_instrument_selected": False,
         "isolated_instrument_selected_at": None,
         "isolated_instrument_selection_reason": None,
+        "isolated_instrument_locked_for_market_day": False,
         "isolated_ema_alerts_count": 0,
         "isolated_ema_telegram_attempts_count": 0,
         "isolated_ema_telegram_success_count": 0,
@@ -139,6 +126,7 @@ def build_default_selected_or_instrument_state() -> dict:
         "selected_at": None,
         "selection_priority": None,
         "selection_reason": None,
+        "locked_for_market_day": False,
         "reference_average": None,
         "average_window": None,
         "contract_info": None,
@@ -163,16 +151,7 @@ def build_default_selected_or_instrument_state() -> dict:
     }
 
 
-# ============================================================
-# Opening Range Cache
-# ============================================================
-
 opening_range_cache = build_default_opening_range_cache()
-
-
-# ============================================================
-# Touch State
-# ============================================================
 
 pending_touch_events = deque()
 
@@ -186,11 +165,6 @@ _pending_touch_events = pending_touch_events
 _touch_events = touch_events
 _alert_sent_keys = alert_sent_keys
 
-
-# ============================================================
-# Main Index LTP State
-# ============================================================
-
 latest_main_index_ltp: float | None = None
 latest_main_index_ltp_source: str | None = None
 latest_main_index_ltp_updated_at: str | None = None
@@ -198,11 +172,6 @@ latest_main_index_ltp_updated_at: str | None = None
 _latest_main_index_ltp: float | None = None
 _latest_main_index_ltp_source: str | None = None
 _latest_main_index_ltp_updated_at: str | None = None
-
-
-# ============================================================
-# Instrument LTP State
-# ============================================================
 
 latest_ltp_by_instrument: dict[str, float] = {}
 
@@ -214,11 +183,6 @@ latest_ltp_updated_at_by_instrument: dict[
 _latest_ltp_by_instrument = latest_ltp_by_instrument
 
 _latest_ltp_updated_at_by_instrument = latest_ltp_updated_at_by_instrument
-
-
-# ============================================================
-# Isolated Instrument State
-# ============================================================
 
 selected_or_instrument_state = build_default_selected_or_instrument_state()
 
@@ -236,17 +200,7 @@ _selected_or_ema_alert_minute_keys = selected_or_ema_alert_minute_keys
 
 _selected_or_ema_alert_minute_date: str | None = None
 
-
-# ============================================================
-# Runtime State
-# ============================================================
-
 runtime_state_date = get_state_market_date()
-
-
-# ============================================================
-# Main Index LTP Helpers
-# ============================================================
 
 
 def set_latest_main_index_ltp(
@@ -263,7 +217,11 @@ def set_latest_main_index_ltp(
 
     try:
         value = float(ltp)
-    except (TypeError, ValueError, OverflowError):
+    except (
+        TypeError,
+        ValueError,
+        OverflowError,
+    ):
         return False
 
     if value <= 0:
@@ -311,11 +269,6 @@ def get_latest_main_index_ltp_snapshot() -> dict:
         }
 
 
-# ============================================================
-# Instrument LTP Helpers
-# ============================================================
-
-
 def set_latest_instrument_ltp(
     instrument_key: str,
     ltp: Any,
@@ -331,7 +284,11 @@ def set_latest_instrument_ltp(
 
     try:
         value = float(ltp)
-    except (TypeError, ValueError, OverflowError):
+    except (
+        TypeError,
+        ValueError,
+        OverflowError,
+    ):
         return False
 
     if value <= 0:
@@ -400,11 +357,6 @@ def get_latest_instrument_ltp_state_snapshot() -> dict:
             "updated_at": deepcopy(latest_ltp_updated_at_by_instrument),
             "count": len(latest_ltp_by_instrument),
         }
-
-
-# ============================================================
-# Snapshot Helpers
-# ============================================================
 
 
 def get_opening_range_cache_snapshot() -> dict:
@@ -476,11 +428,6 @@ def get_selected_or_ema_alerts_snapshot(
         return deepcopy(alerts)
 
 
-# ============================================================
-# EMA Alert State Helpers
-# ============================================================
-
-
 def append_selected_or_ema_alert(
     alert_record: dict,
 ) -> dict:
@@ -498,16 +445,10 @@ def append_selected_or_ema_alert(
 
     algo_delivery = delivery.get("algo_app") or {}
 
-    if not isinstance(
-        telegram_delivery,
-        dict,
-    ):
+    if not isinstance(telegram_delivery, dict):
         telegram_delivery = {}
 
-    if not isinstance(
-        algo_delivery,
-        dict,
-    ):
+    if not isinstance(algo_delivery, dict):
         algo_delivery = {}
 
     telegram_attempted = bool(telegram_delivery.get("attempted"))
@@ -636,6 +577,10 @@ def append_selected_or_ema_alert(
             selected_state_snapshot.get("selection_reason")
         )
 
+        opening_range_cache["isolated_instrument_locked_for_market_day"] = bool(
+            selected_state_snapshot.get("locked_for_market_day")
+        )
+
         opening_range_cache["isolated_ema_telegram_attempts_count"] = (
             selected_state_snapshot.get(
                 "telegram_attempts_count",
@@ -691,10 +636,7 @@ def update_last_algo_app_delivery(
     event_id: str | None,
     delivery_result: dict,
 ) -> bool:
-    if not isinstance(
-        delivery_result,
-        dict,
-    ):
+    if not isinstance(delivery_result, dict):
         return False
 
     normalized_event_id = str(event_id or "").strip()
@@ -705,10 +647,7 @@ def update_last_algo_app_delivery(
 
     with selected_or_lock:
         for alert_record in reversed(selected_or_ema_alerts):
-            if not isinstance(
-                alert_record,
-                dict,
-            ):
+            if not isinstance(alert_record, dict):
                 continue
 
             record_event_id = str(alert_record.get("event_id") or "").strip()
@@ -752,10 +691,7 @@ def update_last_algo_app_delivery(
 
         last_cache_alert = opening_range_cache.get("last_isolated_ema_alert")
 
-        if isinstance(
-            last_cache_alert,
-            dict,
-        ):
+        if isinstance(last_cache_alert, dict):
             last_event_id = str(last_cache_alert.get("event_id") or "").strip()
 
             if not normalized_event_id or last_event_id == normalized_event_id:
@@ -767,11 +703,6 @@ def update_last_algo_app_delivery(
                 delivery["algo_app"] = delivery_snapshot
 
     return matched
-
-
-# ============================================================
-# Cache Synchronization
-# ============================================================
 
 
 def synchronize_cache_counters() -> None:
@@ -830,6 +761,10 @@ def synchronize_cache_counters() -> None:
             selected_state_snapshot.get("selection_reason")
         )
 
+        opening_range_cache["isolated_instrument_locked_for_market_day"] = bool(
+            selected_state_snapshot.get("locked_for_market_day")
+        )
+
         opening_range_cache["isolated_ema_alerts_count"] = isolated_alerts_count
 
         opening_range_cache["isolated_ema_telegram_attempts_count"] = (
@@ -885,11 +820,6 @@ def synchronize_cache_counters() -> None:
         )
 
 
-# ============================================================
-# Reset Helpers
-# ============================================================
-
-
 def reset_touch_state() -> None:
     global last_touch_alert_sent_at
     global latest_main_index_ltp
@@ -905,7 +835,6 @@ def reset_touch_state() -> None:
         alert_sent_keys.clear()
 
         latest_ltp_by_instrument.clear()
-
         latest_ltp_updated_at_by_instrument.clear()
 
         latest_main_index_ltp = None
@@ -983,11 +912,6 @@ def ensure_current_market_day(
     return True
 
 
-# ============================================================
-# EMA Duplicate Key Helpers
-# ============================================================
-
-
 def check_and_reserve_ema_minute_key(
     alert_key: str,
     state_date: Any = None,
@@ -1036,16 +960,8 @@ def release_ema_minute_key(
         selected_or_ema_alert_minute_keys.discard(normalized_key)
 
 
-# ============================================================
-# Initialization
-# ============================================================
-
 synchronize_cache_counters()
 
-
-# ============================================================
-# Public API
-# ============================================================
 
 __all__ = [
     "opening_range_cache_lock",
