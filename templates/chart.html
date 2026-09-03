@@ -90,7 +90,7 @@
     .chart-wrapper {
         position: relative;
         width: 100%;
-        height: calc(100vh - 120px);
+        height: calc(100vh - 56px);
         background: var(--bg);
     }
 
@@ -102,25 +102,41 @@
     /* Floating Instrument Panel */
     .instrument-panel {
         position: absolute;
-        top: 12px;
-        left: 12px;
         z-index: 100;
         width: 400px;
         max-width: calc(100vw - 24px);
-        max-height: calc(100vh - 150px);
+        max-height: calc(100vh - 120px);
         overflow: hidden;
         background: rgba(30, 34, 45, 0.95);
         border: 1px solid var(--border);
         border-radius: 12px;
         box-shadow: var(--shadow);
         backdrop-filter: blur(12px);
-        transition: all 0.2s ease;
+        transition: transform 0.2s ease, opacity 0.2s ease, top 0.2s ease, left 0.2s ease, right 0.2s ease, bottom 0.2s ease;
+    }
+
+    /* Panel Dynamic Positioning Classes */
+    .panel-pos-top-left { top: 12px; left: 12px; right: auto; bottom: auto; transform: none; }
+    .panel-pos-top-right { top: 12px; right: 12px; left: auto; bottom: auto; transform: none; }
+    .panel-pos-bottom-left { bottom: 12px; left: 12px; right: auto; top: auto; transform: none; }
+    .panel-pos-bottom-right { bottom: 12px; right: 12px; left: auto; top: auto; transform: none; }
+    .panel-pos-top-center { top: 12px; left: 50%; right: auto; bottom: auto; transform: translateX(-50%); }
+    .panel-pos-bottom-center { bottom: 12px; left: 50%; right: auto; top: auto; transform: translateX(-50%); }
+    .panel-pos-left-middle { top: 50%; left: 12px; right: auto; bottom: auto; transform: translateY(-50%); }
+    .panel-pos-right-middle { top: 50%; right: 12px; left: auto; bottom: auto; transform: translateY(-50%); }
+    .panel-pos-center { top: 50%; left: 50%; right: auto; bottom: auto; transform: translate(-50%, -50%); }
+
+    /* Dark Mode Text High Contrast Rule */
+    .instrument-panel.dark-theme, .instrument-panel.dark-theme * {
+        color: #ffffff !important;
+    }
+    .instrument-panel.dark-theme .text-muted {
+        color: #b0b8c4 !important;
     }
 
     .instrument-panel.collapsed {
         width: 0;
         opacity: 0;
-        transform: translateX(-15px);
         pointer-events: none;
         border: 0;
     }
@@ -157,11 +173,11 @@
 
     .view-tab.active {
         background: var(--blue);
-        color: #fff;
+        color: #fff !important;
     }
 
     .panel-body {
-        max-height: calc(100vh - 270px);
+        max-height: calc(100vh - 240px);
         padding: 10px;
         overflow-y: auto;
     }
@@ -183,14 +199,12 @@
         border: 1px solid rgba(41, 98, 255, 0.3);
         border-radius: 8px;
         background: linear-gradient(135deg, rgba(41, 98, 255, 0.15), rgba(41, 98, 255, 0.03));
-        color: inherit;
         text-decoration: none;
         transition: all 0.15s ease;
     }
 
     .index-card:hover {
         border-color: var(--blue);
-        color: #fff;
     }
 
     .options-grid {
@@ -228,14 +242,12 @@
         border: 1px solid transparent;
         border-radius: 8px;
         background: var(--surface-2);
-        color: inherit;
         text-decoration: none;
         transition: all 0.15s ease;
     }
 
     .option-card:hover {
         background: var(--surface-3);
-        color: #fff;
     }
 
     .option-card.nearest-option {
@@ -260,9 +272,34 @@
         padding: 1px 4px;
         border-radius: 3px;
         background: var(--yellow);
-        color: #111;
+        color: #111 !important;
         font-size: 7px;
         font-weight: 900;
+    }
+
+    /* Historical Data Loading Overlay Trigger */
+    .history-load-banner {
+        position: absolute;
+        top: 16px;
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 90;
+        display: none;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 14px;
+        border-radius: 20px;
+        background: var(--surface-2);
+        border: 1px solid var(--blue);
+        color: #ffffff;
+        font-size: 12px;
+        font-weight: 600;
+        box-shadow: var(--shadow);
+        cursor: pointer;
+    }
+
+    .history-load-banner:hover {
+        background: var(--blue);
     }
 
     /* Floating Controls */
@@ -305,9 +342,7 @@
 {% endblock %}
 
 {% block content %}
-<!-- =============================================================
-     SUB-HEADER BAR
-     ============================================================= -->
+<!-- SUB-HEADER BAR -->
 <div class="sub-header px-3 d-flex align-items-center justify-content-between">
     <div class="d-flex align-items-center gap-2 text-truncate">
         <h6 class="m-0 fw-bold text-white text-truncate">
@@ -334,14 +369,19 @@
     </div>
 </div>
 
-<!-- =============================================================
-     CHART CONTAINER & FLOATING PANEL
-     ============================================================= -->
+<!-- CHART CONTAINER & FLOATING PANEL -->
 <div class="chart-wrapper">
     <div id="chart"></div>
 
+    <!-- On-Demand History Prompt Banner -->
+    <div class="history-load-banner" id="historyLoadBanner">
+        <i class="bi bi-clock-history"></i>
+        <span>Scroll to end reached. Load past historical data?</span>
+        <button class="btn btn-sm btn-primary py-0 px-2 rounded-pill ms-2" id="triggerLoadHistoryBtn">Load</button>
+    </div>
+
     <!-- Floating Panel -->
-    <aside class="instrument-panel" id="instrumentPanel">
+    <aside class="instrument-panel panel-pos-top-left dark-theme" id="instrumentPanel">
         <div class="panel-header">
             <div class="d-flex align-items-center justify-content-between mb-2">
                 <div class="fw-bold text-white small d-flex align-items-center gap-2">
@@ -500,9 +540,7 @@
     </div>
 </div>
 
-<!-- =============================================================
-     SETTINGS OFFCANVAS
-     ============================================================= -->
+<!-- SETTINGS OFFCANVAS -->
 <div
     class="offcanvas offcanvas-end settings-offcanvas"
     tabindex="-1"
@@ -511,32 +549,48 @@
 >
     <div class="offcanvas-header border-bottom border-secondary">
         <h5 class="offcanvas-title fs-6 fw-bold text-white" id="settingsPanelLabel">
-            <i class="bi bi-gear me-2"></i> Chart Settings
+            <i class="bi bi-gear me-2"></i> Customization & Settings
         </h5>
         <button type="button" class="btn-close btn-close-white" data-bs-dismiss="offcanvas" aria-label="Close"></button>
     </div>
 
     <div class="offcanvas-body">
+        <!-- Panel Positioning Control -->
         <div class="p-3 border border-secondary rounded bg-dark mb-3">
-            <div class="fw-bold text-white small mb-1">Instrument Selector</div>
-            <div class="text-muted small">Options are automatically arranged by distance from the current NIFTY 50 live price.</div>
+            <div class="fw-bold text-white small mb-2"><i class="bi bi-arrows-move me-1 text-primary"></i> Panel Positioning</div>
+            <select id="panelPosSelect" class="form-select form-select-sm bg-secondary text-white border-0">
+                <option value="panel-pos-top-left" selected>Top-Left (Default)</option>
+                <option value="panel-pos-top-right">Top-Right</option>
+                <option value="panel-pos-bottom-left">Bottom-Left</option>
+                <option value="panel-pos-bottom-right">Bottom-Right</option>
+                <option value="panel-pos-top-center">Top-Center</option>
+                <option value="panel-pos-bottom-center">Bottom-Center</option>
+                <option value="panel-pos-left-middle">Left-Middle</option>
+                <option value="panel-pos-right-middle">Right-Middle</option>
+                <option value="panel-pos-center">Center</option>
+            </select>
+        </div>
+
+        <!-- Background / Text Color Control -->
+        <div class="p-3 border border-secondary rounded bg-dark mb-3">
+            <div class="fw-bold text-white small mb-2"><i class="bi bi-palette me-1 text-primary"></i> Panel Background Color</div>
+            <div class="d-flex align-items-center gap-2">
+                <input type="color" id="panelBgColorPicker" class="form-control form-control-color bg-transparent border-0" value="#1e222d" title="Choose background color">
+                <span class="small text-muted" id="panelBgHex">#1e222d</span>
+            </div>
+            <small class="text-muted mt-2 d-block" style="font-size: 11px;">
+                Dark or medium-dark backgrounds automatically enforce high-contrast white text for best readability.
+            </small>
         </div>
 
         <div class="p-3 border border-secondary rounded bg-dark mb-3">
-            <div class="fw-bold text-white small mb-1">Nearest Strike</div>
-            <div class="text-muted small">The closest strike price to the current index LTP is highlighted automatically.</div>
-        </div>
-
-        <div class="p-3 border border-secondary rounded bg-dark">
-            <div class="fw-bold text-white small mb-1">Live Connection</div>
-            <div class="text-muted small">Real-time prices and candles are received through the existing WebSocket connection.</div>
+            <div class="fw-bold text-white small mb-1">On-Demand Historical Data</div>
+            <div class="text-muted small">When scrolling left past the oldest candle, past data is loaded only when you click the popup prompt.</div>
         </div>
     </div>
 </div>
 
-<!-- =============================================================
-     SERVER DATA & SCRIPTS
-     ============================================================= -->
+<!-- SERVER DATA & SCRIPTS -->
 <script id="instrument-key-data" type="application/json">
 {{ instrument_key | tojson }}
 </script>
@@ -575,6 +629,13 @@
     const indexNoResults = document.getElementById("indexNoResults");
     const optionsNoResults = document.getElementById("optionsNoResults");
 
+    const panelPosSelect = document.getElementById("panelPosSelect");
+    const panelBgColorPicker = document.getElementById("panelBgColorPicker");
+    const panelBgHex = document.getElementById("panelBgHex");
+
+    const historyLoadBanner = document.getElementById("historyLoadBanner");
+    const triggerLoadHistoryBtn = document.getElementById("triggerLoadHistoryBtn");
+
     /* =========================================================
        STATE
        ========================================================= */
@@ -583,13 +644,46 @@
     let chart = null;
     let candleSeries = null;
     let lastCandle = null;
+    let oldestCandleTime = null;
     let chartSocket = null;
     let reconnectTimer = null;
     let reconnectAttempts = 0;
     let pageClosing = false;
     let currentIndexLtp = null;
+    let isLoadingHistory = false;
+    let hasMoreHistory = true;
 
     const reconnectMaximumDelay = 15000;
+
+    /* =========================================================
+       PANEL POSITIONING & DARK TEXT DETECTOR
+       ========================================================= */
+    panelPosSelect.addEventListener("change", function() {
+        const selectedClass = this.value;
+        instrumentPanel.className = instrumentPanel.className.replace(/\bpanel-pos-\S+/g, '');
+        instrumentPanel.classList.add(selectedClass);
+    });
+
+    function getLuminance(hexColor) {
+        const rgb = parseInt(hexColor.slice(1), 16);
+        const r = (rgb >> 16) & 0xff;
+        const g = (rgb >>  8) & 0xff;
+        const b = (rgb >>  0) & 0xff;
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    }
+
+    panelBgColorPicker.addEventListener("input", function() {
+        const colorHex = this.value;
+        panelBgHex.textContent = colorHex;
+        instrumentPanel.style.backgroundColor = colorHex;
+
+        // Luminance < 140 is dark/medium-dark => apply dark-theme white text rules
+        if (getLuminance(colorHex) < 140) {
+            instrumentPanel.classList.add("dark-theme");
+        } else {
+            instrumentPanel.classList.remove("dark-theme");
+        }
+    });
 
     /* =========================================================
        VIEW SWITCHING
@@ -759,7 +853,7 @@
     }
 
     /* =========================================================
-       CANDLE UPDATES
+       CANDLE UPDATES & HISTORICAL ON-SCROLL
        ========================================================= */
     function updateCandle(candle) {
         if (!candleSeries || !candle) return;
@@ -797,6 +891,46 @@
             close: ltp
         });
     }
+
+    async function loadOlderHistoricalData() {
+        if (isLoadingHistory || !hasMoreHistory || !oldestCandleTime) return;
+
+        isLoadingHistory = true;
+        triggerLoadHistoryBtn.disabled = true;
+        triggerLoadHistoryBtn.textContent = "Loading...";
+
+        const beforeDateString = new Date(oldestCandleTime * 1000).toISOString().split("T")[0];
+
+        try {
+            const response = await fetch(`/api/older-candles?instrument_key=${encodeURIComponent(currentInstrumentKey)}&before_date=${beforeDateString}`);
+            const result = await response.json();
+
+            if (result && Array.isArray(result.candles) && result.candles.length > 0) {
+                const olderCandles = result.candles.map(normalizeCandle).filter(c => c !== null);
+                const currentData = candleSeries.data();
+                const mergedMap = new Map();
+
+                olderCandles.forEach(c => mergedMap.set(c.time, c));
+                currentData.forEach(c => mergedMap.set(c.time, c));
+
+                const combinedData = Array.from(mergedMap.values()).sort((a, b) => a.time - b.time);
+                candleSeries.setData(combinedData);
+                oldestCandleTime = combinedData[0].time;
+                hasMoreHistory = result.has_more ?? true;
+            } else {
+                hasMoreHistory = false;
+            }
+        } catch (error) {
+            console.error("Failed to load historical candles:", error);
+        } finally {
+            isLoadingHistory = false;
+            historyLoadBanner.style.display = "none";
+            triggerLoadHistoryBtn.disabled = false;
+            triggerLoadHistoryBtn.textContent = "Load";
+        }
+    }
+
+    triggerLoadHistoryBtn.addEventListener("click", loadOlderHistoricalData);
 
     /* =========================================================
        WEBSOCKET
@@ -981,9 +1115,20 @@
         if (candles.length > 0) {
             candleSeries.setData(candles);
             lastCandle = candles[candles.length - 1];
+            oldestCandleTime = candles[0].time;
             updateLivePrice(lastCandle.close);
             chart.timeScale().fitContent();
         }
+
+        // On-Scroll Historical Range Check Trigger
+        chart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
+            if (!range || isLoadingHistory || !hasMoreHistory) return;
+            if (range.from < 5) {
+                historyLoadBanner.style.display = "flex";
+            } else {
+                historyLoadBanner.style.display = "none";
+            }
+        });
 
         const resizeChart = () => {
             if (chart) {

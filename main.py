@@ -4,12 +4,10 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
-
+from fastapi import FastAPI
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
-from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
 from api.chart_routes import router as chart_router
 from api.instrument_routes import router as instrument_router
 from api.algo_app_routes import router as algo_app_router
@@ -37,8 +35,6 @@ from token_tasks.token_monitor import (
 from ws_feed.websocket_routes import router as websocket_router
 
 logger = get_logger(__file__)
-
-DASHBOARD_TEMPLATE_PATH = Path("templates/isolated_ema_dashboard.html")
 
 
 # ============================================================
@@ -1363,39 +1359,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-# ============================================================
-# Dashboard Routes
-# ============================================================
-
-
-@app.get(
-    "/isolated-dashboard",
-    include_in_schema=False,
-)
-async def isolated_dashboard():
-    if not DASHBOARD_TEMPLATE_PATH.exists():
-        raise HTTPException(
-            status_code=404,
-            detail=(
-                "Dashboard template not found. Expected file: "
-                "templates/isolated_ema_dashboard.html"
-            ),
-        )
-
-    return FileResponse(
-        path=DASHBOARD_TEMPLATE_PATH,
-        media_type="text/html",
-    )
-
-
-@app.get(
-    "/isolated-ema-dashboard",
-    include_in_schema=False,
-)
-async def isolated_ema_dashboard_alias():
-    return await isolated_dashboard()
 
 
 # ============================================================

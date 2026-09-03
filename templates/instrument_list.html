@@ -1,8 +1,11 @@
-<!doctype html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+{% extends "base.html" %}
+
+{% block title %}
+    {{ page_title }}
+{% endblock %}
+
+{% block head %}
+
     <title>Chart Instruments</title>
 
     <!-- Bootstrap 5.3 CSS -->
@@ -28,7 +31,7 @@
             --bg-body: #f4f7fe;
             --bg-card: #ffffff;
             --text-primary: #1b2559;
-            --text-secondary: #a3edda;
+            --text-secondary: #707eae;
             --text-muted: #8f9bba;
             --border-color: #e9edf7;
             --accent-blue: #4318ff;
@@ -91,7 +94,7 @@
             left: 16px;
             top: 50%;
             transform: translateY(-50%);
-            color: #a3edda;
+            color: var(--text-secondary);
             font-size: 16px;
         }
 
@@ -126,7 +129,7 @@
             flex: 1;
             border: none;
             background: transparent;
-            color: #a3edda;
+            color: var(--text-secondary);
             font-weight: 700;
             font-size: 13px;
             padding: 10px 16px;
@@ -168,21 +171,40 @@
         /* Instrument Cards */
         .instrument-card {
             display: block;
-            background: #ffffff;
-            border: 1px solid var(--border-color);
+            background: #1e293b;
+            border: 1px solid #334155;
             border-radius: 14px;
-            padding: 14px 18px;
+            padding: 18px 22px;
             margin-bottom: 12px;
             text-decoration: none;
-            color: inherit;
+            color: #f8fafc;
             transition: all 0.2s ease-in-out;
-            box-shadow: 0px 2px 6px rgba(112, 144, 176, 0.04);
+            box-shadow: 0px 4px 12px rgba(0, 0, 0, 0.15);
         }
 
         .instrument-card:hover {
-            border-color: var(--accent-blue);
+            background: #273449;
+            border-color: #475569;
+            color: #ffffff;
             transform: translateY(-2px);
-            box-shadow: 0px 8px 20px rgba(67, 24, 255, 0.12);
+            box-shadow: 0px 8px 20px rgba(0, 0, 0, 0.22);
+        }
+
+        .instrument-card .instrument-symbol {
+            color: #ffffff;
+            font-weight: 700;
+        }
+
+        .instrument-card .instrument-details {
+            color: #cbd5e1;
+        }
+
+        .instrument-card small {
+            color: #cbd5e1;
+        }
+
+        .instrument-card strong {
+            color: #ffffff;
         }
 
         /* Index Specific Card */
@@ -192,7 +214,7 @@
         }
 
         .index-card:hover {
-            border-color: var(--accent-blue);
+            border-color: white;
         }
 
         .index-name {
@@ -246,13 +268,13 @@
         .option-strike {
             font-size: 16px;
             font-weight: 800;
-            color: var(--text-primary);
+            color: white;
         }
 
         .option-expiry {
             font-size: 11px;
             font-weight: 600;
-            color: var(--text-muted);
+            color: white;
         }
 
         .option-badge {
@@ -302,10 +324,9 @@
             display: none !important;
         }
     </style>
-</head>
+{% endblock %}
 
-<body>
-
+{% block content %}
 <!-- HEADER -->
 <header class="page-header d-flex align-items-center justify-content-between">
     <div class="d-flex align-items-center gap-3">
@@ -361,6 +382,10 @@
                     </div>
                 </div>
 
+                <!-- PRE-PROCESS LISTS ONCE -->
+                {% set call_options = instruments | selectattr('option_type', 'equalto', 'CE') | sort(attribute='strike_price') | list %}
+                {% set put_options = instruments | selectattr('option_type', 'equalto', 'PE') | sort(attribute='strike_price') | list %}
+
                 <!-- PANEL BODY CONTENT -->
                 <div class="panel-body">
 
@@ -393,9 +418,7 @@
                                     <i class="bi bi-arrow-up-circle-fill me-1"></i> CALL OPTIONS (CE)
                                 </div>
 
-                                {% set call_options = instruments | selectattr('option_type', 'equalto', 'CE') | list %}
-
-                                {% for item in call_options | sort(attribute='strike_price') %}
+                                {% for item in call_options %}
                                 <a href="/chart/{{ item.instrument_key | urlencode }}" class="instrument-card option-card searchable-card" data-search="{{ item.strike_price | int }} {{ item.expiry }} ce call">
                                     <div>
                                         <div class="option-strike">{{ item.strike_price | int }}</div>
@@ -416,9 +439,7 @@
                                     <i class="bi bi-arrow-down-circle-fill me-1"></i> PUT OPTIONS (PE)
                                 </div>
 
-                                {% set put_options = instruments | selectattr('option_type', 'equalto', 'PE') | list %}
-
-                                {% for item in put_options | sort(attribute='strike_price') %}
+                                {% for item in put_options %}
                                 <a href="/chart/{{ item.instrument_key | urlencode }}" class="instrument-card option-card searchable-card" data-search="{{ item.strike_price | int }} {{ item.expiry }} pe put">
                                     <div>
                                         <div class="option-strike">{{ item.strike_price | int }}</div>
@@ -465,7 +486,7 @@
                                     <i class="bi bi-arrow-up-circle-fill me-1"></i> CALL OPTIONS (CE)
                                 </div>
 
-                                {% for item in call_options | sort(attribute='strike_price') %}
+                                {% for item in call_options %}
                                 <a href="/chart/{{ item.instrument_key | urlencode }}" class="instrument-card option-card searchable-card" data-search="{{ item.strike_price | int }} {{ item.expiry }} ce call">
                                     <div>
                                         <div class="option-strike">{{ item.strike_price | int }}</div>
@@ -486,7 +507,7 @@
                                     <i class="bi bi-arrow-down-circle-fill me-1"></i> PUT OPTIONS (PE)
                                 </div>
 
-                                {% for item in put_options | sort(attribute='strike_price') %}
+                                {% for item in put_options %}
                                 <a href="/chart/{{ item.instrument_key | urlencode }}" class="instrument-card option-card searchable-card" data-search="{{ item.strike_price | int }} {{ item.expiry }} pe put">
                                     <div>
                                         <div class="option-strike">{{ item.strike_price | int }}</div>
@@ -532,6 +553,9 @@
     const buttons = [indexButton, optionsButton, allButton];
     const views = [indexView, optionsView, allView];
 
+    let lastSelectedButton = indexButton;
+    let lastSelectedView = indexView;
+
     function showView(activeButton, activeView) {
         buttons.forEach(function (button) {
             button.classList.remove("active");
@@ -549,6 +573,22 @@
 
     function filterCards() {
         const searchValue = searchInput.value.trim().toLowerCase();
+
+        // If user typed something, automatically switch to 'All' view to search across overall dataset
+        if (searchValue.length > 0) {
+            if (!allButton.classList.contains("active")) {
+                buttons.forEach(b => b.classList.remove("active"));
+                views.forEach(v => v.hidden = true);
+                allButton.classList.add("active");
+                allView.hidden = false;
+            }
+        } else {
+            // Restore back to manual tab selection when search input is empty
+            buttons.forEach(b => b.classList.remove("active"));
+            views.forEach(v => v.hidden = true);
+            lastSelectedButton.classList.add("active");
+            lastSelectedView.hidden = false;
+        }
 
         const activeView = views.find(function (view) {
             return !view.hidden;
@@ -577,19 +617,23 @@
     }
 
     indexButton.addEventListener("click", function () {
+        lastSelectedButton = indexButton;
+        lastSelectedView = indexView;
         showView(indexButton, indexView);
     });
 
     optionsButton.addEventListener("click", function () {
+        lastSelectedButton = optionsButton;
+        lastSelectedView = optionsView;
         showView(optionsButton, optionsView);
     });
 
     allButton.addEventListener("click", function () {
+        lastSelectedButton = allButton;
+        lastSelectedView = allView;
         showView(allButton, allView);
     });
 
     searchInput.addEventListener("input", filterCards);
 </script>
-
-</body>
-</html>
+{% endblock %}

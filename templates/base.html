@@ -4,80 +4,168 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 
-    <title>{% block title %}Trading Dashboard{% endblock %}</title>
+    <title>T - Dashboard</title>
+
+    <!-- Bootstrap 5.3 CSS & Icons -->
+    <link
+        href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
+        rel="stylesheet"
+    />
+    <link
+        rel="stylesheet"
+        href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css"
+    />
 
     <style>
+        :root {
+            --app-bg-dark: #0f172a;
+            --app-nav-bg: #1e293b;
+            --app-border-color: #334155;
+            --app-text-main: #f8fafc;
+            --app-text-muted: #94a3b8;
+        }
+
         * {
             box-sizing: border-box;
         }
 
-        body {
+        body.app-root-body {
             margin: 0;
-            background: #131722;
-            color: #d1d4dc;
-            font-family: Arial, Helvetica, sans-serif;
+            background-color: var(--app-bg-dark);
+            color: var(--app-text-main);
+            font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
         }
 
-        .navbar {
-            height: 64px;
+        /* Modern Glassmorphism Top Navigation Bar */
+        .app-header-navbar {
+            height: 68px;
             display: flex;
             align-items: center;
             justify-content: space-between;
-            padding: 0 20px;
-            background: #1e222d;
-            border-bottom: 1px solid #2a2e39;
+            padding: 0 24px;
+            background: rgba(30, 41, 59, 0.85);
+            backdrop-filter: blur(12px);
+            border-bottom: 1px solid var(--app-border-color);
             position: sticky;
             top: 0;
             z-index: 9999;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25);
         }
 
-        .navbar-brand {
-            color: #ffffff;
-            font-size: 18px;
-            font-weight: 700;
-            text-decoration: none;
-        }
-
-        .navbar-links {
+        /* Brand Styling with Gradient Icon Box */
+        .app-brand-wrapper {
             display: flex;
-            gap: 10px;
-        }
-
-        .nav-link {
-            padding: 10px 14px;
-            background: #2a2e39;
-            border-radius: 6px;
-            color: #ffffff;
+            align-items: center;
+            gap: 12px;
             text-decoration: none;
-            font-size: 13px;
+        }
+
+        .app-brand-icon-box {
+            width: 40px;
+            height: 40px;
+            border-radius: 10px;
+            background: linear-gradient(135deg, #2563eb, #7c3aed);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #ffffff;
+            font-size: 1.25rem;
+            box-shadow: 0 0 15px rgba(37, 99, 235, 0.4);
+        }
+
+        .app-brand-title {
+            color: var(--app-text-main);
+            font-size: 1.15rem;
+            font-weight: 700;
+            letter-spacing: -0.3px;
+        }
+
+        /* Nav Group */
+        .app-nav-item-group {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        /* Colorful Nav Buttons */
+        .app-nav-button {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 16px;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 10px;
+            color: var(--app-text-main);
+            text-decoration: none;
+            font-size: 0.85rem;
             font-weight: 600;
-            transition: background 0.2s ease;
+            transition: all 0.25 ease;
         }
 
-        .nav-link:hover {
-            background: #2962ff;
+        .app-nav-button:hover {
+            background: rgba(255, 255, 255, 0.12);
+            color: #ffffff;
+            border-color: rgba(255, 255, 255, 0.25);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
         }
 
-        .content {
+        /* Icon Badge Pill Backgrounds */
+        .nav-icon-badge {
+            width: 26px;
+            height: 26px;
+            border-radius: 6px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.85rem;
+        }
+
+        /* Route Specific Color Themes */
+        .nav-icon-badge.home-theme {
+            background: rgba(59, 130, 246, 0.2);
+            color: #60a5fa;
+        }
+
+        .nav-icon-badge.ema-theme {
+            background: rgba(168, 85, 247, 0.2);
+            color: #c084fc;
+        }
+
+        .nav-icon-badge.charts-theme {
+            background: rgba(34, 197, 94, 0.2);
+            color: #4ade80;
+        }
+
+        .app-main-content-wrapper {
             width: 100%;
         }
 
+        /* Mobile Optimization */
         @media (max-width: 640px) {
-            .navbar {
-                padding: 0 10px;
+            .app-header-navbar {
+                padding: 0 12px;
+                height: 60px;
             }
 
-            .navbar-brand {
-                font-size: 14px;
+            .app-brand-title {
+                display: none; /* Hide brand text on tiny screens to preserve navigation space */
             }
 
-            .navbar-links {
-                gap: 5px;
+            .app-nav-item-group {
+                gap: 6px;
             }
 
-            .nav-link {
-                padding: 8px 10px;
-                font-size: 11px;
+            .app-nav-button {
+                padding: 6px 10px;
+                font-size: 0.75rem;
+            }
+
+            .nav-icon-badge {
+                width: 22px;
+                height: 22px;
+                font-size: 0.75rem;
             }
         }
     </style>
@@ -85,46 +173,68 @@
     {% block head %}{% endblock %}
 </head>
 
-<body>
+<body class="app-root-body">
 
-<nav class="navbar">
+<nav class="app-header-navbar">
 
-    <a href="/" class="navbar-brand">
-        Trading Dashboard
+    <!-- BRAND / LOGO -->
+    <a href="/" class="app-brand-wrapper">
+        <div class="app-brand-icon-box">
+            <i class="bi bi-activity"></i>
+        </div>
+        <span class="app-brand-title">T - Dashboard</span>
     </a>
 
-    <div class="navbar-links">
+    <!-- NAVIGATION ROUTES -->
+    <div class="app-nav-item-group">
 
-        <a href="/" class="nav-link">
-            Home
+        <!-- HOME -->
+        <a href="/" class="app-nav-button">
+            <span class="nav-icon-badge home-theme">
+                <i class="bi bi-house-door-fill"></i>
+            </span>
+            <span>Home</span>
         </a>
 
-        <a href="javascript:void(0)" onclick="openIsolatedDashboard()" class="nav-link">
-            Isolated EMA
+        <!-- ISOLATED EMA -->
+        <a href="javascript:void(0)" onclick="openIsolatedDashboard()" class="app-nav-button">
+            <span class="nav-icon-badge ema-theme">
+                <i class="bi bi-cpu-fill"></i>
+            </span>
+            <span>Isolated EMA</span>
         </a>
 
-        <a href="/charts" class="nav-link">
-            Charts
+        <!-- CHARTS -->
+        <a href="/charts" class="app-nav-button">
+            <span class="nav-icon-badge charts-theme">
+                <i class="bi bi-candlestick-fill"></i>
+            </span>
+            <span>Charts</span>
         </a>
 
     </div>
 
 </nav>
 
-<div class="content">
+<div class="app-main-content-wrapper">
     {% block content %}{% endblock %}
 </div>
 
+<!-- Bootstrap 5 Bundle JS -->
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+
 <script>
-    // Define apiHost or fallback to current origin
-    const apiHost = window.apiHost || window.location.origin;
+    // Safely assign global host variable to prevent redeclaration errors
+    window.apiHost = window.apiHost || window.location.origin;
 
     function openIsolatedDashboard() {
-        window.location.href = `${apiHost}/isolated-dashboard`;
+        window.location.href = `${window.apiHost}/isolated-dashboard`;
     }
 </script>
 
-{% block scripts %}{% endblock %}
+{% block scripts %}
+
+{% endblock %}
 
 </body>
 </html>
