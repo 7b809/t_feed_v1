@@ -13,52 +13,44 @@ logger = get_logger(__file__)
 
 class TelegramService:
     def __init__(self):
-        self.bot_token = config.TELEGRAM_BOT_TOKEN
-        self.chat_id = config.TELEGRAM_CHAT_ID
-        self.enabled = config.TELEGRAM_ENABLED
-
-        self.timeout_seconds = int(
-            getattr(
-                config,
-                "TELEGRAM_TIMEOUT_SECONDS",
-                10,
-            )
+        self.bot_token = str(getattr(config, "TELEGRAM_BOT_TOKEN", "") or "").strip()
+        self.chat_id = str(getattr(config, "TELEGRAM_CHAT_ID", "") or "").strip()
+        self.enabled = bool(getattr(config, "TELEGRAM_ENABLED", False))
+        self.local_test_mode = bool(getattr(config, "LOCAL_ALERT_TEST_MODE", False))
+        self.local_production_delivery_blocked = bool(
+            getattr(config, "LOCAL_ALERT_PRODUCTION_DELIVERY_BLOCKED", True)
         )
-
+        self.local_alert_source_name = str(
+            getattr(config, "LOCAL_ALERT_SOURCE_NAME", "option_feed_engine_local_test")
+            or "option_feed_engine_local_test"
+        ).strip()
+        self.local_include_original_payload = bool(
+            getattr(config, "LOCAL_ALERT_INCLUDE_ORIGINAL_PAYLOAD", True)
+        )
+        self.timeout_seconds = self._get_effective_timeout_seconds()
         self.market_timezone = self._load_market_timezone()
-
         self.market_time_format = getattr(
-            config,
-            "MARKET_TIME_FORMAT",
-            "%Y-%m-%d %H:%M:%S %Z",
+            config, "MARKET_TIME_FORMAT", "%Y-%m-%d %H:%M:%S %Z"
         )
-
-        self.api_url = (
-            f"https://api.telegram.org/bot" f"{self.bot_token}/sendMessage"
-            if self.bot_token
-            else None
+        self.api_url = self._get_effective_api_url()
+        logger.info(
+            "Telegram service initialized. enabled=%s, local_test_mode=%s, delivery_mode=%s, configured=%s, target_url=%s",
+            self.enabled,
+            self.local_test_mode,
+            self.get_delivery_mode(),
+            self.is_configured(),
+            self._get_safe_target_url(),
         )
-
-    # ============================================================
-    # Time and Configuration
-    # ============================================================
 
     def _load_market_timezone(self) -> ZoneInfo:
-        timezone_name = getattr(
-            config,
-            "MARKET_TIMEZONE",
-            "Asia/Kolkata",
-        )
-
+        timezone_name = getattr(config, "MARKET_TIMEZONE", "Asia/Kolkata")
         try:
             return ZoneInfo(timezone_name)
         except ZoneInfoNotFoundError:
             logger.error(
-                "Invalid MARKET_TIMEZONE configured: %s. "
-                "Falling back to Asia/Kolkata.",
+                "Invalid MARKET_TIMEZONE configured: %s. Falling back to Asia/Kolkata.",
                 timezone_name,
             )
-
             return ZoneInfo("Asia/Kolkata")
 
     def _now_market_time(self) -> str:
@@ -67,36 +59,100 @@ class TelegramService:
     def _now_short_market_time(self) -> str:
         return datetime.now(self.market_timezone).strftime("%I:%M:%S %p %Z")
 
-    def is_configured(self) -> bool:
-        return bool(self.enabled and self.bot_token and self.chat_id and self.api_url)
+    def _get_effective_api_url(self) -> str | None:
+        if self.local_test_mode:
+            local_url = (
+                str(getattr(config, "LOCAL_TELEGRAM_URL", "") or "").strip().rstrip("/")
+            )
+            if not local_url:
+                logger.error(
+                    "LOCAL_TELEGRAM_URL is not configured while LOCAL_ALERT_TEST_MODE=True."
+                )
+                return None
+            return local_url
 
-    # ============================================================
-    # Formatting Helpers
-    # ============================================================
+        if not self.bot_token:
+            return None
 
-    def _escape(
-        self,
-        value: Any,
-    ) -> str:
-        return html.escape(
-            str(value),
-            quote=False,
+        return f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
+
+    def _get_effective_timeout_seconds(self) -> float:
+        configured_helper = getattr(
+            config, "get_effective_telegram_timeout_seconds", None
         )
+        if callable(configured_helper):
+            try:
+                return max(0.1, float(configured_helper()))
+            except (TypeError, ValueError, OverflowError):
+                pass
 
-    def _safe_float(
-        self,
-        value: Any,
-    ) -> float | None:
+        if self.local_test_mode:
+            try:
+                return max(
+                    0.1,
+                    float(getattr(config, "LOCAL_ALERT_TIMEOUT_SECONDS", 10.0)),
+                )
+            except (TypeError, ValueError, OverflowError):
+                return 10.0
+
+        try:
+            return max(
+                0.1,
+                float(getattr(config, "TELEGRAM_TIMEOUT_SECONDS", 10)),
+            )
+        except (TypeError, ValueError, OverflowError):
+            return 10.0
+
+    def _get_safe_target_url(self) -> str | None:
+        if not self.api_url:
+            return None
+
+        if self.local_test_mode:
+            return self.api_url
+
+        if self.bot_token:
+            return self.api_url.replace(self.bot_token, "***")
+
+        return self.api_url
+
+    def get_delivery_mode(self) -> str:
+        return "local_test" if self.local_test_mode else "telegram"
+
+    def get_status(self) -> dict:
+        return {
+            "enabled": self.enabled,
+            "configured": self.is_configured(),
+            "delivery_mode": self.get_delivery_mode(),
+            "local_test_mode": self.local_test_mode,
+            "target_url_configured": bool(self.api_url),
+            "target_url": self._get_safe_target_url() if self.local_test_mode else None,
+            "bot_token_configured": bool(self.bot_token),
+            "chat_id_configured": bool(self.chat_id),
+            "timeout_seconds": self.timeout_seconds,
+            "production_delivery_blocked": bool(
+                self.local_test_mode and self.local_production_delivery_blocked
+            ),
+            "secrets_exposed": False,
+        }
+
+    def is_configured(self) -> bool:
+        if not self.enabled:
+            return False
+
+        if self.local_test_mode:
+            return bool(self.api_url)
+
+        return bool(self.bot_token and self.chat_id and self.api_url)
+
+    def _escape(self, value: Any) -> str:
+        return html.escape(str(value), quote=False)
+
+    def _safe_float(self, value: Any) -> float | None:
         try:
             if value is None:
                 return None
-
             return float(value)
-        except (
-            TypeError,
-            ValueError,
-            OverflowError,
-        ):
+        except (TypeError, ValueError, OverflowError):
             return None
 
     def _format_numeric_value(
@@ -106,13 +162,10 @@ class TelegramService:
         decimal_places: int | None = None,
     ) -> str:
         numeric_value = self._safe_float(value)
-
         if numeric_value is None:
             if value is None:
                 return unavailable_text
-
             text = str(value).strip()
-
             return text if text else unavailable_text
 
         if decimal_places is not None:
@@ -130,7 +183,6 @@ class TelegramService:
         include_sign: bool = False,
     ) -> str:
         numeric_value = self._safe_float(value)
-
         if numeric_value is None:
             return unavailable_text
 
@@ -148,10 +200,8 @@ class TelegramService:
         unavailable_text: str = "N/A",
     ) -> str:
         numeric_value = self._safe_float(value)
-
         if numeric_value is None:
             return unavailable_text
-
         return f"{numeric_value:,.2f}"
 
     def _format_indian_quantity(
@@ -160,7 +210,6 @@ class TelegramService:
         unavailable_text: str = "N/A",
     ) -> str:
         numeric_value = self._safe_float(value)
-
         if numeric_value is None:
             return unavailable_text
 
@@ -176,10 +225,7 @@ class TelegramService:
             groups = []
 
             while remaining:
-                groups.insert(
-                    0,
-                    remaining[-2:],
-                )
+                groups.insert(0, remaining[-2:])
                 remaining = remaining[:-2]
 
             formatted = ",".join(groups) + "," + last_three
@@ -189,35 +235,21 @@ class TelegramService:
 
         return formatted
 
-    def _normalize_option_type(
-        self,
-        option_type: Any,
-    ) -> str | None:
+    def _normalize_option_type(self, option_type: Any) -> str | None:
         if option_type is None:
             return None
 
         normalized = str(option_type).strip().upper()
 
-        if normalized in {
-            "CE",
-            "CALL",
-            "C",
-        }:
+        if normalized in {"CE", "CALL", "C"}:
             return "CE"
 
-        if normalized in {
-            "PE",
-            "PUT",
-            "P",
-        }:
+        if normalized in {"PE", "PUT", "P"}:
             return "PE"
 
         return None
 
-    def _format_cross_type_display(
-        self,
-        cross_type: Any,
-    ) -> str:
+    def _format_cross_type_display(self, cross_type: Any) -> str:
         normalized = str(cross_type or "").strip().lower()
 
         if normalized == "bullish_cross":
@@ -229,15 +261,9 @@ class TelegramService:
         if not normalized:
             return "N/A"
 
-        return normalized.replace(
-            "_",
-            " ",
-        ).title()
+        return normalized.replace("_", " ").title()
 
-    def _format_signal_display(
-        self,
-        signal: Any,
-    ) -> str:
+    def _format_signal_display(self, signal: Any) -> str:
         normalized = str(signal or "").strip().lower()
 
         if normalized == "bullish":
@@ -249,15 +275,9 @@ class TelegramService:
         if not normalized:
             return "N/A"
 
-        return normalized.replace(
-            "_",
-            " ",
-        ).title()
+        return normalized.replace("_", " ").title()
 
-    def _format_ema_mode_display(
-        self,
-        mode: Any,
-    ) -> str:
+    def _format_ema_mode_display(self, mode: Any) -> str:
         normalized = str(mode or "").strip().lower()
 
         if normalized == "candle_close":
@@ -269,10 +289,7 @@ class TelegramService:
         if not normalized:
             return "N/A"
 
-        return normalized.replace(
-            "_",
-            " ",
-        ).title()
+        return normalized.replace("_", " ").title()
 
     def _format_short_market_time(
         self,
@@ -293,10 +310,7 @@ class TelegramService:
             if not text:
                 return unavailable_text
 
-            normalized_text = text.replace(
-                "Z",
-                "+00:00",
-            )
+            normalized_text = text.replace("Z", "+00:00")
 
             try:
                 parsed_datetime = datetime.fromisoformat(normalized_text)
@@ -310,10 +324,7 @@ class TelegramService:
 
                 for date_format in supported_formats:
                     try:
-                        parsed_datetime = datetime.strptime(
-                            text,
-                            date_format,
-                        )
+                        parsed_datetime = datetime.strptime(text, date_format)
                         break
                     except ValueError:
                         continue
@@ -330,10 +341,7 @@ class TelegramService:
 
         return parsed_datetime.strftime(time_format)
 
-    def _get_number_badge(
-        self,
-        index: int,
-    ) -> str:
+    def _get_number_badge(self, index: int) -> str:
         badges = {
             1: "1️⃣",
             2: "2️⃣",
@@ -347,23 +355,12 @@ class TelegramService:
             10: "🔟",
         }
 
-        return badges.get(
-            index,
-            f"{index}.",
-        )
+        return badges.get(index, f"{index}.")
 
-    def _get_live_ema_calculation_mode(
-        self,
-    ) -> str:
+    def _get_live_ema_calculation_mode(self) -> str:
         return (
             "tick_ltp"
-            if bool(
-                getattr(
-                    config,
-                    "LIVE_EMA_CALCULATION_MODE",
-                    False,
-                )
-            )
+            if bool(getattr(config, "LIVE_EMA_CALCULATION_MODE", False))
             else "candle_close"
         )
 
@@ -374,13 +371,53 @@ class TelegramService:
         selected_mode = mode or self._get_live_ema_calculation_mode()
 
         if selected_mode == "tick_ltp":
-            return "Live tick/LTP based EMA cross " "detection"
+            return "Live tick/LTP based EMA cross detection"
 
-        return "Completed candle close based EMA " "cross detection"
+        return "Completed candle close based EMA cross detection"
 
-    # ============================================================
-    # Raw Telegram Delivery
-    # ============================================================
+    def _build_production_payload(self, message: str) -> dict:
+        return {
+            "chat_id": self.chat_id,
+            "text": message,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True,
+        }
+
+    def _build_local_payload(
+        self,
+        message: str,
+        notification_title: str,
+        notification_level: str,
+        notification_context: str,
+    ) -> dict:
+        payload = {
+            "channel": "telegram",
+            "delivery_mode": "local_test",
+            "source": self.local_alert_source_name,
+            "title": notification_title,
+            "level": notification_level,
+            "context": notification_context or "not_available",
+            "message": message,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True,
+            "market_time": self._now_market_time(),
+            "metadata": {
+                "local_test_mode": True,
+                "production_delivery_blocked": bool(
+                    self.local_production_delivery_blocked
+                ),
+            },
+        }
+
+        if self.local_include_original_payload:
+            payload["telegram_payload"] = {
+                "chat_id": self.chat_id or "local_test_chat",
+                "text": message,
+                "parse_mode": "HTML",
+                "disable_web_page_preview": True,
+            }
+
+        return payload
 
     def _send_raw_message(
         self,
@@ -392,28 +429,33 @@ class TelegramService:
     ) -> bool:
         if not self.is_configured():
             logger.warning(
-                "Telegram notification skipped. "
-                "service_configured=False, "
-                "title=%s, level=%s, context=%s",
+                "Telegram notification skipped. service_configured=False, enabled=%s, local_test_mode=%s, delivery_mode=%s, title=%s, level=%s, context=%s",
+                self.enabled,
+                self.local_test_mode,
+                self.get_delivery_mode(),
                 notification_title,
                 notification_level,
-                (notification_context or "not_available"),
+                notification_context or "not_available",
             )
-
             return False
 
-        payload = {
-            "chat_id": self.chat_id,
-            "text": message,
-            "parse_mode": "HTML",
-            "disable_web_page_preview": True,
-        }
+        if self.local_test_mode:
+            payload = self._build_local_payload(
+                message=message,
+                notification_title=notification_title,
+                notification_level=notification_level,
+                notification_context=notification_context,
+            )
+        else:
+            payload = self._build_production_payload(message)
 
         logger.info(
-            "Sending Telegram notification. " "title=%s, level=%s, context=%s",
+            "Sending Telegram notification. delivery_mode=%s, title=%s, level=%s, context=%s, target=%s",
+            self.get_delivery_mode(),
             notification_title,
             notification_level,
-            (notification_context or "not_available"),
+            notification_context or "not_available",
+            self._get_safe_target_url(),
         )
 
         try:
@@ -423,51 +465,132 @@ class TelegramService:
                 timeout=self.timeout_seconds,
             )
 
-            if response.status_code != 200:
+            response_text = str(response.text or "")
+
+            if not 200 <= response.status_code < 300:
                 logger.error(
-                    "Telegram notification failed. "
-                    "title=%s, level=%s, "
-                    "context=%s, status_code=%s, "
-                    "response=%s",
+                    "Telegram notification failed. delivery_mode=%s, title=%s, level=%s, context=%s, status_code=%s, response=%s",
+                    self.get_delivery_mode(),
                     notification_title,
                     notification_level,
-                    (notification_context or "not_available"),
+                    notification_context or "not_available",
                     response.status_code,
-                    response.text,
+                    response_text[:2000],
                 )
-
                 return False
 
+            try:
+                response_payload = response.json()
+            except ValueError:
+                response_payload = None
+
+            if (
+                not self.local_test_mode
+                and isinstance(response_payload, dict)
+                and response_payload.get("ok") is False
+            ):
+                logger.error(
+                    "Telegram API rejected notification. title=%s, level=%s, context=%s, response=%s",
+                    notification_title,
+                    notification_level,
+                    notification_context or "not_available",
+                    response_text[:2000],
+                )
+                return False
+
+            if self.local_test_mode and isinstance(response_payload, dict):
+                local_success = response_payload.get("success")
+                local_ok = response_payload.get("ok")
+                local_accepted = response_payload.get("accepted")
+
+                if local_success is False:
+                    logger.error(
+                        "Local Telegram simulator rejected notification. title=%s, level=%s, context=%s, response=%s",
+                        notification_title,
+                        notification_level,
+                        notification_context or "not_available",
+                        response_text[:2000],
+                    )
+                    return False
+
+                if local_ok is False:
+                    logger.error(
+                        "Local Telegram simulator returned ok=false. title=%s, level=%s, context=%s, response=%s",
+                        notification_title,
+                        notification_level,
+                        notification_context or "not_available",
+                        response_text[:2000],
+                    )
+                    return False
+
+                if local_accepted is False:
+                    logger.error(
+                        "Local Telegram simulator returned accepted=false. title=%s, level=%s, context=%s, response=%s",
+                        notification_title,
+                        notification_level,
+                        notification_context or "not_available",
+                        response_text[:2000],
+                    )
+                    return False
+
             logger.info(
-                "Telegram notification sent. "
-                "title=%s, level=%s, "
-                "context=%s, status_code=%s",
+                "Telegram notification sent. delivery_mode=%s, title=%s, level=%s, context=%s, status_code=%s",
+                self.get_delivery_mode(),
                 notification_title,
                 notification_level,
-                (notification_context or "not_available"),
+                notification_context or "not_available",
                 response.status_code,
             )
 
             return True
 
-        except Exception as ex:
+        except requests.Timeout as ex:
             logger.error(
-                "Telegram notification exception. "
-                "title=%s, level=%s, "
-                "context=%s, exception_type=%s, "
-                "error=%s",
+                "Telegram notification timed out. delivery_mode=%s, title=%s, level=%s, context=%s, timeout_seconds=%s, error=%s",
+                self.get_delivery_mode(),
                 notification_title,
                 notification_level,
-                (notification_context or "not_available"),
+                notification_context or "not_available",
+                self.timeout_seconds,
+                ex,
+            )
+            return False
+
+        except requests.ConnectionError as ex:
+            logger.error(
+                "Telegram notification connection failed. delivery_mode=%s, title=%s, level=%s, context=%s, target=%s, error=%s",
+                self.get_delivery_mode(),
+                notification_title,
+                notification_level,
+                notification_context or "not_available",
+                self._get_safe_target_url(),
+                ex,
+            )
+            return False
+
+        except requests.RequestException as ex:
+            logger.error(
+                "Telegram notification request failed. delivery_mode=%s, title=%s, level=%s, context=%s, exception_type=%s, error=%s",
+                self.get_delivery_mode(),
+                notification_title,
+                notification_level,
+                notification_context or "not_available",
                 type(ex).__name__,
                 ex,
             )
-
             return False
 
-    # ============================================================
-    # Generic Message
-    # ============================================================
+        except Exception as ex:
+            logger.error(
+                "Telegram notification exception. delivery_mode=%s, title=%s, level=%s, context=%s, exception_type=%s, error=%s",
+                self.get_delivery_mode(),
+                notification_title,
+                notification_level,
+                notification_context or "not_available",
+                type(ex).__name__,
+                ex,
+            )
+            return False
 
     def send_message(
         self,
@@ -493,11 +616,7 @@ class TelegramService:
             "OPENING_RANGE": "🎯",
         }
 
-        emoji = emoji_map.get(
-            level_upper,
-            "ℹ️",
-        )
-
+        emoji = emoji_map.get(level_upper, "ℹ️")
         safe_title = self._escape(title)
         safe_message = self._escape(message)
         market_time = self._escape(self._now_market_time())
@@ -505,8 +624,7 @@ class TelegramService:
         formatted_message = (
             f"{emoji} <b>{safe_title}</b>\n\n"
             f"{safe_message}\n\n"
-            f"<b>Level:</b> "
-            f"{self._escape(level_upper)}\n"
+            f"<b>Level:</b> {self._escape(level_upper)}\n"
             f"<b>Time:</b> {market_time}"
         )
 
@@ -516,10 +634,6 @@ class TelegramService:
             notification_level=level_upper,
             notification_context=notification_context,
         )
-
-    # ============================================================
-    # Application Lifecycle Messages
-    # ============================================================
 
     def send_startup_message(
         self,
@@ -554,10 +668,6 @@ class TelegramService:
             notification_context="application_shutdown",
         )
 
-    # ============================================================
-    # Token Messages
-    # ============================================================
-
     def send_token_refresh_message(
         self,
         success: bool,
@@ -565,7 +675,7 @@ class TelegramService:
         error: str = "",
     ) -> bool:
         if success:
-            message = "Access token document refreshed " "successfully from MongoDB."
+            message = "Access token document refreshed successfully from MongoDB."
 
             if updated_at:
                 message += f"\nToken Updated At: {updated_at}"
@@ -574,7 +684,7 @@ class TelegramService:
                 title="Token Refresh Successful",
                 message=message,
                 level="TOKEN",
-                notification_context=("token_refresh_success"),
+                notification_context="token_refresh_success",
             )
 
         message = "Access token refresh failed."
@@ -586,12 +696,8 @@ class TelegramService:
             title="Token Refresh Failed",
             message=message,
             level="ERROR",
-            notification_context=("token_refresh_failed"),
+            notification_context="token_refresh_failed",
         )
-
-    # ============================================================
-    # Instrument Messages
-    # ============================================================
 
     def send_instruments_fetched_message(
         self,
@@ -605,21 +711,18 @@ class TelegramService:
     ) -> bool:
         if success:
             message = (
-                "Option instruments fetched and cache "
-                "updated successfully.\n\n"
+                "Option instruments fetched and cache updated successfully.\n\n"
                 f"Nearest Expiry: {nearest_expiry}\n"
                 f"Total Contracts: {total_contracts}\n"
-                f"Subscribed Keys: "
-                f"{subscribed_keys_count}\n"
-                f"Strike Range: "
-                f"{strike_from} to {strike_to}"
+                f"Subscribed Keys: {subscribed_keys_count}\n"
+                f"Strike Range: {strike_from} to {strike_to}"
             )
 
             return self.send_message(
                 title="Instruments Fetch Successful",
                 message=message,
                 level="INSTRUMENTS",
-                notification_context=("instruments_fetch_success"),
+                notification_context="instruments_fetch_success",
             )
 
         message = "Option instruments fetch failed."
@@ -631,12 +734,8 @@ class TelegramService:
             title="Instruments Fetch Failed",
             message=message,
             level="ERROR",
-            notification_context=("instruments_fetch_failed"),
+            notification_context="instruments_fetch_failed",
         )
-
-    # ============================================================
-    # Subscription Messages
-    # ============================================================
 
     def send_subscription_message(
         self,
@@ -647,10 +746,8 @@ class TelegramService:
     ) -> bool:
         if success:
             message = (
-                "Upstox streamer subscription is "
-                "active.\n\n"
-                f"Subscribed Instruments: "
-                f"{subscribed_keys_count}\n"
+                "Upstox streamer subscription is active.\n\n"
+                f"Subscribed Instruments: {subscribed_keys_count}\n"
                 f"Feed Mode: {feed_mode}"
             )
 
@@ -658,7 +755,7 @@ class TelegramService:
                 title="Feed Subscription Successful",
                 message=message,
                 level="SUBSCRIPTION",
-                notification_context=("feed_subscription_success"),
+                notification_context="feed_subscription_success",
             )
 
         message = "Upstox feed subscription failed."
@@ -670,12 +767,8 @@ class TelegramService:
             title="Feed Subscription Failed",
             message=message,
             level="ERROR",
-            notification_context=("feed_subscription_failed"),
+            notification_context="feed_subscription_failed",
         )
-
-    # ============================================================
-    # Refresh Messages
-    # ============================================================
 
     def send_daily_refresh_message(
         self,
@@ -686,18 +779,16 @@ class TelegramService:
     ) -> bool:
         if success:
             message = (
-                "Daily market hard refresh completed "
-                "successfully.\n\n"
+                "Daily market hard refresh completed successfully.\n\n"
                 f"Nearest Expiry: {nearest_expiry}\n"
-                f"Subscribed Instruments: "
-                f"{subscribed_keys_count}"
+                f"Subscribed Instruments: {subscribed_keys_count}"
             )
 
             return self.send_message(
-                title=("Daily Market Hard Refresh " "Successful"),
+                title="Daily Market Hard Refresh Successful",
                 message=message,
                 level="REFRESH",
-                notification_context=("daily_refresh_success"),
+                notification_context="daily_refresh_success",
             )
 
         message = "Daily market hard refresh failed."
@@ -709,12 +800,8 @@ class TelegramService:
             title="Daily Market Hard Refresh Failed",
             message=message,
             level="ERROR",
-            notification_context=("daily_refresh_failed"),
+            notification_context="daily_refresh_failed",
         )
-
-    # ============================================================
-    # Isolated Instrument Messages
-    # ============================================================
 
     def send_selected_or_instrument_message(
         self,
@@ -740,45 +827,36 @@ class TelegramService:
             )
         ):
             logger.info(
-                "Isolated instrument Telegram alert " "skipped. instrument_key=%s",
+                "Isolated instrument Telegram alert skipped. instrument_key=%s",
                 instrument_key,
             )
-
             return False
 
         strike_text = strike_price if strike_price is not None else "N/A"
-
         type_text = self._normalize_option_type(instrument_type) or "N/A"
-
         window_text = "not_available"
 
         if isinstance(average_window, dict):
             window_text = (
                 f"{average_window.get('final_lower')} "
-                f"to "
-                f"{average_window.get('final_upper')}"
+                f"to {average_window.get('final_upper')}"
             )
 
         ema_mode = self._get_live_ema_calculation_mode()
 
         message = (
-            "Opening Range instrument isolated for "
-            "EMA alerts.\n\n"
-            f"Instrument: {strike_text} "
-            f"{type_text}\n"
+            "Opening Range instrument isolated for EMA alerts.\n\n"
+            f"Instrument: {strike_text} {type_text}\n"
             f"Symbol: {symbol}\n"
             f"Instrument Key: {instrument_key}\n"
             f"Selected Level: {level}\n"
             f"Level Value: {level_value}\n"
-            f"Trigger {trigger_field}: "
-            f"{trigger_price}\n"
+            f"Trigger {trigger_field}: {trigger_price}\n"
             f"Touch Time: {touch_time}\n"
             f"Touch Source: {source}\n"
-            f"Reference Average: "
-            f"{reference_average}\n"
+            f"Reference Average: {reference_average}\n"
             f"Average Window: {window_text}\n"
-            f"NIFTY LTP: "
-            f"{nifty_ltp if nifty_ltp is not None else 'not_available'}\n"
+            f"NIFTY LTP: {nifty_ltp if nifty_ltp is not None else 'not_available'}\n"
             f"EMA Calculation Mode: {ema_mode}"
         )
 
@@ -787,30 +865,23 @@ class TelegramService:
             message=message,
             level="OPENING_RANGE",
             notification_context=(
-                f"isolated_instrument"
-                f"|instrument_key={instrument_key}"
-                f"|strike={strike_text}"
-                f"|type={type_text}"
-                f"|level={level}"
+                f"isolated_instrument|instrument_key={instrument_key}"
+                f"|strike={strike_text}|type={type_text}|level={level}"
             ),
         )
 
         if result:
             logger.info(
-                "Isolated instrument Telegram alert " "sent. instrument_key=%s",
+                "Isolated instrument Telegram alert sent. instrument_key=%s",
                 instrument_key,
             )
         else:
             logger.error(
-                "Isolated instrument Telegram alert " "failed. instrument_key=%s",
+                "Isolated instrument Telegram alert failed. instrument_key=%s",
                 instrument_key,
             )
 
         return result
-
-    # ============================================================
-    # EMA Instrument Formatting
-    # ============================================================
 
     def _format_suggested_order_instruments(
         self,
@@ -823,22 +894,13 @@ class TelegramService:
             item for item in suggested_order_instruments if isinstance(item, dict)
         ]
 
-        lines = [f"📍 <b>NEAREST " f"{self._escape(option_type)} " f"CONTRACTS</b>"]
+        lines = [f"📍 <b>NEAREST {self._escape(option_type)} CONTRACTS</b>"]
 
         if not valid_instruments:
-            lines.extend(
-                [
-                    "",
-                    "No matching instruments available.",
-                ]
-            )
-
+            lines.extend(["", "No matching instruments available."])
             return "\n".join(lines)
 
-        for index, item in enumerate(
-            valid_instruments,
-            start=1,
-        ):
+        for index, item in enumerate(valid_instruments, start=1):
             strike = self._format_numeric_value(
                 item.get("strike_price"),
                 unavailable_text="N/A",
@@ -851,10 +913,7 @@ class TelegramService:
                 or option_type
             )
 
-            market_data = item.get(
-                "market_data",
-                {},
-            )
+            market_data = item.get("market_data", {})
 
             if not isinstance(market_data, dict):
                 market_data = {}
@@ -876,16 +935,9 @@ class TelegramService:
             lines.extend(
                 [
                     "",
-                    (
-                        f"{badge} "
-                        f"<b>{self._escape(strike)} "
-                        f"{self._escape(instrument_type)}</b>"
-                    ),
-                    (f"   💰 LTP     : " f"{self._format_rupee(ltp_value)}"),
-                    (
-                        f"   📊 Volume  : "
-                        f"{self._format_indian_quantity(volume_value)}"
-                    ),
+                    f"{badge} <b>{self._escape(strike)} {self._escape(instrument_type)}</b>",
+                    f"   💰 LTP     : {self._format_rupee(ltp_value)}",
+                    f"   📊 Volume  : {self._format_indian_quantity(volume_value)}",
                 ]
             )
 
@@ -899,13 +951,13 @@ class TelegramService:
         minimum_price = getattr(
             config,
             "EMA_ALERT_BUDGET_MIN_PRICE",
-            20.0,
+            50.0,
         )
 
         maximum_price = getattr(
             config,
             "EMA_ALERT_BUDGET_MAX_PRICE",
-            30.0,
+            120.0,
         )
 
         option_type = self._normalize_option_type(suggested_order_side) or "OPTION"
@@ -916,22 +968,16 @@ class TelegramService:
 
         lines = [
             "💵 <b>BUDGET MATCHES</b>",
-            (
-                f"Range: "
-                f"{self._format_rupee(minimum_price)} "
-                f"to "
-                f"{self._format_rupee(maximum_price)}"
-            ),
+            f"Range: {self._format_rupee(minimum_price)} to {self._format_rupee(maximum_price)}",
         ]
 
         if not valid_instruments:
             lines.extend(
                 [
                     "",
-                    (f"No matching " f"{self._escape(option_type)} " f"instruments."),
+                    f"No matching {self._escape(option_type)} instruments.",
                 ]
             )
-
             return "\n".join(lines)
 
         for item in valid_instruments:
@@ -947,10 +993,7 @@ class TelegramService:
                 or option_type
             )
 
-            market_data = item.get(
-                "market_data",
-                {},
-            )
+            market_data = item.get("market_data", {})
 
             if not isinstance(market_data, dict):
                 market_data = {}
@@ -965,21 +1008,11 @@ class TelegramService:
             lines.extend(
                 [
                     "",
-                    (
-                        f"✅ "
-                        f"<b>{self._escape(strike)} "
-                        f"{self._escape(instrument_type)}</b>"
-                        f"  •  "
-                        f"<b>{self._format_rupee(ltp_value)}</b>"
-                    ),
+                    f"✅ <b>{self._escape(strike)} {self._escape(instrument_type)}</b>  •  <b>{self._format_rupee(ltp_value)}</b>",
                 ]
             )
 
         return "\n".join(lines)
-
-    # ============================================================
-    # Isolated EMA Alert
-    # ============================================================
 
     def send_selected_or_ema_cross_message(
         self,
@@ -997,7 +1030,6 @@ class TelegramService:
             )
         ):
             logger.info("Isolated EMA Telegram alert skipped.")
-
             return False
 
         selected_state = selected_state if isinstance(selected_state, dict) else {}
@@ -1006,19 +1038,13 @@ class TelegramService:
 
         suggested_order_instruments = (
             suggested_order_instruments
-            if isinstance(
-                suggested_order_instruments,
-                list,
-            )
+            if isinstance(suggested_order_instruments, list)
             else []
         )
 
         budget_range_instruments = (
             budget_range_instruments
-            if isinstance(
-                budget_range_instruments,
-                list,
-            )
+            if isinstance(budget_range_instruments, list)
             else []
         )
 
@@ -1032,10 +1058,7 @@ class TelegramService:
         if not isinstance(contract_info, dict):
             contract_info = {}
 
-        strike = contract_info.get(
-            "strike_price",
-            "N/A",
-        )
+        strike = contract_info.get("strike_price", "N/A")
 
         isolated_instrument_type = (
             self._normalize_option_type(
@@ -1076,11 +1099,9 @@ class TelegramService:
         )
 
         candle_low = candle.get("low")
-
         candle_time = candle.get("timestamp") or ema_event.get("timestamp")
 
         close_value = self._safe_float(candle_close)
-
         low_value = self._safe_float(candle_low)
 
         close_low_movement = None
@@ -1106,7 +1127,6 @@ class TelegramService:
         if not suggested_order_option_type:
             if "bullish" in cross_text:
                 suggested_order_option_type = isolated_instrument_type
-
             elif "bearish" in cross_text:
                 if isolated_instrument_type == "CE":
                     suggested_order_option_type = "PE"
@@ -1126,9 +1146,7 @@ class TelegramService:
         )
 
         cross_type_display = self._format_cross_type_display(cross_type)
-
         signal_display = self._format_signal_display(current_signal)
-
         ema_mode_display = self._format_ema_mode_display(ema_mode)
 
         direction_text = (
@@ -1157,23 +1175,18 @@ class TelegramService:
             "🚨 <b>ISOLATED EMA SIGNAL</b>",
             "━━━━━━━━━━━━━━━━━━━━━━",
             "",
-            (
-                f"📌 <b>{self._escape(strike_text)} "
-                f"{self._escape(isolated_instrument_type)}"
-                f"  •  "
-                f"{self._escape(direction_text)}</b>"
-            ),
-            (f"{direction_icon} Crossed " f"<b>{self._escape(selected_level)}</b>"),
-            (f"💹 NIFTY SPOT: " f"<b>{self._escape(nifty_text)}</b>"),
+            f"📌 <b>{self._escape(strike_text)} {self._escape(isolated_instrument_type)}  •  {self._escape(direction_text)}</b>",
+            f"{direction_icon} Crossed <b>{self._escape(selected_level)}</b>",
+            f"💹 NIFTY SPOT: <b>{self._escape(nifty_text)}</b>",
             "",
             "🎯 <b>TRADE DIRECTION</b>",
-            (f"├ Isolated Side : " f"<b>{self._escape(isolated_instrument_type)}</b>"),
-            (f"├ Suggested Side: " f"<b>{self._escape(suggested_order_side)}</b>"),
-            (f"├ Cross Type    : " f"{self._escape(cross_type_display)}"),
-            (f"└ Signal        : " f"{self._escape(signal_display)}"),
+            f"├ Isolated Side : <b>{self._escape(isolated_instrument_type)}</b>",
+            f"├ Suggested Side: <b>{self._escape(suggested_order_side)}</b>",
+            f"├ Cross Type    : {self._escape(cross_type_display)}",
+            f"└ Signal        : {self._escape(signal_display)}",
             "",
             "📊 <b>EMA CANDLE</b>",
-            (f"├ Mode      : " f"{self._escape(ema_mode_display)}"),
+            f"├ Mode      : {self._escape(ema_mode_display)}",
         ]
 
         if bool(
@@ -1183,9 +1196,7 @@ class TelegramService:
                 True,
             )
         ):
-            message_lines.append(
-                f"├ Close     : " f"{self._format_rupee(candle_close)}"
-            )
+            message_lines.append(f"├ Close     : {self._format_rupee(candle_close)}")
 
         if bool(
             getattr(
@@ -1194,7 +1205,7 @@ class TelegramService:
                 True,
             )
         ):
-            message_lines.append(f"├ Low       : " f"{self._format_rupee(candle_low)}")
+            message_lines.append(f"├ Low       : {self._format_rupee(candle_low)}")
 
         if bool(
             getattr(
@@ -1203,10 +1214,9 @@ class TelegramService:
                 True,
             )
         ):
-            message_lines.append(f"├ Movement  : " f"{self._format_rupee(
-                    close_low_movement,
-                    include_sign=True,
-                )}")
+            message_lines.append(
+                f"├ Movement  : {self._format_rupee(close_low_movement, include_sign=True)}"
+            )
 
         if bool(
             getattr(
@@ -1215,13 +1225,11 @@ class TelegramService:
                 True,
             )
         ):
-            message_lines.append(f"└ Time      : " f"{self._escape(
-                    self._format_short_market_time(
-                        candle_time
-                    )
-                )}")
+            message_lines.append(
+                f"└ Time      : {self._escape(self._format_short_market_time(candle_time))}"
+            )
         else:
-            message_lines.append(f"└ Time      : N/A")
+            message_lines.append("└ Time      : N/A")
 
         message_lines.extend(
             [
@@ -1238,12 +1246,7 @@ class TelegramService:
                 True,
             )
         ):
-            message_lines.extend(
-                [
-                    "",
-                    nearest_text,
-                ]
-            )
+            message_lines.extend(["", nearest_text])
 
         if bool(
             getattr(
@@ -1252,30 +1255,21 @@ class TelegramService:
                 True,
             )
         ):
-            message_lines.extend(
-                [
-                    "",
-                    budget_text,
-                ]
-            )
+            message_lines.extend(["", budget_text])
 
         message_lines.extend(
             [
                 "",
                 "━━━━━━━━━━━━━━━━━━━━━━",
-                (f"🕒 Alert Time: " f"<b>{self._escape(
-                        self._now_short_market_time()
-                    )}</b>"),
+                f"🕒 Alert Time: <b>{self._escape(self._now_short_market_time())}</b>",
             ]
         )
 
         message = "\n".join(message_lines)
 
         logger.info(
-            "Sending isolated EMA alert. "
-            "instrument_key=%s, cross_type=%s, "
-            "order_side=%s, nearest_count=%s, "
-            "budget_count=%s",
+            "Sending isolated EMA alert. delivery_mode=%s, instrument_key=%s, cross_type=%s, order_side=%s, nearest_count=%s, budget_count=%s",
+            self.get_delivery_mode(),
             instrument_key,
             cross_type,
             suggested_order_side,
@@ -1285,64 +1279,57 @@ class TelegramService:
 
         result = self._send_raw_message(
             message,
-            notification_title=("Isolated EMA Signal"),
+            notification_title="Isolated EMA Signal",
             notification_level="EMA",
             notification_context=(
-                f"isolated_ema"
-                f"|instrument_key={instrument_key}"
+                f"isolated_ema|instrument_key={instrument_key}"
                 f"|cross_type={cross_type}"
             ),
         )
 
         if result:
             logger.info(
-                "Isolated EMA Telegram alert sent. " "instrument_key=%s",
+                "Isolated EMA Telegram alert sent. delivery_mode=%s, instrument_key=%s",
+                self.get_delivery_mode(),
                 instrument_key,
             )
         else:
             logger.error(
-                "Isolated EMA Telegram alert failed. " "instrument_key=%s",
+                "Isolated EMA Telegram alert failed. delivery_mode=%s, instrument_key=%s",
+                self.get_delivery_mode(),
                 instrument_key,
             )
 
         return result
 
-    def send_isolated_ema_payload(
-        self,
-        payload: dict,
-    ) -> bool:
+    def send_isolated_ema_payload(self, payload: dict) -> bool:
         if not isinstance(payload, dict):
             return False
 
         instrument = payload.get("instrument") or {}
-
         opening_range = payload.get("opening_range") or {}
-
         market_snapshot = payload.get("market_snapshot") or {}
-
         ema_data = payload.get("ema") or {}
-
         order_suggestion = payload.get("order_suggestion") or {}
-
         candle = ema_data.get("candle") or {}
 
         selected_state = {
-            "instrument_key": (instrument.get("instrument_key")),
-            "selected_level": (opening_range.get("selected_level")),
+            "instrument_key": instrument.get("instrument_key"),
+            "selected_level": opening_range.get("selected_level"),
             "contract_info": {
                 **instrument,
-                "instrument_type": (instrument.get("instrument_type")),
+                "instrument_type": instrument.get("instrument_type"),
             },
         }
 
         ema_event = {
             **ema_data,
-            "instrument_key": (instrument.get("instrument_key")),
-            "cross_type": (ema_data.get("cross_type")),
+            "instrument_key": instrument.get("instrument_key"),
+            "cross_type": ema_data.get("cross_type"),
             "current_signal": (
                 ema_data.get("current_signal") or ema_data.get("signal")
             ),
-            "ema_calculation_mode": (ema_data.get("calculation_mode")),
+            "ema_calculation_mode": ema_data.get("calculation_mode"),
             "close": candle.get("close"),
             "timestamp": (candle.get("timestamp") or ema_data.get("timestamp")),
             "candle": candle,
@@ -1353,22 +1340,18 @@ class TelegramService:
         return self.send_selected_or_ema_cross_message(
             selected_state=selected_state,
             ema_event=ema_event,
-            nifty_ltp=(market_snapshot.get("nifty_ltp")),
+            nifty_ltp=market_snapshot.get("nifty_ltp"),
             suggested_order_instruments=(
                 order_suggestion.get("nearest_instruments") or []
             ),
             budget_range_instruments=(budget_filter.get("instruments") or []),
         )
 
-    # ============================================================
-    # Compatibility Wrappers
-    # ============================================================
-
     def send_isolated_instrument_message(
         self,
         isolated_state: dict,
     ) -> bool:
-        isolated_state = isolated_state or {}
+        isolated_state = isolated_state if isinstance(isolated_state, dict) else {}
 
         contract_info = isolated_state.get("contract_info") or {}
 
@@ -1380,19 +1363,19 @@ class TelegramService:
         )
 
         return self.send_selected_or_instrument_message(
-            instrument_key=(isolated_state.get("instrument_key")),
+            instrument_key=isolated_state.get("instrument_key"),
             symbol=symbol,
-            level=(isolated_state.get("selected_level")),
-            level_value=(isolated_state.get("level_value")),
-            trigger_field=(isolated_state.get("trigger_field")),
-            trigger_price=(isolated_state.get("trigger_price")),
-            touch_time=(isolated_state.get("touch_time")),
-            source=(isolated_state.get("touch_source")),
-            nifty_ltp=(isolated_state.get("latest_main_index_ltp")),
-            strike_price=(contract_info.get("strike_price")),
-            instrument_type=(contract_info.get("instrument_type")),
-            reference_average=(isolated_state.get("reference_average")),
-            average_window=(isolated_state.get("average_window")),
+            level=isolated_state.get("selected_level"),
+            level_value=isolated_state.get("level_value"),
+            trigger_field=isolated_state.get("trigger_field"),
+            trigger_price=isolated_state.get("trigger_price"),
+            touch_time=isolated_state.get("touch_time"),
+            source=isolated_state.get("touch_source"),
+            nifty_ltp=isolated_state.get("latest_main_index_ltp"),
+            strike_price=contract_info.get("strike_price"),
+            instrument_type=contract_info.get("instrument_type"),
+            reference_average=isolated_state.get("reference_average"),
+            average_window=isolated_state.get("average_window"),
         )
 
     def send_isolated_ema_cross_message(
@@ -1407,13 +1390,9 @@ class TelegramService:
             selected_state=isolated_state,
             ema_event=ema_event,
             nifty_ltp=nifty_ltp,
-            suggested_order_instruments=(suggested_order_instruments),
-            budget_range_instruments=(budget_range_instruments),
+            suggested_order_instruments=suggested_order_instruments,
+            budget_range_instruments=budget_range_instruments,
         )
-
-    # ============================================================
-    # Exception Messages
-    # ============================================================
 
     def send_exception_message(
         self,
@@ -1422,13 +1401,12 @@ class TelegramService:
         context: str = "",
     ) -> bool:
         message = (
-            f"Exception Type: "
-            f"{type(exception).__name__}\n"
+            f"Exception Type: {type(exception).__name__}\n"
             f"Exception Message: {exception}"
         )
 
         if context:
-            message = f"Context: {context}\n\n" f"{message}"
+            message = f"Context: {context}\n\n{message}"
 
         return self.send_message(
             title=title,
@@ -1439,9 +1417,5 @@ class TelegramService:
             ),
         )
 
-
-# ============================================================
-# Service Instance
-# ============================================================
 
 telegram_service = TelegramService()

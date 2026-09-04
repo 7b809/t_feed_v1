@@ -100,7 +100,7 @@
             text-decoration: none;
             font-size: 0.85rem;
             font-weight: 600;
-            transition: all 0.25 ease;
+            transition: all 0.25s ease;
         }
 
         .app-nav-button:hover {
@@ -212,6 +212,8 @@
             <span>Charts</span>
         </a>
 
+        <!-- LOCAL APP REMOVED -->
+
     </div>
 
 </nav>
@@ -230,6 +232,8 @@
     function openIsolatedDashboard() {
         window.location.href = `${window.apiHost}/isolated-dashboard`;
     }
+
+    // openLocalApp function removed
 </script>
 
 {% block scripts %}

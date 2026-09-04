@@ -1,0 +1,6 @@
+| Priority | File                               | Change                                                                                                                                           |
+| -------- | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **1**    | `services/telegram_service.py`     | **Main fix.** Remove/fix the `9000 → 8000/local-app` URL rewriting and make local-test delivery use `http://127.0.0.1:9000/local-telegram/send`. |
+| **2**    | `core/config.py`                   | Check/fix the Telegram/local-test configuration values so `9000` is the configured simulator port.                                               |
+| **3**    | `.env` / environment configuration | If the Telegram URL/port is defined here, set it to the local simulator endpoint.                                                                |
+| **4**    | `run.bat`                          | **Only if** it currently sets `8000` or an incorrect Telegram URL. Otherwise leave it unchanged.                                                 |

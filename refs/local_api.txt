@@ -1,0 +1,99 @@
+http://127.0.0.1:9000/local-algo/ema-alert
+
+{
+  "schema_version": "1.0",
+  "source": "option_feed_engine_local_test",
+  "event_type": "isolated_instrument_ema_alert",
+  "event_id": "local-test-ema-001",
+  "instrument": {
+    "instrument_key": "TEST_NSE_FO|24500CE",
+    "trading_symbol": "NIFTY 24500 CE",
+    "instrument_type": "CE",
+    "strike_price": 24500,
+    "live_ltp": 120.5
+  },
+  "opening_range": {
+    "available": true,
+    "selected_level": "R3",
+    "level_value": 118.5,
+    "trigger_price": 119
+  },
+  "market_snapshot": {
+    "nifty_ltp": 24518.75
+  },
+  "ema": {
+    "cross_type": "bullish_cross",
+    "current_signal": "bullish",
+    "calculation_mode": "candle_close",
+    "ema_fast": 121.25,
+    "ema_slow": 120.95,
+    "candle": {
+      "timestamp": "2026-09-04T15:30:00+05:30",
+      "open": 118,
+      "high": 123,
+      "low": 117.5,
+      "close": 120.5,
+      "volume": 250000
+    }
+  },
+  "order_suggestion": {
+    "suggested_order_side": "CE",
+    "nearest_instruments": [
+      {
+        "instrument_key": "TEST_NSE_FO|24450CE",
+        "instrument_type": "CE",
+        "strike_price": 24450,
+        "live_ltp": 145.25
+      },
+      {
+        "instrument_key": "TEST_NSE_FO|24500CE",
+        "instrument_type": "CE",
+        "strike_price": 24500,
+        "live_ltp": 120.5
+      },
+      {
+        "instrument_key": "TEST_NSE_FO|24550CE",
+        "instrument_type": "CE",
+        "strike_price": 24550,
+        "live_ltp": 95.75
+      }
+    ],
+    "budget_filter": {
+      "minimum_price": 50,
+      "maximum_price": 120,
+      "matched_count": 1,
+      "instruments": [
+        {
+          "instrument_key": "TEST_NSE_FO|24550CE",
+          "instrument_type": "CE",
+          "strike_price": 24550,
+          "live_ltp": 95.75
+        }
+      ]
+    }
+  }
+}
+
+---------------------------------------------
+
+http://127.0.0.1:9000/local-telegram/send
+
+
+{
+  "channel": "telegram",
+  "delivery_mode": "local_test",
+  "source": "option_feed_engine_local_test",
+  "title": "Isolated EMA Signal",
+  "level": "EMA",
+  "context": "isolated_ema|instrument_key=TEST_NSE_FO|24500CE|cross_type=bullish_cross",
+  "message": "Bullish EMA crossover detected for NIFTY 24500 CE",
+  "parse_mode": "HTML",
+  "disable_web_page_preview": true,
+  "market_time": "2026-09-04T15:30:00+05:30",
+  "metadata": {
+    "local_test_mode": true,
+    "production_delivery_blocked": true
+  }
+}
+
+------------------------------------------------

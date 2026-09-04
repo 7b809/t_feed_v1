@@ -1,1114 +1,260 @@
 import os
+
 from dotenv import load_dotenv
 
 load_dotenv()
 
 
-# Hard Coded Configs
-
-
-# ============================================================
-# MongoDB Configuration
-# ============================================================
-
-MONGO_URI = os.getenv("MONGO_URL")
-MONGO_DB = os.getenv("MONGO_DB")
-TOKENS_COLLECTION = os.getenv("TOKENS_COLLECTION")
-
-REFRESH_INTERVAL_MINUTES = int(os.getenv("REFRESH_INTERVAL_MINUTES", "60"))
-
-
-# ============================================================
-# Telegram Notification Configuration
-# ============================================================
-
-TELEGRAM_ENABLED = os.getenv("TELEGRAM_ENABLED", "false").lower() == "true"
-
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-
-TELEGRAM_TIMEOUT_SECONDS = int(os.getenv("TELEGRAM_TIMEOUT_SECONDS", "10"))
-
-
-# ============================================================
-# Upstox Token Monitor Configuration
-# ============================================================
-
-UPSTOX_TOKEN_DOC_ID = os.getenv(
-    "UPSTOX_TOKEN_DOC_ID",
-    "upstox_access_token",
-)
-
-UPSTOX_TOKEN_CHECK_INTERVAL_MINUTES = int(
-    os.getenv(
-        "UPSTOX_TOKEN_CHECK_INTERVAL_MINUTES",
-        "30",
-    )
-)
-
-TELEGRAM_TOKEN_BOT_ENABLED = (
-    os.getenv(
-        "TELEGRAM_TOKEN_BOT_ENABLED",
-        "true",
-    ).lower()
-    == "true"
-)
-
-TELEGRAM_TOKEN_BOT_POLL_SECONDS = int(
-    os.getenv(
-        "TELEGRAM_TOKEN_BOT_POLL_SECONDS",
-        "3",
-    )
-)
-
-TELEGRAM_TOKEN_BOT_LONG_POLL_TIMEOUT = int(
-    os.getenv(
-        "TELEGRAM_TOKEN_BOT_LONG_POLL_TIMEOUT",
-        "20",
-    )
-)
-
-TELEGRAM_TOKEN_BOT_RESTRICT_TO_CHAT = (
-    os.getenv(
-        "TELEGRAM_TOKEN_BOT_RESTRICT_TO_CHAT",
-        "true",
-    ).lower()
-    == "true"
-)
-
-
-# ============================================================
-# Algo Application API Configuration
-# ============================================================
-
-ALGO_APP_ENABLED = (
-    os.getenv(
-        "ALGO_APP_ENABLED",
-        "false",
-    ).lower()
-    == "true"
-)
-
-ALGO_APP_URL = os.getenv(
-    "ALGO_APP_URL",
-    "",
-)
-
-ALGO_APP_AUTH_TYPE = os.getenv(
-    "ALGO_APP_AUTH_TYPE",
-    "none",
-).lower()
-
-ALGO_APP_AUTH_TOKEN = os.getenv(
-    "ALGO_APP_AUTH_TOKEN",
-    "",
-)
-
-ALGO_APP_API_KEY = os.getenv(
-    "ALGO_APP_API_KEY",
-    "",
-)
-
-ALGO_APP_API_KEY_HEADER = os.getenv(
-    "ALGO_APP_API_KEY_HEADER",
-    "X-API-Key",
-)
-
-ALGO_APP_TIMEOUT_SECONDS = float(
-    os.getenv(
-        "ALGO_APP_TIMEOUT_SECONDS",
-        "10",
-    )
-)
-
-ALGO_APP_VERIFY_SSL = (
-    os.getenv(
-        "ALGO_APP_VERIFY_SSL",
-        "true",
-    ).lower()
-    == "true"
-)
-
-ALGO_APP_MAX_RETRIES = int(
-    os.getenv(
-        "ALGO_APP_MAX_RETRIES",
-        "3",
-    )
-)
-
-ALGO_APP_RETRY_DELAY_SECONDS = float(
-    os.getenv(
-        "ALGO_APP_RETRY_DELAY_SECONDS",
-        "2",
-    )
-)
-
-ALGO_APP_SEND_IN_BACKGROUND = (
-    os.getenv(
-        "ALGO_APP_SEND_IN_BACKGROUND",
-        "true",
-    ).lower()
-    == "true"
-)
-
-ALGO_APP_INCLUDE_EVENT_ID = (
-    os.getenv(
-        "ALGO_APP_INCLUDE_EVENT_ID",
-        "true",
-    ).lower()
-    == "true"
-)
-
-ALGO_APP_PAYLOAD_SCHEMA_VERSION = os.getenv(
-    "ALGO_APP_PAYLOAD_SCHEMA_VERSION",
-    "1.0",
-)
-
-ALGO_APP_SOURCE_NAME = os.getenv(
-    "ALGO_APP_SOURCE_NAME",
-    "option_feed_engine",
-)
-
-ALGO_APP_MAX_RESPONSE_BODY_LENGTH = int(
-    os.getenv(
-        "ALGO_APP_MAX_RESPONSE_BODY_LENGTH",
-        "2000",
-    )
-)
-
-
-# ============================================================
-# Market Timezone Configuration
-# ============================================================
-
-MARKET_TIMEZONE = os.getenv(
-    "MARKET_TIMEZONE",
-    "Asia/Kolkata",
-)
-
-MARKET_TIME_FORMAT = os.getenv(
-    "MARKET_TIME_FORMAT",
-    "%Y-%m-%d %H:%M:%S %Z",
-)
-
-MARKET_OPEN_HOUR = int(
-    os.getenv(
-        "MARKET_OPEN_HOUR",
-        "9",
-    )
-)
-
-MARKET_OPEN_MINUTE = int(
-    os.getenv(
-        "MARKET_OPEN_MINUTE",
-        "15",
-    )
-)
-
-
-# ============================================================
-# Instrument and Subscription Configuration
-# ============================================================
-
-MAIN_NIFTY_SECURITY = os.getenv(
-    "MAIN_NIFTY_SECURITY",
-    "NSE_INDEX|Nifty 50",
-)
-
-STRIKE_FROM = float(
-    os.getenv(
-        "STRIKE_FROM",
-        "23000.0",
-    )
-)
-
-STRIKE_TO = float(
-    os.getenv(
-        "STRIKE_TO",
-        "25000.0",
-    )
-)
-
-WEBSOCKET_FEED_MODE = os.getenv(
-    "WEBSOCKET_FEED_MODE",
-    "full",
-)
-
-
-# ============================================================
-# Historical Candle Configuration
-# ============================================================
-
-HISTORICAL_CANDLE_ENABLED = (
-    os.getenv(
-        "HISTORICAL_CANDLE_ENABLED",
-        "true",
-    ).lower()
-    == "true"
-)
-
-HISTORICAL_CANDLE_DAYS = int(
-    os.getenv(
-        "HISTORICAL_CANDLE_DAYS",
-        "10",
-    )
-)
-
-HISTORICAL_CANDLE_INTERVAL = os.getenv(
-    "HISTORICAL_CANDLE_INTERVAL",
-    "1minute",
-)
-
-HISTORICAL_CANDLE_API_VERSION = os.getenv(
-    "HISTORICAL_CANDLE_API_VERSION",
-    "2.0",
-)
-
-HISTORICAL_CANDLE_MAX_DAYS_PER_REQUEST = int(
-    os.getenv(
-        "HISTORICAL_CANDLE_MAX_DAYS_PER_REQUEST",
-        "7",
-    )
-)
-
-HISTORICAL_CANDLE_OUTPUT_DIR = os.getenv(
-    "HISTORICAL_CANDLE_OUTPUT_DIR",
-    "data/historical_candles",
-)
-
-HISTORICAL_CANDLE_MAX_WORKERS = int(
-    os.getenv(
-        "HISTORICAL_CANDLE_MAX_WORKERS",
-        "8",
-    )
-)
-
-HISTORICAL_CANDLE_REQUEST_SLEEP_SECONDS = float(
-    os.getenv(
-        "HISTORICAL_CANDLE_REQUEST_SLEEP_SECONDS",
-        "0.15",
-    )
-)
-
-
-# ============================================================
-# Opening Range Configuration
-# ============================================================
-
-OPENING_RANGE_ENABLED = (
-    os.getenv(
-        "OPENING_RANGE_ENABLED",
-        "true",
-    ).lower()
-    == "true"
-)
-
-OPENING_RANGE_INTERVAL = os.getenv(
-    "OPENING_RANGE_INTERVAL",
-    "1minute",
-)
-
-OPENING_RANGE_CANDLE_COUNT = int(
-    os.getenv(
-        "OPENING_RANGE_CANDLE_COUNT",
-        "1",
-    )
-)
-
-OPENING_RANGE_MARKET_OPEN_HOUR = int(
-    os.getenv(
-        "OPENING_RANGE_MARKET_OPEN_HOUR",
-        "9",
-    )
-)
-
-OPENING_RANGE_MARKET_OPEN_MINUTE = int(
-    os.getenv(
-        "OPENING_RANGE_MARKET_OPEN_MINUTE",
-        "15",
-    )
-)
-
-OPENING_RANGE_FETCH_HOUR = int(
-    os.getenv(
-        "OPENING_RANGE_FETCH_HOUR",
-        "9",
-    )
-)
-
-OPENING_RANGE_FETCH_MINUTE = int(
-    os.getenv(
-        "OPENING_RANGE_FETCH_MINUTE",
-        "18",
-    )
-)
-
-OPENING_RANGE_INTRADAY_UNIT = os.getenv(
-    "OPENING_RANGE_INTRADAY_UNIT",
-    "minutes",
-)
-
-OPENING_RANGE_INTRADAY_INTERVAL = os.getenv(
-    "OPENING_RANGE_INTRADAY_INTERVAL",
-    "1",
-)
-
-OPENING_RANGE_MAX_WORKERS = int(
-    os.getenv(
-        "OPENING_RANGE_MAX_WORKERS",
-        "8",
-    )
-)
-
-OPENING_RANGE_REQUEST_SLEEP_SECONDS = float(
-    os.getenv(
-        "OPENING_RANGE_REQUEST_SLEEP_SECONDS",
-        "0.15",
-    )
-)
-
-OPENING_RANGE_SAVE_FILE = (
-    os.getenv(
-        "OPENING_RANGE_SAVE_FILE",
-        "true",
-    ).lower()
-    == "true"
-)
-
-OPENING_RANGE_OUTPUT_FILE = os.getenv(
-    "OPENING_RANGE_OUTPUT_FILE",
-    "data/opening_range_results.json",
-)
-
-OPENING_RANGE_MAX_EVENTS_IN_MEMORY = int(
-    os.getenv(
-        "OPENING_RANGE_MAX_EVENTS_IN_MEMORY",
-        "5000",
-    )
-)
-
-
-# ============================================================
-# Opening Range Backfill Configuration
-# ============================================================
-
-OPENING_RANGE_BACKFILL_TOUCH_SCAN_ENABLED = (
-    os.getenv(
-        "OPENING_RANGE_BACKFILL_TOUCH_SCAN_ENABLED",
-        "true",
-    ).lower()
-    == "true"
-)
-
-OPENING_RANGE_BACKFILL_TOUCH_SCAN_SOURCE = os.getenv(
-    "OPENING_RANGE_BACKFILL_TOUCH_SCAN_SOURCE",
-    "intraday_api",
-)
-
-
-# ============================================================
-# Opening Range Touch Configuration
-# ============================================================
-
-OPENING_RANGE_TOUCH_ALERT_ENABLED = (
-    os.getenv(
-        "OPENING_RANGE_TOUCH_ALERT_ENABLED",
-        "true",
-    ).lower()
-    == "true"
-)
-
-OPENING_RANGE_TOUCH_ALERT_MAX_INSTRUMENTS = int(
-    os.getenv(
-        "OPENING_RANGE_TOUCH_ALERT_MAX_INSTRUMENTS",
-        "5",
-    )
-)
-
-OPENING_RANGE_TOUCH_ALERT_BATCH_SECONDS = int(
-    os.getenv(
-        "OPENING_RANGE_TOUCH_ALERT_BATCH_SECONDS",
-        "10",
-    )
-)
-
-OPENING_RANGE_TOUCH_ALERT_ONCE_PER_LEVEL = (
-    os.getenv(
-        "OPENING_RANGE_TOUCH_ALERT_ONCE_PER_LEVEL",
-        "true",
-    ).lower()
-    == "true"
-)
-
-OPENING_RANGE_TOUCH_ALERT_OPTIONS_ONLY = (
-    os.getenv(
-        "OPENING_RANGE_TOUCH_ALERT_OPTIONS_ONLY",
-        "true",
-    ).lower()
-    == "true"
-)
-
-OPENING_RANGE_TOUCH_ALERT_SORT_BY_NEAREST_INDEX = (
-    os.getenv(
-        "OPENING_RANGE_TOUCH_ALERT_SORT_BY_NEAREST_INDEX",
-        "true",
-    ).lower()
-    == "true"
-)
-
-OPENING_RANGE_TOUCH_ALERT_MAIN_INDEX_KEY = os.getenv(
-    "OPENING_RANGE_TOUCH_ALERT_MAIN_INDEX_KEY",
-    MAIN_NIFTY_SECURITY,
-)
-
-OPENING_RANGE_BACKFILL_TOUCH_ALERT_ENABLED = (
-    os.getenv(
-        "OPENING_RANGE_BACKFILL_TOUCH_ALERT_ENABLED",
-        "true",
-    ).lower()
-    == "true"
-)
-
-OPENING_RANGE_LIVE_TOUCH_ALERT_ENABLED = (
-    os.getenv(
-        "OPENING_RANGE_LIVE_TOUCH_ALERT_ENABLED",
-        "true",
-    ).lower()
-    == "true"
-)
-
-OPENING_RANGE_TOUCH_CHECK_MODE = os.getenv(
-    "OPENING_RANGE_TOUCH_CHECK_MODE",
-    "high_low",
-)
-
-OPENING_RANGE_STORE_TOUCH_STATUS = (
-    os.getenv(
-        "OPENING_RANGE_STORE_TOUCH_STATUS",
-        "true",
-    ).lower()
-    == "true"
-)
-
-OPENING_RANGE_TOUCH_EVENTS_OUTPUT_FILE = os.getenv(
-    "OPENING_RANGE_TOUCH_EVENTS_OUTPUT_FILE",
-    "data/opening_range_touch_events.json",
-)
-
-OPENING_RANGE_TOUCH_EVENTS_SAVE_TEST_FILE = (
-    os.getenv(
-        "OPENING_RANGE_TOUCH_EVENTS_SAVE_TEST_FILE",
-        "true",
-    ).lower()
-    == "true"
-)
-
-
-# ============================================================
-# Opening Range Isolation Configuration
-# ============================================================
-
-OPENING_RANGE_ISOLATED_INSTRUMENT_ENABLED = (
-    os.getenv(
-        "OPENING_RANGE_ISOLATED_INSTRUMENT_ENABLED",
-        "true",
-    ).lower()
-    == "true"
-)
-
-OPENING_RANGE_ISOLATION_AVERAGE_WINDOW_POINTS = float(
-    os.getenv(
-        "OPENING_RANGE_ISOLATION_AVERAGE_WINDOW_POINTS",
-        "500.0",
-    )
-)
-
-
-ALGO_TELE_APP = os.getenv("ALGO_TELE_APP", "True").lower() == "true"
-
-OPENING_RANGE_ISOLATION_TOUCH_LEVELS = [
-    value.strip().upper()
-    for value in os.getenv(
-        "OPENING_RANGE_ISOLATION_TOUCH_LEVELS",
-        "R3",
-    ).split(",")
-    if value.strip()
-]
-
-OPENING_RANGE_ISOLATION_PRIORITY_LEVELS = [
-    value.strip().upper()
-    for value in os.getenv(
-        "OPENING_RANGE_ISOLATION_PRIORITY_LEVELS",
-        "R3",
-    ).split(",")
-    if value.strip()
-]
-
-OPENING_RANGE_ISOLATED_INSTRUMENT_NOTIFY_ENABLED = (
-    os.getenv(
-        "OPENING_RANGE_ISOLATED_INSTRUMENT_NOTIFY_ENABLED",
-        "true",
-    ).lower()
-    == "true"
-)
-
-OPENING_RANGE_ISOLATION_ALLOW_BACKFILL_TOUCH = (
-    os.getenv(
-        "OPENING_RANGE_ISOLATION_ALLOW_BACKFILL_TOUCH",
-        "true",
-    ).lower()
-    == "true"
-)
-
-OPENING_RANGE_ISOLATION_ALLOW_LIVE_TOUCH = (
-    os.getenv(
-        "OPENING_RANGE_ISOLATION_ALLOW_LIVE_TOUCH",
-        "true",
-    ).lower()
-    == "true"
-)
-
-OPENING_RANGE_ISOLATION_OPTIONS_ONLY = (
-    os.getenv(
-        "OPENING_RANGE_ISOLATION_OPTIONS_ONLY",
-        "true",
-    ).lower()
-    == "true"
-)
-
-OPENING_RANGE_ISOLATED_INSTRUMENT_OUTPUT_FILE = os.getenv(
-    "OPENING_RANGE_ISOLATED_INSTRUMENT_OUTPUT_FILE",
-    "data/isolated_opening_range_instrument.json",
-)
-
-OPENING_RANGE_ISOLATION_RESET_DAILY = (
-    os.getenv(
-        "OPENING_RANGE_ISOLATION_RESET_DAILY",
-        "true",
-    ).lower()
-    == "true"
-)
-
-
-# ============================================================
-# Selected Instrument Compatibility Configuration
-# ============================================================
-
-OPENING_RANGE_FIRST_TOUCH_SELECTION_ENABLED = (
-    os.getenv(
-        "OPENING_RANGE_FIRST_TOUCH_SELECTION_ENABLED",
-        "true",
-    ).lower()
-    == "true"
-)
-
-OPENING_RANGE_FIRST_TOUCH_SELECTION_SOURCE = os.getenv(
-    "OPENING_RANGE_FIRST_TOUCH_SELECTION_SOURCE",
-    "average_window_level_priority",
-)
-
-OPENING_RANGE_SELECTED_OR_TOUCH_NOTIFY_ENABLED = (
-    os.getenv(
-        "OPENING_RANGE_SELECTED_OR_TOUCH_NOTIFY_ENABLED",
-        "true",
-    ).lower()
-    == "true"
-)
-
-OPENING_RANGE_SELECTED_OR_EMA_ALERT_ENABLED = (
-    os.getenv(
-        "OPENING_RANGE_SELECTED_OR_EMA_ALERT_ENABLED",
-        "true",
-    ).lower()
-    == "true"
-)
-
-OPENING_RANGE_LEGACY_TOUCH_TELEGRAM_ENABLED = (
-    os.getenv(
-        "OPENING_RANGE_LEGACY_TOUCH_TELEGRAM_ENABLED",
-        "false",
-    ).lower()
-    == "true"
-)
-
-OPENING_RANGE_SELECTED_OR_EMA_ALERT_ONCE_PER_CROSS = (
-    os.getenv(
-        "OPENING_RANGE_SELECTED_OR_EMA_ALERT_ONCE_PER_CROSS",
-        "false",
-    ).lower()
-    == "true"
-)
-
-
-# ============================================================
-# EMA Opening Range Enrichment Configuration
-# ============================================================
-
-EMA_CROSS_INCLUDE_OPENING_RANGE_LEVELS = (
-    os.getenv(
-        "EMA_CROSS_INCLUDE_OPENING_RANGE_LEVELS",
-        "true",
-    ).lower()
-    == "true"
-)
-
-EMA_CROSS_BROADCAST_WITHOUT_OPENING_RANGE = (
-    os.getenv(
-        "EMA_CROSS_BROADCAST_WITHOUT_OPENING_RANGE",
-        "true",
-    ).lower()
-    == "true"
-)
-
-
-# ============================================================
-# Isolated Instrument EMA Alert Configuration
-# ============================================================
-
-EMA_ISOLATED_INSTRUMENT_TELEGRAM_ENABLED = (
-    os.getenv(
-        "EMA_ISOLATED_INSTRUMENT_TELEGRAM_ENABLED",
-        "true",
-    ).lower()
-    == "true"
-)
-
-EMA_ISOLATED_ALERT_EVERY_CROSS = (
-    os.getenv(
-        "EMA_ISOLATED_ALERT_EVERY_CROSS",
-        "true",
-    ).lower()
-    == "true"
-)
-
-EMA_ISOLATED_ALERT_INCLUDE_LEVEL_NAME = (
-    os.getenv(
-        "EMA_ISOLATED_ALERT_INCLUDE_LEVEL_NAME",
-        "true",
-    ).lower()
-    == "true"
-)
-
-EMA_ISOLATED_ALERT_INCLUDE_NIFTY_LTP = (
-    os.getenv(
-        "EMA_ISOLATED_ALERT_INCLUDE_NIFTY_LTP",
-        "true",
-    ).lower()
-    == "true"
-)
-
-EMA_ISOLATED_ALERT_INCLUDE_EMA_DETAILS = (
-    os.getenv(
-        "EMA_ISOLATED_ALERT_INCLUDE_EMA_DETAILS",
-        "true",
-    ).lower()
-    == "true"
-)
-
-EMA_ISOLATED_ALERT_INCLUDE_NEAREST_ORDER_INSTRUMENTS = (
-    os.getenv(
-        "EMA_ISOLATED_ALERT_INCLUDE_NEAREST_ORDER_INSTRUMENTS",
-        "true",
-    ).lower()
-    == "true"
-)
-
-EMA_ISOLATED_ALERT_INCLUDE_BUDGET_INSTRUMENTS = (
-    os.getenv(
-        "EMA_ISOLATED_ALERT_INCLUDE_BUDGET_INSTRUMENTS",
-        "true",
-    ).lower()
-    == "true"
-)
-
-EMA_ISOLATED_ALERT_INCLUDE_CANDLE_CLOSE = (
-    os.getenv(
-        "EMA_ISOLATED_ALERT_INCLUDE_CANDLE_CLOSE",
-        "true",
-    ).lower()
-    == "true"
-)
-
-EMA_ISOLATED_ALERT_INCLUDE_CANDLE_LOW = (
-    os.getenv(
-        "EMA_ISOLATED_ALERT_INCLUDE_CANDLE_LOW",
-        "true",
-    ).lower()
-    == "true"
-)
-
-EMA_ISOLATED_ALERT_INCLUDE_CLOSE_LOW_DIFFERENCE = (
-    os.getenv(
-        "EMA_ISOLATED_ALERT_INCLUDE_CLOSE_LOW_DIFFERENCE",
-        "true",
-    ).lower()
-    == "true"
-)
-
-EMA_ISOLATED_ALERT_INCLUDE_CANDLE_TIME = (
-    os.getenv(
-        "EMA_ISOLATED_ALERT_INCLUDE_CANDLE_TIME",
-        "true",
-    ).lower()
-    == "true"
-)
-
-EMA_ISOLATED_ALERT_PRICE_DECIMAL_PLACES = int(
-    os.getenv(
-        "EMA_ISOLATED_ALERT_PRICE_DECIMAL_PLACES",
-        "2",
-    )
-)
-
-
-# ============================================================
-# EMA Order Instrument Configuration
-# ============================================================
-
-EMA_ALERT_BULLISH_OPTION_TYPE = os.getenv(
-    "EMA_ALERT_BULLISH_OPTION_TYPE",
-    "CE",
-).upper()
-
-EMA_ALERT_BEARISH_OPTION_TYPE = os.getenv(
-    "EMA_ALERT_BEARISH_OPTION_TYPE",
-    "PE",
-).upper()
-
-EMA_ALERT_STRIKE_STEP = int(
-    os.getenv(
-        "EMA_ALERT_STRIKE_STEP",
-        "50",
-    )
-)
-
-EMA_ALERT_NEAREST_STRIKE_COUNT = int(
-    os.getenv(
-        "EMA_ALERT_NEAREST_STRIKE_COUNT",
-        "3",
-    )
-)
-
-EMA_ALERT_NEAREST_STRIKE_OFFSETS = [
-    int(value.strip())
-    for value in os.getenv(
-        "EMA_ALERT_NEAREST_STRIKE_OFFSETS",
-        "-50,0,50",
-    ).split(",")
-    if value.strip()
-]
-
-EMA_ALERT_ORDER_STRIKES_CLAMP_TO_FILTER_RANGE = (
-    os.getenv(
-        "EMA_ALERT_ORDER_STRIKES_CLAMP_TO_FILTER_RANGE",
-        "true",
-    ).lower()
-    == "true"
-)
-
-EMA_ALERT_INCLUDE_ORDER_INSTRUMENT_LTP = (
-    os.getenv(
-        "EMA_ALERT_INCLUDE_ORDER_INSTRUMENT_LTP",
-        "true",
-    ).lower()
-    == "true"
-)
-
-EMA_ALERT_SHOW_ORDER_INSTRUMENT_WHEN_LTP_MISSING = (
-    os.getenv(
-        "EMA_ALERT_SHOW_ORDER_INSTRUMENT_WHEN_LTP_MISSING",
-        "true",
-    ).lower()
-    == "true"
-)
-
-EMA_ALERT_MAX_ORDER_INSTRUMENTS = int(
-    os.getenv(
-        "EMA_ALERT_MAX_ORDER_INSTRUMENTS",
-        "3",
-    )
-)
-
-
-# ============================================================
-# EMA Budget Range Configuration
-# ============================================================
-
-EMA_ALERT_BUDGET_RANGE_ENABLED = (
-    os.getenv(
-        "EMA_ALERT_BUDGET_RANGE_ENABLED",
-        "true",
-    ).lower()
-    == "true"
-)
-
-EMA_ALERT_BUDGET_MIN_PRICE = float(
-    os.getenv(
-        "EMA_ALERT_BUDGET_MIN_PRICE",
-        "50.0",
-    )
-)
-
-EMA_ALERT_BUDGET_MAX_PRICE = float(
-    os.getenv(
-        "EMA_ALERT_BUDGET_MAX_PRICE",
-        "120.0",
-    )
-)
-
-EMA_ALERT_BUDGET_MAX_INSTRUMENTS = int(
-    os.getenv(
-        "EMA_ALERT_BUDGET_MAX_INSTRUMENTS",
-        "2",
-    )
-)
-
-EMA_ALERT_BUDGET_USE_SUGGESTED_ORDER_SIDE = (
-    os.getenv(
-        "EMA_ALERT_BUDGET_USE_SUGGESTED_ORDER_SIDE",
-        "true",
-    ).lower()
-    == "true"
-)
-
-EMA_ALERT_BUDGET_SUBSCRIBED_ONLY = (
-    os.getenv(
-        "EMA_ALERT_BUDGET_SUBSCRIBED_ONLY",
-        "true",
-    ).lower()
-    == "true"
-)
-
-EMA_ALERT_BUDGET_REQUIRE_LIVE_LTP = (
-    os.getenv(
-        "EMA_ALERT_BUDGET_REQUIRE_LIVE_LTP",
-        "true",
-    ).lower()
-    == "true"
-)
-
-EMA_ALERT_BUDGET_SORT_MODE = os.getenv(
-    "EMA_ALERT_BUDGET_SORT_MODE",
-    "nearest_to_budget_midpoint",
-)
-
-EMA_ALERT_BUDGET_RANGE_INCLUSIVE = (
-    os.getenv(
-        "EMA_ALERT_BUDGET_RANGE_INCLUSIVE",
-        "true",
-    ).lower()
-    == "true"
-)
-
-
-# ============================================================
-# EMA Algo Payload Configuration
-# ============================================================
-
-EMA_ALGO_PAYLOAD_INCLUDE_OPENING_RANGE = (
-    os.getenv(
-        "EMA_ALGO_PAYLOAD_INCLUDE_OPENING_RANGE",
-        "true",
-    ).lower()
-    == "true"
-)
-
-EMA_ALGO_PAYLOAD_INCLUDE_EMA_VALUES = (
-    os.getenv(
-        "EMA_ALGO_PAYLOAD_INCLUDE_EMA_VALUES",
-        "true",
-    ).lower()
-    == "true"
-)
-
-EMA_ALGO_PAYLOAD_INCLUDE_CANDLE = (
-    os.getenv(
-        "EMA_ALGO_PAYLOAD_INCLUDE_CANDLE",
-        "true",
-    ).lower()
-    == "true"
-)
-
-EMA_ALGO_PAYLOAD_INCLUDE_NEAREST_INSTRUMENTS = (
-    os.getenv(
-        "EMA_ALGO_PAYLOAD_INCLUDE_NEAREST_INSTRUMENTS",
-        "true",
-    ).lower()
-    == "true"
-)
-
-EMA_ALGO_PAYLOAD_INCLUDE_BUDGET_INSTRUMENTS = (
-    os.getenv(
-        "EMA_ALGO_PAYLOAD_INCLUDE_BUDGET_INSTRUMENTS",
-        "true",
-    ).lower()
-    == "true"
-)
-
-EMA_ALGO_PAYLOAD_INCLUDE_DELIVERY_METADATA = (
-    os.getenv(
-        "EMA_ALGO_PAYLOAD_INCLUDE_DELIVERY_METADATA",
-        "false",
-    ).lower()
-    == "true"
-)
-
-
-# ============================================================
-# Test Configuration
-# ============================================================
-
-TEST_FLAG = (
-    os.getenv(
-        "TEST_FLAG",
-        "false",
-    ).lower()
-    == "true"
-)
-
-
-# ============================================================
-# Historical EMA Configuration
-# ============================================================
-
-EMA_FAST_PERIOD = int(
-    os.getenv(
-        "EMA_FAST_PERIOD",
-        "9",
-    )
-)
-
-EMA_SLOW_PERIOD = int(
-    os.getenv(
-        "EMA_SLOW_PERIOD",
-        "21",
-    )
-)
-
-EMA_CROSS_OUTPUT_FILE = os.getenv(
-    "EMA_CROSS_OUTPUT_FILE",
-    "data/ema_cross_results.json",
-)
-
-
-# ============================================================
-# Live EMA Configuration
-# ============================================================
-
-LIVE_EMA_ENABLED = (
-    os.getenv(
-        "LIVE_EMA_ENABLED",
-        "true",
-    ).lower()
-    == "true"
-)
-
-LIVE_EMA_CALCULATION_MODE = (
-    os.getenv(
-        "LIVE_EMA_CALCULATION_MODE",
-        "false",
-    ).lower()
-    == "true"
-)
-
-LIVE_EMA_INTERVAL_MINUTES = int(
-    os.getenv(
-        "LIVE_EMA_INTERVAL_MINUTES",
-        "1",
-    )
-)
-
-LIVE_EMA_FAST_PERIOD = int(
-    os.getenv(
-        "LIVE_EMA_FAST_PERIOD",
-        "9",
-    )
-)
-
-LIVE_EMA_SLOW_PERIOD = int(
-    os.getenv(
-        "LIVE_EMA_SLOW_PERIOD",
-        "21",
-    )
-)
-
-LIVE_EMA_TICK_ALERT_ONCE_PER_DIRECTION = (
-    os.getenv(
-        "LIVE_EMA_TICK_ALERT_ONCE_PER_DIRECTION",
-        "true",
-    ).lower()
-    == "true"
-)
-
-LIVE_EMA_TICK_MIN_PRICE_CHANGE = float(
-    os.getenv(
-        "LIVE_EMA_TICK_MIN_PRICE_CHANGE",
-        "0.0",
-    )
-)
-
-LIVE_EMA_SAVE_TEST_FILE = (
-    os.getenv(
-        "LIVE_EMA_SAVE_TEST_FILE",
-        "true",
-    ).lower()
-    == "true"
-)
-
-LIVE_EMA_OUTPUT_FILE = os.getenv(
-    "LIVE_EMA_OUTPUT_FILE",
-    "data/live_ema_cross_results.json",
-)
-
-LIVE_EMA_MAX_EVENTS_IN_MEMORY = int(
-    os.getenv(
-        "LIVE_EMA_MAX_EVENTS_IN_MEMORY",
-        "5000",
-    )
-)
-
-
-ALGO_APP_BACKGROUND_QUEUE_COUNTS_AS_ACCEPTED = (
-    os.getenv(
-        "ALGO_APP_BACKGROUND_QUEUE_COUNTS_AS_ACCEPTED",
-        "true",
-    ).lower()
-    == "true"
-)
-
-ALGO_APP_BACKGROUND_MAX_WORKERS = int(
-    os.getenv(
-        "ALGO_APP_BACKGROUND_MAX_WORKERS",
-        "2",
-    )
-)
-
-if ALGO_APP_BACKGROUND_MAX_WORKERS < 1:
-    ALGO_APP_BACKGROUND_MAX_WORKERS = 1
-
-
-EMA_ALGO_PAYLOAD_INCLUDE_NEAREST_INSTRUMENT_CANDLES = (
-    os.getenv(
-        "EMA_ALGO_PAYLOAD_INCLUDE_NEAREST_INSTRUMENT_CANDLES",
-        "true",
-    ).lower()
-    == "true"
-)
-
-EMA_ALGO_PAYLOAD_INCLUDE_BUDGET_INSTRUMENT_CANDLES = (
-    os.getenv(
-        "EMA_ALGO_PAYLOAD_INCLUDE_BUDGET_INSTRUMENT_CANDLES",
-        "true",
-    ).lower()
-    == "true"
-)
-
-
-EMA_ALGO_PAYLOAD_INCLUDE_RAW_EMA_EVENT = (
-    os.getenv(
-        "EMA_ALGO_PAYLOAD_INCLUDE_RAW_EMA_EVENT",
-        "true",
-    ).lower()
-    == "true"
-)
+def get_string(name, default=""):
+    return os.getenv(name, default)
+
+
+def get_int(name, default):
+    return int(os.getenv(name, str(default)))
+
+
+def get_float(name, default):
+    return float(os.getenv(name, str(default)))
+
+
+def get_bool(name, default=False):
+    default_value = "true" if default else "false"
+    return os.getenv(name, default_value).strip().lower() == "true"
+
+
+def get_string_list(name, default="", uppercase=False):
+    values = [value.strip() for value in os.getenv(name, default).split(",") if value.strip()]
+    if uppercase:
+        return [value.upper() for value in values]
+    return values
+
+
+def get_int_list(name, default=""):
+    return [int(value.strip()) for value in os.getenv(name, default).split(",") if value.strip()]
+
+
+MONGO_URI = get_string("MONGO_URL")
+MONGO_DB = get_string("MONGO_DB")
+TOKENS_COLLECTION = get_string("TOKENS_COLLECTION")
+REFRESH_INTERVAL_MINUTES = get_int("REFRESH_INTERVAL_MINUTES", 60)
+RUNTIME_CONFIG_ENABLED = get_bool("RUNTIME_CONFIG_ENABLED", True)
+RUNTIME_CONFIG_COLLECTION = get_string("RUNTIME_CONFIG_COLLECTION", "runtime_configs")
+RUNTIME_CONFIG_AUDIT_COLLECTION = get_string("RUNTIME_CONFIG_AUDIT_COLLECTION", "runtime_config_audit")
+RUNTIME_CONFIG_CACHE_ENABLED = get_bool("RUNTIME_CONFIG_CACHE_ENABLED", True)
+RUNTIME_CONFIG_FAIL_OPEN = get_bool("RUNTIME_CONFIG_FAIL_OPEN", True)
+RUNTIME_CONFIG_AUDIT_ENABLED = get_bool("RUNTIME_CONFIG_AUDIT_ENABLED", True)
+RUNTIME_CONFIG_MAX_AUDIT_RECORDS = max(1, get_int("RUNTIME_CONFIG_MAX_AUDIT_RECORDS", 5000))
+LOCAL_ALERT_TEST_MODE = get_bool("LOCAL_ALERT_TEST_MODE", False)
+LOCAL_ALERT_APP_HOST = get_string("LOCAL_ALERT_APP_HOST", "127.0.0.1")
+LOCAL_ALERT_APP_PORT = max(1, get_int("LOCAL_ALERT_APP_PORT", 9000))
+LOCAL_ALERT_APP_BASE_URL = get_string("LOCAL_ALERT_APP_BASE_URL", f"http://{LOCAL_ALERT_APP_HOST}:{LOCAL_ALERT_APP_PORT}").rstrip("/")
+LOCAL_TELEGRAM_URL = get_string("LOCAL_TELEGRAM_URL", f"{LOCAL_ALERT_APP_BASE_URL}/local-telegram/send")
+LOCAL_ALGO_APP_URL = get_string("LOCAL_ALGO_APP_URL", f"{LOCAL_ALERT_APP_BASE_URL}/local-algo/ema-alert")
+LOCAL_ALERT_TIMEOUT_SECONDS = max(0.1, get_float("LOCAL_ALERT_TIMEOUT_SECONDS", 10.0))
+LOCAL_ALERT_PRODUCTION_DELIVERY_BLOCKED = get_bool("LOCAL_ALERT_PRODUCTION_DELIVERY_BLOCKED", True)
+LOCAL_ALERT_INCLUDE_ORIGINAL_PAYLOAD = get_bool("LOCAL_ALERT_INCLUDE_ORIGINAL_PAYLOAD", True)
+LOCAL_ALERT_SOURCE_NAME = get_string("LOCAL_ALERT_SOURCE_NAME", "option_feed_engine_local_test")
+TELEGRAM_ENABLED = get_bool("TELEGRAM_ENABLED", False)
+TELEGRAM_BOT_TOKEN = get_string("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = get_string("TELEGRAM_CHAT_ID")
+TELEGRAM_TIMEOUT_SECONDS = max(1, get_int("TELEGRAM_TIMEOUT_SECONDS", 10))
+TELEGRAM_RUNTIME_CONFIG_ENABLED = get_bool("TELEGRAM_RUNTIME_CONFIG_ENABLED", True)
+TELEGRAM_RUNTIME_CONFIG_CONFIRMATION_REQUIRED = get_bool("TELEGRAM_RUNTIME_CONFIG_CONFIRMATION_REQUIRED", True)
+TELEGRAM_RUNTIME_CONFIG_CUSTOM_VALUE_ENABLED = get_bool("TELEGRAM_RUNTIME_CONFIG_CUSTOM_VALUE_ENABLED", True)
+TELEGRAM_RUNTIME_CONFIG_TIMEOUT_SECONDS = max(1, get_int("TELEGRAM_RUNTIME_CONFIG_TIMEOUT_SECONDS", 120))
+TELEGRAM_RUNTIME_CONFIG_SHOW_SENSITIVE_VALUES = get_bool("TELEGRAM_RUNTIME_CONFIG_SHOW_SENSITIVE_VALUES", False)
+UPSTOX_TOKEN_DOC_ID = get_string("UPSTOX_TOKEN_DOC_ID", "upstox_access_token")
+UPSTOX_TOKEN_CHECK_INTERVAL_MINUTES = max(1, get_int("UPSTOX_TOKEN_CHECK_INTERVAL_MINUTES", 30))
+TELEGRAM_TOKEN_BOT_ENABLED = get_bool("TELEGRAM_TOKEN_BOT_ENABLED", True)
+TELEGRAM_TOKEN_BOT_POLL_SECONDS = max(1, get_int("TELEGRAM_TOKEN_BOT_POLL_SECONDS", 3))
+TELEGRAM_TOKEN_BOT_LONG_POLL_TIMEOUT = max(1, get_int("TELEGRAM_TOKEN_BOT_LONG_POLL_TIMEOUT", 20))
+TELEGRAM_TOKEN_BOT_RESTRICT_TO_CHAT = get_bool("TELEGRAM_TOKEN_BOT_RESTRICT_TO_CHAT", True)
+ALGO_APP_ENABLED = get_bool("ALGO_APP_ENABLED", False)
+ALGO_APP_URL = get_string("ALGO_APP_URL")
+ALGO_APP_AUTH_TYPE = get_string("ALGO_APP_AUTH_TYPE", "none").strip().lower()
+ALGO_APP_AUTH_TOKEN = get_string("ALGO_APP_AUTH_TOKEN")
+ALGO_APP_API_KEY = get_string("ALGO_APP_API_KEY")
+ALGO_APP_API_KEY_HEADER = get_string("ALGO_APP_API_KEY_HEADER", "X-API-Key")
+ALGO_APP_TIMEOUT_SECONDS = max(0.1, get_float("ALGO_APP_TIMEOUT_SECONDS", 10.0))
+ALGO_APP_VERIFY_SSL = get_bool("ALGO_APP_VERIFY_SSL", True)
+ALGO_APP_MAX_RETRIES = max(0, get_int("ALGO_APP_MAX_RETRIES", 3))
+ALGO_APP_RETRY_DELAY_SECONDS = max(0.0, get_float("ALGO_APP_RETRY_DELAY_SECONDS", 2.0))
+ALGO_APP_SEND_IN_BACKGROUND = get_bool("ALGO_APP_SEND_IN_BACKGROUND", True)
+ALGO_APP_INCLUDE_EVENT_ID = get_bool("ALGO_APP_INCLUDE_EVENT_ID", True)
+ALGO_APP_PAYLOAD_SCHEMA_VERSION = get_string("ALGO_APP_PAYLOAD_SCHEMA_VERSION", "1.0")
+ALGO_APP_SOURCE_NAME = get_string("ALGO_APP_SOURCE_NAME", "option_feed_engine")
+ALGO_APP_MAX_RESPONSE_BODY_LENGTH = max(0, get_int("ALGO_APP_MAX_RESPONSE_BODY_LENGTH", 2000))
+ALGO_APP_BACKGROUND_QUEUE_COUNTS_AS_ACCEPTED = get_bool("ALGO_APP_BACKGROUND_QUEUE_COUNTS_AS_ACCEPTED", True)
+ALGO_APP_BACKGROUND_MAX_WORKERS = max(1, get_int("ALGO_APP_BACKGROUND_MAX_WORKERS", 2))
+
+
+def get_effective_telegram_url():
+    if LOCAL_ALERT_TEST_MODE:
+        return LOCAL_TELEGRAM_URL
+    bot_token = str(TELEGRAM_BOT_TOKEN or "").strip()
+    if not bot_token:
+        return ""
+    return f"https://api.telegram.org/bot{bot_token}/sendMessage"
+
+
+def get_effective_algo_app_url():
+    return LOCAL_ALGO_APP_URL if LOCAL_ALERT_TEST_MODE else str(ALGO_APP_URL or "").strip()
+
+
+def get_effective_telegram_timeout_seconds():
+    return LOCAL_ALERT_TIMEOUT_SECONDS if LOCAL_ALERT_TEST_MODE else float(TELEGRAM_TIMEOUT_SECONDS)
+
+
+def get_effective_algo_app_timeout_seconds():
+    return LOCAL_ALERT_TIMEOUT_SECONDS if LOCAL_ALERT_TEST_MODE else float(ALGO_APP_TIMEOUT_SECONDS)
+
+
+def get_effective_algo_app_auth_type():
+    return "none" if LOCAL_ALERT_TEST_MODE else str(ALGO_APP_AUTH_TYPE or "none").strip().lower()
+
+
+def get_effective_algo_app_verify_ssl():
+    return False if LOCAL_ALERT_TEST_MODE else bool(ALGO_APP_VERIFY_SSL)
+
+
+def get_alert_delivery_mode():
+    return "local_test" if LOCAL_ALERT_TEST_MODE else "production"
+
+
+def get_local_alert_test_status():
+    return {
+        "enabled": bool(LOCAL_ALERT_TEST_MODE),
+        "delivery_mode": get_alert_delivery_mode(),
+        "local_alert_app_base_url": LOCAL_ALERT_APP_BASE_URL if LOCAL_ALERT_TEST_MODE else None,
+        "telegram_url": LOCAL_TELEGRAM_URL if LOCAL_ALERT_TEST_MODE else None,
+        "algo_app_url": LOCAL_ALGO_APP_URL if LOCAL_ALERT_TEST_MODE else None,
+        "timeout_seconds": LOCAL_ALERT_TIMEOUT_SECONDS if LOCAL_ALERT_TEST_MODE else None,
+        "production_delivery_blocked": bool(LOCAL_ALERT_TEST_MODE and LOCAL_ALERT_PRODUCTION_DELIVERY_BLOCKED),
+        "include_original_payload": bool(LOCAL_ALERT_INCLUDE_ORIGINAL_PAYLOAD),
+        "source_name": LOCAL_ALERT_SOURCE_NAME,
+    }
+
+
+MARKET_TIMEZONE = get_string("MARKET_TIMEZONE", "Asia/Kolkata")
+MARKET_TIME_FORMAT = get_string("MARKET_TIME_FORMAT", "%Y-%m-%d %H:%M:%S %Z")
+MARKET_OPEN_HOUR = get_int("MARKET_OPEN_HOUR", 9)
+MARKET_OPEN_MINUTE = get_int("MARKET_OPEN_MINUTE", 15)
+MAIN_NIFTY_SECURITY = get_string("MAIN_NIFTY_SECURITY", "NSE_INDEX|Nifty 50")
+STRIKE_FROM = get_float("STRIKE_FROM", 23000)
+STRIKE_TO = get_float("STRIKE_TO", 25000)
+if STRIKE_FROM > STRIKE_TO:
+    STRIKE_FROM, STRIKE_TO = STRIKE_TO, STRIKE_FROM
+
+WEBSOCKET_FEED_MODE = get_string("WEBSOCKET_FEED_MODE", "full")
+HISTORICAL_CANDLE_ENABLED = get_bool("HISTORICAL_CANDLE_ENABLED", True)
+HISTORICAL_CANDLE_DAYS = max(1, get_int("HISTORICAL_CANDLE_DAYS", 10))
+HISTORICAL_CANDLE_INTERVAL = get_string("HISTORICAL_CANDLE_INTERVAL", "1minute")
+HISTORICAL_CANDLE_API_VERSION = get_string("HISTORICAL_CANDLE_API_VERSION", "2.0")
+HISTORICAL_CANDLE_MAX_DAYS_PER_REQUEST = max(1, get_int("HISTORICAL_CANDLE_MAX_DAYS_PER_REQUEST", 7))
+HISTORICAL_CANDLE_OUTPUT_DIR = get_string("HISTORICAL_CANDLE_OUTPUT_DIR", "data/historical_candles")
+HISTORICAL_CANDLE_MAX_WORKERS = max(1, get_int("HISTORICAL_CANDLE_MAX_WORKERS", 8))
+HISTORICAL_CANDLE_REQUEST_SLEEP_SECONDS = max(0.0, get_float("HISTORICAL_CANDLE_REQUEST_SLEEP_SECONDS", 0.15))
+OPENING_RANGE_ENABLED = get_bool("OPENING_RANGE_ENABLED", True)
+OPENING_RANGE_INTERVAL = get_string("OPENING_RANGE_INTERVAL", "1minute")
+OPENING_RANGE_CANDLE_COUNT = max(1, get_int("OPENING_RANGE_CANDLE_COUNT", 1))
+OPENING_RANGE_MARKET_OPEN_HOUR = get_int("OPENING_RANGE_MARKET_OPEN_HOUR", 9)
+OPENING_RANGE_MARKET_OPEN_MINUTE = get_int("OPENING_RANGE_MARKET_OPEN_MINUTE", 15)
+OPENING_RANGE_FETCH_HOUR = get_int("OPENING_RANGE_FETCH_HOUR", 9)
+OPENING_RANGE_FETCH_MINUTE = get_int("OPENING_RANGE_FETCH_MINUTE", 18)
+OPENING_RANGE_INTRADAY_UNIT = get_string("OPENING_RANGE_INTRADAY_UNIT", "minutes")
+OPENING_RANGE_INTRADAY_INTERVAL = get_string("OPENING_RANGE_INTRADAY_INTERVAL", "1")
+OPENING_RANGE_MAX_WORKERS = max(1, get_int("OPENING_RANGE_MAX_WORKERS", 8))
+OPENING_RANGE_REQUEST_SLEEP_SECONDS = max(0.0, get_float("OPENING_RANGE_REQUEST_SLEEP_SECONDS", 0.15))
+OPENING_RANGE_SAVE_FILE = get_bool("OPENING_RANGE_SAVE_FILE", True)
+OPENING_RANGE_OUTPUT_FILE = get_string("OPENING_RANGE_OUTPUT_FILE", "data/opening_range_results.json")
+OPENING_RANGE_MAX_EVENTS_IN_MEMORY = max(1, get_int("OPENING_RANGE_MAX_EVENTS_IN_MEMORY", 5000))
+OPENING_RANGE_BACKFILL_TOUCH_SCAN_ENABLED = get_bool("OPENING_RANGE_BACKFILL_TOUCH_SCAN_ENABLED", True)
+OPENING_RANGE_BACKFILL_TOUCH_SCAN_SOURCE = get_string("OPENING_RANGE_BACKFILL_TOUCH_SCAN_SOURCE", "intraday_api")
+OPENING_RANGE_TOUCH_ALERT_ENABLED = get_bool("OPENING_RANGE_TOUCH_ALERT_ENABLED", True)
+OPENING_RANGE_TOUCH_ALERT_MAX_INSTRUMENTS = max(1, get_int("OPENING_RANGE_TOUCH_ALERT_MAX_INSTRUMENTS", 5))
+OPENING_RANGE_TOUCH_ALERT_BATCH_SECONDS = max(1, get_int("OPENING_RANGE_TOUCH_ALERT_BATCH_SECONDS", 10))
+OPENING_RANGE_TOUCH_ALERT_ONCE_PER_LEVEL = get_bool("OPENING_RANGE_TOUCH_ALERT_ONCE_PER_LEVEL", True)
+OPENING_RANGE_TOUCH_ALERT_OPTIONS_ONLY = get_bool("OPENING_RANGE_TOUCH_ALERT_OPTIONS_ONLY", True)
+OPENING_RANGE_TOUCH_ALERT_SORT_BY_NEAREST_INDEX = get_bool("OPENING_RANGE_TOUCH_ALERT_SORT_BY_NEAREST_INDEX", True)
+OPENING_RANGE_TOUCH_ALERT_MAIN_INDEX_KEY = get_string("OPENING_RANGE_TOUCH_ALERT_MAIN_INDEX_KEY", MAIN_NIFTY_SECURITY)
+OPENING_RANGE_BACKFILL_TOUCH_ALERT_ENABLED = get_bool("OPENING_RANGE_BACKFILL_TOUCH_ALERT_ENABLED", True)
+OPENING_RANGE_LIVE_TOUCH_ALERT_ENABLED = get_bool("OPENING_RANGE_LIVE_TOUCH_ALERT_ENABLED", True)
+OPENING_RANGE_TOUCH_CHECK_MODE = get_string("OPENING_RANGE_TOUCH_CHECK_MODE", "high_low").lower()
+OPENING_RANGE_STORE_TOUCH_STATUS = get_bool("OPENING_RANGE_STORE_TOUCH_STATUS", True)
+OPENING_RANGE_TOUCH_EVENTS_OUTPUT_FILE = get_string("OPENING_RANGE_TOUCH_EVENTS_OUTPUT_FILE", "data/opening_range_touch_events.json")
+OPENING_RANGE_TOUCH_EVENTS_SAVE_TEST_FILE = get_bool("OPENING_RANGE_TOUCH_EVENTS_SAVE_TEST_FILE", True)
+OPENING_RANGE_ISOLATED_INSTRUMENT_ENABLED = get_bool("OPENING_RANGE_ISOLATED_INSTRUMENT_ENABLED", True)
+OPENING_RANGE_ISOLATION_AVERAGE_WINDOW_POINTS = max(0.0, get_float("OPENING_RANGE_ISOLATION_AVERAGE_WINDOW_POINTS", 500))
+OPENING_RANGE_ISOLATION_MIN_WINDOW_POINTS = max(0.0, get_float("OPENING_RANGE_ISOLATION_MIN_WINDOW_POINTS", 0))
+OPENING_RANGE_ISOLATION_MAX_WINDOW_POINTS = max(OPENING_RANGE_ISOLATION_MIN_WINDOW_POINTS, get_float("OPENING_RANGE_ISOLATION_MAX_WINDOW_POINTS", 5000))
+OPENING_RANGE_ISOLATION_AVERAGE_WINDOW_POINTS = max(OPENING_RANGE_ISOLATION_MIN_WINDOW_POINTS, min(OPENING_RANGE_ISOLATION_AVERAGE_WINDOW_POINTS, OPENING_RANGE_ISOLATION_MAX_WINDOW_POINTS))
+ALGO_TELE_APP = get_bool("ALGO_TELE_APP", True)
+OPENING_RANGE_ISOLATION_TOUCH_LEVELS = get_string_list("OPENING_RANGE_ISOLATION_TOUCH_LEVELS", "R2,R3,S2,S3", uppercase=True)
+OPENING_RANGE_ISOLATION_PRIORITY_LEVELS = get_string_list("OPENING_RANGE_ISOLATION_PRIORITY_LEVELS", "R3,S3,R2,S2", uppercase=True)
+OPENING_RANGE_ISOLATED_INSTRUMENT_NOTIFY_ENABLED = get_bool("OPENING_RANGE_ISOLATED_INSTRUMENT_NOTIFY_ENABLED", True)
+OPENING_RANGE_ISOLATION_ALLOW_BACKFILL_TOUCH = get_bool("OPENING_RANGE_ISOLATION_ALLOW_BACKFILL_TOUCH", True)
+OPENING_RANGE_ISOLATION_ALLOW_LIVE_TOUCH = get_bool("OPENING_RANGE_ISOLATION_ALLOW_LIVE_TOUCH", True)
+OPENING_RANGE_ISOLATION_OPTIONS_ONLY = get_bool("OPENING_RANGE_ISOLATION_OPTIONS_ONLY", True)
+OPENING_RANGE_ISOLATED_INSTRUMENT_OUTPUT_FILE = get_string("OPENING_RANGE_ISOLATED_INSTRUMENT_OUTPUT_FILE", "data/isolated_opening_range_instrument.json")
+OPENING_RANGE_ISOLATION_RESET_DAILY = get_bool("OPENING_RANGE_ISOLATION_RESET_DAILY", True)
+OPENING_RANGE_FIRST_TOUCH_SELECTION_ENABLED = get_bool("OPENING_RANGE_FIRST_TOUCH_SELECTION_ENABLED", True)
+OPENING_RANGE_FIRST_TOUCH_SELECTION_SOURCE = get_string("OPENING_RANGE_FIRST_TOUCH_SELECTION_SOURCE", "average_window_level_priority")
+OPENING_RANGE_SELECTED_OR_TOUCH_NOTIFY_ENABLED = get_bool("OPENING_RANGE_SELECTED_OR_TOUCH_NOTIFY_ENABLED", True)
+OPENING_RANGE_SELECTED_OR_EMA_ALERT_ENABLED = get_bool("OPENING_RANGE_SELECTED_OR_EMA_ALERT_ENABLED", True)
+OPENING_RANGE_LEGACY_TOUCH_TELEGRAM_ENABLED = get_bool("OPENING_RANGE_LEGACY_TOUCH_TELEGRAM_ENABLED", False)
+OPENING_RANGE_SELECTED_OR_EMA_ALERT_ONCE_PER_CROSS = get_bool("OPENING_RANGE_SELECTED_OR_EMA_ALERT_ONCE_PER_CROSS", False)
+EMA_CROSS_INCLUDE_OPENING_RANGE_LEVELS = get_bool("EMA_CROSS_INCLUDE_OPENING_RANGE_LEVELS", True)
+EMA_CROSS_BROADCAST_WITHOUT_OPENING_RANGE = get_bool("EMA_CROSS_BROADCAST_WITHOUT_OPENING_RANGE", True)
+EMA_ISOLATED_INSTRUMENT_TELEGRAM_ENABLED = get_bool("EMA_ISOLATED_INSTRUMENT_TELEGRAM_ENABLED", True)
+EMA_ISOLATED_ALERT_EVERY_CROSS = get_bool("EMA_ISOLATED_ALERT_EVERY_CROSS", True)
+EMA_ISOLATED_ALERT_INCLUDE_LEVEL_NAME = get_bool("EMA_ISOLATED_ALERT_INCLUDE_LEVEL_NAME", True)
+EMA_ISOLATED_ALERT_INCLUDE_NIFTY_LTP = get_bool("EMA_ISOLATED_ALERT_INCLUDE_NIFTY_LTP", True)
+EMA_ISOLATED_ALERT_INCLUDE_EMA_DETAILS = get_bool("EMA_ISOLATED_ALERT_INCLUDE_EMA_DETAILS", True)
+EMA_ISOLATED_ALERT_INCLUDE_NEAREST_ORDER_INSTRUMENTS = get_bool("EMA_ISOLATED_ALERT_INCLUDE_NEAREST_ORDER_INSTRUMENTS", True)
+EMA_ISOLATED_ALERT_INCLUDE_BUDGET_INSTRUMENTS = get_bool("EMA_ISOLATED_ALERT_INCLUDE_BUDGET_INSTRUMENTS", True)
+EMA_ISOLATED_ALERT_INCLUDE_CANDLE_CLOSE = get_bool("EMA_ISOLATED_ALERT_INCLUDE_CANDLE_CLOSE", True)
+EMA_ISOLATED_ALERT_INCLUDE_CANDLE_LOW = get_bool("EMA_ISOLATED_ALERT_INCLUDE_CANDLE_LOW", True)
+EMA_ISOLATED_ALERT_INCLUDE_CLOSE_LOW_DIFFERENCE = get_bool("EMA_ISOLATED_ALERT_INCLUDE_CLOSE_LOW_DIFFERENCE", True)
+EMA_ISOLATED_ALERT_INCLUDE_CANDLE_TIME = get_bool("EMA_ISOLATED_ALERT_INCLUDE_CANDLE_TIME", True)
+EMA_ISOLATED_ALERT_PRICE_DECIMAL_PLACES = max(0, get_int("EMA_ISOLATED_ALERT_PRICE_DECIMAL_PLACES", 2))
+EMA_ALERT_BULLISH_OPTION_TYPE = get_string("EMA_ALERT_BULLISH_OPTION_TYPE", "CE").upper()
+EMA_ALERT_BEARISH_OPTION_TYPE = get_string("EMA_ALERT_BEARISH_OPTION_TYPE", "PE").upper()
+EMA_ALERT_STRIKE_STEP = max(1, get_int("EMA_ALERT_STRIKE_STEP", 50))
+EMA_ALERT_NEAREST_STRIKE_COUNT = max(1, get_int("EMA_ALERT_NEAREST_STRIKE_COUNT", 3))
+EMA_ALERT_NEAREST_STRIKE_OFFSETS = get_int_list("EMA_ALERT_NEAREST_STRIKE_OFFSETS", "-50,0,50")
+EMA_ALERT_ORDER_STRIKES_CLAMP_TO_FILTER_RANGE = get_bool("EMA_ALERT_ORDER_STRIKES_CLAMP_TO_FILTER_RANGE", True)
+EMA_ALERT_INCLUDE_ORDER_INSTRUMENT_LTP = get_bool("EMA_ALERT_INCLUDE_ORDER_INSTRUMENT_LTP", True)
+EMA_ALERT_SHOW_ORDER_INSTRUMENT_WHEN_LTP_MISSING = get_bool("EMA_ALERT_SHOW_ORDER_INSTRUMENT_WHEN_LTP_MISSING", True)
+EMA_ALERT_MAX_ORDER_INSTRUMENTS = max(1, get_int("EMA_ALERT_MAX_ORDER_INSTRUMENTS", 3))
+EMA_ALERT_BUDGET_RANGE_ENABLED = get_bool("EMA_ALERT_BUDGET_RANGE_ENABLED", True)
+EMA_ALERT_BUDGET_MIN_PRICE = max(0.0, get_float("EMA_ALERT_BUDGET_MIN_PRICE", 50))
+EMA_ALERT_BUDGET_MAX_PRICE = max(EMA_ALERT_BUDGET_MIN_PRICE, get_float("EMA_ALERT_BUDGET_MAX_PRICE", 120))
+EMA_ALERT_BUDGET_MAX_INSTRUMENTS = max(1, get_int("EMA_ALERT_BUDGET_MAX_INSTRUMENTS", 2))
+EMA_ALERT_BUDGET_USE_SUGGESTED_ORDER_SIDE = get_bool("EMA_ALERT_BUDGET_USE_SUGGESTED_ORDER_SIDE", True)
+EMA_ALERT_BUDGET_SUBSCRIBED_ONLY = get_bool("EMA_ALERT_BUDGET_SUBSCRIBED_ONLY", True)
+EMA_ALERT_BUDGET_REQUIRE_LIVE_LTP = get_bool("EMA_ALERT_BUDGET_REQUIRE_LIVE_LTP", True)
+EMA_ALERT_BUDGET_SORT_MODE = get_string("EMA_ALERT_BUDGET_SORT_MODE", "nearest_to_budget_midpoint")
+EMA_ALERT_BUDGET_RANGE_INCLUSIVE = get_bool("EMA_ALERT_BUDGET_RANGE_INCLUSIVE", True)
+EMA_ALGO_PAYLOAD_INCLUDE_OPENING_RANGE = get_bool("EMA_ALGO_PAYLOAD_INCLUDE_OPENING_RANGE", True)
+EMA_ALGO_PAYLOAD_INCLUDE_EMA_VALUES = get_bool("EMA_ALGO_PAYLOAD_INCLUDE_EMA_VALUES", True)
+EMA_ALGO_PAYLOAD_INCLUDE_CANDLE = get_bool("EMA_ALGO_PAYLOAD_INCLUDE_CANDLE", True)
+EMA_ALGO_PAYLOAD_INCLUDE_NEAREST_INSTRUMENTS = get_bool("EMA_ALGO_PAYLOAD_INCLUDE_NEAREST_INSTRUMENTS", True)
+EMA_ALGO_PAYLOAD_INCLUDE_BUDGET_INSTRUMENTS = get_bool("EMA_ALGO_PAYLOAD_INCLUDE_BUDGET_INSTRUMENTS", True)
+EMA_ALGO_PAYLOAD_INCLUDE_DELIVERY_METADATA = get_bool("EMA_ALGO_PAYLOAD_INCLUDE_DELIVERY_METADATA", False)
+EMA_ALGO_PAYLOAD_INCLUDE_NEAREST_INSTRUMENT_CANDLES = get_bool("EMA_ALGO_PAYLOAD_INCLUDE_NEAREST_INSTRUMENT_CANDLES", True)
+EMA_ALGO_PAYLOAD_INCLUDE_BUDGET_INSTRUMENT_CANDLES = get_bool("EMA_ALGO_PAYLOAD_INCLUDE_BUDGET_INSTRUMENT_CANDLES", True)
+EMA_ALGO_PAYLOAD_INCLUDE_RAW_EMA_EVENT = get_bool("EMA_ALGO_PAYLOAD_INCLUDE_RAW_EMA_EVENT", True)
+TEST_FLAG = get_bool("TEST_FLAG", False)
+EMA_FAST_PERIOD = max(1, get_int("EMA_FAST_PERIOD", 9))
+EMA_SLOW_PERIOD = max(EMA_FAST_PERIOD + 1, get_int("EMA_SLOW_PERIOD", 21))
+EMA_CROSS_OUTPUT_FILE = get_string("EMA_CROSS_OUTPUT_FILE", "data/ema_cross_results.json")
+LIVE_EMA_ENABLED = get_bool("LIVE_EMA_ENABLED", True)
+LIVE_EMA_CALCULATION_MODE = get_bool("LIVE_EMA_CALCULATION_MODE", False)
+LIVE_EMA_INTERVAL_MINUTES = max(1, get_int("LIVE_EMA_INTERVAL_MINUTES", 1))
+LIVE_EMA_FAST_PERIOD = max(1, get_int("LIVE_EMA_FAST_PERIOD", 9))
+LIVE_EMA_SLOW_PERIOD = max(LIVE_EMA_FAST_PERIOD + 1, get_int("LIVE_EMA_SLOW_PERIOD", 21))
+LIVE_EMA_TICK_ALERT_ONCE_PER_DIRECTION = get_bool("LIVE_EMA_TICK_ALERT_ONCE_PER_DIRECTION", True)
+LIVE_EMA_TICK_MIN_PRICE_CHANGE = max(0.0, get_float("LIVE_EMA_TICK_MIN_PRICE_CHANGE", 0))
+LIVE_EMA_SAVE_TEST_FILE = get_bool("LIVE_EMA_SAVE_TEST_FILE", True)
+LIVE_EMA_OUTPUT_FILE = get_string("LIVE_EMA_OUTPUT_FILE", "data/live_ema_cross_results.json")
+LIVE_EMA_MAX_EVENTS_IN_MEMORY = max(1, get_int("LIVE_EMA_MAX_EVENTS_IN_MEMORY", 5000))

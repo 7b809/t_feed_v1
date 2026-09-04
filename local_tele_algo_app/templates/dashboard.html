@@ -1,0 +1,1960 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1.0"
+    >
+    <title>Local Telegram and Algo App Simulator</title>
+
+    <style>
+        :root {
+            --background: #f1f5f9;
+            --surface: #ffffff;
+            --surface-muted: #f8fafc;
+            --primary: #1d4ed8;
+            --primary-dark: #1e3a8a;
+            --success: #15803d;
+            --success-background: #dcfce7;
+            --warning: #a16207;
+            --warning-background: #fef3c7;
+            --danger: #b91c1c;
+            --danger-background: #fee2e2;
+            --text: #0f172a;
+            --text-muted: #64748b;
+            --border: #e2e8f0;
+            --telegram: #0284c7;
+            --algo: #7c3aed;
+            --shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            min-height: 100vh;
+            padding: 24px;
+            background: var(--background);
+            color: var(--text);
+            font-family:
+                Inter,
+                "Segoe UI",
+                Arial,
+                sans-serif;
+        }
+
+        button,
+        input,
+        select {
+            font: inherit;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 1600px;
+            margin: 0 auto;
+        }
+
+        .header {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 20px;
+            padding: 24px;
+            margin-bottom: 20px;
+            border-radius: 18px;
+            background:
+                linear-gradient(
+                    135deg,
+                    var(--primary-dark),
+                    var(--primary)
+                );
+            color: #ffffff;
+            box-shadow: var(--shadow);
+        }
+
+        .header-content {
+            min-width: 0;
+        }
+
+        .header h1 {
+            margin: 10px 0 8px;
+            font-size: 30px;
+            line-height: 1.2;
+        }
+
+        .header p {
+            max-width: 800px;
+            margin: 0;
+            color: #dbeafe;
+            line-height: 1.6;
+        }
+
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 7px;
+            padding: 6px 10px;
+            border-radius: 999px;
+            background: rgba(220, 252, 231, 0.95);
+            color: var(--success);
+            font-size: 12px;
+            font-weight: 800;
+            letter-spacing: 0.04em;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 999px;
+            background: #22c55e;
+        }
+
+        .header-actions {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: flex-end;
+            gap: 10px;
+        }
+
+        .button {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 38px;
+            padding: 9px 14px;
+            border: 0;
+            border-radius: 9px;
+            cursor: pointer;
+            text-decoration: none;
+            font-size: 13px;
+            font-weight: 700;
+            transition:
+                transform 0.15s ease,
+                opacity 0.15s ease,
+                background 0.15s ease;
+        }
+
+        .button:hover {
+            transform: translateY(-1px);
+        }
+
+        .button:disabled {
+            cursor: not-allowed;
+            opacity: 0.55;
+            transform: none;
+        }
+
+        .button-light {
+            background: #ffffff;
+            color: var(--primary-dark);
+        }
+
+        .button-secondary {
+            background: #e2e8f0;
+            color: #334155;
+        }
+
+        .button-primary {
+            background: var(--primary);
+            color: #ffffff;
+        }
+
+        .button-success {
+            background: var(--success);
+            color: #ffffff;
+        }
+
+        .button-danger {
+            background: var(--danger);
+            color: #ffffff;
+        }
+
+        .button-small {
+            min-height: 32px;
+            padding: 6px 10px;
+            font-size: 12px;
+        }
+
+        .metrics {
+            display: grid;
+            grid-template-columns:
+                repeat(
+                    auto-fit,
+                    minmax(210px, 1fr)
+                );
+            gap: 16px;
+            margin-bottom: 20px;
+        }
+
+        .metric-card {
+            padding: 20px;
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            background: var(--surface);
+            box-shadow: var(--shadow);
+        }
+
+        .metric-label {
+            color: var(--text-muted);
+            font-size: 12px;
+            font-weight: 800;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+        }
+
+        .metric-value {
+            margin-top: 8px;
+            font-size: 30px;
+            font-weight: 800;
+            color: var(--text);
+        }
+
+        .metric-subtitle {
+            margin-top: 5px;
+            color: var(--text-muted);
+            font-size: 12px;
+        }
+
+        .metric-telegram {
+            border-top: 4px solid var(--telegram);
+        }
+
+        .metric-algo {
+            border-top: 4px solid var(--algo);
+        }
+
+        .metric-service {
+            border-top: 4px solid var(--success);
+        }
+
+        .metric-refresh {
+            border-top: 4px solid var(--warning);
+        }
+
+        .panel {
+            margin-bottom: 20px;
+            overflow: hidden;
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            background: var(--surface);
+            box-shadow: var(--shadow);
+        }
+
+        .panel-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+            padding: 18px 20px;
+            border-bottom: 1px solid var(--border);
+            background: var(--surface-muted);
+        }
+
+        .panel-title {
+            min-width: 0;
+        }
+
+        .panel-title h2 {
+            margin: 0;
+            font-size: 19px;
+        }
+
+        .panel-title p {
+            margin: 5px 0 0;
+            color: var(--text-muted);
+            font-size: 13px;
+        }
+
+        .panel-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .toolbar {
+            display: grid;
+            grid-template-columns:
+                minmax(220px, 1fr)
+                170px
+                140px;
+            gap: 12px;
+            padding: 14px 20px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .input,
+        .select {
+            width: 100%;
+            height: 40px;
+            padding: 0 12px;
+            border: 1px solid #cbd5e1;
+            border-radius: 9px;
+            outline: none;
+            background: #ffffff;
+            color: var(--text);
+        }
+
+        .input:focus,
+        .select:focus {
+            border-color: #60a5fa;
+            box-shadow:
+                0 0 0 3px rgba(96, 165, 250, 0.2);
+        }
+
+        .table-wrapper {
+            overflow-x: auto;
+        }
+
+        table {
+            width: 100%;
+            min-width: 1050px;
+            border-collapse: collapse;
+        }
+
+        th,
+        td {
+            padding: 13px 14px;
+            border-bottom: 1px solid var(--border);
+            text-align: left;
+            vertical-align: top;
+            font-size: 13px;
+        }
+
+        th {
+            position: sticky;
+            top: 0;
+            z-index: 1;
+            background: #f8fafc;
+            color: #334155;
+            font-size: 12px;
+            font-weight: 800;
+            letter-spacing: 0.03em;
+            text-transform: uppercase;
+        }
+
+        tbody tr:hover td {
+            background: #f8fafc;
+        }
+
+        .empty-state {
+            padding: 34px 20px;
+            color: var(--text-muted);
+            text-align: center;
+        }
+
+        .channel-badge,
+        .level-badge,
+        .cross-badge {
+            display: inline-flex;
+            align-items: center;
+            padding: 4px 8px;
+            border-radius: 999px;
+            font-size: 11px;
+            font-weight: 800;
+            white-space: nowrap;
+        }
+
+        .channel-telegram {
+            background: #e0f2fe;
+            color: #0369a1;
+        }
+
+        .channel-algo {
+            background: #ede9fe;
+            color: #6d28d9;
+        }
+
+        .level-info {
+            background: #dbeafe;
+            color: #1d4ed8;
+        }
+
+        .level-success {
+            background: var(--success-background);
+            color: var(--success);
+        }
+
+        .level-warning {
+            background: var(--warning-background);
+            color: var(--warning);
+        }
+
+        .level-error {
+            background: var(--danger-background);
+            color: var(--danger);
+        }
+
+        .level-ema {
+            background: #ede9fe;
+            color: #6d28d9;
+        }
+
+        .cross-bullish {
+            background: var(--success-background);
+            color: var(--success);
+        }
+
+        .cross-bearish {
+            background: var(--danger-background);
+            color: var(--danger);
+        }
+
+        .identifier {
+            max-width: 240px;
+            overflow-wrap: anywhere;
+            color: #334155;
+            font-family:
+                Consolas,
+                "Courier New",
+                monospace;
+            font-size: 12px;
+        }
+
+        .message-preview {
+            display: block;
+            max-width: 430px;
+            color: #475569;
+            line-height: 1.5;
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
+        }
+
+        .actions {
+            display: flex;
+            gap: 6px;
+            white-space: nowrap;
+        }
+
+        .toast-container {
+            position: fixed;
+            z-index: 1000;
+            top: 18px;
+            right: 18px;
+            display: flex;
+            width: min(390px, calc(100vw - 36px));
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .toast {
+            padding: 13px 15px;
+            border-radius: 10px;
+            background: #0f172a;
+            color: #ffffff;
+            box-shadow:
+                0 12px 30px rgba(15, 23, 42, 0.25);
+            font-size: 13px;
+            line-height: 1.5;
+        }
+
+        .toast-success {
+            background: #166534;
+        }
+
+        .toast-error {
+            background: #991b1b;
+        }
+
+        .modal-backdrop {
+            position: fixed;
+            z-index: 900;
+            inset: 0;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            background: rgba(15, 23, 42, 0.65);
+        }
+
+        .modal-backdrop.visible {
+            display: flex;
+        }
+
+        .modal {
+            width: min(1000px, 100%);
+            max-height: 90vh;
+            overflow: hidden;
+            border-radius: 16px;
+            background: #ffffff;
+            box-shadow:
+                0 24px 70px rgba(15, 23, 42, 0.4);
+        }
+
+        .modal-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 15px;
+            padding: 17px 20px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .modal-header h3 {
+            margin: 0;
+            font-size: 18px;
+        }
+
+        .modal-body {
+            max-height: calc(90vh - 70px);
+            overflow: auto;
+            padding: 20px;
+        }
+
+        .modal-body pre {
+            margin: 0;
+            padding: 16px;
+            overflow: auto;
+            border-radius: 10px;
+            background: #0f172a;
+            color: #e2e8f0;
+            font-family:
+                Consolas,
+                "Courier New",
+                monospace;
+            font-size: 12px;
+            line-height: 1.55;
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
+        }
+
+        .close-button {
+            width: 34px;
+            height: 34px;
+            border: 0;
+            border-radius: 8px;
+            cursor: pointer;
+            background: #e2e8f0;
+            color: #334155;
+            font-size: 19px;
+        }
+
+        .footer {
+            padding: 10px;
+            color: var(--text-muted);
+            text-align: center;
+            font-size: 12px;
+        }
+
+        @media (max-width: 900px) {
+            body {
+                padding: 14px;
+            }
+
+            .header {
+                flex-direction: column;
+            }
+
+            .header-actions {
+                justify-content: flex-start;
+            }
+
+            .panel-header {
+                align-items: flex-start;
+                flex-direction: column;
+            }
+
+            .toolbar {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div
+        id="toastContainer"
+        class="toast-container"
+    ></div>
+
+    <div class="container">
+        <header class="header">
+            <div class="header-content">
+                <span class="status-badge">
+                    <span class="status-dot"></span>
+                    LOCAL TEST MODE
+                </span>
+
+                <h1>
+                    Local Telegram and Algo App Simulator
+                </h1>
+
+                <p>
+                    Receives locally redirected Telegram messages
+                    and Algo App EMA payloads from the Option Feed
+                    Engine. Production destinations are not used
+                    while local alert testing is enabled.
+                </p>
+            </div>
+
+            <div class="header-actions">
+                /docs
+                    Swagger API
+                </a>
+
+                /health
+                    Health
+                </a>
+
+                <button
+                    id="refreshButton"
+                    class="button button-light"
+                    type="button"
+                >
+                    Refresh
+                </button>
+
+                <button
+                    id="clearAllButton"
+                    class="button button-danger"
+                    type="button"
+                >
+                    Clear All
+                </button>
+            </div>
+        </header>
+
+        <section class="metrics">
+            <article class="metric-card metric-telegram">
+                <div class="metric-label">
+                    Telegram Messages
+                </div>
+
+                <div
+                    id="telegramCount"
+                    class="metric-value"
+                >
+                    0
+                </div>
+
+                <div class="metric-subtitle">
+                    Stored local notifications
+                </div>
+            </article>
+
+            <article class="metric-card metric-algo">
+                <div class="metric-label">
+                    Algo App Events
+                </div>
+
+                <div
+                    id="algoCount"
+                    class="metric-value"
+                >
+                    0
+                </div>
+
+                <div class="metric-subtitle">
+                    Stored EMA payloads
+                </div>
+            </article>
+
+            <article class="metric-card metric-service">
+                <div class="metric-label">
+                    Service Status
+                </div>
+
+                <div
+                    id="serviceStatus"
+                    class="metric-value"
+                >
+                    Loading
+                </div>
+
+                <div class="metric-subtitle">
+                    Local receiver availability
+                </div>
+            </article>
+
+            <article class="metric-card metric-refresh">
+                <div class="metric-label">
+                    Last Refresh
+                </div>
+
+                <div
+                    id="lastRefresh"
+                    class="metric-value"
+                    style="font-size: 20px;"
+                >
+                    Not loaded
+                </div>
+
+                <div class="metric-subtitle">
+                    Auto-refresh every 10 seconds
+                </div>
+            </article>
+        </section>
+
+        <section class="panel">
+            <div class="panel-header">
+                <div class="panel-title">
+                    <h2>Local Telegram Messages</h2>
+
+                    <p>
+                        Human-readable alerts generated by the
+                        main feed application.
+                    </p>
+                </div>
+
+                <div class="panel-actions">
+                    <button
+                        id="testTelegramButton"
+                        class="button button-success button-small"
+                        type="button"
+                    >
+                        Create Test Message
+                    </button>
+
+                    <button
+                        id="clearTelegramButton"
+                        class="button button-secondary button-small"
+                        type="button"
+                    >
+                        Clear Telegram
+                    </button>
+                </div>
+            </div>
+
+            <div class="toolbar">
+                <input
+                    id="telegramSearch"
+                    class="input"
+                    type="search"
+                    placeholder="Search title, message, context or ID"
+                >
+
+                <select
+                    id="telegramLevelFilter"
+                    class="select"
+                >
+                    <option value="">
+                        All Levels
+                    </option>
+                    <option value="INFO">
+                        INFO
+                    </option>
+                    <option value="SUCCESS">
+                        SUCCESS
+                    </option>
+                    <option value="WARNING">
+                        WARNING
+                    </option>
+                    <option value="ERROR">
+                        ERROR
+                    </option>
+                    <option value="EMA">
+                        EMA
+                    </option>
+                    <option value="OPENING_RANGE">
+                        OPENING RANGE
+                    </option>
+                    <option value="STARTUP">
+                        STARTUP
+                    </option>
+                    <option value="REFRESH">
+                        REFRESH
+                    </option>
+                </select>
+
+                <select
+                    id="telegramLimit"
+                    class="select"
+                >
+                    <option value="25">
+                        Latest 25
+                    </option>
+                    <option value="50">
+                        Latest 50
+                    </option>
+                    <option
+                        value="100"
+                        selected
+                    >
+                        Latest 100
+                    </option>
+                    <option value="250">
+                        Latest 250
+                    </option>
+                    <option value="500">
+                        Latest 500
+                    </option>
+                </select>
+            </div>
+
+            <div class="table-wrapper">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Received At</th>
+                            <th>Channel</th>
+                            <th>Level</th>
+                            <th>Title</th>
+                            <th>Message</th>
+                            <th>Context</th>
+                            <th>Message ID</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+
+                    <tbody id="telegramTableBody">
+                        <tr>
+                            <td
+                                class="empty-state"
+                                colspan="8"
+                            >
+                                Loading Telegram messages...
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <section class="panel">
+            <div class="panel-header">
+                <div class="panel-title">
+                    <h2>Local Algo App Events</h2>
+
+                    <p>
+                        Structured EMA alert payloads accepted by
+                        the local Algo App simulator.
+                    </p>
+                </div>
+
+                <div class="panel-actions">
+                    <button
+                        id="testAlgoButton"
+                        class="button button-success button-small"
+                        type="button"
+                    >
+                        Create Test Event
+                    </button>
+
+                    <button
+                        id="clearAlgoButton"
+                        class="button button-secondary button-small"
+                        type="button"
+                    >
+                        Clear Algo Events
+                    </button>
+                </div>
+            </div>
+
+            <div class="toolbar">
+                <input
+                    id="algoSearch"
+                    class="input"
+                    type="search"
+                    placeholder="Search event, instrument or cross type"
+                >
+
+                <select
+                    id="algoCrossFilter"
+                    class="select"
+                >
+                    <option value="">
+                        All Cross Types
+                    </option>
+                    <option value="bullish_cross">
+                        Bullish Cross
+                    </option>
+                    <option value="bearish_cross">
+                        Bearish Cross
+                    </option>
+                </select>
+
+                <select
+                    id="algoLimit"
+                    class="select"
+                >
+                    <option value="25">
+                        Latest 25
+                    </option>
+                    <option value="50">
+                        Latest 50
+                    </option>
+                    <option
+                        value="100"
+                        selected
+                    >
+                        Latest 100
+                    </option>
+                    <option value="250">
+                        Latest 250
+                    </option>
+                    <option value="500">
+                        Latest 500
+                    </option>
+                </select>
+            </div>
+
+            <div class="table-wrapper">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Received At</th>
+                            <th>Channel</th>
+                            <th>Event ID</th>
+                            <th>Event Type</th>
+                            <th>Instrument</th>
+                            <th>Cross</th>
+                            <th>Suggested Side</th>
+                            <th>Nearest</th>
+                            <th>Budget</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+
+                    <tbody id="algoTableBody">
+                        <tr>
+                            <td
+                                class="empty-state"
+                                colspan="10"
+                            >
+                                Loading Algo App events...
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <footer class="footer">
+            Local alert simulator version 1.0.0
+        </footer>
+    </div>
+
+    <div
+        id="detailsModal"
+        class="modal-backdrop"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="detailsModalTitle"
+    >
+        <div class="modal">
+            <div class="modal-header">
+                <h3 id="detailsModalTitle">
+                    Event Details
+                </h3>
+
+                <button
+                    id="closeModalButton"
+                    class="close-button"
+                    type="button"
+                    aria-label="Close"
+                >
+                    ×
+                </button>
+            </div>
+
+            <div class="modal-body">
+                <pre id="detailsContent"></pre>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const state = {
+            telegramMessages: [],
+            algoEvents: [],
+            loading: false,
+        };
+
+        const elements = {
+            telegramCount:
+                document.getElementById("telegramCount"),
+            algoCount:
+                document.getElementById("algoCount"),
+            serviceStatus:
+                document.getElementById("serviceStatus"),
+            lastRefresh:
+                document.getElementById("lastRefresh"),
+            telegramTableBody:
+                document.getElementById("telegramTableBody"),
+            algoTableBody:
+                document.getElementById("algoTableBody"),
+            telegramSearch:
+                document.getElementById("telegramSearch"),
+            telegramLevelFilter:
+                document.getElementById(
+                    "telegramLevelFilter"
+                ),
+            telegramLimit:
+                document.getElementById("telegramLimit"),
+            algoSearch:
+                document.getElementById("algoSearch"),
+            algoCrossFilter:
+                document.getElementById("algoCrossFilter"),
+            algoLimit:
+                document.getElementById("algoLimit"),
+            refreshButton:
+                document.getElementById("refreshButton"),
+            clearAllButton:
+                document.getElementById("clearAllButton"),
+            clearTelegramButton:
+                document.getElementById(
+                    "clearTelegramButton"
+                ),
+            clearAlgoButton:
+                document.getElementById("clearAlgoButton"),
+            testTelegramButton:
+                document.getElementById(
+                    "testTelegramButton"
+                ),
+            testAlgoButton:
+                document.getElementById("testAlgoButton"),
+            detailsModal:
+                document.getElementById("detailsModal"),
+            detailsModalTitle:
+                document.getElementById(
+                    "detailsModalTitle"
+                ),
+            detailsContent:
+                document.getElementById("detailsContent"),
+            closeModalButton:
+                document.getElementById("closeModalButton"),
+            toastContainer:
+                document.getElementById("toastContainer"),
+        };
+
+        function escapeHtml(value) {
+            return String(value ?? "")
+                .replaceAll("&", "&amp;")
+                .replaceAll("<", "&lt;")
+                .replaceAll(">", "&gt;")
+                .replaceAll('"', "&quot;")
+                .replaceAll("'", "&#039;");
+        }
+
+        function stripHtml(value) {
+            const temporary = document.createElement("div");
+            temporary.innerHTML = String(value ?? "");
+            return temporary.textContent || "";
+        }
+
+        function truncate(value, maximumLength = 200) {
+            const text = String(value ?? "").trim();
+
+            if (text.length <= maximumLength) {
+                return text;
+            }
+
+            return `${text.slice(0, maximumLength).trim()}...`;
+        }
+
+        function formatDate(value) {
+            if (!value) {
+                return "N/A";
+            }
+
+            const date = new Date(value);
+
+            if (Number.isNaN(date.getTime())) {
+                return String(value);
+            }
+
+            return date.toLocaleString();
+        }
+
+        function showToast(message, type = "default") {
+            const toast = document.createElement("div");
+            toast.className = "toast";
+
+            if (type === "success") {
+                toast.classList.add("toast-success");
+            }
+
+            if (type === "error") {
+                toast.classList.add("toast-error");
+            }
+
+            toast.textContent = message;
+            elements.toastContainer.appendChild(toast);
+
+            window.setTimeout(() => {
+                toast.remove();
+            }, 4000);
+        }
+
+        async function requestJson(
+            url,
+            options = {},
+        ) {
+            const response = await fetch(url, options);
+
+            let payload = null;
+
+            try {
+                payload = await response.json();
+            } catch {
+                payload = null;
+            }
+
+            if (!response.ok) {
+                const detail =
+                    payload?.detail?.error
+                    || payload?.detail
+                    || payload?.error
+                    || `Request failed with HTTP ${response.status}`;
+
+                throw new Error(
+                    typeof detail === "string"
+                        ? detail
+                        : JSON.stringify(detail)
+                );
+            }
+
+            return payload;
+        }
+
+        function getLevelClass(level) {
+            const normalized = String(
+                level || "INFO"
+            ).toUpperCase();
+
+            if (
+                normalized === "ERROR"
+                || normalized === "FAILED"
+            ) {
+                return "level-error";
+            }
+
+            if (normalized === "WARNING") {
+                return "level-warning";
+            }
+
+            if (
+                normalized === "SUCCESS"
+                || normalized === "STARTUP"
+            ) {
+                return "level-success";
+            }
+
+            if (
+                normalized === "EMA"
+                || normalized === "OPENING_RANGE"
+            ) {
+                return "level-ema";
+            }
+
+            return "level-info";
+        }
+
+        function getCrossClass(crossType) {
+            const normalized = String(
+                crossType || ""
+            ).toLowerCase();
+
+            if (normalized.includes("bullish")) {
+                return "cross-bullish";
+            }
+
+            if (normalized.includes("bearish")) {
+                return "cross-bearish";
+            }
+
+            return "level-info";
+        }
+
+        function getFilteredTelegramMessages() {
+            const search = elements.telegramSearch.value
+                .trim()
+                .toLowerCase();
+
+            const level = elements.telegramLevelFilter.value
+                .trim()
+                .toUpperCase();
+
+            return state.telegramMessages.filter((record) => {
+                const payload =
+                    record.payload
+                    && typeof record.payload === "object"
+                        ? record.payload
+                        : {};
+
+                const searchable = [
+                    record.message_id,
+                    record.context,
+                    record.message_preview,
+                    payload.title,
+                    payload.level,
+                    payload.context,
+                    stripHtml(payload.message),
+                ]
+                    .join(" ")
+                    .toLowerCase();
+
+                const recordLevel = String(
+                    payload.level
+                    || record.level
+                    || ""
+                ).toUpperCase();
+
+                return (
+                    (!search || searchable.includes(search))
+                    && (!level || recordLevel === level)
+                );
+            });
+        }
+
+        function getFilteredAlgoEvents() {
+            const search = elements.algoSearch.value
+                .trim()
+                .toLowerCase();
+
+            const crossType = elements.algoCrossFilter.value
+                .trim()
+                .toLowerCase();
+
+            return state.algoEvents.filter((record) => {
+                const searchable = [
+                    record.event_id,
+                    record.event_type,
+                    record.instrument_key,
+                    record.cross_type,
+                    record.suggested_order_side,
+                    record.source,
+                ]
+                    .join(" ")
+                    .toLowerCase();
+
+                const recordCross = String(
+                    record.cross_type || ""
+                ).toLowerCase();
+
+                return (
+                    (!search || searchable.includes(search))
+                    && (
+                        !crossType
+                        || recordCross === crossType
+                    )
+                );
+            });
+        }
+
+        function renderTelegramMessages() {
+            const records =
+                getFilteredTelegramMessages();
+
+            if (!records.length) {
+                elements.telegramTableBody.innerHTML = `
+                    <tr>
+                        <td
+                            class="empty-state"
+                            colspan="8"
+                        >
+                            No matching Telegram messages.
+                        </td>
+                    </tr>
+                `;
+                return;
+            }
+
+            elements.telegramTableBody.innerHTML =
+                records.map((record) => {
+                    const payload =
+                        record.payload
+                        && typeof record.payload === "object"
+                            ? record.payload
+                            : {};
+
+                    const level = String(
+                        payload.level
+                        || record.level
+                        || "INFO"
+                    ).toUpperCase();
+
+                    const title =
+                        payload.title
+                        || record.title
+                        || "Untitled";
+
+                    const message =
+                        payload.message
+                        || record.message_preview
+                        || "";
+
+                    const context =
+                        payload.context
+                        || record.context
+                        || "not_available";
+
+                    const messageId =
+                        record.message_id
+                        || "";
+
+                    return `
+                        <tr>
+                            <td>
+                                ${escapeHtml(
+                                    formatDate(record.received_at)
+                                )}
+                            </td>
+
+                            <td>
+                                <span
+                                    class="
+                                        channel-badge
+                                        channel-telegram
+                                    "
+                                >
+                                    Telegram
+                                </span>
+                            </td>
+
+                            <td>
+                                <span
+                                    class="
+                                        level-badge
+                                        ${getLevelClass(level)}
+                                    "
+                                >
+                                    ${escapeHtml(level)}
+                                </span>
+                            </td>
+
+                            <td>
+                                ${escapeHtml(title)}
+                            </td>
+
+                            <td>
+                                <span class="message-preview">
+                                    ${escapeHtml(
+                                        truncate(
+                                            stripHtml(message),
+                                            220
+                                        )
+                                    )}
+                                </span>
+                            </td>
+
+                            <td class="identifier">
+                                ${escapeHtml(context)}
+                            </td>
+
+                            <td class="identifier">
+                                ${escapeHtml(messageId)}
+                            </td>
+
+                            <td>
+                                <div class="actions">
+                                    <button
+                                        class="
+                                            button
+                                            button-primary
+                                            button-small
+                                        "
+                                        type="button"
+                                        data-action="view-telegram"
+                                        data-id="${escapeHtml(messageId)}"
+                                    >
+                                        View
+                                    </button>
+
+                                    <button
+                                        class="
+                                            button
+                                            button-danger
+                                            button-small
+                                        "
+                                        type="button"
+                                        data-action="delete-telegram"
+                                        data-id="${escapeHtml(messageId)}"
+                                    >
+                                        Delete
+                                    </button>
+                                </div>
+                            </td>
+                        </tr>
+                    `;
+                }).join("");
+        }
+
+        function renderAlgoEvents() {
+            const records = getFilteredAlgoEvents();
+
+            if (!records.length) {
+                elements.algoTableBody.innerHTML = `
+                    <tr>
+                        <td
+                            class="empty-state"
+                            colspan="10"
+                        >
+                            No matching Algo App events.
+                        </td>
+                    </tr>
+                `;
+                return;
+            }
+
+            elements.algoTableBody.innerHTML =
+                records.map((record) => {
+                    const eventId = record.event_id || "";
+                    const crossType =
+                        record.cross_type || "N/A";
+
+                    return `
+                        <tr>
+                            <td>
+                                ${escapeHtml(
+                                    formatDate(record.received_at)
+                                )}
+                            </td>
+
+                            <td>
+                                <span
+                                    class="
+                                        channel-badge
+                                        channel-algo
+                                    "
+                                >
+                                    Algo App
+                                </span>
+                            </td>
+
+                            <td class="identifier">
+                                ${escapeHtml(eventId)}
+                            </td>
+
+                            <td>
+                                ${escapeHtml(
+                                    record.event_type || "N/A"
+                                )}
+                            </td>
+
+                            <td class="identifier">
+                                ${escapeHtml(
+                                    record.instrument_key || "N/A"
+                                )}
+                            </td>
+
+                            <td>
+                                <span
+                                    class="
+                                        cross-badge
+                                        ${getCrossClass(crossType)}
+                                    "
+                                >
+                                    ${escapeHtml(crossType)}
+                                </span>
+                            </td>
+
+                            <td>
+                                ${escapeHtml(
+                                    record.suggested_order_side
+                                    || "N/A"
+                                )}
+                            </td>
+
+                            <td>
+                                ${escapeHtml(
+                                    record.nearest_instruments_count
+                                    ?? 0
+                                )}
+                            </td>
+
+                            <td>
+                                ${escapeHtml(
+                                    record.budget_instruments_count
+                                    ?? 0
+                                )}
+                            </td>
+
+                            <td>
+                                <div class="actions">
+                                    <button
+                                        class="
+                                            button
+                                            button-primary
+                                            button-small
+                                        "
+                                        type="button"
+                                        data-action="view-algo"
+                                        data-id="${escapeHtml(eventId)}"
+                                    >
+                                        View
+                                    </button>
+
+                                    <button
+                                        class="
+                                            button
+                                            button-danger
+                                            button-small
+                                        "
+                                        type="button"
+                                        data-action="delete-algo"
+                                        data-id="${escapeHtml(eventId)}"
+                                    >
+                                        Delete
+                                    </button>
+                                </div>
+                            </td>
+                        </tr>
+                    `;
+                }).join("");
+        }
+
+        function renderAll() {
+            elements.telegramCount.textContent =
+                String(state.telegramMessages.length);
+
+            elements.algoCount.textContent =
+                String(state.algoEvents.length);
+
+            renderTelegramMessages();
+            renderAlgoEvents();
+        }
+
+        function setLoading(loading) {
+            state.loading = loading;
+
+            elements.refreshButton.disabled = loading;
+
+            elements.refreshButton.textContent =
+                loading
+                    ? "Refreshing..."
+                    : "Refresh";
+        }
+
+        async function loadDashboardData() {
+            if (state.loading) {
+                return;
+            }
+
+            setLoading(true);
+
+            try {
+                const telegramLimit =
+                    Number(elements.telegramLimit.value)
+                    || 100;
+
+                const algoLimit =
+                    Number(elements.algoLimit.value)
+                    || 100;
+
+                const [
+                    health,
+                    telegramResponse,
+                    algoResponse,
+                ] = await Promise.all([
+                    requestJson("/health"),
+                    requestJson(
+                        `/api/telegram/messages?limit=${telegramLimit}&newest_first=true`
+                    ),
+                    requestJson(
+                        `/api/algo/events?limit=${algoLimit}&newest_first=true`
+                    ),
+                ]);
+
+                state.telegramMessages =
+                    Array.isArray(telegramResponse.messages)
+                        ? telegramResponse.messages
+                        : [];
+
+                state.algoEvents =
+                    Array.isArray(algoResponse.events)
+                        ? algoResponse.events
+                        : [];
+
+                elements.telegramCount.textContent =
+                    String(
+                        telegramResponse.total_count
+                        ?? state.telegramMessages.length
+                    );
+
+                elements.algoCount.textContent =
+                    String(
+                        algoResponse.total_count
+                        ?? state.algoEvents.length
+                    );
+
+                elements.serviceStatus.textContent =
+                    health.status === "healthy"
+                        ? "Healthy"
+                        : String(health.status || "Unknown");
+
+                elements.lastRefresh.textContent =
+                    new Date().toLocaleTimeString();
+
+                renderTelegramMessages();
+                renderAlgoEvents();
+            } catch (error) {
+                elements.serviceStatus.textContent =
+                    "Unavailable";
+
+                showToast(
+                    `Dashboard refresh failed: ${error.message}`,
+                    "error"
+                );
+            } finally {
+                setLoading(false);
+            }
+        }
+
+        function openModal(title, value) {
+            elements.detailsModalTitle.textContent = title;
+            elements.detailsContent.textContent =
+                JSON.stringify(value, null, 2);
+
+            elements.detailsModal.classList.add("visible");
+        }
+
+        function closeModal() {
+            elements.detailsModal.classList.remove(
+                "visible"
+            );
+        }
+
+        async function viewTelegramMessage(messageId) {
+            try {
+                const response = await requestJson(
+                    `/api/telegram/messages/${encodeURIComponent(messageId)}`
+                );
+
+                openModal(
+                    `Telegram Message: ${messageId}`,
+                    response.message
+                );
+            } catch (error) {
+                showToast(error.message, "error");
+            }
+        }
+
+        async function viewAlgoEvent(eventId) {
+            try {
+                const response = await requestJson(
+                    `/api/algo/events/${encodeURIComponent(eventId)}`
+                );
+
+                openModal(
+                    `Algo Event: ${eventId}`,
+                    response.event
+                );
+            } catch (error) {
+                showToast(error.message, "error");
+            }
+        }
+
+        async function deleteTelegramMessage(messageId) {
+            if (
+                !window.confirm(
+                    `Delete Telegram message ${messageId}?`
+                )
+            ) {
+                return;
+            }
+
+            try {
+                await requestJson(
+                    `/api/telegram/messages/${encodeURIComponent(messageId)}`,
+                    {
+                        method: "DELETE",
+                    }
+                );
+
+                showToast(
+                    "Telegram message deleted.",
+                    "success"
+                );
+
+                await loadDashboardData();
+            } catch (error) {
+                showToast(error.message, "error");
+            }
+        }
+
+        async function deleteAlgoEvent(eventId) {
+            if (
+                !window.confirm(
+                    `Delete Algo App event ${eventId}?`
+                )
+            ) {
+                return;
+            }
+
+            try {
+                await requestJson(
+                    `/api/algo/events/${encodeURIComponent(eventId)}`,
+                    {
+                        method: "DELETE",
+                    }
+                );
+
+                showToast(
+                    "Algo App event deleted.",
+                    "success"
+                );
+
+                await loadDashboardData();
+            } catch (error) {
+                showToast(error.message, "error");
+            }
+        }
+
+        async function clearTelegramMessages() {
+            if (
+                !window.confirm(
+                    "Clear all local Telegram messages?"
+                )
+            ) {
+                return;
+            }
+
+            try {
+                await requestJson(
+                    "/api/telegram/messages",
+                    {
+                        method: "DELETE",
+                    }
+                );
+
+                showToast(
+                    "All Telegram messages cleared.",
+                    "success"
+                );
+
+                await loadDashboardData();
+            } catch (error) {
+                showToast(error.message, "error");
+            }
+        }
+
+        async function clearAlgoEvents() {
+            if (
+                !window.confirm(
+                    "Clear all local Algo App events?"
+                )
+            ) {
+                return;
+            }
+
+            try {
+                await requestJson(
+                    "/api/algo/events",
+                    {
+                        method: "DELETE",
+                    }
+                );
+
+                showToast(
+                    "All Algo App events cleared.",
+                    "success"
+                );
+
+                await loadDashboardData();
+            } catch (error) {
+                showToast(error.message, "error");
+            }
+        }
+
+        async function clearAllData() {
+            if (
+                !window.confirm(
+                    "Clear all local Telegram and Algo App test data?"
+                )
+            ) {
+                return;
+            }
+
+            try {
+                await requestJson(
+                    "/api/test-data",
+                    {
+                        method: "DELETE",
+                    }
+                );
+
+                showToast(
+                    "All local alert data cleared.",
+                    "success"
+                );
+
+                await loadDashboardData();
+            } catch (error) {
+                showToast(error.message, "error");
+            }
+        }
+
+        async function createTestTelegramMessage() {
+            try {
+                await requestJson(
+                    "/api/test/telegram",
+                    {
+                        method: "POST",
+                    }
+                );
+
+                showToast(
+                    "Test Telegram message created.",
+                    "success"
+                );
+
+                await loadDashboardData();
+            } catch (error) {
+                showToast(error.message, "error");
+            }
+        }
+
+        async function createTestAlgoEvent() {
+            try {
+                await requestJson(
+                    "/api/test/algo",
+                    {
+                        method: "POST",
+                    }
+                );
+
+                showToast(
+                    "Test Algo App event created.",
+                    "success"
+                );
+
+                await loadDashboardData();
+            } catch (error) {
+                showToast(error.message, "error");
+            }
+        }
+
+        elements.refreshButton.addEventListener(
+            "click",
+            loadDashboardData
+        );
+
+        elements.clearAllButton.addEventListener(
+            "click",
+            clearAllData
+        );
+
+        elements.clearTelegramButton.addEventListener(
+            "click",
+            clearTelegramMessages
+        );
+
+        elements.clearAlgoButton.addEventListener(
+            "click",
+            clearAlgoEvents
+        );
+
+        elements.testTelegramButton.addEventListener(
+            "click",
+            createTestTelegramMessage
+        );
+
+        elements.testAlgoButton.addEventListener(
+            "click",
+            createTestAlgoEvent
+        );
+
+        elements.telegramSearch.addEventListener(
+            "input",
+            renderTelegramMessages
+        );
+
+        elements.telegramLevelFilter.addEventListener(
+            "change",
+            renderTelegramMessages
+        );
+
+        elements.telegramLimit.addEventListener(
+            "change",
+            loadDashboardData
+        );
+
+        elements.algoSearch.addEventListener(
+            "input",
+            renderAlgoEvents
+        );
+
+        elements.algoCrossFilter.addEventListener(
+            "change",
+            renderAlgoEvents
+        );
+
+        elements.algoLimit.addEventListener(
+            "change",
+            loadDashboardData
+        );
+
+        elements.telegramTableBody.addEventListener(
+            "click",
+            (event) => {
+                const button = event.target.closest(
+                    "button[data-action]"
+                );
+
+                if (!button) {
+                    return;
+                }
+
+                const action = button.dataset.action;
+                const identifier = button.dataset.id;
+
+                if (action === "view-telegram") {
+                    viewTelegramMessage(identifier);
+                }
+
+                if (action === "delete-telegram") {
+                    deleteTelegramMessage(identifier);
+                }
+            }
+        );
+
+        elements.algoTableBody.addEventListener(
+            "click",
+            (event) => {
+                const button = event.target.closest(
+                    "button[data-action]"
+                );
+
+                if (!button) {
+                    return;
+                }
+
+                const action = button.dataset.action;
+                const identifier = button.dataset.id;
+
+                if (action === "view-algo") {
+                    viewAlgoEvent(identifier);
+                }
+
+                if (action === "delete-algo") {
+                    deleteAlgoEvent(identifier);
+                }
+            }
+        );
+
+        elements.closeModalButton.addEventListener(
+            "click",
+            closeModal
+        );
+
+        elements.detailsModal.addEventListener(
+            "click",
+            (event) => {
+                if (event.target === elements.detailsModal) {
+                    closeModal();
+                }
+            }
+        );
+
+        document.addEventListener(
+            "keydown",
+            (event) => {
+                if (event.key === "Escape") {
+                    closeModal();
+                }
+            }
+        );
+
+        loadDashboardData();
+
+        window.setInterval(
+            loadDashboardData,
+            10000
+        );
+    </script>
+</body>
+</html>

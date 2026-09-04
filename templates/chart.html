@@ -1,386 +1,91 @@
 {% extends "base.html" %}
-
 {% block title %}{{ instrument_name or instrument_key }} - Trading Dashboard{% endblock %}
-
 {% block head %}
-<!-- Bootstrap 5.3 -->
-<link
-    href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
-    rel="stylesheet"
-/>
-
-<!-- Bootstrap Icons -->
-<link
-    rel="stylesheet"
-    href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css"
-/>
-
-<!-- Lightweight Charts -->
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet"/>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css"/>
 <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
-
 <style>
-    :root {
-        --bg: #131722;
-        --surface: #1e222d;
-        --surface-2: #2a2e39;
-        --surface-3: #363c4e;
-        --border: #2a2e39;
-        --text: #d1d4dc;
-        --muted: #787b86;
-        --blue: #2962ff;
-        --green: #089981;
-        --red: #f23645;
-        --yellow: #f5c451;
-        --shadow: 0 12px 30px rgba(0, 0, 0, 0.5);
-    }
-
-    body {
-        background: var(--bg);
-        color: var(--text);
-        overflow: hidden;
-    }
-
-    /* Sub-header Bar */
-    .sub-header {
-        height: 56px;
-        background: var(--surface);
-        border-bottom: 1px solid var(--border);
-    }
-
-    .index-live-pill {
-        padding: 2px 6px;
-        border-radius: 4px;
-        background: rgba(8, 153, 129, 0.15);
-        color: var(--green);
-        font-size: 10px;
-        font-weight: 700;
-    }
-
-    .connection-status {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        padding: 4px 10px;
-        border: 1px solid var(--border);
-        border-radius: 20px;
-        background: var(--surface-2);
-        color: var(--muted);
-        font-size: 11px;
-        font-weight: 600;
-    }
-
-    .status-dot {
-        width: 7px;
-        height: 7px;
-        border-radius: 50%;
-        background: var(--muted);
-    }
-
-    .connection-status.connecting { color: var(--yellow); }
-    .connection-status.connecting .status-dot { background: var(--yellow); }
-    .connection-status.connected { color: var(--green); }
-    .connection-status.connected .status-dot {
-        background: var(--green);
-        box-shadow: 0 0 8px rgba(8, 153, 129, 0.8);
-    }
-    .connection-status.disconnected { color: var(--red); }
-    .connection-status.disconnected .status-dot { background: var(--red); }
-
-    /* Chart Layout */
-    .chart-wrapper {
-        position: relative;
-        width: 100%;
-        height: calc(100vh - 56px);
-        background: var(--bg);
-    }
-
-    #chart {
-        width: 100%;
-        height: 100%;
-    }
-
-    /* Floating Instrument Panel */
-    .instrument-panel {
-        position: absolute;
-        z-index: 100;
-        width: 400px;
-        max-width: calc(100vw - 24px);
-        max-height: calc(100vh - 120px);
-        overflow: hidden;
-        background: rgba(30, 34, 45, 0.95);
-        border: 1px solid var(--border);
-        border-radius: 12px;
-        box-shadow: var(--shadow);
-        backdrop-filter: blur(12px);
-        transition: transform 0.2s ease, opacity 0.2s ease, top 0.2s ease, left 0.2s ease, right 0.2s ease, bottom 0.2s ease;
-    }
-
-    /* Panel Dynamic Positioning Classes */
-    .panel-pos-top-left { top: 12px; left: 12px; right: auto; bottom: auto; transform: none; }
-    .panel-pos-top-right { top: 12px; right: 12px; left: auto; bottom: auto; transform: none; }
-    .panel-pos-bottom-left { bottom: 12px; left: 12px; right: auto; top: auto; transform: none; }
-    .panel-pos-bottom-right { bottom: 12px; right: 12px; left: auto; top: auto; transform: none; }
-    .panel-pos-top-center { top: 12px; left: 50%; right: auto; bottom: auto; transform: translateX(-50%); }
-    .panel-pos-bottom-center { bottom: 12px; left: 50%; right: auto; top: auto; transform: translateX(-50%); }
-    .panel-pos-left-middle { top: 50%; left: 12px; right: auto; bottom: auto; transform: translateY(-50%); }
-    .panel-pos-right-middle { top: 50%; right: 12px; left: auto; bottom: auto; transform: translateY(-50%); }
-    .panel-pos-center { top: 50%; left: 50%; right: auto; bottom: auto; transform: translate(-50%, -50%); }
-
-    /* Dark Mode Text High Contrast Rule */
-    .instrument-panel.dark-theme, .instrument-panel.dark-theme * {
-        color: #ffffff !important;
-    }
-    .instrument-panel.dark-theme .text-muted {
-        color: #b0b8c4 !important;
-    }
-
-    .instrument-panel.collapsed {
-        width: 0;
-        opacity: 0;
-        pointer-events: none;
-        border: 0;
-    }
-
-    .panel-header {
-        padding: 12px;
-        border-bottom: 1px solid var(--border);
-    }
-
-    .view-tabs {
-        display: grid;
-        grid-template-columns: 1fr 1fr;
-        gap: 4px;
-        padding: 3px;
-        border-radius: 8px;
-        background: #131722;
-    }
-
-    .view-tab {
-        height: 32px;
-        border: 0;
-        border-radius: 6px;
-        background: transparent;
-        color: var(--muted);
-        font-size: 12px;
-        font-weight: 700;
-        transition: all 0.15s ease;
-    }
-
-    .view-tab:hover {
-        color: #fff;
-        background: var(--surface-2);
-    }
-
-    .view-tab.active {
-        background: var(--blue);
-        color: #fff !important;
-    }
-
-    .panel-body {
-        max-height: calc(100vh - 240px);
-        padding: 10px;
-        overflow-y: auto;
-    }
-
-    .panel-body::-webkit-scrollbar {
-        width: 4px;
-    }
-    .panel-body::-webkit-scrollbar-thumb {
-        background: var(--surface-3);
-        border-radius: 4px;
-    }
-
-    /* Cards & Option Items */
-    .index-card {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        padding: 12px;
-        border: 1px solid rgba(41, 98, 255, 0.3);
-        border-radius: 8px;
-        background: linear-gradient(135deg, rgba(41, 98, 255, 0.15), rgba(41, 98, 255, 0.03));
-        text-decoration: none;
-        transition: all 0.15s ease;
-    }
-
-    .index-card:hover {
-        border-color: var(--blue);
-    }
-
-    .options-grid {
-        display: grid;
-        grid-template-columns: 1fr 1fr;
-        gap: 8px;
-    }
-
-    .column-heading {
-        position: sticky;
-        top: 0;
-        z-index: 5;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        height: 28px;
-        margin-bottom: 6px;
-        border: 1px solid var(--border);
-        border-radius: 6px;
-        background: var(--surface);
-        font-size: 10px;
-        font-weight: 800;
-    }
-
-    .call-heading { color: var(--green); }
-    .put-heading { color: var(--red); }
-
-    .option-card {
-        position: relative;
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        padding: 8px 10px;
-        margin-bottom: 6px;
-        border: 1px solid transparent;
-        border-radius: 8px;
-        background: var(--surface-2);
-        text-decoration: none;
-        transition: all 0.15s ease;
-    }
-
-    .option-card:hover {
-        background: var(--surface-3);
-    }
-
-    .option-card.nearest-option {
-        border-color: rgba(245, 196, 81, 0.6);
-        background: linear-gradient(135deg, rgba(245, 196, 81, 0.12), var(--surface-2));
-    }
-
-    .option-badge {
-        padding: 2px 5px;
-        border-radius: 4px;
-        font-size: 9px;
-        font-weight: 800;
-    }
-
-    .call-badge { background: rgba(8, 153, 129, 0.15); color: var(--green); }
-    .put-badge { background: rgba(242, 54, 69, 0.15); color: var(--red); }
-
-    .nearest-badge {
-        position: absolute;
-        top: -4px;
-        right: 6px;
-        padding: 1px 4px;
-        border-radius: 3px;
-        background: var(--yellow);
-        color: #111 !important;
-        font-size: 7px;
-        font-weight: 900;
-    }
-
-    /* Historical Data Loading Overlay Trigger */
-    .history-load-banner {
-        position: absolute;
-        top: 16px;
-        left: 50%;
-        transform: translateX(-50%);
-        z-index: 90;
-        display: none;
-        align-items: center;
-        gap: 8px;
-        padding: 6px 14px;
-        border-radius: 20px;
-        background: var(--surface-2);
-        border: 1px solid var(--blue);
-        color: #ffffff;
-        font-size: 12px;
-        font-weight: 600;
-        box-shadow: var(--shadow);
-        cursor: pointer;
-    }
-
-    .history-load-banner:hover {
-        background: var(--blue);
-    }
-
-    /* Floating Controls */
-    .chart-controls {
-        position: absolute;
-        right: 16px;
-        bottom: 16px;
-        z-index: 150;
-        display: flex;
-        gap: 8px;
-    }
-
-    .chart-control-btn {
-        width: 38px;
-        height: 38px;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        border: 1px solid var(--border);
-        border-radius: 8px;
-        background: var(--surface);
-        color: var(--text);
-        box-shadow: var(--shadow);
-        cursor: pointer;
-        transition: all 0.15s ease;
-    }
-
-    .chart-control-btn:hover {
-        background: var(--surface-2);
-        color: #fff;
-        border-color: var(--blue);
-    }
-
-    /* Settings Canvas */
-    .settings-offcanvas {
-        background: var(--surface) !important;
-        color: var(--text);
-    }
+:root{--bg:#131722;--surface:#1e222d;--surface-2:#2a2e39;--surface-3:#363c4e;--border:#2a2e39;--text:#d1d4dc;--muted:#787b86;--blue:#2962ff;--green:#089981;--red:#f23645;--yellow:#f5c451;--shadow:0 12px 30px rgba(0,0,0,0.5)}
+body{background:var(--bg);color:var(--text);overflow:hidden}
+.sub-header{height:56px;background:var(--surface);border-bottom:1px solid var(--border)}
+.index-live-pill{padding:2px 6px;border-radius:4px;background:rgba(8,153,129,0.15);color:var(--green);font-size:10px;font-weight:700}
+.connection-status{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border:1px solid var(--border);border-radius:20px;background:var(--surface-2);color:var(--muted);font-size:11px;font-weight:600}
+.status-dot{width:7px;height:7px;border-radius:50%;background:var(--muted)}
+.connection-status.connecting{color:var(--yellow)}
+.connection-status.connecting .status-dot{background:var(--yellow)}
+.connection-status.connected{color:var(--green)}
+.connection-status.connected .status-dot{background:var(--green);box-shadow:0 0 8px rgba(8,153,129,0.8)}
+.connection-status.disconnected{color:var(--red)}
+.connection-status.disconnected .status-dot{background:var(--red)}
+.chart-wrapper{position:relative;width:100%;height:calc(100vh - 56px);background:var(--bg)}
+#chart{width:100%;height:100%}
+.instrument-panel{position:absolute;z-index:100;width:400px;max-width:calc(100vw - 24px);max-height:calc(100vh - 120px);overflow:hidden;background:rgba(30,34,45,0.95);border:1px solid var(--border);border-radius:12px;box-shadow:var(--shadow);backdrop-filter:blur(12px);transition:transform .2s ease,opacity .2s ease,top .2s ease,left .2s ease,right .2s ease,bottom .2s ease}
+.panel-pos-top-left{top:12px;left:12px;right:auto;bottom:auto;transform:none}
+.panel-pos-top-right{top:12px;right:12px;left:auto;bottom:auto;transform:none}
+.panel-pos-bottom-left{bottom:12px;left:12px;right:auto;top:auto;transform:none}
+.panel-pos-bottom-right{bottom:12px;right:12px;left:auto;top:auto;transform:none}
+.panel-pos-top-center{top:12px;left:50%;right:auto;bottom:auto;transform:translateX(-50%)}
+.panel-pos-bottom-center{bottom:12px;left:50%;right:auto;top:auto;transform:translateX(-50%)}
+.panel-pos-left-middle{top:50%;left:12px;right:auto;bottom:auto;transform:translateY(-50%)}
+.panel-pos-right-middle{top:50%;right:12px;left:auto;bottom:auto;transform:translateY(-50%)}
+.panel-pos-center{top:50%;left:50%;right:auto;bottom:auto;transform:translate(-50%,-50%)}
+.instrument-panel.dark-theme,.instrument-panel.dark-theme *{color:#ffffff !important}
+.instrument-panel.dark-theme .text-muted{color:#b0b8c4 !important}
+.instrument-panel.collapsed{width:0;opacity:0;pointer-events:none;border:0}
+.panel-header{padding:12px;border-bottom:1px solid var(--border)}
+.view-tabs{display:grid;grid-template-columns:1fr 1fr;gap:4px;padding:3px;border-radius:8px;background:#131722}
+.view-tab{height:32px;border:0;border-radius:6px;background:transparent;color:var(--muted);font-size:12px;font-weight:700;transition:all .15s ease}
+.view-tab:hover{color:#fff;background:var(--surface-2)}
+.view-tab.active{background:var(--blue);color:#fff !important}
+.panel-body{max-height:calc(100vh - 240px);padding:10px;overflow-y:auto}
+.panel-body::-webkit-scrollbar{width:4px}
+.panel-body::-webkit-scrollbar-thumb{background:var(--surface-3);border-radius:4px}
+.index-card{display:flex;align-items:center;justify-content:space-between;padding:12px;border:1px solid rgba(41,98,255,0.3);border-radius:8px;background:linear-gradient(135deg,rgba(41,98,255,0.15),rgba(41,98,255,0.03));text-decoration:none;transition:all .15s ease}
+.index-card:hover{border-color:var(--blue)}
+.options-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.column-heading{position:sticky;top:0;z-index:5;display:flex;align-items:center;justify-content:center;height:28px;margin-bottom:6px;border:1px solid var(--border);border-radius:6px;background:var(--surface);font-size:10px;font-weight:800}
+.call-heading{color:var(--green)}
+.put-heading{color:var(--red)}
+.option-card{position:relative;display:flex;align-items:center;justify-content:space-between;padding:8px 10px;margin-bottom:6px;border:1px solid transparent;border-radius:8px;background:var(--surface-2);text-decoration:none;transition:all .15s ease}
+.option-card:hover{background:var(--surface-3)}
+.option-card.nearest-option{border-color:rgba(245,196,81,0.6);background:linear-gradient(135deg,rgba(245,196,81,0.12),var(--surface-2))}
+.option-badge{padding:2px 5px;border-radius:4px;font-size:9px;font-weight:800}
+.call-badge{background:rgba(8,153,129,0.15);color:var(--green)}
+.put-badge{background:rgba(242,54,69,0.15);color:var(--red)}
+.nearest-badge{position:absolute;top:-4px;right:6px;padding:1px 4px;border-radius:3px;background:var(--yellow);color:#111 !important;font-size:7px;font-weight:900}
+.history-load-banner{position:absolute;top:16px;left:50%;transform:translateX(-50%);z-index:90;display:none;align-items:center;gap:8px;padding:6px 14px;border-radius:20px;background:var(--surface-2);border:1px solid var(--blue);color:#ffffff;font-size:12px;font-weight:600;box-shadow:var(--shadow);cursor:pointer}
+.history-load-banner:hover{background:var(--blue)}
+.chart-controls{position:absolute;right:16px;bottom:16px;z-index:150;display:flex;gap:8px}
+.chart-control-btn{width:38px;height:38px;display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--text);box-shadow:var(--shadow);cursor:pointer;transition:all .15s ease}
+.chart-control-btn:hover{background:var(--surface-2);color:#fff;border-color:var(--blue)}
+.settings-offcanvas{background:var(--surface) !important;color:var(--text)}
 </style>
 {% endblock %}
-
 {% block content %}
-<!-- SUB-HEADER BAR -->
 <div class="sub-header px-3 d-flex align-items-center justify-content-between">
     <div class="d-flex align-items-center gap-2 text-truncate">
-        <h6 class="m-0 fw-bold text-white text-truncate">
-            {{ instrument_name or instrument_key }}
-        </h6>
-        <span class="index-live-pill">
-            <i class="bi bi-broadcast"></i> LIVE
-        </span>
-        <small class="text-muted d-none d-sm-inline text-truncate ms-2">
-            {{ instrument_key }}
-        </small>
+        <h6 class="m-0 fw-bold text-white text-truncate">{{ instrument_name or instrument_key }}</h6>
+        <span class="index-live-pill"><i class="bi bi-broadcast"></i> LIVE</span>
+        <small class="text-muted d-none d-sm-inline text-truncate ms-2">{{ instrument_key }}</small>
     </div>
-
     <div class="d-flex align-items-center gap-3 flex-shrink-0">
         <div class="text-end">
-            <div class="text-uppercase text-muted small" style="font-size: 9px; letter-spacing: 0.5px;">Live Price</div>
+            <div class="text-uppercase text-muted small" style="font-size:9px;letter-spacing:.5px;">Live Price</div>
             <div class="fw-bold text-white fs-6" id="livePrice">--</div>
         </div>
-
         <div class="connection-status connecting" id="connectionStatus">
             <span class="status-dot"></span>
             <span id="connectionStatusText">Connecting</span>
         </div>
     </div>
 </div>
-
-<!-- CHART CONTAINER & FLOATING PANEL -->
 <div class="chart-wrapper">
     <div id="chart"></div>
-
-    <!-- On-Demand History Prompt Banner -->
     <div class="history-load-banner" id="historyLoadBanner">
         <i class="bi bi-clock-history"></i>
         <span>Scroll to end reached. Load past historical data?</span>
         <button class="btn btn-sm btn-primary py-0 px-2 rounded-pill ms-2" id="triggerLoadHistoryBtn">Load</button>
     </div>
-
-    <!-- Floating Panel -->
     <aside class="instrument-panel panel-pos-top-left dark-theme" id="instrumentPanel">
         <div class="panel-header">
             <div class="d-flex align-items-center justify-content-between mb-2">
@@ -388,120 +93,53 @@
                     <i class="bi bi-grid-3x3-gap-fill text-primary"></i>
                     <span>Instruments</span>
                 </div>
-                <span class="badge bg-dark text-muted border border-secondary">
-                    {{ instruments | length }}
-                </span>
+                <span class="badge bg-dark text-muted border border-secondary">{{ instruments | length }}</span>
             </div>
-
-            <!-- View Tabs -->
             <div class="view-tabs mb-2">
-                <button type="button" class="view-tab active" id="indexBtn">
-                    <i class="bi bi-bar-chart-line me-1"></i> Index
-                </button>
-                <button type="button" class="view-tab" id="optionsBtn">
-                    <i class="bi bi-diagram-3 me-1"></i> Options
-                </button>
+                <button type="button" class="view-tab active" id="indexBtn"><i class="bi bi-bar-chart-line me-1"></i> Index</button>
+                <button type="button" class="view-tab" id="optionsBtn"><i class="bi bi-diagram-3 me-1"></i> Options</button>
             </div>
-
-            <!-- Search Bar -->
             <div class="input-group input-group-sm">
-                <span class="input-group-text bg-dark border-secondary text-muted">
-                    <i class="bi bi-search"></i>
-                </span>
-                <input
-                    type="search"
-                    id="instrumentSearch"
-                    class="form-control bg-dark border-secondary text-white shadow-none"
-                    placeholder="Search strike, expiry, CE / PE..."
-                    autocomplete="off"
-                />
+                <span class="input-group-text bg-dark border-secondary text-muted"><i class="bi bi-search"></i></span>
+                <input type="search" id="instrumentSearch" class="form-control bg-dark border-secondary text-white shadow-none" placeholder="Search strike, expiry, CE / PE..." autocomplete="off"/>
             </div>
         </div>
-
-        <!-- Panel Body -->
         <div class="panel-body">
-            <!-- Index View -->
             <div id="indexView">
-                <a
-                    href="/chart/{{ 'NSE_INDEX|Nifty 50' | urlencode }}"
-                    class="index-card searchable-card"
-                    data-search="nifty 50 main index"
-                >
-                    <div>
-                        <div class="fw-bold text-white">NIFTY 50</div>
-                        <div class="text-muted small">Main Index</div>
-                    </div>
-                    <div class="text-success small fw-bold d-flex align-items-center gap-1">
-                        <i class="bi bi-circle-fill" style="font-size: 8px;"></i> LIVE
-                    </div>
+                <a href="/chart/{{ 'NSE_INDEX|Nifty 50' | urlencode }}" class="index-card searchable-card" data-search="nifty 50 main index">
+                    <div><div class="fw-bold text-white">NIFTY 50</div><div class="text-muted small">Main Index</div></div>
+                    <div class="text-success small fw-bold d-flex align-items-center gap-1"><i class="bi bi-circle-fill" style="font-size:8px;"></i> LIVE</div>
                 </a>
-
-                <div class="text-center text-muted small py-3" id="indexNoResults" hidden>
-                    No matching index found
-                </div>
+                <div class="text-center text-muted small py-3" id="indexNoResults" hidden>No matching index found</div>
             </div>
-
-            <!-- Options View -->
             <div id="optionsView" hidden>
                 <div class="d-flex justify-content-between align-items-center mb-2 px-1">
                     <span class="small fw-bold text-white">Nearest to NIFTY 50</span>
                     <span class="small fw-bold text-warning" id="optionsReferencePrice">LTP --</span>
                 </div>
-
                 <div class="options-grid">
-                    <!-- CALLS -->
                     <div>
-                        <div class="column-heading call-heading">
-                            <i class="bi bi-arrow-up-right me-1"></i> CALL
-                        </div>
+                        <div class="column-heading call-heading"><i class="bi bi-arrow-up-right me-1"></i> CALL</div>
                         {% set call_options = instruments | selectattr('option_type', 'equalto', 'CE') | list %}
                         <div id="callOptions">
                             {% for item in call_options | sort(attribute='strike_price') %}
-                            <a
-                                href="/chart/{{ item.instrument_key | urlencode }}"
-                                class="option-card searchable-card"
-                                data-strike="{{ item.strike_price }}"
-                                data-option-type="CE"
-                                data-search="{{ item.strike_price | int }} {{ item.expiry }} ce call"
-                            >
-                                <div>
-                                    <div class="fw-bold text-white small">{{ item.strike_price | int }}</div>
-                                    <div class="text-muted" style="font-size: 9px;">{{ item.expiry }}</div>
-                                </div>
-                                <div class="d-flex align-items-center gap-1">
-                                    <span class="option-distance text-muted" style="font-size: 8px;"></span>
-                                    <span class="option-badge call-badge">CE</span>
-                                </div>
+                            <a href="/chart/{{ item.instrument_key | urlencode }}" class="option-card searchable-card" data-strike="{{ item.strike_price }}" data-option-type="CE" data-search="{{ item.strike_price | int }} {{ item.expiry }} ce call">
+                                <div><div class="fw-bold text-white small">{{ item.strike_price | int }}</div><div class="text-muted" style="font-size:9px;">{{ item.expiry }}</div></div>
+                                <div class="d-flex align-items-center gap-1"><span class="option-distance text-muted" style="font-size:8px;"></span><span class="option-badge call-badge">CE</span></div>
                             </a>
                             {% else %}
                             <div class="text-center text-muted small py-2">No call options</div>
                             {% endfor %}
                         </div>
                     </div>
-
-                    <!-- PUTS -->
                     <div>
-                        <div class="column-heading put-heading">
-                            <i class="bi bi-arrow-down-right me-1"></i> PUT
-                        </div>
+                        <div class="column-heading put-heading"><i class="bi bi-arrow-down-right me-1"></i> PUT</div>
                         {% set put_options = instruments | selectattr('option_type', 'equalto', 'PE') | list %}
                         <div id="putOptions">
                             {% for item in put_options | sort(attribute='strike_price') %}
-                            <a
-                                href="/chart/{{ item.instrument_key | urlencode }}"
-                                class="option-card searchable-card"
-                                data-strike="{{ item.strike_price }}"
-                                data-option-type="PE"
-                                data-search="{{ item.strike_price | int }} {{ item.expiry }} pe put"
-                            >
-                                <div>
-                                    <div class="fw-bold text-white small">{{ item.strike_price | int }}</div>
-                                    <div class="text-muted" style="font-size: 9px;">{{ item.expiry }}</div>
-                                </div>
-                                <div class="d-flex align-items-center gap-1">
-                                    <span class="option-distance text-muted" style="font-size: 8px;"></span>
-                                    <span class="option-badge put-badge">PE</span>
-                                </div>
+                            <a href="/chart/{{ item.instrument_key | urlencode }}" class="option-card searchable-card" data-strike="{{ item.strike_price }}" data-option-type="PE" data-search="{{ item.strike_price | int }} {{ item.expiry }} pe put">
+                                <div><div class="fw-bold text-white small">{{ item.strike_price | int }}</div><div class="text-muted" style="font-size:9px;">{{ item.expiry }}</div></div>
+                                <div class="d-flex align-items-center gap-1"><span class="option-distance text-muted" style="font-size:8px;"></span><span class="option-badge put-badge">PE</span></div>
                             </a>
                             {% else %}
                             <div class="text-center text-muted small py-2">No put options</div>
@@ -509,53 +147,21 @@
                         </div>
                     </div>
                 </div>
-
-                <div class="text-center text-muted small py-3" id="optionsNoResults" hidden>
-                    No matching options found
-                </div>
+                <div class="text-center text-muted small py-3" id="optionsNoResults" hidden>No matching options found</div>
             </div>
         </div>
     </aside>
-
-    <!-- Floating Chart Controls -->
     <div class="chart-controls">
-        <button
-            type="button"
-            class="chart-control-btn"
-            data-bs-toggle="offcanvas"
-            data-bs-target="#settingsPanel"
-            title="Chart settings"
-        >
-            <i class="bi bi-gear"></i>
-        </button>
-
-        <button
-            type="button"
-            class="chart-control-btn"
-            id="collapseBtn"
-            title="Collapse instrument selector"
-        >
-            <i class="bi bi-layout-sidebar-inset"></i>
-        </button>
+        <button type="button" class="chart-control-btn" data-bs-toggle="offcanvas" data-bs-target="#settingsPanel" title="Chart settings"><i class="bi bi-gear"></i></button>
+        <button type="button" class="chart-control-btn" id="collapseBtn" title="Collapse instrument selector"><i class="bi bi-layout-sidebar-inset"></i></button>
     </div>
 </div>
-
-<!-- SETTINGS OFFCANVAS -->
-<div
-    class="offcanvas offcanvas-end settings-offcanvas"
-    tabindex="-1"
-    id="settingsPanel"
-    aria-labelledby="settingsPanelLabel"
->
+<div class="offcanvas offcanvas-end settings-offcanvas" tabindex="-1" id="settingsPanel" aria-labelledby="settingsPanelLabel">
     <div class="offcanvas-header border-bottom border-secondary">
-        <h5 class="offcanvas-title fs-6 fw-bold text-white" id="settingsPanelLabel">
-            <i class="bi bi-gear me-2"></i> Customization & Settings
-        </h5>
+        <h5 class="offcanvas-title fs-6 fw-bold text-white" id="settingsPanelLabel"><i class="bi bi-gear me-2"></i> Customization & Settings</h5>
         <button type="button" class="btn-close btn-close-white" data-bs-dismiss="offcanvas" aria-label="Close"></button>
     </div>
-
     <div class="offcanvas-body">
-        <!-- Panel Positioning Control -->
         <div class="p-3 border border-secondary rounded bg-dark mb-3">
             <div class="fw-bold text-white small mb-2"><i class="bi bi-arrows-move me-1 text-primary"></i> Panel Positioning</div>
             <select id="panelPosSelect" class="form-select form-select-sm bg-secondary text-white border-0">
@@ -570,588 +176,61 @@
                 <option value="panel-pos-center">Center</option>
             </select>
         </div>
-
-        <!-- Background / Text Color Control -->
         <div class="p-3 border border-secondary rounded bg-dark mb-3">
             <div class="fw-bold text-white small mb-2"><i class="bi bi-palette me-1 text-primary"></i> Panel Background Color</div>
             <div class="d-flex align-items-center gap-2">
                 <input type="color" id="panelBgColorPicker" class="form-control form-control-color bg-transparent border-0" value="#1e222d" title="Choose background color">
                 <span class="small text-muted" id="panelBgHex">#1e222d</span>
             </div>
-            <small class="text-muted mt-2 d-block" style="font-size: 11px;">
-                Dark or medium-dark backgrounds automatically enforce high-contrast white text for best readability.
-            </small>
+            <small class="text-muted mt-2 d-block" style="font-size:11px;">Dark or medium-dark backgrounds automatically enforce high-contrast white text for best readability.</small>
         </div>
-
         <div class="p-3 border border-secondary rounded bg-dark mb-3">
             <div class="fw-bold text-white small mb-1">On-Demand Historical Data</div>
             <div class="text-muted small">When scrolling left past the oldest candle, past data is loaded only when you click the popup prompt.</div>
         </div>
     </div>
 </div>
-
-<!-- SERVER DATA & SCRIPTS -->
-<script id="instrument-key-data" type="application/json">
-{{ instrument_key | tojson }}
-</script>
-
-<script id="candles-data" type="application/json">
-{{ candles | tojson }}
-</script>
-
-<!-- Bootstrap JS -->
+<script id="instrument-key-data" type="application/json">{{ instrument_key | tojson }}</script>
+<script id="candles-data" type="application/json">{{ candles | tojson }}</script>
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 {% endblock %}
-
 {% block scripts %}
 <script>
-    /* =========================================================
-       ELEMENTS
-       ========================================================= */
-    const indexBtn = document.getElementById("indexBtn");
-    const optionsBtn = document.getElementById("optionsBtn");
-    const indexView = document.getElementById("indexView");
-    const optionsView = document.getElementById("optionsView");
-
-    const instrumentPanel = document.getElementById("instrumentPanel");
-    const collapseBtn = document.getElementById("collapseBtn");
-    const chartContainer = document.getElementById("chart");
-
-    const connectionStatus = document.getElementById("connectionStatus");
-    const connectionStatusText = document.getElementById("connectionStatusText");
-    const livePrice = document.getElementById("livePrice");
-
-    const instrumentSearch = document.getElementById("instrumentSearch");
-    const optionsReferencePrice = document.getElementById("optionsReferencePrice");
-    const callOptions = document.getElementById("callOptions");
-    const putOptions = document.getElementById("putOptions");
-
-    const indexNoResults = document.getElementById("indexNoResults");
-    const optionsNoResults = document.getElementById("optionsNoResults");
-
-    const panelPosSelect = document.getElementById("panelPosSelect");
-    const panelBgColorPicker = document.getElementById("panelBgColorPicker");
-    const panelBgHex = document.getElementById("panelBgHex");
-
-    const historyLoadBanner = document.getElementById("historyLoadBanner");
-    const triggerLoadHistoryBtn = document.getElementById("triggerLoadHistoryBtn");
-
-    /* =========================================================
-       STATE
-       ========================================================= */
-    let currentInstrumentKey = "";
-    let chartData = [];
-    let chart = null;
-    let candleSeries = null;
-    let lastCandle = null;
-    let oldestCandleTime = null;
-    let chartSocket = null;
-    let reconnectTimer = null;
-    let reconnectAttempts = 0;
-    let pageClosing = false;
-    let currentIndexLtp = null;
-    let isLoadingHistory = false;
-    let hasMoreHistory = true;
-
-    const reconnectMaximumDelay = 15000;
-
-    /* =========================================================
-       PANEL POSITIONING & DARK TEXT DETECTOR
-       ========================================================= */
-    panelPosSelect.addEventListener("change", function() {
-        const selectedClass = this.value;
-        instrumentPanel.className = instrumentPanel.className.replace(/\bpanel-pos-\S+/g, '');
-        instrumentPanel.classList.add(selectedClass);
-    });
-
-    function getLuminance(hexColor) {
-        const rgb = parseInt(hexColor.slice(1), 16);
-        const r = (rgb >> 16) & 0xff;
-        const g = (rgb >>  8) & 0xff;
-        const b = (rgb >>  0) & 0xff;
-        return 0.2126 * r + 0.7152 * g + 0.0722 * b;
-    }
-
-    panelBgColorPicker.addEventListener("input", function() {
-        const colorHex = this.value;
-        panelBgHex.textContent = colorHex;
-        instrumentPanel.style.backgroundColor = colorHex;
-
-        // Luminance < 140 is dark/medium-dark => apply dark-theme white text rules
-        if (getLuminance(colorHex) < 140) {
-            instrumentPanel.classList.add("dark-theme");
-        } else {
-            instrumentPanel.classList.remove("dark-theme");
-        }
-    });
-
-    /* =========================================================
-       VIEW SWITCHING
-       ========================================================= */
-    function activateView(activeButton, activeView) {
-        indexBtn.classList.remove("active");
-        optionsBtn.classList.remove("active");
-        indexView.hidden = true;
-        optionsView.hidden = true;
-
-        activeButton.classList.add("active");
-        activeView.hidden = false;
-
-        if (activeView === optionsView) {
-            updateOptionsFromLtp(currentIndexLtp);
-        }
-    }
-
-    indexBtn.addEventListener("click", () => activateView(indexBtn, indexView));
-    optionsBtn.addEventListener("click", () => activateView(optionsBtn, optionsView));
-
-    /* =========================================================
-       CONNECTION STATUS
-       ========================================================= */
-    function setConnectionStatus(status, text) {
-        connectionStatus.classList.remove("connecting", "connected", "disconnected");
-        connectionStatus.classList.add(status);
-        connectionStatusText.textContent = text;
-    }
-
-    /* =========================================================
-       TIMESTAMP & CANDLE PARSING
-       ========================================================= */
-    function parseTimestamp(value) {
-        if (value === null || value === undefined) return null;
-        if (typeof value === "number") {
-            return value > 1000000000000 ? Math.floor(value / 1000) : Math.floor(value);
-        }
-        const numericValue = Number(value);
-        if (Number.isFinite(numericValue) && String(value).trim() !== "") {
-            return numericValue > 1000000000000 ? Math.floor(numericValue / 1000) : Math.floor(numericValue);
-        }
-        const parsedValue = new Date(value).getTime();
-        return Number.isFinite(parsedValue) ? Math.floor(parsedValue / 1000) : null;
-    }
-
-    function normalizeCandle(rawCandle) {
-        if (!rawCandle || typeof rawCandle !== "object") return null;
-        const time = parseTimestamp(rawCandle.time ?? rawCandle.timestamp ?? rawCandle.ts ?? rawCandle.start_time ?? rawCandle.candle_start_time);
-        const open = Number(rawCandle.open ?? rawCandle.o);
-        const high = Number(rawCandle.high ?? rawCandle.h);
-        const low = Number(rawCandle.low ?? rawCandle.l);
-        const close = Number(rawCandle.close ?? rawCandle.c);
-
-        if (!Number.isFinite(time) || !Number.isFinite(open) || !Number.isFinite(high) || !Number.isFinite(low) || !Number.isFinite(close)) {
-            return null;
-        }
-        return { time, open, high, low, close };
-    }
-
-    /* =========================================================
-       PAYLOAD HELPERS
-       ========================================================= */
-    function getPayloadInstrumentKey(payload) {
-        if (!payload || typeof payload !== "object") return null;
-        return (
-            payload.instrument_key ?? payload.instrumentKey ?? payload.key ??
-            payload.info?.instrument_key ?? payload.data?.instrument_key ??
-            payload.data?.instrumentKey ?? payload.feed?.instrument_key ?? payload.feed?.instrumentKey ?? null
-        );
-    }
-
-    function getPayloadLtp(payload) {
-        if (!payload || typeof payload !== "object") return null;
-        const rawLtp = payload.ltp ?? payload.live_ltp ?? payload.last_price ??
-                       payload.data?.ltp ?? payload.data?.live_ltp ?? payload.data?.last_price ??
-                       payload.feed?.ltp ?? payload.feed?.live_ltp;
-        const ltp = Number(rawLtp);
-        return Number.isFinite(ltp) ? ltp : null;
-    }
-
-    function getPayloadTimestamp(payload) {
-        if (!payload || typeof payload !== "object") return Math.floor(Date.now() / 1000);
-        return parseTimestamp(
-            payload.timestamp ?? payload.time ?? payload.ts ?? payload.updated_at ??
-            payload.data?.timestamp ?? payload.data?.time ?? payload.feed?.timestamp
-        ) ?? Math.floor(Date.now() / 1000);
-    }
-
-    function getPayloadCandle(payload) {
-        if (!payload || typeof payload !== "object") return null;
-        const candidates = [
-            payload.candle, payload.latest_candle, payload.completed_candle, payload.live_candle,
-            payload.data?.candle, payload.data?.latest_candle, payload.data?.completed_candle, payload.data?.live_candle,
-            payload.feed?.candle, payload.feed?.latest_candle
-        ];
-        for (const candidate of candidates) {
-            const candle = normalizeCandle(candidate);
-            if (candle) return candle;
-        }
-        return null;
-    }
-
-    /* =========================================================
-       LIVE PRICE & STRIKE SORTING
-       ========================================================= */
-    function updateLivePrice(ltp) {
-        if (!Number.isFinite(ltp)) return;
-        currentIndexLtp = ltp;
-        livePrice.textContent = ltp.toFixed(2);
-        optionsReferencePrice.textContent = "LTP " + ltp.toFixed(2);
-        updateOptionsFromLtp(ltp);
-    }
-
-    function updateOptionsFromLtp(ltp) {
-        if (!Number.isFinite(ltp)) return;
-        const allOptionCards = document.querySelectorAll(".option-card");
-        if (!allOptionCards.length) return;
-
-        allOptionCards.forEach(card => {
-            const strike = Number(card.dataset.strike);
-            if (!Number.isFinite(strike)) return;
-
-            const distance = Math.abs(strike - ltp);
-            card.dataset.distance = distance;
-
-            const distanceElement = card.querySelector(".option-distance");
-            if (distanceElement) {
-                distanceElement.textContent = distance === 0 ? "ATM" : distance.toFixed(0);
-            }
-
-            card.classList.remove("nearest-option");
-            const existingBadge = card.querySelector(".nearest-badge");
-            if (existingBadge) existingBadge.remove();
-        });
-
-        sortOptionColumn(callOptions, ltp);
-        sortOptionColumn(putOptions, ltp);
-    }
-
-    function sortOptionColumn(container, ltp) {
-        if (!container) return;
-        const cards = Array.from(container.querySelectorAll(".option-card"));
-
-        cards.sort((first, second) => {
-            const firstStrike = Number(first.dataset.strike);
-            const secondStrike = Number(second.dataset.strike);
-            const firstDistance = Math.abs(firstStrike - ltp);
-            const secondDistance = Math.abs(secondStrike - ltp);
-
-            if (firstDistance !== secondDistance) {
-                return firstDistance - secondDistance;
-            }
-            return firstStrike - secondStrike;
-        });
-
-        cards.forEach(card => container.appendChild(card));
-
-        if (cards.length > 0) {
-            const nearest = cards[0];
-            nearest.classList.add("nearest-option");
-            const badge = document.createElement("span");
-            badge.className = "nearest-badge";
-            badge.textContent = "NEAREST";
-            nearest.appendChild(badge);
-        }
-    }
-
-    /* =========================================================
-       CANDLE UPDATES & HISTORICAL ON-SCROLL
-       ========================================================= */
-    function updateCandle(candle) {
-        if (!candleSeries || !candle) return;
-        if (lastCandle && candle.time < lastCandle.time) return;
-
-        candleSeries.update(candle);
-        lastCandle = candle;
-        updateLivePrice(candle.close);
-    }
-
-    function updateCandleFromLtp(ltp, timestamp) {
-        if (!Number.isFinite(ltp) || !candleSeries) return;
-        updateLivePrice(ltp);
-
-        const minuteTimestamp = Math.floor((timestamp || Math.floor(Date.now() / 1000)) / 60) * 60;
-
-        if (!lastCandle || minuteTimestamp > lastCandle.time) {
-            updateCandle({
-                time: minuteTimestamp,
-                open: ltp,
-                high: ltp,
-                low: ltp,
-                close: ltp
-            });
-            return;
-        }
-
-        if (minuteTimestamp < lastCandle.time) return;
-
-        updateCandle({
-            time: lastCandle.time,
-            open: lastCandle.open,
-            high: Math.max(lastCandle.high, ltp),
-            low: Math.min(lastCandle.low, ltp),
-            close: ltp
-        });
-    }
-
-    async function loadOlderHistoricalData() {
-        if (isLoadingHistory || !hasMoreHistory || !oldestCandleTime) return;
-
-        isLoadingHistory = true;
-        triggerLoadHistoryBtn.disabled = true;
-        triggerLoadHistoryBtn.textContent = "Loading...";
-
-        const beforeDateString = new Date(oldestCandleTime * 1000).toISOString().split("T")[0];
-
-        try {
-            const response = await fetch(`/api/older-candles?instrument_key=${encodeURIComponent(currentInstrumentKey)}&before_date=${beforeDateString}`);
-            const result = await response.json();
-
-            if (result && Array.isArray(result.candles) && result.candles.length > 0) {
-                const olderCandles = result.candles.map(normalizeCandle).filter(c => c !== null);
-                const currentData = candleSeries.data();
-                const mergedMap = new Map();
-
-                olderCandles.forEach(c => mergedMap.set(c.time, c));
-                currentData.forEach(c => mergedMap.set(c.time, c));
-
-                const combinedData = Array.from(mergedMap.values()).sort((a, b) => a.time - b.time);
-                candleSeries.setData(combinedData);
-                oldestCandleTime = combinedData[0].time;
-                hasMoreHistory = result.has_more ?? true;
-            } else {
-                hasMoreHistory = false;
-            }
-        } catch (error) {
-            console.error("Failed to load historical candles:", error);
-        } finally {
-            isLoadingHistory = false;
-            historyLoadBanner.style.display = "none";
-            triggerLoadHistoryBtn.disabled = false;
-            triggerLoadHistoryBtn.textContent = "Load";
-        }
-    }
-
-    triggerLoadHistoryBtn.addEventListener("click", loadOlderHistoricalData);
-
-    /* =========================================================
-       WEBSOCKET
-       ========================================================= */
-    function processWebSocketMessage(event) {
-        let payload;
-        try {
-            payload = JSON.parse(event.data);
-        } catch (error) {
-            console.error("Unable to parse WebSocket payload:", error);
-            return;
-        }
-
-        if (!payload || typeof payload !== "object") return;
-        if (payload.type === "connected" || payload.type === "subscribed" || payload.type === "ping" || payload.event === "ping") return;
-
-        const payloadInstrumentKey = getPayloadInstrumentKey(payload);
-        if (!payloadInstrumentKey || payloadInstrumentKey !== currentInstrumentKey) return;
-
-        const candle = getPayloadCandle(payload);
-        if (candle) {
-            updateCandle(candle);
-            return;
-        }
-
-        const ltp = getPayloadLtp(payload);
-        if (ltp === null) return;
-
-        updateCandleFromLtp(ltp, getPayloadTimestamp(payload));
-    }
-
-    function getWebSocketUrl() {
-        const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-        return protocol + "//" + window.location.host + "/all-feeds";
-    }
-
-    function scheduleReconnect() {
-        if (pageClosing || reconnectTimer) return;
-        reconnectAttempts += 1;
-        const reconnectDelay = Math.min(1000 * Math.pow(2, reconnectAttempts - 1), reconnectMaximumDelay);
-
-        setConnectionStatus("disconnected", "Retry " + Math.ceil(reconnectDelay / 1000) + "s");
-
-        reconnectTimer = window.setTimeout(() => {
-            reconnectTimer = null;
-            connectWebSocket();
-        }, reconnectDelay);
-    }
-
-    function connectWebSocket() {
-        if (!currentInstrumentKey || pageClosing) return;
-        if (chartSocket && (chartSocket.readyState === WebSocket.OPEN || chartSocket.readyState === WebSocket.CONNECTING)) return;
-
-        setConnectionStatus("connecting", "Connecting");
-
-        try {
-            chartSocket = new WebSocket(getWebSocketUrl());
-        } catch (error) {
-            console.error("Unable to create WebSocket:", error);
-            chartSocket = null;
-            scheduleReconnect();
-            return;
-        }
-
-        chartSocket.addEventListener("open", () => {
-            reconnectAttempts = 0;
-            setConnectionStatus("connected", "Live");
-        });
-
-        chartSocket.addEventListener("message", processWebSocketMessage);
-        chartSocket.addEventListener("error", (error) => console.error("Chart WebSocket error:", error));
-        chartSocket.addEventListener("close", () => {
-            chartSocket = null;
-            if (!pageClosing) scheduleReconnect();
-        });
-    }
-
-    /* =========================================================
-       SEARCH & PANEL CONTROLS
-       ========================================================= */
-    instrumentSearch.addEventListener("input", function () {
-        const search = this.value.trim().toLowerCase();
-        const activeView = !indexView.hidden ? indexView : optionsView;
-        const cards = activeView.querySelectorAll(".searchable-card");
-        let visibleCount = 0;
-
-        cards.forEach(card => {
-            const text = (card.dataset.search || "").toLowerCase();
-            const matches = !search || text.includes(search);
-            card.hidden = !matches;
-            if (matches) visibleCount++;
-        });
-
-        if (activeView === indexView) {
-            indexNoResults.hidden = visibleCount !== 0;
-        } else {
-            optionsNoResults.hidden = visibleCount !== 0;
-        }
-    });
-
-    collapseBtn.addEventListener("click", () => {
-        const collapsed = instrumentPanel.classList.toggle("collapsed");
-        const icon = collapseBtn.querySelector("i");
-
-        if (collapsed) {
-            icon.className = "bi bi-layout-sidebar-inset";
-            collapseBtn.setAttribute("title", "Expand instrument selector");
-        } else {
-            icon.className = "bi bi-layout-sidebar-inset-reverse";
-            collapseBtn.setAttribute("title", "Collapse instrument selector");
-        }
-
-        window.setTimeout(() => {
-            if (chart) {
-                chart.applyOptions({
-                    width: chartContainer.clientWidth,
-                    height: chartContainer.clientHeight
-                });
-            }
-        }, 230);
-    });
-
-    /* =========================================================
-       INITIALIZATION
-       ========================================================= */
-    try {
-        currentInstrumentKey = JSON.parse(document.getElementById("instrument-key-data").textContent);
-    } catch (error) {
-        console.error("Unable to parse instrument key:", error);
-    }
-
-    if (typeof currentInstrumentKey === "string" && currentInstrumentKey.startsWith("NSE_FO|")) {
-        activateView(optionsBtn, optionsView);
-    }
-
-    try {
-        chartData = JSON.parse(document.getElementById("candles-data").textContent);
-    } catch (error) {
-        console.error("Unable to parse candle data:", error);
-    }
-
-    const formattedData = Array.isArray(chartData)
-        ? chartData
-            .map(normalizeCandle)
-            .filter(c => c !== null)
-            .sort((a, b) => a.time - b.time)
-            .filter((c, i, arr) => i === arr.length - 1 || c.time !== arr[i + 1].time)
-        : [];
-
-    function createChart(candles) {
-        chart = LightweightCharts.createChart(chartContainer, {
-            width: chartContainer.clientWidth,
-            height: chartContainer.clientHeight,
-            layout: {
-                background: { color: "#131722" },
-                textColor: "#d1d4dc"
-            },
-            grid: {
-                vertLines: { color: "#2a2e39" },
-                horzLines: { color: "#2a2e39" }
-            },
-            crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
-            rightPriceScale: { borderColor: "#2a2e39" },
-            timeScale: { borderColor: "#2a2e39", timeVisible: true, secondsVisible: false }
-        });
-
-        const candleOptions = {
-            upColor: "#089981",
-            downColor: "#f23645",
-            borderUpColor: "#089981",
-            borderDownColor: "#f23645",
-            wickUpColor: "#089981",
-            wickDownColor: "#f23645"
-        };
-
-        if (typeof chart.addSeries === "function" && LightweightCharts.CandlestickSeries) {
-            candleSeries = chart.addSeries(LightweightCharts.CandlestickSeries, candleOptions);
-        } else if (typeof chart.addCandlestickSeries === "function") {
-            candleSeries = chart.addCandlestickSeries(candleOptions);
-        }
-
-        if (candles.length > 0) {
-            candleSeries.setData(candles);
-            lastCandle = candles[candles.length - 1];
-            oldestCandleTime = candles[0].time;
-            updateLivePrice(lastCandle.close);
-            chart.timeScale().fitContent();
-        }
-
-        // On-Scroll Historical Range Check Trigger
-        chart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
-            if (!range || isLoadingHistory || !hasMoreHistory) return;
-            if (range.from < 5) {
-                historyLoadBanner.style.display = "flex";
-            } else {
-                historyLoadBanner.style.display = "none";
-            }
-        });
-
-        const resizeChart = () => {
-            if (chart) {
-                chart.applyOptions({
-                    width: chartContainer.clientWidth,
-                    height: chartContainer.clientHeight
-                });
-            }
-        };
-
-        window.addEventListener("resize", resizeChart);
-        if (typeof ResizeObserver !== "undefined") {
-            new ResizeObserver(resizeChart).observe(chartContainer);
-        }
-    }
-
-    createChart(formattedData);
-    connectWebSocket();
-
-    window.addEventListener("beforeunload", () => {
-        pageClosing = true;
-        if (reconnectTimer) window.clearTimeout(reconnectTimer);
-        if (chartSocket) chartSocket.close(1000, "Chart page closed");
-    });
+const indexBtn=document.getElementById("indexBtn"),optionsBtn=document.getElementById("optionsBtn"),indexView=document.getElementById("indexView"),optionsView=document.getElementById("optionsView"),instrumentPanel=document.getElementById("instrumentPanel"),collapseBtn=document.getElementById("collapseBtn"),chartContainer=document.getElementById("chart"),connectionStatus=document.getElementById("connectionStatus"),connectionStatusText=document.getElementById("connectionStatusText"),livePrice=document.getElementById("livePrice"),instrumentSearch=document.getElementById("instrumentSearch"),optionsReferencePrice=document.getElementById("optionsReferencePrice"),callOptions=document.getElementById("callOptions"),putOptions=document.getElementById("putOptions"),indexNoResults=document.getElementById("indexNoResults"),optionsNoResults=document.getElementById("optionsNoResults"),panelPosSelect=document.getElementById("panelPosSelect"),panelBgColorPicker=document.getElementById("panelBgColorPicker"),panelBgHex=document.getElementById("panelBgHex"),historyLoadBanner=document.getElementById("historyLoadBanner"),triggerLoadHistoryBtn=document.getElementById("triggerLoadHistoryBtn");
+let currentInstrumentKey="",chartData=[],chart=null,candleSeries=null,lastCandle=null,oldestCandleTime=null,chartSocket=null,reconnectTimer=null,reconnectAttempts=0,pageClosing=!1,currentIndexLtp=null,isLoadingHistory=!1,hasMoreHistory=!0;
+const reconnectMaximumDelay=15000;
+panelPosSelect.addEventListener("change",function(){const selectedClass=this.value;instrumentPanel.className=instrumentPanel.className.replace(/\bpanel-pos-\S+/g,'');instrumentPanel.classList.add(selectedClass)});
+function getLuminance(hexColor){const rgb=parseInt(hexColor.slice(1),16),r=(rgb>>16)&255,g=(rgb>>8)&255,b=rgb&255;return .2126*r+.7152*g+.0722*b}
+panelBgColorPicker.addEventListener("input",function(){const colorHex=this.value;panelBgHex.textContent=colorHex;instrumentPanel.style.backgroundColor=colorHex;if(getLuminance(colorHex)<140)instrumentPanel.classList.add("dark-theme");else instrumentPanel.classList.remove("dark-theme")});
+function activateView(activeButton,activeView){indexBtn.classList.remove("active");optionsBtn.classList.remove("active");indexView.hidden=!0;optionsView.hidden=!0;activeButton.classList.add("active");activeView.hidden=!1;if(activeView===optionsView)updateOptionsFromLtp(currentIndexLtp)}
+indexBtn.addEventListener("click",()=>activateView(indexBtn,indexView));optionsBtn.addEventListener("click",()=>activateView(optionsBtn,optionsView));
+function setConnectionStatus(status,text){connectionStatus.classList.remove("connecting","connected","disconnected");connectionStatus.classList.add(status);connectionStatusText.textContent=text}
+function parseTimestamp(value){if(value===null||value===undefined)return null;if(typeof value==="number")return value>1e12?Math.floor(value/1e3):Math.floor(value);const numericValue=Number(value);if(Number.isFinite(numericValue)&&String(value).trim()!=="")return numericValue>1e12?Math.floor(numericValue/1e3):Math.floor(numericValue);const parsedValue=new Date(value).getTime();return Number.isFinite(parsedValue)?Math.floor(parsedValue/1e3):null}
+function normalizeCandle(rawCandle){if(!rawCandle||typeof rawCandle!=="object")return null;const time=parseTimestamp(rawCandle.time??rawCandle.timestamp??rawCandle.ts??rawCandle.start_time??rawCandle.candle_start_time),open=Number(rawCandle.open??rawCandle.o),high=Number(rawCandle.high??rawCandle.h),low=Number(rawCandle.low??rawCandle.l),close=Number(rawCandle.close??rawCandle.c);if(!Number.isFinite(time)||!Number.isFinite(open)||!Number.isFinite(high)||!Number.isFinite(low)||!Number.isFinite(close))return null;return{time,open,high,low,close}}
+function getPayloadInstrumentKey(payload){if(!payload||typeof payload!=="object")return null;return payload.instrument_key??payload.instrumentKey??payload.key??payload.info?.instrument_key??payload.data?.instrument_key??payload.data?.instrumentKey??payload.feed?.instrument_key??payload.feed?.instrumentKey??null}
+function getPayloadLtp(payload){if(!payload||typeof payload!=="object")return null;const rawLtp=payload.ltp??payload.live_ltp??payload.last_price??payload.data?.ltp??payload.data?.live_ltp??payload.data?.last_price??payload.feed?.ltp??payload.feed?.live_ltp;const ltp=Number(rawLtp);return Number.isFinite(ltp)?ltp:null}
+function getPayloadTimestamp(payload){if(!payload||typeof payload!=="object")return Math.floor(Date.now()/1e3);return parseTimestamp(payload.timestamp??payload.time??payload.ts??payload.updated_at??payload.data?.timestamp??payload.data?.time??payload.feed?.timestamp)??Math.floor(Date.now()/1e3)}
+function getPayloadCandle(payload){if(!payload||typeof payload!=="object")return null;const candidates=[payload.candle,payload.latest_candle,payload.completed_candle,payload.live_candle,payload.data?.candle,payload.data?.latest_candle,payload.data?.completed_candle,payload.data?.live_candle,payload.feed?.candle,payload.feed?.latest_candle];for(const candidate of candidates){const candle=normalizeCandle(candidate);if(candle)return candle}return null}
+function updateLivePrice(ltp){if(!Number.isFinite(ltp))return;currentIndexLtp=ltp;livePrice.textContent=ltp.toFixed(2);optionsReferencePrice.textContent="LTP "+ltp.toFixed(2);updateOptionsFromLtp(ltp)}
+function updateOptionsFromLtp(ltp){if(!Number.isFinite(ltp))return;const allOptionCards=document.querySelectorAll(".option-card");if(!allOptionCards.length)return;allOptionCards.forEach(card=>{const strike=Number(card.dataset.strike);if(!Number.isFinite(strike))return;const distance=Math.abs(strike-ltp);card.dataset.distance=distance;const distanceElement=card.querySelector(".option-distance");if(distanceElement)distanceElement.textContent=distance===0?"ATM":distance.toFixed(0);card.classList.remove("nearest-option");const existingBadge=card.querySelector(".nearest-badge");if(existingBadge)existingBadge.remove()});sortOptionColumn(callOptions,ltp);sortOptionColumn(putOptions,ltp)}
+function sortOptionColumn(container,ltp){if(!container)return;const cards=Array.from(container.querySelectorAll(".option-card"));cards.sort((a,b)=>{const da=Math.abs(Number(a.dataset.strike)-ltp),db=Math.abs(Number(b.dataset.strike)-ltp);if(da!==db)return da-db;return Number(a.dataset.strike)-Number(b.dataset.strike)});cards.forEach(card=>container.appendChild(card));if(cards.length>0){const nearest=cards[0];nearest.classList.add("nearest-option");const badge=document.createElement("span");badge.className="nearest-badge";badge.textContent="NEAREST";nearest.appendChild(badge)}}
+function updateCandle(candle){if(!candleSeries||!candle)return;if(lastCandle&&candle.time<lastCandle.time)return;candleSeries.update(candle);lastCandle=candle;updateLivePrice(candle.close)}
+function updateCandleFromLtp(ltp,timestamp){if(!Number.isFinite(ltp)||!candleSeries)return;updateLivePrice(ltp);const minuteTimestamp=Math.floor((timestamp||Math.floor(Date.now()/1e3))/60)*60;if(!lastCandle||minuteTimestamp>lastCandle.time){updateCandle({time:minuteTimestamp,open:ltp,high:ltp,low:ltp,close:ltp});return}if(minuteTimestamp<lastCandle.time)return;updateCandle({time:lastCandle.time,open:lastCandle.open,high:Math.max(lastCandle.high,ltp),low:Math.min(lastCandle.low,ltp),close:ltp})}
+async function loadOlderHistoricalData(){if(isLoadingHistory||!hasMoreHistory||!oldestCandleTime)return;isLoadingHistory=!0;triggerLoadHistoryBtn.disabled=!0;triggerLoadHistoryBtn.textContent="Loading...";const beforeDateString=new Date(oldestCandleTime*1e3).toISOString().split("T")[0];try{const response=await fetch(`/api/older-candles?instrument_key=${encodeURIComponent(currentInstrumentKey)}&before_date=${beforeDateString}`);const result=await response.json();if(result&&Array.isArray(result.candles)&&result.candles.length>0){const olderCandles=result.candles.map(normalizeCandle).filter(c=>c!==null);const currentData=candleSeries.data();const mergedMap=new Map();olderCandles.forEach(c=>mergedMap.set(c.time,c));currentData.forEach(c=>mergedMap.set(c.time,c));const combinedData=Array.from(mergedMap.values()).sort((a,b)=>a.time-b.time);candleSeries.setData(combinedData);oldestCandleTime=combinedData[0].time;hasMoreHistory=result.has_more??!0}else hasMoreHistory=!1}catch(error){console.error("Failed to load historical candles:",error)}finally{isLoadingHistory=!1;historyLoadBanner.style.display="none";triggerLoadHistoryBtn.disabled=!1;triggerLoadHistoryBtn.textContent="Load"}}
+triggerLoadHistoryBtn.addEventListener("click",loadOlderHistoricalData);
+function processWebSocketMessage(event){let payload;try{payload=JSON.parse(event.data)}catch(error){console.error("Unable to parse WebSocket payload:",error);return}if(!payload||typeof payload!=="object")return;if(payload.type==="connected"||payload.type==="subscribed"||payload.type==="ping"||payload.event==="ping")return;const payloadInstrumentKey=getPayloadInstrumentKey(payload);if(!payloadInstrumentKey||payloadInstrumentKey!==currentInstrumentKey)return;const candle=getPayloadCandle(payload);if(candle){updateCandle(candle);return}const ltp=getPayloadLtp(payload);if(ltp===null)return;updateCandleFromLtp(ltp,getPayloadTimestamp(payload))}
+function getWebSocketUrl(){const protocol=window.location.protocol==="https:"?"wss:":"ws:";return protocol+"//"+window.location.host+"/all-feeds"}
+function scheduleReconnect(){if(pageClosing||reconnectTimer)return;reconnectAttempts+=1;const reconnectDelay=Math.min(1e3*Math.pow(2,reconnectAttempts-1),reconnectMaximumDelay);setConnectionStatus("disconnected","Retry "+Math.ceil(reconnectDelay/1e3)+"s");reconnectTimer=window.setTimeout(()=>{reconnectTimer=null;connectWebSocket()},reconnectDelay)}
+function connectWebSocket(){if(!currentInstrumentKey||pageClosing)return;if(chartSocket&&(chartSocket.readyState===WebSocket.OPEN||chartSocket.readyState===WebSocket.CONNECTING))return;setConnectionStatus("connecting","Connecting");try{chartSocket=new WebSocket(getWebSocketUrl())}catch(error){console.error("Unable to create WebSocket:",error);chartSocket=null;scheduleReconnect();return}chartSocket.addEventListener("open",()=>{reconnectAttempts=0;setConnectionStatus("connected","Live")});chartSocket.addEventListener("message",processWebSocketMessage);chartSocket.addEventListener("error",(error)=>console.error("Chart WebSocket error:",error));chartSocket.addEventListener("close",()=>{chartSocket=null;if(!pageClosing)scheduleReconnect()})}
+instrumentSearch.addEventListener("input",function(){const search=this.value.trim().toLowerCase();const activeView=!indexView.hidden?indexView:optionsView;const cards=activeView.querySelectorAll(".searchable-card");let visibleCount=0;cards.forEach(card=>{const text=(card.dataset.search||"").toLowerCase();const matches=!search||text.includes(search);card.hidden=!matches;if(matches)visibleCount++});if(activeView===indexView)indexNoResults.hidden=visibleCount!==0;else optionsNoResults.hidden=visibleCount!==0});
+collapseBtn.addEventListener("click",()=>{const collapsed=instrumentPanel.classList.toggle("collapsed");const icon=collapseBtn.querySelector("i");if(collapsed){icon.className="bi bi-layout-sidebar-inset";collapseBtn.setAttribute("title","Expand instrument selector")}else{icon.className="bi bi-layout-sidebar-inset-reverse";collapseBtn.setAttribute("title","Collapse instrument selector")}window.setTimeout(()=>{if(chart)chart.applyOptions({width:chartContainer.clientWidth,height:chartContainer.clientHeight})},230)});
+try{currentInstrumentKey=JSON.parse(document.getElementById("instrument-key-data").textContent)}catch(error){console.error("Unable to parse instrument key:",error)}
+if(typeof currentInstrumentKey==="string"&&currentInstrumentKey.startsWith("NSE_FO|"))activateView(optionsBtn,optionsView);
+try{chartData=JSON.parse(document.getElementById("candles-data").textContent)}catch(error){console.error("Unable to parse candle data:",error)}
+const formattedData=Array.isArray(chartData)?chartData.map(normalizeCandle).filter(c=>c!==null).sort((a,b)=>a.time-b.time).filter((c,i,arr)=>i===arr.length-1||c.time!==arr[i+1].time):[];
+function createChart(candles){chart=LightweightCharts.createChart(chartContainer,{width:chartContainer.clientWidth,height:chartContainer.clientHeight,layout:{background:{color:"#131722"},textColor:"#d1d4dc"},grid:{vertLines:{color:"#2a2e39"},horzLines:{color:"#2a2e39"}},crosshair:{mode:LightweightCharts.CrosshairMode.Normal},rightPriceScale:{borderColor:"#2a2e39"},timeScale:{borderColor:"#2a2e39",timeVisible:!0,secondsVisible:!1}});const candleOptions={upColor:"#089981",downColor:"#f23645",borderUpColor:"#089981",borderDownColor:"#f23645",wickUpColor:"#089981",wickDownColor:"#f23645"};if(typeof chart.addSeries==="function"&&LightweightCharts.CandlestickSeries)candleSeries=chart.addSeries(LightweightCharts.CandlestickSeries,candleOptions);else if(typeof chart.addCandlestickSeries==="function")candleSeries=chart.addCandlestickSeries(candleOptions);if(candles.length>0){candleSeries.setData(candles);lastCandle=candles[candles.length-1];oldestCandleTime=candles[0].time;updateLivePrice(lastCandle.close);chart.timeScale().fitContent()}chart.timeScale().subscribeVisibleLogicalRangeChange((range)=>{if(!range||isLoadingHistory||!hasMoreHistory)return;if(range.from<5)historyLoadBanner.style.display="flex";else historyLoadBanner.style.display="none"});const resizeChart=()=>{if(chart)chart.applyOptions({width:chartContainer.clientWidth,height:chartContainer.clientHeight})};window.addEventListener("resize",resizeChart);if(typeof ResizeObserver!=="undefined")new ResizeObserver(resizeChart).observe(chartContainer)}
+createChart(formattedData);
+connectWebSocket();
+window.addEventListener("beforeunload",()=>{pageClosing=!0;if(reconnectTimer)window.clearTimeout(reconnectTimer);if(chartSocket)chartSocket.close(1e3,"Chart page closed")});
 </script>
 {% endblock %}

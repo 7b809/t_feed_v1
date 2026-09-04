@@ -1,0 +1,160 @@
+Please reformat the provided Python code to reduce its overall line count and indentation depth while preserving the exact logic, behavior, variable names, and functionality.
+
+Apply the following rules:
+
+1. Compact formatting
+- Collapse multi-line expressions such as function calls, nested conditionals, dictionary/list literals, comprehensions, and variable assignments into single lines wherever reasonably possible.
+- Keep expressions on a single line when doing so does not make the code excessively difficult to read.
+- Use compact formatting for dictionary/list literals and function arguments, for example:
+  {"key": value}
+  [item1, item2]
+  function_name(arg1, arg2, key=value)
+- Reduce unnecessary indentation wherever possible without changing Python syntax or behavior.
+- Do not change variable names, function names, class names, imports, logic, control flow, API behavior, or functionality.
+
+2. Blank-line rules
+- Remove unnecessary blank lines and reduce excessive vertical spacing.
+- However, exactly ONE blank line between logical code blocks is mandatory.
+- Keep one blank line between:
+  - module-level variable/constant groups
+  - function definitions
+  - class definitions
+  - decorators and their associated function/class
+  - major logical sections
+  - unrelated groups of statements
+- Do NOT place multiple consecutive blank lines between normal code blocks.
+- Do NOT remove the mandatory single blank line between logical blocks.
+
+For example, format constant assignments like this:
+
+DEFAULT_OPENING_RANGE_ENABLED = _config_bool("OPENING_RANGE_ENABLED", True)
+DEFAULT_OPENING_RANGE_INTERVAL = _config_string("OPENING_RANGE_INTERVAL", "1minute")
+DEFAULT_OPENING_RANGE_CANDLE_COUNT = max(1, _config_int("OPENING_RANGE_CANDLE_COUNT", 1))
+DEFAULT_MARKET_TIMEZONE = _config_string("MARKET_TIMEZONE", "Asia/Kolkata")
+DEFAULT_MARKET_TIMEZONE_OFFSET = _config_string("MARKET_TIMEZONE_OFFSET", "+05:30")
+
+Then leave ONE blank line before the next logical block.
+
+3. Imports
+- Keep all imports as they are.
+- Do not remove, rename, reorder, or combine imports unless they are already written that way in the provided code.
+- Do not convert imports into different forms.
+
+4. Functions, classes, and docstrings
+- Keep function definitions, class definitions, and docstrings as they are.
+- Do not rename functions or classes.
+- Minimize unnecessary internal whitespace and indentation.
+- Function calls should preferably be compacted to one line when reasonably readable.
+
+For example, convert:
+
+result = some_function(
+    option_type="CE",
+    instrument_key=instrument_key,
+    price=price,
+)
+
+into:
+
+result = some_function(option_type="CE", instrument_key=instrument_key, price=price)
+
+when this remains readable and functionally identical.
+
+5. Dictionaries and lists
+- Prefer compact literals where possible.
+
+For example, convert:
+
+payload = {
+    "status": "success",
+    "message": message,
+    "timestamp": timestamp,
+}
+
+into:
+
+payload = {"status": "success", "message": message, "timestamp": timestamp}
+
+Do the same for short lists and tuples where readability is maintained.
+
+6. Conditional expressions
+- Collapse simple multi-line conditionals/assignments into one line when Python syntax and readability permit.
+
+For example:
+
+value = (
+    default_value
+    if condition
+    else fallback_value
+)
+
+should become:
+
+value = default_value if condition else fallback_value
+
+when there is no loss of clarity.
+
+7. Comments and testing code — IMPORTANT
+- Preserve all existing comments.
+- Do NOT delete, rewrite, rename, or modify comments.
+- Comments that exist specifically for project testing, debugging, manual testing, temporary testing, or future testing MUST remain exactly as provided.
+- Preserve their relative position in the code.
+- Do not remove commented-out test code even if it appears unused.
+
+For example, the following block MUST remain present and unchanged:
+
+# # ============================================================
+# # Manual Testing
+# # ============================================================
+
+
+# if __name__ == "__main__":
+#     import json
+
+#     test_result = get_nearest_option_instruments(
+#         option_type="CE",
+#     )
+
+#     print(
+#         json.dumps(
+#             test_result,
+#             indent=2,
+#             default=str,
+#         )
+#     )
+
+You may compact active Python code, but do NOT compact, rewrite, or alter commented-out testing code. Preserve such testing/comment blocks exactly as supplied.
+
+8. Section comments
+- Preserve section separator comments exactly as provided.
+- Do not remove section headers such as:
+
+# ============================================================
+# Manual Testing
+# ============================================================
+
+- Keep the existing project organization and section structure.
+- Where a section contains code, maintain ONE blank line between the section header and the associated code unless the original formatting specifically requires otherwise.
+
+9. No behavior changes
+- This is ONLY a formatting/refactoring-for-compactness task.
+- Do not optimize algorithms.
+- Do not change conditions.
+- Do not change exception handling.
+- Do not change function signatures.
+- Do not change return values.
+- Do not change API routes.
+- Do not change environment variable names.
+- Do not change default values.
+- Do not change strings.
+- Do not change comments.
+- Do not change logging behavior.
+- Do not introduce new functionality.
+- Do not remove existing functionality.
+
+10. Final output
+- Output the FULL reformatted Python code.
+- Do not provide a summary, explanation, diff, or partial code.
+- Do not omit any existing code.
+- Return the complete result as ONE Python code block.
+- The resulting code must remain syntactically valid and directly usable as a replacement for the original file.
