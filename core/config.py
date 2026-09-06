@@ -97,6 +97,112 @@ class Settings:
             "iso",
         )
 
+        # ------------------------------------------------------------------
+        # Upstox order execution settings
+        # ------------------------------------------------------------------
+
+        # Master safety switch for actual broker order placement.
+        #
+        # IMPORTANT:
+        # Keep this false until the complete order execution flow has been
+        # tested and you explicitly want the application to place real orders.
+        self.order_placement_enabled = os.getenv(
+            "ORDER_PLACEMENT_ENABLED",
+            "false",
+        ).strip().lower() in {"true", "1", "yes", "on"}
+
+        # When enabled, all existing Upstox positions are exited before
+        # placing the newly selected order.
+        #
+        # If exit_positions() fails, the new order is NOT placed.
+        self.order_exit_previous_positions = os.getenv(
+            "ORDER_EXIT_PREVIOUS_POSITIONS",
+            "true",
+        ).strip().lower() in {"true", "1", "yes", "on"}
+
+        # Upstox order product.
+        # I = Intraday.
+        self.order_product = (
+            os.getenv(
+                "ORDER_PRODUCT",
+                "I",
+            )
+            .strip()
+            .upper()
+        )
+
+        # Upstox order type.
+        self.order_type = (
+            os.getenv(
+                "ORDER_TYPE",
+                "MARKET",
+            )
+            .strip()
+            .upper()
+        )
+
+        # Upstox order validity.
+        self.order_validity = (
+            os.getenv(
+                "ORDER_VALIDITY",
+                "DAY",
+            )
+            .strip()
+            .upper()
+        )
+
+        # Transaction side for the newly selected instrument.
+        self.order_transaction_type = (
+            os.getenv(
+                "ORDER_TRANSACTION_TYPE",
+                "BUY",
+            )
+            .strip()
+            .upper()
+        )
+
+        # Upstox order tag.
+        self.order_tag = os.getenv(
+            "ORDER_TAG",
+            "EMA_ALGO",
+        ).strip()
+
+        # AMO flag.
+        self.order_is_amo = os.getenv(
+            "ORDER_IS_AMO",
+            "false",
+        ).strip().lower() in {"true", "1", "yes", "on"}
+
+        # Optional order price.
+        #
+        # For MARKET orders this remains 0.0.
+        self.order_price = float(
+            os.getenv(
+                "ORDER_PRICE",
+                "0.0",
+            )
+        )
+
+        # Optional trigger price.
+        #
+        # For MARKET orders this remains 0.0.
+        self.order_trigger_price = float(
+            os.getenv(
+                "ORDER_TRIGGER_PRICE",
+                "0.0",
+            )
+        )
+
+        # Optional disclosed quantity.
+        #
+        # 0 means no disclosed quantity.
+        self.order_disclosed_quantity = int(
+            os.getenv(
+                "ORDER_DISCLOSED_QUANTITY",
+                "0",
+            )
+        )
+
 
 @lru_cache
 def get_settings() -> Settings:

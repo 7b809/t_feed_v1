@@ -14,6 +14,7 @@ from core.logger import get_logger
 
 from services.telegram_bot_service import telegram_bot_service
 
+
 logger = get_logger("app")
 
 
@@ -51,7 +52,10 @@ async def lifespan(_: FastAPI):
 app = FastAPI(
     title=settings.app_name,
     version="1.0.0",
-    description=("Receives isolated EMA alert payloads " "and stores them in MongoDB."),
+    description=(
+        "Receives isolated EMA alert payloads "
+        "and stores them in MongoDB."
+    ),
     lifespan=lifespan,
 )
 
@@ -59,6 +63,7 @@ app = FastAPI(
 app.include_router(
     health_router,
 )
+
 
 app.include_router(
     order_requests_router,
