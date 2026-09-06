@@ -13,30 +13,49 @@ logger = get_logger(__file__)
 
 class TelegramService:
     def __init__(self):
-        self.bot_token = str(getattr(config, "TELEGRAM_BOT_TOKEN", "") or "").strip()
-        self.chat_id = str(getattr(config, "TELEGRAM_CHAT_ID", "") or "").strip()
-        self.enabled = bool(getattr(config, "TELEGRAM_ENABLED", False))
-        self.local_test_mode = bool(getattr(config, "LOCAL_ALERT_TEST_MODE", False))
-        self.local_production_delivery_blocked = bool(
-            getattr(config, "LOCAL_ALERT_PRODUCTION_DELIVERY_BLOCKED", True)
-        )
-        self.local_alert_source_name = str(
-            getattr(config, "LOCAL_ALERT_SOURCE_NAME", "option_feed_engine_local_test")
-            or "option_feed_engine_local_test"
+        self.bot_token = str(
+            getattr(
+                config,
+                "TELEGRAM_BOT_TOKEN",
+                "",
+            )
+            or ""
         ).strip()
-        self.local_include_original_payload = bool(
-            getattr(config, "LOCAL_ALERT_INCLUDE_ORIGINAL_PAYLOAD", True)
+
+        self.chat_id = str(
+            getattr(
+                config,
+                "TELEGRAM_CHAT_ID",
+                "",
+            )
+            or ""
+        ).strip()
+
+        self.enabled = bool(
+            getattr(
+                config,
+                "TELEGRAM_ENABLED",
+                False,
+            )
         )
+
         self.timeout_seconds = self._get_effective_timeout_seconds()
+
         self.market_timezone = self._load_market_timezone()
+
         self.market_time_format = getattr(
-            config, "MARKET_TIME_FORMAT", "%Y-%m-%d %H:%M:%S %Z"
+            config,
+            "MARKET_TIME_FORMAT",
+            "%Y-%m-%d %H:%M:%S %Z",
         )
+
         self.api_url = self._get_effective_api_url()
+
         logger.info(
-            "Telegram service initialized. enabled=%s, local_test_mode=%s, delivery_mode=%s, configured=%s, target_url=%s",
+            "Telegram service initialized. "
+            "enabled=%s, delivery_mode=%s, "
+            "configured=%s, target_url=%s",
             self.enabled,
-            self.local_test_mode,
             self.get_delivery_mode(),
             self.is_configured(),
             self._get_safe_target_url(),
@@ -59,90 +78,67 @@ class TelegramService:
     def _now_short_market_time(self) -> str:
         return datetime.now(self.market_timezone).strftime("%I:%M:%S %p %Z")
 
-    def _get_effective_api_url(self) -> str | None:
-        if self.local_test_mode:
-            local_url = (
-                str(getattr(config, "LOCAL_TELEGRAM_URL", "") or "").strip().rstrip("/")
-            )
-            if not local_url:
-                logger.error(
-                    "LOCAL_TELEGRAM_URL is not configured while LOCAL_ALERT_TEST_MODE=True."
-                )
-                return None
-            return local_url
-
+    def _get_effective_api_url(
+        self,
+    ) -> str | None:
         if not self.bot_token:
             return None
 
-        return f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
+        return "https://api.telegram.org/" f"bot{self.bot_token}/sendMessage"
 
-    def _get_effective_timeout_seconds(self) -> float:
-        configured_helper = getattr(
-            config, "get_effective_telegram_timeout_seconds", None
-        )
-        if callable(configured_helper):
-            try:
-                return max(0.1, float(configured_helper()))
-            except (TypeError, ValueError, OverflowError):
-                pass
-
-        if self.local_test_mode:
-            try:
-                return max(
-                    0.1,
-                    float(getattr(config, "LOCAL_ALERT_TIMEOUT_SECONDS", 10.0)),
-                )
-            except (TypeError, ValueError, OverflowError):
-                return 10.0
-
+    def _get_effective_timeout_seconds(
+        self,
+    ) -> float:
         try:
             return max(
                 0.1,
-                float(getattr(config, "TELEGRAM_TIMEOUT_SECONDS", 10)),
+                float(
+                    getattr(
+                        config,
+                        "TELEGRAM_TIMEOUT_SECONDS",
+                        10,
+                    )
+                ),
             )
-        except (TypeError, ValueError, OverflowError):
+        except (
+            TypeError,
+            ValueError,
+            OverflowError,
+        ):
             return 10.0
 
-    def _get_safe_target_url(self) -> str | None:
+    def _get_safe_target_url(
+        self,
+    ) -> str | None:
         if not self.api_url:
             return None
 
-        if self.local_test_mode:
-            return self.api_url
-
         if self.bot_token:
-            return self.api_url.replace(self.bot_token, "***")
+            return self.api_url.replace(
+                self.bot_token,
+                "***",
+            )
 
-        return self.api_url
+        return None
 
     def get_delivery_mode(self) -> str:
-        return "local_test" if self.local_test_mode else "telegram"
+        return "telegram"
 
     def get_status(self) -> dict:
         return {
             "enabled": self.enabled,
             "configured": self.is_configured(),
             "delivery_mode": self.get_delivery_mode(),
-            "local_test_mode": self.local_test_mode,
+            "target": "telegram_bot_api",
             "target_url_configured": bool(self.api_url),
-            "target_url": self._get_safe_target_url() if self.local_test_mode else None,
             "bot_token_configured": bool(self.bot_token),
             "chat_id_configured": bool(self.chat_id),
             "timeout_seconds": self.timeout_seconds,
-            "production_delivery_blocked": bool(
-                self.local_test_mode and self.local_production_delivery_blocked
-            ),
             "secrets_exposed": False,
         }
 
     def is_configured(self) -> bool:
-        if not self.enabled:
-            return False
-
-        if self.local_test_mode:
-            return bool(self.api_url)
-
-        return bool(self.bot_token and self.chat_id and self.api_url)
+        return bool(self.enabled and self.bot_token and self.chat_id and self.api_url)
 
     def _escape(self, value: Any) -> str:
         return html.escape(str(value), quote=False)
@@ -375,49 +371,16 @@ class TelegramService:
 
         return "Completed candle close based EMA cross detection"
 
-    def _build_production_payload(self, message: str) -> dict:
+    def _build_telegram_payload(
+        self,
+        message: str,
+    ) -> dict:
         return {
             "chat_id": self.chat_id,
             "text": message,
             "parse_mode": "HTML",
             "disable_web_page_preview": True,
         }
-
-    def _build_local_payload(
-        self,
-        message: str,
-        notification_title: str,
-        notification_level: str,
-        notification_context: str,
-    ) -> dict:
-        payload = {
-            "channel": "telegram",
-            "delivery_mode": "local_test",
-            "source": self.local_alert_source_name,
-            "title": notification_title,
-            "level": notification_level,
-            "context": notification_context or "not_available",
-            "message": message,
-            "parse_mode": "HTML",
-            "disable_web_page_preview": True,
-            "market_time": self._now_market_time(),
-            "metadata": {
-                "local_test_mode": True,
-                "production_delivery_blocked": bool(
-                    self.local_production_delivery_blocked
-                ),
-            },
-        }
-
-        if self.local_include_original_payload:
-            payload["telegram_payload"] = {
-                "chat_id": self.chat_id or "local_test_chat",
-                "text": message,
-                "parse_mode": "HTML",
-                "disable_web_page_preview": True,
-            }
-
-        return payload
 
     def _send_raw_message(
         self,
@@ -427,35 +390,34 @@ class TelegramService:
         notification_level: str = "INFO",
         notification_context: str = "",
     ) -> bool:
+        context = notification_context or "not_available"
+
         if not self.is_configured():
             logger.warning(
-                "Telegram notification skipped. service_configured=False, enabled=%s, local_test_mode=%s, delivery_mode=%s, title=%s, level=%s, context=%s",
+                "Telegram notification skipped. "
+                "service_configured=False, enabled=%s, "
+                "bot_token_configured=%s, "
+                "chat_id_configured=%s, "
+                "title=%s, level=%s, context=%s",
                 self.enabled,
-                self.local_test_mode,
-                self.get_delivery_mode(),
+                bool(self.bot_token),
+                bool(self.chat_id),
                 notification_title,
                 notification_level,
-                notification_context or "not_available",
+                context,
             )
             return False
 
-        if self.local_test_mode:
-            payload = self._build_local_payload(
-                message=message,
-                notification_title=notification_title,
-                notification_level=notification_level,
-                notification_context=notification_context,
-            )
-        else:
-            payload = self._build_production_payload(message)
+        payload = self._build_telegram_payload(message)
 
         logger.info(
-            "Sending Telegram notification. delivery_mode=%s, title=%s, level=%s, context=%s, target=%s",
+            "Sending Telegram notification. "
+            "delivery_mode=%s, title=%s, "
+            "level=%s, context=%s",
             self.get_delivery_mode(),
             notification_title,
             notification_level,
-            notification_context or "not_available",
-            self._get_safe_target_url(),
+            context,
         )
 
         try:
@@ -467,13 +429,14 @@ class TelegramService:
 
             response_text = str(response.text or "")
 
-            if not 200 <= response.status_code < 300:
+            if not (200 <= response.status_code < 300):
                 logger.error(
-                    "Telegram notification failed. delivery_mode=%s, title=%s, level=%s, context=%s, status_code=%s, response=%s",
-                    self.get_delivery_mode(),
+                    "Telegram notification failed. "
+                    "title=%s, level=%s, context=%s, "
+                    "status_code=%s, response=%s",
                     notification_title,
                     notification_level,
-                    notification_context or "not_available",
+                    context,
                     response.status_code,
                     response_text[:2000],
                 )
@@ -484,61 +447,37 @@ class TelegramService:
             except ValueError:
                 response_payload = None
 
-            if (
-                not self.local_test_mode
-                and isinstance(response_payload, dict)
-                and response_payload.get("ok") is False
-            ):
+            if not isinstance(response_payload, dict):
                 logger.error(
-                    "Telegram API rejected notification. title=%s, level=%s, context=%s, response=%s",
+                    "Telegram API returned an invalid "
+                    "response. title=%s, level=%s, "
+                    "context=%s, response=%s",
                     notification_title,
                     notification_level,
-                    notification_context or "not_available",
+                    context,
                     response_text[:2000],
                 )
                 return False
 
-            if self.local_test_mode and isinstance(response_payload, dict):
-                local_success = response_payload.get("success")
-                local_ok = response_payload.get("ok")
-                local_accepted = response_payload.get("accepted")
-
-                if local_success is False:
-                    logger.error(
-                        "Local Telegram simulator rejected notification. title=%s, level=%s, context=%s, response=%s",
-                        notification_title,
-                        notification_level,
-                        notification_context or "not_available",
-                        response_text[:2000],
-                    )
-                    return False
-
-                if local_ok is False:
-                    logger.error(
-                        "Local Telegram simulator returned ok=false. title=%s, level=%s, context=%s, response=%s",
-                        notification_title,
-                        notification_level,
-                        notification_context or "not_available",
-                        response_text[:2000],
-                    )
-                    return False
-
-                if local_accepted is False:
-                    logger.error(
-                        "Local Telegram simulator returned accepted=false. title=%s, level=%s, context=%s, response=%s",
-                        notification_title,
-                        notification_level,
-                        notification_context or "not_available",
-                        response_text[:2000],
-                    )
-                    return False
+            if response_payload.get("ok") is not True:
+                logger.error(
+                    "Telegram API rejected notification. "
+                    "title=%s, level=%s, context=%s, "
+                    "response=%s",
+                    notification_title,
+                    notification_level,
+                    context,
+                    response_text[:2000],
+                )
+                return False
 
             logger.info(
-                "Telegram notification sent. delivery_mode=%s, title=%s, level=%s, context=%s, status_code=%s",
-                self.get_delivery_mode(),
+                "Telegram notification sent. "
+                "title=%s, level=%s, context=%s, "
+                "status_code=%s",
                 notification_title,
                 notification_level,
-                notification_context or "not_available",
+                context,
                 response.status_code,
             )
 
@@ -546,11 +485,12 @@ class TelegramService:
 
         except requests.Timeout as ex:
             logger.error(
-                "Telegram notification timed out. delivery_mode=%s, title=%s, level=%s, context=%s, timeout_seconds=%s, error=%s",
-                self.get_delivery_mode(),
+                "Telegram notification timed out. "
+                "title=%s, level=%s, context=%s, "
+                "timeout_seconds=%s, error=%s",
                 notification_title,
                 notification_level,
-                notification_context or "not_available",
+                context,
                 self.timeout_seconds,
                 ex,
             )
@@ -558,35 +498,37 @@ class TelegramService:
 
         except requests.ConnectionError as ex:
             logger.error(
-                "Telegram notification connection failed. delivery_mode=%s, title=%s, level=%s, context=%s, target=%s, error=%s",
-                self.get_delivery_mode(),
+                "Telegram notification connection "
+                "failed. title=%s, level=%s, "
+                "context=%s, error=%s",
                 notification_title,
                 notification_level,
-                notification_context or "not_available",
-                self._get_safe_target_url(),
+                context,
                 ex,
             )
             return False
 
         except requests.RequestException as ex:
             logger.error(
-                "Telegram notification request failed. delivery_mode=%s, title=%s, level=%s, context=%s, exception_type=%s, error=%s",
-                self.get_delivery_mode(),
+                "Telegram notification request failed. "
+                "title=%s, level=%s, context=%s, "
+                "exception_type=%s, error=%s",
                 notification_title,
                 notification_level,
-                notification_context or "not_available",
+                context,
                 type(ex).__name__,
                 ex,
             )
             return False
 
         except Exception as ex:
-            logger.error(
-                "Telegram notification exception. delivery_mode=%s, title=%s, level=%s, context=%s, exception_type=%s, error=%s",
-                self.get_delivery_mode(),
+            logger.exception(
+                "Telegram notification exception. "
+                "title=%s, level=%s, context=%s, "
+                "exception_type=%s, error=%s",
                 notification_title,
                 notification_level,
-                notification_context or "not_available",
+                context,
                 type(ex).__name__,
                 ex,
             )
@@ -624,7 +566,8 @@ class TelegramService:
         formatted_message = (
             f"{emoji} <b>{safe_title}</b>\n\n"
             f"{safe_message}\n\n"
-            f"<b>Level:</b> {self._escape(level_upper)}\n"
+            f"<b>Level:</b> "
+            f"{self._escape(level_upper)}\n"
             f"<b>Time:</b> {market_time}"
         )
 

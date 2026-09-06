@@ -10,6 +10,10 @@ from .service import (
     calculate_opening_range_for_all_subscribed,
     calculate_opening_range_for_instrument,
 )
+from .ema_alerts import (
+    process_selected_or_ema_cross_alert,
+    process_selected_or_ema_cross_alert_detailed,
+)
 
 from .candle_utils import (
     extract_candles_from_response,
@@ -212,4 +216,6 @@ __all__ = [
     "get_selected_or_state_snapshot",
     "get_selected_or_ema_alerts_snapshot",
     "get_latest_main_index_ltp_snapshot",
+    "process_selected_or_ema_cross_alert",
+"process_selected_or_ema_cross_alert_detailed",
 ]
