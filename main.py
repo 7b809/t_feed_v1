@@ -1,5 +1,6 @@
 import asyncio
 import json
+import zipfile
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
@@ -1138,6 +1139,232 @@ def run_daily_market_hard_refresh():
         )
 
 
+# Daily Telegram log archive settings. TelegramService handles the actual
+# multipart document upload; these settings keep each generated ZIP safely
+# below the configured Telegram upload threshold.
+DAILY_LOG_ARCHIVE_HOUR = 15
+DAILY_LOG_ARCHIVE_MINUTE = 45
+DAILY_LOG_ARCHIVE_MAX_MB = 45
+DAILY_LOG_ARCHIVE_MAX_BYTES = DAILY_LOG_ARCHIVE_MAX_MB * 1024 * 1024
+DAILY_LOG_ARCHIVE_DIR = Path(__file__).resolve().parent / "temp" / "daily_log_archives"
+DAILY_LOG_DIRECTORY = Path(__file__).resolve().parent / "logs"
+
+
+def _get_todays_log_files() -> list[Path]:
+    """Return today's regular log files using the market timezone."""
+    if not DAILY_LOG_DIRECTORY.exists():
+        logger.warning(
+            "Daily log archive skipped. Log directory does not exist: %s",
+            DAILY_LOG_DIRECTORY,
+        )
+        return []
+
+    today = _get_market_now().date()
+    files = []
+    for path in DAILY_LOG_DIRECTORY.rglob("*"):
+        if not path.is_file() or path.suffix.lower() == ".zip":
+            continue
+        try:
+            modified_date = datetime.fromtimestamp(
+                path.stat().st_mtime,
+                ZoneInfo(config.MARKET_TIMEZONE),
+            ).date()
+        except Exception as ex:
+            logger.warning(
+                "Could not inspect log file %s: %s: %s", path, type(ex).__name__, ex
+            )
+            continue
+        if modified_date == today:
+            files.append(path)
+
+    return sorted(files, key=lambda item: str(item).lower())
+
+
+def _build_log_zip(archive_path: Path, log_files: list[Path]) -> int:
+    """Build one ZIP archive and return its final size in bytes."""
+    archive_path.parent.mkdir(parents=True, exist_ok=True)
+    if archive_path.exists():
+        archive_path.unlink()
+
+    log_root = DAILY_LOG_DIRECTORY.resolve()
+    with zipfile.ZipFile(
+        archive_path,
+        mode="w",
+        compression=zipfile.ZIP_DEFLATED,
+        compresslevel=6,
+    ) as archive:
+        for log_file in log_files:
+            try:
+                relative_name = log_file.resolve().relative_to(log_root)
+            except ValueError:
+                relative_name = Path(log_file.name)
+            archive.write(log_file, arcname=str(relative_name))
+
+    return archive_path.stat().st_size
+
+
+def _create_daily_log_archive_batches(log_files: list[Path]) -> list[Path]:
+    """Create size-limited ZIP batches for today's logs."""
+    DAILY_LOG_ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
+    archive_date = _get_market_now().date().isoformat()
+    archives = []
+    current_files: list[Path] = []
+    part_number = 1
+
+    for log_file in log_files:
+        candidate_files = current_files + [log_file]
+        candidate_path = (
+            DAILY_LOG_ARCHIVE_DIR / f"logs_{archive_date}_part_{part_number:02d}.zip"
+        )
+        candidate_size = _build_log_zip(candidate_path, candidate_files)
+
+        if candidate_size <= DAILY_LOG_ARCHIVE_MAX_BYTES:
+            current_files = candidate_files
+            continue
+
+        candidate_path.unlink(missing_ok=True)
+        if current_files:
+            final_path = (
+                DAILY_LOG_ARCHIVE_DIR
+                / f"logs_{archive_date}_part_{part_number:02d}.zip"
+            )
+            final_size = _build_log_zip(final_path, current_files)
+            if final_size > DAILY_LOG_ARCHIVE_MAX_BYTES:
+                final_path.unlink(missing_ok=True)
+                raise RuntimeError(
+                    f"Generated log archive exceeds configured limit: {final_path} ({final_size} bytes)"
+                )
+            archives.append(final_path)
+            part_number += 1
+
+        # Test the individual file as the first member of the new batch.
+        current_files = [log_file]
+        single_path = (
+            DAILY_LOG_ARCHIVE_DIR / f"logs_{archive_date}_part_{part_number:02d}.zip"
+        )
+        single_size = _build_log_zip(single_path, current_files)
+        if single_size > DAILY_LOG_ARCHIVE_MAX_BYTES:
+            single_path.unlink(missing_ok=True)
+            logger.error(
+                "Individual log file exceeds daily Telegram archive limit. file=%s size_mb=%.2f limit_mb=%s",
+                log_file,
+                log_file.stat().st_size / (1024 * 1024),
+                DAILY_LOG_ARCHIVE_MAX_MB,
+            )
+            current_files = []
+            part_number += 1
+
+    if current_files:
+        final_path = (
+            DAILY_LOG_ARCHIVE_DIR / f"logs_{archive_date}_part_{part_number:02d}.zip"
+        )
+        final_size = _build_log_zip(final_path, current_files)
+        if final_size > DAILY_LOG_ARCHIVE_MAX_BYTES:
+            final_path.unlink(missing_ok=True)
+            raise RuntimeError(
+                f"Generated final log archive exceeds configured limit: {final_path} ({final_size} bytes)"
+            )
+        archives.append(final_path)
+
+    return archives
+
+
+def run_daily_log_archive_delivery():
+    """Create today's log ZIP batches and send them to the Telegram chat."""
+    now_market = _get_market_now()
+    archive_date = now_market.date().isoformat()
+    logger.info("================ DAILY LOG ARCHIVE DELIVERY STARTED ================")
+
+    try:
+        if not _is_weekday_market_day():
+            logger.info(
+                "Daily log archive skipped. Today is not a Monday-Friday market day."
+            )
+            return
+
+        log_files = _get_todays_log_files()
+        if not log_files:
+            message = (
+                f"Daily Log Archive — {archive_date}\n\n"
+                f"No log files were found in: {DAILY_LOG_DIRECTORY}"
+            )
+            logger.warning(message)
+            telegram_service.send_message(
+                title="Daily Log Archive", message=message, level="WARNING"
+            )
+            return
+
+        archives = _create_daily_log_archive_batches(log_files)
+        if not archives:
+            message = (
+                f"Daily Log Archive — {archive_date}\n\n"
+                "No uploadable ZIP batches were created. Check the application logs."
+            )
+            telegram_service.send_message(
+                title="Daily Log Archive Failed", message=message, level="ERROR"
+            )
+            return
+
+        telegram_service.send_message(
+            title="Daily Log Archive Ready",
+            message=(
+                f"Market Date: {archive_date}\n"
+                f"Log Files: {len(log_files)}\n"
+                f"ZIP Batches: {len(archives)}\n"
+                f"Per-file ZIP Limit: {DAILY_LOG_ARCHIVE_MAX_MB} MB\n"
+                f"Delivery Time: {now_market.strftime('%H:%M:%S')}"
+            ),
+            level="INFO",
+        )
+
+        for index, archive_path in enumerate(archives, start=1):
+            archive_size_mb = archive_path.stat().st_size / (1024 * 1024)
+            caption = (
+                f"Daily Logs — {archive_date}\n"
+                f"Batch {index}/{len(archives)}\n"
+                f"Size: {archive_size_mb:.2f} MB"
+            )
+            sent = telegram_service.send_document_file(
+                file_path=archive_path,
+                caption=caption,
+            )
+            if sent:
+                logger.info(
+                    "Daily log archive batch sent successfully. batch=%s/%s file=%s size_mb=%.2f",
+                    index,
+                    len(archives),
+                    archive_path,
+                    archive_size_mb,
+                )
+                archive_path.unlink(missing_ok=True)
+            else:
+                logger.error(
+                    "Daily log archive batch send failed. file=%s", archive_path
+                )
+
+        telegram_service.send_message(
+            title="Daily Log Archive Delivery Completed",
+            message=(
+                f"Market Date: {archive_date}\n"
+                f"Log Files: {len(log_files)}\n"
+                f"ZIP Batches: {len(archives)}\n"
+                f"Archive Limit: {DAILY_LOG_ARCHIVE_MAX_MB} MB per batch"
+            ),
+            level="INFO",
+        )
+    except Exception as ex:
+        logger.exception("Daily log archive delivery failed.")
+        telegram_service.send_exception_message(
+            title="Daily Log Archive Delivery Failed",
+            exception=ex,
+            context="run_daily_log_archive_delivery",
+        )
+    finally:
+        logger.info(
+            "================ DAILY LOG ARCHIVE DELIVERY COMPLETED ================"
+        )
+
+
 def start_scheduler() -> BackgroundScheduler:
     scheduler = BackgroundScheduler(timezone=config.MARKET_TIMEZONE)
 
@@ -1189,6 +1416,20 @@ def start_scheduler() -> BackgroundScheduler:
         coalesce=True,
     )
 
+    scheduler.add_job(
+        func=run_daily_log_archive_delivery,
+        trigger=CronTrigger(
+            day_of_week="mon-fri",
+            hour=DAILY_LOG_ARCHIVE_HOUR,
+            minute=DAILY_LOG_ARCHIVE_MINUTE,
+            timezone=config.MARKET_TIMEZONE,
+        ),
+        id="daily_log_archive_delivery_job",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
     scheduler.start()
 
     budget_minimum = get_budget_min_price()
@@ -1209,6 +1450,10 @@ def start_scheduler() -> BackgroundScheduler:
         f"Opening Range: "
         f"{config.OPENING_RANGE_FETCH_HOUR:02d}:"
         f"{config.OPENING_RANGE_FETCH_MINUTE:02d}\n"
+        f"Daily Log Archive: "
+        f"{DAILY_LOG_ARCHIVE_HOUR:02d}:{DAILY_LOG_ARCHIVE_MINUTE:02d}\n"
+        f"Daily Log Archive Limit: "
+        f"{DAILY_LOG_ARCHIVE_MAX_MB} MB\n"
         f"Isolation Window: "
         f"±{get_isolation_window_points()} points\n"
         f"EMA Mode: "
@@ -1223,12 +1468,16 @@ def start_scheduler() -> BackgroundScheduler:
     logger.info(
         "Scheduler active. token_refresh=%s, "
         "token_check=%s, opening_range=%02d:%02d, "
+        "daily_log_archive=%02d:%02d, archive_limit_mb=%s, "
         "timezone=%s, isolation_window=%s, "
         "live_ema_mode=%s",
         config.REFRESH_INTERVAL_MINUTES,
         get_token_monitor_interval_minutes(),
         config.OPENING_RANGE_FETCH_HOUR,
         config.OPENING_RANGE_FETCH_MINUTE,
+        DAILY_LOG_ARCHIVE_HOUR,
+        DAILY_LOG_ARCHIVE_MINUTE,
+        DAILY_LOG_ARCHIVE_MAX_MB,
         config.MARKET_TIMEZONE,
         get_isolation_window_points(),
         get_live_ema_calculation_mode_text(),

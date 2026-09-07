@@ -1,5 +1,6 @@
 import html
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -85,6 +86,20 @@ class TelegramService:
             return None
 
         return "https://api.telegram.org/" f"bot{self.bot_token}/sendMessage"
+
+    def _get_effective_document_api_url(self) -> str | None:
+        if not self.bot_token:
+            return None
+        return "https://api.telegram.org/" f"bot{self.bot_token}/sendDocument"
+
+    def _get_log_archive_max_bytes(self) -> int:
+        # Keep a safety margin below Telegram's standard cloud Bot API
+        # document-upload limit.
+        try:
+            configured_mb = float(getattr(config, "TELEGRAM_LOG_ARCHIVE_MAX_MB", 45))
+            return max(1, int(configured_mb * 1024 * 1024))
+        except (TypeError, ValueError, OverflowError):
+            return 45 * 1024 * 1024
 
     def _get_effective_timeout_seconds(
         self,
@@ -529,6 +544,225 @@ class TelegramService:
                 notification_title,
                 notification_level,
                 context,
+                type(ex).__name__,
+                ex,
+            )
+            return False
+
+    def send_document_file(
+        self,
+        file_path: str | Path,
+        caption: str = "",
+        notification_title: str = "Telegram Document",
+        notification_level: str = "INFO",
+        notification_context: str = "",
+    ) -> bool:
+        path = Path(file_path)
+
+        if not self.is_configured():
+            logger.warning(
+                "Telegram document upload skipped. "
+                "service_configured=False, enabled=%s, "
+                "bot_token_configured=%s, chat_id_configured=%s, "
+                "file=%s, title=%s, context=%s",
+                self.enabled,
+                bool(self.bot_token),
+                bool(self.chat_id),
+                path,
+                notification_title,
+                notification_context or "not_available",
+            )
+            return False
+
+        if not path.exists():
+            logger.error(
+                "Telegram document upload skipped because file does not exist. "
+                "file=%s, title=%s, context=%s",
+                path,
+                notification_title,
+                notification_context or "not_available",
+            )
+            return False
+
+        if not path.is_file():
+            logger.error(
+                "Telegram document upload skipped because path is not a file. "
+                "file=%s, title=%s, context=%s",
+                path,
+                notification_title,
+                notification_context or "not_available",
+            )
+            return False
+
+        try:
+            file_size = path.stat().st_size
+        except OSError as ex:
+            logger.error(
+                "Could not read Telegram document file size. " "file=%s, error=%s: %s",
+                path,
+                type(ex).__name__,
+                ex,
+            )
+            return False
+
+        max_bytes = self._get_log_archive_max_bytes()
+        if file_size > max_bytes:
+            logger.error(
+                "Telegram document upload rejected locally because the file "
+                "exceeds the configured safety limit. file=%s, size_bytes=%s, "
+                "max_bytes=%s, title=%s, context=%s",
+                path,
+                file_size,
+                max_bytes,
+                notification_title,
+                notification_context or "not_available",
+            )
+            return False
+
+        api_url = self._get_effective_document_api_url()
+        if not api_url:
+            logger.error(
+                "Telegram document upload skipped because document API URL "
+                "could not be configured. file=%s, title=%s, context=%s",
+                path,
+                notification_title,
+                notification_context or "not_available",
+            )
+            return False
+
+        safe_caption = str(caption or "")[:1024]
+
+        logger.info(
+            "Sending Telegram document. file=%s, size_bytes=%s, "
+            "max_bytes=%s, title=%s, level=%s, context=%s",
+            path,
+            file_size,
+            max_bytes,
+            notification_title,
+            notification_level,
+            notification_context or "not_available",
+        )
+
+        try:
+            with path.open("rb") as document_file:
+                response = requests.post(
+                    api_url,
+                    data={
+                        "chat_id": self.chat_id,
+                        "caption": safe_caption,
+                        "parse_mode": "HTML",
+                    },
+                    files={
+                        "document": (
+                            path.name,
+                            document_file,
+                            (
+                                "application/zip"
+                                if path.suffix.lower() == ".zip"
+                                else "application/octet-stream"
+                            ),
+                        )
+                    },
+                    timeout=self.timeout_seconds,
+                )
+
+            response_text = str(response.text or "")
+
+            if not (200 <= response.status_code < 300):
+                logger.error(
+                    "Telegram document upload failed. "
+                    "file=%s, title=%s, level=%s, context=%s, "
+                    "status_code=%s, response=%s",
+                    path,
+                    notification_title,
+                    notification_level,
+                    notification_context or "not_available",
+                    response.status_code,
+                    response_text[:2000],
+                )
+                return False
+
+            try:
+                response_payload = response.json()
+            except ValueError:
+                response_payload = None
+
+            if not isinstance(response_payload, dict):
+                logger.error(
+                    "Telegram document API returned an invalid response. "
+                    "file=%s, title=%s, context=%s, response=%s",
+                    path,
+                    notification_title,
+                    notification_context or "not_available",
+                    response_text[:2000],
+                )
+                return False
+
+            if response_payload.get("ok") is not True:
+                logger.error(
+                    "Telegram API rejected document upload. "
+                    "file=%s, title=%s, level=%s, context=%s, response=%s",
+                    path,
+                    notification_title,
+                    notification_level,
+                    notification_context or "not_available",
+                    response_text[:2000],
+                )
+                return False
+
+            logger.info(
+                "Telegram document sent successfully. file=%s, "
+                "size_bytes=%s, title=%s, context=%s, status_code=%s",
+                path,
+                file_size,
+                notification_title,
+                notification_context or "not_available",
+                response.status_code,
+            )
+            return True
+
+        except requests.Timeout as ex:
+            logger.error(
+                "Telegram document upload timed out. file=%s, "
+                "timeout_seconds=%s, title=%s, context=%s, error=%s",
+                path,
+                self.timeout_seconds,
+                notification_title,
+                notification_context or "not_available",
+                ex,
+            )
+            return False
+
+        except requests.ConnectionError as ex:
+            logger.error(
+                "Telegram document upload connection failed. file=%s, "
+                "title=%s, context=%s, error=%s",
+                path,
+                notification_title,
+                notification_context or "not_available",
+                ex,
+            )
+            return False
+
+        except requests.RequestException as ex:
+            logger.error(
+                "Telegram document upload request failed. file=%s, "
+                "title=%s, context=%s, exception_type=%s, error=%s",
+                path,
+                notification_title,
+                notification_context or "not_available",
+                type(ex).__name__,
+                ex,
+            )
+            return False
+
+        except Exception as ex:
+            logger.exception(
+                "Telegram document upload exception. file=%s, "
+                "title=%s, context=%s, exception_type=%s, error=%s",
+                path,
+                notification_title,
+                notification_context or "not_available",
                 type(ex).__name__,
                 ex,
             )
