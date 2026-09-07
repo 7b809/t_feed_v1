@@ -148,15 +148,13 @@ async def _get_or_create_daily_document(
         return existing_document["_id"]
 
     daily_document = {
-        "document_date": document_date,
-        "received_timezone": settings.app_timezone,
-        "schema_version": 1,
-        "test_mode": False,
-        "requests": [],
-        "created_at": received_at_ist.isoformat(),
-        "updated_at": received_at_ist.isoformat(),
-    }
-
+    "document_date": document_date,
+    "received_timezone": settings.app_timezone,
+    "schema_version": 1,
+    "requests": [],
+    "created_at": received_at_ist.isoformat(),
+    "updated_at": received_at_ist.isoformat(),
+}
     try:
         result = await collection.insert_one(
             daily_document,
@@ -256,7 +254,12 @@ async def _append_to_daily_document(
 
     request_document["received_timezone"] = settings.app_timezone
 
-    request_document["test_mode"] = test_mode
+    request_document["receiver_test_mode"] = test_mode
+
+    if "test_mode" in request_document:
+        request_document["producer_test_mode"] = request_document.pop(
+            "test_mode"
+        )
 
     # ---------------------------------------------------------
     # Ensure the daily parent document exists first.
@@ -435,20 +438,6 @@ async def save_test_payload(
 async def save_order_request(
     alert: IsolatedEmaAlert,
 ) -> ObjectId:
-    """
-    Validate, prepare, and save an isolated EMA alert
-    to the MongoDB daily document.
-
-    This is the existing normal/production save path.
-
-    All alerts received on the same IST calendar date
-    are stored inside the same MongoDB document.
-    """
-
-    # ---------------------------------------------------------
-    # Keep Python values initially so that we can explicitly
-    # control date and datetime serialization.
-    # ---------------------------------------------------------
     raw_document = alert.model_dump(
         mode="python",
     )
@@ -458,11 +447,24 @@ async def save_order_request(
         test_mode=False,
     )
 
+    instrument_key = None
+    cross_type = None
+
+    try:
+        instrument_key = alert.raw_ema_event.instrument_key
+    except Exception:
+        pass
+
+    try:
+        cross_type = alert.raw_ema_event.cross_type
+    except Exception:
+        pass
+
     logger.info(
-        "Saved order request " "id=%s " "instrument_key=%s " "cross_type=%s",
+        "Saved order request id=%s instrument_key=%s cross_type=%s",
         document_id,
-        alert.instrument_key,
-        alert.ema_event.cross_type,
+        instrument_key,
+        cross_type,
     )
 
     return document_id

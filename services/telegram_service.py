@@ -12,13 +12,16 @@ class TelegramService:
         self.chat_id = settings.telegram_chat_id
 
     def send_message(self, message: str) -> bool:
-        """
-        Send a Telegram message only when TELE_FLG is enabled.
-        """
+        if not settings.run_tele_bot:
+            logger.info(
+                "Telegram bot disabled. RUN_TELE_BOT=false"
+            )
+            return False
 
-        # Always read the current runtime flag.
-        if not settings.tele_flag:
-            logger.info("Telegram sending disabled. TELE_FLG=false")
+        if not settings.tele_flg:
+            logger.info(
+                "Telegram sending disabled. TELE_FLG=false"
+            )
             return False
 
         if not self.bot_token or not self.chat_id:
@@ -28,7 +31,7 @@ class TelegramService:
             )
             return False
 
-        url = f"https://api.telegram.org/bot" f"{self.bot_token}/sendMessage"
+        url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
 
         payload = {
             "chat_id": self.chat_id,
@@ -54,15 +57,18 @@ class TelegramService:
                 return False
 
             logger.info("Telegram message sent successfully.")
-
             return True
 
         except requests.RequestException:
-            logger.exception("Failed to send Telegram message.")
+            logger.exception(
+                "Failed to send Telegram message."
+            )
             return False
 
         except Exception:
-            logger.exception("Unexpected Telegram error.")
+            logger.exception(
+                "Unexpected Telegram error."
+            )
             return False
 
 

@@ -41,6 +41,15 @@ class Settings:
                 "8000",
             )
         )
+        self.run_tele_bot = os.getenv(
+            "RUN_TELE_BOT",
+            "false",
+        ).strip().lower() in {"true", "1", "yes", "on"}
+        
+        self.PLACE_ORDER = os.getenv(
+            "PLACE_ORDER",
+            "false",
+        ).strip().lower() in {"true", "1", "yes", "on"}
 
         self.telegram_bot_token = os.getenv(
             "TELEGRAM_BOT_TOKEN",

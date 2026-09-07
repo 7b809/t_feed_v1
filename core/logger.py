@@ -49,9 +49,16 @@ def get_logger(log_filename: str) -> logging.Logger:
         return logger
 
     formatter = logging.Formatter(
-        "%(asctime)s | %(levelname)s | %(name)s | %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
+    (
+        "%(asctime)s | "
+        "%(levelname)s | "
+        "%(name)s | "
+        "%(filename)s:%(lineno)d | "
+        "%(funcName)s | "
+        "%(message)s"
+    ),
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
 
     # ------------------------------------------------------------
     # File logging

@@ -43,9 +43,11 @@ class TelegramBotService:
         return self._send_direct_message(message)
 
     def start(self) -> None:
-        """
-        Start Telegram bot polling in a background thread.
-        """
+        if not settings.run_tele_bot:
+            logger.info(
+                "Telegram bot is disabled via RUN_TELE_BOT configuration."
+            )
+            return
 
         if not self.bot_token or not self.chat_id:
             logger.warning(
@@ -337,25 +339,20 @@ class TelegramBotService:
         self,
         message: str,
     ) -> bool:
-        """
-        Send an administrative Telegram message.
-
-        This intentionally does NOT check TELE_FLG.
-
-        This is required for bot control messages such as:
-            /disable_telegram
-
-        because TELE_FLG becomes False before the confirmation
-        message is sent.
-        """
-
-        if not self.bot_token or not self.chat_id:
-            logger.warning(
-                "Cannot send Telegram bot message. " "Bot token or chat ID is missing."
+        if not settings.run_tele_bot:
+            logger.info(
+                "Telegram bot disabled. Message ignored."
             )
             return False
 
-        url = f"https://api.telegram.org/bot" f"{self.bot_token}/sendMessage"
+        if not self.bot_token or not self.chat_id:
+            logger.warning(
+                "Cannot send Telegram bot message. "
+                "Bot token or chat ID is missing."
+            )
+            return False
+
+        url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
 
         payload = {
             "chat_id": self.chat_id,
@@ -381,17 +378,22 @@ class TelegramBotService:
                 )
                 return False
 
-            logger.info("Telegram bot response sent successfully.")
+            logger.info(
+                "Telegram bot response sent successfully."
+            )
 
             return True
 
         except requests.RequestException:
-            logger.exception("Failed to send Telegram bot response.")
+            logger.exception(
+                "Failed to send Telegram bot response."
+            )
             return False
 
         except Exception:
-            logger.exception("Unexpected error sending Telegram bot response.")
+            logger.exception(
+                "Unexpected error sending Telegram bot response."
+            )
             return False
-
 
 telegram_bot_service = TelegramBotService()

@@ -1,0 +1,104 @@
+http://localhost:8001/api/v1/order-requests
+
+
+{
+  "schema_version": "1.0",
+  "event_id": "TEST-EMA-001",
+  "event_type": "isolated_instrument_ema_alert",
+  "source": "option_feed_engine",
+  "market": "NSE",
+  "timezone": "Asia/Kolkata",
+  "created_at": "2026-09-07T11:46:00+05:30",
+  "is_simulation": false,
+
+  "instrument": {
+    "instrument_key": "NSE_FO|42630",
+    "trading_symbol": "NIFTY 23750 PE 08 SEP 26",
+    "instrument_type": "PE",
+    "strike_price": 23750,
+    "expiry": "2026-09-08",
+    "live_ltp": 45.8
+  },
+
+  "order_suggestion": {
+    "rule": "bullish_same_side_bearish_opposite_side",
+    "isolated_instrument_type": "PE",
+    "suggested_order_side": "CE",
+
+    "budget_filter": {
+      "enabled": true,
+      "minimum_price": 50,
+      "maximum_price": 120,
+      "maximum_instruments": 3,
+
+      "instruments": [
+        {
+          "instrument_key": "NSE_FO|42631",
+          "instrument_type": "CE",
+          "option_type": "CE",
+          "strike_price": 23800,
+          "trading_symbol": "NIFTY 23800 CE 08 SEP 26",
+          "lot_size": 65,
+          "live_ltp": 85.8
+        },
+        {
+          "instrument_key": "NSE_FO|42633",
+          "instrument_type": "CE",
+          "option_type": "CE",
+          "strike_price": 23850,
+          "trading_symbol": "NIFTY 23850 CE 08 SEP 26",
+          "lot_size": 65,
+          "live_ltp": 61.1
+        },
+        {
+          "instrument_key": "NSE_FO|42629",
+          "instrument_type": "CE",
+          "option_type": "CE",
+          "strike_price": 23750,
+          "trading_symbol": "NIFTY 23750 CE 08 SEP 26",
+          "lot_size": 65,
+          "live_ltp": 115.6
+        }
+      ]
+    }
+  },
+
+  "raw_ema_event": {
+    "type": "live_ema_cross",
+    "instrument_key": "NSE_FO|42630",
+    "timestamp": "2026-09-07T11:44:00+05:30",
+    "cross_type": "bearish_cross",
+    "interval_minutes": 1,
+    "close": 45.8,
+    "ema_fast_period": 9,
+    "ema_slow_period": 21,
+    "ema_fast": 48.0229,
+    "ema_slow": 48.0557,
+    "previous_ema_fast": 48.5786,
+    "previous_ema_slow": 48.2813,
+    "previous_signal": "bullish",
+    "current_signal": "bearish",
+    "source": "live_feed",
+    "ema_calculation_mode": "candle_close",
+    "created_at": "2026-09-07T11:46:00+05:30",
+
+    "contract_info": {
+      "instrument_key": "NSE_FO|42630",
+      "instrument_type": "PE",
+      "option_type": "PE",
+      "strike_price": 23750,
+      "expiry": "2026-09-08",
+      "trading_symbol": "NIFTY 23750 PE 08 SEP 26",
+      "lot_size": 65
+    },
+
+    "candle": {
+      "timestamp": "2026-09-07T11:44:00+05:30",
+      "open": 46.75,
+      "high": 47.0,
+      "low": 45.4,
+      "close": 45.8,
+      "volume": 1705015
+    }
+  }
+}
