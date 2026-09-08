@@ -928,23 +928,42 @@ def run_initial_startup():
                 details=startup_details,
             )
         else:
+            warning_details = (
+                startup_details
+                + "\n\n"
+                + "RECOVERY MODE: Startup completed with missing "
+                "token/instruments. The application will remain running "
+                "and retry instrument initialization automatically."
+            )
             telegram_service.send_startup_message(
                 status="completed with warnings",
-                details=startup_details,
+                details=warning_details,
             )
 
     except Exception as ex:
-        logger.error(
-            "Initial startup sequence failed: %s: %s",
+        # Startup data acquisition must never prevent the application
+        # infrastructure (FastAPI, Telegram bot, scheduler and streamer)
+        # from coming online. Recovery is handled by the background job.
+        logger.exception(
+            "Initial startup data initialization failed; "
+            "continuing in recovery mode. error=%s: %s",
             type(ex).__name__,
             ex,
         )
         telegram_service.send_exception_message(
-            title="Initial Startup Failed",
+            title="Initial Startup Recovery Mode",
             exception=ex,
             context="run_initial_startup",
         )
-        raise
+        telegram_service.send_startup_message(
+            status="completed with warnings",
+            details=(
+                "Initial startup entered recovery mode.\n\n"
+                f"Error: {type(ex).__name__}: {ex}\n"
+                "The application infrastructure will continue running "
+                "and automatic instrument recovery will retry."
+            ),
+        )
 
 
 def run_daily_market_hard_refresh():
@@ -1365,6 +1384,187 @@ def run_daily_log_archive_delivery():
         )
 
 
+def run_instrument_recovery():
+    """
+    Recover from startup/runtime states where the access token or
+    subscribed instrument cache is unavailable.
+
+    This job is intentionally independent of the WebSocket loop. It first
+    refreshes/reads the token, then reloads instruments. Once valid keys are
+    available it refreshes historical EMA state when necessary and asks the
+    already-running streamer to restart with the new subscription set.
+
+    A failed attempt is non-fatal; the next scheduled run retries it.
+    """
+    logger.info("=============== INSTRUMENT RECOVERY CHECK STARTED ===============")
+
+    try:
+        current_token = token_service.get_access_token()
+        subscribed_keys = options_cache.get("subscribed_keys", []) or []
+
+        if current_token and subscribed_keys:
+            logger.info(
+                "Instrument recovery not required. token_available=%s "
+                "subscribed_keys=%s",
+                True,
+                len(subscribed_keys),
+            )
+            return True
+
+        logger.warning(
+            "Instrument recovery required. token_available=%s subscribed_keys=%s",
+            bool(current_token),
+            len(subscribed_keys),
+        )
+
+        # A new token may have been written by the Telegram token bot after
+        # application startup. Always re-read the persisted token first.
+        if not current_token:
+            token_service.refresh_tokens()
+            current_token = token_service.get_access_token()
+
+        if not current_token:
+            message = (
+                "Instrument Recovery Waiting\n\n"
+                "No valid Upstox access token is currently available.\n"
+                "The application remains online and will retry automatically."
+            )
+            logger.warning(message)
+            telegram_service.send_message(
+                title="Instrument Recovery Waiting",
+                message=message,
+                level="WARNING",
+            )
+            return False
+
+        result = load_and_subscribe_instruments()
+
+        if not result:
+            message = (
+                "Instrument Recovery Attempt Failed\n\n"
+                "Option contracts could not be loaded.\n"
+                "The application remains online and will retry automatically."
+            )
+            logger.warning(message)
+            telegram_service.send_message(
+                title="Instrument Recovery Waiting",
+                message=message,
+                level="WARNING",
+            )
+            return False
+
+        subscribed_keys = options_cache.get("subscribed_keys", []) or []
+
+        if not subscribed_keys:
+            message = (
+                "Instrument Recovery Waiting\n\n"
+                "Instrument contracts loaded, but no subscribed keys were "
+                "produced. The application remains online and will retry."
+            )
+            logger.warning(message)
+            telegram_service.send_message(
+                title="Instrument Recovery Waiting",
+                message=message,
+                level="WARNING",
+            )
+            return False
+
+        logger.info(
+            "Instrument recovery succeeded. subscribed_keys=%s",
+            len(subscribed_keys),
+        )
+
+        # Historical initialization is useful after recovering from a
+        # startup failure because live EMA state may not exist yet.
+        history_summary = fetch_startup_historical_candles()
+
+        if history_summary:
+            logger.info(
+                "Recovery historical EMA initialization completed. "
+                "status=%s total_candles=%s live_ema_initialized=%s",
+                history_summary.get("status"),
+                history_summary.get("total_candles"),
+                history_summary.get("live_ema_initialized"),
+            )
+
+        loop = getattr(upstox_streamer, "loop", None)
+
+        if loop and loop.is_running():
+            future = asyncio.run_coroutine_threadsafe(
+                upstox_streamer.restart(),
+                loop,
+            )
+
+            def recovery_restart_done(done_future):
+                try:
+                    done_future.result()
+                    recovered_keys = options_cache.get(
+                        "subscribed_keys", []
+                    ) or []
+
+                    logger.info(
+                        "Instrument recovery streamer restart completed. "
+                        "subscribed_keys=%s",
+                        len(recovered_keys),
+                    )
+                    telegram_service.send_subscription_message(
+                        success=True,
+                        subscribed_keys_count=len(recovered_keys),
+                        feed_mode=config.WEBSOCKET_FEED_MODE,
+                    )
+                    telegram_service.send_message(
+                        title="Instrument Recovery Completed",
+                        message=(
+                            "Instrument subscription has been recovered.\n\n"
+                            f"Subscribed Instruments: {len(recovered_keys)}\n"
+                            f"Feed Mode: {config.WEBSOCKET_FEED_MODE}\n"
+                            "Upstox streamer restarted with the recovered keys."
+                        ),
+                        level="INFO",
+                    )
+                except Exception as restart_ex:
+                    logger.exception(
+                        "Instrument recovery streamer restart failed: %s: %s",
+                        type(restart_ex).__name__,
+                        restart_ex,
+                    )
+                    telegram_service.send_exception_message(
+                        title="Instrument Recovery Streamer Restart Failed",
+                        exception=restart_ex,
+                        context="recovery_restart_done_callback",
+                    )
+
+            future.add_done_callback(recovery_restart_done)
+        else:
+            # The streamer may not have been started yet. The normal lifespan
+            # startup will start it after the recovery check, or the next
+            # recovery run will restart it once its loop is available.
+            logger.warning(
+                "Instrument recovery succeeded but streamer loop is "
+                "not currently available. Keys are cached for the streamer."
+            )
+
+        return True
+
+    except Exception as ex:
+        # Never allow recovery failures to terminate APScheduler.
+        logger.exception(
+            "Instrument recovery attempt failed; next run will retry. "
+            "error=%s: %s",
+            type(ex).__name__,
+            ex,
+        )
+        telegram_service.send_exception_message(
+            title="Instrument Recovery Attempt Failed",
+            exception=ex,
+            context="run_instrument_recovery",
+        )
+        return False
+
+    finally:
+        logger.info("=============== INSTRUMENT RECOVERY CHECK COMPLETED ===============")
+
+
 def start_scheduler() -> BackgroundScheduler:
     scheduler = BackgroundScheduler(timezone=config.MARKET_TIMEZONE)
 
@@ -1383,6 +1583,16 @@ def start_scheduler() -> BackgroundScheduler:
         trigger="interval",
         minutes=(get_token_monitor_interval_minutes()),
         id="upstox_token_validity_check_job",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
+    scheduler.add_job(
+        func=run_instrument_recovery,
+        trigger="interval",
+        minutes=max(1, get_token_monitor_interval_minutes()),
+        id="instrument_recovery_job",
         replace_existing=True,
         max_instances=1,
         coalesce=True,
@@ -1441,6 +1651,8 @@ def start_scheduler() -> BackgroundScheduler:
         f"{config.REFRESH_INTERVAL_MINUTES} minutes\n"
         f"Token Check: Every "
         f"{get_token_monitor_interval_minutes()} minutes\n"
+        f"Instrument Recovery: Every "
+        f"{max(1, get_token_monitor_interval_minutes())} minutes\n"
         f"Telegram Commands: "
         f"{config.TELEGRAM_TOKEN_BOT_ENABLED}\n"
         f"Telegram Runtime Config: "
@@ -1467,12 +1679,13 @@ def start_scheduler() -> BackgroundScheduler:
 
     logger.info(
         "Scheduler active. token_refresh=%s, "
-        "token_check=%s, opening_range=%02d:%02d, "
+        "token_check=%s, instrument_recovery=%s, opening_range=%02d:%02d, "
         "daily_log_archive=%02d:%02d, archive_limit_mb=%s, "
         "timezone=%s, isolation_window=%s, "
         "live_ema_mode=%s",
         config.REFRESH_INTERVAL_MINUTES,
         get_token_monitor_interval_minutes(),
+        max(1, get_token_monitor_interval_minutes()),
         config.OPENING_RANGE_FETCH_HOUR,
         config.OPENING_RANGE_FETCH_MINUTE,
         DAILY_LOG_ARCHIVE_HOUR,
@@ -1548,6 +1761,9 @@ async def app_lifespan(
             run_initial_startup,
         )
 
+        # Infrastructure must start even when token/instrument initialization
+        # failed. This is the key recovery change: a temporary Upstox/token
+        # problem must not prevent Telegram, scheduler or FastAPI from running.
         scheduler = start_scheduler()
         telegram_bot_started = telegram_token_bot.start()
 
@@ -1557,13 +1773,28 @@ async def app_lifespan(
         subscribed_keys = options_cache.get(
             "subscribed_keys",
             [],
-        )
+        ) or []
 
-        telegram_service.send_subscription_message(
-            success=True,
-            subscribed_keys_count=len(subscribed_keys),
-            feed_mode=config.WEBSOCKET_FEED_MODE,
-        )
+        if subscribed_keys:
+            telegram_service.send_subscription_message(
+                success=True,
+                subscribed_keys_count=len(subscribed_keys),
+                feed_mode=config.WEBSOCKET_FEED_MODE,
+            )
+        else:
+            telegram_service.send_message(
+                title="Application Recovery Mode",
+                message=(
+                    "Application infrastructure is online, but no "
+                    "instrument keys are currently available.\n\n"
+                    "Telegram bot: running\n"
+                    "Scheduler: running\n"
+                    "FastAPI: running\n"
+                    "Upstox streamer: running in waiting/recovery mode\n\n"
+                    "The instrument recovery job will retry automatically."
+                ),
+                level="WARNING",
+            )
 
         logger.info(
             "Application startup completed successfully. "
