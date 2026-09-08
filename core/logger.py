@@ -48,17 +48,35 @@ def get_logger(log_filename: str) -> logging.Logger:
     if logger.handlers:
         return logger
 
+    # ------------------------------------------------------------
+    # Formatter: choose pathname (full) or filename (short)
+    # based on DEBUG_FLAG from config
+    # ------------------------------------------------------------
+    if settings.DEBUG_FLAG:
+        # Full source path
+        log_format = (
+            "%(asctime)s | "
+            "%(levelname)s | "
+            "%(name)s | "
+            "%(pathname)s:%(lineno)d | "
+            "%(funcName)s | "
+            "%(message)s"
+        )
+    else:
+        # Only filename (default)
+        log_format = (
+            "%(asctime)s | "
+            "%(levelname)s | "
+            "%(name)s | "
+            "%(filename)s:%(lineno)d | "
+            "%(funcName)s | "
+            "%(message)s"
+        )
+
     formatter = logging.Formatter(
-    (
-        "%(asctime)s | "
-        "%(levelname)s | "
-        "%(name)s | "
-        "%(filename)s:%(lineno)d | "
-        "%(funcName)s | "
-        "%(message)s"
-    ),
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
+        log_format,
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
 
     # ------------------------------------------------------------
     # File logging

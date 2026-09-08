@@ -1,0 +1,283 @@
+{% extends "base.html" %}
+
+{% block title %}Logs - {{ app_name }}{% endblock %}
+
+{% block styles %}
+<style>
+  /* Dark dashboard override for this page */
+  body {
+    background: #0b0e14;
+    color: #e4e7ec;
+  }
+  .log-page-container {
+    margin-top: 20px;
+  }
+  .log-files-card {
+    background: #1a1f2b;
+    border: none;
+    border-radius: 12px;
+    padding: 15px;
+    height: 70vh;
+    overflow-y: auto;
+  }
+  .log-files-card::-webkit-scrollbar {
+    width: 6px;
+  }
+  .log-files-card::-webkit-scrollbar-track {
+    background: #2a2f3b;
+  }
+  .log-files-card::-webkit-scrollbar-thumb {
+    background: #4a6cf7;
+    border-radius: 10px;
+  }
+  .log-file-item {
+    background: #242b38;
+    border: 1px solid #2f3747;
+    border-radius: 8px;
+    margin-bottom: 8px;
+    padding: 10px 14px;
+    cursor: pointer;
+    transition: 0.2s;
+    color: #c8d0dc;
+    display: flex;
+    align-items: center;
+  }
+  .log-file-item i {
+    margin-right: 10px;
+    color: #4a6cf7;
+    font-size: 1.1rem;
+  }
+  .log-file-item:hover {
+    background: #2f3a4b;
+    border-color: #4a6cf7;
+    transform: translateX(4px);
+  }
+  .log-file-item.active {
+    background: #2f3a4b;
+    border-color: #4a6cf7;
+    box-shadow: 0 0 0 2px #4a6cf7;
+  }
+  .log-content-card {
+    background: #1a1f2b;
+    border: none;
+    border-radius: 12px;
+    padding: 0;
+    height: 70vh;
+    display: flex;
+    flex-direction: column;
+  }
+  .log-toolbar {
+    background: #242b38;
+    padding: 8px 15px;
+    border-top-left-radius: 12px;
+    border-top-right-radius: 12px;
+    border-bottom: 1px solid #2f3747;
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  .log-toolbar .btn {
+    background: #2f3a4b;
+    color: #c8d0dc;
+    border: none;
+    font-size: 0.8rem;
+    padding: 4px 12px;
+    border-radius: 6px;
+    transition: 0.2s;
+  }
+  .log-toolbar .btn:hover {
+    background: #4a6cf7;
+    color: #fff;
+  }
+  .log-toolbar .btn i {
+    margin-right: 5px;
+  }
+  .log-toolbar .spacer {
+    flex: 1;
+  }
+  .log-body {
+    flex: 1;
+    padding: 15px;
+    overflow-y: auto;
+    background: #0f131a;
+    border-bottom-left-radius: 12px;
+    border-bottom-right-radius: 12px;
+    font-family: 'JetBrains Mono', 'Courier New', monospace;
+    font-size: 0.85rem;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    line-height: 1.6;
+  }
+  .log-body::-webkit-scrollbar {
+    width: 8px;
+  }
+  .log-body::-webkit-scrollbar-track {
+    background: #1a1f2b;
+  }
+  .log-body::-webkit-scrollbar-thumb {
+    background: #4a6cf7;
+    border-radius: 10px;
+  }
+  .log-body .line {
+    display: block;
+  }
+  .log-body .line-number {
+    display: inline-block;
+    width: 30px;
+    color: #5a6f8c;
+    user-select: none;
+    margin-right: 10px;
+    text-align: right;
+  }
+  .log-body .line-content {
+    color: #d4dcec;
+  }
+  .log-body .text-muted {
+    color: #5a6f8c !important;
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="row log-page-container">
+    <!-- Left: File list -->
+    <div class="col-md-4">
+        <div class="log-files-card">
+            <h5 style="color:#a0b0c0; margin-bottom: 15px;"><i class="bi bi-folder2-open"></i> Log Files</h5>
+            <ul class="list-unstyled" id="log-file-list">
+                {% for log in logs %}
+                <li class="log-file-item" data-filename="{{ log }}">
+                    <i class="bi bi-file-text"></i> {{ log }}
+                </li>
+                {% else %}
+                <li class="text-muted" style="padding:10px;">No log files found.</li>
+                {% endfor %}
+            </ul>
+        </div>
+    </div>
+
+    <!-- Right: Log content with toolbar -->
+    <div class="col-md-8">
+        <div class="log-content-card">
+            <div class="log-toolbar">
+                <span style="color:#a0b0c0; font-size:0.9rem;"><i class="bi bi-file-earmark-code"></i> Content</span>
+                <span class="spacer"></span>
+                <button class="btn btn-sm" id="zoom-in-btn"><i class="bi bi-zoom-in"></i> Zoom In</button>
+                <button class="btn btn-sm" id="zoom-out-btn"><i class="bi bi-zoom-out"></i> Zoom Out</button>
+                <button class="btn btn-sm" id="copy-btn"><i class="bi bi-clipboard"></i> Copy</button>
+                <button class="btn btn-sm" id="word-wrap-btn"><i class="bi bi-text-wrap"></i> Wrap</button>
+                <button class="btn btn-sm" id="line-numbers-btn"><i class="bi bi-list-ul"></i> Lines</button>
+            </div>
+            <div id="log-display" class="log-body">
+                <span class="text-muted">Select a log file from the list.</span>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  document.addEventListener('DOMContentLoaded', function() {
+    const logDisplay = document.getElementById('log-display');
+    const fileItems = document.querySelectorAll('.log-file-item');
+    let currentContent = '';
+    let fontSize = 0.85;      // rem
+    let wordWrap = true;
+    let showLineNumbers = false;
+
+    // Helper: escape HTML (for line numbers mode)
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+
+    // Render log with optional line numbers
+    function renderLog(content) {
+      if (!content) {
+        logDisplay.innerHTML = '<span class="text-muted">Select a log file from the list.</span>';
+        return;
+      }
+      if (showLineNumbers) {
+        const lines = content.split('\n');
+        let html = '';
+        lines.forEach((line, index) => {
+          html += `<div class="line"><span class="line-number">${index + 1}</span><span class="line-content">${escapeHtml(line)}</span></div>`;
+        });
+        logDisplay.innerHTML = html;
+      } else {
+        logDisplay.textContent = content;
+      }
+    }
+
+    // Load a log file
+    function loadLog(filename) {
+      fetch(`/ui/logs/${encodeURIComponent(filename)}`)
+        .then(response => {
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          return response.text();
+        })
+        .then(data => {
+          currentContent = data;
+          renderLog(data);
+          // Highlight active file
+          fileItems.forEach(item => item.classList.remove('active'));
+          document.querySelector(`.log-file-item[data-filename="${filename}"]`)?.classList.add('active');
+        })
+        .catch(error => {
+          logDisplay.innerHTML = `<span class="text-danger">Error loading log: ${error.message}</span>`;
+        });
+    }
+
+    // Click on file
+    fileItems.forEach(item => {
+      item.addEventListener('click', function() {
+        const filename = this.dataset.filename;
+        if (filename) loadLog(filename);
+      });
+    });
+
+    // Zoom In
+    document.getElementById('zoom-in-btn').addEventListener('click', function() {
+      fontSize = Math.min(fontSize + 0.1, 2.0);
+      logDisplay.style.fontSize = fontSize + 'rem';
+    });
+
+    // Zoom Out
+    document.getElementById('zoom-out-btn').addEventListener('click', function() {
+      fontSize = Math.max(fontSize - 0.1, 0.5);
+      logDisplay.style.fontSize = fontSize + 'rem';
+    });
+
+    // Copy
+    document.getElementById('copy-btn').addEventListener('click', function() {
+      const text = logDisplay.textContent || '';
+      navigator.clipboard.writeText(text).then(() => {
+        const btn = this;
+        const origHtml = btn.innerHTML;
+        btn.innerHTML = '<i class="bi bi-check2"></i> Copied!';
+        setTimeout(() => btn.innerHTML = origHtml, 1500);
+      }).catch(err => {
+        alert('Could not copy: ' + err);
+      });
+    });
+
+    // Word Wrap toggle
+    document.getElementById('word-wrap-btn').addEventListener('click', function() {
+      wordWrap = !wordWrap;
+      logDisplay.style.whiteSpace = wordWrap ? 'pre-wrap' : 'pre';
+      logDisplay.style.wordWrap = wordWrap ? 'break-word' : 'normal';
+      this.innerHTML = wordWrap ? '<i class="bi bi-text-wrap"></i> Wrap' : '<i class="bi bi-text-wrap"></i> No Wrap';
+    });
+
+    // Line Numbers toggle
+    document.getElementById('line-numbers-btn').addEventListener('click', function() {
+      showLineNumbers = !showLineNumbers;
+      if (currentContent) renderLog(currentContent);
+      this.innerHTML = showLineNumbers ? '<i class="bi bi-list-ul"></i> Lines: ON' : '<i class="bi bi-list-ul"></i> Lines';
+    });
+  });
+</script>
+{% endblock %}

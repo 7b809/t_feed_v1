@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+
+{% block title %}Welcome - {{ app_name }}{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-8 text-center">
+        <h1 class="display-4 mt-5">{{ app_name }}</h1>
+        <p class="lead">
+            Isolated EMA alert executor – receive alerts, select instruments, and place orders.
+        </p>
+        <hr class="my-4" />
+        <p>View application logs to monitor your trading activity.</p>
+        <a href="/ui/logs" class="btn btn-primary btn-lg">View Logs</a>
+    </div>
+</div>
+{% endblock %}

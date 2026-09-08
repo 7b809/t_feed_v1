@@ -295,14 +295,12 @@ class TokenService:
 
                 self._last_refresh_error = None
 
+            # --- LOGGING MODIFIED: removed broker, user_id, etc. ---
             logger.info(
-                "Upstox token cache refreshed "
-                "token_changed=%s "
-                "broker=%s",
+                "Upstox token cache refreshed token_changed=%s",
                 token_changed,
-                self._profile_user_id,
-                self._profile_broker,
             )
+            # -------------------------------------------------------
 
             return True
 

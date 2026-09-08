@@ -168,6 +168,7 @@ class Settings:
             "upstox_tokens",
         ).strip()
 
+
         self.upstox_access_token_document_id = os.getenv(
             "UPSTOX_ACCESS_TOKEN_DOCUMENT_ID",
             "upstox_access_token",
@@ -181,6 +182,11 @@ class Settings:
         self.upstox_token_required_on_startup = _get_bool(
             "UPSTOX_TOKEN_REQUIRED_ON_STARTUP",
             True,
+        )
+
+        self.DEBUG_FLAG = _get_bool(
+            "DEBUG_FLAG",
+            False,
         )
 
         self.upstox_token_validation_enabled = _get_bool(
