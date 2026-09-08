@@ -30,6 +30,7 @@ from core.logger import get_logger
 from services.history_service import (
     fetch_historical_candles_for_all_subscribed,
 )
+from api.token_store_routes import router as test_token_router
 from services.opening_range_service import (
     calculate_opening_range_for_all_subscribed,
 )
@@ -1899,3 +1900,4 @@ app.include_router(ws_docs_router)
 app.include_router(logs_router)
 app.include_router(instrument_router)
 app.include_router(ema_alert_simulation_router)
+app.include_router(test_token_router)
