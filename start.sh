@@ -112,7 +112,7 @@ echo "Starting FastAPI..."
 
 nohup "$PYTHON" -m uvicorn main:app \
     --host 0.0.0.0 \
-    --port 8001 \
+    --port 8000 \
     >> "$LOG_FILE" 2>&1 &
 
 PID=$!
@@ -134,7 +134,7 @@ if kill -0 "$PID" 2>/dev/null; then
     echo
     echo "Application started successfully."
     echo "PID: $PID"
-    echo "Port: 8001"
+    echo "Port: 8000"
     echo "Python: $PYTHON"
     echo "Log: $LOG_FILE"
 
