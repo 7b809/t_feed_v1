@@ -45,5 +45,5 @@ async def health() -> dict:
         "order_execution_ready": (
             settings.PLACE_ORDER is False or token_service.has_access_token()
         ),
-        "upstox_token_cache": token_status,
+        "upstox_token_cache": token_status.get("last_validation_status"),
     }
