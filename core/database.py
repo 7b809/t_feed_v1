@@ -17,7 +17,6 @@ mongo = MongoDatabase()
 
 
 async def connect_to_mongo() -> None:
-
     logger.info(
         "Connecting to MongoDB database=%s",
         settings.mongodb_database,
@@ -62,7 +61,6 @@ async def connect_to_mongo() -> None:
 
 
 async def close_mongo_connection() -> None:
-
     if mongo.client is not None:
         await mongo.client.close()
 
@@ -73,7 +71,6 @@ async def close_mongo_connection() -> None:
 
 
 def get_order_requests_collection() -> AsyncCollection:
-
     if mongo.database is None:
         raise RuntimeError("MongoDB is not connected")
 
@@ -81,8 +78,16 @@ def get_order_requests_collection() -> AsyncCollection:
 
 
 def get_order_executions_collection() -> AsyncCollection:
-
     if mongo.database is None:
         raise RuntimeError("MongoDB is not connected")
 
     return mongo.database["order_execs"]
+
+
+def get_upstox_tokens_collection() -> AsyncCollection:
+    if mongo.client is None:
+        raise RuntimeError("MongoDB is not connected")
+
+    token_database = mongo.client[settings.upstox_mongodb_database]
+
+    return token_database[settings.upstox_tokens_collection]
