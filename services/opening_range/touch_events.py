@@ -36,10 +36,14 @@ from .constants import (
 
 logger = get_logger(__file__)
 
-
-# ============================================================
-# Formatting Helpers
-# ============================================================
+logger.info(
+    "Legacy touch alert service initialized. legacy_telegram_enabled=%s, touch_alert_enabled=%s, sort_by_nearest_index=%s, batch_seconds=%s, max_instruments=%s",
+    bool(DEFAULT_LEGACY_TOUCH_TELEGRAM_ENABLED),
+    bool(DEFAULT_TOUCH_ALERT_ENABLED),
+    bool(DEFAULT_SORT_BY_NEAREST_INDEX),
+    DEFAULT_TOUCH_ALERT_BATCH_SECONDS,
+    DEFAULT_TOUCH_ALERT_MAX_INSTRUMENTS,
+)
 
 
 def _format_numeric_value(
@@ -88,11 +92,6 @@ def _format_touch_time(
     return text if text else "not_available"
 
 
-# ============================================================
-# Latest Instrument LTP Helpers
-# ============================================================
-
-
 def update_latest_ltp_for_instrument(
     instrument_key: str,
     ltp: Any,
@@ -119,11 +118,20 @@ def update_latest_ltp_for_instrument(
     if value <= 0:
         return False
 
-    return runtime_state.set_latest_instrument_ltp(
+    result = runtime_state.set_latest_instrument_ltp(
         instrument_key=normalized_instrument_key,
         ltp=value,
         updated_at=updated_at,
     )
+
+    if result:
+        logger.debug(
+            "Latest LTP updated for instrument. instrument_key=%s, ltp=%s",
+            normalized_instrument_key,
+            value,
+        )
+
+    return result
 
 
 def get_latest_ltp_for_instrument(
@@ -136,11 +144,6 @@ def get_latest_ltp_for_instrument(
         return None
 
     return runtime_state.get_latest_instrument_ltp(normalized_instrument_key)
-
-
-# ============================================================
-# Legacy Telegram Touch Alert Sorting
-# ============================================================
 
 
 def get_sorted_touch_events_for_alert(
@@ -198,11 +201,6 @@ def get_sorted_touch_events_for_alert(
         valid_events,
         key=sort_key,
     )
-
-
-# ============================================================
-# Legacy Telegram Touch Alert Formatting
-# ============================================================
 
 
 def format_touch_event_line(
@@ -282,11 +280,6 @@ def format_touch_event_line(
     )
 
 
-# ============================================================
-# Legacy Telegram Touch Alert Sending
-# ============================================================
-
-
 def send_touch_events_telegram_alert(
     events: list,
     source: str,
@@ -330,8 +323,7 @@ def send_touch_events_telegram_alert(
 
         if elapsed_seconds < DEFAULT_TOUCH_ALERT_BATCH_SECONDS:
             logger.debug(
-                "Legacy Opening Range touch alert deferred. "
-                "elapsed_seconds=%s, batch_seconds=%s",
+                "Legacy Opening Range touch alert deferred. elapsed_seconds=%s, batch_seconds=%s",
                 round(elapsed_seconds, 4),
                 DEFAULT_TOUCH_ALERT_BATCH_SECONDS,
             )
@@ -379,6 +371,11 @@ def send_touch_events_telegram_alert(
     )
 
     try:
+        logger.debug(
+            "Attempting legacy touch Telegram alert. source=%s, event_count=%s",
+            normalized_source,
+            len(valid_events),
+        )
         sent = bool(
             telegram_service.send_message(
                 title="Opening Range Touch Alert",
@@ -386,22 +383,17 @@ def send_touch_events_telegram_alert(
                 level="REFRESH",
             )
         )
-    except Exception as ex:
+    except Exception:
         logger.exception(
-            "Failed sending legacy Opening Range touch "
-            "Telegram alert. source=%s, events_count=%s, "
-            "error=%s: %s",
+            "Failed sending legacy Opening Range touch Telegram alert. source=%s, events_count=%s",
             normalized_source,
             len(valid_events),
-            type(ex).__name__,
-            ex,
         )
         return False
 
     if not sent:
         logger.warning(
-            "Legacy Opening Range touch Telegram alert "
-            "was not delivered. source=%s, events_count=%s",
+            "Legacy Opening Range touch Telegram alert was not delivered. source=%s, events_count=%s",
             normalized_source,
             len(valid_events),
         )
@@ -411,19 +403,13 @@ def send_touch_events_telegram_alert(
         runtime_state.last_touch_alert_sent_at = now_timestamp
 
     logger.info(
-        "Legacy Opening Range touch Telegram alert sent. "
-        "source=%s, total_events=%s, alerted_events=%s",
+        "Legacy Opening Range touch Telegram alert sent. source=%s, total_events=%s, alerted_events=%s",
         normalized_source,
         len(valid_events),
         len(selected_events),
     )
 
     return True
-
-
-# ============================================================
-# Pending Touch Alert Queue
-# ============================================================
 
 
 def _restore_pending_events_to_front(
@@ -454,6 +440,11 @@ def _restore_pending_events_to_front(
     with runtime_state.touch_lock:
         for event in reversed(events):
             runtime_state.pending_touch_events.appendleft(event)
+
+    logger.debug(
+        "Restored pending touch events to front of queue. count=%s",
+        len(events),
+    )
 
 
 def _update_pending_event_count_in_cache() -> None:
@@ -495,8 +486,15 @@ def flush_pending_touch_alerts(
 
     with runtime_state.touch_lock:
         pending_events = list(runtime_state.pending_touch_events)
-
+        pending_count = len(pending_events)
         runtime_state.pending_touch_events.clear()
+
+    logger.debug(
+        "Flushing pending touch alerts. force=%s, source=%s, pending_count=%s",
+        force,
+        source,
+        pending_count,
+    )
 
     if not pending_events:
         _update_pending_event_count_in_cache()
@@ -509,18 +507,29 @@ def flush_pending_touch_alerts(
     )
 
     if not sent:
-        # Preserve the original event order. The old implementation
-        # used appendleft() in forward order, which reversed the queue.
+        logger.debug(
+            "Touch alert not sent, restoring pending events. count=%s, source=%s",
+            len(pending_events),
+            source,
+        )
         _restore_pending_events_to_front(pending_events)
 
     _update_pending_event_count_in_cache()
 
+    if sent:
+        logger.info(
+            "Flushed pending touch alerts successfully. source=%s, events_flushed=%s",
+            source,
+            len(pending_events),
+        )
+    else:
+        logger.debug(
+            "Flush pending touch alerts completed without delivery. source=%s, events_pending=%s",
+            source,
+            len(pending_events),
+        )
+
     return sent
-
-
-# ============================================================
-# Public API
-# ============================================================
 
 
 __all__ = [

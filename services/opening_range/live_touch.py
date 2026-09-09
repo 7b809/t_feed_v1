@@ -35,15 +35,22 @@ from .constants import (
 
 logger = get_logger(__file__)
 
-# ============================================================
-# Touch Event Helpers
-# ============================================================
+logger.info(
+    "Opening Range touch service initialized. touch_alert_enabled=%s, live_touch_enabled=%s, backfill_enabled=%s, touch_check_mode=%s, isolation_levels=%s",
+    bool(DEFAULT_TOUCH_ALERT_ENABLED),
+    bool(DEFAULT_LIVE_TOUCH_ALERT_ENABLED),
+    bool(DEFAULT_BACKFILL_SCAN_ENABLED),
+    DEFAULT_TOUCH_CHECK_MODE,
+    DEFAULT_ISOLATION_TOUCH_LEVELS,
+)
+
 
 def build_alert_key(instrument_key: str, level: str) -> str:
     """Builds the daily duplicate-control key for a touch event."""
     normalized_instrument_key = str(instrument_key or "").strip()
     normalized_level = str(level or "").strip().upper()
     return f"{normalized_instrument_key}_{normalized_level}"
+
 
 def calculate_distance_from_index(strike_price: Any, index_ltp: Any) -> float | None:
     """Calculates the absolute distance between an option strike and the latest NIFTY index LTP."""
@@ -58,13 +65,19 @@ def calculate_distance_from_index(strike_price: Any, index_ltp: Any) -> float | 
         return None
     return round(abs(strike_value - index_value), 4)
 
+
 def update_latest_main_index_ltp(ltp: Any, source: str = "unknown", updated_at: str | None = None) -> bool:
     """Updates the latest main-index LTP. Returns True when a valid positive LTP is stored."""
-    return runtime_state.set_latest_main_index_ltp(ltp=ltp, source=source, updated_at=updated_at)
+    result = runtime_state.set_latest_main_index_ltp(ltp=ltp, source=source, updated_at=updated_at)
+    if result:
+        logger.debug("Main index LTP updated. ltp=%s, source=%s", ltp, source)
+    return result
+
 
 def get_latest_main_index_ltp() -> float | None:
     """Returns the latest main-index LTP."""
     return runtime_state.get_latest_main_index_ltp_value()
+
 
 def get_default_touch_status() -> dict:
     """Returns a new default Opening Range touch-status dictionary."""
@@ -75,6 +88,7 @@ def get_default_touch_status() -> dict:
         "first_touch_level": None, "first_touch_source": None, "first_touch_time": None,
         "events": [],
     }
+
 
 def create_touch_event(
     instrument_key: str,
@@ -120,6 +134,7 @@ def create_touch_event(
         "created_at": get_now_market_time().isoformat(),
     }
 
+
 def should_skip_touch_alert(instrument_key: str, level: str, contract_info: dict | None = None) -> bool:
     """Checks whether a touch event should be skipped."""
     if not DEFAULT_TOUCH_ALERT_ENABLED:
@@ -139,6 +154,7 @@ def should_skip_touch_alert(instrument_key: str, level: str, contract_info: dict
             return True
     return False
 
+
 def mark_touch_alert_sent(event: dict) -> bool:
     """Marks a touch key as already tracked."""
     if not isinstance(event, dict):
@@ -148,7 +164,9 @@ def mark_touch_alert_sent(event: dict) -> bool:
         return False
     with runtime_state.touch_lock:
         runtime_state.alert_sent_keys.add(alert_key)
+    logger.debug("Touch alert marked as sent. alert_key=%s", alert_key)
     return True
+
 
 def queue_touch_event(event: dict) -> bool:
     """Queues one touch event for internal tracking."""
@@ -168,7 +186,16 @@ def queue_touch_event(event: dict) -> bool:
         runtime_state.opening_range_cache["pending_touch_events_count"] = pending_events_count
         runtime_state.opening_range_cache["alert_sent_keys_count"] = alert_keys_count
         runtime_state.opening_range_cache["touch_events"] = touch_events_snapshot
+    logger.debug(
+        "Touch event queued. alert_key=%s, instrument_key=%s, level=%s, total_events=%s, pending_events=%s",
+        event_snapshot.get("alert_key"),
+        event_snapshot.get("instrument_key"),
+        event_snapshot.get("level"),
+        touch_events_count,
+        pending_events_count,
+    )
     return True
+
 
 def build_touch_status_from_events(events: list) -> dict:
     """Builds an Opening Range touch status from detected events."""
@@ -191,6 +218,7 @@ def build_touch_status_from_events(events: list) -> dict:
             status["first_touch_time"] = event.get("touch_time")
         status["events"].append(deepcopy(event))
     return status
+
 
 def update_touch_status_in_cache(instrument_key: str, event: dict) -> bool:
     """Updates touch status for one instrument in opening_range_cache."""
@@ -238,11 +266,14 @@ def update_touch_status_in_cache(instrument_key: str, event: dict) -> bool:
         item["touch_status"] = touch_status
         data[normalized_instrument_key] = item
         runtime_state.opening_range_cache["data"] = data
+    logger.debug(
+        "Touch status updated in cache. instrument_key=%s, level=%s, alert_key=%s",
+        normalized_instrument_key,
+        level,
+        event.get("alert_key"),
+    )
     return True
 
-# ============================================================
-# Touch Detection
-# ============================================================
 
 def detect_touch_from_candle(
     instrument_key: str,
@@ -293,7 +324,16 @@ def detect_touch_from_candle(
             candle=candle,
         )
         events.append(event)
+    if events:
+        logger.info(
+            "Touch events detected. instrument_key=%s, source=%s, count=%s, levels=%s",
+            instrument_key,
+            source,
+            len(events),
+            [e.get("level") for e in events],
+        )
     return events
+
 
 def scan_backfill_touches(instrument_key: str, candles: list, levels: dict, contract_info: dict, candle_count: int) -> list:
     """Scans post-Opening-Range candles for existing touches."""
@@ -303,6 +343,12 @@ def scan_backfill_touches(instrument_key: str, candles: list, levels: dict, cont
         return []
     runtime_state.ensure_current_market_day()
     post_opening_range_candles = select_post_opening_range_candles(candles=candles, candle_count=candle_count)
+    logger.info(
+        "Scanning backfill touches. instrument_key=%s, total_candles=%s, post_opening_candles=%s",
+        instrument_key,
+        len(candles),
+        len(post_opening_range_candles),
+    )
     events = []
     for candle in post_opening_range_candles:
         detected_events = detect_touch_from_candle(
@@ -318,21 +364,26 @@ def scan_backfill_touches(instrument_key: str, candles: list, levels: dict, cont
                 mark_touch_alert_sent(event)
             update_touch_status_in_cache(instrument_key=instrument_key, event=event)
             queue_touch_event(event)
+    if events:
+        logger.info(
+            "Backfill touch scan completed. instrument_key=%s, events_found=%s",
+            instrument_key,
+            len(events),
+        )
     return events
 
-# ============================================================
-# Upstox Feed Extraction
-# ============================================================
 
 def _safe_dict(value: Any) -> dict:
     """Returns a dictionary or an empty dictionary."""
     return value if isinstance(value, dict) else {}
+
 
 def _normalize_ohlc_collection(value: Any) -> list:
     """Returns valid OHLC dictionaries from an Upstox OHLC value."""
     if not isinstance(value, list):
         return []
     return [item for item in value if isinstance(item, dict)]
+
 
 def extract_feed_values(tick_data: dict) -> dict:
     """Extracts LTP, high, low, close, and timestamp from Upstox feed data."""
@@ -395,9 +446,6 @@ def extract_feed_values(tick_data: dict) -> dict:
         close_value = ltp
     return {"ltp": ltp, "high": high_value, "low": low_value, "close": close_value, "timestamp": timestamp}
 
-# ============================================================
-# Live Opening Range Processing
-# ============================================================
 
 def process_live_tick_for_opening_range(instrument_key: str, tick_data: dict, contract_info: dict | None = None) -> list:
     """Processes a live tick for Opening Range touch detection."""
@@ -457,19 +505,21 @@ def process_live_tick_for_opening_range(instrument_key: str, tick_data: dict, co
         update_touch_status_in_cache(instrument_key=normalized_instrument_key, event=event)
         queue_touch_event(event)
     if events:
-        # Local import prevents isolation.py and live_touch.py from
-        # becoming a top-level circular-import pair.
         from .isolation import try_isolate_from_touch_events
         try:
             try_isolate_from_touch_events(events)
+            logger.info(
+                "Isolation attempted after touch detection. instrument_key=%s, events=%s",
+                normalized_instrument_key,
+                len(events),
+            )
         except Exception as ex:
-            logger.exception("Opening Range isolation failed after touch detection. instrument_key=%s, error=%s: %s",
-                             normalized_instrument_key, type(ex).__name__, ex)
+            logger.exception(
+                "Opening Range isolation failed after touch detection. instrument_key=%s",
+                normalized_instrument_key,
+            )
     return events
 
-# ============================================================
-# Public API
-# ============================================================
 
 __all__ = [
     "build_alert_key",

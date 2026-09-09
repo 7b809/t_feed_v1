@@ -19,11 +19,15 @@ class AlgoAppService:
     def __init__(self):
         self.enabled = bool(getattr(config, "ALGO_APP_ENABLED", False))
         self.url = str(getattr(config, "ALGO_APP_URL", "") or "").strip().rstrip("/")
+
         self.auth_type = (
             str(getattr(config, "ALGO_APP_AUTH_TYPE", "none") or "none").strip().lower()
         )
+
         self.auth_token = str(getattr(config, "ALGO_APP_AUTH_TOKEN", "") or "").strip()
+
         self.api_key = str(getattr(config, "ALGO_APP_API_KEY", "") or "").strip()
+
         self.api_key_header = str(
             getattr(
                 config,
@@ -32,6 +36,7 @@ class AlgoAppService:
             )
             or "X-API-Key"
         ).strip()
+
         self.timeout_seconds = max(
             0.1,
             float(
@@ -42,6 +47,7 @@ class AlgoAppService:
                 )
             ),
         )
+
         self.verify_ssl = bool(
             getattr(
                 config,
@@ -49,6 +55,7 @@ class AlgoAppService:
                 True,
             )
         )
+
         self.max_retries = max(
             0,
             int(
@@ -59,6 +66,7 @@ class AlgoAppService:
                 )
             ),
         )
+
         self.retry_delay_seconds = max(
             0.0,
             float(
@@ -69,6 +77,7 @@ class AlgoAppService:
                 )
             ),
         )
+
         self.send_in_background = bool(
             getattr(
                 config,
@@ -76,6 +85,7 @@ class AlgoAppService:
                 True,
             )
         )
+
         self.background_queue_counts_as_accepted = bool(
             getattr(
                 config,
@@ -83,6 +93,7 @@ class AlgoAppService:
                 True,
             )
         )
+
         self.max_response_body_length = max(
             0,
             int(
@@ -93,6 +104,7 @@ class AlgoAppService:
                 )
             ),
         )
+
         self.max_workers = max(
             1,
             int(
@@ -103,16 +115,21 @@ class AlgoAppService:
                 )
             ),
         )
+
         self.telegram_success_notification_enabled = bool(
             getattr(config, "ALGO_TELE_APP", False)
         )
+
         self.market_timezone = self._load_market_timezone()
         self._lock = Lock()
+
         self._executor = ThreadPoolExecutor(
             max_workers=self.max_workers,
             thread_name_prefix="algo-app-delivery",
         )
+
         self._futures: set[Future] = set()
+
         self.dispatch_count = 0
         self.background_dispatch_count = 0
         self.delivery_attempt_count = 0
@@ -120,9 +137,11 @@ class AlgoAppService:
         self.delivery_failed_count = 0
         self.retry_count = 0
         self.pending_count = 0
+
         self.telegram_notification_attempt_count = 0
         self.telegram_notification_success_count = 0
         self.telegram_notification_failed_count = 0
+
         self.last_dispatch_at = None
         self.last_success_at = None
         self.last_failure_at = None
@@ -131,10 +150,34 @@ class AlgoAppService:
         self.last_error = None
         self.last_response = None
         self.last_delivery_result = None
+
         self.last_telegram_notification_at = None
         self.last_telegram_notification_event_id = None
         self.last_telegram_notification_success = None
         self.last_telegram_notification_error = None
+
+        logger.info(
+            "Algo App service initialized. enabled=%s, configured=%s, "
+            "url_configured=%s, auth_type=%s, "
+            "authentication_configured=%s, send_in_background=%s, "
+            "background_queue_counts_as_accepted=%s, max_workers=%s, "
+            "max_retries=%s, retry_delay_seconds=%s, "
+            "timeout_seconds=%s, verify_ssl=%s, "
+            "telegram_success_notification_enabled=%s",
+            self.enabled,
+            self.is_configured(),
+            bool(self.url),
+            self.auth_type,
+            self._is_authentication_configured(),
+            self.send_in_background,
+            self.background_queue_counts_as_accepted,
+            self.max_workers,
+            self.max_retries,
+            self.retry_delay_seconds,
+            self.timeout_seconds,
+            self.verify_ssl,
+            self.telegram_success_notification_enabled,
+        )
 
     def _load_market_timezone(self) -> ZoneInfo:
         timezone_name = str(
@@ -148,6 +191,7 @@ class AlgoAppService:
 
         try:
             return ZoneInfo(timezone_name)
+
         except ZoneInfoNotFoundError:
             logger.warning(
                 "Invalid market timezone configured. "
@@ -155,23 +199,21 @@ class AlgoAppService:
                 timezone_name,
             )
             return ZoneInfo("Asia/Kolkata")
-        except Exception as ex:
-            logger.error(
-                "Failed loading market timezone. " "timezone=%s, error=%s: %s",
+
+        except Exception:
+            logger.exception(
+                "Failed loading market timezone. " "timezone=%s, fallback=Asia/Kolkata",
                 timezone_name,
-                type(ex).__name__,
-                ex,
             )
             return ZoneInfo("Asia/Kolkata")
 
     def _now_market_time(self) -> str:
         try:
             return datetime.now(self.market_timezone).isoformat()
-        except Exception as ex:
-            logger.error(
-                "Failed generating market timestamp. " "error=%s: %s",
-                type(ex).__name__,
-                ex,
+
+        except Exception:
+            logger.exception(
+                "Failed generating market timestamp. " "fallback=system_local_time"
             )
             return datetime.now().isoformat()
 
@@ -193,10 +235,7 @@ class AlgoAppService:
 
         return False
 
-    def _get_simulation_metadata(
-        self,
-        payload: dict,
-    ) -> dict:
+    def _get_simulation_metadata(self, payload: dict) -> dict:
         simulation_data = payload.get("simulation")
 
         if not isinstance(simulation_data, dict):
@@ -212,12 +251,7 @@ class AlgoAppService:
 
         return {
             "is_simulation": is_simulation,
-            "dry_run": bool(
-                simulation_data.get(
-                    "dry_run",
-                    False,
-                )
-            ),
+            "dry_run": bool(simulation_data.get("dry_run", False)),
             "requested_by": simulation_data.get("requested_by"),
         }
 
@@ -237,15 +271,12 @@ class AlgoAppService:
                 True,
             )
         ):
-            return (
-                False,
-                "EMA alert simulation is disabled.",
-            )
+            return False, "EMA alert simulation is disabled."
 
         if metadata["dry_run"]:
             return (
                 False,
-                "Dry-run simulation payloads cannot be " "delivered to the Algo App.",
+                "Dry-run simulation payloads cannot be delivered " "to the Algo App.",
             )
 
         if not bool(
@@ -257,15 +288,12 @@ class AlgoAppService:
         ):
             return (
                 False,
-                "Algo App delivery for simulated EMA " "alerts is disabled.",
+                "Algo App delivery for simulated EMA alerts is disabled.",
             )
 
         return True, None
 
-    def _build_headers(
-        self,
-        payload: dict,
-    ) -> dict:
+    def _build_headers(self, payload: dict) -> dict:
         headers = {
             "Accept": "application/json",
             "Content-Type": "application/json",
@@ -274,6 +302,7 @@ class AlgoAppService:
 
         if self.auth_type == "bearer" and self.auth_token:
             headers["Authorization"] = f"Bearer {self.auth_token}"
+
         elif self.auth_type == "api_key" and self.api_key and self.api_key_header:
             headers[self.api_key_header] = self.api_key
 
@@ -298,14 +327,12 @@ class AlgoAppService:
         headers["X-Simulation"] = (
             "true" if simulation_metadata["is_simulation"] else "false"
         )
+
         headers["X-Dry-Run"] = "true" if simulation_metadata["dry_run"] else "false"
 
         return headers
 
-    def _truncate_text(
-        self,
-        value: Any,
-    ) -> str:
+    def _truncate_text(self, value: Any) -> str:
         if value is None or self.max_response_body_length <= 0:
             return ""
 
@@ -317,32 +344,26 @@ class AlgoAppService:
     ) -> Any:
         try:
             return response.json()
+
         except ValueError:
             try:
                 return self._truncate_text(response.text)
-            except Exception as ex:
-                logger.warning(
-                    "Failed reading Algo App response "
-                    "body. status_code=%s, error=%s: %s",
+
+            except Exception:
+                logger.exception(
+                    "Failed reading Algo App response body. " "status_code=%s",
                     response.status_code,
-                    type(ex).__name__,
-                    ex,
                 )
                 return None
-        except Exception as ex:
-            logger.warning(
-                "Unexpected Algo App response parsing "
-                "error. status_code=%s, error=%s: %s",
+
+        except Exception:
+            logger.exception(
+                "Unexpected Algo App response parsing error. " "status_code=%s",
                 response.status_code,
-                type(ex).__name__,
-                ex,
             )
             return None
 
-    def _is_retryable_status(
-        self,
-        status_code: int,
-    ) -> bool:
+    def _is_retryable_status(self, status_code: int) -> bool:
         return status_code in {408, 425, 429} or status_code >= 500
 
     def _calculate_retry_delay(
@@ -355,17 +376,15 @@ class AlgoAppService:
 
             if retry_after:
                 try:
-                    return max(
-                        0.0,
-                        float(retry_after),
-                    )
+                    return max(0.0, float(retry_after))
+
                 except (
                     TypeError,
                     ValueError,
                     OverflowError,
                 ):
                     logger.warning(
-                        "Invalid Retry-After header " "from Algo App. value=%s",
+                        "Invalid Retry-After header from Algo App. " "value=%s",
                         retry_after,
                     )
 
@@ -379,50 +398,35 @@ class AlgoAppService:
         payload: Any,
     ) -> tuple[bool, str | None]:
         if not isinstance(payload, dict):
-            return (
-                False,
-                "Payload must be a JSON object.",
-            )
+            return False, "Payload must be a JSON object."
 
         if not payload:
-            return (
-                False,
-                "Payload must not be empty.",
-            )
+            return False, "Payload must not be empty."
 
         event_type = str(payload.get("event_type") or "").strip()
 
         if not event_type:
-            return (
-                False,
-                "Payload event_type is required.",
-            )
+            return False, "Payload event_type is required."
 
         instrument = payload.get("instrument")
 
         if not isinstance(instrument, dict):
-            return (
-                False,
-                "Payload instrument must be an object.",
-            )
+            return False, "Payload instrument must be an object."
 
         instrument_key = str(instrument.get("instrument_key") or "").strip()
 
         if not instrument_key:
             return (
                 False,
-                "Payload instrument.instrument_key " "is required.",
+                "Payload instrument.instrument_key is required.",
             )
 
         order_suggestion = payload.get("order_suggestion")
 
-        if order_suggestion is not None and not isinstance(
-            order_suggestion,
-            dict,
-        ):
+        if order_suggestion is not None and not isinstance(order_suggestion, dict):
             return (
                 False,
-                "Payload order_suggestion must be " "an object.",
+                "Payload order_suggestion must be an object.",
             )
 
         if isinstance(order_suggestion, dict):
@@ -431,10 +435,7 @@ class AlgoAppService:
                 [],
             )
 
-            if not isinstance(
-                nearest_instruments,
-                list,
-            ):
+            if not isinstance(nearest_instruments, list):
                 return (
                     False,
                     "order_suggestion.nearest_instruments " "must be a list.",
@@ -442,10 +443,7 @@ class AlgoAppService:
 
             budget_filter = order_suggestion.get("budget_filter")
 
-            if budget_filter is not None and not isinstance(
-                budget_filter,
-                dict,
-            ):
+            if budget_filter is not None and not isinstance(budget_filter, dict):
                 return (
                     False,
                     "order_suggestion.budget_filter " "must be an object.",
@@ -457,13 +455,10 @@ class AlgoAppService:
                     [],
                 )
 
-                if not isinstance(
-                    budget_instruments,
-                    list,
-                ):
+                if not isinstance(budget_instruments, list):
                     return (
                         False,
-                        "order_suggestion.budget_filter." "instruments must be a list.",
+                        "order_suggestion.budget_filter.instruments " "must be a list.",
                     )
 
         simulation_valid, simulation_error = self._validate_simulation_delivery(payload)
@@ -497,10 +492,7 @@ class AlgoAppService:
         with self._lock:
             self.retry_count += 1
 
-    def _record_delivery_result(
-        self,
-        result: dict,
-    ) -> None:
+    def _record_delivery_result(self, result: dict) -> None:
         success = bool(result.get("success"))
         now = self._now_market_time()
 
@@ -550,13 +542,18 @@ class AlgoAppService:
         event_id: str | None,
     ) -> bool:
         if not self.telegram_success_notification_enabled:
+            logger.debug(
+                "Algo App success Telegram notification skipped. "
+                "reason=notification_disabled, event_id=%s",
+                event_id,
+            )
             return False
 
         try:
             success = bool(
                 telegram_service.send_message(
-                    title=("Algo App Payload Delivery"),
-                    message=("Payload sent successfully " "to Algo App."),
+                    title="Algo App Payload Delivery",
+                    message=("Payload sent successfully to Algo App."),
                     level="ALGO",
                 )
             )
@@ -566,9 +563,15 @@ class AlgoAppService:
                     event_id=event_id,
                     success=True,
                 )
+
+                logger.info(
+                    "Algo App delivery confirmation Telegram "
+                    "notification sent. event_id=%s",
+                    event_id,
+                )
                 return True
 
-            error = "Telegram service returned an " "unsuccessful result."
+            error = "Telegram service returned an unsuccessful result."
 
             self._record_telegram_notification_result(
                 event_id=event_id,
@@ -576,26 +579,25 @@ class AlgoAppService:
                 error=error,
             )
 
+            logger.warning(
+                "Algo App delivery confirmation Telegram "
+                "notification failed. event_id=%s, "
+                "reason=telegram_service_returned_false",
+                event_id,
+            )
             return False
 
-        except Exception as ex:
-            error = f"{type(ex).__name__}: {ex}"
-
+        except Exception:
             self._record_telegram_notification_result(
                 event_id=event_id,
                 success=False,
-                error=error,
+                error="Telegram notification raised an exception.",
             )
 
-            logger.error(
-                "Algo App delivery confirmation "
-                "Telegram exception. event_id=%s, "
-                "error=%s: %s",
+            logger.exception(
+                "Algo App delivery confirmation Telegram exception. " "event_id=%s",
                 event_id,
-                type(ex).__name__,
-                ex,
             )
-
             return False
 
     def _update_opening_range_delivery_state(
@@ -610,14 +612,19 @@ class AlgoAppService:
                 event_id=event_id,
                 delivery_result=delivery_result,
             )
-        except Exception as ex:
-            logger.warning(
-                "Could not update Algo App delivery "
-                "result in Opening Range state. "
-                "event_id=%s, error=%s: %s",
+
+            logger.debug(
+                "Algo App delivery result stored in Opening Range state. "
+                "event_id=%s, success=%s",
                 event_id,
-                type(ex).__name__,
-                ex,
+                delivery_result.get("success"),
+            )
+
+        except Exception:
+            logger.exception(
+                "Could not update Algo App delivery result in "
+                "Opening Range state. event_id=%s",
+                event_id,
             )
 
     def _build_result(
@@ -644,11 +651,11 @@ class AlgoAppService:
             "attempt_count": attempt_count,
             "response": response,
             "error": error,
-            "telegram_notification": (telegram_notification),
+            "telegram_notification": telegram_notification,
             "target_url_configured": bool(self.url),
             "delivery_mode": "production",
             "started_at": started_at,
-            "completed_at": (self._now_market_time()),
+            "completed_at": self._now_market_time(),
         }
 
     def _build_not_configured_result(
@@ -658,10 +665,13 @@ class AlgoAppService:
     ) -> dict:
         if not self.enabled:
             error = "Algo App delivery is disabled."
+
         elif not self.url:
             error = "ALGO_APP_URL is empty."
+
         elif not self._is_authentication_configured():
-            error = "Algo App authentication " "configuration is invalid."
+            error = "Algo App authentication configuration is invalid."
+
         else:
             error = "Algo App delivery is not configured."
 
@@ -674,12 +684,41 @@ class AlgoAppService:
             error=error,
         )
 
-    def _send_payload(
+    def _log_retry(
         self,
-        payload: dict,
-    ) -> dict:
+        *,
+        event_id: str | None,
+        attempt_number: int,
+        total_attempts: int,
+        retry_delay: float,
+        reason: str,
+    ) -> None:
+        logger.info(
+            "Algo App delivery retry scheduled. event_id=%s, "
+            "completed_attempt=%s, next_attempt=%s, "
+            "maximum_attempts=%s, retry_delay_seconds=%s, "
+            "reason=%s",
+            event_id,
+            attempt_number,
+            attempt_number + 1,
+            total_attempts,
+            retry_delay,
+            reason,
+        )
+
+    def _send_payload(self, payload: dict) -> dict:
         started_at = self._now_market_time()
         event_id = str(payload.get("event_id") or "").strip() or None
+
+        event_type = str(payload.get("event_type") or "").strip() or None
+
+        logger.info(
+            "Algo App payload delivery processing started. "
+            "event_id=%s, event_type=%s, configured=%s",
+            event_id,
+            event_type,
+            self.is_configured(),
+        )
 
         valid_payload, validation_error = self._validate_payload(payload)
 
@@ -696,11 +735,12 @@ class AlgoAppService:
             self._record_delivery_result(result)
 
             logger.warning(
-                "Algo App payload validation failed. " "event_id=%s, error=%s",
+                "Algo App payload validation failed. "
+                "event_id=%s, event_type=%s, error=%s",
                 event_id,
+                event_type,
                 validation_error,
             )
-
             return result
 
         if not self.is_configured():
@@ -712,15 +752,22 @@ class AlgoAppService:
             self._record_delivery_result(result)
 
             logger.warning(
-                "Algo App payload delivery skipped. " "event_id=%s, error=%s",
+                "Algo App payload delivery skipped. "
+                "event_id=%s, enabled=%s, url_configured=%s, "
+                "auth_type=%s, authentication_configured=%s, "
+                "error=%s",
                 event_id,
+                self.enabled,
+                bool(self.url),
+                self.auth_type,
+                self._is_authentication_configured(),
                 result.get("error"),
             )
-
             return result
 
         try:
             headers = self._build_headers(payload)
+
         except Exception as ex:
             result = self._build_result(
                 event_id=event_id,
@@ -728,10 +775,15 @@ class AlgoAppService:
                 configured=True,
                 attempted=False,
                 success=False,
-                error=("HeaderBuildError: " f"{type(ex).__name__}: {ex}"),
+                error=(f"HeaderBuildError: {type(ex).__name__}: {ex}"),
             )
 
             self._record_delivery_result(result)
+
+            logger.exception(
+                "Failed building Algo App request headers. " "event_id=%s",
+                event_id,
+            )
             return result
 
         total_attempts = max(
@@ -744,19 +796,18 @@ class AlgoAppService:
         last_error = None
         completed_attempts = 0
 
-        for attempt_number in range(
-            1,
-            total_attempts + 1,
-        ):
+        for attempt_number in range(1, total_attempts + 1):
             completed_attempts = attempt_number
             self._record_attempt()
 
             try:
                 logger.info(
                     "Sending Algo App EMA payload. "
-                    "event_id=%s, target=ALGO_APP_URL, "
-                    "attempt=%s, maximum_attempts=%s",
+                    "event_id=%s, event_type=%s, "
+                    "target=ALGO_APP_URL, attempt=%s, "
+                    "maximum_attempts=%s",
                     event_id,
+                    event_type,
                     attempt_number,
                     total_attempts,
                 )
@@ -783,7 +834,7 @@ class AlgoAppService:
                         configured=True,
                         attempted=True,
                         success=True,
-                        status_code=(response.status_code),
+                        status_code=response.status_code,
                         attempt_count=attempt_number,
                         response=last_response,
                         telegram_notification={
@@ -797,21 +848,36 @@ class AlgoAppService:
 
                     logger.info(
                         "Algo App EMA payload delivered. "
-                        "event_id=%s, status_code=%s, "
-                        "attempt=%s",
+                        "event_id=%s, event_type=%s, "
+                        "status_code=%s, attempt=%s, "
+                        "telegram_notification_sent=%s",
                         event_id,
+                        event_type,
                         response.status_code,
                         attempt_number,
+                        telegram_sent,
                     )
-
                     return result
 
-                last_error = "Algo App returned HTTP " f"{response.status_code}."
+                last_error = f"Algo App returned HTTP {response.status_code}."
 
-                if (
-                    not self._is_retryable_status(response.status_code)
-                    or attempt_number >= total_attempts
-                ):
+                retryable = self._is_retryable_status(response.status_code)
+                will_retry = retryable and attempt_number < total_attempts
+
+                logger.warning(
+                    "Algo App returned an unsuccessful response. "
+                    "event_id=%s, status_code=%s, attempt=%s, "
+                    "maximum_attempts=%s, retryable=%s, "
+                    "retrying=%s",
+                    event_id,
+                    response.status_code,
+                    attempt_number,
+                    total_attempts,
+                    retryable,
+                    will_retry,
+                )
+
+                if not will_retry:
                     break
 
                 retry_delay = self._calculate_retry_delay(
@@ -821,44 +887,113 @@ class AlgoAppService:
 
                 self._record_retry()
 
+                self._log_retry(
+                    event_id=event_id,
+                    attempt_number=attempt_number,
+                    total_attempts=total_attempts,
+                    retry_delay=retry_delay,
+                    reason=f"http_{response.status_code}",
+                )
+
                 if retry_delay > 0:
                     time.sleep(retry_delay)
 
             except requests.Timeout as ex:
                 last_error = f"{type(ex).__name__}: {ex}"
+                will_retry = attempt_number < total_attempts
 
-                if attempt_number >= total_attempts:
+                logger.warning(
+                    "Algo App request timed out. event_id=%s, "
+                    "attempt=%s, maximum_attempts=%s, "
+                    "retrying=%s, error=%s",
+                    event_id,
+                    attempt_number,
+                    total_attempts,
+                    will_retry,
+                    last_error,
+                )
+
+                if not will_retry:
                     break
 
                 retry_delay = self._calculate_retry_delay(attempt_number)
 
                 self._record_retry()
+
+                self._log_retry(
+                    event_id=event_id,
+                    attempt_number=attempt_number,
+                    total_attempts=total_attempts,
+                    retry_delay=retry_delay,
+                    reason="timeout",
+                )
 
                 if retry_delay > 0:
                     time.sleep(retry_delay)
 
             except requests.ConnectionError as ex:
                 last_error = f"{type(ex).__name__}: {ex}"
+                will_retry = attempt_number < total_attempts
 
-                if attempt_number >= total_attempts:
+                logger.warning(
+                    "Algo App connection failed. event_id=%s, "
+                    "attempt=%s, maximum_attempts=%s, "
+                    "retrying=%s, error=%s",
+                    event_id,
+                    attempt_number,
+                    total_attempts,
+                    will_retry,
+                    last_error,
+                )
+
+                if not will_retry:
                     break
 
                 retry_delay = self._calculate_retry_delay(attempt_number)
 
                 self._record_retry()
+
+                self._log_retry(
+                    event_id=event_id,
+                    attempt_number=attempt_number,
+                    total_attempts=total_attempts,
+                    retry_delay=retry_delay,
+                    reason="connection_error",
+                )
 
                 if retry_delay > 0:
                     time.sleep(retry_delay)
 
             except requests.RequestException as ex:
                 last_error = f"{type(ex).__name__}: {ex}"
+                will_retry = attempt_number < total_attempts
 
-                if attempt_number >= total_attempts:
+                logger.warning(
+                    "Algo App HTTP request failed. "
+                    "event_id=%s, attempt=%s, "
+                    "maximum_attempts=%s, retrying=%s, "
+                    "error=%s",
+                    event_id,
+                    attempt_number,
+                    total_attempts,
+                    will_retry,
+                    last_error,
+                )
+
+                if not will_retry:
                     break
 
                 retry_delay = self._calculate_retry_delay(attempt_number)
 
                 self._record_retry()
+
+                self._log_retry(
+                    event_id=event_id,
+                    attempt_number=attempt_number,
+                    total_attempts=total_attempts,
+                    retry_delay=retry_delay,
+                    reason="request_exception",
+                )
 
                 if retry_delay > 0:
                     time.sleep(retry_delay)
@@ -867,8 +1002,8 @@ class AlgoAppService:
                 last_error = f"{type(ex).__name__}: {ex}"
 
                 logger.exception(
-                    "Unexpected Algo App delivery "
-                    "exception. event_id=%s, attempt=%s",
+                    "Unexpected Algo App delivery exception. "
+                    "event_id=%s, attempt=%s",
                     event_id,
                     attempt_number,
                 )
@@ -883,7 +1018,7 @@ class AlgoAppService:
             status_code=last_status_code,
             attempt_count=completed_attempts,
             response=last_response,
-            error=(last_error or "Algo App delivery failed."),
+            error=last_error or "Algo App delivery failed.",
             telegram_notification={
                 "enabled": (self.telegram_success_notification_enabled),
                 "attempted": False,
@@ -895,9 +1030,10 @@ class AlgoAppService:
 
         logger.error(
             "Algo App EMA payload delivery failed. "
-            "event_id=%s, status_code=%s, "
+            "event_id=%s, event_type=%s, status_code=%s, "
             "attempt_count=%s, error=%s",
             event_id,
+            event_type,
             last_status_code,
             completed_attempts,
             result.get("error"),
@@ -905,11 +1041,13 @@ class AlgoAppService:
 
         return result
 
-    def _background_delivery(
-        self,
-        payload: dict,
-    ) -> dict:
+    def _background_delivery(self, payload: dict) -> dict:
         event_id = str(payload.get("event_id") or "").strip() or None
+
+        logger.info(
+            "Algo App background delivery started. event_id=%s",
+            event_id,
+        )
 
         try:
             result = self._send_payload(payload)
@@ -919,16 +1057,19 @@ class AlgoAppService:
                 delivery_result=result,
             )
 
+            logger.info(
+                "Algo App background delivery completed. "
+                "event_id=%s, success=%s, status_code=%s",
+                event_id,
+                result.get("success"),
+                result.get("status_code"),
+            )
             return result
 
         except Exception as ex:
             logger.exception(
-                "Unhandled background Algo App "
-                "delivery exception. event_id=%s, "
-                "error=%s: %s",
+                "Unhandled background Algo App delivery exception. " "event_id=%s",
                 event_id,
-                type(ex).__name__,
-                ex,
             )
 
             result = self._build_result(
@@ -937,7 +1078,7 @@ class AlgoAppService:
                 configured=self.is_configured(),
                 attempted=False,
                 success=False,
-                error=(f"{type(ex).__name__}: {ex}"),
+                error=f"{type(ex).__name__}: {ex}",
             )
 
             self._record_delivery_result(result)
@@ -952,10 +1093,14 @@ class AlgoAppService:
         finally:
             self._decrement_pending_count()
 
-    def _background_done(
-        self,
-        future: Future,
-    ) -> None:
+            logger.debug(
+                "Algo App background pending count decremented. "
+                "event_id=%s, pending_count=%s",
+                event_id,
+                self.pending_count,
+            )
+
+    def _background_done(self, future: Future) -> None:
         with self._lock:
             self._futures.discard(future)
 
@@ -964,39 +1109,71 @@ class AlgoAppService:
 
             if not isinstance(result, dict):
                 logger.error(
-                    "Algo App background delivery " "returned an invalid result."
+                    "Algo App background delivery returned an "
+                    "invalid result. result_type=%s",
+                    type(result).__name__,
                 )
-        except Exception as ex:
-            logger.exception(
-                "Algo App background delivery future " "failed. error=%s: %s",
-                type(ex).__name__,
-                ex,
+                return
+
+            logger.debug(
+                "Algo App background future completed. " "event_id=%s, success=%s",
+                result.get("event_id"),
+                result.get("success"),
             )
 
-    def dispatch_ema_alert(
-        self,
-        payload: dict,
-    ) -> bool:
+        except Exception:
+            logger.exception("Algo App background delivery future failed.")
+
+    def dispatch_ema_alert(self, payload: dict) -> bool:
+        event_id = None
+        event_type = None
+
+        if isinstance(payload, dict):
+            event_id = str(payload.get("event_id") or "").strip() or None
+
+            event_type = str(payload.get("event_type") or "").strip() or None
+
+        logger.info(
+            "Algo App EMA dispatch requested. event_id=%s, "
+            "event_type=%s, payload_type=%s, enabled=%s, "
+            "configured=%s, background=%s",
+            event_id,
+            event_type,
+            type(payload).__name__,
+            self.enabled,
+            self.is_configured(),
+            self.send_in_background,
+        )
+
         try:
             valid_payload, validation_error = self._validate_payload(payload)
 
             if not valid_payload:
                 logger.warning(
-                    "Algo App dispatch skipped because " "payload is invalid. error=%s",
+                    "Algo App dispatch skipped. "
+                    "reason=invalid_payload, event_id=%s, "
+                    "event_type=%s, error=%s",
+                    event_id,
+                    event_type,
                     validation_error,
                 )
                 return False
 
             if not self.is_configured():
                 logger.warning(
-                    "Algo App dispatch skipped because "
-                    "ALGO_APP_URL or authentication is "
-                    "not configured."
+                    "Algo App dispatch skipped. "
+                    "reason=service_not_configured, event_id=%s, "
+                    "enabled=%s, url_configured=%s, "
+                    "auth_type=%s, authentication_configured=%s",
+                    event_id,
+                    self.enabled,
+                    bool(self.url),
+                    self.auth_type,
+                    self._is_authentication_configured(),
                 )
                 return False
 
             payload_copy = deepcopy(payload)
-            event_id = str(payload_copy.get("event_id") or "").strip() or None
 
             if self.send_in_background:
                 dispatch_recorded = False
@@ -1015,29 +1192,32 @@ class AlgoAppService:
 
                     with self._lock:
                         self._futures.add(future)
+                        pending_count = self.pending_count
+                        tracked_future_count = len(self._futures)
 
                     future.add_done_callback(self._background_done)
 
                     logger.info(
                         "Algo App EMA payload queued. "
-                        "event_id=%s, target=ALGO_APP_URL",
+                        "event_id=%s, target=ALGO_APP_URL, "
+                        "pending_count=%s, tracked_futures=%s, "
+                        "queue_counts_as_accepted=%s",
                         event_id,
+                        pending_count,
+                        tracked_future_count,
+                        self.background_queue_counts_as_accepted,
                     )
 
                     return self.background_queue_counts_as_accepted
 
-                except Exception as ex:
+                except Exception:
                     if dispatch_recorded:
                         self._decrement_pending_count()
 
                     logger.exception(
-                        "Algo App background dispatch "
-                        "failed. event_id=%s, error=%s: %s",
+                        "Algo App background dispatch failed. " "event_id=%s",
                         event_id,
-                        type(ex).__name__,
-                        ex,
                     )
-
                     return False
 
             self._record_dispatch(
@@ -1052,28 +1232,49 @@ class AlgoAppService:
                 delivery_result=result,
             )
 
+            logger.info(
+                "Synchronous Algo App dispatch completed. "
+                "event_id=%s, success=%s, status_code=%s",
+                event_id,
+                result.get("success"),
+                result.get("status_code"),
+            )
+
             return bool(result.get("success"))
 
-        except Exception as ex:
+        except Exception:
             logger.exception(
-                "Unexpected Algo App dispatch " "exception. error=%s: %s",
-                type(ex).__name__,
-                ex,
+                "Unexpected Algo App dispatch exception. " "event_id=%s, event_type=%s",
+                event_id,
+                event_type,
             )
             return False
 
-    def send_ema_alert(
-        self,
-        payload: dict,
-    ) -> dict:
+    def send_ema_alert(self, payload: dict) -> dict:
         started_at = self._now_market_time()
+
+        event_id = None
+        event_type = None
+
+        if isinstance(payload, dict):
+            event_id = str(payload.get("event_id") or "").strip() or None
+
+            event_type = str(payload.get("event_type") or "").strip() or None
+
+        logger.info(
+            "Synchronous Algo App EMA delivery requested. "
+            "event_id=%s, event_type=%s, payload_type=%s",
+            event_id,
+            event_type,
+            type(payload).__name__,
+        )
 
         try:
             valid_payload, validation_error = self._validate_payload(payload)
 
             if not valid_payload:
-                return self._build_result(
-                    event_id=None,
+                result = self._build_result(
+                    event_id=event_id,
                     started_at=started_at,
                     configured=self.is_configured(),
                     attempted=False,
@@ -1081,9 +1282,18 @@ class AlgoAppService:
                     error=validation_error,
                 )
 
-            payload_copy = deepcopy(payload)
+                logger.warning(
+                    "Synchronous Algo App delivery rejected. "
+                    "reason=invalid_payload, event_id=%s, "
+                    "event_type=%s, error=%s",
+                    event_id,
+                    event_type,
+                    validation_error,
+                )
 
-            event_id = str(payload_copy.get("event_id") or "").strip() or None
+                return result
+
+            payload_copy = deepcopy(payload)
 
             self._record_dispatch(
                 event_id=event_id,
@@ -1097,21 +1307,24 @@ class AlgoAppService:
                 delivery_result=result,
             )
 
+            logger.info(
+                "Synchronous Algo App EMA delivery completed. "
+                "event_id=%s, success=%s, status_code=%s, "
+                "attempt_count=%s",
+                event_id,
+                result.get("success"),
+                result.get("status_code"),
+                result.get("attempt_count"),
+            )
+
             return result
 
         except Exception as ex:
-            event_id = None
-
-            if isinstance(payload, dict):
-                event_id = str(payload.get("event_id") or "").strip() or None
-
             logger.exception(
-                "Unexpected synchronous Algo App "
-                "delivery exception. event_id=%s, "
-                "error=%s: %s",
+                "Unexpected synchronous Algo App delivery exception. "
+                "event_id=%s, event_type=%s",
                 event_id,
-                type(ex).__name__,
-                ex,
+                event_type,
             )
 
             result = self._build_result(
@@ -1120,7 +1333,7 @@ class AlgoAppService:
                 configured=self.is_configured(),
                 attempted=False,
                 success=False,
-                error=(f"{type(ex).__name__}: {ex}"),
+                error=f"{type(ex).__name__}: {ex}",
             )
 
             self._record_delivery_result(result)
@@ -1132,7 +1345,7 @@ class AlgoAppService:
             with self._lock:
                 return {
                     "enabled": self.enabled,
-                    "configured": (self.is_configured()),
+                    "configured": self.is_configured(),
                     "url_configured": bool(self.url),
                     "target": "ALGO_APP_URL",
                     "delivery_mode": "production",
@@ -1140,7 +1353,7 @@ class AlgoAppService:
                     "production_delivery_blocked": False,
                     "auth_type": self.auth_type,
                     "authentication_configured": (self._is_authentication_configured()),
-                    "timeout_seconds": (self.timeout_seconds),
+                    "timeout_seconds": self.timeout_seconds,
                     "verify_ssl": self.verify_ssl,
                     "max_retries": self.max_retries,
                     "retry_delay_seconds": (self.retry_delay_seconds),
@@ -1148,17 +1361,18 @@ class AlgoAppService:
                     "background_queue_counts_as_accepted": (
                         self.background_queue_counts_as_accepted
                     ),
-                    "background_max_workers": (self.max_workers),
+                    "background_max_workers": self.max_workers,
                     "telegram_success_notification_enabled": (
                         self.telegram_success_notification_enabled
                     ),
-                    "dispatch_count": (self.dispatch_count),
+                    "dispatch_count": self.dispatch_count,
                     "background_dispatch_count": (self.background_dispatch_count),
                     "delivery_attempt_count": (self.delivery_attempt_count),
                     "delivery_success_count": (self.delivery_success_count),
                     "delivery_failed_count": (self.delivery_failed_count),
                     "retry_count": self.retry_count,
-                    "pending_count": (self.pending_count),
+                    "pending_count": self.pending_count,
+                    "tracked_future_count": len(self._futures),
                     "telegram_notification_attempt_count": (
                         self.telegram_notification_attempt_count
                     ),
@@ -1168,11 +1382,11 @@ class AlgoAppService:
                     "telegram_notification_failed_count": (
                         self.telegram_notification_failed_count
                     ),
-                    "last_dispatch_at": (self.last_dispatch_at),
-                    "last_success_at": (self.last_success_at),
-                    "last_failure_at": (self.last_failure_at),
-                    "last_event_id": (self.last_event_id),
-                    "last_status_code": (self.last_status_code),
+                    "last_dispatch_at": self.last_dispatch_at,
+                    "last_success_at": self.last_success_at,
+                    "last_failure_at": self.last_failure_at,
+                    "last_event_id": self.last_event_id,
+                    "last_status_code": self.last_status_code,
                     "last_error": self.last_error,
                     "last_response": deepcopy(self.last_response),
                     "last_delivery_result": deepcopy(self.last_delivery_result),
@@ -1188,15 +1402,11 @@ class AlgoAppService:
                     "last_telegram_notification_error": (
                         self.last_telegram_notification_error
                     ),
-                    "market_time": (self._now_market_time()),
+                    "market_time": self._now_market_time(),
                 }
 
         except Exception as ex:
-            logger.exception(
-                "Failed retrieving Algo App service " "status. error=%s: %s",
-                type(ex).__name__,
-                ex,
-            )
+            logger.exception("Failed retrieving Algo App service status.")
 
             return {
                 "enabled": self.enabled,
@@ -1204,27 +1414,34 @@ class AlgoAppService:
                 "target": "ALGO_APP_URL",
                 "delivery_mode": "production",
                 "local_test_mode": False,
-                "error": (f"{type(ex).__name__}: {ex}"),
-                "market_time": (self._now_market_time()),
+                "error": f"{type(ex).__name__}: {ex}",
+                "market_time": self._now_market_time(),
             }
 
-    def shutdown(
-        self,
-        wait: bool = False,
-    ) -> None:
+    def shutdown(self, wait: bool = False) -> None:
+        logger.info(
+            "Algo App background executor shutdown requested. "
+            "wait=%s, pending_count=%s, tracked_futures=%s",
+            wait,
+            self.pending_count,
+            len(self._futures),
+        )
+
         try:
             self._executor.shutdown(
                 wait=wait,
                 cancel_futures=not wait,
             )
 
-            logger.info("Algo App background executor " "shutdown completed.")
+            logger.info(
+                "Algo App background executor shutdown completed. " "wait=%s",
+                wait,
+            )
 
-        except Exception as ex:
+        except Exception:
             logger.exception(
-                "Algo App executor shutdown failed. " "error=%s: %s",
-                type(ex).__name__,
-                ex,
+                "Algo App executor shutdown failed. wait=%s",
+                wait,
             )
 
 

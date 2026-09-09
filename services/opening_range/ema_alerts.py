@@ -25,9 +25,13 @@ from .constants import (
 
 logger = get_logger(__file__)
 
-# ============================================================
-# Isolated Instrument State
-# ============================================================
+logger.info(
+    "EMA alerts service module initialized. isolated_telegram_enabled=%s, algo_app_enabled=%s, live_ema_mode=%s, include_opening_range_levels=%s",
+    bool(DEFAULT_EMA_ISOLATED_TELEGRAM_ENABLED),
+    bool(getattr(config, "ALGO_APP_ENABLED", False)),
+    bool(DEFAULT_LIVE_EMA_CALCULATION_MODE),
+    bool(DEFAULT_EMA_CROSS_INCLUDE_OPENING_RANGE_LEVELS),
+)
 
 
 def is_selected_or_instrument_locked() -> bool:
@@ -63,11 +67,6 @@ def get_isolated_instrument_type_from_state(selected_state: dict) -> str | None:
         "option_type"
     )
     return normalize_option_type(instrument_type)
-
-
-# ============================================================
-# Value Formatting
-# ============================================================
 
 
 def _format_numeric_value(
@@ -199,11 +198,6 @@ def _format_option_label(strike: Any, option_type: Any) -> str:
     return f"{formatted_strike} {option_type_text}"
 
 
-# ============================================================
-# EMA Candle Data
-# ============================================================
-
-
 def extract_ema_candle_details(ema_event: dict) -> dict:
     if not isinstance(ema_event, dict):
         ema_event = {}
@@ -240,11 +234,6 @@ def extract_ema_candle_details(ema_event: dict) -> dict:
     }
 
 
-# ============================================================
-# Suggested Order Instruments
-# ============================================================
-
-
 def get_suggested_order_option_type(
     instruments: list | None, cross_type: str, isolated_instrument_type: str | None
 ) -> str | None:
@@ -275,11 +264,6 @@ def get_suggested_order_option_type(
     return None
 
 
-# ============================================================
-# Option Chain Alert Instruments
-# ============================================================
-
-
 def get_option_chain_instruments_for_ema(
     *, cross_type: str, isolated_instrument_type: str | None
 ):
@@ -291,9 +275,7 @@ def get_option_chain_instruments_for_ema(
         isolated_instrument_type=isolated_instrument_type,
     )
     if not suggested_order_option_type:
-        error_message = (
-            "Could not resolve suggested option type for isolated EMA alert."
-        )
+        error_message = "Could not resolve suggested option type for isolated EMA alert."
         logger.warning(
             "%s cross_type=%s, isolated_type=%s",
             error_message,
@@ -325,11 +307,10 @@ def get_option_chain_instruments_for_ema(
     except Exception as ex:
         error_message = f"{type(ex).__name__}: {ex}"
         logger.exception(
-            "EMA option-chain instrument lookup failed. cross_type=%s, isolated_type=%s, order_side=%s, error=%s",
+            "EMA option-chain instrument lookup failed. cross_type=%s, isolated_type=%s, order_side=%s",
             cross_type,
             isolated_instrument_type,
             suggested_order_option_type,
-            error_message,
         )
         return {
             "status": "failed",
@@ -488,9 +469,6 @@ def format_suggested_order_instruments(instruments: list) -> str:
     return "Nearest Option-Chain Instruments:\n" + "\n\n".join(formatted_instruments)
 
 
-# ============================================================
-# Budget Range Instruments
-# ============================================================
 def format_budget_range_instruments(
     instruments: list, order_option_type: str | None
 ) -> str:
@@ -539,11 +517,6 @@ def format_budget_range_instruments(
     return f"{heading}\n" + "\n\n".join(formatted_instruments)
 
 
-# ============================================================
-# EMA Direction and Duplicate Control
-# ============================================================
-
-
 def normalize_ema_cross_direction(ema_event: dict) -> str:
     if not isinstance(ema_event, dict):
         return "unknown"
@@ -590,11 +563,6 @@ def should_skip_isolated_ema_alert_for_minute_direction(
     return skip_alert, alert_key, direction
 
 
-# ============================================================
-# Telegram Delivery
-# ============================================================
-
-
 def _send_telegram_message(title: str, message: str, level: str) -> bool:
     try:
         return bool(
@@ -602,18 +570,12 @@ def _send_telegram_message(title: str, message: str, level: str) -> bool:
         )
     except Exception as ex:
         logger.error(
-            "Telegram delivery failed. title=%s, level=%s, error=%s: %s",
+            "Telegram delivery failed. title=%s, level=%s, error=%s",
             title,
             level,
             type(ex).__name__,
-            ex,
         )
         return False
-
-
-# ============================================================
-# Algo App Delivery
-# ============================================================
 
 
 def _dispatch_algo_app_payload(payload: dict) -> bool:
@@ -625,18 +587,14 @@ def _dispatch_algo_app_payload(payload: dict) -> bool:
         return bool(algo_app_service.dispatch_ema_alert(deepcopy(payload)))
     except Exception as ex:
         logger.error(
-            "Algo App dispatch failed. event_id=%s, instrument_key=%s, error=%s: %s",
+            "Algo App dispatch failed. event_id=%s, instrument_key=%s, error=%s",
             payload.get("event_id"),
             (payload.get("instrument") or {}).get("instrument_key"),
             type(ex).__name__,
-            ex,
         )
         return False
 
 
-# ============================================================
-# Canonical EMA Alert Payload
-# ============================================================
 def build_isolated_ema_alert_payload(
     ema_event: dict,
     selected_state: dict,
@@ -1191,9 +1149,6 @@ def build_isolated_ema_alert_payload(
     return payload
 
 
-# ============================================================
-# Telegram Message Formatting
-# ============================================================
 def build_isolated_ema_telegram_message(payload: dict) -> str:
     if not isinstance(payload, dict):
         payload = {}
@@ -1340,9 +1295,6 @@ def build_isolated_ema_telegram_message(payload: dict) -> str:
     )
 
 
-# ============================================================
-# Isolated EMA Alert Processing
-# ============================================================
 def process_selected_or_ema_cross_alert_detailed(
     ema_event: dict,
     selected_state_override: dict | None = None,
@@ -1351,6 +1303,14 @@ def process_selected_or_ema_cross_alert_detailed(
     send_telegram: bool | None = None,
     send_algo_app: bool | None = None,
 ) -> dict:
+    logger.info(
+        "Processing isolated EMA alert. instrument_key=%s, cross_type=%s, simulation=%s, dry_run=%s",
+        ema_event.get("instrument_key") if isinstance(ema_event, dict) else None,
+        ema_event.get("cross_type") if isinstance(ema_event, dict) else None,
+        simulation,
+        dry_run,
+    )
+
     result = {
         "success": False,
         "accepted": False,
@@ -1398,6 +1358,7 @@ def process_selected_or_ema_cross_alert_detailed(
     if not isinstance(ema_event, dict):
         result["skip_reason"] = "invalid_ema_event"
         result["error"] = "ema_event must be a dictionary."
+        logger.warning("EMA alert processing skipped. reason=%s", result["skip_reason"])
         return result
 
     event_key = str(ema_event.get("instrument_key") or "").strip()
@@ -1441,11 +1402,13 @@ def process_selected_or_ema_cross_alert_detailed(
     ):
         result["skip_reason"] = "simulation_disabled"
         result["error"] = "EMA alert simulation is disabled."
+        logger.warning("EMA alert processing skipped. reason=%s", result["skip_reason"])
         return result
 
     if dry_run and not simulation:
         result["skip_reason"] = "invalid_dry_run_mode"
         result["error"] = "dry_run is allowed only for simulations."
+        logger.warning("EMA alert processing skipped. reason=%s", result["skip_reason"])
         return result
 
     telegram_enabled = (
@@ -1480,13 +1443,17 @@ def process_selected_or_ema_cross_alert_detailed(
     if not simulation and not telegram_enabled and not algo_enabled:
         result["skip_reason"] = "all_delivery_channels_disabled"
         result["message"] = "Telegram and Algo App delivery are disabled."
+        logger.warning("EMA alert processing skipped. reason=%s", result["skip_reason"])
         return result
 
     if selected_state_override is not None:
         if not simulation:
             result["skip_reason"] = "selected_state_override_not_allowed"
             result["error"] = (
-                "selected_state_override is allowed only " "for simulation requests."
+                "selected_state_override is allowed only for simulation requests."
+            )
+            logger.warning(
+                "EMA alert processing skipped. reason=%s", result["skip_reason"]
             )
             return result
 
@@ -1495,7 +1462,10 @@ def process_selected_or_ema_cross_alert_detailed(
             dict,
         ):
             result["skip_reason"] = "invalid_selected_state_override"
-            result["error"] = "selected_state_override must be a " "dictionary."
+            result["error"] = "selected_state_override must be a dictionary."
+            logger.warning(
+                "EMA alert processing skipped. reason=%s", result["skip_reason"]
+            )
             return result
 
         selected_state = deepcopy(selected_state_override)
@@ -1506,28 +1476,29 @@ def process_selected_or_ema_cross_alert_detailed(
     if not isinstance(selected_state, dict):
         result["skip_reason"] = "invalid_selected_state"
         result["error"] = "Selected instrument state is invalid."
+        logger.warning("EMA alert processing skipped. reason=%s", result["skip_reason"])
         return result
 
     if not selected_state.get("selected"):
         result["skip_reason"] = "isolated_instrument_not_selected"
         result["message"] = "No isolated instrument is currently selected."
+        logger.info("EMA alert processing skipped. reason=%s", result["skip_reason"])
         return result
 
     isolated_key = str(selected_state.get("instrument_key") or "").strip()
 
     if not isolated_key or not event_key:
         result["skip_reason"] = "instrument_key_unavailable"
-        result["error"] = (
-            "Selected instrument key or EMA event " "instrument key is unavailable."
-        )
+        result["error"] = "Selected instrument key or EMA event instrument key is unavailable."
+        logger.warning("EMA alert processing skipped. reason=%s", result["skip_reason"])
         return result
 
     if isolated_key != event_key:
         result["skip_reason"] = "instrument_key_mismatch"
         result["error"] = (
-            f"Selected instrument {isolated_key} does not "
-            f"match EMA event instrument {event_key}."
+            f"Selected instrument {isolated_key} does not match EMA event instrument {event_key}."
         )
+        logger.warning("EMA alert processing skipped. reason=%s", result["skip_reason"])
         return result
 
     contract_info = selected_state.get("contract_info") or {}
@@ -1556,12 +1527,14 @@ def process_selected_or_ema_cross_alert_detailed(
 
     if not isolated_instrument_type:
         result["skip_reason"] = "instrument_type_unavailable"
-        result["error"] = "Could not resolve the isolated instrument " "option type."
+        result["error"] = "Could not resolve the isolated instrument option type."
+        logger.warning("EMA alert processing skipped. reason=%s", result["skip_reason"])
         return result
 
     if not cross_type:
         result["skip_reason"] = "cross_type_unavailable"
         result["error"] = "EMA cross_type is unavailable."
+        logger.warning("EMA alert processing skipped. reason=%s", result["skip_reason"])
         return result
 
     alert_direction = normalize_ema_cross_direction(ema_event)
@@ -1574,6 +1547,7 @@ def process_selected_or_ema_cross_alert_detailed(
     }:
         result["skip_reason"] = "direction_unresolved"
         result["error"] = "EMA alert direction could not be resolved."
+        logger.warning("EMA alert processing skipped. reason=%s", result["skip_reason"])
         return result
 
     alert_icon = _get_ema_alert_icon(
@@ -1622,9 +1596,11 @@ def process_selected_or_ema_cross_alert_detailed(
 
         if skip_alert:
             result["skip_reason"] = "duplicate_alert"
-            result["message"] = (
-                "A matching EMA alert was already processed "
-                "for this instrument, minute, and direction."
+            result["message"] = "A matching EMA alert was already processed for this instrument, minute, and direction."
+            logger.info(
+                "EMA alert skipped due to duplicate. reason=%s, key=%s",
+                result["skip_reason"],
+                minute_alert_key,
             )
             return result
 
@@ -1632,6 +1608,13 @@ def process_selected_or_ema_cross_alert_detailed(
 
         result["duplicate_control"]["reserved"] = duplicate_key_reserved
         result["state_changes"]["duplicate_key_reserved"] = duplicate_key_reserved
+
+        if duplicate_key_reserved:
+            logger.debug(
+                "EMA duplicate key reserved. key=%s, instrument_key=%s",
+                minute_alert_key,
+                event_key,
+            )
 
     try:
         ema_candle = extract_ema_candle_details(ema_event)
@@ -1647,12 +1630,20 @@ def process_selected_or_ema_cross_alert_detailed(
 
         if not suggested_order_option_type:
             result["skip_reason"] = "order_side_unresolved"
-            result["error"] = "Could not resolve the suggested order " "option type."
+            result["error"] = "Could not resolve the suggested order option type."
 
             if duplicate_key_reserved and minute_alert_key:
                 state.release_ema_minute_key(minute_alert_key)
                 result["duplicate_control"]["released"] = True
+                logger.debug(
+                    "Released duplicate key after failure. key=%s", minute_alert_key
+                )
 
+            logger.warning(
+                "EMA alert processing skipped. reason=%s, isolated_type=%s",
+                result["skip_reason"],
+                isolated_instrument_type,
+            )
             return result
 
         option_chain_selection = get_option_chain_instruments_for_ema(
@@ -1683,6 +1674,11 @@ def process_selected_or_ema_cross_alert_detailed(
             )
 
             result["warnings"].append(str(option_chain_error))
+            logger.warning(
+                "Option-chain lookup was not fully successful. error=%s, cross_type=%s",
+                option_chain_error,
+                cross_type,
+            )
 
         suggested_instruments = option_chain_selection.get(
             "nearest_instruments",
@@ -1741,12 +1737,19 @@ def process_selected_or_ema_cross_alert_detailed(
 
         if not isinstance(payload, dict):
             result["skip_reason"] = "invalid_payload"
-            result["error"] = "EMA alert payload builder returned an " "invalid result."
+            result["error"] = "EMA alert payload builder returned an invalid result."
 
             if duplicate_key_reserved and minute_alert_key:
                 state.release_ema_minute_key(minute_alert_key)
                 result["duplicate_control"]["released"] = True
+                logger.debug(
+                    "Released duplicate key after payload build failure. key=%s",
+                    minute_alert_key,
+                )
 
+            logger.warning(
+                "EMA alert processing skipped. reason=%s", result["skip_reason"]
+            )
             return result
 
         order_suggestion = payload.get(
@@ -1936,10 +1939,11 @@ def process_selected_or_ema_cross_alert_detailed(
         if dry_run:
             result["success"] = True
             result["accepted"] = True
-            result["message"] = (
-                "EMA alert payload and Telegram preview "
-                "generated successfully. No delivery was "
-                "attempted."
+            result["message"] = "EMA alert payload and Telegram preview generated successfully. No delivery was attempted."
+            logger.info(
+                "EMA alert dry-run completed successfully. event_id=%s, instrument_key=%s",
+                result["event_id"],
+                event_key,
             )
             return result
 
@@ -1949,16 +1953,39 @@ def process_selected_or_ema_cross_alert_detailed(
         if telegram_enabled:
             result["delivery"]["telegram"]["attempted"] = True
 
+            logger.debug(
+                "Attempting Telegram delivery. event_id=%s, title=%s",
+                result["event_id"],
+                telegram_title,
+            )
+
             telegram_sent = _send_telegram_message(
                 title=telegram_title,
                 message=telegram_message,
                 level="EMA",
             )
 
+            logger.debug(
+                "Telegram delivery completed. event_id=%s, success=%s",
+                result["event_id"],
+                telegram_sent,
+            )
+
         if algo_enabled:
             result["delivery"]["algo_app"]["attempted"] = True
 
+            logger.debug(
+                "Attempting Algo App dispatch. event_id=%s",
+                result["event_id"],
+            )
+
             algo_dispatched = _dispatch_algo_app_payload(payload)
+
+            logger.debug(
+                "Algo App dispatch completed. event_id=%s, dispatched=%s",
+                result["event_id"],
+                algo_dispatched,
+            )
 
         result["delivery"]["telegram"]["success"] = telegram_sent
 
@@ -1987,6 +2014,10 @@ def process_selected_or_ema_cross_alert_detailed(
         if not delivery_accepted and duplicate_key_reserved and minute_alert_key:
             state.release_ema_minute_key(minute_alert_key)
             result["duplicate_control"]["released"] = True
+            logger.debug(
+                "Released duplicate key because no delivery channel accepted. key=%s",
+                minute_alert_key,
+            )
 
         alert_record = {
             "type": (
@@ -2020,12 +2051,30 @@ def process_selected_or_ema_cross_alert_detailed(
         if delivery_accepted and not simulation:
             state.append_selected_or_ema_alert(alert_record)
             result["state_changes"]["alert_record_appended"] = True
+            logger.debug(
+                "EMA alert record appended to state. event_id=%s, instrument_key=%s",
+                result["event_id"],
+                event_key,
+            )
 
         if delivery_accepted:
             result["message"] = "EMA alert delivery was accepted."
+            logger.info(
+                "EMA alert processed successfully. event_id=%s, instrument_key=%s, direction=%s, telegram=%s, algo_app=%s",
+                result["event_id"],
+                event_key,
+                alert_direction,
+                telegram_sent,
+                algo_dispatched,
+            )
         else:
             result["skip_reason"] = "delivery_not_accepted"
-            result["message"] = "EMA alert was not accepted by any " "delivery channel."
+            result["message"] = "EMA alert was not accepted by any delivery channel."
+            logger.warning(
+                "EMA alert processing completed with no accepted delivery. event_id=%s, instrument_key=%s",
+                result["event_id"],
+                event_key,
+            )
 
         return result
 
@@ -2034,12 +2083,14 @@ def process_selected_or_ema_cross_alert_detailed(
             try:
                 state.release_ema_minute_key(minute_alert_key)
                 result["duplicate_control"]["released"] = True
+                logger.debug(
+                    "Released duplicate key after exception. key=%s", minute_alert_key
+                )
             except Exception as release_ex:
                 logger.error(
-                    "Failed releasing EMA duplicate key. " "key=%s, error=%s: %s",
+                    "Failed releasing EMA duplicate key after exception. key=%s, error=%s",
                     minute_alert_key,
                     type(release_ex).__name__,
-                    release_ex,
                 )
 
         result["success"] = False
@@ -2050,14 +2101,10 @@ def process_selected_or_ema_cross_alert_detailed(
         result["message"] = "EMA alert processing failed."
 
         logger.exception(
-            "Isolated EMA processing failed. "
-            "instrument_key=%s, cross_type=%s, "
-            "simulation=%s, error=%s: %s",
+            "Isolated EMA processing failed. instrument_key=%s, cross_type=%s, simulation=%s",
             event_key,
             cross_type,
             simulation,
-            type(ex).__name__,
-            ex,
         )
 
         return result
@@ -2076,11 +2123,6 @@ def process_selected_or_ema_cross_alert(
     )
 
     return bool(result.get("accepted"))
-
-
-# ============================================================
-# Opening Range EMA Payload
-# ============================================================
 
 
 def _build_default_touch_status() -> dict:
@@ -2173,9 +2215,6 @@ def get_opening_range_levels_for_ema_event(instrument_key: str) -> dict:
     }
 
 
-# ============================================================
-# Public API
-# ============================================================
 __all__ = [
     "is_selected_or_instrument_locked",
     "get_selected_or_instrument_key",
