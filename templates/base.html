@@ -111,7 +111,7 @@
             box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
         }
 
-        /* Icon Badge Pill Backgrounds */
+        /* Icon Badge Pill Backgrounds – one per route */
         .nav-icon-badge {
             width: 26px;
             height: 26px;
@@ -122,7 +122,6 @@
             font-size: 0.85rem;
         }
 
-        /* Route Specific Color Themes */
         .nav-icon-badge.home-theme {
             background: rgba(59, 130, 246, 0.2);
             color: #60a5fa;
@@ -138,6 +137,12 @@
             color: #4ade80;
         }
 
+        /* New theme for Logs – amber/orange */
+        .nav-icon-badge.logs-theme {
+            background: rgba(251, 146, 60, 0.2);
+            color: #fb923c;
+        }
+
         .app-main-content-wrapper {
             width: 100%;
         }
@@ -150,7 +155,7 @@
             }
 
             .app-brand-title {
-                display: none; /* Hide brand text on tiny screens to preserve navigation space */
+                display: none;
             }
 
             .app-nav-item-group {
@@ -212,14 +217,13 @@
             <span>Charts</span>
         </a>
 
-                <!-- logs -->
-        <a href="/ui/logs" class="app-nav-button">
-            <span class="nav-icon-badge charts-theme">
-                <i class="bi bi-candlestick-fill"></i>
+        <!-- LOGS – now with a dedicated icon and theme -->
+        <a href="/logs" class="app-nav-button">
+            <span class="nav-icon-badge logs-theme">
+                <i class="bi bi-file-earmark-text-fill"></i>
             </span>
             <span>Logs</span>
         </a>
-        <!-- LOCAL APP REMOVED -->
 
     </div>
 
@@ -239,13 +243,9 @@
     function openIsolatedDashboard() {
         window.location.href = `${window.apiHost}/isolated-dashboard`;
     }
-
-    // openLocalApp function removed
 </script>
 
-{% block scripts %}
-
-{% endblock %}
+{% block scripts %}{% endblock %}
 
 </body>
 </html>
