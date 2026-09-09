@@ -101,13 +101,9 @@ def read_log_file(log_file: Path) -> list:
     ) as file:
         return file.readlines()
 
-
 @router.get("/logs", response_class=HTMLResponse, include_in_schema=False)
 async def show_logs(request: Request):
-    log_files = [
-        file["filename"]
-        for file in get_available_log_files()
-    ]
+    log_files = get_available_log_files()
 
     return templates.TemplateResponse(
         request=request,
