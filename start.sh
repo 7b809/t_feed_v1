@@ -7,7 +7,7 @@
 APP_NAME="upstox_order_receiver"
 
 # Change the port number here only
-PORT=8001
+PORT=8010
 
 PID_FILE="${APP_NAME}.pid"
 LOG_DIR="logs"
