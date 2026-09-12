@@ -12,7 +12,7 @@ PORT=8001
 # =========================================================
 
 LOG_DIR="logs"
-LOG_FILE="${LOG_DIR}/app.log"
+LOG_FILE="${LOG_DIR}/app_${PORT}.log"
 VENV_DIR="myenv"
 REQUIREMENTS_FILE="requirements.txt"
 
@@ -28,6 +28,7 @@ echo
 # ---------------------------------------------------------
 # Create logs directory
 # ---------------------------------------------------------
+rm -rf "$LOG_DIR"
 mkdir -p "$LOG_DIR"
 
 
