@@ -2,10 +2,20 @@
 
 APP_NAME="upstox_order_receiver"
 PID_FILE="${APP_NAME}.pid"
+
+# =========================================================
+# GLOBAL CONFIGURATION
+# =========================================================
+
+PORT=8000
+
+# =========================================================
+
 LOG_DIR="logs"
 LOG_FILE="${LOG_DIR}/app.log"
 VENV_DIR="myenv"
 REQUIREMENTS_FILE="requirements.txt"
+
 
 echo "=========================================="
 echo "  Upstox Order Request Receiver"
@@ -13,6 +23,7 @@ echo "=========================================="
 echo
 echo "Starting FastAPI application..."
 echo
+
 
 # ---------------------------------------------------------
 # Create logs directory
@@ -29,6 +40,7 @@ if [ -f "$PID_FILE" ]; then
     if kill -0 "$PID" 2>/dev/null; then
         echo "Application is already running."
         echo "PID: $PID"
+        echo "Port: $PORT"
         exit 0
     else
         echo "Removing stale PID file."
@@ -78,8 +90,10 @@ if [ ! -d "$VENV_DIR" ]; then
         echo "Python packages installed successfully."
 
     else
+
         echo
         echo "WARNING: $REQUIREMENTS_FILE not found."
+
     fi
 
 else
@@ -97,10 +111,12 @@ fi
 PYTHON="$VENV_DIR/bin/python"
 
 if [ ! -f "$PYTHON" ]; then
+
     echo
     echo "ERROR: Virtual environment Python not found:"
     echo "$PYTHON"
     exit 1
+
 fi
 
 
@@ -109,10 +125,11 @@ fi
 # ---------------------------------------------------------
 echo
 echo "Starting FastAPI..."
+echo "Port: $PORT"
 
 nohup "$PYTHON" -m uvicorn main:app \
     --host 0.0.0.0 \
-    --port 8000 \
+    --port "$PORT" \
     >> "$LOG_FILE" 2>&1 &
 
 PID=$!
@@ -134,7 +151,7 @@ if kill -0 "$PID" 2>/dev/null; then
     echo
     echo "Application started successfully."
     echo "PID: $PID"
-    echo "Port: 8000"
+    echo "Port: $PORT"
     echo "Python: $PYTHON"
     echo "Log: $LOG_FILE"
 
