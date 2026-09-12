@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
+import shutil
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -59,6 +60,144 @@ from token_tasks.token_monitor import (
 from ws_feed.websocket_routes import router as websocket_router
 
 logger = get_logger(__file__)
+
+
+PROJECT_ROOT = Path(__file__).resolve().parent
+
+
+def cleanup_startup_paths() -> dict:
+    """
+    Remove configured files and directories during application startup.
+
+    All entries in STARTUP_REMOVE_LIST must remain inside PROJECT_ROOT.
+    Directories are recreated after deletion so the application can use
+    them immediately.
+    """
+    logger.info("================ STARTUP CLEANUP STARTED ================")
+
+    summary = {
+        "removed": [],
+        "recreated": [],
+        "not_found": [],
+        "skipped": [],
+        "failed": [],
+    }
+
+    project_root = PROJECT_ROOT.resolve()
+
+    for configured_path in config.STARTUP_REMOVE_LIST:
+        relative_path = Path(configured_path)
+
+        try:
+            # Only relative paths are permitted.
+            if relative_path.is_absolute():
+                raise ValueError(
+                    f"Absolute cleanup paths are not allowed: " f"{configured_path}"
+                )
+
+            if not relative_path.parts:
+                raise ValueError("Empty cleanup path is not allowed.")
+
+            top_level_name = relative_path.parts[0]
+
+            if top_level_name in config.STARTUP_CLEANUP_PROTECTED_PATHS:
+                warning = (
+                    f"Protected startup cleanup path skipped: " f"{configured_path}"
+                )
+                logger.warning(warning)
+                summary["skipped"].append(configured_path)
+                continue
+
+            target_path = project_root / relative_path
+
+            # Reject symlinks explicitly. This prevents cleanup from
+            # following a link to a location outside the project.
+            if target_path.is_symlink():
+                warning = f"Symbolic link cleanup path skipped: " f"{target_path}"
+                logger.warning(warning)
+                summary["skipped"].append(configured_path)
+                continue
+
+            resolved_target = target_path.resolve(strict=False)
+
+            try:
+                resolved_target.relative_to(project_root)
+            except ValueError as ex:
+                raise ValueError(
+                    f"Cleanup path is outside project root: " f"{resolved_target}"
+                ) from ex
+
+            if resolved_target == project_root:
+                raise ValueError("Project root cannot be used as a cleanup target.")
+
+            if not target_path.exists():
+                logger.info(
+                    "Startup cleanup path does not exist: %s",
+                    target_path,
+                )
+                summary["not_found"].append(configured_path)
+
+                # If the configured target looks like a directory,
+                # recreate it even when it did not previously exist.
+                if relative_path.suffix == "":
+                    target_path.mkdir(parents=True, exist_ok=True)
+                    summary["recreated"].append(configured_path)
+
+                continue
+
+            if target_path.is_dir():
+                shutil.rmtree(target_path)
+
+                logger.info(
+                    "Startup cleanup directory removed: %s",
+                    target_path,
+                )
+                summary["removed"].append(configured_path)
+
+                target_path.mkdir(parents=True, exist_ok=True)
+
+                logger.info(
+                    "Startup cleanup directory recreated: %s",
+                    target_path,
+                )
+                summary["recreated"].append(configured_path)
+
+            elif target_path.is_file():
+                target_path.unlink()
+
+                logger.info(
+                    "Startup cleanup file removed: %s",
+                    target_path,
+                )
+                summary["removed"].append(configured_path)
+
+            else:
+                warning = f"Unsupported startup cleanup path skipped: " f"{target_path}"
+                logger.warning(warning)
+                summary["skipped"].append(configured_path)
+
+        except Exception as ex:
+            error = f"{configured_path}: " f"{type(ex).__name__}: {ex}"
+            summary["failed"].append(error)
+
+            logger.exception(
+                "Startup cleanup failed for path=%s",
+                configured_path,
+            )
+
+    logger.info(
+        "Startup cleanup completed. removed=%s, recreated=%s, "
+        "not_found=%s, skipped=%s, failed=%s",
+        len(summary["removed"]),
+        len(summary["recreated"]),
+        len(summary["not_found"]),
+        len(summary["skipped"]),
+        len(summary["failed"]),
+    )
+
+    logger.info("================ STARTUP CLEANUP COMPLETED ================")
+
+    return summary
 
 
 def get_live_ema_calculation_mode_text() -> str:
@@ -1499,9 +1638,7 @@ def run_instrument_recovery():
             def recovery_restart_done(done_future):
                 try:
                     done_future.result()
-                    recovered_keys = options_cache.get(
-                        "subscribed_keys", []
-                    ) or []
+                    recovered_keys = options_cache.get("subscribed_keys", []) or []
 
                     logger.info(
                         "Instrument recovery streamer restart completed. "
@@ -1550,8 +1687,7 @@ def run_instrument_recovery():
     except Exception as ex:
         # Never allow recovery failures to terminate APScheduler.
         logger.exception(
-            "Instrument recovery attempt failed; next run will retry. "
-            "error=%s: %s",
+            "Instrument recovery attempt failed; next run will retry. " "error=%s: %s",
             type(ex).__name__,
             ex,
         )
@@ -1563,7 +1699,9 @@ def run_instrument_recovery():
         return False
 
     finally:
-        logger.info("=============== INSTRUMENT RECOVERY CHECK COMPLETED ===============")
+        logger.info(
+            "=============== INSTRUMENT RECOVERY CHECK COMPLETED ==============="
+        )
 
 
 def start_scheduler() -> BackgroundScheduler:
@@ -1743,14 +1881,39 @@ async def app_lifespan(
     scheduler = None
     streamer_started = False
     telegram_bot_started = False
+    runtime_config_initialized = False
 
     try:
         loop = asyncio.get_running_loop()
+
+        cleanup_summary = await loop.run_in_executor(
+            None,
+            cleanup_startup_paths,
+        )
+
+        logger.info(
+            "Startup cleanup status. removed=%s, recreated=%s, "
+            "not_found=%s, skipped=%s, failed=%s",
+            len(cleanup_summary.get("removed", [])),
+            len(cleanup_summary.get("recreated", [])),
+            len(cleanup_summary.get("not_found", [])),
+            len(cleanup_summary.get("skipped", [])),
+            len(cleanup_summary.get("failed", [])),
+        )
+
+        cleanup_failures = cleanup_summary.get("failed", [])
+
+        if cleanup_failures:
+            logger.warning(
+                "Startup cleanup completed with failures: %s",
+                cleanup_failures,
+            )
 
         runtime_status = await loop.run_in_executor(
             None,
             initialize_application_runtime_config,
         )
+        runtime_config_initialized = True
 
         logger.info(
             "Runtime configuration startup status: %s",
@@ -1762,19 +1925,19 @@ async def app_lifespan(
             run_initial_startup,
         )
 
-        # Infrastructure must start even when token/instrument initialization
-        # failed. This is the key recovery change: a temporary Upstox/token
-        # problem must not prevent Telegram, scheduler or FastAPI from running.
         scheduler = start_scheduler()
         telegram_bot_started = telegram_token_bot.start()
 
         await upstox_streamer.start()
         streamer_started = True
 
-        subscribed_keys = options_cache.get(
-            "subscribed_keys",
-            [],
-        ) or []
+        subscribed_keys = (
+            options_cache.get(
+                "subscribed_keys",
+                [],
+            )
+            or []
+        )
 
         if subscribed_keys:
             telegram_service.send_subscription_message(
@@ -1800,31 +1963,36 @@ async def app_lifespan(
         logger.info(
             "Application startup completed successfully. "
             "telegram_bot_started=%s, streamer_started=%s, "
-            "runtime_config_overrides=%s",
+            "runtime_config_overrides=%s, "
+            "cleanup_removed=%s, cleanup_failed=%s",
             telegram_bot_started,
             streamer_started,
             runtime_status.get(
                 "override_count",
                 0,
             ),
+            len(cleanup_summary.get("removed", [])),
+            len(cleanup_failures),
         )
 
         yield
 
     except Exception as ex:
         logger.exception("Application startup/runtime failure.")
+
         telegram_service.send_exception_message(
-            title=("Application Startup Runtime Failure"),
+            title="Application Startup Runtime Failure",
             exception=ex,
             context="app_lifespan",
         )
+
         raise
 
     finally:
         logger.info("Executing lifespan shutdown sequence...")
 
         telegram_service.send_shutdown_message(
-            details=("Application shutdown sequence started.")
+            details="Application shutdown sequence started.",
         )
 
         shutdown_errors = []
@@ -1833,14 +2001,14 @@ async def app_lifespan(
             if telegram_bot_started:
                 telegram_token_bot.stop()
         except Exception as ex:
-            shutdown_errors.append("Telegram bot: " f"{type(ex).__name__}: {ex}")
+            shutdown_errors.append(f"Telegram bot: {type(ex).__name__}: {ex}")
             logger.exception("Telegram bot shutdown failed.")
 
         try:
             if streamer_started:
                 await upstox_streamer.stop()
         except Exception as ex:
-            shutdown_errors.append("Upstox streamer: " f"{type(ex).__name__}: {ex}")
+            shutdown_errors.append(f"Upstox streamer: {type(ex).__name__}: {ex}")
             logger.exception("Upstox streamer shutdown failed.")
 
         try:
@@ -1848,27 +2016,27 @@ async def app_lifespan(
                 logger.info("Shutting down background scheduler...")
                 scheduler.shutdown(wait=False)
         except Exception as ex:
-            shutdown_errors.append("Scheduler: " f"{type(ex).__name__}: {ex}")
+            shutdown_errors.append(f"Scheduler: {type(ex).__name__}: {ex}")
             logger.exception("Scheduler shutdown failed.")
 
         try:
-            close_runtime_config()
+            if runtime_config_initialized:
+                close_runtime_config()
         except Exception as ex:
-            shutdown_errors.append(
-                "Runtime configuration: " f"{type(ex).__name__}: {ex}"
-            )
+            shutdown_errors.append(f"Runtime configuration: {type(ex).__name__}: {ex}")
             logger.exception("Runtime configuration shutdown failed.")
 
         if shutdown_errors:
             error_text = "\n".join(shutdown_errors)
+
             telegram_service.send_shutdown_message(
                 details=(
-                    "Application shutdown completed with " f"errors.\n\n{error_text}"
-                )
+                    "Application shutdown completed with errors." f"\n\n{error_text}"
+                ),
             )
         else:
             telegram_service.send_shutdown_message(
-                details=("Application shutdown completed " "successfully.")
+                details="Application shutdown completed successfully.",
             )
 
         logger.info("Application shutdown sequence completed.")

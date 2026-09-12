@@ -410,3 +410,20 @@ def get_ema_alert_simulation_status():
         "allow_telegram": bool(EMA_ALERT_SIMULATION_ALLOW_TELEGRAM),
         "allow_algo_app": bool(EMA_ALERT_SIMULATION_ALLOW_ALGO_APP),
     }
+
+
+# Paths are relative to PROJECT_ROOT.
+# Directories will be deleted and recreated as empty directories.
+STARTUP_REMOVE_LIST = [
+    "data",
+   
+]
+
+# Never allow these important paths to be removed accidentally.
+STARTUP_CLEANUP_PROTECTED_PATHS = {
+    "logs",
+    ".env",
+    ".git",
+    "myenv",
+    ".venv",
+}

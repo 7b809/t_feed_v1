@@ -69,8 +69,6 @@ def calculate_distance_from_index(strike_price: Any, index_ltp: Any) -> float | 
 def update_latest_main_index_ltp(ltp: Any, source: str = "unknown", updated_at: str | None = None) -> bool:
     """Updates the latest main-index LTP. Returns True when a valid positive LTP is stored."""
     result = runtime_state.set_latest_main_index_ltp(ltp=ltp, source=source, updated_at=updated_at)
-    if result:
-        logger.debug("Main index LTP updated. ltp=%s, source=%s", ltp, source)
     return result
 
 

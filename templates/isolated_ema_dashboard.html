@@ -1,18 +1,16 @@
-{% extends "base.html" %} {% block title %}Isolated EMA Dashboard {% endblock %}
-{% block head %}
+{% extends "base.html" %}
 
+{% block title %}Isolated EMA Dashboard{% endblock %}
+
+{% block head %}
 <link
   href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
   rel="stylesheet"
 />
-
-<!-- Bootstrap Icons -->
 <link
   rel="stylesheet"
   href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css"
 />
-
-<!-- Google Fonts -->
 <link
   href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap"
   rel="stylesheet"
@@ -32,7 +30,7 @@
     --accent-red: #ee5d50;
     --accent-yellow: #ffb547;
     --accent-purple: #868cff;
-    --card-shadow: 0px 18px 40px rgba(112, 144, 176, 0.12);
+    --card-shadow: 0 18px 40px rgba(112, 144, 176, 0.12);
   }
 
   body {
@@ -42,12 +40,11 @@
     min-height: 100vh;
   }
 
-  /* Page Header */
   .dashboard-header {
     background: #ffffff;
     border-bottom: 1px solid var(--border-color);
     padding: 20px 32px;
-    box-shadow: 0px 4px 20px rgba(112, 144, 176, 0.06);
+    box-shadow: 0 4px 20px rgba(112, 144, 176, 0.06);
   }
 
   .brand-icon {
@@ -60,10 +57,9 @@
     justify-content: center;
     color: white;
     font-size: 22px;
-    box-shadow: 0px 6px 14px rgba(67, 24, 255, 0.35);
+    box-shadow: 0 6px 14px rgba(67, 24, 255, 0.35);
   }
 
-  /* Cards Styling */
   .card-custom {
     background: var(--bg-card);
     border: 1px solid var(--border-color);
@@ -78,7 +74,7 @@
 
   .card-custom:hover {
     transform: translateY(-2px);
-    box-shadow: 0px 22px 45px rgba(112, 144, 176, 0.18);
+    box-shadow: 0 22px 45px rgba(112, 144, 176, 0.18);
   }
 
   .card-title-custom {
@@ -93,12 +89,12 @@
     gap: 8px;
   }
 
-  /* Key Metrics */
   .metric-value {
     font-size: 32px;
     font-weight: 800;
     color: var(--accent-blue);
     line-height: 1.2;
+    word-break: break-word;
   }
 
   .metric-label {
@@ -107,7 +103,6 @@
     color: var(--text-muted);
   }
 
-  /* Status Indicator Dots */
   .status-dot {
     display: inline-block;
     width: 10px;
@@ -123,7 +118,6 @@
     box-shadow: 0 0 0 3px rgba(5, 205, 153, 0.2);
   }
 
-  /* KV Info Grid Blocks */
   .kv-card {
     background: #f4f7fe;
     border: 1px solid #e9edf7;
@@ -132,7 +126,8 @@
     height: 100%;
   }
 
-  .kv-card .k {
+  .kv-card .k,
+  .decision-reason .k {
     color: var(--text-muted);
     font-size: 11px;
     font-weight: 700;
@@ -148,10 +143,16 @@
     word-break: break-word;
   }
 
-  /* Custom Tables */
   .table-container {
     max-height: 380px;
-    overflow-y: auto;
+    overflow: auto;
+    border-radius: 12px;
+    border: 1px solid var(--border-color);
+  }
+
+  .table-container-wide {
+    max-height: 500px;
+    overflow: auto;
     border-radius: 12px;
     border: 1px solid var(--border-color);
   }
@@ -172,6 +173,7 @@
     top: 0;
     z-index: 2;
     padding: 12px;
+    white-space: nowrap;
   }
 
   .table-custom td {
@@ -182,7 +184,6 @@
     font-weight: 500;
   }
 
-  /* Custom Badges */
   .badge-custom {
     padding: 6px 12px;
     border-radius: 8px;
@@ -190,30 +191,96 @@
     font-weight: 800;
     letter-spacing: 0.5px;
     display: inline-block;
+    white-space: nowrap;
   }
 
   .badge-green {
     background: rgba(5, 205, 153, 0.12);
     color: var(--accent-green);
   }
+
   .badge-red {
     background: rgba(238, 93, 80, 0.12);
     color: var(--accent-red);
   }
+
   .badge-yellow {
     background: rgba(255, 181, 71, 0.15);
     color: #d97706;
   }
+
   .badge-blue {
     background: rgba(67, 24, 255, 0.1);
     color: var(--accent-blue);
   }
+
   .badge-purple {
     background: rgba(134, 140, 255, 0.15);
     color: #5b21b6;
   }
 
-  /* Event Feed */
+  .decision-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 12px;
+    border-radius: 9px;
+    font-size: 12px;
+    font-weight: 800;
+    letter-spacing: 0.4px;
+  }
+
+  .decision-badge.yes {
+    background: rgba(5, 205, 153, 0.12);
+    color: var(--accent-green);
+  }
+
+  .decision-badge.no {
+    background: rgba(238, 93, 80, 0.12);
+    color: var(--accent-red);
+  }
+
+  .decision-badge.pending {
+    background: rgba(255, 181, 71, 0.15);
+    color: #d97706;
+  }
+
+  .decision-reason {
+    background: #f4f7fe;
+    border: 1px solid var(--border-color);
+    border-left: 4px solid var(--accent-yellow);
+    border-radius: 12px;
+    padding: 14px 16px;
+    color: var(--text-primary);
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1.6;
+  }
+
+  .decision-reason.selected {
+    border-left-color: var(--accent-green);
+    background: rgba(5, 205, 153, 0.06);
+  }
+
+  .decision-reason.failed {
+    border-left-color: var(--accent-red);
+    background: rgba(238, 93, 80, 0.06);
+  }
+
+  .diagnostic-selected-row td {
+    background: rgba(5, 205, 153, 0.07) !important;
+  }
+
+  .diagnostic-instrument {
+    min-width: 170px;
+  }
+
+  .diagnostic-reason {
+    min-width: 320px;
+    white-space: normal;
+    line-height: 1.5;
+  }
+
   .event-feed {
     max-height: 380px;
     overflow-y: auto;
@@ -229,7 +296,6 @@
     padding: 12px 16px;
   }
 
-  /* Raw JSON View */
   .json-preview {
     background: #1b2559;
     color: #a3edda;
@@ -245,7 +311,6 @@
     border: 1px solid rgba(163, 237, 218, 0.15);
   }
 
-  /* Action Buttons */
   .btn-action {
     border-radius: 10px;
     font-weight: 700;
@@ -254,8 +319,9 @@
     transition: all 0.2s ease;
   }
 </style>
-{% endblock %} {% block content %}
-<!-- HEADER SECTION -->
+{% endblock %}
+
+{% block content %}
 <div class="dashboard-header mb-4">
   <div
     class="d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-3"
@@ -264,6 +330,7 @@
       <div class="brand-icon">
         <i class="bi bi-activity"></i>
       </div>
+
       <div>
         <h1 class="h4 mb-0 fw-bold" style="color: var(--text-primary)">
           Isolated EMA Dashboard
@@ -274,28 +341,40 @@
       </div>
     </div>
 
-    <!-- TOOLBAR BUTTONS -->
     <div class="d-flex flex-wrap gap-2">
       <button
         class="btn btn-light btn-action text-primary"
+        type="button"
         onclick="loadDashboard()"
       >
-        <i class="bi bi-arrow-clockwise me-1"></i> Refresh
+        <i class="bi bi-arrow-clockwise me-1"></i>
+        Refresh
       </button>
+
       <button
         class="btn btn-primary btn-action"
+        type="button"
         style="background: var(--accent-blue); border: none"
         onclick="triggerOpeningRangeFetch()"
       >
-        <i class="bi bi-lightning-charge-fill me-1"></i> Fetch OR
+        <i class="bi bi-lightning-charge-fill me-1"></i>
+        Fetch OR
       </button>
+
       <button
         class="btn btn-outline-secondary btn-action"
+        type="button"
         onclick="clearLiveEvents()"
       >
-        <i class="bi bi-trash me-1"></i> Clear Feed
+        <i class="bi bi-trash me-1"></i>
+        Clear Feed
       </button>
-      <button class="btn btn-dark btn-action" onclick="toggleAutoRefresh()">
+
+      <button
+        class="btn btn-dark btn-action"
+        type="button"
+        onclick="toggleAutoRefresh()"
+      >
         Auto Refresh:
         <span id="autoRefreshText" class="badge bg-success ms-1">ON</span>
       </button>
@@ -303,42 +382,47 @@
   </div>
 </div>
 
-<!-- MAIN DASHBOARD CONTENT -->
 <div class="container-fluid px-4 pb-5">
-  <!-- METRICS OVERVIEW ROW -->
   <div class="row g-3 mb-4">
-    <!-- CONNECTION STATUS -->
     <div class="col-12 col-sm-6 col-xl-3">
       <div class="card-custom">
         <div class="card-title-custom">
-          <i class="bi bi-wifi text-primary"></i> Connection
+          <i class="bi bi-wifi text-primary"></i>
+          Connection
         </div>
+
         <div class="mb-2">
           <span id="apiDot" class="status-dot"></span>
           <span id="apiStatus" class="fw-bold">API checking...</span>
         </div>
+
         <div class="mb-2">
           <span id="emaWsDot" class="status-dot"></span>
-          <span id="emaWsStatus" class="fw-bold text-muted"
-            >EMA WS Disconnected</span
-          >
+          <span id="emaWsStatus" class="fw-bold text-muted">
+            EMA WS Disconnected
+          </span>
         </div>
+
         <div class="mb-2">
           <span id="orWsDot" class="status-dot"></span>
-          <span id="orWsStatus" class="fw-bold text-muted"
-            >OR WS Disconnected</span
-          >
+          <span id="orWsStatus" class="fw-bold text-muted">
+            OR WS Disconnected
+          </span>
         </div>
-        <span class="small text-muted" id="lastUpdated">Last updated: -</span>
+
+        <span class="small text-muted" id="lastUpdated">
+          Last updated: -
+        </span>
       </div>
     </div>
 
-    <!-- EMA MODE -->
     <div class="col-12 col-sm-6 col-xl-3">
       <div class="card-custom">
         <div class="card-title-custom">
-          <i class="bi bi-sliders text-primary"></i> EMA Mode
+          <i class="bi bi-sliders text-primary"></i>
+          EMA Mode
         </div>
+
         <div id="emaModeMetric" class="metric-value">-</div>
         <div class="metric-label" id="emaModeDescription">
           Waiting for data...
@@ -346,38 +430,41 @@
       </div>
     </div>
 
-    <!-- ISOLATED STATUS -->
     <div class="col-12 col-sm-6 col-xl-3">
       <div class="card-custom">
         <div class="card-title-custom">
-          <i class="bi bi-funnel-fill text-primary"></i> Isolated Status
+          <i class="bi bi-funnel-fill text-primary"></i>
+          Isolated Status
         </div>
+
         <div id="isolatedMetric" class="metric-value">-</div>
-        <div class="metric-label" id="isolatedMessage">Waiting for data...</div>
+        <div class="metric-label" id="isolatedMessage">
+          Waiting for data...
+        </div>
       </div>
     </div>
 
-    <!-- EMA ALERTS COUNT -->
     <div class="col-12 col-sm-6 col-xl-3">
       <div class="card-custom">
         <div class="card-title-custom">
-          <i class="bi bi-bell-fill text-primary"></i> EMA Alerts Today
+          <i class="bi bi-bell-fill text-primary"></i>
+          EMA Alerts Today
         </div>
+
         <div id="alertCountMetric" class="metric-value">0</div>
         <div class="metric-label">Isolated instrument alerts</div>
       </div>
     </div>
   </div>
 
-  <!-- DETAILS GRID ROW -->
   <div class="row g-3 mb-4">
-    <!-- ISOLATED INSTRUMENT DETAILS -->
     <div class="col-12 col-lg-6">
       <div class="card-custom">
         <div class="card-title-custom">
-          <i class="bi bi-crosshair text-primary"></i> Today's Isolated
-          Instrument
+          <i class="bi bi-crosshair text-primary"></i>
+          Today's Isolated Instrument
         </div>
+
         <div class="row g-2">
           <div class="col-6">
             <div class="kv-card">
@@ -385,42 +472,49 @@
               <div class="v" id="isoInstrument">-</div>
             </div>
           </div>
+
           <div class="col-6">
             <div class="kv-card">
               <div class="k">Instrument Key</div>
               <div class="v" id="isoInstrumentKey">-</div>
             </div>
           </div>
+
           <div class="col-6">
             <div class="kv-card">
               <div class="k">Selected Level</div>
               <div class="v" id="isoLevel">-</div>
             </div>
           </div>
+
           <div class="col-6">
             <div class="kv-card">
               <div class="k">Level Value</div>
               <div class="v" id="isoLevelValue">-</div>
             </div>
           </div>
+
           <div class="col-6">
             <div class="kv-card">
               <div class="k">Trigger</div>
               <div class="v" id="isoTrigger">-</div>
             </div>
           </div>
+
           <div class="col-6">
             <div class="kv-card">
               <div class="k">Touch Time</div>
               <div class="v" id="isoTouchTime">-</div>
             </div>
           </div>
+
           <div class="col-6">
             <div class="kv-card">
               <div class="k">Ref Average</div>
               <div class="v" id="isoReferenceAverage">-</div>
             </div>
           </div>
+
           <div class="col-6">
             <div class="kv-card">
               <div class="k">NIFTY LTP</div>
@@ -431,13 +525,13 @@
       </div>
     </div>
 
-    <!-- OPENING RANGE STATUS -->
     <div class="col-12 col-lg-6">
       <div class="card-custom">
         <div class="card-title-custom">
-          <i class="bi bi-bar-chart-steps text-primary"></i> Opening Range
-          Status
+          <i class="bi bi-bar-chart-steps text-primary"></i>
+          Opening Range Status
         </div>
+
         <div class="row g-2">
           <div class="col-6">
             <div class="kv-card">
@@ -445,30 +539,35 @@
               <div class="v" id="orStatus">-</div>
             </div>
           </div>
+
           <div class="col-6">
             <div class="kv-card">
               <div class="k">Date</div>
               <div class="v" id="orDate">-</div>
             </div>
           </div>
+
           <div class="col-6">
             <div class="kv-card">
               <div class="k">Total Instruments</div>
               <div class="v" id="orTotal">-</div>
             </div>
           </div>
+
           <div class="col-6">
             <div class="kv-card">
               <div class="k">Success</div>
               <div class="v" id="orSuccess">-</div>
             </div>
           </div>
+
           <div class="col-6">
             <div class="kv-card">
               <div class="k">Touch Events</div>
               <div class="v" id="orTouchCount">-</div>
             </div>
           </div>
+
           <div class="col-6">
             <div class="kv-card">
               <div class="k">Main Index LTP</div>
@@ -480,15 +579,155 @@
     </div>
   </div>
 
-  <!-- TABLES & FEEDS -->
   <div class="row g-3 mb-4">
-    <!-- EMA ALERTS HISTORY TABLE -->
     <div class="col-12">
       <div class="card-custom">
         <div class="card-title-custom">
-          <i class="bi bi-clock-history text-primary"></i> Isolated EMA Alert
-          History
+          <i class="bi bi-search text-primary"></i>
+          Backfill Isolation Evaluation
         </div>
+
+        <div class="row g-2">
+          <div class="col-6 col-md-3 col-xl-2">
+            <div class="kv-card">
+              <div class="k">Evaluated</div>
+              <div class="v" id="backfillEvaluated">-</div>
+            </div>
+          </div>
+
+          <div class="col-6 col-md-3 col-xl-2">
+            <div class="kv-card">
+              <div class="k">Instrument Isolated</div>
+              <div class="v" id="backfillIsolated">-</div>
+            </div>
+          </div>
+
+          <div class="col-6 col-md-3 col-xl-2">
+            <div class="kv-card">
+              <div class="k">Status</div>
+              <div class="v" id="backfillStatus">-</div>
+            </div>
+          </div>
+
+          <div class="col-6 col-md-3 col-xl-2">
+            <div class="kv-card">
+              <div class="k">Evaluated Instruments</div>
+              <div class="v" id="backfillEvaluatedInstruments">-</div>
+            </div>
+          </div>
+
+          <div class="col-6 col-md-3 col-xl-2">
+            <div class="kv-card">
+              <div class="k">Instruments With Touch</div>
+              <div class="v" id="backfillInstrumentsWithTouch">-</div>
+            </div>
+          </div>
+
+          <div class="col-6 col-md-3 col-xl-2">
+            <div class="kv-card">
+              <div class="k">Touch Events</div>
+              <div class="v" id="backfillTouchEventsCount">-</div>
+            </div>
+          </div>
+
+          <div class="col-12 col-md-4">
+            <div class="kv-card">
+              <div class="k">Selected Instrument</div>
+              <div class="v" id="backfillSelectedInstrument">-</div>
+            </div>
+          </div>
+
+          <div class="col-6 col-md-2">
+            <div class="kv-card">
+              <div class="k">Selected Level</div>
+              <div class="v" id="backfillSelectedLevel">-</div>
+            </div>
+          </div>
+
+          <div class="col-6 col-md-3">
+            <div class="kv-card">
+              <div class="k">Touch Time</div>
+              <div class="v" id="backfillTouchTime">-</div>
+            </div>
+          </div>
+
+          <div class="col-12 col-md-3">
+            <div class="kv-card">
+              <div class="k">Reason Code</div>
+              <div class="v" id="backfillReasonCode">-</div>
+            </div>
+          </div>
+
+          <div class="col-12">
+            <div class="decision-reason" id="backfillReasonContainer">
+              <div class="k">Isolation Decision Reason</div>
+              <div id="backfillReason">
+                Waiting for backfill isolation data...
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="row g-3 mb-4">
+    <div class="col-12">
+      <div class="card-custom">
+        <div
+          class="d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-2 mb-3"
+        >
+          <div class="card-title-custom mb-0">
+            <i class="bi bi-list-check text-primary"></i>
+            Backfill Instrument Isolation Diagnostics
+          </div>
+
+          <div class="d-flex align-items-center gap-2">
+            <span class="small text-muted">Records:</span>
+            <span
+              id="backfillDiagnosticsCount"
+              class="badge-custom badge-blue"
+            >
+              0
+            </span>
+          </div>
+        </div>
+
+        <div class="table-container-wide">
+          <table class="table table-custom table-hover">
+            <thead>
+              <tr>
+                <th>Instrument</th>
+                <th>Key</th>
+                <th>Status</th>
+                <th>Touch Found</th>
+                <th>Events</th>
+                <th>Levels</th>
+                <th>Isolated</th>
+                <th>Reason Code</th>
+                <th>Reason</th>
+              </tr>
+            </thead>
+
+            <tbody id="backfillDiagnosticsTableBody">
+              <tr>
+                <td colspan="9" class="text-center text-muted py-4">
+                  No backfill isolation diagnostics loaded.
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-12">
+      <div class="card-custom">
+        <div class="card-title-custom">
+          <i class="bi bi-clock-history text-primary"></i>
+          Isolated EMA Alert History
+        </div>
+
         <div class="table-container">
           <table class="table table-custom table-hover">
             <thead>
@@ -504,6 +743,7 @@
                 <th>NIFTY</th>
               </tr>
             </thead>
+
             <tbody id="alertsTableBody">
               <tr>
                 <td colspan="9" class="text-center text-muted py-4">
@@ -516,13 +756,13 @@
       </div>
     </div>
 
-    <!-- RECENT TOUCH EVENTS -->
     <div class="col-12 col-lg-6">
       <div class="card-custom">
         <div class="card-title-custom">
-          <i class="bi bi-hand-index-thumb text-primary"></i> Recent Opening
-          Range Touches
+          <i class="bi bi-hand-index-thumb text-primary"></i>
+          Recent Opening Range Touches
         </div>
+
         <div class="table-container">
           <table class="table table-custom table-hover">
             <thead>
@@ -535,6 +775,7 @@
                 <th>NIFTY</th>
               </tr>
             </thead>
+
             <tbody id="touchEventsTableBody">
               <tr>
                 <td colspan="6" class="text-center text-muted py-4">
@@ -547,12 +788,13 @@
       </div>
     </div>
 
-    <!-- LIVE WEBSOCKET EVENTS FEED -->
     <div class="col-12 col-lg-6">
       <div class="card-custom">
         <div class="card-title-custom">
-          <i class="bi bi-broadcast text-primary"></i> Live WebSocket Events
+          <i class="bi bi-broadcast text-primary"></i>
+          Live WebSocket Events
         </div>
+
         <div class="event-feed" id="liveEventsList">
           <div class="event-card text-center text-muted py-4">
             <i class="bi bi-pulse fs-3 d-block mb-1"></i>
@@ -563,8 +805,6 @@
     </div>
   </div>
 
-  <!-- RAW SNAPSHOT JSON -->
-  <!-- RAW SNAPSHOT JSON -->
   <div class="row">
     <div class="col-12">
       <div class="card-custom">
@@ -583,24 +823,22 @@
             data-bs-target="#rawSnapshotCollapse"
             aria-expanded="false"
             aria-controls="rawSnapshotCollapse"
-            id="rawSnapshotToggle"
           >
-            <i class="bi bi-chevron-down me-1" id="rawSnapshotToggleIcon"></i>
-            <span id="rawSnapshotToggleText">Show Snapshot</span>
+            <i class="bi bi-chevron-down me-1"></i>
+            Show Snapshot
           </button>
         </div>
 
         <div class="collapse mt-3" id="rawSnapshotCollapse">
-          <pre id="rawSnapshot" class="json-preview mb-0">
-Waiting for data...</pre
-          >
+          <pre id="rawSnapshot" class="json-preview mb-0">Waiting for data...</pre>
         </div>
       </div>
     </div>
   </div>
 </div>
-{% endblock %} {% block scripts %}
-<!-- Bootstrap 5 JS Bundle -->
+{% endblock %}
+
+{% block scripts %}
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 
 <script>
@@ -610,6 +848,8 @@ Waiting for data...</pre
     refreshTimer: null,
     emaSocket: null,
     orSocket: null,
+    emaReconnectTimer: null,
+    orReconnectTimer: null,
     liveEvents: [],
     maxLiveEvents: 50,
   };
@@ -628,33 +868,61 @@ Waiting for data...</pre
     if (value === null || value === undefined || value === "") {
       return fallback;
     }
+
     return value;
   }
 
   function setText(id, value) {
-    const el = document.getElementById(id);
-    if (el) {
-      el.textContent = safe(value);
+    const element = document.getElementById(id);
+
+    if (element) {
+      element.textContent = safe(value);
     }
+  }
+
+  function setHtml(id, value) {
+    const element = document.getElementById(id);
+
+    if (element) {
+      element.innerHTML = value;
+    }
+  }
+
+  function escapeHtml(value) {
+    return String(value)
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#039;");
   }
 
   function setApiStatus(ok, text) {
     const dot = document.getElementById("apiDot");
     const status = document.getElementById("apiStatus");
 
-    dot.className = ok ? "status-dot ok" : "status-dot";
-    status.textContent = text;
+    if (dot) {
+      dot.className = ok ? "status-dot ok" : "status-dot";
+    }
+
+    if (status) {
+      status.textContent = text;
+    }
   }
 
   function setWsStatus(kind, ok, text) {
     const dotId = kind === "ema" ? "emaWsDot" : "orWsDot";
     const statusId = kind === "ema" ? "emaWsStatus" : "orWsStatus";
-
     const dot = document.getElementById(dotId);
     const status = document.getElementById(statusId);
 
-    dot.className = ok ? "status-dot ok" : "status-dot";
-    status.textContent = text;
+    if (dot) {
+      dot.className = ok ? "status-dot ok" : "status-dot";
+    }
+
+    if (status) {
+      status.textContent = text;
+    }
   }
 
   function badge(text, type) {
@@ -670,14 +938,48 @@ Waiting for data...</pre
     return `<span class="${className}">${escapeHtml(safe(text))}</span>`;
   }
 
+  function formatInstrument(contractInfo, instrumentKey) {
+    const info =
+      contractInfo && typeof contractInfo === "object"
+        ? contractInfo
+        : {};
+
+    const strike = info.strike_price;
+    const optionType = info.instrument_type || info.option_type;
+    const symbol =
+      info.trading_symbol ||
+      info.tradingsymbol ||
+      info.instrument_key ||
+      instrumentKey;
+
+    const primary = [strike, optionType]
+      .filter(
+        (value) =>
+          value !== null &&
+          value !== undefined &&
+          value !== "",
+      )
+      .join(" ");
+
+    if (primary && symbol && String(symbol) !== primary) {
+      return `${primary} | ${symbol}`;
+    }
+
+    return primary || safe(symbol || instrumentKey);
+  }
+
   async function getJson(url) {
     const response = await fetch(url, {
       method: "GET",
-      headers: { Accept: "application/json" },
+      headers: {
+        Accept: "application/json",
+      },
     });
 
     if (!response.ok) {
-      throw new Error(`${response.status} ${response.statusText}`);
+      throw new Error(
+        `${response.status} ${response.statusText}`,
+      );
     }
 
     return response.json();
@@ -686,11 +988,15 @@ Waiting for data...</pre
   async function postJson(url) {
     const response = await fetch(url, {
       method: "POST",
-      headers: { Accept: "application/json" },
+      headers: {
+        Accept: "application/json",
+      },
     });
 
     if (!response.ok) {
-      throw new Error(`${response.status} ${response.statusText}`);
+      throw new Error(
+        `${response.status} ${response.statusText}`,
+      );
     }
 
     return response.json();
@@ -701,13 +1007,275 @@ Waiting for data...</pre
       data?.live_ema_calculation || {
         flag: false,
         mode: "candle_close",
-        description: "completed candle close based EMA calculation",
+        description:
+          "completed candle close based EMA calculation",
       }
     );
   }
 
+  function renderBackfillIsolation(data, openingStatus) {
+    const backfill =
+      data.backfill_isolation ||
+      openingStatus.backfill_isolation ||
+      {};
+
+    const evaluated = Boolean(backfill.evaluated);
+    const isolated = Boolean(backfill.isolated);
+
+    setHtml(
+      "backfillEvaluated",
+      evaluated
+        ? `
+          <span class="decision-badge yes">
+            <i class="bi bi-check-circle-fill"></i>
+            YES
+          </span>
+        `
+        : `
+          <span class="decision-badge pending">
+            <i class="bi bi-hourglass-split"></i>
+            NOT YET
+          </span>
+        `,
+    );
+
+    let isolationBadge = `
+      <span class="decision-badge pending">
+        <i class="bi bi-dash-circle-fill"></i>
+        NOT EVALUATED
+      </span>
+    `;
+
+    if (evaluated && isolated) {
+      isolationBadge = `
+        <span class="decision-badge yes">
+          <i class="bi bi-check-circle-fill"></i>
+          YES
+        </span>
+      `;
+    } else if (evaluated) {
+      isolationBadge = `
+        <span class="decision-badge no">
+          <i class="bi bi-x-circle-fill"></i>
+          NO
+        </span>
+      `;
+    }
+
+    setHtml("backfillIsolated", isolationBadge);
+
+    const selectedDiagnostic =
+      backfill.selected_diagnostic || {};
+
+    const selectedInstrument = isolated
+      ? formatInstrument(
+          selectedDiagnostic.contract_info,
+          backfill.selected_instrument_key,
+        )
+      : "-";
+
+    setText(
+      "backfillStatus",
+      backfill.status || "not_evaluated",
+    );
+    setText(
+      "backfillEvaluatedInstruments",
+      backfill.evaluated_instruments ?? 0,
+    );
+    setText(
+      "backfillInstrumentsWithTouch",
+      backfill.instruments_with_touch ?? 0,
+    );
+    setText(
+      "backfillTouchEventsCount",
+      backfill.backfill_touch_events_count ?? 0,
+    );
+    setText(
+      "backfillSelectedInstrument",
+      selectedInstrument,
+    );
+    setText(
+      "backfillSelectedLevel",
+      backfill.selected_level,
+    );
+    setText("backfillTouchTime", backfill.touch_time);
+    setText(
+      "backfillReasonCode",
+      backfill.reason_code,
+    );
+    setText(
+      "backfillReason",
+      backfill.reason ||
+        "Backfill isolation information is not available.",
+    );
+
+    const reasonContainer = document.getElementById(
+      "backfillReasonContainer",
+    );
+
+    if (reasonContainer) {
+      reasonContainer.classList.remove(
+        "selected",
+        "failed",
+      );
+
+      if (isolated) {
+        reasonContainer.classList.add("selected");
+      } else if (
+        evaluated &&
+        backfill.status === "failed"
+      ) {
+        reasonContainer.classList.add("failed");
+      }
+    }
+
+    renderBackfillDiagnostics(
+      Array.isArray(backfill.diagnostics)
+        ? backfill.diagnostics
+        : [],
+    );
+  }
+
+  function renderBackfillDiagnostics(diagnostics) {
+    const tbody = document.getElementById(
+      "backfillDiagnosticsTableBody",
+    );
+
+    setText(
+      "backfillDiagnosticsCount",
+      diagnostics.length,
+    );
+
+    if (!tbody) {
+      return;
+    }
+
+    if (!diagnostics.length) {
+      tbody.innerHTML = `
+        <tr>
+          <td colspan="9" class="text-center text-muted py-4">
+            No backfill isolation diagnostics found.
+          </td>
+        </tr>
+      `;
+      return;
+    }
+
+    const orderedDiagnostics = diagnostics
+      .slice()
+      .sort((left, right) => {
+        if (left.isolated && !right.isolated) {
+          return -1;
+        }
+
+        if (!left.isolated && right.isolated) {
+          return 1;
+        }
+
+        if (
+          left.backfill_touch_found &&
+          !right.backfill_touch_found
+        ) {
+          return -1;
+        }
+
+        if (
+          !left.backfill_touch_found &&
+          right.backfill_touch_found
+        ) {
+          return 1;
+        }
+
+        return String(
+          left.instrument_key || "",
+        ).localeCompare(
+          String(right.instrument_key || ""),
+        );
+      });
+
+    tbody.innerHTML = orderedDiagnostics
+      .map((diagnostic) => {
+        const instrument = formatInstrument(
+          diagnostic.contract_info,
+          diagnostic.instrument_key,
+        );
+
+        const statusType =
+          diagnostic.status === "success"
+            ? "green"
+            : diagnostic.status === "failed"
+              ? "red"
+              : "yellow";
+
+        const touchBadge =
+          diagnostic.backfill_touch_found
+            ? badge("YES", "green")
+            : badge("NO", "yellow");
+
+        const isolatedBadge = diagnostic.isolated
+          ? badge("YES", "green")
+          : badge("NO", "red");
+
+        const levels = Array.isArray(
+          diagnostic.touch_levels,
+        )
+          ? diagnostic.touch_levels.join(", ")
+          : "-";
+
+        const rowClass = diagnostic.isolated
+          ? "diagnostic-selected-row"
+          : "";
+
+        return `
+          <tr class="${rowClass}">
+            <td class="diagnostic-instrument">
+              ${escapeHtml(instrument)}
+            </td>
+            <td>
+              ${escapeHtml(
+                safe(diagnostic.instrument_key),
+              )}
+            </td>
+            <td>
+              ${badge(
+                diagnostic.status || "unknown",
+                statusType,
+              )}
+            </td>
+            <td>${touchBadge}</td>
+            <td>
+              ${escapeHtml(
+                safe(
+                  diagnostic.backfill_touch_events_count,
+                  0,
+                ),
+              )}
+            </td>
+            <td>${escapeHtml(safe(levels))}</td>
+            <td>${isolatedBadge}</td>
+            <td>
+              ${badge(
+                diagnostic.reason_code || "unknown",
+                diagnostic.isolated
+                  ? "green"
+                  : "blue",
+              )}
+            </td>
+            <td class="diagnostic-reason">
+              ${escapeHtml(
+                safe(diagnostic.reason),
+              )}
+            </td>
+          </tr>
+        `;
+      })
+      .join("");
+  }
+
   function renderDashboard(data) {
-    const openingStatus = data.opening_range_status || {};
+    const openingStatus =
+      data.opening_range_status || {};
+
     const isolated =
       data.isolated_instrument ||
       data.selected_or_instrument ||
@@ -716,47 +1284,95 @@ Waiting for data...</pre
 
     const emaMode = getLiveEmaMode(data);
 
+    renderBackfillIsolation(data, openingStatus);
+
     setText("emaModeMetric", emaMode.mode);
-    setText("emaModeDescription", emaMode.description);
+    setText(
+      "emaModeDescription",
+      emaMode.description,
+    );
 
     const selected = Boolean(isolated.selected);
 
-    setText("isolatedMetric", selected ? "YES" : "NO");
+    setText(
+      "isolatedMetric",
+      selected ? "YES" : "NO",
+    );
+
     setText(
       "isolatedMessage",
       selected
-        ? "Instrument isolated for EMA Telegram alerts."
-        : "No isolated instrument selected yet.",
+        ? isolated.selection_reason ||
+            data.backfill_isolation?.reason ||
+            "Instrument isolated for EMA Telegram alerts."
+        : data.backfill_isolation?.reason ||
+            "No isolated instrument selected yet.",
     );
 
     const info = isolated.contract_info || {};
-    const strike = safe(info.strike_price);
-    const optionType = safe(info.instrument_type);
-    const symbol = safe(info.trading_symbol || info.instrument_key);
 
     setText(
       "isoInstrument",
-      selected ? `${strike} ${optionType} | ${symbol}` : "-",
+      selected
+        ? formatInstrument(
+            info,
+            isolated.instrument_key,
+          )
+        : "-",
     );
-    setText("isoInstrumentKey", isolated.instrument_key);
+    setText(
+      "isoInstrumentKey",
+      isolated.instrument_key,
+    );
     setText("isoLevel", isolated.selected_level);
-    setText("isoLevelValue", isolated.level_value);
+    setText(
+      "isoLevelValue",
+      isolated.level_value,
+    );
     setText(
       "isoTrigger",
       isolated.trigger_field
-        ? `${isolated.trigger_field}: ${isolated.trigger_price}`
+        ? `${isolated.trigger_field}: ${safe(
+            isolated.trigger_price,
+          )}`
         : "-",
     );
-    setText("isoTouchTime", isolated.touch_time);
-    setText("isoReferenceAverage", isolated.reference_average);
-    setText("isoNiftyLtp", isolated.latest_main_index_ltp);
+    setText(
+      "isoTouchTime",
+      isolated.touch_time,
+    );
+    setText(
+      "isoReferenceAverage",
+      isolated.reference_average,
+    );
+    setText(
+      "isoNiftyLtp",
+      isolated.latest_main_index_ltp,
+    );
 
     setText("orStatus", openingStatus.status);
     setText("orDate", openingStatus.date);
-    setText("orTotal", openingStatus.total_instruments);
-    setText("orSuccess", openingStatus.success_count);
-    setText("orTouchCount", openingStatus.touch_events_count);
-    setText("orMainLtp", openingStatus.latest_main_index_ltp);
+    setText(
+      "orTotal",
+      openingStatus.total_instruments,
+    );
+    setText(
+      "orSuccess",
+      openingStatus.success_count,
+    );
+    setText(
+      "orTouchCount",
+      openingStatus.touch_events_count ??
+        data.recent_touch_events_count ??
+        data.backfill_isolation
+          ?.backfill_touch_events_count ??
+        0,
+    );
+    setText(
+      "orMainLtp",
+      openingStatus.latest_main_index_ltp ??
+        data.latest_main_index_ltp,
+    );
 
     setText(
       "alertCountMetric",
@@ -766,15 +1382,36 @@ Waiting for data...</pre
         0,
     );
 
-    renderAlerts(data.isolated_ema_alerts || []);
-    renderTouchEvents(data.recent_touch_events || []);
+    renderAlerts(
+      Array.isArray(data.isolated_ema_alerts)
+        ? data.isolated_ema_alerts
+        : [],
+    );
+
+    renderTouchEvents(
+      Array.isArray(data.recent_touch_events)
+        ? data.recent_touch_events
+        : [],
+    );
   }
 
   function renderAlerts(alerts) {
-    const tbody = document.getElementById("alertsTableBody");
+    const tbody = document.getElementById(
+      "alertsTableBody",
+    );
+
+    if (!tbody) {
+      return;
+    }
 
     if (!alerts.length) {
-      tbody.innerHTML = `<tr><td colspan="9" class="text-center text-muted py-4">No isolated EMA alerts found.</td></tr>`;
+      tbody.innerHTML = `
+        <tr>
+          <td colspan="9" class="text-center text-muted py-4">
+            No isolated EMA alerts found.
+          </td>
+        </tr>
+      `;
       return;
     }
 
@@ -784,39 +1421,99 @@ Waiting for data...</pre
       .map((record) => {
         const event = record.ema_event || {};
         const info =
-          record.contract_info || event.contract_info || event.info || {};
+          record.contract_info ||
+          event.contract_info ||
+          event.info ||
+          {};
+
         const mode =
-          record.ema_calculation_mode || event.ema_calculation_mode || "-";
+          record.ema_calculation_mode ||
+          event.ema_calculation_mode ||
+          "-";
 
         const modeBadge =
-          mode === "tick_ltp" ? badge(mode, "purple") : badge(mode, "blue");
-        const crossType = event.cross_type || "-";
-        const crossBadge = String(crossType).includes("bullish")
+          mode === "tick_ltp"
+            ? badge(mode, "purple")
+            : badge(mode, "blue");
+
+        const crossType =
+          event.cross_type || "-";
+
+        const crossBadge = String(
+          crossType,
+        ).includes("bullish")
           ? badge(crossType, "green")
           : badge(crossType, "red");
 
         return `
-                    <tr>
-                        <td>${escapeHtml(safe(record.created_at || event.timestamp))}</td>
-                        <td>${escapeHtml(safe(info.strike_price))} ${escapeHtml(safe(info.instrument_type))}</td>
-                        <td>${escapeHtml(safe(record.selected_level))}</td>
-                        <td>${crossBadge}</td>
-                        <td>${modeBadge}</td>
-                        <td>${escapeHtml(safe(event.close || event.ltp))}</td>
-                        <td>${escapeHtml(safe(event.ema_fast))}</td>
-                        <td>${escapeHtml(safe(event.ema_slow))}</td>
-                        <td>${escapeHtml(safe(record.nifty_ltp))}</td>
-                    </tr>
-                `;
+          <tr>
+            <td>
+              ${escapeHtml(
+                safe(
+                  record.created_at ||
+                    event.timestamp,
+                ),
+              )}
+            </td>
+            <td>
+              ${escapeHtml(
+                formatInstrument(
+                  info,
+                  record.instrument_key ||
+                    event.instrument_key,
+                ),
+              )}
+            </td>
+            <td>
+              ${escapeHtml(
+                safe(record.selected_level),
+              )}
+            </td>
+            <td>${crossBadge}</td>
+            <td>${modeBadge}</td>
+            <td>
+              ${escapeHtml(
+                safe(event.close || event.ltp),
+              )}
+            </td>
+            <td>
+              ${escapeHtml(
+                safe(event.ema_fast),
+              )}
+            </td>
+            <td>
+              ${escapeHtml(
+                safe(event.ema_slow),
+              )}
+            </td>
+            <td>
+              ${escapeHtml(
+                safe(record.nifty_ltp),
+              )}
+            </td>
+          </tr>
+        `;
       })
       .join("");
   }
 
   function renderTouchEvents(events) {
-    const tbody = document.getElementById("touchEventsTableBody");
+    const tbody = document.getElementById(
+      "touchEventsTableBody",
+    );
+
+    if (!tbody) {
+      return;
+    }
 
     if (!events.length) {
-      tbody.innerHTML = `<tr><td colspan="6" class="text-center text-muted py-4">No Opening Range touch events found.</td></tr>`;
+      tbody.innerHTML = `
+        <tr>
+          <td colspan="6" class="text-center text-muted py-4">
+            No Opening Range touch events found.
+          </td>
+        </tr>
+      `;
       return;
     }
 
@@ -825,21 +1522,53 @@ Waiting for data...</pre
       .reverse()
       .map((event) => {
         const info = event.contract_info || {};
-        const level = String(event.level || "-").toUpperCase();
+        const level = String(
+          event.level || "-",
+        ).toUpperCase();
+
         const levelBadge = level.startsWith("R")
           ? badge(level, "green")
           : badge(level, "red");
 
         return `
-                    <tr>
-                        <td>${escapeHtml(safe(event.touch_time || event.created_at))}</td>
-                        <td>${escapeHtml(safe(info.strike_price))} ${escapeHtml(safe(info.instrument_type))}</td>
-                        <td>${levelBadge}</td>
-                        <td>${escapeHtml(safe(event.trigger_field))}: ${escapeHtml(safe(event.trigger_price))}</td>
-                        <td>${escapeHtml(safe(event.source))}</td>
-                        <td>${escapeHtml(safe(event.main_index_ltp))}</td>
-                    </tr>
-                `;
+          <tr>
+            <td>
+              ${escapeHtml(
+                safe(
+                  event.touch_time ||
+                    event.created_at,
+                ),
+              )}
+            </td>
+            <td>
+              ${escapeHtml(
+                formatInstrument(
+                  info,
+                  event.instrument_key,
+                ),
+              )}
+            </td>
+            <td>${levelBadge}</td>
+            <td>
+              ${escapeHtml(
+                safe(event.trigger_field),
+              )}:
+              ${escapeHtml(
+                safe(event.trigger_price),
+              )}
+            </td>
+            <td>
+              ${escapeHtml(
+                safe(event.source),
+              )}
+            </td>
+            <td>
+              ${escapeHtml(
+                safe(event.main_index_ltp),
+              )}
+            </td>
+          </tr>
+        `;
       })
       .join("");
   }
@@ -852,45 +1581,84 @@ Waiting for data...</pre
 
       renderDashboard(dashboardData);
 
-      document.getElementById("rawSnapshot").textContent = JSON.stringify(
-        dashboardData,
-        null,
-        2,
-      );
+      const rawSnapshot =
+        document.getElementById("rawSnapshot");
+
+      if (rawSnapshot) {
+        rawSnapshot.textContent = JSON.stringify(
+          dashboardData,
+          null,
+          2,
+        );
+      }
 
       setText(
         "lastUpdated",
         `Last updated: ${new Date().toLocaleTimeString()}`,
       );
+
       setApiStatus(true, "API Connected");
     } catch (error) {
       console.error(error);
-      setApiStatus(false, `API Error: ${error.message}`);
-      document.getElementById("rawSnapshot").textContent =
-        `Failed loading dashboard:\n${error.stack || error.message}`;
+
+      setApiStatus(
+        false,
+        `API Error: ${error.message}`,
+      );
+
+      const rawSnapshot =
+        document.getElementById("rawSnapshot");
+
+      if (rawSnapshot) {
+        rawSnapshot.textContent =
+          `Failed loading dashboard:\n${
+            error.stack || error.message
+          }`;
+      }
     }
   }
 
   async function triggerOpeningRangeFetch() {
-    const ok = confirm(
+    const shouldRun = confirm(
       "Run manual Opening Range fetch now? This calls /opening-range/fetch.",
     );
 
-    if (!ok) return;
+    if (!shouldRun) {
+      return;
+    }
 
     try {
-      setApiStatus(true, "Running Opening Range fetch...");
-      const result = await postJson(`${apiBase()}/opening-range/fetch`);
-      document.getElementById("rawSnapshot").textContent = JSON.stringify(
-        result,
-        null,
-        2,
+      setApiStatus(
+        true,
+        "Running Opening Range fetch...",
       );
+
+      const result = await postJson(
+        `${apiBase()}/opening-range/fetch`,
+      );
+
+      const rawSnapshot =
+        document.getElementById("rawSnapshot");
+
+      if (rawSnapshot) {
+        rawSnapshot.textContent = JSON.stringify(
+          result,
+          null,
+          2,
+        );
+      }
+
       await loadDashboard();
     } catch (error) {
       console.error(error);
-      alert(`Opening Range fetch failed: ${error.message}`);
-      setApiStatus(false, `Fetch error: ${error.message}`);
+      alert(
+        `Opening Range fetch failed: ${error.message}`,
+      );
+
+      setApiStatus(
+        false,
+        `Fetch error: ${error.message}`,
+      );
     }
   }
 
@@ -901,52 +1669,95 @@ Waiting for data...</pre
       payload,
     });
 
-    state.liveEvents = state.liveEvents.slice(0, state.maxLiveEvents);
+    state.liveEvents = state.liveEvents.slice(
+      0,
+      state.maxLiveEvents,
+    );
+
     renderLiveEvents();
   }
 
   function renderLiveEvents() {
-    const list = document.getElementById("liveEventsList");
+    const list = document.getElementById(
+      "liveEventsList",
+    );
+
+    if (!list) {
+      return;
+    }
 
     if (!state.liveEvents.length) {
       list.innerHTML = `
-                <div class="event-card text-center text-muted py-4">
-                    <i class="bi bi-pulse fs-3 d-block mb-1"></i>
-                    Waiting for live stream events...
-                </div>
-            `;
+        <div class="event-card text-center text-muted py-4">
+          <i class="bi bi-pulse fs-3 d-block mb-1"></i>
+          Waiting for live stream events...
+        </div>
+      `;
       return;
     }
 
     list.innerHTML = state.liveEvents
       .map((item) => {
-        const p = item.payload || {};
+        const payload = item.payload || {};
+
         const kindBadge =
-          item.kind === "EMA" ? badge("EMA", "purple") : badge("OR", "yellow");
+          item.kind === "EMA"
+            ? badge("EMA", "purple")
+            : badge("OR", "yellow");
 
         const title =
           item.kind === "EMA"
-            ? `${safe(p.cross_type)} | ${safe(p.instrument_key)}`
-            : `${safe(p.level || p.type)} | ${safe(p.instrument_key)}`;
+            ? `${safe(payload.cross_type)} | ${safe(
+                payload.instrument_key,
+              )}`
+            : `${safe(
+                payload.level || payload.type,
+              )} | ${safe(payload.instrument_key)}`;
 
         const price =
           item.kind === "EMA"
-            ? `Price: ${safe(p.close || p.ltp)} | Mode: ${safe(p.ema_calculation_mode)}`
-            : `Trigger: ${safe(p.trigger_field)} ${safe(p.trigger_price)}`;
+            ? `Price: ${safe(
+                payload.close || payload.ltp,
+              )} | Mode: ${safe(
+                payload.ema_calculation_mode,
+              )}`
+            : `Trigger: ${safe(
+                payload.trigger_field,
+              )} ${safe(payload.trigger_price)}`;
 
         return `
-                    <div class="event-card">
-                        <div class="d-flex justify-content-between align-items-center mb-1">
-                            <div>${kindBadge} <strong class="ms-1">${escapeHtml(title)}</strong></div>
-                            <span class="small text-muted">${escapeHtml(safe(item.time))}</span>
-                        </div>
-                        <div class="small fw-semibold text-secondary mb-1">${escapeHtml(price)}</div>
-                        <details>
-                            <summary class="small text-primary style="cursor: pointer;">Payload Details</summary>
-                            <pre class="json-preview mt-2 mb-0">${escapeHtml(JSON.stringify(p, null, 2))}</pre>
-                        </details>
-                    </div>
-                `;
+          <div class="event-card">
+            <div class="d-flex justify-content-between align-items-center mb-1">
+              <div>
+                ${kindBadge}
+                <strong class="ms-1">
+                  ${escapeHtml(title)}
+                </strong>
+              </div>
+
+              <span class="small text-muted">
+                ${escapeHtml(safe(item.time))}
+              </span>
+            </div>
+
+            <div class="small fw-semibold text-secondary mb-1">
+              ${escapeHtml(price)}
+            </div>
+
+            <details>
+              <summary
+                class="small text-primary"
+                style="cursor: pointer;"
+              >
+                Payload Details
+              </summary>
+
+              <pre class="json-preview mt-2 mb-0">${escapeHtml(
+                JSON.stringify(payload, null, 2),
+              )}</pre>
+            </details>
+          </div>
+        `;
       })
       .join("");
   }
@@ -956,97 +1767,193 @@ Waiting for data...</pre
     renderLiveEvents();
   }
 
-  function escapeHtml(text) {
-    return String(text)
-      .replaceAll("&", "&amp;")
-      .replaceAll("<", "&lt;")
-      .replaceAll(">", "&gt;")
-      .replaceAll('"', "&quot;")
-      .replaceAll("'", "&#039;");
+  function scheduleEmaReconnect() {
+    if (state.emaReconnectTimer) {
+      clearTimeout(state.emaReconnectTimer);
+    }
+
+    state.emaReconnectTimer = setTimeout(
+      connectEmaWebSocket,
+      3000,
+    );
+  }
+
+  function scheduleOpeningRangeReconnect() {
+    if (state.orReconnectTimer) {
+      clearTimeout(state.orReconnectTimer);
+    }
+
+    state.orReconnectTimer = setTimeout(
+      connectOpeningRangeWebSocket,
+      3000,
+    );
   }
 
   function connectEmaWebSocket() {
     try {
-      const url = `${wsBase()}/ws/ema-crossover`;
-      state.emaSocket = new WebSocket(url);
+      if (
+        state.emaSocket &&
+        (
+          state.emaSocket.readyState === WebSocket.OPEN ||
+          state.emaSocket.readyState === WebSocket.CONNECTING
+        )
+      ) {
+        return;
+      }
+
+      state.emaSocket = new WebSocket(
+        `${wsBase()}/ws/ema-crossover`,
+      );
 
       state.emaSocket.onopen = () => {
-        setWsStatus("ema", true, "EMA WS Connected");
+        setWsStatus(
+          "ema",
+          true,
+          "EMA WS Connected",
+        );
       };
 
       state.emaSocket.onmessage = (event) => {
         try {
           const payload = JSON.parse(event.data);
+
           if (payload.type === "live_ema_cross") {
             addLiveEvent("EMA", payload);
             loadDashboard();
           }
         } catch (error) {
-          console.error("EMA WS parse error", error);
+          console.error(
+            "EMA WS parse error",
+            error,
+          );
         }
       };
 
       state.emaSocket.onclose = () => {
-        setWsStatus("ema", false, "EMA WS Disconnected");
-        setTimeout(connectEmaWebSocket, 3000);
+        state.emaSocket = null;
+
+        setWsStatus(
+          "ema",
+          false,
+          "EMA WS Disconnected",
+        );
+
+        scheduleEmaReconnect();
       };
 
       state.emaSocket.onerror = () => {
-        setWsStatus("ema", false, "EMA WS Error");
+        setWsStatus(
+          "ema",
+          false,
+          "EMA WS Error",
+        );
       };
     } catch (error) {
       console.error(error);
-      setWsStatus("ema", false, "EMA WS Failed");
-      setTimeout(connectEmaWebSocket, 3000);
+
+      setWsStatus(
+        "ema",
+        false,
+        "EMA WS Failed",
+      );
+
+      scheduleEmaReconnect();
     }
   }
 
   function connectOpeningRangeWebSocket() {
     try {
-      const url = `${wsBase()}/ws/opening-range`;
-      state.orSocket = new WebSocket(url);
+      if (
+        state.orSocket &&
+        (
+          state.orSocket.readyState === WebSocket.OPEN ||
+          state.orSocket.readyState === WebSocket.CONNECTING
+        )
+      ) {
+        return;
+      }
+
+      state.orSocket = new WebSocket(
+        `${wsBase()}/ws/opening-range`,
+      );
 
       state.orSocket.onopen = () => {
-        setWsStatus("or", true, "OR WS Connected");
+        setWsStatus(
+          "or",
+          true,
+          "OR WS Connected",
+        );
       };
 
       state.orSocket.onmessage = (event) => {
         try {
           const payload = JSON.parse(event.data);
+          const eventType = String(
+            payload.type || "",
+          );
+
           if (
-            payload.type === "opening_range_touch" ||
-            String(payload.type || "").startsWith("opening_range")
+            eventType === "opening_range_touch" ||
+            eventType.startsWith("opening_range")
           ) {
             addLiveEvent("OR", payload);
             loadDashboard();
           }
         } catch (error) {
-          console.error("OR WS parse error", error);
+          console.error(
+            "OR WS parse error",
+            error,
+          );
         }
       };
 
       state.orSocket.onclose = () => {
-        setWsStatus("or", false, "OR WS Disconnected");
-        setTimeout(connectOpeningRangeWebSocket, 3000);
+        state.orSocket = null;
+
+        setWsStatus(
+          "or",
+          false,
+          "OR WS Disconnected",
+        );
+
+        scheduleOpeningRangeReconnect();
       };
 
       state.orSocket.onerror = () => {
-        setWsStatus("or", false, "OR WS Error");
+        setWsStatus(
+          "or",
+          false,
+          "OR WS Error",
+        );
       };
     } catch (error) {
       console.error(error);
-      setWsStatus("or", false, "OR WS Failed");
-      setTimeout(connectOpeningRangeWebSocket, 3000);
+
+      setWsStatus(
+        "or",
+        false,
+        "OR WS Failed",
+      );
+
+      scheduleOpeningRangeReconnect();
     }
   }
 
   function toggleAutoRefresh() {
     state.autoRefresh = !state.autoRefresh;
-    const el = document.getElementById("autoRefreshText");
-    el.textContent = state.autoRefresh ? "ON" : "OFF";
-    el.className = state.autoRefresh
-      ? "badge bg-success ms-1"
-      : "badge bg-danger ms-1";
+
+    const element =
+      document.getElementById("autoRefreshText");
+
+    if (element) {
+      element.textContent = state.autoRefresh
+        ? "ON"
+        : "OFF";
+
+      element.className = state.autoRefresh
+        ? "badge bg-success ms-1"
+        : "badge bg-danger ms-1";
+    }
 
     setupAutoRefresh();
   }
@@ -1058,16 +1965,43 @@ Waiting for data...</pre
     }
 
     if (state.autoRefresh) {
-      state.refreshTimer = setInterval(loadDashboard, state.refreshIntervalMs);
+      state.refreshTimer = setInterval(
+        loadDashboard,
+        state.refreshIntervalMs,
+      );
     }
   }
 
-  document.addEventListener("DOMContentLoaded", () => {
-    loadDashboard();
-    setupAutoRefresh();
-    connectEmaWebSocket();
-    connectOpeningRangeWebSocket();
+  document.addEventListener(
+    "DOMContentLoaded",
+    () => {
+      loadDashboard();
+      setupAutoRefresh();
+      connectEmaWebSocket();
+      connectOpeningRangeWebSocket();
+    },
+  );
+
+  window.addEventListener("beforeunload", () => {
+    if (state.refreshTimer) {
+      clearInterval(state.refreshTimer);
+    }
+
+    if (state.emaReconnectTimer) {
+      clearTimeout(state.emaReconnectTimer);
+    }
+
+    if (state.orReconnectTimer) {
+      clearTimeout(state.orReconnectTimer);
+    }
+
+    if (state.emaSocket) {
+      state.emaSocket.close();
+    }
+
+    if (state.orSocket) {
+      state.orSocket.close();
+    }
   });
 </script>
-
 {% endblock %}

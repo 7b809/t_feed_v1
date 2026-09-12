@@ -142,16 +142,168 @@ function setConnectionStatus(status, text) { connectionStatus.classList.remove("
 // ============================================================
 // TIMESTAMP PARSER
 // ============================================================
-function parseTimestamp(value) { if (value === null || value === undefined) { return null; } if (typeof value === "number") { if (!Number.isFinite(value)) { return null; } if (value > 1e12) { return Math.floor(value / 1000); } return Math.floor(value); } const stringValue = String(value).trim(); if (!stringValue) { return null; } const numericValue = Number(stringValue); if (Number.isFinite(numericValue)) { if (numericValue > 1e12) { return Math.floor(numericValue / 1000); } return Math.floor(numericValue); } const parsedValue = new Date(stringValue).getTime(); if (!Number.isFinite(parsedValue)) { return null; } return Math.floor(parsedValue / 1000); }
+function parseTimestamp(value) {
+  if (
+    value === null ||
+    value === undefined ||
+    value === ""
+  ) {
+    return null;
+  }
+
+  if (value instanceof Date) {
+    const milliseconds = value.getTime();
+
+    return Number.isFinite(milliseconds)
+      ? Math.floor(milliseconds / 1000)
+      : null;
+  }
+
+  const numericValue = Number(value);
+
+  if (Number.isFinite(numericValue)) {
+    const absoluteValue = Math.abs(numericValue);
+
+    if (absoluteValue >= 1e18) {
+      return Math.floor(numericValue / 1e9);
+    }
+
+    if (absoluteValue >= 1e15) {
+      return Math.floor(numericValue / 1e6);
+    }
+
+    if (absoluteValue >= 1e12) {
+      return Math.floor(numericValue / 1e3);
+    }
+
+    return Math.floor(numericValue);
+  }
+
+  const parsedMilliseconds = Date.parse(
+    String(value).trim(),
+  );
+
+  if (!Number.isFinite(parsedMilliseconds)) {
+    return null;
+  }
+
+  return Math.floor(parsedMilliseconds / 1000);
+}
+
 // ============================================================
 // LIGHTWEIGHT CHART TIME NORMALIZER
 // ============================================================
-function normalizeChartTime(time) { if (time === null || time === undefined) { return null; } if (typeof time === "number") { if (!Number.isFinite(time)) { return null; } return time; } if (typeof time === "object" && Number.isFinite(time.year) && Number.isFinite(time.month) && Number.isFinite(time.day)) { return Math.floor(new Date(time.year, time.month - 1, time.day).getTime() / 1000); } return null; }
+function normalizeChartTime(time) {
+  if (time === null || time === undefined) {
+    return null;
+  }
+
+  if (typeof time === "number") {
+    return Number.isFinite(time) ? time : null;
+  }
+
+  if (typeof time === "string") {
+    return parseTimestamp(time);
+  }
+
+  if (
+    typeof time === "object" &&
+    Number.isFinite(time.year) &&
+    Number.isFinite(time.month) &&
+    Number.isFinite(time.day)
+  ) {
+    return Math.floor(
+      Date.UTC(
+        time.year,
+        time.month - 1,
+        time.day,
+      ) / 1000,
+    );
+  }
+
+  return null;
+}
+
 // ============================================================
 // DATE FORMATTERS
 // ============================================================
-function formatTimeLabel(time) { const timestamp = normalizeChartTime(time); if (!Number.isFinite(timestamp)) { return ""; } const date = new Date(timestamp * 1000); return date.toLocaleString("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }).replace(",", ""); }
-function formatFullDate(time) { const timestamp = normalizeChartTime(time); if (!Number.isFinite(timestamp)) { return ""; } const date = new Date(timestamp * 1000); return date.toLocaleString("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }); }
+function getChartDate(time) {
+  const timestamp = normalizeChartTime(time);
+
+  if (!Number.isFinite(timestamp)) {
+    return null;
+  }
+
+  return new Date(timestamp * 1000);
+}
+
+function formatChartDate(date) {
+  if (!(date instanceof Date)) {
+    return "";
+  }
+
+  return new Intl.DateTimeFormat("en-IN", {
+    timeZone: "Asia/Kolkata",
+    day: "2-digit",
+    month: "2-digit",
+    year: "2-digit",
+  }).format(date);
+}
+
+function formatChartTime(date) {
+  if (!(date instanceof Date)) {
+    return "";
+  }
+
+  return new Intl.DateTimeFormat("en-IN", {
+    timeZone: "Asia/Kolkata",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(date);
+}
+
+function formatTimeLabel(time, tickMarkType) {
+  const date = getChartDate(time);
+
+  if (!date) {
+    return "";
+  }
+
+  const TickMarkType =
+    LightweightCharts.TickMarkType || {};
+
+  if (
+    tickMarkType === TickMarkType.Year ||
+    tickMarkType === TickMarkType.Month ||
+    tickMarkType === TickMarkType.DayOfMonth
+  ) {
+    return formatChartDate(date);
+  }
+
+  return formatChartTime(date);
+}
+
+function formatFullDate(time) {
+  const date = getChartDate(time);
+
+  if (!date) {
+    return "";
+  }
+
+  return new Intl.DateTimeFormat("en-IN", {
+    timeZone: "Asia/Kolkata",
+    weekday: "short",
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).format(date);
+}
+
 // ============================================================
 // NORMALIZE CANDLE
 // ============================================================
@@ -225,7 +377,159 @@ const formattedData = Array.isArray(chartData) ? chartData.map(normalizeCandle).
 // ============================================================
 // CREATE CHART
 // ============================================================
-function createChart(candles) { chart = LightweightCharts.createChart(chartContainer, { width: chartContainer.clientWidth, height: chartContainer.clientHeight, layout: { background: { color: "#131722" }, textColor: "#d1d4dc" }, grid: { vertLines: { color: "#2a2e39" }, horzLines: { color: "#2a2e39" } }, crosshair: { mode: LightweightCharts.CrosshairMode.Normal, vertLine: { labelBackgroundColor: "#2962ff", labelBorderColor: "#2962ff" } }, rightPriceScale: { borderColor: "#2a2e39" }, timeScale: { borderColor: "#2a2e39", timeVisible: true, secondsVisible: false, tickMarkFormatter: (time, tickMarkType, locale) => { return formatTimeLabel(time); } }, localization: { timeFormatter: time => { return formatFullDate(time); } } }); const candleOptions = { upColor: "#089981", downColor: "#f23645", borderUpColor: "#089981", borderDownColor: "#f23645", wickUpColor: "#089981", wickDownColor: "#f23645" }; if (typeof chart.addSeries === "function" && LightweightCharts.CandlestickSeries) { candleSeries = chart.addSeries(LightweightCharts.CandlestickSeries, candleOptions); } else if (typeof chart.addCandlestickSeries === "function") { candleSeries = chart.addCandlestickSeries(candleOptions); } if (candles.length > 0) { candleSeries.setData(candles); lastCandle = candles[candles.length - 1]; oldestCandleTime = candles[0].time; updateLivePrice(lastCandle.close); chart.timeScale().fitContent(); } chart.timeScale().subscribeVisibleLogicalRangeChange(range => { if (!range || isLoadingHistory || !hasMoreHistory) { return; } if (range.from < 5) { historyLoadBanner.style.display = "flex"; } else { historyLoadBanner.style.display = "none"; } }); const resizeChart = () => { if (!chart) { return; } chart.applyOptions({ width: chartContainer.clientWidth, height: chartContainer.clientHeight }); }; window.addEventListener("resize", resizeChart); if (typeof ResizeObserver !== "undefined") { new ResizeObserver(resizeChart).observe(chartContainer); } }
+function createChart(candles) {
+  chart = LightweightCharts.createChart(
+    chartContainer,
+    {
+      width: chartContainer.clientWidth,
+      height: chartContainer.clientHeight,
+      layout: {
+        background: {
+          color: "#131722",
+        },
+        textColor: "#d1d4dc",
+      },
+      grid: {
+        vertLines: {
+          color: "#2a2e39",
+        },
+        horzLines: {
+          color: "#2a2e39",
+        },
+      },
+      crosshair: {
+        mode: LightweightCharts.CrosshairMode.Normal,
+        vertLine: {
+          labelBackgroundColor: "#2962ff",
+          labelBorderColor: "#2962ff",
+        },
+      },
+      rightPriceScale: {
+        borderColor: "#2a2e39",
+      },
+      timeScale: {
+        borderColor: "#2a2e39",
+        timeVisible: true,
+        secondsVisible: false,
+        rightOffset: 8,
+        barSpacing: 8,
+        minBarSpacing: 3,
+        fixLeftEdge: false,
+        fixRightEdge: false,
+        lockVisibleTimeRangeOnResize: false,
+        tickMarkFormatter: (
+          time,
+          tickMarkType,
+        ) => {
+          return formatTimeLabel(
+            time,
+            tickMarkType,
+          );
+        },
+      },
+      localization: {
+        locale: "en-IN",
+        timeFormatter: (time) => {
+          return formatFullDate(time);
+        },
+        priceFormatter: (price) => {
+          const numericPrice = Number(price);
+
+          return Number.isFinite(numericPrice)
+            ? numericPrice.toFixed(2)
+            : "";
+        },
+      },
+    },
+  );
+
+  const candleOptions = {
+    upColor: "#089981",
+    downColor: "#f23645",
+    borderUpColor: "#089981",
+    borderDownColor: "#f23645",
+    wickUpColor: "#089981",
+    wickDownColor: "#f23645",
+    priceFormat: {
+      type: "price",
+      precision: 2,
+      minMove: 0.01,
+    },
+  };
+
+  if (
+    typeof chart.addSeries === "function" &&
+    LightweightCharts.CandlestickSeries
+  ) {
+    candleSeries = chart.addSeries(
+      LightweightCharts.CandlestickSeries,
+      candleOptions,
+    );
+  } else if (
+    typeof chart.addCandlestickSeries === "function"
+  ) {
+    candleSeries = chart.addCandlestickSeries(
+      candleOptions,
+    );
+  }
+
+  if (!candleSeries) {
+    throw new Error(
+      "Unable to create the candlestick series.",
+    );
+  }
+
+  if (candles.length > 0) {
+    candleSeries.setData(candles);
+
+    lastCandle = candles[candles.length - 1];
+    oldestCandleTime = candles[0].time;
+
+    updateLivePrice(lastCandle.close);
+    chart.timeScale().fitContent();
+  }
+
+  chart
+    .timeScale()
+    .subscribeVisibleLogicalRangeChange(
+      (range) => {
+        if (
+          !range ||
+          isLoadingHistory ||
+          !hasMoreHistory
+        ) {
+          return;
+        }
+
+        historyLoadBanner.style.display =
+          range.from < 5 ? "flex" : "none";
+      },
+    );
+
+  const resizeChart = () => {
+    if (!chart) {
+      return;
+    }
+
+    chart.applyOptions({
+      width: chartContainer.clientWidth,
+      height: chartContainer.clientHeight,
+    });
+  };
+
+  window.addEventListener(
+    "resize",
+    resizeChart,
+  );
+
+  if (typeof ResizeObserver !== "undefined") {
+    const resizeObserver = new ResizeObserver(
+      resizeChart,
+    );
+
+    resizeObserver.observe(chartContainer);
+  }
+}
 // ============================================================
 // START CHART
 // ============================================================
