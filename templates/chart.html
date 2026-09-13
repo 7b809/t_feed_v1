@@ -5,11 +5,35 @@
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css"/>
 <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
 <style>
-:root { --bg: #131722; --surface: #1e222d; --surface-2: #2a2e39; --surface-3: #363c4e; --border: #2a2e39; --text: #d1d4dc; --muted: #787b86; --blue: #2962ff; --green: #089981; --red: #f23645; --yellow: #f5c451; --shadow: 0 12px 30px rgba(0,0,0,0.5); }
+:root {
+  --bg: #131722; --surface: #1e222d; --surface-2: #2a2e39; --surface-3: #363c4e;
+  --border: #2a2e39; --text: #d1d4dc; --muted: #787b86;
+  --blue: #2962ff; --green: #089981; --red: #f23645; --yellow: #f5c451;
+  --shadow: 0 12px 30px rgba(0,0,0,0.5);
+  --sub-header-h: 56px;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
 body { background: var(--bg); color: var(--text); overflow: hidden; }
-.sub-header { height: 56px; background: var(--surface); border-bottom: 1px solid var(--border); }
-.index-live-pill { padding: 2px 6px; border-radius: 4px; background: rgba(8,153,129,0.15); color: var(--green); font-size: 10px; font-weight: 700; }
-.connection-status { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border: 1px solid var(--border); border-radius: 20px; background: var(--surface-2); color: var(--muted); font-size: 11px; font-weight: 600; }
+
+.sub-header {
+  min-height: var(--sub-header-h);
+  height: var(--sub-header-h);
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+.index-live-pill {
+  padding: 2px 6px; border-radius: 4px;
+  background: rgba(8,153,129,0.15); color: var(--green);
+  font-size: 10px; font-weight: 700; flex-shrink: 0;
+}
+.connection-status {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 10px; border: 1px solid var(--border);
+  border-radius: 20px; background: var(--surface-2);
+  color: var(--muted); font-size: 11px; font-weight: 600;
+  flex-shrink: 0;
+}
 .status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
 .connection-status.connecting { color: var(--yellow); }
 .connection-status.connecting .status-dot { background: var(--yellow); }
@@ -17,62 +41,759 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
 .connection-status.connected .status-dot { background: var(--green); box-shadow: 0 0 8px rgba(8,153,129,0.8); }
 .connection-status.disconnected { color: var(--red); }
 .connection-status.disconnected .status-dot { background: var(--red); }
-.chart-wrapper { position: relative; width: 100%; height: calc(100vh - 56px); background: var(--bg); }
+
+/* =========================================================
+   PAGE / SCROLL LAYOUT
+   ========================================================= */
+.content-scroll {
+  position: relative;
+  width: 100%;
+  height: calc(100vh - var(--sub-header-h));
+  height: calc(100dvh - var(--sub-header-h));
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 16px 16px 96px 16px;
+  scroll-behavior: smooth;
+  -webkit-overflow-scrolling: touch;
+}
+.content-scroll::-webkit-scrollbar { width: 8px; }
+.content-scroll::-webkit-scrollbar-thumb { background: var(--surface-3); border-radius: 8px; }
+.content-scroll::-webkit-scrollbar-track { background: transparent; }
+
+/* =========================================================
+   CHART CARD
+   ========================================================= */
+.chart-card {
+  position: relative;
+  width: 100%;
+  height: clamp(320px, calc(100dvh - 140px), 920px);
+  min-height: 320px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: var(--shadow);
+}
 #chart { width: 100%; height: 100%; }
-.instrument-panel { position: absolute; z-index: 100; width: 400px; max-width: calc(100vw - 24px); max-height: calc(100vh - 120px); overflow: hidden; background: rgba(30,34,45,0.95); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); backdrop-filter: blur(12px); transition: transform 0.2s ease, opacity 0.2s ease, top 0.2s ease, left 0.2s ease, right 0.2s ease, bottom 0.2s ease; }
-.panel-pos-top-left { top: 12px; left: 12px; right: auto; bottom: auto; transform: none; }
-.panel-pos-top-right { top: 12px; right: 12px; left: auto; bottom: auto; transform: none; }
-.panel-pos-bottom-left { bottom: 12px; left: 12px; right: auto; top: auto; transform: none; }
+
+/* =========================================================
+   LEVEL LABEL TOGGLE BAR (below the chart)
+   ========================================================= */
+.chart-toggles-card {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 8px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+}
+.chart-toggles-title {
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  margin-right: 4px;
+  flex-shrink: 0;
+}
+.label-toggle-btn {
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--muted);
+  border-radius: 14px;
+  padding: 4px 12px;
+  font-size: 10px;
+  font-weight: 800;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+.label-toggle-btn:hover { color: #fff; border-color: var(--blue); }
+.label-toggle-btn.active {
+  background: var(--blue);
+  color: #fff;
+  border-color: var(--blue);
+  box-shadow: 0 0 0 1px rgba(41,98,255,0.4) inset;
+}
+.label-toggle-btn.avg-btn {
+  cursor: default;
+  background: rgba(41,98,255,0.12);
+  color: #7ea6ff;
+  border-color: rgba(41,98,255,0.4);
+}
+.label-toggle-btn.avg-btn:hover {
+  color: #7ea6ff;
+  border-color: rgba(41,98,255,0.4);
+  background: rgba(41,98,255,0.12);
+}
+
+/* =========================================================
+   SCROLL NAV
+   ========================================================= */
+.scroll-nav {
+  position: fixed;
+  right: 20px;
+  bottom: 24px;
+  z-index: 300;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.scroll-nav-btn {
+  width: 42px; height: 42px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid var(--border); border-radius: 50%;
+  background: var(--surface-2); color: var(--text);
+  box-shadow: var(--shadow);
+  cursor: pointer; transition: all 0.15s ease;
+  font-size: 16px;
+}
+.scroll-nav-btn:hover { background: var(--blue); color: #fff; border-color: var(--blue); }
+.scroll-nav-btn:active { transform: scale(0.95); }
+
+/* =========================================================
+   INSTRUMENT PANEL
+   ========================================================= */
+.instrument-panel {
+  position: absolute; z-index: 100;
+  width: min(400px, calc(100% - 24px));
+  max-height: calc(100% - 24px);
+  overflow: hidden;
+  background: rgba(30,34,45,0.95);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(12px);
+  transition: transform 0.2s ease, opacity 0.2s ease, top 0.2s ease, left 0.2s ease, right 0.2s ease, bottom 0.2s ease;
+}
+.panel-pos-top-left     { top: 12px; left: 12px; right: auto; bottom: auto; transform: none; }
+.panel-pos-top-right    { top: 12px; right: 12px; left: auto; bottom: auto; transform: none; }
+.panel-pos-bottom-left  { bottom: 12px; left: 12px; right: auto; top: auto; transform: none; }
 .panel-pos-bottom-right { bottom: 12px; right: 12px; left: auto; top: auto; transform: none; }
-.panel-pos-top-center { top: 12px; left: 50%; right: auto; bottom: auto; transform: translateX(-50%); }
-.panel-pos-bottom-center { bottom: 12px; left: 50%; right: auto; top: auto; transform: translateX(-50%); }
-.panel-pos-left-middle { top: 50%; left: 12px; right: auto; bottom: auto; transform: translateY(-50%); }
+.panel-pos-top-center   { top: 12px; left: 50%; right: auto; bottom: auto; transform: translateX(-50%); }
+.panel-pos-bottom-center{ bottom: 12px; left: 50%; right: auto; top: auto; transform: translateX(-50%); }
+.panel-pos-left-middle  { top: 50%; left: 12px; right: auto; bottom: auto; transform: translateY(-50%); }
 .panel-pos-right-middle { top: 50%; right: 12px; left: auto; bottom: auto; transform: translateY(-50%); }
-.panel-pos-center { top: 50%; left: 50%; right: auto; bottom: auto; transform: translate(-50%,-50%); }
+.panel-pos-center       { top: 50%; left: 50%; right: auto; bottom: auto; transform: translate(-50%,-50%); }
+
 .instrument-panel.dark-theme, .instrument-panel.dark-theme * { color: #ffffff !important; }
 .instrument-panel.dark-theme .text-muted { color: #b0b8c4 !important; }
 .instrument-panel.collapsed { width: 0; opacity: 0; pointer-events: none; border: 0; }
 .panel-header { padding: 12px; border-bottom: 1px solid var(--border); }
+.panel-header-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.panel-fold-btn {
+  width: 26px; height: 26px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid var(--border); border-radius: 6px;
+  background: var(--surface-2); color: var(--text);
+  cursor: pointer; transition: all 0.15s ease; padding: 0; font-size: 12px;
+}
+.panel-fold-btn:hover { background: var(--blue); color: #fff; border-color: var(--blue); }
 .view-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 3px; border-radius: 8px; background: #131722; }
 .view-tab { height: 32px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font-size: 12px; font-weight: 700; transition: all 0.15s ease; }
 .view-tab:hover { color: #fff; background: var(--surface-2); }
 .view-tab.active { background: var(--blue); color: #fff !important; }
-.panel-body { max-height: calc(100vh - 240px); padding: 10px; overflow-y: auto; }
+.panel-body {
+  max-height: calc(100vh - 240px);
+  max-height: calc(100dvh - 240px);
+  padding: 10px;
+  overflow-y: auto;
+}
 .panel-body::-webkit-scrollbar { width: 4px; }
 .panel-body::-webkit-scrollbar-thumb { background: var(--surface-3); border-radius: 4px; }
-.index-card { display: flex; align-items: center; justify-content: space-between; padding: 12px; border: 1px solid rgba(41,98,255,0.3); border-radius: 8px; background: linear-gradient(135deg, rgba(41,98,255,0.15), rgba(41,98,255,0.03)); text-decoration: none; transition: all 0.15s ease; }
+.index-card {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px; border: 1px solid rgba(41,98,255,0.3); border-radius: 8px;
+  background: linear-gradient(135deg, rgba(41,98,255,0.15), rgba(41,98,255,0.03));
+  text-decoration: none; transition: all 0.15s ease;
+}
 .index-card:hover { border-color: var(--blue); }
 .options-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-.column-heading { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; justify-content: center; height: 28px; margin-bottom: 6px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); font-size: 10px; font-weight: 800; }
+.column-heading {
+  position: sticky; top: 0; z-index: 5;
+  display: flex; align-items: center; justify-content: center;
+  height: 28px; margin-bottom: 6px; border: 1px solid var(--border);
+  border-radius: 6px; background: var(--surface);
+  font-size: 10px; font-weight: 800;
+}
 .call-heading { color: var(--green); }
 .put-heading { color: var(--red); }
-.option-card { position: relative; display: flex; align-items: center; justify-content: space-between; padding: 8px 10px; margin-bottom: 6px; border: 1px solid transparent; border-radius: 8px; background: var(--surface-2); text-decoration: none; transition: all 0.15s ease; }
+.option-card {
+  position: relative;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 10px; margin-bottom: 6px;
+  border: 1px solid transparent; border-radius: 8px;
+  background: var(--surface-2); text-decoration: none;
+  transition: all 0.15s ease;
+}
 .option-card:hover { background: var(--surface-3); }
-.option-card.nearest-option { border-color: rgba(245,196,81,0.6); background: linear-gradient(135deg, rgba(245,196,81,0.12), var(--surface-2)); }
+.option-card.nearest-option {
+  border-color: rgba(245,196,81,0.6);
+  background: linear-gradient(135deg, rgba(245,196,81,0.12), var(--surface-2));
+}
 .option-badge { padding: 2px 5px; border-radius: 4px; font-size: 9px; font-weight: 800; }
 .call-badge { background: rgba(8,153,129,0.15); color: var(--green); }
 .put-badge { background: rgba(242,54,69,0.15); color: var(--red); }
-.nearest-badge { position: absolute; top: -4px; right: 6px; padding: 1px 4px; border-radius: 3px; background: var(--yellow); color: #111 !important; font-size: 7px; font-weight: 900; }
-.history-load-banner { position: absolute; top: 16px; left: 50%; transform: translateX(-50%); z-index: 90; display: none; align-items: center; gap: 8px; padding: 6px 14px; border-radius: 20px; background: var(--surface-2); border: 1px solid var(--blue); color: #ffffff; font-size: 12px; font-weight: 600; box-shadow: var(--shadow); cursor: pointer; }
+.nearest-badge {
+  position: absolute; top: -4px; right: 6px;
+  padding: 1px 4px; border-radius: 3px;
+  background: var(--yellow); color: #111 !important;
+  font-size: 7px; font-weight: 900;
+}
+
+/* =========================================================
+   MISC
+   ========================================================= */
+.history-load-banner {
+  position: absolute; top: 16px; left: 50%; transform: translateX(-50%);
+  z-index: 90; display: none; align-items: center; gap: 8px;
+  padding: 6px 14px; border-radius: 20px;
+  background: var(--surface-2); border: 1px solid var(--blue);
+  color: #ffffff; font-size: 12px; font-weight: 600;
+  box-shadow: var(--shadow); cursor: pointer;
+  max-width: calc(100% - 32px);
+}
 .history-load-banner:hover { background: var(--blue); }
-.chart-controls { position: absolute; right: 16px; bottom: 16px; z-index: 150; display: flex; gap: 8px; }
-.chart-control-btn { width: 38px; height: 38px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); box-shadow: var(--shadow); cursor: pointer; transition: all 0.15s ease; }
+.chart-controls {
+  position: absolute; right: 16px; bottom: 16px;
+  z-index: 150; display: flex; gap: 8px;
+}
+.chart-control-btn {
+  width: 38px; height: 38px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid var(--border); border-radius: 8px;
+  background: var(--surface); color: var(--text);
+  box-shadow: var(--shadow); cursor: pointer; transition: all 0.15s ease;
+}
 .chart-control-btn:hover { background: var(--surface-2); color: #fff; border-color: var(--blue); }
 .settings-offcanvas { background: var(--surface) !important; color: var(--text); }
+
+/* =========================================================
+   OPENING RANGE / LEVEL OVERLAY
+   ========================================================= */
+.level-label-layer {
+  position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+  overflow: hidden; pointer-events: none; z-index: 5;
+}
+.level-line-label {
+  position: absolute; display: none; transform: translateY(-50%);
+  padding: 1px 5px; font-size: 10px; font-weight: 700; line-height: 1.2;
+  font-family: inherit; letter-spacing: 0.02em; color: #ffffff;
+  border-radius: 3px; white-space: nowrap; pointer-events: none;
+  z-index: 6; box-shadow: 0 1px 2px rgba(0,0,0,0.25);
+}
+.chart-tooltip {
+  position: absolute; display: none; z-index: 30; pointer-events: none;
+  padding: 8px 10px; border: 1px solid var(--border);
+  border-radius: 8px; background: rgba(30,34,45,0.96);
+  color: var(--text); font-size: 11px; line-height: 1.45;
+  box-shadow: var(--shadow); backdrop-filter: blur(8px);
+  min-width: 120px;
+}
+.level-status-bar {
+  position: absolute; z-index: 90; top: 12px; right: 16px;
+  display: flex; flex-wrap: wrap; gap: 6px;
+  padding: 6px 10px; border: 1px solid var(--border);
+  border-radius: 20px; background: rgba(30,34,45,0.92);
+  backdrop-filter: blur(12px); box-shadow: var(--shadow);
+  max-width: calc(100% - 32px);
+}
+.level-status-bar .badge { font-size: 10px; font-weight: 700; padding: 3px 8px; letter-spacing: 0.02em; }
+.level-status-bar .badge.level-r { background: rgba(242,54,69,0.18) !important; color: #ff8a95 !important; }
+.level-status-bar .badge.level-s { background: rgba(8,153,129,0.18) !important; color: #6ee7c2 !important; }
+
+/* =========================================================
+   INSTRUMENT INFO CARD
+   ========================================================= */
+.instrument-info-card {
+  position: relative; width: 100%; margin-top: 16px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 12px; box-shadow: var(--shadow);
+  overflow: hidden; transition: max-height 0.25s ease;
+}
+.instrument-info-card.collapsed { max-height: 52px; overflow: hidden; }
+.instrument-info-header {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer; user-select: none;
+}
+.instrument-info-card.collapsed .instrument-info-header { border-bottom-color: transparent; }
+.instrument-info-title {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 12px; font-weight: 700; color: #ffffff;
+  text-overflow: ellipsis; white-space: nowrap; overflow: hidden; min-width: 0;
+}
+.instrument-info-title .symbol { font-size: 13px; color: #ffffff; }
+.instrument-info-title .type-pill { font-size: 9px; font-weight: 800; padding: 2px 6px; border-radius: 4px; letter-spacing: 0.04em; flex-shrink: 0; }
+.instrument-info-title .type-pill.ce { background: rgba(8,153,129,0.18); color: #6ee7c2; }
+.instrument-info-title .type-pill.pe { background: rgba(242,54,69,0.18); color: #ff8a95; }
+.instrument-info-title .type-pill.na { background: rgba(120,123,134,0.2); color: #b0b8c4; }
+.instrument-info-toggle {
+  display: inline-flex; align-items: center; gap: 6px;
+  border: 1px solid var(--border); background: var(--surface-2);
+  color: var(--text); border-radius: 20px;
+  padding: 4px 12px; font-size: 11px; font-weight: 700;
+  cursor: pointer; transition: all 0.15s ease; flex-shrink: 0;
+}
+.instrument-info-toggle:hover { background: var(--surface-3); color: #fff; border-color: var(--blue); }
+.instrument-info-body {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  padding: 12px 14px 14px;
+}
+.info-tile {
+  position: relative;
+  display: flex; flex-direction: column; gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid var(--border); border-radius: 8px;
+  background: var(--surface-2); min-width: 0;
+  transition: all 0.15s ease;
+}
+.info-tile:hover { background: var(--surface-3); border-color: var(--blue); }
+.info-tile .info-label {
+  font-size: 9px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--muted);
+}
+.info-tile .info-value {
+  font-size: 12px; font-weight: 700; color: #ffffff;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.info-tile .info-value.accent-green  { color: #6ee7c2; }
+.info-tile .info-value.accent-red    { color: #ff8a95; }
+.info-tile .info-value.accent-blue   { color: #7ea6ff; }
+.info-tile .info-value.accent-yellow { color: #f5c451; }
+.info-tile.wide { grid-column: span 2; }
+
+/* =========================================================
+   RESPONSIVE BREAKPOINTS
+   ========================================================= */
+@media (max-width: 1024px) {
+  .instrument-info-body { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+@media (max-width: 720px) {
+  :root { --sub-header-h: 52px; }
+
+  .sub-header { padding-left: 10px !important; padding-right: 10px !important; }
+  .sub-header h6 { font-size: 13px; }
+  .index-live-pill { font-size: 9px; padding: 1px 5px; }
+  .connection-status { padding: 3px 8px; font-size: 10px; }
+  .status-dot { width: 6px; height: 6px; }
+
+  .content-scroll { padding: 10px 10px 92px 10px; }
+
+  .chart-card {
+    height: clamp(300px, calc(100dvh - 130px), 640px);
+    min-height: 300px;
+    border-radius: 10px;
+  }
+
+  .chart-toggles-card { padding: 7px 10px; gap: 6px; margin-top: 10px; }
+  .label-toggle-btn { padding: 3px 9px; font-size: 9.5px; }
+  .chart-toggles-title { font-size: 9.5px; }
+
+  .instrument-panel {
+    width: calc(100% - 20px);
+    max-width: calc(100% - 20px);
+    max-height: calc(100% - 20px);
+  }
+  .panel-pos-top-left     { top: 10px; left: 10px; }
+  .panel-pos-top-right    { top: 10px; right: 10px; }
+  .panel-pos-bottom-left  { bottom: 10px; left: 10px; }
+  .panel-pos-bottom-right { bottom: 10px; right: 10px; }
+  .panel-body { max-height: calc(100dvh - 260px); }
+  .option-card { padding: 10px 10px; }
+
+  .level-status-bar {
+    top: 8px; right: 8px; left: 8px;
+    max-width: none;
+    padding: 5px 8px;
+    justify-content: center;
+    border-radius: 14px;
+  }
+  .level-status-bar .badge { font-size: 9px; padding: 2px 6px; }
+
+  .chart-controls { right: 10px; bottom: 10px; gap: 6px; }
+  .chart-control-btn { width: 34px; height: 34px; border-radius: 7px; }
+  .chart-control-btn i { font-size: 14px; }
+
+  .scroll-nav { right: 10px; bottom: 14px; gap: 6px; }
+  .scroll-nav-btn { width: 36px; height: 36px; font-size: 14px; }
+
+  .history-load-banner { font-size: 11px; padding: 5px 10px; }
+
+  .instrument-info-body {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
+    padding: 10px 10px 12px;
+  }
+  .info-tile { padding: 7px 8px; }
+  .info-tile .info-value { font-size: 11.5px; }
+  .info-tile.wide { grid-column: span 2; }
+  .instrument-info-header { padding: 10px 12px; }
+  .instrument-info-title .symbol { font-size: 12px; }
+  .instrument-info-toggle { padding: 3px 10px; font-size: 10px; }
+}
+
+@media (max-width: 420px) {
+  .sub-header h6 { font-size: 12px; }
+  .connection-status #connectionStatusText { display: none; }
+  .connection-status { padding: 3px 6px; gap: 4px; }
+
+  .chart-card { height: clamp(280px, calc(100dvh - 120px), 560px); }
+
+  .level-status-bar .badge { font-size: 8.5px; padding: 2px 5px; }
+
+  .instrument-info-body { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .chart-toggles-card { gap: 5px; padding: 6px 8px; }
+  .label-toggle-btn { padding: 3px 8px; font-size: 9px; }
+}
+
+@media (min-width: 1600px) {
+  .instrument-info-body { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+  .info-tile.wide { grid-column: span 2; }
+}
 </style>
 {% endblock %}
 {% block content %}
-<div class="sub-header px-3 d-flex align-items-center justify-content-between"><div class="d-flex align-items-center gap-2 text-truncate"><h6 class="m-0 fw-bold text-white text-truncate">{{ instrument_name or instrument_key }}</h6><span class="index-live-pill"><i class="bi bi-broadcast"></i>LIVE</span><small class="text-muted d-none d-sm-inline text-truncate ms-2">{{ instrument_key }}</small></div><div class="d-flex align-items-center gap-3 flex-shrink-0"><div class="text-end"><div class="text-uppercase text-muted small" style="font-size:9px;letter-spacing:.5px;">Live Price</div><div class="fw-bold text-white fs-6" id="livePrice">--</div></div><div class="connection-status connecting" id="connectionStatus"><span class="status-dot"></span><span id="connectionStatusText">Connecting</span></div></div></div>
-<div class="chart-wrapper"><div id="chart"></div>
-<div class="history-load-banner" id="historyLoadBanner"><i class="bi bi-clock-history"></i><span>Scroll to end reached. Load past historical data?</span><button class="btn btn-sm btn-primary py-0 px-2 rounded-pill ms-2" id="triggerLoadHistoryBtn">Load</button></div>
-<aside class="instrument-panel panel-pos-top-left dark-theme" id="instrumentPanel"><div class="panel-header"><div class="d-flex align-items-center justify-content-between mb-2"><div class="fw-bold text-white small d-flex align-items-center gap-2"><i class="bi bi-grid-3x3-gap-fill text-primary"></i><span>Instruments</span></div><span class="badge bg-dark text-muted border border-secondary">{{ instruments | length }}</span></div><div class="view-tabs mb-2"><button type="button" class="view-tab active" id="indexBtn"><i class="bi bi-bar-chart-line me-1"></i>Index</button><button type="button" class="view-tab" id="optionsBtn"><i class="bi bi-diagram-3 me-1"></i>Options</button></div><div class="input-group input-group-sm"><span class="input-group-text bg-dark border-secondary text-muted"><i class="bi bi-search"></i></span><input type="search" id="instrumentSearch" class="form-control bg-dark border-secondary text-white shadow-none" placeholder="Search strike, expiry, CE / PE..." autocomplete="off"/></div></div>
-<div class="panel-body"><div id="indexView"><a href="/chart/{{ 'NSE_INDEX|Nifty 50' | urlencode }}" class="index-card searchable-card" data-search="nifty 50 main index"><div><div class="fw-bold text-white">NIFTY 50</div><div class="text-muted small">Main Index</div></div><div class="text-success small fw-bold d-flex align-items-center gap-1"><i class="bi bi-circle-fill" style="font-size:8px;"></i>LIVE</div></a><div class="text-center text-muted small py-3" id="indexNoResults" hidden>No matching index found</div></div>
-<div id="optionsView" hidden><div class="d-flex justify-content-between align-items-center mb-2 px-1"><span class="small fw-bold text-white">Nearest to NIFTY 50</span><span class="small fw-bold text-warning" id="optionsReferencePrice">LTP --</span></div>
-<div class="options-grid"><div><div class="column-heading call-heading"><i class="bi bi-arrow-up-right me-1"></i>CALL</div>{% set call_options = instruments | selectattr('option_type', 'equalto', 'CE') | list %}<div id="callOptions">{% for item in call_options | sort(attribute='strike_price') %}<a href="/chart/{{ item.instrument_key | urlencode }}" class="option-card searchable-card" data-strike="{{ item.strike_price }}" data-option-type="CE" data-search="{{ item.strike_price | int }} {{ item.expiry }} ce call"><div><div class="fw-bold text-white small">{{ item.strike_price | int }}</div><div class="text-muted" style="font-size:9px;">{{ item.expiry }}</div></div><div class="d-flex align-items-center gap-1"><span class="option-distance text-muted" style="font-size:8px;"></span><span class="option-badge call-badge">CE</span></div></a>{% else %}<div class="text-center text-muted small py-2">No call options</div>{% endfor %}</div></div>
-<div><div class="column-heading put-heading"><i class="bi bi-arrow-down-right me-1"></i>PUT</div>{% set put_options = instruments | selectattr('option_type', 'equalto', 'PE') | list %}<div id="putOptions">{% for item in put_options | sort(attribute='strike_price') %}<a href="/chart/{{ item.instrument_key | urlencode }}" class="option-card searchable-card" data-strike="{{ item.strike_price }}" data-option-type="PE" data-search="{{ item.strike_price | int }} {{ item.expiry }} pe put"><div><div class="fw-bold text-white small">{{ item.strike_price | int }}</div><div class="text-muted" style="font-size:9px;">{{ item.expiry }}</div></div><div class="d-flex align-items-center gap-1"><span class="option-distance text-muted" style="font-size:8px;"></span><span class="option-badge put-badge">PE</span></div></a>{% else %}<div class="text-center text-muted small py-2">No put options</div>{% endfor %}</div></div></div>
-<div class="text-center text-muted small py-3" id="optionsNoResults" hidden>No matching options found</div></div></div></aside>
-<div class="chart-controls"><button type="button" class="chart-control-btn" data-bs-toggle="offcanvas" data-bs-target="#settingsPanel" title="Chart settings"><i class="bi bi-gear"></i></button><button type="button" class="chart-control-btn" id="collapseBtn" title="Collapse instrument selector"><i class="bi bi-layout-sidebar-inset"></i></button></div></div>
-<div class="offcanvas offcanvas-end settings-offcanvas" tabindex="-1" id="settingsPanel" aria-labelledby="settingsPanelLabel"><div class="offcanvas-header border-bottom border-secondary"><h5 class="offcanvas-title fs-6 fw-bold text-white" id="settingsPanelLabel"><i class="bi bi-gear me-2"></i>Customization & Settings</h5><button type="button" class="btn-close btn-close-white" data-bs-dismiss="offcanvas" aria-label="Close"></button></div><div class="offcanvas-body"><div class="p-3 border border-secondary rounded bg-dark mb-3"><div class="fw-bold text-white small mb-2"><i class="bi bi-arrows-move me-1 text-primary"></i>Panel Positioning</div><select id="panelPosSelect" class="form-select form-select-sm bg-secondary text-white border-0"><option value="panel-pos-top-left" selected>Top-Left (Default)</option><option value="panel-pos-top-right">Top-Right</option><option value="panel-pos-bottom-left">Bottom-Left</option><option value="panel-pos-bottom-right">Bottom-Right</option><option value="panel-pos-top-center">Top-Center</option><option value="panel-pos-bottom-center">Bottom-Center</option><option value="panel-pos-left-middle">Left-Middle</option><option value="panel-pos-right-middle">Right-Middle</option><option value="panel-pos-center">Center</option></select></div><div class="p-3 border border-secondary rounded bg-dark mb-3"><div class="fw-bold text-white small mb-2"><i class="bi bi-palette me-1 text-primary"></i>Panel Background Color</div><div class="d-flex align-items-center gap-2"><input type="color" id="panelBgColorPicker" class="form-control form-control-color bg-transparent border-0" value="#1e222d" title="Choose background color"/><span class="small text-muted" id="panelBgHex">#1e222d</span></div><small class="text-muted mt-2 d-block" style="font-size:11px;">Dark or medium-dark backgrounds automatically enforce high-contrast white text for best readability.</small></div><div class="p-3 border border-secondary rounded bg-dark mb-3"><div class="fw-bold text-white small mb-1">On-Demand Historical Data</div><div class="text-muted small">When scrolling left past the oldest candle, past data is loaded only when you click the popup prompt.</div></div></div></div>
+
+<div class="sub-header px-3 d-flex align-items-center justify-content-between">
+  <div class="d-flex align-items-center gap-2 text-truncate">
+    <h6 class="m-0 fw-bold text-white text-truncate">{{ instrument_name or instrument_key }}</h6>
+    <span class="index-live-pill"><i class="bi bi-broadcast"></i>LIVE</span>
+    <small class="text-muted d-none d-md-inline text-truncate ms-2">{{ instrument_key }}</small>
+  </div>
+  <div class="d-flex align-items-center gap-3 flex-shrink-0">
+    <div class="text-end">
+      <div class="text-uppercase text-muted small" style="font-size:9px;letter-spacing:.5px;">Live Price</div>
+      <div class="fw-bold text-white fs-6" id="livePrice">--</div>
+    </div>
+    <div class="connection-status connecting" id="connectionStatus">
+      <span class="status-dot"></span>
+      <span id="connectionStatusText">Connecting</span>
+    </div>
+  </div>
+</div>
+
+<!-- =========================================================
+     SCROLLABLE CONTENT REGION
+     ========================================================= -->
+<div class="content-scroll" id="contentScroll">
+
+  <!-- ===================== CHART CARD ===================== -->
+  <div class="chart-card" id="chartCard">
+    <div id="chart"></div>
+
+    <!-- Opening Range / Level badges -->
+    <div class="level-status-bar" id="level-status">
+      <span class="badge rounded-pill level-r" data-level="r1">R1</span>
+      <span class="badge rounded-pill level-r" data-level="r2">R2</span>
+      <span class="badge rounded-pill level-r" data-level="r3">R3</span>
+      <span class="badge rounded-pill level-s" data-level="s1">S1</span>
+      <span class="badge rounded-pill level-s" data-level="s2">S2</span>
+      <span class="badge rounded-pill level-s" data-level="s3">S3</span>
+    </div>
+
+    <div class="history-load-banner" id="historyLoadBanner">
+      <i class="bi bi-clock-history"></i>
+      <span>Scroll to end reached. Load past historical data?</span>
+      <button class="btn btn-sm btn-primary py-0 px-2 rounded-pill ms-2" id="triggerLoadHistoryBtn">Load</button>
+    </div>
+
+    <!-- ===================== INSTRUMENT PANEL ===================== -->
+    <aside class="instrument-panel panel-pos-top-left dark-theme" id="instrumentPanel">
+      <div class="panel-header">
+        <div class="panel-header-top">
+          <div class="fw-bold text-white small d-flex align-items-center gap-2">
+            <i class="bi bi-grid-3x3-gap-fill text-primary"></i>
+            <span>Instruments</span>
+          </div>
+          <div class="d-flex align-items-center gap-2">
+            <span class="badge bg-dark text-muted border border-secondary">{{ instruments | length }}</span>
+            <button type="button" class="panel-fold-btn" id="panelFoldBtn" title="Fold / unfold instruments panel">
+              <i class="bi bi-chevron-up" id="panelFoldIcon"></i>
+            </button>
+          </div>
+        </div>
+        <div class="view-tabs mb-2">
+          <button type="button" class="view-tab active" id="indexBtn"><i class="bi bi-bar-chart-line me-1"></i>Index</button>
+          <button type="button" class="view-tab" id="optionsBtn"><i class="bi bi-diagram-3 me-1"></i>Options</button>
+        </div>
+        <div class="input-group input-group-sm">
+          <span class="input-group-text bg-dark border-secondary text-muted"><i class="bi bi-search"></i></span>
+          <input type="search" id="instrumentSearch" class="form-control bg-dark border-secondary text-white shadow-none" placeholder="Search strike, expiry, CE / PE..." autocomplete="off"/>
+        </div>
+      </div>
+
+      <div class="panel-body">
+        <div id="indexView">
+          <a href="/chart/{{ 'NSE_INDEX|Nifty 50' | urlencode }}" class="index-card searchable-card" data-search="nifty 50 main index">
+            <div>
+              <div class="fw-bold text-white">NIFTY 50</div>
+              <div class="text-muted small">Main Index</div>
+            </div>
+            <div class="text-success small fw-bold d-flex align-items-center gap-1">
+              <i class="bi bi-circle-fill" style="font-size:8px;"></i>LIVE
+            </div>
+          </a>
+          <div class="text-center text-muted small py-3" id="indexNoResults" hidden>No matching index found</div>
+        </div>
+
+        <div id="optionsView" hidden>
+          <div class="d-flex justify-content-between align-items-center mb-2 px-1">
+            <span class="small fw-bold text-white">Nearest to NIFTY 50</span>
+            <span class="small fw-bold text-warning" id="optionsReferencePrice">LTP --</span>
+          </div>
+          <div class="options-grid">
+            <div>
+              <div class="column-heading call-heading"><i class="bi bi-arrow-up-right me-1"></i>CALL</div>
+              {% set call_options = instruments | selectattr('option_type', 'equalto', 'CE') | list %}
+              <div id="callOptions">
+                {% for item in call_options | sort(attribute='strike_price') %}
+                  <a href="/chart/{{ item.instrument_key | urlencode }}" class="option-card searchable-card" data-strike="{{ item.strike_price }}" data-option-type="CE" data-search="{{ item.strike_price | int }} {{ item.expiry }} ce call">
+                    <div>
+                      <div class="fw-bold text-white small">{{ item.strike_price | int }}</div>
+                      <div class="text-muted" style="font-size:9px;">{{ item.expiry }}</div>
+                    </div>
+                    <div class="d-flex align-items-center gap-1">
+                      <span class="option-distance text-muted" style="font-size:8px;"></span>
+                      <span class="option-badge call-badge">CE</span>
+                    </div>
+                  </a>
+                {% else %}
+                  <div class="text-center text-muted small py-2">No call options</div>
+                {% endfor %}
+              </div>
+            </div>
+            <div>
+              <div class="column-heading put-heading"><i class="bi bi-arrow-down-right me-1"></i>PUT</div>
+              {% set put_options = instruments | selectattr('option_type', 'equalto', 'PE') | list %}
+              <div id="putOptions">
+                {% for item in put_options | sort(attribute='strike_price') %}
+                  <a href="/chart/{{ item.instrument_key | urlencode }}" class="option-card searchable-card" data-strike="{{ item.strike_price }}" data-option-type="PE" data-search="{{ item.strike_price | int }} {{ item.expiry }} pe put">
+                    <div>
+                      <div class="fw-bold text-white small">{{ item.strike_price | int }}</div>
+                      <div class="text-muted" style="font-size:9px;">{{ item.expiry }}</div>
+                    </div>
+                    <div class="d-flex align-items-center gap-1">
+                      <span class="option-distance text-muted" style="font-size:8px;"></span>
+                      <span class="option-badge put-badge">PE</span>
+                    </div>
+                  </a>
+                {% else %}
+                  <div class="text-center text-muted small py-2">No put options</div>
+                {% endfor %}
+              </div>
+            </div>
+          </div>
+          <div class="text-center text-muted small py-3" id="optionsNoResults" hidden>No matching options found</div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Floating chart controls (inside chart card) -->
+    <div class="chart-controls">
+      <button type="button" class="chart-control-btn" data-bs-toggle="offcanvas" data-bs-target="#settingsPanel" title="Chart settings"><i class="bi bi-gear"></i></button>
+      <button type="button" class="chart-control-btn" id="collapseBtn" title="Collapse instrument selector"><i class="bi bi-layout-sidebar-inset"></i></button>
+      <button type="button" class="chart-control-btn" id="toggleInfoCardBtn" title="Toggle instrument info card"><i class="bi bi-info-circle"></i></button>
+    </div>
+  </div>
+  <!-- ===================== END CHART CARD ===================== -->
+
+  <!-- ============================================================
+       LEVEL LABEL TOGGLE BAR  (below chart, above info card)
+       Toggles only hide the LABEL text (HTML overlay);
+       the actual level LINES always remain drawn.
+       ============================================================ -->
+  <div class="chart-toggles-card" id="labelToggleBar">
+    <div class="chart-toggles-title"><i class="bi bi-tags me-1"></i>Labels</div>
+
+    <button type="button"
+            class="label-toggle-btn"
+            data-toggle="r2s2"
+            title="Show / hide R2 and S2 labels (lines stay)">
+      R2 / S2
+    </button>
+
+    <button type="button"
+            class="label-toggle-btn active"
+            data-toggle="r3s3"
+            title="Show / hide R3 and S3 labels (lines stay)">
+      R3 / S3
+    </button>
+
+    <button type="button"
+            class="label-toggle-btn active"
+            data-toggle="highLow"
+            title="Show / hide HIGH and LOW labels (lines stay)">
+      HIGH / LOW
+    </button>
+
+    <button type="button"
+            class="label-toggle-btn avg-btn"
+            disabled
+            title="AVG label is always shown">
+      AVG <i class="bi bi-lock-fill ms-1" style="font-size:8px;"></i>
+    </button>
+  </div>
+
+  <!-- ============================================================
+       INSTRUMENT INFO CARD  (below chart, scroll down to see it)
+       ============================================================ -->
+  {% set _type = (instrument.get('option_type') or instrument.get('instrument_type') or '') | upper %}
+  <div class="instrument-info-card" id="instrumentInfoCard">
+    <div class="instrument-info-header" id="instrumentInfoHeader">
+      <div class="instrument-info-title">
+        <i class="bi bi-info-circle text-primary"></i>
+        <span class="symbol">{{ instrument.get('trading_symbol') or instrument_name or instrument_key }}</span>
+        {% if _type in ['CE', 'CALL', 'C'] %}
+          <span class="type-pill ce">CE</span>
+        {% elif _type in ['PE', 'PUT', 'P'] %}
+          <span class="type-pill pe">PE</span>
+        {% elif _type %}
+          <span class="type-pill na">{{ _type }}</span>
+        {% endif %}
+        {% if instrument.get('expiry') %}
+          <span class="badge bg-dark text-muted border border-secondary" style="font-size:9px;">{{ instrument.get('expiry') }}</span>
+        {% endif %}
+      </div>
+      <button type="button" class="instrument-info-toggle" id="instrumentInfoToggle" title="Fold up / fold down instrument details">
+        <i class="bi bi-chevron-up" id="instrumentInfoChevron"></i>
+        <span id="instrumentInfoToggleText">Fold up</span>
+      </button>
+    </div>
+
+    <div class="instrument-info-body">
+      <div class="info-tile">
+        <span class="info-label">Symbol</span>
+        <span class="info-value">{{ instrument.get('trading_symbol') or instrument_name or '—' }}</span>
+      </div>
+
+      <div class="info-tile">
+        <span class="info-label">Strike</span>
+        <span class="info-value accent-blue">
+          {% if instrument.get('strike_price') is not none %}{{ instrument.get('strike_price') }}{% else %}—{% endif %}
+        </span>
+      </div>
+
+      <div class="info-tile">
+        <span class="info-label">Option Type</span>
+        <span class="info-value {% if _type in ['CE','CALL','C'] %}accent-green{% elif _type in ['PE','PUT','P'] %}accent-red{% endif %}">
+          {{ _type or '—' }}
+        </span>
+      </div>
+
+      <div class="info-tile">
+        <span class="info-label">Expiry</span>
+        <span class="info-value accent-yellow">{{ instrument.get('expiry') or '—' }}</span>
+      </div>
+
+      <div class="info-tile">
+        <span class="info-label">Lot Size</span>
+        <span class="info-value">
+          {% if instrument.get('lot_size') is not none %}{{ instrument.get('lot_size') }}{% else %}—{% endif %}
+        </span>
+      </div>
+
+      <div class="info-tile">
+        <span class="info-label">Tick Size</span>
+        <span class="info-value">
+          {% if instrument.get('tick_size') is not none %}{{ instrument.get('tick_size') }}{% else %}—{% endif %}
+        </span>
+      </div>
+
+      <div class="info-tile">
+        <span class="info-label">Exchange</span>
+        <span class="info-value">{{ instrument.get('exchange') or (instrument_key.split('|')[0] if '|' in instrument_key else '—') }}</span>
+      </div>
+
+      <div class="info-tile">
+        <span class="info-label">Segment</span>
+        <span class="info-value">{{ instrument.get('segment') or instrument.get('instrument_type') or '—' }}</span>
+      </div>
+
+      <div class="info-tile wide">
+        <span class="info-label">Instrument Key</span>
+        <span class="info-value" title="{{ instrument_key }}">{{ instrument_key }}</span>
+      </div>
+
+      <div class="info-tile wide">
+        <span class="info-label">Underlying</span>
+        <span class="info-value">{{ instrument.get('underlying_symbol') or instrument.get('underlying') or '—' }}</span>
+      </div>
+
+      {% if instrument.get('name') %}
+      <div class="info-tile wide">
+        <span class="info-label">Name</span>
+        <span class="info-value">{{ instrument.get('name') }}</span>
+      </div>
+      {% endif %}
+
+      <div class="info-tile wide">
+        <span class="info-label">Total Candles Loaded</span>
+        <span class="info-value">{{ total_candles if total_candles is not none else 0 }}</span>
+      </div>
+    </div>
+  </div>
+
+</div>
+<!-- =========================================================
+     END SCROLL CONTAINER
+     ========================================================= -->
+
+<!-- Always-visible scroll navigation -->
+<div class="scroll-nav">
+  <button type="button" class="scroll-nav-btn" id="scrollUpBtn" title="Scroll up">
+    <i class="bi bi-chevron-up"></i>
+  </button>
+  <button type="button" class="scroll-nav-btn" id="scrollDownBtn" title="Scroll down">
+    <i class="bi bi-chevron-down"></i>
+  </button>
+</div>
+
+<div class="offcanvas offcanvas-end settings-offcanvas" tabindex="-1" id="settingsPanel" aria-labelledby="settingsPanelLabel">
+  <div class="offcanvas-header border-bottom border-secondary">
+    <h5 class="offcanvas-title fs-6 fw-bold text-white" id="settingsPanelLabel"><i class="bi bi-gear me-2"></i>Customization & Settings</h5>
+    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="offcanvas" aria-label="Close"></button>
+  </div>
+  <div class="offcanvas-body">
+    <div class="p-3 border border-secondary rounded bg-dark mb-3">
+      <div class="fw-bold text-white small mb-2"><i class="bi bi-arrows-move me-1 text-primary"></i>Panel Positioning</div>
+      <select id="panelPosSelect" class="form-select form-select-sm bg-secondary text-white border-0">
+        <option value="panel-pos-top-left" selected>Top-Left (Default)</option>
+        <option value="panel-pos-top-right">Top-Right</option>
+        <option value="panel-pos-bottom-left">Bottom-Left</option>
+        <option value="panel-pos-bottom-right">Bottom-Right</option>
+        <option value="panel-pos-top-center">Top-Center</option>
+        <option value="panel-pos-bottom-center">Bottom-Center</option>
+        <option value="panel-pos-left-middle">Left-Middle</option>
+        <option value="panel-pos-right-middle">Right-Middle</option>
+        <option value="panel-pos-center">Center</option>
+      </select>
+    </div>
+    <div class="p-3 border border-secondary rounded bg-dark mb-3">
+      <div class="fw-bold text-white small mb-2"><i class="bi bi-palette me-1 text-primary"></i>Panel Background Color</div>
+      <div class="d-flex align-items-center gap-2">
+        <input type="color" id="panelBgColorPicker" class="form-control form-control-color bg-transparent border-0" value="#1e222d" title="Choose background color"/>
+        <span class="small text-muted" id="panelBgHex">#1e222d</span>
+      </div>
+      <small class="text-muted mt-2 d-block" style="font-size:11px;">Dark or medium-dark backgrounds automatically enforce high-contrast white text for best readability.</small>
+    </div>
+    <div class="p-3 border border-secondary rounded bg-dark mb-3">
+      <div class="fw-bold text-white small mb-1">On-Demand Historical Data</div>
+      <div class="text-muted small">When scrolling left past the oldest candle, past data is loaded only when you click the popup prompt.</div>
+    </div>
+  </div>
+</div>
+
 <script id="instrument-key-data" type="application/json">{{ instrument_key | tojson }}</script>
 <script id="candles-data" type="application/json">{{ candles | tojson }}</script>
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
@@ -89,6 +810,8 @@ const optionsView = document.getElementById("optionsView");
 const instrumentPanel = document.getElementById("instrumentPanel");
 const collapseBtn = document.getElementById("collapseBtn");
 const chartContainer = document.getElementById("chart");
+const chartCard = document.getElementById("chartCard");
+const contentScroll = document.getElementById("contentScroll");
 const connectionStatus = document.getElementById("connectionStatus");
 const connectionStatusText = document.getElementById("connectionStatusText");
 const livePrice = document.getElementById("livePrice");
@@ -103,6 +826,22 @@ const panelBgColorPicker = document.getElementById("panelBgColorPicker");
 const panelBgHex = document.getElementById("panelBgHex");
 const historyLoadBanner = document.getElementById("historyLoadBanner");
 const triggerLoadHistoryBtn = document.getElementById("triggerLoadHistoryBtn");
+const levelStatusBar = document.getElementById("level-status");
+const panelFoldBtn = document.getElementById("panelFoldBtn");
+const panelFoldIcon = document.getElementById("panelFoldIcon");
+
+// Instrument info card
+const instrumentInfoCard = document.getElementById("instrumentInfoCard");
+const instrumentInfoHeader = document.getElementById("instrumentInfoHeader");
+const instrumentInfoToggle = document.getElementById("instrumentInfoToggle");
+const instrumentInfoChevron = document.getElementById("instrumentInfoChevron");
+const instrumentInfoToggleText = document.getElementById("instrumentInfoToggleText");
+const toggleInfoCardBtn = document.getElementById("toggleInfoCardBtn");
+
+// Scroll nav
+const scrollUpBtn = document.getElementById("scrollUpBtn");
+const scrollDownBtn = document.getElementById("scrollDownBtn");
+
 // ============================================================
 // STATE
 // ============================================================
@@ -120,427 +859,829 @@ let currentIndexLtp = null;
 let isLoadingHistory = false;
 let hasMoreHistory = true;
 const reconnectMaximumDelay = 15000;
+const PANEL_COLLAPSE_KEY = "chart.instrumentPanel.collapsed";
+
+// Label visibility groups (only affects HTML label text; lines always drawn)
+const labelVisibility = {
+  r2s2:    false,   // R2 / S2 labels hidden by default
+  r3s3:    true,    // R3 / S3 labels visible by default
+  highLow: true     // HIGH / LOW labels visible by default
+  // 'avg' has no entry — always visible
+};
+
+function isLabelGroupVisible(levelName) {
+  const n = String(levelName || "").toLowerCase();
+  if (n === "avg") return true;
+  if (n === "r2" || n === "s2") return labelVisibility.r2s2;
+  if (n === "r3" || n === "s3") return labelVisibility.r3s3;
+  if (n === "high" || n === "low") return labelVisibility.highLow;
+  return true;
+}
+
+// Opening Range / Level state
+let calculatedOpeningRanges = {};
+let levelLines = [];
+let levelLabels = [];
+let levelLabelLayer = null;
+let levelLabelUpdateScheduled = false;
+let chartTooltip = null;
+let currentRenderedDate = null;
+
+// ============================================================
+// LABEL TOGGLE BUTTONS
+// ============================================================
+document.querySelectorAll(".label-toggle-btn[data-toggle]").forEach(function (btn) {
+  // sync initial UI state with labelVisibility
+  const key = btn.dataset.toggle;
+  if (key in labelVisibility) {
+    btn.classList.toggle("active", !!labelVisibility[key]);
+  }
+  btn.addEventListener("click", function () {
+    const k = this.dataset.toggle;
+    if (!(k in labelVisibility)) return;
+    labelVisibility[k] = !labelVisibility[k];
+    this.classList.toggle("active", labelVisibility[k]);
+    scheduleLevelLabelUpdate();
+  });
+});
+
 // ============================================================
 // PANEL POSITION
 // ============================================================
-panelPosSelect.addEventListener("change", function () { const selectedClass = this.value; instrumentPanel.className = instrumentPanel.className.replace(/\bpanel-pos-\S+/g, ""); instrumentPanel.classList.add(selectedClass); });
+panelPosSelect.addEventListener("change", function () {
+  const selectedClass = this.value;
+  instrumentPanel.className = instrumentPanel.className.replace(/\bpanel-pos-\S+/g, "");
+  instrumentPanel.classList.add(selectedClass);
+});
+
 // ============================================================
 // PANEL COLOR
 // ============================================================
-function getLuminance(hexColor) { const rgb = parseInt(hexColor.slice(1), 16); const r = (rgb >> 16) & 255; const g = (rgb >> 8) & 255; const b = rgb & 255; return 0.2126 * r + 0.7152 * g + 0.0722 * b; }
-panelBgColorPicker.addEventListener("input", function () { const colorHex = this.value; panelBgHex.textContent = colorHex; instrumentPanel.style.backgroundColor = colorHex; if (getLuminance(colorHex) < 140) { instrumentPanel.classList.add("dark-theme"); } else { instrumentPanel.classList.remove("dark-theme"); } });
+function getLuminance(hexColor) {
+  const rgb = parseInt(hexColor.slice(1), 16);
+  const r = (rgb >> 16) & 255, g = (rgb >> 8) & 255, b = rgb & 255;
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+panelBgColorPicker.addEventListener("input", function () {
+  const colorHex = this.value;
+  panelBgHex.textContent = colorHex;
+  instrumentPanel.style.backgroundColor = colorHex;
+  if (getLuminance(colorHex) < 140) instrumentPanel.classList.add("dark-theme");
+  else instrumentPanel.classList.remove("dark-theme");
+});
+
 // ============================================================
 // VIEW SWITCHING
 // ============================================================
-function activateView(activeButton, activeView) { indexBtn.classList.remove("active"); optionsBtn.classList.remove("active"); indexView.hidden = true; optionsView.hidden = true; activeButton.classList.add("active"); activeView.hidden = false; if (activeView === optionsView) { updateOptionsFromLtp(currentIndexLtp); } }
+function activateView(activeButton, activeView) {
+  indexBtn.classList.remove("active");
+  optionsBtn.classList.remove("active");
+  indexView.hidden = true;
+  optionsView.hidden = true;
+  activeButton.classList.add("active");
+  activeView.hidden = false;
+  if (activeView === optionsView) updateOptionsFromLtp(currentIndexLtp);
+}
 indexBtn.addEventListener("click", () => activateView(indexBtn, indexView));
 optionsBtn.addEventListener("click", () => activateView(optionsBtn, optionsView));
+
+// ============================================================
+// INSTRUMENT PANEL FOLD (persistent across navigations)
+// ============================================================
+function applyPanelCollapsed(collapsed) {
+  instrumentPanel.classList.toggle("collapsed", collapsed);
+  if (panelFoldIcon) panelFoldIcon.className = collapsed ? "bi bi-chevron-down" : "bi bi-chevron-up";
+  if (collapseBtn) {
+    const icon = collapseBtn.querySelector("i");
+    if (icon) icon.className = collapsed ? "bi bi-layout-sidebar-inset-reverse" : "bi bi-layout-sidebar-inset";
+    collapseBtn.setAttribute("title", collapsed ? "Expand instrument selector" : "Collapse instrument selector");
+  }
+  try { sessionStorage.setItem(PANEL_COLLAPSE_KEY, collapsed ? "1" : "0"); } catch (e) {}
+}
+function setPanelCollapsed(collapsed) {
+  applyPanelCollapsed(collapsed);
+  window.setTimeout(() => {
+    if (chart) {
+      chart.applyOptions({ width: chartContainer.clientWidth, height: chartContainer.clientHeight });
+      scheduleLevelLabelUpdate();
+    }
+  }, 230);
+}
+function togglePanelCollapsed() {
+  setPanelCollapsed(!instrumentPanel.classList.contains("collapsed"));
+}
+try {
+  if (sessionStorage.getItem(PANEL_COLLAPSE_KEY) === "1") applyPanelCollapsed(true);
+} catch (e) {}
+document.querySelectorAll(".option-card, .index-card").forEach(function (link) {
+  link.addEventListener("click", function () { applyPanelCollapsed(true); });
+});
+if (collapseBtn) collapseBtn.addEventListener("click", togglePanelCollapsed);
+if (panelFoldBtn) panelFoldBtn.addEventListener("click", function (e) { e.stopPropagation(); togglePanelCollapsed(); });
+
+// ============================================================
+// INSTRUMENT INFO CARD FOLD UP / FOLD DOWN
+// ============================================================
+function setInfoCardCollapsed(collapsed) {
+  if (!instrumentInfoCard) return;
+  instrumentInfoCard.classList.toggle("collapsed", collapsed);
+  if (instrumentInfoChevron) instrumentInfoChevron.className = collapsed ? "bi bi-chevron-down" : "bi bi-chevron-up";
+  if (instrumentInfoToggleText) instrumentInfoToggleText.textContent = collapsed ? "Fold down" : "Fold up";
+}
+function toggleInfoCard() {
+  if (!instrumentInfoCard) return;
+  setInfoCardCollapsed(!instrumentInfoCard.classList.contains("collapsed"));
+}
+if (instrumentInfoHeader) {
+  instrumentInfoHeader.addEventListener("click", function (event) {
+    if (event.target.closest(".instrument-info-toggle")) return;
+    toggleInfoCard();
+  });
+}
+if (instrumentInfoToggle) {
+  instrumentInfoToggle.addEventListener("click", function (event) {
+    event.stopPropagation();
+    toggleInfoCard();
+  });
+}
+if (toggleInfoCardBtn) {
+  toggleInfoCardBtn.addEventListener("click", function () {
+    if (instrumentInfoCard.classList.contains("collapsed")) setInfoCardCollapsed(false);
+    else setInfoCardCollapsed(true);
+    instrumentInfoCard.scrollIntoView({ behavior: "smooth", block: "end" });
+  });
+}
+
+// ============================================================
+// SCROLL NAV
+// ============================================================
+function smoothScrollBy(amount) {
+  if (!contentScroll) return;
+  contentScroll.scrollBy({ top: amount, behavior: "smooth" });
+}
+if (scrollUpBtn) scrollUpBtn.addEventListener("click", () => smoothScrollBy(-Math.round(contentScroll.clientHeight * 0.8)));
+if (scrollDownBtn) scrollDownBtn.addEventListener("click", () => smoothScrollBy(Math.round(contentScroll.clientHeight * 0.8)));
+
 // ============================================================
 // CONNECTION STATUS
 // ============================================================
-function setConnectionStatus(status, text) { connectionStatus.classList.remove("connecting", "connected", "disconnected"); connectionStatus.classList.add(status); connectionStatusText.textContent = text; }
+function setConnectionStatus(status, text) {
+  connectionStatus.classList.remove("connecting", "connected", "disconnected");
+  connectionStatus.classList.add(status);
+  connectionStatusText.textContent = text;
+}
+
 // ============================================================
 // TIMESTAMP PARSER
 // ============================================================
 function parseTimestamp(value) {
-  if (
-    value === null ||
-    value === undefined ||
-    value === ""
-  ) {
-    return null;
-  }
-
-  if (value instanceof Date) {
-    const milliseconds = value.getTime();
-
-    return Number.isFinite(milliseconds)
-      ? Math.floor(milliseconds / 1000)
-      : null;
-  }
-
+  if (value === null || value === undefined || value === "") return null;
+  if (value instanceof Date) { const ms = value.getTime(); return Number.isFinite(ms) ? Math.floor(ms / 1000) : null; }
   const numericValue = Number(value);
-
   if (Number.isFinite(numericValue)) {
-    const absoluteValue = Math.abs(numericValue);
-
-    if (absoluteValue >= 1e18) {
-      return Math.floor(numericValue / 1e9);
-    }
-
-    if (absoluteValue >= 1e15) {
-      return Math.floor(numericValue / 1e6);
-    }
-
-    if (absoluteValue >= 1e12) {
-      return Math.floor(numericValue / 1e3);
-    }
-
+    const abs = Math.abs(numericValue);
+    if (abs >= 1e18) return Math.floor(numericValue / 1e9);
+    if (abs >= 1e15) return Math.floor(numericValue / 1e6);
+    if (abs >= 1e12) return Math.floor(numericValue / 1e3);
     return Math.floor(numericValue);
   }
-
-  const parsedMilliseconds = Date.parse(
-    String(value).trim(),
-  );
-
-  if (!Number.isFinite(parsedMilliseconds)) {
-    return null;
-  }
-
-  return Math.floor(parsedMilliseconds / 1000);
+  const parsedMs = Date.parse(String(value).trim());
+  if (!Number.isFinite(parsedMs)) return null;
+  return Math.floor(parsedMs / 1000);
 }
 
 // ============================================================
-// LIGHTWEIGHT CHART TIME NORMALIZER
+// TIME NORMALIZER
 // ============================================================
 function normalizeChartTime(time) {
-  if (time === null || time === undefined) {
-    return null;
+  if (time === null || time === undefined) return null;
+  if (typeof time === "number") return Number.isFinite(time) ? time : null;
+  if (typeof time === "string") return parseTimestamp(time);
+  if (typeof time === "object" && Number.isFinite(time.year) && Number.isFinite(time.month) && Number.isFinite(time.day)) {
+    return Math.floor(Date.UTC(time.year, time.month - 1, time.day) / 1000);
   }
-
-  if (typeof time === "number") {
-    return Number.isFinite(time) ? time : null;
-  }
-
-  if (typeof time === "string") {
-    return parseTimestamp(time);
-  }
-
-  if (
-    typeof time === "object" &&
-    Number.isFinite(time.year) &&
-    Number.isFinite(time.month) &&
-    Number.isFinite(time.day)
-  ) {
-    return Math.floor(
-      Date.UTC(
-        time.year,
-        time.month - 1,
-        time.day,
-      ) / 1000,
-    );
-  }
-
   return null;
 }
 
 // ============================================================
 // DATE FORMATTERS
 // ============================================================
-function getChartDate(time) {
-  const timestamp = normalizeChartTime(time);
-
-  if (!Number.isFinite(timestamp)) {
-    return null;
-  }
-
-  return new Date(timestamp * 1000);
-}
-
-function formatChartDate(date) {
-  if (!(date instanceof Date)) {
-    return "";
-  }
-
-  return new Intl.DateTimeFormat("en-IN", {
-    timeZone: "Asia/Kolkata",
-    day: "2-digit",
-    month: "2-digit",
-    year: "2-digit",
-  }).format(date);
-}
-
-function formatChartTime(date) {
-  if (!(date instanceof Date)) {
-    return "";
-  }
-
-  return new Intl.DateTimeFormat("en-IN", {
-    timeZone: "Asia/Kolkata",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).format(date);
-}
-
+function getChartDate(time) { const ts = normalizeChartTime(time); if (!Number.isFinite(ts)) return null; return new Date(ts * 1000); }
+function formatChartDate(date) { if (!(date instanceof Date)) return ""; return new Intl.DateTimeFormat("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "2-digit", year: "2-digit" }).format(date); }
+function formatChartTime(date) { if (!(date instanceof Date)) return ""; return new Intl.DateTimeFormat("en-IN", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", hour12: false }).format(date); }
 function formatTimeLabel(time, tickMarkType) {
   const date = getChartDate(time);
-
-  if (!date) {
-    return "";
-  }
-
-  const TickMarkType =
-    LightweightCharts.TickMarkType || {};
-
-  if (
-    tickMarkType === TickMarkType.Year ||
-    tickMarkType === TickMarkType.Month ||
-    tickMarkType === TickMarkType.DayOfMonth
-  ) {
-    return formatChartDate(date);
-  }
-
+  if (!date) return "";
+  const TickMarkType = LightweightCharts.TickMarkType || {};
+  if (tickMarkType === TickMarkType.Year || tickMarkType === TickMarkType.Month || tickMarkType === TickMarkType.DayOfMonth) return formatChartDate(date);
   return formatChartTime(date);
 }
-
 function formatFullDate(time) {
   const date = getChartDate(time);
-
-  if (!date) {
-    return "";
-  }
-
-  return new Intl.DateTimeFormat("en-IN", {
-    timeZone: "Asia/Kolkata",
-    weekday: "short",
-    day: "2-digit",
-    month: "short",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false,
-  }).format(date);
+  if (!date) return "";
+  return new Intl.DateTimeFormat("en-IN", { timeZone: "Asia/Kolkata", weekday: "short", day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }).format(date);
 }
 
 // ============================================================
 // NORMALIZE CANDLE
 // ============================================================
-function normalizeCandle(rawCandle) { if (!rawCandle || typeof rawCandle !== "object") { return null; } const rawTime = rawCandle.time ?? rawCandle.timestamp ?? rawCandle.ts ?? rawCandle.start_time ?? rawCandle.candle_start_time; const time = parseTimestamp(rawTime); const open = Number(rawCandle.open ?? rawCandle.o); const high = Number(rawCandle.high ?? rawCandle.h); const low = Number(rawCandle.low ?? rawCandle.l); const close = Number(rawCandle.close ?? rawCandle.c); if (!Number.isFinite(time) || !Number.isFinite(open) || !Number.isFinite(high) || !Number.isFinite(low) || !Number.isFinite(close)) { return null; } return { time, open, high, low, close }; }
+function normalizeCandle(rawCandle) {
+  if (!rawCandle || typeof rawCandle !== "object") return null;
+  const rawTime = rawCandle.time ?? rawCandle.timestamp ?? rawCandle.ts ?? rawCandle.start_time ?? rawCandle.candle_start_time;
+  const time = parseTimestamp(rawTime);
+  const open = Number(rawCandle.open ?? rawCandle.o);
+  const high = Number(rawCandle.high ?? rawCandle.h);
+  const low  = Number(rawCandle.low  ?? rawCandle.l);
+  const close= Number(rawCandle.close?? rawCandle.c);
+  if (!Number.isFinite(time) || !Number.isFinite(open) || !Number.isFinite(high) || !Number.isFinite(low) || !Number.isFinite(close)) return null;
+  return { time, open, high, low, close };
+}
+
 // ============================================================
 // PAYLOAD HELPERS
 // ============================================================
-function getPayloadInstrumentKey(payload) { if (!payload || typeof payload !== "object") { return null; } return payload.instrument_key ?? payload.instrumentKey ?? payload.key ?? payload.info?.instrument_key ?? payload.data?.instrument_key ?? payload.data?.instrumentKey ?? payload.feed?.instrument_key ?? payload.feed?.instrumentKey ?? null; }
-function getPayloadLtp(payload) { if (!payload || typeof payload !== "object") { return null; } const rawLtp = payload.ltp ?? payload.live_ltp ?? payload.last_price ?? payload.data?.ltp ?? payload.data?.live_ltp ?? payload.data?.last_price ?? payload.feed?.ltp ?? payload.feed?.live_ltp; const ltp = Number(rawLtp); return Number.isFinite(ltp) ? ltp : null; }
-function getPayloadTimestamp(payload) { if (!payload || typeof payload !== "object") { return Math.floor(Date.now() / 1000); } return parseTimestamp(payload.timestamp ?? payload.time ?? payload.ts ?? payload.updated_at ?? payload.data?.timestamp ?? payload.data?.time ?? payload.feed?.timestamp) ?? Math.floor(Date.now() / 1000); }
-function getPayloadCandle(payload) { if (!payload || typeof payload !== "object") { return null; } const candidates = [payload.candle, payload.latest_candle, payload.completed_candle, payload.live_candle, payload.data?.candle, payload.data?.latest_candle, payload.data?.completed_candle, payload.data?.live_candle, payload.feed?.candle, payload.feed?.latest_candle]; for (const candidate of candidates) { const candle = normalizeCandle(candidate); if (candle) { return candle; } } return null; }
+function getPayloadInstrumentKey(payload) { if (!payload || typeof payload !== "object") return null; return payload.instrument_key ?? payload.instrumentKey ?? payload.key ?? payload.info?.instrument_key ?? payload.data?.instrument_key ?? payload.data?.instrumentKey ?? payload.feed?.instrument_key ?? payload.feed?.instrumentKey ?? null; }
+function getPayloadLtp(payload) { if (!payload || typeof payload !== "object") return null; const rawLtp = payload.ltp ?? payload.live_ltp ?? payload.last_price ?? payload.data?.ltp ?? payload.data?.live_ltp ?? payload.data?.last_price ?? payload.feed?.ltp ?? payload.feed?.live_ltp; const ltp = Number(rawLtp); return Number.isFinite(ltp) ? ltp : null; }
+function getPayloadTimestamp(payload) { if (!payload || typeof payload !== "object") return Math.floor(Date.now() / 1000); return parseTimestamp(payload.timestamp ?? payload.time ?? payload.ts ?? payload.updated_at ?? payload.data?.timestamp ?? payload.data?.time ?? payload.feed?.timestamp) ?? Math.floor(Date.now() / 1000); }
+function getPayloadCandle(payload) {
+  if (!payload || typeof payload !== "object") return null;
+  const candidates = [payload.candle, payload.latest_candle, payload.completed_candle, payload.live_candle, payload.data?.candle, payload.data?.latest_candle, payload.data?.completed_candle, payload.data?.live_candle, payload.feed?.candle, payload.feed?.latest_candle];
+  for (const candidate of candidates) { const candle = normalizeCandle(candidate); if (candle) return candle; }
+  return null;
+}
+
 // ============================================================
 // LIVE PRICE
 // ============================================================
-function updateLivePrice(ltp) { if (!Number.isFinite(ltp)) { return; } currentIndexLtp = ltp; livePrice.textContent = ltp.toFixed(2); optionsReferencePrice.textContent = "LTP " + ltp.toFixed(2); updateOptionsFromLtp(ltp); }
+function updateLivePrice(ltp) {
+  if (!Number.isFinite(ltp)) return;
+  currentIndexLtp = ltp;
+  livePrice.textContent = ltp.toFixed(2);
+  optionsReferencePrice.textContent = "LTP " + ltp.toFixed(2);
+  updateOptionsFromLtp(ltp);
+}
+
 // ============================================================
 // OPTION SORTING
 // ============================================================
-function updateOptionsFromLtp(ltp) { if (!Number.isFinite(ltp)) { return; } const allOptionCards = document.querySelectorAll(".option-card"); if (!allOptionCards.length) { return; } allOptionCards.forEach(card => { const strike = Number(card.dataset.strike); if (!Number.isFinite(strike)) { return; } const distance = Math.abs(strike - ltp); card.dataset.distance = distance; const distanceElement = card.querySelector(".option-distance"); if (distanceElement) { distanceElement.textContent = distance === 0 ? "ATM" : distance.toFixed(0); } card.classList.remove("nearest-option"); const existingBadge = card.querySelector(".nearest-badge"); if (existingBadge) { existingBadge.remove(); } }); sortOptionColumn(callOptions, ltp); sortOptionColumn(putOptions, ltp); }
-function sortOptionColumn(container, ltp) { if (!container) { return; } const cards = Array.from(container.querySelectorAll(".option-card")); cards.sort((a, b) => { const da = Math.abs(Number(a.dataset.strike) - ltp); const db = Math.abs(Number(b.dataset.strike) - ltp); if (da !== db) { return da - db; } return Number(a.dataset.strike) - Number(b.dataset.strike); }); cards.forEach(card => container.appendChild(card)); if (cards.length > 0) { const nearest = cards[0]; nearest.classList.add("nearest-option"); const badge = document.createElement("span"); badge.className = "nearest-badge"; badge.textContent = "NEAREST"; nearest.appendChild(badge); } }
+function updateOptionsFromLtp(ltp) {
+  if (!Number.isFinite(ltp)) return;
+  const allOptionCards = document.querySelectorAll(".option-card");
+  if (!allOptionCards.length) return;
+  allOptionCards.forEach(card => {
+    const strike = Number(card.dataset.strike);
+    if (!Number.isFinite(strike)) return;
+    const distance = Math.abs(strike - ltp);
+    card.dataset.distance = distance;
+    const distanceElement = card.querySelector(".option-distance");
+    if (distanceElement) distanceElement.textContent = distance === 0 ? "ATM" : distance.toFixed(0);
+    card.classList.remove("nearest-option");
+    const existingBadge = card.querySelector(".nearest-badge");
+    if (existingBadge) existingBadge.remove();
+  });
+  sortOptionColumn(callOptions, ltp);
+  sortOptionColumn(putOptions, ltp);
+}
+function sortOptionColumn(container, ltp) {
+  if (!container) return;
+  const cards = Array.from(container.querySelectorAll(".option-card"));
+  cards.sort((a, b) => {
+    const da = Math.abs(Number(a.dataset.strike) - ltp);
+    const db = Math.abs(Number(b.dataset.strike) - ltp);
+    if (da !== db) return da - db;
+    return Number(a.dataset.strike) - Number(b.dataset.strike);
+  });
+  cards.forEach(card => container.appendChild(card));
+  if (cards.length > 0) {
+    const nearest = cards[0];
+    nearest.classList.add("nearest-option");
+    const badge = document.createElement("span");
+    badge.className = "nearest-badge";
+    badge.textContent = "NEAREST";
+    nearest.appendChild(badge);
+  }
+}
+
 // ============================================================
 // CANDLE UPDATE
 // ============================================================
-function updateCandle(candle) { if (!candleSeries || !candle) { return; } if (lastCandle && candle.time < lastCandle.time) { return; } candleSeries.update(candle); lastCandle = candle; updateLivePrice(candle.close); }
-function updateCandleFromLtp(ltp, timestamp) { if (!Number.isFinite(ltp) || !candleSeries) { return; } updateLivePrice(ltp); const minuteTimestamp = Math.floor((timestamp || Math.floor(Date.now() / 1000)) / 60) * 60; if (!lastCandle || minuteTimestamp > lastCandle.time) { updateCandle({ time: minuteTimestamp, open: ltp, high: ltp, low: ltp, close: ltp }); return; } if (minuteTimestamp < lastCandle.time) { return; } updateCandle({ time: lastCandle.time, open: lastCandle.open, high: Math.max(lastCandle.high, ltp), low: Math.min(lastCandle.low, ltp), close: ltp }); }
+function updateCandle(candle) {
+  if (!candleSeries || !candle) return;
+  if (lastCandle && candle.time < lastCandle.time) return;
+  candleSeries.update(candle);
+  lastCandle = candle;
+  updateLivePrice(candle.close);
+
+  const prevDate = currentRenderedDate;
+  const newDate = getDateKeyIST(candle.time);
+  if (newDate && newDate !== prevDate) {
+    currentRenderedDate = newDate;
+    renderOpeningRangeLines();
+  }
+}
+function updateCandleFromLtp(ltp, timestamp) {
+  if (!Number.isFinite(ltp) || !candleSeries) return;
+  updateLivePrice(ltp);
+  const minuteTimestamp = Math.floor((timestamp || Math.floor(Date.now() / 1000)) / 60) * 60;
+  if (!lastCandle || minuteTimestamp > lastCandle.time) {
+    updateCandle({ time: minuteTimestamp, open: ltp, high: ltp, low: ltp, close: ltp });
+    return;
+  }
+  if (minuteTimestamp < lastCandle.time) return;
+  updateCandle({ time: lastCandle.time, open: lastCandle.open, high: Math.max(lastCandle.high, ltp), low: Math.min(lastCandle.low, ltp), close: ltp });
+}
+
 // ============================================================
 // LOAD OLDER HISTORICAL DATA
 // ============================================================
-async function loadOlderHistoricalData() { if (isLoadingHistory || !hasMoreHistory || !oldestCandleTime) { return; } isLoadingHistory = true; triggerLoadHistoryBtn.disabled = true; triggerLoadHistoryBtn.textContent = "Loading..."; const beforeDateString = new Date(oldestCandleTime * 1000).toISOString().split("T")[0]; try { const response = await fetch(`/api/older-candles?instrument_key=${encodeURIComponent(currentInstrumentKey)}&before_date=${beforeDateString}`); const result = await response.json(); if (result && Array.isArray(result.candles) && result.candles.length > 0) { const olderCandles = result.candles.map(normalizeCandle).filter(candle => candle !== null); const currentData = candleSeries.data(); const mergedMap = new Map(); olderCandles.forEach(candle => mergedMap.set(candle.time, candle)); currentData.forEach(candle => mergedMap.set(candle.time, candle)); const combinedData = Array.from(mergedMap.values()).sort((a, b) => a.time - b.time); candleSeries.setData(combinedData); oldestCandleTime = combinedData[0].time; hasMoreHistory = result.has_more ?? true; } else { hasMoreHistory = false; } } catch (error) { console.error("Failed to load historical candles:", error); } finally { isLoadingHistory = false; historyLoadBanner.style.display = "none"; triggerLoadHistoryBtn.disabled = false; triggerLoadHistoryBtn.textContent = "Load"; } }
+async function loadOlderHistoricalData() {
+  if (isLoadingHistory || !hasMoreHistory || !oldestCandleTime) return;
+  isLoadingHistory = true;
+  triggerLoadHistoryBtn.disabled = true;
+  triggerLoadHistoryBtn.textContent = "Loading...";
+  const beforeDateString = new Date(oldestCandleTime * 1000).toISOString().split("T")[0];
+  try {
+    const response = await fetch(`/api/older-candles?instrument_key=${encodeURIComponent(currentInstrumentKey)}&before_date=${beforeDateString}`);
+    const result = await response.json();
+    if (result && Array.isArray(result.candles) && result.candles.length > 0) {
+      const olderCandles = result.candles.map(normalizeCandle).filter(c => c !== null);
+      const currentData = candleSeries.data();
+      const mergedMap = new Map();
+      olderCandles.forEach(candle => mergedMap.set(candle.time, candle));
+      currentData.forEach(candle => mergedMap.set(candle.time, candle));
+      const combinedData = Array.from(mergedMap.values()).sort((a, b) => a.time - b.time);
+      candleSeries.setData(combinedData);
+      oldestCandleTime = combinedData[0].time;
+      hasMoreHistory = result.has_more ?? true;
+      rebuildAndRenderOpeningRanges(combinedData);
+    } else {
+      hasMoreHistory = false;
+    }
+  } catch (error) {
+    console.error("Failed to load historical candles:", error);
+  } finally {
+    isLoadingHistory = false;
+    historyLoadBanner.style.display = "none";
+    triggerLoadHistoryBtn.disabled = false;
+    triggerLoadHistoryBtn.textContent = "Load";
+  }
+}
 triggerLoadHistoryBtn.addEventListener("click", loadOlderHistoricalData);
+
 // ============================================================
 // WEBSOCKET MESSAGE
 // ============================================================
-function processWebSocketMessage(event) { let payload; try { payload = JSON.parse(event.data); } catch (error) { console.error("Unable to parse WebSocket payload:", error); return; } if (!payload || typeof payload !== "object") { return; } if (payload.type === "connected" || payload.type === "subscribed" || payload.type === "ping" || payload.event === "ping") { return; } const payloadInstrumentKey = getPayloadInstrumentKey(payload); if (!payloadInstrumentKey || payloadInstrumentKey !== currentInstrumentKey) { return; } const candle = getPayloadCandle(payload); if (candle) { updateCandle(candle); return; } const ltp = getPayloadLtp(payload); if (ltp === null) { return; } updateCandleFromLtp(ltp, getPayloadTimestamp(payload)); }
+function processWebSocketMessage(event) {
+  let payload;
+  try { payload = JSON.parse(event.data); } catch (error) { console.error("Unable to parse WebSocket payload:", error); return; }
+  if (!payload || typeof payload !== "object") return;
+  if (payload.type === "connected" || payload.type === "subscribed" || payload.type === "ping" || payload.event === "ping") return;
+  const payloadInstrumentKey = getPayloadInstrumentKey(payload);
+  if (!payloadInstrumentKey || payloadInstrumentKey !== currentInstrumentKey) return;
+  const candle = getPayloadCandle(payload);
+  if (candle) { updateCandle(candle); return; }
+  const ltp = getPayloadLtp(payload);
+  if (ltp === null) return;
+  updateCandleFromLtp(ltp, getPayloadTimestamp(payload));
+}
+
 // ============================================================
 // WEBSOCKET URL
 // ============================================================
-function getWebSocketUrl() { const protocol = window.location.protocol === "https:" ? "wss:" : "ws:"; return protocol + "//" + window.location.host + "/all-feeds"; }
+function getWebSocketUrl() {
+  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  return protocol + "//" + window.location.host + "/all-feeds";
+}
+
 // ============================================================
 // RECONNECT
 // ============================================================
-function scheduleReconnect() { if (pageClosing || reconnectTimer) { return; } reconnectAttempts += 1; const reconnectDelay = Math.min(1000 * Math.pow(2, reconnectAttempts - 1), reconnectMaximumDelay); setConnectionStatus("disconnected", "Retry " + Math.ceil(reconnectDelay / 1000) + "s"); reconnectTimer = window.setTimeout(() => { reconnectTimer = null; connectWebSocket(); }, reconnectDelay); }
+function scheduleReconnect() {
+  if (pageClosing || reconnectTimer) return;
+  reconnectAttempts += 1;
+  const reconnectDelay = Math.min(1000 * Math.pow(2, reconnectAttempts - 1), reconnectMaximumDelay);
+  setConnectionStatus("disconnected", "Retry " + Math.ceil(reconnectDelay / 1000) + "s");
+  reconnectTimer = window.setTimeout(() => { reconnectTimer = null; connectWebSocket(); }, reconnectDelay);
+}
+
 // ============================================================
 // CONNECT WEBSOCKET
 // ============================================================
-function connectWebSocket() { if (!currentInstrumentKey || pageClosing) { return; } if (chartSocket && (chartSocket.readyState === WebSocket.OPEN || chartSocket.readyState === WebSocket.CONNECTING)) { return; } setConnectionStatus("connecting", "Connecting"); try { chartSocket = new WebSocket(getWebSocketUrl()); } catch (error) { console.error("Unable to create WebSocket:", error); chartSocket = null; scheduleReconnect(); return; } chartSocket.addEventListener("open", () => { reconnectAttempts = 0; setConnectionStatus("connected", "Live"); }); chartSocket.addEventListener("message", processWebSocketMessage); chartSocket.addEventListener("error", error => console.error("Chart WebSocket error:", error)); chartSocket.addEventListener("close", () => { chartSocket = null; if (!pageClosing) { scheduleReconnect(); } }); }
+function connectWebSocket() {
+  if (!currentInstrumentKey || pageClosing) return;
+  if (chartSocket && (chartSocket.readyState === WebSocket.OPEN || chartSocket.readyState === WebSocket.CONNECTING)) return;
+  setConnectionStatus("connecting", "Connecting");
+  try { chartSocket = new WebSocket(getWebSocketUrl()); } catch (error) { console.error("Unable to create WebSocket:", error); chartSocket = null; scheduleReconnect(); return; }
+  chartSocket.addEventListener("open", () => { reconnectAttempts = 0; setConnectionStatus("connected", "Live"); });
+  chartSocket.addEventListener("message", processWebSocketMessage);
+  chartSocket.addEventListener("error", error => console.error("Chart WebSocket error:", error));
+  chartSocket.addEventListener("close", () => { chartSocket = null; if (!pageClosing) scheduleReconnect(); });
+}
+
 // ============================================================
 // INSTRUMENT SEARCH
 // ============================================================
-instrumentSearch.addEventListener("input", function () { const search = this.value.trim().toLowerCase(); const activeView = !indexView.hidden ? indexView : optionsView; const cards = activeView.querySelectorAll(".searchable-card"); let visibleCount = 0; cards.forEach(card => { const text = (card.dataset.search || "").toLowerCase(); const matches = !search || text.includes(search); card.hidden = !matches; if (matches) { visibleCount++; } }); if (activeView === indexView) { indexNoResults.hidden = visibleCount !== 0; } else { optionsNoResults.hidden = visibleCount !== 0; } });
-// ============================================================
-// COLLAPSE PANEL
-// ============================================================
-collapseBtn.addEventListener("click", () => { const collapsed = instrumentPanel.classList.toggle("collapsed"); const icon = collapseBtn.querySelector("i"); if (collapsed) { icon.className = "bi bi-layout-sidebar-inset"; collapseBtn.setAttribute("title", "Expand instrument selector"); } else { icon.className = "bi bi-layout-sidebar-inset-reverse"; collapseBtn.setAttribute("title", "Collapse instrument selector"); } window.setTimeout(() => { if (chart) { chart.applyOptions({ width: chartContainer.clientWidth, height: chartContainer.clientHeight }); } }, 230); });
+instrumentSearch.addEventListener("input", function () {
+  const search = this.value.trim().toLowerCase();
+  const activeView = !indexView.hidden ? indexView : optionsView;
+  const cards = activeView.querySelectorAll(".searchable-card");
+  let visibleCount = 0;
+  cards.forEach(card => {
+    const text = (card.dataset.search || "").toLowerCase();
+    const matches = !search || text.includes(search);
+    card.hidden = !matches;
+    if (matches) visibleCount++;
+  });
+  if (activeView === indexView) indexNoResults.hidden = visibleCount !== 0;
+  else optionsNoResults.hidden = visibleCount !== 0;
+});
+
 // ============================================================
 // READ INSTRUMENT KEY
 // ============================================================
 try { currentInstrumentKey = JSON.parse(document.getElementById("instrument-key-data").textContent); } catch (error) { console.error("Unable to parse instrument key:", error); }
+
 // ============================================================
 // AUTO SELECT OPTIONS VIEW
 // ============================================================
 if (typeof currentInstrumentKey === "string" && currentInstrumentKey.startsWith("NSE_FO|")) { activateView(optionsBtn, optionsView); }
+
 // ============================================================
 // READ INITIAL CANDLES
 // ============================================================
 try { chartData = JSON.parse(document.getElementById("candles-data").textContent); } catch (error) { console.error("Unable to parse candle data:", error); }
+
 // ============================================================
 // FORMAT INITIAL CANDLE DATA
 // ============================================================
-const formattedData = Array.isArray(chartData) ? chartData.map(normalizeCandle).filter(candle => candle !== null).sort((a, b) => a.time - b.time).filter((candle, index, array) => index === array.length - 1 || candle.time !== array[index + 1].time) : [];
-// ============================================================
-// CREATE CHART
-// ============================================================
+const formattedData = Array.isArray(chartData)
+  ? chartData.map(normalizeCandle).filter(c => c !== null).sort((a, b) => a.time - b.time).filter((c, i, arr) => i === arr.length - 1 || c.time !== arr[i + 1].time)
+  : [];
+
+/* ============================================================
+   OPENING RANGE / LEVEL CALCULATIONS
+   ============================================================ */
+function getDateKeyIST(unixSeconds) {
+  if (!Number.isFinite(unixSeconds)) return null;
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric", month: "2-digit", day: "2-digit"
+  }).formatToParts(new Date(unixSeconds * 1000));
+  const map = {};
+  parts.forEach(p => { if (p.type !== "literal") map[p.type] = p.value; });
+  return `${map.year}-${map.month}-${map.day}`;
+}
+
+function calculateOpeningRangeForDay(dayCandles) {
+  if (!Array.isArray(dayCandles) || dayCandles.length === 0) return null;
+  const sorted = dayCandles.slice().sort((a, b) => a.time - b.time);
+  const first = sorted[0];
+  if (!first) return null;
+
+  const open  = Number(first.open);
+  const high  = Number(first.high);
+  const low   = Number(first.low);
+  const close = Number(first.close);
+  if (!Number.isFinite(open) || !Number.isFinite(high) || !Number.isFinite(low) || !Number.isFinite(close)) return null;
+
+  const r1 = high;
+  const s1 = low;
+  const average = (r1 + s1) / 2;
+  const r1Diff = r1 - average;
+  const s1Diff = average - s1;
+
+  const r2 = r1 + r1Diff;
+  const r3 = r2 + r1Diff;
+  const s2 = s1 - s1Diff;
+  const s3 = s2 - s1Diff;
+
+  return { open, high, low, close, average, levels: { r1, r2, r3, s1, s2, s3 } };
+}
+
+function buildOpeningRangesFromCandles(candles) {
+  const grouped = {};
+  (candles || []).forEach(c => {
+    const key = getDateKeyIST(c.time);
+    if (!key) return;
+    if (!grouped[key]) grouped[key] = [];
+    grouped[key].push(c);
+  });
+  const result = {};
+  Object.keys(grouped).forEach(date => {
+    const r = calculateOpeningRangeForDay(grouped[date]);
+    if (r) result[date] = r;
+  });
+  return result;
+}
+
+/* ============================================================
+   LEVEL LINE HELPERS
+   ============================================================ */
+function addLineSeriesSafe(options) {
+  if (!chart) return null;
+  try {
+    if (typeof chart.addSeries === "function" && LightweightCharts.LineSeries) {
+      return chart.addSeries(LightweightCharts.LineSeries, options);
+    }
+    if (typeof chart.addLineSeries === "function") {
+      return chart.addLineSeries(options);
+    }
+  } catch (err) { console.warn("addLineSeriesSafe failed:", err); }
+  return null;
+}
+function getLevelColor(levelName) { return levelName.startsWith("r") ? "#f23645" : "#089981"; }
+function getRangeLevelColor(rangeKey) {
+  if (rangeKey === "high") return "#fd7e14";
+  if (rangeKey === "low")  return "#20c997";
+  return "#2962ff";
+}
+
+/* ============================================================
+   HTML OVERLAY LABEL LAYER
+   ============================================================ */
+function ensureLevelLabelLayer() {
+  if (levelLabelLayer) return levelLabelLayer;
+  if (!chartContainer) return null;
+  if (getComputedStyle(chartContainer).position === "static") chartContainer.style.position = "relative";
+  levelLabelLayer = document.createElement("div");
+  levelLabelLayer.className = "level-label-layer";
+  chartContainer.appendChild(levelLabelLayer);
+  return levelLabelLayer;
+}
+function createLevelLabel(levelName, startTime, value, color) {
+  const layer = ensureLevelLabelLayer();
+  if (!layer) return;
+  const element = document.createElement("div");
+  element.className = "level-line-label";
+  element.textContent = String(levelName).toUpperCase() + " (" + Number(value).toFixed(2) + ")";
+  element.style.backgroundColor = color;
+  layer.appendChild(element);
+  levelLabels.push({ element, startTime, value, color, levelName });
+}
+function scheduleLevelLabelUpdate() {
+  if (levelLabelUpdateScheduled) return;
+  levelLabelUpdateScheduled = true;
+  requestAnimationFrame(() => {
+    levelLabelUpdateScheduled = false;
+    updateLevelLabelPositions();
+  });
+}
+function updateLevelLabelPositions() {
+  if (!chart || !candleSeries || !levelLabels.length) return;
+  const timeScale = chart.timeScale();
+  const containerWidth = chartContainer.clientWidth;
+  levelLabels.forEach(label => {
+    // ---- Label visibility gating (does NOT affect lines) ----
+    if (!isLabelGroupVisible(label.levelName)) {
+      label.element.style.display = "none";
+      return;
+    }
+
+    const x = timeScale.timeToCoordinate(label.startTime);
+    const y = candleSeries.priceToCoordinate(label.value);
+    if (x === null || y === null || !Number.isFinite(x) || !Number.isFinite(y)) { label.element.style.display = "none"; return; }
+    if (x < -120 || x > containerWidth + 120) { label.element.style.display = "none"; return; }
+    label.element.style.display = "block";
+    label.element.style.left = Math.round(x + 4) + "px";
+    label.element.style.top  = Math.round(y) + "px";
+  });
+}
+
+/* ============================================================
+   DRAW / REMOVE LEVEL LINES
+   ============================================================ */
+function drawDayLevelLine(levelName, rawValue, startTime, endTime, color, lineStyle) {
+  if (rawValue === null || rawValue === undefined || rawValue === "") return;
+  const value = Number(rawValue);
+  if (!Number.isFinite(value)) return;
+  const lineSeries = addLineSeriesSafe({
+    color, lineWidth: 1, lineStyle,
+    priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false
+  });
+  if (!lineSeries) return;
+  const data = [{ time: startTime, value }];
+  if (endTime !== startTime) data.push({ time: endTime, value });
+  try { lineSeries.setData(data); } catch (err) { console.warn("setData failed for line:", err); return; }
+  levelLines.push(lineSeries);
+
+  // Create the label; visibility is decided dynamically via isLabelGroupVisible().
+  createLevelLabel(levelName, startTime, value, color);
+}
+function removeOpeningRangeLevels() {
+  if (chart) {
+    levelLines.forEach(line => { try { chart.removeSeries(line); } catch (err) { console.warn("removeSeries failed:", err); } });
+  }
+  levelLines = [];
+  levelLabels.forEach(label => {
+    try { if (label.element && label.element.parentNode) label.element.parentNode.removeChild(label.element); }
+    catch (err) { console.warn("remove label failed:", err); }
+  });
+  levelLabels = [];
+}
+function renderOpeningRangeLines() {
+  removeOpeningRangeLevels();
+  if (!chart || !candleSeries) return;
+  const dates = Object.keys(calculatedOpeningRanges).sort();
+  if (dates.length === 0) return;
+  dates.forEach(date => {
+    const openingRange = calculatedOpeningRanges[date];
+    if (!openingRange) return;
+    const dayCandles = candleSeries.data().filter(c => getDateKeyIST(c.time) === date);
+    if (dayCandles.length === 0) return;
+    const startTime = dayCandles[0].time;
+    const endTime   = dayCandles[dayCandles.length - 1].time;
+    const levels = openingRange.levels || {};
+
+    // R1 == HIGH and S1 == LOW -> skip to avoid overlap with solid HIGH / LOW lines
+    ["r2", "r3"].forEach(name =>
+      drawDayLevelLine(name, levels[name], startTime, endTime, getLevelColor(name), LightweightCharts.LineStyle.Dashed)
+    );
+    drawDayLevelLine("high", openingRange.high,     startTime, endTime, getRangeLevelColor("high"), LightweightCharts.LineStyle.Solid);
+    drawDayLevelLine("avg",  openingRange.average,  startTime, endTime, getRangeLevelColor("avg"),  LightweightCharts.LineStyle.Solid);
+    drawDayLevelLine("low",  openingRange.low,      startTime, endTime, getRangeLevelColor("low"),  LightweightCharts.LineStyle.Solid);
+    ["s2", "s3"].forEach(name =>
+      drawDayLevelLine(name, levels[name], startTime, endTime, getLevelColor(name), LightweightCharts.LineStyle.Dashed)
+    );
+  });
+  scheduleLevelLabelUpdate();
+  updateLevelBadgesForLatestDate();
+}
+function rebuildAndRenderOpeningRanges(allCandles) {
+  calculatedOpeningRanges = buildOpeningRangesFromCandles(allCandles);
+  renderOpeningRangeLines();
+}
+
+/* ============================================================
+   LEVEL BADGES
+   ============================================================ */
+function updateLevelBadgesForLatestDate() {
+  if (!levelStatusBar) return;
+  const dates = Object.keys(calculatedOpeningRanges).sort();
+  if (dates.length === 0) { resetLevelBadges(); return; }
+  const latest = dates[dates.length - 1];
+  const calc = calculatedOpeningRanges[latest];
+  const levels = (calc && calc.levels) || {};
+  levelStatusBar.querySelectorAll(".badge").forEach(badge => {
+    const name = badge.dataset.level;
+    const value = Number(levels[name]);
+    if (Number.isFinite(value)) badge.textContent = name.toUpperCase() + " " + value.toFixed(2);
+    else badge.textContent = name.toUpperCase();
+  });
+}
+function resetLevelBadges() {
+  if (!levelStatusBar) return;
+  levelStatusBar.querySelectorAll(".badge").forEach(badge => {
+    const name = badge.dataset.level;
+    if (name) badge.textContent = name.toUpperCase();
+  });
+}
+
+/* ============================================================
+   CUSTOM CANDLE TOOLTIP
+   ============================================================ */
+function createChartTooltip() {
+  if (chartTooltip) return;
+  chartTooltip = document.createElement("div");
+  chartTooltip.className = "chart-tooltip";
+  chartContainer.appendChild(chartTooltip);
+}
+function hideTooltip() { if (chartTooltip) chartTooltip.style.display = "none"; }
+function formatTooltipTime(time) {
+  if (typeof time !== "number") return "";
+  const date = new Date(time * 1000);
+  if (Number.isNaN(date.getTime())) return "";
+  return new Intl.DateTimeFormat("en-IN", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric", month: "short", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", hour12: false
+  }).format(date);
+}
+function formatPrice(v) { const n = Number(v); return Number.isFinite(n) ? n.toFixed(2) : "—"; }
+function handleCrosshairMove(param) {
+  if (!chartTooltip || !candleSeries) return;
+  if (!param || !param.time || !param.point) { hideTooltip(); return; }
+  const seriesData = param.seriesData ? param.seriesData.get(candleSeries) : null;
+  if (!seriesData) { hideTooltip(); return; }
+  const open  = Number(seriesData.open);
+  const high  = Number(seriesData.high);
+  const low   = Number(seriesData.low);
+  const close = Number(seriesData.close);
+  if (!Number.isFinite(open) || !Number.isFinite(high) || !Number.isFinite(low) || !Number.isFinite(close)) { hideTooltip(); return; }
+  const timeStr = formatTooltipTime(param.time);
+  chartTooltip.innerHTML = `
+    <div style="font-weight:600;margin-bottom:4px;">${timeStr}</div>
+    <div>O: <strong>${formatPrice(open)}</strong></div>
+    <div>H: <strong>${formatPrice(high)}</strong></div>
+    <div>L: <strong>${formatPrice(low)}</strong></div>
+    <div>C: <strong>${formatPrice(close)}</strong></div>
+  `;
+  chartTooltip.style.display = "block";
+  const tw = chartTooltip.offsetWidth;
+  const th = chartTooltip.offsetHeight;
+  let left = param.point.x + 15;
+  let top  = param.point.y + 15;
+  if (left + tw > chartContainer.clientWidth) left = param.point.x - tw - 15;
+  if (top + th > chartContainer.clientHeight) top  = param.point.y - th - 15;
+  chartTooltip.style.left = Math.max(5, left) + "px";
+  chartTooltip.style.top  = Math.max(5, top) + "px";
+}
+
+/* ============================================================
+   CREATE CHART
+   ============================================================ */
 function createChart(candles) {
   chart = LightweightCharts.createChart(
     chartContainer,
     {
       width: chartContainer.clientWidth,
       height: chartContainer.clientHeight,
-      layout: {
-        background: {
-          color: "#131722",
-        },
-        textColor: "#d1d4dc",
-      },
-      grid: {
-        vertLines: {
-          color: "#2a2e39",
-        },
-        horzLines: {
-          color: "#2a2e39",
-        },
-      },
-      crosshair: {
-        mode: LightweightCharts.CrosshairMode.Normal,
-        vertLine: {
-          labelBackgroundColor: "#2962ff",
-          labelBorderColor: "#2962ff",
-        },
-      },
-      rightPriceScale: {
-        borderColor: "#2a2e39",
-      },
+      layout: { background: { color: "#131722" }, textColor: "#d1d4dc" },
+      grid: { vertLines: { color: "#2a2e39" }, horzLines: { color: "#2a2e39" } },
+      crosshair: { mode: LightweightCharts.CrosshairMode.Normal, vertLine: { labelBackgroundColor: "#2962ff", labelBorderColor: "#2962ff" } },
+      rightPriceScale: { borderColor: "#2a2e39" },
       timeScale: {
         borderColor: "#2a2e39",
-        timeVisible: true,
-        secondsVisible: false,
-        rightOffset: 8,
-        barSpacing: 8,
-        minBarSpacing: 3,
-        fixLeftEdge: false,
-        fixRightEdge: false,
-        lockVisibleTimeRangeOnResize: false,
-        tickMarkFormatter: (
-          time,
-          tickMarkType,
-        ) => {
-          return formatTimeLabel(
-            time,
-            tickMarkType,
-          );
-        },
+        timeVisible: true, secondsVisible: false,
+        rightOffset: 8, barSpacing: 8, minBarSpacing: 3,
+        fixLeftEdge: false, fixRightEdge: false, lockVisibleTimeRangeOnResize: false,
+        tickMarkFormatter: (time, tickMarkType) => formatTimeLabel(time, tickMarkType)
       },
       localization: {
         locale: "en-IN",
-        timeFormatter: (time) => {
-          return formatFullDate(time);
-        },
-        priceFormatter: (price) => {
-          const numericPrice = Number(price);
-
-          return Number.isFinite(numericPrice)
-            ? numericPrice.toFixed(2)
-            : "";
-        },
-      },
-    },
+        timeFormatter: (time) => formatFullDate(time),
+        priceFormatter: (price) => { const numericPrice = Number(price); return Number.isFinite(numericPrice) ? numericPrice.toFixed(2) : ""; }
+      }
+    }
   );
 
   const candleOptions = {
-    upColor: "#089981",
-    downColor: "#f23645",
-    borderUpColor: "#089981",
-    borderDownColor: "#f23645",
-    wickUpColor: "#089981",
-    wickDownColor: "#f23645",
-    priceFormat: {
-      type: "price",
-      precision: 2,
-      minMove: 0.01,
-    },
+    upColor: "#089981", downColor: "#f23645",
+    borderUpColor: "#089981", borderDownColor: "#f23645",
+    wickUpColor: "#089981", wickDownColor: "#f23645",
+    priceFormat: { type: "price", precision: 2, minMove: 0.01 }
   };
 
-  if (
-    typeof chart.addSeries === "function" &&
-    LightweightCharts.CandlestickSeries
-  ) {
-    candleSeries = chart.addSeries(
-      LightweightCharts.CandlestickSeries,
-      candleOptions,
-    );
-  } else if (
-    typeof chart.addCandlestickSeries === "function"
-  ) {
-    candleSeries = chart.addCandlestickSeries(
-      candleOptions,
-    );
+  if (typeof chart.addSeries === "function" && LightweightCharts.CandlestickSeries) {
+    candleSeries = chart.addSeries(LightweightCharts.CandlestickSeries, candleOptions);
+  } else if (typeof chart.addCandlestickSeries === "function") {
+    candleSeries = chart.addCandlestickSeries(candleOptions);
   }
 
-  if (!candleSeries) {
-    throw new Error(
-      "Unable to create the candlestick series.",
-    );
-  }
+  if (!candleSeries) throw new Error("Unable to create the candlestick series.");
 
   if (candles.length > 0) {
     candleSeries.setData(candles);
-
     lastCandle = candles[candles.length - 1];
     oldestCandleTime = candles[0].time;
-
     updateLivePrice(lastCandle.close);
     chart.timeScale().fitContent();
+    currentRenderedDate = getDateKeyIST(lastCandle.time);
   }
 
-  chart
-    .timeScale()
-    .subscribeVisibleLogicalRangeChange(
-      (range) => {
-        if (
-          !range ||
-          isLoadingHistory ||
-          !hasMoreHistory
-        ) {
-          return;
-        }
+  ensureLevelLabelLayer();
+  createChartTooltip();
+  chart.subscribeCrosshairMove(handleCrosshairMove);
 
-        historyLoadBanner.style.display =
-          range.from < 5 ? "flex" : "none";
-      },
-    );
+  chart.timeScale().subscribeVisibleTimeRangeChange(() => scheduleLevelLabelUpdate());
+  chart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
+    scheduleLevelLabelUpdate();
+    if (!range || isLoadingHistory || !hasMoreHistory) return;
+    historyLoadBanner.style.display = range.from < 5 ? "flex" : "none";
+  });
 
   const resizeChart = () => {
-    if (!chart) {
-      return;
-    }
-
-    chart.applyOptions({
-      width: chartContainer.clientWidth,
-      height: chartContainer.clientHeight,
-    });
+    if (!chart) return;
+    chart.applyOptions({ width: chartContainer.clientWidth, height: chartContainer.clientHeight });
+    scheduleLevelLabelUpdate();
   };
-
-  window.addEventListener(
-    "resize",
-    resizeChart,
-  );
-
+  window.addEventListener("resize", resizeChart);
+  window.addEventListener("orientationchange", () => setTimeout(resizeChart, 200));
   if (typeof ResizeObserver !== "undefined") {
-    const resizeObserver = new ResizeObserver(
-      resizeChart,
-    );
-
-    resizeObserver.observe(chartContainer);
+    const resizeObserver = new ResizeObserver(resizeChart);
+    resizeObserver.observe(chartCard);
   }
+
+  calculatedOpeningRanges = buildOpeningRangesFromCandles(candles);
+  renderOpeningRangeLines();
 }
+
 // ============================================================
 // START CHART
 // ============================================================
 createChart(formattedData);
+
 // ============================================================
 // START WEBSOCKET
 // ============================================================
 connectWebSocket();
+
 // ============================================================
 // PAGE CLOSE
 // ============================================================
-window.addEventListener("beforeunload", () => { pageClosing = true; if (reconnectTimer) { window.clearTimeout(reconnectTimer); } if (chartSocket) { chartSocket.close(1000, "Chart page closed"); } });
+window.addEventListener("beforeunload", () => {
+  pageClosing = true;
+  if (reconnectTimer) window.clearTimeout(reconnectTimer);
+  if (chartSocket) chartSocket.close(1000, "Chart page closed");
+});
 </script>
 {% endblock %}
