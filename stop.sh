@@ -1,71 +1,46 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
-APP_NAME="upstox_order_receiver"
-PID_FILE="${APP_NAME}.pid"
+set -euo pipefail
+
+cd "$(dirname "$0")"
+
+PID_FILE="uvicorn.pid"
 
 echo "=========================================="
-echo "  Upstox Order Request Receiver"
+echo "       Stopping FastAPI Application"
 echo "=========================================="
 echo
-echo "Stopping FastAPI application..."
-echo
 
-if [ ! -f "$PID_FILE" ]; then
-    echo "Application is not running."
+if [[ ! -f "$PID_FILE" ]]; then
+    echo "[INFO] PID file not found."
+    echo "[INFO] Application may already be stopped."
     exit 0
 fi
 
-PID=$(cat "$PID_FILE")
+PID="$(cat "$PID_FILE")"
 
 if kill -0 "$PID" 2>/dev/null; then
-    echo "Stopping process PID: $PID"
 
-    # Try graceful shutdown first.
+    echo "[INFO] Stopping process: $PID"
+
     kill "$PID"
 
-    echo "Graceful stop signal sent to PID: $PID"
-    echo "Waiting for process to stop..."
+    sleep 2
 
-    # Give the application up to 10 seconds to shut down gracefully.
-    for i in {1..10}; do
-        if ! kill -0 "$PID" 2>/dev/null; then
-            echo "Process stopped gracefully after ${i} second(s)."
-            break
-        fi
-
-        sleep 1
-    done
-
-    # Double-check whether the process is still active.
     if kill -0 "$PID" 2>/dev/null; then
-        echo
-        echo "WARNING: Process PID $PID is still active."
-        echo "Process did not stop gracefully."
-        echo "Still active - force killing PID: $PID using kill -9..."
-
+        echo "[INFO] Process still running. Force stopping..."
         kill -9 "$PID"
-
-        # Final verification after kill -9.
-        sleep 1
-
-        if kill -0 "$PID" 2>/dev/null; then
-            echo "ERROR: Process PID $PID is STILL ACTIVE after kill -9."
-            echo "Please check the process manually."
-            exit 1
-        else
-            echo "Process PID $PID successfully killed."
-        fi
     fi
 
-    echo
-    echo "Application stopped."
+    echo "[OK] Application stopped."
 
 else
-    echo "Process $PID is no longer running."
+
+    echo "[INFO] Process $PID is not running."
+
 fi
 
 rm -f "$PID_FILE"
 
+echo "[OK] PID file removed."
 echo
-echo "PID file removed."
-echo "Done."

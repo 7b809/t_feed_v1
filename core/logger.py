@@ -1,105 +1,20 @@
 import logging
-from logging.handlers import RotatingFileHandler
 from pathlib import Path
+from core.config import get_settings
 
-from core.config import settings
+_LOG_ROOT = Path(__file__).resolve().parents[1] / "logs"
 
-LOG_DIR = Path(__file__).resolve().parent.parent / "logs"
-LOG_DIR.mkdir(parents=True, exist_ok=True)
-
-
-class PrintHandler(logging.Handler):
-    """Print every log message using print()."""
-
-    def emit(self, record: logging.LogRecord) -> None:
-        try:
-            message = self.format(record)
-            print(message, flush=True)
-        except Exception:
-            self.handleError(record)
-
-
-def get_logger(log_filename: str) -> logging.Logger:
-    """
-    Return a logger that writes to logs/{log_filename}.
-
-    When PRINT_FLAG=true, every log is also sent through print().
-    """
-
-    safe_name = Path(log_filename).name
-
-    if not safe_name.endswith(".log"):
-        safe_name += ".log"
-
-    logger_name = f"upstox_order_receiver.{safe_name}"
-
-    logger = logging.getLogger(logger_name)
-
-    logger.setLevel(
-        getattr(
-            logging,
-            settings.log_level.upper(),
-            logging.INFO,
-        )
-    )
-
+def get_logger(filename: str) -> logging.Logger:
+    """Write logs only to logs/<filename>/<filename>.log."""
+    safe_name = Path(filename).stem.replace(" ", "_")
+    log_dir = _LOG_ROOT / safe_name
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_file = log_dir / f"{safe_name}.log"
+    logger = logging.getLogger(f"project_update_service.{safe_name}")
+    logger.setLevel(getattr(logging, get_settings().log_level.upper(), logging.INFO))
     logger.propagate = False
-
-    if logger.handlers:
-        return logger
-
-    # ------------------------------------------------------------
-    # Formatter: choose pathname (full) or filename (short)
-    # based on DEBUG_FLAG from config
-    # ------------------------------------------------------------
-    if settings.DEBUG_FLAG:
-        # Full source path
-        log_format = (
-            "%(asctime)s | "
-            "%(levelname)s | "
-            "%(name)s | "
-            "%(pathname)s:%(lineno)d | "
-            "%(funcName)s | "
-            "%(message)s"
-        )
-    else:
-        # Only filename (default)
-        log_format = (
-            "%(asctime)s | "
-            "%(levelname)s | "
-            "%(name)s | "
-            "%(filename)s:%(lineno)d | "
-            "%(funcName)s | "
-            "%(message)s"
-        )
-
-    formatter = logging.Formatter(
-        log_format,
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
-
-    # ------------------------------------------------------------
-    # File logging
-    # ------------------------------------------------------------
-
-    file_handler = RotatingFileHandler(
-        LOG_DIR / safe_name,
-        maxBytes=10 * 1024 * 1024,
-        backupCount=5,
-        encoding="utf-8",
-    )
-
-    file_handler.setFormatter(formatter)
-
-    logger.addHandler(file_handler)
-
-    # ------------------------------------------------------------
-    # Console / print logging
-    # ------------------------------------------------------------
-
-    if settings.print_flag:
-        print_handler = PrintHandler()
-        print_handler.setFormatter(formatter)
-        logger.addHandler(print_handler)
-
+    if not logger.handlers:
+        handler = logging.FileHandler(log_file, encoding="utf-8")
+        handler.setFormatter(logging.Formatter("%(asctime)s | %(levelname)s | %(name)s | %(message)s"))
+        logger.addHandler(handler)
     return logger

@@ -1,83 +1,30 @@
 from contextlib import asynccontextmanager
-
 from fastapi import FastAPI
-
-from api.routes.health import router as health_router
-from api.routes.order_requests import router as order_requests_router
-from api.routes.ui import router as ui_router
-
-from core.config import settings
-from core.database import (
-    close_mongo_connection,
-    connect_to_mongo,
-)
+from api.routes import router
+from core.config import get_settings
 from core.logger import get_logger
+from services.notifier import TelegramNotifier
+from services.update_runner import UpdateManager
+from telegram_bot.bot import ProjectUpdateBot
 
-from services.telegram_bot_service import telegram_bot_service
-from services.token_service import token_service
-
-
+settings = get_settings()
 logger = get_logger("app")
-
+notifier = TelegramNotifier(settings)
+manager = UpdateManager(settings, notifier)
+bot = ProjectUpdateBot(settings, manager)
 
 @asynccontextmanager
-async def lifespan(_: FastAPI):
-    await connect_to_mongo()
+async def lifespan(app: FastAPI):
+    app.state.update_manager = manager
+    await bot.start()
+    logger.info("Service started")
+    yield
+    await bot.stop()
+    logger.info("Service stopped")
 
-    token_loaded = await token_service.start()
+app = FastAPI(title=settings.app_name, version="1.0.0", lifespan=lifespan)
+app.include_router(router)
 
-    if (
-        settings.upstox_token_required_on_startup
-        and not token_loaded
-    ):
-        logger.error(
-            "Application startup aborted. "
-            "Upstox access token is unavailable."
-        )
-
-        await token_service.stop()
-        await close_mongo_connection()
-
-        raise RuntimeError(
-            "Upstox access token is unavailable."
-        )
-
-    logger.info(
-        "%s started token_available=%s",
-        settings.app_name,
-        token_service.has_access_token(),
-    )
-
-    telegram_bot_service.start()
-    telegram_bot_service.send_startup_message()
-
-    try:
-        yield
-
-    finally:
-        telegram_bot_service.stop()
-        await token_service.stop()
-        await close_mongo_connection()
-
-        logger.info("%s stopped", settings.app_name)
-
-
-app = FastAPI(
-    title=settings.app_name,
-    version="1.0.0",
-    description=(
-        "Receives isolated EMA alert payloads, "
-        "selects instruments, executes orders, "
-        "and stores request/execution data."
-    ),
-    lifespan=lifespan,
-)
-
-
-# ------------------------------------------------------------------
-# Routers
-# ------------------------------------------------------------------
-
-app.include_router(health_router)
-app.include_router(order_requests_router, prefix="/api/v1")
-app.include_router(ui_router)
+@app.get("/health")
+async def health():
+    return {"status": "ok"}

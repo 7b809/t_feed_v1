@@ -1,172 +1,147 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
-APP_NAME="upstox_order_receiver"
-PID_FILE="${APP_NAME}.pid"
+set -euo pipefail
 
-# =========================================================
-# GLOBAL CONFIGURATION
-# =========================================================
+# ============================================================
+# Configuration
+# ============================================================
 
-PORT=8001
+HOST="0.0.0.0"
+PORT="8080"
 
-# =========================================================
+VENV_DIR=".venv"
+PID_FILE="uvicorn.pid"
+LOG_FILE="uvicorn.log"
 
-LOG_DIR="logs"
-LOG_FILE="${LOG_DIR}/app_${PORT}.log"
-VENV_DIR="myenv"
-REQUIREMENTS_FILE="requirements.txt"
+# ============================================================
+# Move to project directory
+# ============================================================
 
+cd "$(dirname "$0")"
 
 echo "=========================================="
-echo "  Upstox Order Request Receiver"
+echo "       FastAPI Application"
 echo "=========================================="
 echo
-echo "Starting FastAPI application..."
-echo
 
+# ============================================================
+# Check existing process
+# ============================================================
 
-# ---------------------------------------------------------
-# Create logs directory
-# ---------------------------------------------------------
-rm -rf "$LOG_DIR"
-mkdir -p "$LOG_DIR"
-
-
-# ---------------------------------------------------------
-# Check if application is already running
-# ---------------------------------------------------------
-if [ -f "$PID_FILE" ]; then
-    PID=$(cat "$PID_FILE")
+if [[ -f "$PID_FILE" ]]; then
+    PID="$(cat "$PID_FILE")"
 
     if kill -0 "$PID" 2>/dev/null; then
-        echo "Application is already running."
-        echo "PID: $PID"
-        echo "Port: $PORT"
-        exit 0
+        echo "[ERROR] Application is already running."
+        echo "[INFO] PID  : $PID"
+        echo "[INFO] Port : $PORT"
+        echo
+        exit 1
     else
-        echo "Removing stale PID file."
+        echo "[INFO] Removing stale PID file..."
         rm -f "$PID_FILE"
     fi
 fi
 
+# ============================================================
+# Check / create virtual environment
+# ============================================================
 
-# ---------------------------------------------------------
-# Create virtual environment if it does not exist
-# ---------------------------------------------------------
-if [ ! -d "$VENV_DIR" ]; then
+if [[ -f "$VENV_DIR/bin/activate" ]]; then
 
+    echo "[OK] Existing virtual environment found."
+    echo "[INFO] Assuming required packages are already installed."
     echo
-    echo "Virtual environment not found."
-    echo "Creating $VENV_DIR..."
+
+else
+
+    echo "[INFO] Virtual environment not found."
+    echo "[INFO] Creating $VENV_DIR..."
+    echo
 
     python3 -m venv "$VENV_DIR"
 
-    if [ $? -ne 0 ]; then
-        echo
-        echo "ERROR: Failed to create virtual environment."
-        exit 1
-    fi
+    echo
+    echo "[OK] Virtual environment created."
+    echo
 
-    echo "Virtual environment created."
+    # --------------------------------------------------------
+    # Activate newly created environment
+    # --------------------------------------------------------
 
-    # -----------------------------------------------------
-    # Install requirements only when environment is created
-    # -----------------------------------------------------
-    if [ -f "$REQUIREMENTS_FILE" ]; then
+    source "$VENV_DIR/bin/activate"
 
-        echo
-        echo "Installing Python packages..."
+    echo "[INFO] Installing required packages..."
+    echo
 
-        "$VENV_DIR/bin/python" -m pip install --upgrade pip
+    python -m pip install --upgrade pip
 
-        "$VENV_DIR/bin/pip" install -r "$REQUIREMENTS_FILE"
+    if [[ -f "requirements.txt" ]]; then
 
-        if [ $? -ne 0 ]; then
-            echo
-            echo "ERROR: Failed to install Python packages."
-            exit 1
-        fi
+        python -m pip install -r requirements.txt
 
         echo
-        echo "Python packages installed successfully."
+        echo "[OK] Required packages installed."
 
     else
 
         echo
-        echo "WARNING: $REQUIREMENTS_FILE not found."
+        echo "[WARNING] requirements.txt not found."
+        echo "[WARNING] No packages installed."
 
     fi
 
-else
-
     echo
-    echo "Virtual environment already exists."
-    echo "Skipping environment creation and package installation."
 
 fi
 
+# ============================================================
+# Activate virtual environment
+# ============================================================
 
-# ---------------------------------------------------------
-# Verify virtual environment Python exists
-# ---------------------------------------------------------
-PYTHON="$VENV_DIR/bin/python"
+source "$VENV_DIR/bin/activate"
 
-if [ ! -f "$PYTHON" ]; then
-
-    echo
-    echo "ERROR: Virtual environment Python not found:"
-    echo "$PYTHON"
-    exit 1
-
-fi
-
-
-# ---------------------------------------------------------
-# Start FastAPI in background
-# ---------------------------------------------------------
+echo "[OK] Virtual environment activated."
 echo
-echo "Starting FastAPI..."
-echo "Port: $PORT"
 
-nohup "$PYTHON" -m uvicorn main:app \
-    --host 0.0.0.0 \
+# ============================================================
+# Start FastAPI application
+# ============================================================
+
+echo "=========================================="
+echo "       Starting FastAPI Application"
+echo "=========================================="
+echo
+echo "HOST : $HOST"
+echo "PORT : $PORT"
+echo "PID  : $PID_FILE"
+echo "LOG  : $LOG_FILE"
+echo
+
+# ============================================================
+# Run Uvicorn in background
+# ============================================================
+
+nohup python -m uvicorn main:app \
+    --host "$HOST" \
     --port "$PORT" \
-    >> "$LOG_FILE" 2>&1 &
+    > "$LOG_FILE" 2>&1 &
 
 PID=$!
 
-
-# ---------------------------------------------------------
+# ============================================================
 # Save PID
-# ---------------------------------------------------------
+# ============================================================
+
 echo "$PID" > "$PID_FILE"
 
+echo "[OK] Application started."
+echo
+echo "PID: $PID"
+echo "URL: http://$HOST:$PORT"
+echo "Log: $LOG_FILE"
+echo
 
-# ---------------------------------------------------------
-# Wait and verify application
-# ---------------------------------------------------------
-sleep 2
-
-if kill -0 "$PID" 2>/dev/null; then
-
-    echo
-    echo "Application started successfully."
-    echo "PID: $PID"
-    echo "Port: $PORT"
-    echo "Python: $PYTHON"
-    echo "Log: $LOG_FILE"
-
-else
-
-    echo
-    echo "ERROR: Application failed to start."
-
-    rm -f "$PID_FILE"
-
-    echo
-    echo "Check logs:"
-    echo "tail -f $LOG_FILE"
-
-    exit 1
-
-fi
+echo "=========================================="
+echo "       Application Running"
+echo "=========================================="
