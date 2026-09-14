@@ -63,6 +63,19 @@ class UpdateManager:
             list(settings.projects.keys()),
         )
 
+        logger.info(
+            "Project-control working directory | cwd=%s",
+            Path.cwd(),
+        )
+
+        for project_name, project_config in settings.projects.items():
+            logger.info(
+                "Configured project | name=%s | folder=%s | command=%s",
+                project_name,
+                project_config["folder"],
+                project_config["command"],
+            )
+
     # ========================================================
     # Submit Job
     # ========================================================
@@ -75,10 +88,18 @@ class UpdateManager:
     ) -> JobStatus:
 
         logger.info(
-            "Job submission requested | project=%s | requested_by=%s | chat_id=%s",
+            "============================================================"
+        )
+
+        logger.info(
+            "UPDATE REQUEST RECEIVED | project=%s | requested_by=%s | chat_id=%s",
             project,
             requested_by,
             chat_id,
+        )
+
+        logger.info(
+            "============================================================"
         )
 
         # ----------------------------------------------------
@@ -94,6 +115,29 @@ class UpdateManager:
             )
 
             raise KeyError(project)
+
+        # ----------------------------------------------------
+        # Show selected project configuration
+        # ----------------------------------------------------
+
+        project_config = self.settings.projects[project]
+
+        logger.info(
+            "Selected project confirmed | project=%s",
+            project,
+        )
+
+        logger.info(
+            "Selected project folder | project=%s | folder=%s",
+            project,
+            project_config["folder"],
+        )
+
+        logger.info(
+            "Selected project command | project=%s | command=%s",
+            project,
+            project_config["command"],
+        )
 
         # ----------------------------------------------------
         # Create job
@@ -182,10 +226,32 @@ class UpdateManager:
     ):
 
         logger.info(
-            "Job execution started | job_id=%s | project=%s | chat_id=%s",
+            "============================================================"
+        )
+
+        logger.info(
+            "PROJECT UPDATE STARTING | job_id=%s | project=%s",
             job.job_id,
             job.project,
+        )
+
+        logger.info(
+            "Project-control process directory | cwd=%s",
+            Path.cwd(),
+        )
+
+        logger.info(
+            "Requested by | %s",
+            job.requested_by,
+        )
+
+        logger.info(
+            "Telegram chat ID | %s",
             chat_id,
+        )
+
+        logger.info(
+            "============================================================"
         )
 
         # ----------------------------------------------------
@@ -223,13 +289,46 @@ class UpdateManager:
             project_config["command"]
         )
 
+        # ----------------------------------------------------
+        # Display exact execution information
+        # ----------------------------------------------------
+
         logger.info(
-            "Project configuration loaded | "
-            "job_id=%s | project=%s | folder=%s | command=%s",
-            job.job_id,
+            "------------------------------------------------------------"
+        )
+
+        logger.info(
+            "PROJECT EXECUTION CONFIGURATION"
+        )
+
+        logger.info(
+            "Project name : %s",
             job.project,
+        )
+
+        logger.info(
+            "Project folder : %s",
             project_dir,
+        )
+
+        logger.info(
+            "Command list : %s",
             command,
+        )
+
+        logger.info(
+            "Working directory (cwd) : %s",
+            project_dir,
+        )
+
+        logger.info(
+            "Equivalent shell command : cd %s && %s",
+            project_dir,
+            " ".join(command),
+        )
+
+        logger.info(
+            "------------------------------------------------------------"
         )
 
         # ----------------------------------------------------
@@ -237,8 +336,7 @@ class UpdateManager:
         # ----------------------------------------------------
 
         logger.info(
-            "Waiting for project lock | "
-            "job_id=%s | project=%s",
+            "Waiting for project lock | job_id=%s | project=%s",
             job.job_id,
             job.project,
         )
@@ -246,8 +344,7 @@ class UpdateManager:
         async with self.locks[job.project]:
 
             logger.info(
-                "Project lock acquired | "
-                "job_id=%s | project=%s",
+                "Project lock acquired | job_id=%s | project=%s",
                 job.job_id,
                 job.project,
             )
@@ -255,6 +352,11 @@ class UpdateManager:
             # ------------------------------------------------
             # Validate project directory
             # ------------------------------------------------
+
+            logger.info(
+                "Checking project directory | path=%s",
+                project_dir,
+            )
 
             if not project_dir.is_dir():
 
@@ -268,10 +370,11 @@ class UpdateManager:
                 job.error = error
 
                 logger.error(
-                    "Job failed | job_id=%s | project=%s | error=%s",
+                    "Project directory validation FAILED | "
+                    "job_id=%s | project=%s | path=%s",
                     job.job_id,
                     job.project,
-                    error,
+                    project_dir,
                 )
 
                 await self.notifier.send(
@@ -284,6 +387,13 @@ class UpdateManager:
                 )
 
                 return
+
+            logger.info(
+                "Project directory validation PASSED | "
+                "project=%s | path=%s",
+                job.project,
+                project_dir,
+            )
 
             # ------------------------------------------------
             # Validate command
@@ -301,7 +411,8 @@ class UpdateManager:
                 job.error = error
 
                 logger.error(
-                    "Job failed | job_id=%s | project=%s | error=%s",
+                    "Command validation FAILED | "
+                    "job_id=%s | project=%s | error=%s",
                     job.job_id,
                     job.project,
                     error,
@@ -318,52 +429,79 @@ class UpdateManager:
 
                 return
 
+            logger.info(
+                "Command validation PASSED | project=%s | command=%s",
+                job.project,
+                command,
+            )
+
             # ------------------------------------------------
             # Validate executable/script when possible
             # ------------------------------------------------
 
             executable = command[0]
 
+            logger.info(
+                "Command executable | project=%s | executable=%s",
+                job.project,
+                executable,
+            )
+
             if len(command) >= 2:
 
                 possible_script = project_dir / command[1]
 
-                if (
-                    command[0] in (
-                        "python",
-                        "python3",
-                                           "bash",
-                        "sh",
-                    )
-                    and not possible_script.is_file()
+                if executable in (
+                    "python",
+                    "python3",
+                    "python3.10",
+                    "bash",
+                    "sh",
                 ):
 
-                    error = (
-                        f"Required script not found: "
-                        f"{possible_script}"
-                    )
-
-                    job.status = "failed"
-                    job.finished_at = utcnow()
-                    job.error = error
-
-                    logger.error(
-                        "Job failed | job_id=%s | project=%s | error=%s",
-                        job.job_id,
+                    logger.info(
+                        "Checking required script | "
+                        "project=%s | script=%s",
                         job.project,
-                        error,
+                        possible_script,
                     )
 
-                    await self.notifier.send(
-                        (
-                            f"FAILED | {job.project}\n"
-                            f"Job: {job.job_id}\n"
-                            f"{error}"
-                        ),
-                        chat_id,
-                    )
+                    if not possible_script.is_file():
 
-                    return
+                        error = (
+                            f"Required script not found: "
+                            f"{possible_script}"
+                        )
+
+                        job.status = "failed"
+                        job.finished_at = utcnow()
+                        job.error = error
+
+                        logger.error(
+                            "Required script validation FAILED | "
+                            "job_id=%s | project=%s | script=%s",
+                            job.job_id,
+                            job.project,
+                            possible_script,
+                        )
+
+                        await self.notifier.send(
+                            (
+                                f"FAILED | {job.project}\n"
+                                f"Job: {job.job_id}\n"
+                                f"{error}"
+                            ),
+                            chat_id,
+                        )
+
+                        return
+
+                    logger.info(
+                        "Required script validation PASSED | "
+                        "project=%s | script=%s",
+                        job.project,
+                        possible_script,
+                    )
 
             # ------------------------------------------------
             # Mark job as running
@@ -373,12 +511,36 @@ class UpdateManager:
             job.started_at = utcnow()
 
             logger.info(
-                "Job running | job_id=%s | project=%s | "
-                "folder=%s | command=%s",
-                job.job_id,
+                "============================================================"
+            )
+
+            logger.info(
+                "EXECUTING PROJECT UPDATE"
+            )
+
+            logger.info(
+                "Project : %s",
                 job.project,
+            )
+
+            logger.info(
+                "Directory : %s",
                 project_dir,
-                command,
+            )
+
+            logger.info(
+                "Command : %s",
+                " ".join(command),
+            )
+
+            logger.info(
+                "Full execution : cd %s && %s",
+                project_dir,
+                " ".join(command),
+            )
+
+            logger.info(
+                "============================================================"
             )
 
             # ------------------------------------------------
@@ -410,36 +572,78 @@ class UpdateManager:
                 # ============================================
 
                 env = os.environ.copy()
+
                 env["PYTHONUNBUFFERED"] = "1"
 
                 logger.info(
-                    "Starting subprocess | "
-                    "job_id=%s | command=%s | cwd=%s",
+                    "Subprocess environment prepared | "
+                    "job_id=%s | PYTHONUNBUFFERED=1",
                     job.job_id,
-                    command,
-                    project_dir,
                 )
 
                 # ============================================
                 # Start process
                 # ============================================
 
-                process = (
-                    await asyncio.create_subprocess_exec(
-                        *command,
-                        cwd=project_dir,
-                        env=env,
-                        stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.STDOUT,
-                    )
+                logger.info(
+                    "------------------------------------------------------------"
                 )
 
                 logger.info(
-                    "Subprocess started | "
-                    "job_id=%s | pid=%s | project=%s",
+                    "STARTING SUBPROCESS"
+                )
+
+                logger.info(
+                    "Executable : %s",
+                    executable,
+                )
+
+                logger.info(
+                    "Arguments : %s",
+                    command[1:],
+                )
+
+                logger.info(
+                    "cwd : %s",
+                    project_dir,
+                )
+
+                logger.info(
+                    "Command : %s",
+                    " ".join(command),
+                )
+
+                logger.info(
+                    "------------------------------------------------------------"
+                )
+
+                process = await asyncio.create_subprocess_exec(
+                    *command,
+                    cwd=project_dir,
+                    env=env,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT,
+                )
+
+                logger.info(
+                    "SUBPROCESS STARTED SUCCESSFULLY | "
+                    "job_id=%s | project=%s | pid=%s",
                     job.job_id,
-                    process.pid,
                     job.project,
+                    process.pid,
+                )
+
+                logger.info(
+                    "Subprocess working directory | "
+                    "pid=%s | cwd=%s",
+                    process.pid,
+                    project_dir,
+                )
+
+                logger.info(
+                    "Subprocess command | pid=%s | command=%s",
+                    process.pid,
+                    " ".join(command),
                 )
 
                 # ============================================
@@ -466,8 +670,9 @@ class UpdateManager:
                         ).rstrip()
 
                         if text:
+
                             logger.info(
-                                "%s | OUTPUT | %s",
+                                "%s | PROJECT OUTPUT | %s",
                                 job.job_id,
                                 text,
                             )
@@ -477,9 +682,10 @@ class UpdateManager:
                 # ============================================
 
                 logger.info(
-                    "Waiting for subprocess | "
-                    "job_id=%s | timeout=%s seconds",
+                    "Waiting for project command to finish | "
+                    "job_id=%s | pid=%s | timeout=%s seconds",
                     job.job_id,
+                    process.pid,
                     self.settings.command_timeout_seconds,
                 )
 
@@ -488,10 +694,7 @@ class UpdateManager:
                         process.wait(),
                         read_output(),
                     ),
-                    timeout=(
-                        self.settings
-                        .command_timeout_seconds
-                    ),
+                    timeout=self.settings.command_timeout_seconds,
                 )
 
                 # ============================================
@@ -510,13 +713,45 @@ class UpdateManager:
                 job.finished_at = utcnow()
 
                 logger.info(
-                    "Subprocess completed | "
-                    "job_id=%s | project=%s | pid=%s | "
-                    "return_code=%s",
-                    job.job_id,
+                    "------------------------------------------------------------"
+                )
+
+                logger.info(
+                    "PROJECT COMMAND COMPLETED"
+                )
+
+                logger.info(
+                    "Project : %s",
                     job.project,
+                )
+
+                logger.info(
+                    "Job ID : %s",
+                    job.job_id,
+                )
+
+                logger.info(
+                    "PID : %s",
                     process.pid,
+                )
+
+                logger.info(
+                    "Directory : %s",
+                    project_dir,
+                )
+
+                logger.info(
+                    "Command : %s",
+                    " ".join(command),
+                )
+
+                logger.info(
+                    "Exit code : %s",
                     process.returncode,
+                )
+
+                logger.info(
+                    "------------------------------------------------------------"
                 )
 
                 # ============================================
@@ -528,11 +763,39 @@ class UpdateManager:
                     job.status = "succeeded"
 
                     logger.info(
-                        "Job succeeded | "
-                        "job_id=%s | project=%s | "
-                        "return_code=0",
-                        job.job_id,
+                        "============================================================"
+                    )
+
+                    logger.info(
+                        "PROJECT UPDATE SUCCESS"
+                    )
+
+                    logger.info(
+                        "Project : %s",
                         job.project,
+                    )
+
+                    logger.info(
+                        "Job ID : %s",
+                        job.job_id,
+                    )
+
+                    logger.info(
+                        "Directory : %s",
+                        project_dir,
+                    )
+
+                    logger.info(
+                        "Command : %s",
+                        " ".join(command),
+                    )
+
+                    logger.info(
+                        "Exit code : 0"
+                    )
+
+                    logger.info(
+                        "============================================================"
                     )
 
                     await self.notifier.send(
@@ -567,13 +830,45 @@ class UpdateManager:
                     )
 
                     logger.error(
-                        "Job failed | "
-                        "job_id=%s | project=%s | "
-                        "return_code=%s | error=%s",
-                        job.job_id,
+                        "============================================================"
+                    )
+
+                    logger.error(
+                        "PROJECT UPDATE FAILED"
+                    )
+
+                    logger.error(
+                        "Project : %s",
                         job.project,
+                    )
+
+                    logger.error(
+                        "Job ID : %s",
+                        job.job_id,
+                    )
+
+                    logger.error(
+                        "Directory : %s",
+                        project_dir,
+                    )
+
+                    logger.error(
+                        "Command : %s",
+                        " ".join(command),
+                    )
+
+                    logger.error(
+                        "Exit code : %s",
                         process.returncode,
+                    )
+
+                    logger.error(
+                        "Error : %s",
                         job.error,
+                    )
+
+                    logger.error(
+                        "============================================================"
                     )
 
                     await self.notifier.send(
@@ -582,7 +877,7 @@ class UpdateManager:
                             f"Job: {job.job_id}\n"
                             f"{job.error}\n\n"
                             f"Output tail:\n"
-                            f"{job.output_tail}"
+                            f"{job.output_tail or '(no output)'}"
                         ),
                         chat_id,
                     )
@@ -601,12 +896,40 @@ class UpdateManager:
             except asyncio.TimeoutError:
 
                 logger.error(
-                    "Job timed out | "
-                    "job_id=%s | project=%s | "
-                    "timeout=%s seconds",
-                    job.job_id,
+                    "============================================================"
+                )
+
+                logger.error(
+                    "PROJECT UPDATE TIMED OUT"
+                )
+
+                logger.error(
+                    "Project : %s",
                     job.project,
+                )
+
+                logger.error(
+                    "Job ID : %s",
+                    job.job_id,
+                )
+
+                logger.error(
+                    "Directory : %s",
+                    project_dir,
+                )
+
+                logger.error(
+                    "Command : %s",
+                    " ".join(command),
+                )
+
+                logger.error(
+                    "Timeout : %s seconds",
                     self.settings.command_timeout_seconds,
+                )
+
+                logger.error(
+                    "============================================================"
                 )
 
                 if (
@@ -625,6 +948,13 @@ class UpdateManager:
 
                     await process.wait()
 
+                    logger.info(
+                        "Timed-out subprocess killed | "
+                        "job_id=%s | pid=%s",
+                        job.job_id,
+                        process.pid,
+                    )
+
                 job.status = "timed_out"
                 job.finished_at = utcnow()
                 job.error = (
@@ -632,7 +962,7 @@ class UpdateManager:
                 )
 
                 # ------------------------------------------------
-                # Capture any output already produced
+                # Capture output
                 # ------------------------------------------------
 
                 if output:
@@ -642,8 +972,7 @@ class UpdateManager:
                     )
 
                     job.output_tail = text[
-                        -self.settings
-                        .telegram_output_max_chars:
+                        -self.settings.telegram_output_max_chars:
                     ]
 
                 await self.notifier.send(
@@ -675,14 +1004,44 @@ class UpdateManager:
                 job.error = str(exc)
 
                 logger.exception(
-                    "Unexpected job failure | "
-                    "job_id=%s | project=%s",
-                    job.job_id,
+                    "============================================================"
+                )
+
+                logger.exception(
+                    "UNEXPECTED PROJECT UPDATE ERROR"
+                )
+
+                logger.exception(
+                    "Project : %s",
                     job.project,
                 )
 
+                logger.exception(
+                    "Job ID : %s",
+                    job.job_id,
+                )
+
+                logger.exception(
+                    "Directory : %s",
+                    project_dir,
+                )
+
+                logger.exception(
+                    "Command : %s",
+                    " ".join(command),
+                )
+
+                logger.exception(
+                    "Error : %s",
+                    exc,
+                )
+
+                logger.exception(
+                    "============================================================"
+                )
+
                 # ------------------------------------------------
-                # Capture any output already produced
+                # Capture output
                 # ------------------------------------------------
 
                 if output:
@@ -692,8 +1051,7 @@ class UpdateManager:
                     )
 
                     job.output_tail = text[
-                        -self.settings
-                        .telegram_output_max_chars:
+                        -self.settings.telegram_output_max_chars:
                     ]
 
                 await self.notifier.send(
@@ -717,9 +1075,33 @@ class UpdateManager:
             finally:
 
                 logger.info(
-                    "Job execution finished | "
-                    "job_id=%s | project=%s | status=%s",
-                    job.job_id,
+                    "============================================================"
+                )
+
+                logger.info(
+                    "JOB EXECUTION FINISHED"
+                )
+
+                logger.info(
+                    "Project : %s",
                     job.project,
+                )
+
+                logger.info(
+                    "Job ID : %s",
+                    job.job_id,
+                )
+
+                logger.info(
+                    "Final status : %s",
                     job.status,
+                )
+
+                logger.info(
+                    "Project folder : %s",
+                    project_dir,
+                )
+
+                logger.info(
+                    "============================================================"
                 ) 
