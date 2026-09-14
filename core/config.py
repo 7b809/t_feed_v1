@@ -11,8 +11,14 @@ class Settings:
     # ============================================================
 
     PROJECTS = {
-        "algo_app_v1": "/home/ubuntu/TheProjects/algo_app_v1",
-        "t_feed_v1": "/home/ubuntu/TheProjects/t_feed_v1_temp2",
+        "algo_app_v1": {
+            "folder": "/home/ubuntu/TheProjects/algo_app_v1",
+            "command": ["python3", "update_project.py"],
+        },
+        "t_feed_v1": {
+            "folder": "/home/ubuntu/TheProjects/t_feed_v1_temp2",
+            "command": ["python3", "update_project.py"],
+        },
     }
 
     # ============================================================
@@ -52,13 +58,9 @@ class Settings:
         self.update_python = self.DEFAULT_UPDATE_PYTHON
         self.update_script = self.DEFAULT_UPDATE_SCRIPT
 
-        self.command_timeout_seconds = (
-            self.DEFAULT_COMMAND_TIMEOUT_SECONDS
-        )
+        self.command_timeout_seconds = self.DEFAULT_COMMAND_TIMEOUT_SECONDS
 
-        self.telegram_output_max_chars = (
-            self.DEFAULT_TELEGRAM_OUTPUT_MAX_CHARS
-        )
+        self.telegram_output_max_chars = self.DEFAULT_TELEGRAM_OUTPUT_MAX_CHARS
 
         # --------------------------------------------------------
         # Load values from .env
@@ -182,64 +184,48 @@ class Settings:
         # --------------------------------------------------------
 
         if len(self.api_key) < 16:
-            raise ValueError(
-                "API_KEY must be at least 16 characters"
-            )
+            raise ValueError("API_KEY must be at least 16 characters")
 
         # --------------------------------------------------------
         # Port
         # --------------------------------------------------------
 
         if not 1 <= self.port <= 65535:
-            raise ValueError(
-                f"PORT must be between 1 and 65535: {self.port}"
-            )
+            raise ValueError(f"PORT must be between 1 and 65535: {self.port}")
 
         # --------------------------------------------------------
         # Timeout
         # --------------------------------------------------------
 
         if self.command_timeout_seconds <= 0:
-            raise ValueError(
-                "COMMAND_TIMEOUT_SECONDS must be greater than 0"
-            )
+            raise ValueError("COMMAND_TIMEOUT_SECONDS must be greater than 0")
 
         # --------------------------------------------------------
         # Telegram output size
         # --------------------------------------------------------
 
         if self.telegram_output_max_chars <= 0:
-            raise ValueError(
-                "TELEGRAM_OUTPUT_MAX_CHARS must be greater than 0"
-            )
+            raise ValueError("TELEGRAM_OUTPUT_MAX_CHARS must be greater than 0")
 
         # --------------------------------------------------------
         # Project configuration
         # --------------------------------------------------------
 
         if not self.PROJECTS:
-            raise ValueError(
-                "PROJECTS must not be empty"
-            )
+            raise ValueError("PROJECTS must not be empty")
 
         for name, path in self.PROJECTS.items():
 
             if not isinstance(name, str):
-                raise ValueError(
-                    "Project name must be a string"
-                )
+                raise ValueError("Project name must be a string")
 
             if not isinstance(path, str):
-                raise ValueError(
-                    f"Project path must be a string: {name}"
-                )
+                raise ValueError(f"Project path must be a string: {name}")
 
             project_path = Path(path)
 
             if not project_path.is_absolute():
-                raise ValueError(
-                    f"Project path must be absolute: {path}"
-                )
+                raise ValueError(f"Project path must be absolute: {path}")
 
     # ============================================================
     # Project Mapping
@@ -251,10 +237,7 @@ class Settings:
         Return project names mapped to resolved Path objects.
         """
 
-        return {
-            name: Path(path).resolve()
-            for name, path in self.PROJECTS.items()
-        }
+        return {name: Path(path).resolve() for name, path in self.PROJECTS.items()}
 
     # ============================================================
     # Telegram Allowed Chat ID
@@ -275,9 +258,7 @@ class Settings:
             return int(self.telegram_chat_id)
 
         except ValueError:
-            raise ValueError(
-                "TELEGRAM_CHAT_ID must be a valid integer"
-            )
+            raise ValueError("TELEGRAM_CHAT_ID must be a valid integer")
 
 
 # ================================================================
