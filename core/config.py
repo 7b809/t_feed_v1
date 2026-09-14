@@ -1,4 +1,3 @@
-
 import os
 from pathlib import Path
 
@@ -6,30 +5,44 @@ from pathlib import Path
 class Settings:
     # ============================================================
     # Static Project Configuration
+    # ============================================================
     #
     # Project configuration is intentionally kept in code.
     # It does NOT come from .env.
     #
     # Each project contains:
     #
-    #   folder  -> Absolute project directory
-    #   command -> Command to execute inside that directory
+    #   command -> Complete command to execute
+    #
+    # The command should contain the full executable/script path.
     #
     # Example:
     #
     # "algo_app_v1": {
-    #     "folder": "/home/ubuntu/TheProjects/algo_app_v1",
-    #     "command": ["python3", "update_project.py"],
+    #     "command": [
+    #         "python3",
+    #         "/home/ubuntu/TheProjects/algo_app_v1/update_project.py",
+    #     ],
     # }
+    #
+    # The working directory is automatically derived from the
+    # script path by update_runner.py.
+    #
     # ============================================================
 
     PROJECTS = {
         "algo_app_v1": {
-            "command ": ["python3", "/home/ubuntu/TheProjects/algo_app_v1/update_project.py"],
+            "command": [
+                "python3",
+                "/home/ubuntu/TheProjects/algo_app_v1/update_project.py",
+            ],
         },
 
         "t_feed_v1": {
-            "command": ["python3", "/home/ubuntu/TheProjects/t_feed_v1_temp2/update_project.py"],
+            "command": [
+                "python3",
+                "/home/ubuntu/TheProjects/t_feed_v1_temp2/update_project.py",
+            ],
         },
     }
 
@@ -50,6 +63,7 @@ class Settings:
     # ============================================================
 
     def __init__(self):
+
         # --------------------------------------------------------
         # Application
         # --------------------------------------------------------
@@ -191,6 +205,7 @@ class Settings:
     # ============================================================
 
     def validate(self):
+
         # --------------------------------------------------------
         # API key
         # --------------------------------------------------------
@@ -257,24 +272,6 @@ class Settings:
                 )
 
             # ----------------------------------------------------
-            # Folder
-            # ----------------------------------------------------
-
-            folder = project.get("folder")
-
-            if not isinstance(folder, str) or not folder.strip():
-                raise ValueError(
-                    f"Project folder must be a non-empty string: {name}"
-                )
-
-            project_path = Path(folder)
-
-            if not project_path.is_absolute():
-                raise ValueError(
-                    f"Project folder must be absolute: {name}: {folder}"
-                )
-
-            # ----------------------------------------------------
             # Command
             # ----------------------------------------------------
 
@@ -284,6 +281,10 @@ class Settings:
                 raise ValueError(
                     f"Project command must be a non-empty list: {name}"
                 )
+
+            # ----------------------------------------------------
+            # Validate every command argument
+            # ----------------------------------------------------
 
             for argument in command:
 
@@ -296,6 +297,59 @@ class Settings:
                     raise ValueError(
                         f"Command arguments cannot be empty: {name}"
                     )
+
+            # ----------------------------------------------------
+            # Validate executable
+            # ----------------------------------------------------
+
+            executable = command[0].strip()
+
+            if not executable:
+                raise ValueError(
+                    f"Project executable cannot be empty: {name}"
+                )
+
+            # ----------------------------------------------------
+            # Validate script path when command has arguments
+            # ----------------------------------------------------
+            #
+            # For commands such as:
+            #
+            # ["python3", "/path/update_project.py"]
+            #
+            # the second argument is expected to be the script.
+            #
+            # We validate it when the executable is a known
+            # interpreter/shell.
+            #
+            # ----------------------------------------------------
+
+            if len(command) >= 2:
+
+                if executable in (
+                    "python",
+                    "python3",
+                    "python3.10",
+                    "python3.11",
+                    "python3.12",
+                    "python3.13",
+                    "bash",
+                    "sh",
+                ):
+
+                    script_path = Path(command[1])
+
+                    if not script_path.is_absolute():
+                        raise ValueError(
+                            f"Project script path must be absolute: "
+                            f"{name}: {command[1]}"
+                        )
+
+                    if not script_path.is_file():
+                        raise ValueError(
+                            f"Project script does not exist: "
+                            f"{name}: {script_path}"
+                        )
 
     # ============================================================
     # Project Mapping
@@ -310,13 +364,15 @@ class Settings:
 
         {
             "project_name": {
-                "folder": Path(...),
                 "command": [...]
             }
         }
 
-        The folder is converted to an absolute resolved Path.
-        The command is returned as a separate list.
+        No project folder is required.
+
+        The command contains the complete executable/script path.
+        update_runner.py automatically derives the working directory
+        from the command.
         """
 
         result = {}
@@ -324,10 +380,6 @@ class Settings:
         for name, project in self.PROJECTS.items():
 
             result[name] = {
-                "folder": Path(
-                    project["folder"]
-                ).resolve(),
-
                 "command": list(
                     project["command"]
                 ),
