@@ -243,32 +243,32 @@ def process_selected_instrument(
     # Exit failed
     # --------------------------------------------------------------
 
-    if not exit_result.get("success"):
+    # if not exit_result.get("success"):
 
-        exit_error = exit_result.get(
-            "error"
-        )
+    #     exit_error = exit_result.get(
+    #         "error"
+    #     )
 
-        logger.error(
-            "Exit position failed: %s",
-            exit_error,
-        )
+    #     logger.error(
+    #         "Exit position failed: %s",
+    #         exit_error,
+    #     )
 
-        _send_telegram_message(
-            "❌ <b>Exit Positions Failed</b>\n\n"
-            f"📌 Symbol: <b>{trading_symbol}</b>\n"
-            f"⚠️ Error: <code>{exit_error}</code>\n\n"
-            "🚫 <b>New order NOT placed.</b>"
-        )
+    #     _send_telegram_message(
+    #         "❌ <b>Exit Positions Failed</b>\n\n"
+    #         f"📌 Symbol: <b>{trading_symbol}</b>\n"
+    #         f"⚠️ Error: <code>{exit_error}</code>\n\n"
+    #         "🚫 <b>New order NOT placed.</b>"
+    #     )
 
-        return {
-            "success": False,
-            "order_status": "EXIT_FAILED",
-            "selected_instrument": instrument_details,
-            "exit_result": exit_result,
-            "place_order_result": None,
-            "error": "Position exit failed.",
-        }
+    #     return {
+    #         "success": False,
+    #         "order_status": "EXIT_FAILED",
+    #         "selected_instrument": instrument_details,
+    #         "exit_result": exit_result,
+    #         "place_order_result": None,
+    #         "error": "Position exit failed.",
+    #     }
 
     # --------------------------------------------------------------
     # Exit successful
