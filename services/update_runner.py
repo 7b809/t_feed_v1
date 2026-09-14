@@ -70,10 +70,9 @@ class UpdateManager:
 
         for project_name, project_config in settings.projects.items():
             logger.info(
-                "Configured project | name=%s | folder=%s | command=%s",
+                "Configured project | name=%s | command=%s",
                 project_name,
-                project_config["folder"],
-                project_config["command"],
+                project_config.get("command"),
             )
 
     # ========================================================
@@ -128,15 +127,9 @@ class UpdateManager:
         )
 
         logger.info(
-            "Selected project folder | project=%s | folder=%s",
-            project,
-            project_config["folder"],
-        )
-
-        logger.info(
             "Selected project command | project=%s | command=%s",
             project,
-            project_config["command"],
+            project_config.get("command"),
         )
 
         # ----------------------------------------------------
@@ -281,13 +274,27 @@ class UpdateManager:
             job.project
         ]
 
-        project_dir = Path(
-            project_config["folder"]
+        command = list(
+            project_config.get("command", [])
         )
 
-        command = list(
-            project_config["command"]
-        )
+        # ----------------------------------------------------
+        # Determine working directory automatically
+        # ----------------------------------------------------
+
+        project_dir = None
+
+        if len(command) >= 2:
+
+            script_path = Path(command[1])
+
+            if script_path.is_absolute():
+
+                project_dir = script_path.parent
+
+            else:
+
+                project_dir = Path.cwd() / script_path.parent
 
         # ----------------------------------------------------
         # Display exact execution information
@@ -307,11 +314,6 @@ class UpdateManager:
         )
 
         logger.info(
-            "Project folder : %s",
-            project_dir,
-        )
-
-        logger.info(
             "Command list : %s",
             command,
         )
@@ -321,11 +323,20 @@ class UpdateManager:
             project_dir,
         )
 
-        logger.info(
-            "Equivalent shell command : cd %s && %s",
-            project_dir,
-            " ".join(command),
-        )
+        if project_dir is not None:
+
+            logger.info(
+                "Equivalent shell command : cd %s && %s",
+                project_dir,
+                " ".join(command),
+            )
+
+        else:
+
+            logger.info(
+                "Equivalent shell command : %s",
+                " ".join(command),
+            )
 
         logger.info(
             "------------------------------------------------------------"
@@ -347,52 +358,6 @@ class UpdateManager:
                 "Project lock acquired | job_id=%s | project=%s",
                 job.job_id,
                 job.project,
-            )
-
-            # ------------------------------------------------
-            # Validate project directory
-            # ------------------------------------------------
-
-            logger.info(
-                "Checking project directory | path=%s",
-                project_dir,
-            )
-
-            if not project_dir.is_dir():
-
-                error = (
-                    f"Project directory does not exist: "
-                    f"{project_dir}"
-                )
-
-                job.status = "failed"
-                job.finished_at = utcnow()
-                job.error = error
-
-                logger.error(
-                    "Project directory validation FAILED | "
-                    "job_id=%s | project=%s | path=%s",
-                    job.job_id,
-                    job.project,
-                    project_dir,
-                )
-
-                await self.notifier.send(
-                    (
-                        f"FAILED | {job.project}\n"
-                        f"Job: {job.job_id}\n"
-                        f"{error}"
-                    ),
-                    chat_id,
-                )
-
-                return
-
-            logger.info(
-                "Project directory validation PASSED | "
-                "project=%s | path=%s",
-                job.project,
-                project_dir,
             )
 
             # ------------------------------------------------
@@ -436,7 +401,7 @@ class UpdateManager:
             )
 
             # ------------------------------------------------
-            # Validate executable/script when possible
+            # Validate executable
             # ------------------------------------------------
 
             executable = command[0]
@@ -447,9 +412,27 @@ class UpdateManager:
                 executable,
             )
 
+            # ------------------------------------------------
+            # Validate script when possible
+            # ------------------------------------------------
+
             if len(command) >= 2:
 
-                possible_script = project_dir / command[1]
+                possible_script = Path(command[1])
+
+                if not possible_script.is_absolute():
+
+                    if project_dir is not None:
+
+                        possible_script = (
+                            project_dir / possible_script
+                        )
+
+                    else:
+
+                        possible_script = (
+                            Path.cwd() / possible_script
+                        )
 
                 if executable in (
                     "python",
@@ -462,7 +445,7 @@ class UpdateManager:
                     logger.info(
                         "Checking required script | "
                         "project=%s | script=%s",
-                        job.project,
+                        project_name if False else job.project,
                         possible_script,
                     )
 
@@ -533,11 +516,20 @@ class UpdateManager:
                 " ".join(command),
             )
 
-            logger.info(
-                "Full execution : cd %s && %s",
-                project_dir,
-                " ".join(command),
-            )
+            if project_dir is not None:
+
+                logger.info(
+                    "Full execution : cd %s && %s",
+                    project_dir,
+                    " ".join(command),
+                )
+
+            else:
+
+                logger.info(
+                    "Full execution : %s",
+                    " ".join(command),
+                )
 
             logger.info(
                 "============================================================"
@@ -617,13 +609,28 @@ class UpdateManager:
                     "------------------------------------------------------------"
                 )
 
-                process = await asyncio.create_subprocess_exec(
-                    *command,
-                    cwd=project_dir,
-                    env=env,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.STDOUT,
-                )
+                # ====================================================
+                # ACTUAL PROJECT COMMAND EXECUTION
+                # ====================================================
+
+                if project_dir is not None:
+
+                    process = await asyncio.create_subprocess_exec(
+                        *command,
+                        cwd=project_dir,
+                        env=env,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.STDOUT,
+                    )
+
+                else:
+
+                    process = await asyncio.create_subprocess_exec(
+                        *command,
+                        env=env,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.STDOUT,
+                    )
 
                 logger.info(
                     "SUBPROCESS STARTED SUCCESSFULLY | "
@@ -957,6 +964,7 @@ class UpdateManager:
 
                 job.status = "timed_out"
                 job.finished_at = utcnow()
+
                 job.error = (
                     "Command timed out and was killed"
                 )
@@ -1098,10 +1106,10 @@ class UpdateManager:
                 )
 
                 logger.info(
-                    "Project folder : %s",
+                    "Project directory : %s",
                     project_dir,
                 )
 
                 logger.info(
                     "============================================================"
-                ) 
+                )

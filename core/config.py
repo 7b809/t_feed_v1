@@ -25,13 +25,11 @@ class Settings:
 
     PROJECTS = {
         "algo_app_v1": {
-            "folder": "/home/ubuntu/TheProjects/algo_app_v1",
-            "command": ["python3", "update_project.py"],
+            "command ": ["python3", "/home/ubuntu/TheProjects/algo_app_v1/update_project.py"],
         },
 
         "t_feed_v1": {
-            "folder": "/home/ubuntu/TheProjects/t_feed_v1_temp2",
-            "command": ["python3", "update_project.py"],
+            "command": ["python3", "/home/ubuntu/TheProjects/t_feed_v1_temp2/update_project.py"],
         },
     }
 
