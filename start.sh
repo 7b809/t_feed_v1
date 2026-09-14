@@ -7,7 +7,7 @@ set -euo pipefail
 # ============================================================
 
 HOST="0.0.0.0"
-PORT="8080"
+PORT="8005"
 
 VENV_DIR=".venv"
 PID_FILE="uvicorn.pid"
