@@ -16,7 +16,7 @@ myenv/
 venv/
  files.txt
  t.txt
- 
+ *.pid
 .env.* 
 .env
 test_logs
