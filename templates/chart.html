@@ -296,11 +296,26 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
   min-width: 120px;
 }
 .level-status-bar {
-  position: absolute; z-index: 90; top: 12px; right: 16px;
-  display: flex; flex-wrap: wrap; gap: 6px;
-  padding: 6px 10px; border: 1px solid var(--border);
-  border-radius: 20px; background: rgba(30,34,45,0.92);
-  backdrop-filter: blur(12px); box-shadow: var(--shadow);
+  position: absolute;
+  z-index: 90;
+  top: 12px;
+  left: 50%;
+  right: auto;
+  transform: translateX(-50%);
+
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  background: rgba(30,34,45,0.92);
+  backdrop-filter: blur(12px);
+  box-shadow: var(--shadow);
+
   max-width: calc(100% - 32px);
 }
 .level-status-bar .badge { font-size: 10px; font-weight: 700; padding: 3px 8px; letter-spacing: 0.02em; }
@@ -791,10 +806,15 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
       <div class="fw-bold text-white small mb-1">On-Demand Historical Data</div>
       <div class="text-muted small">When scrolling left past the oldest candle, past data is loaded only when you click the popup prompt.</div>
     </div>
+    <div class="p-3 border border-secondary rounded bg-dark mb-3">
+      <div class="fw-bold text-white small mb-2"><i class="bi bi-sliders2 me-1 text-primary"></i>Price Scale</div>
+      <div class="text-muted small">The chart initially fits the visible candles tightly (like TradingView) with a small amount of padding. Drag or scroll on the right-side price scale to zoom vertically. The scale automatically adapts its precision and tick spacing to the visible price range.</div>
+    </div>
   </div>
 </div>
 
 <script id="instrument-key-data" type="application/json">{{ instrument_key | tojson }}</script>
+<script id="instrument-tick-size-data" type="application/json">{{ instrument.get('tick_size') | tojson }}</script>
 <script id="candles-data" type="application/json">{{ candles | tojson }}</script>
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 {% endblock %}
@@ -886,6 +906,375 @@ let levelLabelLayer = null;
 let levelLabelUpdateScheduled = false;
 let chartTooltip = null;
 let currentRenderedDate = null;
+
+// ============================================================
+// DYNAMIC PRICE SCALE — state + helpers
+// ------------------------------------------------------------
+// The RIGHT price scale's displayed unit / precision adapts to the
+// CURRENTLY VISIBLE price range (i.e. the user's zoom level). This
+// affects ONLY the axis display precision — never the actual
+// price range (viewport) and never any level VALUE.
+//
+// NOTE ON VIEWPORT VS. FORMATTING:
+//   * The VIEWPORT (what price range is visible) is controlled by
+//     Lightweight Charts' natural autoscale, configured with
+//     `rightPriceScale.autoScale = true` and tight
+//     `rightPriceScale.scaleMargins = { top: 0.05, bottom: 0.05 }`,
+//     AND by excluding overlay level lines from autoscale via
+//     `autoscaleInfoProvider: () => null` on every level line.
+//     This produces a TradingView-like tight initial view that
+//     fits the visible candles.
+//   * The FORMATTING (decimal precision / minMove) is what the
+//     functions below control. They react to the current visible
+//     range but never change it.
+// ============================================================
+const dynamicPriceScale = {
+  currentUnit: null,          // last applied dynamic unit (nice number)
+  currentPrecision: null,     // last applied price-format precision
+  currentMinMove: null,       // last applied minMove
+  tickSize: null,             // instrument tick size, if known
+  lastTopPrice: null,         // cached visible top price
+  lastBottomPrice: null,      // cached visible bottom price
+  rafId: null,                // rAF handle for the watcher loop
+  lastCheckTs: 0,             // throttle timestamp (ms)
+  // Throttle so price-scale checks never run more than ~10x/second.
+  checkIntervalMs: 90,
+};
+
+// ---- Read instrument tick size (if the template provides it) ----
+(function readInstrumentTickSize() {
+  try {
+    const el = document.getElementById("instrument-tick-size-data");
+    if (!el) return;
+    const raw = JSON.parse(el.textContent);
+    const num = Number(raw);
+    if (Number.isFinite(num) && num > 0) {
+      dynamicPriceScale.tickSize = num;
+    }
+  } catch (err) {
+    console.warn("Unable to read instrument tick size:", err);
+  }
+})();
+
+// ---- Pane height (excludes the bottom time scale) ----
+function getPaneHeight() {
+  if (!chart) {
+    return (chartContainer && chartContainer.clientHeight) || 500;
+  }
+  try {
+    // Lightweight Charts v4/v5: IPriceScaleApi.height() returns the
+    // vertical extent of the price scale (== pane price area height).
+    const ps = chart.priceScale("right");
+    if (ps && typeof ps.height === "function") {
+      const h = ps.height();
+      if (Number.isFinite(h) && h > 0) return h;
+    }
+  } catch (err) {
+    // fall through to fallback
+  }
+  // Conservative fallback: chart height minus an estimated time scale.
+  const totalH = (chartContainer && chartContainer.clientHeight) || 500;
+  return Math.max(100, totalH - 30);
+}
+
+// ---- Read the CURRENT visible price range from the series ----
+// Uses series.coordinateToPrice() — the only cross-version-safe
+// way to translate pixel-y into price-y for the visible pane.
+function getVisiblePriceRange() {
+  if (!candleSeries) return null;
+  const paneHeight = getPaneHeight();
+  if (!Number.isFinite(paneHeight) || paneHeight <= 0) return null;
+
+  let topPrice = null;
+  let bottomPrice = null;
+  try {
+    topPrice = candleSeries.coordinateToPrice(0);
+    bottomPrice = candleSeries.coordinateToPrice(paneHeight);
+  } catch (err) {
+    return null;
+  }
+  if (topPrice === null || bottomPrice === null) return null;
+
+  const top = Number(topPrice);
+  const bottom = Number(bottomPrice);
+  if (!Number.isFinite(top) || !Number.isFinite(bottom)) return null;
+
+  const minPrice = Math.min(top, bottom);
+  const maxPrice = Math.max(top, bottom);
+  const range = maxPrice - minPrice;
+  if (!Number.isFinite(range) || range <= 0) return null;
+
+  return { minPrice, maxPrice, range };
+}
+
+// ---- Snap a raw unit to the nearest "nice" 1/2/5 × 10^n value ----
+function snapToNiceUnit(rawUnit) {
+  if (!Number.isFinite(rawUnit) || rawUnit <= 0) return null;
+
+  const exponent = Math.floor(Math.log10(rawUnit));
+  if (!Number.isFinite(exponent)) return null;
+
+  const base = Math.pow(10, exponent);
+  if (!Number.isFinite(base) || base <= 0) return null;
+
+  const mantissa = rawUnit / base;
+  if (!Number.isFinite(mantissa)) return null;
+
+  let niceMantissa;
+  if (mantissa < 1.5) niceMantissa = 1;
+  else if (mantissa < 3) niceMantissa = 2;
+  else if (mantissa < 7) niceMantissa = 5;
+  else niceMantissa = 10;
+
+  const result = niceMantissa * base;
+  if (!Number.isFinite(result) || result <= 0) return null;
+  return result;
+}
+
+// ---- Compute the appropriate price unit for the visible range ----
+function getDynamicPriceUnit(minPrice, maxPrice, paneHeight) {
+  const range = maxPrice - minPrice;
+  if (!Number.isFinite(range) || range <= 0) return null;
+
+  const height = (Number.isFinite(paneHeight) && paneHeight > 0)
+    ? paneHeight
+    : ((chartContainer && chartContainer.clientHeight) || 500);
+
+  // Desired number of readable tick labels: 6..14 depending on height.
+  // (70px is roughly one comfortable row per label.)
+  const desiredTickCount = Math.max(
+    6,
+    Math.min(14, Math.round(height / 70))
+  );
+
+  const rawUnit = range / desiredTickCount;
+  let unit = snapToNiceUnit(rawUnit);
+  if (unit === null) return null;
+
+  // Respect the instrument's tick size — never display a granularity
+  // smaller than the instrument can actually trade at.
+  const tickSize = dynamicPriceScale.tickSize;
+  if (Number.isFinite(tickSize) && tickSize > 0) {
+    if (unit < tickSize) {
+      unit = tickSize;
+    } else {
+      // Snap UP to the nearest integer multiple of tickSize that is
+      // >= unit, so the axis step never falls below the requested
+      // granularity (and is always a valid multiple of tickSize).
+      const multiples = Math.max(1, Math.ceil(unit / tickSize));
+      unit = multiples * tickSize;
+    }
+  }
+
+  if (!Number.isFinite(unit) || unit <= 0) return null;
+  return unit;
+}
+
+// ---- Decimals needed to make a given unit readable ----
+function getPricePrecision(step) {
+  if (!Number.isFinite(step) || step <= 0) return 2;
+  if (step >= 1) return 0;
+
+  // For step=0.5 -> 1 decimal; step=0.05 -> 2; step=0.01 -> 2.
+  const decimals = Math.ceil(-Math.log10(step));
+  if (!Number.isFinite(decimals) || decimals < 0) return 2;
+  return Math.min(decimals, 8);
+}
+
+// ============================================================
+// INITIAL VIEWPORT — tight TradingView-like vertical autoscale
+// ------------------------------------------------------------
+// Computes a sensible vertical price range from the actual candle
+// high/low with a modest percentage padding (default 5%). This is
+// the "ideal" tight range that the initial viewport should show,
+// derived ONLY from candle data — never from hard-coded values
+// such as 0 or 540.
+//
+// NOTE: the actual application of the initial tight viewport is
+// done by Lightweight Charts' own autoscale, which:
+//   • fits the VISIBLE candles (not level lines) by default, and
+//   • respects `rightPriceScale.scaleMargins` for padding.
+// We configure those two things accordingly (see createChart()
+// and drawDayLevelLine()). This helper is used for verification,
+// debugging, and as a safety fallback (applyTightInitialAutoscale).
+// ============================================================
+function calculateInitialPriceScaleRange(candles) {
+  if (!Array.isArray(candles) || candles.length === 0) return null;
+
+  let minPrice = Infinity;
+  let maxPrice = -Infinity;
+
+  for (const candle of candles) {
+    if (!candle) continue;
+    const lo = Number(candle.low);
+    const hi = Number(candle.high);
+    if (!Number.isFinite(lo) || !Number.isFinite(hi)) continue;
+    if (lo < minPrice) minPrice = lo;
+    if (hi > maxPrice) maxPrice = hi;
+  }
+
+  if (!Number.isFinite(minPrice) || !Number.isFinite(maxPrice)) return null;
+  if (maxPrice <= minPrice) return null;
+
+  const candleRange = maxPrice - minPrice;
+  // Modest TradingView-like padding: 5% of the actual candle range.
+  const padding = candleRange * 0.05;
+
+  return {
+    minPrice: minPrice - padding,
+    maxPrice: maxPrice + padding,
+    candleMin: minPrice,
+    candleMax: maxPrice,
+    candleRange,
+    padding,
+  };
+}
+
+// ---- Apply the tight initial vertical price range ONCE ----
+// This does NOT continuously reset the viewport. After the user
+// manually zooms the right price scale, Lightweight Charts turns
+// autoscale off and we leave the user's zoom alone.
+//
+// On the next animation frame we compare the actual visible range
+// with the ideal tight range. Only if the actual range is still
+// far wider than intended (e.g. a future LWC behaviour change or
+// some unforeseen pollution of autoscale) do we nudge the price
+// scale back toward a tight autoscale. This is a one-shot safety
+// net, not a continuous enforcement.
+function applyTightInitialAutoscale(candles) {
+  if (!chart || !candleSeries) return;
+
+  const tight = calculateInitialPriceScaleRange(candles);
+  if (!tight) return;
+
+  if (window.__DEBUG_PRICE_SCALE__) {
+    console.log("[price-scale] ideal tight range from candles:", tight);
+  }
+
+  requestAnimationFrame(() => {
+    if (!chart || pageClosing) return;
+    const actual = getVisiblePriceRange();
+    if (!actual) return;
+
+    const idealRange = tight.maxPrice - tight.minPrice;
+    if (!Number.isFinite(idealRange) || idealRange <= 0) return;
+
+    // Only intervene when the actual range is WAY off (more than
+    // ~2.5x the ideal tight range). Normal autoscale behaviour
+    // already matches the ideal range closely.
+    if (actual.range > idealRange * 2.5) {
+      try {
+        chart.priceScale("right").applyOptions({
+          autoScale: true,
+          scaleMargins: { top: 0.05, bottom: 0.05 },
+        });
+      } catch (err) {
+        console.warn("Fallback tight-autoscale apply failed:", err);
+      }
+    }
+  });
+}
+
+// ---- Apply the dynamic unit to the series' price format ----
+// Only runs the expensive applyOptions() when the unit ACTUALLY
+// changes, so no feedback loops and no wasted work. This function
+// ONLY affects the axis DISPLAY precision — it never touches the
+// visible price range (viewport).
+function updateDynamicPriceScale() {
+  if (!candleSeries) return;
+
+  const rangeInfo = getVisiblePriceRange();
+  if (!rangeInfo) return;
+
+  // Always trigger a label reposition if the visible range moved,
+  // even when the unit itself hasn't changed.
+  const topChanged = dynamicPriceScale.lastTopPrice === null
+    || Math.abs(dynamicPriceScale.lastTopPrice - rangeInfo.minPrice) > 1e-9;
+  const bottomChanged = dynamicPriceScale.lastBottomPrice === null
+    || Math.abs(dynamicPriceScale.lastBottomPrice - rangeInfo.maxPrice) > 1e-9;
+
+  if (topChanged || bottomChanged) {
+    dynamicPriceScale.lastTopPrice = rangeInfo.minPrice;
+    dynamicPriceScale.lastBottomPrice = rangeInfo.maxPrice;
+    scheduleLevelLabelUpdate();
+  }
+
+  const paneHeight = getPaneHeight();
+  const unit = getDynamicPriceUnit(
+    rangeInfo.minPrice,
+    rangeInfo.maxPrice,
+    paneHeight
+  );
+  if (unit === null) return;
+
+  // Nothing to do if the unit is unchanged — prevents feedback loops.
+  if (dynamicPriceScale.currentUnit === unit) return;
+
+  const precision = getPricePrecision(unit);
+  const rawMinMove = Math.pow(10, -precision);
+  const tickSize = dynamicPriceScale.tickSize;
+  const effectiveMinMove =
+    (Number.isFinite(tickSize) && tickSize > 0)
+      ? Math.max(rawMinMove, tickSize)
+      : rawMinMove;
+
+  try {
+    candleSeries.applyOptions({
+      priceFormat: {
+        type: "price",
+        precision: precision,
+        minMove: effectiveMinMove,
+      },
+    });
+  } catch (err) {
+    console.warn("Failed to apply dynamic price format:", err);
+    return;
+  }
+
+  dynamicPriceScale.currentUnit = unit;
+  dynamicPriceScale.currentPrecision = precision;
+  dynamicPriceScale.currentMinMove = effectiveMinMove;
+
+  // Refresh level labels (they use priceToCoordinate which already
+  // reflects the visible range; the call is cheap & idempotent).
+  scheduleLevelLabelUpdate();
+}
+
+// ---- rAF watcher: reacts to ANY price-scale change, including
+//      vertical-only zoom via the right-hand price scale drag,
+//      which Lightweight Charts does not expose as an event.
+//
+//      IMPORTANT: this watcher NEVER resets the visible price
+//      range. It only observes the current range to keep the
+//      axis DISPLAY precision / tick spacing in sync.
+// ----
+function startPriceScaleWatcher() {
+  if (dynamicPriceScale.rafId !== null) return;
+
+  const tick = (now) => {
+    if (pageClosing) return;
+    const ts = (typeof now === "number") ? now : performance.now();
+    if (ts - dynamicPriceScale.lastCheckTs >= dynamicPriceScale.checkIntervalMs) {
+      dynamicPriceScale.lastCheckTs = ts;
+      try {
+        updateDynamicPriceScale();
+      } catch (err) {
+        // Never let the watcher throw — it runs continuously.
+        console.warn("Price scale watcher error:", err);
+      }
+    }
+    dynamicPriceScale.rafId = requestAnimationFrame(tick);
+  };
+
+  dynamicPriceScale.rafId = requestAnimationFrame(tick);
+}
+
+function stopPriceScaleWatcher() {
+  if (dynamicPriceScale.rafId !== null) {
+    cancelAnimationFrame(dynamicPriceScale.rafId);
+    dynamicPriceScale.rafId = null;
+  }
+}
 
 // ============================================================
 // LABEL TOGGLE BUTTONS
@@ -1193,6 +1582,14 @@ function updateCandleFromLtp(ltp, timestamp) {
 
 // ============================================================
 // LOAD OLDER HISTORICAL DATA
+// ------------------------------------------------------------
+// NOTE: historical loading must NOT reset the user's current
+// vertical zoom. `candleSeries.setData()` does not touch the
+// visible price range, and we deliberately do not call any
+// custom "reset vertical range" here. If the user has manually
+// zoomed (autoscale off), the zoom is preserved. If the user
+// has not interacted, LWC's own autoscale simply re-fits to
+// the new visible candle set — no application-side reset.
 // ============================================================
 async function loadOlderHistoricalData() {
   if (isLoadingHistory || !hasMoreHistory || !oldestCandleTime) return;
@@ -1426,10 +1823,16 @@ function scheduleLevelLabelUpdate() {
     updateLevelLabelPositions();
   });
 }
+// Repositions every level label so its screen-Y always matches the
+// CURRENT price scale. Level VALUES are never touched — only their
+// pixel position. Labels whose price is outside the visible pane are
+// hidden (never clamped to an edge) so the chart stays price-accurate.
 function updateLevelLabelPositions() {
   if (!chart || !candleSeries || !levelLabels.length) return;
   const timeScale = chart.timeScale();
   const containerWidth = chartContainer.clientWidth;
+  const paneHeight = getPaneHeight();
+
   levelLabels.forEach(label => {
     // ---- Label visibility gating (does NOT affect lines) ----
     if (!isLabelGroupVisible(label.levelName)) {
@@ -1439,8 +1842,23 @@ function updateLevelLabelPositions() {
 
     const x = timeScale.timeToCoordinate(label.startTime);
     const y = candleSeries.priceToCoordinate(label.value);
-    if (x === null || y === null || !Number.isFinite(x) || !Number.isFinite(y)) { label.element.style.display = "none"; return; }
-    if (x < -120 || x > containerWidth + 120) { label.element.style.display = "none"; return; }
+    if (x === null || y === null || !Number.isFinite(x) || !Number.isFinite(y)) {
+      label.element.style.display = "none";
+      return;
+    }
+
+    // Hide labels whose level price is outside the visible price range.
+    // (No clamping — a level above/below the viewport stays off-screen.)
+    if (y < -8 || y > paneHeight + 8) {
+      label.element.style.display = "none";
+      return;
+    }
+
+    if (x < -120 || x > containerWidth + 120) {
+      label.element.style.display = "none";
+      return;
+    }
+
     label.element.style.display = "block";
     label.element.style.left = Math.round(x + 4) + "px";
     label.element.style.top  = Math.round(y) + "px";
@@ -1456,7 +1874,13 @@ function drawDayLevelLine(levelName, rawValue, startTime, endTime, color, lineSt
   if (!Number.isFinite(value)) return;
   const lineSeries = addLineSeriesSafe({
     color, lineWidth: 1, lineStyle,
-    priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false
+    priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+    // CRITICAL: exclude level lines from the right price scale's
+    // autoscale. Without this, level lines from OTHER days (e.g. a
+    // much older day with a very high R3 or a very low S3) stretch
+    // the autoscale range far beyond the currently visible candles,
+    // which makes candles look vertically compressed.
+    autoscaleInfoProvider: () => null,
   });
   if (!lineSeries) return;
   const data = [{ time: startTime, value }];
@@ -1598,7 +2022,20 @@ function createChart(candles) {
       layout: { background: { color: "#131722" }, textColor: "#d1d4dc" },
       grid: { vertLines: { color: "#2a2e39" }, horzLines: { color: "#2a2e39" } },
       crosshair: { mode: LightweightCharts.CrosshairMode.Normal, vertLine: { labelBackgroundColor: "#2962ff", labelBorderColor: "#2962ff" } },
-      rightPriceScale: { borderColor: "#2a2e39" },
+      rightPriceScale: {
+        borderColor: "#2a2e39",
+        // Tight TradingView-like padding around the visible candle
+        // high/low. The default 10% padding on each side makes the
+        // candles feel vertically compressed; 5% gives a tighter view
+        // while still leaving a little breathing room.
+        scaleMargins: { top: 0.05, bottom: 0.05 },
+        // Autoscale is enabled so the chart fits the VISIBLE candles
+        // tightly on first render. Lightweight Charts automatically
+        // disables autoscale when the user manually zooms the right
+        // price scale, so manual vertical zoom continues to work
+        // normally and is never overridden.
+        autoScale: true,
+      },
       timeScale: {
         borderColor: "#2a2e39",
         timeVisible: true, secondsVisible: false,
@@ -1606,19 +2043,33 @@ function createChart(candles) {
         fixLeftEdge: false, fixRightEdge: false, lockVisibleTimeRangeOnResize: false,
         tickMarkFormatter: (time, tickMarkType) => formatTimeLabel(time, tickMarkType)
       },
+      // NOTE: localization.priceFormatter intentionally NOT set here.
+      // The right price scale's precision is now driven per-series by
+      // the DYNAMIC PRICE SCALE logic (see updateDynamicPriceScale()).
+      // This lets the axis adapt its decimal precision to the user's
+      // current zoom level without touching any actual price values.
       localization: {
         locale: "en-IN",
-        timeFormatter: (time) => formatFullDate(time),
-        priceFormatter: (price) => { const numericPrice = Number(price); return Number.isFinite(numericPrice) ? numericPrice.toFixed(2) : ""; }
+        timeFormatter: (time) => formatFullDate(time)
       }
     }
   );
+
+  // Initial price format. Dynamic updates override precision/minMove
+  // as soon as the first price-scale check runs after chart creation.
+  const initialTickSize = dynamicPriceScale.tickSize;
+  const initialPrecision = (Number.isFinite(initialTickSize) && initialTickSize > 0)
+    ? getPricePrecision(initialTickSize)
+    : 2;
+  const initialMinMove = (Number.isFinite(initialTickSize) && initialTickSize > 0)
+    ? initialTickSize
+    : 0.01;
 
   const candleOptions = {
     upColor: "#089981", downColor: "#f23645",
     borderUpColor: "#089981", borderDownColor: "#f23645",
     wickUpColor: "#089981", wickDownColor: "#f23645",
-    priceFormat: { type: "price", precision: 2, minMove: 0.01 }
+    priceFormat: { type: "price", precision: initialPrecision, minMove: initialMinMove }
   };
 
   if (typeof chart.addSeries === "function" && LightweightCharts.CandlestickSeries) {
@@ -1645,6 +2096,9 @@ function createChart(candles) {
   chart.timeScale().subscribeVisibleTimeRangeChange(() => scheduleLevelLabelUpdate());
   chart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
     scheduleLevelLabelUpdate();
+    // Horizontal scroll/zoom changed — also refresh the dynamic price
+    // scale in case the visible price range moved (e.g. after fitContent).
+    updateDynamicPriceScale();
     if (!range || isLoadingHistory || !hasMoreHistory) return;
     historyLoadBanner.style.display = range.from < 5 ? "flex" : "none";
   });
@@ -1653,6 +2107,8 @@ function createChart(candles) {
     if (!chart) return;
     chart.applyOptions({ width: chartContainer.clientWidth, height: chartContainer.clientHeight });
     scheduleLevelLabelUpdate();
+    // Recompute visible price range / unit after resize.
+    updateDynamicPriceScale();
   };
   window.addEventListener("resize", resizeChart);
   window.addEventListener("orientationchange", () => setTimeout(resizeChart, 200));
@@ -1663,6 +2119,22 @@ function createChart(candles) {
 
   calculatedOpeningRanges = buildOpeningRangesFromCandles(candles);
   renderOpeningRangeLines();
+
+  // Initialize the dynamic price unit for the first visible range
+  // (before the watcher's first tick fires).
+  updateDynamicPriceScale();
+
+  // Apply the tight initial vertical autoscale ONCE. This runs after
+  // the level lines have been added (so their autoscale exclusion
+  // is in effect) and after fitContent(). It does NOT continuously
+  // reset the viewport — see applyTightInitialAutoscale().
+  applyTightInitialAutoscale(candles);
+
+  // Start the continuous rAF watcher that reacts to any price-scale
+  // change, including vertical-only zoom via the right price scale.
+  // It ONLY updates display precision / tick spacing and label
+  // positions — never the visible price range itself.
+  startPriceScaleWatcher();
 }
 
 // ============================================================
@@ -1680,6 +2152,7 @@ connectWebSocket();
 // ============================================================
 window.addEventListener("beforeunload", () => {
   pageClosing = true;
+  stopPriceScaleWatcher();
   if (reconnectTimer) window.clearTimeout(reconnectTimer);
   if (chartSocket) chartSocket.close(1000, "Chart page closed");
 });

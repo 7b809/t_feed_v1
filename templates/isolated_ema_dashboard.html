@@ -281,6 +281,10 @@
     line-height: 1.5;
   }
 
+  .diagnostic-actions {
+    white-space: nowrap;
+  }
+
   .event-feed {
     max-height: 380px;
     overflow-y: auto;
@@ -682,14 +686,32 @@
             Backfill Instrument Isolation Diagnostics
           </div>
 
-          <div class="d-flex align-items-center gap-2">
-            <span class="small text-muted">Records:</span>
-            <span
-              id="backfillDiagnosticsCount"
-              class="badge-custom badge-blue"
-            >
-              0
-            </span>
+          <div class="d-flex flex-wrap align-items-center gap-3">
+            <div class="form-check form-switch mb-0">
+              <input
+                class="form-check-input"
+                type="checkbox"
+                role="switch"
+                id="showAllDiagnosticsToggle"
+                aria-label="Show All Instruments"
+              />
+              <label
+                class="form-check-label small fw-semibold"
+                for="showAllDiagnosticsToggle"
+              >
+                Show All Instruments
+              </label>
+            </div>
+
+            <div class="d-flex align-items-center gap-2">
+              <span class="small text-muted">Records:</span>
+              <span
+                id="backfillDiagnosticsCount"
+                class="badge-custom badge-blue"
+              >
+                0
+              </span>
+            </div>
           </div>
         </div>
 
@@ -706,13 +728,14 @@
                 <th>Isolated</th>
                 <th>Reason Code</th>
                 <th>Reason</th>
+                <th>Actions</th>
               </tr>
             </thead>
 
             <tbody id="backfillDiagnosticsTableBody">
               <tr>
-                <td colspan="9" class="text-center text-muted py-4">
-                  No backfill isolation diagnostics loaded.
+                <td colspan="10" class="text-center text-muted py-4">
+                  No Opening Range-touched instruments found.
                 </td>
               </tr>
             </tbody>
@@ -836,6 +859,97 @@
     </div>
   </div>
 </div>
+
+<!-- ============================================================
+     Manual Instrument Isolation Confirmation Modal
+     ============================================================ -->
+<div
+  class="modal fade"
+  id="manualIsolationModal"
+  tabindex="-1"
+  aria-labelledby="manualIsolationModalLabel"
+  aria-hidden="true"
+>
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="manualIsolationModalLabel">
+          <i class="bi bi-crosshair me-2 text-primary"></i>
+          Manual Instrument Isolation
+        </h5>
+
+        <button
+          type="button"
+          class="btn-close"
+          data-bs-dismiss="modal"
+          aria-label="Close"
+        ></button>
+      </div>
+
+      <div class="modal-body">
+        <div class="row g-2 mb-3">
+          <div class="col-6">
+            <div class="kv-card">
+              <div class="k">Strike</div>
+              <div class="v" id="manualIsolationStrike">-</div>
+            </div>
+          </div>
+
+          <div class="col-6">
+            <div class="kv-card">
+              <div class="k">Option Type</div>
+              <div class="v" id="manualIsolationOptionType">-</div>
+            </div>
+          </div>
+
+          <div class="col-12">
+            <div class="kv-card">
+              <div class="k">Level</div>
+              <div class="v" id="manualIsolationLevel">-</div>
+            </div>
+          </div>
+        </div>
+
+        <p class="mb-0 fw-semibold">
+          Are you sure you want to isolate this instrument?
+        </p>
+
+        <div
+          id="manualIsolationError"
+          class="alert alert-danger mt-3 mb-0 d-none"
+          role="alert"
+          aria-live="polite"
+        ></div>
+      </div>
+
+      <div class="modal-footer">
+        <button
+          type="button"
+          class="btn btn-light btn-action"
+          data-bs-dismiss="modal"
+          id="manualIsolationCancelBtn"
+        >
+          Cancel
+        </button>
+
+        <button
+          type="button"
+          class="btn btn-success btn-action"
+          id="manualIsolationConfirmBtn"
+        >
+          Confirm
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Toast container for notifications -->
+<div
+  class="toast-container position-fixed top-0 end-0 p-3"
+  id="dashboardToastContainer"
+  style="z-index: 1100"
+></div>
 {% endblock %}
 
 {% block scripts %}
@@ -852,7 +966,13 @@
     orReconnectTimer: null,
     liveEvents: [],
     maxLiveEvents: 50,
+    backfillDiagnostics: [],
+    pendingManualIsolation: null,
   };
+
+  // Diagnostics as currently rendered (visible + ordered). Used by
+  // row action handlers so we never have to embed raw strings in HTML.
+  let renderedDiagnostics = [];
 
   function apiBase() {
     return window.apiHost || window.location.origin;
@@ -994,9 +1114,26 @@
     });
 
     if (!response.ok) {
-      throw new Error(
-        `${response.status} ${response.statusText}`,
-      );
+      let detail = `${response.status} ${response.statusText}`;
+
+      try {
+        const body = await response.json();
+
+        if (body && typeof body === "object") {
+          const message =
+            body.detail ||
+            body.message ||
+            body.error;
+
+          if (message) {
+            detail = `${response.status} ${response.statusText}: ${message}`;
+          }
+        }
+      } catch (parseError) {
+        // Response body was not JSON; keep the status text.
+      }
+
+      throw new Error(detail);
     }
 
     return response.json();
@@ -1012,6 +1149,88 @@
       }
     );
   }
+
+  /* ============================================================
+     Diagnostics filter helpers
+     ============================================================ */
+
+  function isShowAllDiagnostics() {
+    const toggle = document.getElementById(
+      "showAllDiagnosticsToggle",
+    );
+
+    return Boolean(toggle && toggle.checked);
+  }
+
+  function getVisibleDiagnostics(diagnostics) {
+    const list = Array.isArray(diagnostics)
+      ? diagnostics
+      : [];
+
+    if (isShowAllDiagnostics()) {
+      return list;
+    }
+
+    return list.filter(
+      (diagnostic) =>
+        diagnostic &&
+        diagnostic.backfill_touch_found === true,
+    );
+  }
+
+  /* ============================================================
+     Notifications
+     ============================================================ */
+
+  function showToast(message, type = "success") {
+    const container = document.getElementById(
+      "dashboardToastContainer",
+    );
+
+    if (!container) {
+      return;
+    }
+
+    const toastEl = document.createElement("div");
+    toastEl.className =
+      `toast align-items-center text-bg-${type} border-0`;
+    toastEl.setAttribute("role", "alert");
+    toastEl.setAttribute("aria-live", "assertive");
+    toastEl.setAttribute("aria-atomic", "true");
+
+    toastEl.innerHTML = `
+      <div class="d-flex">
+        <div class="toast-body">${escapeHtml(message)}</div>
+        <button
+          type="button"
+          class="btn-close btn-close-white me-2 m-auto"
+          data-bs-dismiss="toast"
+          aria-label="Close"
+        ></button>
+      </div>
+    `;
+
+    container.appendChild(toastEl);
+
+    if (window.bootstrap && bootstrap.Toast) {
+      const toast = bootstrap.Toast.getOrCreateInstance(
+        toastEl,
+        { delay: 4000 },
+      );
+
+      toastEl.addEventListener("hidden.bs.toast", () => {
+        toastEl.remove();
+      });
+
+      toast.show();
+    } else {
+      setTimeout(() => toastEl.remove(), 4000);
+    }
+  }
+
+  /* ============================================================
+     Backfill isolation evaluation panel
+     ============================================================ */
 
   function renderBackfillIsolation(data, openingStatus) {
     const backfill =
@@ -1129,6 +1348,8 @@
       }
     }
 
+    // Keep the original call signature. renderBackfillDiagnostics
+    // internally applies the "Show All" filter and stores state.
     renderBackfillDiagnostics(
       Array.isArray(backfill.diagnostics)
         ? backfill.diagnostics
@@ -1136,32 +1357,52 @@
     );
   }
 
+  /* ============================================================
+     Diagnostics table
+     ============================================================ */
+
   function renderBackfillDiagnostics(diagnostics) {
     const tbody = document.getElementById(
       "backfillDiagnosticsTableBody",
     );
 
+    // Retain the complete backend array in frontend state so the
+    // toggle can re-render without re-fetching.
+    state.backfillDiagnostics = Array.isArray(diagnostics)
+      ? diagnostics
+      : [];
+
+    const visible = getVisibleDiagnostics(
+      state.backfillDiagnostics,
+    );
+
     setText(
       "backfillDiagnosticsCount",
-      diagnostics.length,
+      visible.length,
     );
 
     if (!tbody) {
       return;
     }
 
-    if (!diagnostics.length) {
+    if (!visible.length) {
+      renderedDiagnostics = [];
+
+      const emptyMessage = isShowAllDiagnostics()
+        ? "No backfill isolation diagnostics found."
+        : "No Opening Range-touched instruments found.";
+
       tbody.innerHTML = `
         <tr>
-          <td colspan="9" class="text-center text-muted py-4">
-            No backfill isolation diagnostics found.
+          <td colspan="10" class="text-center text-muted py-4">
+            ${escapeHtml(emptyMessage)}
           </td>
         </tr>
       `;
       return;
     }
 
-    const orderedDiagnostics = diagnostics
+    const orderedDiagnostics = visible
       .slice()
       .sort((left, right) => {
         if (left.isolated && !right.isolated) {
@@ -1193,8 +1434,10 @@
         );
       });
 
+    renderedDiagnostics = orderedDiagnostics;
+
     tbody.innerHTML = orderedDiagnostics
-      .map((diagnostic) => {
+      .map((diagnostic, index) => {
         const instrument = formatInstrument(
           diagnostic.contract_info,
           diagnostic.instrument_key,
@@ -1227,7 +1470,7 @@
           : "";
 
         return `
-          <tr class="${rowClass}">
+          <tr class="${rowClass}" data-row-index="${index}">
             <td class="diagnostic-instrument">
               ${escapeHtml(instrument)}
             </td>
@@ -1266,11 +1509,218 @@
                 safe(diagnostic.reason),
               )}
             </td>
+            <td class="diagnostic-actions">
+              <div class="d-flex gap-1">
+                <button
+                  type="button"
+                  class="btn btn-sm btn-outline-primary"
+                  title="Open Instrument Chart"
+                  aria-label="Open Instrument Chart"
+                  data-action="chart"
+                  data-row-index="${index}"
+                >
+                  <i class="bi bi-bar-chart-line"></i>
+                </button>
+
+                <button
+                  type="button"
+                  class="btn btn-sm btn-outline-success"
+                  title="Manually Isolate Instrument"
+                  aria-label="Manually Isolate Instrument"
+                  data-action="isolate"
+                  data-row-index="${index}"
+                >
+                  <i class="bi bi-crosshair"></i>
+                </button>
+              </div>
+            </td>
           </tr>
         `;
       })
       .join("");
   }
+
+  /* ============================================================
+     Row actions
+     ============================================================ */
+
+  function openInstrumentChart(instrumentKey) {
+    if (!instrumentKey) {
+      return;
+    }
+
+    window.location.href =
+      `/chart/${encodeURIComponent(instrumentKey)}`;
+  }
+
+  function getDiagnosticStrikeAndOptionType(diagnostic) {
+    const contractInfo =
+      (diagnostic && diagnostic.contract_info) || {};
+
+    const strike = contractInfo.strike_price;
+    const optionType =
+      contractInfo.instrument_type ||
+      contractInfo.option_type;
+
+    return { strike, optionType };
+  }
+
+  function getDiagnosticLevelsText(diagnostic) {
+    const levels = Array.isArray(
+      diagnostic && diagnostic.touch_levels,
+    )
+      ? diagnostic.touch_levels.filter(
+          (level) =>
+            level !== null &&
+            level !== undefined &&
+            level !== "",
+        )
+      : [];
+
+    if (!levels.length) {
+      return "-";
+    }
+
+    return levels.join(", ");
+  }
+
+  function openManualIsolationModal(diagnostic) {
+    if (!diagnostic) {
+      return;
+    }
+
+    const { strike, optionType } =
+      getDiagnosticStrikeAndOptionType(diagnostic);
+
+    state.pendingManualIsolation = diagnostic;
+
+    setText("manualIsolationStrike", strike);
+    setText("manualIsolationOptionType", optionType);
+    setText(
+      "manualIsolationLevel",
+      getDiagnosticLevelsText(diagnostic),
+    );
+
+    const errorEl = document.getElementById(
+      "manualIsolationError",
+    );
+
+    if (errorEl) {
+      errorEl.textContent = "";
+      errorEl.classList.add("d-none");
+    }
+
+    const confirmBtn = document.getElementById(
+      "manualIsolationConfirmBtn",
+    );
+
+    if (confirmBtn) {
+      confirmBtn.disabled = false;
+      confirmBtn.textContent = "Confirm";
+    }
+
+    const modalEl = document.getElementById(
+      "manualIsolationModal",
+    );
+
+    if (modalEl && window.bootstrap && bootstrap.Modal) {
+      bootstrap.Modal.getOrCreateInstance(modalEl).show();
+    }
+  }
+
+  async function confirmManualIsolation() {
+    const confirmBtn = document.getElementById(
+      "manualIsolationConfirmBtn",
+    );
+    const errorEl = document.getElementById(
+      "manualIsolationError",
+    );
+
+    const showError = (message) => {
+      if (errorEl) {
+        errorEl.textContent = message;
+        errorEl.classList.remove("d-none");
+      }
+    };
+
+    const hideError = () => {
+      if (errorEl) {
+        errorEl.textContent = "";
+        errorEl.classList.add("d-none");
+      }
+    };
+
+    hideError();
+
+    const diagnostic = state.pendingManualIsolation;
+
+    if (!diagnostic) {
+      showError("No diagnostic selected.");
+      return;
+    }
+
+    const { strike, optionType } =
+      getDiagnosticStrikeAndOptionType(diagnostic);
+
+    if (
+      strike === null ||
+      strike === undefined ||
+      strike === "" ||
+      optionType === null ||
+      optionType === undefined ||
+      optionType === ""
+    ) {
+      showError(
+        "Missing strike or option type for this diagnostic.",
+      );
+      return;
+    }
+
+    const params = new URLSearchParams({
+      strike: String(strike),
+      striketype: String(optionType),
+      requested_by: "isolated_ema_dashboard",
+    });
+
+    if (confirmBtn) {
+      confirmBtn.disabled = true;
+      confirmBtn.textContent = "Isolating...";
+    }
+
+    try {
+      await postJson(
+        `${apiBase()}/opening-range/isolated-instrument/manual?${params.toString()}`,
+      );
+
+      const modalEl = document.getElementById(
+        "manualIsolationModal",
+      );
+
+      if (modalEl && window.bootstrap && bootstrap.Modal) {
+        bootstrap.Modal.getOrCreateInstance(modalEl).hide();
+      }
+
+      state.pendingManualIsolation = null;
+
+      showToast("Instrument isolated successfully.", "success");
+
+      await loadDashboard();
+    } catch (error) {
+      console.error(error);
+      showError(
+        `Manual isolation failed: ${error.message}`,
+      );
+    } finally {
+      if (confirmBtn) {
+        confirmBtn.disabled = false;
+        confirmBtn.textContent = "Confirm";
+      }
+    }
+  }
+
+  /* ============================================================
+     Dashboard rendering
+     ============================================================ */
 
   function renderDashboard(data) {
     const openingStatus =
@@ -1972,9 +2422,104 @@
     }
   }
 
+  /* ============================================================
+     Wiring
+     ============================================================ */
+
+  function setupDiagnosticsControls() {
+    const toggle = document.getElementById(
+      "showAllDiagnosticsToggle",
+    );
+
+    if (toggle) {
+      // Toggle preference is pure frontend UI state. It is never
+      // reset by loadDashboard()/auto-refresh/WebSocket events.
+      toggle.addEventListener("change", () => {
+        renderBackfillDiagnostics(
+          state.backfillDiagnostics,
+        );
+      });
+    }
+
+    const tbody = document.getElementById(
+      "backfillDiagnosticsTableBody",
+    );
+
+    if (tbody) {
+      tbody.addEventListener("click", (event) => {
+        const button = event.target.closest(
+          "button[data-action]",
+        );
+
+        if (!button) {
+          return;
+        }
+
+        const rowIndex = Number(
+          button.getAttribute("data-row-index"),
+        );
+
+        const diagnostic = Number.isInteger(rowIndex)
+          ? renderedDiagnostics[rowIndex]
+          : null;
+
+        if (!diagnostic) {
+          return;
+        }
+
+        if (button.getAttribute("data-action") === "chart") {
+          openInstrumentChart(diagnostic.instrument_key);
+        } else if (
+          button.getAttribute("data-action") === "isolate"
+        ) {
+          openManualIsolationModal(diagnostic);
+        }
+      });
+    }
+
+    const confirmBtn = document.getElementById(
+      "manualIsolationConfirmBtn",
+    );
+
+    if (confirmBtn) {
+      confirmBtn.addEventListener(
+        "click",
+        confirmManualIsolation,
+      );
+    }
+
+    const modalEl = document.getElementById(
+      "manualIsolationModal",
+    );
+
+    if (modalEl) {
+      modalEl.addEventListener(
+        "hidden.bs.modal",
+        () => {
+          state.pendingManualIsolation = null;
+
+          const errorEl = document.getElementById(
+            "manualIsolationError",
+          );
+
+          if (errorEl) {
+            errorEl.textContent = "";
+            errorEl.classList.add("d-none");
+          }
+
+          if (confirmBtn) {
+            confirmBtn.disabled = false;
+            confirmBtn.textContent = "Confirm";
+          }
+        },
+      );
+    }
+  }
+
   document.addEventListener(
     "DOMContentLoaded",
     () => {
+      setupDiagnosticsControls();
       loadDashboard();
       setupAutoRefresh();
       connectEmaWebSocket();
