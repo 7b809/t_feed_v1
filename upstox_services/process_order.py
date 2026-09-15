@@ -3,8 +3,8 @@ from typing import Any
 from core.config import settings
 from core.logger import get_logger
 
-from services.telegram_bot_service import (
-    telegram_bot_service,
+from services.telegram_service import (
+    telegram_service,
 )
 
 from upstox_services.place_order import (
@@ -26,29 +26,24 @@ def _send_telegram_message(
     message: str,
 ) -> None:
     """
-    Send a Telegram message using the existing Telegram bot service.
+    Send a Telegram message using the TelegramService.
 
     Telegram failures must never stop the actual order workflow.
     """
 
-    if not settings.tele_flg:
-        logger.debug(
-            "Telegram message skipped because TELE_FLG=false."
-        )
-        return
-
     try:
-        telegram_bot_service._send_direct_message(
-            message
-        )
+        success = telegram_service.send_message(message)
+
+        if not success:
+            logger.warning(
+                "Telegram message was not sent."
+            )
 
     except Exception:
         logger.exception(
             "Unexpected error while sending Telegram "
             "process-order message."
         )
-
-
 # ------------------------------------------------------------------
 # Selected instrument helper
 # ------------------------------------------------------------------

@@ -12,17 +12,17 @@ class TelegramService:
         self.chat_id = settings.telegram_chat_id
 
     def send_message(self, message: str) -> bool:
-        if not settings.run_tele_bot:
-            logger.info(
-                "Telegram bot disabled. RUN_TELE_BOT=false"
-            )
-            return False
+        # if not settings.run_tele_bot:
+        #     logger.info(
+        #         "Telegram bot disabled. RUN_TELE_BOT=false"
+        #     )
+        #     return False
 
-        if not settings.tele_flg:
-            logger.info(
-                "Telegram sending disabled. TELE_FLG=false"
-            )
-            return False
+        # if not settings.tele_flg:
+        #     logger.info(
+        #         "Telegram sending disabled. TELE_FLG=false"
+        #     )
+        #     return False
 
         if not self.bot_token or not self.chat_id:
             logger.warning(

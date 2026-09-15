@@ -57,6 +57,10 @@ def main() -> None:
     print("\nFetching latest Git information...")
 
     run_command(
+        ["rm", "-rf", "logs"],
+    )
+
+    run_command(
         ["git", "fetch", "--all"],
     )
 

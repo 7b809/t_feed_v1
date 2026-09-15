@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from api.routes.health import router as health_router
 from api.routes.order_requests import router as order_requests_router
 from api.routes.ui import router as ui_router
-
+from api.routes.logs_api import router as logs_router
 from core.config import settings
 from core.database import (
     close_mongo_connection,
@@ -81,3 +81,4 @@ app = FastAPI(
 app.include_router(health_router)
 app.include_router(order_requests_router, prefix="/api/v1")
 app.include_router(ui_router)
+app.include_router(logs_router)
