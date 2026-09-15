@@ -780,6 +780,7 @@ class TelegramService:
         emoji_map = {
             "INFO": "ℹ️",
             "SUCCESS": "✅",
+            "ISOLATION": "🎯",
             "WARNING": "⚠️",
             "ERROR": "❌",
             "STARTUP": "🚀",
@@ -1569,6 +1570,385 @@ class TelegramService:
             nifty_ltp=nifty_ltp,
             suggested_order_instruments=suggested_order_instruments,
             budget_range_instruments=budget_range_instruments,
+        )
+
+    def send_manual_instrument_isolation_result(
+        self,
+        result: dict,
+    ) -> bool:
+        """
+        Sends a formatted Telegram response for a manual instrument
+        isolation request.
+
+        The isolation result must come from
+        manual_instrument_isolation_service.isolate().
+        """
+
+        if not isinstance(result, dict):
+            logger.error(
+                "Manual isolation Telegram response rejected. "
+                "reason=invalid_result, result_type=%s",
+                type(result).__name__,
+            )
+
+            return self.send_message(
+                title="Manual Isolation Failed",
+                message=(
+                    "The manual instrument isolation service returned "
+                    "an invalid response."
+                ),
+                level="ERROR",
+                notification_context="manual_isolation|invalid_result",
+            )
+
+        success = bool(result.get("success"))
+        status = str(result.get("status") or "unknown").strip().lower()
+        error_code = str(result.get("error_code") or "").strip()
+
+        request_data = result.get("request") or {}
+
+        if not isinstance(request_data, dict):
+            request_data = {}
+
+        configured_range = result.get("configured_strike_range") or {}
+
+        if not isinstance(configured_range, dict):
+            configured_range = {}
+
+        previous_instrument = result.get("previous_instrument") or {}
+
+        if not isinstance(previous_instrument, dict):
+            previous_instrument = {}
+
+        isolated_instrument = result.get("isolated_instrument") or {}
+
+        if not isinstance(isolated_instrument, dict):
+            isolated_instrument = {}
+
+        requested_strike = request_data.get("strike_price")
+        requested_option_type = (
+            self._normalize_option_type(request_data.get("option_type"))
+            or str(request_data.get("option_type") or "N/A").strip().upper()
+        )
+
+        requested_by = str(request_data.get("requested_by") or "unknown").strip()
+
+        request_source = str(request_data.get("source") or "unknown").strip().lower()
+
+        minimum_strike = configured_range.get("minimum")
+        maximum_strike = configured_range.get("maximum")
+
+        requested_strike_text = self._format_numeric_value(
+            requested_strike,
+            unavailable_text="N/A",
+        )
+
+        minimum_strike_text = self._format_numeric_value(
+            minimum_strike,
+            unavailable_text="N/A",
+        )
+
+        maximum_strike_text = self._format_numeric_value(
+            maximum_strike,
+            unavailable_text="N/A",
+        )
+
+        if success:
+            contract_info = isolated_instrument.get("contract_info") or {}
+
+            if not isinstance(contract_info, dict):
+                contract_info = {}
+
+            instrument_key = str(
+                isolated_instrument.get("instrument_key")
+                or contract_info.get("instrument_key")
+                or "N/A"
+            ).strip()
+
+            trading_symbol = str(
+                contract_info.get("trading_symbol")
+                or contract_info.get("tradingsymbol")
+                or instrument_key
+                or "N/A"
+            ).strip()
+
+            strike_price = contract_info.get(
+                "strike_price",
+                requested_strike,
+            )
+
+            option_type = (
+                self._normalize_option_type(
+                    contract_info.get("instrument_type")
+                    or contract_info.get("option_type")
+                    or requested_option_type
+                )
+                or requested_option_type
+            )
+
+            expiry = contract_info.get("expiry") or "N/A"
+
+            latest_live_data = isolated_instrument.get("latest_live_data") or {}
+
+            if not isinstance(latest_live_data, dict):
+                latest_live_data = {}
+
+            live_ltp = latest_live_data.get("ltp")
+
+            previous_contract_info = previous_instrument.get("contract_info") or {}
+
+            if not isinstance(previous_contract_info, dict):
+                previous_contract_info = {}
+
+            previous_selected = bool(previous_instrument.get("selected"))
+
+            previous_key = previous_instrument.get(
+                "instrument_key"
+            ) or previous_contract_info.get("instrument_key")
+
+            previous_strike = previous_contract_info.get("strike_price")
+
+            previous_type = self._normalize_option_type(
+                previous_contract_info.get("instrument_type")
+                or previous_contract_info.get("option_type")
+            )
+
+            if previous_selected and previous_key:
+                previous_strike_text = self._format_numeric_value(
+                    previous_strike,
+                    unavailable_text="N/A",
+                )
+
+                previous_type_text = previous_type or "N/A"
+
+                previous_text = (
+                    f"{previous_strike_text} "
+                    f"{previous_type_text}\n"
+                    f"{previous_key}"
+                )
+            else:
+                previous_text = "No previous isolated instrument"
+
+            selected_at = isolated_instrument.get("selected_at") or result.get(
+                "processed_at"
+            )
+
+            message_lines = [
+                "✅ <b>MANUAL ISOLATION COMPLETED</b>",
+                "━━━━━━━━━━━━━━━━━━━━━━",
+                "",
+                (
+                    f"🎯 <b>{self._escape(self._format_numeric_value(strike_price, 'N/A'))} "
+                    f"{self._escape(option_type)}</b>"
+                ),
+                "",
+                "📊 <b>SELECTED CONTRACT</b>",
+                (f"├ Symbol : " f"<b>{self._escape(trading_symbol)}</b>"),
+                (f"├ Expiry : " f"{self._escape(expiry)}"),
+                (f"├ LTP    : " f"{self._format_rupee(live_ltp)}"),
+                (f"└ Key    : " f"{self._escape(instrument_key)}"),
+                "",
+                "🔄 <b>OVERRIDE DETAILS</b>",
+                (f"├ Previous : " f"{self._escape(previous_text)}"),
+                "├ Mode     : Manual Override",
+                "├ Locked   : Until end of market day",
+                (f"├ Source   : " f"{self._escape(request_source.upper())}"),
+                (f"└ Requested By: " f"{self._escape(requested_by)}"),
+                "",
+                "📈 EMA alerts will now be processed for this instrument.",
+                "",
+                "━━━━━━━━━━━━━━━━━━━━━━",
+                (
+                    f"🕒 Selected At: "
+                    f"<b>{self._escape(self._format_short_market_time(selected_at, include_seconds=True))}</b>"
+                ),
+            ]
+
+            message = "\n".join(message_lines)
+
+            logger.info(
+                "Sending successful manual isolation Telegram response. "
+                "instrument_key=%s, strike=%s, option_type=%s, "
+                "requested_by=%s, source=%s",
+                instrument_key,
+                strike_price,
+                option_type,
+                requested_by,
+                request_source,
+            )
+
+            return self._send_raw_message(
+                message,
+                notification_title="Manual Instrument Isolation",
+                notification_level="ISOLATION",
+                notification_context=(
+                    f"manual_isolation|success=true"
+                    f"|instrument_key={instrument_key}"
+                    f"|strike={strike_price}"
+                    f"|option_type={option_type}"
+                    f"|source={request_source}"
+                ),
+            )
+
+        if error_code == "STRIKE_OUTSIDE_CONFIGURED_RANGE":
+            title = "Instrument Outside Configured Range"
+
+            message_lines = [
+                "❌ <b>INSTRUMENT NOT ISOLATED</b>",
+                "━━━━━━━━━━━━━━━━━━━━━━",
+                "",
+                (
+                    f"Requested: <b>{self._escape(requested_strike_text)} "
+                    f"{self._escape(requested_option_type)}</b>"
+                ),
+                "",
+                "The requested strike is outside the configured project range.",
+                "",
+                "📏 <b>ALLOWED STRIKE RANGE</b>",
+                (
+                    f"{self._escape(minimum_strike_text)} to "
+                    f"{self._escape(maximum_strike_text)}"
+                ),
+                "",
+                "Use a strike within the configured range.",
+                "",
+                (
+                    f"Example: <code>/isolate "
+                    f"{self._escape(minimum_strike_text)} CE</code>"
+                ),
+            ]
+
+            notification_level = "WARNING"
+
+        elif error_code == "INSTRUMENT_NOT_AVAILABLE":
+            title = "Instrument Not Available"
+
+            message_lines = [
+                "⚠️ <b>INSTRUMENT NOT AVAILABLE</b>",
+                "━━━━━━━━━━━━━━━━━━━━━━",
+                "",
+                (
+                    f"Requested: <b>{self._escape(requested_strike_text)} "
+                    f"{self._escape(requested_option_type)}</b>"
+                ),
+                "",
+                (
+                    "The strike is inside the configured project range, "
+                    "but the exact contract is not available in the "
+                    "loaded option instruments."
+                ),
+                "",
+                "📏 <b>CONFIGURED RANGE</b>",
+                (
+                    f"{self._escape(minimum_strike_text)} to "
+                    f"{self._escape(maximum_strike_text)}"
+                ),
+                "",
+                "Possible reasons:",
+                "• Option contracts have not been refreshed",
+                "• The strike is not in the nearest-expiry cache",
+                "• The requested option type is unavailable",
+            ]
+
+            notification_level = "WARNING"
+
+        elif error_code == "INVALID_OPTION_TYPE":
+            title = "Invalid Option Type"
+
+            message_lines = [
+                "❌ <b>INVALID OPTION TYPE</b>",
+                "━━━━━━━━━━━━━━━━━━━━━━",
+                "",
+                (f"Received: " f"<b>{self._escape(requested_option_type)}</b>"),
+                "",
+                "Supported option types:",
+                "• CE or CALL",
+                "• PE or PUT",
+                "",
+                (
+                    f"Example: <code>/isolate "
+                    f"{self._escape(requested_strike_text)} CE</code>"
+                ),
+            ]
+
+            notification_level = "ERROR"
+
+        elif error_code == "INVALID_STRIKE_PRICE":
+            title = "Invalid Strike Price"
+
+            message_lines = [
+                "❌ <b>INVALID STRIKE PRICE</b>",
+                "━━━━━━━━━━━━━━━━━━━━━━",
+                "",
+                "Provide a valid positive strike price.",
+                "",
+                "Example: <code>/isolate 24200 CE</code>",
+            ]
+
+            notification_level = "ERROR"
+
+        else:
+            title = "Manual Isolation Failed"
+
+            service_message = str(
+                result.get("message") or "The instrument could not be isolated."
+            ).strip()
+
+            message_lines = [
+                "❌ <b>MANUAL ISOLATION FAILED</b>",
+                "━━━━━━━━━━━━━━━━━━━━━━",
+                "",
+                (
+                    f"Requested: <b>{self._escape(requested_strike_text)} "
+                    f"{self._escape(requested_option_type)}</b>"
+                ),
+                "",
+                self._escape(service_message),
+            ]
+
+            if error_code:
+                message_lines.extend(
+                    [
+                        "",
+                        (f"Error Code: " f"<code>{self._escape(error_code)}</code>"),
+                    ]
+                )
+
+            notification_level = "ERROR"
+
+        message_lines.extend(
+            [
+                "",
+                "━━━━━━━━━━━━━━━━━━━━━━",
+                (f"🕒 Time: " f"<b>{self._escape(self._now_short_market_time())}</b>"),
+            ]
+        )
+
+        message = "\n".join(message_lines)
+
+        logger.info(
+            "Sending rejected manual isolation Telegram response. "
+            "strike=%s, option_type=%s, status=%s, "
+            "error_code=%s, requested_by=%s, source=%s",
+            requested_strike,
+            requested_option_type,
+            status,
+            error_code,
+            requested_by,
+            request_source,
+        )
+
+        return self._send_raw_message(
+            message,
+            notification_title=title,
+            notification_level=notification_level,
+            notification_context=(
+                f"manual_isolation|success=false"
+                f"|error_code={error_code or 'unknown'}"
+                f"|strike={requested_strike_text}"
+                f"|option_type={requested_option_type}"
+                f"|source={request_source}"
+            ),
         )
 
     def send_exception_message(

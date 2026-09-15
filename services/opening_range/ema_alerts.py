@@ -8,6 +8,9 @@ from core.logger import get_logger
 from services.algo_app_service import algo_app_service
 from services.option_service import normalize_candle, options_cache
 from services.telegram_service import telegram_service
+from services.isolated_instrument_event_service import (
+    isolated_instrument_event_saving_service,
+)
 
 from . import state
 from .candle_utils import (
@@ -275,7 +278,9 @@ def get_option_chain_instruments_for_ema(
         isolated_instrument_type=isolated_instrument_type,
     )
     if not suggested_order_option_type:
-        error_message = "Could not resolve suggested option type for isolated EMA alert."
+        error_message = (
+            "Could not resolve suggested option type for isolated EMA alert."
+        )
         logger.warning(
             "%s cross_type=%s, isolated_type=%s",
             error_message,
@@ -593,6 +598,112 @@ def _dispatch_algo_app_payload(payload: dict) -> bool:
             type(ex).__name__,
         )
         return False
+
+
+def _save_isolated_instrument_processing_event(
+    *,
+    payload: dict,
+    processing_result: dict,
+    processing_status: str,
+) -> dict:
+    save_result = {
+        "success": False,
+        "saved": False,
+        "skipped": False,
+        "document_id": None,
+        "date": None,
+        "time_key": None,
+        "error": None,
+    }
+
+    if not isinstance(payload, dict):
+        save_result["skipped"] = True
+        save_result["error"] = "Payload is unavailable."
+
+        logger.warning(
+            "Isolated instrument event saving skipped. "
+            "reason=payload_unavailable, processing_status=%s",
+            processing_status,
+        )
+
+        return save_result
+
+    if not isinstance(processing_result, dict):
+        processing_result = {}
+
+    try:
+        save_result = isolated_instrument_event_saving_service.save_processing_event(
+            payload=deepcopy(payload),
+            processing_result=processing_result,
+            processing_status=processing_status,
+        )
+
+        if not isinstance(save_result, dict):
+            logger.warning(
+                "Isolated instrument event saving returned an invalid result. "
+                "event_id=%s, processing_status=%s",
+                payload.get("event_id"),
+                processing_status,
+            )
+
+            return {
+                "success": False,
+                "saved": False,
+                "skipped": False,
+                "document_id": None,
+                "date": None,
+                "time_key": None,
+                "error": "Event saving service returned an invalid result.",
+            }
+
+        if save_result.get("saved"):
+            logger.info(
+                "Isolated instrument EMA event saved. "
+                "event_id=%s, document_id=%s, date=%s, "
+                "time_key=%s, processing_status=%s",
+                payload.get("event_id"),
+                save_result.get("document_id"),
+                save_result.get("date"),
+                save_result.get("time_key"),
+                processing_status,
+            )
+        elif save_result.get("skipped"):
+            logger.info(
+                "Isolated instrument EMA event saving skipped. "
+                "event_id=%s, processing_status=%s, reason=%s",
+                payload.get("event_id"),
+                processing_status,
+                save_result.get("error"),
+            )
+        else:
+            logger.warning(
+                "Isolated instrument EMA event was not saved. "
+                "event_id=%s, processing_status=%s, error=%s",
+                payload.get("event_id"),
+                processing_status,
+                save_result.get("error"),
+            )
+
+        return save_result
+
+    except Exception as ex:
+        logger.exception(
+            "Unexpected isolated instrument EMA event saving failure. "
+            "event_id=%s, processing_status=%s, error_type=%s",
+            payload.get("event_id"),
+            processing_status,
+            type(ex).__name__,
+        )
+
+        return {
+            "success": False,
+            "saved": False,
+            "skipped": False,
+            "document_id": None,
+            "date": None,
+            "time_key": None,
+            "error": f"{type(ex).__name__}: {ex}",
+        }
 
 
 def build_isolated_ema_alert_payload(
@@ -1347,6 +1458,16 @@ def process_selected_or_ema_cross_alert_detailed(
             "released": False,
             "minute_alert_key": None,
         },
+        "event_saving": {
+            "attempted": False,
+            "success": False,
+            "saved": False,
+            "skipped": False,
+            "document_id": None,
+            "date": None,
+            "time_key": None,
+            "error": None,
+        },
         "state_changes": {
             "alert_record_appended": False,
             "duplicate_key_reserved": False,
@@ -1489,7 +1610,9 @@ def process_selected_or_ema_cross_alert_detailed(
 
     if not isolated_key or not event_key:
         result["skip_reason"] = "instrument_key_unavailable"
-        result["error"] = "Selected instrument key or EMA event instrument key is unavailable."
+        result["error"] = (
+            "Selected instrument key or EMA event instrument key is unavailable."
+        )
         logger.warning("EMA alert processing skipped. reason=%s", result["skip_reason"])
         return result
 
@@ -1596,7 +1719,9 @@ def process_selected_or_ema_cross_alert_detailed(
 
         if skip_alert:
             result["skip_reason"] = "duplicate_alert"
-            result["message"] = "A matching EMA alert was already processed for this instrument, minute, and direction."
+            result["message"] = (
+                "A matching EMA alert was already processed for this instrument, minute, and direction."
+            )
             logger.info(
                 "EMA alert skipped due to duplicate. reason=%s, key=%s",
                 result["skip_reason"],
@@ -1615,6 +1740,7 @@ def process_selected_or_ema_cross_alert_detailed(
                 minute_alert_key,
                 event_key,
             )
+    payload = None
 
     try:
         ema_candle = extract_ema_candle_details(ema_event)
@@ -1939,12 +2065,48 @@ def process_selected_or_ema_cross_alert_detailed(
         if dry_run:
             result["success"] = True
             result["accepted"] = True
-            result["message"] = "EMA alert payload and Telegram preview generated successfully. No delivery was attempted."
+            result["message"] = (
+                "EMA alert payload and Telegram preview generated successfully. "
+                "No delivery was attempted."
+            )
+
+            result["event_saving"]["attempted"] = True
+
+            event_saving_result = _save_isolated_instrument_processing_event(
+                payload=payload,
+                processing_result=result,
+                processing_status="dry_run_completed",
+            )
+
+            result["event_saving"].update(
+                {
+                    "success": bool(event_saving_result.get("success")),
+                    "saved": bool(event_saving_result.get("saved")),
+                    "skipped": bool(event_saving_result.get("skipped")),
+                    "document_id": event_saving_result.get("document_id"),
+                    "date": event_saving_result.get("date"),
+                    "time_key": event_saving_result.get("time_key"),
+                    "error": event_saving_result.get("error"),
+                }
+            )
+
+            if (
+                not result["event_saving"]["saved"]
+                and not result["event_saving"]["skipped"]
+            ):
+                result["warnings"].append(
+                    "Dry-run payload was generated, but the isolated instrument "
+                    "event could not be saved."
+                )
+
             logger.info(
-                "EMA alert dry-run completed successfully. event_id=%s, instrument_key=%s",
+                "EMA alert dry-run completed successfully. "
+                "event_id=%s, instrument_key=%s, event_saved=%s",
                 result["event_id"],
                 event_key,
+                result["event_saving"]["saved"],
             )
+
             return result
 
         telegram_sent = False
@@ -2075,6 +2237,48 @@ def process_selected_or_ema_cross_alert_detailed(
                 result["event_id"],
                 event_key,
             )
+        processing_status = (
+            "simulation_delivery_accepted"
+            if simulation and delivery_accepted
+            else (
+                "simulation_delivery_not_accepted"
+                if simulation
+                else (
+                    "delivery_accepted"
+                    if delivery_accepted
+                    else "delivery_not_accepted"
+                )
+            )
+        )
+
+        result["event_saving"]["attempted"] = True
+
+        event_saving_result = _save_isolated_instrument_processing_event(
+            payload=payload,
+            processing_result=result,
+            processing_status=processing_status,
+        )
+
+        result["event_saving"].update(
+            {
+                "success": bool(event_saving_result.get("success")),
+                "saved": bool(event_saving_result.get("saved")),
+                "skipped": bool(event_saving_result.get("skipped")),
+                "document_id": event_saving_result.get("document_id"),
+                "date": event_saving_result.get("date"),
+                "time_key": event_saving_result.get("time_key"),
+                "error": event_saving_result.get("error"),
+            }
+        )
+
+        if (
+            not result["event_saving"]["saved"]
+            and not result["event_saving"]["skipped"]
+        ):
+            result["warnings"].append(
+                "EMA alert processing completed, but the isolated instrument "
+                "event could not be saved."
+            )
 
         return result
 
@@ -2099,6 +2303,27 @@ def process_selected_or_ema_cross_alert_detailed(
         result["skip_reason"] = "processing_exception"
         result["error"] = f"{type(ex).__name__}: {ex}"
         result["message"] = "EMA alert processing failed."
+
+        if isinstance(payload, dict):
+            result["event_saving"]["attempted"] = True
+
+            event_saving_result = _save_isolated_instrument_processing_event(
+                payload=payload,
+                processing_result=result,
+                processing_status="processing_exception",
+            )
+
+            result["event_saving"].update(
+                {
+                    "success": bool(event_saving_result.get("success")),
+                    "saved": bool(event_saving_result.get("saved")),
+                    "skipped": bool(event_saving_result.get("skipped")),
+                    "document_id": event_saving_result.get("document_id"),
+                    "date": event_saving_result.get("date"),
+                    "time_key": event_saving_result.get("time_key"),
+                    "error": event_saving_result.get("error"),
+                }
+            )
 
         logger.exception(
             "Isolated EMA processing failed. instrument_key=%s, cross_type=%s, simulation=%s",

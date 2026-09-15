@@ -3,6 +3,9 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.concurrency import run_in_threadpool
 
+from services.manual_instrument_isolation_service import (
+    manual_instrument_isolation_service,
+)
 from core import config
 from core.logger import get_logger
 from services.algo_app_service import algo_app_service
@@ -1034,6 +1037,146 @@ async def get_opening_range_file_status():
     }
 
 
+@router.post("/opening-range/isolated-instrument/manual")
+async def manually_isolate_opening_range_instrument(
+    strike: float = Query(
+        ...,
+        gt=0,
+        description="Option strike price to isolate.",
+    ),
+    striketype: str = Query(
+        ...,
+        min_length=1,
+        description="Option type. Supported values: CE, PE, CALL, PUT.",
+    ),
+    requested_by: str = Query(
+        default="opening_range_api",
+        min_length=1,
+        max_length=200,
+        description="User or client requesting the manual isolation.",
+    ),
+):
+    logger.warning(
+        "Manual instrument isolation API request received. "
+        "strike=%s, striketype=%s, requested_by=%s",
+        strike,
+        striketype,
+        requested_by,
+    )
+
+    try:
+        result = await run_in_threadpool(
+            manual_instrument_isolation_service.isolate,
+            strike_price=strike,
+            option_type=striketype,
+            requested_by=requested_by,
+            source="api",
+        )
+
+        if not isinstance(result, dict):
+            logger.error(
+                "Manual instrument isolation service returned an "
+                "invalid result. result_type=%s",
+                type(result).__name__,
+            )
+
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "success": False,
+                    "status": "failed",
+                    "error_code": "INVALID_SERVICE_RESULT",
+                    "message": (
+                        "Manual instrument isolation service returned "
+                        "an invalid result."
+                    ),
+                },
+            )
+
+        if result.get("success"):
+            logger.warning(
+                "Manual instrument isolation API request completed. "
+                "strike=%s, striketype=%s, requested_by=%s, "
+                "instrument_key=%s",
+                strike,
+                striketype,
+                requested_by,
+                (
+                    result.get("isolated_instrument", {}).get("instrument_key")
+                    if isinstance(
+                        result.get("isolated_instrument"),
+                        dict,
+                    )
+                    else None
+                ),
+            )
+
+            return result
+
+        error_code = str(
+            result.get("error_code") or "MANUAL_ISOLATION_REJECTED"
+        ).strip()
+
+        status_code_by_error = {
+            "INVALID_STRIKE_PRICE": 422,
+            "INVALID_OPTION_TYPE": 422,
+            "STRIKE_OUTSIDE_CONFIGURED_RANGE": 422,
+            "INSTRUMENT_NOT_AVAILABLE": 404,
+            "INSTRUMENT_KEY_UNAVAILABLE": 404,
+            "SERVICE_DISABLED": 409,
+        }
+
+        status_code = status_code_by_error.get(error_code, 400)
+
+        logger.info(
+            "Manual instrument isolation API request rejected. "
+            "strike=%s, striketype=%s, requested_by=%s, "
+            "error_code=%s, status_code=%s",
+            strike,
+            striketype,
+            requested_by,
+            error_code,
+            status_code,
+        )
+
+        raise HTTPException(
+            status_code=status_code,
+            detail=result,
+        )
+
+    except HTTPException:
+        raise
+
+    except Exception as ex:
+        error_message = f"{type(ex).__name__}: {ex}"
+
+        logger.exception(
+            "Manual instrument isolation API request failed. "
+            "strike=%s, striketype=%s, requested_by=%s, error=%s",
+            strike,
+            striketype,
+            requested_by,
+            error_message,
+        )
+
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "success": False,
+                "status": "failed",
+                "error_code": "MANUAL_ISOLATION_FAILED",
+                "message": "Manual instrument isolation failed.",
+                "error": error_message,
+                "request": {
+                    "strike_price": strike,
+                    "option_type": striketype,
+                    "requested_by": requested_by,
+                    "source": "api",
+                },
+            },
+        ) from ex
+
+
 @router.get("/opening-range/config")
 async def get_opening_range_config():
     return {
@@ -1162,4 +1305,5 @@ __all__ = [
     "get_ema_alert_content_payload",
     "get_ema_algo_payload_config",
     "resolve_opening_range_instrument_key",
+    "manually_isolate_opening_range_instrument",
 ]
