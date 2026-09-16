@@ -121,7 +121,7 @@ def process_selected_instrument(
     place_order_enabled = bool(
         getattr(
             config,
-            "PLACE_ORDER",
+            "UPSTOX_ORDER_ENABLED",
             False,
         )
     )
