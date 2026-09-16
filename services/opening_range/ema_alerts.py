@@ -5,11 +5,12 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from core import config
 from core.logger import get_logger
-from services.algo_app_service import algo_app_service
 from services.option_service import normalize_candle, options_cache
-from services.telegram_service import telegram_service
 from services.isolated_instrument_event_service import (
     isolated_instrument_event_saving_service,
+)
+from services.opening_range.ema_event_delivery_service import (
+    ema_event_delivery_service,
 )
 
 from . import state
@@ -566,144 +567,6 @@ def should_skip_isolated_ema_alert_for_minute_direction(
         alert_key=alert_key, state_date=alert_date
     )
     return skip_alert, alert_key, direction
-
-
-def _send_telegram_message(title: str, message: str, level: str) -> bool:
-    try:
-        return bool(
-            telegram_service.send_message(title=title, message=message, level=level)
-        )
-    except Exception as ex:
-        logger.error(
-            "Telegram delivery failed. title=%s, level=%s, error=%s",
-            title,
-            level,
-            type(ex).__name__,
-        )
-        return False
-
-
-def _dispatch_algo_app_payload(payload: dict) -> bool:
-    if not config.ALGO_APP_ENABLED:
-        return False
-    if not isinstance(payload, dict):
-        return False
-    try:
-        return bool(algo_app_service.dispatch_ema_alert(deepcopy(payload)))
-    except Exception as ex:
-        logger.error(
-            "Algo App dispatch failed. event_id=%s, instrument_key=%s, error=%s",
-            payload.get("event_id"),
-            (payload.get("instrument") or {}).get("instrument_key"),
-            type(ex).__name__,
-        )
-        return False
-
-
-def _save_isolated_instrument_processing_event(
-    *,
-    payload: dict,
-    processing_result: dict,
-    processing_status: str,
-) -> dict:
-    save_result = {
-        "success": False,
-        "saved": False,
-        "skipped": False,
-        "document_id": None,
-        "date": None,
-        "time_key": None,
-        "error": None,
-    }
-
-    if not isinstance(payload, dict):
-        save_result["skipped"] = True
-        save_result["error"] = "Payload is unavailable."
-
-        logger.warning(
-            "Isolated instrument event saving skipped. "
-            "reason=payload_unavailable, processing_status=%s",
-            processing_status,
-        )
-
-        return save_result
-
-    if not isinstance(processing_result, dict):
-        processing_result = {}
-
-    try:
-        save_result = isolated_instrument_event_saving_service.save_processing_event(
-            payload=deepcopy(payload),
-            processing_result=processing_result,
-            processing_status=processing_status,
-        )
-
-        if not isinstance(save_result, dict):
-            logger.warning(
-                "Isolated instrument event saving returned an invalid result. "
-                "event_id=%s, processing_status=%s",
-                payload.get("event_id"),
-                processing_status,
-            )
-
-            return {
-                "success": False,
-                "saved": False,
-                "skipped": False,
-                "document_id": None,
-                "date": None,
-                "time_key": None,
-                "error": "Event saving service returned an invalid result.",
-            }
-
-        if save_result.get("saved"):
-            logger.info(
-                "Isolated instrument EMA event saved. "
-                "event_id=%s, document_id=%s, date=%s, "
-                "time_key=%s, processing_status=%s",
-                payload.get("event_id"),
-                save_result.get("document_id"),
-                save_result.get("date"),
-                save_result.get("time_key"),
-                processing_status,
-            )
-        elif save_result.get("skipped"):
-            logger.info(
-                "Isolated instrument EMA event saving skipped. "
-                "event_id=%s, processing_status=%s, reason=%s",
-                payload.get("event_id"),
-                processing_status,
-                save_result.get("error"),
-            )
-        else:
-            logger.warning(
-                "Isolated instrument EMA event was not saved. "
-                "event_id=%s, processing_status=%s, error=%s",
-                payload.get("event_id"),
-                processing_status,
-                save_result.get("error"),
-            )
-
-        return save_result
-
-    except Exception as ex:
-        logger.exception(
-            "Unexpected isolated instrument EMA event saving failure. "
-            "event_id=%s, processing_status=%s, error_type=%s",
-            payload.get("event_id"),
-            processing_status,
-            type(ex).__name__,
-        )
-
-        return {
-            "success": False,
-            "saved": False,
-            "skipped": False,
-            "document_id": None,
-            "date": None,
-            "time_key": None,
-            "error": f"{type(ex).__name__}: {ex}",
-        }
 
 
 def build_isolated_ema_alert_payload(
@@ -2072,11 +1935,17 @@ def process_selected_or_ema_cross_alert_detailed(
 
             result["event_saving"]["attempted"] = True
 
-            event_saving_result = _save_isolated_instrument_processing_event(
+            processing_status = "simulation_dry_run"
+            event_saving_result = ema_event_delivery_service.process(
                 payload=payload,
-                processing_result=result,
-                processing_status="dry_run_completed",
-            )
+                telegram_title=telegram_title,
+                telegram_message=telegram_message,
+                telegram_level="EMA",
+                telegram_enabled=False,
+                algo_app_enabled=False,
+                save_event=True,
+                processing_status=processing_status,
+            ).get("mongo", {})
 
             result["event_saving"].update(
                 {
@@ -2095,80 +1964,31 @@ def process_selected_or_ema_cross_alert_detailed(
                 and not result["event_saving"]["skipped"]
             ):
                 result["warnings"].append(
-                    "Dry-run payload was generated, but the isolated instrument "
+                    "EMA alert processing completed, but the isolated instrument "
                     "event could not be saved."
                 )
 
-            logger.info(
-                "EMA alert dry-run completed successfully. "
-                "event_id=%s, instrument_key=%s, event_saved=%s",
-                result["event_id"],
-                event_key,
-                result["event_saving"]["saved"],
-            )
-
             return result
 
-        telegram_sent = False
-        algo_dispatched = False
-
-        if telegram_enabled:
-            result["delivery"]["telegram"]["attempted"] = True
-
-            logger.debug(
-                "Attempting Telegram delivery. event_id=%s, title=%s",
-                result["event_id"],
-                telegram_title,
-            )
-
-            telegram_sent = _send_telegram_message(
-                title=telegram_title,
-                message=telegram_message,
-                level="EMA",
-            )
-
-            logger.debug(
-                "Telegram delivery completed. event_id=%s, success=%s",
-                result["event_id"],
-                telegram_sent,
-            )
-
-        if algo_enabled:
-            result["delivery"]["algo_app"]["attempted"] = True
-
-            logger.debug(
-                "Attempting Algo App dispatch. event_id=%s",
-                result["event_id"],
-            )
-
-            algo_dispatched = _dispatch_algo_app_payload(payload)
-
-            logger.debug(
-                "Algo App dispatch completed. event_id=%s, dispatched=%s",
-                result["event_id"],
-                algo_dispatched,
-            )
-
-        result["delivery"]["telegram"]["success"] = telegram_sent
-
-        result["delivery"]["algo_app"].update(
-            {
-                "dispatched": algo_dispatched,
-                "delivery_mode": (
-                    "background"
-                    if bool(
-                        getattr(
-                            config,
-                            "ALGO_APP_SEND_IN_BACKGROUND",
-                            True,
-                        )
-                    )
-                    else "synchronous"
-                ),
-            }
+        delivery_result = ema_event_delivery_service.process(
+            payload=payload,
+            telegram_title=telegram_title,
+            telegram_message=telegram_message,
+            telegram_level="EMA",
+            telegram_enabled=telegram_enabled,
+            algo_app_enabled=algo_enabled,
+            save_event=False,
+            processing_status=None,
         )
 
-        delivery_accepted = bool(telegram_sent or algo_dispatched)
+        result["delivery"] = {
+            "telegram": deepcopy(delivery_result.get("telegram", {})),
+            "algo_app": deepcopy(delivery_result.get("algo_app", {})),
+        }
+
+        telegram_sent = bool((delivery_result.get("telegram") or {}).get("success"))
+        algo_dispatched = bool((delivery_result.get("algo_app") or {}).get("success"))
+        delivery_accepted = bool(delivery_result.get("accepted"))
 
         result["success"] = delivery_accepted
         result["accepted"] = delivery_accepted
@@ -2253,11 +2073,16 @@ def process_selected_or_ema_cross_alert_detailed(
 
         result["event_saving"]["attempted"] = True
 
-        event_saving_result = _save_isolated_instrument_processing_event(
+        event_saving_result = ema_event_delivery_service.process(
             payload=payload,
-            processing_result=result,
+            telegram_title=telegram_title,
+            telegram_message=telegram_message,
+            telegram_level="EMA",
+            telegram_enabled=False,
+            algo_app_enabled=False,
+            save_event=True,
             processing_status=processing_status,
-        )
+        ).get("mongo", {})
 
         result["event_saving"].update(
             {
@@ -2307,11 +2132,16 @@ def process_selected_or_ema_cross_alert_detailed(
         if isinstance(payload, dict):
             result["event_saving"]["attempted"] = True
 
-            event_saving_result = _save_isolated_instrument_processing_event(
+            event_saving_result = ema_event_delivery_service.process(
                 payload=payload,
-                processing_result=result,
+                telegram_title="Isolated Instrument EMA Alert",
+                telegram_message=str(result.get("telegram_message") or ""),
+                telegram_level="EMA",
+                telegram_enabled=False,
+                algo_app_enabled=False,
+                save_event=True,
                 processing_status="processing_exception",
-            )
+            ).get("mongo", {})
 
             result["event_saving"].update(
                 {

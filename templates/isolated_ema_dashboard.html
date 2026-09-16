@@ -1545,13 +1545,15 @@
      ============================================================ */
 
   function openInstrumentChart(instrumentKey) {
-    if (!instrumentKey) {
-      return;
-    }
-
-    window.location.href =
-      `/chart/${encodeURIComponent(instrumentKey)}`;
+  if (!instrumentKey) {
+    return;
   }
+
+  const chartUrl =
+    `/chart/${encodeURIComponent(instrumentKey)}`;
+
+  window.open(chartUrl, "_blank", "noopener,noreferrer");
+}
 
   function getDiagnosticStrikeAndOptionType(diagnostic) {
     const contractInfo =

@@ -39,6 +39,39 @@ def get_int_list(name, default=""):
     ]
 
 
+
+SERVICE_CONTROL_ENABLED = (
+    os.getenv("SERVICE_CONTROL_ENABLED", "false").strip().lower()
+    in {"1", "true", "yes", "on"}
+)
+
+SERVICE_CONTROL_TOKEN = os.getenv(
+    "SERVICE_CONTROL_TOKEN",
+    "",
+).strip()
+
+SERVICE_MANAGER = os.getenv(
+    "SERVICE_MANAGER",
+    "internal",
+).strip().lower()
+
+SYSTEMD_SERVICE_NAME = os.getenv(
+    "SYSTEMD_SERVICE_NAME",
+    "option-feed-engine",
+).strip()
+
+REDEPLOY_COMMAND = os.getenv(
+    "REDEPLOY_COMMAND",
+    "",
+).strip()
+
+SERVICE_COMMAND_TIMEOUT_SECONDS = int(
+    os.getenv(
+        "SERVICE_COMMAND_TIMEOUT_SECONDS",
+        "120",
+    )
+)
+
 MONGO_URI = get_string("MONGO_URL")
 MONGO_DB = get_string("MONGO_DB")
 TOKENS_COLLECTION = get_string("TOKENS_COLLECTION")
@@ -61,6 +94,16 @@ ISOLATED_INSTRUMENT_EVENT_ENABLED = get_bool(
 ISOLATED_INSTRUMENT_EVENT_COLLECTION = get_string(
     "ISOLATED_INSTRUMENT_EVENT_COLLECTION",
     "isolated_instrumentevent",
+)
+
+UPSTOX_ORDER_COLLECTION = get_string(
+    "UPSTOX_ORDER_COLLECTION",
+    "upstox_orders",
+)
+
+UPSTOX_ORDER_ENABLED = get_bool(
+    "UPSTOX_ORDER_ENABLED",
+    True,
 )
 
 ISOLATED_INSTRUMENT_EVENT_FIELD_NAME = get_string(
@@ -462,3 +505,8 @@ STARTUP_CLEANUP_PROTECTED_PATHS = {
     "myenv",
     ".venv",
 }
+
+PLACE_ORDER = get_bool(
+    "PLACE_ORDER",
+    False,
+)

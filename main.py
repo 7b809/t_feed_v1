@@ -18,6 +18,9 @@ from api.debug_routes import router as debug_router
 from api.ema_alert_simulation_routes import (
     router as ema_alert_simulation_router,
 )
+from api.service_control_routes import (
+    router as service_control_router,
+)
 from api.health_routes import router as health_router
 from api.history_routes import router as history_router
 from api.home_routes import router as home_router
@@ -2069,3 +2072,4 @@ app.include_router(logs_router)
 app.include_router(instrument_router)
 app.include_router(ema_alert_simulation_router)
 app.include_router(test_token_router)
+app.include_router(service_control_router)
