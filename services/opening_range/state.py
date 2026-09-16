@@ -346,7 +346,7 @@ def append_selected_or_ema_alert(alert_record: dict) -> dict:
                 current_count = int(selected_or_instrument_state.get("algo_app_failed_count", 0) or 0)
                 selected_or_instrument_state["algo_app_failed_count"] = current_count + 1
             selected_or_instrument_state["last_algo_app_delivery"] = deepcopy(algo_delivery)
-        selected_or_instrument_state["last_ema_alert"] = record
+        selected_or_instrument_state["last_ema_alert"] = None
         selected_state_snapshot = deepcopy(selected_or_instrument_state)
         alert_count = len(selected_or_ema_alerts)
     with opening_range_cache_lock:

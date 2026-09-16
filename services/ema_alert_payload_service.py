@@ -701,68 +701,18 @@ def build_isolated_ema_alert_payload(
         payload.pop("raw_ema_event", None)
     return make_json_safe(clean_optional_values(payload))
 
-
 def build_safe_raw_ema_event(ema_event: dict) -> dict:
-    """
-    Create a snapshot of the EMA event without recursively embedding
-    complete previous-alert payloads.
-    """
     if not isinstance(ema_event, dict):
         return {}
 
     safe_event = deepcopy(ema_event)
+
     isolated_instrument = safe_event.get("isolated_instrument")
 
-    if not isinstance(isolated_instrument, dict):
-        return safe_event
-
-    previous_alert = isolated_instrument.get("last_ema_alert")
-
-    if not isinstance(previous_alert, dict):
-        isolated_instrument["last_ema_alert"] = None
-        return safe_event
-
-    previous_payload = previous_alert.get("payload")
-
-    if not isinstance(previous_payload, dict):
-        previous_payload = {}
-
-    duplicate_control = previous_payload.get("duplicate_control")
-
-    if not isinstance(duplicate_control, dict):
-        duplicate_control = {}
-
-    order_suggestion = previous_payload.get("order_suggestion")
-
-    if not isinstance(order_suggestion, dict):
-        order_suggestion = {}
-
-    isolated_instrument["last_ema_alert"] = {
-        "event_id": (
-            previous_alert.get("event_id") or previous_payload.get("event_id")
-        ),
-        "event_type": (
-            previous_alert.get("type")
-            or previous_alert.get("event_type")
-            or previous_payload.get("event_type")
-        ),
-        "created_at": (
-            previous_alert.get("created_at") or previous_payload.get("created_at")
-        ),
-        "alert_direction": (
-            previous_alert.get("alert_direction")
-            or previous_alert.get("direction")
-            or duplicate_control.get("direction")
-        ),
-        "suggested_order_option_type": (
-            previous_alert.get("suggested_order_option_type")
-            or previous_alert.get("suggested_order_side")
-            or order_suggestion.get("suggested_order_side")
-        ),
-    }
+    if isinstance(isolated_instrument, dict):
+        isolated_instrument.pop("last_ema_alert", None)
 
     return safe_event
-
 
 class EmaAlertPayloadService:
     def build_isolated_ema_alert_payload(
