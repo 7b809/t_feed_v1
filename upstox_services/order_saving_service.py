@@ -1,3 +1,4 @@
+
 from __future__ import annotations
 
 from copy import deepcopy
@@ -6,16 +7,36 @@ from threading import Lock
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pymongo import ASCENDING, DESCENDING, MongoClient
+from pymongo import MongoClient
 from pymongo.errors import PyMongoError
 
 from core import config
 from core.logger import get_logger
 
+
 logger = get_logger(__file__)
 
 
 class OrderSavingService:
+    """
+    Saves all order results in one MongoDB document per day.
+
+    Document structure:
+
+    {
+        "_id": "YYYY-MM-DD",
+        "date": "YYYY-MM-DD",
+        "timezone": "Asia/Kolkata",
+        "orders": {
+            "HH_MM_SS": {
+                ...
+            }
+        },
+        "created_at": datetime,
+        "updated_at": datetime
+    }
+    """
+
     def __init__(self) -> None:
         self._client: MongoClient | None = None
         self._database = None
@@ -24,7 +45,8 @@ class OrderSavingService:
         self._indexes_initialized = False
 
         logger.info(
-            "Order saving service initialized. " "enabled=%s, collection=%s",
+            "Daily order saving service initialized. "
+            "enabled=%s, collection=%s",
             self._is_enabled(),
             self._get_collection_name(),
         )
@@ -87,16 +109,20 @@ class OrderSavingService:
 
         try:
             return ZoneInfo(timezone_name)
+
         except ZoneInfoNotFoundError:
             logger.warning(
-                "Invalid market timezone. " "Using Asia/Kolkata. timezone=%s",
+                "Invalid market timezone. "
+                "Using Asia/Kolkata. timezone=%s",
                 timezone_name,
             )
 
             return ZoneInfo("Asia/Kolkata")
 
     def _get_current_datetime(self) -> datetime:
-        return datetime.now(tz=self._get_market_timezone())
+        return datetime.now(
+            tz=self._get_market_timezone()
+        )
 
     def _get_collection(self):
         if self._collection is not None:
@@ -108,9 +134,11 @@ class OrderSavingService:
 
             if not self._is_enabled():
                 logger.info(
-                    "Order result saving is disabled. " "collection=%s",
+                    "Daily order result saving is disabled. "
+                    "collection=%s",
                     self._get_collection_name(),
                 )
+
                 return None
 
             mongo_uri = self._get_mongo_uri()
@@ -119,14 +147,18 @@ class OrderSavingService:
 
             if not mongo_uri:
                 logger.error(
-                    "Order result saving skipped: " "MONGO_URL is not configured."
+                    "Order result saving skipped: "
+                    "MONGO_URL is not configured."
                 )
+
                 return None
 
             if not database_name:
                 logger.error(
-                    "Order result saving skipped: " "MONGO_DB is not configured."
+                    "Order result saving skipped: "
+                    "MONGO_DB is not configured."
                 )
+
                 return None
 
             try:
@@ -141,12 +173,14 @@ class OrderSavingService:
 
                 self._database = self._client[database_name]
 
-                self._collection = self._database[collection_name]
+                self._collection = self._database[
+                    collection_name
+                ]
 
                 self._initialize_indexes()
 
                 logger.info(
-                    "Order MongoDB collection initialized. "
+                    "Daily order MongoDB collection initialized. "
                     "database=%s, collection=%s",
                     database_name,
                     collection_name,
@@ -156,7 +190,7 @@ class OrderSavingService:
 
             except Exception as exc:
                 logger.exception(
-                    "Failed to initialize order MongoDB "
+                    "Failed to initialize daily order MongoDB "
                     "collection. database=%s, "
                     "collection=%s, error_type=%s",
                     database_name,
@@ -167,6 +201,7 @@ class OrderSavingService:
                 if self._client is not None:
                     try:
                         self._client.close()
+
                     except Exception:
                         logger.exception(
                             "Failed to close MongoDB client "
@@ -180,61 +215,34 @@ class OrderSavingService:
                 return None
 
     def _initialize_indexes(self) -> None:
+        """
+        No additional indexes are required for daily documents.
+
+        The document _id is the date and is automatically indexed
+        by MongoDB.
+        """
+
         if self._collection is None or self._indexes_initialized:
             return
 
         try:
             self._collection.create_index(
-                [("event_id", ASCENDING)],
-                name="idx_event_id",
-            )
-
-            self._collection.create_index(
-                [("order_id", ASCENDING)],
-                name="idx_order_id",
-                sparse=True,
-            )
-
-            self._collection.create_index(
-                [("instrument_key", ASCENDING)],
-                name="idx_instrument_key",
-            )
-
-            self._collection.create_index(
-                [("trading_symbol", ASCENDING)],
-                name="idx_trading_symbol",
-            )
-
-            self._collection.create_index(
-                [("created_at", DESCENDING)],
-                name="idx_created_at",
-            )
-
-            self._collection.create_index(
-                [("updated_at", DESCENDING)],
-                name="idx_updated_at",
-            )
-
-            self._collection.create_index(
-                [("order_status", ASCENDING)],
-                name="idx_order_status",
-            )
-
-            self._collection.create_index(
                 [
-                    ("event_id", ASCENDING),
-                    ("instrument_key", ASCENDING),
+                    ("updated_at", -1),
                 ],
-                name="idx_event_instrument",
+                name="idx_daily_updated_at",
             )
 
             self._indexes_initialized = True
 
-            logger.info("Order MongoDB indexes initialized.")
+            logger.info(
+                "Daily order MongoDB indexes initialized."
+            )
 
         except PyMongoError as exc:
             logger.warning(
-                "Failed to initialize order MongoDB " "indexes. error=%s",
+                "Failed to initialize daily order MongoDB "
+                "indexes. error=%s",
                 exc,
             )
 
@@ -267,10 +275,16 @@ class OrderSavingService:
             return None
 
         direct_order_id = (
-            value.get("order_id") or value.get("orderId") or value.get("id")
+            value.get("order_id")
+            or value.get("orderId")
+            or value.get("id")
         )
 
-        normalized_direct_id = OrderSavingService._normalize_text(direct_order_id)
+        normalized_direct_id = (
+            OrderSavingService._normalize_text(
+                direct_order_id
+            )
+        )
 
         if normalized_direct_id:
             return normalized_direct_id
@@ -285,7 +299,11 @@ class OrderSavingService:
             if not isinstance(nested_value, dict):
                 continue
 
-            nested_order_id = OrderSavingService._extract_nested_order_id(nested_value)
+            nested_order_id = (
+                OrderSavingService._extract_nested_order_id(
+                    nested_value
+                )
+            )
 
             if nested_order_id:
                 return nested_order_id
@@ -302,43 +320,49 @@ class OrderSavingService:
             or order_result.get("id")
         )
 
-        normalized_direct_id = OrderSavingService._normalize_text(direct_order_id)
+        normalized_direct_id = (
+            OrderSavingService._normalize_text(
+                direct_order_id
+            )
+        )
 
         if normalized_direct_id:
             return normalized_direct_id
 
-        place_order_result = order_result.get("place_order_result")
+        place_order_result = order_result.get(
+            "place_order_result"
+        )
 
-        return OrderSavingService._extract_nested_order_id(place_order_result)
+        return OrderSavingService._extract_nested_order_id(
+            place_order_result
+        )
 
     @staticmethod
     def _get_instrument_details(
         payload: dict[str, Any],
         order_result: dict[str, Any],
     ) -> dict[str, Any]:
-        selected_instrument = order_result.get("selected_instrument")
+        selected_instrument = order_result.get(
+            "selected_instrument"
+        )
 
-        if not isinstance(
-            selected_instrument,
-            dict,
-        ):
+        if not isinstance(selected_instrument, dict):
             selected_instrument = {}
 
         payload_instrument = payload.get("instrument")
 
-        if not isinstance(
-            payload_instrument,
-            dict,
-        ):
+        if not isinstance(payload_instrument, dict):
             payload_instrument = {}
 
-        instrument_key = selected_instrument.get(
-            "instrument_key"
-        ) or payload_instrument.get("instrument_key")
+        instrument_key = (
+            selected_instrument.get("instrument_key")
+            or payload_instrument.get("instrument_key")
+        )
 
-        trading_symbol = selected_instrument.get(
-            "trading_symbol"
-        ) or payload_instrument.get("trading_symbol")
+        trading_symbol = (
+            selected_instrument.get("trading_symbol")
+            or payload_instrument.get("trading_symbol")
+        )
 
         live_ltp = OrderSavingService._first_not_none(
             selected_instrument.get("live_ltp"),
@@ -353,8 +377,16 @@ class OrderSavingService:
         )
 
         return {
-            "instrument_key": (OrderSavingService._normalize_text(instrument_key)),
-            "trading_symbol": (OrderSavingService._normalize_text(trading_symbol)),
+            "instrument_key": (
+                OrderSavingService._normalize_text(
+                    instrument_key
+                )
+            ),
+            "trading_symbol": (
+                OrderSavingService._normalize_text(
+                    trading_symbol
+                )
+            ),
             "live_ltp": live_ltp,
             "lot_size": lot_size,
         }
@@ -368,20 +400,18 @@ class OrderSavingService:
         if not isinstance(ema_data, dict):
             ema_data = {}
 
-        duplicate_control = payload.get("duplicate_control")
+        duplicate_control = payload.get(
+            "duplicate_control"
+        )
 
-        if not isinstance(
-            duplicate_control,
-            dict,
-        ):
+        if not isinstance(duplicate_control, dict):
             duplicate_control = {}
 
-        order_suggestion = payload.get("order_suggestion")
+        order_suggestion = payload.get(
+            "order_suggestion"
+        )
 
-        if not isinstance(
-            order_suggestion,
-            dict,
-        ):
+        if not isinstance(order_suggestion, dict):
             order_suggestion = {}
 
         simulation = payload.get("simulation")
@@ -389,12 +419,11 @@ class OrderSavingService:
         if not isinstance(simulation, dict):
             simulation = {}
 
-        market_snapshot = payload.get("market_snapshot")
+        market_snapshot = payload.get(
+            "market_snapshot"
+        )
 
-        if not isinstance(
-            market_snapshot,
-            dict,
-        ):
+        if not isinstance(market_snapshot, dict):
             market_snapshot = {}
 
         return {
@@ -408,13 +437,33 @@ class OrderSavingService:
             "cross_type": ema_data.get("cross_type"),
             "previous_signal": ema_data.get("previous_signal"),
             "current_signal": ema_data.get("current_signal"),
-            "direction": duplicate_control.get("direction"),
-            "suggested_order_side": (order_suggestion.get("suggested_order_side")),
-            "underlying_spot_price": (market_snapshot.get("underlying_spot_price")),
-            "nifty_ltp": market_snapshot.get("nifty_ltp"),
-            "is_simulation": bool(payload.get("is_simulation")),
-            "dry_run": bool(simulation.get("dry_run")),
-            "minute_alert_key": (duplicate_control.get("minute_alert_key")),
+            "direction": duplicate_control.get(
+                "direction"
+            ),
+            "suggested_order_side": (
+                order_suggestion.get(
+                    "suggested_order_side"
+                )
+            ),
+            "underlying_spot_price": (
+                market_snapshot.get(
+                    "underlying_spot_price"
+                )
+            ),
+            "nifty_ltp": market_snapshot.get(
+                "nifty_ltp"
+            ),
+            "is_simulation": bool(
+                payload.get("is_simulation")
+            ),
+            "dry_run": bool(
+                simulation.get("dry_run")
+            ),
+            "minute_alert_key": (
+                duplicate_control.get(
+                    "minute_alert_key"
+                )
+            ),
         }
 
     def _build_order_document(
@@ -425,67 +474,146 @@ class OrderSavingService:
     ) -> dict[str, Any]:
         now = self._get_current_datetime()
 
-        instrument_details = self._get_instrument_details(
-            payload=payload,
-            order_result=order_result,
+        instrument_details = (
+            self._get_instrument_details(
+                payload=payload,
+                order_result=order_result,
+            )
         )
 
-        success = bool(order_result.get("success"))
+        success = bool(
+            order_result.get("success")
+        )
 
-        executed = bool(order_result.get("executed"))
+        executed = bool(
+            order_result.get("executed")
+        )
 
-        skipped = bool(order_result.get("skipped"))
+        skipped = bool(
+            order_result.get("skipped")
+        )
 
-        order_status = self._normalize_text(order_result.get("order_status"))
+        order_status = self._normalize_text(
+            order_result.get("order_status")
+        )
 
         if not order_status:
             if skipped:
                 order_status = "SKIPPED"
+
             elif success:
                 order_status = "SUCCESS"
+
             else:
                 order_status = "FAILED"
 
-        order_id = self._get_order_id(order_result)
+        order_id = self._get_order_id(
+            order_result
+        )
 
         return {
-            "event_id": self._normalize_text(payload.get("event_id")),
+            "event_id": self._normalize_text(
+                payload.get("event_id")
+            ),
             "order_id": order_id,
-            "instrument_key": (instrument_details.get("instrument_key")),
-            "trading_symbol": (instrument_details.get("trading_symbol")),
+            "instrument_key": (
+                instrument_details.get(
+                    "instrument_key"
+                )
+            ),
+            "trading_symbol": (
+                instrument_details.get(
+                    "trading_symbol"
+                )
+            ),
             "instrument": instrument_details,
             "order_status": order_status,
             "success": success,
             "executed": executed,
             "skipped": skipped,
             "error": order_result.get("error"),
-            "order_result": deepcopy(order_result),
-            "payload_metadata": (self._get_payload_metadata(payload)),
+            "order_result": deepcopy(
+                order_result
+            ),
+            "payload_metadata": (
+                self._get_payload_metadata(
+                    payload
+                )
+            ),
             "created_at": now,
             "updated_at": now,
-            "created_at_ist": now.strftime("%Y-%m-%d %H:%M:%S %Z"),
-            "updated_at_ist": now.strftime("%Y-%m-%d %H:%M:%S %Z"),
+            "created_at_ist": now.strftime(
+                "%Y-%m-%d %H:%M:%S %Z"
+            ),
+            "updated_at_ist": now.strftime(
+                "%Y-%m-%d %H:%M:%S %Z"
+            ),
         }
 
     @staticmethod
-    def _build_save_filter(
-        document: dict[str, Any],
-    ) -> dict[str, Any] | None:
-        event_id = document.get("event_id")
+    def _get_daily_document_id(
+        now: datetime,
+    ) -> str:
+        """
+        Returns the daily MongoDB document ID.
 
-        if event_id:
-            return {
-                "event_id": event_id,
-            }
+        Example:
+            2026-09-17
+        """
 
-        order_id = document.get("order_id")
+        return now.strftime("%Y-%m-%d")
 
-        if order_id:
-            return {
-                "order_id": order_id,
-            }
+    @staticmethod
+    def _get_time_key(
+        now: datetime,
+    ) -> str:
+        """
+        Returns the initial order key.
 
-        return None
+        Example:
+            10_11_32
+        """
+
+        return now.strftime("%H_%M_%S")
+
+    def _get_unique_order_key(
+        self,
+        *,
+        collection: Any,
+        daily_document_id: str,
+        base_key: str,
+    ) -> str:
+        """
+        Creates a unique order key inside today's document.
+
+        Examples:
+            10_11_32
+            10_11_32_1
+            10_11_32_2
+        """
+
+        order_key = base_key
+        counter = 0
+
+        while True:
+            existing_document = collection.find_one(
+                {
+                    "_id": daily_document_id,
+                    f"orders.{order_key}": {
+                        "$exists": True
+                    },
+                },
+                {
+                    "_id": 1,
+                },
+            )
+
+            if existing_document is None:
+                return order_key
+
+            counter += 1
+
+            order_key = f"{base_key}_{counter}"
 
     def save_order_result(
         self,
@@ -500,6 +628,7 @@ class OrderSavingService:
             "updated": False,
             "skipped": False,
             "document_id": None,
+            "order_key": None,
             "event_id": None,
             "order_id": None,
             "error": None,
@@ -509,152 +638,172 @@ class OrderSavingService:
             result.update(
                 {
                     "skipped": True,
-                    "error": ("Order result saving is " "disabled by configuration."),
+                    "error": (
+                        "Order result saving is "
+                        "disabled by configuration."
+                    ),
                 }
             )
 
-            logger.info("Order result saving skipped because " "it is disabled.")
+            logger.info(
+                "Daily order result saving skipped "
+                "because it is disabled."
+            )
 
             return result
 
         if not isinstance(payload, dict):
-            result["error"] = "Payload must be a dictionary."
+            result["error"] = (
+                "Payload must be a dictionary."
+            )
+
             return result
 
         if not isinstance(order_result, dict):
-            result["error"] = "Order result must be a dictionary."
+            result["error"] = (
+                "Order result must be a dictionary."
+            )
+
             return result
 
         if not payload:
             result["error"] = "Payload is empty."
+
             return result
 
         if not order_result:
-            result["error"] = "Order result is empty."
+            result["error"] = (
+                "Order result is empty."
+            )
+
             return result
 
         collection = self._get_collection()
 
         if collection is None:
-            result["error"] = "Order MongoDB collection is " "unavailable."
+            result["error"] = (
+                "Order MongoDB collection is unavailable."
+            )
+
             return result
 
         try:
+            now = self._get_current_datetime()
+
+            daily_document_id = (
+                self._get_daily_document_id(now)
+            )
+
+            base_time_key = (
+                self._get_time_key(now)
+            )
+
             document = self._build_order_document(
                 payload=payload,
                 order_result=order_result,
             )
 
-            result["event_id"] = document.get("event_id")
-            result["order_id"] = document.get("order_id")
+            order_key = self._get_unique_order_key(
+                collection=collection,
+                daily_document_id=daily_document_id,
+                base_key=base_time_key,
+            )
 
-            save_filter = self._build_save_filter(document)
+            result["document_id"] = daily_document_id
 
-            if save_filter is None:
-                insert_result = collection.insert_one(document)
+            result["order_key"] = order_key
 
-                document_id = str(insert_result.inserted_id)
+            result["event_id"] = document.get(
+                "event_id"
+            )
 
-                result.update(
-                    {
-                        "success": True,
-                        "saved": True,
-                        "created": True,
-                        "updated": False,
-                        "document_id": document_id,
-                        "error": None,
-                    }
-                )
+            result["order_id"] = document.get(
+                "order_id"
+            )
 
-            else:
-                created_at = document.pop("created_at")
-                created_at_ist = document.pop("created_at_ist")
-
-                update_result = collection.update_one(
-                    save_filter,
-                    {
-                        "$set": document,
-                        "$setOnInsert": {
-                            "created_at": created_at,
-                            "created_at_ist": (created_at_ist),
-                        },
+            update_result = collection.update_one(
+                {
+                    "_id": daily_document_id,
+                },
+                {
+                    "$set": {
+                        f"orders.{order_key}": document,
+                        "updated_at": now,
+                        "updated_at_ist": now.strftime(
+                            "%Y-%m-%d %H:%M:%S %Z"
+                        ),
                     },
-                    upsert=True,
-                )
+                    "$setOnInsert": {
+                        "date": daily_document_id,
+                        "timezone": str(
+                            self._get_market_timezone()
+                        ),
+                        "created_at": now,
+                        "created_at_ist": now.strftime(
+                            "%Y-%m-%d %H:%M:%S %Z"
+                        ),
+                    },
+                },
+                upsert=True,
+            )
 
-                created = update_result.upserted_id is not None
+            created = update_result.upserted_id is not None
 
-                if created:
-                    document_id = str(update_result.upserted_id)
-                else:
-                    existing_document = collection.find_one(
-                        save_filter,
-                        {
-                            "_id": 1,
-                        },
-                    )
-
-                    document_id = (
-                        str(existing_document.get("_id"))
-                        if isinstance(
-                            existing_document,
-                            dict,
-                        )
-                        and existing_document.get("_id") is not None
-                        else None
-                    )
-
-                result.update(
-                    {
-                        "success": True,
-                        "saved": True,
-                        "created": created,
-                        "updated": not created,
-                        "document_id": document_id,
-                        "error": None,
-                    }
-                )
+            result.update(
+                {
+                    "success": True,
+                    "saved": True,
+                    "created": created,
+                    "updated": not created,
+                    "error": None,
+                }
+            )
 
             logger.info(
-                "Order result saved successfully. "
-                "event_id=%s, order_id=%s, "
-                "instrument_key=%s, "
+                "Daily order result saved successfully. "
+                "date=%s, order_key=%s, event_id=%s, "
+                "order_id=%s, instrument_key=%s, "
                 "order_status=%s, created=%s, "
-                "updated=%s, document_id=%s",
+                "updated=%s",
+                daily_document_id,
+                order_key,
                 result.get("event_id"),
                 result.get("order_id"),
                 document.get("instrument_key"),
                 document.get("order_status"),
                 result.get("created"),
                 result.get("updated"),
-                result.get("document_id"),
             )
 
             return result
 
         except PyMongoError as exc:
             logger.exception(
-                "MongoDB error while saving order "
-                "result. event_id=%s, "
+                "MongoDB error while saving daily "
+                "order result. event_id=%s, "
                 "error_type=%s",
                 payload.get("event_id"),
                 type(exc).__name__,
             )
 
-            result["error"] = f"{type(exc).__name__}: {exc}"
+            result["error"] = (
+                f"{type(exc).__name__}: {exc}"
+            )
 
             return result
 
         except Exception as exc:
             logger.exception(
-                "Unexpected error while saving order "
-                "result. event_id=%s, "
+                "Unexpected error while saving daily "
+                "order result. event_id=%s, "
                 "error_type=%s",
                 payload.get("event_id"),
                 type(exc).__name__,
             )
 
-            result["error"] = f"{type(exc).__name__}: {exc}"
+            result["error"] = (
+                f"{type(exc).__name__}: {exc}"
+            )
 
             return result
 
@@ -664,10 +813,15 @@ class OrderSavingService:
                 try:
                     self._client.close()
 
-                    logger.info("Order MongoDB connection closed.")
+                    logger.info(
+                        "Daily order MongoDB connection closed."
+                    )
 
                 except Exception:
-                    logger.exception("Failed to close order MongoDB " "connection.")
+                    logger.exception(
+                        "Failed to close daily order "
+                        "MongoDB connection."
+                    )
 
             self._client = None
             self._database = None
