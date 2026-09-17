@@ -101,6 +101,13 @@ UPSTOX_ORDER_COLLECTION = get_string(
     "upstox_orders",
 )
 
+# Controls whether a sandbox order is submitted.
+PLACE_ORDER = get_bool(
+    "PLACE_ORDER",
+    True,
+)
+
+# Controls whether the order workflow result is saved to MongoDB.
 UPSTOX_ORDER_ENABLED = get_bool(
     "UPSTOX_ORDER_ENABLED",
     True,
@@ -506,7 +513,3 @@ STARTUP_CLEANUP_PROTECTED_PATHS = {
     ".venv",
 }
 
-PLACE_ORDER = get_bool(
-    "PLACE_ORDER",
-    False,
-)

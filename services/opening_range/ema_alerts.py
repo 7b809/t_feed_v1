@@ -6,9 +6,6 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from core import config
 from core.logger import get_logger
 from services.option_service import normalize_candle, options_cache
-from services.isolated_instrument_event_service import (
-    isolated_instrument_event_saving_service,
-)
 from services.opening_range.ema_event_delivery_service import (
     ema_event_delivery_service,
 )
@@ -415,12 +412,23 @@ def enrich_option_chain_instruments(
             and normalized_isolated_key
             and instrument_key == normalized_isolated_key
         )
-        option_ltp = _safe_float(instrument.get("ltp"))
+
+        option_ltp = _safe_float(
+            instrument.get("live_ltp"),
+            default=_safe_float(instrument.get("ltp")),
+        )
+
         market_data = instrument.get("market_data", {})
+
         if not isinstance(market_data, dict):
             market_data = {}
+
         if option_ltp is None:
-            option_ltp = _safe_float(market_data.get("ltp"))
+            option_ltp = _safe_float(
+                market_data.get("live_ltp"),
+                default=_safe_float(market_data.get("ltp")),
+            )
+
         instrument["ltp"] = option_ltp
         instrument["live_ltp"] = option_ltp
         instrument["market_data"] = market_data
@@ -859,6 +867,18 @@ def build_isolated_ema_alert_payload(
                         False,
                     )
                 ),
+                "place_order": bool(
+                    delivery_controls.get(
+                        "place_order",
+                        False,
+                    )
+                ),
+                "save_order_result": bool(
+                    delivery_controls.get(
+                        "save_order_result",
+                        False,
+                    )
+                ),
             },
         },
         "instrument": {
@@ -1087,17 +1107,6 @@ def build_isolated_ema_alert_payload(
             if isinstance(instrument, dict):
                 instrument.pop("candle", None)
 
-    if not bool(
-        getattr(
-            config,
-            "EMA_ALGO_PAYLOAD_INCLUDE_BUDGET_INSTRUMENTS",
-            True,
-        )
-    ):
-        payload["order_suggestion"]["budget_filter"]["instruments"] = []
-
-        payload["order_suggestion"]["budget_filter"]["matched_count"] = 0
-
     include_budget_candles = bool(
         getattr(
             config,
@@ -1305,14 +1314,61 @@ def process_selected_or_ema_cross_alert_detailed(
                 "enabled": False,
                 "attempted": False,
                 "success": False,
+                "error": None,
                 "title": None,
             },
             "algo_app": {
                 "enabled": False,
                 "attempted": False,
-                "dispatched": False,
+                "success": False,
+                "error": None,
                 "delivery_mode": None,
             },
+            "order": {
+                "enabled": False,
+                "attempted": False,
+                "success": False,
+                "order_status": None,
+                "selected_instrument": None,
+                "order_id": None,
+                "error": None,
+            },
+            "order_mongo": {
+                "enabled": False,
+                "attempted": False,
+                "success": False,
+                "saved": False,
+                "document_id": None,
+                "error": None,
+            },
+            "mongo": {
+                "enabled": False,
+                "attempted": False,
+                "success": False,
+                "saved": False,
+                "skipped": False,
+                "document_id": None,
+                "date": None,
+                "time_key": None,
+                "error": None,
+            },
+        },
+        "order": {
+            "enabled": False,
+            "attempted": False,
+            "success": False,
+            "order_status": None,
+            "selected_instrument": None,
+            "order_id": None,
+            "error": None,
+        },
+        "order_saving": {
+            "enabled": False,
+            "attempted": False,
+            "success": False,
+            "saved": False,
+            "document_id": None,
+            "error": None,
         },
         "duplicate_control": {
             "enabled": False,
@@ -1421,13 +1477,63 @@ def process_selected_or_ema_cross_alert_detailed(
         )
     )
 
+    order_enabled = bool(
+        getattr(
+            config,
+            "PLACE_ORDER",
+            False,
+        )
+    )
+
+    if simulation or dry_run:
+        order_enabled = False
+
+    order_saving_configured = bool(
+        getattr(
+            config,
+            "UPSTOX_ORDER_ENABLED",
+            True,
+        )
+    )
+
+    order_saving_enabled = bool(order_enabled and order_saving_configured)
+
     result["delivery"]["telegram"]["enabled"] = telegram_enabled
     result["delivery"]["algo_app"]["enabled"] = algo_enabled
+    result["delivery"]["order"]["enabled"] = order_enabled
+    result["delivery"]["order_mongo"]["enabled"] = order_saving_enabled
 
-    if not simulation and not telegram_enabled and not algo_enabled:
-        result["skip_reason"] = "all_delivery_channels_disabled"
-        result["message"] = "Telegram and Algo App delivery are disabled."
-        logger.warning("EMA alert processing skipped. reason=%s", result["skip_reason"])
+    result["order"]["enabled"] = order_enabled
+    result["order_saving"]["enabled"] = order_saving_enabled
+
+    logger.info(
+        "EMA action channels resolved. "
+        "instrument_key=%s, telegram_enabled=%s, "
+        "algo_app_enabled=%s, order_enabled=%s, "
+        "order_saving_enabled=%s, simulation=%s, dry_run=%s",
+        event_key,
+        telegram_enabled,
+        algo_enabled,
+        order_enabled,
+        order_saving_enabled,
+        simulation,
+        dry_run,
+    )
+
+    if (
+        not simulation
+        and not telegram_enabled
+        and not algo_enabled
+        and not order_enabled
+    ):
+        result["skip_reason"] = "all_action_channels_disabled"
+        result["message"] = (
+            "Telegram, Algo App, and sandbox order execution " "are disabled."
+        )
+        logger.warning(
+            "EMA alert processing skipped. reason=%s",
+            result["skip_reason"],
+        )
         return result
 
     if selected_state_override is not None:
@@ -1721,6 +1827,8 @@ def process_selected_or_ema_cross_alert_detailed(
             delivery_controls={
                 "send_telegram": telegram_enabled,
                 "send_algo_app": algo_enabled,
+                "place_order": order_enabled,
+                "save_order_result": order_saving_enabled,
             },
         )
 
@@ -1808,14 +1916,6 @@ def process_selected_or_ema_cross_alert_detailed(
         if not isinstance(option_chain_budget, dict):
             option_chain_budget = {}
 
-        include_budget_instruments = bool(
-            getattr(
-                config,
-                "EMA_ALGO_PAYLOAD_INCLUDE_BUDGET_INSTRUMENTS",
-                True,
-            )
-        )
-
         include_budget_candles = bool(
             getattr(
                 config,
@@ -1824,9 +1924,7 @@ def process_selected_or_ema_cross_alert_detailed(
             )
         )
 
-        budget_payload_instruments = (
-            deepcopy(enriched_budget_instruments) if include_budget_instruments else []
-        )
+        budget_payload_instruments = deepcopy(enriched_budget_instruments)
 
         if not include_budget_candles:
             for instrument in budget_payload_instruments:
@@ -1929,23 +2027,26 @@ def process_selected_or_ema_cross_alert_detailed(
             result["success"] = True
             result["accepted"] = True
             result["message"] = (
-                "EMA alert payload and Telegram preview generated successfully. "
-                "No delivery was attempted."
+                "EMA alert payload and Telegram preview generated "
+                "successfully. No delivery or sandbox order was attempted."
             )
 
             result["event_saving"]["attempted"] = True
 
             processing_status = "simulation_dry_run"
-            event_saving_result = ema_event_delivery_service.process(
+            event_saving_delivery_result = ema_event_delivery_service.process(
                 payload=payload,
                 telegram_title=telegram_title,
                 telegram_message=telegram_message,
                 telegram_level="EMA",
                 telegram_enabled=False,
                 algo_app_enabled=False,
+                order_enabled=False,
                 save_event=True,
                 processing_status=processing_status,
-            ).get("mongo", {})
+            )
+
+            event_saving_result = event_saving_delivery_result.get("mongo") or {}
 
             result["event_saving"].update(
                 {
@@ -1977,21 +2078,77 @@ def process_selected_or_ema_cross_alert_detailed(
             telegram_level="EMA",
             telegram_enabled=telegram_enabled,
             algo_app_enabled=algo_enabled,
-            save_event=False,
+            order_enabled=order_enabled,
+            save_event=True,
             processing_status=None,
         )
 
         result["delivery"] = {
-            "telegram": deepcopy(delivery_result.get("telegram", {})),
-            "algo_app": deepcopy(delivery_result.get("algo_app", {})),
+            "telegram": deepcopy(delivery_result.get("telegram") or {}),
+            "algo_app": deepcopy(delivery_result.get("algo_app") or {}),
+            "order": deepcopy(delivery_result.get("order") or {}),
+            "order_mongo": deepcopy(delivery_result.get("order_mongo") or {}),
+            "mongo": deepcopy(delivery_result.get("mongo") or {}),
         }
 
-        telegram_sent = bool((delivery_result.get("telegram") or {}).get("success"))
-        algo_dispatched = bool((delivery_result.get("algo_app") or {}).get("success"))
+        result["order"] = deepcopy(delivery_result.get("order") or {})
+
+        result["order_saving"] = deepcopy(delivery_result.get("order_mongo") or {})
+
+        telegram_result = delivery_result.get("telegram") or {}
+
+        algo_result = delivery_result.get("algo_app") or {}
+
+        order_result = delivery_result.get("order") or {}
+
+        order_mongo_result = delivery_result.get("order_mongo") or {}
+
+        mongo_result = delivery_result.get("mongo") or {}
+
+        telegram_sent = bool(telegram_result.get("success"))
+
+        algo_dispatched = bool(algo_result.get("success"))
+
+        order_attempted = bool(order_result.get("attempted"))
+
+        order_placed = bool(order_result.get("success"))
+
+        order_status = order_result.get("order_status")
+
+        order_id = order_result.get("order_id")
+
+        order_error = order_result.get("error")
+
+        order_result_saved = bool(order_mongo_result.get("saved"))
+
+        event_saved = bool(mongo_result.get("saved"))
+
         delivery_accepted = bool(delivery_result.get("accepted"))
 
         result["success"] = delivery_accepted
         result["accepted"] = delivery_accepted
+
+        result["event_saving"].update(
+            {
+                "attempted": bool(mongo_result.get("attempted")),
+                "success": bool(mongo_result.get("success")),
+                "saved": bool(mongo_result.get("saved")),
+                "skipped": bool(mongo_result.get("skipped")),
+                "document_id": mongo_result.get("document_id"),
+                "date": mongo_result.get("date"),
+                "time_key": mongo_result.get("time_key"),
+                "error": mongo_result.get("error"),
+            }
+        )
+
+        if (
+            not result["event_saving"]["saved"]
+            and not result["event_saving"]["skipped"]
+        ):
+            result["warnings"].append(
+                "EMA alert processing completed, but the isolated "
+                "instrument event could not be saved."
+            )
 
         if not delivery_accepted and duplicate_key_reserved and minute_alert_key:
             state.release_ema_minute_key(minute_alert_key)
@@ -2025,6 +2182,17 @@ def process_selected_or_ema_cross_alert_detailed(
             "budget_range_instruments": deepcopy(enriched_budget_instruments),
             "payload": deepcopy(payload),
             "delivery": deepcopy(result["delivery"]),
+            "order": deepcopy(order_result),
+            "order_mongo": deepcopy(order_mongo_result),
+            "event_mongo": deepcopy(mongo_result),
+            "order_enabled": order_enabled,
+            "order_attempted": order_attempted,
+            "order_placed": order_placed,
+            "order_status": order_status,
+            "order_id": order_id,
+            "order_error": order_error,
+            "order_result_saved": order_result_saved,
+            "event_saved": event_saved,
             "simulation": bool(simulation),
             "dry_run": bool(dry_run),
             "created_at": (get_now_market_time().isoformat()),
@@ -2040,69 +2208,64 @@ def process_selected_or_ema_cross_alert_detailed(
             )
 
         if delivery_accepted:
-            result["message"] = "EMA alert delivery was accepted."
+            result["message"] = (
+                "EMA alert workflow was accepted. "
+                f"Telegram: {telegram_sent}. "
+                f"Algo App: {algo_dispatched}. "
+                f"Sandbox Order Attempted: {order_attempted}. "
+                f"Sandbox Order Placed: {order_placed}. "
+                f"Order Status: {order_status}. "
+                f"Order Result Saved: {order_result_saved}. "
+                f"EMA Event Saved: {event_saved}."
+            )
             logger.info(
-                "EMA alert processed successfully. event_id=%s, instrument_key=%s, direction=%s, telegram=%s, algo_app=%s",
+                "EMA alert processed successfully. "
+                "event_id=%s, instrument_key=%s, direction=%s, "
+                "telegram=%s, algo_app=%s, "
+                "order_enabled=%s, order_attempted=%s, "
+                "order_placed=%s, order_status=%s, "
+                "order_id=%s, order_error=%s, "
+                "order_result_saved=%s, event_saved=%s",
                 result["event_id"],
                 event_key,
                 alert_direction,
                 telegram_sent,
                 algo_dispatched,
+                order_enabled,
+                order_attempted,
+                order_placed,
+                order_status,
+                order_id,
+                order_error,
+                order_result_saved,
+                event_saved,
             )
         else:
-            result["skip_reason"] = "delivery_not_accepted"
-            result["message"] = "EMA alert was not accepted by any delivery channel."
+            result["skip_reason"] = "workflow_not_accepted"
+            result["message"] = (
+                "EMA alert workflow was not accepted by Telegram, "
+                "Algo App, or sandbox order processing."
+            )
             logger.warning(
-                "EMA alert processing completed with no accepted delivery. event_id=%s, instrument_key=%s",
+                "EMA alert processing completed with no accepted workflow. "
+                "event_id=%s, instrument_key=%s, "
+                "telegram=%s, algo_app=%s, "
+                "order_enabled=%s, order_attempted=%s, "
+                "order_placed=%s, order_status=%s, "
+                "order_id=%s, order_error=%s, "
+                "order_result_saved=%s, event_saved=%s",
                 result["event_id"],
                 event_key,
-            )
-        processing_status = (
-            "simulation_delivery_accepted"
-            if simulation and delivery_accepted
-            else (
-                "simulation_delivery_not_accepted"
-                if simulation
-                else (
-                    "delivery_accepted"
-                    if delivery_accepted
-                    else "delivery_not_accepted"
-                )
-            )
-        )
-
-        result["event_saving"]["attempted"] = True
-
-        event_saving_result = ema_event_delivery_service.process(
-            payload=payload,
-            telegram_title=telegram_title,
-            telegram_message=telegram_message,
-            telegram_level="EMA",
-            telegram_enabled=False,
-            algo_app_enabled=False,
-            save_event=True,
-            processing_status=processing_status,
-        ).get("mongo", {})
-
-        result["event_saving"].update(
-            {
-                "success": bool(event_saving_result.get("success")),
-                "saved": bool(event_saving_result.get("saved")),
-                "skipped": bool(event_saving_result.get("skipped")),
-                "document_id": event_saving_result.get("document_id"),
-                "date": event_saving_result.get("date"),
-                "time_key": event_saving_result.get("time_key"),
-                "error": event_saving_result.get("error"),
-            }
-        )
-
-        if (
-            not result["event_saving"]["saved"]
-            and not result["event_saving"]["skipped"]
-        ):
-            result["warnings"].append(
-                "EMA alert processing completed, but the isolated instrument "
-                "event could not be saved."
+                telegram_sent,
+                algo_dispatched,
+                order_enabled,
+                order_attempted,
+                order_placed,
+                order_status,
+                order_id,
+                order_error,
+                order_result_saved,
+                event_saved,
             )
 
         return result
@@ -2132,16 +2295,19 @@ def process_selected_or_ema_cross_alert_detailed(
         if isinstance(payload, dict):
             result["event_saving"]["attempted"] = True
 
-            event_saving_result = ema_event_delivery_service.process(
+            exception_save_result = ema_event_delivery_service.process(
                 payload=payload,
-                telegram_title="Isolated Instrument EMA Alert",
+                telegram_title=("Isolated Instrument EMA Alert"),
                 telegram_message=str(result.get("telegram_message") or ""),
                 telegram_level="EMA",
                 telegram_enabled=False,
                 algo_app_enabled=False,
+                order_enabled=False,
                 save_event=True,
                 processing_status="processing_exception",
-            ).get("mongo", {})
+            )
+
+            event_saving_result = exception_save_result.get("mongo") or {}
 
             result["event_saving"].update(
                 {

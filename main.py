@@ -11,7 +11,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-
+from api.order_routes import router as upstox_orders_router
 from api.algo_app_routes import router as algo_app_router
 from api.chart_routes import router as chart_router
 from api.debug_routes import router as debug_router
@@ -2073,3 +2073,4 @@ app.include_router(instrument_router)
 app.include_router(ema_alert_simulation_router)
 app.include_router(test_token_router)
 app.include_router(service_control_router)
+app.include_router(upstox_orders_router)
