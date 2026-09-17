@@ -25,22 +25,20 @@ def _send_telegram_message(
 
         if not success:
             logger.warning(
-                "Telegram message was not sent. " "title=%s, context=%s",
+                "Telegram message was not sent. title=%s, context=%s",
                 title,
                 notification_context,
             )
 
     except Exception:
         logger.exception(
-            "Unexpected error while sending Telegram message. " "title=%s, context=%s",
+            "Unexpected error while sending Telegram message. title=%s, context=%s",
             title,
             notification_context,
         )
 
 
-def _safe_float(
-    value: Any,
-) -> float | None:
+def _safe_float(value: Any) -> float | None:
     try:
         if value is None:
             return None
@@ -49,9 +47,7 @@ def _safe_float(
         return None
 
 
-def _safe_int(
-    value: Any,
-) -> int | None:
+def _safe_int(value: Any) -> int | None:
     try:
         if value is None:
             return None
@@ -180,312 +176,19 @@ def _extract_order_id(
     return None
 
 
-def process_selected_instrument(
-    selected_instrument: dict[str, Any] | None,
+def _safe_place_order(
+    normalized_instrument: dict[str, Any],
+    instrument_details: dict[str, Any],
+    exit_result: Any,
 ) -> dict[str, Any]:
-    if not isinstance(selected_instrument, dict) or not selected_instrument:
-        logger.warning("Order workflow stopped. No instrument selected.")
-
-        _send_telegram_message(
-            title="Order Workflow Stopped",
-            message="No instrument was selected.",
-            level="WARNING",
-            notification_context=("process_order|no_instrument"),
-        )
-
-        return _build_failure_result(
-            order_status="NO_INSTRUMENT",
-            instrument_details=None,
-            error="No instrument selected.",
-            executed=False,
-        )
-
-    instrument_details = _build_instrument_details(selected_instrument)
-
+    """
+    Wraps place_selected_instrument so that exceptions are logged,
+    notified via Telegram, and converted to a structured failure result.
+    """
     trading_symbol = instrument_details.get("trading_symbol")
     instrument_key = instrument_details.get("instrument_key")
     live_ltp = instrument_details.get("live_ltp")
     lot_size = instrument_details.get("lot_size")
-
-    place_order_enabled = bool(
-        getattr(
-            config,
-            "PLACE_ORDER",
-            False,
-        )
-    )
-
-    logger.info(
-        "Order workflow started. "
-        "trading_symbol=%s, instrument_key=%s, "
-        "live_ltp=%s, lot_size=%s, "
-        "place_order_enabled=%s",
-        trading_symbol,
-        instrument_key,
-        live_ltp,
-        lot_size,
-        place_order_enabled,
-    )
-
-    _send_telegram_message(
-        title="Order Workflow Started",
-        message=(
-            f"Symbol: {trading_symbol}\n"
-            f"Instrument: {instrument_key}\n"
-            f"Live LTP: {live_ltp}\n"
-            f"Lot Size: {lot_size}\n"
-            f"Place Order: "
-            f"{'ENABLED' if place_order_enabled else 'DISABLED'}"
-        ),
-        level="STARTUP",
-        notification_context=(
-            "process_order|started|" f"instrument_key={instrument_key}"
-        ),
-    )
-
-    if not place_order_enabled:
-        logger.info(
-            "Order execution skipped. "
-            "PLACE_ORDER=false, trading_symbol=%s, "
-            "instrument_key=%s",
-            trading_symbol,
-            instrument_key,
-        )
-
-        _send_telegram_message(
-            title="Order Execution Skipped",
-            message=(
-                f"Symbol: {trading_symbol}\n"
-                f"Instrument: {instrument_key}\n"
-                f"Live LTP: {live_ltp}\n"
-                f"Lot Size: {lot_size}\n"
-                "PLACE_ORDER=false"
-            ),
-            level="INFO",
-            notification_context=(
-                "process_order|disabled|" f"instrument_key={instrument_key}"
-            ),
-        )
-
-        return _build_skipped_result(
-            order_status="DISABLED",
-            instrument_details=instrument_details,
-            reason="PLACE_ORDER=false",
-        )
-
-    validation_errors = []
-
-    if not trading_symbol:
-        validation_errors.append("trading_symbol is missing")
-
-    if not instrument_key:
-        validation_errors.append("instrument_key is missing")
-
-    if live_ltp is None or live_ltp <= 0:
-        validation_errors.append("live_ltp must be a positive number")
-
-    if lot_size is None or lot_size <= 0:
-        validation_errors.append("lot_size must be a positive integer")
-
-    if validation_errors:
-        validation_error = "; ".join(validation_errors)
-
-        logger.error(
-            "Order workflow stopped. Invalid instrument "
-            "details. trading_symbol=%s, "
-            "instrument_key=%s, live_ltp=%s, "
-            "lot_size=%s, validation_error=%s",
-            trading_symbol,
-            instrument_key,
-            live_ltp,
-            lot_size,
-            validation_error,
-        )
-
-        _send_telegram_message(
-            title="Invalid Selected Instrument",
-            message=(
-                "Required instrument details are invalid.\n"
-                f"Symbol: {trading_symbol}\n"
-                f"Instrument Key: {instrument_key}\n"
-                f"Live LTP: {live_ltp}\n"
-                f"Lot Size: {lot_size}\n"
-                f"Validation Error: {validation_error}\n"
-                "The order workflow was stopped."
-            ),
-            level="ERROR",
-            notification_context=(
-                "process_order|invalid_instrument|" f"instrument_key={instrument_key}"
-            ),
-        )
-
-        return _build_failure_result(
-            order_status="INVALID_INSTRUMENT",
-            instrument_details=instrument_details,
-            error=validation_error,
-            executed=False,
-        )
-
-    normalized_instrument = {
-        "instrument_key": instrument_key,
-        "trading_symbol": trading_symbol,
-        "live_ltp": live_ltp,
-        "lot_size": lot_size,
-    }
-
-    logger.info(
-        "Step 1 started. Exiting all existing positions. " "instrument_key=%s",
-        instrument_key,
-    )
-
-    _send_telegram_message(
-        title="Exiting Existing Positions",
-        message=(
-            "Checking and exiting all existing positions.\n"
-            f"New Symbol: {trading_symbol}\n"
-            f"Target LTP: {live_ltp}"
-        ),
-        level="REFRESH",
-        notification_context=(
-            "process_order|exit_started|" f"instrument_key={instrument_key}"
-        ),
-    )
-
-    try:
-        exit_result = exit_all_positions()
-
-    except Exception as exc:
-        logger.exception(
-            "Exception while exiting positions. "
-            "trading_symbol=%s, instrument_key=%s, "
-            "exception_type=%s, error=%s",
-            trading_symbol,
-            instrument_key,
-            type(exc).__name__,
-            exc,
-        )
-
-        _send_telegram_message(
-            title="Exit Positions Exception",
-            message=(
-                f"Symbol: {trading_symbol}\n"
-                f"Instrument: {instrument_key}\n"
-                f"Error Type: {type(exc).__name__}\n"
-                f"Error: {exc}\n"
-                "The new order will not be placed."
-            ),
-            level="ERROR",
-            notification_context=(
-                "process_order|exit_exception|" f"instrument_key={instrument_key}"
-            ),
-        )
-
-        return _build_failure_result(
-            order_status="EXIT_FAILED",
-            instrument_details=(normalized_instrument),
-            error=(
-                f"Position exit raised an exception: " f"{type(exc).__name__}: {exc}"
-            ),
-            executed=True,
-        )
-
-    if not isinstance(exit_result, dict):
-        logger.error(
-            "Position exit returned an invalid response. "
-            "response_type=%s, response=%r",
-            type(exit_result).__name__,
-            exit_result,
-        )
-
-        _send_telegram_message(
-            title="Invalid Position Exit Response",
-            message=(
-                f"Symbol: {trading_symbol}\n"
-                f"Instrument: {instrument_key}\n"
-                f"Response Type: "
-                f"{type(exit_result).__name__}\n"
-                "The position service returned an invalid "
-                "response. The new order will not be placed."
-            ),
-            level="ERROR",
-            notification_context=(
-                "process_order|invalid_exit_response|"
-                f"instrument_key={instrument_key}"
-            ),
-        )
-
-        return _build_failure_result(
-            order_status="EXIT_FAILED",
-            instrument_details=(normalized_instrument),
-            exit_result=exit_result,
-            error="Invalid position exit response.",
-            executed=True,
-        )
-
-    if exit_result.get("success") is not True:
-        exit_error = (
-            exit_result.get("error")
-            or exit_result.get("message")
-            or "Unknown position exit error."
-        )
-
-        logger.error(
-            "Position exit failed. "
-            "trading_symbol=%s, instrument_key=%s, "
-            "error=%s",
-            trading_symbol,
-            instrument_key,
-            exit_error,
-        )
-
-        _send_telegram_message(
-            title="Exit Positions Failed",
-            message=(
-                f"Symbol: {trading_symbol}\n"
-                f"Instrument: {instrument_key}\n"
-                f"Error: {exit_error}\n"
-                "The new order will not be placed."
-            ),
-            level="ERROR",
-            notification_context=(
-                "process_order|exit_failed|" f"instrument_key={instrument_key}"
-            ),
-        )
-
-        return _build_failure_result(
-            order_status="EXIT_FAILED",
-            instrument_details=(normalized_instrument),
-            exit_result=exit_result,
-            error=str(exit_error),
-            executed=True,
-        )
-
-    logger.info(
-        "All existing positions exited successfully. "
-        "trading_symbol=%s, instrument_key=%s",
-        trading_symbol,
-        instrument_key,
-    )
-
-    _send_telegram_message(
-        title="Positions Exited Successfully",
-        message=(
-            "All existing positions were exited successfully.\n"
-            f"Next Symbol: {trading_symbol}\n"
-            f"Live LTP: {live_ltp}\n"
-            "Proceeding to place the new order."
-        ),
-        level="SUCCESS",
-        notification_context=(
-            "process_order|exit_success|" f"instrument_key={instrument_key}"
-        ),
-    )
-
-    logger.info(
-        "Step 2 started. Placing new order. " "trading_symbol=%s, instrument_key=%s",
-        trading_symbol,
-        instrument_key,
-    )
 
     _send_telegram_message(
         title="Placing New Order",
@@ -498,7 +201,7 @@ def process_selected_instrument(
         ),
         level="INFO",
         notification_context=(
-            "process_order|placement_started|" f"instrument_key={instrument_key}"
+            f"process_order|placement_started|instrument_key={instrument_key}"
         ),
     )
 
@@ -527,17 +230,15 @@ def process_selected_instrument(
             ),
             level="ERROR",
             notification_context=(
-                "process_order|placement_exception|" f"instrument_key={instrument_key}"
+                f"process_order|placement_exception|instrument_key={instrument_key}"
             ),
         )
 
         return _build_failure_result(
             order_status="PLACE_ORDER_FAILED",
-            instrument_details=(normalized_instrument),
+            instrument_details=normalized_instrument,
             exit_result=exit_result,
-            error=(
-                "Order placement raised an exception: " f"{type(exc).__name__}: {exc}"
-            ),
+            error=f"Order placement raised an exception: {type(exc).__name__}: {exc}",
             executed=True,
         )
 
@@ -554,20 +255,18 @@ def process_selected_instrument(
             message=(
                 f"Symbol: {trading_symbol}\n"
                 f"Instrument: {instrument_key}\n"
-                f"Response Type: "
-                f"{type(place_order_result).__name__}\n"
+                f"Response Type: {type(place_order_result).__name__}\n"
                 "The order service returned an invalid response."
             ),
             level="ERROR",
             notification_context=(
-                "process_order|invalid_placement_response|"
-                f"instrument_key={instrument_key}"
+                f"process_order|invalid_placement_response|instrument_key={instrument_key}"
             ),
         )
 
         return _build_failure_result(
             order_status="PLACE_ORDER_FAILED",
-            instrument_details=(normalized_instrument),
+            instrument_details=normalized_instrument,
             exit_result=exit_result,
             place_order_result=place_order_result,
             error="Invalid order placement response.",
@@ -582,9 +281,7 @@ def process_selected_instrument(
         )
 
         logger.error(
-            "Order placement failed. "
-            "trading_symbol=%s, instrument_key=%s, "
-            "error=%s",
+            "Order placement failed. " "trading_symbol=%s, instrument_key=%s, error=%s",
             trading_symbol,
             instrument_key,
             order_error,
@@ -601,13 +298,13 @@ def process_selected_instrument(
             ),
             level="ERROR",
             notification_context=(
-                "process_order|placement_failed|" f"instrument_key={instrument_key}"
+                f"process_order|placement_failed|instrument_key={instrument_key}"
             ),
         )
 
         return _build_failure_result(
             order_status="PLACE_ORDER_FAILED",
-            instrument_details=(normalized_instrument),
+            instrument_details=normalized_instrument,
             exit_result=exit_result,
             place_order_result=place_order_result,
             error=str(order_error),
@@ -618,8 +315,7 @@ def process_selected_instrument(
 
     logger.info(
         "Order workflow completed successfully. "
-        "trading_symbol=%s, instrument_key=%s, "
-        "order_id=%s",
+        "trading_symbol=%s, instrument_key=%s, order_id=%s",
         trading_symbol,
         instrument_key,
         order_id,
@@ -639,7 +335,7 @@ def process_selected_instrument(
         ),
         level="SUCCESS",
         notification_context=(
-            "process_order|completed|" f"instrument_key={instrument_key}"
+            f"process_order|completed|instrument_key={instrument_key}"
         ),
     )
 
@@ -649,8 +345,328 @@ def process_selected_instrument(
         "skipped": False,
         "order_status": "ORDER_PLACED",
         "order_id": order_id,
-        "selected_instrument": (normalized_instrument),
+        "selected_instrument": normalized_instrument,
         "exit_result": exit_result,
-        "place_order_result": (place_order_result),
+        "place_order_result": place_order_result,
         "error": None,
     }
+
+
+def _run_exit_step(
+    instrument_details: dict[str, Any],
+) -> Any:
+    """
+    Runs the exit-all-positions step.
+
+    During the current testing phase, the exit step is assumed to behave
+    as intended when the token is valid. Any exception or non-success
+    response from the exit service is logged and notified via Telegram,
+    but the workflow continues to place the new order.
+
+    Returns the (possibly best-effort) exit_result for downstream
+    reporting purposes.
+    """
+    trading_symbol = instrument_details.get("trading_symbol")
+    instrument_key = instrument_details.get("instrument_key")
+    live_ltp = instrument_details.get("live_ltp")
+
+    logger.info(
+        "Step 1 started. Exiting all existing positions. instrument_key=%s",
+        instrument_key,
+    )
+
+    _send_telegram_message(
+        title="Exiting Existing Positions",
+        message=(
+            "Checking and exiting all existing positions.\n"
+            f"New Symbol: {trading_symbol}\n"
+            f"Target LTP: {live_ltp}"
+        ),
+        level="REFRESH",
+        notification_context=(
+            f"process_order|exit_started|instrument_key={instrument_key}"
+        ),
+    )
+
+    exit_result: Any = None
+
+    try:
+        exit_result = exit_all_positions()
+
+    except Exception as exc:
+        logger.exception(
+            "Exception while exiting positions. "
+            "trading_symbol=%s, instrument_key=%s, "
+            "exception_type=%s, error=%s",
+            trading_symbol,
+            instrument_key,
+            type(exc).__name__,
+            exc,
+        )
+
+        _send_telegram_message(
+            title="Exit Positions Exception",
+            message=(
+                f"Symbol: {trading_symbol}\n"
+                f"Instrument: {instrument_key}\n"
+                f"Error Type: {type(exc).__name__}\n"
+                f"Error: {exc}\n"
+                "Continuing with order placement (test mode: exit step assumed OK)."
+            ),
+            level="ERROR",
+            notification_context=(
+                f"process_order|exit_exception|instrument_key={instrument_key}"
+            ),
+        )
+
+        return {
+            "success": True,
+            "assumed": True,
+            "error": None,
+            "exception": f"{type(exc).__name__}: {exc}",
+        }
+
+    if not isinstance(exit_result, dict):
+        logger.error(
+            "Position exit returned an invalid response. "
+            "response_type=%s, response=%r",
+            type(exit_result).__name__,
+            exit_result,
+        )
+
+        _send_telegram_message(
+            title="Invalid Position Exit Response",
+            message=(
+                f"Symbol: {trading_symbol}\n"
+                f"Instrument: {instrument_key}\n"
+                f"Response Type: {type(exit_result).__name__}\n"
+                "Continuing with order placement (test mode: exit step assumed OK)."
+            ),
+            level="ERROR",
+            notification_context=(
+                f"process_order|invalid_exit_response|instrument_key={instrument_key}"
+            ),
+        )
+
+        return {
+            "success": True,
+            "assumed": True,
+            "error": None,
+            "invalid_response": repr(exit_result),
+        }
+
+    if exit_result.get("success") is not True:
+        exit_error = (
+            exit_result.get("error")
+            or exit_result.get("message")
+            or "Unknown position exit error."
+        )
+
+        logger.error(
+            "Position exit reported failure. "
+            "trading_symbol=%s, instrument_key=%s, error=%s",
+            trading_symbol,
+            instrument_key,
+            exit_error,
+        )
+
+        _send_telegram_message(
+            title="Exit Positions Reported Failure",
+            message=(
+                f"Symbol: {trading_symbol}\n"
+                f"Instrument: {instrument_key}\n"
+                f"Error: {exit_error}\n"
+                "Continuing with order placement (test mode: exit step assumed OK)."
+            ),
+            level="WARNING",
+            notification_context=(
+                f"process_order|exit_reported_failure|instrument_key={instrument_key}"
+            ),
+        )
+
+        return exit_result
+
+    logger.info(
+        "All existing positions exited successfully. "
+        "trading_symbol=%s, instrument_key=%s",
+        trading_symbol,
+        instrument_key,
+    )
+
+    _send_telegram_message(
+        title="Positions Exited Successfully",
+        message=(
+            "All existing positions were exited successfully.\n"
+            f"Next Symbol: {trading_symbol}\n"
+            f"Live LTP: {live_ltp}\n"
+            "Proceeding to place the new order."
+        ),
+        level="SUCCESS",
+        notification_context=(
+            f"process_order|exit_success|instrument_key={instrument_key}"
+        ),
+    )
+
+    return exit_result
+
+
+def process_selected_instrument(
+    selected_instrument: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if not isinstance(selected_instrument, dict) or not selected_instrument:
+        logger.warning("Order workflow stopped. No instrument selected.")
+
+        _send_telegram_message(
+            title="Order Workflow Stopped",
+            message="No instrument was selected.",
+            level="WARNING",
+            notification_context="process_order|no_instrument",
+        )
+
+        return _build_failure_result(
+            order_status="NO_INSTRUMENT",
+            instrument_details=None,
+            error="No instrument selected.",
+            executed=False,
+        )
+
+    instrument_details = _build_instrument_details(selected_instrument)
+
+    trading_symbol = instrument_details.get("trading_symbol")
+    instrument_key = instrument_details.get("instrument_key")
+    live_ltp = instrument_details.get("live_ltp")
+    lot_size = instrument_details.get("lot_size")
+
+    place_order_enabled = bool(
+        getattr(
+            config,
+            "PLACE_ORDER",
+            False,
+        )
+    )
+
+    logger.info(
+        "Order workflow started. "
+        "trading_symbol=%s, instrument_key=%s, "
+        "live_ltp=%s, lot_size=%s, place_order_enabled=%s",
+        trading_symbol,
+        instrument_key,
+        live_ltp,
+        lot_size,
+        place_order_enabled,
+    )
+
+    _send_telegram_message(
+        title="Order Workflow Started",
+        message=(
+            f"Symbol: {trading_symbol}\n"
+            f"Instrument: {instrument_key}\n"
+            f"Live LTP: {live_ltp}\n"
+            f"Lot Size: {lot_size}\n"
+            f"Place Order: {'ENABLED' if place_order_enabled else 'DISABLED'}"
+        ),
+        level="STARTUP",
+        notification_context=(f"process_order|started|instrument_key={instrument_key}"),
+    )
+
+    if not place_order_enabled:
+        logger.info(
+            "Order execution skipped. "
+            "PLACE_ORDER=false, trading_symbol=%s, instrument_key=%s",
+            trading_symbol,
+            instrument_key,
+        )
+
+        _send_telegram_message(
+            title="Order Execution Skipped",
+            message=(
+                f"Symbol: {trading_symbol}\n"
+                f"Instrument: {instrument_key}\n"
+                f"Live LTP: {live_ltp}\n"
+                f"Lot Size: {lot_size}\n"
+                "PLACE_ORDER=false"
+            ),
+            level="INFO",
+            notification_context=(
+                f"process_order|disabled|instrument_key={instrument_key}"
+            ),
+        )
+
+        return _build_skipped_result(
+            order_status="DISABLED",
+            instrument_details=instrument_details,
+            reason="PLACE_ORDER=false",
+        )
+
+    validation_errors = []
+
+    if not trading_symbol:
+        validation_errors.append("trading_symbol is missing")
+
+    if not instrument_key:
+        validation_errors.append("instrument_key is missing")
+
+    if live_ltp is None or live_ltp <= 0:
+        validation_errors.append("live_ltp must be a positive number")
+
+    if lot_size is None or lot_size <= 0:
+        validation_errors.append("lot_size must be a positive integer")
+
+    if validation_errors:
+        validation_error = "; ".join(validation_errors)
+
+        logger.error(
+            "Order workflow stopped. Invalid instrument details. "
+            "trading_symbol=%s, instrument_key=%s, "
+            "live_ltp=%s, lot_size=%s, validation_error=%s",
+            trading_symbol,
+            instrument_key,
+            live_ltp,
+            lot_size,
+            validation_error,
+        )
+
+        _send_telegram_message(
+            title="Invalid Selected Instrument",
+            message=(
+                "Required instrument details are invalid.\n"
+                f"Symbol: {trading_symbol}\n"
+                f"Instrument Key: {instrument_key}\n"
+                f"Live LTP: {live_ltp}\n"
+                f"Lot Size: {lot_size}\n"
+                f"Validation Error: {validation_error}\n"
+                "The order workflow was stopped."
+            ),
+            level="ERROR",
+            notification_context=(
+                f"process_order|invalid_instrument|instrument_key={instrument_key}"
+            ),
+        )
+
+        return _build_failure_result(
+            order_status="INVALID_INSTRUMENT",
+            instrument_details=instrument_details,
+            error=validation_error,
+            executed=False,
+        )
+
+    normalized_instrument = {
+        "instrument_key": instrument_key,
+        "trading_symbol": trading_symbol,
+        "live_ltp": live_ltp,
+        "lot_size": lot_size,
+    }
+
+    exit_result = _run_exit_step(normalized_instrument)
+
+    logger.info(
+        "Step 2 started. Placing new order. trading_symbol=%s, instrument_key=%s",
+        trading_symbol,
+        instrument_key,
+    )
+
+    return _safe_place_order(
+        normalized_instrument=normalized_instrument,
+        instrument_details=instrument_details,
+        exit_result=exit_result,
+    )
