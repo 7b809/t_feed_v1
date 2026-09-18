@@ -142,10 +142,12 @@ from .opening_range.isolation import (
 # ============================================================
 
 from .opening_range.ema_alerts import (
+    build_isolated_ema_alert_payload,
+    build_isolated_ema_telegram_message,
     enrich_option_chain_instruments,
+    extract_ema_candle_details,
     format_budget_range_instruments,
     format_suggested_order_instruments,
-    get_ema_alert_minute_bucket,
     get_isolated_instrument_type_from_state,
     get_opening_range_levels_for_ema_event,
     get_option_chain_instruments_for_ema,
@@ -153,10 +155,12 @@ from .opening_range.ema_alerts import (
     get_selected_or_instrument_key,
     get_selected_or_instrument_state,
     get_suggested_order_option_type,
+    is_finalized_ema_event,
     is_selected_or_instrument_locked,
     normalize_ema_cross_direction,
     process_selected_or_ema_cross_alert,
-    should_skip_isolated_ema_alert_for_minute_direction,
+    process_selected_or_ema_cross_alert_detailed,
+    resolve_ema_event_finalized_minute_key,
 )
 
 # ============================================================
@@ -259,6 +263,7 @@ __all__ = [
     # Main calculation
     "calculate_opening_range_for_instrument",
     "calculate_opening_range_for_all_subscribed",
+
     # Basic helpers
     "is_opening_range_enabled",
     "get_market_timezone",
@@ -272,20 +277,25 @@ __all__ = [
     "normalize_candle",
     "normalize_candles",
     "serialize_candle",
+
     # Candle selection
     "get_market_open_datetime",
     "get_opening_range_end_datetime",
     "select_opening_range_candles",
     "select_post_opening_range_candles",
+
     # Instrument helpers
     "get_subscribed_instrument_keys",
     "get_contract_info_by_key",
     "normalize_option_type",
     "is_option_contract",
+
     # Intraday fetch
     "fetch_intraday_candles_for_instrument",
+
     # Range calculation
     "calculate_opening_range_levels",
+
     # Touch event helpers
     "build_alert_key",
     "calculate_distance_from_index",
@@ -298,19 +308,23 @@ __all__ = [
     "queue_touch_event",
     "build_touch_status_from_events",
     "update_touch_status_in_cache",
+
     # Touch detection
     "detect_touch_from_candle",
     "scan_backfill_touches",
     "extract_feed_values",
     "process_live_tick_for_opening_range",
+
     # Instrument LTP
     "update_latest_ltp_for_instrument",
     "get_latest_ltp_for_instrument",
+
     # Legacy Telegram touch alerts
     "get_sorted_touch_events_for_alert",
     "format_touch_event_line",
     "send_touch_events_telegram_alert",
     "flush_pending_touch_alerts",
+
     # Isolated instrument selection
     "get_level_priority",
     "get_reference_opening_range_average",
@@ -322,22 +336,34 @@ __all__ = [
     "send_isolated_instrument_notification",
     "isolate_instrument_from_event",
     "try_isolate_from_touch_events",
-    # Isolated EMA helpers
+
+    # Isolated EMA state helpers
     "is_selected_or_instrument_locked",
     "get_selected_or_instrument_key",
     "get_selected_or_instrument_state",
     "get_selected_or_ema_alerts",
     "get_isolated_instrument_type_from_state",
+    "extract_ema_candle_details",
+
+    # Finalized-minute EMA handling
+    "is_finalized_ema_event",
+    "resolve_ema_event_finalized_minute_key",
+    "normalize_ema_cross_direction",
+
+    # EMA option-chain helpers
     "get_suggested_order_option_type",
     "get_option_chain_instruments_for_ema",
     "enrich_option_chain_instruments",
     "format_suggested_order_instruments",
     "format_budget_range_instruments",
-    "normalize_ema_cross_direction",
-    "get_ema_alert_minute_bucket",
-    "should_skip_isolated_ema_alert_for_minute_direction",
+
+    # EMA payload and processing
+    "build_isolated_ema_alert_payload",
+    "build_isolated_ema_telegram_message",
     "process_selected_or_ema_cross_alert",
+    "process_selected_or_ema_cross_alert_detailed",
     "get_opening_range_levels_for_ema_event",
+
     # Status and dashboard
     "get_opening_range_status",
     "get_opening_range_cache",
@@ -345,9 +371,11 @@ __all__ = [
     "get_opening_range_for_instrument_from_cache",
     "get_opening_range_touch_events",
     "get_opening_range_pending_touch_events",
+
     # Storage
     "save_opening_range_results_to_file",
     "save_touch_events_to_file_if_enabled",
+
     # Runtime state management
     "ensure_current_market_day",
     "reset_all_opening_range_state",
@@ -357,6 +385,7 @@ __all__ = [
     "get_selected_or_state_snapshot",
     "get_selected_or_ema_alerts_snapshot",
     "get_latest_main_index_ltp_snapshot",
+
     # Shared mutable compatibility state
     "opening_range_cache",
     "opening_range_cache_lock",
@@ -368,6 +397,7 @@ __all__ = [
     "selected_or_instrument_state",
     "selected_or_ema_alerts",
     "selected_or_ema_alert_minute_keys",
+
     # Legacy aliases
     "_opening_range_cache_lock",
     "_touch_lock",

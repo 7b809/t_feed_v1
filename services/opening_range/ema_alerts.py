@@ -235,6 +235,85 @@ def extract_ema_candle_details(ema_event: dict) -> dict:
     }
 
 
+# ============================================================
+# Finalized-minute duplicate guard helpers (safety guard only)
+# ============================================================
+
+
+def is_finalized_ema_event(ema_event: dict) -> bool:
+    """
+    Returns True if the EMA event is a finalized minute event.
+
+    Live EMA service emits:
+    - event_status="pending" while the minute is still open.
+    - event_status="final" once the minute rolls over or flush is called.
+    - Candle-close mode events have no event_status (treated as immediate/final).
+    """
+    if not isinstance(ema_event, dict):
+        return False
+    event_status = str(ema_event.get("event_status") or "").strip().lower()
+    if event_status == "final":
+        return True
+    if event_status == "pending":
+        return False
+    # Candle-close mode or legacy events without event_status -> treat as final
+    return True
+
+
+def resolve_ema_event_finalized_minute_key(ema_event: dict) -> str | None:
+    """
+    Resolves the finalized-minute key for an EMA event.
+
+    Priority:
+    1. ema_event["minute_key"] (set by LiveEMAService pending/final logic).
+    2. Derive from candle/tick timestamp.
+    3. None if event is still pending or timestamp unavailable.
+    """
+    if not isinstance(ema_event, dict):
+        return None
+    if not is_finalized_ema_event(ema_event):
+        return None
+    explicit_minute_key = str(ema_event.get("minute_key") or "").strip()
+    if explicit_minute_key:
+        return explicit_minute_key
+    candle = ema_event.get("candle") or {}
+    if not isinstance(candle, dict):
+        candle = {}
+    tick = ema_event.get("tick") or {}
+    if not isinstance(tick, dict):
+        tick = {}
+    timestamp_value = (
+        candle.get("timestamp") or ema_event.get("timestamp") or tick.get("timestamp")
+    )
+    parsed = parse_candle_timestamp(timestamp_value)
+    if parsed is None:
+        return None
+    return parsed.strftime("%Y-%m-%dT%H:%M")
+
+
+def _build_finalized_minute_guard_key(
+    instrument_key: str, ema_event: dict, alert_direction: str
+) -> str | None:
+    """
+    Builds a safety-guard key for finalized-minute duplicate protection.
+
+    Returns None for pending events (no guard applied).
+    """
+    normalized_instrument_key = str(instrument_key or "").strip()
+    if not normalized_instrument_key:
+        return None
+    finalized_minute_key = resolve_ema_event_finalized_minute_key(ema_event)
+    if not finalized_minute_key:
+        return None
+    normalized_direction = str(alert_direction or "unknown").strip().lower()
+    return f"{normalized_instrument_key}_{finalized_minute_key}_{normalized_direction}"
+
+
+# ============================================================
+# Option-chain + payload helpers (unchanged)
+# ============================================================
+
+
 def get_suggested_order_option_type(
     instruments: list | None, cross_type: str, isolated_instrument_type: str | None
 ) -> str | None:
@@ -553,30 +632,6 @@ def normalize_ema_cross_direction(ema_event: dict) -> str:
     return "unknown"
 
 
-def get_ema_alert_minute_bucket(timestamp_value: Any = None) -> str:
-    if timestamp_value is not None:
-        parsed = parse_candle_timestamp(timestamp_value)
-        if parsed is not None:
-            return parsed.strftime("%Y-%m-%dT%H:%M")
-    return get_now_market_time().strftime("%Y-%m-%dT%H:%M")
-
-
-def should_skip_isolated_ema_alert_for_minute_direction(
-    instrument_key: str, ema_event: dict, timestamp_value: Any = None
-) -> tuple[bool, str, str]:
-    normalized_instrument_key = str(instrument_key or "unknown_instrument").strip()
-    if not normalized_instrument_key:
-        normalized_instrument_key = "unknown_instrument"
-    direction = normalize_ema_cross_direction(ema_event)
-    minute_bucket = get_ema_alert_minute_bucket(timestamp_value)
-    alert_key = f"{normalized_instrument_key}_{minute_bucket}_{direction}"
-    alert_date = minute_bucket[:10]
-    skip_alert = state.check_and_reserve_ema_minute_key(
-        alert_key=alert_key, state_date=alert_date
-    )
-    return skip_alert, alert_key, direction
-
-
 def build_isolated_ema_alert_payload(
     ema_event: dict,
     selected_state: dict,
@@ -586,7 +641,7 @@ def build_isolated_ema_alert_payload(
     suggested_instruments: list,
     budget_instruments: list,
     ema_candle: dict,
-    minute_alert_key: str | None,
+    finalized_minute_guard_key: str | None,
     alert_direction: str,
     simulation: bool = False,
     dry_run: bool = False,
@@ -807,6 +862,10 @@ def build_isolated_ema_alert_payload(
     normalized_requested_by = str(
         requested_by or simulation_metadata.get("requested_by") or ""
     ).strip()
+
+    event_status = str(ema_event.get("event_status") or "").strip().lower() or None
+    minute_key = str(ema_event.get("minute_key") or "").strip() or None
+    finalized_at = ema_event.get("finalized_at")
 
     payload = {
         "schema_version": getattr(
@@ -1040,8 +1099,12 @@ def build_isolated_ema_alert_payload(
             },
         },
         "duplicate_control": {
-            "minute_alert_key": minute_alert_key,
+            "finalized_minute_guard_key": finalized_minute_guard_key,
             "direction": normalized_direction,
+            "event_status": event_status,
+            "minute_key": minute_key,
+            "finalized_at": finalized_at,
+            "is_finalized_event": bool(event_status == "final" or event_status is None),
             "bypassed_for_simulation": bool(simulation),
         },
         "raw_ema_event": deepcopy(ema_event),
@@ -1287,11 +1350,13 @@ def process_selected_or_ema_cross_alert_detailed(
     send_algo_app: bool | None = None,
 ) -> dict:
     logger.info(
-        "Processing isolated EMA alert. instrument_key=%s, cross_type=%s, simulation=%s, dry_run=%s",
+        "Processing isolated EMA alert. instrument_key=%s, cross_type=%s, simulation=%s, dry_run=%s, event_status=%s, minute_key=%s",
         ema_event.get("instrument_key") if isinstance(ema_event, dict) else None,
         ema_event.get("cross_type") if isinstance(ema_event, dict) else None,
         simulation,
         dry_run,
+        ema_event.get("event_status") if isinstance(ema_event, dict) else None,
+        ema_event.get("minute_key") if isinstance(ema_event, dict) else None,
     )
 
     result = {
@@ -1304,6 +1369,8 @@ def process_selected_or_ema_cross_alert_detailed(
         "instrument_key": None,
         "cross_type": None,
         "direction": None,
+        "event_status": None,
+        "minute_key": None,
         "message": None,
         "warnings": [],
         "payload": None,
@@ -1375,7 +1442,9 @@ def process_selected_or_ema_cross_alert_detailed(
             "checked": False,
             "reserved": False,
             "released": False,
-            "minute_alert_key": None,
+            "finalized_minute_guard_key": None,
+            "event_status": None,
+            "minute_key": None,
         },
         "event_saving": {
             "attempted": False,
@@ -1389,7 +1458,7 @@ def process_selected_or_ema_cross_alert_detailed(
         },
         "state_changes": {
             "alert_record_appended": False,
-            "duplicate_key_reserved": False,
+            "finalized_minute_guard_reserved": False,
         },
         "skip_reason": None,
         "error": None,
@@ -1405,8 +1474,13 @@ def process_selected_or_ema_cross_alert_detailed(
 
     cross_type = str(ema_event.get("cross_type") or "").strip()
 
+    event_status = str(ema_event.get("event_status") or "").strip().lower() or None
+    minute_key = str(ema_event.get("minute_key") or "").strip() or None
+
     result["instrument_key"] = event_key or None
     result["cross_type"] = cross_type or None
+    result["event_status"] = event_status
+    result["minute_key"] = minute_key
 
     simulation_metadata = ema_event.get("simulation")
 
@@ -1661,52 +1735,91 @@ def process_selected_or_ema_cross_alert_detailed(
 
     event_timestamp = ema_event.get("timestamp") or event_candle.get("timestamp")
 
-    minute_alert_key = None
-    duplicate_key_reserved = False
+    # ============================================================
+    # Finalized-minute duplicate protection (safety guard only)
+    #
+    # Rules:
+    # - Pending events (event_status == "pending") bypass the guard.
+    # - Finalized events (event_status == "final" or missing) build a
+    #   guard key from the finalized minute key + direction.
+    # - Simulation / dry_run bypass the guard entirely.
+    # - The guard is a safety net; primary dedup is handled by the
+    #   LiveEMAService pending/final minute logic.
+    # ============================================================
+    finalized_minute_guard_key = None
+    guard_reserved = False
 
-    duplicate_control_enabled = bool(not simulation and not dry_run)
+    finalized_guard_enabled = bool(
+        not simulation and not dry_run and is_finalized_ema_event(ema_event)
+    )
 
-    result["duplicate_control"]["enabled"] = duplicate_control_enabled
+    result["duplicate_control"]["enabled"] = finalized_guard_enabled
+    result["duplicate_control"]["event_status"] = event_status
+    result["duplicate_control"]["minute_key"] = minute_key
 
-    if duplicate_control_enabled:
+    if finalized_guard_enabled:
         result["duplicate_control"]["checked"] = True
 
-        (
-            skip_alert,
-            minute_alert_key,
-            alert_direction,
-        ) = should_skip_isolated_ema_alert_for_minute_direction(
+        finalized_minute_guard_key = _build_finalized_minute_guard_key(
             instrument_key=event_key,
             ema_event=ema_event,
-            timestamp_value=event_timestamp,
+            alert_direction=alert_direction,
         )
 
-        result["direction"] = alert_direction
-        result["duplicate_control"]["minute_alert_key"] = minute_alert_key
+        result["duplicate_control"][
+            "finalized_minute_guard_key"
+        ] = finalized_minute_guard_key
 
-        if skip_alert:
-            result["skip_reason"] = "duplicate_alert"
-            result["message"] = (
-                "A matching EMA alert was already processed for this instrument, minute, and direction."
+        if finalized_minute_guard_key:
+            alert_date = (
+                finalized_minute_guard_key.split("_", 1)[1][:10]
+                if "_" in finalized_minute_guard_key
+                else None
             )
-            logger.info(
-                "EMA alert skipped due to duplicate. reason=%s, key=%s",
-                result["skip_reason"],
-                minute_alert_key,
+
+            skip_alert = state.check_and_reserve_ema_minute_key(
+                alert_key=finalized_minute_guard_key,
+                state_date=alert_date,
             )
-            return result
 
-        duplicate_key_reserved = bool(minute_alert_key)
+            if skip_alert:
+                result["skip_reason"] = "duplicate_finalized_minute_alert"
+                result["message"] = (
+                    "A finalized EMA alert was already processed for this "
+                    "instrument, minute, and direction (safety guard)."
+                )
+                logger.info(
+                    "EMA alert skipped due to finalized-minute safety guard. key=%s",
+                    finalized_minute_guard_key,
+                )
+                return result
 
-        result["duplicate_control"]["reserved"] = duplicate_key_reserved
-        result["state_changes"]["duplicate_key_reserved"] = duplicate_key_reserved
+            guard_reserved = True
+            result["duplicate_control"]["reserved"] = True
+            result["state_changes"]["finalized_minute_guard_reserved"] = True
 
-        if duplicate_key_reserved:
             logger.debug(
-                "EMA duplicate key reserved. key=%s, instrument_key=%s",
-                minute_alert_key,
+                "EMA finalized-minute guard reserved. key=%s, instrument_key=%s",
+                finalized_minute_guard_key,
                 event_key,
             )
+        else:
+            logger.debug(
+                "EMA finalized-minute guard skipped (no finalized minute key). "
+                "instrument_key=%s, event_status=%s",
+                event_key,
+                event_status,
+            )
+    else:
+        logger.debug(
+            "EMA finalized-minute guard bypassed. instrument_key=%s, "
+            "event_status=%s, simulation=%s, dry_run=%s",
+            event_key,
+            event_status,
+            simulation,
+            dry_run,
+        )
+
     payload = None
 
     try:
@@ -1725,11 +1838,12 @@ def process_selected_or_ema_cross_alert_detailed(
             result["skip_reason"] = "order_side_unresolved"
             result["error"] = "Could not resolve the suggested order option type."
 
-            if duplicate_key_reserved and minute_alert_key:
-                state.release_ema_minute_key(minute_alert_key)
+            if guard_reserved and finalized_minute_guard_key:
+                state.release_ema_minute_key(finalized_minute_guard_key)
                 result["duplicate_control"]["released"] = True
                 logger.debug(
-                    "Released duplicate key after failure. key=%s", minute_alert_key
+                    "Released finalized-minute guard after failure. key=%s",
+                    finalized_minute_guard_key,
                 )
 
             logger.warning(
@@ -1817,7 +1931,7 @@ def process_selected_or_ema_cross_alert_detailed(
             suggested_instruments=(enriched_nearest_instruments),
             budget_instruments=(enriched_budget_instruments),
             ema_candle=ema_candle,
-            minute_alert_key=minute_alert_key,
+            finalized_minute_guard_key=finalized_minute_guard_key,
             alert_direction=alert_direction,
             simulation=simulation,
             dry_run=dry_run,
@@ -1834,12 +1948,12 @@ def process_selected_or_ema_cross_alert_detailed(
             result["skip_reason"] = "invalid_payload"
             result["error"] = "EMA alert payload builder returned an invalid result."
 
-            if duplicate_key_reserved and minute_alert_key:
-                state.release_ema_minute_key(minute_alert_key)
+            if guard_reserved and finalized_minute_guard_key:
+                state.release_ema_minute_key(finalized_minute_guard_key)
                 result["duplicate_control"]["released"] = True
                 logger.debug(
-                    "Released duplicate key after payload build failure. key=%s",
-                    minute_alert_key,
+                    "Released finalized-minute guard after payload build failure. key=%s",
+                    finalized_minute_guard_key,
                 )
 
             logger.warning(
@@ -2148,12 +2262,12 @@ def process_selected_or_ema_cross_alert_detailed(
                 "instrument event could not be saved."
             )
 
-        if not delivery_accepted and duplicate_key_reserved and minute_alert_key:
-            state.release_ema_minute_key(minute_alert_key)
+        if not delivery_accepted and guard_reserved and finalized_minute_guard_key:
+            state.release_ema_minute_key(finalized_minute_guard_key)
             result["duplicate_control"]["released"] = True
             logger.debug(
-                "Released duplicate key because no delivery channel accepted. key=%s",
-                minute_alert_key,
+                "Released finalized-minute guard because no delivery channel accepted. key=%s",
+                finalized_minute_guard_key,
             )
 
         alert_record = {
@@ -2169,8 +2283,10 @@ def process_selected_or_ema_cross_alert_detailed(
             "nifty_ltp": nifty_ltp,
             "isolated_instrument_type": (isolated_instrument_type),
             "suggested_order_option_type": (suggested_order_option_type),
-            "minute_alert_key": minute_alert_key,
+            "finalized_minute_guard_key": finalized_minute_guard_key,
             "alert_direction": alert_direction,
+            "event_status": event_status,
+            "minute_key": minute_key,
             "telegram_title": telegram_title,
             "ema_calculation_mode": (payload.get("ema", {}).get("calculation_mode")),
             "ema_event": deepcopy(ema_event),
@@ -2219,6 +2335,7 @@ def process_selected_or_ema_cross_alert_detailed(
             logger.info(
                 "EMA alert processed successfully. "
                 "event_id=%s, instrument_key=%s, direction=%s, "
+                "event_status=%s, minute_key=%s, "
                 "telegram=%s, algo_app=%s, "
                 "order_enabled=%s, order_attempted=%s, "
                 "order_placed=%s, order_status=%s, "
@@ -2227,6 +2344,8 @@ def process_selected_or_ema_cross_alert_detailed(
                 result["event_id"],
                 event_key,
                 alert_direction,
+                event_status,
+                minute_key,
                 telegram_sent,
                 algo_dispatched,
                 order_enabled,
@@ -2247,6 +2366,7 @@ def process_selected_or_ema_cross_alert_detailed(
             logger.warning(
                 "EMA alert processing completed with no accepted workflow. "
                 "event_id=%s, instrument_key=%s, "
+                "event_status=%s, minute_key=%s, "
                 "telegram=%s, algo_app=%s, "
                 "order_enabled=%s, order_attempted=%s, "
                 "order_placed=%s, order_status=%s, "
@@ -2254,6 +2374,8 @@ def process_selected_or_ema_cross_alert_detailed(
                 "order_result_saved=%s, event_saved=%s",
                 result["event_id"],
                 event_key,
+                event_status,
+                minute_key,
                 telegram_sent,
                 algo_dispatched,
                 order_enabled,
@@ -2269,17 +2391,18 @@ def process_selected_or_ema_cross_alert_detailed(
         return result
 
     except Exception as ex:
-        if duplicate_key_reserved and minute_alert_key:
+        if guard_reserved and finalized_minute_guard_key:
             try:
-                state.release_ema_minute_key(minute_alert_key)
+                state.release_ema_minute_key(finalized_minute_guard_key)
                 result["duplicate_control"]["released"] = True
                 logger.debug(
-                    "Released duplicate key after exception. key=%s", minute_alert_key
+                    "Released finalized-minute guard after exception. key=%s",
+                    finalized_minute_guard_key,
                 )
             except Exception as release_ex:
                 logger.error(
-                    "Failed releasing EMA duplicate key after exception. key=%s, error=%s",
-                    minute_alert_key,
+                    "Failed releasing finalized-minute guard after exception. key=%s, error=%s",
+                    finalized_minute_guard_key,
                     type(release_ex).__name__,
                 )
 
@@ -2320,10 +2443,11 @@ def process_selected_or_ema_cross_alert_detailed(
             )
 
         logger.exception(
-            "Isolated EMA processing failed. instrument_key=%s, cross_type=%s, simulation=%s",
+            "Isolated EMA processing failed. instrument_key=%s, cross_type=%s, simulation=%s, event_status=%s",
             event_key,
             cross_type,
             simulation,
+            event_status,
         )
 
         return result
@@ -2441,14 +2565,14 @@ __all__ = [
     "get_selected_or_ema_alerts",
     "get_isolated_instrument_type_from_state",
     "extract_ema_candle_details",
+    "is_finalized_ema_event",
+    "resolve_ema_event_finalized_minute_key",
     "get_suggested_order_option_type",
     "get_option_chain_instruments_for_ema",
     "enrich_option_chain_instruments",
     "format_suggested_order_instruments",
     "format_budget_range_instruments",
     "normalize_ema_cross_direction",
-    "get_ema_alert_minute_bucket",
-    "should_skip_isolated_ema_alert_for_minute_direction",
     "build_isolated_ema_alert_payload",
     "build_isolated_ema_telegram_message",
     "process_selected_or_ema_cross_alert",
