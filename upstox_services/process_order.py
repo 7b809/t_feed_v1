@@ -606,8 +606,8 @@ def process_selected_instrument(
     if not instrument_key:
         validation_errors.append("instrument_key is missing")
 
-    if live_ltp is None or live_ltp <= 0:
-        validation_errors.append("live_ltp must be a positive number")
+    # live_ltp is optional for MARKET orders.
+    # No LTP validation is required for MARKET order placement.
 
     if lot_size is None or lot_size <= 0:
         validation_errors.append("lot_size must be a positive integer")
