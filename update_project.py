@@ -1,11 +1,21 @@
+
 import os
 import subprocess
 import sys
+import shutil
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 
 PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 START_SCRIPT = "start.sh"
 STOP_SCRIPT = "stop.sh"
+
+LOGS_DIR = os.path.join(PROJECT_DIR, "logs")
+META_DATA_DIR = os.path.join(PROJECT_DIR, "meta_data")
+
+TIMEZONE = "Asia/Kolkata"
 
 
 def run_command(
@@ -21,8 +31,49 @@ def run_command(
     )
 
     if check and result.returncode != 0:
-        print(f"\nERROR: Command failed with exit code " f"{result.returncode}")
+        print(
+            f"\nERROR: Command failed with exit code "
+            f"{result.returncode}"
+        )
         sys.exit(result.returncode)
+
+
+def backup_logs() -> None:
+    print("\n==========================================")
+    print("  Creating Logs Backup")
+    print("==========================================")
+
+    if not os.path.exists(LOGS_DIR):
+        print(f"\nWARNING: Logs directory not found: {LOGS_DIR}")
+        print("Skipping logs backup.")
+        return
+
+    os.makedirs(META_DATA_DIR, exist_ok=True)
+
+    current_datetime = datetime.now(
+        ZoneInfo(TIMEZONE)
+    ).strftime("%Y%m%d_%H%M%S")
+
+    archive_base_name = os.path.join(
+        META_DATA_DIR,
+        f"logs_{current_datetime}",
+    )
+
+    try:
+        archive_path = shutil.make_archive(
+            base_name=archive_base_name,
+            format="zip",
+            root_dir=PROJECT_DIR,
+            base_dir="logs",
+        )
+
+        print("\nLogs backup created successfully:")
+        print(archive_path)
+
+    except Exception as error:
+        print("\nERROR: Failed to create logs backup.")
+        print(error)
+        sys.exit(1)
 
 
 def main() -> None:
@@ -31,11 +82,16 @@ def main() -> None:
     print("  Project Update")
     print("==========================================")
 
-    print(f"\nProject directory:")
+    print("\nProject directory:")
     print(PROJECT_DIR)
 
     # ---------------------------------------------------------
-    # 1. Stop running application
+    # 1. Backup logs before doing anything
+    # ---------------------------------------------------------
+    backup_logs()
+
+    # ---------------------------------------------------------
+    # 2. Stop running application
     # ---------------------------------------------------------
     stop_script = os.path.join(
         PROJECT_DIR,
@@ -44,15 +100,17 @@ def main() -> None:
 
     if os.path.exists(stop_script):
         print("\nStopping application...")
+
         run_command(
             ["bash", STOP_SCRIPT],
             check=False,
         )
+
     else:
         print(f"\nWARNING: {STOP_SCRIPT} not found.")
 
     # ---------------------------------------------------------
-    # 2. Fetch latest remote information
+    # 3. Fetch latest remote information
     # ---------------------------------------------------------
     print("\nFetching latest Git information...")
 
@@ -61,7 +119,7 @@ def main() -> None:
     )
 
     # ---------------------------------------------------------
-    # 3. Reset all tracked changes
+    # 4. Reset all tracked changes
     # ---------------------------------------------------------
     print("\nResetting all local changes...")
 
@@ -70,7 +128,7 @@ def main() -> None:
     )
 
     # ---------------------------------------------------------
-    # 4. Remove untracked files/directories
+    # 5. Remove untracked files/directories
     # ---------------------------------------------------------
     print("\nRemoving untracked files and directories...")
 
@@ -79,7 +137,7 @@ def main() -> None:
     )
 
     # ---------------------------------------------------------
-    # 5. Pull latest code
+    # 6. Pull latest code
     # ---------------------------------------------------------
     print("\nPulling latest code...")
 
@@ -88,7 +146,7 @@ def main() -> None:
     )
 
     # ---------------------------------------------------------
-    # 6. Make start.sh and stop.sh executable
+    # 7. Make start.sh and stop.sh executable
     # ---------------------------------------------------------
     print("\nSetting script permissions...")
 
@@ -106,6 +164,7 @@ def main() -> None:
         run_command(
             ["chmod", "+x", START_SCRIPT],
         )
+
     else:
         print(f"WARNING: {START_SCRIPT} not found.")
 
@@ -113,11 +172,12 @@ def main() -> None:
         run_command(
             ["chmod", "+x", STOP_SCRIPT],
         )
+
     else:
         print(f"WARNING: {STOP_SCRIPT} not found.")
 
     # ---------------------------------------------------------
-    # 7. Show final Git status
+    # 8. Show final Git status
     # ---------------------------------------------------------
     print("\nFinal Git status:")
 
@@ -126,7 +186,7 @@ def main() -> None:
     )
 
     # ---------------------------------------------------------
-    # 8. Start application
+    # 9. Start application
     # ---------------------------------------------------------
     if os.path.exists(start_script):
         print("\nStarting application...")
@@ -134,6 +194,7 @@ def main() -> None:
         run_command(
             ["bash", START_SCRIPT],
         )
+
     else:
         print(f"\nWARNING: {START_SCRIPT} not found.")
 
