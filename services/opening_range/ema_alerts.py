@@ -1664,9 +1664,7 @@ def process_selected_or_ema_cross_alert_detailed(
     minute_alert_key = None
     duplicate_key_reserved = False
 
-    duplicate_control_enabled = bool(
-        DEFAULT_LIVE_EMA_CALCULATION_MODE and not simulation and not dry_run
-    )
+    duplicate_control_enabled = bool(not simulation and not dry_run)
 
     result["duplicate_control"]["enabled"] = duplicate_control_enabled
 
