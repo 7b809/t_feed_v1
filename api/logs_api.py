@@ -1,9 +1,11 @@
 from pathlib import Path
+
 import io
 import zipfile
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import (
+    FileResponse,
     HTMLResponse,
     PlainTextResponse,
     StreamingResponse,
@@ -12,17 +14,41 @@ from fastapi.templating import Jinja2Templates
 
 router = APIRouter(tags=["Logs"])
 
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
 LOGS_DIR = PROJECT_ROOT / "logs"
+META_DATA_DIR = PROJECT_ROOT / "meta_data"
 TEMPLATES_DIR = PROJECT_ROOT / "templates"
+
 
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
-ALLOWED_LOG_EXTENSIONS = {".log", ".txt"}
+
+ALLOWED_LOG_EXTENSIONS = {
+    ".log",
+    ".txt",
+}
+
+ALLOWED_METADATA_EXTENSIONS = {
+    ".zip",
+    ".log",
+    ".txt",
+    ".json",
+    ".csv",
+}
+
+
+# ============================================================
+# LOG FILE FUNCTIONS
+# ============================================================
 
 
 def get_available_log_files() -> list:
-    LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    LOGS_DIR.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
 
     files = []
 
@@ -71,13 +97,17 @@ def validate_log_file(filename: str) -> Path:
             detail="Unsupported log file type",
         )
 
-    LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    LOGS_DIR.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
 
     logs_directory = LOGS_DIR.resolve()
     log_file = (LOGS_DIR / filename).resolve()
 
     try:
         log_file.relative_to(logs_directory)
+
     except ValueError:
         raise HTTPException(
             status_code=400,
@@ -108,7 +138,114 @@ def read_log_file(log_file: Path) -> list:
         return file.readlines()
 
 
-@router.get("/logs", response_class=HTMLResponse, include_in_schema=False)
+# ============================================================
+# METADATA FILE FUNCTIONS
+# ============================================================
+
+
+def get_available_metadata_files() -> list:
+    """
+    Return all supported files available inside the meta_data folder.
+    """
+    META_DATA_DIR.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    files = []
+
+    for file_path in sorted(
+        META_DATA_DIR.iterdir(),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    ):
+        if not file_path.is_file():
+            continue
+
+        if file_path.suffix.lower() not in ALLOWED_METADATA_EXTENSIONS:
+            continue
+
+        stat = file_path.stat()
+
+        files.append(
+            {
+                "filename": file_path.name,
+                "extension": file_path.suffix.lower(),
+                "size_bytes": stat.st_size,
+                "modified_time": stat.st_mtime,
+            }
+        )
+
+    return files
+
+
+def validate_metadata_file(filename: str) -> Path:
+    """
+    Validate a metadata filename and prevent path traversal.
+    """
+    if not filename or filename in {".", ".."}:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid metadata filename",
+        )
+
+    requested_path = Path(filename)
+
+    if requested_path.name != filename:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid metadata filename",
+        )
+
+    if requested_path.suffix.lower() not in ALLOWED_METADATA_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported metadata file type",
+        )
+
+    META_DATA_DIR.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    metadata_directory = META_DATA_DIR.resolve()
+
+    metadata_file = (META_DATA_DIR / filename).resolve()
+
+    try:
+        metadata_file.relative_to(metadata_directory)
+
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid metadata file path",
+        )
+
+    if not metadata_file.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"Metadata file not found: {filename}",
+        )
+
+    if not metadata_file.is_file():
+        raise HTTPException(
+            status_code=400,
+            detail=f"Not a metadata file: {filename}",
+        )
+
+    return metadata_file
+
+
+# ============================================================
+# LOG HTML ROUTE
+# ============================================================
+
+
+@router.get(
+    "/logs",
+    response_class=HTMLResponse,
+    include_in_schema=False,
+)
 async def show_logs(request: Request):
     log_files = get_available_log_files()
 
@@ -120,6 +257,11 @@ async def show_logs(request: Request):
             "logs": log_files,
         },
     )
+
+
+# ============================================================
+# LOG CONTENT ROUTE
+# ============================================================
 
 
 @router.get(
@@ -151,6 +293,11 @@ def show_log_file_content(filename: str):
         ) from exc
 
 
+# ============================================================
+# LIST LOG FILES API
+# ============================================================
+
+
 @router.get("/api/logs")
 def list_log_files():
     try:
@@ -170,6 +317,11 @@ def list_log_files():
         ) from exc
 
 
+# ============================================================
+# GET LOG FILE API
+# ============================================================
+
+
 @router.get("/api/logs/{filename}")
 def get_log_file(
     filename: str,
@@ -182,7 +334,9 @@ def get_log_file(
 ):
     try:
         log_file = validate_log_file(filename)
+
         all_lines = read_log_file(log_file)
+
         selected_lines = all_lines[-lines:]
 
         return {
@@ -205,6 +359,11 @@ def get_log_file(
             status_code=500,
             detail=f"Failed to read log file: {exc}",
         ) from exc
+
+
+# ============================================================
+# DOWNLOAD ALL LOGS AS ZIP
+# ============================================================
 
 
 @router.get(
@@ -251,4 +410,119 @@ def download_logs():
         raise HTTPException(
             status_code=500,
             detail=f"Failed to create logs ZIP: {exc}",
+        ) from exc
+
+
+# ============================================================
+# METADATA HTML ROUTE
+# ============================================================
+
+
+@router.get(
+    "/ui/meta-data",
+    response_class=HTMLResponse,
+    include_in_schema=False,
+)
+async def show_metadata(request: Request):
+    metadata_files = get_available_metadata_files()
+
+    return templates.TemplateResponse(
+        request=request,
+        name="show_metadata.html",
+        context={
+            "app_name": "T Feed",
+            "metadata_files": metadata_files,
+        },
+    )
+
+
+# ============================================================
+# LIST ALL METADATA FILES API
+# ============================================================
+
+
+@router.get("/api/meta-data")
+def list_metadata_files():
+    """
+    Return all available files inside the meta_data folder.
+    """
+    try:
+        files = get_available_metadata_files()
+
+        return {
+            "success": True,
+            "metadata_directory": str(META_DATA_DIR),
+            "count": len(files),
+            "files": files,
+        }
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=(f"Failed to list metadata files: {exc}"),
+        ) from exc
+
+
+# ============================================================
+# GET METADATA FILE INFORMATION
+# ============================================================
+
+
+@router.get("/api/meta-data/{filename}")
+def get_metadata_file_info(filename: str):
+    """
+    Return information about a selected metadata file.
+    """
+    try:
+        metadata_file = validate_metadata_file(filename)
+
+        stat = metadata_file.stat()
+
+        return {
+            "success": True,
+            "filename": metadata_file.name,
+            "path": str(metadata_file),
+            "extension": metadata_file.suffix.lower(),
+            "size_bytes": stat.st_size,
+            "modified_time": stat.st_mtime,
+        }
+
+    except HTTPException:
+        raise
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=(f"Failed to get metadata file information: {exc}"),
+        ) from exc
+
+
+# ============================================================
+# DOWNLOAD SELECTED METADATA FILE
+# ============================================================
+
+
+@router.get(
+    "/api/meta-data/download/{filename}",
+)
+def download_metadata_file(filename: str):
+    """
+    Download a selected metadata file.
+    """
+    try:
+        metadata_file = validate_metadata_file(filename)
+
+        return FileResponse(
+            path=str(metadata_file),
+            filename=metadata_file.name,
+            media_type="application/octet-stream",
+        )
+
+    except HTTPException:
+        raise
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=(f"Failed to download metadata file: {exc}"),
         ) from exc
