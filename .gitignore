@@ -6,6 +6,7 @@ combined_output.txt
 *.sqlite3
 wv  
 downloads
+meta_data/
 logs
 sample_data.txt
 file.txt
