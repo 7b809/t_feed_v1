@@ -1,7 +1,13 @@
 from pathlib import Path
+import io
+import zipfile
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, PlainTextResponse
+from fastapi.responses import (
+    HTMLResponse,
+    PlainTextResponse,
+    StreamingResponse,
+)
 from fastapi.templating import Jinja2Templates
 
 router = APIRouter(tags=["Logs"])
@@ -101,6 +107,7 @@ def read_log_file(log_file: Path) -> list:
     ) as file:
         return file.readlines()
 
+
 @router.get("/logs", response_class=HTMLResponse, include_in_schema=False)
 async def show_logs(request: Request):
     log_files = get_available_log_files()
@@ -185,9 +192,7 @@ def get_log_file(
             "total_lines": len(all_lines),
             "returned_lines": len(selected_lines),
             "first_returned_line": (
-                len(all_lines) - len(selected_lines) + 1
-                if selected_lines
-                else 0
+                len(all_lines) - len(selected_lines) + 1 if selected_lines else 0
             ),
             "logs": selected_lines,
         }
@@ -199,4 +204,51 @@ def get_log_file(
         raise HTTPException(
             status_code=500,
             detail=f"Failed to read log file: {exc}",
+        ) from exc
+
+
+@router.get(
+    "/api/logs/download",
+    include_in_schema=False,
+)
+def download_logs():
+    try:
+        if not LOGS_DIR.exists() or not LOGS_DIR.is_dir():
+            raise HTTPException(
+                status_code=404,
+                detail="Logs folder not found",
+            )
+
+        zip_buffer = io.BytesIO()
+
+        with zipfile.ZipFile(
+            zip_buffer,
+            mode="w",
+            compression=zipfile.ZIP_DEFLATED,
+        ) as zip_file:
+
+            for file_path in LOGS_DIR.rglob("*"):
+                if file_path.is_file():
+                    arcname = file_path.relative_to(LOGS_DIR)
+
+                    zip_file.write(
+                        file_path,
+                        arcname=str(arcname),
+                    )
+
+        zip_buffer.seek(0)
+
+        return StreamingResponse(
+            zip_buffer,
+            media_type="application/zip",
+            headers={"Content-Disposition": ('attachment; filename="logs.zip"')},
+        )
+
+    except HTTPException:
+        raise
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to create logs ZIP: {exc}",
         ) from exc
