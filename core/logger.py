@@ -27,7 +27,10 @@ class LineCountRotatingHandler(logging.FileHandler):
         if os.path.exists(self.baseFilename):
             try:
                 with open(
-                    self.baseFilename, "r", encoding=self.encoding, errors="ignore"
+                    self.baseFilename,
+                    "r",
+                    encoding=self.encoding,
+                    errors="ignore",
                 ) as file:
                     return sum(1 for _ in file)
             except (OSError, UnicodeError):
@@ -47,7 +50,6 @@ class LineCountRotatingHandler(logging.FileHandler):
             if self.shouldRollover(record_line_count):
                 self.doRollover()
 
-            # Use FileHandler.emit() to avoid formatting the message again here.
             super().emit(record)
             self.line_count += record_line_count
 
@@ -58,7 +60,10 @@ class LineCountRotatingHandler(logging.FileHandler):
         """
         Determines whether the new log record would exceed maxLines.
         """
-        return self.line_count > 0 and self.line_count + new_line_count > self.maxLines
+        return (
+            self.line_count > 0
+            and self.line_count + new_line_count > self.maxLines
+        )
 
     def doRollover(self):
         """
@@ -92,21 +97,25 @@ class LineCountRotatingHandler(logging.FileHandler):
                 os.replace(self.baseFilename, first_backup)
 
         elif os.path.exists(self.baseFilename):
-            # If there are no backups, clear the active file.
             os.remove(self.baseFilename)
 
-        # FileHandler._open() uses the handler's configured mode.
         self.stream = self._open()
         self.line_count = 0
 
 
-def get_logger(filename: str, log_level=logging.INFO) -> logging.Logger:
+def get_logger(filename: str, log_level=logging.DEBUG) -> logging.Logger:
     """
-    Creates and returns a logger that logs to both console and a file
-    named logs/<filename>.log.
+    Creates and returns a logger that logs all standard logging levels
+    to both the console and a rotating file.
+
+    Supported levels:
+    - DEBUG
+    - INFO
+    - WARNING
+    - ERROR
+    - CRITICAL
 
     The formatter automatically includes:
-
     - Source filename
     - Source line number
     - Function or method name
@@ -115,8 +124,9 @@ def get_logger(filename: str, log_level=logging.INFO) -> logging.Logger:
         File or module name, normally passed as __file__.
 
     :param log_level:
-        Logging level. Defaults to logging.INFO.
+        Logging level. Defaults to logging.DEBUG.
     """
+
     # Extract the pure filename without its path or extension.
     base_name = os.path.splitext(os.path.basename(filename))[0]
 
@@ -126,14 +136,13 @@ def get_logger(filename: str, log_level=logging.INFO) -> logging.Logger:
     logger = logging.getLogger(base_name)
     logger.setLevel(log_level)
 
-    # Prevent the same message from also reaching root logger handlers.
+    # Prevent messages from reaching root logger handlers.
     logger.propagate = False
 
-    # Check this logger's own handlers only.
+    # Avoid adding duplicate handlers.
     if logger.handlers:
         return logger
 
-    # This formatter applies centrally to every module using get_logger().
     formatter = logging.Formatter(
         "%(asctime)s [%(levelname)s] [%(name)s] "
         "[%(filename)s:%(lineno)d] [%(funcName)s]: %(message)s",
@@ -146,12 +155,19 @@ def get_logger(filename: str, log_level=logging.INFO) -> logging.Logger:
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
 
-    # Line-count rotating file handler
-    log_file_path = os.path.join(LOGS_DIR, f"{base_name}.log")
+    # Rotating file handler
+    log_file_path = os.path.join(
+        LOGS_DIR,
+        f"{base_name}.log",
+    )
 
     file_handler = LineCountRotatingHandler(
-        log_file_path, maxLines=1000, backupCount=3, encoding="utf-8"
+        log_file_path,
+        maxLines=1000,
+        backupCount=3,
+        encoding="utf-8",
     )
+
     file_handler.setLevel(log_level)
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
