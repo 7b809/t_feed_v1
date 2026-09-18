@@ -212,7 +212,7 @@ def main() -> None:
             )
 
         else:
-            message = f"{STOP_SCRIPT} not found. Skipping application stop."
+            message = f"{STOP_SCRIPT} not found. " "Skipping application stop."
 
             print(f"\nWARNING: {message}")
 
@@ -239,10 +239,17 @@ def main() -> None:
         )
 
         # 5. Remove untracked files and directories
-        print("\nRemoving untracked files and directories...")
+        # Exclude meta_data so that log backups are preserved
+        print("\nRemoving untracked files and directories " "except meta_data...")
 
         run_command(
-            ["git", "clean", "-fd"],
+            [
+                "git",
+                "clean",
+                "-fd",
+                "-e",
+                "meta_data/",
+            ],
             step_name="Git Clean",
         )
 
@@ -331,7 +338,7 @@ def main() -> None:
             )
 
         else:
-            message = f"{START_SCRIPT} not found. Application was not started."
+            message = f"{START_SCRIPT} not found. " "Application was not started."
 
             print(f"\nWARNING: {message}")
 
