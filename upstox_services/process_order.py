@@ -1,4 +1,5 @@
 from typing import Any
+from uuid import uuid4
 
 from core import config
 from core.logger import get_logger
@@ -7,6 +8,16 @@ from upstox_services.place_order import place_selected_instrument
 from upstox_services.position_service import exit_all_positions
 
 logger = get_logger(__file__)
+
+
+def _is_dummy_orders_enabled() -> bool:
+    """
+    Returns True when dummy order mode is enabled.
+    Supports both lowercase and uppercase configuration names.
+    """
+    return bool(
+        getattr(config, "dummy_orders", False) or getattr(config, "DUMMY_ORDERS", False)
+    )
 
 
 def _send_telegram_message(
@@ -176,6 +187,59 @@ def _extract_order_id(
     return None
 
 
+def _build_dummy_place_order_result(
+    normalized_instrument: dict[str, Any],
+    instrument_details: dict[str, Any],
+) -> dict[str, Any]:
+    """
+    Builds a simulated (dummy) order placement response.
+
+    No real order is sent to Upstox when dummy order mode is enabled.
+    """
+    trading_symbol = instrument_details.get("trading_symbol")
+    instrument_key = instrument_details.get("instrument_key")
+    live_ltp = instrument_details.get("live_ltp")
+    lot_size = instrument_details.get("lot_size")
+
+    dummy_order_id = f"DUMMY-{uuid4().hex[:12].upper()}"
+
+    logger.info(
+        "Dummy order mode enabled. Skipping real order placement. "
+        "trading_symbol=%s, instrument_key=%s, live_ltp=%s, "
+        "lot_size=%s, dummy_order_id=%s",
+        trading_symbol,
+        instrument_key,
+        live_ltp,
+        lot_size,
+        dummy_order_id,
+    )
+
+    _send_telegram_message(
+        title="Dummy Order Simulated",
+        message=(
+            "Dummy order mode is ENABLED.\n"
+            "No real order was sent to Upstox.\n"
+            f"Symbol: {trading_symbol}\n"
+            f"Instrument: {instrument_key}\n"
+            f"Live LTP: {live_ltp}\n"
+            f"Lot Size: {lot_size}\n"
+            f"Dummy Order ID: {dummy_order_id}"
+        ),
+        level="INFO",
+        notification_context=(
+            f"process_order|dummy_placement|instrument_key={instrument_key}"
+        ),
+    )
+
+    return {
+        "success": True,
+        "dummy": True,
+        "order_id": dummy_order_id,
+        "message": "Dummy order simulated. No real order was sent to Upstox.",
+        "instrument": normalized_instrument,
+    }
+
+
 def _safe_place_order(
     normalized_instrument: dict[str, Any],
     instrument_details: dict[str, Any],
@@ -184,11 +248,17 @@ def _safe_place_order(
     """
     Wraps place_selected_instrument so that exceptions are logged,
     notified via Telegram, and converted to a structured failure result.
+
+    When dummy order mode is enabled (config.dummy_orders = True or config.DUMMY_ORDERS = True), the real
+    place_selected_instrument() call is skipped and a simulated success
+    result is returned instead.
     """
     trading_symbol = instrument_details.get("trading_symbol")
     instrument_key = instrument_details.get("instrument_key")
     live_ltp = instrument_details.get("live_ltp")
     lot_size = instrument_details.get("lot_size")
+
+    dummy_orders_enabled = _is_dummy_orders_enabled()
 
     _send_telegram_message(
         title="Placing New Order",
@@ -197,7 +267,8 @@ def _safe_place_order(
             f"Symbol: {trading_symbol}\n"
             f"Instrument: {instrument_key}\n"
             f"Live LTP: {live_ltp}\n"
-            f"Lot Size: {lot_size}"
+            f"Lot Size: {lot_size}\n"
+            f"Mode: {'DUMMY (simulated)' if dummy_orders_enabled else 'REAL'}"
         ),
         level="INFO",
         notification_context=(
@@ -205,6 +276,59 @@ def _safe_place_order(
         ),
     )
 
+    # ------------------------------------------------------------------
+    # DUMMY ORDER MODE: skip the real order placement entirely.
+    # ------------------------------------------------------------------
+    if dummy_orders_enabled:
+        place_order_result = _build_dummy_place_order_result(
+            normalized_instrument=normalized_instrument,
+            instrument_details=instrument_details,
+        )
+
+        order_id = _extract_order_id(place_order_result)
+
+        logger.info(
+            "Dummy order workflow completed successfully. "
+            "trading_symbol=%s, instrument_key=%s, order_id=%s",
+            trading_symbol,
+            instrument_key,
+            order_id,
+        )
+
+        _send_telegram_message(
+            title="Dummy Order Placed Successfully",
+            message=(
+                f"Symbol: {trading_symbol}\n"
+                f"Instrument: {instrument_key}\n"
+                f"Live LTP: {live_ltp}\n"
+                f"Lot Size: {lot_size}\n"
+                f"Dummy Order ID: {order_id or 'N/A'}\n\n"
+                "Dummy mode: exit step simulated.\n"
+                "Dummy mode: order placement simulated.\n"
+                "No real Upstox calls were made."
+            ),
+            level="SUCCESS",
+            notification_context=(
+                f"process_order|dummy_completed|instrument_key={instrument_key}"
+            ),
+        )
+
+        return {
+            "success": True,
+            "executed": True,
+            "skipped": False,
+            "dummy": True,
+            "order_status": "DUMMY_ORDER_PLACED",
+            "order_id": order_id,
+            "selected_instrument": normalized_instrument,
+            "exit_result": exit_result,
+            "place_order_result": place_order_result,
+            "error": None,
+        }
+
+    # ------------------------------------------------------------------
+    # REAL ORDER MODE: existing behaviour.
+    # ------------------------------------------------------------------
     try:
         place_order_result = place_selected_instrument(normalized_instrument)
 
@@ -363,6 +487,10 @@ def _run_exit_step(
     response from the exit service is logged and notified via Telegram,
     but the workflow continues to place the new order.
 
+    When dummy order mode is enabled (config.dummy_orders = True or config.DUMMY_ORDERS = True), the real
+    exit_all_positions() call is skipped and a simulated success result is
+    returned instead.
+
     Returns the (possibly best-effort) exit_result for downstream
     reporting purposes.
     """
@@ -370,9 +498,12 @@ def _run_exit_step(
     instrument_key = instrument_details.get("instrument_key")
     live_ltp = instrument_details.get("live_ltp")
 
+    dummy_orders_enabled = _is_dummy_orders_enabled()
+
     logger.info(
-        "Step 1 started. Exiting all existing positions. instrument_key=%s",
+        "Step 1 started. Exiting all existing positions. instrument_key=%s, dummy=%s",
         instrument_key,
+        dummy_orders_enabled,
     )
 
     _send_telegram_message(
@@ -380,7 +511,8 @@ def _run_exit_step(
         message=(
             "Checking and exiting all existing positions.\n"
             f"New Symbol: {trading_symbol}\n"
-            f"Target LTP: {live_ltp}"
+            f"Target LTP: {live_ltp}\n"
+            f"Mode: {'DUMMY (simulated)' if dummy_orders_enabled else 'REAL'}"
         ),
         level="REFRESH",
         notification_context=(
@@ -388,6 +520,45 @@ def _run_exit_step(
         ),
     )
 
+    # ------------------------------------------------------------------
+    # DUMMY ORDER MODE: skip the real exit_all_positions() call.
+    # ------------------------------------------------------------------
+    if dummy_orders_enabled:
+        logger.info(
+            "Dummy order mode enabled. Skipping real exit_all_positions() call. "
+            "trading_symbol=%s, instrument_key=%s",
+            trading_symbol,
+            instrument_key,
+        )
+
+        _send_telegram_message(
+            title="Dummy Exit Simulated",
+            message=(
+                "Dummy order mode is ENABLED.\n"
+                "No real exit_all_positions() call was made.\n"
+                f"New Symbol: {trading_symbol}\n"
+                f"Instrument: {instrument_key}\n"
+                f"Live LTP: {live_ltp}\n"
+                "Proceeding to simulate the new order placement."
+            ),
+            level="INFO",
+            notification_context=(
+                f"process_order|dummy_exit|instrument_key={instrument_key}"
+            ),
+        )
+
+        return {
+            "success": True,
+            "dummy": True,
+            "assumed": True,
+            "positions_exited": 0,
+            "message": ("Dummy mode: real exit_all_positions() call was skipped."),
+            "error": None,
+        }
+
+    # ------------------------------------------------------------------
+    # REAL MODE: existing behaviour.
+    # ------------------------------------------------------------------
     exit_result: Any = None
 
     try:
@@ -545,15 +716,18 @@ def process_selected_instrument(
         )
     )
 
+    dummy_orders_enabled = _is_dummy_orders_enabled()
+
     logger.info(
         "Order workflow started. "
         "trading_symbol=%s, instrument_key=%s, "
-        "live_ltp=%s, lot_size=%s, place_order_enabled=%s",
+        "live_ltp=%s, lot_size=%s, place_order_enabled=%s, dummy_orders_enabled=%s",
         trading_symbol,
         instrument_key,
         live_ltp,
         lot_size,
         place_order_enabled,
+        dummy_orders_enabled,
     )
 
     _send_telegram_message(
@@ -563,7 +737,8 @@ def process_selected_instrument(
             f"Instrument: {instrument_key}\n"
             f"Live LTP: {live_ltp}\n"
             f"Lot Size: {lot_size}\n"
-            f"Place Order: {'ENABLED' if place_order_enabled else 'DISABLED'}"
+            f"Place Order: {'ENABLED' if place_order_enabled else 'DISABLED'}\n"
+            f"Order Mode: {'DUMMY' if dummy_orders_enabled else 'REAL'}"
         ),
         level="STARTUP",
         notification_context=(f"process_order|started|instrument_key={instrument_key}"),
