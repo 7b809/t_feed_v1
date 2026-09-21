@@ -17,6 +17,8 @@ META_DATA_DIR = os.path.join(PROJECT_DIR, "meta_data")
 
 TIMEZONE = "Asia/Kolkata"
 
+DEBUG_MODE = False
+
 
 def send_telegram(
     title: str,
@@ -26,7 +28,12 @@ def send_telegram(
     """
     Send a Telegram notification without interrupting
     the update process if Telegram fails.
+
+    Notifications are only sent when DEBUG_MODE is True.
     """
+    if not DEBUG_MODE:
+        return
+
     try:
         telegram_service.send_message(
             title=title,
