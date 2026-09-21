@@ -1,6 +1,13 @@
-upstox-python-sdk
-python-dotenv
-pymongo
 fastapi
 uvicorn
+python-dotenv
+pydantic
+pydantic-settings
+requests
 httpx
+pymongo
+motor
+websockets
+python-dateutil
+pytz
+tzdata
