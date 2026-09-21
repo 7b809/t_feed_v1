@@ -9,6 +9,7 @@ downloads
 meta_data/
 logs
 sample_data.txt
+files.txt
 file.txt
 *.ini
 # C extensions

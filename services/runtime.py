@@ -15,6 +15,9 @@ from services.state import (
     load_state,
     save_state,
 )
+
+from services.notification_service import NotificationService
+
 from utils.common import (
     call_with_retry,
     chunks,
@@ -26,29 +29,51 @@ logger = get_logger(__file__)
 
 
 class EmaRuntime:
-    def __init__(self, token_service, telegram_service=None):
+    def __init__(self, token_service, telegram_service=None, notification_service=None):
         self.token_service = token_service
+
+        # Backward compatibility with the existing telegram_service argument.
         self.telegram = telegram_service
+
+        # Use the centralized notification service when provided.
+        self.notifications = notification_service or NotificationService(
+            telegram_service=telegram_service
+        )
+
         self.contracts: list[dict] = []
         self.states: dict[str, dict] = {}
         self.locks: dict[str, Lock] = {}
+
         self.quote_client = None
         self.quote_api = None
 
     def close(self) -> None:
+        """
+        Close the Upstox quote client and release resources.
+        """
         if self.quote_client:
-            self.quote_client.close()
+            close_method = getattr(self.quote_client, "close", None)
+            if callable(close_method):
+                try:
+                    close_method()
+                except Exception:
+                    logger.exception("Failed to close quote client")
+
             self.quote_client = None
             self.quote_api = None
 
     def replace_contracts(self, contracts: list[dict]) -> None:
+        """
+        Replace the active instrument contracts and initialize
+        the market quote client.
+        """
         self.close()
-
         self.contracts = list(contracts)
         self.states = {}
         self.locks = {
             row["instrument_key"]: Lock()
-            for row in contracts
+            for row in self.contracts
+            if row.get("instrument_key")
         }
 
         token = self.token_service.get_access_token()
@@ -57,24 +82,21 @@ class EmaRuntime:
         configuration.access_token = token
 
         self.quote_client = upstox_client.ApiClient(configuration)
-        self.quote_api = upstox_client.MarketQuoteV3Api(
-            self.quote_client
-        )
+        self.quote_api = upstox_client.MarketQuoteV3Api(self.quote_client)
 
         logger.info(
-            "Runtime contracts replaced total_instruments=%s",
-            len(self.contracts),
+            "Runtime contracts replaced total_instruments=%s", len(self.contracts)
         )
 
     def initialize(self, trading_date: date) -> list:
+        """
+        Perform historical and intraday EMA warmup for all contracts.
+        """
         token = self.token_service.get_access_token()
-        results = []
 
+        results = []
         total_instruments = len(self.contracts)
-        workers = min(
-            config.MAX_WORKERS,
-            total_instruments,
-        ) if total_instruments else 0
+        workers = min(config.MAX_WORKERS, total_instruments) if total_instruments else 0
 
         logger.info(
             "EMA warmup started trading_date=%s total_instruments=%s workers=%s",
@@ -84,15 +106,11 @@ class EmaRuntime:
         )
 
         with ThreadPoolExecutor(
-            max_workers=workers or 1,
-            thread_name_prefix="warmup",
+            max_workers=workers or 1, thread_name_prefix="warmup"
         ) as pool:
             future_map = {
                 pool.submit(
-                    self._initialize_one,
-                    token,
-                    contract,
-                    trading_date,
+                    self._initialize_one, token, contract, trading_date
                 ): contract
                 for contract in self.contracts
             }
@@ -104,24 +122,18 @@ class EmaRuntime:
                 try:
                     state = future.result()
                     self.states[instrument_key] = state
-
                     results.append(
-                        {
-                            "instrument_key": instrument_key,
-                            "status": "success",
-                        }
+                        {"instrument_key": instrument_key, "status": "success"}
                     )
 
                     logger.info(
-                        "Instrument warmup completed instrument=%s "
-                        "status=success",
+                        "Instrument warmup completed instrument=%s status=success",
                         instrument_key,
                     )
 
                 except Exception as ex:
                     logger.exception(
-                        "Instrument warmup failed instrument=%s",
-                        instrument_key,
+                        "Instrument warmup failed instrument=%s", instrument_key
                     )
 
                     results.append(
@@ -132,18 +144,21 @@ class EmaRuntime:
                         }
                     )
 
-        success_count = sum(
-            result["status"] == "success"
-            for result in results
-        )
-        failure_count = sum(
-            result["status"] == "failed"
-            for result in results
-        )
+                    self.notifications.notify_error(
+                        title="EMA Warmup Failed",
+                        message=(
+                            f"Instrument: {instrument_key}\n"
+                            f"Trading date: {trading_date.isoformat()}\n"
+                            f"Error: {ex}"
+                        ),
+                        source="ema_runtime.initialize",
+                    )
+
+        success_count = sum(result["status"] == "success" for result in results)
+        failure_count = sum(result["status"] == "failed" for result in results)
 
         logger.info(
-            "EMA warmup summary trading_date=%s "
-            "total_instruments=%s success=%s failure=%s",
+            "EMA warmup summary trading_date=%s total_instruments=%s success=%s failure=%s",
             trading_date.isoformat(),
             total_instruments,
             success_count,
@@ -152,105 +167,62 @@ class EmaRuntime:
 
         return results
 
-    def _initialize_one(
-        self,
-        token: str,
-        contract: dict,
-        trading_date: date,
-    ) -> dict:
+    def _initialize_one(self, token: str, contract: dict, trading_date: date) -> dict:
+        """
+        Fetch historical and intraday candles and calculate
+        the initial EMA state for one instrument.
+        """
         instrument_key = contract["instrument_key"]
+
         client, api = build_history_client(token)
 
         try:
-            logger.info(
-                "Historical fetch started instrument=%s",
-                instrument_key,
-            )
+            logger.info("Historical fetch started instrument=%s", instrument_key)
 
-            historical = fetch_history(
-                api,
-                instrument_key,
-                trading_date,
-            )
+            historical = fetch_history(api, instrument_key, trading_date)
 
             logger.info(
-                "Historical fetch completed instrument=%s "
-                "candle_count=%s",
+                "Historical fetch completed instrument=%s candle_count=%s",
                 instrument_key,
                 len(historical),
             )
 
-            logger.info(
-                "Intraday fetch started instrument=%s",
-                instrument_key,
-            )
+            logger.info("Intraday fetch started instrument=%s", instrument_key)
 
-            intraday = fetch_intraday(
-                api,
-                instrument_key,
-                trading_date,
-            )
+            intraday = fetch_intraday(api, instrument_key, trading_date)
 
             logger.info(
-                "Intraday fetch completed instrument=%s "
-                "candle_count=%s",
+                "Intraday fetch completed instrument=%s candle_count=%s",
                 instrument_key,
                 len(intraday),
             )
 
-            merged = {
-                candle["timestamp"]: candle
-                for candle in historical
-            }
-
-            merged.update(
-                {
-                    candle["timestamp"]: candle
-                    for candle in intraday
-                }
-            )
+            merged = {candle["timestamp"]: candle for candle in historical}
+            merged.update({candle["timestamp"]: candle for candle in intraday})
 
             logger.info(
-                "EMA calculation started instrument=%s "
-                "historical_candles=%s intraday_candles=%s "
-                "merged_candles=%s",
+                "EMA calculation started instrument=%s historical_candles=%s intraday_candles=%s merged_candles=%s",
                 instrument_key,
                 len(historical),
                 len(intraday),
                 len(merged),
             )
 
-            calculated, state = calculate_sequence(
-                list(merged.values())
-            )
+            calculated, state = calculate_sequence(list(merged.values()))
 
             if state is None:
-                raise RuntimeError(
-                    "No candles available for EMA initialization"
-                )
+                raise RuntimeError("No candles available for EMA initialization")
 
             crossover_count = 0
-
             for candle in calculated:
                 if candle.get("cross_type"):
-                    append_crossover(
-                        contract,
-                        trading_date,
-                        candle,
-                    )
+                    append_crossover(contract, trading_date, candle)
                     crossover_count += 1
 
-            save_state(
-                contract,
-                trading_date,
-                state,
-            )
+            save_state(contract, trading_date, state)
 
             logger.info(
-                "EMA calculation completed instrument=%s "
-                "calculated_candles=%s crossovers=%s "
-                "ema_fast=%s ema_slow=%s "
-                "last_processed_timestamp=%s",
+                "EMA calculation completed instrument=%s calculated_candles=%s crossovers=%s ema_fast=%s ema_slow=%s last_processed_timestamp=%s",
                 instrument_key,
                 len(calculated),
                 crossover_count,
@@ -263,40 +235,39 @@ class EmaRuntime:
 
         finally:
             close_method = getattr(client, "close", None)
-
             if callable(close_method):
                 close_method()
 
-    def restore_or_initialize(
-        self,
-        trading_date: date,
-    ) -> list:
+    def restore_or_initialize(self, trading_date: date) -> list:
+        """
+        Restore saved EMA states.
+
+        Instruments without saved state are initialized using
+        historical and intraday data.
+        """
         missing = []
         restored_count = 0
 
         for contract in self.contracts:
             instrument_key = contract["instrument_key"]
-            state = load_state(
-                contract,
-                trading_date,
-            )
+
+            state = load_state(contract, trading_date)
 
             if state:
                 self.states[instrument_key] = state
                 restored_count += 1
 
                 logger.info(
-                    "EMA state restored instrument=%s "
-                    "last_processed_timestamp=%s",
+                    "EMA state restored instrument=%s last_processed_timestamp=%s",
                     instrument_key,
                     state.get("last_processed_timestamp"),
                 )
+
             else:
                 missing.append(contract)
 
         logger.info(
-            "EMA state restore summary trading_date=%s "
-            "total_instruments=%s restored=%s missing=%s",
+            "EMA state restore summary trading_date=%s total_instruments=%s restored=%s missing=%s",
             trading_date.isoformat(),
             len(self.contracts),
             restored_count,
@@ -312,53 +283,50 @@ class EmaRuntime:
 
         try:
             return self.initialize(trading_date)
+
         finally:
             self.contracts = original_contracts
 
-    def reconcile_all(
-        self,
-        trading_date: date,
-    ) -> None:
+    def reconcile_all(self, trading_date: date) -> None:
+        """
+        Fetch intraday candles and reconcile all active instruments.
+        """
         token = self.token_service.get_access_token()
 
         total_instruments = len(self.contracts)
+
         success_count = 0
         failure_count = 0
         skipped_count = 0
 
         logger.info(
-            "Intraday reconciliation started trading_date=%s "
-            "total_instruments=%s",
+            "Intraday reconciliation started trading_date=%s total_instruments=%s",
             trading_date.isoformat(),
             total_instruments,
         )
 
         for contract in self.contracts:
             instrument_key = contract["instrument_key"]
+
             state = self.states.get(instrument_key)
 
             if not state:
                 skipped_count += 1
 
                 logger.warning(
-                    "Intraday reconciliation skipped instrument=%s "
-                    "reason=state_not_available",
+                    "Intraday reconciliation skipped instrument=%s reason=state_not_available",
                     instrument_key,
                 )
+
                 continue
 
             client, api = build_history_client(token)
 
             try:
-                candles = fetch_intraday(
-                    api,
-                    instrument_key,
-                    trading_date,
-                )
+                candles = fetch_intraday(api, instrument_key, trading_date)
 
                 logger.info(
-                    "Reconciliation intraday fetch completed "
-                    "instrument=%s candle_count=%s",
+                    "Reconciliation intraday fetch completed instrument=%s candle_count=%s",
                     instrument_key,
                     len(candles),
                 )
@@ -367,11 +335,7 @@ class EmaRuntime:
                 instrument_skipped_count = 0
 
                 for candle in candles:
-                    result = self.process_candle(
-                        contract,
-                        trading_date,
-                        candle,
-                    )
+                    result = self.process_candle(contract, trading_date, candle)
 
                     if result["status"] == "success":
                         processed_count += 1
@@ -381,32 +345,37 @@ class EmaRuntime:
                 success_count += 1
 
                 logger.info(
-                    "Intraday reconciliation completed "
-                    "instrument=%s fetched_candles=%s "
-                    "processed_candles=%s skipped_candles=%s",
+                    "Intraday reconciliation completed instrument=%s fetched_candles=%s processed_candles=%s skipped_candles=%s",
                     instrument_key,
                     len(candles),
                     processed_count,
                     instrument_skipped_count,
                 )
 
-            except Exception:
+            except Exception as ex:
                 failure_count += 1
 
                 logger.exception(
-                    "Intraday reconciliation failed instrument=%s",
-                    instrument_key,
+                    "Intraday reconciliation failed instrument=%s", instrument_key
+                )
+
+                self.notifications.notify_error(
+                    title="EMA Reconciliation Failed",
+                    message=(
+                        f"Instrument: {instrument_key}\n"
+                        f"Trading date: {trading_date.isoformat()}\n"
+                        f"Error: {ex}"
+                    ),
+                    source="ema_runtime.reconcile_all",
                 )
 
             finally:
                 close_method = getattr(client, "close", None)
-
                 if callable(close_method):
                     close_method()
 
         logger.info(
-            "Intraday reconciliation summary trading_date=%s "
-            "total_instruments=%s success=%s failure=%s skipped=%s",
+            "Intraday reconciliation summary trading_date=%s total_instruments=%s success=%s failure=%s skipped=%s",
             trading_date.isoformat(),
             total_instruments,
             success_count,
@@ -414,13 +383,22 @@ class EmaRuntime:
             skipped_count,
         )
 
-    def process_candle(
-        self,
-        contract: dict,
-        trading_date: date,
-        candle: dict,
-    ) -> dict:
+    def process_candle(self, contract: dict, trading_date: date, candle: dict) -> dict:
+        """
+        Process one completed candle.
+
+        Processing flow:
+
+        1. Validate instrument state.
+        2. Ignore duplicate or old candles.
+        3. Calculate EMA only once.
+        4. Save the latest state.
+        5. Save the completed candle.
+        6. Save crossover data when detected.
+        7. Send a centralized notification when needed.
+        """
         instrument_key = contract["instrument_key"]
+
         instrument_lock = self.locks.get(instrument_key)
 
         if instrument_lock is None:
@@ -440,12 +418,8 @@ class EmaRuntime:
                     "instrument_key": instrument_key,
                 }
 
-            current = parse_timestamp(
-                candle.get("timestamp")
-            )
-            previous = parse_timestamp(
-                state.get("last_processed_timestamp")
-            )
+            current = parse_timestamp(candle.get("timestamp"))
+            previous = parse_timestamp(state.get("last_processed_timestamp"))
 
             if current is None:
                 return {
@@ -462,79 +436,56 @@ class EmaRuntime:
                     "candle_timestamp": current.isoformat(),
                 }
 
-            if (
-                previous is not None
-                and current - previous > timedelta(minutes=1)
-            ):
+            if previous is not None and current - previous > timedelta(minutes=1):
                 logger.warning(
-                    "Candle gap detected instrument=%s "
-                    "previous=%s current=%s",
+                    "Candle gap detected instrument=%s previous=%s current=%s",
                     instrument_key,
                     previous.isoformat(),
                     current.isoformat(),
                 )
 
-            enriched, new_state = update_state(
-                state,
-                candle,
-            )
+            enriched, new_state = update_state(state, candle)
 
             self.states[instrument_key] = new_state
+            save_state(contract, trading_date, new_state)
+            append_completed_candle(contract, trading_date, enriched)
 
-            save_state(
-                contract,
-                trading_date,
-                new_state,
-            )
+            cross_type = enriched.get("cross_type")
 
-            append_completed_candle(
-                contract,
-                trading_date,
-                enriched,
-            )
-
-            if enriched.get("cross_type"):
-                append_crossover(
-                    contract,
-                    trading_date,
-                    enriched,
-                )
+            if cross_type:
+                append_crossover(contract, trading_date, enriched)
 
                 logger.info(
-                    "EMA crossover instrument=%s type=%s "
-                    "timestamp=%s close=%s ema_fast=%s ema_slow=%s",
+                    "EMA crossover instrument=%s type=%s timestamp=%s close=%s ema_fast=%s ema_slow=%s",
                     instrument_key,
-                    enriched["cross_type"],
-                    enriched["timestamp"],
+                    cross_type,
+                    enriched.get("timestamp"),
                     enriched.get("close"),
                     enriched.get("ema_9"),
                     enriched.get("ema_21"),
                 )
 
-                if self.telegram:
-                    self.telegram.send(
-                        f"EMA {enriched['cross_type'].upper()} CROSS\n"
-                        f"{contract.get('trading_symbol')}\n"
-                        f"Close: {enriched.get('close')}\n"
-                        f"EMA 9: {enriched.get('ema_9')}\n"
-                        f"EMA 21: {enriched.get('ema_21')}\n"
-                        f"Time: {enriched.get('timestamp')}"
-                    )
+                self.notifications.notify_crossover(
+                    contract=contract, candle=enriched, trading_date=trading_date
+                )
 
             return {
                 "status": "success",
                 "instrument_key": instrument_key,
                 "candle_timestamp": enriched["timestamp"],
-                "cross_type": enriched.get("cross_type"),
+                "cross_type": cross_type,
+                "ema_9": enriched.get("ema_9"),
+                "ema_21": enriched.get("ema_21"),
+                "close": enriched.get("close"),
             }
 
-    def poll_completed_candles(
-        self,
-        trading_date: date,
-    ) -> dict:
-        poll_started_at = datetime.now(
-            config.MARKET_TIMEZONE
-        )
+    def poll_completed_candles(self, trading_date: date) -> dict:
+        """
+        Poll the previous completed one-minute OHLC candle
+        for all active instruments.
+        """
+        poll_started_at = datetime.now(config.MARKET_TIMEZONE)
+
         total_instruments = len(self.contracts)
 
         outcomes = {
@@ -550,9 +501,7 @@ class EmaRuntime:
                 "status": "skipped",
                 "trading_date": trading_date.isoformat(),
                 "poll_started_at": poll_started_at.isoformat(),
-                "poll_completed_at": datetime.now(
-                    config.MARKET_TIMEZONE
-                ).isoformat(),
+                "poll_completed_at": datetime.now(config.MARKET_TIMEZONE).isoformat(),
                 "total_instruments": total_instruments,
                 "successful_instruments": 0,
                 "failed_instruments": 0,
@@ -561,9 +510,7 @@ class EmaRuntime:
             }
 
             logger.warning(
-                "One-minute candle processing skipped "
-                "total_instruments=%s success=0 failure=0 skipped=%s "
-                "reason=quote_api_not_initialized",
+                "One-minute candle processing skipped total_instruments=%s success=0 failure=0 skipped=%s reason=quote_api_not_initialized",
                 total_instruments,
                 total_instruments,
             )
@@ -571,41 +518,29 @@ class EmaRuntime:
             return summary
 
         logger.info(
-            "One-minute candle polling started trading_date=%s "
-            "interval=%s total_instruments=%s",
+            "One-minute candle polling started trading_date=%s interval=%s total_instruments=%s",
             trading_date.isoformat(),
             config.OHLC_INTERVAL,
             total_instruments,
         )
 
-        lookup = {
-            row["instrument_key"]: row
-            for row in self.contracts
-        }
+        lookup = {row["instrument_key"]: row for row in self.contracts}
 
-        for batch in chunks(
-            self.contracts,
-            config.OHLC_BATCH_SIZE,
-        ):
-            batch_keys = [
-                row["instrument_key"]
-                for row in batch
-            ]
+        for batch in chunks(self.contracts, config.OHLC_BATCH_SIZE):
+            batch_keys = [row["instrument_key"] for row in batch]
             symbols = ",".join(batch_keys)
 
             try:
                 response = call_with_retry(
                     "ohlc_v3",
-                    lambda: self.quote_api.get_market_quote_ohlc(
-                        config.OHLC_INTERVAL,
-                        instrument_key=symbols,
+                    lambda: (
+                        self.quote_api.get_market_quote_ohlc(
+                            config.OHLC_INTERVAL, instrument_key=symbols
+                        )
                     ),
                 )
 
-                data = object_to_dict(response).get(
-                    "data",
-                    {},
-                )
+                data = object_to_dict(response).get("data", {})
 
                 if not isinstance(data, dict):
                     for instrument_key in batch_keys:
@@ -615,8 +550,7 @@ class EmaRuntime:
                         }
 
                     logger.error(
-                        "OHLC batch returned invalid data "
-                        "batch_instruments=%s",
+                        "OHLC batch returned invalid data batch_instruments=%s",
                         len(batch_keys),
                     )
                     continue
@@ -634,15 +568,12 @@ class EmaRuntime:
 
                     if not contract:
                         logger.warning(
-                            "OHLC quote skipped because instrument "
-                            "was not found instrument=%s",
+                            "OHLC quote skipped because instrument was not found instrument=%s",
                             instrument_key,
                         )
                         continue
 
-                    previous = object_to_dict(
-                        quote.get("prev_ohlc")
-                    )
+                    previous = object_to_dict(quote.get("prev_ohlc"))
 
                     if not previous:
                         outcomes[instrument_key] = {
@@ -651,10 +582,7 @@ class EmaRuntime:
                         }
                         continue
 
-                    candle = normalize_candle(
-                        previous,
-                        "ohlc_prev",
-                    )
+                    candle = normalize_candle(previous, "ohlc_prev")
 
                     if candle is None:
                         outcomes[instrument_key] = {
@@ -664,12 +592,8 @@ class EmaRuntime:
                         continue
 
                     try:
-                        outcomes[instrument_key] = (
-                            self.process_candle(
-                                contract,
-                                trading_date,
-                                candle,
-                            )
+                        outcomes[instrument_key] = self.process_candle(
+                            contract, trading_date, candle
                         )
 
                     except Exception as ex:
@@ -680,15 +604,23 @@ class EmaRuntime:
                         }
 
                         logger.exception(
-                            "One-minute candle processing failed "
-                            "instrument=%s",
+                            "One-minute candle processing failed instrument=%s",
                             instrument_key,
+                        )
+
+                        self.notifications.notify_error(
+                            title="Candle Processing Failed",
+                            message=(
+                                f"Instrument: {instrument_key}\n"
+                                f"Trading date: {trading_date.isoformat()}\n"
+                                f"Error: {ex}"
+                            ),
+                            source="ema_runtime.process_candle",
                         )
 
             except Exception as ex:
                 logger.exception(
-                    "OHLC batch fetch failed batch_size=%s",
-                    len(batch_keys),
+                    "OHLC batch fetch failed batch_size=%s", len(batch_keys)
                 )
 
                 for instrument_key in batch_keys:
@@ -698,29 +630,30 @@ class EmaRuntime:
                         "error": str(ex),
                     }
 
+                self.notifications.notify_error(
+                    title="OHLC Batch Fetch Failed",
+                    message=(
+                        f"Batch size: {len(batch_keys)}\n"
+                        f"Instruments: {', '.join(batch_keys)}\n"
+                        f"Error: {ex}"
+                    ),
+                    source="ema_runtime.poll_completed_candles",
+                )
+
         successful_instruments = sum(
-            result.get("status") == "success"
-            for result in outcomes.values()
+            result.get("status") == "success" for result in outcomes.values()
         )
         failed_instruments = sum(
-            result.get("status") == "failed"
-            for result in outcomes.values()
+            result.get("status") == "failed" for result in outcomes.values()
         )
         skipped_instruments = sum(
-            result.get("status") == "skipped"
-            for result in outcomes.values()
+            result.get("status") == "skipped" for result in outcomes.values()
         )
 
-        poll_completed_at = datetime.now(
-            config.MARKET_TIMEZONE
-        )
+        poll_completed_at = datetime.now(config.MARKET_TIMEZONE)
 
         summary = {
-            "status": (
-                "success"
-                if failed_instruments == 0
-                else "partial_failure"
-            ),
+            "status": ("success" if failed_instruments == 0 else "partial_failure"),
             "trading_date": trading_date.isoformat(),
             "interval": config.OHLC_INTERVAL,
             "poll_started_at": poll_started_at.isoformat(),
@@ -734,9 +667,7 @@ class EmaRuntime:
         }
 
         logger.info(
-            "One-minute candle processing completed "
-            "processed=%s out_of=%s success=%s failure=%s skipped=%s "
-            "interval=%s started_at=%s completed_at=%s",
+            "One-minute candle processing completed processed=%s out_of=%s success=%s failure=%s skipped=%s interval=%s started_at=%s completed_at=%s",
             successful_instruments,
             total_instruments,
             successful_instruments,

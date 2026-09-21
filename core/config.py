@@ -1,12 +1,13 @@
 import os
-from dataclasses import dataclass
 from datetime import time
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 
+
 load_dotenv()
+
 
 def load_env() -> None:
     env_path = Path(__file__).resolve().parents[1] / ".env"
@@ -47,29 +48,63 @@ def parse_clock(value: str) -> time:
 
 load_env()
 
+
+# ============================================================
+# DATABASE / TOKEN CONFIGURATION
+# ============================================================
+
 MONGO_URI = require_env("MONGO_URI")
 MONGO_DB = require_env("MONGO_DB")
 TOKENS_COLLECTION = require_env("TOKENS_COLLECTION")
 TOKEN_DOCUMENT_ID = env_str("TOKEN_DOCUMENT_ID", "upstox_access_token")
 TOKEN_REFRESH_SECONDS = env_int("TOKEN_REFRESH_SECONDS", 300)
 
-MARKET_TIMEZONE = ZoneInfo("Asia/Kolkata")
-MAIN_NIFTY_SECURITY = "NSE_INDEX|Nifty 50"
+
+# ============================================================
+# MARKET CONFIGURATION
+# ============================================================
+
+MARKET_TIMEZONE = ZoneInfo(env_str("MARKET_TIMEZONE", "Asia/Kolkata"))
+MAIN_NIFTY_SECURITY = env_str("MAIN_NIFTY_SECURITY", "NSE_INDEX|Nifty 50")
+
+
+# ============================================================
+# CONTRACT / STRIKE CONFIGURATION
+# ============================================================
+
 STRIKE_FROM = env_float("STRIKE_FROM", 22000)
 STRIKE_TO = env_float("STRIKE_TO", 26000)
 TEST_FLAG = env_bool("TEST_FLAG", True)
 TEST_ITEM_COUNT = env_int("TEST_ITEM_COUNT", 5)
 TEST_RANDOM_SEED = env_optional_int("TEST_RANDOM_SEED")
+
+
+# ============================================================
+# MARKET TIMING
+# ============================================================
+
 DAILY_REFRESH_TIME = parse_clock(env_str("DAILY_REFRESH_TIME", "09:00"))
 MARKET_OPEN_TIME = parse_clock(env_str("MARKET_OPEN_TIME", "09:15"))
 MARKET_CLOSE_TIME = parse_clock(env_str("MARKET_CLOSE_TIME", "15:30"))
 LIVE_POLL_DELAY_SECONDS = env_int("LIVE_POLL_DELAY_SECONDS", 3)
 SCHEDULER_IDLE_SECONDS = env_float("SCHEDULER_IDLE_SECONDS", 1.0)
+
+
+# ============================================================
+# EMA CONFIGURATION
+# ============================================================
+
 EMA_FAST_PERIOD = env_int("EMA_FAST_PERIOD", 9)
 EMA_SLOW_PERIOD = env_int("EMA_SLOW_PERIOD", 21)
 HISTORICAL_TRADING_DAYS = env_int("HISTORICAL_TRADING_DAYS", 7)
 HISTORICAL_LOOKBACK_DAYS = env_int("HISTORICAL_LOOKBACK_DAYS", 15)
 MINIMUM_LOOKBACK_DAYS = env_int("MINIMUM_LOOKBACK_DAYS", 1)
+
+
+# ============================================================
+# API / BACKGROUND PROCESSING
+# ============================================================
+
 MAX_WORKERS = env_int("MAX_WORKERS", 5)
 OHLC_BATCH_SIZE = env_int("OHLC_BATCH_SIZE", 500)
 OHLC_INTERVAL = env_str("OHLC_INTERVAL", "I1")
@@ -77,21 +112,39 @@ API_MAX_RETRIES = env_int("API_MAX_RETRIES", 3)
 API_RETRY_BASE_DELAY_SECONDS = env_float("API_RETRY_BASE_DELAY_SECONDS", 1.0)
 API_CALL_DELAY_SECONDS = env_float("API_CALL_DELAY_SECONDS", 0.25)
 SAVE_ALL_COMPLETED_CANDLES = env_bool("SAVE_ALL_COMPLETED_CANDLES", False)
+
+
+# ============================================================
+# APPLICATION / LOGGING
+# ============================================================
+
 DATA_ROOT = Path(env_str("DATA_ROOT", "data"))
 LOG_LEVEL = env_str("LOG_LEVEL", "INFO")
+
+
+# ============================================================
+# FASTAPI SERVER
+# ============================================================
 
 API_HOST = env_str("API_HOST", "0.0.0.0")
 API_PORT = env_int("API_PORT", 8000)
 
 
+# ============================================================
+# API AUTHENTICATION
+# ============================================================
+
 API_AUTH_ENABLED = env_bool("API_AUTH_ENABLED", False)
 ADMIN_API_KEY = env_str("ADMIN_API_KEY", "")
 
 if API_AUTH_ENABLED and not ADMIN_API_KEY:
-    raise RuntimeError(
-        "ADMIN_API_KEY is required when API_AUTH_ENABLED=true"
-    )
-    
+    raise RuntimeError("ADMIN_API_KEY is required when API_AUTH_ENABLED=true")
+
+
+# ============================================================
+# TELEGRAM CONFIGURATION
+# ============================================================
+
 TELEGRAM_ENABLED = env_bool("TELEGRAM_ENABLED", False)
 TELEGRAM_BOT_TOKEN = env_str("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = env_str("TELEGRAM_CHAT_ID", "")
@@ -100,17 +153,125 @@ TELEGRAM_TIMEOUT_SECONDS = env_float("TELEGRAM_TIMEOUT_SECONDS", 10.0)
 if TELEGRAM_ENABLED and (not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID):
     raise RuntimeError("TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are required when TELEGRAM_ENABLED=true")
 
-if STRIKE_FROM > STRIKE_TO:
-    raise RuntimeError("STRIKE_FROM cannot be greater than STRIKE_TO")
-if OHLC_INTERVAL not in {"I1", "I30", "1d"}:
-    raise RuntimeError("OHLC_INTERVAL must be I1, I30, or 1d")
+
+# ============================================================
+# EMA REST API CONFIGURATION
+# ============================================================
+
+EMA_API_ENABLED = env_bool("EMA_API_ENABLED", True)
+EMA_API_PREFIX = env_str("EMA_API_PREFIX", "/ema/apis")
+
+
+# ============================================================
+# EMA WEBSOCKET CONFIGURATION
+# ============================================================
+
+EMA_WEBSOCKET_ENABLED = env_bool("EMA_WEBSOCKET_ENABLED", True)
+EMA_WEBSOCKET_PATH = env_str("EMA_WEBSOCKET_PATH", "/ws/ema")
+EMA_WS_HEARTBEAT_SECONDS = env_int("EMA_WS_HEARTBEAT_SECONDS", 30)
+EMA_WS_MAX_CONNECTIONS = env_int("EMA_WS_MAX_CONNECTIONS", 1000)
+EMA_WS_SEND_TIMEOUT_SECONDS = env_float("EMA_WS_SEND_TIMEOUT_SECONDS", 5.0)
+
+
+# ============================================================
+# EMA EVENT / BROADCAST CONFIGURATION
+# ============================================================
+
+EMA_EVENTS_ENABLED = env_bool("EMA_EVENTS_ENABLED", True)
+EMA_EVENT_QUEUE_SIZE = env_int("EMA_EVENT_QUEUE_SIZE", 1000)
+EMA_BROADCAST_CROSSOVERS_ONLY = env_bool("EMA_BROADCAST_CROSSOVERS_ONLY", True)
+
+
+# ============================================================
+# EMA NOTIFICATION CONFIGURATION
+# ============================================================
+
+EMA_TELEGRAM_CROSSOVER_ENABLED = env_bool("EMA_TELEGRAM_CROSSOVER_ENABLED", True)
+EMA_TELEGRAM_LIFECYCLE_ENABLED = env_bool("EMA_TELEGRAM_LIFECYCLE_ENABLED", True)
+EMA_TELEGRAM_ERROR_ENABLED = env_bool("EMA_TELEGRAM_ERROR_ENABLED", True)
+EMA_NOTIFY_LIVE_START = env_bool("EMA_NOTIFY_LIVE_START", True)
+EMA_NOTIFY_HARD_REFRESH = env_bool("EMA_NOTIFY_HARD_REFRESH", True)
+EMA_NOTIFY_HARD_REFRESH_ERRORS = env_bool("EMA_NOTIFY_HARD_REFRESH_ERRORS", True)
+
+
+# ============================================================
+# EMA LIVE PROCESSING CONFIGURATION
+# ============================================================
+
+EMA_LIVE_PROCESSING_ENABLED = env_bool("EMA_LIVE_PROCESSING_ENABLED", True)
+EMA_LIVE_PROCESS_INTERVAL_SECONDS = env_float("EMA_LIVE_PROCESS_INTERVAL_SECONDS", 60.0)
+EMA_COMPLETED_CANDLE_ONLY = env_bool("EMA_COMPLETED_CANDLE_ONLY", True)
+EMA_RECONCILIATION_ENABLED = env_bool("EMA_RECONCILIATION_ENABLED", True)
+
+
+# ============================================================
+# EMA API QUERY LIMITS
+# ============================================================
+
+EMA_API_DEFAULT_LIMIT = env_int("EMA_API_DEFAULT_LIMIT", 100)
+EMA_API_MAX_LIMIT = env_int("EMA_API_MAX_LIMIT", 1000)
+
+
+# ============================================================
+# RUNTIME DATA PATHS
+# ============================================================
 
 CONTRACTS_FILE = DATA_ROOT / "nearest_nifty_option_contracts.json"
 RUNTIME_ROOT = DATA_ROOT / "runtime"
 EMA_STATE_ROOT = DATA_ROOT / "ema_state"
 CROSSOVER_ROOT = DATA_ROOT / "crossovers"
 CANDLE_ROOT = DATA_ROOT / "candles"
+
+
+# ============================================================
+# HISTORICAL LOOKBACK ATTEMPTS
+# ============================================================
+
 LOOKBACK_ATTEMPTS = tuple(
     value for value in (15, 14, 12, 10, 8, 7, 6, 5, 4, 3, 2, 1)
-    if MINIMUM_LOOKBACK_DAYS <= value <= HISTORICAL_LOOKBACK_DAYS
+    if (MINIMUM_LOOKBACK_DAYS <= value <= HISTORICAL_LOOKBACK_DAYS)
 )
+
+
+# ============================================================
+# VALIDATION
+# ============================================================
+
+if STRIKE_FROM > STRIKE_TO:
+    raise RuntimeError("STRIKE_FROM cannot be greater than STRIKE_TO")
+
+if OHLC_INTERVAL not in {"I1", "I30", "1d"}:
+    raise RuntimeError("OHLC_INTERVAL must be I1, I30, or 1d")
+
+if EMA_FAST_PERIOD <= 0:
+    raise RuntimeError("EMA_FAST_PERIOD must be greater than 0")
+
+if EMA_SLOW_PERIOD <= 0:
+    raise RuntimeError("EMA_SLOW_PERIOD must be greater than 0")
+
+if EMA_FAST_PERIOD >= EMA_SLOW_PERIOD:
+    raise RuntimeError("EMA_FAST_PERIOD must be less than EMA_SLOW_PERIOD")
+
+if HISTORICAL_TRADING_DAYS <= 0:
+    raise RuntimeError("HISTORICAL_TRADING_DAYS must be greater than 0")
+
+if HISTORICAL_LOOKBACK_DAYS < MINIMUM_LOOKBACK_DAYS:
+    raise RuntimeError("HISTORICAL_LOOKBACK_DAYS cannot be less than MINIMUM_LOOKBACK_DAYS")
+
+if MAX_WORKERS <= 0:
+    raise RuntimeError("MAX_WORKERS must be greater than 0")
+
+if OHLC_BATCH_SIZE <= 0:
+    raise RuntimeError("OHLC_BATCH_SIZE must be greater than 0")
+
+if EMA_WS_HEARTBEAT_SECONDS <= 0:
+    raise RuntimeError("EMA_WS_HEARTBEAT_SECONDS must be greater than 0")
+
+if EMA_WS_MAX_CONNECTIONS <= 0:
+    raise RuntimeError("EMA_WS_MAX_CONNECTIONS must be greater than 0")
+
+if EMA_API_DEFAULT_LIMIT <= 0:
+    raise RuntimeError("EMA_API_DEFAULT_LIMIT must be greater than 0")
+
+if EMA_API_MAX_LIMIT < EMA_API_DEFAULT_LIMIT:
+    raise RuntimeError("EMA_API_MAX_LIMIT cannot be less than EMA_API_DEFAULT_LIMIT")
