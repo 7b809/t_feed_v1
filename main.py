@@ -14,6 +14,8 @@ from fastapi.middleware.cors import (
 from api.ema_routes import (
     router as ema_router,
 )
+from api.logs_routes import router as logs_router
+
 from api.refresh_routes import (
     configure_refresh_routes,
     router as refresh_router,
@@ -402,7 +404,7 @@ app.include_router(refresh_router)
 app.include_router(ema_router)
 
 app.include_router(websocket_router)
-
+app.include_router(logs_router)
 
 @app.get(
     "/",
