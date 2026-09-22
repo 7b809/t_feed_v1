@@ -1,10 +1,28 @@
+"""
+api/logs_routes.py
+
+Endpoints for browsing, viewing, downloading and managing log files.
+
+Routes
+------
+GET    /api/logs                         -> list all log files
+GET    /api/logs/info                    -> folder info (size, count, latest)
+GET    /api/logs/{filename}              -> view a specific log file
+GET    /api/logs/download?filename=...   -> download a specific log file
+GET    /api/logs/download-all            -> download all logs as ZIP
+DELETE /api/logs/{filename}              -> delete a specific log file (guarded)
+"""
+
 from __future__ import annotations
 
 import asyncio
 import inspect
-from datetime import date, datetime
+import os
+import zipfile
+from datetime import date, datetime, timezone
+from io import BytesIO
 from pathlib import Path
-from typing import Any, Callable, List, Optional
+from typing import Any, Callable
 
 from fastapi import (
     APIRouter,
@@ -13,7 +31,7 @@ from fastapi import (
     Request,
     status,
 )
-from fastapi.responses import FileResponse, PlainTextResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from core import config
@@ -23,236 +41,314 @@ logger = get_logger(__file__)
 
 DEBUG_MODE = False
 
+router = APIRouter(prefix="/api/logs", tags=["logs"])
 
-# ------------------------------------------------------------------
-# Router
-# ------------------------------------------------------------------
-router = APIRouter(
-    prefix="/api/logs",
-    tags=["logs"],
-)
+# ---------------------------------------------------------------------
+# Config / paths
+# ---------------------------------------------------------------------
+LOG_DIR: Path = Path(getattr(config, "LOG_DIR", "logs")).resolve()
+ALLOWED_EXTENSIONS = {".log", ".txt", ".jsonl", ".out", ".err"}
+MAX_VIEW_BYTES = 5 * 1024 * 1024  # 5 MB max for inline view
 
 
-# ------------------------------------------------------------------
+# ---------------------------------------------------------------------
 # Helpers
-# ------------------------------------------------------------------
-def _resolve_logs_dir() -> Path:
-    """
-    Resolve the logs directory from config (LOG_DIR) or default to ./logs.
-    Always returns an absolute resolved path.
-    """
-    log_dir = getattr(config, "LOG_DIR", None) or "logs"
-    path = Path(str(log_dir)).expanduser()
-    if not path.is_absolute():
-        # Resolve relative to the project root (parent of this file's package)
-        project_root = Path(__file__).resolve().parent.parent
-        path = (project_root / path).resolve()
-    return path
-
-
-def _safe_join(base: Path, filename: str) -> Path:
-    """
-    Safely join base dir + filename, preventing path traversal (../).
-    Raises HTTPException(400) if the resolved path escapes base.
-    """
-    if not filename:
+# ---------------------------------------------------------------------
+def _ensure_log_dir() -> None:
+    if not LOG_DIR.exists() or not LOG_DIR.is_dir():
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="filename is required",
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Log directory not found: {LOG_DIR}",
         )
 
-    # Reject any path separators or traversal segments
-    candidate = (base / filename).resolve()
-    try:
-        candidate.relative_to(base.resolve())
-    except ValueError:
+
+def _safe_path(filename: str) -> Path:
+    """Prevent path traversal and restrict to allowed extensions."""
+    if not filename or "/" in filename or "\\" in filename or ".." in filename:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid filename (path traversal detected)",
+            detail="Invalid filename.",
         )
-    return candidate
+
+    ext = Path(filename).suffix.lower()
+    if ext not in ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Extension '{ext}' not allowed. Allowed: {sorted(ALLOWED_EXTENSIONS)}",
+        )
+
+    full = (LOG_DIR / filename).resolve()
+    if LOG_DIR not in full.parents and full != LOG_DIR:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Path traversal detected.",
+        )
+    if not full.exists() or not full.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Log file not found: {filename}",
+        )
+    return full
 
 
-def _is_log_file(p: Path) -> bool:
-    """Only expose regular files with common log extensions."""
-    if not p.is_file():
-        return False
-    return (
-        p.suffix.lower() in {".log", ".txt", ".jsonl", ".out", ".err"} or p.suffix == ""
-    )
-
-
-def _file_meta(p: Path) -> dict:
+def _file_meta(p: Path) -> dict[str, Any]:
     st = p.stat()
     return {
         "filename": p.name,
         "size_bytes": st.st_size,
         "size_kb": round(st.st_size / 1024, 2),
-        "modified_at": datetime.fromtimestamp(st.st_mtime).isoformat(),
+        "modified_at": datetime.fromtimestamp(st.st_mtime, tz=timezone.utc).isoformat(),
     }
 
 
-# ------------------------------------------------------------------
+def _list_log_files() -> list[dict[str, Any]]:
+    _ensure_log_dir()
+    files: list[dict[str, Any]] = []
+    for p in sorted(LOG_DIR.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
+        if p.is_file() and p.suffix.lower() in ALLOWED_EXTENSIONS:
+            files.append(_file_meta(p))
+    return files
+
+
+def _build_zip_bytes(files: list[Path]) -> BytesIO:
+    buf = BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for f in files:
+            zf.write(f, arcname=f.name)
+    buf.seek(0)
+    return buf
+
+
+# ---------------------------------------------------------------------
 # Models
-# ------------------------------------------------------------------
-class LogFileInfo(BaseModel):
-    filename: str = Field(..., description="Name of the log file")
-    size_bytes: int = Field(..., description="File size in bytes")
-    size_kb: float = Field(..., description="File size in KB")
-    modified_at: str = Field(..., description="Last modified time (ISO 8601)")
+# ---------------------------------------------------------------------
+class LogFileMeta(BaseModel):
+    filename: str
+    size_bytes: int
+    size_kb: float
+    modified_at: str
 
 
 class LogListResponse(BaseModel):
-    logs_dir: str = Field(..., description="Absolute path of the logs directory")
-    count: int = Field(..., description="Number of log files found")
-    files: List[LogFileInfo] = Field(default_factory=list)
+    count: int
+    log_dir: str
+    files: list[LogFileMeta]
 
 
-# ------------------------------------------------------------------
+class LogInfoResponse(BaseModel):
+    log_dir: str
+    exists: bool
+    total_files: int
+    total_size_bytes: int
+    total_size_mb: float
+    latest_file: str | None = None
+    oldest_file: str | None = None
+    allowed_extensions: list[str]
+
+
+# ---------------------------------------------------------------------
 # Routes
-# ------------------------------------------------------------------
+# ---------------------------------------------------------------------
 @router.get(
     "",
     response_model=LogListResponse,
     summary="List all available log files",
-    description="Returns metadata (name, size, modified time) of every log file in the logs/ directory.",
 )
 async def list_logs() -> LogListResponse:
-    base = _resolve_logs_dir()
-
-    if not base.exists() or not base.is_dir():
-        logger.warning("Logs directory does not exist: %s", base)
-        return LogListResponse(logs_dir=str(base), count=0, files=[])
-
-    files: List[LogFileInfo] = []
+    """Return metadata for every log file in the logs directory."""
     try:
-        for entry in sorted(base.iterdir(), key=lambda x: x.name.lower()):
-            if _is_log_file(entry):
-                files.append(LogFileInfo(**_file_meta(entry)))
+        files = _list_log_files()
+        return LogListResponse(
+            count=len(files),
+            log_dir=str(LOG_DIR),
+            files=[LogFileMeta(**f) for f in files],
+        )
+    except HTTPException:
+        raise
     except Exception as exc:
-        logger.exception("Failed to enumerate log files: %s", exc)
+        logger.exception("Failed to list log files: %s", exc)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to list log files: {exc}",
         )
 
-    return LogListResponse(
-        logs_dir=str(base),
-        count=len(files),
-        files=files,
+
+@router.get(
+    "/info",
+    response_model=LogInfoResponse,
+    summary="Get log folder info",
+)
+async def log_info() -> LogInfoResponse:
+    """Return overall info about the logs folder."""
+    exists = LOG_DIR.exists() and LOG_DIR.is_dir()
+    if not exists:
+        return LogInfoResponse(
+            log_dir=str(LOG_DIR),
+            exists=False,
+            total_files=0,
+            total_size_bytes=0,
+            total_size_mb=0.0,
+            allowed_extensions=sorted(ALLOWED_EXTENSIONS),
+        )
+
+    files = _list_log_files()
+    total_bytes = sum(f["size_bytes"] for f in files)
+    latest = files[0]["filename"] if files else None
+    oldest = files[-1]["filename"] if files else None
+
+    return LogInfoResponse(
+        log_dir=str(LOG_DIR),
+        exists=True,
+        total_files=len(files),
+        total_size_bytes=total_bytes,
+        total_size_mb=round(total_bytes / (1024 * 1024), 3),
+        latest_file=latest,
+        oldest_file=oldest,
+        allowed_extensions=sorted(ALLOWED_EXTENSIONS),
     )
 
 
 @router.get(
-    "/{filename}",
-    summary="Fetch a specific log file",
-    description=(
-        "Returns the contents of a log file. "
-        "Use `tail` to return only the last N lines. "
-        "Use `download=true` to force a file download."
-    ),
-    responses={
-        200: {"content": {"text/plain": {}}},
-        404: {"description": "Log file not found"},
-        400: {"description": "Invalid filename"},
-    },
+    "/download",
+    summary="Download a single log file",
+    response_class=FileResponse,
 )
-async def get_log_file(
+async def download_log(
+    filename: str = Query(..., description="Log file name (e.g. app.log)"),
+):
+    """Download the specified log file as an attachment."""
+    path = _safe_path(filename)
+    return FileResponse(
+        path=str(path),
+        media_type="application/octet-stream",
+        filename=path.name,
+    )
+
+
+@router.get(
+    "/download-all",
+    summary="Download all log files as a ZIP",
+)
+async def download_all_logs():
+    """Bundle every log file into a single ZIP archive."""
+    files = [LOG_DIR / f["filename"] for f in _list_log_files()]
+    if not files:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No log files available to download.",
+        )
+
+    buf = _build_zip_bytes(files)
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    zip_name = f"logs_{ts}.zip"
+
+    return StreamingResponse(
+        buf,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{zip_name}"',
+        },
+    )
+
+
+@router.delete(
+    "/{filename}",
+    summary="Delete a specific log file (guarded)",
+)
+async def delete_log(
     filename: str,
-    tail: Optional[int] = Query(
-        None,
-        ge=1,
-        le=100_000,
-        description="Return only the last N lines (optional)",
-    ),
-    download: bool = Query(
+    confirm: bool = Query(
         False,
-        description="If true, forces a file download (Content-Disposition: attachment)",
+        description="Set to true to confirm deletion.",
     ),
 ):
-    base = _resolve_logs_dir()
-
-    if not base.exists() or not base.is_dir():
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Logs directory not found",
-        )
-
-    target = _safe_join(base, filename)
-
-    if not target.exists() or not target.is_file():
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Log file '{filename}' not found",
-        )
-
-    if not _is_log_file(target):
+    """Delete a single log file. Requires confirm=true."""
+    if not confirm:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"File '{filename}' is not a valid log file",
+            detail="Deletion requires confirm=true query param.",
         )
 
-    # Optional tail mode -> return PlainTextResponse
-    if tail is not None:
-        try:
-            content = await asyncio.to_thread(_read_tail, target, tail)
-        except Exception as exc:
-            logger.exception("Failed to read tail of %s: %s", target, exc)
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to read log file: {exc}",
-            )
-        return PlainTextResponse(content=content, media_type="text/plain")
-
-    # Download mode -> FileResponse with attachment header
-    if download:
-        return FileResponse(
-            path=str(target),
-            media_type="application/octet-stream",
-            filename=target.name,
-        )
-
-    # Default -> return whole file as text/plain
+    path = _safe_path(filename)
     try:
-        content = await asyncio.to_thread(target.read_text, "utf-8", "replace")
+        path.unlink()
+        logger.info("Deleted log file: %s", path.name)
+        return {"deleted": True, "filename": path.name}
     except Exception as exc:
-        logger.exception("Failed to read %s: %s", target, exc)
+        logger.exception("Failed to delete log file %s: %s", path, exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to delete log file: {exc}",
+        )
+
+
+@router.get(
+    "/{filename}",
+    summary="View a specific log file (last N lines)",
+)
+async def view_log(
+    filename: str,
+    lines: int = Query(
+        500,
+        ge=1,
+        le=10000,
+        description="Number of trailing lines to return.",
+    ),
+    raw: bool = Query(
+        False,
+        description="If true, return the raw file content.",
+    ),
+):
+    """
+    View a specific log file.
+
+    - Default: returns the last `lines` lines.
+    - `raw=true`: returns full file content (capped at MAX_VIEW_BYTES).
+    """
+    path = _safe_path(filename)
+
+    try:
+        size = path.stat().st_size
+
+        if raw:
+            if size > MAX_VIEW_BYTES:
+                raise HTTPException(
+                    status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                    detail=(
+                        f"File too large to view inline "
+                        f"({size} bytes > {MAX_VIEW_BYTES}). "
+                        "Use /download instead."
+                    ),
+                )
+            content = path.read_text(encoding="utf-8", errors="replace")
+            return {
+                "filename": path.name,
+                "size_bytes": size,
+                "mode": "raw",
+                "content": content,
+            }
+
+        # tail mode
+        tail_lines: list[str] = []
+        with path.open("r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                tail_lines.append(line)
+                if len(tail_lines) > lines:
+                    tail_lines.pop(0)
+
+        return {
+            "filename": path.name,
+            "size_bytes": size,
+            "mode": "tail",
+            "lines_returned": len(tail_lines),
+            "content": "".join(tail_lines),
+        }
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Failed to read log file %s: %s", path, exc)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to read log file: {exc}",
         )
-    return PlainTextResponse(content=content, media_type="text/plain")
-
-
-# ------------------------------------------------------------------
-# Internal sync helpers (run in threadpool)
-# ------------------------------------------------------------------
-def _read_tail(path: Path, n: int) -> str:
-    """
-    Read last N lines from a file efficiently (no full file read for big files).
-    """
-    if n <= 0:
-        return ""
-    block_size = 8192
-    with path.open("rb") as f:
-        f.seek(0, 2)  # end
-        file_size = f.tell()
-        if file_size == 0:
-            return ""
-
-        buffer = b""
-        newline_count = 0
-        pos = file_size
-
-        while pos > 0 and newline_count <= n:
-            read_size = min(block_size, pos)
-            pos -= read_size
-            f.seek(pos)
-            chunk = f.read(read_size)
-            buffer = chunk + buffer
-            newline_count = buffer.count(b"\n")
-
-        # Decode and split into lines
-        text = buffer.decode("utf-8", errors="replace")
-        lines = text.splitlines()
-        return "\n".join(lines[-n:]) + ("\n" if lines else "")
