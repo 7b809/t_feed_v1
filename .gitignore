@@ -18,7 +18,6 @@ venv/
  files.txt
  t.txt
  large_files.json
-.env.* 
 .env
 test_logs
 output
@@ -27,7 +26,6 @@ data
 **/migrations/__pycache__/
 logs
 test_logs
-.env
 temp
 tests
 test
