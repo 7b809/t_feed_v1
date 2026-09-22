@@ -1,10 +1,17 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 from datetime import date, datetime
-from typing import Any
+from typing import Any, Callable
 
-from fastapi import APIRouter, HTTPException, Query, Request, status
+from fastapi import (
+    APIRouter,
+    HTTPException,
+    Query,
+    Request,
+    status,
+)
 from pydantic import BaseModel, Field
 
 from core import config
@@ -12,17 +19,13 @@ from core.logger import get_logger
 
 logger = get_logger(__file__)
 
-# ---------------------------------------------------------------------------
-# Debug Configuration
-# ---------------------------------------------------------------------------
-
 DEBUG_MODE = False
 
 
-def _debug(message: str, *args: Any) -> None:
-    """
-    Print debug information only when DEBUG_MODE is enabled.
-    """
+def _debug(
+    message: str,
+    *args: Any,
+) -> None:
     if not DEBUG_MODE:
         return
 
@@ -32,10 +35,6 @@ def _debug(message: str, *args: Any) -> None:
     print(f"[EMA API DEBUG] {message}")
 
 
-# ---------------------------------------------------------------------------
-# Response Models
-# ---------------------------------------------------------------------------
-
 class ApiResponse(BaseModel):
     status: str
     message: str | None = None
@@ -43,22 +42,18 @@ class ApiResponse(BaseModel):
 
 
 class HardRefreshRequest(BaseModel):
-    force: bool = False
+    force: bool = True
+
     trigger: str = Field(
-        default="api",
+        default="ema_api",
         min_length=1,
         max_length=100,
     )
 
 
-# ---------------------------------------------------------------------------
-# Utility Functions
-# ---------------------------------------------------------------------------
-
-def _get_runtime(request: Request):
-    """
-    Resolve the EMA runtime from FastAPI application state.
-    """
+def _get_runtime(
+    request: Request,
+):
     runtime = getattr(
         request.app.state,
         "ema_runtime",
@@ -73,21 +68,21 @@ def _get_runtime(request: Request):
         )
 
     if runtime is None:
-        _debug("EMA runtime is not initialized in app.state")
         raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="EMA runtime is not initialized",
+            status_code=(
+                status.HTTP_503_SERVICE_UNAVAILABLE
+            ),
+            detail=(
+                "EMA runtime is not initialized"
+            ),
         )
-
-    _debug("EMA runtime resolved")
 
     return runtime
 
 
-def _get_scheduler(request: Request):
-    """
-    Resolve the scheduler from FastAPI application state.
-    """
+def _get_scheduler(
+    request: Request,
+):
     scheduler = getattr(
         request.app.state,
         "ema_scheduler",
@@ -102,21 +97,21 @@ def _get_scheduler(request: Request):
         )
 
     if scheduler is None:
-        _debug("EMA scheduler is not initialized in app.state")
         raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="EMA scheduler is not initialized",
+            status_code=(
+                status.HTTP_503_SERVICE_UNAVAILABLE
+            ),
+            detail=(
+                "EMA scheduler is not initialized"
+            ),
         )
-
-    _debug("EMA scheduler resolved")
 
     return scheduler
 
 
-def _get_query_service(request: Request):
-    """
-    Resolve the read-only EMA query service.
-    """
+def _get_query_service(
+    request: Request,
+):
     query_service = getattr(
         request.app.state,
         "ema_query_service",
@@ -124,35 +119,28 @@ def _get_query_service(request: Request):
     )
 
     if query_service is None:
-        _debug("EMA query service is not initialized in app.state")
         raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="EMA query service is not initialized",
+            status_code=(
+                status.HTTP_503_SERVICE_UNAVAILABLE
+            ),
+            detail=(
+                "EMA query service is not initialized"
+            ),
         )
-
-    _debug("EMA query service resolved")
 
     return query_service
 
 
-def _get_state_path() -> Any:
-    """
-    Return the service state JSON path.
-    """
-    return (
-        config.RUNTIME_ROOT
-        / "service_state.json"
-    )
-
-
-def _serialize(value: Any) -> Any:
-    """
-    Convert common Python objects into JSON-compatible values.
-    """
+def _serialize(
+    value: Any,
+) -> Any:
     if value is None:
         return None
 
-    if isinstance(value, (datetime, date)):
+    if isinstance(
+        value,
+        (datetime, date),
+    ):
         return value.isoformat()
 
     if isinstance(value, dict):
@@ -161,39 +149,59 @@ def _serialize(value: Any) -> Any:
             for key, item in value.items()
         }
 
-    if isinstance(value, (list, tuple, set)):
+    if isinstance(
+        value,
+        (list, tuple, set),
+    ):
         return [
             _serialize(item)
             for item in value
         ]
 
     if hasattr(value, "model_dump"):
-        return _serialize(
-            value.model_dump()
-        )
+        try:
+            return _serialize(
+                value.model_dump(
+                    mode="json"
+                )
+            )
+        except TypeError:
+            return _serialize(
+                value.model_dump()
+            )
 
     if hasattr(value, "dict"):
         return _serialize(
             value.dict()
         )
 
+    if hasattr(value, "to_dict"):
+        return _serialize(
+            value.to_dict()
+        )
+
     return value
 
 
 async def _call_service(
-    method,
-    *args,
-    **kwargs,
-):
-    """
-    Execute synchronous repository/service methods in a worker thread.
-
-    Async methods are also supported.
-    """
+    method: Callable[..., Any],
+    *args: Any,
+    **kwargs: Any,
+) -> Any:
     _debug(
         "Calling service method: {}",
-        getattr(method, "__name__", repr(method)),
+        getattr(
+            method,
+            "__name__",
+            repr(method),
+        ),
     )
+
+    if inspect.iscoroutinefunction(method):
+        return await method(
+            *args,
+            **kwargs,
+        )
 
     result = await asyncio.to_thread(
         method,
@@ -201,19 +209,16 @@ async def _call_service(
         **kwargs,
     )
 
-    if hasattr(result, "__await__"):
-        result = await result
+    if inspect.isawaitable(result):
+        return await result
 
     return result
 
 
 def _service_method(
-    service,
+    service: Any,
     *method_names: str,
 ):
-    """
-    Return the first available method from a service.
-    """
     for method_name in method_names:
         method = getattr(
             service,
@@ -222,26 +227,14 @@ def _service_method(
         )
 
         if callable(method):
-            _debug(
-                "Resolved service method '{}'",
-                method_name,
-            )
             return method
-
-    _debug(
-        "None of the service methods {} were found",
-        method_names,
-    )
 
     return None
 
 
 def _runtime_contracts(
-    runtime,
-) -> list[dict]:
-    """
-    Safely return the currently loaded contracts.
-    """
+    runtime: Any,
+) -> list:
     contracts = getattr(
         runtime,
         "contracts",
@@ -251,15 +244,16 @@ def _runtime_contracts(
     if not isinstance(contracts, list):
         return []
 
-    return contracts
+    return [
+        contract
+        for contract in contracts
+        if isinstance(contract, dict)
+    ]
 
 
 def _runtime_states(
-    runtime,
+    runtime: Any,
 ) -> dict:
-    """
-    Safely return the currently loaded EMA states.
-    """
     states = getattr(
         runtime,
         "states",
@@ -272,33 +266,142 @@ def _runtime_states(
     return states
 
 
-# ---------------------------------------------------------------------------
-# Router Factory
-# ---------------------------------------------------------------------------
+def _normalize_cross_scope(
+    value: str,
+) -> str:
+    normalized = str(
+        value or "all"
+    ).strip().lower()
+
+    aliases = {
+        "historical": "historical",
+        "historic": "historical",
+        "history": "historical",
+        "intraday": "intraday",
+        "intra_day": "intraday",
+        "today": "intraday",
+        "live": "intraday",
+        "all": "all",
+        "both": "all",
+    }
+
+    result = aliases.get(normalized)
+
+    if result is None:
+        raise HTTPException(
+            status_code=(
+                status.HTTP_400_BAD_REQUEST
+            ),
+            detail=(
+                "cross_scope must be "
+                "historical, intraday, or all"
+            ),
+        )
+
+    return result
+
+
+def _normalize_cross_type(
+    value: str | None,
+) -> str | None:
+    if value is None:
+        return None
+
+    normalized = str(value).strip().lower()
+
+    if not normalized:
+        return None
+
+    if normalized not in {
+        "bullish",
+        "bearish",
+    }:
+        raise HTTPException(
+            status_code=(
+                status.HTTP_400_BAD_REQUEST
+            ),
+            detail=(
+                "cross_type must be "
+                "bullish or bearish"
+            ),
+        )
+
+    return normalized
+
+
+def _validate_time_range(
+    start_time: datetime | None,
+    end_time: datetime | None,
+) -> None:
+    if (
+        start_time is not None
+        and end_time is not None
+        and start_time > end_time
+    ):
+        raise HTTPException(
+            status_code=(
+                status.HTTP_400_BAD_REQUEST
+            ),
+            detail=(
+                "start_time cannot be later "
+                "than end_time"
+            ),
+        )
+
+
+def _raise_service_error(
+    operation: str,
+    exception: Exception,
+) -> None:
+    if isinstance(exception, HTTPException):
+        raise exception
+
+    if isinstance(exception, ValueError):
+        raise HTTPException(
+            status_code=(
+                status.HTTP_400_BAD_REQUEST
+            ),
+            detail=str(exception),
+        ) from exception
+
+    logger.exception(
+        "%s failed",
+        operation,
+    )
+
+    raise HTTPException(
+        status_code=(
+            status.HTTP_500_INTERNAL_SERVER_ERROR
+        ),
+        detail=f"{operation} failed: {exception}",
+    ) from exception
+
 
 def create_ema_router(
-    runtime=None,
-    scheduler=None,
-    query_service=None,
+    runtime: Any = None,
+    scheduler: Any = None,
+    query_service: Any = None,
 ) -> APIRouter:
-    """
-    Create the EMA REST API router.
-
-    Dependencies may be supplied directly, or resolved through
-    request.app.state at request time.
-    """
     router = APIRouter(
         prefix=getattr(
             config,
             "EMA_API_PREFIX",
-            "/api/ema",
+            "/ema/apis",
         ),
         tags=["EMA"],
     )
 
-    # -----------------------------------------------------------------------
-    # Health
-    # -----------------------------------------------------------------------
+    api_default_limit = getattr(
+        config,
+        "EMA_API_DEFAULT_LIMIT",
+        100,
+    )
+
+    api_max_limit = getattr(
+        config,
+        "EMA_API_MAX_LIMIT",
+        1000,
+    )
 
     @router.get(
         "/health",
@@ -307,7 +410,7 @@ def create_ema_router(
     )
     async def ema_health(
         request: Request,
-    ):
+    ) -> ApiResponse:
         active_runtime = (
             runtime
             or _get_runtime(request)
@@ -347,13 +450,25 @@ def create_ema_router(
             is not None
         )
 
+        initialized_states = len(states)
+        total_contracts = len(contracts)
+
+        if (
+            quote_api_initialized
+            and scheduler_running is not False
+            and (
+                total_contracts == 0
+                or initialized_states
+                == total_contracts
+            )
+        ):
+            service_status = "healthy"
+        else:
+            service_status = "degraded"
+
         health_data = {
             "service": "ema",
-            "status": (
-                "healthy"
-                if quote_api_initialized
-                else "degraded"
-            ),
+            "status": service_status,
             "timestamp": datetime.now(
                 config.MARKET_TIMEZONE
             ).isoformat(),
@@ -366,34 +481,45 @@ def create_ema_router(
             "quote_api_initialized": (
                 quote_api_initialized
             ),
-            "total_contracts": len(
-                contracts
+            "total_contracts": (
+                total_contracts
             ),
-            "initialized_states": len(
-                states
+            "initialized_states": (
+                initialized_states
             ),
-            "ema_fast_period": getattr(
-                config,
-                "EMA_FAST_PERIOD",
-                9,
+            "ema_fast_period": (
+                config.EMA_FAST_PERIOD
             ),
-            "ema_slow_period": getattr(
-                config,
-                "EMA_SLOW_PERIOD",
-                21,
+            "ema_slow_period": (
+                config.EMA_SLOW_PERIOD
+            ),
+            "historical_crosses_enabled": (
+                getattr(
+                    config,
+                    "SAVE_HISTORICAL_CROSSES",
+                    True,
+                )
+            ),
+            "intraday_crosses_enabled": (
+                getattr(
+                    config,
+                    "SAVE_INTRADAY_CROSSES",
+                    True,
+                )
+            ),
+            "crosses_root": str(
+                getattr(
+                    config,
+                    "EMA_CROSS_ROOT",
+                    "",
+                )
             ),
         }
-
-        _debug("Health check data: {}", health_data)
 
         return ApiResponse(
             status="success",
             data=health_data,
         )
-
-    # -----------------------------------------------------------------------
-    # Runtime State
-    # -----------------------------------------------------------------------
 
     @router.get(
         "/state",
@@ -408,9 +534,7 @@ def create_ema_router(
                 "Optional instrument key"
             ),
         ),
-    ):
-        _debug("State request for instrument_key={}", instrument_key)
-
+    ) -> ApiResponse:
         active_runtime = (
             runtime
             or _get_runtime(request)
@@ -435,23 +559,20 @@ def create_ema_router(
         }
 
         if instrument_key:
-            state = states.get(
+            state_value = states.get(
                 instrument_key
             )
 
-            if state is None:
+            if state_value is None:
                 raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
+                    status_code=(
+                        status.HTTP_404_NOT_FOUND
+                    ),
                     detail=(
                         "EMA state not found for "
                         f"instrument: {instrument_key}"
                     ),
                 )
-
-            contract = contract_map.get(
-                instrument_key,
-                {},
-            )
 
             return ApiResponse(
                 status="success",
@@ -460,15 +581,18 @@ def create_ema_router(
                         instrument_key
                     ),
                     "contract": _serialize(
-                        contract
+                        contract_map.get(
+                            instrument_key,
+                            {},
+                        )
                     ),
                     "state": _serialize(
-                        state
+                        state_value
                     ),
                 },
             )
 
-        instruments = []
+        instruments: list[dict] = []
 
         for contract in contracts:
             key = contract.get(
@@ -481,8 +605,10 @@ def create_ema_router(
             instruments.append(
                 {
                     "instrument_key": key,
-                    "trading_symbol": contract.get(
-                        "trading_symbol"
+                    "trading_symbol": (
+                        contract.get(
+                            "trading_symbol"
+                        )
                     ),
                     "exchange": contract.get(
                         "exchange"
@@ -490,33 +616,37 @@ def create_ema_router(
                     "segment": contract.get(
                         "segment"
                     ),
+                    "strike_price": (
+                        contract.get(
+                            "strike_price"
+                        )
+                    ),
+                    "option_type": (
+                        contract.get(
+                            "option_type"
+                        )
+                    ),
                     "state": _serialize(
                         states.get(key)
                     ),
                 }
             )
 
-        data = {
-            "timestamp": datetime.now(
-                config.MARKET_TIMEZONE
-            ).isoformat(),
-            "total_contracts": len(
-                contracts
-            ),
-            "initialized_states": len(
-                states
-            ),
-            "instruments": instruments,
-        }
-
         return ApiResponse(
             status="success",
-            data=data,
+            data={
+                "timestamp": datetime.now(
+                    config.MARKET_TIMEZONE
+                ).isoformat(),
+                "total_contracts": len(
+                    contracts
+                ),
+                "initialized_states": len(
+                    states
+                ),
+                "instruments": instruments,
+            },
         )
-
-    # -----------------------------------------------------------------------
-    # Contracts
-    # -----------------------------------------------------------------------
 
     @router.get(
         "/contracts",
@@ -525,7 +655,7 @@ def create_ema_router(
     )
     async def ema_contracts(
         request: Request,
-    ):
+    ) -> ApiResponse:
         active_runtime = (
             runtime
             or _get_runtime(request)
@@ -535,23 +665,15 @@ def create_ema_router(
             active_runtime
         )
 
-        _debug("Returning {} contracts", len(contracts))
-
         return ApiResponse(
             status="success",
             data={
-                "total": len(
-                    contracts
-                ),
+                "total": len(contracts),
                 "contracts": _serialize(
                     contracts
                 ),
             },
         )
-
-    # -----------------------------------------------------------------------
-    # Latest State
-    # -----------------------------------------------------------------------
 
     @router.get(
         "/latest",
@@ -563,65 +685,83 @@ def create_ema_router(
         instrument_key: str | None = Query(
             default=None,
         ),
-    ):
-        active_runtime = (
-            runtime
-            or _get_runtime(request)
+    ) -> ApiResponse:
+        active_query_service = (
+            query_service
+            or _get_query_service(request)
         )
 
-        states = _runtime_states(
-            active_runtime
-        )
+        try:
+            if instrument_key:
+                method = _service_method(
+                    active_query_service,
+                    "get_latest_state",
+                )
 
-        if instrument_key:
-            state = states.get(
-                instrument_key
-            )
+                if method is None:
+                    raise HTTPException(
+                        status_code=(
+                            status.HTTP_501_NOT_IMPLEMENTED
+                        ),
+                        detail=(
+                            "Latest EMA state query "
+                            "is not implemented"
+                        ),
+                    )
 
-            if state is None:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=(
-                        "Latest EMA state not found "
-                        f"for instrument: {instrument_key}"
-                    ),
+                result = await _call_service(
+                    method,
+                    instrument_key,
+                )
+
+                if result is None:
+                    raise HTTPException(
+                        status_code=(
+                            status.HTTP_404_NOT_FOUND
+                        ),
+                        detail=(
+                            "Latest EMA state not found "
+                            f"for instrument: "
+                            f"{instrument_key}"
+                        ),
+                    )
+
+            else:
+                method = _service_method(
+                    active_query_service,
+                    "get_current_state",
+                )
+
+                if method is None:
+                    raise HTTPException(
+                        status_code=(
+                            status.HTTP_501_NOT_IMPLEMENTED
+                        ),
+                        detail=(
+                            "Current EMA state query "
+                            "is not implemented"
+                        ),
+                    )
+
+                result = await _call_service(
+                    method
                 )
 
             return ApiResponse(
                 status="success",
-                data={
-                    "instrument_key": (
-                        instrument_key
-                    ),
-                    "state": _serialize(
-                        state
-                    ),
-                },
+                data=_serialize(result),
             )
 
-        latest = {
-            key: _serialize(value)
-            for key, value in states.items()
-        }
-
-        return ApiResponse(
-            status="success",
-            data={
-                "total": len(
-                    latest
-                ),
-                "states": latest,
-            },
-        )
-
-    # -----------------------------------------------------------------------
-    # Historical EMA Query
-    # -----------------------------------------------------------------------
+        except Exception as ex:
+            _raise_service_error(
+                "Latest EMA state query",
+                ex,
+            )
 
     @router.get(
         "/history",
         response_model=ApiResponse,
-        summary="Get historical EMA candles",
+        summary="Get historical EMA data",
     )
     async def ema_history(
         request: Request,
@@ -632,12 +772,27 @@ def create_ema_router(
         trading_date: date | None = Query(
             default=None,
         ),
-        limit: int = Query(
-            default=100,
-            ge=1,
-            le=5000,
+        start_time: datetime | None = Query(
+            default=None,
         ),
-    ):
+        end_time: datetime | None = Query(
+            default=None,
+        ),
+        limit: int = Query(
+            default=api_default_limit,
+            ge=1,
+            le=api_max_limit,
+        ),
+        offset: int = Query(
+            default=0,
+            ge=0,
+        ),
+    ) -> ApiResponse:
+        _validate_time_range(
+            start_time,
+            end_time,
+        )
+
         active_query_service = (
             query_service
             or _get_query_service(request)
@@ -653,36 +808,36 @@ def create_ema_router(
 
         if method is None:
             raise HTTPException(
-                status_code=status.HTTP_501_NOT_IMPLEMENTED,
+                status_code=(
+                    status.HTTP_501_NOT_IMPLEMENTED
+                ),
                 detail=(
-                    "Historical EMA query is not "
-                    "implemented by the query service"
+                    "Historical EMA query is "
+                    "not implemented"
                 ),
             )
 
-        kwargs = {
-            "instrument_key": instrument_key,
-            "limit": limit,
-        }
+        try:
+            result = await _call_service(
+                method,
+                instrument_key=instrument_key,
+                trading_date=trading_date,
+                start_time=start_time,
+                end_time=end_time,
+                limit=limit,
+                offset=offset,
+            )
 
-        if trading_date is not None:
-            kwargs["trading_date"] = trading_date
+            return ApiResponse(
+                status="success",
+                data=_serialize(result),
+            )
 
-        result = await _call_service(
-            method,
-            **kwargs,
-        )
-
-        return ApiResponse(
-            status="success",
-            data=_serialize(
-                result
-            ),
-        )
-
-    # -----------------------------------------------------------------------
-    # Intraday EMA Query
-    # -----------------------------------------------------------------------
+        except Exception as ex:
+            _raise_service_error(
+                "Historical EMA query",
+                ex,
+            )
 
     @router.get(
         "/intraday",
@@ -698,12 +853,27 @@ def create_ema_router(
         trading_date: date | None = Query(
             default=None,
         ),
-        limit: int = Query(
-            default=500,
-            ge=1,
-            le=5000,
+        start_time: datetime | None = Query(
+            default=None,
         ),
-    ):
+        end_time: datetime | None = Query(
+            default=None,
+        ),
+        limit: int = Query(
+            default=api_default_limit,
+            ge=1,
+            le=api_max_limit,
+        ),
+        offset: int = Query(
+            default=0,
+            ge=0,
+        ),
+    ) -> ApiResponse:
+        _validate_time_range(
+            start_time,
+            end_time,
+        )
+
         active_query_service = (
             query_service
             or _get_query_service(request)
@@ -719,36 +889,36 @@ def create_ema_router(
 
         if method is None:
             raise HTTPException(
-                status_code=status.HTTP_501_NOT_IMPLEMENTED,
+                status_code=(
+                    status.HTTP_501_NOT_IMPLEMENTED
+                ),
                 detail=(
-                    "Intraday EMA query is not "
-                    "implemented by the query service"
+                    "Intraday EMA query is "
+                    "not implemented"
                 ),
             )
 
-        kwargs = {
-            "instrument_key": instrument_key,
-            "limit": limit,
-        }
+        try:
+            result = await _call_service(
+                method,
+                instrument_key=instrument_key,
+                trading_date=trading_date,
+                start_time=start_time,
+                end_time=end_time,
+                limit=limit,
+                offset=offset,
+            )
 
-        if trading_date is not None:
-            kwargs["trading_date"] = trading_date
+            return ApiResponse(
+                status="success",
+                data=_serialize(result),
+            )
 
-        result = await _call_service(
-            method,
-            **kwargs,
-        )
-
-        return ApiResponse(
-            status="success",
-            data=_serialize(
-                result
-            ),
-        )
-
-    # -----------------------------------------------------------------------
-    # Crossovers
-    # -----------------------------------------------------------------------
+        except Exception as ex:
+            _raise_service_error(
+                "Intraday EMA query",
+                ex,
+            )
 
     @router.get(
         "/crossovers",
@@ -763,18 +933,51 @@ def create_ema_router(
         trading_date: date | None = Query(
             default=None,
         ),
+        cross_scope: str = Query(
+            default="all",
+            description=(
+                "historical, intraday, or all"
+            ),
+        ),
         cross_type: str | None = Query(
             default=None,
             description=(
-                "BULLISH or BEARISH"
+                "bullish or bearish"
             ),
         ),
-        limit: int = Query(
-            default=100,
-            ge=1,
-            le=5000,
+        start_time: datetime | None = Query(
+            default=None,
         ),
-    ):
+        end_time: datetime | None = Query(
+            default=None,
+        ),
+        limit: int = Query(
+            default=api_default_limit,
+            ge=1,
+            le=api_max_limit,
+        ),
+        offset: int = Query(
+            default=0,
+            ge=0,
+        ),
+    ) -> ApiResponse:
+        _validate_time_range(
+            start_time,
+            end_time,
+        )
+
+        normalized_scope = (
+            _normalize_cross_scope(
+                cross_scope
+            )
+        )
+
+        normalized_cross_type = (
+            _normalize_cross_type(
+                cross_type
+            )
+        )
+
         active_query_service = (
             query_service
             or _get_query_service(request)
@@ -789,47 +992,38 @@ def create_ema_router(
 
         if method is None:
             raise HTTPException(
-                status_code=status.HTTP_501_NOT_IMPLEMENTED,
+                status_code=(
+                    status.HTTP_501_NOT_IMPLEMENTED
+                ),
                 detail=(
-                    "Crossover query is not "
-                    "implemented by the query service"
+                    "Crossover query is "
+                    "not implemented"
                 ),
             )
 
-        kwargs = {
-            "limit": limit,
-        }
-
-        if instrument_key is not None:
-            kwargs["instrument_key"] = (
-                instrument_key
+        try:
+            result = await _call_service(
+                method,
+                instrument_key=instrument_key,
+                trading_date=trading_date,
+                cross_scope=normalized_scope,
+                cross_type=normalized_cross_type,
+                start_time=start_time,
+                end_time=end_time,
+                limit=limit,
+                offset=offset,
             )
 
-        if trading_date is not None:
-            kwargs["trading_date"] = (
-                trading_date
+            return ApiResponse(
+                status="success",
+                data=_serialize(result),
             )
 
-        if cross_type is not None:
-            kwargs["cross_type"] = (
-                cross_type.upper()
+        except Exception as ex:
+            _raise_service_error(
+                "EMA crossover query",
+                ex,
             )
-
-        result = await _call_service(
-            method,
-            **kwargs,
-        )
-
-        return ApiResponse(
-            status="success",
-            data=_serialize(
-                result
-            ),
-        )
-
-    # -----------------------------------------------------------------------
-    # Unified Query
-    # -----------------------------------------------------------------------
 
     @router.get(
         "/query",
@@ -847,15 +1041,88 @@ def create_ema_router(
         data_type: str = Query(
             default="state",
             description=(
-                "state, history, intraday, crossovers"
+                "state, history, intraday, "
+                "or crossovers"
             ),
         ),
-        limit: int = Query(
-            default=100,
-            ge=1,
-            le=5000,
+        cross_scope: str = Query(
+            default="all",
+            description=(
+                "historical, intraday, or all"
+            ),
         ),
-    ):
+        cross_type: str | None = Query(
+            default=None,
+            description=(
+                "bullish or bearish"
+            ),
+        ),
+        start_time: datetime | None = Query(
+            default=None,
+        ),
+        end_time: datetime | None = Query(
+            default=None,
+        ),
+        limit: int = Query(
+            default=api_default_limit,
+            ge=1,
+            le=api_max_limit,
+        ),
+        offset: int = Query(
+            default=0,
+            ge=0,
+        ),
+    ) -> ApiResponse:
+        _validate_time_range(
+            start_time,
+            end_time,
+        )
+
+        normalized_data_type = str(
+            data_type
+        ).strip().lower()
+
+        allowed_data_types = {
+            "state",
+            "current",
+            "latest",
+            "live",
+            "history",
+            "historical",
+            "intraday",
+            "intra_day",
+            "crossovers",
+            "crosses",
+            "signals",
+        }
+
+        if (
+            normalized_data_type
+            not in allowed_data_types
+        ):
+            raise HTTPException(
+                status_code=(
+                    status.HTTP_400_BAD_REQUEST
+                ),
+                detail=(
+                    "data_type must be state, "
+                    "history, intraday, or "
+                    "crossovers"
+                ),
+            )
+
+        normalized_scope = (
+            _normalize_cross_scope(
+                cross_scope
+            )
+        )
+
+        normalized_cross_type = (
+            _normalize_cross_type(
+                cross_type
+            )
+        )
+
         active_query_service = (
             query_service
             or _get_query_service(request)
@@ -869,43 +1136,39 @@ def create_ema_router(
 
         if method is None:
             raise HTTPException(
-                status_code=status.HTTP_501_NOT_IMPLEMENTED,
+                status_code=(
+                    status.HTTP_501_NOT_IMPLEMENTED
+                ),
                 detail=(
-                    "Unified EMA query is not "
-                    "implemented by the query service"
+                    "Unified EMA query is "
+                    "not implemented"
                 ),
             )
 
-        kwargs = {
-            "data_type": data_type,
-            "limit": limit,
-        }
-
-        if instrument_key is not None:
-            kwargs["instrument_key"] = (
-                instrument_key
+        try:
+            result = await _call_service(
+                method,
+                data_type=normalized_data_type,
+                instrument_key=instrument_key,
+                trading_date=trading_date,
+                cross_scope=normalized_scope,
+                cross_type=normalized_cross_type,
+                start_time=start_time,
+                end_time=end_time,
+                limit=limit,
+                offset=offset,
             )
 
-        if trading_date is not None:
-            kwargs["trading_date"] = (
-                trading_date
+            return ApiResponse(
+                status="success",
+                data=_serialize(result),
             )
 
-        result = await _call_service(
-            method,
-            **kwargs,
-        )
-
-        return ApiResponse(
-            status="success",
-            data=_serialize(
-                result
-            ),
-        )
-
-    # -----------------------------------------------------------------------
-    # Hard Refresh
-    # -----------------------------------------------------------------------
+        except Exception as ex:
+            _raise_service_error(
+                "Unified EMA query",
+                ex,
+            )
 
     @router.post(
         "/hard-refresh",
@@ -914,8 +1177,11 @@ def create_ema_router(
     )
     async def hard_refresh(
         request: Request,
-        payload: HardRefreshRequest | None = None,
-    ):
+        payload: (
+            HardRefreshRequest
+            | None
+        ) = None,
+    ) -> ApiResponse:
         active_scheduler = (
             scheduler
             or _get_scheduler(request)
@@ -935,10 +1201,12 @@ def create_ema_router(
 
         if method is None:
             raise HTTPException(
-                status_code=status.HTTP_501_NOT_IMPLEMENTED,
+                status_code=(
+                    status.HTTP_501_NOT_IMPLEMENTED
+                ),
                 detail=(
                     "Hard refresh is not "
-                    "implemented by the scheduler"
+                    "implemented"
                 ),
             )
 
@@ -946,51 +1214,48 @@ def create_ema_router(
             config.MARKET_TIMEZONE
         )
 
-        kwargs = {
-            "now": now,
-            "force": refresh_payload.force,
-            "trigger": refresh_payload.trigger,
-        }
-
-        _debug(
-            "Hard refresh requested: force={}, trigger={}",
-            refresh_payload.force,
-            refresh_payload.trigger,
-        )
-
         try:
             result = await _call_service(
                 method,
-                **kwargs,
+                now=now,
+                force=refresh_payload.force,
+                trigger=(
+                    refresh_payload.trigger
+                ),
             )
+
+            result_status = (
+                result.get("status")
+                if isinstance(result, dict)
+                else None
+            )
+
+            if result_status == "already_running":
+                raise HTTPException(
+                    status_code=(
+                        status.HTTP_409_CONFLICT
+                    ),
+                    detail=(
+                        "A refresh is already "
+                        "in progress"
+                    ),
+                )
 
             return ApiResponse(
                 status="success",
                 message=(
                     "EMA hard refresh completed"
                 ),
-                data=_serialize(
-                    result
-                ),
+                data=_serialize(result),
             )
 
         except Exception as ex:
-            logger.exception(
-                "EMA hard refresh API failed"
+            _raise_service_error(
+                "EMA hard refresh",
+                ex,
             )
-
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=(
-                    f"EMA hard refresh failed: {ex}"
-                ),
-            ) from ex
 
     return router
 
-
-# ---------------------------------------------------------------------------
-# Default Router
-# ---------------------------------------------------------------------------
 
 router = create_ema_router()

@@ -1,22 +1,8 @@
-"""
-services/notification_service.py
-
-Centralized notification service for EMA events.
-
-Responsibilities:
-    - EMA crossover notifications
-    - Live processing lifecycle notifications
-    - Hard refresh notifications
-    - Error notifications
-    - Duplicate notification prevention
-    - Safe Telegram delivery
-"""
-
 from __future__ import annotations
 
 import logging
 import threading
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Optional
 
 from core import config
@@ -25,46 +11,31 @@ logger = logging.getLogger(__name__)
 
 
 class NotificationService:
-    """
-    Centralized notification service.
-
-    The service is intentionally defensive:
-        - Notification failures do not stop EMA processing.
-        - Configuration flags can disable individual notification types.
-        - Duplicate events can be suppressed using event identifiers.
-    """
-
     def __init__(self, telegram_service: Optional[Any] = None) -> None:
         self.enabled = self._get_bool_setting(
             "TELEGRAM_ENABLED",
             default=False,
         )
-
         self.crossover_enabled = self._get_bool_setting(
             "EMA_TELEGRAM_CROSSOVER_ENABLED",
             default=True,
         )
-
         self.lifecycle_enabled = self._get_bool_setting(
             "EMA_TELEGRAM_LIFECYCLE_ENABLED",
             default=True,
         )
-
         self.error_enabled = self._get_bool_setting(
             "EMA_TELEGRAM_ERROR_ENABLED",
             default=True,
         )
-
         self.notify_live_start = self._get_bool_setting(
             "EMA_NOTIFY_LIVE_START",
             default=True,
         )
-
         self.notify_hard_refresh = self._get_bool_setting(
             "EMA_NOTIFY_HARD_REFRESH",
             default=True,
         )
-
         self.notify_hard_refresh_errors = self._get_bool_setting(
             "EMA_NOTIFY_HARD_REFRESH_ERRORS",
             default=True,
@@ -74,30 +45,25 @@ class NotificationService:
         self._sent_event_ids: set[str] = set()
         self._lock = threading.Lock()
 
-    # ------------------------------------------------------------------
-    # Configuration helpers
-    # ------------------------------------------------------------------
-
     @staticmethod
     def _get_bool_setting(name: str, default: bool) -> bool:
-        """
-        Safely read a boolean configuration value.
+        value = getattr(config, name, default)
 
-        Supports configuration values that may not exist yet.
-        """
-        return bool(getattr(config, name, default))
+        if isinstance(value, bool):
+            return value
 
-    # ------------------------------------------------------------------
-    # Telegram service resolution
-    # ------------------------------------------------------------------
+        if isinstance(value, str):
+            return value.strip().lower() in {
+                "1",
+                "true",
+                "yes",
+                "on",
+                "enabled",
+            }
 
-    def _get_telegram_service(self) -> Optional[Any]:
-        """
-        Resolve the Telegram service lazily.
+        return bool(value)
 
-        A service can also be injected through the constructor, which
-        makes testing easier and avoids hard dependencies.
-        """
+    def _get_telegram_service(self):
         if self._telegram_service is not None:
             return self._telegram_service
 
@@ -115,15 +81,10 @@ class NotificationService:
             return None
 
         except Exception:
-            logger.exception("Failed to initialize TelegramService.")
+            logger.exception("Failed to initialize TelegramService")
             return None
 
-    # ------------------------------------------------------------------
-    # Generic sending
-    # ------------------------------------------------------------------
-
     def is_enabled(self) -> bool:
-        """Return whether Telegram notifications are enabled."""
         return self.enabled
 
     def send(
@@ -132,24 +93,18 @@ class NotificationService:
         *,
         silent: bool = False,
     ) -> bool:
-        """
-        Send a Telegram message safely.
-
-        Returns:
-            True: message was sent successfully.
-            False: sending was disabled or failed.
-        """
         if not self.enabled:
-            logger.debug("Telegram notifications are disabled.")
+            logger.debug("Telegram notifications are disabled")
             return False
 
         if not message or not message.strip():
-            logger.warning("Skipped empty Telegram notification.")
+            logger.warning("Skipped empty Telegram notification")
             return False
 
         telegram_service = self._get_telegram_service()
 
         if telegram_service is None:
+            logger.warning("Telegram notification skipped because service is unavailable")
             return False
 
         try:
@@ -159,46 +114,30 @@ class NotificationService:
             )
 
             if result is False:
-                logger.warning("TelegramService returned failure.")
+                logger.warning("TelegramService returned failure")
                 return False
 
             return True
 
         except TypeError:
-            """
-            Compatibility fallback for TelegramService implementations
-            that accept positional arguments only or do not support
-            the silent keyword.
-            """
             try:
                 result = telegram_service.send(message)
 
                 if result is False:
-                    logger.warning("TelegramService returned failure.")
+                    logger.warning("TelegramService returned failure")
                     return False
 
                 return True
 
             except Exception:
-                logger.exception("Telegram notification failed.")
+                logger.exception("Telegram notification failed")
                 return False
 
         except Exception:
-            logger.exception("Unexpected Telegram notification error.")
+            logger.exception("Unexpected Telegram notification error")
             return False
 
-    # ------------------------------------------------------------------
-    # Duplicate prevention
-    # ------------------------------------------------------------------
-
     def _is_duplicate(self, event_id: Optional[str]) -> bool:
-        """
-        Check and register an event identifier.
-
-        Returns:
-            True if the event was already processed.
-            False if this is a new event.
-        """
         if not event_id:
             return False
 
@@ -211,20 +150,14 @@ class NotificationService:
         return False
 
     def clear_event_cache(self) -> None:
-        """Clear the in-memory duplicate event cache."""
         with self._lock:
             self._sent_event_ids.clear()
-
-    # ------------------------------------------------------------------
-    # Formatting helpers
-    # ------------------------------------------------------------------
 
     @staticmethod
     def _format_value(
         value: Any,
         default: str = "-",
     ) -> str:
-        """Convert a value into a display-safe string."""
         if value is None:
             return default
 
@@ -235,11 +168,6 @@ class NotificationService:
 
     @staticmethod
     def _format_timestamp(value: Any) -> str:
-        """
-        Format a timestamp for Telegram.
-
-        Supports datetime and string values.
-        """
         if value is None:
             return "-"
 
@@ -248,6 +176,46 @@ class NotificationService:
 
         return str(value)
 
+    @staticmethod
+    def _merge_event_data(
+        event: Any = None,
+        *,
+        contract: Optional[dict] = None,
+        candle: Optional[dict] = None,
+        trading_date: Optional[date] = None,
+        source: Optional[str] = None,
+    ) -> dict[str, Any]:
+        merged: dict[str, Any] = {}
+
+        if isinstance(event, dict):
+            merged.update(event)
+        elif event is not None:
+            try:
+                merged.update(vars(event))
+            except TypeError:
+                logger.warning(
+                    "Unable to convert notification event to dictionary "
+                    "event_type=%s",
+                    type(event).__name__,
+                )
+
+        if isinstance(contract, dict):
+            merged.update(contract)
+
+        if isinstance(candle, dict):
+            merged.update(candle)
+
+        if trading_date is not None:
+            merged["trading_date"] = trading_date.isoformat()
+
+        if source:
+            merged["source"] = source
+
+        if "candle_timestamp" not in merged and "timestamp" in merged:
+            merged["candle_timestamp"] = merged.get("timestamp")
+
+        return merged
+
     @classmethod
     def _get_event_value(
         cls,
@@ -255,7 +223,6 @@ class NotificationService:
         name: str,
         default: Any = None,
     ) -> Any:
-        """Read a field from a dataclass or dictionary event."""
         if event is None:
             return default
 
@@ -266,99 +233,140 @@ class NotificationService:
 
     @classmethod
     def _instrument_label(cls, event: Any) -> str:
-        """
-        Build a readable instrument label.
-
-        Preference:
-            trading_symbol -> instrument_key -> underlying.
-        """
         trading_symbol = cls._get_event_value(
             event,
             "trading_symbol",
         )
-
         instrument_key = cls._get_event_value(
             event,
             "instrument_key",
         )
-
         underlying = cls._get_event_value(
             event,
             "underlying",
         )
 
-        return str(trading_symbol or instrument_key or underlying or "UNKNOWN")
+        return str(
+            trading_symbol
+            or instrument_key
+            or underlying
+            or "UNKNOWN"
+        )
 
-    # ------------------------------------------------------------------
-    # EMA crossover notification
-    # ------------------------------------------------------------------
+    @classmethod
+    def _build_crossover_event_id(cls, event: Any):
+        instrument_key = cls._get_event_value(
+            event,
+            "instrument_key",
+        )
+        timestamp = cls._get_event_value(
+            event,
+            "candle_timestamp",
+            cls._get_event_value(event, "timestamp"),
+        )
+        cross_type = cls._get_event_value(
+            event,
+            "cross_type",
+        )
+
+        if not instrument_key or not timestamp or not cross_type:
+            return None
+
+        return (
+            f"crossover:"
+            f"{instrument_key}:"
+            f"{timestamp}:"
+            f"{str(cross_type).lower()}"
+        )
 
     def notify_crossover(
         self,
-        event: Any,
+        event: Any = None,
         *,
+        contract: Optional[dict] = None,
+        candle: Optional[dict] = None,
+        trading_date: Optional[date] = None,
+        source: Optional[str] = None,
         event_id: Optional[str] = None,
         silent: bool = False,
     ) -> bool:
-        """
-        Send an EMA crossover notification.
-
-        Expected event fields:
-            instrument_key
-            trading_symbol
-            timestamp
-            close
-            ema_9
-            ema_21
-            ema_difference
-            previous_ema_difference
-            cross_type
-            candle_timestamp
-            source
-        """
         if not self.crossover_enabled:
             return False
 
-        if event_id and self._is_duplicate(event_id):
+        normalized_event = self._merge_event_data(
+            event,
+            contract=contract,
+            candle=candle,
+            trading_date=trading_date,
+            source=source or "ema_runtime.process_candle",
+        )
+
+        resolved_event_id = (
+            event_id
+            or self._build_crossover_event_id(normalized_event)
+        )
+
+        if resolved_event_id and self._is_duplicate(resolved_event_id):
             logger.debug(
-                "Duplicate crossover notification skipped: %s",
-                event_id,
+                "Duplicate crossover notification skipped event_id=%s",
+                resolved_event_id,
             )
             return False
 
         cross_type = self._get_event_value(
-            event,
+            normalized_event,
             "cross_type",
             "UNKNOWN",
         )
-
-        instrument = self._instrument_label(event)
-
+        instrument = self._instrument_label(normalized_event)
         timestamp = self._format_timestamp(
             self._get_event_value(
-                event,
+                normalized_event,
                 "candle_timestamp",
-                self._get_event_value(event, "timestamp"),
+                self._get_event_value(
+                    normalized_event,
+                    "timestamp",
+                ),
             )
         )
-
-        close = self._format_value(self._get_event_value(event, "close"))
-
-        ema_9 = self._format_value(self._get_event_value(event, "ema_9"))
-
-        ema_21 = self._format_value(self._get_event_value(event, "ema_21"))
-
-        difference = self._format_value(self._get_event_value(event, "ema_difference"))
-
+        trading_date_value = self._format_value(
+            self._get_event_value(
+                normalized_event,
+                "trading_date",
+            )
+        )
+        close = self._format_value(
+            self._get_event_value(
+                normalized_event,
+                "close",
+            )
+        )
+        ema_9 = self._format_value(
+            self._get_event_value(
+                normalized_event,
+                "ema_9",
+            )
+        )
+        ema_21 = self._format_value(
+            self._get_event_value(
+                normalized_event,
+                "ema_21",
+            )
+        )
+        difference = self._format_value(
+            self._get_event_value(
+                normalized_event,
+                "ema_difference",
+            )
+        )
         previous_difference = self._format_value(
             self._get_event_value(
-                event,
+                normalized_event,
                 "previous_ema_difference",
             )
         )
-
-        source = self._get_event_value(
-            event,
+        event_source = self._get_event_value(
+            normalized_event,
             "source",
             "unknown",
         )
@@ -367,7 +375,8 @@ class NotificationService:
             "📊 *EMA CROSSOVER DETECTED*\n"
             "\n"
             f"📌 *Instrument:* `{instrument}`\n"
-            f"🔔 *Signal:* `{cross_type}`\n"
+            f"🔔 *Signal:* `{str(cross_type).upper()}`\n"
+            f"📅 *Trading Date:* `{trading_date_value}`\n"
             f"🕒 *Candle Time:* `{timestamp}`\n"
             f"💰 *Close:* `{close}`\n"
             "\n"
@@ -375,13 +384,15 @@ class NotificationService:
             f"📉 *EMA 21:* `{ema_21}`\n"
             f"➗ *Difference:* `{difference}`\n"
             f"↩️ *Previous Difference:* `{previous_difference}`\n"
-            f"⚙️ *Source:* `{source}`"
+            f"⚙️ *Source:* `{event_source}`"
         )
 
         logger.info(
-            "Sending EMA crossover notification: " "instrument=%s cross_type=%s",
+            "Sending EMA crossover notification "
+            "instrument=%s cross_type=%s event_id=%s",
             instrument,
             cross_type,
+            resolved_event_id,
         )
 
         return self.send(
@@ -389,17 +400,12 @@ class NotificationService:
             silent=silent,
         )
 
-    # ------------------------------------------------------------------
-    # Lifecycle notifications
-    # ------------------------------------------------------------------
-
     def notify_live_started(
         self,
         *,
         instrument_count: Optional[int] = None,
         message: Optional[str] = None,
     ) -> bool:
-        """Notify that live EMA processing has started."""
         if not self.lifecycle_enabled:
             return False
 
@@ -409,7 +415,11 @@ class NotificationService:
         if message:
             notification = message
         else:
-            count_text = str(instrument_count) if instrument_count is not None else "-"
+            count_text = (
+                str(instrument_count)
+                if instrument_count is not None
+                else "-"
+            )
 
             notification = (
                 "🟢 *EMA LIVE PROCESSING STARTED*\n"
@@ -418,7 +428,7 @@ class NotificationService:
                 "⏱️ *Mode:* Completed one-minute candles"
             )
 
-        logger.info("Sending live processing started notification.")
+        logger.info("Sending live processing started notification")
 
         return self.send(notification)
 
@@ -428,12 +438,14 @@ class NotificationService:
         instrument_count: Optional[int] = None,
         reason: Optional[str] = None,
     ) -> bool:
-        """Notify that live EMA processing has stopped."""
         if not self.lifecycle_enabled:
             return False
 
-        count_text = str(instrument_count) if instrument_count is not None else "-"
-
+        count_text = (
+            str(instrument_count)
+            if instrument_count is not None
+            else "-"
+        )
         reason_text = reason or "Not specified"
 
         message = (
@@ -443,7 +455,7 @@ class NotificationService:
             f"📝 *Reason:* `{reason_text}`"
         )
 
-        logger.info("Sending live processing stopped notification.")
+        logger.info("Sending live processing stopped notification")
 
         return self.send(message)
 
@@ -454,7 +466,6 @@ class NotificationService:
         message: Optional[str] = None,
         details: Optional[dict[str, Any]] = None,
     ) -> bool:
-        """Send a generic lifecycle notification."""
         if not self.lifecycle_enabled:
             return False
 
@@ -470,27 +481,25 @@ class NotificationService:
             if details:
                 for key, value in details.items():
                     label = str(key).replace("_", " ").title()
-                    lines.append(f"• *{label}:* `{self._format_value(value)}`")
+                    formatted_value = self._format_value(value)
+                    lines.append(
+                        f"• *{label}:* `{formatted_value}`"
+                    )
 
             notification = "\n".join(lines)
 
         logger.info(
-            "Sending lifecycle notification: %s",
+            "Sending lifecycle notification event=%s",
             event_name,
         )
 
         return self.send(notification)
-
-    # ------------------------------------------------------------------
-    # Hard refresh notifications
-    # ------------------------------------------------------------------
 
     def notify_hard_refresh_started(
         self,
         *,
         job_id: Optional[str] = None,
     ) -> bool:
-        """Notify that a hard refresh has started."""
         if not self.lifecycle_enabled:
             return False
 
@@ -515,7 +524,6 @@ class NotificationService:
         instrument_count: Optional[int] = None,
         duration_seconds: Optional[float] = None,
     ) -> bool:
-        """Notify that a hard refresh completed successfully."""
         if not self.lifecycle_enabled:
             return False
 
@@ -523,10 +531,15 @@ class NotificationService:
             return False
 
         job_text = job_id or "-"
-        count_text = str(instrument_count) if instrument_count is not None else "-"
-
+        count_text = (
+            str(instrument_count)
+            if instrument_count is not None
+            else "-"
+        )
         duration_text = (
-            f"{duration_seconds:.2f}" if duration_seconds is not None else "-"
+            f"{duration_seconds:.2f}"
+            if duration_seconds is not None
+            else "-"
         )
 
         message = (
@@ -545,7 +558,6 @@ class NotificationService:
         job_id: Optional[str] = None,
         error: Optional[str] = None,
     ) -> bool:
-        """Notify that a hard refresh failed."""
         if not self.error_enabled:
             return False
 
@@ -563,73 +575,83 @@ class NotificationService:
         )
 
         logger.error(
-            "Hard refresh failed. job_id=%s error=%s",
+            "Hard refresh failed job_id=%s error=%s",
             job_text,
             error_text,
         )
 
         return self.send(message)
 
-    # ------------------------------------------------------------------
-    # Error notifications
-    # ------------------------------------------------------------------
-
     def notify_error(
         self,
-        error: Any,
+        error: Any = None,
         *,
+        title: Optional[str] = None,
+        message: Optional[str] = None,
+        source: Optional[str] = None,
         context: Optional[str] = None,
         instrument_key: Optional[str] = None,
         event_id: Optional[str] = None,
         silent: bool = False,
     ) -> bool:
-        """
-        Send an error notification.
-
-        Error messages are truncated to prevent excessively large
-        Telegram messages.
-        """
         if not self.error_enabled:
             return False
 
         if event_id and self._is_duplicate(event_id):
             logger.debug(
-                "Duplicate error notification skipped: %s",
+                "Duplicate error notification skipped event_id=%s",
                 event_id,
             )
             return False
 
-        error_text = str(error or "Unknown error")
+        resolved_error = error
+
+        if resolved_error is None:
+            resolved_error = message or "Unknown error"
+
+        error_text = str(resolved_error)
 
         if len(error_text) > 2000:
             error_text = error_text[:2000] + "..."
 
-        context_text = context or "EMA service"
+        title_text = title or "EMA SERVICE ERROR"
+        context_text = context or source or "EMA service"
         instrument_text = instrument_key or "-"
 
-        message = (
-            "🚨 *EMA SERVICE ERROR*\n"
-            "\n"
-            f"📌 *Context:* `{context_text}`\n"
-            f"📊 *Instrument:* `{instrument_text}`\n"
-            f"⚠️ *Error:* `{error_text}`"
-        )
+        if message and error is not None:
+            detail_text = str(message)
+
+            if len(detail_text) > 2000:
+                detail_text = detail_text[:2000] + "..."
+        else:
+            detail_text = None
+
+        lines = [
+            f"🚨 *{title_text.upper()}*",
+            "",
+            f"📌 *Context:* `{context_text}`",
+            f"📊 *Instrument:* `{instrument_text}`",
+            f"⚠️ *Error:* `{error_text}`",
+        ]
+
+        if detail_text and detail_text != error_text:
+            lines.append(f"📝 *Details:* `{detail_text}`")
+
+        notification = "\n".join(lines)
 
         logger.error(
-            "Sending EMA error notification. " "context=%s instrument=%s error=%s",
+            "Sending EMA error notification "
+            "title=%s context=%s instrument=%s error=%s",
+            title_text,
             context_text,
             instrument_text,
             error_text,
         )
 
         return self.send(
-            message,
+            notification,
             silent=silent,
         )
-
-    # ------------------------------------------------------------------
-    # Event dispatcher
-    # ------------------------------------------------------------------
 
     def notify_event(
         self,
@@ -637,25 +659,11 @@ class NotificationService:
         *,
         event_id: Optional[str] = None,
     ) -> bool:
-        """
-        Dispatch an EmaEvent to the appropriate notification method.
-
-        Supported event values:
-            crossover
-            live_started
-            live_stopped
-            lifecycle
-            error
-            hard_refresh_started
-            hard_refresh_completed
-            hard_refresh_failed
-        """
         event_name = self._get_event_value(
             event,
             "event",
             "",
         )
-
         normalized_event = str(event_name).strip().lower()
 
         if normalized_event in {
@@ -703,10 +711,18 @@ class NotificationService:
             "service_lifecycle",
         }:
             return self.notify_lifecycle(
-                event_name=normalized_event,
+                event_name=self._get_event_value(
+                    event,
+                    "event_name",
+                    normalized_event,
+                ),
                 message=self._get_event_value(
                     event,
                     "message",
+                ),
+                details=self._get_event_value(
+                    event,
+                    "details",
                 ),
             )
 
@@ -718,11 +734,22 @@ class NotificationService:
                 error=self._get_event_value(
                     event,
                     "error",
-                    self._get_event_value(event, "message"),
+                    self._get_event_value(
+                        event,
+                        "message",
+                    ),
+                ),
+                title=self._get_event_value(
+                    event,
+                    "title",
                 ),
                 context=self._get_event_value(
                     event,
                     "context",
+                ),
+                source=self._get_event_value(
+                    event,
+                    "source",
                 ),
                 instrument_key=self._get_event_value(
                     event,
@@ -764,17 +791,19 @@ class NotificationService:
                 error=self._get_event_value(
                     event,
                     "error",
-                    self._get_event_value(event, "message"),
+                    self._get_event_value(
+                        event,
+                        "message",
+                    ),
                 ),
             )
 
         logger.debug(
-            "No notification handler for event: %s",
+            "No notification handler for event=%s",
             normalized_event,
         )
 
         return False
 
 
-# Shared service instance.
 notification_service = NotificationService()
