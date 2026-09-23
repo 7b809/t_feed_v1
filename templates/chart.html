@@ -952,13 +952,30 @@ let chartTooltip = null;
 let currentRenderedDate = null;
 
 // ============================================================
-// EMA INDICATOR STATE
+// EMA INDICATOR STATE  (with cached computations for instant toggling)
 // ============================================================
 const indicatorState = {
   ema9:     { enabled: false, series: null, length: 9,  color: "#2962ff" },
   ema21:    { enabled: false, series: null, length: 21, color: "#f5c451" },
   emaCross: { enabled: false, markers: [] },
 };
+
+/**
+ * EMA cache: length -> { data: [{time, value}, ...], lastTime, lastValue }
+ * Data is cached per length so toggling on/off doesn't recompute.
+ * Invalidated on: chart setData (full refresh), historical load, instrument change.
+ */
+const emaCache = new Map();
+
+/**
+ * Cache for EMA cross markers so toggling EMA Cross doesn't recompute.
+ */
+let emaCrossCache = { crosses: null, lastTime: null };
+
+/**
+ * Throttle handle for incremental EMA updates on live ticks.
+ */
+let emaIncrementalRaf = null;
 
 // ============================================================
 // DYNAMIC PRICE SCALE — state + helpers
@@ -1270,7 +1287,7 @@ document.querySelectorAll(".label-toggle-btn[data-toggle]").forEach(function (bt
 });
 
 // ============================================================
-// EMA INDICATOR FUNCTIONS
+// EMA INDICATOR FUNCTIONS  (with caching for smooth toggling)
 // ============================================================
 
 // ---- EMA calculation (Pine-compatible: alpha = 2/(len+1)) ----
@@ -1288,21 +1305,87 @@ function calculateEMA(candles, length) {
   return out;
 }
 
-// ---- Detect EMA crossovers ----
-function detectEMACrosses(candles, fastLen, slowLen) {
-  const fast = calculateEMA(candles, fastLen);
-  const slow = calculateEMA(candles, slowLen);
+/**
+ * Get EMA data from cache, or compute and cache it.
+ * @param {number} length
+ * @param {Array} candles - optional; if omitted, uses candleSeries.data()
+ * @returns {Array<{time:number, value:number}>}
+ */
+function getOrComputeEMA(length, candles) {
+  const source = candles || (candleSeries ? candleSeries.data() : []);
+  if (!source || source.length === 0) return [];
+
+  const cached = emaCache.get(length);
+  const lastSourceTime = source[source.length - 1].time;
+  const lastSourceLen = source.length;
+
+  if (cached && cached.lastTime === lastSourceTime && cached.length === lastSourceLen) {
+    return cached.data;
+  }
+
+  // Full recompute (only when source length changed significantly or new bar)
+  // For live ticks (same length, last time updated), do incremental update below.
+  if (cached && cached.length === lastSourceLen && source[lastSourceLen - 1].time === cached.lastTime) {
+    // Same bar — just update last value
+    const k = 2 / (length + 1);
+    const prevValue = cached.data.length >= 2
+      ? cached.data[cached.data.length - 2].value
+      : Number(source[0].close);
+    const newClose = Number(source[lastSourceLen - 1].close);
+    if (Number.isFinite(prevValue) && Number.isFinite(newClose)) {
+      const newValue = newClose * k + prevValue * (1 - k);
+      const newData = cached.data.slice();
+      newData[newData.length - 1] = { time: source[lastSourceLen - 1].time, value: newValue };
+      emaCache.set(length, { data: newData, lastTime: newData[newData.length - 1].time, length: newData.length });
+      return newData;
+    }
+  }
+
+  // Full recompute
+  const fresh = calculateEMA(source, length);
+  emaCache.set(length, {
+    data: fresh,
+    lastTime: fresh.length ? fresh[fresh.length - 1].time : null,
+    length: fresh.length,
+  });
+  return fresh;
+}
+
+/**
+ * Invalidate all EMA caches. Call when candles array changes structurally
+ * (historical load, instrument change, full setData).
+ */
+function invalidateEMACache() {
+  emaCache.clear();
+  emaCrossCache = { crosses: null, lastTime: null };
+}
+
+// ---- Detect EMA crossovers (cached) ----
+function getOrComputeEMACrosses(candles) {
+  const source = candles || (candleSeries ? candleSeries.data() : []);
+  if (!source || source.length === 0) return [];
+
+  const lastTime = source[source.length - 1].time;
+  const lastLen = source.length;
+  if (emaCrossCache.crosses && emaCrossCache.lastTime === lastTime && emaCrossCache.length === lastLen) {
+    return emaCrossCache.crosses;
+  }
+
+  const fastLen = indicatorState.ema9.length;
+  const slowLen = indicatorState.ema21.length;
+
+  // Use cached EMA arrays where possible
+  const fast = getOrComputeEMA(fastLen, source);
+  const slow = getOrComputeEMA(slowLen, source);
   const n = Math.min(fast.length, slow.length);
   const crosses = [];
 
-  // Build a quick lookup for candle high/low by time
   const candleByTime = new Map();
-  for (const c of candles) candleByTime.set(c.time, c);
+  for (const c of source) candleByTime.set(c.time, c);
 
   for (let i = 1; i < n; i++) {
     const prevDiff = fast[i - 1].value - slow[i - 1].value;
     const currDiff = fast[i].value - slow[i].value;
-
     if (prevDiff <= 0 && currDiff > 0) {
       const c = candleByTime.get(fast[i].time);
       crosses.push({
@@ -1321,39 +1404,19 @@ function detectEMACrosses(candles, fastLen, slowLen) {
       });
     }
   }
+
+  emaCrossCache = { crosses, lastTime, length: lastLen };
   return crosses;
 }
 
 // ============================================================
 // VERSION-SAFE MARKERS API WRAPPER (HARDENED)
-// ------------------------------------------------------------
-// Lightweight Charts v5 REMOVED series.setMarkers().
-// The replacement is a plugin primitive created via
-// LightweightCharts.createSeriesMarkers(series, []).
-//
-// IMPORTANT v5 GOTCHAS we defend against here:
-//   1. createSeriesMarkers() must be called AFTER the series
-//      has at least one data point. Calling on an empty series
-//      can silently no-op on some v5 builds.
-//   2. The primitive caches internally, so after calling
-//      candleSeries.setData(...) we may need to recreate the
-//      primitive to force a redraw.
-//   3. If markers have identical time values, LWC will only
-//      render the last one per bar. We dedupe by time.
-//   4. Marker `time` values must exactly match a candle time,
-//      otherwise the marker is silently dropped.
 // ============================================================
 let markersPrimitive = null;
-let markersApiKind = "unknown";   // "v5" | "v4" | "none"
+let markersApiKind = "unknown";
 
-// v5: (re)create the plugin primitive with the given markers.
-// We always RE-create to defeat the internal cache-after-setData bug.
 function setMarkersV5(markers) {
-  // Destroy any previous primitive first (best effort — LWC v5
-  // doesn't require explicit destroy, but dropping the reference
-  // forces a fresh primitive on the next create).
   markersPrimitive = null;
-
   try {
     markersPrimitive = LightweightCharts.createSeriesMarkers(
       candleSeries,
@@ -1367,20 +1430,16 @@ function setMarkersV5(markers) {
   }
 }
 
-// Main dispatch: try v5 first, then v4, and log which path ran.
 function applyMarkersToCandleSeries(markers) {
   if (!candleSeries) return;
-
   const list = Array.isArray(markers) ? markers : [];
 
-  // ---- v5 path ----
   if (typeof LightweightCharts.createSeriesMarkers === "function") {
     const ok = setMarkersV5(list);
     markersApiKind = "v5";
     if (ok) return;
   }
 
-  // ---- v4 path ----
   if (typeof candleSeries.setMarkers === "function") {
     try {
       candleSeries.setMarkers(list);
@@ -1415,7 +1474,7 @@ function renderEMALines(candles) {
       });
     }
     if (indicatorState.ema9.series) {
-      const data = calculateEMA(candles, indicatorState.ema9.length);
+      const data = getOrComputeEMA(indicatorState.ema9.length, candles);
       indicatorState.ema9.series.setData(data);
     }
   } else if (indicatorState.ema9.series) {
@@ -1437,7 +1496,7 @@ function renderEMALines(candles) {
       });
     }
     if (indicatorState.ema21.series) {
-      const data = calculateEMA(candles, indicatorState.ema21.length);
+      const data = getOrComputeEMA(indicatorState.ema21.length, candles);
       indicatorState.ema21.series.setData(data);
     }
   } else if (indicatorState.ema21.series) {
@@ -1452,40 +1511,24 @@ function renderEMALines(candles) {
 function renderEMACrossMarkers(candles) {
   if (!candleSeries) return;
 
-  // If EMA Cross toggle is OFF → clear all markers.
   if (!indicatorState.emaCross.enabled) {
     applyMarkersToCandleSeries([]);
     indicatorState.emaCross.markers = [];
     return;
   }
 
-  // Detect crosses using the same candle buffer shown on the chart.
-  const crosses = detectEMACrosses(
-    candles,
-    indicatorState.ema9.length,
-    indicatorState.ema21.length
-  );
+  const crosses = getOrComputeEMACrosses(candles);
 
   if (window.__DEBUG_MARKERS__) {
-    console.log(
-      "[markers] crosses detected:",
-      crosses.length,
-      crosses.slice(-5)  // show last 5
-    );
+    console.log("[markers] crosses detected:", crosses.length, crosses.slice(-5));
   }
 
-  // ---- Build markers ----
-  // LWC v4/v5 rule: at most ONE marker per (time) will be rendered
-  // visually unless they're at DIFFERENT positions. Multiple crosses
-  // on the same bar are extremely rare with EMA9/21, so we simply
-  // dedupe by time to guarantee visibility.
   const seenTimes = new Set();
   const markers = [];
 
   for (const c of crosses) {
     if (seenTimes.has(c.time)) continue;
     seenTimes.add(c.time);
-
     const isBull = c.type === "bull";
     markers.push({
       time: c.time,
@@ -1493,17 +1536,11 @@ function renderEMACrossMarkers(candles) {
       color:    isBull ? "#089981" : "#f23645",
       shape:    isBull ? "arrowUp" : "arrowDown",
       text:     isBull ? "BUY" : "SELL",
-      size: 2,   // ← bumped from 1 to 2 so it's clearly visible
+      size: 2,
     });
   }
 
-  // Sort by time ascending (LWC requires this).
   markers.sort((a, b) => a.time - b.time);
-
-  if (window.__DEBUG_MARKERS__) {
-    console.log("[markers] markers to render:", markers.length, markers.slice(-5));
-  }
-
   applyMarkersToCandleSeries(markers);
   indicatorState.emaCross.markers = markers;
 }
@@ -1516,9 +1553,59 @@ function refreshIndicators(candles) {
     renderEMALines(data);
     renderEMACrossMarkers(data);
   } catch (err) {
-    // Never let an indicator error break the live feed or chart
     console.warn("refreshIndicators error (swallowed):", err);
   }
+}
+
+/**
+ * Throttled incremental refresh for live ticks.
+ * Only updates the last data point of each active series, rather than
+ * rebuilding the entire EMA array each tick.
+ */
+function scheduleIncrementalEMARefresh() {
+  if (emaIncrementalRaf !== null) return;
+  emaIncrementalRaf = requestAnimationFrame(() => {
+    emaIncrementalRaf = null;
+    try {
+      if (!candleSeries) return;
+      const data = candleSeries.data();
+      if (!data || data.length === 0) return;
+
+      // EMA 9 incremental
+      if (indicatorState.ema9.enabled && indicatorState.ema9.series) {
+        const cached = emaCache.get(indicatorState.ema9.length);
+        if (cached && cached.data.length > 0) {
+          const lastEMA = cached.data[cached.data.length - 1];
+          indicatorState.ema9.series.update(lastEMA);
+        } else {
+          const fresh = getOrComputeEMA(indicatorState.ema9.length, data);
+          indicatorState.ema9.series.setData(fresh);
+        }
+      }
+
+      // EMA 21 incremental
+      if (indicatorState.ema21.enabled && indicatorState.ema21.series) {
+        const cached = emaCache.get(indicatorState.ema21.length);
+        if (cached && cached.data.length > 0) {
+          const lastEMA = cached.data[cached.data.length - 1];
+          indicatorState.ema21.series.update(lastEMA);
+        } else {
+          const fresh = getOrComputeEMA(indicatorState.ema21.length, data);
+          indicatorState.ema21.series.setData(fresh);
+        }
+      }
+
+      // EMA Cross — only re-render if last candle time changed
+      if (indicatorState.emaCross.enabled) {
+        const lastTime = data[data.length - 1].time;
+        if (emaCrossCache.lastTime !== lastTime) {
+          renderEMACrossMarkers(data);
+        }
+      }
+    } catch (err) {
+      console.warn("incremental EMA refresh error (swallowed):", err);
+    }
+  });
 }
 
 // ---- Wire up indicator toggle buttons ----
@@ -1560,6 +1647,7 @@ document.querySelectorAll("#indicatorToggleBar .label-toggle-btn[data-indicator]
       localStorage.setItem(INDICATOR_PREFS_KEY, JSON.stringify(prefs));
     } catch (e) {}
 
+    // Instant refresh using cache (no recompute)
     refreshIndicators();
   });
 });
@@ -1831,9 +1919,9 @@ function updateCandle(candle) {
   lastCandle = candle;
   updateLivePrice(candle.close);
 
-  // ---- Recompute indicators on every tick (error-safe) ----
+  // ---- Smooth incremental EMA refresh ----
   if (indicatorState.ema9.enabled || indicatorState.ema21.enabled || indicatorState.emaCross.enabled) {
-    refreshIndicators();
+    scheduleIncrementalEMARefresh();
   }
 
   const prevDate = currentRenderedDate;
@@ -1874,6 +1962,10 @@ async function loadOlderHistoricalData() {
       olderCandles.forEach(candle => mergedMap.set(candle.time, candle));
       currentData.forEach(candle => mergedMap.set(candle.time, candle));
       const combinedData = Array.from(mergedMap.values()).sort((a, b) => a.time - b.time);
+
+      // Invalidate EMA cache before setData — the data shape changed
+      invalidateEMACache();
+
       candleSeries.setData(combinedData);
       oldestCandleTime = combinedData[0].time;
       hasMoreHistory = result.has_more ?? true;
@@ -2355,7 +2447,7 @@ function createChart(candles) {
   calculatedOpeningRanges = buildOpeningRangesFromCandles(candles);
   renderOpeningRangeLines();
 
-  // ---- Refresh EMA indicators after chart init (error-safe) ----
+  // ---- Refresh EMA indicators after chart init (error-safe, uses cache) ----
   refreshIndicators(candles);
 
   updateDynamicPriceScale();
