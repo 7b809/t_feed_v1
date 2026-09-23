@@ -132,6 +132,21 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
   background: rgba(41,98,255,0.12);
 }
 
+/* Indicator-specific button colors when active */
+.label-toggle-btn[data-indicator="ema9"].active {
+  background: #2962ff;
+  border-color: #2962ff;
+}
+.label-toggle-btn[data-indicator="ema21"].active {
+  background: #f5c451;
+  border-color: #f5c451;
+  color: #111;
+}
+.label-toggle-btn[data-indicator="emaCross"].active {
+  background: linear-gradient(90deg, #089981 0%, #f23645 100%);
+  border-color: transparent;
+}
+
 /* =========================================================
    SCROLL NAV
    ========================================================= */
@@ -661,6 +676,34 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
   </div>
 
   <!-- ============================================================
+       INDICATORS TOGGLE BAR  (EMA 9 / EMA 21 / EMA Cross signals)
+       ============================================================ -->
+  <div class="chart-toggles-card" id="indicatorToggleBar">
+    <div class="chart-toggles-title"><i class="bi bi-graph-up-arrow me-1"></i>Indicators</div>
+
+    <button type="button"
+            class="label-toggle-btn"
+            data-indicator="ema9"
+            title="Show / hide EMA 9 line">
+      EMA 9
+    </button>
+
+    <button type="button"
+            class="label-toggle-btn"
+            data-indicator="ema21"
+            title="Show / hide EMA 21 line">
+      EMA 21
+    </button>
+
+    <button type="button"
+            class="label-toggle-btn"
+            data-indicator="emaCross"
+            title="Show / hide EMA 9/21 crossover BUY / SELL signals">
+      <i class="bi bi-arrow-left-right me-1"></i>EMA Cross
+    </button>
+  </div>
+
+  <!-- ============================================================
        INSTRUMENT INFO CARD  (below chart, scroll down to see it)
        ============================================================ -->
   {% set _type = (instrument.get('option_type') or instrument.get('instrument_type') or '') | upper %}
@@ -880,6 +923,7 @@ let isLoadingHistory = false;
 let hasMoreHistory = true;
 const reconnectMaximumDelay = 15000;
 const PANEL_COLLAPSE_KEY = "chart.instrumentPanel.collapsed";
+const INDICATOR_PREFS_KEY = "chart.indicators.prefs";
 
 // Label visibility groups (only affects HTML label text; lines always drawn)
 const labelVisibility = {
@@ -908,36 +952,26 @@ let chartTooltip = null;
 let currentRenderedDate = null;
 
 // ============================================================
+// EMA INDICATOR STATE
+// ============================================================
+const indicatorState = {
+  ema9:     { enabled: false, series: null, length: 9,  color: "#2962ff" },
+  ema21:    { enabled: false, series: null, length: 21, color: "#f5c451" },
+  emaCross: { enabled: false, markers: [] },
+};
+
+// ============================================================
 // DYNAMIC PRICE SCALE — state + helpers
-// ------------------------------------------------------------
-// The RIGHT price scale's displayed unit / precision adapts to the
-// CURRENTLY VISIBLE price range (i.e. the user's zoom level). This
-// affects ONLY the axis display precision — never the actual
-// price range (viewport) and never any level VALUE.
-//
-// NOTE ON VIEWPORT VS. FORMATTING:
-//   * The VIEWPORT (what price range is visible) is controlled by
-//     Lightweight Charts' natural autoscale, configured with
-//     `rightPriceScale.autoScale = true` and tight
-//     `rightPriceScale.scaleMargins = { top: 0.05, bottom: 0.05 }`,
-//     AND by excluding overlay level lines from autoscale via
-//     `autoscaleInfoProvider: () => null` on every level line.
-//     This produces a TradingView-like tight initial view that
-//     fits the visible candles.
-//   * The FORMATTING (decimal precision / minMove) is what the
-//     functions below control. They react to the current visible
-//     range but never change it.
 // ============================================================
 const dynamicPriceScale = {
-  currentUnit: null,          // last applied dynamic unit (nice number)
-  currentPrecision: null,     // last applied price-format precision
-  currentMinMove: null,       // last applied minMove
-  tickSize: null,             // instrument tick size, if known
-  lastTopPrice: null,         // cached visible top price
-  lastBottomPrice: null,      // cached visible bottom price
-  rafId: null,                // rAF handle for the watcher loop
-  lastCheckTs: 0,             // throttle timestamp (ms)
-  // Throttle so price-scale checks never run more than ~10x/second.
+  currentUnit: null,
+  currentPrecision: null,
+  currentMinMove: null,
+  tickSize: null,
+  lastTopPrice: null,
+  lastBottomPrice: null,
+  rafId: null,
+  lastCheckTs: 0,
   checkIntervalMs: 90,
 };
 
@@ -962,24 +996,19 @@ function getPaneHeight() {
     return (chartContainer && chartContainer.clientHeight) || 500;
   }
   try {
-    // Lightweight Charts v4/v5: IPriceScaleApi.height() returns the
-    // vertical extent of the price scale (== pane price area height).
     const ps = chart.priceScale("right");
     if (ps && typeof ps.height === "function") {
       const h = ps.height();
       if (Number.isFinite(h) && h > 0) return h;
     }
   } catch (err) {
-    // fall through to fallback
+    // fall through
   }
-  // Conservative fallback: chart height minus an estimated time scale.
   const totalH = (chartContainer && chartContainer.clientHeight) || 500;
   return Math.max(100, totalH - 30);
 }
 
 // ---- Read the CURRENT visible price range from the series ----
-// Uses series.coordinateToPrice() — the only cross-version-safe
-// way to translate pixel-y into price-y for the visible pane.
 function getVisiblePriceRange() {
   if (!candleSeries) return null;
   const paneHeight = getPaneHeight();
@@ -1040,8 +1069,6 @@ function getDynamicPriceUnit(minPrice, maxPrice, paneHeight) {
     ? paneHeight
     : ((chartContainer && chartContainer.clientHeight) || 500);
 
-  // Desired number of readable tick labels: 6..14 depending on height.
-  // (70px is roughly one comfortable row per label.)
   const desiredTickCount = Math.max(
     6,
     Math.min(14, Math.round(height / 70))
@@ -1051,16 +1078,11 @@ function getDynamicPriceUnit(minPrice, maxPrice, paneHeight) {
   let unit = snapToNiceUnit(rawUnit);
   if (unit === null) return null;
 
-  // Respect the instrument's tick size — never display a granularity
-  // smaller than the instrument can actually trade at.
   const tickSize = dynamicPriceScale.tickSize;
   if (Number.isFinite(tickSize) && tickSize > 0) {
     if (unit < tickSize) {
       unit = tickSize;
     } else {
-      // Snap UP to the nearest integer multiple of tickSize that is
-      // >= unit, so the axis step never falls below the requested
-      // granularity (and is always a valid multiple of tickSize).
       const multiples = Math.max(1, Math.ceil(unit / tickSize));
       unit = multiples * tickSize;
     }
@@ -1075,7 +1097,6 @@ function getPricePrecision(step) {
   if (!Number.isFinite(step) || step <= 0) return 2;
   if (step >= 1) return 0;
 
-  // For step=0.5 -> 1 decimal; step=0.05 -> 2; step=0.01 -> 2.
   const decimals = Math.ceil(-Math.log10(step));
   if (!Number.isFinite(decimals) || decimals < 0) return 2;
   return Math.min(decimals, 8);
@@ -1083,20 +1104,6 @@ function getPricePrecision(step) {
 
 // ============================================================
 // INITIAL VIEWPORT — tight TradingView-like vertical autoscale
-// ------------------------------------------------------------
-// Computes a sensible vertical price range from the actual candle
-// high/low with a modest percentage padding (default 5%). This is
-// the "ideal" tight range that the initial viewport should show,
-// derived ONLY from candle data — never from hard-coded values
-// such as 0 or 540.
-//
-// NOTE: the actual application of the initial tight viewport is
-// done by Lightweight Charts' own autoscale, which:
-//   • fits the VISIBLE candles (not level lines) by default, and
-//   • respects `rightPriceScale.scaleMargins` for padding.
-// We configure those two things accordingly (see createChart()
-// and drawDayLevelLine()). This helper is used for verification,
-// debugging, and as a safety fallback (applyTightInitialAutoscale).
 // ============================================================
 function calculateInitialPriceScaleRange(candles) {
   if (!Array.isArray(candles) || candles.length === 0) return null;
@@ -1117,7 +1124,6 @@ function calculateInitialPriceScaleRange(candles) {
   if (maxPrice <= minPrice) return null;
 
   const candleRange = maxPrice - minPrice;
-  // Modest TradingView-like padding: 5% of the actual candle range.
   const padding = candleRange * 0.05;
 
   return {
@@ -1131,16 +1137,6 @@ function calculateInitialPriceScaleRange(candles) {
 }
 
 // ---- Apply the tight initial vertical price range ONCE ----
-// This does NOT continuously reset the viewport. After the user
-// manually zooms the right price scale, Lightweight Charts turns
-// autoscale off and we leave the user's zoom alone.
-//
-// On the next animation frame we compare the actual visible range
-// with the ideal tight range. Only if the actual range is still
-// far wider than intended (e.g. a future LWC behaviour change or
-// some unforeseen pollution of autoscale) do we nudge the price
-// scale back toward a tight autoscale. This is a one-shot safety
-// net, not a continuous enforcement.
 function applyTightInitialAutoscale(candles) {
   if (!chart || !candleSeries) return;
 
@@ -1159,9 +1155,6 @@ function applyTightInitialAutoscale(candles) {
     const idealRange = tight.maxPrice - tight.minPrice;
     if (!Number.isFinite(idealRange) || idealRange <= 0) return;
 
-    // Only intervene when the actual range is WAY off (more than
-    // ~2.5x the ideal tight range). Normal autoscale behaviour
-    // already matches the ideal range closely.
     if (actual.range > idealRange * 2.5) {
       try {
         chart.priceScale("right").applyOptions({
@@ -1176,18 +1169,12 @@ function applyTightInitialAutoscale(candles) {
 }
 
 // ---- Apply the dynamic unit to the series' price format ----
-// Only runs the expensive applyOptions() when the unit ACTUALLY
-// changes, so no feedback loops and no wasted work. This function
-// ONLY affects the axis DISPLAY precision — it never touches the
-// visible price range (viewport).
 function updateDynamicPriceScale() {
   if (!candleSeries) return;
 
   const rangeInfo = getVisiblePriceRange();
   if (!rangeInfo) return;
 
-  // Always trigger a label reposition if the visible range moved,
-  // even when the unit itself hasn't changed.
   const topChanged = dynamicPriceScale.lastTopPrice === null
     || Math.abs(dynamicPriceScale.lastTopPrice - rangeInfo.minPrice) > 1e-9;
   const bottomChanged = dynamicPriceScale.lastBottomPrice === null
@@ -1207,7 +1194,6 @@ function updateDynamicPriceScale() {
   );
   if (unit === null) return;
 
-  // Nothing to do if the unit is unchanged — prevents feedback loops.
   if (dynamicPriceScale.currentUnit === unit) return;
 
   const precision = getPricePrecision(unit);
@@ -1235,19 +1221,10 @@ function updateDynamicPriceScale() {
   dynamicPriceScale.currentPrecision = precision;
   dynamicPriceScale.currentMinMove = effectiveMinMove;
 
-  // Refresh level labels (they use priceToCoordinate which already
-  // reflects the visible range; the call is cheap & idempotent).
   scheduleLevelLabelUpdate();
 }
 
-// ---- rAF watcher: reacts to ANY price-scale change, including
-//      vertical-only zoom via the right-hand price scale drag,
-//      which Lightweight Charts does not expose as an event.
-//
-//      IMPORTANT: this watcher NEVER resets the visible price
-//      range. It only observes the current range to keep the
-//      axis DISPLAY precision / tick spacing in sync.
-// ----
+// ---- rAF watcher for price scale ----
 function startPriceScaleWatcher() {
   if (dynamicPriceScale.rafId !== null) return;
 
@@ -1259,7 +1236,6 @@ function startPriceScaleWatcher() {
       try {
         updateDynamicPriceScale();
       } catch (err) {
-        // Never let the watcher throw — it runs continuously.
         console.warn("Price scale watcher error:", err);
       }
     }
@@ -1280,7 +1256,6 @@ function stopPriceScaleWatcher() {
 // LABEL TOGGLE BUTTONS
 // ============================================================
 document.querySelectorAll(".label-toggle-btn[data-toggle]").forEach(function (btn) {
-  // sync initial UI state with labelVisibility
   const key = btn.dataset.toggle;
   if (key in labelVisibility) {
     btn.classList.toggle("active", !!labelVisibility[key]);
@@ -1291,6 +1266,190 @@ document.querySelectorAll(".label-toggle-btn[data-toggle]").forEach(function (bt
     labelVisibility[k] = !labelVisibility[k];
     this.classList.toggle("active", labelVisibility[k]);
     scheduleLevelLabelUpdate();
+  });
+});
+
+// ============================================================
+// EMA INDICATOR FUNCTIONS
+// ============================================================
+
+// ---- EMA calculation (Pine-compatible: alpha = 2/(len+1)) ----
+function calculateEMA(candles, length) {
+  if (!Array.isArray(candles) || candles.length === 0 || length <= 0) return [];
+  const k = 2 / (length + 1);
+  const out = [];
+  let prev = null;
+  for (let i = 0; i < candles.length; i++) {
+    const close = Number(candles[i].close);
+    if (!Number.isFinite(close)) continue;
+    prev = (prev === null) ? close : (close * k + prev * (1 - k));
+    out.push({ time: candles[i].time, value: prev });
+  }
+  return out;
+}
+
+// ---- Detect EMA crossovers ----
+function detectEMACrosses(candles, fastLen, slowLen) {
+  const fast = calculateEMA(candles, fastLen);
+  const slow = calculateEMA(candles, slowLen);
+  const n = Math.min(fast.length, slow.length);
+  const crosses = [];
+
+  // Build a quick lookup for candle high/low by time
+  const candleByTime = new Map();
+  for (const c of candles) candleByTime.set(c.time, c);
+
+  for (let i = 1; i < n; i++) {
+    const prevDiff = fast[i - 1].value - slow[i - 1].value;
+    const currDiff = fast[i].value - slow[i].value;
+
+    if (prevDiff <= 0 && currDiff > 0) {
+      const c = candleByTime.get(fast[i].time);
+      crosses.push({
+        time: fast[i].time,
+        type: "bull",
+        price: c ? c.low : fast[i].value,
+        value: fast[i].value,
+      });
+    } else if (prevDiff >= 0 && currDiff < 0) {
+      const c = candleByTime.get(fast[i].time);
+      crosses.push({
+        time: fast[i].time,
+        type: "bear",
+        price: c ? c.high : fast[i].value,
+        value: fast[i].value,
+      });
+    }
+  }
+  return crosses;
+}
+
+// ---- Render / update EMA lines ----
+function renderEMALines(candles) {
+  if (!chart) return;
+
+  // EMA 9
+  if (indicatorState.ema9.enabled) {
+    if (!indicatorState.ema9.series) {
+      indicatorState.ema9.series = addLineSeriesSafe({
+        color: indicatorState.ema9.color,
+        lineWidth: 2,
+        priceLineVisible: false,
+        lastValueVisible: true,
+        crosshairMarkerVisible: false,
+        title: "EMA 9",
+        autoscaleInfoProvider: () => null,
+      });
+    }
+    if (indicatorState.ema9.series) {
+      const data = calculateEMA(candles, indicatorState.ema9.length);
+      indicatorState.ema9.series.setData(data);
+    }
+  } else if (indicatorState.ema9.series) {
+    try { chart.removeSeries(indicatorState.ema9.series); } catch (e) {}
+    indicatorState.ema9.series = null;
+  }
+
+  // EMA 21
+  if (indicatorState.ema21.enabled) {
+    if (!indicatorState.ema21.series) {
+      indicatorState.ema21.series = addLineSeriesSafe({
+        color: indicatorState.ema21.color,
+        lineWidth: 2,
+        priceLineVisible: false,
+        lastValueVisible: true,
+        crosshairMarkerVisible: false,
+        title: "EMA 21",
+        autoscaleInfoProvider: () => null,
+      });
+    }
+    if (indicatorState.ema21.series) {
+      const data = calculateEMA(candles, indicatorState.ema21.length);
+      indicatorState.ema21.series.setData(data);
+    }
+  } else if (indicatorState.ema21.series) {
+    try { chart.removeSeries(indicatorState.ema21.series); } catch (e) {}
+    indicatorState.ema21.series = null;
+  }
+}
+
+// ---- Render crossover markers on the candle series ----
+function renderEMACrossMarkers(candles) {
+  if (!candleSeries) return;
+
+  if (!indicatorState.emaCross.enabled) {
+    candleSeries.setMarkers([]);
+    indicatorState.emaCross.markers = [];
+    return;
+  }
+
+  const crosses = detectEMACrosses(
+    candles,
+    indicatorState.ema9.length,
+    indicatorState.ema21.length
+  );
+
+  const markers = crosses.map(c => ({
+    time: c.time,
+    position: c.type === "bull" ? "belowBar" : "aboveBar",
+    color:    c.type === "bull" ? "#089981" : "#f23645",
+    shape:    c.type === "bull" ? "arrowUp" : "arrowDown",
+    text:     c.type === "bull" ? "BUY" : "SELL",
+    size: 1,
+  }));
+
+  candleSeries.setMarkers(markers);
+  indicatorState.emaCross.markers = markers;
+}
+
+// ---- Master refresh ----
+function refreshIndicators(candles) {
+  const data = candles || (candleSeries ? candleSeries.data() : []);
+  if (!data || data.length === 0) return;
+  renderEMALines(data);
+  renderEMACrossMarkers(data);
+}
+
+// ---- Wire up indicator toggle buttons ----
+document.querySelectorAll("#indicatorToggleBar .label-toggle-btn[data-indicator]").forEach(btn => {
+  const key = btn.dataset.indicator;
+  if (!(key in indicatorState)) return;
+
+  // Restore from localStorage if available
+  try {
+    const saved = JSON.parse(localStorage.getItem(INDICATOR_PREFS_KEY) || "{}");
+    if (saved[key]) {
+      indicatorState[key].enabled = true;
+      btn.classList.add("active");
+    }
+  } catch (e) {}
+
+  btn.addEventListener("click", () => {
+    indicatorState[key].enabled = !indicatorState[key].enabled;
+    btn.classList.toggle("active", indicatorState[key].enabled);
+
+    // Require EMA lines visible before showing crosses
+    if (key === "emaCross" && indicatorState[key].enabled) {
+      if (!indicatorState.ema9.enabled) {
+        indicatorState.ema9.enabled = true;
+        document.querySelector('[data-indicator="ema9"]')?.classList.add("active");
+      }
+      if (!indicatorState.ema21.enabled) {
+        indicatorState.ema21.enabled = true;
+        document.querySelector('[data-indicator="ema21"]')?.classList.add("active");
+      }
+    }
+
+    // Persist prefs
+    try {
+      const prefs = {};
+      Object.keys(indicatorState).forEach(k => {
+        if (typeof indicatorState[k].enabled === "boolean") prefs[k] = indicatorState[k].enabled;
+      });
+      localStorage.setItem(INDICATOR_PREFS_KEY, JSON.stringify(prefs));
+    } catch (e) {}
+
+    refreshIndicators();
   });
 });
 
@@ -1335,7 +1494,7 @@ indexBtn.addEventListener("click", () => activateView(indexBtn, indexView));
 optionsBtn.addEventListener("click", () => activateView(optionsBtn, optionsView));
 
 // ============================================================
-// INSTRUMENT PANEL FOLD (persistent across navigations)
+// INSTRUMENT PANEL FOLD
 // ============================================================
 function applyPanelCollapsed(collapsed) {
   instrumentPanel.classList.toggle("collapsed", collapsed);
@@ -1369,7 +1528,7 @@ if (collapseBtn) collapseBtn.addEventListener("click", togglePanelCollapsed);
 if (panelFoldBtn) panelFoldBtn.addEventListener("click", function (e) { e.stopPropagation(); togglePanelCollapsed(); });
 
 // ============================================================
-// INSTRUMENT INFO CARD FOLD UP / FOLD DOWN
+// INSTRUMENT INFO CARD FOLD
 // ============================================================
 function setInfoCardCollapsed(collapsed) {
   if (!instrumentInfoCard) return;
@@ -1561,6 +1720,11 @@ function updateCandle(candle) {
   lastCandle = candle;
   updateLivePrice(candle.close);
 
+  // ---- Recompute indicators on every tick ----
+  if (indicatorState.ema9.enabled || indicatorState.ema21.enabled || indicatorState.emaCross.enabled) {
+    refreshIndicators();
+  }
+
   const prevDate = currentRenderedDate;
   const newDate = getDateKeyIST(candle.time);
   if (newDate && newDate !== prevDate) {
@@ -1582,14 +1746,6 @@ function updateCandleFromLtp(ltp, timestamp) {
 
 // ============================================================
 // LOAD OLDER HISTORICAL DATA
-// ------------------------------------------------------------
-// NOTE: historical loading must NOT reset the user's current
-// vertical zoom. `candleSeries.setData()` does not touch the
-// visible price range, and we deliberately do not call any
-// custom "reset vertical range" here. If the user has manually
-// zoomed (autoscale off), the zoom is preserved. If the user
-// has not interacted, LWC's own autoscale simply re-fits to
-// the new visible candle set — no application-side reset.
 // ============================================================
 async function loadOlderHistoricalData() {
   if (isLoadingHistory || !hasMoreHistory || !oldestCandleTime) return;
@@ -1611,6 +1767,7 @@ async function loadOlderHistoricalData() {
       oldestCandleTime = combinedData[0].time;
       hasMoreHistory = result.has_more ?? true;
       rebuildAndRenderOpeningRanges(combinedData);
+      refreshIndicators(combinedData);
     } else {
       hasMoreHistory = false;
     }
@@ -1823,10 +1980,6 @@ function scheduleLevelLabelUpdate() {
     updateLevelLabelPositions();
   });
 }
-// Repositions every level label so its screen-Y always matches the
-// CURRENT price scale. Level VALUES are never touched — only their
-// pixel position. Labels whose price is outside the visible pane are
-// hidden (never clamped to an edge) so the chart stays price-accurate.
 function updateLevelLabelPositions() {
   if (!chart || !candleSeries || !levelLabels.length) return;
   const timeScale = chart.timeScale();
@@ -1834,7 +1987,6 @@ function updateLevelLabelPositions() {
   const paneHeight = getPaneHeight();
 
   levelLabels.forEach(label => {
-    // ---- Label visibility gating (does NOT affect lines) ----
     if (!isLabelGroupVisible(label.levelName)) {
       label.element.style.display = "none";
       return;
@@ -1847,8 +1999,6 @@ function updateLevelLabelPositions() {
       return;
     }
 
-    // Hide labels whose level price is outside the visible price range.
-    // (No clamping — a level above/below the viewport stays off-screen.)
     if (y < -8 || y > paneHeight + 8) {
       label.element.style.display = "none";
       return;
@@ -1875,11 +2025,6 @@ function drawDayLevelLine(levelName, rawValue, startTime, endTime, color, lineSt
   const lineSeries = addLineSeriesSafe({
     color, lineWidth: 1, lineStyle,
     priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
-    // CRITICAL: exclude level lines from the right price scale's
-    // autoscale. Without this, level lines from OTHER days (e.g. a
-    // much older day with a very high R3 or a very low S3) stretch
-    // the autoscale range far beyond the currently visible candles,
-    // which makes candles look vertically compressed.
     autoscaleInfoProvider: () => null,
   });
   if (!lineSeries) return;
@@ -1888,7 +2033,6 @@ function drawDayLevelLine(levelName, rawValue, startTime, endTime, color, lineSt
   try { lineSeries.setData(data); } catch (err) { console.warn("setData failed for line:", err); return; }
   levelLines.push(lineSeries);
 
-  // Create the label; visibility is decided dynamically via isLabelGroupVisible().
   createLevelLabel(levelName, startTime, value, color);
 }
 function removeOpeningRangeLevels() {
@@ -1916,7 +2060,6 @@ function renderOpeningRangeLines() {
     const endTime   = dayCandles[dayCandles.length - 1].time;
     const levels = openingRange.levels || {};
 
-    // R1 == HIGH and S1 == LOW -> skip to avoid overlap with solid HIGH / LOW lines
     ["r2", "r3"].forEach(name =>
       drawDayLevelLine(name, levels[name], startTime, endTime, getLevelColor(name), LightweightCharts.LineStyle.Dashed)
     );
@@ -2024,16 +2167,7 @@ function createChart(candles) {
       crosshair: { mode: LightweightCharts.CrosshairMode.Normal, vertLine: { labelBackgroundColor: "#2962ff", labelBorderColor: "#2962ff" } },
       rightPriceScale: {
         borderColor: "#2a2e39",
-        // Tight TradingView-like padding around the visible candle
-        // high/low. The default 10% padding on each side makes the
-        // candles feel vertically compressed; 5% gives a tighter view
-        // while still leaving a little breathing room.
         scaleMargins: { top: 0.05, bottom: 0.05 },
-        // Autoscale is enabled so the chart fits the VISIBLE candles
-        // tightly on first render. Lightweight Charts automatically
-        // disables autoscale when the user manually zooms the right
-        // price scale, so manual vertical zoom continues to work
-        // normally and is never overridden.
         autoScale: true,
       },
       timeScale: {
@@ -2043,11 +2177,6 @@ function createChart(candles) {
         fixLeftEdge: false, fixRightEdge: false, lockVisibleTimeRangeOnResize: false,
         tickMarkFormatter: (time, tickMarkType) => formatTimeLabel(time, tickMarkType)
       },
-      // NOTE: localization.priceFormatter intentionally NOT set here.
-      // The right price scale's precision is now driven per-series by
-      // the DYNAMIC PRICE SCALE logic (see updateDynamicPriceScale()).
-      // This lets the axis adapt its decimal precision to the user's
-      // current zoom level without touching any actual price values.
       localization: {
         locale: "en-IN",
         timeFormatter: (time) => formatFullDate(time)
@@ -2055,8 +2184,6 @@ function createChart(candles) {
     }
   );
 
-  // Initial price format. Dynamic updates override precision/minMove
-  // as soon as the first price-scale check runs after chart creation.
   const initialTickSize = dynamicPriceScale.tickSize;
   const initialPrecision = (Number.isFinite(initialTickSize) && initialTickSize > 0)
     ? getPricePrecision(initialTickSize)
@@ -2096,8 +2223,6 @@ function createChart(candles) {
   chart.timeScale().subscribeVisibleTimeRangeChange(() => scheduleLevelLabelUpdate());
   chart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
     scheduleLevelLabelUpdate();
-    // Horizontal scroll/zoom changed — also refresh the dynamic price
-    // scale in case the visible price range moved (e.g. after fitContent).
     updateDynamicPriceScale();
     if (!range || isLoadingHistory || !hasMoreHistory) return;
     historyLoadBanner.style.display = range.from < 5 ? "flex" : "none";
@@ -2107,7 +2232,6 @@ function createChart(candles) {
     if (!chart) return;
     chart.applyOptions({ width: chartContainer.clientWidth, height: chartContainer.clientHeight });
     scheduleLevelLabelUpdate();
-    // Recompute visible price range / unit after resize.
     updateDynamicPriceScale();
   };
   window.addEventListener("resize", resizeChart);
@@ -2120,20 +2244,11 @@ function createChart(candles) {
   calculatedOpeningRanges = buildOpeningRangesFromCandles(candles);
   renderOpeningRangeLines();
 
-  // Initialize the dynamic price unit for the first visible range
-  // (before the watcher's first tick fires).
+  // ---- Refresh EMA indicators after chart init ----
+  refreshIndicators(candles);
+
   updateDynamicPriceScale();
-
-  // Apply the tight initial vertical autoscale ONCE. This runs after
-  // the level lines have been added (so their autoscale exclusion
-  // is in effect) and after fitContent(). It does NOT continuously
-  // reset the viewport — see applyTightInitialAutoscale().
   applyTightInitialAutoscale(candles);
-
-  // Start the continuous rAF watcher that reacts to any price-scale
-  // change, including vertical-only zoom via the right price scale.
-  // It ONLY updates display precision / tick spacing and label
-  // positions — never the visible price range itself.
   startPriceScaleWatcher();
 }
 
