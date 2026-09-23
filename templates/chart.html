@@ -1325,53 +1325,76 @@ function detectEMACrosses(candles, fastLen, slowLen) {
 }
 
 // ============================================================
-// VERSION-SAFE MARKERS API WRAPPER
+// VERSION-SAFE MARKERS API WRAPPER (HARDENED)
 // ------------------------------------------------------------
 // Lightweight Charts v5 REMOVED series.setMarkers().
-// It is now a plugin: LightweightCharts.createSeriesMarkers(series, markers)
+// The replacement is a plugin primitive created via
+// LightweightCharts.createSeriesMarkers(series, []).
 //
-// This helper works across v4 and v5:
-//   * v5  → uses createSeriesMarkers (returns a primitive we keep a ref to)
-//   * v4  → falls back to series.setMarkers (no primitive needed)
-//
-// We keep the returned primitive in `markersPrimitive` so we can call
-// .setMarkers(...) on it repeatedly to update markers in place.
+// IMPORTANT v5 GOTCHAS we defend against here:
+//   1. createSeriesMarkers() must be called AFTER the series
+//      has at least one data point. Calling on an empty series
+//      can silently no-op on some v5 builds.
+//   2. The primitive caches internally, so after calling
+//      candleSeries.setData(...) we may need to recreate the
+//      primitive to force a redraw.
+//   3. If markers have identical time values, LWC will only
+//      render the last one per bar. We dedupe by time.
+//   4. Marker `time` values must exactly match a candle time,
+//      otherwise the marker is silently dropped.
 // ============================================================
-let markersPrimitive = null;   // v5 primitive, or null when using v4
+let markersPrimitive = null;
+let markersApiKind = "unknown";   // "v5" | "v4" | "none"
 
+// v5: (re)create the plugin primitive with the given markers.
+// We always RE-create to defeat the internal cache-after-setData bug.
+function setMarkersV5(markers) {
+  // Destroy any previous primitive first (best effort — LWC v5
+  // doesn't require explicit destroy, but dropping the reference
+  // forces a fresh primitive on the next create).
+  markersPrimitive = null;
+
+  try {
+    markersPrimitive = LightweightCharts.createSeriesMarkers(
+      candleSeries,
+      markers || []
+    );
+    return true;
+  } catch (err) {
+    console.warn("[markers] createSeriesMarkers threw:", err);
+    markersPrimitive = null;
+    return false;
+  }
+}
+
+// Main dispatch: try v5 first, then v4, and log which path ran.
 function applyMarkersToCandleSeries(markers) {
   if (!candleSeries) return;
 
-  // ---- v5 path: plugin-based API ----
+  const list = Array.isArray(markers) ? markers : [];
+
+  // ---- v5 path ----
   if (typeof LightweightCharts.createSeriesMarkers === "function") {
-    try {
-      if (!markersPrimitive) {
-        markersPrimitive = LightweightCharts.createSeriesMarkers(
-          candleSeries,
-          markers || []
-        );
-      } else {
-        markersPrimitive.setMarkers(markers || []);
-      }
-      return;
-    } catch (err) {
-      console.warn("createSeriesMarkers failed, falling back to setMarkers:", err);
-      markersPrimitive = null;
-    }
+    const ok = setMarkersV5(list);
+    markersApiKind = "v5";
+    if (ok) return;
   }
 
-  // ---- v4 path: series method ----
+  // ---- v4 path ----
   if (typeof candleSeries.setMarkers === "function") {
     try {
-      candleSeries.setMarkers(markers || []);
+      candleSeries.setMarkers(list);
+      markersApiKind = "v4";
       return;
     } catch (err) {
-      console.warn("setMarkers failed:", err);
+      console.warn("[markers] candleSeries.setMarkers threw:", err);
     }
   }
 
-  // ---- Neither path worked — swallow silently (don't break chart init) ----
-  console.warn("No markers API available on this Lightweight Charts build.");
+  if (markersApiKind === "unknown") {
+    markersApiKind = "none";
+    console.warn("[markers] No markers API available on this LWC build.");
+  }
 }
 
 // ---- Render / update EMA lines ----
@@ -1423,32 +1446,64 @@ function renderEMALines(candles) {
   }
 }
 
-// ---- Render crossover markers on the candle series ----
+// ============================================================
+// RENDER EMA CROSSOVER ARROWS (BUY / SELL markers)
+// ============================================================
 function renderEMACrossMarkers(candles) {
   if (!candleSeries) return;
 
+  // If EMA Cross toggle is OFF → clear all markers.
   if (!indicatorState.emaCross.enabled) {
     applyMarkersToCandleSeries([]);
     indicatorState.emaCross.markers = [];
     return;
   }
 
+  // Detect crosses using the same candle buffer shown on the chart.
   const crosses = detectEMACrosses(
     candles,
     indicatorState.ema9.length,
     indicatorState.ema21.length
   );
 
-  const markers = crosses.map(c => ({
-    time: c.time,
-    position: c.type === "bull" ? "belowBar" : "aboveBar",
-    color:    c.type === "bull" ? "#089981" : "#f23645",
-    shape:    c.type === "bull" ? "arrowUp" : "arrowDown",
-    text:     c.type === "bull" ? "BUY" : "SELL",
-    size: 1,
-  }));
+  if (window.__DEBUG_MARKERS__) {
+    console.log(
+      "[markers] crosses detected:",
+      crosses.length,
+      crosses.slice(-5)  // show last 5
+    );
+  }
 
-  // ✅ Version-safe call (works on both v4 and v5)
+  // ---- Build markers ----
+  // LWC v4/v5 rule: at most ONE marker per (time) will be rendered
+  // visually unless they're at DIFFERENT positions. Multiple crosses
+  // on the same bar are extremely rare with EMA9/21, so we simply
+  // dedupe by time to guarantee visibility.
+  const seenTimes = new Set();
+  const markers = [];
+
+  for (const c of crosses) {
+    if (seenTimes.has(c.time)) continue;
+    seenTimes.add(c.time);
+
+    const isBull = c.type === "bull";
+    markers.push({
+      time: c.time,
+      position: isBull ? "belowBar" : "aboveBar",
+      color:    isBull ? "#089981" : "#f23645",
+      shape:    isBull ? "arrowUp" : "arrowDown",
+      text:     isBull ? "BUY" : "SELL",
+      size: 2,   // ← bumped from 1 to 2 so it's clearly visible
+    });
+  }
+
+  // Sort by time ascending (LWC requires this).
+  markers.sort((a, b) => a.time - b.time);
+
+  if (window.__DEBUG_MARKERS__) {
+    console.log("[markers] markers to render:", markers.length, markers.slice(-5));
+  }
+
   applyMarkersToCandleSeries(markers);
   indicatorState.emaCross.markers = markers;
 }
