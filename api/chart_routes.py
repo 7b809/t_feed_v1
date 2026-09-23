@@ -312,4 +312,4 @@ async def get_chart_json(
         raise HTTPException(
             status_code=500,
             detail=str(exc),
-        )
+        ) 
