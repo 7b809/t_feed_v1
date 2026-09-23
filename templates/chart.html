@@ -1324,6 +1324,56 @@ function detectEMACrosses(candles, fastLen, slowLen) {
   return crosses;
 }
 
+// ============================================================
+// VERSION-SAFE MARKERS API WRAPPER
+// ------------------------------------------------------------
+// Lightweight Charts v5 REMOVED series.setMarkers().
+// It is now a plugin: LightweightCharts.createSeriesMarkers(series, markers)
+//
+// This helper works across v4 and v5:
+//   * v5  → uses createSeriesMarkers (returns a primitive we keep a ref to)
+//   * v4  → falls back to series.setMarkers (no primitive needed)
+//
+// We keep the returned primitive in `markersPrimitive` so we can call
+// .setMarkers(...) on it repeatedly to update markers in place.
+// ============================================================
+let markersPrimitive = null;   // v5 primitive, or null when using v4
+
+function applyMarkersToCandleSeries(markers) {
+  if (!candleSeries) return;
+
+  // ---- v5 path: plugin-based API ----
+  if (typeof LightweightCharts.createSeriesMarkers === "function") {
+    try {
+      if (!markersPrimitive) {
+        markersPrimitive = LightweightCharts.createSeriesMarkers(
+          candleSeries,
+          markers || []
+        );
+      } else {
+        markersPrimitive.setMarkers(markers || []);
+      }
+      return;
+    } catch (err) {
+      console.warn("createSeriesMarkers failed, falling back to setMarkers:", err);
+      markersPrimitive = null;
+    }
+  }
+
+  // ---- v4 path: series method ----
+  if (typeof candleSeries.setMarkers === "function") {
+    try {
+      candleSeries.setMarkers(markers || []);
+      return;
+    } catch (err) {
+      console.warn("setMarkers failed:", err);
+    }
+  }
+
+  // ---- Neither path worked — swallow silently (don't break chart init) ----
+  console.warn("No markers API available on this Lightweight Charts build.");
+}
+
 // ---- Render / update EMA lines ----
 function renderEMALines(candles) {
   if (!chart) return;
@@ -1378,7 +1428,7 @@ function renderEMACrossMarkers(candles) {
   if (!candleSeries) return;
 
   if (!indicatorState.emaCross.enabled) {
-    candleSeries.setMarkers([]);
+    applyMarkersToCandleSeries([]);
     indicatorState.emaCross.markers = [];
     return;
   }
@@ -1398,16 +1448,22 @@ function renderEMACrossMarkers(candles) {
     size: 1,
   }));
 
-  candleSeries.setMarkers(markers);
+  // ✅ Version-safe call (works on both v4 and v5)
+  applyMarkersToCandleSeries(markers);
   indicatorState.emaCross.markers = markers;
 }
 
-// ---- Master refresh ----
+// ---- Master refresh (error-safe) ----
 function refreshIndicators(candles) {
-  const data = candles || (candleSeries ? candleSeries.data() : []);
-  if (!data || data.length === 0) return;
-  renderEMALines(data);
-  renderEMACrossMarkers(data);
+  try {
+    const data = candles || (candleSeries ? candleSeries.data() : []);
+    if (!data || data.length === 0) return;
+    renderEMALines(data);
+    renderEMACrossMarkers(data);
+  } catch (err) {
+    // Never let an indicator error break the live feed or chart
+    console.warn("refreshIndicators error (swallowed):", err);
+  }
 }
 
 // ---- Wire up indicator toggle buttons ----
@@ -1720,7 +1776,7 @@ function updateCandle(candle) {
   lastCandle = candle;
   updateLivePrice(candle.close);
 
-  // ---- Recompute indicators on every tick ----
+  // ---- Recompute indicators on every tick (error-safe) ----
   if (indicatorState.ema9.enabled || indicatorState.ema21.enabled || indicatorState.emaCross.enabled) {
     refreshIndicators();
   }
@@ -2244,7 +2300,7 @@ function createChart(candles) {
   calculatedOpeningRanges = buildOpeningRangesFromCandles(candles);
   renderOpeningRangeLines();
 
-  // ---- Refresh EMA indicators after chart init ----
+  // ---- Refresh EMA indicators after chart init (error-safe) ----
   refreshIndicators(candles);
 
   updateDynamicPriceScale();
@@ -2253,14 +2309,22 @@ function createChart(candles) {
 }
 
 // ============================================================
-// START CHART
+// START CHART (error-safe)
 // ============================================================
-createChart(formattedData);
+try {
+  createChart(formattedData);
+} catch (err) {
+  console.error("Chart init failed:", err);
+}
 
 // ============================================================
-// START WEBSOCKET
+// START WEBSOCKET (always, even if chart init partially failed)
 // ============================================================
-connectWebSocket();
+try {
+  connectWebSocket();
+} catch (err) {
+  console.error("WebSocket init failed:", err);
+}
 
 // ============================================================
 // PAGE CLOSE
@@ -2272,4 +2336,4 @@ window.addEventListener("beforeunload", () => {
   if (chartSocket) chartSocket.close(1000, "Chart page closed");
 });
 </script>
-{% endblock %} 
+{% endblock %}
