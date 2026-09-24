@@ -1134,7 +1134,7 @@ def get_contract_history(
             f"{HISTORICAL_WINDOW_DAYS} is fetched in windows."
         ),
     ),
-) -> dict[str, Any]:
+) -> dict[str, Any]: 
     """
     Convenience route: resolve a contract and return its historical candles.
     """
