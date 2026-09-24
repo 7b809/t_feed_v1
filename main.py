@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import shutil
 from contextlib import asynccontextmanager
+from pathlib import Path
 from threading import Thread
 from typing import Any
 
@@ -14,6 +16,8 @@ from fastapi.middleware.cors import (
 from api.ema_routes import (
     router as ema_router,
 )
+from api.chart_routes import (
+    router as chart_router,)
 from api.logs_routes import router as logs_router
 from api.data_routes import router as data_router
 from api.refresh_routes import (
@@ -116,6 +120,87 @@ def _get_cors_origins() -> list[str]:
     return []
 
 
+def _resolve_cleanup_paths() -> list[Path]:
+    """
+    Resolve the directories that must be wiped on every fresh run.
+
+    Sources (in priority order) for each path:
+      - data  : config.DATA_ROOT, config.DATA_DIR, default "data"
+      - logs  : config.LOG_DIR, default "logs"
+
+    Paths are resolved relative to the current working directory so that
+    the cleanup matches what the rest of the code writes to.
+    """
+    candidates: list[Path] = []
+
+    data_value = (
+        getattr(config, "DATA_ROOT", None)
+        or getattr(config, "DATA_DIR", None)
+        or "data"
+    )
+
+    logs_value = getattr(config, "LOG_DIR", None) or "logs"
+
+    for raw in (data_value, logs_value):
+        if raw is None:
+            continue
+
+        try:
+            candidates.append(Path(str(raw)).resolve())
+        except Exception:
+            logger.exception(
+                "Failed to resolve cleanup path raw=%s",
+                raw,
+            )
+
+    return candidates
+
+
+def _cleanup_runtime_directories() -> None:
+    """
+    Remove data/ and logs/ directories before the service starts.
+
+    Called once at the beginning of the FastAPI lifespan startup so that
+    every run starts from a clean state, regardless of how the process
+    was launched.
+
+    Any failure is logged but does not abort startup, so the service can
+    still come up even if a file is locked on Windows.
+    """
+    for path in _resolve_cleanup_paths():
+        try:
+            if path.exists():
+                if path.is_dir():
+                    shutil.rmtree(path, ignore_errors=False)
+                    logger.info(
+                        "Startup cleanup removed directory path=%s",
+                        path,
+                    )
+                else:
+                    path.unlink()
+                    logger.info(
+                        "Startup cleanup removed file path=%s",
+                        path,
+                    )
+            else:
+                logger.info(
+                    "Startup cleanup skipped because path does not exist path=%s",
+                    path,
+                )
+
+        except PermissionError:
+            logger.exception(
+                "Startup cleanup failed because path is in use path=%s",
+                path,
+            )
+
+        except Exception:
+            logger.exception(
+                "Startup cleanup failed path=%s",
+                path,
+            )
+
+
 def _log_registered_routes(
     application: FastAPI,
 ) -> None:
@@ -195,6 +280,10 @@ async def lifespan(
     startup_completed = False
 
     try:
+        # Wipe data/ and logs/ on every fresh run before any component
+        # creates or reads files in those directories.
+        _cleanup_runtime_directories()
+
         event_loop = asyncio.get_running_loop()
 
         runtime = EmaRuntime(
@@ -400,7 +489,7 @@ logger.info(
 )
 
 app.include_router(refresh_router)
-
+app.include_router(chart_router)
 app.include_router(ema_router)
 
 app.include_router(websocket_router)

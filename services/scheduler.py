@@ -33,6 +33,9 @@ class Scheduler:
         self.stop_event = Event()
         self.refresh_lock = Lock()
 
+        # Tracks whether we have attempted a startup bootstrap in this process.
+        self._startup_bootstrap_attempted = False
+
     def _call_callable_safely(self, fn, **kwargs):
         """
         Safely invoke a method by mapping kwargs to its explicit parameter signature,
@@ -186,6 +189,101 @@ class Scheduler:
             return contracts
 
         return []
+
+    def _contracts_file_exists(self) -> bool:
+        """
+        Return True when the full contracts file exists on disk.
+        """
+        try:
+            return config.CONTRACTS_FILE.exists()
+        except Exception:
+            logger.exception("Failed to check contracts file existence")
+            return False
+
+    def _bootstrap_contracts_only(
+        self,
+        now: datetime,
+        trigger: str = "startup_bootstrap",
+    ) -> dict:
+        """
+        Fetch and persist the nearest NIFTY option contracts without running
+        the heavy EMA warmup.
+
+        This is used so that candle discovery and candle routes work
+        immediately on startup, regardless of the current time.
+        """
+        if not self.refresh_lock.acquire(blocking=False):
+            logger.warning(
+                "Bootstrap ignored because another refresh is already running trigger=%s",
+                trigger,
+            )
+            return {
+                "status": "already_running",
+                "message": "A refresh is already in progress",
+            }
+
+        started_at = datetime.now(config.MARKET_TIMEZONE)
+
+        try:
+            logger.info(
+                "Bootstrap contracts fetch started trigger=%s time=%s",
+                trigger,
+                started_at.isoformat(),
+            )
+
+            token = self.token_service.get_access_token(force_refresh=True)
+
+            payload, contracts = fetch_and_select(token)
+
+            self.runtime.replace_contracts(contracts)
+
+            completed_at = datetime.now(config.MARKET_TIMEZONE)
+
+            summary = {
+                "status": "success",
+                "trigger": trigger,
+                "bootstrap": True,
+                "started_at": started_at.isoformat(),
+                "completed_at": completed_at.isoformat(),
+                "nearest_expiry": payload.get("nearest_expiry"),
+                "test_flag": config.TEST_FLAG,
+                "selected_contract_count": len(contracts),
+                "contracts_file": str(config.CONTRACTS_FILE),
+            }
+
+            logger.info(
+                "Bootstrap contracts fetch completed trigger=%s selected=%s nearest_expiry=%s contracts_file=%s",
+                trigger,
+                len(contracts),
+                payload.get("nearest_expiry"),
+                config.CONTRACTS_FILE,
+            )
+
+            return summary
+
+        except Exception as ex:
+            logger.exception("Bootstrap contracts fetch failed trigger=%s", trigger)
+
+            self._notify(
+                event_type="error",
+                title="NIFTY EMA Bootstrap Failed",
+                message=(
+                    "NIFTY EMA bootstrap contracts fetch failed\n"
+                    f"Trigger: {trigger}\n"
+                    f"Error: {ex}"
+                ),
+                source="scheduler._bootstrap_contracts_only",
+            )
+
+            return {
+                "status": "failed",
+                "trigger": trigger,
+                "bootstrap": True,
+                "error": str(ex),
+            }
+
+        finally:
+            self.refresh_lock.release()
 
     def refresh_day(
         self, now: datetime, force: bool = False, trigger: str = "scheduler"
@@ -420,11 +518,63 @@ class Scheduler:
         """
         self.stop_event.set()
 
+    def _handle_startup_bootstrap(self, now: datetime) -> None:
+        """
+        On the first loop iteration, ensure contract discovery works.
+
+        Behavior:
+          - If the full contracts file is missing, fetch and persist it now,
+            regardless of the current time.
+          - If the file exists but nothing is loaded into the runtime, try to
+            restore the current day's selection from disk without hitting Upstox.
+        """
+        if self._startup_bootstrap_attempted:
+            return
+
+        self._startup_bootstrap_attempted = True
+
+        try:
+            contracts_file_exists = self._contracts_file_exists()
+
+            logger.info(
+                "Startup bootstrap evaluation contracts_file=%s exists=%s runtime_contracts=%s",
+                config.CONTRACTS_FILE,
+                contracts_file_exists,
+                len(self.runtime.contracts),
+            )
+
+            if not contracts_file_exists:
+                self._bootstrap_contracts_only(
+                    now,
+                    trigger="startup_bootstrap_missing_file",
+                )
+                return
+
+            if not self.runtime.contracts:
+                contracts = self.selected_for_today(now.date())
+
+                if contracts:
+                    self.runtime.replace_contracts(contracts)
+
+                    logger.info(
+                        "Startup bootstrap restored selected contracts from disk count=%s",
+                        len(contracts),
+                    )
+                else:
+                    logger.info(
+                        "Startup bootstrap found contracts file but no selection for today; "
+                        "leaving runtime empty until scheduler window opens"
+                    )
+
+        except Exception:
+            logger.exception("Startup bootstrap failed")
+
     def run(self) -> None:
         """
         Start the scheduler loop.
 
         Responsibilities:
+        - Startup contract bootstrap.
         - Daily refresh.
         - Runtime restoration.
         - One-minute OHLC polling.
@@ -444,6 +594,9 @@ class Scheduler:
             now = datetime.now(config.MARKET_TIMEZONE)
 
             try:
+                # Ensure contract discovery works even outside market hours.
+                self._handle_startup_bootstrap(now)
+
                 if self.is_weekday(now):
                     state = read_json(self.state_path, {})
 
