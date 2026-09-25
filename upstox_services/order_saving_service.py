@@ -253,15 +253,28 @@ class OrderSavingService:
 
         return normalized or None
 
+    # ------------------------------------------------------------------
+    # ORDER ID EXTRACTION
+    # ------------------------------------------------------------------
     @staticmethod
     def _extract_nested_order_id(
         value: Any,
     ) -> str | None:
+        """
+        Walks a nested dictionary looking for an order id.
+
+        Handles both the plain keys ("order_id", "orderId", "id") and
+        the Upstox SDK's underscore-prefixed keys ("_order_id") and
+        nested containers ("data", "_data", "response", "result").
+        """
         if not isinstance(value, dict):
             return None
 
         direct_order_id = (
-            value.get("order_id") or value.get("orderId") or value.get("id")
+            value.get("order_id")
+            or value.get("orderId")
+            or value.get("id")
+            or value.get("_order_id")
         )
 
         normalized_direct_id = OrderSavingService._normalize_text(direct_order_id)
@@ -271,6 +284,7 @@ class OrderSavingService:
 
         for nested_key in (
             "data",
+            "_data",
             "response",
             "result",
         ):
@@ -294,6 +308,7 @@ class OrderSavingService:
             order_result.get("order_id")
             or order_result.get("orderId")
             or order_result.get("id")
+            or order_result.get("_order_id")
         )
 
         normalized_direct_id = OrderSavingService._normalize_text(direct_order_id)
@@ -305,6 +320,9 @@ class OrderSavingService:
 
         return OrderSavingService._extract_nested_order_id(place_order_result)
 
+    # ------------------------------------------------------------------
+    # INSTRUMENT DETAILS
+    # ------------------------------------------------------------------
     @staticmethod
     def _get_instrument_details(
         payload: dict[str, Any],
@@ -347,6 +365,35 @@ class OrderSavingService:
             "lot_size": lot_size,
         }
 
+    # ------------------------------------------------------------------
+    # PLACE ORDER REQUEST (flattened at top level)
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _get_place_order_request(
+        order_result: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """
+        Extracts the order placement request that was sent to Upstox
+        and returns it as a plain dict, so it can be stored at the top
+        level of the order document for easy querying.
+
+        Returns None when the placement request is missing or invalid.
+        """
+        place_order_result = order_result.get("place_order_result")
+
+        if not isinstance(place_order_result, dict):
+            return None
+
+        request = place_order_result.get("request")
+
+        if not isinstance(request, dict):
+            return None
+
+        return deepcopy(request)
+
+    # ------------------------------------------------------------------
+    # MARGIN METADATA
+    # ------------------------------------------------------------------
     @staticmethod
     def _get_margin_metadata(
         order_result: dict[str, Any],
@@ -395,6 +442,9 @@ class OrderSavingService:
             "error": margin_result.get("error"),
         }
 
+    # ------------------------------------------------------------------
+    # PAYLOAD METADATA
+    # ------------------------------------------------------------------
     @staticmethod
     def _get_payload_metadata(
         payload: dict[str, Any],
@@ -444,6 +494,9 @@ class OrderSavingService:
             "minute_alert_key": (duplicate_control.get("minute_alert_key")),
         }
 
+    # ------------------------------------------------------------------
+    # DOCUMENT BUILDER
+    # ------------------------------------------------------------------
     def _build_order_document(
         self,
         *,
@@ -488,15 +541,19 @@ class OrderSavingService:
             "executed": executed,
             "skipped": skipped,
             "error": order_result.get("error"),
-            "order_result": deepcopy(order_result),
+            "place_order_request": self._get_place_order_request(order_result),
             "margin": self._get_margin_metadata(order_result),
             "payload_metadata": (self._get_payload_metadata(payload)),
+            "order_result": deepcopy(order_result),
             "created_at": now,
             "updated_at": now,
             "created_at_ist": now.strftime("%Y-%m-%d %H:%M:%S %Z"),
             "updated_at_ist": now.strftime("%Y-%m-%d %H:%M:%S %Z"),
         }
 
+    # ------------------------------------------------------------------
+    # DAILY DOCUMENT + ORDER KEY HELPERS
+    # ------------------------------------------------------------------
     @staticmethod
     def _get_daily_document_id(
         now: datetime,
@@ -560,6 +617,9 @@ class OrderSavingService:
 
             order_key = f"{base_key}_{counter}"
 
+    # ------------------------------------------------------------------
+    # PUBLIC SAVE API
+    # ------------------------------------------------------------------
     def save_order_result(
         self,
         *,
