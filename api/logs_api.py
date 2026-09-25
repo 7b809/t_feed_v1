@@ -18,6 +18,7 @@ router = APIRouter(tags=["Logs"])
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 LOGS_DIR = PROJECT_ROOT / "logs"
+TEXT_LOGS_DIR = PROJECT_ROOT / "logs_text"
 META_DATA_DIR = PROJECT_ROOT / "meta_data"
 TEMPLATES_DIR = PROJECT_ROOT / "templates"
 
@@ -40,12 +41,74 @@ ALLOWED_METADATA_EXTENSIONS = {
 
 
 # ============================================================
+# LOG SOURCE HELPERS
+# ============================================================
+
+
+def resolve_log_source(source: str) -> str:
+    """
+    Normalizes a user-supplied source into one of:
+
+        "logs"       -> rotating .log files
+        "logs_text"  -> plain-text .txt files
+        "all"        -> both directories merged
+    """
+    normalized = str(source or "all").strip().lower()
+
+    if normalized in {"logs_text", "text", "txt"}:
+        return "logs_text"
+
+    if normalized in {"logs", "log"}:
+        return "logs"
+
+    return "all"
+
+
+def get_source_directories(source: str) -> list[tuple[str, Path]]:
+    """
+    Returns a list of (source_name, directory) tuples for the given
+    resolved source value.
+    """
+    resolved_source = resolve_log_source(source)
+
+    if resolved_source == "logs":
+        return [("logs", LOGS_DIR)]
+
+    if resolved_source == "logs_text":
+        return [("logs_text", TEXT_LOGS_DIR)]
+
+    return [
+        ("logs", LOGS_DIR),
+        ("logs_text", TEXT_LOGS_DIR),
+    ]
+
+
+def get_directory_for_source(source: str) -> tuple[str, Path]:
+    """
+    Returns a single (source_name, directory) tuple for the given
+    source. Falls back to "logs" when the source is unknown or "all".
+    """
+    resolved_source = resolve_log_source(source)
+
+    if resolved_source == "logs_text":
+        return ("logs_text", TEXT_LOGS_DIR)
+
+    return ("logs", LOGS_DIR)
+
+
+# ============================================================
 # LOG FILE FUNCTIONS
 # ============================================================
 
 
-def get_available_log_files() -> list:
-    LOGS_DIR.mkdir(
+def list_files_in_directory(
+    directory: Path,
+    source_name: str,
+) -> list:
+    """
+    Lists all supported log files inside a single directory.
+    """
+    directory.mkdir(
         parents=True,
         exist_ok=True,
     )
@@ -53,7 +116,7 @@ def get_available_log_files() -> list:
     files = []
 
     for file_path in sorted(
-        LOGS_DIR.iterdir(),
+        directory.iterdir(),
         key=lambda path: path.stat().st_mtime,
         reverse=True,
     ):
@@ -68,6 +131,8 @@ def get_available_log_files() -> list:
         files.append(
             {
                 "filename": file_path.name,
+                "source": source_name,
+                "extension": file_path.suffix.lower(),
                 "size_bytes": stat.st_size,
                 "modified_time": stat.st_mtime,
             }
@@ -76,7 +141,42 @@ def get_available_log_files() -> list:
     return files
 
 
-def validate_log_file(filename: str) -> Path:
+def get_available_log_files(source: str = "all") -> list:
+    """
+    Lists all supported log files for the given source:
+
+        "logs"       -> only logs/
+        "logs_text"  -> only logs_text/
+        "all"        -> both, merged and sorted by modified_time desc
+    """
+    resolved_source = resolve_log_source(source)
+
+    if resolved_source in {"logs", "logs_text"}:
+        source_name, directory = get_directory_for_source(resolved_source)
+
+        return list_files_in_directory(directory, source_name)
+
+    merged: list = []
+
+    for source_name, directory in get_source_directories("all"):
+        merged.extend(list_files_in_directory(directory, source_name))
+
+    merged.sort(
+        key=lambda entry: entry.get("modified_time", 0),
+        reverse=True,
+    )
+
+    return merged
+
+
+def validate_log_file(
+    filename: str,
+    source: str = "logs",
+) -> Path:
+    """
+    Validates a log filename for the given source and returns a
+    resolved Path. Prevents path traversal.
+    """
     if not filename or filename in {".", ".."}:
         raise HTTPException(
             status_code=400,
@@ -97,13 +197,15 @@ def validate_log_file(filename: str) -> Path:
             detail="Unsupported log file type",
         )
 
-    LOGS_DIR.mkdir(
+    _, logs_dir = get_directory_for_source(source)
+
+    logs_dir.mkdir(
         parents=True,
         exist_ok=True,
     )
 
-    logs_directory = LOGS_DIR.resolve()
-    log_file = (LOGS_DIR / filename).resolve()
+    logs_directory = logs_dir.resolve()
+    log_file = (logs_dir / filename).resolve()
 
     try:
         log_file.relative_to(logs_directory)
@@ -246,8 +348,16 @@ def validate_metadata_file(filename: str) -> Path:
     response_class=HTMLResponse,
     include_in_schema=False,
 )
-async def show_logs(request: Request):
-    log_files = get_available_log_files()
+async def show_logs(
+    request: Request,
+    source: str = Query(
+        default="all",
+        description="Which log source to list: 'logs', 'logs_text' or 'all'",
+    ),
+):
+    resolved_source = resolve_log_source(source)
+
+    log_files = get_available_log_files(source=resolved_source)
 
     return templates.TemplateResponse(
         request=request,
@@ -255,6 +365,9 @@ async def show_logs(request: Request):
         context={
             "app_name": "T Feed",
             "logs": log_files,
+            "log_source": resolved_source,
+            "logs_directory": str(LOGS_DIR),
+            "text_logs_directory": str(TEXT_LOGS_DIR),
         },
     )
 
@@ -269,9 +382,15 @@ async def show_logs(request: Request):
     response_class=PlainTextResponse,
     include_in_schema=False,
 )
-def show_log_file_content(filename: str):
+def show_log_file_content(
+    filename: str,
+    source: str = Query(
+        default="logs",
+        description="Which log source to read: 'logs' or 'logs_text'",
+    ),
+):
     try:
-        log_file = validate_log_file(filename)
+        log_file = validate_log_file(filename, source=source)
 
         with log_file.open(
             mode="r",
@@ -299,13 +418,22 @@ def show_log_file_content(filename: str):
 
 
 @router.get("/api/logs")
-def list_log_files():
+def list_log_files(
+    source: str = Query(
+        default="all",
+        description="Which log source to list: 'logs', 'logs_text' or 'all'",
+    ),
+):
     try:
-        files = get_available_log_files()
+        resolved_source = resolve_log_source(source)
+
+        files = get_available_log_files(source=resolved_source)
 
         return {
             "success": True,
+            "source": resolved_source,
             "logs_directory": str(LOGS_DIR),
+            "text_logs_directory": str(TEXT_LOGS_DIR),
             "count": len(files),
             "files": files,
         }
@@ -331,9 +459,18 @@ def get_log_file(
         le=5000,
         description="Number of latest log lines to return",
     ),
+    source: str = Query(
+        default="logs",
+        description="Which log source to read: 'logs' or 'logs_text'",
+    ),
 ):
     try:
-        log_file = validate_log_file(filename)
+        resolved_source = resolve_log_source(source)
+
+        if resolved_source == "all":
+            resolved_source = "logs"
+
+        log_file = validate_log_file(filename, source=resolved_source)
 
         all_lines = read_log_file(log_file)
 
@@ -342,6 +479,7 @@ def get_log_file(
         return {
             "success": True,
             "filename": filename,
+            "source": resolved_source,
             "path": str(log_file),
             "total_lines": len(all_lines),
             "returned_lines": len(selected_lines),
@@ -370,12 +508,31 @@ def get_log_file(
     "/api/logs/download",
     include_in_schema=False,
 )
-def download_logs():
+def download_logs(
+    source: str = Query(
+        default="all",
+        description="Which log source to zip: 'logs', 'logs_text' or 'all'",
+    ),
+):
     try:
-        if not LOGS_DIR.exists() or not LOGS_DIR.is_dir():
+        resolved_source = resolve_log_source(source)
+
+        directories = get_source_directories(resolved_source)
+
+        any_content = False
+
+        for _, directory in directories:
+            if not directory.exists() or not directory.is_dir():
+                continue
+
+            if any(directory.rglob("*")):
+                any_content = True
+                break
+
+        if not any_content:
             raise HTTPException(
                 status_code=404,
-                detail="Logs folder not found",
+                detail="No log files found to download",
             )
 
         zip_buffer = io.BytesIO()
@@ -386,9 +543,17 @@ def download_logs():
             compression=zipfile.ZIP_DEFLATED,
         ) as zip_file:
 
-            for file_path in LOGS_DIR.rglob("*"):
-                if file_path.is_file():
-                    arcname = file_path.relative_to(LOGS_DIR)
+            for source_name, directory in directories:
+                if not directory.exists() or not directory.is_dir():
+                    continue
+
+                for file_path in directory.rglob("*"):
+                    if not file_path.is_file():
+                        continue
+
+                    relative = file_path.relative_to(directory)
+
+                    arcname = Path(source_name) / relative
 
                     zip_file.write(
                         file_path,
@@ -397,10 +562,17 @@ def download_logs():
 
         zip_buffer.seek(0)
 
+        if resolved_source == "all":
+            archive_name = "logs_all.zip"
+        else:
+            archive_name = f"{resolved_source}.zip"
+
         return StreamingResponse(
             zip_buffer,
             media_type="application/zip",
-            headers={"Content-Disposition": ('attachment; filename="logs.zip"')},
+            headers={
+                "Content-Disposition": f'attachment; filename="{archive_name}"'
+            },
         )
 
     except HTTPException:

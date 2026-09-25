@@ -6,6 +6,12 @@ LOGS_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs"
 )
 
+# Path to the plain-text logs directory (a mirror of LOGS_DIR,
+# but containing .txt files that are simpler to read / grep / share).
+TEXT_LOGS_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs_text"
+)
+
 
 class LineCountRotatingHandler(logging.FileHandler):
     """
@@ -103,10 +109,44 @@ class LineCountRotatingHandler(logging.FileHandler):
         self.line_count = 0
 
 
+class PlainTextHandler(logging.FileHandler):
+    """
+    A simple append-only plain-text log handler.
+
+    Writes each log record to a .txt file (mirror of the .log file)
+    using a slightly simpler, human-friendly format. No rotation is
+    performed by default, so the file keeps a complete history in a
+    single easy-to-open text file.
+
+    Rotation can still be enabled by passing maxBytes / backupCount
+    (handled by the parent FileHandler when using
+    logging.handlers.RotatingFileHandler instead of FileHandler; here
+    we keep it simple with a plain append-only FileHandler).
+    """
+
+    def __init__(self, filename, encoding="utf-8"):
+        super().__init__(filename, mode="a", encoding=encoding)
+
+
+def _build_formatter() -> logging.Formatter:
+    """
+    Shared formatter used by both the .log and .txt handlers.
+    """
+    return logging.Formatter(
+        "%(asctime)s [%(levelname)s] [%(name)s] "
+        "[%(filename)s:%(lineno)d] [%(funcName)s]: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+
+
 def get_logger(filename: str, log_level=logging.DEBUG) -> logging.Logger:
     """
     Creates and returns a logger that logs all standard logging levels
-    to both the console and a rotating file.
+    to:
+
+      - the console
+      - a rotating .log file under logs/
+      - an append-only .txt file under logs_text/
 
     Supported levels:
     - DEBUG
@@ -130,8 +170,9 @@ def get_logger(filename: str, log_level=logging.DEBUG) -> logging.Logger:
     # Extract the pure filename without its path or extension.
     base_name = os.path.splitext(os.path.basename(filename))[0]
 
-    # Ensure that the logs directory exists.
+    # Ensure that the logs directories exist.
     os.makedirs(LOGS_DIR, exist_ok=True)
+    os.makedirs(TEXT_LOGS_DIR, exist_ok=True)
 
     logger = logging.getLogger(base_name)
     logger.setLevel(log_level)
@@ -143,19 +184,19 @@ def get_logger(filename: str, log_level=logging.DEBUG) -> logging.Logger:
     if logger.handlers:
         return logger
 
-    formatter = logging.Formatter(
-        "%(asctime)s [%(levelname)s] [%(name)s] "
-        "[%(filename)s:%(lineno)d] [%(funcName)s]: %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
+    formatter = _build_formatter()
 
-    # Console handler
+    # ------------------------------------------------------------------
+    # 1. Console handler
+    # ------------------------------------------------------------------
     console_handler = logging.StreamHandler()
     console_handler.setLevel(log_level)
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
 
-    # Rotating file handler
+    # ------------------------------------------------------------------
+    # 2. Rotating .log file handler
+    # ------------------------------------------------------------------
     log_file_path = os.path.join(
         LOGS_DIR,
         f"{base_name}.log",
@@ -171,5 +212,22 @@ def get_logger(filename: str, log_level=logging.DEBUG) -> logging.Logger:
     file_handler.setLevel(log_level)
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
+
+    # ------------------------------------------------------------------
+    # 3. Plain-text .txt file handler (mirror)
+    # ------------------------------------------------------------------
+    text_file_path = os.path.join(
+        TEXT_LOGS_DIR,
+        f"{base_name}.txt",
+    )
+
+    text_handler = PlainTextHandler(
+        text_file_path,
+        encoding="utf-8",
+    )
+
+    text_handler.setLevel(log_level)
+    text_handler.setFormatter(formatter)
+    logger.addHandler(text_handler)
 
     return logger
