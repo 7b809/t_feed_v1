@@ -5,8 +5,8 @@ from typing import Any
 import upstox_client
 from upstox_client.rest import ApiException
 
-from core import config
 from core.logger import get_logger
+from services.token_service import token_service
 
 logger = get_logger(__file__)
 
@@ -30,13 +30,22 @@ class MarginService:
     # Configuration helpers
     # ------------------------------------------------------------------
     def _get_access_token(self) -> str:
-        token = (
-            getattr(config, "UPSTOX_ACCESS_TOKEN", None)
-            or getattr(config, "ACCESS_TOKEN", None)
-            or ""
-        )
+        """
+        Fetches the Upstox access token using the same token service
+        that place_order.py uses. Returns an empty string when the
+        token is unavailable.
+        """
+        try:
+            access_token = token_service.get_access_token()
 
-        return str(token).strip()
+        except Exception:
+            logger.exception(
+                "Failed to fetch Upstox access token from token_service."
+            )
+
+            return ""
+
+        return str(access_token or "").strip()
 
     def _get_api_instance(self) -> upstox_client.ChargeApi:
         if self._api_instance is not None:
@@ -45,10 +54,7 @@ class MarginService:
         access_token = self._get_access_token()
 
         if not access_token:
-            raise ValueError(
-                "Upstox access token is not configured. "
-                "Set UPSTOX_ACCESS_TOKEN or ACCESS_TOKEN in config."
-            )
+            raise RuntimeError("Upstox access token is not available.")
 
         configuration = upstox_client.Configuration()
         configuration.access_token = access_token
