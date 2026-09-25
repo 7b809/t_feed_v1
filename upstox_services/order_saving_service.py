@@ -392,6 +392,33 @@ class OrderSavingService:
         return deepcopy(request)
 
     # ------------------------------------------------------------------
+    # PLACE ORDER RESPONSE (flattened at top level)
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _get_place_order_response(
+        order_result: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """
+        Extracts the raw Upstox placement response (including the
+        SDK's underscore-prefixed "_data._order_id") and returns it as
+        a plain dict, so it can be stored at the top level of the
+        order document.
+
+        Returns None when the response is missing or invalid.
+        """
+        place_order_result = order_result.get("place_order_result")
+
+        if not isinstance(place_order_result, dict):
+            return None
+
+        response = place_order_result.get("response")
+
+        if not isinstance(response, dict):
+            return None
+
+        return deepcopy(response)
+
+    # ------------------------------------------------------------------
     # MARGIN METADATA
     # ------------------------------------------------------------------
     @staticmethod
@@ -542,6 +569,7 @@ class OrderSavingService:
             "skipped": skipped,
             "error": order_result.get("error"),
             "place_order_request": self._get_place_order_request(order_result),
+            "place_order_response": self._get_place_order_response(order_result),
             "margin": self._get_margin_metadata(order_result),
             "payload_metadata": (self._get_payload_metadata(payload)),
             "order_result": deepcopy(order_result),

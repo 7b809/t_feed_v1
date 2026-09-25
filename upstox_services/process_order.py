@@ -135,6 +135,18 @@ def _build_skipped_result(
 def _extract_order_id(
     place_order_result: dict[str, Any] | None,
 ) -> str | None:
+    """
+    Extracts the Upstox order id from a place_order_result dictionary.
+
+    Handles both the simple shape:
+
+        {"order_id": "..."}
+
+    and the Upstox SDK's native underscore-prefixed shape:
+
+        {"response": {"_status": "success",
+                      "_data": {"_order_id": "260925000045060"}}}
+    """
     if not isinstance(place_order_result, dict):
         return None
 
@@ -142,6 +154,7 @@ def _extract_order_id(
         place_order_result.get("order_id")
         or place_order_result.get("orderId")
         or place_order_result.get("id")
+        or place_order_result.get("_order_id")
     )
 
     if direct_order_id is not None:
@@ -150,10 +163,15 @@ def _extract_order_id(
         if normalized_order_id:
             return normalized_order_id
 
-    data = place_order_result.get("data")
+    data = place_order_result.get("data") or place_order_result.get("_data")
 
     if isinstance(data, dict):
-        data_order_id = data.get("order_id") or data.get("orderId") or data.get("id")
+        data_order_id = (
+            data.get("order_id")
+            or data.get("orderId")
+            or data.get("id")
+            or data.get("_order_id")
+        )
 
         if data_order_id is not None:
             normalized_order_id = str(data_order_id).strip()
@@ -165,7 +183,10 @@ def _extract_order_id(
 
     if isinstance(response, dict):
         response_order_id = (
-            response.get("order_id") or response.get("orderId") or response.get("id")
+            response.get("order_id")
+            or response.get("orderId")
+            or response.get("id")
+            or response.get("_order_id")
         )
 
         if response_order_id is not None:
@@ -174,13 +195,14 @@ def _extract_order_id(
             if normalized_order_id:
                 return normalized_order_id
 
-        response_data = response.get("data")
+        response_data = response.get("data") or response.get("_data")
 
         if isinstance(response_data, dict):
             response_data_order_id = (
                 response_data.get("order_id")
                 or response_data.get("orderId")
                 or response_data.get("id")
+                or response_data.get("_order_id")
             )
 
             if response_data_order_id is not None:
@@ -1030,4 +1052,4 @@ def process_selected_instrument(
         instrument_details=instrument_details,
         exit_result=exit_result,
         margin_result=margin_result,
-    ) 
+    )

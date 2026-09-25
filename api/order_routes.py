@@ -5,6 +5,9 @@ from fastapi import APIRouter, HTTPException, Query
 
 from core.logger import get_logger
 from services.option_service import options_cache
+from upstox_services.order_saving_service import (
+    upstox_order_saving_service,
+)
 from upstox_services.process_order import (
     process_selected_instrument,
 )
@@ -159,6 +162,63 @@ def build_selected_instrument(
     }
 
 
+def build_order_save_payload(
+    *,
+    instrument: dict[str, Any],
+    selected_instrument: dict[str, Any],
+    instrument_key: str | None,
+    strike: float | None,
+    striketype: str | None,
+) -> dict[str, Any]:
+    """
+    Builds the payload dictionary that is handed to the order saving
+    service so that a full record of the request is persisted to
+    MongoDB alongside the workflow result.
+
+    The payload shape mirrors what the saving service expects in
+    _get_payload_metadata() and _get_instrument_details():
+
+        {
+            "instrument": {...},
+            "source": "...",
+            "event_type": "...",
+            "market": {...},
+            "ema": {...},
+            ...
+        }
+    """
+    return {
+        "event_id": None,
+        "event_type": "MANUAL_SANDBOX_ORDER",
+        "source": "order_routes.place_order",
+        "market": "NSE_FO",
+        "timezone": "Asia/Kolkata",
+        "created_at": None,
+        "is_simulation": False,
+        "simulation": {
+            "dry_run": False,
+        },
+        "instrument": {
+            "instrument_key": selected_instrument.get("instrument_key"),
+            "trading_symbol": selected_instrument.get("trading_symbol"),
+            "live_ltp": selected_instrument.get("live_ltp"),
+            "lot_size": selected_instrument.get("lot_size"),
+            "strike_price": instrument.get("strike_price"),
+            "expiry": instrument.get("expiry"),
+            "option_type": instrument.get("option_type"),
+        },
+        "request": {
+            "instrument_key": instrument_key,
+            "strike": strike,
+            "striketype": striketype,
+        },
+        "ema": {},
+        "duplicate_control": {},
+        "order_suggestion": {},
+        "market_snapshot": {},
+    }
+
+
 @router.get("/place")
 def place_order_get(
     instrument_key: str | None = Query(
@@ -285,11 +345,66 @@ def _place_order(
             and workflow_result.get("success")
         )
 
+        # ------------------------------------------------------------------
+        # STEP 3: Persist the order workflow result to MongoDB.
+        #
+        # This is best-effort: a failure here must NOT break the API
+        # response, because the real order has already been placed.
+        # ------------------------------------------------------------------
+        save_result: dict[str, Any] = {
+            "success": False,
+            "saved": False,
+            "skipped": True,
+            "error": "Order saving was not attempted.",
+        }
+
+        try:
+            save_payload = build_order_save_payload(
+                instrument=instrument,
+                selected_instrument=selected_instrument,
+                instrument_key=instrument_key,
+                strike=strike,
+                striketype=striketype,
+            )
+
+            save_result = upstox_order_saving_service.save_order_result(
+                payload=save_payload,
+                order_result=workflow_result,
+            )
+
+            logger.info(
+                "Manual sandbox order saved to MongoDB. "
+                "instrument_key=%s, saved=%s, "
+                "document_id=%s, order_key=%s, "
+                "order_id=%s, error=%s",
+                selected_instrument.get("instrument_key"),
+                save_result.get("saved"),
+                save_result.get("document_id"),
+                save_result.get("order_key"),
+                save_result.get("order_id"),
+                save_result.get("error"),
+            )
+
+        except Exception as save_exc:
+            logger.exception(
+                "Failed to save sandbox order result to MongoDB. "
+                "instrument_key=%s",
+                selected_instrument.get("instrument_key"),
+            )
+
+            save_result = {
+                "success": False,
+                "saved": False,
+                "skipped": False,
+                "error": (f"{type(save_exc).__name__}: {save_exc}"),
+            }
+
         return {
             "success": workflow_success,
             "resolved_instrument": instrument,
             "selected_instrument": (selected_instrument),
             "order_workflow": (workflow_result),
+            "order_save_result": save_result,
         }
 
     except HTTPException:
