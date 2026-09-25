@@ -1030,4 +1030,4 @@ def process_selected_instrument(
         instrument_details=instrument_details,
         exit_result=exit_result,
         margin_result=margin_result,
-    )
+    ) 
