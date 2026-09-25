@@ -4,6 +4,7 @@ from uuid import uuid4
 from core import config
 from core.logger import get_logger
 from services.telegram_service import telegram_service
+from upstox_services.margin_service import margin_service
 from upstox_services.place_order import place_selected_instrument
 from upstox_services.position_service import exit_all_positions
 
@@ -93,6 +94,7 @@ def _build_failure_result(
     error: str,
     exit_result: Any = None,
     place_order_result: Any = None,
+    margin_result: Any = None,
     executed: bool = False,
 ) -> dict[str, Any]:
     return {
@@ -103,6 +105,7 @@ def _build_failure_result(
         "order_id": None,
         "selected_instrument": instrument_details,
         "exit_result": exit_result,
+        "margin_result": margin_result,
         "place_order_result": place_order_result,
         "error": error,
     }
@@ -112,6 +115,7 @@ def _build_skipped_result(
     order_status: str,
     instrument_details: dict[str, Any] | None,
     reason: str,
+    margin_result: Any = None,
 ) -> dict[str, Any]:
     return {
         "success": False,
@@ -122,6 +126,7 @@ def _build_skipped_result(
         "reason": reason,
         "selected_instrument": instrument_details,
         "exit_result": None,
+        "margin_result": margin_result,
         "place_order_result": None,
         "error": None,
     }
@@ -187,6 +192,172 @@ def _extract_order_id(
     return None
 
 
+def _calculate_margin(
+    instrument_details: dict[str, Any],
+    *,
+    transaction_type: str = "BUY",
+) -> dict[str, Any]:
+    """
+    Calculates margin for the given instrument using the margin service.
+
+    This is a best-effort step: any failure is logged and notified via
+    Telegram, but it does NOT block the order workflow.
+
+    Returns the normalized margin result dictionary produced by
+    margin_service.calculate_margin().
+    """
+    instrument_key = instrument_details.get("instrument_key")
+    lot_size = instrument_details.get("lot_size")
+
+    quantity = lot_size if lot_size and lot_size > 0 else margin_service.DEFAULT_QUANTITY
+
+    logger.info(
+        "Step 2.5 started. Calculating margin. "
+        "instrument_key=%s, quantity=%s, transaction_type=%s",
+        instrument_key,
+        quantity,
+        transaction_type,
+    )
+
+    _send_telegram_message(
+        title="Calculating Margin",
+        message=(
+            f"Instrument: {instrument_key}\n"
+            f"Quantity: {quantity}\n"
+            f"Product: {margin_service.DEFAULT_PRODUCT}\n"
+            f"Transaction Type: {transaction_type}"
+        ),
+        level="INFO",
+        notification_context=(
+            f"process_order|margin_calculation_started|instrument_key={instrument_key}"
+        ),
+    )
+
+    try:
+        margin_result = margin_service.calculate_margin(
+            instrument_key=instrument_key or "",
+            quantity=quantity,
+            product=margin_service.DEFAULT_PRODUCT,
+            transaction_type=transaction_type,
+        )
+
+    except Exception as exc:
+        logger.exception(
+            "Unexpected exception while calculating margin. "
+            "instrument_key=%s, exception_type=%s, error=%s",
+            instrument_key,
+            type(exc).__name__,
+            exc,
+        )
+
+        _send_telegram_message(
+            title="Margin Calculation Exception",
+            message=(
+                f"Instrument: {instrument_key}\n"
+                f"Error Type: {type(exc).__name__}\n"
+                f"Error: {exc}\n"
+                "Continuing with order workflow."
+            ),
+            level="ERROR",
+            notification_context=(
+                f"process_order|margin_exception|instrument_key={instrument_key}"
+            ),
+        )
+
+        return {
+            "success": False,
+            "instrument_key": instrument_key,
+            "quantity": quantity,
+            "product": margin_service.DEFAULT_PRODUCT,
+            "transaction_type": transaction_type,
+            "margin": None,
+            "required_margin": None,
+            "available_margin": None,
+            "raw_response": None,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+
+    if not isinstance(margin_result, dict):
+        logger.error(
+            "Margin service returned an invalid response. "
+            "response_type=%s, response=%r",
+            type(margin_result).__name__,
+            margin_result,
+        )
+
+        _send_telegram_message(
+            title="Invalid Margin Response",
+            message=(
+                f"Instrument: {instrument_key}\n"
+                f"Response Type: {type(margin_result).__name__}\n"
+                "Continuing with order workflow."
+            ),
+            level="ERROR",
+            notification_context=(
+                f"process_order|invalid_margin_response|instrument_key={instrument_key}"
+            ),
+        )
+
+        return {
+            "success": False,
+            "instrument_key": instrument_key,
+            "quantity": quantity,
+            "product": margin_service.DEFAULT_PRODUCT,
+            "transaction_type": transaction_type,
+            "margin": None,
+            "required_margin": None,
+            "available_margin": None,
+            "raw_response": None,
+            "error": "Invalid margin service response.",
+        }
+
+    if margin_result.get("success") is True:
+        logger.info(
+            "Margin calculated successfully. "
+            "instrument_key=%s, required_margin=%s, available_margin=%s",
+            instrument_key,
+            margin_result.get("required_margin"),
+            margin_result.get("available_margin"),
+        )
+
+        _send_telegram_message(
+            title="Margin Calculated",
+            message=(
+                f"Instrument: {instrument_key}\n"
+                f"Quantity: {quantity}\n"
+                f"Required Margin: {margin_result.get('required_margin')}\n"
+                f"Available Margin: {margin_result.get('available_margin')}"
+            ),
+            level="SUCCESS",
+            notification_context=(
+                f"process_order|margin_success|instrument_key={instrument_key}"
+            ),
+        )
+
+    else:
+        logger.warning(
+            "Margin calculation failed. "
+            "instrument_key=%s, error=%s",
+            instrument_key,
+            margin_result.get("error"),
+        )
+
+        _send_telegram_message(
+            title="Margin Calculation Failed",
+            message=(
+                f"Instrument: {instrument_key}\n"
+                f"Error: {margin_result.get('error')}\n"
+                "Continuing with order workflow."
+            ),
+            level="WARNING",
+            notification_context=(
+                f"process_order|margin_failed|instrument_key={instrument_key}"
+            ),
+        )
+
+    return margin_result
+
+
 def _build_dummy_place_order_result(
     normalized_instrument: dict[str, Any],
     instrument_details: dict[str, Any],
@@ -244,6 +415,7 @@ def _safe_place_order(
     normalized_instrument: dict[str, Any],
     instrument_details: dict[str, Any],
     exit_result: Any,
+    margin_result: Any = None,
 ) -> dict[str, Any]:
     """
     Wraps place_selected_instrument so that exceptions are logged,
@@ -322,6 +494,7 @@ def _safe_place_order(
             "order_id": order_id,
             "selected_instrument": normalized_instrument,
             "exit_result": exit_result,
+            "margin_result": margin_result,
             "place_order_result": place_order_result,
             "error": None,
         }
@@ -362,6 +535,7 @@ def _safe_place_order(
             order_status="PLACE_ORDER_FAILED",
             instrument_details=normalized_instrument,
             exit_result=exit_result,
+            margin_result=margin_result,
             error=f"Order placement raised an exception: {type(exc).__name__}: {exc}",
             executed=True,
         )
@@ -392,6 +566,7 @@ def _safe_place_order(
             order_status="PLACE_ORDER_FAILED",
             instrument_details=normalized_instrument,
             exit_result=exit_result,
+            margin_result=margin_result,
             place_order_result=place_order_result,
             error="Invalid order placement response.",
             executed=True,
@@ -430,6 +605,7 @@ def _safe_place_order(
             order_status="PLACE_ORDER_FAILED",
             instrument_details=normalized_instrument,
             exit_result=exit_result,
+            margin_result=margin_result,
             place_order_result=place_order_result,
             error=str(order_error),
             executed=True,
@@ -471,6 +647,7 @@ def _safe_place_order(
         "order_id": order_id,
         "selected_instrument": normalized_instrument,
         "exit_result": exit_result,
+        "margin_result": margin_result,
         "place_order_result": place_order_result,
         "error": None,
     }
@@ -840,8 +1017,17 @@ def process_selected_instrument(
         instrument_key,
     )
 
+    # ------------------------------------------------------------------
+    # Step 2.5: Calculate margin (best-effort, does not block order).
+    # ------------------------------------------------------------------
+    margin_result = _calculate_margin(
+        instrument_details=normalized_instrument,
+        transaction_type="BUY",
+    )
+
     return _safe_place_order(
         normalized_instrument=normalized_instrument,
         instrument_details=instrument_details,
         exit_result=exit_result,
+        margin_result=margin_result,
     )
