@@ -1638,3 +1638,4 @@ def process_selected_instrument(
         exit_result=exit_result,
         margin_result=margin_result,
     )
+ 
