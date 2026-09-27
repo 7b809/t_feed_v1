@@ -16,9 +16,13 @@ dist/
 pip-wheel-metadata/
 share/python-wheels/
 wheels/
-
+data/
 myenv
 .myenv
+
+combined_output.txt
+files.txt
+file.txt
 
 # Installer logs
 pip-log.txt
