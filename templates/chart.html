@@ -1,9 +1,26 @@
 {% extends "base.html" %}
 {% block title %}{{ instrument_name or instrument_key }} - Trading Dashboard{% endblock %}
 {% block head %}
+<!-- ===== FASTER CDN: preconnect + dns-prefetch before stylesheets ===== -->
+<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+<link rel="dns-prefetch" href="https://cdn.jsdelivr.net">
+<link rel="preconnect" href="https://unpkg.com" crossorigin>
+<link rel="dns-prefetch" href="https://unpkg.com">
+
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet"/>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css"/>
+
+<!-- ===== LIGHTWEIGHT CHARTS: load with high priority and eagerly ===== -->
+<!-- Add crossorigin attribute to match script loading behavior -->
+<link 
+  rel="preload" 
+  href="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js" 
+  as="script" 
+  crossorigin="anonymous"
+/>
+
 <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
+
 <style>
 :root {
   --bg: #131722; --surface: #1e222d; --surface-2: #2a2e39; --surface-3: #363c4e;
@@ -75,6 +92,131 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
   box-shadow: var(--shadow);
 }
 #chart { width: 100%; height: 100%; }
+
+/* =========================================================
+   CHART LOADING OVERLAY (buffering / spinner / progress ring)
+   ========================================================= */
+.chart-loading-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 500;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  background: radial-gradient(circle at center, rgba(19,23,34,0.92), rgba(19,23,34,0.98));
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  transition: opacity 0.35s ease, visibility 0.35s ease;
+  color: var(--text);
+  pointer-events: all;
+}
+.chart-loading-overlay.hidden {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+/* --- Progress ring --- */
+.loader-ring-wrap {
+  position: relative;
+  width: 108px;
+  height: 108px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.loader-ring {
+  width: 108px;
+  height: 108px;
+  transform: rotate(-90deg);
+}
+.loader-ring .ring-track {
+  fill: none;
+  stroke: rgba(120,123,134,0.18);
+  stroke-width: 5;
+}
+.loader-ring .ring-progress {
+  fill: none;
+  stroke: url(#loaderRingGradient);
+  stroke-width: 5;
+  stroke-linecap: round;
+  stroke-dasharray: 283; /* 2πr, r=45 */
+  stroke-dashoffset: 283;
+  transition: stroke-dashoffset 0.35s ease;
+}
+.loader-ring .ring-glow {
+  fill: none;
+  stroke: rgba(41,98,255,0.35);
+  stroke-width: 9;
+  stroke-linecap: round;
+  stroke-dasharray: 283;
+  stroke-dashoffset: 283;
+  filter: blur(6px);
+  transition: stroke-dashoffset 0.35s ease;
+}
+.loader-spinner {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.loader-spinner::before {
+  content: "";
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: 3px solid rgba(41,98,255,0.25);
+  border-top-color: var(--blue);
+  animation: spin 0.9s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.loader-percent {
+  position: absolute;
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  color: #ffffff;
+  z-index: 2;
+}
+
+/* --- Text --- */
+.loader-title {
+  font-size: 14px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #ffffff;
+}
+.loader-status {
+  font-size: 12px;
+  color: var(--muted);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  min-height: 16px;
+  text-align: center;
+  padding: 0 16px;
+  max-width: 90%;
+}
+.loader-hint {
+  font-size: 10.5px;
+  color: #5b6172;
+  letter-spacing: 0.03em;
+}
+
+/* --- Buffering (lightweight) variant used during historical loads --- */
+.chart-loading-overlay.buffering .loader-title { display: none; }
+.chart-loading-overlay.buffering .loader-hint { display: none; }
+.chart-loading-overlay.buffering .loader-ring-wrap {
+  width: 72px; height: 72px;
+}
+.chart-loading-overlay.buffering .loader-ring { width: 72px; height: 72px; }
+.chart-loading-overlay.buffering .loader-spinner::before {
+  width: 30px; height: 30px; border-width: 2.5px;
+}
 
 /* =========================================================
    LEVEL LABEL TOGGLE BAR (below the chart)
@@ -426,6 +568,11 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
     border-radius: 10px;
   }
 
+  .loader-ring-wrap, .loader-ring { width: 90px; height: 90px; }
+  .loader-spinner::before { width: 34px; height: 34px; }
+  .loader-percent { font-size: 13px; }
+  .loader-title { font-size: 12px; }
+
   .chart-toggles-card { padding: 7px 10px; gap: 6px; margin-top: 10px; }
   .label-toggle-btn { padding: 3px 9px; font-size: 9.5px; }
   .chart-toggles-title { font-size: 9.5px; }
@@ -480,6 +627,10 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
 
   .chart-card { height: clamp(280px, calc(100dvh - 120px), 560px); }
 
+  .loader-ring-wrap, .loader-ring { width: 78px; height: 78px; }
+  .loader-spinner::before { width: 28px; height: 28px; }
+  .loader-percent { font-size: 12px; }
+
   .level-status-bar .badge { font-size: 8.5px; padding: 2px 5px; }
 
   .instrument-info-body { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -521,6 +672,34 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
   <!-- ===================== CHART CARD ===================== -->
   <div class="chart-card" id="chartCard">
     <div id="chart"></div>
+
+    <!-- ============================================================
+         CHART LOADING OVERLAY (buffering + spinner + progress ring)
+         Hidden automatically once the chart is fully drawn.
+         Also reused as a lightweight "buffering" state during
+         historical data loads.
+         ============================================================ -->
+    <div class="chart-loading-overlay" id="chartLoadingOverlay" aria-live="polite" aria-busy="true">
+      <div class="loader-ring-wrap">
+        <svg class="loader-ring" viewBox="0 0 100 100" aria-hidden="true">
+          <defs>
+            <linearGradient id="loaderRingGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%"  stop-color="#2962ff"/>
+              <stop offset="50%" stop-color="#089981"/>
+              <stop offset="100%" stop-color="#f5c451"/>
+            </linearGradient>
+          </defs>
+          <circle class="ring-track"    cx="50" cy="50" r="45"></circle>
+          <circle class="ring-glow"     cx="50" cy="50" r="45" id="loaderRingGlow"></circle>
+          <circle class="ring-progress" cx="50" cy="50" r="45" id="loaderRingProgress"></circle>
+        </svg>
+        <div class="loader-spinner"></div>
+        <div class="loader-percent" id="loaderPercent">0%</div>
+      </div>
+      <div class="loader-title" id="loaderTitle">Loading Chart</div>
+      <div class="loader-status" id="loaderStatus">Preparing data…</div>
+      <div class="loader-hint">Fetching candles · building indicators · rendering chart</div>
+    </div>
 
     <!-- Opening Range / Level badges -->
     <div class="level-status-bar" id="level-status">
@@ -859,10 +1038,107 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
 <script id="instrument-key-data" type="application/json">{{ instrument_key | tojson }}</script>
 <script id="instrument-tick-size-data" type="application/json">{{ instrument.get('tick_size') | tojson }}</script>
 <script id="candles-data" type="application/json">{{ candles | tojson }}</script>
-<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+
+<!-- ===== Bootstrap JS: defer so it doesn't block first paint ===== -->
+<script defer src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 {% endblock %}
 {% block scripts %}
 <script>
+// ============================================================
+// CHART LOADING OVERLAY CONTROLLER
+// ============================================================
+const LoadingOverlay = (function () {
+  const overlay   = document.getElementById("chartLoadingOverlay");
+  const ring      = document.getElementById("loaderRingProgress");
+  const glow      = document.getElementById("loaderRingGlow");
+  const percentEl = document.getElementById("loaderPercent");
+  const titleEl   = document.getElementById("loaderTitle");
+  const statusEl  = document.getElementById("loaderStatus");
+
+  const CIRCUMFERENCE = 2 * Math.PI * 45; // r = 45
+
+  let currentPct = 0;
+  let targetPct  = 0;
+  let animating  = false;
+  let hideTimer  = null;
+
+  function _render() {
+    const pct = Math.max(0, Math.min(100, targetPct));
+    currentPct = pct;
+    const offset = CIRCUMFERENCE * (1 - pct / 100);
+    if (ring) ring.style.strokeDashoffset = offset;
+    if (glow) glow.style.strokeDashoffset = offset;
+    if (percentEl) percentEl.textContent = Math.round(pct) + "%";
+  }
+
+  function _animateTo(target) {
+    targetPct = target;
+    if (animating) return;
+    animating = true;
+    (function step() {
+      const diff = targetPct - currentPct;
+      if (Math.abs(diff) < 0.4) {
+        currentPct = targetPct;
+        _render();
+        animating = false;
+        return;
+      }
+      currentPct += diff * 0.18;
+      _render();
+      requestAnimationFrame(step);
+    })();
+  }
+
+  function setProgress(pct) {
+    _animateTo(pct);
+  }
+
+  function setStatus(text, title) {
+    if (statusEl && typeof text === "string") statusEl.textContent = text;
+    if (titleEl && typeof title === "string") titleEl.textContent = title;
+  }
+
+  function showBuffering(message) {
+    if (!overlay) return;
+    if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
+    overlay.classList.remove("hidden");
+    overlay.classList.add("buffering");
+    overlay.setAttribute("aria-busy", "true");
+    setStatus(message || "Buffering…", "");
+  }
+
+  function hideBuffering() {
+    if (!overlay) return;
+    overlay.classList.remove("buffering");
+    hide(0);
+  }
+
+  function hide(delay) {
+    if (!overlay) return;
+    const ms = Number.isFinite(delay) ? delay : 220;
+    if (hideTimer) clearTimeout(hideTimer);
+    hideTimer = setTimeout(() => {
+      overlay.classList.add("hidden");
+      overlay.setAttribute("aria-busy", "false");
+      hideTimer = null;
+    }, ms);
+  }
+
+  function reset() {
+    currentPct = 0;
+    targetPct  = 0;
+    animating  = false;
+    _render();
+    if (overlay) {
+      overlay.classList.remove("buffering");
+      overlay.classList.remove("hidden");
+      overlay.setAttribute("aria-busy", "true");
+    }
+  }
+
+  return { setProgress, setStatus, showBuffering, hideBuffering, hide, reset };
+})();
+
 // ============================================================
 // DOM ELEMENTS
 // ============================================================
@@ -1944,13 +2220,17 @@ function updateCandleFromLtp(ltp, timestamp) {
 }
 
 // ============================================================
-// LOAD OLDER HISTORICAL DATA
+// LOAD OLDER HISTORICAL DATA  (with buffering overlay)
 // ============================================================
 async function loadOlderHistoricalData() {
   if (isLoadingHistory || !hasMoreHistory || !oldestCandleTime) return;
   isLoadingHistory = true;
   triggerLoadHistoryBtn.disabled = true;
   triggerLoadHistoryBtn.textContent = "Loading...";
+
+  // Show buffering overlay while we fetch + merge + re-render.
+  LoadingOverlay.showBuffering("Buffering past candles…");
+
   const beforeDateString = new Date(oldestCandleTime * 1000).toISOString().split("T")[0];
   try {
     const response = await fetch(`/api/older-candles?instrument_key=${encodeURIComponent(currentInstrumentKey)}&before_date=${beforeDateString}`);
@@ -1981,6 +2261,7 @@ async function loadOlderHistoricalData() {
     historyLoadBanner.style.display = "none";
     triggerLoadHistoryBtn.disabled = false;
     triggerLoadHistoryBtn.textContent = "Load";
+    LoadingOverlay.hideBuffering();
   }
 }
 triggerLoadHistoryBtn.addEventListener("click", loadOlderHistoricalData);
@@ -2064,16 +2345,67 @@ try { currentInstrumentKey = JSON.parse(document.getElementById("instrument-key-
 if (typeof currentInstrumentKey === "string" && currentInstrumentKey.startsWith("NSE_FO|")) { activateView(optionsBtn, optionsView); }
 
 // ============================================================
-// READ INITIAL CANDLES
+// READ INITIAL CANDLES  (raw — heavy normalization happens
+// asynchronously below, in chunks, so the overlay can paint)
 // ============================================================
 try { chartData = JSON.parse(document.getElementById("candles-data").textContent); } catch (error) { console.error("Unable to parse candle data:", error); }
 
 // ============================================================
-// FORMAT INITIAL CANDLE DATA
+// FAST, CHUNKED CANDLE NORMALIZATION
+// ------------------------------------------------------------
+// Yields to the event loop every ~2ms so the browser can paint
+// the loading overlay and stay responsive on large candle sets.
+// Returns a Promise<Candle[]>.
 // ============================================================
-const formattedData = Array.isArray(chartData)
-  ? chartData.map(normalizeCandle).filter(c => c !== null).sort((a, b) => a.time - b.time).filter((c, i, arr) => i === arr.length - 1 || c.time !== arr[i + 1].time)
-  : [];
+function normalizeCandlesChunked(rawCandles, onProgress) {
+  return new Promise((resolve) => {
+    if (!Array.isArray(rawCandles) || rawCandles.length === 0) {
+      resolve([]);
+      return;
+    }
+
+    const total = rawCandles.length;
+    const out = [];
+    let i = 0;
+    const CHUNK = 2000;             // items per slice
+    const TIME_BUDGET_MS = 6;       // yield after ~6ms of work
+
+    function step() {
+      const start = performance.now();
+      let processed = 0;
+
+      while (i < total && processed < CHUNK) {
+        const c = normalizeCandle(rawCandles[i]);
+        if (c) out.push(c);
+        i++;
+        processed++;
+        // Yield often so UI stays smooth
+        if (performance.now() - start > TIME_BUDGET_MS) break;
+      }
+
+      if (typeof onProgress === "function") {
+        onProgress(i, total);
+      }
+
+      if (i < total) {
+        // Use rIC when available, else rAF, else setTimeout
+        if (typeof requestIdleCallback === "function") {
+          requestIdleCallback(step, { timeout: 40 });
+        } else {
+          requestAnimationFrame(step);
+        }
+      } else {
+        // Deduplicate by time + sort ascending
+        out.sort((a, b) => a.time - b.time);
+        const deduped = out.filter((c, idx, arr) => idx === arr.length - 1 || c.time !== arr[idx + 1].time);
+        resolve(deduped);
+      }
+    }
+
+    // Kick off after a paint
+    requestAnimationFrame(step);
+  });
+}
 
 /* ============================================================
    OPENING RANGE / LEVEL CALCULATIONS
@@ -2455,22 +2787,78 @@ function createChart(candles) {
   startPriceScaleWatcher();
 }
 
-// ============================================================
-// START CHART (error-safe)
-// ============================================================
-try {
-  createChart(formattedData);
-} catch (err) {
-  console.error("Chart init failed:", err);
+/* ============================================================
+   BOOTSTRAP THE CHART WITH PROGRESS REPORTING
+   Stages: parse → normalize → build → render → indicators → done
+   ============================================================ */
+async function bootstrapChart() {
+  try {
+    LoadingOverlay.reset();
+    LoadingOverlay.setProgress(6);
+    LoadingOverlay.setStatus("Reading candle data…", "Loading Chart");
+
+    // Small yield so the overlay paints at least once.
+    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+
+    LoadingOverlay.setProgress(18);
+    LoadingOverlay.setStatus("Normalizing candles…");
+
+    const rawCount = Array.isArray(chartData) ? chartData.length : 0;
+    const formattedData = await normalizeCandlesChunked(chartData, (done, total) => {
+      const pct = 18 + (done / Math.max(1, total)) * 42; // 18 → 60
+      LoadingOverlay.setProgress(pct);
+      if (total > 0 && (done === total || done % 5000 === 0)) {
+        LoadingOverlay.setStatus(`Normalizing candles… ${done.toLocaleString()} / ${total.toLocaleString()}`);
+      }
+    });
+
+    LoadingOverlay.setProgress(64);
+    LoadingOverlay.setStatus("Building chart…");
+    await new Promise(r => requestAnimationFrame(r));
+
+    // Chart creation is synchronous but heavy; yield first so the
+    // progress ring visually reaches ~64% before we block.
+    try {
+      createChart(formattedData);
+    } catch (err) {
+      console.error("Chart init failed:", err);
+      LoadingOverlay.setStatus("Chart failed to render", "Error");
+      LoadingOverlay.hide(600);
+      return;
+    }
+
+    LoadingOverlay.setProgress(86);
+    LoadingOverlay.setStatus("Rendering indicators & levels…");
+    await new Promise(r => requestAnimationFrame(r));
+
+    // One final frame for LWC to finish layout/paint.
+    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+
+    LoadingOverlay.setProgress(100);
+    LoadingOverlay.setStatus("Ready");
+    LoadingOverlay.hide(260);
+
+    // Now that the chart is visible, open the WebSocket.
+    try {
+      connectWebSocket();
+    } catch (err) {
+      console.error("WebSocket init failed:", err);
+    }
+  } catch (err) {
+    console.error("Chart bootstrap failed:", err);
+    LoadingOverlay.setStatus("Unexpected error while loading chart", "Error");
+    LoadingOverlay.hide(800);
+  }
 }
 
-// ============================================================
-// START WEBSOCKET (always, even if chart init partially failed)
-// ============================================================
-try {
-  connectWebSocket();
-} catch (err) {
-  console.error("WebSocket init failed:", err);
+// Kick off after the browser has had a chance to paint the overlay.
+if (document.readyState === "complete" || document.readyState === "interactive") {
+  // Defer one frame so the overlay paints first.
+  requestAnimationFrame(() => bootstrapChart());
+} else {
+  window.addEventListener("DOMContentLoaded", () => {
+    requestAnimationFrame(() => bootstrapChart());
+  });
 }
 
 // ============================================================

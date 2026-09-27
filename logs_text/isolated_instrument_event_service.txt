@@ -1,0 +1,2 @@
+2026-09-27 16:39:42 [INFO] [isolated_instrument_event_service] [isolated_instrument_event_service.py:23] [__init__]: Isolated instrument event saving service initialized. enabled=True, collection=isolated_instrumentevent, event_field=events, fail_open=True
+2026-09-27 16:49:18 [INFO] [isolated_instrument_event_service] [isolated_instrument_event_service.py:23] [__init__]: Isolated instrument event saving service initialized. enabled=True, collection=isolated_instrumentevent, event_field=events, fail_open=True

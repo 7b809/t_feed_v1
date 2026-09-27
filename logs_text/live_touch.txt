@@ -1,0 +1,2 @@
+2026-09-27 16:39:42 [INFO] [live_touch] [live_touch.py:38] [<module>]: Opening Range touch service initialized. touch_alert_enabled=True, live_touch_enabled=True, backfill_enabled=True, touch_check_mode=high_low, isolation_levels=['R3']
+2026-09-27 16:49:18 [INFO] [live_touch] [live_touch.py:38] [<module>]: Opening Range touch service initialized. touch_alert_enabled=True, live_touch_enabled=True, backfill_enabled=True, touch_check_mode=high_low, isolation_levels=['R3']
