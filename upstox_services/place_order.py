@@ -93,6 +93,18 @@ def place_market_order(
     validity: str = "DAY",
     tag: str = "EMA_ALGO",
 ) -> dict[str, Any]:
+    """
+    Places a market order for a given instrument.
+
+    :param instrument_key: Upstox instrument key (e.g., NSE_FO|12345)
+    :param quantity: Number of units/shares to trade
+    :param transaction_type: "BUY" or "SELL"
+    :param product: "D" (Delivery/CNC), "I" (Intraday/MIS), etc.
+    :param validity: "DAY", "IOC", etc.
+    :param tag: Custom order identifier tag
+    """
+    # Normalize transaction type to uppercase
+    transaction_type = transaction_type.upper()
 
     order_request = {
         "instrument_key": instrument_key,
@@ -134,7 +146,8 @@ def place_market_order(
         serialized_response = _serialize_upstox_response(response)
 
         logger.info(
-            "Order placed successfully " "instrument=%s quantity=%s",
+            "Order placed successfully | side=%s instrument=%s quantity=%s",
+            transaction_type,
             instrument_key,
             quantity,
         )
@@ -150,7 +163,7 @@ def place_market_order(
     except ApiException as exc:
         error_message = exc.body if getattr(exc, "body", None) else str(exc)
 
-        logger.exception("Upstox place_order failed.")
+        logger.exception("Upstox place_order failed for side=%s.", transaction_type)
 
         return {
             "success": False,
@@ -161,7 +174,7 @@ def place_market_order(
         }
 
     except Exception as exc:
-        logger.exception("Unexpected error while placing order.")
+        logger.exception("Unexpected error while placing %s order.", transaction_type)
 
         return {
             "success": False,
@@ -174,8 +187,20 @@ def place_market_order(
 
 def place_selected_instrument(
     selected_instrument: dict[str, Any],
+    transaction_type: str = "BUY",
+    product: str = "D",
+    validity: str = "DAY",
+    tag: str = "EMA_ALGO",
 ) -> dict[str, Any]:
+    """
+    Wrapper to place an order using details from a selected_instrument dict.
 
+    :param selected_instrument: Dict containing `instrument_key`, `lot_size`, `trading_symbol`
+    :param transaction_type: "BUY" or "SELL" (defaults to "BUY")
+    :param product: Product code ("D", "I", etc.)
+    :param validity: Order validity ("DAY", "IOC", etc.)
+    :param tag: Order tag string
+    """
     if not selected_instrument:
         return {
             "success": False,
@@ -183,9 +208,7 @@ def place_selected_instrument(
         }
 
     instrument_key = selected_instrument.get("instrument_key")
-
     lot_size = selected_instrument.get("lot_size")
-
     trading_symbol = selected_instrument.get("trading_symbol")
 
     if not instrument_key:
@@ -203,12 +226,17 @@ def place_selected_instrument(
     result = place_market_order(
         instrument_key=instrument_key,
         quantity=int(lot_size),
+        transaction_type=transaction_type,
+        product=product,
+        validity=validity,
+        tag=tag,
     )
 
     result["selected_instrument"] = {
         "instrument_key": instrument_key,
         "trading_symbol": trading_symbol,
         "lot_size": lot_size,
+        "transaction_type": transaction_type.upper(),
     }
 
     return result
