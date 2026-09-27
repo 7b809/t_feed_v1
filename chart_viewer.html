@@ -1,0 +1,1395 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Upstox Candle Viewer — IST · Opening Range + EMA Cross</title>
+
+  <!-- Bootstrap 5 (light theme) -->
+  <link
+    href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
+    rel="stylesheet"
+  />
+  <!-- Bootstrap Icons -->
+  <link
+    href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css"
+    rel="stylesheet"
+  />
+  <!-- TradingView Lightweight Charts -->
+  <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+
+  <style>
+    :root {
+      --bg-page: #f6f8fb;
+      --bg-card: #ffffff;
+      --border-soft: #e3e8ef;
+      --text-main: #1f2937;
+      --text-muted: #6b7280;
+      --accent: #2563eb;
+      --accent-soft: #eff4ff;
+      --up: #16a34a;
+      --down: #dc2626;
+    }
+
+    html, body {
+      height: 100%;
+      background: var(--bg-page);
+      color: var(--text-main);
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    }
+
+    .app-header {
+      background: var(--bg-card);
+      border-bottom: 1px solid var(--border-soft);
+      padding: 14px 20px;
+    }
+
+    .app-header .brand-icon {
+      font-size: 1.35rem;
+      color: var(--accent);
+    }
+
+    .app-header .title {
+      font-weight: 600;
+      font-size: 1.05rem;
+      margin: 0;
+    }
+
+    .app-header .subtitle {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+    }
+
+    .card-soft {
+      background: var(--bg-card);
+      border: 1px solid var(--border-soft);
+      border-radius: 12px;
+      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
+    }
+
+    .upload-zone {
+      border: 1.5px dashed #cbd5e1;
+      border-radius: 10px;
+      padding: 18px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.15s ease-in-out;
+      background: #fbfcfe;
+    }
+
+    .upload-zone:hover,
+    .upload-zone.dragover {
+      border-color: var(--accent);
+      background: var(--accent-soft);
+    }
+
+    .upload-zone .upload-icon {
+      font-size: 1.75rem;
+      color: var(--accent);
+    }
+
+    .upload-zone .upload-text {
+      font-size: 0.85rem;
+      color: var(--text-muted);
+    }
+
+    .meta-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 6px 0;
+      border-bottom: 1px dashed var(--border-soft);
+      font-size: 0.875rem;
+    }
+
+    .meta-row:last-child { border-bottom: none; }
+
+    .meta-label {
+      color: var(--text-muted);
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .meta-value {
+      font-weight: 600;
+      color: var(--text-main);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .stat-card {
+      border-radius: 10px;
+      padding: 12px 14px;
+      background: var(--bg-card);
+      border: 1px solid var(--border-soft);
+    }
+
+    .stat-card .stat-label {
+      font-size: 0.72rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+
+    .stat-card .stat-value {
+      font-size: 1.05rem;
+      font-weight: 700;
+      margin-top: 2px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .stat-value.up { color: var(--up); }
+    .stat-value.down { color: var(--down); }
+
+    #chart {
+      width: 100%;
+      height: 560px;
+      border-radius: 10px;
+      overflow: hidden;
+    }
+
+    .footer-note {
+      font-size: 0.78rem;
+      color: var(--text-muted);
+    }
+
+    .empty-state {
+      padding: 60px 20px;
+      text-align: center;
+      color: var(--text-muted);
+    }
+
+    .empty-state .empty-icon {
+      font-size: 3rem;
+      color: #cbd5e1;
+      display: block;
+      margin-bottom: 10px;
+    }
+
+    .toolbar-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 0.82rem;
+    }
+
+    .badge-ist {
+      background: #eef2ff;
+      color: #4338ca;
+      font-weight: 500;
+      border: 1px solid #e0e7ff;
+    }
+
+    /* Legend for OR levels */
+    .or-legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px 18px;
+      font-size: 0.78rem;
+      color: var(--text-muted);
+      margin-top: 10px;
+    }
+    .or-legend .swatch {
+      display: inline-block;
+      width: 14px;
+      height: 3px;
+      border-radius: 2px;
+      margin-right: 6px;
+      vertical-align: middle;
+    }
+
+    /* Toggle group for levels */
+    .level-toggles {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 8px;
+      margin-bottom: 4px;
+    }
+    .level-toggles .btn {
+      font-size: 0.75rem;
+      padding: 0.2rem 0.65rem;
+      border-radius: 20px;
+    }
+
+    /* Touch Events table */
+    .touch-table {
+      font-size: 0.82rem;
+      margin-bottom: 0;
+    }
+    .touch-table th {
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      font-weight: 700;
+      border-bottom: 1px solid var(--border-soft);
+      white-space: nowrap;
+    }
+    .touch-table td {
+      vertical-align: middle;
+      font-variant-numeric: tabular-nums;
+      border-bottom: 1px dashed var(--border-soft);
+    }
+    .touch-table tbody tr:last-child td { border-bottom: none; }
+    .touch-badge {
+      font-size: 0.68rem;
+      font-weight: 800;
+      padding: 2px 8px;
+      border-radius: 20px;
+      letter-spacing: 0.04em;
+    }
+    .touch-badge.r3 { background: rgba(22,163,74,0.12); color: #15803d; }
+    .touch-badge.s3 { background: rgba(220,38,38,0.12); color: #b91c1c; }
+    .touch-badge.r2 { background: rgba(22,163,74,0.08); color: #166534; }
+    .touch-badge.s2 { background: rgba(220,38,38,0.08); color: #991b1b; }
+    .touch-badge.r1 { background: rgba(22,163,74,0.06); color: #14532d; }
+    .touch-badge.s1 { background: rgba(220,38,38,0.06); color: #7f1d1d; }
+    .touch-price-up { color: var(--up); font-weight: 700; }
+    .touch-price-down { color: var(--down); font-weight: 700; }
+
+    /* Radio-style single-select level filter buttons */
+    .touch-filter-group {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: var(--bg-page);
+      border: 1px solid var(--border-soft);
+      border-radius: 20px;
+      padding: 3px;
+    }
+    .touch-filter-btn {
+      border: 0;
+      background: transparent;
+      color: var(--text-muted);
+      border-radius: 16px;
+      padding: 4px 12px;
+      font-size: 0.72rem;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      white-space: nowrap;
+    }
+    .touch-filter-btn:hover { color: var(--text-main); }
+    .touch-filter-btn.active[data-filter="R3"] {
+      background: #16a34a;
+      color: #fff;
+      box-shadow: 0 0 0 1px rgba(22,163,74,0.4) inset;
+    }
+    .touch-filter-btn.active[data-filter="S3"] {
+      background: #dc2626;
+      color: #fff;
+      box-shadow: 0 0 0 1px rgba(220,38,38,0.4) inset;
+    }
+    .touch-filter-btn.active[data-filter="BOTH"] {
+      background: linear-gradient(90deg, #16a34a 0%, #dc2626 100%);
+      color: #fff;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Header -->
+  <header class="app-header d-flex align-items-center justify-content-between">
+    <div class="d-flex align-items-center gap-3">
+      <i class="bi bi-graph-up-arrow brand-icon"></i>
+      <div>
+        <p class="title mb-0">Upstox Candle Viewer</p>
+        <span class="subtitle">TradingView Lightweight Charts · Times shown in IST</span>
+      </div>
+    </div>
+    <span class="badge badge-ist rounded-pill px-3 py-2">
+      <i class="bi bi-clock me-1"></i> Asia/Kolkata (IST)
+    </span>
+  </header>
+
+  <main class="container-fluid py-4" style="max-width: 1400px;">
+
+    <!-- Upload Row -->
+    <div class="row g-3 mb-4">
+      <div class="col-12">
+        <div class="card-soft p-3">
+          <div class="row g-3 align-items-center">
+            <div class="col-md-7">
+              <div class="upload-zone" id="uploadZone">
+                <input type="file" id="fileInput" accept=".json,application/json" hidden />
+                <i class="bi bi-cloud-arrow-up upload-icon d-block"></i>
+                <div class="fw-semibold mt-2">Click or drop a JSON candle file</div>
+                <div class="upload-text">Expected: Upstox export with <code>data.candles</code> array</div>
+              </div>
+            </div>
+            <div class="col-md-5">
+              <div class="d-flex flex-column gap-2">
+                <button class="btn btn-outline-secondary toolbar-btn" id="btnFitAll">
+                  <i class="bi bi-arrows-fullscreen"></i> Fit All
+                </button>
+                <button class="btn btn-outline-secondary toolbar-btn" id="btnReset">
+                  <i class="bi bi-arrow-counterclockwise"></i> Reset Zoom
+                </button>
+                <button class="btn btn-outline-secondary toolbar-btn" id="btnToggleVolume">
+                  <i class="bi bi-bar-chart"></i> Toggle Volume
+                </button>
+                <button class="btn btn-outline-danger toolbar-btn" id="btnClear">
+                  <i class="bi bi-trash3"></i> Clear
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Meta + Stats -->
+    <div class="row g-3 mb-3" id="metaSection" style="display:none;">
+      <div class="col-lg-4">
+        <div class="card-soft p-3 h-100">
+          <h6 class="fw-semibold mb-3">
+            <i class="bi bi-info-circle me-1 text-primary"></i> File Information
+          </h6>
+          <div class="meta-row">
+            <span class="meta-label"><i class="bi bi-file-earmark-text"></i> File</span>
+            <span class="meta-value" id="metaFile">—</span>
+          </div>
+          <div class="meta-row">
+            <span class="meta-label"><i class="bi bi-hash"></i> Candles</span>
+            <span class="meta-value" id="metaCount">—</span>
+          </div>
+          <div class="meta-row">
+            <span class="meta-label"><i class="bi bi-calendar-event"></i> From</span>
+            <span class="meta-value" id="metaFrom">—</span>
+          </div>
+          <div class="meta-row">
+            <span class="meta-label"><i class="bi bi-calendar-check"></i> To</span>
+            <span class="meta-value" id="metaTo">—</span>
+          </div>
+          <div class="meta-row">
+            <span class="meta-label"><i class="bi bi-arrow-left-right"></i> EMA Crosses</span>
+            <span class="meta-value" id="metaEmaCrosses">—</span>
+          </div>
+          <div class="meta-row">
+            <span class="meta-label"><i class="bi bi-crosshair"></i> R3 / S3 Touches</span>
+            <span class="meta-value" id="metaTouches">—</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="col-lg-8">
+        <div class="card-soft p-3 h-100">
+          <h6 class="fw-semibold mb-3">
+            <i class="bi bi-activity me-1 text-primary"></i> Price Summary
+          </h6>
+          <div class="row g-3">
+            <div class="col-6 col-md-3">
+              <div class="stat-card">
+                <div class="stat-label"><i class="bi bi-box-arrow-in-down"></i> Open</div>
+                <div class="stat-value" id="statOpen">—</div>
+              </div>
+            </div>
+            <div class="col-6 col-md-3">
+              <div class="stat-card">
+                <div class="stat-label"><i class="bi bi-box-arrow-up"></i> Close</div>
+                <div class="stat-value" id="statClose">—</div>
+              </div>
+            </div>
+            <div class="col-6 col-md-3">
+              <div class="stat-card">
+                <div class="stat-label"><i class="bi bi-arrow-up-circle"></i> High</div>
+                <div class="stat-value" id="statHigh">—</div>
+              </div>
+            </div>
+            <div class="col-6 col-md-3">
+              <div class="stat-card">
+                <div class="stat-label"><i class="bi bi-arrow-down-circle"></i> Low</div>
+                <div class="stat-value" id="statLow">—</div>
+              </div>
+            </div>
+          </div>
+          <p class="footer-note mb-0 mt-3">
+            <i class="bi bi-globe2 me-1"></i>
+            All timestamps rendered in <strong>Asia/Kolkata (IST)</strong> — offset
+            <span id="istOffset">+05:30</span>.
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Chart -->
+    <div class="row g-3">
+      <div class="col-12">
+        <div class="card-soft p-3">
+          <div id="chart"></div>
+          <div id="emptyState" class="empty-state">
+            <i class="bi bi-bar-chart-line empty-icon"></i>
+            <div class="fw-semibold">No data loaded</div>
+            <div class="small">Load a JSON file above to plot the candlestick chart.</div>
+          </div>
+
+          <!-- OR level toggle buttons -->
+          <div class="level-toggles" id="levelToggles" style="display:none;">
+            <span class="fw-semibold me-1 small text-muted">Toggle levels:</span>
+            <button class="btn btn-outline-dark btn-sm" data-levels="H,L,A" id="btnHLA">
+              <i class="bi bi-eye"></i> H, L, A
+            </button>
+            <button class="btn btn-outline-success btn-sm" data-levels="R1,S1" id="btnR1S1">
+              <i class="bi bi-eye-slash"></i> R1 / S1
+            </button>
+            <button class="btn btn-outline-success btn-sm" data-levels="R2,S2" id="btnR2S2">
+              <i class="bi bi-eye-slash"></i> R2 / S2
+            </button>
+            <button class="btn btn-outline-success btn-sm" data-levels="R3,S3" id="btnR3S3">
+              <i class="bi bi-eye"></i> R3 / S3
+            </button>
+            <button class="btn btn-outline-warning btn-sm" data-levels="R3_Threshold,S3_Threshold" id="btnThresh">
+              <i class="bi bi-eye-slash"></i> Thresholds
+            </button>
+            <button class="btn btn-outline-primary btn-sm" id="btnEmaCross">
+              <i class="bi bi-eye"></i> EMA Cross
+            </button>
+          </div>
+
+          <!-- OR legend -->
+          <div class="or-legend" id="orLegend" style="display:none;">
+            <span><span class="swatch" style="background:#111827"></span>H — Opening Range High</span>
+            <span><span class="swatch" style="background:#111827"></span>L — Opening Range Low</span>
+            <span><span class="swatch" style="background:#6b7280"></span>A — Midpoint (H+L)/2</span>
+            <span><span class="swatch" style="background:#16a34a"></span>R1 / R2 / R3 — Resistance</span>
+            <span><span class="swatch" style="background:#dc2626"></span>S1 / S2 / S3 — Support</span>
+            <span><span class="swatch" style="background:#f59e0b"></span>R3 / S3 Thresholds</span>
+            <span><span class="swatch" style="background:#16a34a"></span>▲ BUY — EMA 9/21 bullish cross</span>
+            <span><span class="swatch" style="background:#dc2626"></span>▼ SELL — EMA 9/21 bearish cross</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- =========================================================
+         R3 / S3 TOUCH EVENTS TABLE
+         ========================================================= -->
+    <div class="row g-3 mt-2" id="touchTableSection" style="display:none;">
+      <div class="col-12">
+        <div class="card-soft p-3">
+          <div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
+            <h6 class="fw-semibold mb-0">
+              <i class="bi bi-crosshair me-1 text-primary"></i> R3 / S3 Touch Events
+              <span class="badge bg-primary-subtle text-primary-emphasis ms-2" id="touchCountBadge">0</span>
+            </h6>
+
+            <!-- Radio-style single-select level filter -->
+            <div class="d-flex align-items-center gap-2">
+              <label class="small text-muted mb-0">Show:</label>
+              <div class="touch-filter-group" role="radiogroup" aria-label="Touch level filter">
+                <button type="button" class="touch-filter-btn active" data-filter="R3" role="radio" aria-checked="true">
+                  <i class="bi bi-arrow-up-right me-1"></i>R3 only
+                </button>
+                <button type="button" class="touch-filter-btn" data-filter="S3" role="radio" aria-checked="false">
+                  <i class="bi bi-arrow-down-right me-1"></i>S3 only
+                </button>
+                <button type="button" class="touch-filter-btn" data-filter="BOTH" role="radio" aria-checked="false">
+                  <i class="bi bi-arrow-left-right me-1"></i>Both
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div class="table-responsive" style="max-height: 340px; overflow-y: auto;">
+            <table class="table table-sm touch-table align-middle mb-0">
+              <thead class="sticky-top bg-white">
+                <tr>
+                  <th>#</th>
+                  <th>Date</th>
+                  <th>Touch Time (IST)</th>
+                  <th>Level</th>
+                  <th class="text-end">Level Value</th>
+                  <th class="text-end">Touch Price</th>
+                  <th class="text-end">Trigger Field</th>
+                  <th class="text-end">Distance</th>
+                </tr>
+              </thead>
+              <tbody id="touchTableBody">
+                <!-- populated by JS -->
+              </tbody>
+            </table>
+          </div>
+
+          <div id="touchEmptyState" class="text-center text-muted small py-3" style="display:none;">
+            <i class="bi bi-info-circle me-1"></i> No touches detected for the selected level(s) in this dataset.
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <p class="footer-note text-center mt-4 mb-0">
+      Rendered with TradingView Lightweight Charts · Bootstrap 5 · Bootstrap Icons
+    </p>
+  </main>
+
+  <!-- Error toast -->
+  <div class="position-fixed bottom-0 end-0 p-3" style="z-index: 1080;">
+    <div id="errorToast" class="toast align-items-center text-bg-danger border-0" role="alert" aria-live="assertive" aria-atomic="true">
+      <div class="d-flex">
+        <div class="toast-body" id="errorToastMsg">Something went wrong.</div>
+        <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Bootstrap JS (for toast / dismiss) -->
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+
+  <script>
+  (function () {
+    "use strict";
+
+    // -----------------------------------------------------------------
+    // Constants
+    // -----------------------------------------------------------------
+    const IST_TIMEZONE = "Asia/Kolkata";
+    const IST_OFFSET_MIN = 5 * 60 + 30; // +05:30 in minutes
+
+    const EMA_FAST_PERIOD = 9;
+    const EMA_SLOW_PERIOD = 21;
+
+    // Format a JS Date or ISO string to IST-friendly display strings.
+    const istTimeFmt = new Intl.DateTimeFormat("en-GB", {
+      timeZone: IST_TIMEZONE,
+      hour: "2-digit", minute: "2-digit", hour12: false,
+    });
+    const istFullFmt = new Intl.DateTimeFormat("en-GB", {
+      timeZone: IST_TIMEZONE,
+      year: "numeric", month: "short", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", hour12: false,
+    });
+    const istDateOnlyFmt = new Intl.DateTimeFormat("en-GB", {
+      timeZone: IST_TIMEZONE,
+      day: "2-digit", month: "short", year: "numeric",
+    });
+
+    // TradingView lightweight-charts uses Unix seconds for time.
+    function toChartTime(isoString) {
+      const d = new Date(isoString);
+      const istWallClockMs = d.getTime() + IST_OFFSET_MIN * 60 * 1000;
+      return Math.floor(istWallClockMs / 1000);
+    }
+
+    function fromChartTime(sec) {
+      const d = new Date((sec - IST_OFFSET_MIN * 60) * 1000);
+      return d;
+    }
+
+    function istDateKey(sec) {
+      const d = fromChartTime(sec);
+      const y = d.getUTCFullYear();
+      const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+      const day = String(d.getUTCDate()).padStart(2, "0");
+      return `${y}-${m}-${day}`;
+    }
+
+    // -----------------------------------------------------------------
+    // DOM
+    // -----------------------------------------------------------------
+    const fileInput       = document.getElementById("fileInput");
+    const uploadZone      = document.getElementById("uploadZone");
+    const btnFitAll       = document.getElementById("btnFitAll");
+    const btnReset        = document.getElementById("btnReset");
+    const btnToggleVolume = document.getElementById("btnToggleVolume");
+    const btnClear        = document.getElementById("btnClear");
+    const metaSection     = document.getElementById("metaSection");
+    const chartEl         = document.getElementById("chart");
+    const emptyState      = document.getElementById("emptyState");
+    const orLegend        = document.getElementById("orLegend");
+    const levelToggles    = document.getElementById("levelToggles");
+
+    const metaFile  = document.getElementById("metaFile");
+    const metaCount = document.getElementById("metaCount");
+    const metaFrom  = document.getElementById("metaFrom");
+    const metaTo    = document.getElementById("metaTo");
+    const metaEmaCrosses = document.getElementById("metaEmaCrosses");
+    const metaTouches = document.getElementById("metaTouches");
+
+    const statOpen  = document.getElementById("statOpen");
+    const statClose = document.getElementById("statClose");
+    const statHigh  = document.getElementById("statHigh");
+    const statLow   = document.getElementById("statLow");
+    const istOffsetEl = document.getElementById("istOffset");
+
+    const errorToastEl  = document.getElementById("errorToast");
+    const errorToastMsg = document.getElementById("errorToastMsg");
+    const errorToast    = new bootstrap.Toast(errorToastEl, { delay: 4500 });
+
+    // Touch table
+    const touchTableSection = document.getElementById("touchTableSection");
+    const touchTableBody    = document.getElementById("touchTableBody");
+    const touchCountBadge   = document.getElementById("touchCountBadge");
+    const touchEmptyState   = document.getElementById("touchEmptyState");
+
+    // Level toggle buttons
+    const btnHLA     = document.getElementById("btnHLA");
+    const btnR1S1    = document.getElementById("btnR1S1");
+    const btnR2S2    = document.getElementById("btnR2S2");
+    const btnR3S3    = document.getElementById("btnR3S3");
+    const btnThresh  = document.getElementById("btnThresh");
+    const btnEmaCross = document.getElementById("btnEmaCross");
+
+    // -----------------------------------------------------------------
+    // Chart state
+    // -----------------------------------------------------------------
+    let chart = null;
+    let candleSeries = null;
+    let volumeSeries = null;
+    let volumeVisible = true;
+
+    let emaMarkersPrimitive = null;
+    let emaCrossMarkers = [];
+    let emaCrossVisible = true;
+
+    let orSeriesMap = new Map();
+
+    let levelVisibility = {
+      H: true,
+      L: true,
+      A: true,
+      R1: false,
+      S1: false,
+      R2: false,
+      S2: false,
+      R3: true,
+      S3: true,
+      R3_Threshold: false,
+      S3_Threshold: false,
+    };
+
+    let allCandles = [];
+    let allTouchEvents = [];
+
+    // Selected filter for touch table: "R3" | "S3" | "BOTH"
+    let touchFilter = "R3";
+
+    function showError(msg) {
+      errorToastMsg.textContent = msg;
+      errorToast.show();
+    }
+
+    function fmt(n, digits) {
+      if (n === null || n === undefined || Number.isNaN(n)) return "—";
+      const d = (typeof digits === "number") ? digits : 2;
+      return Number(n).toLocaleString("en-IN", {
+        minimumFractionDigits: d,
+        maximumFractionDigits: d,
+      });
+    }
+
+    // -----------------------------------------------------------------
+    // EMA calculation
+    // -----------------------------------------------------------------
+    function calculateEMA(candles, period) {
+      if (!candles || candles.length === 0 || period <= 0) return [];
+      const k = 2 / (period + 1);
+      const result = [];
+      let prev = null;
+
+      for (let i = 0; i < candles.length; i++) {
+        const close = Number(candles[i].close);
+        if (!Number.isFinite(close)) continue;
+
+        if (prev === null) {
+          prev = close;
+        } else {
+          prev = close * k + prev * (1 - k);
+        }
+        result.push({ time: candles[i].time, value: prev });
+      }
+      return result;
+    }
+
+    // -----------------------------------------------------------------
+    // Detect EMA crosses from candles
+    // -----------------------------------------------------------------
+    function detectEmaCrosses(candles) {
+      const crosses = [];
+      if (!candles || candles.length < 2) return crosses;
+
+      const fast = calculateEMA(candles, EMA_FAST_PERIOD);
+      const slow = calculateEMA(candles, EMA_SLOW_PERIOD);
+
+      const n = Math.min(fast.length, slow.length);
+      if (n < 2) return crosses;
+
+      const candleByTime = new Map();
+      for (const c of candles) candleByTime.set(c.time, c);
+
+      for (let i = 1; i < n; i++) {
+        const prevDiff = fast[i - 1].value - slow[i - 1].value;
+        const currDiff = fast[i].value - slow[i].value;
+
+        if (prevDiff <= 0 && currDiff > 0) {
+          const c = candleByTime.get(fast[i].time);
+          crosses.push({
+            time: fast[i].time,
+            type: "bull",
+            label: "BUY",
+            price: c ? c.low : fast[i].value,
+            fast: fast[i].value,
+            slow: slow[i].value,
+          });
+        } else if (prevDiff >= 0 && currDiff < 0) {
+          const c = candleByTime.get(fast[i].time);
+          crosses.push({
+            time: fast[i].time,
+            type: "bear",
+            label: "SELL",
+            price: c ? c.high : fast[i].value,
+            fast: fast[i].value,
+            slow: slow[i].value,
+          });
+        }
+      }
+
+      return crosses;
+    }
+
+    // -----------------------------------------------------------------
+    // Chart init
+    // -----------------------------------------------------------------
+    function ensureChart() {
+      if (chart) return;
+
+      chart = LightweightCharts.createChart(chartEl, {
+        layout: {
+          background: { type: "solid", color: "#ffffff" },
+          textColor: "#1f2937",
+          fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif",
+        },
+        grid: {
+          vertLines: { color: "#eef1f6" },
+          horzLines: { color: "#eef1f6" },
+        },
+        crosshair: {
+          mode: LightweightCharts.CrosshairMode.Normal,
+          vertLine: { color: "#94a3b8", width: 1, style: 3, labelBackgroundColor: "#2563eb" },
+          horzLine: { color: "#94a3b8", width: 1, style: 3, labelBackgroundColor: "#2563eb" },
+        },
+        rightPriceScale: {
+          borderColor: "#e3e8ef",
+          scaleMargins: { top: 0.08, bottom: volumeVisible ? 0.28 : 0.08 },
+        },
+        timeScale: {
+          borderColor: "#e3e8ef",
+          timeVisible: true,
+          secondsVisible: false,
+          tickMarkFormatter: (time) => {
+            const d = fromChartTime(time);
+            return istTimeFmt.format(d);
+          },
+        },
+        localization: {
+          locale: "en-IN",
+          timeFormatter: (time) => {
+            const d = fromChartTime(time);
+            return istFullFmt.format(d);
+          },
+        },
+        handleScroll: true,
+        handleScale: true,
+        autoSize: false,
+      });
+
+      candleSeries = chart.addCandlestickSeries({
+        upColor: "#16a34a",
+        downColor: "#dc2626",
+        borderUpColor: "#16a34a",
+        borderDownColor: "#dc2626",
+        wickUpColor: "#16a34a",
+        wickDownColor: "#dc2626",
+        priceLineVisible: false,
+        lastValueVisible: true,
+      });
+
+      volumeSeries = chart.addHistogramSeries({
+        priceFormat: { type: "volume" },
+        priceScaleId: "volume",
+        color: "#93c5fd",
+      });
+      chart.priceScale("volume").applyOptions({
+        scaleMargins: { top: 0.78, bottom: 0.0 },
+      });
+
+      const ro = new ResizeObserver(() => {
+        if (chart && chartEl.clientWidth > 0) {
+          chart.applyOptions({
+            width: chartEl.clientWidth,
+            height: chartEl.clientHeight,
+          });
+        }
+      });
+      ro.observe(chartEl);
+    }
+
+    // -----------------------------------------------------------------
+    // Parse candles
+    // -----------------------------------------------------------------
+    function parseCandles(json) {
+      if (!json || typeof json !== "object") {
+        throw new Error("JSON is not an object.");
+      }
+      const data = json.data || {};
+      const candles = data.candles;
+      if (!Array.isArray(candles)) {
+        throw new Error("Missing `data.candles` array in JSON.");
+      }
+
+      const out = [];
+      for (const row of candles) {
+        if (!Array.isArray(row) || row.length < 6) continue;
+        const [ts, o, h, l, c, v] = row;
+        const t = toChartTime(ts);
+        out.push({
+          time: t,
+          open: Number(o),
+          high: Number(h),
+          low: Number(l),
+          close: Number(c),
+          volume: Number(v || 0),
+        });
+      }
+      out.sort((a, b) => a.time - b.time);
+      return out;
+    }
+
+    // -----------------------------------------------------------------
+    // Opening Range (OR) level computation
+    // -----------------------------------------------------------------
+    function computeOpeningRangeLevels(candles) {
+      const byDay = new Map();
+      for (const c of candles) {
+        const key = istDateKey(c.time);
+        if (!byDay.has(key)) byDay.set(key, []);
+        byDay.get(key).push(c);
+      }
+
+      const days = [];
+
+      for (const [dayKey, dayCandles] of byDay.entries()) {
+        if (!dayCandles.length) continue;
+
+        const first = dayCandles[0];
+        const H = first.high;
+        const L = first.low;
+
+        const A   = (H + L) / 2;
+        const D_H = Math.abs(H - A);
+        const D_L = Math.abs(A - L);
+
+        const R1 = A + D_H / 2;
+        const S1 = A - D_L / 2;
+
+        const R2 = H + D_H;
+        const S2 = L - D_L;
+
+        const R3 = R2 + D_H;
+        const S3 = S2 - D_L;
+
+        const R3_Threshold = (R2 + R3) / 2;
+        const S3_Threshold = (S2 + S3) / 2;
+
+        const dayStart = dayCandles[0].time;
+        const dayEnd   = dayCandles[dayCandles.length - 1].time;
+
+        const levels = [
+          { name: "H",            value: H,            color: "#111827", lineStyle: 0, lineWidth: 2 },
+          { name: "L",            value: L,            color: "#111827", lineStyle: 0, lineWidth: 2 },
+          { name: "A",            value: A,            color: "#6b7280", lineStyle: 2, lineWidth: 1 },
+          { name: "R1",           value: R1,           color: "#16a34a", lineStyle: 0, lineWidth: 1 },
+          { name: "S1",           value: S1,           color: "#dc2626", lineStyle: 0, lineWidth: 1 },
+          { name: "R2",           value: R2,           color: "#16a34a", lineStyle: 0, lineWidth: 1 },
+          { name: "S2",           value: S2,           color: "#dc2626", lineStyle: 0, lineWidth: 1 },
+          { name: "R3",           value: R3,           color: "#16a34a", lineStyle: 0, lineWidth: 2 },
+          { name: "S3",           value: S3,           color: "#dc2626", lineStyle: 0, lineWidth: 2 },
+          { name: "R3_Threshold", value: R3_Threshold, color: "#f59e0b", lineStyle: 2, lineWidth: 1 },
+          { name: "S3_Threshold", value: S3_Threshold, color: "#f59e0b", lineStyle: 2, lineWidth: 1 },
+        ];
+
+        days.push({ dayKey, dayStart, dayEnd, levels, H, L, A, R1, S1, R2, S2, R3, S3 });
+      }
+
+      return days;
+    }
+
+    // -----------------------------------------------------------------
+    // Detect R3 / S3 touch events per day
+    // -----------------------------------------------------------------
+    function detectR3S3Touches(candles) {
+      const days = computeOpeningRangeLevels(candles);
+      const touches = [];
+
+      for (const day of days) {
+        const dayCandles = candles.filter(c => istDateKey(c.time) === day.dayKey);
+        if (!dayCandles.length) continue;
+
+        let r3Touched = null;
+        let s3Touched = null;
+
+        // Iterate candles chronologically; record the FIRST touch of R3 and S3
+        for (const c of dayCandles) {
+          if (r3Touched === null && Number.isFinite(day.R3) && c.high >= day.R3) {
+            r3Touched = {
+              date: day.dayKey,
+              timeChart: c.time,
+              timeISO: fromChartTime(c.time).toISOString(),
+              level: "R3",
+              levelValue: day.R3,
+              touchPrice: c.high,
+              triggerField: "high",
+              distance: c.high - day.R3,
+              candle: { o: c.open, h: c.high, l: c.low, c: c.close },
+            };
+          }
+          if (s3Touched === null && Number.isFinite(day.S3) && c.low <= day.S3) {
+            s3Touched = {
+              date: day.dayKey,
+              timeChart: c.time,
+              timeISO: fromChartTime(c.time).toISOString(),
+              level: "S3",
+              levelValue: day.S3,
+              touchPrice: c.low,
+              triggerField: "low",
+              distance: day.S3 - c.low,
+              candle: { o: c.open, h: c.high, l: c.low, c: c.close },
+            };
+          }
+
+          if (r3Touched && s3Touched) break;
+        }
+
+        if (r3Touched) touches.push(r3Touched);
+        if (s3Touched) touches.push(s3Touched);
+      }
+
+      touches.sort((a, b) => b.timeChart - a.timeChart);
+      return touches;
+    }
+
+    // -----------------------------------------------------------------
+    // Render Touch Events Table
+    // -----------------------------------------------------------------
+    function renderTouchTable(touches) {
+      allTouchEvents = touches || [];
+
+      if (allTouchEvents.length === 0) {
+        touchTableSection.style.display = "none";
+        return;
+      }
+
+      touchTableSection.style.display = "";
+      metaTouches.textContent = allTouchEvents.length.toLocaleString("en-IN");
+
+      applyTouchFilter();
+    }
+
+    function applyTouchFilter() {
+      // touchFilter: "R3" | "S3" | "BOTH"
+      const filtered = allTouchEvents.filter(t => {
+        if (touchFilter === "BOTH") return true;
+        return t.level.toUpperCase() === touchFilter;
+      });
+
+      touchCountBadge.textContent = filtered.length.toLocaleString("en-IN");
+
+      if (filtered.length === 0) {
+        touchTableBody.innerHTML = "";
+        touchEmptyState.style.display = "";
+        return;
+      }
+
+      touchEmptyState.style.display = "none";
+
+      const rows = filtered.map((t, i) => {
+        const dateStr = istDateOnlyFmt.format(fromChartTime(t.timeChart));
+        const timeStr = istTimeFmt.format(fromChartTime(t.timeChart));
+        const isR = t.level.toUpperCase().startsWith("R");
+        const badgeClass = t.level.toLowerCase();
+        const priceClass = isR ? "touch-price-up" : "touch-price-down";
+        const distanceStr = (t.distance >= 0 ? "+" : "") + Number(t.distance).toFixed(2);
+
+        return `
+          <tr>
+            <td class="text-muted">${i + 1}</td>
+            <td><strong>${dateStr}</strong></td>
+            <td>${timeStr}</td>
+            <td><span class="touch-badge ${badgeClass}">${t.level}</span></td>
+            <td class="text-end">${fmt(t.levelValue)}</td>
+            <td class="text-end ${priceClass}">${fmt(t.touchPrice)}</td>
+            <td class="text-end text-muted small">${t.triggerField}</td>
+            <td class="text-end text-muted small">${distanceStr}</td>
+          </tr>
+        `;
+      }).join("");
+
+      touchTableBody.innerHTML = rows;
+    }
+
+    // -----------------------------------------------------------------
+    // Radio-style filter buttons
+    // -----------------------------------------------------------------
+    function setTouchFilter(newFilter) {
+      touchFilter = newFilter;
+
+      // Update active state / aria on all filter buttons
+      document.querySelectorAll(".touch-filter-btn").forEach(btn => {
+        const isActive = btn.dataset.filter === newFilter;
+        btn.classList.toggle("active", isActive);
+        btn.setAttribute("aria-checked", isActive ? "true" : "false");
+      });
+
+      applyTouchFilter();
+    }
+
+    document.querySelectorAll(".touch-filter-btn").forEach(btn => {
+      btn.addEventListener("click", () => {
+        setTouchFilter(btn.dataset.filter);
+      });
+    });
+
+    // -----------------------------------------------------------------
+    // OR line drawing
+    // -----------------------------------------------------------------
+    function clearOrLines() {
+      if (!chart) {
+        orSeriesMap.clear();
+        return;
+      }
+      for (const [, items] of orSeriesMap.entries()) {
+        for (const item of items) {
+          if (item.series) {
+            try { chart.removeSeries(item.series); } catch (e) { /* ignore */ }
+          }
+        }
+      }
+      orSeriesMap.clear();
+    }
+
+    function drawOrLevels(candles) {
+      clearOrLines();
+      if (!chart || !candleSeries) return;
+
+      const days = computeOpeningRangeLevels(candles);
+
+      for (const day of days) {
+        for (const lvl of day.levels) {
+          const lineSeries = chart.addLineSeries({
+            color: lvl.color,
+            lineWidth: lvl.lineWidth,
+            lineStyle: lvl.lineStyle === 2 ? LightweightCharts.LineStyle.Dashed
+                     : lvl.lineStyle === 3 ? LightweightCharts.LineStyle.Dotted
+                     : LightweightCharts.LineStyle.Solid,
+            priceLineVisible: false,
+            lastValueVisible: false,
+            crosshairMarkerVisible: false,
+            priceScaleId: "right",
+          });
+
+          lineSeries.setData([
+            { time: day.dayStart, value: lvl.value },
+            { time: day.dayEnd,   value: lvl.value },
+          ]);
+
+          lineSeries.applyOptions({ visible: levelVisibility[lvl.name] !== false });
+
+          if (!orSeriesMap.has(lvl.name)) {
+            orSeriesMap.set(lvl.name, []);
+          }
+          orSeriesMap.get(lvl.name).push({
+            series: lineSeries,
+            dayKey: day.dayKey,
+            dayStart: day.dayStart,
+            dayEnd: day.dayEnd,
+            value: lvl.value,
+            color: lvl.color,
+          });
+        }
+      }
+
+      orLegend.style.display = "";
+      levelToggles.style.display = "";
+    }
+
+    function updateLevelVisibility(levelNames) {
+      for (const name of levelNames) {
+        const visible = levelVisibility[name];
+        const items = orSeriesMap.get(name) || [];
+        for (const item of items) {
+          if (item.series) {
+            item.series.applyOptions({ visible: visible });
+          }
+        }
+      }
+    }
+
+    // -----------------------------------------------------------------
+    // Render EMA cross markers (triangles only)
+    // -----------------------------------------------------------------
+    function applyMarkers(crossEvents) {
+      if (!candleSeries) return;
+
+      if (!emaCrossVisible) {
+        if (emaMarkersPrimitive) {
+          emaMarkersPrimitive.setMarkers([]);
+        } else if (typeof candleSeries.setMarkers === "function") {
+          candleSeries.setMarkers([]);
+        }
+        return;
+      }
+
+      const markers = [];
+
+      for (const evt of crossEvents) {
+        const isBull = evt.type === "bull";
+        markers.push({
+          time: evt.time,
+          position: isBull ? "belowBar" : "aboveBar",
+          color: isBull ? "#16a34a" : "#dc2626",
+          shape: isBull ? "arrowUp" : "arrowDown",
+          text: evt.label,
+          size: 2,
+        });
+      }
+
+      markers.sort((a, b) => a.time - b.time);
+
+      if (typeof LightweightCharts.createSeriesMarkers === "function") {
+        if (emaMarkersPrimitive) {
+          emaMarkersPrimitive.setMarkers(markers);
+        } else {
+          emaMarkersPrimitive = LightweightCharts.createSeriesMarkers(
+            candleSeries,
+            markers
+          );
+        }
+      } else if (typeof candleSeries.setMarkers === "function") {
+        candleSeries.setMarkers(markers);
+      }
+    }
+
+    // -----------------------------------------------------------------
+    // Render candles
+    // -----------------------------------------------------------------
+    function renderCandles(candles, fileName) {
+      ensureChart();
+
+      if (candles.length === 0) {
+        showError("No valid candles found in file.");
+        return;
+      }
+
+      allCandles = candles;
+
+      candleSeries.setData(candles);
+
+      const volumeData = candles.map((c) => ({
+        time: c.time,
+        value: c.volume,
+        color: c.close >= c.open ? "rgba(22,163,74,0.45)" : "rgba(220,38,38,0.45)",
+      }));
+      volumeSeries.setData(volumeData);
+      volumeSeries.applyOptions({ visible: volumeVisible });
+
+      drawOrLevels(candles);
+
+      const crosses = detectEmaCrosses(candles);
+      emaCrossMarkers = crosses;
+      applyMarkers(emaCrossMarkers);
+
+      const touches = detectR3S3Touches(candles);
+      renderTouchTable(touches);
+
+      chart.timeScale().fitContent();
+
+      metaSection.style.display = "";
+      emptyState.style.display = "none";
+
+      const first = candles[0];
+      const last  = candles[candles.length - 1];
+
+      metaFile.textContent  = fileName || "—";
+      metaCount.textContent = candles.length.toLocaleString("en-IN");
+      metaFrom.textContent  = istFullFmt.format(fromChartTime(first.time));
+      metaTo.textContent    = istFullFmt.format(fromChartTime(last.time));
+      metaEmaCrosses.textContent = crosses.length.toLocaleString("en-IN");
+
+      statOpen.textContent  = fmt(first.open);
+      statClose.textContent = fmt(last.close);
+
+      let hi = -Infinity, lo = Infinity;
+      for (const c of candles) {
+        if (c.high > hi) hi = c.high;
+        if (c.low  < lo) lo = c.low;
+      }
+      statHigh.textContent = fmt(hi);
+      statLow.textContent  = fmt(lo);
+
+      const up = last.close >= first.open;
+      statClose.classList.toggle("up", up);
+      statClose.classList.toggle("down", !up);
+
+      istOffsetEl.textContent = "+05:30";
+    }
+
+    // -----------------------------------------------------------------
+    // File loading
+    // -----------------------------------------------------------------
+    function handleFile(file) {
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try {
+          const json = JSON.parse(e.target.result);
+          const candles = parseCandles(json);
+
+          if (candles.length === 0) {
+            showError("No valid candles found in file.");
+            return;
+          }
+
+          renderCandles(candles, file.name);
+        } catch (err) {
+          console.error(err);
+          showError("Failed to parse JSON: " + err.message);
+        }
+      };
+      reader.onerror = () => showError("Could not read file.");
+      reader.readAsText(file);
+    }
+
+    // -----------------------------------------------------------------
+    // Events
+    // -----------------------------------------------------------------
+    uploadZone.addEventListener("click", () => fileInput.click());
+    fileInput.addEventListener("change", (e) => {
+      const f = e.target.files && e.target.files[0];
+      handleFile(f);
+      fileInput.value = "";
+    });
+
+    ["dragenter", "dragover"].forEach((evt) =>
+      uploadZone.addEventListener(evt, (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        uploadZone.classList.add("dragover");
+      })
+    );
+    ["dragleave", "drop"].forEach((evt) =>
+      uploadZone.addEventListener(evt, (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        uploadZone.classList.remove("dragover");
+      })
+    );
+    uploadZone.addEventListener("drop", (e) => {
+      const f = e.dataTransfer.files && e.dataTransfer.files[0];
+      handleFile(f);
+    });
+
+    btnFitAll.addEventListener("click", () => {
+      if (chart) chart.timeScale().fitContent();
+    });
+
+    btnReset.addEventListener("click", () => {
+      if (chart) {
+        chart.timeScale().resetTimeScale();
+        chart.priceScale("right").applyOptions({ autoScale: true });
+      }
+    });
+
+    btnToggleVolume.addEventListener("click", () => {
+      if (!chart || !volumeSeries) return;
+      volumeVisible = !volumeVisible;
+      volumeSeries.applyOptions({ visible: volumeVisible });
+      chart.priceScale("right").applyOptions({
+        scaleMargins: { top: 0.08, bottom: volumeVisible ? 0.28 : 0.08 },
+      });
+      if (volumeVisible) {
+        chart.priceScale("volume").applyOptions({
+          scaleMargins: { top: 0.78, bottom: 0.0 },
+        });
+      }
+    });
+
+    btnClear.addEventListener("click", () => {
+      allCandles = [];
+      if (chart) {
+        clearOrLines();
+        chart.remove();
+        chart = null;
+        candleSeries = null;
+        volumeSeries = null;
+        emaMarkersPrimitive = null;
+      }
+      orSeriesMap.clear();
+      emaCrossMarkers = [];
+      allTouchEvents = [];
+      metaSection.style.display = "none";
+      emptyState.style.display = "";
+      orLegend.style.display = "none";
+      levelToggles.style.display = "none";
+      touchTableSection.style.display = "none";
+      touchTableBody.innerHTML = "";
+    });
+
+    // -----------------------------------------------------------------
+    // Level toggle buttons
+    // -----------------------------------------------------------------
+    function toggleLevels(names) {
+      const anyVisible = names.some(n => levelVisibility[n]);
+      const newState = !anyVisible;
+      for (const n of names) {
+        levelVisibility[n] = newState;
+      }
+      updateLevelVisibility(names);
+
+      const btn = names.includes("H") ? btnHLA
+                : names.includes("R1") ? btnR1S1
+                : names.includes("R2") ? btnR2S2
+                : names.includes("R3") ? btnR3S3
+                : btnThresh;
+      if (btn) {
+        const label = btn.textContent.trim().split(' ').pop();
+        btn.innerHTML = newState
+          ? '<i class="bi bi-eye"></i> ' + label
+          : '<i class="bi bi-eye-slash"></i> ' + label;
+      }
+    }
+
+    btnHLA.addEventListener("click", () => toggleLevels(["H", "L", "A"]));
+    btnR1S1.addEventListener("click", () => toggleLevels(["R1", "S1"]));
+    btnR2S2.addEventListener("click", () => toggleLevels(["R2", "S2"]));
+    btnR3S3.addEventListener("click", () => toggleLevels(["R3", "S3"]));
+    btnThresh.addEventListener("click", () => toggleLevels(["R3_Threshold", "S3_Threshold"]));
+
+    btnEmaCross.addEventListener("click", () => {
+      emaCrossVisible = !emaCrossVisible;
+      btnEmaCross.innerHTML = emaCrossVisible
+        ? '<i class="bi bi-eye"></i> EMA Cross'
+        : '<i class="bi bi-eye-slash"></i> EMA Cross';
+      applyMarkers(emaCrossMarkers);
+    });
+
+    // Initialize button states on load
+    (function initButtonIcons() {
+      btnHLA.innerHTML = '<i class="bi bi-eye"></i> H, L, A';
+      btnR1S1.innerHTML = '<i class="bi bi-eye-slash"></i> R1 / S1';
+      btnR2S2.innerHTML = '<i class="bi bi-eye-slash"></i> R2 / S2';
+      btnR3S3.innerHTML = '<i class="bi bi-eye"></i> R3 / S3';
+      btnThresh.innerHTML = '<i class="bi bi-eye-slash"></i> Thresholds';
+      btnEmaCross.innerHTML = '<i class="bi bi-eye"></i> EMA Cross';
+    })();
+
+    // Default touch filter is R3 only (radio button already marked active in HTML)
+    setTouchFilter("R3");
+
+  })();
+  </script>
+</body>
+</html>
