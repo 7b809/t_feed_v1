@@ -1,4 +1,0 @@
-2026-09-27 16:39:45 [INFO] [option_service] [option_service.py:629] [get_options_contracts]: Updated options cache. subscribed_keys=83, contracts_by_key=82, contracts_by_strike_type=82
-2026-09-27 16:39:45 [INFO] [option_service] [option_service.py:635] [get_options_contracts]: Saved options response to D:\files\temp_ticks\t_feed_v1-temp\data\nearest_nifty_option_contracts.json
-2026-09-27 16:49:20 [INFO] [option_service] [option_service.py:629] [get_options_contracts]: Updated options cache. subscribed_keys=83, contracts_by_key=82, contracts_by_strike_type=82
-2026-09-27 16:49:20 [INFO] [option_service] [option_service.py:635] [get_options_contracts]: Saved options response to D:\files\temp_ticks\t_feed_v1-temp\data\nearest_nifty_option_contracts.json
