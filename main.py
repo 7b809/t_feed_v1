@@ -55,7 +55,7 @@ from services.runtime_config_service import (
 from services.telegram_service import telegram_service
 from services.token_service import token_service
 from services.upstox_websocket import upstox_streamer
-from services.external_ema_feed import external_ema_feed
+from services.ema_engine import internal_ema_engine
 from token_tasks.telegram_token_bot import telegram_token_bot
 from token_tasks.token_monitor import (
     check_upstox_token_validity,
@@ -205,11 +205,11 @@ def cleanup_startup_paths() -> dict:
 
 
 def get_live_ema_calculation_mode_text() -> str:
-    return "external_websocket"
+    return "internal_completed_candle"
 
 
 def get_live_ema_calculation_mode_description() -> str:
-    return "EMA state and crossover events supplied by the external EMA WebSocket"
+    return "Internal EMA 9/21 calculation from completed one-minute candles"
 
 
 def get_ema_order_side_rule_text() -> str:
@@ -1738,6 +1738,16 @@ def start_scheduler() -> BackgroundScheduler:
     )
 
     scheduler.add_job(
+        func=internal_ema_engine.poll_completed_candles,
+        trigger="interval",
+        seconds=10,
+        id="internal_ema_completed_candle_job",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
+    scheduler.add_job(
         func=run_daily_market_hard_refresh,
         trigger=CronTrigger(
             day_of_week="mon-fri",
@@ -1925,12 +1935,28 @@ async def app_lifespan(
             run_initial_startup,
         )
 
+        if internal_ema_engine.is_running:
+            try:
+                telegram_service.send_message(
+                    title="LIVE EMA CALCULATION STARTED",
+                    message=(
+                        f"Instruments: {len(internal_ema_engine.get_states_snapshot())}\n"
+                        f"EMA Fast: {config.EMA_FAST_PERIOD}\n"
+                        f"EMA Slow: {config.EMA_SLOW_PERIOD}\n"
+                        "Interval: 1 minute\n"
+                        f"Time: {datetime.now(ZoneInfo(config.MARKET_TIMEZONE)).isoformat()}"
+                    ),
+                    level="INFO",
+                )
+            except Exception:
+                logger.exception("EMA started Telegram notification failed")
+
+        internal_ema_engine.loop = loop
         scheduler = start_scheduler()
         telegram_bot_started = telegram_token_bot.start()
 
         await upstox_streamer.start()
         streamer_started = True
-        await external_ema_feed.start()
 
         subscribed_keys = (
             options_cache.get(
@@ -2013,10 +2039,10 @@ async def app_lifespan(
             logger.exception("Upstox streamer shutdown failed.")
 
         try:
-            await external_ema_feed.stop()
+            internal_ema_engine.is_running = False
         except Exception as ex:
-            shutdown_errors.append(f"External EMA feed: {type(ex).__name__}: {ex}")
-            logger.exception("External EMA feed shutdown failed.")
+            shutdown_errors.append(f"Internal EMA engine: {type(ex).__name__}: {ex}")
+            logger.exception("Internal EMA engine shutdown failed.")
 
         try:
             if scheduler is not None and scheduler.running:

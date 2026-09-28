@@ -225,7 +225,9 @@ def calculate_ema(values: list, period: int) -> list:
             previous_ema = price
         else:
             previous_ema = (price * multiplier) + (previous_ema * (1 - multiplier))
-        ema_values.append(round(previous_ema, 4))
+        # Keep full precision between candles, matching ema_v1; callers round
+        # only when serializing display values.
+        ema_values.append(previous_ema)
     return ema_values
 
 def extract_close_prices_from_candles(candles: list) -> list:
@@ -303,9 +305,10 @@ def save_ema_cross_results_to_file(summary: dict, output_file: str = DEFAULT_EMA
 # ============================================================
 
 def initialize_live_ema_from_history(summary: dict) -> bool:
-    """External EMA feed owns live EMA state; no local seeding is needed."""
-    logger.info("Skipping local live EMA initialization; using external EMA feed.")
-    return False
+    """Seed the internal live engine from this service's historical EMA results."""
+    from services.ema_engine import internal_ema_engine
+
+    return internal_ema_engine.initialize_from_history(summary)
 
 # ============================================================
 # Intraday Fetch Helper

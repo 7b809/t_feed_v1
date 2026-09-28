@@ -19,6 +19,7 @@ venv/
  t.txt
  large_files.json
 .env.* 
+!.env.example
 .env
 test_logs
 output

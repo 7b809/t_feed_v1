@@ -196,6 +196,8 @@ MARKET_TIMEZONE = get_string("MARKET_TIMEZONE", "Asia/Kolkata")
 MARKET_TIME_FORMAT = get_string("MARKET_TIME_FORMAT", "%Y-%m-%d %H:%M:%S %Z")
 MARKET_OPEN_HOUR = get_int("MARKET_OPEN_HOUR", 9)
 MARKET_OPEN_MINUTE = get_int("MARKET_OPEN_MINUTE", 15)
+MARKET_CLOSE_HOUR = get_int("MARKET_CLOSE_HOUR", 15)
+MARKET_CLOSE_MINUTE = get_int("MARKET_CLOSE_MINUTE", 30)
 MAIN_NIFTY_SECURITY = get_string("MAIN_NIFTY_SECURITY", "NSE_INDEX|Nifty 50")
 STRIKE_FROM = get_float("STRIKE_FROM", 23000)
 STRIKE_TO = get_float("STRIKE_TO", 25000)
@@ -471,14 +473,6 @@ LIVE_EMA_OUTPUT_FILE = get_string(
     "LIVE_EMA_OUTPUT_FILE", "data/live_ema_cross_results.json"
 )
 LIVE_EMA_MAX_EVENTS_IN_MEMORY = max(1, get_int("LIVE_EMA_MAX_EVENTS_IN_MEMORY", 5000))
-EXTERNAL_EMA_WEBSOCKET_URL = get_string(
-    "EXTERNAL_EMA_WEBSOCKET_URL", "wss://tfeed.up.railway.app/ws/ema"
-).rstrip("/")
-EXTERNAL_EMA_OUTPUT_FILE = get_string(
-    "EXTERNAL_EMA_OUTPUT_FILE", "logs/external_ema_feed.jsonl"
-)
-EXTERNAL_EMA_RECONNECT_SECONDS = max(1, get_int("EXTERNAL_EMA_RECONNECT_SECONDS", 5))
-
 EMA_ALERT_SIMULATION_ENABLED = get_bool(
     "EMA_ALERT_SIMULATION_ENABLED",
     True,

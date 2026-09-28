@@ -17,12 +17,15 @@ options_cache + subscribed_keys
 Historical Candle API     Upstox Live WebSocket
    |                          |
    v                          v
-Historical EMA State      Live ticks / live candles
-                              |
-                 +------------+------------+
-                 |                         |
-                 v                         v
-          Live EMA Engine          Opening Range Engine
+Historical EMA State      Live ticks / one-minute candle poll
+   |                          |
+   +------------+-------------+
+                v
+       Internal EMA Engine
+       EMA 9 / EMA 21
+       Completed-candle dedupe
+                |
+                +--------------------> Opening Range Engine
                  |                         |
                  | EMA crosses             | Level touches
                  |                         | R2/R3/S2/S3
@@ -34,7 +37,7 @@ Historical EMA State      Live ticks / live candles
                  +------------+-------------+
                  |                          |
                  v                          v
-         WebSocket Broadcast       Isolated EMA Action
+         Internal WebSocket       Isolated EMA Action
          all instruments                    |
                                   +---------+----------+
                                   |                    |

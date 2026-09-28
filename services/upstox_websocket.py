@@ -7,7 +7,7 @@ import upstox_client
 
 from core import config
 from core.logger import get_logger
-from services.external_ema_feed import external_ema_feed
+from services.ema_engine import internal_ema_engine
 from services.opening_range_service import (
     flush_pending_touch_alerts,
     get_opening_range_levels_for_ema_event,
@@ -73,7 +73,7 @@ class UpstoxStreamer:
         return datetime.now(self.market_timezone).strftime(self.market_time_format)
 
     def _get_live_ema_calculation_mode_text(self) -> str:
-        return "external_websocket"
+        return "internal_completed_candle"
 
     # ============================================================
     # Message Processing Decision
@@ -100,7 +100,7 @@ class UpstoxStreamer:
     # ============================================================
 
     def get_status(self) -> dict:
-        live_ema_status = external_ema_feed.get_status()
+        live_ema_status = internal_ema_engine.get_status()
         try:
             opening_range_status = get_opening_range_status()
         except Exception as ex:
@@ -124,7 +124,7 @@ class UpstoxStreamer:
             "live_ema_failed_count": self.live_ema_failed_count,
             "live_ema_calculation_mode_flag": live_ema_mode_flag,
             "live_ema_calculation_mode": live_ema_mode,
-            "live_ema_calculation_mode_description": "EMA state and crossover events from the external EMA WebSocket",
+            "live_ema_calculation_mode_description": "Internal EMA engine processes completed one-minute candles",
             "ema_opening_range_enriched_count": self.ema_opening_range_enriched_count,
             "ema_opening_range_enrichment_failed_count": self.ema_opening_range_enrichment_failed_count,
             "isolated_ema_alert_processed_count": self.isolated_ema_alert_processed_count,

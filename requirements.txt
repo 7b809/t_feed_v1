@@ -5,7 +5,6 @@ pymongo
 python-dotenv
 pydantic
 pydantic-settings
-websockets
 websocket-client
 requests
 pandas

@@ -4,7 +4,7 @@ from typing import Any
 
 from core.logger import get_logger
 from core import config
-from services.external_ema_feed import external_ema_feed
+from services.ema_engine import internal_ema_engine
 from services.algo_app_service import algo_app_service
 from services.telegram_service import telegram_service
 from services.option_service import (
@@ -118,7 +118,7 @@ def get_live_instrument_state(
     instrument_key: str,
 ) -> dict:
     try:
-        instrument_state = external_ema_feed.get_instrument_state(instrument_key)
+        instrument_state = internal_ema_engine.get_instrument_state(instrument_key)
     except Exception as ex:
         logger.warning(
             "Could not read live EMA state for simulation. "
@@ -415,7 +415,7 @@ def build_simulated_selected_state(
         },
         "latest_main_index_ltp": latest_main_index_ltp,
         "live_ema_calculation_mode_flag": True,
-        "live_ema_calculation_mode": "external_websocket",
+        "live_ema_calculation_mode": "internal_completed_candle",
         "ema_alerts_count": 0,
         "disabled": False,
         "simulation": True,
@@ -445,7 +445,7 @@ def build_simulated_ema_event(
 
     tick_based_mode = False
 
-    calculation_mode = "external_websocket"
+    calculation_mode = "internal_completed_candle"
 
     tick = None
 

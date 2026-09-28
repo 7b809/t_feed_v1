@@ -4,6 +4,7 @@ from fastapi.concurrency import run_in_threadpool
 from core import config
 from core.logger import get_logger
 from services.option_service import options_cache
+from services.ema_engine import internal_ema_engine
 from services.opening_range_service import (
     calculate_opening_range_for_all_subscribed,
     calculate_opening_range_for_instrument,
@@ -20,6 +21,25 @@ from services.opening_range_service import (
 
 logger = get_logger(__file__)
 router = APIRouter()
+
+
+@router.get("/history/live-ema/state")
+async def get_internal_live_ema_state(
+    instrument_key: str | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=1000),
+):
+    """Read the authoritative internal EMA state and recent crossover events."""
+    states = internal_ema_engine.get_states_snapshot()
+    if instrument_key:
+        states = {instrument_key: states[instrument_key]} if instrument_key in states else {}
+    events = internal_ema_engine.get_events_snapshot(instrument_key, limit)
+    return {
+        "status": "success",
+        "source": "internal_completed_candle",
+        "states": states,
+        "latest_crossover": events[-1] if events else None,
+        "crossover_history": events,
+    }
 
 # ============================================================
 # Live EMA Mode Helper

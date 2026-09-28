@@ -6,6 +6,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
 from core import config
 from core.logger import get_logger
 from services.option_service import options_cache
+from services.ema_engine import internal_ema_engine
 from ws_feed.broadcaster import broadcaster
 
 logger = get_logger(__file__)
@@ -20,7 +21,7 @@ router = APIRouter()
 
 def get_live_ema_calculation_mode_text() -> str:
     """Returns the source used for EMA state and crossover events."""
-    return "external_websocket"
+    return "internal_completed_candle"
 
 
 def get_live_ema_calculation_mode_payload() -> dict:
@@ -31,7 +32,7 @@ def get_live_ema_calculation_mode_payload() -> dict:
     return {
         "flag": True,
         "mode": mode,
-        "description": "EMA state and crossover events from the external EMA WebSocket",
+        "description": "EMA state and crossover events from the internal completed-candle engine",
     }
 
 
@@ -366,6 +367,7 @@ async def websocket_option(
 # ============================================================
 
 
+@router.websocket("/ws/ema")
 @router.websocket("/ws/ema-crossover")
 async def websocket_ema_crossover(websocket: WebSocket):
     """
@@ -374,7 +376,7 @@ async def websocket_ema_crossover(websocket: WebSocket):
     Current flow:
     - Receives EMA crossover events for all initialized instruments.
     - Events are not filtered by isolated instrument.
-    - EMA crossover events are received from the external EMA feed.
+    - EMA crossover events are published by temp3's internal EMA engine.
     - Each event may include Opening Range levels for the same instrument.
     - Each event may also include isolated instrument state.
     - Telegram EMA alerts are restricted to the isolated Opening Range instrument.
@@ -418,6 +420,13 @@ async def websocket_ema_crossover(websocket: WebSocket):
                 ),
             }
         )
+        await websocket.send_json({
+            "type": "initial_state",
+            "instruments": [
+                {"instrument_key": key, "state": value}
+                for key, value in internal_ema_engine.get_states_snapshot().items()
+            ],
+        })
 
         while True:
             try:
@@ -496,7 +505,7 @@ async def websocket_ema_crossover_instrument(
 
     Current flow:
     - Streams EMA crossover events only for the resolved instrument.
-    - EMA crossover events are received from the external EMA feed.
+    - EMA crossover events are published by temp3's internal EMA engine.
     - Event payload may include Opening Range levels for the same instrument.
     - Telegram EMA alerts are sent only if this resolved instrument is also
       the isolated instrument of the day.
@@ -594,6 +603,11 @@ async def websocket_ema_crossover_instrument(
                 "telegram_ema_alerts": "only_if_this_instrument_is_isolated",
             }
         )
+        await websocket.send_json({
+            "type": "initial_state",
+            "instrument_key": resolved_instrument_key,
+            "state": internal_ema_engine.get_instrument_state(resolved_instrument_key),
+        })
 
         while True:
             try:
@@ -649,6 +663,15 @@ async def websocket_ema_crossover_instrument(
             )
         else:
             broadcaster.disconnect(websocket)
+
+
+@router.websocket("/ws/ema/{instrument_key}")
+async def websocket_ema_instrument_path(websocket: WebSocket, instrument_key: str):
+    """Path-style alias for the existing instrument-specific EMA stream."""
+    await websocket_ema_crossover_instrument(
+        websocket=websocket,
+        instrument_key=instrument_key,
+    )
 
 
 # ============================================================
