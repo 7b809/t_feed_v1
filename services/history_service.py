@@ -303,21 +303,9 @@ def save_ema_cross_results_to_file(summary: dict, output_file: str = DEFAULT_EMA
 # ============================================================
 
 def initialize_live_ema_from_history(summary: dict) -> bool:
-    """Initializes live EMA service from historical EMA summary."""
-    try:
-        if not getattr(config, "LIVE_EMA_ENABLED", True):
-            logger.info("Live EMA initialization skipped because LIVE_EMA_ENABLED=False.")
-            return False
-        from services.live_ema_service import live_ema_service
-        live_ema_service.initialize_from_history_summary(summary)
-        logger.info("Live EMA service initialized successfully from historical EMA summary.")
-        return True
-    except ModuleNotFoundError:
-        logger.warning("Live EMA service file not found. Skipping live EMA initialization. Expected file: services/live_ema_service.py")
-        return False
-    except Exception as ex:
-        logger.error(f"Live EMA service initialization failed: {type(ex).__name__}: {ex}")
-        return False
+    """External EMA feed owns live EMA state; no local seeding is needed."""
+    logger.info("Skipping local live EMA initialization; using external EMA feed.")
+    return False
 
 # ============================================================
 # Intraday Fetch Helper

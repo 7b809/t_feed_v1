@@ -1,0 +1,1 @@
+2026-09-28 18:33:38 [INFO] [storage] [storage.py:301] [save_opening_range_results_to_file]: Opening Range results saved. file_path=data\opening_range_results.json, status=success, total_instruments=83

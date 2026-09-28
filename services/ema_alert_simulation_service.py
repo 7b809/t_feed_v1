@@ -3,7 +3,8 @@ from math import isfinite
 from typing import Any
 
 from core.logger import get_logger
-from services.live_ema_service import live_ema_service
+from core import config
+from services.external_ema_feed import external_ema_feed
 from services.algo_app_service import algo_app_service
 from services.telegram_service import telegram_service
 from services.option_service import (
@@ -117,7 +118,7 @@ def get_live_instrument_state(
     instrument_key: str,
 ) -> dict:
     try:
-        instrument_state = live_ema_service.get_instrument_state(instrument_key)
+        instrument_state = external_ema_feed.get_instrument_state(instrument_key)
     except Exception as ex:
         logger.warning(
             "Could not read live EMA state for simulation. "
@@ -294,7 +295,7 @@ def calculate_simulated_ema_values(
     fast_period = safe_int(
         instrument_state.get("fast_period"),
         default=safe_int(
-            getattr(live_ema_service, "fast_period", 9),
+            getattr(config, "EMA_FAST_PERIOD", 9),
             default=9,
         ),
     )
@@ -302,7 +303,7 @@ def calculate_simulated_ema_values(
     slow_period = safe_int(
         instrument_state.get("slow_period"),
         default=safe_int(
-            getattr(live_ema_service, "slow_period", 21),
+            getattr(config, "EMA_SLOW_PERIOD", 21),
             default=21,
         ),
     )
@@ -413,20 +414,8 @@ def build_simulated_selected_state(
             "updated_at": now_market.isoformat(),
         },
         "latest_main_index_ltp": latest_main_index_ltp,
-        "live_ema_calculation_mode_flag": bool(
-            getattr(
-                live_ema_service,
-                "tick_based_mode",
-                False,
-            )
-        ),
-        "live_ema_calculation_mode": str(
-            getattr(
-                live_ema_service,
-                "calculation_mode",
-                "candle_close",
-            )
-        ),
+        "live_ema_calculation_mode_flag": True,
+        "live_ema_calculation_mode": "external_websocket",
         "ema_alerts_count": 0,
         "disabled": False,
         "simulation": True,
@@ -454,15 +443,9 @@ def build_simulated_ema_event(
         price=price,
     )
 
-    tick_based_mode = bool(
-        getattr(
-            live_ema_service,
-            "tick_based_mode",
-            False,
-        )
-    )
+    tick_based_mode = False
 
-    calculation_mode = "tick_ltp" if tick_based_mode else "candle_close"
+    calculation_mode = "external_websocket"
 
     tick = None
 
@@ -482,18 +465,7 @@ def build_simulated_ema_event(
         "timestamp_ms": candle.get("timestamp_ms"),
         "cross_type": cross_type,
         "direction": get_cross_direction(cross_type),
-        "interval_minutes": (
-            0
-            if tick_based_mode
-            else safe_int(
-                getattr(
-                    live_ema_service,
-                    "interval_minutes",
-                    1,
-                ),
-                default=1,
-            )
-        ),
+        "interval_minutes": 0 if tick_based_mode else 1,
         "close": price,
         "ltp": price,
         **ema_values,

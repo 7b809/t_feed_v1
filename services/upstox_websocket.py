@@ -7,7 +7,7 @@ import upstox_client
 
 from core import config
 from core.logger import get_logger
-from services.live_ema_service import live_ema_service
+from services.external_ema_feed import external_ema_feed
 from services.opening_range_service import (
     flush_pending_touch_alerts,
     get_opening_range_levels_for_ema_event,
@@ -73,7 +73,7 @@ class UpstoxStreamer:
         return datetime.now(self.market_timezone).strftime(self.market_time_format)
 
     def _get_live_ema_calculation_mode_text(self) -> str:
-        return "tick_ltp" if bool(getattr(config, "LIVE_EMA_CALCULATION_MODE", False)) else "candle_close"
+        return "external_websocket"
 
     # ============================================================
     # Message Processing Decision
@@ -100,15 +100,12 @@ class UpstoxStreamer:
     # ============================================================
 
     def get_status(self) -> dict:
-        try:
-            live_ema_status = live_ema_service.get_status()
-        except Exception as ex:
-            live_ema_status = {"status": "error", "error": f"{type(ex).__name__}: {ex}"}
+        live_ema_status = external_ema_feed.get_status()
         try:
             opening_range_status = get_opening_range_status()
         except Exception as ex:
             opening_range_status = {"status": "error", "error": f"{type(ex).__name__}: {ex}"}
-        live_ema_mode_flag = bool(getattr(config, "LIVE_EMA_CALCULATION_MODE", False))
+        live_ema_mode_flag = True
         live_ema_mode = self._get_live_ema_calculation_mode_text()
         return {
             "is_running": self.is_running,
@@ -127,7 +124,7 @@ class UpstoxStreamer:
             "live_ema_failed_count": self.live_ema_failed_count,
             "live_ema_calculation_mode_flag": live_ema_mode_flag,
             "live_ema_calculation_mode": live_ema_mode,
-            "live_ema_calculation_mode_description": "tick/LTP based EMA calculation" if live_ema_mode_flag else "completed 1-minute candle close based EMA calculation",
+            "live_ema_calculation_mode_description": "EMA state and crossover events from the external EMA WebSocket",
             "ema_opening_range_enriched_count": self.ema_opening_range_enriched_count,
             "ema_opening_range_enrichment_failed_count": self.ema_opening_range_enrichment_failed_count,
             "isolated_ema_alert_processed_count": self.isolated_ema_alert_processed_count,
@@ -363,17 +360,7 @@ class UpstoxStreamer:
                     self.contract_match_count += 1
                 else:
                     self.contract_miss_count += 1
-                live_ema_cross_event = None
                 opening_range_touch_events = []
-                try:
-                    if bool(getattr(config, "LIVE_EMA_ENABLED", True)):
-                        live_ema_cross_event = live_ema_service.process_live_feed(instrument_key=instrument_key, tick_data=tick_data, contract_info=contract_info)
-                        self.live_ema_processed_count += 1
-                        if live_ema_cross_event:
-                            self.live_ema_cross_count += 1
-                except Exception as ex:
-                    self.live_ema_failed_count += 1
-                    logger.error("Live EMA processing failed. instrument_key=%s, error=%s: %s", instrument_key, type(ex).__name__, ex)
                 try:
                     if bool(getattr(config, "OPENING_RANGE_TOUCH_ALERT_ENABLED", True)):
                         opening_range_touch_events = process_live_tick_for_opening_range(instrument_key=instrument_key, tick_data=tick_data, contract_info=contract_info) or []
@@ -384,16 +371,6 @@ class UpstoxStreamer:
                 except Exception as ex:
                     self.opening_range_failed_count += 1
                     logger.error("Opening Range processing failed. instrument_key=%s, error=%s: %s", instrument_key, type(ex).__name__, ex)
-                if live_ema_cross_event:
-                    live_ema_cross_event = self._enrich_ema_event_with_opening_range(instrument_key=instrument_key, live_ema_cross_event=live_ema_cross_event)
-                    logger.info("Live EMA cross generated. instrument_key=%s, cross_type=%s, timestamp=%s, ema_mode=%s", instrument_key, live_ema_cross_event.get("cross_type"), live_ema_cross_event.get("timestamp"), live_ema_cross_event.get("ema_calculation_mode"))
-                    self._process_isolated_ema_alert(live_ema_cross_event)
-                if live_ema_cross_event and has_local_clients:
-                    try:
-                        if hasattr(broadcaster, "broadcast_ema_cross"):
-                            await broadcaster.broadcast_ema_cross(live_ema_cross_event)
-                    except Exception as ex:
-                        logger.error("EMA broadcast failed. instrument_key=%s, error=%s: %s", instrument_key, type(ex).__name__, ex)
                 if opening_range_touch_events and has_local_clients:
                     for opening_range_event in opening_range_touch_events:
                         try:

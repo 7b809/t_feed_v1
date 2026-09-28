@@ -1,0 +1,2 @@
+2026-09-28 18:33:38 [INFO] [external_ema_feed] [external_ema_feed.py:50] [start]: External EMA feed started: wss://tfeed.up.railway.app/ws/ema
+2026-09-28 18:33:38 [INFO] [external_ema_feed] [external_ema_feed.py:99] [_run]: Connecting external EMA feed for NSE_FO|73905

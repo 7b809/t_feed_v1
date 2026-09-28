@@ -1,2 +1,3 @@
 2026-09-27 16:39:42 [INFO] [touch_events] [touch_events.py:39] [<module>]: Legacy touch alert service initialized. legacy_telegram_enabled=False, touch_alert_enabled=True, sort_by_nearest_index=True, batch_seconds=10, max_instruments=5
 2026-09-27 16:49:18 [INFO] [touch_events] [touch_events.py:39] [<module>]: Legacy touch alert service initialized. legacy_telegram_enabled=False, touch_alert_enabled=True, sort_by_nearest_index=True, batch_seconds=10, max_instruments=5
+2026-09-28 18:32:46 [INFO] [touch_events] [touch_events.py:39] [<module>]: Legacy touch alert service initialized. legacy_telegram_enabled=False, touch_alert_enabled=True, sort_by_nearest_index=True, batch_seconds=10, max_instruments=5

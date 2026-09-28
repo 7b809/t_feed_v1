@@ -19,37 +19,19 @@ router = APIRouter()
 
 
 def get_live_ema_calculation_mode_text() -> str:
-    """
-    Returns configured live EMA calculation mode.
-
-    LIVE_EMA_CALCULATION_MODE = False
-        completed candle close based EMA calculation.
-
-    LIVE_EMA_CALCULATION_MODE = True
-        live tick/LTP based EMA calculation.
-    """
-
-    return (
-        "tick_ltp"
-        if bool(getattr(config, "LIVE_EMA_CALCULATION_MODE", False))
-        else "candle_close"
-    )
+    """Returns the source used for EMA state and crossover events."""
+    return "external_websocket"
 
 
 def get_live_ema_calculation_mode_payload() -> dict:
     """Returns live EMA calculation mode payload for websocket connection messages."""
 
-    flag = bool(getattr(config, "LIVE_EMA_CALCULATION_MODE", False))
     mode = get_live_ema_calculation_mode_text()
 
     return {
-        "flag": flag,
+        "flag": True,
         "mode": mode,
-        "description": (
-            "live tick/LTP based EMA calculation"
-            if flag
-            else "completed candle close based EMA calculation"
-        ),
+        "description": "EMA state and crossover events from the external EMA WebSocket",
     }
 
 
@@ -149,9 +131,8 @@ async def websocket_all_feeds(websocket: WebSocket):
     - Opening Range touch events
 
     Current flow:
-    - EMA calculation runs for all initialized instruments.
-    - EMA calculation mode is controlled by LIVE_EMA_CALCULATION_MODE.
-    - EMA WebSocket events are broadcast for all instruments.
+    - External EMA crossover events are broadcast to local clients.
+    - External EMA connection subscribes to the selected isolated instrument.
     - Telegram EMA alerts are restricted to the isolated Opening Range instrument.
     - EMA crossover events may include Opening Range context and isolated instrument state.
     """
@@ -259,7 +240,7 @@ async def websocket_option(
 
     Current flow:
     - EMA event broadcast routing still works for matching option clients.
-    - EMA calculation mode is controlled by LIVE_EMA_CALCULATION_MODE.
+    - EMA crossover events are received from the external EMA feed.
     - Telegram EMA alerts are not sent from this WebSocket route.
     - Telegram EMA alerts are sent only for the isolated Opening Range instrument.
     """
@@ -393,7 +374,7 @@ async def websocket_ema_crossover(websocket: WebSocket):
     Current flow:
     - Receives EMA crossover events for all initialized instruments.
     - Events are not filtered by isolated instrument.
-    - EMA calculation mode is controlled by LIVE_EMA_CALCULATION_MODE.
+    - EMA crossover events are received from the external EMA feed.
     - Each event may include Opening Range levels for the same instrument.
     - Each event may also include isolated instrument state.
     - Telegram EMA alerts are restricted to the isolated Opening Range instrument.
@@ -515,7 +496,7 @@ async def websocket_ema_crossover_instrument(
 
     Current flow:
     - Streams EMA crossover events only for the resolved instrument.
-    - EMA calculation mode is controlled by LIVE_EMA_CALCULATION_MODE.
+    - EMA crossover events are received from the external EMA feed.
     - Event payload may include Opening Range levels for the same instrument.
     - Telegram EMA alerts are sent only if this resolved instrument is also
       the isolated instrument of the day.

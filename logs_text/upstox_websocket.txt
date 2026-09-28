@@ -22,3 +22,15 @@
 2026-09-27 16:51:15 [INFO] [upstox_websocket] [upstox_websocket.py:178] [stop]: Upstox streamer disconnected.
 2026-09-27 16:51:15 [WARNING] [upstox_websocket] [upstox_websocket.py:276] [_run_loop]: Upstox streamer loop cancelled.
 2026-09-27 16:51:15 [INFO] [upstox_websocket] [upstox_websocket.py:281] [_run_loop]: Exited Upstox streamer loop.
+2026-09-28 18:33:38 [INFO] [upstox_websocket] [upstox_websocket.py:160] [start]: UpstoxStreamer.start() called. market_time=2026-09-28 18:33:38 IST
+2026-09-28 18:33:38 [INFO] [upstox_websocket] [upstox_websocket.py:167] [start]: UpstoxStreamer task created. market_time=2026-09-28 18:33:38 IST, ema_mode=external_websocket
+2026-09-28 18:33:38 [INFO] [upstox_websocket] [upstox_websocket.py:212] [_run_loop]: Entered Upstox streamer loop. market_time=2026-09-28 18:33:38 IST
+2026-09-28 18:33:38 [INFO] [upstox_websocket] [upstox_websocket.py:229] [_run_loop]: WebSocket configuration. mode=full, keys=83, ema_mode=external_websocket
+2026-09-28 18:33:38 [INFO] [upstox_websocket] [upstox_websocket.py:267] [_run_loop]: Starting Upstox stream connection.
+2026-09-28 18:33:38 [WARNING] [upstox_websocket] [upstox_websocket.py:269] [_run_loop]: Upstox streamer connect returned.
+2026-09-28 18:33:38 [INFO] [upstox_websocket] [upstox_websocket.py:237] [on_open]: Connected to Upstox Market Stream V3. instruments=83
+2026-09-28 18:43:17 [INFO] [upstox_websocket] [upstox_websocket.py:170] [stop]: UpstoxStreamer.stop() called. market_time=2026-09-28 18:43:17 IST
+2026-09-28 18:43:17 [WARNING] [upstox_websocket] [upstox_websocket.py:260] [on_close]: Upstox WebSocket closed. status=None, message=None
+2026-09-28 18:43:17 [INFO] [upstox_websocket] [upstox_websocket.py:175] [stop]: Upstox streamer disconnected.
+2026-09-28 18:43:17 [WARNING] [upstox_websocket] [upstox_websocket.py:273] [_run_loop]: Upstox streamer loop cancelled.
+2026-09-28 18:43:17 [INFO] [upstox_websocket] [upstox_websocket.py:278] [_run_loop]: Exited Upstox streamer loop.

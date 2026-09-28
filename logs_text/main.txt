@@ -110,3 +110,146 @@
 2026-09-27 16:51:15 [INFO] [main] [main.py:1995] [app_lifespan]: Executing lifespan shutdown sequence...
 2026-09-27 16:51:15 [INFO] [main] [main.py:2019] [app_lifespan]: Shutting down background scheduler...
 2026-09-27 16:51:15 [INFO] [main] [main.py:2045] [app_lifespan]: Application shutdown sequence completed.
+2026-09-28 18:32:47 [INFO] [main] [main.py:1878] [app_lifespan]: Executing lifespan startup sequence...
+2026-09-28 18:32:47 [INFO] [main] [main.py:1850] [log_registered_routes]: Registered application routes:
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP GET,HEAD -> /openapi.json
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP GET,HEAD -> /docs
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP GET,HEAD -> /docs/oauth2-redirect
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP GET,HEAD -> /redoc
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP GET -> /
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP GET -> /isolated-dashboard
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP GET -> /isolated-ema-dashboard
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP GET -> /health
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP GET -> /test-broadcast
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP GET -> /test-broadcast-option
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP GET -> /test-broadcast-ema
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP GET -> /test-broadcast-opening-range
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP GET -> /debug/cache
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP GET -> /debug/find-option
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP POST -> /refresh/manual
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP GET -> /refresh/status
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP GET -> /opening-range/status
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP POST -> /opening-range/fetch
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP GET -> /opening-range/cache
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP GET -> /opening-range/instrument
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP GET -> /opening-range/ema-context
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP POST -> /opening-range/instrument/fetch
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP GET -> /opening-range/selected-instrument
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP GET -> /opening-range/selected-instrument/ema-alerts
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP GET -> /opening-range/isolated-instrument
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP GET -> /opening-range/isolated-instrument/ema-alerts
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP GET -> /opening-range/touch-events
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP GET -> /opening-range/touch-events/pending
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP POST -> /opening-range/touch-events/flush
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP GET -> /opening-range/file
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP GET -> /opening-range/config
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP GET -> /opening-range/status
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP GET -> /opening-range/dashboard
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP POST -> /opening-range/fetch
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP POST -> /opening-range/instrument/fetch
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP GET -> /opening-range/cache
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP GET -> /opening-range/instrument
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP GET -> /opening-range/ema-context
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP GET -> /opening-range/selected-instrument
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP GET -> /opening-range/selected-instrument/ema-alerts
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP GET -> /opening-range/isolated-instrument
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP GET -> /opening-range/isolated-instrument/ema-alerts
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP GET -> /opening-range/touch-events
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP GET -> /opening-range/touch-events/pending
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP POST -> /opening-range/touch-events/flush
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP GET -> /opening-range/file
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP POST -> /opening-range/isolated-instrument/manual
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP GET -> /opening-range/config
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP GET -> /algo-app/status
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP GET -> /algo-app/config
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP GET -> /algo-app/delivery-status
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP POST -> /algo-app/dispatch
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP POST -> /algo-app/send
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP POST -> /algo-app/ema-alert
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP GET -> /algo-app/health
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP GET -> /charts
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP GET -> /chart/{instrument_key:path}
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP GET -> /chart/api/{instrument_key:path}
+2026-09-28 18:32:47 [INFO] [main] [main.py:1868] [log_registered_routes]: WS -> /all-feeds
+2026-09-28 18:32:47 [INFO] [main] [main.py:1868] [log_registered_routes]: WS -> /ws
+2026-09-28 18:32:47 [INFO] [main] [main.py:1868] [log_registered_routes]: WS -> /option
+2026-09-28 18:32:47 [INFO] [main] [main.py:1868] [log_registered_routes]: WS -> /ws/ema-crossover
+2026-09-28 18:32:47 [INFO] [main] [main.py:1868] [log_registered_routes]: WS -> /ws/ema-crossover/instrument
+2026-09-28 18:32:47 [INFO] [main] [main.py:1868] [log_registered_routes]: WS -> /ws/opening-range
+2026-09-28 18:32:47 [INFO] [main] [main.py:1868] [log_registered_routes]: WS -> /ws/opening-range/instrument
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP GET -> /docs/websockets
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP GET -> /logs
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP GET -> /ui/logs/{filename}
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP GET -> /api/logs
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP GET -> /api/logs/{filename}
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP GET -> /api/logs/download
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP GET -> /ui/meta-data
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP GET -> /api/meta-data
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP GET -> /api/meta-data/{filename}
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP GET -> /api/meta-data/download/{filename}
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP GET -> /api/instruments
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP GET -> /api/latest-range
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP GET -> /api/option-chain
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP POST -> /api/ema-alerts/simulate
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP POST -> /test/save-token
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP GET -> /admin/service/status
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP POST -> /admin/service/streamer/restart
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP POST -> /admin/service/start
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP POST -> /admin/service/stop
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP POST -> /admin/service/restart
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP POST -> /admin/service/redeploy
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP GET -> /api/order/place
+2026-09-28 18:32:47 [INFO] [main] [main.py:1862] [log_registered_routes]: HTTP POST -> /api/order/place
+2026-09-28 18:32:47 [INFO] [main] [main.py:80] [cleanup_startup_paths]: ================ STARTUP CLEANUP STARTED ================
+2026-09-28 18:32:47 [INFO] [main] [main.py:155] [cleanup_startup_paths]: Startup cleanup directory removed: D:\files\temp_ticks\t_feed_v1-temp\data
+2026-09-28 18:32:47 [INFO] [main] [main.py:163] [cleanup_startup_paths]: Startup cleanup directory recreated: D:\files\temp_ticks\t_feed_v1-temp\data
+2026-09-28 18:32:47 [INFO] [main] [main.py:192] [cleanup_startup_paths]: Startup cleanup completed. removed=1, recreated=1, not_found=0, skipped=0, failed=0
+2026-09-28 18:32:47 [INFO] [main] [main.py:202] [cleanup_startup_paths]: ================ STARTUP CLEANUP COMPLETED ================
+2026-09-28 18:32:47 [INFO] [main] [main.py:1894] [app_lifespan]: Startup cleanup status. removed=1, recreated=1, not_found=0, skipped=0, failed=0
+2026-09-28 18:32:47 [INFO] [main] [main.py:837] [initialize_application_runtime_config]: Initializing runtime configuration service...
+2026-09-28 18:32:47 [INFO] [main] [main.py:842] [initialize_application_runtime_config]: Runtime configuration initialized. enabled=True, initialized=True, database_connected=True, overrides=1, error=None
+2026-09-28 18:32:47 [INFO] [main] [main.py:1918] [app_lifespan]: Runtime configuration startup status: {'enabled': True, 'initialized': True, 'database_connected': True, 'cache_enabled': True, 'override_count': 1, 'registry_count': 18, 'error': None}
+2026-09-28 18:32:47 [INFO] [main] [main.py:904] [run_initial_startup]: Initializing application startup sequence...
+2026-09-28 18:32:47 [INFO] [main] [main.py:273] [load_and_subscribe_instruments]: Executing contract load and subscription workflow...
+2026-09-28 18:32:48 [INFO] [main] [main.py:290] [load_and_subscribe_instruments]: ================ SUBSCRIPTION SUMMARY ================
+2026-09-28 18:32:48 [INFO] [main] [main.py:291] [load_and_subscribe_instruments]: Main Security: NSE_INDEX|Nifty 50
+2026-09-28 18:32:48 [INFO] [main] [main.py:295] [load_and_subscribe_instruments]: Strike Price Range: 23000.0 to 25000.0
+2026-09-28 18:32:48 [INFO] [main] [main.py:300] [load_and_subscribe_instruments]: Total Subscribed Instruments: 83
+2026-09-28 18:32:48 [INFO] [main] [main.py:304] [load_and_subscribe_instruments]: =======================================================
+2026-09-28 18:32:48 [INFO] [main] [main.py:322] [fetch_startup_historical_candles]: ================ STARTUP HISTORICAL EMA CROSSOVER LOAD STARTED ================
+2026-09-28 18:33:22 [INFO] [main] [main.py:353] [fetch_startup_historical_candles]: Startup historical EMA crossover fetch completed. status=success, total_instruments=83, success=83, empty=0, insufficient_data=0, failed=0, total_candles=187717, live_ema_initialized=False, live_ema_calculation_mode=external_websocket
+2026-09-28 18:33:22 [INFO] [main] [main.py:429] [fetch_startup_historical_candles]: ================ STARTUP HISTORICAL EMA CROSSOVER LOAD COMPLETED ================
+2026-09-28 18:33:22 [INFO] [main] [main.py:762] [run_startup_opening_range_catchup]: Startup Opening Range catch-up check. market_datetime=2026-09-28T18:33:22.094741+05:30
+2026-09-28 18:33:22 [INFO] [main] [main.py:539] [run_daily_opening_range_fetch]: ================ DAILY OPENING RANGE FETCH STARTED ================
+2026-09-28 18:33:38 [INFO] [main] [main.py:596] [run_daily_opening_range_fetch]: Daily opening range fetch completed. status=success, total_instruments=83, success=83, empty=0, insufficient_data=0, failed=0, backfill_touch_events=60, latest_main_index_ltp=22780.25, isolated_selected=True, isolated_instrument_key=NSE_FO|73905, isolated_level=R3, output_file=data\opening_range_results.json
+2026-09-28 18:33:38 [INFO] [main] [main.py:688] [run_daily_opening_range_fetch]: ================ DAILY OPENING RANGE FETCH COMPLETED ================
+2026-09-28 18:33:38 [INFO] [main] [main.py:809] [run_startup_opening_range_catchup]: Startup Opening Range catch-up completed. status=success, date=2026-09-28, success=83, failed=0, isolated_selected=True
+2026-09-28 18:33:38 [INFO] [main] [main.py:959] [run_initial_startup]: === Memory Cache State Summary ===
+2026-09-28 18:33:38 [INFO] [main] [main.py:960] [run_initial_startup]: Access Token Available: True
+2026-09-28 18:33:38 [INFO] [main] [main.py:964] [run_initial_startup]: Token Updated At: 2026-09-28T09:01:17.625564+05:30
+2026-09-28 18:33:38 [INFO] [main] [main.py:968] [run_initial_startup]: Nearest Expiry: 2026-09-29
+2026-09-28 18:33:38 [INFO] [main] [main.py:972] [run_initial_startup]: Total Contracts: 82
+2026-09-28 18:33:38 [INFO] [main] [main.py:976] [run_initial_startup]: Subscribed Instruments: 83
+2026-09-28 18:33:38 [INFO] [main] [main.py:980] [run_initial_startup]: Algo App Enabled: False
+2026-09-28 18:33:38 [INFO] [main] [main.py:984] [run_initial_startup]: Algo App URL Configured: False
+2026-09-28 18:33:38 [INFO] [main] [main.py:995] [run_initial_startup]: Budget Range Enabled: True
+2026-09-28 18:33:38 [INFO] [main] [main.py:999] [run_initial_startup]: Budget Range: 50.00 to 150.00
+2026-09-28 18:33:38 [INFO] [main] [main.py:1004] [run_initial_startup]: Budget Maximum Instruments: 3
+2026-09-28 18:33:38 [INFO] [main] [main.py:1008] [run_initial_startup]: Isolation Window Points: 300.0
+2026-09-28 18:33:38 [INFO] [main] [main.py:1014] [run_initial_startup]: Sample Contract:
+{
+  "instrument_key": "NSE_FO|65899",
+  "instrument_type": "PE",
+  "option_type": "PE",
+  "strike_price": 23000.0,
+  "expiry": "2026-09-29",
+  "trading_symbol": "NIFTY 23000 PE 29 SEP 26",
+  "underlying_type": "INDEX",
+  "underlying_symbol": "NIFTY",
+  "lot_size": 65
+}
+2026-09-28 18:33:38 [INFO] [main] [main.py:1819] [start_scheduler]: Scheduler active. token_refresh=60, token_check=30, instrument_recovery=30, opening_range=09:18, daily_log_archive=15:45, archive_limit_mb=45, timezone=Asia/Kolkata, isolation_window=300.0, live_ema_mode=external_websocket
+2026-09-28 18:33:38 [INFO] [main] [main.py:1964] [app_lifespan]: Application startup completed successfully. telegram_bot_started=False, streamer_started=True, runtime_config_overrides=1, cleanup_removed=1, cleanup_failed=0
+2026-09-28 18:43:17 [INFO] [main] [main.py:1993] [app_lifespan]: Executing lifespan shutdown sequence...
+2026-09-28 18:43:17 [INFO] [main] [main.py:2023] [app_lifespan]: Shutting down background scheduler...
+2026-09-28 18:43:18 [INFO] [main] [main.py:2049] [app_lifespan]: Application shutdown sequence completed.

@@ -1,2 +1,3 @@
 2026-09-27 16:39:42 [INFO] [ema_alerts] [ema_alerts.py:29] [<module>]: EMA alerts service module initialized. isolated_telegram_enabled=True, algo_app_enabled=False, live_ema_mode=False, include_opening_range_levels=True
 2026-09-27 16:49:18 [INFO] [ema_alerts] [ema_alerts.py:29] [<module>]: EMA alerts service module initialized. isolated_telegram_enabled=True, algo_app_enabled=False, live_ema_mode=False, include_opening_range_levels=True
+2026-09-28 18:32:46 [INFO] [ema_alerts] [ema_alerts.py:29] [<module>]: EMA alerts service module initialized. isolated_telegram_enabled=True, algo_app_enabled=False, live_ema_mode=False, include_opening_range_levels=True
