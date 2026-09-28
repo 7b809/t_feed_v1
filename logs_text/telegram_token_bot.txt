@@ -1,3 +1,0 @@
-2026-09-27 16:39:57 [INFO] [telegram_token_bot] [telegram_token_bot.py:2100] [start]: Telegram token bot is disabled or not configured. Check TELEGRAM_ENABLED, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, and TELEGRAM_TOKEN_BOT_ENABLED.
-2026-09-27 16:49:33 [INFO] [telegram_token_bot] [telegram_token_bot.py:2100] [start]: Telegram token bot is disabled or not configured. Check TELEGRAM_ENABLED, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, and TELEGRAM_TOKEN_BOT_ENABLED.
-2026-09-28 18:33:38 [INFO] [telegram_token_bot] [telegram_token_bot.py:2100] [start]: Telegram token bot is disabled or not configured. Check TELEGRAM_ENABLED, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, and TELEGRAM_TOKEN_BOT_ENABLED.
