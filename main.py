@@ -18,6 +18,7 @@ from api.debug_routes import router as debug_router
 from api.ema_alert_simulation_routes import (
     router as ema_alert_simulation_router,
 )
+from api.candles_routes import router as candles_router
 from api.service_control_routes import (
     router as service_control_router,
 )
@@ -2088,6 +2089,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(candles_router)
 app.include_router(home_router)
 app.include_router(health_router)
 app.include_router(debug_router)
