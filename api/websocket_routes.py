@@ -10,6 +10,7 @@ from urllib.parse import quote, unquote
 
 from fastapi import (
     APIRouter,
+    Query,
     Request,
     WebSocket,
     WebSocketDisconnect,
@@ -47,17 +48,9 @@ def _build_websocket_path(
     prefix_value = prefix.strip("/")
     path_value = path.strip("/")
 
-    normalized_prefix = (
-        f"/{prefix_value}"
-        if prefix_value
-        else ""
-    )
+    normalized_prefix = f"/{prefix_value}" if prefix_value else ""
 
-    normalized_path = (
-        f"/{path_value}"
-        if path_value
-        else ""
-    )
+    normalized_path = f"/{path_value}" if path_value else ""
 
     if not normalized_prefix:
         return normalized_path or "/ws/ema"
@@ -68,15 +61,10 @@ def _build_websocket_path(
     if normalized_path == normalized_prefix:
         return normalized_prefix
 
-    if normalized_path.startswith(
-        f"{normalized_prefix}/"
-    ):
+    if normalized_path.startswith(f"{normalized_prefix}/"):
         return normalized_path
 
-    return (
-        f"{normalized_prefix}"
-        f"{normalized_path}"
-    )
+    return f"{normalized_prefix}" f"{normalized_path}"
 
 
 FULL_WEBSOCKET_PATH = _build_websocket_path(
@@ -84,19 +72,13 @@ FULL_WEBSOCKET_PATH = _build_websocket_path(
     WEBSOCKET_PATH,
 )
 
-ALL_WEBSOCKET_PATH = (
-    f"{FULL_WEBSOCKET_PATH}/all"
-)
+ALL_WEBSOCKET_PATH = f"{FULL_WEBSOCKET_PATH}/all"
 
-MULTIPLE_WEBSOCKET_PATH = (
-    f"{FULL_WEBSOCKET_PATH}/multiple"
-)
+MULTIPLE_WEBSOCKET_PATH = f"{FULL_WEBSOCKET_PATH}/multiple"
 
 
 def _now_iso() -> str:
-    return datetime.now(
-        config.MARKET_TIMEZONE
-    ).isoformat()
+    return datetime.now(config.MARKET_TIMEZONE).isoformat()
 
 
 def _debug(
@@ -131,46 +113,28 @@ def _json_safe(
         return value.isoformat()
 
     if isinstance(value, dict):
-        return {
-            str(key): _json_safe(item)
-            for key, item in value.items()
-        }
+        return {str(key): _json_safe(item) for key, item in value.items()}
 
     if isinstance(
         value,
         (list, tuple, set),
     ):
-        return [
-            _json_safe(item)
-            for item in value
-        ]
+        return [_json_safe(item) for item in value]
 
     if hasattr(value, "model_dump"):
         try:
-            return _json_safe(
-                value.model_dump(
-                    mode="json"
-                )
-            )
+            return _json_safe(value.model_dump(mode="json"))
         except TypeError:
-            return _json_safe(
-                value.model_dump()
-            )
+            return _json_safe(value.model_dump())
 
     if hasattr(value, "dict"):
-        return _json_safe(
-            value.dict()
-        )
+        return _json_safe(value.dict())
 
     if hasattr(value, "to_dict"):
-        return _json_safe(
-            value.to_dict()
-        )
+        return _json_safe(value.to_dict())
 
     if hasattr(value, "__dict__"):
-        return _json_safe(
-            vars(value)
-        )
+        return _json_safe(vars(value))
 
     return str(value)
 
@@ -189,11 +153,7 @@ def _parse_json_message(
     except json.JSONDecodeError:
         return {}
 
-    return (
-        parsed
-        if isinstance(parsed, dict)
-        else {}
-    )
+    return parsed if isinstance(parsed, dict) else {}
 
 
 def _normalise_instrument_keys(
@@ -218,19 +178,26 @@ def _normalise_instrument_keys(
         if not isinstance(item, str):
             continue
 
-        instrument_key = unquote(
-            item
-        ).strip()
+        instrument_key = unquote(item).strip()
 
-        if (
-            instrument_key
-            and instrument_key not in result
-        ):
-            result.append(
-                instrument_key
-            )
+        if instrument_key and instrument_key not in result:
+            result.append(instrument_key)
 
     return result
+
+
+def _normalise_option_type(
+    value: Any,
+) -> str | None:
+    if value is None:
+        return None
+
+    text = str(value).strip().upper()
+
+    if text in {"CE", "PE"}:
+        return text
+
+    return None
 
 
 def _get_application_runtime(
@@ -264,17 +231,13 @@ def _get_application_runtime(
 def _get_runtime(
     websocket: WebSocket,
 ) -> Any:
-    return _get_application_runtime(
-        websocket.app
-    )
+    return _get_application_runtime(websocket.app)
 
 
 def _get_runtime_from_request(
     request: Request,
 ) -> Any:
-    return _get_application_runtime(
-        request.app
-    )
+    return _get_application_runtime(request.app)
 
 
 def _get_application_manager(
@@ -308,17 +271,13 @@ def _get_application_manager(
 def _get_websocket_manager(
     websocket: WebSocket,
 ) -> Any:
-    return _get_application_manager(
-        websocket.app
-    )
+    return _get_application_manager(websocket.app)
 
 
 def _get_manager_from_request(
     request: Request,
 ) -> Any:
-    return _get_application_manager(
-        request.app
-    )
+    return _get_application_manager(request.app)
 
 
 def _get_runtime_contracts(
@@ -339,11 +298,7 @@ def _get_runtime_contracts(
     ):
         return []
 
-    return [
-        contract
-        for contract in contracts
-        if isinstance(contract, dict)
-    ]
+    return [contract for contract in contracts if isinstance(contract, dict)]
 
 
 def _get_runtime_states(
@@ -358,29 +313,15 @@ def _get_runtime_states(
         {},
     )
 
-    return (
-        states
-        if isinstance(states, dict)
-        else {}
-    )
+    return states if isinstance(states, dict) else {}
 
 
 def _get_contract_by_instrument_key(
     runtime: Any,
     instrument_key: str,
 ) -> dict[str, Any] | None:
-    for contract in _get_runtime_contracts(
-        runtime
-    ):
-        if (
-            str(
-                contract.get(
-                    "instrument_key"
-                )
-                or ""
-            ).strip()
-            == instrument_key
-        ):
+    for contract in _get_runtime_contracts(runtime):
+        if str(contract.get("instrument_key") or "").strip() == instrument_key:
             return contract
 
     return None
@@ -391,36 +332,76 @@ def _get_selected_instrument_keys(
 ) -> list:
     result: list[str] = []
 
-    for contract in _get_runtime_contracts(
-        runtime
-    ):
-        instrument_key = str(
-            contract.get(
-                "instrument_key"
-            )
-            or ""
-        ).strip()
+    for contract in _get_runtime_contracts(runtime):
+        instrument_key = str(contract.get("instrument_key") or "").strip()
 
-        if (
-            instrument_key
-            and instrument_key not in result
-        ):
-            result.append(
-                instrument_key
-            )
+        if instrument_key and instrument_key not in result:
+            result.append(instrument_key)
 
     return result
+
+
+def _match_contracts(
+    runtime: Any,
+    *,
+    instrument_key: str | None = None,
+    strike: float | None = None,
+    option_type: str | None = None,
+) -> list[dict[str, Any]]:
+    """
+    Return every runtime contract matching the query.
+
+    Priority:
+      - instrument_key (exact match) if given
+      - else strike (required) + optional option_type
+    """
+    contracts = _get_runtime_contracts(runtime)
+
+    if instrument_key:
+        key = instrument_key.strip()
+
+        return [
+            c for c in contracts if str(c.get("instrument_key") or "").strip() == key
+        ]
+
+    if strike is None:
+        return []
+
+    strike_value = float(strike)
+
+    wanted_option = _normalise_option_type(option_type)
+
+    matches: list[dict[str, Any]] = []
+
+    for contract in contracts:
+        try:
+            contract_strike = float(
+                contract.get("strike_price") or contract.get("strike") or 0
+            )
+        except (TypeError, ValueError):
+            continue
+
+        if contract_strike != strike_value:
+            continue
+
+        if wanted_option:
+            contract_option = _normalise_option_type(
+                contract.get("option_type") or contract.get("instrument_type")
+            )
+
+            if contract_option != wanted_option:
+                continue
+
+        matches.append(contract)
+
+    return matches
 
 
 def _get_websocket_base_url(
     request: Request,
 ) -> str:
     forwarded_proto = (
-        request.headers
-        .get("x-forwarded-proto", "")
-        .split(",")[0]
-        .strip()
-        .lower()
+        request.headers.get("x-forwarded-proto", "").split(",")[0].strip().lower()
     )
 
     if forwarded_proto in {
@@ -436,30 +417,13 @@ def _get_websocket_base_url(
         websocket_scheme = "ws"
 
     else:
-        websocket_scheme = (
-            "wss"
-            if request.url.scheme == "https"
-            else "ws"
-        )
+        websocket_scheme = "wss" if request.url.scheme == "https" else "ws"
 
-    forwarded_host = (
-        request.headers
-        .get("x-forwarded-host", "")
-        .split(",")[0]
-        .strip()
-    )
+    forwarded_host = request.headers.get("x-forwarded-host", "").split(",")[0].strip()
 
-    host = (
-        forwarded_host
-        or request.headers.get("host")
-        or request.url.netloc
-    )
+    host = forwarded_host or request.headers.get("host") or request.url.netloc
 
-    return (
-        f"{websocket_scheme}://"
-        f"{host}"
-        f"{FULL_WEBSOCKET_PATH}"
-    )
+    return f"{websocket_scheme}://" f"{host}" f"{FULL_WEBSOCKET_PATH}"
 
 
 def _get_auto_subscribe_setting() -> bool:
@@ -473,16 +437,13 @@ def _get_auto_subscribe_setting() -> bool:
         return value
 
     if isinstance(value, str):
-        return (
-            value.strip().lower()
-            in {
-                "1",
-                "true",
-                "yes",
-                "on",
-                "enabled",
-            }
-        )
+        return value.strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+            "enabled",
+        }
 
     return bool(value)
 
@@ -517,8 +478,7 @@ async def _call_first_available(
         return result
 
     logger.warning(
-        "WebSocket manager method unavailable "
-        "methods=%s",
+        "WebSocket manager method unavailable " "methods=%s",
         method_names,
     )
 
@@ -530,9 +490,7 @@ async def _send_json(
     payload: dict[str, Any],
 ) -> bool:
     try:
-        await websocket.send_json(
-            _json_safe(payload)
-        )
+        await websocket.send_json(_json_safe(payload))
 
         return True
 
@@ -540,17 +498,12 @@ async def _send_json(
         return False
 
     except RuntimeError:
-        logger.debug(
-            "WebSocket message skipped because "
-            "connection is closed"
-        )
+        logger.debug("WebSocket message skipped because " "connection is closed")
 
         return False
 
     except Exception:
-        logger.exception(
-            "WebSocket message send failed"
-        )
+        logger.exception("WebSocket message send failed")
 
         return False
 
@@ -571,9 +524,7 @@ async def _accept_and_reject(
 
     finally:
         with suppress(Exception):
-            await websocket.close(
-                code=close_code
-            )
+            await websocket.close(code=close_code)
 
 
 def _success_response(
@@ -606,64 +557,42 @@ def _build_initial_state_payload(
     runtime: Any,
     instrument_keys: list[str],
 ) -> dict[str, Any]:
-    states = _get_runtime_states(
-        runtime
-    )
+    states = _get_runtime_states(runtime)
 
-    instruments: list[
-        dict[str, Any]
-    ] = []
+    instruments: list[dict[str, Any]] = []
 
     for instrument_key in instrument_keys:
-        contract = (
-            _get_contract_by_instrument_key(
-                runtime,
-                instrument_key,
-            )
+        contract = _get_contract_by_instrument_key(
+            runtime,
+            instrument_key,
         )
 
-        state = states.get(
-            instrument_key
-        )
+        state = states.get(instrument_key)
 
         symbol = None
 
         if isinstance(contract, dict):
             symbol = (
-                contract.get(
-                    "trading_symbol"
-                )
+                contract.get("trading_symbol")
                 or contract.get("symbol")
-                or contract.get(
-                    "tradingsymbol"
-                )
-                or contract.get(
-                    "underlying_symbol"
-                )
+                or contract.get("tradingsymbol")
+                or contract.get("underlying_symbol")
                 or instrument_key
             )
 
         instruments.append(
             {
-                "instrument_key": (
-                    instrument_key
-                ),
+                "instrument_key": (instrument_key),
                 "symbol": symbol,
-                "contract": _json_safe(
-                    contract
-                ),
-                "state": _json_safe(
-                    state
-                ),
+                "contract": _json_safe(contract),
+                "state": _json_safe(state),
             }
         )
 
     return {
         "event": "initial_state",
         "timestamp": _now_iso(),
-        "instrument_count": len(
-            instruments
-        ),
+        "instrument_count": len(instruments),
         "instruments": instruments,
     }
 
@@ -742,9 +671,7 @@ async def _subscribe_all(
     )
 
     if callable(subscribe_all_method):
-        result = subscribe_all_method(
-            websocket
-        )
+        result = subscribe_all_method(websocket)
 
         if inspect.isawaitable(result):
             result = await result
@@ -793,9 +720,7 @@ async def _remove_all_subscriptions(
     )
 
     if callable(unsubscribe_all_method):
-        result = unsubscribe_all_method(
-            websocket
-        )
+        result = unsubscribe_all_method(websocket)
 
         if inspect.isawaitable(result):
             result = await result
@@ -816,30 +741,19 @@ async def _handle_subscribe_message(
     message: dict[str, Any],
     current_subscriptions: set[str],
 ) -> set:
-    available_keys = set(
-        _get_selected_instrument_keys(
-            runtime
-        )
-    )
+    available_keys = set(_get_selected_instrument_keys(runtime))
 
-    subscribe_all = bool(
-        message.get("all")
-        or message.get("subscribe_all")
-    )
+    subscribe_all = bool(message.get("all") or message.get("subscribe_all"))
 
     if subscribe_all:
-        requested_keys = sorted(
-            available_keys
-        )
+        requested_keys = sorted(available_keys)
 
         if not requested_keys:
             await _send_json(
                 websocket,
                 _error_response(
                     "No instruments are available",
-                    code=(
-                        "NO_AVAILABLE_INSTRUMENTS"
-                    ),
+                    code=("NO_AVAILABLE_INSTRUMENTS"),
                 ),
             )
 
@@ -852,21 +766,15 @@ async def _handle_subscribe_message(
                 requested_keys,
             )
 
-        updated_subscriptions = set(
-            requested_keys
-        )
+        updated_subscriptions = set(requested_keys)
 
         await _send_json(
             websocket,
             _success_response(
                 "Subscribed to all instruments",
                 subscription_mode="all",
-                subscribed_instruments=(
-                    requested_keys
-                ),
-                subscription_count=len(
-                    requested_keys
-                ),
+                subscribed_instruments=(requested_keys),
+                subscription_count=len(requested_keys),
             ),
         )
 
@@ -880,14 +788,10 @@ async def _handle_subscribe_message(
 
         return updated_subscriptions
 
-    requested_keys = (
-        _normalise_instrument_keys(
-            message.get(
-                "instrument_keys",
-                message.get(
-                    "instrument_key"
-                ),
-            )
+    requested_keys = _normalise_instrument_keys(
+        message.get(
+            "instrument_keys",
+            message.get("instrument_key"),
         )
     )
 
@@ -896,25 +800,15 @@ async def _handle_subscribe_message(
             websocket,
             _error_response(
                 "No valid instrument keys provided",
-                code=(
-                    "INVALID_SUBSCRIPTION"
-                ),
+                code=("INVALID_SUBSCRIPTION"),
             ),
         )
 
         return current_subscriptions
 
-    unknown_keys = [
-        key
-        for key in requested_keys
-        if key not in available_keys
-    ]
+    unknown_keys = [key for key in requested_keys if key not in available_keys]
 
-    valid_keys = [
-        key
-        for key in requested_keys
-        if key in available_keys
-    ]
+    valid_keys = [key for key in requested_keys if key in available_keys]
 
     if unknown_keys:
         await _send_json(
@@ -922,30 +816,21 @@ async def _handle_subscribe_message(
             _error_response(
                 "One or more instruments are not selected",
                 code="UNKNOWN_INSTRUMENT",
-                unknown_instruments=(
-                    unknown_keys
-                ),
-                available_instruments=sorted(
-                    available_keys
-                ),
+                unknown_instruments=(unknown_keys),
+                available_instruments=sorted(available_keys),
             ),
         )
 
     if not valid_keys:
         return current_subscriptions
 
-    updated_subscriptions = (
-        current_subscriptions
-        | set(valid_keys)
-    )
+    updated_subscriptions = current_subscriptions | set(valid_keys)
 
     if manager is not None:
         await _replace_subscription(
             manager,
             websocket,
-            sorted(
-                updated_subscriptions
-            ),
+            sorted(updated_subscriptions),
         )
 
     await _send_json(
@@ -953,19 +838,10 @@ async def _handle_subscribe_message(
         _success_response(
             "Subscription updated",
             subscription_mode=(
-                "single"
-                if len(
-                    updated_subscriptions
-                )
-                == 1
-                else "multiple"
+                "single" if len(updated_subscriptions) == 1 else "multiple"
             ),
-            subscribed_instruments=sorted(
-                updated_subscriptions
-            ),
-            subscription_count=len(
-                updated_subscriptions
-            ),
+            subscribed_instruments=sorted(updated_subscriptions),
+            subscription_count=len(updated_subscriptions),
         ),
     )
 
@@ -973,18 +849,13 @@ async def _handle_subscribe_message(
         websocket,
         _build_initial_state_payload(
             runtime,
-            sorted(
-                updated_subscriptions
-            ),
+            sorted(updated_subscriptions),
         ),
     )
 
     logger.info(
-        "WebSocket subscription updated "
-        "instruments=%s",
-        sorted(
-            updated_subscriptions
-        ),
+        "WebSocket subscription updated " "instruments=%s",
+        sorted(updated_subscriptions),
     )
 
     return updated_subscriptions
@@ -996,15 +867,10 @@ async def _handle_unsubscribe_message(
     message: dict[str, Any],
     current_subscriptions: set[str],
 ) -> set:
-    unsubscribe_all = bool(
-        message.get("all")
-        or message.get("unsubscribe_all")
-    )
+    unsubscribe_all = bool(message.get("all") or message.get("unsubscribe_all"))
 
     if unsubscribe_all:
-        requested_keys = sorted(
-            current_subscriptions
-        )
+        requested_keys = sorted(current_subscriptions)
 
         if manager is not None:
             await _remove_all_subscriptions(
@@ -1017,9 +883,7 @@ async def _handle_unsubscribe_message(
             websocket,
             _success_response(
                 "All subscriptions removed",
-                unsubscribed_instruments=(
-                    requested_keys
-                ),
+                unsubscribed_instruments=(requested_keys),
                 subscribed_instruments=[],
                 subscription_count=0,
             ),
@@ -1027,14 +891,10 @@ async def _handle_unsubscribe_message(
 
         return set()
 
-    requested_keys = (
-        _normalise_instrument_keys(
-            message.get(
-                "instrument_keys",
-                message.get(
-                    "instrument_key"
-                ),
-            )
+    requested_keys = _normalise_instrument_keys(
+        message.get(
+            "instrument_keys",
+            message.get("instrument_key"),
         )
     )
 
@@ -1043,31 +903,21 @@ async def _handle_unsubscribe_message(
             websocket,
             _error_response(
                 "No valid instrument keys provided",
-                code=(
-                    "INVALID_UNSUBSCRIPTION"
-                ),
+                code=("INVALID_UNSUBSCRIPTION"),
             ),
         )
 
         return current_subscriptions
 
-    matching_keys = [
-        key
-        for key in requested_keys
-        if key in current_subscriptions
-    ]
+    matching_keys = [key for key in requested_keys if key in current_subscriptions]
 
     if not matching_keys:
         await _send_json(
             websocket,
             _success_response(
                 "No matching subscriptions found",
-                subscribed_instruments=sorted(
-                    current_subscriptions
-                ),
-                subscription_count=len(
-                    current_subscriptions
-                ),
+                subscribed_instruments=sorted(current_subscriptions),
+                subscription_count=len(current_subscriptions),
             ),
         )
 
@@ -1080,24 +930,15 @@ async def _handle_unsubscribe_message(
             matching_keys,
         )
 
-    updated_subscriptions = (
-        current_subscriptions
-        - set(matching_keys)
-    )
+    updated_subscriptions = current_subscriptions - set(matching_keys)
 
     await _send_json(
         websocket,
         _success_response(
             "Subscription removed",
-            unsubscribed_instruments=(
-                matching_keys
-            ),
-            subscribed_instruments=sorted(
-                updated_subscriptions
-            ),
-            subscription_count=len(
-                updated_subscriptions
-            ),
+            unsubscribed_instruments=(matching_keys),
+            subscribed_instruments=sorted(updated_subscriptions),
+            subscription_count=len(updated_subscriptions),
         ),
     )
 
@@ -1109,9 +950,7 @@ async def _handle_snapshot_message(
     runtime: Any,
     current_subscriptions: set[str],
 ) -> None:
-    instrument_keys = sorted(
-        current_subscriptions
-    )
+    instrument_keys = sorted(current_subscriptions)
 
     if not instrument_keys:
         await _send_json(
@@ -1119,11 +958,7 @@ async def _handle_snapshot_message(
             _error_response(
                 "No instruments are currently subscribed",
                 code="NO_SUBSCRIPTIONS",
-                available_instruments=(
-                    _get_selected_instrument_keys(
-                        runtime
-                    )
-                ),
+                available_instruments=(_get_selected_instrument_keys(runtime)),
             ),
         )
 
@@ -1157,12 +992,16 @@ async def _handle_client_message(
     message: dict[str, Any],
     current_subscriptions: set[str],
 ) -> set:
-    action = str(
-        message.get(
-            "action",
-            message.get("type", ""),
+    action = (
+        str(
+            message.get(
+                "action",
+                message.get("type", ""),
+            )
         )
-    ).strip().lower()
+        .strip()
+        .lower()
+    )
 
     if action in {
         "subscribe",
@@ -1206,9 +1045,7 @@ async def _handle_client_message(
         "ping",
         "heartbeat",
     }:
-        await _handle_ping_message(
-            websocket
-        )
+        await _handle_ping_message(websocket)
 
         return current_subscriptions
 
@@ -1218,25 +1055,18 @@ async def _handle_client_message(
     }:
         await _send_json(
             websocket,
-            _success_response(
-                "Disconnect requested"
-            ),
+            _success_response("Disconnect requested"),
         )
 
         with suppress(Exception):
-            await websocket.close(
-                code=1000
-            )
+            await websocket.close(code=1000)
 
         raise WebSocketDisconnect
 
     await _send_json(
         websocket,
         _error_response(
-            (
-                "Unsupported WebSocket action: "
-                f"{action or '(empty)'}"
-            ),
+            ("Unsupported WebSocket action: " f"{action or '(empty)'}"),
             code="UNSUPPORTED_ACTION",
             supported_actions=[
                 "subscribe",
@@ -1254,36 +1084,23 @@ async def _handle_client_message(
 async def _receive_json_message(
     websocket: WebSocket,
 ) -> dict[str, Any] | None:
-    raw_message = (
-        await websocket.receive()
-    )
+    raw_message = await websocket.receive()
 
-    if (
-        raw_message.get("type")
-        == "websocket.disconnect"
-    ):
+    if raw_message.get("type") == "websocket.disconnect":
         return None
 
-    text_data = raw_message.get(
-        "text"
-    )
+    text_data = raw_message.get("text")
 
     if text_data is None:
-        bytes_data = raw_message.get(
-            "bytes"
-        )
+        bytes_data = raw_message.get("bytes")
 
         if bytes_data is not None:
             try:
-                text_data = bytes_data.decode(
-                    "utf-8"
-                )
+                text_data = bytes_data.decode("utf-8")
             except UnicodeDecodeError:
                 text_data = None
 
-    return _parse_json_message(
-        text_data
-    )
+    return _parse_json_message(text_data)
 
 
 async def _connect_client(
@@ -1317,9 +1134,7 @@ async def _connect_client(
             websocket,
             _error_response(
                 str(ex),
-                code=(
-                    "CONNECTION_REJECTED"
-                ),
+                code=("CONNECTION_REJECTED"),
             ),
             close_code=1013,
         )
@@ -1338,16 +1153,10 @@ def _connected_payload(
         "status": "success",
         "client_id": client_id,
         "timestamp": _now_iso(),
-        "websocket_path": (
-            FULL_WEBSOCKET_PATH
-        ),
+        "websocket_path": (FULL_WEBSOCKET_PATH),
         "connection_mode": mode,
-        "subscribed_instruments": (
-            subscriptions
-        ),
-        "subscription_count": len(
-            subscriptions
-        ),
+        "subscribed_instruments": (subscriptions),
+        "subscription_count": len(subscriptions),
         "available_actions": [
             "subscribe",
             "unsubscribe",
@@ -1358,6 +1167,358 @@ def _connected_payload(
     }
 
 
+# ---------------------------------------------------------------------------
+# NEW: shared response builders for the resolve/url endpoints
+# ---------------------------------------------------------------------------
+def _sample_connected_event(
+    instrument_key: str,
+    symbol: str | None,
+) -> dict[str, Any]:
+    return {
+        "event": "connected",
+        "status": "success",
+        "client_id": "139973949519776",
+        "timestamp": "2026-09-28T11:11:54.940543+05:30",
+        "websocket_path": (FULL_WEBSOCKET_PATH),
+        "connection_mode": "single",
+        "subscribed_instruments": [instrument_key],
+        "subscription_count": 1,
+        "available_actions": [
+            "subscribe",
+            "unsubscribe",
+            "snapshot",
+            "ping",
+            "disconnect",
+        ],
+        "instrument_key": instrument_key,
+        "symbol": symbol or "NIFTY OPTION",
+    }
+
+
+def _sample_initial_state(
+    instrument_key: str,
+    symbol: str | None,
+) -> dict[str, Any]:
+    return {
+        "event": "initial_state",
+        "timestamp": ("2026-09-28T11:11:54.940676+05:30"),
+        "instrument_count": 1,
+        "instruments": [
+            {
+                "instrument_key": (instrument_key),
+                "symbol": symbol or "NIFTY OPTION",
+                "contract": {
+                    "instrument_key": (instrument_key),
+                    "instrument_type": "PE",
+                    "option_type": "PE",
+                    "strike_price": 23000.0,
+                    "expiry": "2026-09-29",
+                    "trading_symbol": (symbol or "NIFTY OPTION"),
+                    "underlying_type": "INDEX",
+                    "underlying_symbol": "NIFTY",
+                    "lot_size": 65,
+                },
+                "state": {
+                    "ema_9": (171.0995146343065),
+                    "ema_21": (170.0469201120984),
+                    "ema_difference": (1.0525945222080964),
+                    "valid_candle_count": 2811,
+                    "last_processed_timestamp": ("2026-09-28T11:10:00+05:30"),
+                },
+            }
+        ],
+    }
+
+
+def _sample_crossover_event(
+    instrument_key: str,
+    symbol: str | None,
+) -> dict[str, Any]:
+    return {
+        "event": {
+            "timestamp": ("2026-09-28T11:28:00+05:30"),
+            "date": "2026-09-28",
+            "open": 170.0,
+            "high": 170.25,
+            "low": 165.4,
+            "close": 166.25,
+            "volume": 458575,
+            "open_interest": 0,
+            "source": "ohlc_prev",
+            "ema_9": 173.222944,
+            "ema_21": 173.862766,
+            "ema_difference": -0.639822,
+            "previous_ema_difference": (0.342137),
+            "cross_type": "bearish",
+            "is_bullish_cross": False,
+            "is_bearish_cross": True,
+        },
+        "event_type": "ema.crossover",
+        "mode": "live",
+        "instrument_key": instrument_key,
+        "symbol": symbol or "NIFTY OPTION",
+        "trading_symbol": symbol or "NIFTY OPTION",
+        "exchange": None,
+        "segment": None,
+        "underlying": "NIFTY",
+        "strike_price": 23000.0,
+        "option_type": "PE",
+        "sequence": 1469,
+        "published_at": ("2026-09-28T11:29:05.234612+05:30"),
+    }
+
+
+def _sample_pong_event() -> dict[str, Any]:
+    return {
+        "event": "pong",
+        "timestamp": ("2026-09-28T11:30:00.000000+05:30"),
+    }
+
+
+def _sample_messages(
+    instrument_key: str,
+    symbol: str | None,
+) -> list[dict[str, Any]]:
+    """
+    Return the four canonical payloads a client will see on the
+    single-instrument socket, in the order they are delivered.
+    """
+    return [
+        {
+            "when": "immediately after connect",
+            "sample": _sample_connected_event(
+                instrument_key,
+                symbol,
+            ),
+        },
+        {
+            "when": (
+                "immediately after connect " '(and in reply to {"action":"snapshot"})'
+            ),
+            "sample": _sample_initial_state(
+                instrument_key,
+                symbol,
+            ),
+        },
+        {
+            "when": ("when EMA-9 crosses EMA-21 " "(this is the primary signal)"),
+            "sample": _sample_crossover_event(
+                instrument_key,
+                symbol,
+            ),
+        },
+        {
+            "when": ('in reply to {"action":"ping"}'),
+            "sample": _sample_pong_event(),
+        },
+    ]
+
+
+def _sample_live_event_shape() -> dict[str, Any]:
+    return {
+        "event": {
+            "timestamp": ("2026-09-22T09:17:00+05:30"),
+            "date": "2026-09-22",
+            "open": 441.35,
+            "high": 441.5,
+            "low": 433.6,
+            "close": 437.6,
+            "volume": 11700,
+            "open_interest": 429520,
+            "source": "intraday",
+            "ema_9": 446.499441,
+            "ema_21": 447.370389,
+            "ema_difference": -0.870948,
+            "previous_ema_difference": (0.376873),
+            "cross_type": "bearish",
+            "is_bullish_cross": False,
+            "is_bearish_cross": True,
+        },
+        "instrument_key": ("NSE_FO|instrument-key"),
+        "symbol": "NIFTY OPTION",
+        "strike_price": 23000.0,
+        "option_type": "CE",
+    }
+
+
+def _connection_options(
+    websocket_url: str,
+    instrument_keys: list[str],
+) -> dict[str, Any]:
+    encoded_query = quote(
+        ",".join(instrument_keys),
+        safe=",",
+    )
+
+    return {
+        "dynamic": {
+            "websocket_url": websocket_url,
+            "subscribe_message": {
+                "action": "subscribe",
+                "instrument_keys": ["NSE_FO|instrument-key"],
+            },
+        },
+        "all_instruments": {
+            "websocket_url": (f"{websocket_url}/all"),
+            "subscribe_required": False,
+        },
+        "multiple_instruments": {
+            "url_template": (
+                f"{websocket_url}/multiple"
+                "?instrument_keys="
+                "NSE_FO%7C123,NSE_FO%7C456"
+            ),
+            "current_example": (
+                f"{websocket_url}/multiple" f"?instrument_keys={encoded_query}"
+                if instrument_keys
+                else None
+            ),
+            "subscribe_required": False,
+        },
+        "single_instrument": {
+            "url_template": (f"{websocket_url}/" "{encoded_instrument_key}"),
+            "subscribe_required": False,
+        },
+    }
+
+
+def _build_resolve_response(
+    request: Request,
+    runtime: Any,
+    *,
+    instrument_key: str | None,
+    strike: float | None,
+    option_type: str | None,
+) -> JSONResponse:
+    websocket_url = _get_websocket_base_url(request)
+
+    available_contracts = _get_runtime_contracts(runtime)
+
+    available_keys = [
+        str(c.get("instrument_key") or "").strip() for c in available_contracts
+    ]
+    available_keys = [k for k in available_keys if k]
+
+    matches = _match_contracts(
+        runtime,
+        instrument_key=instrument_key,
+        strike=strike,
+        option_type=option_type,
+    )
+
+    if runtime is None:
+        return JSONResponse(
+            status_code=503,
+            content=_json_safe(
+                {
+                    "status": "unavailable",
+                    "message": ("EMA runtime is not initialized"),
+                    "timestamp": _now_iso(),
+                    "query": {
+                        "instrument_key": (instrument_key),
+                        "strike": strike,
+                        "option_type": (option_type),
+                    },
+                }
+            ),
+        )
+
+    if not matches:
+        return JSONResponse(
+            status_code=404,
+            content=_json_safe(
+                {
+                    "status": "not_found",
+                    "message": ("No matching instrument in " "the current EMA runtime"),
+                    "timestamp": _now_iso(),
+                    "query": {
+                        "instrument_key": (instrument_key),
+                        "strike": strike,
+                        "option_type": (option_type),
+                    },
+                    "available_instrument_count": (len(available_keys)),
+                    "available_instrument_keys": (sorted(available_keys)),
+                }
+            ),
+        )
+
+    states = _get_runtime_states(runtime)
+
+    results: list[dict[str, Any]] = []
+
+    for contract in matches:
+        key = str(contract.get("instrument_key") or "").strip()
+
+        if not key:
+            continue
+
+        encoded_key = quote(key, safe="")
+
+        symbol = (
+            contract.get("trading_symbol")
+            or contract.get("symbol")
+            or contract.get("tradingsymbol")
+            or contract.get("underlying_symbol")
+            or key
+        )
+
+        state = states.get(key) or {}
+
+        results.append(
+            {
+                "instrument_key": key,
+                "encoded_instrument_key": (encoded_key),
+                "symbol": symbol,
+                "strike_price": contract.get("strike_price"),
+                "option_type": contract.get("option_type"),
+                "expiry": (contract.get("expiry") or contract.get("expiry_date")),
+                "contract": _json_safe(contract),
+                "state": _json_safe(state),
+                "single_websocket_url": (f"{websocket_url}/" f"{encoded_key}"),
+                "sample_messages": (
+                    _sample_messages(
+                        key,
+                        symbol,
+                    )
+                ),
+            }
+        )
+
+    payload = {
+        "status": "success",
+        "timestamp": _now_iso(),
+        "query": {
+            "instrument_key": instrument_key,
+            "strike": strike,
+            "option_type": option_type,
+        },
+        "match_count": len(results),
+        "matches": results,
+        "connection_options": (
+            _connection_options(
+                websocket_url,
+                [r["instrument_key"] for r in results],
+            )
+        ),
+        "supported_actions": [
+            "subscribe",
+            "unsubscribe",
+            "snapshot",
+            "ping",
+            "disconnect",
+        ],
+        "live_event_shape": (_sample_live_event_shape()),
+    }
+
+    return JSONResponse(
+        status_code=200,
+        content=_json_safe(payload),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Router
+# ---------------------------------------------------------------------------
 router = APIRouter()
 
 
@@ -1369,67 +1530,40 @@ router = APIRouter()
 async def list_available_websockets(
     request: Request,
 ) -> JSONResponse:
-    runtime = _get_runtime_from_request(
-        request
-    )
+    runtime = _get_runtime_from_request(request)
 
-    manager = _get_manager_from_request(
-        request
-    )
+    manager = _get_manager_from_request(request)
 
-    websocket_url = (
-        _get_websocket_base_url(
-            request
-        )
-    )
+    websocket_url = _get_websocket_base_url(request)
 
     if runtime is None:
         return JSONResponse(
             status_code=503,
             content={
                 "status": "unavailable",
-                "message": (
-                    "EMA runtime is not initialized"
-                ),
+                "message": ("EMA runtime is not initialized"),
                 "timestamp": _now_iso(),
-                "websocket_path": (
-                    FULL_WEBSOCKET_PATH
-                ),
-                "websocket_url": (
-                    websocket_url
-                ),
+                "websocket_path": (FULL_WEBSOCKET_PATH),
+                "websocket_url": (websocket_url),
                 "available_instrument_count": 0,
                 "available_instrument_keys": [],
                 "instruments": [],
             },
         )
 
-    contracts = _get_runtime_contracts(
-        runtime
-    )
+    contracts = _get_runtime_contracts(runtime)
 
-    states = _get_runtime_states(
-        runtime
-    )
+    states = _get_runtime_states(runtime)
 
-    instruments: list[
-        dict[str, Any]
-    ] = []
+    instruments: list[dict[str, Any]] = []
 
     for contract in contracts:
-        instrument_key = str(
-            contract.get(
-                "instrument_key"
-            )
-            or ""
-        ).strip()
+        instrument_key = str(contract.get("instrument_key") or "").strip()
 
         if not instrument_key:
             continue
 
-        state = states.get(
-            instrument_key
-        )
+        state = states.get(instrument_key)
 
         if not isinstance(state, dict):
             state = {}
@@ -1443,81 +1577,37 @@ async def list_available_websockets(
             contract.get("trading_symbol")
             or contract.get("symbol")
             or contract.get("tradingsymbol")
-            or contract.get(
-                "underlying_symbol"
-            )
+            or contract.get("underlying_symbol")
             or contract.get("underlying")
             or instrument_key
         )
 
         instruments.append(
             {
-                "instrument_key": (
-                    instrument_key
-                ),
-                "encoded_instrument_key": (
-                    encoded_key
-                ),
+                "instrument_key": (instrument_key),
+                "encoded_instrument_key": (encoded_key),
                 "symbol": symbol,
                 "trading_symbol": symbol,
-                "strike_price": contract.get(
-                    "strike_price"
-                ),
-                "option_type": contract.get(
-                    "option_type"
-                ),
-                "expiry": (
-                    contract.get("expiry")
-                    or contract.get(
-                        "expiry_date"
-                    )
-                ),
-                "state_available": bool(
-                    state
-                ),
-                "last_processed_timestamp": (
-                    state.get(
-                        "last_processed_timestamp"
-                    )
-                ),
-                "ema_9": state.get(
-                    "ema_9"
-                ),
-                "ema_21": state.get(
-                    "ema_21"
-                ),
-                "single_websocket_url": (
-                    f"{websocket_url}/"
-                    f"{encoded_key}"
-                ),
-                "contract": _json_safe(
-                    contract
-                ),
+                "strike_price": contract.get("strike_price"),
+                "option_type": contract.get("option_type"),
+                "expiry": (contract.get("expiry") or contract.get("expiry_date")),
+                "state_available": bool(state),
+                "last_processed_timestamp": (state.get("last_processed_timestamp")),
+                "ema_9": state.get("ema_9"),
+                "ema_21": state.get("ema_21"),
+                "single_websocket_url": (f"{websocket_url}/" f"{encoded_key}"),
+                "contract": _json_safe(contract),
             }
         )
 
     instruments.sort(
         key=lambda item: (
-            float(
-                item.get("strike_price")
-                or 0
-            ),
-            str(
-                item.get("option_type")
-                or ""
-            ),
+            float(item.get("strike_price") or 0),
+            str(item.get("option_type") or ""),
         )
     )
 
-    instrument_keys = [
-        item["instrument_key"]
-        for item in instruments
-    ]
-
-    encoded_query = quote(
-        ",".join(instrument_keys),
-        safe=",",
-    )
+    instrument_keys = [item["instrument_key"] for item in instruments]
 
     manager_status = None
 
@@ -1529,71 +1619,30 @@ async def list_available_websockets(
         )
 
         if callable(status_method):
-            manager_status = (
-                status_method()
-            )
+            manager_status = status_method()
 
     payload = {
         "status": "success",
         "timestamp": _now_iso(),
-        "discovery_path": (
-            f"{FULL_WEBSOCKET_PATH}/available"
-        ),
-        "websocket_path": (
-            FULL_WEBSOCKET_PATH
-        ),
+        "discovery_path": (f"{FULL_WEBSOCKET_PATH}/available"),
+        "websocket_path": (FULL_WEBSOCKET_PATH),
         "websocket_url": websocket_url,
-        "all_websocket_url": (
-            f"{websocket_url}/all"
-        ),
+        "all_websocket_url": (f"{websocket_url}/all"),
         "multiple_websocket_url": (
             f"{websocket_url}/multiple"
-            f"?instrument_keys={encoded_query}"
+            "?instrument_keys="
+            f"{quote(','.join(instrument_keys), safe=',')}"
         ),
-        "available_instrument_count": len(
-            instruments
-        ),
-        "available_instrument_keys": (
-            instrument_keys
-        ),
+        "available_instrument_count": len(instruments),
+        "available_instrument_keys": (instrument_keys),
         "instruments": instruments,
-        "manager": _json_safe(
-            manager_status
+        "manager": _json_safe(manager_status),
+        "connection_options": (
+            _connection_options(
+                websocket_url,
+                instrument_keys,
+            )
         ),
-        "connection_options": {
-            "dynamic": {
-                "websocket_url": (
-                    websocket_url
-                ),
-                "subscribe_message": {
-                    "action": "subscribe",
-                    "instrument_keys": [
-                        "NSE_FO|instrument-key"
-                    ],
-                },
-            },
-            "all_instruments": {
-                "websocket_url": (
-                    f"{websocket_url}/all"
-                ),
-                "subscribe_required": False,
-            },
-            "multiple_instruments": {
-                "url_template": (
-                    f"{websocket_url}/multiple"
-                    "?instrument_keys="
-                    "NSE_FO%7C123,NSE_FO%7C456"
-                ),
-                "subscribe_required": False,
-            },
-            "single_instrument": {
-                "url_template": (
-                    f"{websocket_url}/"
-                    "{encoded_instrument_key}"
-                ),
-                "subscribe_required": False,
-            },
-        },
         "supported_actions": [
             "subscribe",
             "unsubscribe",
@@ -1601,36 +1650,7 @@ async def list_available_websockets(
             "ping",
             "disconnect",
         ],
-        "live_event_shape": {
-            "event": {
-                "timestamp": (
-                    "2026-09-22T09:17:00+05:30"
-                ),
-                "date": "2026-09-22",
-                "open": 441.35,
-                "high": 441.5,
-                "low": 433.6,
-                "close": 437.6,
-                "volume": 11700,
-                "open_interest": 429520,
-                "source": "intraday",
-                "ema_9": 446.499441,
-                "ema_21": 447.370389,
-                "ema_difference": -0.870948,
-                "previous_ema_difference": (
-                    0.376873
-                ),
-                "cross_type": "bearish",
-                "is_bullish_cross": False,
-                "is_bearish_cross": True,
-            },
-            "instrument_key": (
-                "NSE_FO|instrument-key"
-            ),
-            "symbol": "NIFTY OPTION",
-            "strike_price": 23000.0,
-            "option_type": "CE",
-        },
+        "live_event_shape": (_sample_live_event_shape()),
     }
 
     return JSONResponse(
@@ -1639,6 +1659,137 @@ async def list_available_websockets(
     )
 
 
+# ---------------------------------------------------------------------------
+# NEW: resolve endpoint
+#   GET /ws/ema/resolve?instrument_key=NSE_FO%7C65899
+#   GET /ws/ema/resolve?strike=23000&option_type=PE
+# ---------------------------------------------------------------------------
+@router.get(
+    f"{FULL_WEBSOCKET_PATH}/resolve",
+    tags=["WebSocket"],
+    name="resolve_websocket_url",
+)
+async def resolve_websocket_url(
+    request: Request,
+    instrument_key: str | None = Query(
+        default=None,
+        description=("Direct instrument key, e.g. NSE_FO|65899"),
+    ),
+    strike: float | None = Query(
+        default=None,
+        description=("Strike price, e.g. 23000 " "(requires option_type)"),
+    ),
+    option_type: str | None = Query(
+        default=None,
+        description="Option type: CE or PE",
+    ),
+) -> JSONResponse:
+    runtime = _get_runtime_from_request(request)
+
+    if not instrument_key and strike is None:
+        return JSONResponse(
+            status_code=400,
+            content=_json_safe(
+                {
+                    "status": "error",
+                    "code": "MISSING_QUERY",
+                    "message": (
+                        "Provide either "
+                        "instrument_key, or "
+                        "strike (optionally with "
+                        "option_type)."
+                    ),
+                    "timestamp": _now_iso(),
+                }
+            ),
+        )
+
+    return _build_resolve_response(
+        request,
+        runtime,
+        instrument_key=instrument_key,
+        strike=strike,
+        option_type=option_type,
+    )
+
+
+# ---------------------------------------------------------------------------
+# NEW: pure URL builder (does not need runtime / contract resolution)
+#   GET /ws/ema/url
+#   GET /ws/ema/url?instrument_key=NSE_FO%7C65899
+#   GET /ws/ema/url?instrument_key=K1,K2,K3
+# ---------------------------------------------------------------------------
+@router.get(
+    f"{FULL_WEBSOCKET_PATH}/url",
+    tags=["WebSocket"],
+    name="build_websocket_url",
+)
+async def build_websocket_url(
+    request: Request,
+    instrument_key: str | None = Query(
+        default=None,
+        description=(
+            "Optional single or comma-separated "
+            "instrument key(s). If omitted, only "
+            "the base templates are returned."
+        ),
+    ),
+) -> JSONResponse:
+    websocket_url = _get_websocket_base_url(request)
+
+    keys = _normalise_instrument_keys(instrument_key)
+
+    payload: dict[str, Any] = {
+        "status": "success",
+        "timestamp": _now_iso(),
+        "websocket_base_url": websocket_url,
+        "all_instruments_url": (f"{websocket_url}/all"),
+        "multiple_instruments_url_template": (
+            f"{websocket_url}/multiple"
+            "?instrument_keys="
+            "{comma-separated-encoded-keys}"
+        ),
+        "single_instrument_url_template": (
+            f"{websocket_url}/" "{encoded_instrument_key}"
+        ),
+        "connection_options": (
+            _connection_options(
+                websocket_url,
+                keys,
+            )
+        ),
+        "supported_actions": [
+            "subscribe",
+            "unsubscribe",
+            "snapshot",
+            "ping",
+            "disconnect",
+        ],
+    }
+
+    if keys:
+        payload["resolved"] = {
+            "instrument_keys": keys,
+            "single_websocket_urls": [
+                (f"{websocket_url}/" f"{quote(k, safe='')}") for k in keys
+            ],
+            "multiple_websocket_url": (
+                f"{websocket_url}/multiple"
+                "?instrument_keys="
+                f"{quote(','.join(keys), safe=',')}"
+            ),
+        }
+
+    return JSONResponse(
+        status_code=200,
+        content=_json_safe(payload),
+    )
+
+
+# ---------------------------------------------------------------------------
+# WebSocket routes (unchanged, except ordering — resolve/url must be
+# registered BEFORE the catch-all /{instrument_key:path} route below)
+# ---------------------------------------------------------------------------
 @router.websocket(
     FULL_WEBSOCKET_PATH,
     name="ema_websocket",
@@ -1646,17 +1797,11 @@ async def list_available_websockets(
 async def ema_websocket(
     websocket: WebSocket,
 ) -> None:
-    runtime = _get_runtime(
-        websocket
-    )
+    runtime = _get_runtime(websocket)
 
-    manager = _get_websocket_manager(
-        websocket
-    )
+    manager = _get_websocket_manager(websocket)
 
-    client_id = str(
-        id(websocket)
-    )
+    client_id = str(id(websocket))
 
     current_subscriptions: set[str] = set()
     client_registered = False
@@ -1674,12 +1819,10 @@ async def ema_websocket(
 
             return
 
-        client_registered = (
-            await _connect_client(
-                websocket,
-                manager,
-                client_id,
-            )
+        client_registered = await _connect_client(
+            websocket,
+            manager,
+            client_id,
         )
 
         if not client_registered:
@@ -1697,45 +1840,28 @@ async def ema_websocket(
         await _send_json(
             websocket,
             {
-                "event": (
-                    "available_instruments"
-                ),
+                "event": ("available_instruments"),
                 "timestamp": _now_iso(),
-                "instrument_keys": (
-                    _get_selected_instrument_keys(
-                        runtime
-                    )
-                ),
+                "instrument_keys": (_get_selected_instrument_keys(runtime)),
             },
         )
 
         if _get_auto_subscribe_setting():
-            current_subscriptions = set(
-                _get_selected_instrument_keys(
-                    runtime
-                )
-            )
+            current_subscriptions = set(_get_selected_instrument_keys(runtime))
 
             if current_subscriptions:
                 await _subscribe_all(
                     manager,
                     websocket,
-                    sorted(
-                        current_subscriptions
-                    ),
+                    sorted(current_subscriptions),
                 )
 
                 await _send_json(
                     websocket,
                     _success_response(
-                        (
-                            "Automatically subscribed "
-                            "to all instruments"
-                        ),
+                        ("Automatically subscribed " "to all instruments"),
                         subscription_mode="all",
-                        subscribed_instruments=sorted(
-                            current_subscriptions
-                        ),
+                        subscribed_instruments=sorted(current_subscriptions),
                     ),
                 )
 
@@ -1743,16 +1869,12 @@ async def ema_websocket(
                     websocket,
                     _build_initial_state_payload(
                         runtime,
-                        sorted(
-                            current_subscriptions
-                        ),
+                        sorted(current_subscriptions),
                     ),
                 )
 
         while True:
-            message = await _receive_json_message(
-                websocket
-            )
+            message = await _receive_json_message(websocket)
 
             if message is None:
                 break
@@ -1761,30 +1883,24 @@ async def ema_websocket(
                 await _send_json(
                     websocket,
                     _error_response(
-                        (
-                            "Message must be a valid "
-                            "JSON object"
-                        ),
+                        ("Message must be a valid " "JSON object"),
                         code="INVALID_MESSAGE",
                     ),
                 )
 
                 continue
 
-            current_subscriptions = (
-                await _handle_client_message(
-                    websocket,
-                    manager,
-                    runtime,
-                    message,
-                    current_subscriptions,
-                )
+            current_subscriptions = await _handle_client_message(
+                websocket,
+                manager,
+                runtime,
+                message,
+                current_subscriptions,
             )
 
     except WebSocketDisconnect:
         logger.info(
-            "EMA WebSocket disconnected "
-            "client_id=%s",
+            "EMA WebSocket disconnected " "client_id=%s",
             client_id,
         )
 
@@ -1793,8 +1909,7 @@ async def ema_websocket(
 
     except Exception:
         logger.exception(
-            "EMA WebSocket connection failed "
-            "client_id=%s",
+            "EMA WebSocket connection failed " "client_id=%s",
             client_id,
         )
 
@@ -1803,16 +1918,12 @@ async def ema_websocket(
                 websocket,
                 _error_response(
                     "Internal WebSocket error",
-                    code=(
-                        "INTERNAL_WEBSOCKET_ERROR"
-                    ),
+                    code=("INTERNAL_WEBSOCKET_ERROR"),
                 ),
             )
 
         with suppress(Exception):
-            await websocket.close(
-                code=1011
-            )
+            await websocket.close(code=1011)
 
     finally:
         if client_registered:
@@ -1830,17 +1941,11 @@ async def ema_websocket(
 async def ema_all_instruments_websocket(
     websocket: WebSocket,
 ) -> None:
-    runtime = _get_runtime(
-        websocket
-    )
+    runtime = _get_runtime(websocket)
 
-    manager = _get_websocket_manager(
-        websocket
-    )
+    manager = _get_websocket_manager(websocket)
 
-    client_id = str(
-        id(websocket)
-    )
+    client_id = str(id(websocket))
 
     client_registered = False
     instrument_keys: list[str] = []
@@ -1858,32 +1963,24 @@ async def ema_all_instruments_websocket(
 
             return
 
-        instrument_keys = (
-            _get_selected_instrument_keys(
-                runtime
-            )
-        )
+        instrument_keys = _get_selected_instrument_keys(runtime)
 
         if not instrument_keys:
             await _accept_and_reject(
                 websocket,
                 _error_response(
                     "No instruments are available",
-                    code=(
-                        "NO_AVAILABLE_INSTRUMENTS"
-                    ),
+                    code=("NO_AVAILABLE_INSTRUMENTS"),
                 ),
                 close_code=1013,
             )
 
             return
 
-        client_registered = (
-            await _connect_client(
-                websocket,
-                manager,
-                client_id,
-            )
+        client_registered = await _connect_client(
+            websocket,
+            manager,
+            client_id,
         )
 
         if not client_registered:
@@ -1913,9 +2010,7 @@ async def ema_all_instruments_websocket(
         )
 
         while True:
-            message = await _receive_json_message(
-                websocket
-            )
+            message = await _receive_json_message(websocket)
 
             if message is None:
                 break
@@ -1924,30 +2019,29 @@ async def ema_all_instruments_websocket(
                 await _send_json(
                     websocket,
                     _error_response(
-                        (
-                            "Message must be a valid "
-                            "JSON object"
-                        ),
+                        ("Message must be a valid " "JSON object"),
                         code="INVALID_MESSAGE",
                     ),
                 )
 
                 continue
 
-            action = str(
-                message.get(
-                    "action",
-                    message.get("type", ""),
+            action = (
+                str(
+                    message.get(
+                        "action",
+                        message.get("type", ""),
+                    )
                 )
-            ).strip().lower()
+                .strip()
+                .lower()
+            )
 
             if action in {
                 "ping",
                 "heartbeat",
             }:
-                await _handle_ping_message(
-                    websocket
-                )
+                await _handle_ping_message(websocket)
 
             elif action in {
                 "snapshot",
@@ -1968,15 +2062,11 @@ async def ema_all_instruments_websocket(
             }:
                 await _send_json(
                     websocket,
-                    _success_response(
-                        "Disconnect requested"
-                    ),
+                    _success_response("Disconnect requested"),
                 )
 
                 with suppress(Exception):
-                    await websocket.close(
-                        code=1000
-                    )
+                    await websocket.close(code=1000)
 
                 break
 
@@ -1984,10 +2074,7 @@ async def ema_all_instruments_websocket(
                 await _send_json(
                     websocket,
                     _error_response(
-                        (
-                            "This endpoint is subscribed "
-                            "to all instruments"
-                        ),
+                        ("This endpoint is subscribed " "to all instruments"),
                         code="UNSUPPORTED_ACTION",
                         supported_actions=[
                             "snapshot",
@@ -1999,8 +2086,7 @@ async def ema_all_instruments_websocket(
 
     except WebSocketDisconnect:
         logger.info(
-            "All-instrument WebSocket "
-            "disconnected client_id=%s",
+            "All-instrument WebSocket " "disconnected client_id=%s",
             client_id,
         )
 
@@ -2009,15 +2095,12 @@ async def ema_all_instruments_websocket(
 
     except Exception:
         logger.exception(
-            "All-instrument WebSocket failed "
-            "client_id=%s",
+            "All-instrument WebSocket failed " "client_id=%s",
             client_id,
         )
 
         with suppress(Exception):
-            await websocket.close(
-                code=1011
-            )
+            await websocket.close(code=1011)
 
     finally:
         if client_registered:
@@ -2035,26 +2118,16 @@ async def ema_all_instruments_websocket(
 async def ema_multiple_instruments_websocket(
     websocket: WebSocket,
 ) -> None:
-    runtime = _get_runtime(
-        websocket
-    )
+    runtime = _get_runtime(websocket)
 
-    manager = _get_websocket_manager(
-        websocket
-    )
+    manager = _get_websocket_manager(websocket)
 
-    client_id = str(
-        id(websocket)
-    )
+    client_id = str(id(websocket))
 
     client_registered = False
 
-    requested_keys = (
-        _normalise_instrument_keys(
-            websocket.query_params.get(
-                "instrument_keys"
-            )
-        )
+    requested_keys = _normalise_instrument_keys(
+        websocket.query_params.get("instrument_keys")
     )
 
     try:
@@ -2070,53 +2143,30 @@ async def ema_multiple_instruments_websocket(
 
             return
 
-        available_keys = set(
-            _get_selected_instrument_keys(
-                runtime
-            )
-        )
+        available_keys = set(_get_selected_instrument_keys(runtime))
 
-        unknown_keys = [
-            key
-            for key in requested_keys
-            if key not in available_keys
-        ]
+        unknown_keys = [key for key in requested_keys if key not in available_keys]
 
-        valid_keys = [
-            key
-            for key in requested_keys
-            if key in available_keys
-        ]
+        valid_keys = [key for key in requested_keys if key in available_keys]
 
         if not valid_keys:
             await _accept_and_reject(
                 websocket,
                 _error_response(
-                    (
-                        "No valid instrument keys "
-                        "were supplied"
-                    ),
-                    code=(
-                        "INVALID_SUBSCRIPTION"
-                    ),
-                    unknown_instruments=(
-                        unknown_keys
-                    ),
-                    available_instruments=sorted(
-                        available_keys
-                    ),
+                    ("No valid instrument keys " "were supplied"),
+                    code=("INVALID_SUBSCRIPTION"),
+                    unknown_instruments=(unknown_keys),
+                    available_instruments=sorted(available_keys),
                 ),
                 close_code=1008,
             )
 
             return
 
-        client_registered = (
-            await _connect_client(
-                websocket,
-                manager,
-                client_id,
-            )
+        client_registered = await _connect_client(
+            websocket,
+            manager,
+            client_id,
         )
 
         if not client_registered:
@@ -2141,17 +2191,10 @@ async def ema_multiple_instruments_websocket(
             await _send_json(
                 websocket,
                 _error_response(
-                    (
-                        "Some requested instruments "
-                        "were ignored"
-                    ),
+                    ("Some requested instruments " "were ignored"),
                     code="UNKNOWN_INSTRUMENT",
-                    unknown_instruments=(
-                        unknown_keys
-                    ),
-                    subscribed_instruments=(
-                        valid_keys
-                    ),
+                    unknown_instruments=(unknown_keys),
+                    subscribed_instruments=(valid_keys),
                 ),
             )
 
@@ -2163,14 +2206,10 @@ async def ema_multiple_instruments_websocket(
             ),
         )
 
-        current_subscriptions = set(
-            valid_keys
-        )
+        current_subscriptions = set(valid_keys)
 
         while True:
-            message = await _receive_json_message(
-                websocket
-            )
+            message = await _receive_json_message(websocket)
 
             if message is None:
                 break
@@ -2179,30 +2218,24 @@ async def ema_multiple_instruments_websocket(
                 await _send_json(
                     websocket,
                     _error_response(
-                        (
-                            "Message must be a valid "
-                            "JSON object"
-                        ),
+                        ("Message must be a valid " "JSON object"),
                         code="INVALID_MESSAGE",
                     ),
                 )
 
                 continue
 
-            current_subscriptions = (
-                await _handle_client_message(
-                    websocket,
-                    manager,
-                    runtime,
-                    message,
-                    current_subscriptions,
-                )
+            current_subscriptions = await _handle_client_message(
+                websocket,
+                manager,
+                runtime,
+                message,
+                current_subscriptions,
             )
 
     except WebSocketDisconnect:
         logger.info(
-            "Multiple-instrument WebSocket "
-            "disconnected client_id=%s",
+            "Multiple-instrument WebSocket " "disconnected client_id=%s",
             client_id,
         )
 
@@ -2211,15 +2244,12 @@ async def ema_multiple_instruments_websocket(
 
     except Exception:
         logger.exception(
-            "Multiple-instrument WebSocket failed "
-            "client_id=%s",
+            "Multiple-instrument WebSocket failed " "client_id=%s",
             client_id,
         )
 
         with suppress(Exception):
-            await websocket.close(
-                code=1011
-            )
+            await websocket.close(code=1011)
 
     finally:
         if client_registered:
@@ -2231,33 +2261,22 @@ async def ema_multiple_instruments_websocket(
 
 
 @router.websocket(
-    (
-        f"{FULL_WEBSOCKET_PATH}/"
-        "{instrument_key:path}"
-    ),
+    (f"{FULL_WEBSOCKET_PATH}/" "{instrument_key:path}"),
     name="ema_instrument_websocket",
 )
 async def ema_instrument_websocket(
     websocket: WebSocket,
     instrument_key: str,
 ) -> None:
-    runtime = _get_runtime(
-        websocket
-    )
+    runtime = _get_runtime(websocket)
 
-    manager = _get_websocket_manager(
-        websocket
-    )
+    manager = _get_websocket_manager(websocket)
 
-    client_id = str(
-        id(websocket)
-    )
+    client_id = str(id(websocket))
 
     client_registered = False
 
-    instrument_key = unquote(
-        instrument_key
-    ).strip()
+    instrument_key = unquote(instrument_key).strip()
 
     try:
         if runtime is None:
@@ -2272,37 +2291,26 @@ async def ema_instrument_websocket(
 
             return
 
-        available_keys = set(
-            _get_selected_instrument_keys(
-                runtime
-            )
-        )
+        available_keys = set(_get_selected_instrument_keys(runtime))
 
         if instrument_key not in available_keys:
             await _accept_and_reject(
                 websocket,
                 _error_response(
-                    (
-                        "Instrument is not "
-                        "currently selected"
-                    ),
+                    ("Instrument is not " "currently selected"),
                     code="UNKNOWN_INSTRUMENT",
                     instrument_key=instrument_key,
-                    available_instruments=sorted(
-                        available_keys
-                    ),
+                    available_instruments=sorted(available_keys),
                 ),
                 close_code=1008,
             )
 
             return
 
-        client_registered = (
-            await _connect_client(
-                websocket,
-                manager,
-                client_id,
-            )
+        client_registered = await _connect_client(
+            websocket,
+            manager,
+            client_id,
         )
 
         if not client_registered:
@@ -2314,11 +2322,9 @@ async def ema_instrument_websocket(
             [instrument_key],
         )
 
-        contract = (
-            _get_contract_by_instrument_key(
-                runtime,
-                instrument_key,
-            )
+        contract = _get_contract_by_instrument_key(
+            runtime,
+            instrument_key,
         )
 
         symbol = (
@@ -2330,23 +2336,15 @@ async def ema_instrument_websocket(
             else instrument_key
         )
 
-        connected_payload = (
-            _connected_payload(
-                client_id=client_id,
-                mode="single",
-                subscriptions=[
-                    instrument_key
-                ],
-            )
+        connected_payload = _connected_payload(
+            client_id=client_id,
+            mode="single",
+            subscriptions=[instrument_key],
         )
 
-        connected_payload[
-            "instrument_key"
-        ] = instrument_key
+        connected_payload["instrument_key"] = instrument_key
 
-        connected_payload[
-            "symbol"
-        ] = symbol
+        connected_payload["symbol"] = symbol
 
         await _send_json(
             websocket,
@@ -2362,9 +2360,7 @@ async def ema_instrument_websocket(
         )
 
         while True:
-            message = await _receive_json_message(
-                websocket
-            )
+            message = await _receive_json_message(websocket)
 
             if message is None:
                 break
@@ -2373,30 +2369,29 @@ async def ema_instrument_websocket(
                 await _send_json(
                     websocket,
                     _error_response(
-                        (
-                            "Message must be a valid "
-                            "JSON object"
-                        ),
+                        ("Message must be a valid " "JSON object"),
                         code="INVALID_MESSAGE",
                     ),
                 )
 
                 continue
 
-            action = str(
-                message.get(
-                    "action",
-                    message.get("type", ""),
+            action = (
+                str(
+                    message.get(
+                        "action",
+                        message.get("type", ""),
+                    )
                 )
-            ).strip().lower()
+                .strip()
+                .lower()
+            )
 
             if action in {
                 "ping",
                 "heartbeat",
             }:
-                await _handle_ping_message(
-                    websocket
-                )
+                await _handle_ping_message(websocket)
 
             elif action in {
                 "snapshot",
@@ -2417,15 +2412,11 @@ async def ema_instrument_websocket(
             }:
                 await _send_json(
                     websocket,
-                    _success_response(
-                        "Disconnect requested"
-                    ),
+                    _success_response("Disconnect requested"),
                 )
 
                 with suppress(Exception):
-                    await websocket.close(
-                        code=1000
-                    )
+                    await websocket.close(code=1000)
 
                 break
 
@@ -2433,10 +2424,7 @@ async def ema_instrument_websocket(
                 await _send_json(
                     websocket,
                     _error_response(
-                        (
-                            "This endpoint is dedicated "
-                            "to one instrument"
-                        ),
+                        ("This endpoint is dedicated " "to one instrument"),
                         code="UNSUPPORTED_ACTION",
                         supported_actions=[
                             "snapshot",
@@ -2448,8 +2436,7 @@ async def ema_instrument_websocket(
 
     except WebSocketDisconnect:
         logger.info(
-            "Instrument WebSocket disconnected "
-            "client_id=%s instrument=%s",
+            "Instrument WebSocket disconnected " "client_id=%s instrument=%s",
             client_id,
             instrument_key,
         )
@@ -2459,16 +2446,13 @@ async def ema_instrument_websocket(
 
     except Exception:
         logger.exception(
-            "Instrument WebSocket failed "
-            "client_id=%s instrument=%s",
+            "Instrument WebSocket failed " "client_id=%s instrument=%s",
             client_id,
             instrument_key,
         )
 
         with suppress(Exception):
-            await websocket.close(
-                code=1011
-            )
+            await websocket.close(code=1011)
 
     finally:
         if client_registered:
@@ -2481,16 +2465,15 @@ async def ema_instrument_websocket(
 
 logger.info(
     "WebSocket routes configured "
-    "discovery=%s dynamic=%s all=%s "
-    "multiple=%s single=%s",
+    "discovery=%s resolve=%s url=%s dynamic=%s "
+    "all=%s multiple=%s single=%s",
     f"{FULL_WEBSOCKET_PATH}/available",
+    f"{FULL_WEBSOCKET_PATH}/resolve",
+    f"{FULL_WEBSOCKET_PATH}/url",
     FULL_WEBSOCKET_PATH,
     ALL_WEBSOCKET_PATH,
     MULTIPLE_WEBSOCKET_PATH,
-    (
-        f"{FULL_WEBSOCKET_PATH}/"
-        "{instrument_key:path}"
-    ),
+    (f"{FULL_WEBSOCKET_PATH}/" "{instrument_key:path}"),
 )
 
 
@@ -2500,6 +2483,8 @@ __all__ = [
     "MULTIPLE_WEBSOCKET_PATH",
     "router",
     "list_available_websockets",
+    "resolve_websocket_url",
+    "build_websocket_url",
     "ema_websocket",
     "ema_all_instruments_websocket",
     "ema_multiple_instruments_websocket",
