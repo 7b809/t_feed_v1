@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from datetime import datetime
+import json
+import os
+from datetime import datetime, date
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -16,7 +19,6 @@ from upstox_services.position_service import exit_all_positions
 
 # ---------------------------------------------------------------------------
 # Reuse the existing order-saving service infrastructure for MongoDB.
-# This avoids needing a separate `core.db.get_database()` helper.
 # ---------------------------------------------------------------------------
 try:
     from services.order_saving_service import (  # type: ignore
@@ -28,22 +30,134 @@ except Exception:  # pragma: no cover - fallback so file still imports
 logger = get_logger(__file__)
 
 
-# Name of the MongoDB collection used for "sell-exit" pair tracking.
-SELL_EXIT_COLLECTION_NAME = "sell_exit_orders"
+# ===========================================================================
+# CONFIG FILE LOADING
+# ===========================================================================
+# Instead of hardcoding collection names / tags / API versions in this file,
+# we load them from a JSON config file. Path resolution order:
+#   1) env PROCESS_ORDER_CONFIG_FILE
+#   2) <project_root>/config/process_order_config.json
+#
+# Example JSON:
+# {
+#   "sell_exit_collection_name": "sell_exit_orders",
+#   "order_history_collection_name": "order_history",
+#   "default_order_tag": "EMA_ALGO",
+#   "upstox_api_version": "2.0"
+# }
+# ===========================================================================
 
-# Tag used by place_selected_instrument -> place_market_order. Keep in sync.
-DEFAULT_ORDER_TAG = "EMA_ALGO"
+_DEFAULT_CONFIG_FILENAME = "config/process_order_config.json"
 
-# Upstox API version for market quote calls.
-UPSTOX_API_VERSION = "2.0"
+# Fallback values used when the config file is missing / unreadable.
+_DEFAULT_CONFIG_VALUES: dict[str, Any] = {
+    "sell_exit_collection_name": "sell_exit_orders",
+    "order_history_collection_name": "order_history",
+    "default_order_tag": "EMA_ALGO",
+    "upstox_api_version": "2.0",
+}
 
-# Collection used to record every processed instrument together with the
-# live LTP fetched from Upstox at processing time.
-ORDER_HISTORY_COLLECTION_NAME = "order_history"
+# In-memory cache so we don't hit disk on every call.
+_PROCESS_ORDER_CONFIG_CACHE: dict[str, Any] | None = None
+
+
+def _resolve_config_path() -> Path:
+    """
+    Resolves the JSON config file path.
+    """
+    env_path = os.getenv("PROCESS_ORDER_CONFIG_FILE", "").strip()
+    if env_path:
+        return Path(env_path).expanduser()
+
+    # Try relative to CWD first, then relative to this file's grandparent.
+    cwd_candidate = Path(_DEFAULT_CONFIG_FILENAME)
+    if cwd_candidate.exists():
+        return cwd_candidate
+
+    here = Path(__file__).resolve()
+    # services/... -> project root is parents[1] usually; be tolerant.
+    for parent in here.parents:
+        candidate = parent / _DEFAULT_CONFIG_FILENAME
+        if candidate.exists():
+            return candidate
+
+    return cwd_candidate  # return default even if it doesn't exist
+
+
+def _load_process_order_config(force_reload: bool = False) -> dict[str, Any]:
+    """
+    Loads and caches the process-order config JSON.
+    Any missing key falls back to _DEFAULT_CONFIG_VALUES.
+    """
+    global _PROCESS_ORDER_CONFIG_CACHE
+
+    if _PROCESS_ORDER_CONFIG_CACHE is not None and not force_reload:
+        return _PROCESS_ORDER_CONFIG_CACHE
+
+    merged: dict[str, Any] = dict(_DEFAULT_CONFIG_VALUES)
+    path = _resolve_config_path()
+
+    try:
+        if path.exists():
+            with path.open("r", encoding="utf-8") as handle:
+                loaded = json.load(handle)
+            if isinstance(loaded, dict):
+                merged.update(loaded)
+                logger.info("Loaded process-order config from %s", path)
+            else:
+                logger.warning(
+                    "Process-order config file %s is not a JSON object. "
+                    "Using defaults.",
+                    path,
+                )
+        else:
+            logger.warning(
+                "Process-order config file not found at %s. Using defaults.",
+                path,
+            )
+    except Exception:
+        logger.exception(
+            "Failed to read process-order config file at %s. Using defaults.",
+            path,
+        )
+
+    _PROCESS_ORDER_CONFIG_CACHE = merged
+    return merged
+
+
+def _cfg(key: str, default: Any = None) -> Any:
+    """
+    Convenience accessor for the process-order config.
+    """
+    cfg = _load_process_order_config()
+    if key in cfg and cfg[key] is not None:
+        return cfg[key]
+    if default is not None:
+        return default
+    return _DEFAULT_CONFIG_VALUES.get(key)
 
 
 # ---------------------------------------------------------------------------
-# Config helpers
+# Values pulled from the config file (evaluated lazily at call time).
+# ---------------------------------------------------------------------------
+def _sell_exit_collection_name() -> str:
+    return str(_cfg("sell_exit_collection_name")).strip() or "sell_exit_orders"
+
+
+def _order_history_collection_name() -> str:
+    return str(_cfg("order_history_collection_name")).strip() or "order_history"
+
+
+def _default_order_tag() -> str:
+    return str(_cfg("default_order_tag")).strip() or "EMA_ALGO"
+
+
+def _upstox_api_version() -> str:
+    return str(_cfg("upstox_api_version")).strip() or "2.0"
+
+
+# ---------------------------------------------------------------------------
+# Config helpers (env-based, unchanged API)
 # ---------------------------------------------------------------------------
 def _is_dummy_orders_enabled() -> bool:
     """
@@ -58,12 +172,6 @@ def _is_dummy_orders_enabled() -> bool:
 def _is_sell_exit_enabled() -> bool:
     """
     Returns True when SELL_EXIT mode is enabled.
-
-    SELL_EXIT mode means:
-        - First BUY order  -> stored locally (instrument_key, lot_size, etc.)
-        - Next order       -> SELL the stored instrument, then place new BUY,
-                              and store the new BUY instrument.
-    When False, the legacy behaviour (exit_all_positions) is used.
     """
     return bool(
         getattr(config, "SELL_EXIT", False) or getattr(config, "sell_exit", False)
@@ -73,14 +181,6 @@ def _is_sell_exit_enabled() -> bool:
 def _get_upstox_access_token() -> str | None:
     """
     Resolves the Upstox access token from the available configuration.
-
-    Tries, in order:
-        1) config.UPSTOX_ACCESS_TOKEN (string)
-        2) config.upstox_access_token (string)
-        3) config.get_upstox_access_token() (callable)
-        4) config.access_token (string)
-
-    Adjust this function if your token lives somewhere else.
     """
     candidates: list[Any] = [
         getattr(config, "UPSTOX_ACCESS_TOKEN", None),
@@ -100,7 +200,6 @@ def _get_upstox_access_token() -> str | None:
         elif candidate:
             return str(candidate).strip()
 
-    # Last resort: try a well-known callable name.
     getter = getattr(config, "get_upstox_access_token", None)
     if callable(getter):
         try:
@@ -113,33 +212,17 @@ def _get_upstox_access_token() -> str | None:
     return None
 
 
-# ---------------------------------------------------------------------------
+# ===========================================================================
 # MongoDB access (reuses order_saving_service's connection settings)
-# ---------------------------------------------------------------------------
+# ===========================================================================
 def _get_mongo_database():
     """
     Returns the MongoDB database handle used by the order-saving service.
-
-    This reuses the same MONGO_URI / MONGO_DB configuration values that
-    `order_saving_service` already uses, so we don't need a separate
-    `core.db.get_database()` helper.
-
-    Strategy:
-        1) If `upstox_order_saving_service` is importable, use its internal
-           `_get_collection()` bootstrap once to establish a client, then
-           grab its database handle.
-        2) Otherwise, fall back to reading config.MONGO_URI / config.MONGO_DB
-           directly and opening a short-lived MongoClient.
     """
-    # ---- Path 1: reuse the order-saving service's already-open client ----
     if upstox_order_saving_service is not None:
         try:
-            # Calling _get_collection() ensures the client/database are
-            # initialized (and respects UPSTOX_ORDER_ENABLED).
             collection = upstox_order_saving_service._get_collection()  # type: ignore[attr-defined]
-
             if collection is not None:
-                # pymongo Collection exposes .database
                 db = getattr(collection, "database", None)
                 if db is not None:
                     return db
@@ -149,7 +232,6 @@ def _get_mongo_database():
                 "order_saving_service. Falling back to direct config."
             )
 
-    # ---- Path 2: open our own client from config ----
     mongo_uri = str(
         getattr(config, "MONGO_URI", None) or getattr(config, "MONGO_URL", "") or ""
     ).strip()
@@ -174,9 +256,9 @@ def _get_mongo_database():
     return client[database_name]
 
 
-# ---------------------------------------------------------------------------
-# Telegram helper
-# ---------------------------------------------------------------------------
+# ===========================================================================
+# TELEGRAM helper
+# ===========================================================================
 def _send_telegram_message(
     title: str,
     message: str,
@@ -206,9 +288,9 @@ def _send_telegram_message(
         )
 
 
-# ---------------------------------------------------------------------------
+# ===========================================================================
 # Safe conversion helpers
-# ---------------------------------------------------------------------------
+# ===========================================================================
 def _safe_float(value: Any) -> float | None:
     try:
         if value is None:
@@ -227,23 +309,256 @@ def _safe_int(value: Any) -> int | None:
         return None
 
 
-# ---------------------------------------------------------------------------
+# ===========================================================================
+# Date-wise single-document helpers
+# ===========================================================================
+def _today_str() -> str:
+    """
+    Returns today's date as YYYY-MM-DD (local time).
+    """
+    return date.today().isoformat()
+
+
+def _now_time_key(transaction_type: str) -> str:
+    """
+    Builds a time-based key like '10:54_BUY' or '14:13_SELL'.
+
+    transaction_type is normalized to uppercase; anything non-SELL becomes
+    'BUY'.
+    """
+    hhmm = datetime.now().strftime("%H:%M")
+    side = "SELL" if str(transaction_type).strip().upper() == "SELL" else "BUY"
+    return f"{hhmm}_{side}"
+
+
+def _get_daily_collection(collection_name: str):
+    """
+    Returns a MongoDB collection handle for the given collection name.
+    """
+    db = _get_mongo_database()
+    return db[collection_name]
+
+
+def _ensure_daily_doc(collection, *, strategy: str) -> dict[str, Any]:
+    """
+    Ensures today's single daily document exists in the collection.
+    Returns the (upserted) document filter used.
+    """
+    now_iso = datetime.now().isoformat()
+    day = _today_str()
+
+    doc_filter = {"date": day, "strategy": strategy}
+
+    collection.update_one(
+        doc_filter,
+        {
+            "$setOnInsert": {
+                "date": day,
+                "strategy": strategy,
+                "created_at": now_iso,
+            },
+            "$set": {"updated_at": now_iso},
+        },
+        upsert=True,
+    )
+    return doc_filter
+
+
+def _append_daily_entry(
+    collection_name: str,
+    *,
+    strategy: str,
+    transaction_type: str,
+    payload: dict[str, Any],
+    key_hint: str | None = None,
+) -> dict[str, Any]:
+    """
+    Appends a time-based entry to today's daily document.
+
+    Document shape (per collection):
+        {
+          "date": "YYYY-MM-DD",
+          "strategy": "<tag>",
+          "entries": {
+              "10:54_BUY":  { ... },   # payload merged with key + timestamp
+              "14:13_SELL": { ... }
+          },
+          "created_at": "...",
+          "updated_at": "..."
+        }
+
+    Collision handling: if the exact time key already exists, a suffix
+    '_2', '_3', ... is appended so data is never overwritten.
+
+    Returns the final entry key used.
+    """
+    now_iso = datetime.now().isoformat()
+    day = _today_str()
+
+    collection = _get_daily_collection(collection_name)
+    _ensure_daily_doc(collection, strategy=strategy)
+
+    base_key = key_hint or _now_time_key(transaction_type)
+
+    # Find a free key (avoid overwriting an existing entry in the same minute).
+    final_key = base_key
+    suffix = 1
+    while True:
+        existing = collection.find_one(
+            {
+                "date": day,
+                "strategy": strategy,
+                f"entries.{final_key}": {"$exists": True},
+            },
+            {"_id": 1},
+        )
+        if not existing:
+            break
+        suffix += 1
+        final_key = f"{base_key}_{suffix}"
+
+    entry_doc = {
+        **payload,
+        "entry_key": final_key,
+        "transaction_type": (
+            "SELL" if str(transaction_type).strip().upper() == "SELL" else "BUY"
+        ),
+        "recorded_at": now_iso,
+    }
+
+    try:
+        collection.update_one(
+            {"date": day, "strategy": strategy},
+            {
+                "$set": {
+                    f"entries.{final_key}": entry_doc,
+                    "updated_at": now_iso,
+                }
+            },
+            upsert=True,
+        )
+        logger.info(
+            "Daily entry appended. collection=%s, date=%s, key=%s",
+            collection_name,
+            day,
+            final_key,
+        )
+    except Exception:
+        logger.exception(
+            "Failed to append daily entry. collection=%s, date=%s, key=%s",
+            collection_name,
+            day,
+            final_key,
+        )
+
+    return entry_doc
+
+
+def _append_daily_entry_to_specific_key(
+    collection_name: str,
+    *,
+    strategy: str,
+    entry_key: str,
+    payload: dict[str, Any],
+) -> None:
+    """
+    Writes/overwrites a specific entry key in today's daily document.
+    Used when we need to merge a SELL back into the BUY entry key.
+    """
+    now_iso = datetime.now().isoformat()
+    day = _today_str()
+
+    collection = _get_daily_collection(collection_name)
+    _ensure_daily_doc(collection, strategy=strategy)
+
+    try:
+        collection.update_one(
+            {"date": day, "strategy": strategy},
+            {
+                "$set": {
+                    f"entries.{entry_key}": {
+                        **payload,
+                        "entry_key": entry_key,
+                        "recorded_at": now_iso,
+                    },
+                    "updated_at": now_iso,
+                }
+            },
+            upsert=True,
+        )
+        logger.info(
+            "Daily entry merged. collection=%s, date=%s, key=%s",
+            collection_name,
+            day,
+            entry_key,
+        )
+    except Exception:
+        logger.exception(
+            "Failed to merge daily entry. collection=%s, date=%s, key=%s",
+            collection_name,
+            day,
+            entry_key,
+        )
+
+
+def _load_active_buy_order() -> dict[str, Any] | None:
+    """
+    Returns the currently active BUY entry from today's daily document.
+
+    An entry is considered active if:
+        - it exists at any key matching '*_BUY*'
+        - it has no 'closed_at' / 'sell_order_id' yet
+    """
+    strategy = _default_order_tag()
+    day = _today_str()
+
+    try:
+        collection = _get_daily_collection(_sell_exit_collection_name())
+        doc = collection.find_one({"date": day, "strategy": strategy})
+        if not doc:
+            return None
+
+        entries = doc.get("entries") or {}
+        if not isinstance(entries, dict):
+            return None
+
+        # Prefer the most recently recorded BUY without a matching SELL.
+        candidates: list[tuple[str, dict[str, Any]]] = []
+        for key, entry in entries.items():
+            if not isinstance(entry, dict):
+                continue
+            if (
+                not str(key).upper().endswith("_BUY")
+                and "_BUY_" not in str(key).upper()
+            ):
+                # allow keys like "10:54_BUY_2"
+                if not str(key).upper().split("_", 1)[-1].startswith("BUY"):
+                    continue
+            if entry.get("sell_order_id") or entry.get("closed_at"):
+                continue
+            candidates.append((str(key), entry))
+
+        if not candidates:
+            return None
+
+        candidates.sort(key=lambda item: item[1].get("recorded_at") or "", reverse=True)
+        _key, entry = candidates[0]
+
+        # Provide a top-level "buy_order_id" for the SELL step.
+        entry = {**entry, "buy_order_id": entry.get("order_id")}
+        return entry
+
+    except Exception:
+        logger.exception("Failed to load active BUY order from MongoDB.")
+        return None
+
+
+# ===========================================================================
 # Live LTP fetch via Upstox MarketQuoteApi
-# ---------------------------------------------------------------------------
+# ===========================================================================
 def _fetch_live_ltp(instrument_key: str) -> float | None:
     """
-    Fetches the live LTP for the given Upstox instrument_key using the
-    MarketQuoteApi.ltp() endpoint.
-
-    Accepts instrument_key in any of these forms:
-        - "NSE_FO|73923"          (pipe form, as used by Upstox APIs)
-        - "NSE_FO:NIFTY26SEP23300CE" (colon form, as returned by ltp())
-
-    The Upstox ltp() endpoint expects the pipe form ("NSE_FO|73923").
-    If a colon-form key is passed, we return None and log the issue.
-
-    Returns:
-        float | None: the last_price if successful, otherwise None.
+    Fetches the live LTP for the given Upstox instrument_key.
     """
     if not instrument_key:
         logger.warning("Live LTP fetch skipped: empty instrument_key.")
@@ -261,7 +576,7 @@ def _fetch_live_ltp(instrument_key: str) -> float | None:
 
     if not access_token:
         logger.error(
-            "Live LTP fetch skipped: no Upstox access token available " "in config."
+            "Live LTP fetch skipped: no Upstox access token available in config."
         )
         return None
 
@@ -273,7 +588,7 @@ def _fetch_live_ltp(instrument_key: str) -> float | None:
             upstox_client.ApiClient(configuration)
         )
 
-        api_response = api_instance.ltp(instrument_key, UPSTOX_API_VERSION)
+        api_response = api_instance.ltp(instrument_key, _upstox_api_version())
 
         last_price = _extract_last_price_from_ltp_response(api_response, instrument_key)
 
@@ -391,18 +706,14 @@ def _extract_last_price_from_ltp_response(
     return None
 
 
-# ---------------------------------------------------------------------------
+# ===========================================================================
 # Instrument details builder (fetches live LTP)
-# ---------------------------------------------------------------------------
+# ===========================================================================
 def _build_instrument_details(
     selected_instrument: dict[str, Any],
 ) -> dict[str, Any]:
     """
     Builds the normalized instrument details dict.
-
-    The live LTP is fetched from Upstox via MarketQuoteApi.ltp() using
-    the instrument_key. If the fetch fails, we fall back to any LTP
-    already present in the selected_instrument dict.
     """
     instrument_key = (
         str(selected_instrument.get("instrument_key") or "").strip() or None
@@ -439,9 +750,9 @@ def _build_instrument_details(
     }
 
 
-# ---------------------------------------------------------------------------
+# ===========================================================================
 # Result builders
-# ---------------------------------------------------------------------------
+# ===========================================================================
 def _build_failure_result(
     order_status: str,
     instrument_details: dict[str, Any] | None,
@@ -486,9 +797,9 @@ def _build_skipped_result(
     }
 
 
-# ---------------------------------------------------------------------------
+# ===========================================================================
 # Order id extraction
-# ---------------------------------------------------------------------------
+# ===========================================================================
 def _extract_order_id(
     place_order_result: dict[str, Any] | None,
 ) -> str | None:
@@ -507,7 +818,6 @@ def _extract_order_id(
 
     if direct_order_id is not None:
         normalized_order_id = str(direct_order_id).strip()
-
         if normalized_order_id:
             return normalized_order_id
 
@@ -520,10 +830,8 @@ def _extract_order_id(
             or data.get("id")
             or data.get("_order_id")
         )
-
         if data_order_id is not None:
             normalized_order_id = str(data_order_id).strip()
-
             if normalized_order_id:
                 return normalized_order_id
 
@@ -536,15 +844,12 @@ def _extract_order_id(
             or response.get("id")
             or response.get("_order_id")
         )
-
         if response_order_id is not None:
             normalized_order_id = str(response_order_id).strip()
-
             if normalized_order_id:
                 return normalized_order_id
 
         response_data = response.get("data") or response.get("_data")
-
         if isinstance(response_data, dict):
             response_data_order_id = (
                 response_data.get("order_id")
@@ -552,283 +857,177 @@ def _extract_order_id(
                 or response_data.get("id")
                 or response_data.get("_order_id")
             )
-
             if response_data_order_id is not None:
                 normalized_order_id = str(response_data_order_id).strip()
-
                 if normalized_order_id:
                     return normalized_order_id
 
     return None
 
 
-# ---------------------------------------------------------------------------
-# MongoDB helpers for SELL_EXIT pair tracking
-# ---------------------------------------------------------------------------
-def _get_sell_exit_collection():
-    """
-    Returns the MongoDB collection used to track the active BUY instrument
-    and the SELL exit results.
-
-    Reuses the same MongoDB database handle as the order-saving service.
-    """
-    db = _get_mongo_database()
-    return db[SELL_EXIT_COLLECTION_NAME]
-
-
-def _pair_document_filter() -> dict[str, Any]:
-    """
-    Filter identifying the single "active pair" document for this strategy.
-    """
-    return {"strategy": DEFAULT_ORDER_TAG, "active": True}
-
-
-def _load_active_buy_order() -> dict[str, Any] | None:
-    """
-    Returns the currently stored BUY instrument (or None if none stored).
-    """
-    try:
-        collection = _get_sell_exit_collection()
-        document = collection.find_one(_pair_document_filter())
-        return document
-    except Exception:
-        logger.exception("Failed to load active BUY order from MongoDB.")
-        return None
-
-
+# ===========================================================================
+# Daily-document writers (new date-wise model)
+# ===========================================================================
 def _save_active_buy_order(
     instrument_details: dict[str, Any],
     *,
     order_id: str | None,
     place_order_result: Any = None,
-) -> None:
+) -> str:
     """
-    Upserts the active BUY instrument for SELL_EXIT mode.
+    Appends a BUY entry into today's single document in
+    `sell_exit_orders` collection.
 
-    Stores the fetched live LTP alongside the instrument so the SELL step
-    can compute entry-vs-exit LTP analysis.
+    Returns the entry key (e.g. '10:54_BUY').
     """
-    now_iso = datetime.now().isoformat()
-
-    document = {
-        "strategy": DEFAULT_ORDER_TAG,
-        "active": True,
-        "type": "BUY_ENTRY",
-        "instrument_key": instrument_details.get("instrument_key"),
-        "trading_symbol": instrument_details.get("trading_symbol"),
-        "lot_size": instrument_details.get("lot_size"),
-        # BUY-side live LTP fetched at order-processing time.
-        "buy_live_ltp": instrument_details.get("live_ltp"),
-        # Legacy generic field for backward-compat consumers.
-        "live_ltp": instrument_details.get("live_ltp"),
-        "buy_order_id": order_id,
-        "buy_placed_at": now_iso,
-        "buy_place_order_result": place_order_result,
-        "updated_at": now_iso,
-    }
-
-    try:
-        collection = _get_sell_exit_collection()
-        collection.update_one(
-            _pair_document_filter(),
-            {
-                "$set": document,
-                "$setOnInsert": {"created_at": now_iso},
-            },
-            upsert=True,
-        )
-        logger.info(
-            "Active BUY order saved. instrument_key=%s, order_id=%s, "
-            "buy_live_ltp=%s",
-            instrument_details.get("instrument_key"),
-            order_id,
-            instrument_details.get("live_ltp"),
-        )
-    except Exception:
-        logger.exception(
-            "Failed to save active BUY order to MongoDB. instrument_key=%s",
-            instrument_details.get("instrument_key"),
-        )
+    entry = _append_daily_entry(
+        _sell_exit_collection_name(),
+        strategy=_default_order_tag(),
+        transaction_type="BUY",
+        payload={
+            "type": "BUY_ENTRY",
+            "instrument_key": instrument_details.get("instrument_key"),
+            "trading_symbol": instrument_details.get("trading_symbol"),
+            "lot_size": instrument_details.get("lot_size"),
+            "buy_live_ltp": instrument_details.get("live_ltp"),
+            "live_ltp": instrument_details.get("live_ltp"),
+            "order_id": order_id,
+            "buy_order_id": order_id,
+            "place_order_result": place_order_result,
+        },
+    )
+    return str(entry.get("entry_key") or "")
 
 
-def _clear_active_buy_order(reason: str = "sold") -> None:
-    """
-    Removes the active BUY marker once the instrument has been sold.
-    """
-    try:
-        collection = _get_sell_exit_collection()
-        collection.update_one(
-            _pair_document_filter(),
-            {
-                "$set": {
-                    "active": False,
-                    "closed_reason": reason,
-                    "closed_at": datetime.now().isoformat(),
-                }
-            },
-        )
-        logger.info("Active BUY order cleared. reason=%s", reason)
-    except Exception:
-        logger.exception("Failed to clear active BUY order from MongoDB.")
-
-
-def _save_sell_exit_result(
+def _append_sell_exit_result(
     sell_instrument: dict[str, Any],
     sell_result: dict[str, Any] | None,
     *,
     error: str | None = None,
+    buy_entry_key: str | None = None,
     buy_order_id: str | None = None,
-) -> None:
+) -> str:
     """
-    Persists the SELL exit alongside the BUY entry.
+    Appends a SELL entry into today's single document in
+    `sell_exit_orders` collection.
 
-    Strategy:
-        1) Try to update the existing pair document (the one created when
-           the BUY was placed). This keeps BUY-side LTP and SELL-side LTP
-           in the SAME document.
-        2) If no matching BUY document exists, insert a standalone
-           SELL_EXIT document so we never lose the SELL record.
-
-    Fields written on the SELL side:
-        - sell_live_ltp:  LTP fetched at SELL time
-        - buy_live_ltp:   LTP fetched at BUY time (preserved)
-        - ltp_change / ltp_change_pct: computed for analysis
+    If `buy_entry_key` is provided, we also merge the SELL data back into
+    the matching BUY entry (so the BUY entry becomes a TRADE_PAIR).
     """
     now_iso = datetime.now().isoformat()
-
     sell_order_id = _extract_order_id(sell_result) if sell_result else None
     sell_live_ltp = _safe_float(sell_instrument.get("live_ltp"))
 
-    sell_fields = {
-        "sell_order_id": sell_order_id,
-        "sell_live_ltp": sell_live_ltp,
-        "sell_placed_at": now_iso,
-        "sell_result": sell_result,
-        "sell_error": error,
-        "sell_instrument_key": sell_instrument.get("instrument_key"),
-        "sell_trading_symbol": sell_instrument.get("trading_symbol"),
-        "sell_lot_size": sell_instrument.get("lot_size"),
-        "updated_at": now_iso,
-    }
+    entry = _append_daily_entry(
+        _sell_exit_collection_name(),
+        strategy=_default_order_tag(),
+        transaction_type="SELL",
+        payload={
+            "type": "SELL_EXIT",
+            "instrument_key": sell_instrument.get("instrument_key"),
+            "trading_symbol": sell_instrument.get("trading_symbol"),
+            "lot_size": sell_instrument.get("lot_size"),
+            "sell_live_ltp": sell_live_ltp,
+            "live_ltp": sell_live_ltp,
+            "sell_order_id": sell_order_id,
+            "sell_result": sell_result,
+            "sell_error": error,
+            "buy_order_id": buy_order_id,
+            "paired_buy_entry_key": buy_entry_key,
+            "closed_at": now_iso if not error else None,
+        },
+    )
+    sell_entry_key = str(entry.get("entry_key") or "")
 
-    # ------------------------------------------------------------------
-    # Attempt to update the existing pair document (same doc as BUY).
-    # ------------------------------------------------------------------
-    updated_existing = False
+    # Merge SELL fields back into the matching BUY entry for a paired view.
+    if buy_entry_key:
+        _merge_sell_into_buy_entry(
+            buy_entry_key=buy_entry_key,
+            sell_entry_key=sell_entry_key,
+            sell_order_id=sell_order_id,
+            sell_live_ltp=sell_live_ltp,
+            sell_result=sell_result,
+            error=error,
+        )
+
+    return sell_entry_key
+
+
+def _merge_sell_into_buy_entry(
+    *,
+    buy_entry_key: str,
+    sell_entry_key: str,
+    sell_order_id: str | None,
+    sell_live_ltp: float | None,
+    sell_result: dict[str, Any] | None,
+    error: str | None,
+) -> None:
+    """
+    Merges SELL fields into the existing BUY entry inside today's document.
+    """
+    strategy = _default_order_tag()
+    day = _today_str()
+    now_iso = datetime.now().isoformat()
 
     try:
-        collection = _get_sell_exit_collection()
+        collection = _get_daily_collection(_sell_exit_collection_name())
 
-        pair_filter: dict[str, Any] | None = None
+        doc = collection.find_one({"date": day, "strategy": strategy})
+        if not doc:
+            return
 
-        if buy_order_id:
-            pair_filter = {
-                "strategy": DEFAULT_ORDER_TAG,
-                "buy_order_id": buy_order_id,
-            }
+        entries = doc.get("entries") or {}
+        buy_entry = entries.get(buy_entry_key)
+        if not isinstance(buy_entry, dict):
+            return
 
-        if pair_filter is not None:
-            existing = collection.find_one(pair_filter)
+        buy_ltp = _safe_float(buy_entry.get("buy_live_ltp"))
+        if buy_ltp is None:
+            buy_ltp = _safe_float(buy_entry.get("live_ltp"))
 
-            if existing:
-                buy_ltp = _safe_float(existing.get("buy_live_ltp"))
-                if buy_ltp is None:
-                    buy_ltp = _safe_float(existing.get("live_ltp"))
+        ltp_change = None
+        ltp_change_pct = None
+        if buy_ltp is not None and sell_live_ltp is not None:
+            ltp_change = sell_live_ltp - buy_ltp
+            if buy_ltp != 0:
+                ltp_change_pct = (ltp_change / buy_ltp) * 100.0
 
-                ltp_change = None
-                ltp_change_pct = None
+        merged_buy_entry = {
+            **buy_entry,
+            "type": "TRADE_PAIR",
+            "sell_entry_key": sell_entry_key,
+            "sell_order_id": sell_order_id,
+            "sell_live_ltp": sell_live_ltp,
+            "sell_result": sell_result,
+            "sell_error": error,
+            "ltp_change": ltp_change,
+            "ltp_change_pct": ltp_change_pct,
+            "closed_at": now_iso if not error else None,
+        }
 
-                if buy_ltp is not None and sell_live_ltp is not None:
-                    ltp_change = sell_live_ltp - buy_ltp
-                    if buy_ltp != 0:
-                        ltp_change_pct = (ltp_change / buy_ltp) * 100.0
-
-                update_doc = {
-                    "$set": {
-                        **sell_fields,
-                        "ltp_change": ltp_change,
-                        "ltp_change_pct": ltp_change_pct,
-                        "type": "TRADE_PAIR",
-                    },
-                    "$setOnInsert": {
-                        "strategy": DEFAULT_ORDER_TAG,
-                        "instrument_key": sell_instrument.get("instrument_key"),
-                        "trading_symbol": sell_instrument.get("trading_symbol"),
-                        "lot_size": sell_instrument.get("lot_size"),
-                        "created_at": now_iso,
-                    },
+        collection.update_one(
+            {"date": day, "strategy": strategy},
+            {
+                "$set": {
+                    f"entries.{buy_entry_key}": merged_buy_entry,
+                    "updated_at": now_iso,
                 }
-
-                collection.update_one(pair_filter, update_doc)
-                updated_existing = True
-
-                logger.info(
-                    "SELL exit merged into existing BUY pair document. "
-                    "instrument_key=%s, buy_order_id=%s, sell_order_id=%s, "
-                    "buy_live_ltp=%s, sell_live_ltp=%s, ltp_change=%s",
-                    sell_instrument.get("instrument_key"),
-                    buy_order_id,
-                    sell_order_id,
-                    buy_ltp,
-                    sell_live_ltp,
-                    ltp_change,
-                )
-
-    except Exception:
-        logger.exception(
-            "Failed to update existing BUY pair document with SELL result. "
-            "instrument_key=%s",
-            sell_instrument.get("instrument_key"),
+            },
         )
-
-    # ------------------------------------------------------------------
-    # Fallback: no existing pair document -> insert a standalone SELL doc.
-    # ------------------------------------------------------------------
-    if updated_existing:
-        return
-
-    document = {
-        "strategy": DEFAULT_ORDER_TAG,
-        "type": "SELL_EXIT",
-        "instrument_key": sell_instrument.get("instrument_key"),
-        "trading_symbol": sell_instrument.get("trading_symbol"),
-        "lot_size": sell_instrument.get("lot_size"),
-        "sell_live_ltp": sell_live_ltp,
-        "live_ltp": sell_live_ltp,
-        "buy_order_id": buy_order_id,
-        **sell_fields,
-    }
-
-    try:
-        collection = _get_sell_exit_collection()
-        collection.insert_one(document)
         logger.info(
-            "Standalone SELL exit result saved (no matching BUY pair doc). "
-            "instrument_key=%s, sell_order_id=%s, sell_live_ltp=%s",
-            sell_instrument.get("instrument_key"),
-            sell_order_id,
-            sell_live_ltp,
+            "SELL merged into BUY entry. buy_key=%s, sell_key=%s",
+            buy_entry_key,
+            sell_entry_key,
         )
     except Exception:
         logger.exception(
-            "Failed to save SELL exit result to MongoDB. instrument_key=%s",
-            sell_instrument.get("instrument_key"),
+            "Failed to merge SELL into BUY entry. buy_key=%s, sell_key=%s",
+            buy_entry_key,
+            sell_entry_key,
         )
 
 
-# ---------------------------------------------------------------------------
-# Order-history persistence with fetched LTP
-# ---------------------------------------------------------------------------
-def _get_order_history_collection():
-    """
-    Returns the MongoDB collection used to record order-history entries.
-    Reuses the same MongoDB database handle as the order-saving service.
-    """
-    db = _get_mongo_database()
-    return db[ORDER_HISTORY_COLLECTION_NAME]
-
-
-def _save_order_history_entry(
+def _append_order_history_entry(
     instrument_details: dict[str, Any],
     *,
     order_status: str,
@@ -841,16 +1040,13 @@ def _save_order_history_entry(
     place_order_result: Any = None,
     error: str | None = None,
     extra: dict[str, Any] | None = None,
-) -> None:
+    transaction_type: str = "BUY",
+) -> str:
     """
-    Persists a single order-workflow history entry.
-
-    The entry stores the live LTP fetched from Upstox at processing time.
+    Appends an order-history entry into today's single document in
+    `order_history` collection.
     """
-    now_iso = datetime.now().isoformat()
-
-    document = {
-        "strategy": DEFAULT_ORDER_TAG,
+    payload: dict[str, Any] = {
         "type": "ORDER_HISTORY",
         "instrument_key": instrument_details.get("instrument_key"),
         "trading_symbol": instrument_details.get("trading_symbol"),
@@ -865,34 +1061,24 @@ def _save_order_history_entry(
         "margin_result": margin_result,
         "place_order_result": place_order_result,
         "error": error,
-        "processed_at": now_iso,
-        "updated_at": now_iso,
+        "processed_at": datetime.now().isoformat(),
     }
 
     if extra:
-        document.update(extra)
+        payload.update(extra)
 
-    try:
-        collection = _get_order_history_collection()
-        collection.insert_one(document)
-        logger.info(
-            "Order history entry saved. instrument_key=%s, order_status=%s, "
-            "live_ltp=%s, order_id=%s",
-            instrument_details.get("instrument_key"),
-            order_status,
-            instrument_details.get("live_ltp"),
-            order_id,
-        )
-    except Exception:
-        logger.exception(
-            "Failed to save order history entry. instrument_key=%s",
-            instrument_details.get("instrument_key"),
-        )
+    entry = _append_daily_entry(
+        _order_history_collection_name(),
+        strategy=_default_order_tag(),
+        transaction_type=transaction_type,
+        payload=payload,
+    )
+    return str(entry.get("entry_key") or "")
 
 
-# ---------------------------------------------------------------------------
+# ===========================================================================
 # Margin calculation
-# ---------------------------------------------------------------------------
+# ===========================================================================
 def _calculate_margin(
     instrument_details: dict[str, Any],
     *,
@@ -900,9 +1086,6 @@ def _calculate_margin(
 ) -> dict[str, Any]:
     """
     Calculates margin for the given instrument using the margin service.
-
-    This is a best-effort step: any failure is logged and notified via
-    Telegram, but it does NOT block the order workflow.
     """
     instrument_key = instrument_details.get("instrument_key")
     lot_size = instrument_details.get("lot_size")
@@ -1057,9 +1240,9 @@ def _calculate_margin(
     return margin_result
 
 
-# ---------------------------------------------------------------------------
+# ===========================================================================
 # Dummy order builder
-# ---------------------------------------------------------------------------
+# ===========================================================================
 def _build_dummy_place_order_result(
     normalized_instrument: dict[str, Any],
     instrument_details: dict[str, Any],
@@ -1111,9 +1294,9 @@ def _build_dummy_place_order_result(
     }
 
 
-# ---------------------------------------------------------------------------
+# ===========================================================================
 # Safe place order (BUY-side)
-# ---------------------------------------------------------------------------
+# ===========================================================================
 def _safe_place_order(
     normalized_instrument: dict[str, Any],
     instrument_details: dict[str, Any],
@@ -1186,14 +1369,15 @@ def _safe_place_order(
             ),
         )
 
+        buy_entry_key: str | None = None
         if persist_as_active_buy:
-            _save_active_buy_order(
+            buy_entry_key = _save_active_buy_order(
                 instrument_details=instrument_details,
                 order_id=order_id,
                 place_order_result=place_order_result,
             )
 
-        _save_order_history_entry(
+        _append_order_history_entry(
             instrument_details=instrument_details,
             order_status="DUMMY_ORDER_PLACED",
             success=True,
@@ -1204,7 +1388,8 @@ def _safe_place_order(
             margin_result=margin_result,
             place_order_result=place_order_result,
             error=None,
-            extra={"dummy": True},
+            extra={"dummy": True, "buy_entry_key": buy_entry_key},
+            transaction_type="BUY",
         )
 
         return {
@@ -1255,7 +1440,7 @@ def _safe_place_order(
 
         error_msg = f"Order placement raised an exception: {type(exc).__name__}: {exc}"
 
-        _save_order_history_entry(
+        _append_order_history_entry(
             instrument_details=instrument_details,
             order_status="PLACE_ORDER_FAILED",
             success=False,
@@ -1266,6 +1451,7 @@ def _safe_place_order(
             margin_result=margin_result,
             place_order_result=None,
             error=error_msg,
+            transaction_type="BUY",
         )
 
         return _build_failure_result(
@@ -1299,7 +1485,7 @@ def _safe_place_order(
             ),
         )
 
-        _save_order_history_entry(
+        _append_order_history_entry(
             instrument_details=instrument_details,
             order_status="PLACE_ORDER_FAILED",
             success=False,
@@ -1310,6 +1496,7 @@ def _safe_place_order(
             margin_result=margin_result,
             place_order_result=place_order_result,
             error="Invalid order placement response.",
+            transaction_type="BUY",
         )
 
         return _build_failure_result(
@@ -1351,7 +1538,7 @@ def _safe_place_order(
             ),
         )
 
-        _save_order_history_entry(
+        _append_order_history_entry(
             instrument_details=instrument_details,
             order_status="PLACE_ORDER_FAILED",
             success=False,
@@ -1362,6 +1549,7 @@ def _safe_place_order(
             margin_result=margin_result,
             place_order_result=place_order_result,
             error=str(order_error),
+            transaction_type="BUY",
         )
 
         return _build_failure_result(
@@ -1384,8 +1572,9 @@ def _safe_place_order(
         order_id,
     )
 
+    buy_entry_key: str | None = None
     if persist_as_active_buy:
-        _save_active_buy_order(
+        buy_entry_key = _save_active_buy_order(
             instrument_details=instrument_details,
             order_id=order_id,
             place_order_result=place_order_result,
@@ -1407,7 +1596,7 @@ def _safe_place_order(
         ),
     )
 
-    _save_order_history_entry(
+    _append_order_history_entry(
         instrument_details=instrument_details,
         order_status="ORDER_PLACED",
         success=True,
@@ -1418,6 +1607,8 @@ def _safe_place_order(
         margin_result=margin_result,
         place_order_result=place_order_result,
         error=None,
+        extra={"buy_entry_key": buy_entry_key},
+        transaction_type="BUY",
     )
 
     return {
@@ -1434,18 +1625,14 @@ def _safe_place_order(
     }
 
 
-# ---------------------------------------------------------------------------
+# ===========================================================================
 # SELL_EXIT: place SELL for the previously stored BUY instrument
-# ---------------------------------------------------------------------------
+# ===========================================================================
 def _run_sell_exit_step(
     stored_buy_order: dict[str, Any],
 ) -> dict[str, Any]:
     """
     Sells the previously stored BUY instrument (SELL_EXIT mode).
-
-    IMPORTANT: A FRESH LTP is fetched for the instrument being sold so
-    that the stored SELL record captures the exit-time market price,
-    enabling entry-vs-exit LTP analysis.
     """
     if not stored_buy_order:
         logger.info("SELL_EXIT: no stored BUY order found. Skipping SELL step.")
@@ -1467,12 +1654,14 @@ def _run_sell_exit_step(
             "sell_result": None,
             "sell_live_ltp": None,
             "buy_live_ltp": None,
+            "buy_entry_key": None,
             "error": None,
         }
 
     sell_instrument_key = stored_buy_order.get("instrument_key")
     sell_trading_symbol = stored_buy_order.get("trading_symbol")
     sell_lot_size = stored_buy_order.get("lot_size")
+    buy_entry_key = stored_buy_order.get("entry_key")
     buy_live_ltp = _safe_float(stored_buy_order.get("buy_live_ltp"))
     if buy_live_ltp is None:
         buy_live_ltp = _safe_float(stored_buy_order.get("live_ltp"))
@@ -1497,6 +1686,7 @@ def _run_sell_exit_step(
             "sell_result": None,
             "sell_live_ltp": None,
             "buy_live_ltp": buy_live_ltp,
+            "buy_entry_key": buy_entry_key,
             "error": "Stored BUY order is missing instrument_key.",
         }
 
@@ -1522,12 +1712,10 @@ def _run_sell_exit_step(
             "sell_result": None,
             "sell_live_ltp": None,
             "buy_live_ltp": buy_live_ltp,
+            "buy_entry_key": buy_entry_key,
             "error": f"Stored BUY order has invalid lot_size: {sell_lot_size}",
         }
 
-    # ------------------------------------------------------------------
-    # FRESH LTP FETCH for the instrument being sold.
-    # ------------------------------------------------------------------
     logger.info(
         "SELL_EXIT: fetching fresh LTP before selling. instrument_key=%s",
         sell_instrument_key,
@@ -1712,20 +1900,13 @@ def _run_sell_exit_step(
                 ),
             )
 
-    # ------------------------------------------------------------------
-    # Persist SELL exit alongside BUY (same document when possible).
-    # ------------------------------------------------------------------
-    _save_sell_exit_result(
+    sell_entry_key = _append_sell_exit_result(
         sell_instrument=sell_payload,
         sell_result=sell_result if isinstance(sell_result, dict) else None,
         error=error_message,
+        buy_entry_key=buy_entry_key,
         buy_order_id=stored_buy_order.get("buy_order_id"),
     )
-
-    # ------------------------------------------------------------------
-    # Clear the active BUY marker so the next cycle can start fresh.
-    # ------------------------------------------------------------------
-    _clear_active_buy_order(reason="sold" if not error_message else "sell_failed")
 
     return {
         "success": sell_result is not None
@@ -1739,23 +1920,20 @@ def _run_sell_exit_step(
         "sell_live_ltp": sell_live_ltp,
         "buy_live_ltp": buy_live_ltp,
         "sell_result": sell_result,
+        "buy_entry_key": buy_entry_key,
+        "sell_entry_key": sell_entry_key,
         "error": error_message,
     }
 
 
-# ---------------------------------------------------------------------------
+# ===========================================================================
 # Legacy exit-all-positions step
-# ---------------------------------------------------------------------------
+# ===========================================================================
 def _run_exit_step(
     instrument_details: dict[str, Any],
 ) -> Any:
     """
     Runs the exit-all-positions step.
-
-    NOTE: In EXIT_ALL mode we do not have per-position detail from
-    exit_all_positions(), so we cannot fetch per-instrument exit LTP here.
-    The new instrument's LTP has already been fetched in
-    _build_instrument_details() and is persisted via order_history.
     """
     trading_symbol = instrument_details.get("trading_symbol")
     instrument_key = instrument_details.get("instrument_key")
@@ -1938,9 +2116,9 @@ def _run_exit_step(
     return exit_result
 
 
-# ---------------------------------------------------------------------------
+# ===========================================================================
 # Main workflow
-# ---------------------------------------------------------------------------
+# ===========================================================================
 def process_selected_instrument(
     selected_instrument: dict[str, Any] | None,
 ) -> dict[str, Any]:
@@ -2025,7 +2203,7 @@ def process_selected_instrument(
             ),
         )
 
-        _save_order_history_entry(
+        _append_order_history_entry(
             instrument_details=instrument_details,
             order_status="DISABLED",
             success=False,
@@ -2037,6 +2215,7 @@ def process_selected_instrument(
             place_order_result=None,
             error=None,
             extra={"reason": "PLACE_ORDER=false"},
+            transaction_type="BUY",
         )
 
         return _build_skipped_result(
@@ -2087,7 +2266,7 @@ def process_selected_instrument(
             ),
         )
 
-        _save_order_history_entry(
+        _append_order_history_entry(
             instrument_details=instrument_details,
             order_status="INVALID_INSTRUMENT",
             success=False,
@@ -2098,6 +2277,7 @@ def process_selected_instrument(
             margin_result=None,
             place_order_result=None,
             error=validation_error,
+            transaction_type="BUY",
         )
 
         return _build_failure_result(
@@ -2140,6 +2320,8 @@ def process_selected_instrument(
                 "sell_result": None,
                 "sell_live_ltp": None,
                 "buy_live_ltp": None,
+                "buy_entry_key": None,
+                "sell_entry_key": None,
                 "error": None,
             }
 

@@ -486,8 +486,8 @@ def get_nearest_order_instruments_for_ema_cross(current_nifty_ltp: float, cross_
     return output[:max_items]
 
 
-def get_budget_range_order_instruments(option_type: str, ltp_by_instrument: dict[str, Any], current_nifty_ltp: float | None = None, minimum_price: float | None = None, maximum_price: float | None = None, maximum_instruments: int | None = None, subscribed_only: bool | None = None, sort_mode: str | None = None, inclusive: bool | None = None, market_data_by_instrument: dict[str, Any] | None = None, isolated_instrument_key: str | None = None) -> list:
-    if not bool(getattr(config, "EMA_ALERT_BUDGET_RANGE_ENABLED", True)):
+def get_budget_range_order_instruments(option_type: str, ltp_by_instrument: dict[str, Any], current_nifty_ltp: float | None = None, minimum_price: float | None = None, maximum_price: float | None = None, maximum_instruments: int | None = None, subscribed_only: bool | None = None, sort_mode: str | None = None, inclusive: bool | None = None, market_data_by_instrument: dict[str, Any] | None = None, isolated_instrument_key: str | None = None, enabled: bool | None = None) -> list:
+    if not bool(getattr(config, "EMA_ALERT_BUDGET_RANGE_ENABLED", True) if enabled is None else enabled):
         return []
     normalized_option_type = normalize_option_type(option_type)
     if not normalized_option_type:

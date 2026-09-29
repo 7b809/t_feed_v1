@@ -19,6 +19,7 @@ from services.opening_range_service import (
     get_opening_range_levels_for_ema_event,
     process_selected_or_ema_cross_alert,
 )
+from services.opening_range.ema_opening_window import opening_ema_cross_selector
 from services.option_service import get_contract_info_by_instrument_key, options_cache
 from ws_feed.broadcaster import broadcaster
 
@@ -30,6 +31,7 @@ class InternalEmaEngine:
 
     def __init__(self):
         self.states: dict[str, dict] = {}
+        self._instrument_locks: dict[str, RLock] = {}
         self.events: list[dict] = []
         self.lock = RLock()
         self.loop = None
@@ -75,6 +77,9 @@ class InternalEmaEngine:
                 }
                 initialized += 1
         self.is_running = initialized > 0
+        opening_ema_cross_selector.reset_for_day(
+            datetime.now(get_market_timezone()).date()
+        )
         logger.info("Internal EMA warmup complete initialized=%s", initialized)
         return bool(initialized)
 
@@ -159,32 +164,62 @@ class InternalEmaEngine:
                 if candle_dt is None or candle_dt.replace(second=0, microsecond=0) >= cutoff:
                     continue
                 completed.append((candle_dt, candle))
+            emitted = []
             for candle_dt, candle in sorted(completed, key=lambda item: item[0]):
-                self.process_candle(key, {
+                result = self.process_candle(key, {
                     "timestamp": candle_dt.isoformat(),
                     "open": candle[1], "high": candle[2], "low": candle[3],
                     "close": candle[4],
                     "volume": candle[5] if len(candle) > 5 else 0,
                     "open_interest": candle[6] if len(candle) > 6 else 0,
                 })
+                if isinstance(result, dict) and result.get("type") == "live_ema_cross":
+                    emitted.append(result)
+            return emitted
 
         workers = min(
             max(1, int(getattr(config, "HISTORICAL_CANDLE_MAX_WORKERS", 8))),
             len(keys),
         )
         try:
+            cycle_crosses = []
             with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="ema-candle") as pool:
                 futures = {pool.submit(poll_one, key): key for key in keys}
                 for future in as_completed(futures):
                     try:
-                        future.result()
+                        cycle_crosses.extend(future.result())
                     except Exception as exc:
                         self.last_error = f"{type(exc).__name__}: {exc}"
                         logger.exception("Internal EMA candle poll failed instrument=%s", futures[future])
+            grouped = {}
+            for event in cycle_crosses:
+                grouped.setdefault(event.get("candle_timestamp") or event.get("timestamp"), []).append(event)
+            for stamp in sorted(grouped):
+                candle_events = grouped[stamp]
+                opening_events = [event for event in candle_events if opening_ema_cross_selector.is_opening_window_event(event)]
+                if opening_events:
+                    opening_ema_cross_selector.process_candle_crosses(
+                        opening_events, self._dispatch_cross_event
+                    )
+                    # Other directions from this initial candle are recorded and
+                    # broadcast, but only bullish crosses qualify for selection.
+                    continue
+                for event in candle_events:
+                    self._dispatch_cross_event(event)
+            opening_ema_cross_selector.finalize_if_caught_up(
+                self.get_states_snapshot(), keys
+            )
         finally:
             self._poll_lock.release()
 
     def process_candle(self, instrument_key: str, candle: dict) -> dict | None:
+        key = str(instrument_key)
+        with self.lock:
+            instrument_lock = self._instrument_locks.setdefault(key, RLock())
+        with instrument_lock:
+            return self._process_candle(key, candle)
+
+    def _process_candle(self, instrument_key: str, candle: dict) -> dict | None:
         stamp = str(candle.get("timestamp") or "")
         close = float(candle.get("close"))
         with self.lock:
@@ -240,6 +275,12 @@ class InternalEmaEngine:
             )
         except Exception:
             logger.exception("EMA intraday cross persistence failed instrument=%s", instrument_key)
+            with self.lock:
+                current = self.states.get(instrument_key) or {}
+                if current.get("last_processed_timestamp") == stamp:
+                    self.states[instrument_key] = previous
+                    self.processed_count = max(0, self.processed_count - 1)
+            return None
         try:
             event.update(get_opening_range_levels_for_ema_event(instrument_key) or {})
         except Exception:
@@ -255,10 +296,6 @@ class InternalEmaEngine:
                     output.write(json.dumps(event, ensure_ascii=False, default=str) + "\n")
             except OSError:
                 logger.exception("Could not persist internal EMA event instrument=%s", instrument_key)
-        try:
-            process_selected_or_ema_cross_alert(event)
-        except Exception:
-            logger.exception("EMA isolation dispatch failed instrument=%s", instrument_key)
         self.crossovers_count += 1
         try:
             if self.loop and self.loop.is_running():
@@ -266,6 +303,16 @@ class InternalEmaEngine:
         except Exception:
             logger.exception("EMA WebSocket broadcast scheduling failed instrument=%s", instrument_key)
         return event
+
+    def _dispatch_cross_event(self, event: dict) -> bool:
+        try:
+            return bool(process_selected_or_ema_cross_alert(event))
+        except Exception:
+            logger.exception(
+                "EMA isolation dispatch failed instrument=%s",
+                event.get("instrument_key"),
+            )
+            return False
 
 
 internal_ema_engine = InternalEmaEngine()

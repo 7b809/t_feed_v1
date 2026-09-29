@@ -37,11 +37,10 @@ async def orders_dashboard(
     request: Request,
 ):
     return templates.TemplateResponse(
-        "orders.html",
-        {
-            "request": request,
-        },
-    )
+    request=request,        # or positional: request
+    name="orders.html",
+    context={"request": request},   # optional but recommended
+)
 
 
 def normalize_option_type(

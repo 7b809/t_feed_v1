@@ -231,11 +231,13 @@ def is_event_eligible_for_isolation(event: dict) -> tuple[bool, str]:
 
     level = str(event.get("level") or "").strip().upper()
     touch_levels = get_isolation_touch_levels()
-
-    if level not in touch_levels:
-        return False, "level_not_eligible"
-
     source = str(event.get("source") or "").strip().lower()
+
+    # Opening EMA candidates use the same option/average-window validation
+    # and isolation state as touch candidates, but are qualified by a
+    # completed EMA candle rather than an R/S touch level.
+    if source != "opening_ema_cross" and level not in touch_levels:
+        return False, "level_not_eligible"
 
     if source == "intraday_backfill_scan" and not get_isolation_allow_backfill_touch():
         return False, "backfill_selection_disabled"
@@ -551,16 +553,26 @@ def send_isolated_instrument_notification(
     )
     short_touch_time = _get_short_market_time(selected_state.get("touch_time"))
 
-    message = (
-        f"{strike} {option_type_text} selected after "
-        f"{selected_level} touch\n\n"
-        f"Touch Price: {trigger_price}\n"
-        f"Level Value: {level_value}\n"
-        f"NIFTY: {nifty_ltp}\n"
-        f"Touch Time: {short_touch_time}\n\n"
-        "EMA Telegram alerts will now be sent only for this instrument.\n"
-        "The instrument is locked for the market day."
-    )
+    if str(selected_state.get("selection_reason") or "").startswith(
+        "opening_ema_cross"
+    ):
+        message = (
+            f"{strike} {option_type_text} selected after a completed "
+            f"bullish EMA cross at {short_touch_time}.\n\n"
+            f"Opening Range average: {nifty_ltp}\n"
+            "The instrument is locked for the market day."
+        )
+    else:
+        message = (
+            f"{strike} {option_type_text} selected after "
+            f"{selected_level} touch\n\n"
+            f"Touch Price: {trigger_price}\n"
+            f"Level Value: {level_value}\n"
+            f"NIFTY: {nifty_ltp}\n"
+            f"Touch Time: {short_touch_time}\n\n"
+            "EMA Telegram alerts will now be sent only for this instrument.\n"
+            "The instrument is locked for the market day."
+        )
 
     try:
         notification_sent = bool(
@@ -752,7 +764,11 @@ def isolate_instrument_from_event(event: dict) -> bool:
             "selected_at": selected_at,
             "selection_priority": get_level_priority(level),
             "selection_reason": (
-                "initial_level_priority_nearest_to_" "opening_range_average_daily_lock"
+                "opening_ema_cross_nearest_to_average_daily_lock"
+                if str(event.get("source") or "").strip().lower()
+                == "opening_ema_cross"
+                else "initial_level_priority_nearest_to_"
+                "opening_range_average_daily_lock"
             ),
             "locked_for_market_day": True,
             "reference_average": reference_average,
