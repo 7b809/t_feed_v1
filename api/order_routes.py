@@ -1,7 +1,9 @@
 from copy import deepcopy
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import HTMLResponse
+from fastapi.templating import Jinja2Templates
 
 from core.logger import get_logger
 from services.option_service import options_cache
@@ -14,10 +16,32 @@ from upstox_services.process_order import (
 
 logger = get_logger(__file__)
 
+templates = Jinja2Templates(directory="templates")
+
 router = APIRouter(
     prefix="/api/order",
     tags=["Sandbox Order"],
 )
+
+orders_page_router = APIRouter(
+    tags=["Orders Dashboard"],
+)
+
+
+@orders_page_router.get(
+    "/orders",
+    response_class=HTMLResponse,
+    include_in_schema=False,
+)
+async def orders_dashboard(
+    request: Request,
+):
+    return templates.TemplateResponse(
+        "orders.html",
+        {
+            "request": request,
+        },
+    )
 
 
 def normalize_option_type(
@@ -138,10 +162,9 @@ def find_instrument_by_strike(
 
     if nearest_expiry:
         for instrument in matches:
-            if (
-                str(instrument.get("expiry") or "").strip()
-                == str(nearest_expiry).strip()
-            ):
+            instrument_expiry = str(instrument.get("expiry") or "").strip()
+
+            if instrument_expiry == str(nearest_expiry).strip():
                 return instrument
 
     return matches[0]
@@ -170,23 +193,6 @@ def build_order_save_payload(
     strike: float | None,
     striketype: str | None,
 ) -> dict[str, Any]:
-    """
-    Builds the payload dictionary that is handed to the order saving
-    service so that a full record of the request is persisted to
-    MongoDB alongside the workflow result.
-
-    The payload shape mirrors what the saving service expects in
-    _get_payload_metadata() and _get_instrument_details():
-
-        {
-            "instrument": {...},
-            "source": "...",
-            "event_type": "...",
-            "market": {...},
-            "ema": {...},
-            ...
-        }
-    """
     return {
         "event_id": None,
         "event_type": "MANUAL_SANDBOX_ORDER",
@@ -205,7 +211,9 @@ def build_order_save_payload(
             "lot_size": selected_instrument.get("lot_size"),
             "strike_price": instrument.get("strike_price"),
             "expiry": instrument.get("expiry"),
-            "option_type": instrument.get("option_type"),
+            "option_type": (
+                instrument.get("option_type") or instrument.get("instrument_type")
+            ),
         },
         "request": {
             "instrument_key": instrument_key,
@@ -307,7 +315,7 @@ def _place_order(
                     "instrument_key": instrument_key,
                     "strike": strike,
                     "striketype": striketype,
-                    "message": ("Matching instrument " "was not found."),
+                    "message": ("Matching instrument was not found."),
                 },
             )
 
@@ -345,17 +353,11 @@ def _place_order(
             and workflow_result.get("success")
         )
 
-        # ------------------------------------------------------------------
-        # STEP 3: Persist the order workflow result to MongoDB.
-        #
-        # This is best-effort: a failure here must NOT break the API
-        # response, because the real order has already been placed.
-        # ------------------------------------------------------------------
         save_result: dict[str, Any] = {
             "success": False,
             "saved": False,
             "skipped": True,
-            "error": "Order saving was not attempted.",
+            "error": ("Order saving was not attempted."),
         }
 
         try:
@@ -387,8 +389,7 @@ def _place_order(
 
         except Exception as save_exc:
             logger.exception(
-                "Failed to save sandbox order result to MongoDB. "
-                "instrument_key=%s",
+                "Failed to save sandbox order result " "to MongoDB. instrument_key=%s",
                 selected_instrument.get("instrument_key"),
             )
 
@@ -396,14 +397,14 @@ def _place_order(
                 "success": False,
                 "saved": False,
                 "skipped": False,
-                "error": (f"{type(save_exc).__name__}: {save_exc}"),
+                "error": (f"{type(save_exc).__name__}: " f"{save_exc}"),
             }
 
         return {
             "success": workflow_success,
             "resolved_instrument": instrument,
-            "selected_instrument": (selected_instrument),
-            "order_workflow": (workflow_result),
+            "selected_instrument": selected_instrument,
+            "order_workflow": workflow_result,
             "order_save_result": save_result,
         }
 

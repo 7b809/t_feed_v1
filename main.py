@@ -6,22 +6,29 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 import shutil
-
+from services.daily_order_archive_service import (
+    daily_order_archive_service,
+)
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from api.order_routes import router as upstox_orders_router
 from api.algo_app_routes import router as algo_app_router
 from api.chart_routes import router as chart_router
 from api.debug_routes import router as debug_router
 from api.ema_alert_simulation_routes import (
     router as ema_alert_simulation_router,
 )
+from api.order_book_routes import router as order_book_router
 from api.candles_routes import router as candles_router
 from api.service_control_routes import (
     router as service_control_router,
 )
+from api.order_routes import (
+    orders_page_router,
+    router as order_router,
+)
+
 from api.health_routes import router as health_router
 from api.history_routes import router as history_router
 from api.home_routes import router as home_router
@@ -1429,6 +1436,89 @@ def _create_daily_log_archive_batches(log_files: list[Path]) -> list[Path]:
     return archives
 
 
+def run_daily_order_book_archive():
+    now_market = _get_market_now()
+
+    logger.info("================ DAILY ORDER BOOK " "ARCHIVE STARTED ================")
+
+    try:
+        if not _is_weekday_market_day():
+            logger.info(
+                "Daily order book archive skipped. "
+                "Today is not a Monday-Friday market day."
+            )
+
+            return {
+                "success": False,
+                "status": "skipped_non_market_day",
+                "market_date": (now_market.date().isoformat()),
+                "total_orders_count": 0,
+            }
+
+        result = daily_order_archive_service.archive_today_orders(
+            source="daily_scheduler"
+        )
+
+        if result.get("success"):
+            telegram_service.send_message(
+                title="Daily Order Book Archived",
+                message=(
+                    f"Market Date: "
+                    f"{result.get('market_date')}\n"
+                    f"Orders: "
+                    f"{result.get('total_orders_count', 0)}\n"
+                    f"Archive Status: "
+                    f"{result.get('status')}\n"
+                    f"Database: "
+                    f"{result.get('database_name')}\n"
+                    f"Collection: "
+                    f"{result.get('collection_name')}\n"
+                    f"Fetched At: "
+                    f"{result.get('fetched_at')}"
+                ),
+                level="INFO",
+                notification_context=(
+                    "daily_order_book_archive" f"|date={result.get('market_date')}"
+                ),
+            )
+        else:
+            telegram_service.send_message(
+                title="Daily Order Book Archive Skipped",
+                message=(
+                    f"Status: {result.get('status')}\n"
+                    f"Message: {result.get('message')}\n"
+                    f"Market Date: "
+                    f"{result.get('market_date')}"
+                ),
+                level="WARNING",
+                notification_context=("daily_order_book_archive_skipped"),
+            )
+
+        return result
+
+    except Exception as ex:
+        logger.exception("Daily order book archive failed.")
+
+        telegram_service.send_exception_message(
+            title="Daily Order Book Archive Failed",
+            exception=ex,
+            context="run_daily_order_book_archive",
+        )
+
+        return {
+            "success": False,
+            "status": "failed",
+            "market_date": (now_market.date().isoformat()),
+            "total_orders_count": 0,
+            "error": (f"{type(ex).__name__}: {ex}"),
+        }
+
+    finally:
+        logger.info(
+            "================ DAILY ORDER BOOK " "ARCHIVE COMPLETED ================"
+        )
+
+
 def run_daily_log_archive_delivery():
     """Create today's log ZIP batches and send them to the Telegram chat."""
     now_market = _get_market_now()
@@ -1790,6 +1880,28 @@ def start_scheduler() -> BackgroundScheduler:
         coalesce=True,
     )
 
+    scheduler.add_job(
+        func=run_daily_order_book_archive,
+        trigger=CronTrigger(
+            day_of_week="mon-fri",
+            hour=getattr(
+                config,
+                "DAILY_ORDER_ARCHIVE_HOUR",
+                15,
+            ),
+            minute=getattr(
+                config,
+                "DAILY_ORDER_ARCHIVE_MINUTE",
+                35,
+            ),
+            timezone=config.MARKET_TIMEZONE,
+        ),
+        id="daily_order_book_archive_job",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
     scheduler.start()
 
     budget_minimum = get_budget_min_price()
@@ -2090,6 +2202,9 @@ app.add_middleware(
 )
 
 app.include_router(candles_router)
+app.include_router(order_router)
+app.include_router(order_book_router)
+app.include_router(orders_page_router)
 app.include_router(home_router)
 app.include_router(health_router)
 app.include_router(debug_router)
@@ -2105,4 +2220,4 @@ app.include_router(instrument_router)
 app.include_router(ema_alert_simulation_router)
 app.include_router(test_token_router)
 app.include_router(service_control_router)
-app.include_router(upstox_orders_router)
+

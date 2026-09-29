@@ -39,21 +39,23 @@ def get_int_list(name, default=""):
     ]
 
 
-
-SERVICE_CONTROL_ENABLED = (
-    os.getenv("SERVICE_CONTROL_ENABLED", "false").strip().lower()
-    in {"1", "true", "yes", "on"}
-)
+SERVICE_CONTROL_ENABLED = os.getenv(
+    "SERVICE_CONTROL_ENABLED", "false"
+).strip().lower() in {"1", "true", "yes", "on"}
 
 SERVICE_CONTROL_TOKEN = os.getenv(
     "SERVICE_CONTROL_TOKEN",
     "",
 ).strip()
 
-SERVICE_MANAGER = os.getenv(
-    "SERVICE_MANAGER",
-    "internal",
-).strip().lower()
+SERVICE_MANAGER = (
+    os.getenv(
+        "SERVICE_MANAGER",
+        "internal",
+    )
+    .strip()
+    .lower()
+)
 
 SYSTEMD_SERVICE_NAME = os.getenv(
     "SYSTEMD_SERVICE_NAME",
@@ -99,6 +101,53 @@ ISOLATED_INSTRUMENT_EVENT_COLLECTION = get_string(
 UPSTOX_ORDER_COLLECTION = get_string(
     "UPSTOX_ORDER_COLLECTION",
     "upstox_orders",
+)
+
+DAILY_ORDER_ARCHIVE_ENABLED = get_bool(
+    "DAILY_ORDER_ARCHIVE_ENABLED",
+    True,
+)
+
+DAILY_ORDER_ARCHIVE_COLLECTION = get_string(
+    "DAILY_ORDER_ARCHIVE_COLLECTION",
+    "daily_order_book",
+).strip()
+
+DAILY_ORDER_ARCHIVE_HOUR = min(
+    23,
+    max(
+        0,
+        get_int(
+            "DAILY_ORDER_ARCHIVE_HOUR",
+            15,
+        ),
+    ),
+)
+
+DAILY_ORDER_ARCHIVE_MINUTE = min(
+    59,
+    max(
+        0,
+        get_int(
+            "DAILY_ORDER_ARCHIVE_MINUTE",
+            35,
+        ),
+    ),
+)
+
+DAILY_ORDER_ARCHIVE_WEEKDAYS_ONLY = get_bool(
+    "DAILY_ORDER_ARCHIVE_WEEKDAYS_ONLY",
+    True,
+)
+
+DAILY_ORDER_ARCHIVE_FAIL_OPEN = get_bool(
+    "DAILY_ORDER_ARCHIVE_FAIL_OPEN",
+    True,
+)
+
+DAILY_ORDER_ARCHIVE_NOTIFY_TELEGRAM = get_bool(
+    "DAILY_ORDER_ARCHIVE_NOTIFY_TELEGRAM",
+    True,
 )
 
 # Controls whether a sandbox order is submitted.
@@ -200,7 +249,7 @@ MARKET_CLOSE_HOUR = get_int("MARKET_CLOSE_HOUR", 15)
 MARKET_CLOSE_MINUTE = get_int("MARKET_CLOSE_MINUTE", 30)
 MAIN_NIFTY_SECURITY = get_string("MAIN_NIFTY_SECURITY", "NSE_INDEX|Nifty 50")
 STRIKE_FROM = get_float("STRIKE_FROM", 22500)
-STRIKE_TO = get_float("STRIKE_TO", 24500)
+STRIKE_TO = get_float("STRIKE_TO", 25000)
 if STRIKE_FROM > STRIKE_TO:
     STRIKE_FROM, STRIKE_TO = STRIKE_TO, STRIKE_FROM
 
@@ -504,7 +553,6 @@ def get_ema_alert_simulation_status():
 # Directories will be deleted and recreated as empty directories.
 STARTUP_REMOVE_LIST = [
     "data",
-   
 ]
 
 # Never allow these important paths to be removed accidentally.
@@ -515,4 +563,3 @@ STARTUP_CLEANUP_PROTECTED_PATHS = {
     "myenv",
     ".venv",
 }
-
