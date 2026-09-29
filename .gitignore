@@ -14,6 +14,8 @@ file.txt
 # C extensions
 *.so
 myenv/
+tests
+test
 venv/
  files.txt
  t.txt
@@ -31,6 +33,8 @@ test_logs
 .env
 temp
 tests
+!tests/
+!tests/test_ema_engine.py
 test
 db.sqlite3
 # Distribution / packaging

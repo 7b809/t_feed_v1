@@ -1830,8 +1830,12 @@ def start_scheduler() -> BackgroundScheduler:
 
     scheduler.add_job(
         func=internal_ema_engine.poll_completed_candles,
-        trigger="interval",
-        seconds=10,
+        trigger=CronTrigger(
+            day_of_week="mon-fri",
+            minute="*",
+            second=10,
+            timezone=config.MARKET_TIMEZONE,
+        ),
         id="internal_ema_completed_candle_job",
         replace_existing=True,
         max_instances=1,

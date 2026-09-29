@@ -39,6 +39,7 @@ class InternalEmaEngine:
         self.crossovers_count = 0
         self.last_error = None
         self.last_poll_minute = None
+        self._poll_lock = RLock()
 
     def initialize_from_history(self, summary: dict | None) -> bool:
         if not isinstance(summary, dict):
@@ -65,6 +66,7 @@ class InternalEmaEngine:
                     "ema_21": float(slow),
                     "ema_difference": float(fast) - float(slow),
                     "last_processed_timestamp": last_timestamp,
+                    "last_processed_candle_timestamp": last_timestamp,
                     "last_price": ema.get("latest_close"),
                     "current_trend": ema.get("latest_signal"),
                     "valid_candle_count": int(result.get("candles_count") or 0),
@@ -108,13 +110,18 @@ class InternalEmaEngine:
             }
 
     def poll_completed_candles(self):
-        """Fetch current intraday data and process its latest completed candle."""
+        """Fetch and incrementally process completed 1-minute candles."""
         if not getattr(config, "LIVE_EMA_ENABLED", True):
             return
         if not self.states:
             return
         keys = list(dict.fromkeys(options_cache.get("subscribed_keys", []) or []))
         if not keys:
+            return
+        # Prevent overlapping scheduled/manual cycles from fetching and handling
+        # the same instruments concurrently. Per-candle state checks below are
+        # still the final duplicate guard.
+        if not self._poll_lock.acquire(blocking=False):
             return
         self.is_running = True
         now = datetime.now(get_market_timezone())
@@ -129,10 +136,12 @@ class InternalEmaEngine:
             or now.time() > last_poll_deadline
         ):
             self.is_running = False
+            self._poll_lock.release()
             return
         self.is_running = True
         poll_minute = now.strftime("%Y-%m-%dT%H:%M")
         if poll_minute == self.last_poll_minute or now.second < 5:
+            self._poll_lock.release()
             return
         self.last_poll_minute = poll_minute
         cutoff = now.replace(second=0, microsecond=0)
@@ -163,14 +172,17 @@ class InternalEmaEngine:
             max(1, int(getattr(config, "HISTORICAL_CANDLE_MAX_WORKERS", 8))),
             len(keys),
         )
-        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="ema-candle") as pool:
-            futures = {pool.submit(poll_one, key): key for key in keys}
-            for future in as_completed(futures):
-                try:
-                    future.result()
-                except Exception as exc:
-                    self.last_error = f"{type(exc).__name__}: {exc}"
-                    logger.exception("Internal EMA candle poll failed instrument=%s", futures[future])
+        try:
+            with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="ema-candle") as pool:
+                futures = {pool.submit(poll_one, key): key for key in keys}
+                for future in as_completed(futures):
+                    try:
+                        future.result()
+                    except Exception as exc:
+                        self.last_error = f"{type(exc).__name__}: {exc}"
+                        logger.exception("Internal EMA candle poll failed instrument=%s", futures[future])
+        finally:
+            self._poll_lock.release()
 
     def process_candle(self, instrument_key: str, candle: dict) -> dict | None:
         stamp = str(candle.get("timestamp") or "")
@@ -192,6 +204,7 @@ class InternalEmaEngine:
                 **previous,
                 "ema_9": fast, "ema_21": slow, "ema_difference": diff,
                 "last_processed_timestamp": stamp, "last_price": close,
+                "last_processed_candle_timestamp": stamp,
                 "current_trend": "bullish" if diff > 0 else "bearish" if diff < 0 else "neutral",
                 "valid_candle_count": int(previous.get("valid_candle_count", 0)) + 1,
             }
@@ -211,6 +224,22 @@ class InternalEmaEngine:
             "previous_ema_fast": old_fast, "previous_ema_slow": old_slow,
             "price": close, "close": close, "ema_calculation_mode": "internal_completed_candle",
         }
+        try:
+            from services.history_service import save_runtime_intraday_ema_cross
+
+            save_runtime_intraday_ema_cross(
+                instrument_key,
+                {
+                    "timestamp": stamp,
+                    "type": f"{cross}_cross",
+                    "close": close,
+                    "ema_fast": fast,
+                    "ema_slow": slow,
+                },
+                contract_info=contract,
+            )
+        except Exception:
+            logger.exception("EMA intraday cross persistence failed instrument=%s", instrument_key)
         try:
             event.update(get_opening_range_levels_for_ema_event(instrument_key) or {})
         except Exception:
