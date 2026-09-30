@@ -22,7 +22,7 @@ from .isolation import (
     choose_best_isolation_event,
     get_reference_opening_range_average,
     is_event_eligible_for_isolation,
-    isolate_instrument_from_event,
+    try_isolate_from_touch_events,
 )
 from .state import selected_or_instrument_state, selected_or_lock
 
@@ -98,7 +98,6 @@ class OpeningEmaCrossSelector:
                 subscribed_only=True,
                 sort_mode=getattr(config, "EMA_ALERT_BUDGET_SORT_MODE", "nearest_to_budget_midpoint"),
                 inclusive=getattr(config, "EMA_ALERT_BUDGET_RANGE_INCLUSIVE", True),
-                enabled=True,
             )
             qualified.update(
                 str(item.get("instrument_key"))
@@ -177,7 +176,9 @@ class OpeningEmaCrossSelector:
                     return False
                 isolated = True
             else:
-                isolated = isolate_instrument_from_event(best)
+                # Commit through the shared Opening Range isolation service,
+                # which owns the daily lock and final eligibility check.
+                isolated = try_isolate_from_touch_events([best])
             if not isolated:
                 logger.warning("Opening EMA candidate isolation failed. key=%s", key)
                 return False

@@ -191,20 +191,28 @@ class InternalEmaEngine:
                     except Exception as exc:
                         self.last_error = f"{type(exc).__name__}: {exc}"
                         logger.exception("Internal EMA candle poll failed instrument=%s", futures[future])
+            # Decide after bounded workers finish so opening-window candidates
+            # are selected deterministically across instruments.
             grouped = {}
             for event in cycle_crosses:
-                grouped.setdefault(event.get("candle_timestamp") or event.get("timestamp"), []).append(event)
+                grouped.setdefault(
+                    event.get("candle_timestamp") or event.get("timestamp"), []
+                ).append(event)
             for stamp in sorted(grouped):
                 candle_events = grouped[stamp]
-                opening_events = [event for event in candle_events if opening_ema_cross_selector.is_opening_window_event(event)]
+                opening_events = [
+                    event for event in candle_events
+                    if opening_ema_cross_selector.is_opening_window_event(event)
+                ]
                 if opening_events:
                     opening_ema_cross_selector.process_candle_crosses(
                         opening_events, self._dispatch_cross_event
                     )
-                    # Other directions from this initial candle are recorded and
-                    # broadcast, but only bullish crosses qualify for selection.
                     continue
-                for event in candle_events:
+                for event in sorted(
+                    candle_events,
+                    key=lambda item: str(item.get("instrument_key") or ""),
+                ):
                     self._dispatch_cross_event(event)
             opening_ema_cross_selector.finalize_if_caught_up(
                 self.get_states_snapshot(), keys
@@ -313,6 +321,5 @@ class InternalEmaEngine:
                 event.get("instrument_key"),
             )
             return False
-
 
 internal_ema_engine = InternalEmaEngine()

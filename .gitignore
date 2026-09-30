@@ -34,8 +34,7 @@ test_logs
 temp
 tests
 !tests/
-!tests/test_ema_engine.py
-!tests/test_ema_opening_window.py
+!tests/test_r3_isolation_trigger.py
 test
 db.sqlite3
 # Distribution / packaging
