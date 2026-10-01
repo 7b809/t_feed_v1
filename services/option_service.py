@@ -312,6 +312,25 @@ def get_subscribed_instrument_keys() -> list:
         return list(options_cache.get("subscribed_keys", []))
 
 
+def get_live_websocket_instrument_keys() -> list[str]:
+    """Return index feeds and isolated instruments, never the option universe."""
+    keys = []
+    for underlying in getattr(config, "ACTIVE_STRATEGY_UNDERLYINGS", ("NIFTY",)):
+        settings = getattr(config, "STRATEGY_UNDERLYINGS", {}).get(underlying, {})
+        index_key = str(settings.get("instrument_key") or "").strip()
+        if index_key:
+            keys.append(index_key)
+    try:
+        from services.opening_range.state import get_selected_or_state_snapshot
+        selected = get_selected_or_state_snapshot()
+        selected_key = str(selected.get("instrument_key") or "").strip()
+        if selected.get("selected") and selected_key:
+            keys.append(selected_key)
+    except Exception:
+        logger.exception("Could not resolve selected WebSocket instrument")
+    return list(dict.fromkeys(keys))
+
+
 def get_cached_option_contracts() -> list:
     with _cache_lock:
         return [item.copy() for item in options_cache.get("data", []) if isinstance(item, dict)]
@@ -563,16 +582,32 @@ def get_budget_range_order_instruments(option_type: str, ltp_by_instrument: dict
 
 
 def get_available_feeds() -> list:
-    feeds = [{**NIFTY_INDEX_FEED, "supported_intervals": NIFTY_SUPPORTED_INTERVALS}]
+    feeds = [
+        get_feed_by_instrument_key(settings["instrument_key"])
+        for settings in getattr(config, "STRATEGY_UNDERLYINGS", {}).values()
+        if settings.get("enabled")
+    ]
+    feeds = [feed for feed in feeds if feed]
     for item in get_cached_option_contracts():
         feeds.append({**item, "supported_intervals": OPTION_SUPPORTED_INTERVALS})
     return feeds
 
 
 def get_feed_by_instrument_key(instrument_key: str) -> dict | None:
-    main_key = getattr(config, "MAIN_NIFTY_SECURITY", "NSE_INDEX|Nifty 50")
-    if instrument_key == main_key:
-        return {**NIFTY_INDEX_FEED, "supported_intervals": NIFTY_SUPPORTED_INTERVALS}
+    normalized_key = str(instrument_key or "").strip()
+    for underlying, settings in getattr(config, "STRATEGY_UNDERLYINGS", {}).items():
+        if normalized_key == str(settings.get("instrument_key") or "").strip():
+            return {
+                "instrument_key": normalized_key,
+                "instrument_type": "INDEX",
+                "strike_price": None,
+                "expiry": None,
+                "trading_symbol": settings.get("display_name", underlying),
+                "underlying_type": "INDEX",
+                "underlying_symbol": settings.get("display_name", underlying),
+                "underlying": underlying,
+                "supported_intervals": NIFTY_SUPPORTED_INTERVALS,
+            }
     contract = get_contract_info_by_instrument_key(instrument_key)
     if not contract:
         return None
@@ -580,12 +615,20 @@ def get_feed_by_instrument_key(instrument_key: str) -> dict | None:
 
 
 def is_nifty_index_feed(instrument_key: str) -> bool:
-    main_key = getattr(config, "MAIN_NIFTY_SECURITY", "NSE_INDEX|Nifty 50")
-    return instrument_key == main_key
+    return str(instrument_key or "").strip() == str(getattr(config, "MAIN_NIFTY_SECURITY", "NSE_INDEX|Nifty 50")).strip()
+
+
+def is_index_feed(instrument_key: str) -> bool:
+    key = str(instrument_key or "").strip()
+    return any(
+        key == str(item.get("instrument_key") or "").strip()
+        for item in getattr(config, "STRATEGY_UNDERLYINGS", {}).values()
+        if item.get("enabled")
+    )
 
 
 def is_valid_feed_interval(instrument_key: str, interval: int) -> bool:
-    if is_nifty_index_feed(instrument_key):
+    if is_index_feed(instrument_key):
         return interval in NIFTY_SUPPORTED_INTERVALS
     return interval in OPTION_SUPPORTED_INTERVALS
 
@@ -657,14 +700,15 @@ def get_options_cache_summary() -> dict:
 
 
 def get_chart_instruments() -> list:
-    instruments = []
-    instruments.append({
-        "instrument_key": NIFTY_INDEX_FEED.get("instrument_key"),
-        "trading_symbol": NIFTY_INDEX_FEED.get("trading_symbol"),
-        "instrument_type": "INDEX",
-        "strike_price": None,
-        "expiry": None,
-    })
+    instruments = [
+        {key: feed.get(key) for key in (
+            "instrument_key", "trading_symbol", "instrument_type", "strike_price", "expiry", "underlying"
+        )}
+        for settings in getattr(config, "STRATEGY_UNDERLYINGS", {}).values()
+        if settings.get("enabled")
+        for feed in [get_feed_by_instrument_key(settings["instrument_key"])]
+        if feed
+    ]
     for contract in get_cached_option_contracts():
         instruments.append({
             "instrument_key": contract.get("instrument_key"),
@@ -680,6 +724,9 @@ def get_chart_instruments() -> list:
 def get_chart_instrument(instrument_key: str) -> dict | None:
     if not instrument_key:
         return None
+    feed = get_feed_by_instrument_key(instrument_key)
+    if feed and feed.get("instrument_type") == "INDEX":
+        return feed
     return get_contract_info_by_instrument_key(instrument_key)
 
 
@@ -708,6 +755,7 @@ __all__ = [
     "build_enriched_order_instrument",
     "get_nearest_expiry_contracts",
     "get_subscribed_instrument_keys",
+    "get_live_websocket_instrument_keys",
     "get_cached_option_contracts",
     "get_all_cached_instruments",
     "get_contract_info_by_instrument_key",
@@ -723,6 +771,7 @@ __all__ = [
     "get_available_feeds",
     "get_feed_by_instrument_key",
     "is_nifty_index_feed",
+    "is_index_feed",
     "is_valid_feed_interval",
     "get_options_contracts",
     "get_options_cache_summary",

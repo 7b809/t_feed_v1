@@ -519,6 +519,45 @@ def process_live_tick_for_opening_range(instrument_key: str, tick_data: dict, co
     return events
 
 
+def process_completed_candle_for_opening_range(
+    instrument_key: str, candle: dict, contract_info: dict | None = None,
+) -> list:
+    """Detect OR touches from a completed candle, independent of live ticks.
+
+    R-levels retain the existing high >= level semantics; S-levels retain
+    low <= level semantics. Touch duplicate control, event recording and
+    isolation continue through the same code paths used by backfill/live.
+    """
+    key = str(instrument_key or "").strip()
+    if not key or not isinstance(candle, dict):
+        return []
+    runtime_state.ensure_current_market_day()
+    with runtime_state.opening_range_cache_lock:
+        data = runtime_state.opening_range_cache.get("data", {})
+        item = deepcopy(data.get(key)) if isinstance(data, dict) else None
+    if not item or item.get("status") != "success":
+        return []
+    info = contract_info if isinstance(contract_info, dict) else get_contract_info_by_key(key)
+    if DEFAULT_TOUCH_ALERT_OPTIONS_ONLY and not is_option_contract(info):
+        return []
+    events = detect_touch_from_candle(
+        instrument_key=key, candle=candle, levels=item.get("levels") or {},
+        contract_info=info or {}, source="completed_1minute_candle",
+    )
+    for event in events:
+        if DEFAULT_TOUCH_ALERT_ONCE_PER_LEVEL:
+            mark_touch_alert_sent(event)
+        update_touch_status_in_cache(key, event)
+        queue_touch_event(event)
+    if events:
+        from .isolation import try_isolate_from_touch_events
+        try:
+            try_isolate_from_touch_events(events)
+        except Exception:
+            logger.exception("Opening Range candle isolation failed. instrument_key=%s", key)
+    return events
+
+
 __all__ = [
     "build_alert_key",
     "calculate_distance_from_index",
@@ -535,4 +574,5 @@ __all__ = [
     "scan_backfill_touches",
     "extract_feed_values",
     "process_live_tick_for_opening_range",
+    "process_completed_candle_for_opening_range",
 ]

@@ -173,6 +173,27 @@ class InternalEmaEngine:
                     "volume": candle[5] if len(candle) > 5 else 0,
                     "open_interest": candle[6] if len(candle) > 6 else 0,
                 })
+                if isinstance(result, dict):
+                    try:
+                        from services.opening_range.live_touch import (
+                            process_completed_candle_for_opening_range,
+                        )
+                        process_completed_candle_for_opening_range(
+                            key,
+                            {
+                                "timestamp": candle_dt.isoformat(),
+                                "open": candle[1], "high": candle[2],
+                                "low": candle[3], "close": candle[4],
+                                "volume": candle[5] if len(candle) > 5 else 0,
+                                "oi": candle[6] if len(candle) > 6 else 0,
+                            },
+                            get_contract_info_by_instrument_key(key),
+                        )
+                    except Exception:
+                        logger.exception(
+                            "Completed candle Opening Range touch processing failed instrument=%s",
+                            key,
+                        )
                 if isinstance(result, dict) and result.get("type") == "live_ema_cross":
                     emitted.append(result)
             return emitted

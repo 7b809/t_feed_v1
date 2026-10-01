@@ -12,13 +12,11 @@ from services.opening_range_service import (
     flush_pending_touch_alerts,
     get_opening_range_levels_for_ema_event,
     get_opening_range_status,
-    process_live_tick_for_opening_range,
     process_selected_or_ema_cross_alert,
 )
 from services.option_service import (
     get_feed_by_instrument_key,
-    get_subscribed_instrument_keys,
-    options_cache,
+    get_live_websocket_instrument_keys,
 )
 from services.token_service import token_service
 from ws_feed.broadcaster import broadcaster
@@ -221,10 +219,10 @@ class UpstoxStreamer:
                 configuration.access_token = access_token
                 api_client = upstox_client.ApiClient(configuration)
                 try:
-                    keys = get_subscribed_instrument_keys()
+                    keys = get_live_websocket_instrument_keys()
                 except Exception as ex:
-                    logger.warning("Subscribed key helper failed. Using direct cache. error=%s: %s", type(ex).__name__, ex)
-                    keys = options_cache.get("subscribed_keys", [])
+                    logger.warning("Live subscription helper failed. error=%s: %s", type(ex).__name__, ex)
+                    keys = []
                 mode = getattr(config, "WEBSOCKET_FEED_MODE", "full")
                 logger.info("WebSocket configuration. mode=%s, keys=%s, ema_mode=%s", mode, len(keys), self._get_live_ema_calculation_mode_text())
                 if not keys:
@@ -267,8 +265,19 @@ class UpstoxStreamer:
                 logger.info("Starting Upstox stream connection.")
                 await asyncio.to_thread(self.streamer.connect)
                 logger.warning("Upstox streamer connect returned.")
+                active_keys = set(keys)
                 while self.is_running:
-                    await asyncio.sleep(30)
+                    await asyncio.sleep(5)
+                    desired_keys = set(get_live_websocket_instrument_keys())
+                    added = sorted(desired_keys - active_keys)
+                    removed = sorted(active_keys - desired_keys)
+                    if added:
+                        await asyncio.to_thread(self.streamer.subscribe, added, mode)
+                        logger.info("Subscribed newly selected instruments. keys=%s", added)
+                    if removed:
+                        await asyncio.to_thread(self.streamer.unsubscribe, removed)
+                        logger.info("Unsubscribed inactive instruments. keys=%s", removed)
+                    active_keys = desired_keys
             except asyncio.CancelledError:
                 logger.warning("Upstox streamer loop cancelled.")
                 break
@@ -363,7 +372,9 @@ class UpstoxStreamer:
                 opening_range_touch_events = []
                 try:
                     if bool(getattr(config, "OPENING_RANGE_TOUCH_ALERT_ENABLED", True)):
-                        opening_range_touch_events = process_live_tick_for_opening_range(instrument_key=instrument_key, tick_data=tick_data, contract_info=contract_info) or []
+                        # Tick data updates selected dashboards only. OR discovery
+                        # and isolation are driven by completed candle processing.
+                        opening_range_touch_events = []
                         self.opening_range_processed_count += 1
                         if opening_range_touch_events:
                             self.opening_range_touch_count += len(opening_range_touch_events)

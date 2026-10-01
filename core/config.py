@@ -544,6 +544,29 @@ MAIN_NIFTY_SECURITY = _cfg_str(
     "market.main_nifty_security", "MAIN_NIFTY_SECURITY", "NSE_INDEX|Nifty 50"
 )
 
+# Strategy underlyings share the generic strategy engine. NIFTY remains the
+# backwards-compatible default; other indexes are opt-in until configured.
+STRATEGY_UNDERLYINGS = {
+    "NIFTY": {
+        "enabled": _cfg_bool("strategies.nifty.enabled", "STRATEGY_NIFTY_ENABLED", True),
+        "instrument_key": MAIN_NIFTY_SECURITY,
+        "display_name": "NIFTY 50",
+    },
+    "BANKNIFTY": {
+        "enabled": _cfg_bool("strategies.banknifty.enabled", "STRATEGY_BANKNIFTY_ENABLED", False),
+        "instrument_key": _cfg_str("strategies.banknifty.instrument_key", "BANKNIFTY_SECURITY", "NSE_INDEX|Nifty Bank"),
+        "display_name": "NIFTY BANK",
+    },
+    "SENSEX": {
+        "enabled": _cfg_bool("strategies.sensex.enabled", "STRATEGY_SENSEX_ENABLED", False),
+        "instrument_key": _cfg_str("strategies.sensex.instrument_key", "SENSEX_SECURITY", "BSE_INDEX|SENSEX"),
+        "display_name": "SENSEX",
+    },
+}
+ACTIVE_STRATEGY_UNDERLYINGS = tuple(
+    name for name, settings in STRATEGY_UNDERLYINGS.items() if settings["enabled"]
+)
+
 STRIKE_FROM = _cfg_float("market.strike_from", "STRIKE_FROM", 22500)
 STRIKE_TO = _cfg_float("market.strike_to", "STRIKE_TO", 25000)
 if STRIKE_FROM > STRIKE_TO:
