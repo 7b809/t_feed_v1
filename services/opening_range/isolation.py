@@ -81,8 +81,35 @@ def get_level_priority(level: str) -> int:
         return 999
 
 
-def get_reference_opening_range_average() -> float | None:
+def _context_for_event(event: dict | None):
     try:
+        from services.strategy_context import find_context_for_instrument, get_strategy_context
+        if isinstance(event, dict):
+            underlying = str(event.get("underlying") or "").strip().upper()
+            if underlying:
+                context = get_strategy_context(underlying, active_only=True)
+                if context:
+                    return context
+            return find_context_for_instrument(str(event.get("instrument_key") or ""))
+    except Exception:
+        logger.exception("Could not resolve strategy context for isolation")
+    return None
+
+
+def get_reference_opening_range_average(underlying: str | None = None) -> float | None:
+    try:
+        if underlying:
+            from services.strategy_context import get_strategy_context
+            context = get_strategy_context(underlying, active_only=True)
+            if not context:
+                return None
+            instruments = context.opening_range.get("instruments", {})
+            item = instruments.get(context.index_instrument_key, {}) if isinstance(instruments, dict) else {}
+            average = ((item.get("range") or {}).get("average") if isinstance(item, dict) else None)
+            if average is not None and safe_float(average) > 0:
+                return safe_float(average)
+            ltp = context.runtime_metadata.get("underlying_ltp")
+            return safe_float(ltp) if ltp and safe_float(ltp) > 0 else None
         with runtime_state.opening_range_cache_lock:
             cache_data = runtime_state.opening_range_cache.get("data", {})
 
@@ -153,13 +180,14 @@ def get_reference_opening_range_average() -> float | None:
         return None
 
 
-def build_average_window(reference_average: float) -> dict:
+def build_average_window(reference_average: float, option_config: dict | None = None) -> dict:
     normalized_reference_average = safe_float(
         reference_average,
         default=0.0,
     )
-    strike_from = safe_float(DEFAULT_STRIKE_FROM, default=0.0)
-    strike_to = safe_float(DEFAULT_STRIKE_TO, default=999999.0)
+    option_config = option_config if isinstance(option_config, dict) else {}
+    strike_from = safe_float(option_config.get("strike_from", DEFAULT_STRIKE_FROM), default=0.0)
+    strike_to = safe_float(option_config.get("strike_to", DEFAULT_STRIKE_TO), default=999999.0)
 
     if strike_from > strike_to:
         logger.warning(
@@ -260,12 +288,13 @@ def is_event_eligible_for_isolation(event: dict) -> tuple[bool, str]:
     if strike_value <= 0:
         return False, "invalid_strike"
 
-    reference_average = get_reference_opening_range_average()
+    context = _context_for_event(event)
+    reference_average = get_reference_opening_range_average(context.underlying if context else None)
 
     if reference_average is None or reference_average <= 0:
         return False, "reference_average_not_available"
 
-    average_window = build_average_window(reference_average)
+    average_window = build_average_window(reference_average, context.option_config if context else None)
 
     if not average_window.get("valid"):
         return False, "invalid_average_window"
@@ -291,7 +320,8 @@ def choose_best_isolation_event(events: list) -> dict | None:
         logger.info("Isolation candidate selection skipped. reason=no_touch_events")
         return None
 
-    reference_average = get_reference_opening_range_average()
+    context = _context_for_event(events[0]) if events else None
+    reference_average = get_reference_opening_range_average(context.underlying if context else None)
 
     if reference_average is None or reference_average <= 0:
         logger.info(
@@ -301,7 +331,7 @@ def choose_best_isolation_event(events: list) -> dict | None:
         )
         return None
 
-    average_window = build_average_window(reference_average)
+    average_window = build_average_window(reference_average, context.option_config if context else None)
 
     if not average_window.get("valid"):
         logger.warning(
@@ -448,8 +478,12 @@ def should_replace_isolated_instrument(new_event: dict) -> bool:
         )
         return False
 
-    with runtime_state.selected_or_lock:
-        current_state = deepcopy(runtime_state.selected_or_instrument_state)
+    context = _context_for_event(new_event)
+    if context:
+        current_state = deepcopy(context.selected_instrument)
+    else:
+        with runtime_state.selected_or_lock:
+            current_state = deepcopy(runtime_state.selected_or_instrument_state)
 
     if not current_state.get("selected"):
         logger.info(
@@ -681,7 +715,8 @@ def isolate_instrument_from_event(event: dict) -> bool:
             contract_info = {}
 
         contract_info = deepcopy(contract_info)
-        reference_average = get_reference_opening_range_average()
+        context = _context_for_event(event)
+        reference_average = get_reference_opening_range_average(context.underlying if context else None)
 
         if reference_average is None or reference_average <= 0:
             logger.info(
@@ -693,7 +728,7 @@ def isolate_instrument_from_event(event: dict) -> bool:
             )
             return False
 
-        average_window = build_average_window(reference_average)
+        average_window = build_average_window(reference_average, context.option_config if context else None)
 
         if not average_window.get("valid"):
             logger.warning(
@@ -706,22 +741,27 @@ def isolate_instrument_from_event(event: dict) -> bool:
             )
             return False
 
-        with runtime_state.opening_range_cache_lock:
-            cache_data = runtime_state.opening_range_cache.get(
+        if context:
+            instruments = context.opening_range.get("instruments", {})
+            cached_item = instruments.get(instrument_key, {}) if isinstance(instruments, dict) else {}
+            item = deepcopy(cached_item) if isinstance(cached_item, dict) else {}
+        else:
+            with runtime_state.opening_range_cache_lock:
+                cache_data = runtime_state.opening_range_cache.get(
                 "data",
                 {},
             )
 
-            if not isinstance(cache_data, dict):
-                logger.warning(
+                if not isinstance(cache_data, dict):
+                    logger.warning(
                     "Opening Range cache data has an invalid type during "
                     "isolation commit. payload_type=%s",
                     type(cache_data).__name__,
                 )
-                cache_data = {}
+                    cache_data = {}
 
-            cached_item = cache_data.get(instrument_key, {})
-            item = deepcopy(cached_item) if isinstance(cached_item, dict) else {}
+                cached_item = cache_data.get(instrument_key, {})
+                item = deepcopy(cached_item) if isinstance(cached_item, dict) else {}
 
         latest_instrument_snapshot = runtime_state.get_latest_instrument_ltp_snapshot(
             instrument_key
@@ -736,11 +776,13 @@ def isolate_instrument_from_event(event: dict) -> bool:
             )
             latest_instrument_snapshot = {}
 
-        latest_main_index_ltp = runtime_state.get_latest_main_index_ltp_value()
+        latest_main_index_ltp = (context.runtime_metadata.get("underlying_ltp") if context else runtime_state.get_latest_main_index_ltp_value())
         selected_at = get_now_market_time().isoformat()
 
         new_selected_state = {
             "selected": True,
+            "underlying": context.underlying if context else event.get("underlying", "NIFTY"),
+            "underlying_instrument_key": context.index_instrument_key if context else event.get("underlying_instrument_key", DEFAULT_MAIN_INDEX_KEY),
             "instrument_key": instrument_key,
             "selected_level": level,
             "level_value": event.get("level_value"),
@@ -775,45 +817,49 @@ def isolate_instrument_from_event(event: dict) -> bool:
             ),
         }
 
-        with runtime_state.selected_or_lock:
-            if runtime_state.selected_or_instrument_state.get("selected"):
-                logger.info(
+        if context:
+            with context._lock:
+                if context.selected_instrument.get("selected"):
+                    return False
+                context.selected_instrument = deepcopy(new_selected_state)
+                context.isolation_state.update({"selected": True, "selected_at": selected_at, "reason": new_selected_state["selection_reason"]})
+                context.alert_state.setdefault("ema_alerts", [])
+                selected_state_snapshot = deepcopy(context.selected_instrument)
+        else:
+            with runtime_state.selected_or_lock:
+                if runtime_state.selected_or_instrument_state.get("selected"):
+                    logger.info(
                     "Isolation state update blocked. "
                     "reason=instrument_selected_by_another_event, "
                     "current_instrument_key=%s, "
                     "current_level=%s, new_instrument_key=%s, "
                     "new_level=%s",
-                    runtime_state.selected_or_instrument_state.get("instrument_key"),
-                    runtime_state.selected_or_instrument_state.get("selected_level"),
-                    instrument_key,
-                    level,
+                        runtime_state.selected_or_instrument_state.get("instrument_key"),
+                        runtime_state.selected_or_instrument_state.get("selected_level"),
+                        instrument_key,
+                        level,
                 )
-                return False
+                    return False
 
-            runtime_state.selected_or_instrument_state.clear()
-            runtime_state.selected_or_instrument_state.update(new_selected_state)
-            selected_state_snapshot = deepcopy(
-                runtime_state.selected_or_instrument_state
-            )
+                runtime_state.selected_or_instrument_state.clear()
+                runtime_state.selected_or_instrument_state.update(new_selected_state)
+                selected_state_snapshot = deepcopy(runtime_state.selected_or_instrument_state)
 
-        with runtime_state.opening_range_cache_lock:
-            runtime_state.opening_range_cache["isolated_instrument"] = (
-                selected_state_snapshot
-            )
-            runtime_state.opening_range_cache["isolated_instrument_selected"] = True
-            runtime_state.opening_range_cache["isolated_instrument_selected_at"] = (
-                selected_at
-            )
-            runtime_state.opening_range_cache[
-                "isolated_instrument_selection_reason"
-            ] = new_selected_state.get("selection_reason")
-            runtime_state.opening_range_cache["isolated_ema_alerts_count"] = len(
-                runtime_state.selected_or_ema_alerts
-            )
+        if context is None or context.underlying == "NIFTY":
+            with runtime_state.opening_range_cache_lock:
+                runtime_state.opening_range_cache["isolated_instrument"] = selected_state_snapshot
+                runtime_state.opening_range_cache["isolated_instrument_selected"] = True
+                runtime_state.opening_range_cache["isolated_instrument_selected_at"] = selected_at
+                runtime_state.opening_range_cache["isolated_instrument_selection_reason"] = new_selected_state.get("selection_reason")
+                runtime_state.opening_range_cache["isolated_ema_alerts_count"] = len(runtime_state.selected_or_ema_alerts)
 
         option_type = normalize_option_type(
             contract_info.get("instrument_type") or contract_info.get("option_type")
         ) or contract_info.get("instrument_type")
+
+        if context:
+            from services.strategy_context import persist_strategy_context
+            persist_strategy_context(context, event_type="instrument_selected")
 
         logger.info(
             "Opening Range instrument isolated and locked for market day. "
@@ -901,59 +947,27 @@ def try_isolate_from_touch_events(events: list) -> bool:
     try:
         runtime_state.ensure_current_market_day()
 
-        with runtime_state.selected_or_lock:
-            current_selected = bool(
-                runtime_state.selected_or_instrument_state.get("selected")
-            )
-            current_instrument_key = runtime_state.selected_or_instrument_state.get(
-                "instrument_key"
-            )
-            current_level = runtime_state.selected_or_instrument_state.get(
-                "selected_level"
-            )
-
-        if current_selected:
-            logger.info(
-                "Isolation event processing stopped. "
-                "reason=instrument_already_selected_for_market_day, "
-                "instrument_key=%s, level=%s, event_count=%s",
-                current_instrument_key,
-                current_level,
-                len(events),
-            )
-            return False
-
-        best_event = choose_best_isolation_event(events)
-
-        if not best_event:
-            logger.info(
-                "Isolation event processing completed. "
-                "result=no_selection, reason=no_eligible_touch_event, "
-                "event_count=%s",
-                len(events),
-            )
-            return False
-
-        logger.info(
-            "Isolation candidate will be committed. instrument_key=%s, "
-            "level=%s, source=%s",
-            best_event.get("instrument_key"),
-            best_event.get("level"),
-            best_event.get("source"),
-        )
-
-        isolated = isolate_instrument_from_event(best_event)
-
-        logger.info(
-            "Isolation event processing completed. result=%s, "
-            "instrument_key=%s, level=%s, event_count=%s",
-            "isolated" if isolated else "not_isolated",
-            best_event.get("instrument_key"),
-            best_event.get("level"),
-            len(events),
-        )
-
-        return isolated
+        grouped: dict[str, list] = {}
+        for event in events:
+            if not isinstance(event, dict):
+                continue
+            ctx = _context_for_event(event)
+            key = ctx.underlying if ctx else "__legacy__"
+            grouped.setdefault(key, []).append(event)
+        results = []
+        for underlying, scoped_events in grouped.items():
+            context = _context_for_event(scoped_events[0]) if scoped_events else None
+            if context:
+                already_selected = bool(context.selected_instrument.get("selected"))
+            else:
+                with runtime_state.selected_or_lock:
+                    already_selected = bool(runtime_state.selected_or_instrument_state.get("selected"))
+            if already_selected:
+                continue
+            candidate = choose_best_isolation_event(scoped_events)
+            if candidate:
+                results.append(isolate_instrument_from_event(candidate))
+        return any(results)
 
     except Exception:
         logger.exception(

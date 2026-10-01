@@ -564,8 +564,8 @@ def resolve_opening_range_instrument_key(
 
 
 @router.get("/opening-range/status")
-async def get_opening_range_latest_status():
-    isolated_state = get_selected_or_instrument_state()
+async def get_opening_range_latest_status(underlying: str | None = Query(default=None)):
+    isolated_state = get_selected_or_instrument_state(underlying)
 
     return {
         "status": "success",
@@ -859,8 +859,8 @@ async def get_opening_range_ema_context(
 
 
 @router.get("/opening-range/selected-instrument")
-async def get_selected_opening_range_instrument():
-    isolated_state = get_selected_or_instrument_state()
+async def get_selected_opening_range_instrument(underlying: str | None = Query(default=None)):
+    isolated_state = get_selected_or_instrument_state(underlying)
 
     return {
         "status": "success",
@@ -875,14 +875,16 @@ async def get_selected_opening_range_instrument():
         "delivery_flow": (get_delivery_flow_payload()),
         "selected_or_instrument": isolated_state,
         "isolated_instrument": isolated_state,
+        "underlying": underlying or isolated_state.get("underlying"),
     }
 
 
 @router.get("/opening-range/selected-instrument/ema-alerts")
 async def get_selected_opening_range_ema_alerts(
-    limit: int = Query(default=100, ge=1, le=1000)
+    limit: int = Query(default=100, ge=1, le=1000),
+    underlying: str | None = Query(default=None),
 ):
-    isolated_state = get_selected_or_instrument_state()
+    isolated_state = get_selected_or_instrument_state(underlying)
     return {
         "status": "success",
         "flow": "isolated_instrument",
@@ -895,13 +897,14 @@ async def get_selected_opening_range_ema_alerts(
         "algo_app": get_algo_app_payload(),
         "selected_or_instrument": isolated_state,
         "isolated_instrument": isolated_state,
-        "alerts": get_selected_or_ema_alerts(limit=limit),
+        "underlying": underlying or isolated_state.get("underlying"),
+        "alerts": get_selected_or_ema_alerts(limit=limit, underlying=underlying),
     }
 
 
 @router.get("/opening-range/isolated-instrument")
-async def get_isolated_opening_range_instrument():
-    isolated_state = get_selected_or_instrument_state()
+async def get_isolated_opening_range_instrument(underlying: str | None = Query(default=None)):
+    isolated_state = get_selected_or_instrument_state(underlying)
 
     return {
         "status": "success",
@@ -915,12 +918,14 @@ async def get_isolated_opening_range_instrument():
         "algo_app": get_algo_app_payload(),
         "delivery_flow": (get_delivery_flow_payload()),
         "isolated_instrument": isolated_state,
+        "underlying": underlying or isolated_state.get("underlying"),
     }
 
 
 @router.get("/opening-range/isolated-instrument/ema-alerts")
 async def get_isolated_opening_range_ema_alerts(
-    limit: int = Query(default=100, ge=1, le=1000)
+    limit: int = Query(default=100, ge=1, le=1000),
+    underlying: str | None = Query(default=None),
 ):
     return {
         "status": "success",
@@ -932,8 +937,9 @@ async def get_isolated_opening_range_ema_alerts(
         "local_alert_test": get_local_alert_test_payload(),
         "telegram": get_telegram_payload(),
         "algo_app": get_algo_app_payload(),
-        "isolated_instrument": get_selected_or_instrument_state(),
-        "alerts": get_selected_or_ema_alerts(limit=limit),
+        "isolated_instrument": get_selected_or_instrument_state(underlying),
+        "underlying": underlying,
+        "alerts": get_selected_or_ema_alerts(limit=limit, underlying=underlying),
     }
 
 
@@ -1055,6 +1061,7 @@ async def manually_isolate_opening_range_instrument(
         max_length=200,
         description="User or client requesting the manual isolation.",
     ),
+    underlying: str | None = Query(default=None, description="Enabled underlying index for this selection."),
 ):
     logger.warning(
         "Manual instrument isolation API request received. "
@@ -1071,6 +1078,7 @@ async def manually_isolate_opening_range_instrument(
             option_type=striketype,
             requested_by=requested_by,
             source="api",
+            underlying=underlying,
         )
 
         if not isinstance(result, dict):

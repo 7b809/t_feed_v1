@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 from services.strategy_context import StrategyContext
 from services.opening_range.live_touch import detect_touch_from_candle
@@ -25,14 +26,22 @@ class StrategyContextTests(unittest.TestCase):
         sensex.selected_instrument["instrument_key"] = "BSE_FO|sensex-put"
         self.assertNotEqual(nifty.selected_instrument, sensex.selected_instrument)
 
+    def test_restore_ignores_a_different_underlying_document(self):
+        nifty = StrategyContext("NIFTY", "NSE_INDEX|Nifty 50", "NIFTY 50", True, trading_date="2026-10-02")
+        sensex = StrategyContext("SENSEX", "BSE_INDEX|SENSEX", "SENSEX", True, trading_date="2026-10-02")
+        nifty.selected_instrument = {"selected": True, "instrument_key": "NSE_FO|nifty-call"}
+        sensex.restore(nifty.snapshot())
+        self.assertEqual(sensex.selected_instrument, {})
+
     def test_completed_candle_preserves_directional_touch_semantics(self):
-        events = detect_touch_from_candle(
-            "NSE_FO|test-option",
-            {"timestamp": "2026-10-01T10:00:00+05:30", "high": 102.4, "low": 95.0, "close": 101.0},
-            {"r2": 100.0, "r3": 110.0, "s2": 90.0, "s3": 80.0},
-            {"instrument_key": "NSE_FO|test-option", "instrument_type": "CE", "strike_price": 25000},
-            "completed_1minute_candle",
-        )
+        with patch("services.opening_range.live_touch.DEFAULT_ISOLATION_TOUCH_LEVELS", {"R2"}):
+            events = detect_touch_from_candle(
+                "NSE_FO|test-option",
+                {"timestamp": "2026-10-01T10:00:00+05:30", "high": 102.4, "low": 95.0, "close": 101.0},
+                {"r2": 100.0, "r3": 110.0, "s2": 90.0, "s3": 80.0},
+                {"instrument_key": "NSE_FO|test-option", "instrument_type": "CE", "strike_price": 25000},
+                "completed_1minute_candle",
+            )
         self.assertEqual([event["level"] for event in events], ["R2"])
         self.assertEqual(events[0]["trigger_field"], "high")
         self.assertEqual(events[0]["source"], "completed_1minute_candle")

@@ -23,6 +23,9 @@ options_cache = {
     "data": [],
     "contracts_by_key": {},
     "contracts_by_strike_type": {},
+    "contracts_by_underlying_strike_type": {},
+    "nearest_expiries_by_underlying": {},
+    "underlying_caches": {},
 }
 
 NIFTY_INDEX_FEED = {
@@ -127,6 +130,7 @@ def clean_contract_data(item: dict) -> dict:
         "trading_symbol": item.get("trading_symbol"),
         "underlying_type": item.get("underlying_type"),
         "underlying_symbol": item.get("underlying_symbol"),
+        "provider_metadata": deepcopy(item),
         "lot_size": safe_int(item.get("lot_size"), 0),
     }
 
@@ -263,7 +267,7 @@ def build_enriched_order_instrument(contract: dict, option_type: str, market_dat
     }
 
 
-def get_nearest_expiry_contracts(contracts: list) -> tuple[str | None, list]:
+def get_nearest_expiry_contracts(contracts: list, strike_range: tuple[float, float] | None = None, use_global_range: bool = True) -> tuple[str | None, list]:
     if not contracts:
         return None, []
     today = datetime.now().date()
@@ -280,9 +284,15 @@ def get_nearest_expiry_contracts(contracts: list) -> tuple[str | None, list]:
     nearest_date = min(valid_expiries)
     nearest_date_text = nearest_date.strftime("%Y-%m-%d")
     matching_contracts = [clean_contract_data(item) for item in contracts if (isinstance(item, dict) and parse_expiry_date(item.get("expiry")) == nearest_date)]
-    strike_from = safe_float(getattr(config, "STRIKE_FROM", 0.0))
-    strike_to = safe_float(getattr(config, "STRIKE_TO", 0.0))
-    matching_contracts = [item for item in matching_contracts if (item.get("strike_price") is not None and strike_from <= safe_float(item.get("strike_price")) <= strike_to)]
+    if strike_range is None and use_global_range:
+        strike_from = safe_float(getattr(config, "STRIKE_FROM", 0.0))
+        strike_to = safe_float(getattr(config, "STRIKE_TO", 0.0))
+    elif strike_range is not None:
+        strike_from, strike_to = map(float, strike_range)
+    else:
+        strike_from = strike_to = None
+    if strike_from is not None and strike_to is not None:
+        matching_contracts = [item for item in matching_contracts if (item.get("strike_price") is not None and strike_from <= safe_float(item.get("strike_price")) <= strike_to)]
     return nearest_date_text, matching_contracts
 
 
@@ -305,6 +315,15 @@ def _refresh_cache_indexes_locked() -> None:
     contracts_by_key, contracts_by_strike_type = _build_cache_indexes(options_cache.get("data", []))
     options_cache["contracts_by_key"] = contracts_by_key
     options_cache["contracts_by_strike_type"] = contracts_by_strike_type
+    by_underlying = {}
+    for item in options_cache.get("data", []):
+        if not isinstance(item, dict):
+            continue
+        underlying = str(item.get("underlying") or "").upper()
+        strike_type_key = build_strike_type_key(item.get("strike_price"), item.get("instrument_type"))
+        if underlying and strike_type_key:
+            by_underlying[(underlying, strike_type_key)] = item.copy()
+    options_cache["contracts_by_underlying_strike_type"] = by_underlying
 
 
 def get_subscribed_instrument_keys() -> list:
@@ -315,19 +334,21 @@ def get_subscribed_instrument_keys() -> list:
 def get_live_websocket_instrument_keys() -> list[str]:
     """Return index feeds and isolated instruments, never the option universe."""
     keys = []
-    for underlying in getattr(config, "ACTIVE_STRATEGY_UNDERLYINGS", ("NIFTY",)):
-        settings = getattr(config, "STRATEGY_UNDERLYINGS", {}).get(underlying, {})
-        index_key = str(settings.get("instrument_key") or "").strip()
-        if index_key:
-            keys.append(index_key)
     try:
-        from services.opening_range.state import get_selected_or_state_snapshot
-        selected = get_selected_or_state_snapshot()
-        selected_key = str(selected.get("instrument_key") or "").strip()
-        if selected.get("selected") and selected_key:
-            keys.append(selected_key)
+        from services.strategy_context import get_strategy_contexts
+        for context in get_strategy_contexts().values():
+            keys.append(context.index_instrument_key)
+            selected = context.selected_instrument or {}
+            selected_key = str(selected.get("instrument_key") or "").strip()
+            if selected.get("selected") and selected_key:
+                keys.append(selected_key)
     except Exception:
-        logger.exception("Could not resolve selected WebSocket instrument")
+        logger.exception("Could not resolve per-underlying WebSocket instruments")
+        for underlying in getattr(config, "ACTIVE_STRATEGY_UNDERLYINGS", ("NIFTY",)):
+            settings = getattr(config, "STRATEGY_UNDERLYINGS", {}).get(underlying, {})
+            index_key = str(settings.get("instrument_key") or "").strip()
+            if index_key:
+                keys.append(index_key)
     return list(dict.fromkeys(keys))
 
 
@@ -337,16 +358,30 @@ def get_cached_option_contracts() -> list:
 
 
 def get_all_cached_instruments() -> list:
-    return [NIFTY_INDEX_FEED.copy(), *get_cached_option_contracts()]
+    feeds = [
+        get_feed_by_instrument_key(settings["instrument_key"])
+        for settings in getattr(config, "STRATEGY_UNDERLYINGS", {}).values()
+        if settings.get("enabled")
+    ]
+    return [*filter(None, feeds), *get_cached_option_contracts()]
 
 
 def get_contract_info_by_instrument_key(instrument_key: str) -> dict | None:
-    main_key = getattr(config, "MAIN_NIFTY_SECURITY", "NSE_INDEX|Nifty 50")
-    if instrument_key == main_key:
-        return NIFTY_INDEX_FEED.copy()
     normalized_key = str(instrument_key or "").strip()
     if not normalized_key:
         return None
+    for underlying, settings in getattr(config, "STRATEGY_UNDERLYINGS", {}).items():
+        if normalized_key == str(settings.get("instrument_key") or "").strip():
+            return {
+                "instrument_key": normalized_key,
+                "instrument_type": "INDEX",
+                "strike_price": None,
+                "expiry": None,
+                "trading_symbol": settings.get("display_name", underlying),
+                "underlying_type": "INDEX",
+                "underlying_symbol": underlying,
+                "underlying": underlying,
+            }
     with _cache_lock:
         item = options_cache.get("contracts_by_key", {}).get(normalized_key)
         if item:
@@ -361,15 +396,22 @@ def get_contract_info_by_instrument_key(instrument_key: str) -> dict | None:
     return None
 
 
-def get_contract_info_by_strike_type(strike_price: float, instrument_type: str) -> dict | None:
+def get_contract_info_by_strike_type(strike_price: float, instrument_type: str, underlying: str | None = None) -> dict | None:
     option_type = normalize_option_type(instrument_type)
     if strike_price is None or not option_type:
         return None
     strike_type_key = build_strike_type_key(strike_price, option_type)
     if not strike_type_key:
         return None
+    if not underlying:
+        # Compatibility lookup remains NIFTY-first, but a caller can request
+        # the exact index to avoid same-strike CE/PE collisions.
+        underlying = "NIFTY" if "NIFTY" in getattr(config, "STRATEGY_UNDERLYINGS", {}) else None
     with _cache_lock:
-        item = options_cache.get("contracts_by_strike_type", {}).get(strike_type_key)
+        if underlying:
+            item = options_cache.get("contracts_by_underlying_strike_type", {}).get((str(underlying).upper(), strike_type_key))
+        else:
+            item = options_cache.get("contracts_by_strike_type", {}).get(strike_type_key)
         if item:
             return item.copy()
         cached_data = list(options_cache.get("data", []))
@@ -379,7 +421,8 @@ def get_contract_info_by_strike_type(strike_price: float, instrument_type: str) 
             continue
         contract_strike = safe_float(contract.get("strike_price"))
         contract_type = normalize_option_type(contract.get("instrument_type") or contract.get("option_type"))
-        if contract_strike == target_strike and contract_type == option_type:
+        contract_underlying = str(contract.get("underlying") or "").upper()
+        if (not underlying or contract_underlying == str(underlying).upper()) and contract_strike == target_strike and contract_type == option_type:
             return contract.copy()
     return None
 
@@ -505,7 +548,7 @@ def get_nearest_order_instruments_for_ema_cross(current_nifty_ltp: float, cross_
     return output[:max_items]
 
 
-def get_budget_range_order_instruments(option_type: str, ltp_by_instrument: dict[str, Any], current_nifty_ltp: float | None = None, minimum_price: float | None = None, maximum_price: float | None = None, maximum_instruments: int | None = None, subscribed_only: bool | None = None, sort_mode: str | None = None, inclusive: bool | None = None, market_data_by_instrument: dict[str, Any] | None = None, isolated_instrument_key: str | None = None, enabled: bool | None = None) -> list:
+def get_budget_range_order_instruments(option_type: str, ltp_by_instrument: dict[str, Any], current_nifty_ltp: float | None = None, minimum_price: float | None = None, maximum_price: float | None = None, maximum_instruments: int | None = None, subscribed_only: bool | None = None, sort_mode: str | None = None, inclusive: bool | None = None, market_data_by_instrument: dict[str, Any] | None = None, isolated_instrument_key: str | None = None, enabled: bool | None = None, underlying: str | None = None) -> list:
     if not bool(getattr(config, "EMA_ALERT_BUDGET_RANGE_ENABLED", True) if enabled is None else enabled):
         return []
     normalized_option_type = normalize_option_type(option_type)
@@ -541,6 +584,8 @@ def get_budget_range_order_instruments(option_type: str, ltp_by_instrument: dict
     for contract in contracts:
         instrument_key = str(contract.get("instrument_key") or "").strip()
         if not instrument_key:
+            continue
+        if underlying and str(contract.get("underlying") or "").upper() != str(underlying).upper():
             continue
         if use_subscribed_only and instrument_key not in subscribed_keys:
             continue
@@ -633,9 +678,81 @@ def is_valid_feed_interval(instrument_key: str, interval: int) -> bool:
     return interval in OPTION_SUPPORTED_INTERVALS
 
 
+def _provider_underlying_matches(expected: str, provider_symbol: Any) -> bool:
+    if provider_symbol is None or str(provider_symbol).strip() == "":
+        return True
+    normalized = "".join(ch for ch in str(provider_symbol).upper() if ch.isalnum())
+    aliases = {
+        "NIFTY": {"NIFTY", "NIFTY50", "NIFTYINDEX"},
+        "BANKNIFTY": {"BANKNIFTY", "NIFTYBANK", "NIFTYBANKINDEX"},
+        "SENSEX": {"SENSEX", "BSESENSEX", "SPBSESENSEX"},
+    }
+    return normalized in aliases.get(str(expected).upper(), {str(expected).upper()})
+
+
+def _build_underlying_option_result(underlying: str, index_key: str, result: dict) -> None:
+    """Store a validated contract response in its own context, then expose a
+    merged raw cache for legacy APIs and history fetchers.
+    """
+    from services.strategy_context import get_strategy_contexts, persist_strategy_context
+
+    contexts = get_strategy_contexts()
+    context = contexts.get(underlying)
+    if context is None:
+        return
+    context.index_instrument_key = index_key
+    context.set_option_universe(result.get("data", []))
+    context.runtime_metadata["nearest_expiry"] = result.get("nearest_expiry")
+    context.runtime_metadata["option_contract_count"] = len(context.option_universe)
+    context.runtime_metadata["option_universe_updated_at"] = datetime.now().astimezone().isoformat()
+    persist_strategy_context(context, event_type="option_universe_loaded")
+
+    contracts = []
+    for active in contexts.values():
+        contracts.extend(active.option_universe.values())
+    contracts_by_key, contracts_by_strike_type = _build_cache_indexes(contracts)
+    by_underlying_strike_type = {}
+    for contract in contracts:
+        key = build_strike_type_key(contract.get("strike_price"), contract.get("instrument_type"))
+        if key and contract.get("underlying"):
+            by_underlying_strike_type[(str(contract["underlying"]).upper(), key)] = contract.copy()
+    subscribed = [active.index_instrument_key for active in contexts.values()]
+    subscribed.extend(contract.get("instrument_key") for contract in contracts)
+    expiries = {
+        active.underlying: active.runtime_metadata.get("nearest_expiry")
+        for active in contexts.values()
+    }
+    with _cache_lock:
+        options_cache["data"] = contracts
+        options_cache["contracts_by_key"] = contracts_by_key
+        options_cache["contracts_by_strike_type"] = contracts_by_strike_type
+        options_cache["contracts_by_underlying_strike_type"] = by_underlying_strike_type
+        options_cache["subscribed_keys"] = list(dict.fromkeys(k for k in subscribed if k))
+        options_cache["total_contracts"] = len(contracts)
+        options_cache["nearest_expiries_by_underlying"] = expiries
+        options_cache["nearest_expiry"] = expiries.get("NIFTY")
+        options_cache["underlying_caches"] = {
+            active.underlying: {
+                "nearest_expiry": expiries.get(active.underlying),
+                "total_contracts": len(active.option_universe),
+                "instrument_keys": list(active.option_universe),
+            }
+            for active in contexts.values()
+        }
+
+
 def get_options_contracts(instrument_key: str | None = None, expiry_date: str | None = None, output_filename: str = "data/nearest_nifty_option_contracts.json", filter_nearest: bool = True, save_data: bool = False) -> dict | None:
     if not instrument_key:
         instrument_key = getattr(config, "MAIN_NIFTY_SECURITY", "NSE_INDEX|Nifty 50")
+    underlying = next((name for name, settings in config.STRATEGY_UNDERLYINGS.items()
+                       if str(settings.get("instrument_key") or "").strip() == str(instrument_key).strip()), None)
+    if underlying and not config.STRATEGY_UNDERLYINGS[underlying].get("enabled"):
+        logger.info("Skipping option load for disabled underlying=%s", underlying)
+        return None
+    settings = config.STRATEGY_UNDERLYINGS.get(underlying, {}) if underlying else {}
+    option_config = settings.get("option") or {}
+    strike_from = option_config.get("strike_from", config.STRIKE_FROM)
+    strike_to = option_config.get("strike_to", config.STRIKE_TO)
     access_token = token_service.get_access_token()
     if not access_token:
         logger.error("Failed to retrieve access token.")
@@ -653,22 +770,60 @@ def get_options_contracts(instrument_key: str | None = None, expiry_date: str | 
         if not isinstance(response_dict, dict):
             response_dict = {}
         all_contracts = response_dict.get("data", [])
+        if underlying:
+            valid_contracts = []
+            for raw in all_contracts:
+                if not isinstance(raw, dict):
+                    continue
+                provider_symbol = raw.get("underlying_symbol")
+                if not _provider_underlying_matches(underlying, provider_symbol):
+                    logger.warning("Dropping option contract with mismatched underlying. expected=%s actual=%s key=%s",
+                                   underlying, provider_symbol, raw.get("instrument_key"))
+                    continue
+                contract = clean_contract_data(raw)
+                contract["underlying"] = underlying
+                contract["underlying_instrument_key"] = str(instrument_key)
+                valid_contracts.append(contract)
+            all_contracts = valid_contracts
         if filter_nearest and not expiry_date:
-            nearest_expiry, filtered_contracts = get_nearest_expiry_contracts(all_contracts)
+            configured_range = (
+                (strike_from, strike_to)
+                if strike_from is not None and strike_to is not None
+                else None
+            )
+            nearest_expiry, filtered_contracts = get_nearest_expiry_contracts(
+                all_contracts,
+                strike_range=configured_range,
+                use_global_range=not bool(underlying),
+            )
+            if underlying:
+                for contract in filtered_contracts:
+                    contract["underlying"] = underlying
+                    contract["underlying_instrument_key"] = str(instrument_key)
             final_output = {"status": response_dict.get("status", "success"), "nearest_expiry": nearest_expiry, "total_contracts": len(filtered_contracts), "data": filtered_contracts}
         else:
             cleaned_contracts = [clean_contract_data(item) for item in all_contracts if isinstance(item, dict)]
+            if underlying:
+                for contract in cleaned_contracts:
+                    contract["underlying"] = underlying
+                    contract["underlying_instrument_key"] = str(instrument_key)
             final_output = {"status": response_dict.get("status", "success"), "nearest_expiry": expiry_date, "total_contracts": len(cleaned_contracts), "data": cleaned_contracts}
+        final_output["underlying"] = underlying
+        final_output["underlying_instrument_key"] = str(instrument_key)
         option_keys = [item.get("instrument_key") for item in final_output.get("data", []) if item.get("instrument_key")]
         keys_to_subscribe = list(dict.fromkeys([instrument_key, *option_keys]))
         contracts_by_key, contracts_by_strike_type = _build_cache_indexes(final_output.get("data", []))
-        with _cache_lock:
-            options_cache["nearest_expiry"] = final_output.get("nearest_expiry")
-            options_cache["total_contracts"] = final_output.get("total_contracts", 0)
-            options_cache["subscribed_keys"] = keys_to_subscribe
-            options_cache["data"] = final_output.get("data", [])
-            options_cache["contracts_by_key"] = contracts_by_key
-            options_cache["contracts_by_strike_type"] = contracts_by_strike_type
+        if underlying:
+            _build_underlying_option_result(underlying, str(instrument_key), final_output)
+        else:
+            with _cache_lock:
+                options_cache["nearest_expiry"] = final_output.get("nearest_expiry")
+                options_cache["total_contracts"] = final_output.get("total_contracts", 0)
+                options_cache["subscribed_keys"] = keys_to_subscribe
+                options_cache["data"] = final_output.get("data", [])
+                options_cache["contracts_by_key"] = contracts_by_key
+                options_cache["contracts_by_strike_type"] = contracts_by_strike_type
+                options_cache["contracts_by_underlying_strike_type"] = {}
         logger.info("Updated options cache. subscribed_keys=%s, contracts_by_key=%s, contracts_by_strike_type=%s", len(keys_to_subscribe), len(contracts_by_key), len(contracts_by_strike_type))
         if save_data:
             output_path = Path(output_filename)
@@ -683,6 +838,48 @@ def get_options_contracts(instrument_key: str | None = None, expiry_date: str | 
     except Exception as ex:
         logger.error("Unexpected option contracts error: %s: %s", type(ex).__name__, ex)
         return None
+
+
+def load_options_for_enabled_underlyings(save_data: bool = True) -> dict:
+    """Load each enabled index option chain into its own strategy context."""
+    from services.strategy_context import get_strategy_contexts
+
+    contexts = get_strategy_contexts()
+    if not contexts:
+        with _cache_lock:
+            options_cache.update({
+                "nearest_expiry": None, "total_contracts": 0, "subscribed_keys": [],
+                "data": [], "contracts_by_key": {}, "contracts_by_strike_type": {},
+                "contracts_by_underlying_strike_type": {}, "nearest_expiries_by_underlying": {},
+                "underlying_caches": {},
+            })
+        return {"status": "disabled", "results": {}, "errors": {}, "data": [], "subscribed_keys": []}
+    results = {}
+    errors = {}
+    for underlying, context in contexts.items():
+        result = get_options_contracts(
+            instrument_key=context.index_instrument_key,
+            output_filename=f"data/nearest_{underlying.lower()}_option_contracts.json",
+            save_data=save_data,
+        )
+        if result:
+            results[underlying] = result
+        else:
+            errors[underlying] = "Option contract loading failed or returned no contracts."
+    with _cache_lock:
+        data = list(options_cache.get("data", []))
+        expiries = dict(options_cache.get("nearest_expiries_by_underlying", {}))
+        keys = list(options_cache.get("subscribed_keys", []))
+    return {
+        "status": "success" if results and not errors else ("partial" if results else "failed"),
+        "results": results,
+        "errors": errors,
+        "nearest_expiries_by_underlying": expiries,
+        "nearest_expiry": expiries.get("NIFTY"),
+        "total_contracts": len(data),
+        "data": data,
+        "subscribed_keys": keys,
+    }
 
 
 def get_options_cache_summary() -> dict:

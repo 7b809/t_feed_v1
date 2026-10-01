@@ -35,6 +35,28 @@ from .constants import (
 
 logger = get_logger(__file__)
 
+
+def _strategy_context(instrument_key: str):
+    try:
+        from services.strategy_context import find_context_for_instrument
+        return find_context_for_instrument(instrument_key)
+    except Exception:
+        return None
+
+
+def _broadcast_touch_events(events: list) -> None:
+    """Schedule touch broadcasts from scheduler/worker threads when a loop exists."""
+    try:
+        from services.ema_engine import internal_ema_engine
+        from ws_feed.broadcaster import broadcaster
+        loop = internal_ema_engine.loop
+        if loop and loop.is_running():
+            import asyncio
+            for event in events:
+                asyncio.run_coroutine_threadsafe(broadcaster.broadcast_opening_range(event), loop)
+    except Exception:
+        logger.exception("Could not schedule Opening Range touch broadcast")
+
 logger.info(
     "Opening Range touch service initialized. touch_alert_enabled=%s, live_touch_enabled=%s, backfill_enabled=%s, touch_check_mode=%s, isolation_levels=%s",
     bool(DEFAULT_TOUCH_ALERT_ENABLED),
@@ -49,7 +71,10 @@ def build_alert_key(instrument_key: str, level: str) -> str:
     """Builds the daily duplicate-control key for a touch event."""
     normalized_instrument_key = str(instrument_key or "").strip()
     normalized_level = str(level or "").strip().upper()
-    return f"{normalized_instrument_key}_{normalized_level}"
+    context = _strategy_context(normalized_instrument_key)
+    underlying = context.underlying if context else "NIFTY"
+    market_day = runtime_state.get_state_market_date()
+    return f"{market_day}_{underlying}_{normalized_instrument_key}_{normalized_level}"
 
 
 def calculate_distance_from_index(strike_price: Any, index_ltp: Any) -> float | None:
@@ -111,11 +136,17 @@ def create_touch_event(
         now_market = get_now_market_time()
         normalized_touch_time = str(touch_time).strip() if touch_time else now_market.isoformat()
         event_date = now_market.date().isoformat()
-    index_ltp = get_latest_main_index_ltp()
+    context = _strategy_context(normalized_instrument_key)
+    index_ltp = (
+        context.runtime_metadata.get("underlying_ltp")
+        if context else get_latest_main_index_ltp()
+    )
     strike_price = normalized_contract_info.get("strike_price")
     distance_from_index = calculate_distance_from_index(strike_price=strike_price, index_ltp=index_ltp)
     return {
         "type": "opening_range_touch",
+        "underlying": context.underlying if context else normalized_contract_info.get("underlying", "NIFTY"),
+        "underlying_instrument_key": context.index_instrument_key if context else normalized_contract_info.get("underlying_instrument_key", DEFAULT_MAIN_INDEX_KEY),
         "instrument_key": normalized_instrument_key,
         "level": normalized_level,
         "level_value": round(safe_float(level_value), 4),
@@ -148,6 +179,9 @@ def should_skip_touch_alert(instrument_key: str, level: str, contract_info: dict
     runtime_state.ensure_current_market_day()
     alert_key = build_alert_key(normalized_instrument_key, normalized_level)
     with runtime_state.touch_lock:
+        context = _strategy_context(normalized_instrument_key)
+        if context and DEFAULT_TOUCH_ALERT_ONCE_PER_LEVEL and alert_key in context.touch_state:
+            return True
         if DEFAULT_TOUCH_ALERT_ONCE_PER_LEVEL and alert_key in runtime_state.alert_sent_keys:
             return True
     return False
@@ -160,6 +194,15 @@ def mark_touch_alert_sent(event: dict) -> bool:
     alert_key = str(event.get("alert_key") or "").strip()
     if not alert_key:
         return False
+    context = _strategy_context(str(event.get("instrument_key") or ""))
+    if context:
+        context.touch_state[alert_key] = {
+            **(context.touch_state.get(alert_key) or {}),
+            "alert_seen": True,
+            "level": event.get("level"),
+            "instrument_key": event.get("instrument_key"),
+            "touch_time": event.get("touch_time"),
+        }
     with runtime_state.touch_lock:
         runtime_state.alert_sent_keys.add(alert_key)
     logger.debug("Touch alert marked as sent. alert_key=%s", alert_key)
@@ -171,6 +214,18 @@ def queue_touch_event(event: dict) -> bool:
     if not isinstance(event, dict):
         return False
     event_snapshot = deepcopy(event)
+    context = _strategy_context(event_snapshot.get("instrument_key"))
+    if context:
+        underlying = str(event_snapshot.get("underlying") or context.underlying)
+        level_key = f"{underlying}:{event_snapshot.get('instrument_key')}:{event_snapshot.get('level')}"
+        event_snapshot["underlying"] = underlying
+        context.touch_state[level_key] = {
+            "touched": True,
+            "touch_time": event_snapshot.get("touch_time"),
+            "source": event_snapshot.get("source"),
+        }
+        context.candidates[level_key] = deepcopy(event_snapshot)
+        context.append_event(event_snapshot, kind="touch")
     with runtime_state.touch_lock:
         runtime_state.touch_events.append(event_snapshot)
         if DEFAULT_LEGACY_TOUCH_TELEGRAM_ENABLED:
@@ -184,6 +239,9 @@ def queue_touch_event(event: dict) -> bool:
         runtime_state.opening_range_cache["pending_touch_events_count"] = pending_events_count
         runtime_state.opening_range_cache["alert_sent_keys_count"] = alert_keys_count
         runtime_state.opening_range_cache["touch_events"] = touch_events_snapshot
+    if context:
+        from services.strategy_context import persist_strategy_context
+        persist_strategy_context(context, event_type="opening_range_touch")
     logger.debug(
         "Touch event queued. alert_key=%s, instrument_key=%s, level=%s, total_events=%s, pending_events=%s",
         event_snapshot.get("alert_key"),
@@ -229,6 +287,15 @@ def update_touch_status_in_cache(instrument_key: str, event: dict) -> bool:
     if level not in {"R2", "S2", "R3", "S3"}:
         return False
     lower_level = level.lower()
+    context = _strategy_context(normalized_instrument_key)
+    if context:
+        level_key = f"{context.underlying}:{normalized_instrument_key}:{level}"
+        context.touch_state[level_key] = {
+            **(context.touch_state.get(level_key) or {}),
+            "touched": True,
+            "touch_time": event.get("touch_time"),
+            "source": event.get("source"),
+        }
     with runtime_state.opening_range_cache_lock:
         data = runtime_state.opening_range_cache.get("data", {})
         if not isinstance(data, dict):
@@ -446,9 +513,7 @@ def extract_feed_values(tick_data: dict) -> dict:
 
 
 def process_live_tick_for_opening_range(instrument_key: str, tick_data: dict, contract_info: dict | None = None) -> list:
-    """Processes a live tick for Opening Range touch detection."""
-    if not DEFAULT_LIVE_TOUCH_ALERT_ENABLED:
-        return []
+    """Record live prices only; strategy touch discovery is candle-based."""
     normalized_instrument_key = str(instrument_key or "").strip()
     if not normalized_instrument_key or not isinstance(tick_data, dict):
         return []
@@ -457,66 +522,13 @@ def process_live_tick_for_opening_range(instrument_key: str, tick_data: dict, co
     ltp = safe_float(feed_values.get("ltp"), default=0.0)
     updated_at = feed_values.get("timestamp") or get_now_market_time().isoformat()
     runtime_state.set_latest_instrument_ltp(instrument_key=normalized_instrument_key, ltp=ltp, updated_at=updated_at)
-    if normalized_instrument_key == DEFAULT_MAIN_INDEX_KEY:
-        if ltp > 0:
-            update_latest_main_index_ltp(ltp=ltp, source="live_tick", updated_at=updated_at)
-        return []
-    normalized_contract_info = contract_info if isinstance(contract_info, dict) else None
-    if not normalized_contract_info:
-        normalized_contract_info = get_contract_info_by_key(normalized_instrument_key)
-    if DEFAULT_TOUCH_ALERT_OPTIONS_ONLY and not is_option_contract(normalized_contract_info):
-        return []
-    with runtime_state.opening_range_cache_lock:
-        cache_data = runtime_state.opening_range_cache.get("data", {})
-        if not isinstance(cache_data, dict):
-            cache_data = {}
-        cached_item = cache_data.get(normalized_instrument_key)
-        item = deepcopy(cached_item) if isinstance(cached_item, dict) else None
-    if not item or item.get("status") != "success":
-        return []
-    levels = item.get("levels") or {}
-    if not isinstance(levels, dict) or not levels:
-        return []
-    pseudo_candle = {
-        "timestamp": updated_at,
-        "open": 0.0,
-        "high": safe_float(feed_values.get("high"), default=0.0),
-        "low": safe_float(feed_values.get("low"), default=0.0),
-        "close": safe_float(feed_values.get("close"), default=ltp),
-        "volume": 0,
-        "oi": 0,
-    }
-    if DEFAULT_TOUCH_CHECK_MODE == "ltp":
-        pseudo_candle["high"] = ltp
-        pseudo_candle["low"] = ltp
-        pseudo_candle["close"] = ltp
-    events = detect_touch_from_candle(
-        instrument_key=normalized_instrument_key,
-        candle=pseudo_candle,
-        levels=levels,
-        contract_info=normalized_contract_info,
-        source="live_tick",
-    )
-    for event in events:
-        if DEFAULT_TOUCH_ALERT_ONCE_PER_LEVEL:
-            mark_touch_alert_sent(event)
-        update_touch_status_in_cache(instrument_key=normalized_instrument_key, event=event)
-        queue_touch_event(event)
-    if events:
-        from .isolation import try_isolate_from_touch_events
-        try:
-            try_isolate_from_touch_events(events)
-            logger.info(
-                "Isolation attempted after touch detection. instrument_key=%s, events=%s",
-                normalized_instrument_key,
-                len(events),
-            )
-        except Exception as ex:
-            logger.exception(
-                "Opening Range isolation failed after touch detection. instrument_key=%s",
-                normalized_instrument_key,
-            )
-    return events
+    context = _strategy_context(normalized_instrument_key)
+    if context and normalized_instrument_key == context.index_instrument_key and ltp > 0:
+        context.runtime_metadata["underlying_ltp"] = ltp
+        context.runtime_metadata["underlying_ltp_updated_at"] = updated_at
+    elif normalized_instrument_key == DEFAULT_MAIN_INDEX_KEY and ltp > 0:
+        update_latest_main_index_ltp(ltp=ltp, source="live_tick", updated_at=updated_at)
+    return []
 
 
 def process_completed_candle_for_opening_range(
@@ -532,9 +544,15 @@ def process_completed_candle_for_opening_range(
     if not key or not isinstance(candle, dict):
         return []
     runtime_state.ensure_current_market_day()
-    with runtime_state.opening_range_cache_lock:
-        data = runtime_state.opening_range_cache.get("data", {})
+    context = _strategy_context(key)
+    item = None
+    if context and context.enabled:
+        data = context.opening_range.get("instruments", {})
         item = deepcopy(data.get(key)) if isinstance(data, dict) else None
+    if item is None:
+        with runtime_state.opening_range_cache_lock:
+            data = runtime_state.opening_range_cache.get("data", {})
+            item = deepcopy(data.get(key)) if isinstance(data, dict) else None
     if not item or item.get("status") != "success":
         return []
     info = contract_info if isinstance(contract_info, dict) else get_contract_info_by_key(key)
@@ -550,6 +568,7 @@ def process_completed_candle_for_opening_range(
         update_touch_status_in_cache(key, event)
         queue_touch_event(event)
     if events:
+        _broadcast_touch_events(events)
         from .isolation import try_isolate_from_touch_events
         try:
             try_isolate_from_touch_events(events)

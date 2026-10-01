@@ -24,6 +24,7 @@ from api.candles_routes import router as candles_router
 from api.service_control_routes import (
     router as service_control_router,
 )
+from api.strategy_routes import router as strategy_router
 from api.order_routes import (
     orders_page_router,
     router as order_router,
@@ -47,7 +48,7 @@ from services.opening_range_service import (
     calculate_opening_range_for_all_subscribed,
 )
 from services.option_service import (
-    get_options_contracts,
+    load_options_for_enabled_underlyings,
     options_cache,
 )
 from services.runtime_config_service import (
@@ -280,9 +281,9 @@ def get_runtime_config_status_text() -> str:
 def load_and_subscribe_instruments():
     logger.info("Executing contract load and subscription workflow...")
 
-    result = get_options_contracts(save_data=True)
+    result = load_options_for_enabled_underlyings(save_data=True)
 
-    if not result:
+    if not result or result.get("status") == "failed":
         logger.error("Failed to load option contracts for subscription.")
         telegram_service.send_instruments_fetched_message(
             success=False,
@@ -2176,6 +2177,13 @@ async def app_lifespan(
             shutdown_errors.append(f"Runtime configuration: {type(ex).__name__}: {ex}")
             logger.exception("Runtime configuration shutdown failed.")
 
+        try:
+            from services.strategy_state_persistence import strategy_state_repository
+            strategy_state_repository.close()
+        except Exception as ex:
+            shutdown_errors.append(f"Strategy state persistence: {type(ex).__name__}: {ex}")
+            logger.exception("Strategy state persistence shutdown failed.")
+
         if shutdown_errors:
             error_text = "\n".join(shutdown_errors)
 
@@ -2224,4 +2232,5 @@ app.include_router(instrument_router)
 app.include_router(ema_alert_simulation_router)
 app.include_router(test_token_router)
 app.include_router(service_control_router)
+app.include_router(strategy_router)
 

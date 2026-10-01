@@ -7,7 +7,7 @@ from fastapi.concurrency import run_in_threadpool
 
 from core import config
 from core.logger import get_logger
-from services.option_service import get_options_contracts, options_cache
+from services.option_service import load_options_for_enabled_underlyings, options_cache
 from services.token_service import token_service
 from services.upstox_websocket import upstox_streamer
 from services.telegram_service import telegram_service
@@ -267,11 +267,11 @@ async def manual_market_refresh():
             logger.info("Manual refresh: fetching latest option contracts...")
 
             result = await run_in_threadpool(
-                get_options_contracts,
+                load_options_for_enabled_underlyings,
                 save_data=True,
             )
 
-            if not result:
+            if not result or result.get("status") == "failed":
                 error_message = (
                     "Manual refresh failed: "
                     "Option contract fetch returned no result."

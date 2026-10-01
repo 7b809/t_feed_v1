@@ -386,6 +386,18 @@
   </div>
 </div>
 
+<section class="mb-4" aria-labelledby="strategyContextsTitle">
+  <div class="card-custom">
+    <div class="card-title-custom" id="strategyContextsTitle">
+      <i class="bi bi-diagram-3 text-primary"></i>
+      Enabled Index Strategy Contexts
+    </div>
+    <div class="row g-3" id="strategyContextsGrid">
+      <div class="col-12 text-muted">Loading strategy contexts…</div>
+    </div>
+  </div>
+</section>
+
 <div class="container-fluid px-4 pb-5">
   <div class="row g-3 mb-4">
     <div class="col-12 col-sm-6 col-xl-3">
@@ -2027,6 +2039,13 @@
 
   async function loadDashboard() {
     try {
+      try {
+        const contextsData = await getJson(`${apiBase()}/api/strategies`);
+        renderStrategyContexts(contextsData.strategies || []);
+      } catch (contextError) {
+        const grid = document.getElementById("strategyContextsGrid");
+        if (grid) grid.innerHTML = `<div class="col-12 text-muted">Strategy context API unavailable: ${escapeHtml(contextError.message)}</div>`;
+      }
       const dashboardData = await getJson(
         `${apiBase()}/opening-range/dashboard?touch_limit=100&alert_limit=100`,
       );
@@ -2068,6 +2087,43 @@
           }`;
       }
     }
+  }
+
+  function renderStrategyContexts(contexts) {
+    const grid = document.getElementById("strategyContextsGrid");
+    if (!grid) return;
+    if (!Array.isArray(contexts) || !contexts.length) {
+      grid.innerHTML = '<div class="col-12 text-muted">No enabled strategy contexts.</div>';
+      return;
+    }
+    grid.innerHTML = contexts.map(context => {
+      const selected = context.selected_instrument || {};
+      const instruments = (context.opening_range || {}).instruments || {};
+      const indexOr = instruments[context.underlying_instrument_key] || {};
+      const range = indexOr.range || {};
+      const emaStates = (context.ema || {}).state || {};
+      const status = (context.opening_range || {}).status || "pending";
+      const selectedLabel = selected.selected
+        ? `${selected.contract_info?.trading_symbol || selected.instrument_key} · ${selected.selected_level || "selected"}`
+        : "No instrument selected";
+      const chartLink = selected.selected && selected.instrument_key
+        ? `<a class="btn btn-sm btn-outline-primary mt-2" href="/chart/${encodeURIComponent(selected.instrument_key)}">Open selected chart</a>`
+        : "";
+      return `<div class="col-12 col-md-6 col-xl-4">
+        <article class="kv-card">
+          <div class="d-flex justify-content-between align-items-start gap-2">
+            <div><div class="fw-bold">${escapeHtml(context.display_name || context.underlying)}</div>
+              <div class="small text-muted">${escapeHtml(context.underlying)} · ${escapeHtml(context.trading_date || "")}</div></div>
+            <span class="badge ${status === "success" || status === "completed" ? "bg-success" : "bg-secondary"}">${escapeHtml(status)}</span>
+          </div>
+          <div class="small mt-3">Option contracts: <strong>${Number(context.option_contract_count || 0)}</strong></div>
+          <div class="small">EMA instruments: <strong>${Object.keys(emaStates).length}</strong></div>
+          <div class="small">OR average: <strong>${escapeHtml(safe(range.average, "pending"))}</strong></div>
+          <div class="small mt-2">Selected: <strong>${escapeHtml(selectedLabel)}</strong></div>
+          ${chartLink}
+        </article>
+      </div>`;
+    }).join("");
   }
 
   async function triggerOpeningRangeFetch() {

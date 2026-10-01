@@ -722,6 +722,34 @@ def _update_main_cache_after_calculation(
         )
         cache["isolated_ema_alerts_count"] = len(isolated_ema_alerts)
 
+    # The cache remains for legacy API compatibility. Strategy services and
+    # persistence use the instrument-keyed OR state owned by each context.
+    try:
+        from services.strategy_context import (
+            get_strategy_contexts,
+            persist_strategy_context,
+        )
+        contexts = get_strategy_contexts()
+        for context in contexts.values():
+            instrument_results = {
+                key: deepcopy(value)
+                for key, value in results.items()
+                if key == context.index_instrument_key or key in context.option_universe
+            }
+            context.opening_range = {
+                "trading_date": current_date,
+                "status": overall_status,
+                "calculated_at": completed_at,
+                "source": "intraday_api",
+                "interval": DEFAULT_OPENING_RANGE_INTERVAL,
+                "opening_range_candle_count": candle_count,
+                "instruments": instrument_results,
+            }
+            context.runtime_metadata["opening_range_updated_at"] = completed_at
+            persist_strategy_context(context, event_type="opening_range_calculated")
+    except Exception:
+        logger.exception("Per-underlying Opening Range context sync failed")
+
 
 def _update_cache_isolation_and_output(
     output_file_path: str | None,
@@ -860,6 +888,15 @@ def calculate_opening_range_for_instrument(
         latest_candle.get("close"),
         default=0.0,
     )
+
+    try:
+        from services.strategy_context import find_context_for_instrument
+        strategy_context = find_context_for_instrument(normalized_instrument_key)
+        if strategy_context and normalized_instrument_key == strategy_context.index_instrument_key and latest_intraday_close > 0:
+            strategy_context.runtime_metadata["underlying_ltp"] = latest_intraday_close
+            strategy_context.runtime_metadata["underlying_ltp_updated_at"] = latest_candle.get("timestamp")
+    except Exception:
+        logger.exception("Could not update per-underlying Opening Range reference price key=%s", normalized_instrument_key)
 
     is_main_index = normalized_instrument_key == DEFAULT_MAIN_INDEX_KEY
 

@@ -19,8 +19,8 @@ from services.opening_range_service import (
     get_opening_range_levels_for_ema_event,
     process_selected_or_ema_cross_alert,
 )
-from services.opening_range.ema_opening_window import opening_ema_cross_selector
-from services.option_service import get_contract_info_by_instrument_key, options_cache
+from services.opening_range.ema_opening_window import get_opening_ema_cross_selector
+from services.option_service import get_contract_info_by_instrument_key
 from ws_feed.broadcaster import broadcaster
 
 logger = get_logger(__file__)
@@ -76,10 +76,17 @@ class InternalEmaEngine:
                     "live_processing": True,
                 }
                 initialized += 1
+        from services.strategy_context import find_context_for_instrument
+        for key, value in self.get_states_snapshot().items():
+            context = find_context_for_instrument(key)
+            if context:
+                context.ema_state[key] = dict(value)
         self.is_running = initialized > 0
-        opening_ema_cross_selector.reset_for_day(
-            datetime.now(get_market_timezone()).date()
-        )
+        from services.strategy_context import get_strategy_contexts
+        for context in get_strategy_contexts().values():
+            get_opening_ema_cross_selector(context.underlying).reset_for_day(
+                datetime.now(get_market_timezone()).date()
+            )
         logger.info("Internal EMA warmup complete initialized=%s", initialized)
         return bool(initialized)
 
@@ -120,7 +127,8 @@ class InternalEmaEngine:
             return
         if not self.states:
             return
-        keys = list(dict.fromkeys(options_cache.get("subscribed_keys", []) or []))
+        from services.strategy_context import get_active_strategy_instrument_keys, get_strategy_contexts, persist_strategy_context
+        keys = get_active_strategy_instrument_keys()
         if not keys:
             return
         # Prevent overlapping scheduled/manual cycles from fetching and handling
@@ -216,17 +224,18 @@ class InternalEmaEngine:
             # are selected deterministically across instruments.
             grouped = {}
             for event in cycle_crosses:
-                grouped.setdefault(
-                    event.get("candle_timestamp") or event.get("timestamp"), []
-                ).append(event)
-            for stamp in sorted(grouped):
-                candle_events = grouped[stamp]
+                stamp = event.get("candle_timestamp") or event.get("timestamp")
+                underlying = str(event.get("underlying") or "NIFTY").upper()
+                grouped.setdefault((stamp, underlying), []).append(event)
+            for stamp, underlying in sorted(grouped):
+                candle_events = grouped[(stamp, underlying)]
+                selector = get_opening_ema_cross_selector(underlying)
                 opening_events = [
                     event for event in candle_events
-                    if opening_ema_cross_selector.is_opening_window_event(event)
+                    if selector.is_opening_window_event(event)
                 ]
                 if opening_events:
-                    opening_ema_cross_selector.process_candle_crosses(
+                    selector.process_candle_crosses(
                         opening_events, self._dispatch_cross_event
                     )
                     continue
@@ -235,9 +244,17 @@ class InternalEmaEngine:
                     key=lambda item: str(item.get("instrument_key") or ""),
                 ):
                     self._dispatch_cross_event(event)
-            opening_ema_cross_selector.finalize_if_caught_up(
-                self.get_states_snapshot(), keys
-            )
+            state_snapshot = self.get_states_snapshot()
+            for context in get_strategy_contexts().values():
+                scoped_keys = [key for key in keys if key == context.index_instrument_key or key in context.option_universe]
+                scoped_state = {key: state_snapshot[key] for key in scoped_keys if key in state_snapshot}
+                get_opening_ema_cross_selector(context.underlying).finalize_if_caught_up(scoped_state, scoped_keys)
+            for context in get_strategy_contexts().values():
+                context.ema_state = {
+                    key: dict(value) for key, value in self.get_states_snapshot().items()
+                    if key == context.index_instrument_key or key in context.option_universe
+                }
+                persist_strategy_context(context, event_type="ema_candle_batch")
         finally:
             self._poll_lock.release()
 
@@ -274,6 +291,10 @@ class InternalEmaEngine:
             }
             self.states[instrument_key] = updated
             self.processed_count += 1
+        from services.strategy_context import find_context_for_instrument
+        context = find_context_for_instrument(instrument_key)
+        if context:
+            context.ema_state[instrument_key] = dict(updated)
         if not cross:
             return updated
         contract = get_contract_info_by_instrument_key(instrument_key) or {}
@@ -288,6 +309,11 @@ class InternalEmaEngine:
             "previous_ema_fast": old_fast, "previous_ema_slow": old_slow,
             "price": close, "close": close, "ema_calculation_mode": "internal_completed_candle",
         }
+        if context:
+            event.update({
+                "underlying": context.underlying,
+                "underlying_instrument_key": context.index_instrument_key,
+            })
         try:
             from services.history_service import save_runtime_intraday_ema_cross
 
@@ -325,6 +351,8 @@ class InternalEmaEngine:
                     output.write(json.dumps(event, ensure_ascii=False, default=str) + "\n")
             except OSError:
                 logger.exception("Could not persist internal EMA event instrument=%s", instrument_key)
+        if context:
+            context.append_event(event, kind="ema")
         self.crossovers_count += 1
         try:
             if self.loop and self.loop.is_running():

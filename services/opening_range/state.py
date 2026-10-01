@@ -264,7 +264,17 @@ def get_latest_instrument_ltp_state_snapshot() -> dict:
             "count": len(latest_ltp_by_instrument),
         }
 
-def get_opening_range_cache_snapshot() -> dict:
+def get_opening_range_cache_snapshot(underlying: str | None = None) -> dict:
+    if underlying:
+        try:
+            from services.strategy_context import get_strategy_context
+            context = get_strategy_context(underlying, active_only=True)
+            if context:
+                return {"underlying": context.underlying,
+                        "underlying_instrument_key": context.index_instrument_key,
+                        **deepcopy(context.opening_range)}
+        except Exception:
+            pass
     with opening_range_cache_lock:
         return deepcopy(opening_range_cache)
 
@@ -290,11 +300,30 @@ def get_touch_state_snapshot(limit: int | None = None) -> dict:
             "last_touch_alert_sent_at": last_touch_alert_sent_at,
         }
 
-def get_selected_or_state_snapshot() -> dict:
+def get_selected_or_state_snapshot(underlying: str | None = None) -> dict:
+    lookup_underlying = underlying or "NIFTY"
+    if lookup_underlying:
+        try:
+            from services.strategy_context import get_strategy_context
+            context = get_strategy_context(lookup_underlying, active_only=True)
+            if context:
+                return deepcopy(context.selected_instrument)
+        except Exception:
+            pass
     with selected_or_lock:
         return deepcopy(selected_or_instrument_state)
 
-def get_selected_or_ema_alerts_snapshot(limit: int | None = None) -> list:
+def get_selected_or_ema_alerts_snapshot(limit: int | None = None, underlying: str | None = None) -> list:
+    lookup_underlying = underlying or "NIFTY"
+    if lookup_underlying:
+        try:
+            from services.strategy_context import get_strategy_context
+            context = get_strategy_context(lookup_underlying, active_only=True)
+            if context:
+                alerts = list(context.alert_state.get("ema_alerts", []))
+                return deepcopy(alerts[-max(1, int(limit)):]) if limit else deepcopy(alerts)
+        except Exception:
+            pass
     with selected_or_lock:
         alerts = list(selected_or_ema_alerts)
         if limit is not None:
@@ -309,6 +338,18 @@ def append_selected_or_ema_alert(alert_record: dict) -> dict:
     if not isinstance(alert_record, dict):
         return {}
     record = deepcopy(alert_record)
+    context = None
+    try:
+        from services.strategy_context import find_context_for_instrument
+        context = find_context_for_instrument(str(record.get("instrument_key") or ""))
+        if context:
+            record.setdefault("underlying", context.underlying)
+            alerts = context.alert_state.setdefault("ema_alerts", [])
+            alerts.append(deepcopy(record))
+            del alerts[:-2000]
+            context.alert_state["last_ema_alert"] = deepcopy(record)
+    except Exception:
+        context = None
     delivery = record.get("delivery") or {}
     if not isinstance(delivery, dict):
         delivery = {}
@@ -322,6 +363,23 @@ def append_selected_or_ema_alert(alert_record: dict) -> dict:
     telegram_success = bool(telegram_delivery.get("success"))
     algo_attempted = bool(algo_delivery.get("attempted"))
     algo_dispatched = bool(algo_delivery.get("dispatched") or algo_delivery.get("success"))
+    if context:
+        selected = context.selected_instrument
+        selected["ema_alerts_count"] = int(selected.get("ema_alerts_count", 0) or 0) + 1
+        selected["last_ema_alert"] = deepcopy(record)
+        if telegram_attempted:
+            selected["telegram_attempts_count"] = int(selected.get("telegram_attempts_count", 0) or 0) + 1
+            selected["telegram_success_count"] = int(selected.get("telegram_success_count", 0) or 0) + int(telegram_success)
+            selected["telegram_failed_count"] = int(selected.get("telegram_failed_count", 0) or 0) + int(not telegram_success)
+            selected["last_telegram_delivery"] = deepcopy(telegram_delivery)
+        if algo_attempted:
+            selected["algo_app_attempts_count"] = int(selected.get("algo_app_attempts_count", 0) or 0) + 1
+            selected["algo_app_dispatch_count"] = int(selected.get("algo_app_dispatch_count", 0) or 0) + int(algo_dispatched)
+            selected["algo_app_failed_count"] = int(selected.get("algo_app_failed_count", 0) or 0) + int(not algo_dispatched)
+            selected["last_algo_app_delivery"] = deepcopy(algo_delivery)
+        from services.strategy_context import persist_strategy_context
+        persist_strategy_context(context, event_type="ema_alert")
+        return deepcopy(record)
     with selected_or_lock:
         selected_or_ema_alerts.append(record)
         current_alert_count = int(selected_or_instrument_state.get("ema_alerts_count", 0) or 0)
@@ -373,6 +431,24 @@ def update_last_algo_app_delivery(event_id: str | None, delivery_result: dict) -
     normalized_event_id = str(event_id or "").strip()
     delivery_snapshot = deepcopy(delivery_result)
     matched = False
+    try:
+        from services.strategy_context import get_strategy_contexts, persist_strategy_context
+        for context in get_strategy_contexts().values():
+            alerts = context.alert_state.get("ema_alerts", [])
+            for alert_record in reversed(alerts):
+                if not isinstance(alert_record, dict):
+                    continue
+                if normalized_event_id and str(alert_record.get("event_id") or "").strip() != normalized_event_id:
+                    continue
+                alert_record.setdefault("delivery", {})["algo_app"] = delivery_snapshot
+                context.selected_instrument["last_algo_app_delivery"] = delivery_snapshot
+                last_alert = context.selected_instrument.get("last_ema_alert")
+                if isinstance(last_alert, dict) and str(last_alert.get("event_id") or "").strip() == normalized_event_id:
+                    last_alert.setdefault("delivery", {})["algo_app"] = delivery_snapshot
+                persist_strategy_context(context, event_type="algo_app_delivery")
+                return True
+    except Exception:
+        pass
     with selected_or_lock:
         for alert_record in reversed(selected_or_ema_alerts):
             if not isinstance(alert_record, dict):
@@ -493,7 +569,7 @@ def ensure_current_market_day(state_date: Any = None) -> bool:
     reset_all_opening_range_state(state_date=normalized_date)
     return True
 
-def check_and_reserve_ema_minute_key(alert_key: str, state_date: Any = None) -> bool:
+def check_and_reserve_ema_minute_key(alert_key: str, state_date: Any = None, underlying: str | None = None) -> bool:
     global selected_or_ema_alert_minute_date, _selected_or_ema_alert_minute_date
     if not alert_key:
         return False
@@ -501,6 +577,22 @@ def check_and_reserve_ema_minute_key(alert_key: str, state_date: Any = None) -> 
     normalized_key = str(alert_key).strip()
     if not normalized_key:
         return False
+    if underlying:
+        try:
+            from services.strategy_context import get_strategy_context
+            context = get_strategy_context(underlying, active_only=True)
+            if context:
+                if context.alert_state.get("ema_guard_date") != normalized_date:
+                    context.alert_state["ema_guard_date"] = normalized_date
+                    context.alert_state["ema_guard_keys"] = []
+                keys = context.alert_state.setdefault("ema_guard_keys", [])
+                if normalized_key in keys:
+                    return True
+                keys.append(normalized_key)
+                del keys[:-5000]
+                return False
+        except Exception:
+            pass
     with selected_or_lock:
         if selected_or_ema_alert_minute_date != normalized_date:
             selected_or_ema_alert_minute_keys.clear()
@@ -511,12 +603,23 @@ def check_and_reserve_ema_minute_key(alert_key: str, state_date: Any = None) -> 
         selected_or_ema_alert_minute_keys.add(normalized_key)
     return False
 
-def release_ema_minute_key(alert_key: str) -> None:
+def release_ema_minute_key(alert_key: str, underlying: str | None = None) -> None:
     if not alert_key:
         return
     normalized_key = str(alert_key).strip()
     if not normalized_key:
         return
+    if underlying:
+        try:
+            from services.strategy_context import get_strategy_context
+            context = get_strategy_context(underlying, active_only=True)
+            if context:
+                keys = context.alert_state.get("ema_guard_keys", [])
+                if normalized_key in keys:
+                    keys.remove(normalized_key)
+                return
+        except Exception:
+            pass
     with selected_or_lock:
         selected_or_ema_alert_minute_keys.discard(normalized_key)
 

@@ -55,7 +55,14 @@ class ManualInstrumentIsolationService:
 
         return "application"
 
-    def _get_configured_strike_range(self) -> tuple[float, float]:
+    def _get_configured_strike_range(self, underlying: str | None = None) -> tuple[float, float]:
+        if underlying:
+            settings = getattr(config, "STRATEGY_UNDERLYINGS", {}).get(str(underlying).upper(), {})
+            option = settings.get("option") or {}
+            if option.get("strike_from") is not None and option.get("strike_to") is not None:
+                low, high = float(option["strike_from"]), float(option["strike_to"])
+                return (min(low, high), max(low, high))
+            return (0.0, 999999.0)
         strike_from = self._safe_float(
             getattr(config, "STRIKE_FROM", 0.0),
             default=0.0,
@@ -118,6 +125,7 @@ class ManualInstrumentIsolationService:
         option_type: Any,
         requested_by: Any,
         source: str = "application",
+        underlying: str | None = None,
     ) -> dict:
         normalized_source = self._normalize_source(source)
         normalized_requested_by = self._normalize_requested_by(requested_by)
@@ -149,7 +157,8 @@ class ManualInstrumentIsolationService:
                 error_code="INVALID_OPTION_TYPE",
             )
 
-        strike_from, strike_to = self._get_configured_strike_range()
+        normalized_underlying = str(underlying or "").strip().upper() or None
+        strike_from, strike_to = self._get_configured_strike_range(normalized_underlying)
 
         if not strike_from <= normalized_strike <= strike_to:
             return self._build_result(
@@ -170,6 +179,7 @@ class ManualInstrumentIsolationService:
         contract_info = get_contract_info_by_strike_type(
             strike_price=normalized_strike,
             instrument_type=normalized_option_type,
+            underlying=normalized_underlying,
         )
 
         if not isinstance(contract_info, dict) or not contract_info:
@@ -190,6 +200,18 @@ class ManualInstrumentIsolationService:
             )
 
         instrument_key = str(contract_info.get("instrument_key") or "").strip()
+        normalized_underlying = normalized_underlying or str(contract_info.get("underlying") or "").strip().upper() or None
+        context = None
+        if normalized_underlying:
+            from services.strategy_context import get_strategy_context
+            context = get_strategy_context(normalized_underlying, active_only=True)
+            if context is None:
+                return self._build_result(
+                    success=False, status="rejected", message="The requested underlying is not enabled.",
+                    strike_price=normalized_strike, option_type=normalized_option_type,
+                    source=normalized_source, requested_by=normalized_requested_by,
+                    error_code="UNDERLYING_NOT_ENABLED",
+                )
 
         if not instrument_key:
             return self._build_result(
@@ -207,21 +229,30 @@ class ManualInstrumentIsolationService:
             )
 
         runtime_state.ensure_current_market_day()
+        strike_from, strike_to = self._get_configured_strike_range(normalized_underlying)
+        if not strike_from <= normalized_strike <= strike_to:
+            return self._build_result(
+                success=False, status="rejected", message="Strike is outside the underlying's configured range.",
+                strike_price=normalized_strike, option_type=normalized_option_type,
+                source=normalized_source, requested_by=normalized_requested_by,
+                error_code="STRIKE_OUTSIDE_CONFIGURED_RANGE",
+            )
 
         with self._operation_lock:
-            with runtime_state.selected_or_lock:
-                previous_state = deepcopy(runtime_state.selected_or_instrument_state)
-
-                latest_instrument_snapshot = (
-                    runtime_state.get_latest_instrument_ltp_snapshot(instrument_key)
-                )
-
-                latest_main_index_ltp = runtime_state.get_latest_main_index_ltp_value()
-
-                isolated_at = get_now_market_time().isoformat()
-
+            latest_instrument_snapshot = runtime_state.get_latest_instrument_ltp_snapshot(instrument_key)
+            latest_main_index_ltp = (
+                context.runtime_metadata.get("underlying_ltp")
+                if context else runtime_state.get_latest_main_index_ltp_value()
+            )
+            isolated_at = get_now_market_time().isoformat()
+            selected_state = context.selected_instrument if context else runtime_state.selected_or_instrument_state
+            state_lock = context._lock if context else runtime_state.selected_or_lock
+            with state_lock:
+                previous_state = deepcopy(selected_state)
                 new_state = {
                     "selected": True,
+                    "underlying": normalized_underlying or "NIFTY",
+                    "underlying_instrument_key": context.index_instrument_key if context else contract_info.get("underlying_instrument_key"),
                     "instrument_key": instrument_key,
                     "selected_level": "MANUAL",
                     "level_value": None,
@@ -231,17 +262,14 @@ class ManualInstrumentIsolationService:
                     "touch_source": normalized_source,
                     "selected_at": isolated_at,
                     "selection_priority": 0,
-                    "selection_reason": ("manual_instrument_isolation_override"),
+                    "selection_reason": "manual_instrument_isolation_override",
                     "locked_for_market_day": True,
                     "reference_average": None,
                     "average_window": None,
                     "contract_info": deepcopy(contract_info),
                     "range": None,
                     "levels": None,
-                    "latest_live_data": {
-                        "ltp": latest_instrument_snapshot.get("ltp"),
-                        "updated_at": latest_instrument_snapshot.get("updated_at"),
-                    },
+                    "latest_live_data": {"ltp": latest_instrument_snapshot.get("ltp"), "updated_at": latest_instrument_snapshot.get("updated_at")},
                     "latest_main_index_ltp": latest_main_index_ltp,
                     "ema_alerts_count": 0,
                     "telegram_attempts_count": 0,
@@ -256,37 +284,28 @@ class ManualInstrumentIsolationService:
                     "disabled": False,
                     "manual_override": True,
                     "manual_override_source": normalized_source,
-                    "manual_override_requested_by": (normalized_requested_by),
+                    "manual_override_requested_by": normalized_requested_by,
                     "manual_override_at": isolated_at,
-                    "previous_instrument_key": (previous_state.get("instrument_key")),
-                    "message": (
-                        "Instrument manually isolated and locked " "for the market day."
-                    ),
+                    "previous_instrument_key": previous_state.get("instrument_key"),
+                    "message": "Instrument manually isolated and locked for the market day.",
                 }
+                selected_state.clear()
+                selected_state.update(new_state)
+                isolated_snapshot = deepcopy(selected_state)
 
-                runtime_state.selected_or_instrument_state.clear()
-                runtime_state.selected_or_instrument_state.update(new_state)
+            if context:
+                context.isolation_state.update({"selected": True, "selected_at": isolated_at, "reason": "manual_instrument_isolation_override"})
 
-                isolated_snapshot = deepcopy(runtime_state.selected_or_instrument_state)
-
-            with runtime_state.opening_range_cache_lock:
-                runtime_state.opening_range_cache["isolated_instrument"] = deepcopy(
-                    isolated_snapshot
-                )
-
-                runtime_state.opening_range_cache["isolated_instrument_selected"] = True
-
-                runtime_state.opening_range_cache["isolated_instrument_selected_at"] = (
-                    isolated_at
-                )
-
-                runtime_state.opening_range_cache[
-                    "isolated_instrument_selection_reason"
-                ] = "manual_instrument_isolation_override"
-
-                runtime_state.opening_range_cache[
-                    "isolated_instrument_locked_for_market_day"
-                ] = True
+            if context:
+                from services.strategy_context import persist_strategy_context
+                persist_strategy_context(context, event_type="manual_instrument_selected")
+            else:
+                with runtime_state.opening_range_cache_lock:
+                    runtime_state.opening_range_cache["isolated_instrument"] = deepcopy(isolated_snapshot)
+                    runtime_state.opening_range_cache["isolated_instrument_selected"] = True
+                    runtime_state.opening_range_cache["isolated_instrument_selected_at"] = isolated_at
+                    runtime_state.opening_range_cache["isolated_instrument_selection_reason"] = "manual_instrument_isolation_override"
+                    runtime_state.opening_range_cache["isolated_instrument_locked_for_market_day"] = True
 
         logger.warning(
             "Manual instrument isolation completed. "

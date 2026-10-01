@@ -1,273 +1,290 @@
 # Option Feed Engine
 
-FastAPI market-data application using Upstox for option contracts, candles, and market streaming. The application maintains option instrument metadata, calculates Opening Range (OR) levels, warms and updates EMA state from candles, detects OR touches, applies existing isolation and alert rules, and exposes REST, HTML dashboard, and WebSocket interfaces.
+FastAPI application that loads Upstox option contracts, retrieves historical and intraday candles, calculates Opening Range (OR) levels and EMA values, identifies eligible option instruments, and streams market data and strategy events to APIs, WebSocket clients, dashboards, Telegram, and an optional Algo App integration.
 
-The current branch adds configuration metadata for NIFTY, BANKNIFTY, and SENSEX, a per-underlying context container, completed-candle OR touch processing, and a narrower upstream WebSocket subscription list. These additions are not yet a complete multi-index strategy runtime: the existing option, EMA, OR, and isolation services still use shared NIFTY-centered state. See [Known limitations](#known-limitations) before enabling non-NIFTY indexes in a live deployment.
-
-## Run the application
-
-Use Python with the packages listed in `requirements.txt`:
-
-```powershell
-Copy-Item .env.example .env
-# Edit .env with MongoDB and Upstox token-store settings.
-python -m pip install -r requirements.txt
-python -m uvicorn main:app --host 0.0.0.0 --port 8000
-```
-
-The Upstox access token is obtained through the existing MongoDB token lifecycle; this README does not assume an unauthenticated candle API. `run.bat`, `start.sh`, and the `Procfile` are also present as launch/deployment helpers. Keep secrets in `.env` or the configured secret store; do not commit them.
+The `multi-index-v1` runtime scopes the strategy work by enabled underlying index. Its central rule is that candle history drives EMA and pre-selection touch discovery, while upstream live streaming is limited to enabled index feeds plus selected option instruments.
 
 ## Project overview
 
-The main runtime components are:
+The engine operates over configured underlying indexes (initially NIFTY, BANKNIFTY, and SENSEX) and their option chains. For every enabled underlying it builds an isolated `StrategyContext` containing that index's option contracts, OR result, EMA state and events, touch state and events, candidates, selected instrument, alert state, and runtime metadata. Common strategy services are reused across contexts.
 
-- **Market inputs:** Upstox option-contract metadata, historical candles, current-day intraday candles, and a Market Data Stream V3 connection.
-- **Strategy calculations:** an internal EMA engine and Opening Range calculation/touch services.
-- **Discovery and selection:** touch events pass through the existing isolation eligibility, priority, and daily-selection rules.
-- **Delivery:** EMA and OR events, live ticks, REST APIs, dashboard pages, Telegram, and configured Algo App integrations.
+Completed one-minute candles are used to update EMA and evaluate pre-selection OR touches. A touch candidate is evaluated against the corresponding underlying's OR reference and option configuration. A successful daily selection gets its own live option subscription, with market ticks used for real-time price/chart updates and downstream live events.
 
-The application has one FastAPI process and one set of legacy strategy singletons. It is not currently running three fully independent strategy instances.
-
-## Architecture at a glance
+## Architecture overview
 
 ```text
-Configuration
-  ├── enabled index keys → index feed metadata and base WS keys
-  └── one shared option configuration/cache (currently NIFTY default)
-
-Upstox option contracts ──→ shared options_cache ──→ candle polling
-Upstox History API ────────→ completed 1-minute candles
-                                  ├──→ per-instrument EMA state/cross events
-                                  └──→ OR touch check against shared OR result
-                                                     │
-                                                     ▼
-                                      shared isolation selection slot
-                                                     │
-Enabled index feeds ────────────────────────────────┤
-Selected instrument ────────────────────────────────┘
-             │
-             ▼
-Upstox Market Data Stream V3 → tick broadcaster → REST/WS clients and charts
+Configuration (core/config.py)
+             |
+             v
+      Enabled underlyings
+       /       |       \
+      v        v        v
+   NIFTY   BANKNIFTY   SENSEX
+      |        |        |
+      v        v        v
+ Independent StrategyContext instances
+      |        |        |
+      +--------+--------+
+               |
+       per-index option universes
+               |
+       historical/intraday candles
+               |
+      +--------+---------+
+      |        |         |
+      v        v         v
+     EMA      OR       Touch/candidates
+      |        |         |
+      +--------+---------+
+               v
+       Per-index isolation/selection
+               |
+               v
+   Enabled index feeds + selected options
+               |
+               v
+       Upstox Market Data WebSocket
+               |
+       +-------+--------+
+       |                |
+       v                v
+  Live broadcaster   Dashboard/charts
 ```
 
-### Historical and current behavior
+Mongo strategy state uses one configured collection, with a separate upserted document for each trading date and underlying.
 
-The application began with a NIFTY-oriented option cache and one Opening Range/isolation state. Live Upstox ticks were used for pre-isolation OR touch evaluation. EMA has already been moved to an internal completed-candle engine and remains candle-based.
+## Previous and current architecture
 
-This branch changes the touch path: the EMA candle poller now calls the OR touch processor for each newly processed candle. Upstream WS keys are now computed from enabled index feeds plus the currently selected instrument instead of the entire option cache. However, the contract cache and isolation state were not converted to per-underlying stores; see below for the exact scope.
+### Previous model
 
-## Index configuration and current scope
+The earlier strategy runtime centered on NIFTY and global runtime stores: one option cache, one OR cache, one touch queue/duplicate set, and one selected-instrument slot. Live ticks were also available to the OR touch path. This made NIFTY the implicit reference for parts of option filtering and selection and made it difficult to run independent index strategies safely.
 
-`core/config.py` builds `STRATEGY_UNDERLYINGS` and `ACTIVE_STRATEGY_UNDERLYINGS`. Configuration values come from environment variables first, then the existing JSON config file (`APP_CONFIG_FILE`, `config/app_config.json`, or `config.json`), then defaults.
+```text
+NIFTY-oriented global state
+  ├── option cache
+  ├── OR and EMA
+  ├── touch processing (including a live-tick path)
+  └── one selected instrument/dashboard state
+```
 
-| Environment key | JSON key | Default | Current effect |
+### Current model
+
+```text
+Enabled underlying
+      |
+      v
+Independent StrategyContext
+  ├── option universe for that underlying
+  ├── index and option OR results
+  ├── per-instrument EMA state and EMA events
+  ├── context-scoped touch state, events, candidates
+  ├── selected instrument and isolation state
+  └── alert state and runtime metadata
+      |
+      +--> completed 1-minute candles: EMA and pre-selection touch discovery
+      |
+      +--> selected instrument: selective live WebSocket feed
+```
+
+The shared `options_cache` and `opening_range_cache` still exist as compatibility/raw-data views used by existing application surfaces. For an instrument found in an enabled context, strategy lookup and persistence use that context's option universe, OR state, and selected state.
+
+## Configuration and supported indexes
+
+`core/config.py` builds `STRATEGY_UNDERLYINGS` and `ACTIVE_STRATEGY_UNDERLYINGS`. Configuration resolution is environment variable first, then the application's JSON configuration, then defaults. The JSON file is located using `APP_CONFIG_FILE` or the existing `config/app_config.json` / `config.json` search.
+
+| Environment variable | JSON key | Default | Purpose |
 | --- | --- | --- | --- |
-| `STRATEGY_NIFTY_ENABLED` | `strategies.nifty.enabled` | `true` | Includes NIFTY in active index metadata and the live WS base-key list. Its security key is `MAIN_NIFTY_SECURITY`. |
-| `STRATEGY_BANKNIFTY_ENABLED` | `strategies.banknifty.enabled` | `false` | Includes BANKNIFTY in active index metadata and the live WS base-key list when enabled. |
+| `STRATEGY_NIFTY_ENABLED` | `strategies.nifty.enabled` | `true` | Enables NIFTY strategy context. Its key is `MAIN_NIFTY_SECURITY`. |
+| `MAIN_NIFTY_SECURITY` | `market.main_nifty_security` | `NSE_INDEX\|Nifty 50` | NIFTY index instrument key. |
+| `STRATEGY_BANKNIFTY_ENABLED` | `strategies.banknifty.enabled` | `false` | Enables BANKNIFTY strategy context. |
 | `BANKNIFTY_SECURITY` | `strategies.banknifty.instrument_key` | `NSE_INDEX\|Nifty Bank` | BANKNIFTY index instrument key. |
-| `STRATEGY_SENSEX_ENABLED` | `strategies.sensex.enabled` | `false` | Includes SENSEX in active index metadata and the live WS base-key list when enabled. |
+| `STRATEGY_SENSEX_ENABLED` | `strategies.sensex.enabled` | `false` | Enables SENSEX strategy context. |
 | `SENSEX_SECURITY` | `strategies.sensex.instrument_key` | `BSE_INDEX\|SENSEX` | SENSEX index instrument key. |
-| `MAIN_NIFTY_SECURITY` | `market.main_nifty_security` | `NSE_INDEX\|Nifty 50` | NIFTY index instrument key and default for option-contract loading. |
+| `STRATEGY_NIFTY_STRIKE_FROM`, `STRATEGY_NIFTY_STRIKE_TO` | `strategies.nifty.strike_from`, `strategies.nifty.strike_to` | Global `STRIKE_FROM`, `STRIKE_TO` | Optional NIFTY option strike bounds. |
+| `STRATEGY_BANKNIFTY_STRIKE_FROM`, `STRATEGY_BANKNIFTY_STRIKE_TO` | `strategies.banknifty.strike_from`, `strategies.banknifty.strike_to` | Unbounded | Optional BANKNIFTY strike bounds. |
+| `STRATEGY_SENSEX_STRIKE_FROM`, `STRATEGY_SENSEX_STRIKE_TO` | `strategies.sensex.strike_from`, `strategies.sensex.strike_to` | Unbounded | Optional SENSEX strike bounds. |
+| `STRIKE_FROM`, `STRIKE_TO` | `market.strike_from`, `market.strike_to` | `22500`, `25000` | Shared legacy bounds and NIFTY fallback. `.env.example` overrides these. |
+| `STRATEGY_STATE_COLLECTION` | `strategy_state.collection` | `strategy_state` | One Mongo collection for date/index strategy snapshots. |
 
-Example environment configuration:
+Example matching the checked-in `.env.example` defaults:
 
 ```dotenv
 STRATEGY_NIFTY_ENABLED=true
+STRATEGY_NIFTY_STRIKE_FROM=23000
+STRATEGY_NIFTY_STRIKE_TO=25000
 STRATEGY_BANKNIFTY_ENABLED=false
 BANKNIFTY_SECURITY=NSE_INDEX|Nifty Bank
-STRATEGY_SENSEX_ENABLED=true
+STRATEGY_SENSEX_ENABLED=false
 SENSEX_SECURITY=BSE_INDEX|SENSEX
+STRATEGY_STATE_COLLECTION=strategy_state
 ```
 
-The current behavior of these flags is narrower than a full strategy enable/disable switch. They control active index feed metadata, chart instrument listings, interval classification, and base upstream WS index keys. They do **not** yet gate contract loading, EMA warmup/polling, OR calculation, touch state, alerts, or isolation by underlying. The regular startup contract loader still calls `get_options_contracts()` without an index argument, which defaults to NIFTY.
+For NIFTY and SENSEX together, set `STRATEGY_SENSEX_ENABLED=true`. Add an optional pair of SENSEX strike variables only if a strike range is desired. BANKNIFTY and SENSEX do not inherit NIFTY's global strike bounds when their own range is absent.
 
-Other relevant existing settings include:
+An enabled index gets a context, option-chain load, candle processing, OR state, and an index base WebSocket key. A disabled index is excluded from active contexts, option-chain loading, EMA active keys, strategy processing, and selected-instrument subscriptions. The service may still have static/master metadata for all three configured indexes.
 
-| Key | Purpose / implementation detail |
+## Strategy context and index/option mapping
+
+`services/strategy_context.py` creates a context from each configured index. Its runtime state includes:
+
+| Context field | Contents |
 | --- | --- |
-| `STRIKE_FROM`, `STRIKE_TO` | One shared strike filter used when choosing nearest-expiry contracts. Defaults are `22500` and `25000` in `core/config.py`; `.env.example` sets `23000` and `25000`. |
-| `MARKET_TIMEZONE`, `MARKET_OPEN_HOUR`, `MARKET_OPEN_MINUTE`, `MARKET_CLOSE_HOUR`, `MARKET_CLOSE_MINUTE` | Timezone and EMA polling window. Defaults: `Asia/Kolkata`, 09:15–15:30. |
-| `LIVE_EMA_ENABLED` | Enables/disables internal completed-candle EMA polling. |
-| `EMA_FAST_PERIOD`, `EMA_SLOW_PERIOD` | General EMA configuration defaults to 9/21 and is used by other EMA/history paths. The internal incremental engine currently stores and updates `ema_9` and `ema_21` directly; its incremental alpha values are fixed at 2/10 and 2/22. |
-| `LIVE_EMA_FAST_PERIOD`, `LIVE_EMA_SLOW_PERIOD`, `LIVE_EMA_INTERVAL_MINUTES` | Defined in configuration, but the internal poller currently requests `1minute` and the incremental update uses fixed 9/21 fields. These keys do not currently reconfigure that path. |
-| `HISTORICAL_CANDLE_MAX_WORKERS` | Caps concurrent per-instrument candle requests. |
-| `OPENING_RANGE_ENABLED`, `OPENING_RANGE_CANDLE_COUNT`, `OPENING_RANGE_FETCH_HOUR`, `OPENING_RANGE_FETCH_MINUTE` | Enables OR, sets opening candle count (default one), and sets its daily fetch time (defaults to 09:18). |
-| `OPENING_RANGE_TOUCH_CHECK_MODE` | Legacy live-touch mode value (`high_low` or `ltp`). The new completed-candle processor evaluates candle high/low using the existing directional thresholds. |
-| `OPENING_RANGE_TOUCH_ALERT_ONCE_PER_LEVEL` | Enables once-per-instrument/level duplicate suppression; default true. |
-| `OPENING_RANGE_ISOLATION_TOUCH_LEVELS`, `OPENING_RANGE_ISOLATION_PRIORITY_LEVELS` | Configured isolation levels and priority. Defaults are `R3`. |
-| `WEBSOCKET_FEED_MODE` | Upstox stream mode; default `full`. |
+| `underlying`, `index_instrument_key`, `display_name`, `enabled` | Identity and configured activation. |
+| `option_config` | Per-index strike range configuration. |
+| `option_universe` | Map from option `instrument_key` to normalized provider contract metadata. |
+| `opening_range` | Date/status/source plus OR result map keyed by the index or option instrument key. |
+| `ema_state`, `ema_events` | Per-instrument EMA snapshots and bounded crossover event history. |
+| `touch_state`, `touch_events` | Date/index-scoped duplicate and touch state, plus bounded event history. |
+| `candidates` | Touch candidates keyed by underlying, instrument, and level. |
+| `selected_instrument`, `isolation_state` | The context's independent daily selection and lock state. |
+| `alert_state` | EMA alert history and finalized-minute duplicate guards. |
+| `runtime_metadata` | Option expiry/count, update timestamps, underlying LTP, and related runtime values. |
 
-See `core/config.py` and `.env.example` for the complete settings catalogue. Many additional alert, order, Telegram, runtime-config, and service-control settings are intentionally omitted from this architecture-focused table.
+For example, the NIFTY context owns NIFTY CE/PE contracts and the SENSEX context owns SENSEX CE/PE contracts. The option loader iterates active contexts, calls Upstox using each configured index instrument key, filters by provider `underlying_symbol` where that metadata is present, and stamps each normalized contract with `underlying` and `underlying_instrument_key`. Normalized contracts retain `provider_metadata` for inspection. Per-index lookups use the context or an underlying-aware cache index rather than choosing a same-strike contract from another index.
 
-## Strategy context and index/option relationship
+With `filter_nearest=True` (the default), the loader chooses the nearest non-expired expiry and applies that index's configured strike bounds. If no per-index range exists, BANKNIFTY/SENSEX contracts are not filtered using NIFTY's global range. Explicit `expiry_date` requests bypass nearest-expiry selection. The combined legacy cache records per-underlying expiry and contract summaries while each context remains the strategy universe.
 
-`services/strategy_context.py` defines a `StrategyContext` dataclass with:
+## Candle and EMA processing
 
-- `underlying`, `index_instrument_key`, `display_name`, and `enabled`;
-- `option_universe`, keyed by option instrument key;
-- dictionaries/lists for `opening_range`, `ema_state`, `ema_events`, `touch_state`, `candidates`, `selected_instrument`, and `alert_state`;
-- `set_option_universe()`, which copies contracts and stamps `underlying` plus `underlying_instrument_key` metadata;
-- `snapshot()`, which returns a deep-copied representation.
+`InternalEmaEngine.poll_completed_candles()` runs from the APScheduler job `internal_ema_completed_candle_job`, scheduled on weekdays at second 10 of each minute. It requests `1minute` intraday candles for index and option instrument keys in active contexts. A candle is eligible only when its parsed timestamp, truncated to a minute, is earlier than the current minute cutoff. The poller skips an already-polled minute, avoids overlapping cycles, and the per-instrument state rejects timestamps not later than `last_processed_timestamp`.
 
-`get_strategy_contexts()` lazily creates one in-memory context for each configured supported index and filters disabled contexts by default. This is a **state-container foundation**, not the state store currently used by the OR or EMA engines. Existing processing code does not populate these contexts or route events through them yet.
-
-The option master response contains each contract's instrument key, CE/PE type, strike, expiry, and provider-supplied underlying metadata. `get_options_contracts(instrument_key=...)` can request contracts for a specified index, but it writes the response to the single global `options_cache`. The application startup path requests only the default NIFTY security. The current strike filter is global, not per index. Consequently, the intended mapping:
+Historical candle processing warms EMA state before the poller begins. The engine maintains state by instrument key and mirrors each instrument state into its owning context. Incremental EMA is updated from each completed candle close; the current implementation stores `ema_9` and `ema_21`, derives trend and crossover from the prior/current fast-slow difference, and emits a crossover event carrying candle timestamp, instrument key, contract details, and underlying identity when the context is known. Events are broadcast to the EMA WebSocket and saved through the existing intraday EMA history path. The engine's incremental calculation uses fixed 9/21 fields; see [Known limitations](#known-limitations) regarding the separate configurable EMA period settings.
 
 ```text
-NIFTY      → NIFTY CE/PE contracts
-BANKNIFTY  → BANKNIFTY CE/PE contracts
-SENSEX     → SENSEX CE/PE contracts
+Historical candle warmup
+        |
+        v
+Enabled context instrument keys
+        |
+        v
+Completed 1-minute candle (timestamp < current minute)
+        +-------------------------------+
+        |                               |
+        v                               v
+Incremental EMA 9/21              Completed-candle OR touch
+        |                               |
+        v                               v
+EMA crossover event               Candidate/selection evaluation
 ```
 
-is not yet maintained as three independent runtime universes. Do not treat the context helper's metadata stamping as proof that contracts have been loaded or processed for all three indexes.
+The OR touch call is made only when `process_candle` returns a newly updated EMA state. This means duplicate, not-yet-initialized, or otherwise unprocessed EMA candles do not run this touch path.
 
-## Candle processing and EMA
+## Opening Range and touch rules
 
-`InternalEmaEngine` in `services/ema_engine.py` owns per-instrument EMA state keyed by instrument key. `initialize_from_history()` seeds each state's latest fast/slow values, timestamp, close, trend, and valid-candle count from the historical initialization summary. The app's startup and hard-refresh flows use the existing candle/history services to produce that summary.
+The OR service calculates OR data for the subscribed index and option keys using the configured OR candle interval and opening-candle count (`OPENING_RANGE_INTERVAL`, default `1minute`; `OPENING_RANGE_CANDLE_COUNT`, default `1`). The per-index `opening_range` context stores the OR result for the index instrument and that context's option instruments, including calculated range/level data, status, date, interval, source, and calculation time. The shared OR cache is updated for existing consumers as a compatibility snapshot.
 
-The scheduler invokes `poll_completed_candles()` on weekdays at second 10 of each minute. The engine has its own guards: it only polls between configured market open and one minute after close, avoids a second poll in the same market minute, refuses overlapping poll cycles, and checks returned timestamps against the current minute cutoff. The API requests are made through the existing authenticated Upstox history service with the `1minute` interval. Per-instrument requests run in a bounded thread pool; an individual future error is logged while other instruments can finish.
-
-For each newly processed candle timestamp, the engine updates EMA state once. Timestamps at or before `last_processed_timestamp` are skipped. The incremental update is:
+Pre-selection discovery is candle-based. `process_completed_candle_for_opening_range()` reads the instrument's OR levels from its owning context and uses the completed candle. The directional business rules are:
 
 ```text
-fast = old_fast + (2 / 10) × (close - old_fast)
-slow = old_slow + (2 / 22) × (close - old_slow)
+R2 / R3: candle high >= level
+S2 / S3: candle low  <= level
 ```
 
-A crossover is emitted when the fast/slow difference changes sign. The event includes instrument key, contract metadata when found, cross direction, candle timestamp, close, prior/current EMA values, and calculation mode. Events are retained in bounded memory, appended to `logs/live_ema_events.jsonl`, enriched with OR context when available, dispatched to existing selected-instrument alert logic, and broadcast to connected local EMA WebSocket clients. Persistence of the crossover is also attempted through the existing history service. This is not a durable checkpoint of all in-memory EMA state; restart warmup reconstructs it from history.
+If the selected high/low is not positive, the existing fallback uses candle close and labels the trigger field `close`. Touches are limited to levels in `OPENING_RANGE_ISOLATION_TOUCH_LEVELS` (default `R3`) and the configured option-only rule. Duplicate alert keys include trading date, underlying, instrument key, and level; the default once-per-level rule is enabled. Context touch histories and event arrays are bounded. Touch payloads include `underlying`, `underlying_instrument_key`, `instrument_key`, level/value, trigger price/field, timestamp, source, normalized contract metadata, and candle data.
+
+The prior live-tick OR-touch helper remains callable for compatibility but now records live price state only and returns no touch candidates. A touch or selection decision is not made from a live tick.
+
+## Isolation and selected instruments
+
+Touch events are grouped by underlying before selection. Each group is evaluated using that context's OR average (or its own index LTP fallback), strike configuration, existing touch eligibility, configured touch-level priority, and average-window rules. The selected option and the daily lock are written to that same context. The early-opening EMA selector also maintains one selection window per underlying and filters candidates against that context's option universe and reference value. The date/index key is also the unit of persistence. Thus an existing NIFTY lock does not block a SENSEX selection. Existing replacement behavior remains a daily lock: a context with an already selected instrument does not replace it during that trading day.
 
 ```text
-Authenticated intraday candle request
-             ↓
-Only timestamped, completed 1-minute candles
-             ├──→ per-instrument EMA update → crossover event
-             └──→ completed-candle OR touch check
+Completed candle
+      |
+      v
+Per-instrument OR touch and candidate
+      |
+      v
+Group by underlying -> eligibility/priority/window checks
+      |
+      v
+Context selected_instrument (daily locked)
+      |
+      v
+Subscribe selected option -> live chart/dashboard feed
 ```
 
-EMA is not calculated from incoming WebSocket tick prices in this engine. The engine's instrument list currently comes from the shared `options_cache["subscribed_keys"]`, so the candle path is not yet filtered by the per-underlying enable flags.
+When the context's selected instrument is unavailable, no option is added from that context. The running WebSocket synchronizer computes a desired-key set and applies added/removed key differences; processing one context does not remove another context's still-desired key.
 
-## Opening Range and touch detection
+## Selective live WebSocket subscriptions
 
-`services/opening_range/service.py` fetches current-day intraday candles for the shared subscribed-key list and selects the configured number of opening candles (default one). The range calculator derives high, low, average, R1/S1, R2/S2, R3/S3, and the R3/S3 thresholds using the formula in `services/opening_range/range_calculator.py`. Results and per-instrument levels are written into one shared `opening_range_cache` in `services/opening_range/state.py`. OR fetch is scheduled for weekdays at the configured fetch time; startup catch-up can run if that time has passed and today's result is missing.
+`get_live_websocket_instrument_keys()` returns the index instrument key for every active context and that context's selected option, if one exists. It does not return every option contract. The option universe remains available to candle polling and strategy calculations without putting all those options on the live streaming path.
 
-The new `process_completed_candle_for_opening_range()` path is called by the internal EMA poller after it accepts a newer candle for that instrument. It looks up the instrument in the shared OR result data, requires a successful OR calculation, and passes the candle to the existing touch detector. The detector preserves the established directional rule:
+The Upstox streamer periodically compares desired keys with its active set and calls subscribe for added keys and unsubscribe for removed keys. On reconnection it rebuilds its subscription set from current active contexts, so current selections are included. Live ticks update instrument LTP state and are broadcast through the existing broadcaster to general, instrument, chart, and related WebSocket clients. They can update a selected chart and live price but do not perform OR level discovery. EMA itself remains candle-based.
 
-```text
-R2 / R3: candle high >= level (uses close as fallback if high is invalid)
-S2 / S3: candle low  <= level (uses close as fallback if low is invalid)
-```
+## Events, alerts, and dashboard
 
-This is not a generic `low <= level <= high` containment check. Only levels in `OPENING_RANGE_ISOLATION_TOUCH_LEVELS` are considered by this detector (default `R3`). Touch alerts can be restricted to option contracts and are suppressed after an instrument/level key has been recorded when once-per-level is enabled. A touch event records `instrument_key`, level, level value, trigger price/field, parsed touch timestamp/date, source, contract metadata, candle, and alert key. It does not currently add an explicit underlying identifier.
+EMA crossover and OR touch events carry instrument identity and, for context-owned instruments, `underlying` plus `underlying_instrument_key`. Touch events are appended to the owning context; the bounded shared touch list and legacy pending alert queue are retained for existing interfaces. EMA finalized-minute suppression is scoped to the context's alert state. Accepted EMA alert records (including configured Telegram/Algo App delivery results) are attached to their instrument's underlying context. Existing Telegram commands and delivery integrations are retained. NIFTY's existing option-chain alert suggestion path remains in place; for other contexts, nearest CE/PE suggestions are selected from that context's loaded option universe and its own underlying spot/reference. Those non-NIFTY master-data suggestions do not include a live-priced budget list.
 
-Touch events update shared touch status and event queues, then go through existing isolation rules. Historical OR backfill scans post-opening candles separately when enabled. The completed-candle touch event source is `completed_1minute_candle`. The old live-tick touch function remains in the code for compatibility, but the Upstox stream handler no longer invokes it for pre-isolation discovery.
+The existing isolated EMA dashboard now includes an **Enabled Index Strategy Contexts** view. It fetches `/api/strategies` and displays one card per active underlying with option count, OR average/status, EMA instrument count, and that context's selected instrument. A selected option exposes an `/chart/{instrument_key}` link. Existing dashboard tables and compatibility views remain available; they have not all been rewritten as per-index table filters.
 
-The OR cache, touch queues, duplicate keys, latest-main-index LTP, and selected-instrument state are all single shared runtime objects. OR calculation over option candles also does not create distinct OR state per index. The event's `main_index_ltp` / distance metadata is NIFTY-oriented.
-
-## Isolation and alerts
-
-Touch events are submitted to `try_isolate_from_touch_events()`. The existing isolation service filters eligible events using option-only configuration, configured level/priority, and the reference average/window rules; it chooses a best eligible event and commits it only if the daily shared selection slot permits. `should_replace_isolated_instrument()` currently blocks replacement once an instrument is selected for the market day. Selection state is reset according to the existing market-day reset path.
-
-An isolated-instrument notification may be delivered through the configured Telegram integration. EMA cross events use the existing selected-instrument EMA alert path, which can also dispatch to the configured Algo App integration. Touch event batches may be flushed through the legacy Telegram path when enabled. Delivery options and filters are configured in `core/config.py` and the Opening Range constants/runtime-config service.
-
-These flows currently have one selection slot and shared alert counters. They do not support a simultaneous NIFTY selection and SENSEX selection as independent strategies.
-
-## Upstream WebSocket and selective subscriptions
-
-`get_live_websocket_instrument_keys()` returns the configured active index instrument keys plus the instrument in the current shared selected-OR state, if one exists. The Upstox streamer starts with that list. While running, `services/upstox_websocket.py` re-evaluates the list every five seconds, subscribes newly added keys and unsubscribes removed keys through the existing `MarketDataStreamerV3` instance. On stream failure, the outer connection loop retries after a delay and builds a fresh initial list. This is the upstream Upstox subscription policy; it is distinct from local client WebSocket routes.
-
-As a result, the full option universe is no longer passed as the upstream stream's initial subscription set solely for touch discovery. Strategy discovery uses candles. The stream carries configured index feed ticks and the selected instrument's live ticks. Tick messages are decoded and broadcast through `ws_feed.broadcaster`; tick handling does not call the OR live-touch detector. EMA calculations continue to use candles.
-
-The selected instrument lookup is still the single shared selection state. Dynamic subscribe/unsubscribe recovery depends on the Upstox SDK's stream methods and a live connection; it has not been exercised by the automated tests in this repository/runtime. Also, other code still maintains the broader `options_cache["subscribed_keys"]` list for candle/history work, so “not subscribed to Upstox stream” does not mean “excluded from all application processing.”
-
-## Frontend, API, and local WebSocket interfaces
-
-The existing HTML pages and APIs remain instrument-centric. Active configured index feeds can appear in chart instrument listings, and index feed metadata identifies the configured underlying. The isolated dashboard and OR status APIs read the single shared selected instrument and shared OR cache; they do not yet expose a collection of independent per-index strategy selections.
-
-Notable routes (routers are registered in `main.py`):
+Important REST routes include:
 
 | Route | Purpose |
 | --- | --- |
-| `/` | Main live option-feed dashboard. |
-| `/health` | Health and service/cache status. |
-| `/api/instruments` | Loaded options cache instruments. |
-| `/api/option-chain` | Existing option-chain view. |
-| `/charts` and `/chart/{instrument_key}` | Chart instrument listing and chart page. |
-| `/chart/api/{instrument_key}` | Chart JSON data. |
-| `/candles/candles` | Historical plus intraday candle API (the router prefix is `/candles`, handler route is `/candles`). |
-| `/opening-range/status`, `/opening-range/dashboard`, `/opening-range/cache` | OR summary/dashboard/shared cache. |
-| `/opening-range/selected-instrument`, `/opening-range/isolated-instrument` | Current single selected instrument views. |
-| `/history/live-ema/state`, `/history/ema-crosses` | Internal EMA state and crossover history. |
-| `/isolated-dashboard` and `/isolated-ema-dashboard` | HTML isolated EMA dashboard and alias. |
+| `GET /api/strategies` | List enabled strategy contexts and compact runtime state for each. |
+| `GET /api/strategies/{underlying}` | Return one enabled context snapshot, including its option universe. |
+| `GET /opening-range/status?underlying=...` | Existing aggregate OR status; the selected-instrument field can be scoped to the requested underlying. |
+| `GET /opening-range/dashboard` | Existing aggregate dashboard summary. |
+| `GET /opening-range/cache` | Existing aggregate compatibility OR cache. |
+| `GET /opening-range/selected-instrument` | Selected state; accepts optional `underlying`. |
+| `GET /opening-range/selected-instrument/ema-alerts?underlying=...` | EMA alert history for a context when an underlying is specified. |
+| `GET /opening-range/isolated-instrument` | Existing selected-state view; accepts optional `underlying`. |
+| `GET /opening-range/isolated-instrument/ema-alerts?underlying=...` | Selected instrument EMA alerts for the named context. |
+| `GET /opening-range/touch-events` | Existing touch event list. |
+| `POST /opening-range/fetch` | Manually recalculate OR over subscribed instruments. |
+| `POST /opening-range/isolated-instrument/manual?strike=...&striketype=...&underlying=...` | Manually select a loaded option within the requested context. `underlying` is optional for compatibility (legacy lookup remains NIFTY-first). |
+| `GET /chart/{instrument_key}` | Render an instrument chart page. |
 
-Local WebSocket client endpoints include `/ws` and `/all-feeds` for broad tick/event delivery, `/option` for option-specific filtering, `/ws/ema` and `/ws/ema-crossover` for EMA crossover messages, `/ws/ema-crossover/instrument` and `/ws/ema/{instrument_key}` for instrument-filtered EMA, and `/ws/opening-range` plus `/ws/opening-range/instrument` for OR updates. These are local FastAPI client endpoints, not the upstream Upstox connection.
+WebSocket endpoints include `/ws`, `/all-feeds`, `/option`, `/ws/ema`, `/ws/ema-crossover`, `/ws/ema-crossover/instrument`, `/ws/opening-range`, and `/ws/opening-range/instrument`. Instrument-specific routes use instrument keys/option filters as implemented in `ws_feed/websocket_routes.py`. The broadcaster forwards event payload fields, including underlying identity when supplied.
 
-## Events and data delivery
+## MongoDB persistence
 
-An EMA crossover event uses `type: live_ema_cross` and `event_type: ema.crossover`, and carries its instrument, timestamp/candle timestamp, cross direction, close, EMA values, and contract metadata. OR enrichment is attached where available. It is persisted/buffered and broadcast via the local broadcaster.
+`services/strategy_state_persistence.py` stores snapshots in the one collection configured by `STRATEGY_STATE_COLLECTION` (default `strategy_state`), using the project's `MONGO_URL`/`MONGO_DB` settings. The repository creates a unique compound index on `(trading_date, underlying)` and upserts by that same identity. `trading_date` is the market date in `MARKET_TIMEZONE` (default `Asia/Kolkata`) formatted as `YYYY-MM-DD`.
 
-An OR touch event uses `type: opening_range_touch`; it includes the instrument key, level, threshold, trigger field/price, touch timestamp, source, contract information, candle payload, and duplicate-control alert key. The current event schema does not promise a separate underlying field. Consequently, a consumer should use instrument metadata to determine the contract's underlying, and should not assume that the event is already isolated into an independent per-index stream.
+Each snapshot includes identity and index key, strategy configuration, option universe, OR, EMA states/events, touch state/events, candidates, selected instrument, isolation state, alerts, and metadata. Writes happen on meaningful context updates and once after an EMA candle batch, not once per incoming WebSocket tick. The repository uses bounded context event histories. Mongo loading/writing is fail-open for the live runtime: when Mongo settings or connectivity are missing, processing can continue and repository warnings/errors are logged.
 
-```text
-Completed candle ──┬──→ EMA state → EMA crossover → alert/persistence/local WS
-                   └──→ OR levels → touch event → isolation → shared selection
-                                                              │
-Enabled index feed + shared selected key → Upstox WS → tick broadcast/dashboard
+Example document identity and content shape:
+
+```json
+{
+  "trading_date": "2026-10-02",
+  "underlying": "SENSEX",
+  "underlying_instrument_key": "BSE_INDEX|SENSEX",
+  "strategy_config": { "enabled": true, "display_name": "SENSEX", "option": {} },
+  "opening_range": { "status": "success", "instruments": {} },
+  "ema": { "state": {}, "events": [] },
+  "touch_state": {},
+  "touch_events": [],
+  "candidates": {},
+  "selected_instrument": {},
+  "isolation": {},
+  "alerts": {},
+  "metadata": { "updated_at": "...", "version": 1 }
+}
 ```
 
-## Startup, market-day, and shutdown lifecycle
+NIFTY, BANKNIFTY, and SENSEX are separate documents in that same collection for a given date. Earlier dates are not overwritten by later trading days.
 
-At FastAPI lifespan startup, the application performs startup cleanup, initializes runtime configuration, and runs its existing startup workflow. That workflow refreshes the token, loads the option contracts into the shared cache (NIFTY by default), fetches history/current-day candles and initializes EMA state, and performs OR catch-up when required. It then connects the EMA engine to the app event loop, starts the APScheduler, starts the Telegram token bot, and starts the Upstox streamer.
+## Startup, market-day flow, and shutdown
 
-Relevant scheduler jobs include token refresh and validity checks, instrument recovery, weekday daily market hard refresh at 09:00, EMA candle polling at second 10 each minute, the configured weekday OR fetch (default 09:18), and daily archive jobs. The EMA poller applies its own configured market-open/close checks (defaults 09:15–15:30 in `Asia/Kolkata`) and skips weekends. The OR fetch schedule is independently configured. Current market processing is not orchestrated as one lifecycle per configured index.
+### Startup
 
-During shutdown, the lifespan stops the Telegram bot if started, stops the Upstox streamer, marks the EMA engine stopped, shuts down the scheduler without waiting for all jobs, closes runtime configuration, and reports shutdown status through logging/Telegram where configured.
+1. FastAPI startup initializes runtime configuration and the existing token/Mongo lifecycle.
+2. `load_options_for_enabled_underlyings()` loads each active index chain and builds context option universes, then merges a compatibility cache for existing application/history consumers.
+3. Startup historical candle processing warms EMA values and mirrors instrument state into contexts.
+4. Startup OR catch-up calculates OR state and scans eligible backfill candles using the configured existing backfill rules.
+5. The application starts the scheduler and internal EMA poller integration, then starts the Upstox streamer. The live key set contains active index feeds plus selected instruments.
 
-## Component reference
+### Market day
 
-| Path | Responsibility |
-| --- | --- |
-| `main.py` | FastAPI lifespan, router registration, startup/recovery workflows, scheduler jobs, shutdown. |
-| `core/config.py` | Environment/JSON configuration parsing, market settings, and supported underlying metadata. |
-| `services/strategy_context.py` | Per-index state-container dataclass and lazy registry; not yet the runtime source of strategy state. |
-| `services/token_service.py` | Upstox access-token retrieval and cache. |
-| `services/option_service.py` | Contract API, nearest expiry/global strike filtering, shared options cache, feed metadata, and upstream live-key selection. |
-| `services/history_service.py` | Existing historical/intraday candle workflows, EMA warmup/persistence helpers. |
-| `services/ema_engine.py` | Completed-candle polling, per-instrument EMA state, duplicate guard, crossover events and delivery. |
-| `services/opening_range/` | OR formula, intraday calculation, touch event handling, shared state, isolation and alert logic. |
-| `services/opening_range/live_touch.py` | Legacy tick path plus completed-candle OR touch detection. The live stream no longer invokes the tick touch path. |
-| `services/upstox_websocket.py` | Upstream Upstox stream lifecycle, selected-key subscription sync, tick handling and local client broadcast. |
-| `ws_feed/broadcaster.py` | Local client connection registry and broadcast fan-out. |
-| `ws_feed/websocket_routes.py` | Local FastAPI WebSocket client endpoints. |
-| `api/opening_range_routes.py`, `api/history_routes.py` | OR dashboard/status/selection and EMA/history APIs. |
-| `api/instrument_routes.py`, `api/chart_routes.py`, `api/candles_routes.py` | Instrument listing, charts, and candle endpoints. |
-| `templates/` | HTML pages, including `isolated_ema_dashboard.html`, `chart.html`, and instrument/order views. |
+Market timings come from `MARKET_OPEN_HOUR`, `MARKET_OPEN_MINUTE`, `MARKET_CLOSE_HOUR`, and `MARKET_CLOSE_MINUTE`; defaults are 09:15–15:30 in `MARKET_TIMEZONE` (default `Asia/Kolkata`). EMA polling is restricted to weekdays and this configured market window, through the minute after the configured close. Completed candle state is processed, touch candidates are evaluated against context-owned OR levels, and daily selections remain locked by underlying. Selected live updates continue to flow to the dashboard/chart. Existing scheduled refresh, token, archive, and cleanup jobs continue through APScheduler.
 
-## Testing and verification
+On a new market date, `StrategyContext.ensure_trading_date()` clears intraday state before restoring only the matching date/underlying Mongo document. On application shutdown, the FastAPI lifespan stops the streamer, scheduler, token bot/runtime services, and closes configured runtime resources according to the existing `main.py` shutdown sequence. Mongo strategy-state writes are snapshots/upserts; no per-tick strategy records are created.
 
-The repository contains `tests/test_strategy_context.py`, with unit cases for context contract metadata, disabled context option clearing, independent context selection dictionaries, and directional candle-touch semantics. The test command is:
+## Multi-index examples and backward compatibility
 
-```powershell
-python -m unittest discover -s tests -v
-```
-
-In the implementation environment, this command was attempted with the available bundled Python and could not import the test module because `python-dotenv` was unavailable there (`ModuleNotFoundError: dotenv`). No live Upstox, NIFTY-only end-to-end, multi-index independence, disabled-index lifecycle, dynamic upstream subscribe/unsubscribe, or dashboard integration scenario is documented as passing. Install the project requirements in the intended environment before using the command above.
-
-The touch unit test currently asserts an R2 event, while the checked-in example configuration selects R3 by default. Since the detector only evaluates configured touch levels, that assertion should be reconciled with the test environment before treating the test module as a passing suite.
-
-## Known limitations
-
-- NIFTY remains the only index whose option contracts are loaded automatically by the application startup workflow.
-- `STRATEGY_*_ENABLED` flags do not gate the complete strategy lifecycle; at present, they primarily affect index metadata/listings and the base upstream WebSocket key set.
-- `StrategyContext` exists as a helper, but OR, EMA, touch, isolation, alert, and frontend code still uses legacy shared/global runtime structures.
-- There is one global option cache, one OR cache/event queue set, one selected-instrument slot, and one NIFTY-oriented latest-index-LTP/distance path. Two indexes cannot be independently isolated at the same time.
-- The option strike bounds are shared. `get_options_contracts()` replaces the shared cache for each call instead of maintaining an index-keyed cache.
-- EMA polling reads all keys in the shared subscription cache and is not filtered by `ACTIVE_STRATEGY_UNDERLYINGS`. Its live incremental update uses fixed 9/21 alphas even though several period settings exist.
-- OR event payloads do not contain an explicit underlying field. UI/API selection and dashboard state remain shared rather than keyed by underlying.
-- Automated coverage is limited to the added unit module; the attempted run was blocked by the missing dependency described above. Upstream subscription behavior and market-provider integration have not been verified here.
-
-## Backward compatibility and future extension
-
-The configuration below is the intended NIFTY-only switch setting:
+NIFTY-only mode remains the defaults represented in `.env.example`:
 
 ```dotenv
 STRATEGY_NIFTY_ENABLED=true
@@ -275,6 +292,103 @@ STRATEGY_BANKNIFTY_ENABLED=false
 STRATEGY_SENSEX_ENABLED=false
 ```
 
-It retains the default NIFTY contract loader and its current shared strategy flow. Since the enable flag does not gate every subsystem, disabling NIFTY should not be interpreted as proving that all NIFTY strategy work has been disabled.
+Two-index example:
 
-The context and configuration layers provide a starting point for extension: add or configure an index key/display name and instantiate the same context shape. A complete new index still requires wiring its option response into an index-keyed contract cache; routing candle/EMA/OR/touch work by that association; making selection, event, alert, and frontend state per underlying; and testing that disabled contexts produce no processing or subscriptions. Configuration alone is not sufficient in the current implementation.
+```dotenv
+STRATEGY_NIFTY_ENABLED=true
+STRATEGY_BANKNIFTY_ENABLED=false
+STRATEGY_SENSEX_ENABLED=true
+```
+
+In the second example NIFTY and SENSEX get independent candles, EMA states, OR results, option universes, touch/selection state, alert histories, and selected live feeds. BANKNIFTY is omitted from active strategy processing. NIFTY retains its default instrument key and global strike-range fallback, which preserves the NIFTY-only contract-loading behavior while touch discovery uses completed candles.
+
+## Component and file reference
+
+| Path | Responsibility |
+| --- | --- |
+| `main.py` | FastAPI application/lifespan, startup orchestration, scheduled jobs, and route registration. |
+| `core/config.py` | Environment/JSON settings, enabled underlying map, instrument keys, and per-index option ranges. |
+| `services/strategy_context.py` | Per-underlying runtime state, IST trading date reset/restore, active keys, and context snapshots. |
+| `services/strategy_state_persistence.py` | One Mongo collection, unique date/underlying index, load, and upsert repository. |
+| `services/option_service.py` | Upstox option master loading, provider underlying filtering, per-index option universes, cache compatibility indexes, and selected live-key generation. |
+| `services/history_service.py` | Historical/intraday candle fetching and historical EMA warmup integration. |
+| `services/ema_engine.py` | Completed one-minute candle polling, duplicate protection, incremental EMA updates, context association, crossover event and broadcast. |
+| `services/opening_range/service.py` | Opening Range calculation orchestration and context OR synchronization. |
+| `services/opening_range/live_touch.py` | Completed-candle touch semantics, event creation, per-context touch state, and live-price-only tick handler. |
+| `services/opening_range/isolation.py` | Context-specific reference average/window, event eligibility, priority, and daily selection. |
+| `services/opening_range/state.py` | Legacy compatibility cache/queues plus context-aware state access and date/index helper behavior. |
+| `services/opening_range/ema_alerts.py` | Selected-context EMA alert construction and existing alert delivery workflow. |
+| `services/upstox_websocket.py` | Upstream stream lifecycle and dynamic subscribe/unsubscribe synchronization. |
+| `ws_feed/broadcaster.py` | Downstream live tick, EMA crossover, and OR event delivery to WebSocket clients. |
+| `ws_feed/websocket_routes.py` | Browser/client WebSocket routes. |
+| `api/strategy_routes.py` | Multi-index strategy context list and single-underlying snapshot endpoints. |
+| `api/opening_range_routes.py` | Existing OR, touch, selected instrument, alert, and manual fetch APIs. |
+| `api/chart_routes.py` | Chart page and chart instrument/data routes. |
+| `templates/isolated_ema_dashboard.html` | Existing OR/EMA dashboard plus enabled strategy context cards. |
+| `tests/test_strategy_context.py` | Context ownership, disabled context option behavior, selection isolation, and directional candle touch checks. |
+| `tests/test_strategy_state_persistence.py` | Same-collection date/underlying upsert and unique compound identity checks. |
+
+## End-to-end data flow
+
+```text
+Upstox option master                    Upstox candle history
+        |                                         |
+        v                                         v
+Validate/filter by underlying         1-minute history/warmup
+        |                                         |
+        v                                         v
+Context.option_universe  <---- active instrument keys ----+
+        |                                         |
+        +---------------------+-------------------+
+                              v
+                   Completed-candle poll
+                    /        |         \
+                   v         v          v
+                 EMA        OR       Directional touch
+                   \         |          /
+                    \        |         /
+                     v       v        v
+                  Context state/events
+                              |
+                    eligibility + isolation
+                              |
+                              v
+                 Context selected instrument
+                              |
+                              v
+             selective upstream live subscription
+                              |
+                              v
+           tick broadcaster -> chart/dashboard clients
+
+Context changes and candle batches -> date/index Mongo upsert
+```
+
+## Rationale and extensibility
+
+The context-based model supports more than one underlying without copying the strategy implementation, prevents one index's lock/OR/touch/alert state from replacing another's, and uses closed candles for stable strategy discovery. Selective upstream subscriptions keep the live tick path focused on configured index feeds and selected instruments while preserving live chart/dashboard updates. No numerical performance improvement is claimed here; the repository does not contain measurements for one.
+
+The initial supported set is explicitly configured in `STRATEGY_UNDERLYINGS`. Enabling BANKNIFTY or SENSEX and setting its instrument key is configuration-driven. Adding an entirely new index currently requires a code/config addition to that supported-index map, a provider-recognized instrument key and option metadata, plus validation that existing feed/chart/order assumptions accept its market. The strategy services can then consume a context without creating a duplicate per-index strategy implementation. It is not currently a zero-code-change plugin system.
+
+## Testing and verification
+
+Run the unit tests from the repository root in an environment with `requirements.txt` installed:
+
+```powershell
+python -m unittest discover -s tests
+```
+
+The focused context tests cover option ownership, disabled context behavior, independent selection values, and directional candle touch conditions. The persistence tests use an in-memory collection double to assert the unique `(trading_date, underlying)` identity and that updates affect only the matching date/index document.
+
+In the development environment used for this change, Python AST parsing and `git diff --check` were run. The normal focused unittest command could not import the project because the runtime is missing project dependencies (`python-dotenv`, `upstox_client`, and `pymongo`). To exercise the changed strategy/persistence logic, all 5 context tests and all 3 persistence tests were also run with import stubs for those absent external modules; those 8 tests passed. This does not verify provider, Mongo, or full application integration. Install `requirements.txt` and run the normal command for an environment-level verification.
+
+## Known limitations
+
+- The shared option and OR caches and legacy global state accessors remain for compatibility. New per-context paths are used for known enabled-context instruments, but older aggregate dashboard tables are not yet all converted to per-underlying filters.
+- Automated coverage currently focuses on context ownership, directional touch behavior, and date/index persistence identity. It does not yet exercise multi-index startup against Upstox, live subscribe/unsubscribe against the provider, the browser dashboard, or Telegram/Algo App delivery end to end.
+- The internal incremental EMA engine currently uses `ema_9` and `ema_21` fields/formulas. The repository also defines `EMA_FAST_PERIOD`/`EMA_SLOW_PERIOD` and `LIVE_EMA_FAST_PERIOD`/`LIVE_EMA_SLOW_PERIOD`; changing these settings does not currently change the engine's hard-coded incremental 9/21 recurrence.
+- Touch discovery within the candle poll is coupled to an initialized EMA state because the OR touch function is called after a newly processed EMA candle. Uninitialized or duplicate EMA candles do not independently run touch processing.
+- Provider contract validation checks `underlying_symbol` when available. If the provider omits it, the returned contracts are accepted from the request's underlying and stamped with that context identity.
+- For non-NIFTY selected-instrument EMA alerts, nearest option suggestions come from the context contract master; the current option master does not supply the live option prices needed to reproduce the existing NIFTY budget-price suggestion list.
+- MongoDB persistence is fail-open and depends on valid `MONGO_URL`, `MONGO_DB`, connectivity, and the `pymongo` dependency. It is not required for the process to continue strategy calculations.
+- The application was not fully runtime-tested in this environment because the installed Python runtime lacks `python-dotenv`; live Upstox, Mongo, Telegram, and browser integration behavior was not exercised here.

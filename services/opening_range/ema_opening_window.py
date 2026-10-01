@@ -8,7 +8,7 @@ from threading import RLock
 
 from core import config
 from core.logger import get_logger
-from services.option_service import get_budget_range_order_instruments, options_cache
+from services.option_service import get_budget_range_order_instruments
 from services.runtime_config_service import (
     get_budget_max_price,
     get_budget_min_price,
@@ -24,7 +24,7 @@ from .isolation import (
     is_event_eligible_for_isolation,
     try_isolate_from_touch_events,
 )
-from .state import selected_or_instrument_state, selected_or_lock
+from . import state as runtime_state
 
 logger = get_logger(__file__)
 
@@ -36,7 +36,8 @@ class OpeningEmaCrossSelector:
     WINDOW_END = dt_time(9, 18)
     FINAL_CANDLE_START = dt_time(9, 17)
 
-    def __init__(self):
+    def __init__(self, underlying: str = "NIFTY"):
+        self.underlying = str(underlying or "NIFTY").strip().upper()
         self.lock = RLock()
         self.market_date: date | None = None
         self.active = False
@@ -83,8 +84,12 @@ class OpeningEmaCrossSelector:
             for item in candidates
             if item.get("instrument_key") and item.get("close") is not None
         }
-        contract_data = options_cache.get("data", [])
-        maximum = max(1, len(contract_data) if isinstance(contract_data, list) else len(candidates))
+        try:
+            from services.strategy_context import get_strategy_context
+            context = get_strategy_context(self.underlying, active_only=True)
+            maximum = max(1, len(context.option_universe) if context else len(candidates))
+        except Exception:
+            maximum = max(1, len(candidates))
         qualified: set[str] = set()
         for option_type in ("CE", "PE"):
             budget_items = get_budget_range_order_instruments(
@@ -98,6 +103,7 @@ class OpeningEmaCrossSelector:
                 subscribed_only=True,
                 sort_mode=getattr(config, "EMA_ALERT_BUDGET_SORT_MODE", "nearest_to_budget_midpoint"),
                 inclusive=getattr(config, "EMA_ALERT_BUDGET_RANGE_INCLUSIVE", True),
+                underlying=self.underlying,
             )
             qualified.update(
                 str(item.get("instrument_key"))
@@ -117,11 +123,18 @@ class OpeningEmaCrossSelector:
             logger.info("Opening EMA candle had no bullish cross candidates.")
             return False
 
-        reference = get_reference_opening_range_average()
+        reference = get_reference_opening_range_average(self.underlying)
         if reference is None or reference <= 0:
             logger.warning("Opening EMA candidates rejected: OR reference average unavailable.")
             return False
-        average_window = build_average_window(reference)
+        try:
+            from services.strategy_context import get_strategy_context
+            context = get_strategy_context(self.underlying, active_only=True)
+            option_config = context.option_config if context else None
+        except Exception:
+            context = None
+            option_config = None
+        average_window = build_average_window(reference, option_config)
         if not average_window.get("valid"):
             logger.warning("Opening EMA candidates rejected: OR average window invalid.")
             return False
@@ -165,10 +178,12 @@ class OpeningEmaCrossSelector:
         with self.lock:
             if not self.active or self.candidate_selected:
                 return self.candidate_selected
-            with selected_or_lock:
-                current = deepcopy(selected_or_instrument_state)
+            current = runtime_state.get_selected_or_state_snapshot(self.underlying)
             if current.get("selected"):
                 if str(current.get("instrument_key") or "") != key:
+                    with self.lock:
+                        self.candidate_selected = True
+                        self.active = False
                     logger.info(
                         "Opening EMA selection blocked by existing daily isolation. current=%s candidate=%s",
                         current.get("instrument_key"), key,
@@ -198,6 +213,11 @@ class OpeningEmaCrossSelector:
         """Send one no-qualifier Telegram after all instruments reach candle 3."""
         now = get_now_market_time()
         self._ensure_day(now.date())
+        if runtime_state.get_selected_or_state_snapshot(self.underlying).get("selected"):
+            with self.lock:
+                self.candidate_selected = True
+                self.active = False
+            return False
         with self.lock:
             if not self.active or self.candidate_selected or self.no_cross_sent:
                 return False
@@ -212,6 +232,7 @@ class OpeningEmaCrossSelector:
             self.active = False
 
         message = (
+            f"Underlying: {self.underlying}\n"
             "The initial opening EMA search window (09:15–09:18) is complete.\n"
             "No qualifying bullish EMA cross was identified after applying the "
             "configured Opening Range isolation window and budget-range criteria."
@@ -221,7 +242,7 @@ class OpeningEmaCrossSelector:
                 title="Opening EMA Search Complete",
                 message=message,
                 level="INFO",
-                notification_context=f"opening_ema_no_candidate|date={now.date().isoformat()}",
+                notification_context=f"opening_ema_no_candidate|date={now.date().isoformat()}|underlying={self.underlying}",
             )
             logger.info("Opening EMA search expired without qualifying candidate. date=%s", now.date())
         except Exception:
@@ -229,5 +250,15 @@ class OpeningEmaCrossSelector:
         return True
 
 
-opening_ema_cross_selector = OpeningEmaCrossSelector()
+_selectors: dict[str, OpeningEmaCrossSelector] = {}
+
+
+def get_opening_ema_cross_selector(underlying: str = "NIFTY") -> OpeningEmaCrossSelector:
+    key = str(underlying or "NIFTY").strip().upper()
+    if key not in _selectors:
+        _selectors[key] = OpeningEmaCrossSelector(key)
+    return _selectors[key]
+
+
+opening_ema_cross_selector = get_opening_ema_cross_selector("NIFTY")
 

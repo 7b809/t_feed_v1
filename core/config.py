@@ -253,6 +253,9 @@ SERVICE_COMMAND_TIMEOUT_SECONDS = _cfg_int(
 MONGO_URI = _cfg_str("mongo.uri", "MONGO_URL", "")
 MONGO_DB = _cfg_str("mongo.db", "MONGO_DB", "")
 TOKENS_COLLECTION = _cfg_str("mongo.tokens_collection", "TOKENS_COLLECTION", "")
+STRATEGY_STATE_COLLECTION = _cfg_str(
+    "strategy_state.collection", "STRATEGY_STATE_COLLECTION", "strategy_state"
+).strip()
 
 REFRESH_INTERVAL_MINUTES = _cfg_int(
     "mongo.refresh_interval_minutes", "REFRESH_INTERVAL_MINUTES", 60
@@ -571,6 +574,31 @@ STRIKE_FROM = _cfg_float("market.strike_from", "STRIKE_FROM", 22500)
 STRIKE_TO = _cfg_float("market.strike_to", "STRIKE_TO", 25000)
 if STRIKE_FROM > STRIKE_TO:
     STRIKE_FROM, STRIKE_TO = STRIKE_TO, STRIKE_FROM
+
+for _underlying_name, _settings in STRATEGY_UNDERLYINGS.items():
+    _slug = _underlying_name.lower()
+    _fallback_range = (STRIKE_FROM, STRIKE_TO) if _underlying_name == "NIFTY" else (None, None)
+    _range_from_raw = _cfg(
+        f"strategies.{_slug}.strike_from",
+        f"STRATEGY_{_underlying_name}_STRIKE_FROM",
+        _fallback_range[0],
+    )
+    _range_to_raw = _cfg(
+        f"strategies.{_slug}.strike_to",
+        f"STRATEGY_{_underlying_name}_STRIKE_TO",
+        _fallback_range[1],
+    )
+    try:
+        _range_from = float(_range_from_raw) if _range_from_raw is not None else None
+        _range_to = float(_range_to_raw) if _range_to_raw is not None else None
+    except (TypeError, ValueError):
+        _range_from, _range_to = _fallback_range
+    _settings["option"] = {"strike_from": _range_from, "strike_to": _range_to}
+    if (_range_from is not None and _range_to is not None
+            and _range_from > _range_to):
+        _settings["option"]["strike_from"], _settings["option"]["strike_to"] = (
+            _settings["option"]["strike_to"], _settings["option"]["strike_from"]
+        )
 
 
 # ===========================================================================

@@ -35,27 +35,25 @@ logger.info(
 )
 
 
-def is_selected_or_instrument_locked() -> bool:
-    with state.selected_or_lock:
-        return bool(state.selected_or_instrument_state.get("selected"))
+def is_selected_or_instrument_locked(underlying: str | None = None) -> bool:
+    return bool(state.get_selected_or_state_snapshot(underlying).get("selected"))
 
 
-def get_selected_or_instrument_key() -> str | None:
-    with state.selected_or_lock:
-        instrument_key = state.selected_or_instrument_state.get("instrument_key")
+def get_selected_or_instrument_key(underlying: str | None = None) -> str | None:
+    instrument_key = state.get_selected_or_state_snapshot(underlying).get("instrument_key")
     if instrument_key is None:
         return None
     normalized_key = str(instrument_key).strip()
     return normalized_key if normalized_key else None
 
 
-def get_selected_or_instrument_state() -> dict:
-    return state.get_selected_or_state_snapshot()
+def get_selected_or_instrument_state(underlying: str | None = None) -> dict:
+    return state.get_selected_or_state_snapshot(underlying)
 
 
-def get_selected_or_ema_alerts(limit: int = 100) -> list:
+def get_selected_or_ema_alerts(limit: int = 100, underlying: str | None = None) -> list:
     normalized_limit = max(1, safe_int(limit, default=100))
-    return state.get_selected_or_ema_alerts_snapshot(limit=normalized_limit)
+    return state.get_selected_or_ema_alerts_snapshot(limit=normalized_limit, underlying=underlying)
 
 
 def get_isolated_instrument_type_from_state(selected_state: dict) -> str | None:
@@ -345,10 +343,8 @@ def get_suggested_order_option_type(
 
 
 def get_option_chain_instruments_for_ema(
-    *, cross_type: str, isolated_instrument_type: str | None
+    *, cross_type: str, isolated_instrument_type: str | None, underlying: str | None = None
 ):
-    from services.main_index_ltp_service import get_nearest_option_instruments
-
     suggested_order_option_type = get_suggested_order_option_type(
         instruments=[],
         cross_type=cross_type,
@@ -378,6 +374,45 @@ def get_option_chain_instruments_for_ema(
             "raw_result": {},
             "error": error_message,
         }
+    if underlying:
+        try:
+            from services.strategy_context import get_strategy_context
+            from services.opening_range.candle_utils import safe_float
+            context = get_strategy_context(underlying, active_only=True)
+            contracts = list(context.option_universe.values()) if context else []
+            spot = safe_float(context.runtime_metadata.get("underlying_ltp")) if context else 0
+            if spot <= 0 and context:
+                index_result = context.opening_range.get("instruments", {}).get(context.index_instrument_key, {})
+                spot = safe_float(index_result.get("latest_intraday_close"))
+            if spot <= 0 and context:
+                spot = safe_float((context.selected_instrument.get("contract_info") or {}).get("strike_price"))
+            matches = [
+                dict(item) for item in contracts
+                if normalize_option_type(item.get("instrument_type") or item.get("option_type")) == suggested_order_option_type
+                and safe_float(item.get("strike_price")) > 0
+            ]
+            matches.sort(key=lambda item: abs(safe_float(item.get("strike_price")) - spot))
+            count = max(1, safe_int(getattr(config, "MAIN_INDEX_NEAREST_INSTRUMENTS_COUNT", 3), default=3))
+            nearest = matches[:count]
+            return {
+                "status": "success" if nearest else "empty",
+                "success": bool(nearest),
+                "underlying": context.underlying if context else underlying,
+                "underlying_instrument_key": context.index_instrument_key if context else None,
+                "suggested_order_option_type": suggested_order_option_type,
+                "underlying_spot_price": spot or None,
+                "expiry_date": context.runtime_metadata.get("nearest_expiry") if context else None,
+                "data_source": "context_option_universe",
+                "nearest_instruments": nearest,
+                "nearest_strikes": [item.get("strike_price") for item in nearest],
+                "budget_instruments": [],
+                "budget_range": {"enabled": False, "reason": "budget pricing is not present in the option master"},
+                "raw_result": {"count": len(matches)},
+                "error": None if nearest else "No matching option contracts in the underlying context.",
+            }
+        except Exception:
+            logger.exception("Context option selection failed for underlying=%s", underlying)
+    from services.main_index_ltp_service import get_nearest_option_instruments
     requested_count = max(
         1,
         safe_int(getattr(config, "MAIN_INDEX_NEAREST_INSTRUMENTS_COUNT", 3), default=3),
@@ -718,7 +753,12 @@ def build_isolated_ema_alert_payload(
         f"{normalized_direction}-{uuid4().hex[:8]}"
     )
 
-    nifty_ltp = state.get_latest_main_index_ltp_value()
+    try:
+        from services.strategy_context import find_context_for_instrument
+        context = find_context_for_instrument(instrument_key)
+        nifty_ltp = context.runtime_metadata.get("underlying_ltp") if context else state.get_latest_main_index_ltp_value()
+    except Exception:
+        nifty_ltp = state.get_latest_main_index_ltp_value()
 
     isolated_snapshot = (
         state.get_latest_instrument_ltp_snapshot(instrument_key)
@@ -1471,6 +1511,14 @@ def process_selected_or_ema_cross_alert_detailed(
         return result
 
     event_key = str(ema_event.get("instrument_key") or "").strip()
+    underlying = str(ema_event.get("underlying") or "").strip().upper() or None
+    if underlying is None and event_key:
+        try:
+            from services.strategy_context import find_context_for_instrument
+            context = find_context_for_instrument(event_key)
+            underlying = context.underlying if context else None
+        except Exception:
+            underlying = None
 
     cross_type = str(ema_event.get("cross_type") or "").strip()
 
@@ -1635,7 +1683,7 @@ def process_selected_or_ema_cross_alert_detailed(
         selected_state = deepcopy(selected_state_override)
     else:
         state.ensure_current_market_day()
-        selected_state = get_selected_or_instrument_state()
+        selected_state = get_selected_or_instrument_state(underlying)
 
     if not isinstance(selected_state, dict):
         result["skip_reason"] = "invalid_selected_state"
@@ -1776,10 +1824,13 @@ def process_selected_or_ema_cross_alert_detailed(
                 if "_" in finalized_minute_guard_key
                 else None
             )
+            if finalized_minute_guard_key and underlying:
+                finalized_minute_guard_key = f"{underlying}_{finalized_minute_guard_key}"
 
             skip_alert = state.check_and_reserve_ema_minute_key(
                 alert_key=finalized_minute_guard_key,
                 state_date=alert_date,
+                underlying=underlying,
             )
 
             if skip_alert:
@@ -1839,7 +1890,7 @@ def process_selected_or_ema_cross_alert_detailed(
             result["error"] = "Could not resolve the suggested order option type."
 
             if guard_reserved and finalized_minute_guard_key:
-                state.release_ema_minute_key(finalized_minute_guard_key)
+                state.release_ema_minute_key(finalized_minute_guard_key, underlying=underlying)
                 result["duplicate_control"]["released"] = True
                 logger.debug(
                     "Released finalized-minute guard after failure. key=%s",
@@ -1856,6 +1907,7 @@ def process_selected_or_ema_cross_alert_detailed(
         option_chain_selection = get_option_chain_instruments_for_ema(
             cross_type=cross_type,
             isolated_instrument_type=(isolated_instrument_type),
+            underlying=underlying,
         )
 
         if not isinstance(
@@ -1920,7 +1972,7 @@ def process_selected_or_ema_cross_alert_detailed(
         nifty_ltp = option_chain_spot_price
 
         if nifty_ltp is None:
-            nifty_ltp = state.get_latest_main_index_ltp_value()
+            nifty_ltp = selected_state.get("latest_main_index_ltp")
 
         payload = build_isolated_ema_alert_payload(
             ema_event=ema_event,
@@ -1949,7 +2001,7 @@ def process_selected_or_ema_cross_alert_detailed(
             result["error"] = "EMA alert payload builder returned an invalid result."
 
             if guard_reserved and finalized_minute_guard_key:
-                state.release_ema_minute_key(finalized_minute_guard_key)
+                state.release_ema_minute_key(finalized_minute_guard_key, underlying=underlying)
                 result["duplicate_control"]["released"] = True
                 logger.debug(
                     "Released finalized-minute guard after payload build failure. key=%s",
@@ -2263,7 +2315,7 @@ def process_selected_or_ema_cross_alert_detailed(
             )
 
         if not delivery_accepted and guard_reserved and finalized_minute_guard_key:
-            state.release_ema_minute_key(finalized_minute_guard_key)
+            state.release_ema_minute_key(finalized_minute_guard_key, underlying=underlying)
             result["duplicate_control"]["released"] = True
             logger.debug(
                 "Released finalized-minute guard because no delivery channel accepted. key=%s",
@@ -2393,7 +2445,7 @@ def process_selected_or_ema_cross_alert_detailed(
     except Exception as ex:
         if guard_reserved and finalized_minute_guard_key:
             try:
-                state.release_ema_minute_key(finalized_minute_guard_key)
+                state.release_ema_minute_key(finalized_minute_guard_key, underlying=underlying)
                 result["duplicate_control"]["released"] = True
                 logger.debug(
                     "Released finalized-minute guard after exception. key=%s",
@@ -2503,33 +2555,59 @@ def _build_empty_opening_range_ema_payload(
 
 
 def get_opening_range_levels_for_ema_event(instrument_key: str) -> dict:
-    latest_main_index_ltp = state.get_latest_main_index_ltp_value()
+    context = None
+    try:
+        from services.strategy_context import find_context_for_instrument
+        context = find_context_for_instrument(str(instrument_key or ""))
+    except Exception:
+        context = None
+    latest_main_index_ltp = (
+        context.runtime_metadata.get("underlying_ltp")
+        if context else state.get_latest_main_index_ltp_value()
+    )
     if not DEFAULT_EMA_CROSS_INCLUDE_OPENING_RANGE_LEVELS:
-        return _build_empty_opening_range_ema_payload(
+        payload = _build_empty_opening_range_ema_payload(
             latest_main_index_ltp=latest_main_index_ltp
         )
+        if context:
+            payload["isolated_instrument"] = deepcopy(context.selected_instrument)
+        return payload
     if instrument_key is None:
-        return _build_empty_opening_range_ema_payload(
+        payload = _build_empty_opening_range_ema_payload(
             latest_main_index_ltp=latest_main_index_ltp
         )
+        if context:
+            payload["isolated_instrument"] = deepcopy(context.selected_instrument)
+        return payload
     normalized_instrument_key = str(instrument_key).strip()
     if not normalized_instrument_key:
-        return _build_empty_opening_range_ema_payload(
+        payload = _build_empty_opening_range_ema_payload(
             latest_main_index_ltp=latest_main_index_ltp
         )
-    with state.opening_range_cache_lock:
-        cache_data = state.opening_range_cache.get("data", {})
-        if not isinstance(cache_data, dict):
-            cache_data = {}
-        cached_item = cache_data.get(normalized_instrument_key)
+        if context:
+            payload["isolated_instrument"] = deepcopy(context.selected_instrument)
+        return payload
+    if context:
+        instruments = context.opening_range.get("instruments", {})
+        cached_item = instruments.get(normalized_instrument_key) if isinstance(instruments, dict) else None
         item = deepcopy(cached_item) if isinstance(cached_item, dict) else None
-        cached_main_index_ltp = state.opening_range_cache.get("latest_main_index_ltp")
-    if cached_main_index_ltp is not None:
-        latest_main_index_ltp = cached_main_index_ltp
+    else:
+        with state.opening_range_cache_lock:
+            cache_data = state.opening_range_cache.get("data", {})
+            if not isinstance(cache_data, dict):
+                cache_data = {}
+            cached_item = cache_data.get(normalized_instrument_key)
+            item = deepcopy(cached_item) if isinstance(cached_item, dict) else None
+            cached_main_index_ltp = state.opening_range_cache.get("latest_main_index_ltp")
+        if cached_main_index_ltp is not None:
+            latest_main_index_ltp = cached_main_index_ltp
     if not item:
-        return _build_empty_opening_range_ema_payload(
+        payload = _build_empty_opening_range_ema_payload(
             latest_main_index_ltp=latest_main_index_ltp
         )
+        if context:
+            payload["isolated_instrument"] = deepcopy(context.selected_instrument)
+        return payload
     levels = item.get("levels") or {}
     if not isinstance(levels, dict):
         levels = {}
@@ -2554,7 +2632,9 @@ def get_opening_range_levels_for_ema_event(instrument_key: str) -> dict:
         "latest_intraday_close": item.get("latest_intraday_close"),
         "latest_main_index_ltp": latest_main_index_ltp,
         "processed_at": item.get("processed_at"),
-        "isolated_instrument": get_selected_or_instrument_state(),
+        "isolated_instrument": deepcopy(context.selected_instrument) if context else get_selected_or_instrument_state(),
+        "underlying": context.underlying if context else None,
+        "underlying_instrument_key": context.index_instrument_key if context else None,
     }
 
 
