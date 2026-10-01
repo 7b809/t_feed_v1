@@ -1,0 +1,37 @@
+name: Deploy t_feed_v1
+
+on:
+  push:
+    branches:
+      - temp2
+
+jobs:
+  deploy:
+    name: Deploy to AWS Server
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.2.2
+        with:
+          host: ${{ secrets.AWS_HOST }}
+          username: ${{ secrets.AWS_USER }}
+          key: ${{ secrets.AWS_SSH_KEY }}
+          script: |
+            set -e
+
+            echo "======================================"
+            echo "Starting deployment"
+            echo "======================================"
+
+            cd ~/TheProjects/t_feed_v1
+
+            echo "Current directory:"
+            pwd
+
+            echo "Updating project..."
+            python3 update_project.py
+
+            echo "======================================"
+            echo "Deployment completed"
+            echo "======================================"
