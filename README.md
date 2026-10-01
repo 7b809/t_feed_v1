@@ -106,7 +106,7 @@ The option and EMA inputs are separate: the Upstox market stream supplies live t
 Relevant implementation files are `services/token_service.py`, `services/option_service.py`, `services/upstox_websocket.py`, `services/history_service.py`, and `ws_feed/broadcaster.py`.
 
 ## EMA Engine
-
+ 
 The internal engine is `services/ema_engine.py` (`InternalEmaEngine`, singleton `internal_ema_engine`). Historical fetching and EMA calculation remain in `services/history_service.py`; its `initialize_live_ema_from_history()` function passes the resulting summary into the engine. EMA periods are configured by `EMA_FAST_PERIOD` and `EMA_SLOW_PERIOD` (defaults 9 and 21).
 
 ### Initialization
