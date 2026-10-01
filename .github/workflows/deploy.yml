@@ -1,4 +1,4 @@
-name: Deploy t_feed_v1
+name: Deploy Project
 
 on:
   push:
