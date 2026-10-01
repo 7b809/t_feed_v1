@@ -90,7 +90,7 @@ The shared `options_cache` and `opening_range_cache` still exist as compatibilit
 
 ## Configuration and supported indexes
 
-`core/config.py` builds `STRATEGY_UNDERLYINGS` and `ACTIVE_STRATEGY_UNDERLYINGS`. Configuration resolution is environment variable first, then the application's JSON configuration, then defaults. The JSON file is located using `APP_CONFIG_FILE` or the existing `config/app_config.json` / `config.json` search.
+`core/instrument_specs.py` is the authoritative static catalog for supported underlying identity, provider key defaults, exchange, provider symbol aliases, and strike interval. `core/config.py` combines those specifications with environment/JSON runtime defaults. Effective strategy values resolve in this order: Mongo-backed `RuntimeConfigService` override, environment variable, JSON configuration, then static/default value. The JSON file is located using `APP_CONFIG_FILE` or the existing `config/app_config.json` / `config.json` search. The Mongo runtime registry uses the existing `RUNTIME_CONFIG_ENABLED`, `RUNTIME_CONFIG_COLLECTION`, and refresh mechanism; there is no second runtime-config loader.
 
 | Environment variable | JSON key | Default | Purpose |
 | --- | --- | --- | --- |
@@ -98,11 +98,11 @@ The shared `options_cache` and `opening_range_cache` still exist as compatibilit
 | `MAIN_NIFTY_SECURITY` | `market.main_nifty_security` | `NSE_INDEX\|Nifty 50` | NIFTY index instrument key. |
 | `STRATEGY_BANKNIFTY_ENABLED` | `strategies.banknifty.enabled` | `false` | Enables BANKNIFTY strategy context. |
 | `BANKNIFTY_SECURITY` | `strategies.banknifty.instrument_key` | `NSE_INDEX\|Nifty Bank` | BANKNIFTY index instrument key. |
-| `STRATEGY_SENSEX_ENABLED` | `strategies.sensex.enabled` | `false` | Enables SENSEX strategy context. |
+| `STRATEGY_SENSEX_ENABLED` | `strategies.sensex.enabled` | `true` | Enables SENSEX strategy context. |
 | `SENSEX_SECURITY` | `strategies.sensex.instrument_key` | `BSE_INDEX\|SENSEX` | SENSEX index instrument key. |
-| `STRATEGY_NIFTY_STRIKE_FROM`, `STRATEGY_NIFTY_STRIKE_TO` | `strategies.nifty.strike_from`, `strategies.nifty.strike_to` | Global `STRIKE_FROM`, `STRIKE_TO` | Optional NIFTY option strike bounds. |
-| `STRATEGY_BANKNIFTY_STRIKE_FROM`, `STRATEGY_BANKNIFTY_STRIKE_TO` | `strategies.banknifty.strike_from`, `strategies.banknifty.strike_to` | Unbounded | Optional BANKNIFTY strike bounds. |
-| `STRATEGY_SENSEX_STRIKE_FROM`, `STRATEGY_SENSEX_STRIKE_TO` | `strategies.sensex.strike_from`, `strategies.sensex.strike_to` | Unbounded | Optional SENSEX strike bounds. |
+| `STRATEGY_NIFTY_STRIKE_FROM`, `STRATEGY_NIFTY_STRIKE_TO` | `strategies.nifty.strike_from`, `strategies.nifty.strike_to` | Legacy global bounds as NIFTY fallback | Inclusive NIFTY strategy filter bounds; runtime-overridable. |
+| `STRATEGY_BANKNIFTY_STRIKE_FROM`, `STRATEGY_BANKNIFTY_STRIKE_TO` | `strategies.banknifty.strike_from`, `strategies.banknifty.strike_to` | Unbounded while disabled | Inclusive BANKNIFTY filter bounds; runtime-overridable. |
+| `STRATEGY_SENSEX_STRIKE_FROM`, `STRATEGY_SENSEX_STRIKE_TO` | `strategies.sensex.strike_from`, `strategies.sensex.strike_to` | `80000`, `82000` in `.env.example` | Inclusive SENSEX filter bounds; runtime-overridable. |
 | `STRIKE_FROM`, `STRIKE_TO` | `market.strike_from`, `market.strike_to` | `22500`, `25000` | Shared legacy bounds and NIFTY fallback. `.env.example` overrides these. |
 | `STRATEGY_STATE_COLLECTION` | `strategy_state.collection` | `strategy_state` | One Mongo collection for date/index strategy snapshots. |
 
@@ -113,13 +113,31 @@ STRATEGY_NIFTY_ENABLED=true
 STRATEGY_NIFTY_STRIKE_FROM=23000
 STRATEGY_NIFTY_STRIKE_TO=25000
 STRATEGY_BANKNIFTY_ENABLED=false
-BANKNIFTY_SECURITY=NSE_INDEX|Nifty Bank
-STRATEGY_SENSEX_ENABLED=false
-SENSEX_SECURITY=BSE_INDEX|SENSEX
+STRATEGY_SENSEX_ENABLED=true
+STRATEGY_SENSEX_STRIKE_FROM=80000
+STRATEGY_SENSEX_STRIKE_TO=82000
 STRATEGY_STATE_COLLECTION=strategy_state
 ```
 
-For NIFTY and SENSEX together, set `STRATEGY_SENSEX_ENABLED=true`. Add an optional pair of SENSEX strike variables only if a strike range is desired. BANKNIFTY and SENSEX do not inherit NIFTY's global strike bounds when their own range is absent.
+### Per-Index Option Strike Configuration
+
+Strike range and strike interval are separate settings. The strategy range is a runtime filter; the interval is an instrument characteristic and is not a global runtime setting.
+
+| Underlying | Static step | Runtime range example | Instrument key default |
+| --- | ---: | --- | --- |
+| NIFTY | 50 | `23000`–`25000` | `NSE_INDEX|Nifty 50` |
+| BANKNIFTY | 100 (independent spec) | configured separately when enabled | `NSE_INDEX|Nifty Bank` |
+| SENSEX | 100 | `80000`–`82000` | `BSE_INDEX|SENSEX` |
+
+The steps come from `INDEX_INSTRUMENT_SPECS` in `core/instrument_specs.py`; no service contains its own step constant. The runtime registry provides `STRATEGY_<UNDERLYING>_ENABLED`, `STRATEGY_<UNDERLYING>_STRIKE_FROM`, and `STRATEGY_<UNDERLYING>_STRIKE_TO` for each configured index. The same values can be set by the existing Mongo runtime-config service. Instrument-key environment variables are retained as deployment overrides for existing installations, while their default identities and all strike steps are cataloged in the static module.
+
+Range endpoints are inclusive absolute strikes. Both endpoints must be whole numbers divisible by that underlying's step (`23000` and `25000` are valid NIFTY bounds; `23025` is rejected). Explicit per-index ranges with reversed or partial boundaries are rejected. For backward compatibility, the legacy global `STRIKE_FROM`/`STRIKE_TO` fallback for NIFTY retains its existing reversed-bound normalization. Runtime configuration changes are picked up by subsequent context reads; option-chain refresh/reload applies new bounds to the newly fetched provider response.
+
+The option-chain provider remains authoritative. Filtering retains only returned contracts with a matching provider underlying, an in-range strike, and a strike aligned to the current context's step. The configured boundaries never generate option symbols or contract records. Thus a valid configured strike absent from provider data does not enter the option universe.
+
+The `GET /api/strategies` and `GET /api/strategies/{underlying}` responses expose current `runtime_config` metadata including `strike_step`, `strike_from`, and `strike_to`. The instrument listing also includes active index strategy summaries, so frontend filters can use server-provided metadata instead of hard-coded intervals.
+
+At option-load startup/refresh, the service logs the effective enabled flag and, for active indexes, the instrument key, strike range, and static step. It does not log credentials.
 
 An enabled index gets a context, option-chain load, candle processing, OR state, and an index base WebSocket key. A disabled index is excluded from active contexts, option-chain loading, EMA active keys, strategy processing, and selected-instrument subscriptions. The service may still have static/master metadata for all three configured indexes.
 
@@ -130,7 +148,8 @@ An enabled index gets a context, option-chain load, candle processing, OR state,
 | Context field | Contents |
 | --- | --- |
 | `underlying`, `index_instrument_key`, `display_name`, `enabled` | Identity and configured activation. |
-| `option_config` | Per-index strike range configuration. |
+| `option_config` | Live per-index strike boundaries plus the static `strike_step`. |
+| `strategy_config_snapshot` | Immutable effective configuration captured when the context first becomes active for that trading date (or restored from its saved state) and written to Mongo for historical reconstruction. |
 | `option_universe` | Map from option `instrument_key` to normalized provider contract metadata. |
 | `opening_range` | Date/status/source plus OR result map keyed by the index or option instrument key. |
 | `ema_state`, `ema_events` | Per-instrument EMA snapshots and bounded crossover event history. |
@@ -142,7 +161,7 @@ An enabled index gets a context, option-chain load, candle processing, OR state,
 
 For example, the NIFTY context owns NIFTY CE/PE contracts and the SENSEX context owns SENSEX CE/PE contracts. The option loader iterates active contexts, calls Upstox using each configured index instrument key, filters by provider `underlying_symbol` where that metadata is present, and stamps each normalized contract with `underlying` and `underlying_instrument_key`. Normalized contracts retain `provider_metadata` for inspection. Per-index lookups use the context or an underlying-aware cache index rather than choosing a same-strike contract from another index.
 
-With `filter_nearest=True` (the default), the loader chooses the nearest non-expired expiry and applies that index's configured strike bounds. If no per-index range exists, BANKNIFTY/SENSEX contracts are not filtered using NIFTY's global range. Explicit `expiry_date` requests bypass nearest-expiry selection. The combined legacy cache records per-underlying expiry and contract summaries while each context remains the strategy universe.
+With `filter_nearest=True` (the default), the loader chooses the nearest non-expired expiry and applies that index's configured inclusive bounds and static step. An unset range for a disabled index does not inherit NIFTY's global range; its actual returned contracts are still filtered by that index's step. Explicit `expiry_date` requests bypass nearest-expiry selection but retain the same underlying/range/step filtering. The combined legacy cache records per-underlying expiry, contract, and strike-configuration summaries while each context remains the strategy universe.
 
 ## Candle and EMA processing
 
@@ -222,7 +241,7 @@ Important REST routes include:
 
 | Route | Purpose |
 | --- | --- |
-| `GET /api/strategies` | List enabled strategy contexts and compact runtime state for each. |
+| `GET /api/strategies` | List enabled strategy contexts, current per-index strike settings, and compact runtime state for each. |
 | `GET /api/strategies/{underlying}` | Return one enabled context snapshot, including its option universe. |
 | `GET /opening-range/status?underlying=...` | Existing aggregate OR status; the selected-instrument field can be scoped to the requested underlying. |
 | `GET /opening-range/dashboard` | Existing aggregate dashboard summary. |
@@ -242,7 +261,7 @@ WebSocket endpoints include `/ws`, `/all-feeds`, `/option`, `/ws/ema`, `/ws/ema-
 
 `services/strategy_state_persistence.py` stores snapshots in the one collection configured by `STRATEGY_STATE_COLLECTION` (default `strategy_state`), using the project's `MONGO_URL`/`MONGO_DB` settings. The repository creates a unique compound index on `(trading_date, underlying)` and upserts by that same identity. `trading_date` is the market date in `MARKET_TIMEZONE` (default `Asia/Kolkata`) formatted as `YYYY-MM-DD`.
 
-Each snapshot includes identity and index key, strategy configuration, option universe, OR, EMA states/events, touch state/events, candidates, selected instrument, isolation state, alerts, and metadata. Writes happen on meaningful context updates and once after an EMA candle batch, not once per incoming WebSocket tick. The repository uses bounded context event histories. Mongo loading/writing is fail-open for the live runtime: when Mongo settings or connectivity are missing, processing can continue and repository warnings/errors are logged.
+Each snapshot includes identity and index key, strategy configuration, option universe, OR, EMA states/events, touch state/events, candidates, selected instrument, isolation state, alerts, and metadata. The strategy configuration snapshot captures `enabled`, display name, and the effective strike range and step when the context first becomes active for that trading date (or restores its existing saved state). Live runtime edits update processing configuration, but do not rewrite that day's stored configuration snapshot; the next trading date captures the then-effective values when that context is active. Writes happen on meaningful context updates and once after an EMA candle batch, not once per incoming WebSocket tick. The repository uses bounded context event histories. Mongo loading/writing is fail-open for the live runtime: when Mongo settings or connectivity are missing, processing can continue and repository warnings/errors are logged.
 
 Example document identity and content shape:
 
@@ -251,7 +270,11 @@ Example document identity and content shape:
   "trading_date": "2026-10-02",
   "underlying": "SENSEX",
   "underlying_instrument_key": "BSE_INDEX|SENSEX",
-  "strategy_config": { "enabled": true, "display_name": "SENSEX", "option": {} },
+  "strategy_config": {
+    "enabled": true,
+    "display_name": "SENSEX",
+    "option": { "strike_from": 80000, "strike_to": 82000, "strike_step": 100 }
+  },
   "opening_range": { "status": "success", "instruments": {} },
   "ema": { "state": {}, "events": [] },
   "touch_state": {},
@@ -284,13 +307,15 @@ On a new market date, `StrategyContext.ensure_trading_date()` clears intraday st
 
 ## Multi-index examples and backward compatibility
 
-NIFTY-only mode remains the defaults represented in `.env.example`:
+The checked-in example enables NIFTY and SENSEX and disables BANKNIFTY. To run the backwards-compatible NIFTY-only selection, configure:
 
 ```dotenv
 STRATEGY_NIFTY_ENABLED=true
 STRATEGY_BANKNIFTY_ENABLED=false
 STRATEGY_SENSEX_ENABLED=false
 ```
+
+NIFTY retains the existing default key and NIFTY-specific strike-range fallback. The candle-based touch path remains the current implementation in either single- or multi-index mode.
 
 Two-index example:
 
@@ -300,14 +325,16 @@ STRATEGY_BANKNIFTY_ENABLED=false
 STRATEGY_SENSEX_ENABLED=true
 ```
 
-In the second example NIFTY and SENSEX get independent candles, EMA states, OR results, option universes, touch/selection state, alert histories, and selected live feeds. BANKNIFTY is omitted from active strategy processing. NIFTY retains its default instrument key and global strike-range fallback, which preserves the NIFTY-only contract-loading behavior while touch discovery uses completed candles.
+In the second example NIFTY and SENSEX get independent candles, EMA states, OR results, option universes, touch/selection state, alert histories, and selected live feeds. BANKNIFTY is omitted from active strategy processing. The two active indexes use separate range boundaries and their own static interval.
 
 ## Component and file reference
 
 | Path | Responsibility |
 | --- | --- |
 | `main.py` | FastAPI application/lifespan, startup orchestration, scheduled jobs, and route registration. |
-| `core/config.py` | Environment/JSON settings, enabled underlying map, instrument keys, and per-index option ranges. |
+| `core/config.py` | Environment/JSON runtime defaults, supported underlying map, deployment instrument-key overrides, and aligned per-index option ranges. |
+| `core/instrument_specs.py` | Authoritative static instrument identity, provider symbol aliases, exchange, and per-index strike intervals; aligned-range validation and provider-row filtering helpers. |
+| `services/runtime_config_service.py` | Existing Mongo runtime-config registry and refresh path, now also exposing per-index enable/range values while leaving instrument steps static. |
 | `services/strategy_context.py` | Per-underlying runtime state, IST trading date reset/restore, active keys, and context snapshots. |
 | `services/strategy_state_persistence.py` | One Mongo collection, unique date/underlying index, load, and upsert repository. |
 | `services/option_service.py` | Upstox option master loading, provider underlying filtering, per-index option universes, cache compatibility indexes, and selected live-key generation. |
@@ -322,11 +349,12 @@ In the second example NIFTY and SENSEX get independent candles, EMA states, OR r
 | `ws_feed/broadcaster.py` | Downstream live tick, EMA crossover, and OR event delivery to WebSocket clients. |
 | `ws_feed/websocket_routes.py` | Browser/client WebSocket routes. |
 | `api/strategy_routes.py` | Multi-index strategy context list and single-underlying snapshot endpoints. |
+| `api/instrument_routes.py` | Instrument listing API with context-aware range filtering and active-index configuration metadata. |
 | `api/opening_range_routes.py` | Existing OR, touch, selected instrument, alert, and manual fetch APIs. |
 | `api/chart_routes.py` | Chart page and chart instrument/data routes. |
 | `templates/isolated_ema_dashboard.html` | Existing OR/EMA dashboard plus enabled strategy context cards. |
-| `tests/test_strategy_context.py` | Context ownership, disabled context option behavior, selection isolation, and directional candle touch checks. |
-| `tests/test_strategy_state_persistence.py` | Same-collection date/underlying upsert and unique compound identity checks. |
+| `tests/test_index_strike_config.py` | Per-index static steps, aligned boundaries, filtering, and provider-contract source-of-truth checks. |
+| `tests/test_strategy_runtime_config.py` | Runtime range overrides, per-index validation, disabled BANKNIFTY settings, and daily configuration snapshot behavior. |
 
 ## End-to-end data flow
 
@@ -368,25 +396,26 @@ Context changes and candle batches -> date/index Mongo upsert
 
 The context-based model supports more than one underlying without copying the strategy implementation, prevents one index's lock/OR/touch/alert state from replacing another's, and uses closed candles for stable strategy discovery. Selective upstream subscriptions keep the live tick path focused on configured index feeds and selected instruments while preserving live chart/dashboard updates. No numerical performance improvement is claimed here; the repository does not contain measurements for one.
 
-The initial supported set is explicitly configured in `STRATEGY_UNDERLYINGS`. Enabling BANKNIFTY or SENSEX and setting its instrument key is configuration-driven. Adding an entirely new index currently requires a code/config addition to that supported-index map, a provider-recognized instrument key and option metadata, plus validation that existing feed/chart/order assumptions accept its market. The strategy services can then consume a context without creating a duplicate per-index strategy implementation. It is not currently a zero-code-change plugin system.
+The initial supported set is explicit. To add another underlying, add its `IndexInstrumentSpec` to `core/instrument_specs.py` (identity, provider aliases, exchange, and static step), add its runtime defaults to the supported-underlying configuration in `core/config.py`, and verify its option-chain metadata and provider behavior. Runtime enable/range registry entries are generated from configured underlyings; the generic contract filter and context strategy logic are reused. Existing feed/chart/order assumptions still need validation for the new market. It is not currently a zero-code-change plugin system.
 
 ## Testing and verification
 
-Run the unit tests from the repository root in an environment with `requirements.txt` installed:
+Run the added tests from the repository root in an environment with `requirements.txt` installed:
 
 ```powershell
 python -m unittest discover -s tests
 ```
 
-The focused context tests cover option ownership, disabled context behavior, independent selection values, and directional candle touch conditions. The persistence tests use an in-memory collection double to assert the unique `(trading_date, underlying)` identity and that updates affect only the matching date/index document.
+The 6 strike tests cover the static NIFTY/SENSEX/BANKNIFTY intervals, valid and invalid range alignment, inclusive independent NIFTY/SENSEX filtering, range validation, and the fact that filtering retains only contracts supplied by the provider. The 4 runtime/context tests cover per-index alignment, disabled BANKNIFTY configuration, updated Sensex bounds being read after the runtime cache changes, and preservation of the trading-day strategy-config snapshot. The runtime-config tests do not connect to Mongo; they validate the existing service's effective-value resolution against an in-memory cache.
 
-In the development environment used for this change, Python AST parsing and `git diff --check` were run. The normal focused unittest command could not import the project because the runtime is missing project dependencies (`python-dotenv`, `upstox_client`, and `pymongo`). To exercise the changed strategy/persistence logic, all 5 context tests and all 3 persistence tests were also run with import stubs for those absent external modules; those 8 tests passed. This does not verify provider, Mongo, or full application integration. Install `requirements.txt` and run the normal command for an environment-level verification.
+In the current development environment, the six strike tests passed with the standard unittest runner. All ten tests also passed when the missing `python-dotenv` and `pymongo` imports were stubbed so the runtime-config resolver could be exercised without external services. This does not verify Mongo refresh/persistence, full startup, Upstox provider calls, WebSocket subscriptions, or browser behavior.
 
 ## Known limitations
 
 - The shared option and OR caches and legacy global state accessors remain for compatibility. New per-context paths are used for known enabled-context instruments, but older aggregate dashboard tables are not yet all converted to per-underlying filters.
-- Automated coverage currently focuses on context ownership, directional touch behavior, and date/index persistence identity. It does not yet exercise multi-index startup against Upstox, live subscribe/unsubscribe against the provider, the browser dashboard, or Telegram/Algo App delivery end to end.
+- The new strike tests do not exercise Mongo-backed runtime edits or live reload against a provider, multi-index startup against Upstox, live subscribe/unsubscribe, browser dashboard behavior, or Telegram/Algo App delivery end to end.
 - The internal incremental EMA engine currently uses `ema_9` and `ema_21` fields/formulas. The repository also defines `EMA_FAST_PERIOD`/`EMA_SLOW_PERIOD` and `LIVE_EMA_FAST_PERIOD`/`LIVE_EMA_SLOW_PERIOD`; changing these settings does not currently change the engine's hard-coded incremental 9/21 recurrence.
+- `EMA_ALERT_STRIKE_STEP` is retained by a legacy NIFTY-only EMA order-suggestion helper. It does not filter per-index provider option chains; those use the static step from each `IndexInstrumentSpec`.
 - Touch discovery within the candle poll is coupled to an initialized EMA state because the OR touch function is called after a newly processed EMA candle. Uninitialized or duplicate EMA candles do not independently run touch processing.
 - Provider contract validation checks `underlying_symbol` when available. If the provider omits it, the returned contracts are accepted from the request's underlying and stamped with that context identity.
 - For non-NIFTY selected-instrument EMA alerts, nearest option suggestions come from the context contract master; the current option master does not supply the live option prices needed to reproduce the existing NIFTY budget-price suggestion list.

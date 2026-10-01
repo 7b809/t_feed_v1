@@ -19,6 +19,11 @@ def list_strategy_contexts():
             "enabled": context.enabled,
             "trading_date": context.trading_date,
             "underlying_instrument_key": context.index_instrument_key,
+            "runtime_config": {
+                "strike_step": context.option_config.get("strike_step"),
+                "strike_from": context.option_config.get("strike_from"),
+                "strike_to": context.option_config.get("strike_to"),
+            },
             "option_contract_count": len(context.option_universe),
             "opening_range": state["opening_range"],
             "ema": state["ema"],
@@ -39,4 +44,11 @@ def get_strategy_context_snapshot(underlying: str):
     context = get_strategy_context(underlying, active_only=True)
     if not context:
         raise HTTPException(status_code=404, detail="Enabled strategy not found")
-    return context.snapshot()
+    snapshot = context.snapshot()
+    snapshot["runtime_config"] = {
+        "enabled": context.enabled,
+        "strike_step": context.option_config.get("strike_step"),
+        "strike_from": context.option_config.get("strike_from"),
+        "strike_to": context.option_config.get("strike_to"),
+    }
+    return snapshot

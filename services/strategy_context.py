@@ -48,6 +48,7 @@ class StrategyContext:
     display_name: str
     enabled: bool
     option_config: dict[str, Any] = field(default_factory=dict)
+    strategy_config_snapshot: dict[str, Any] = field(default_factory=dict)
     trading_date: str = field(default_factory=market_date)
     option_universe: dict[str, dict] = field(default_factory=dict)
     opening_range: dict[str, Any] = field(default_factory=dict)
@@ -62,6 +63,18 @@ class StrategyContext:
     runtime_metadata: dict[str, Any] = field(default_factory=dict)
     _lock: RLock = field(default_factory=RLock, repr=False, compare=False)
     _restored_date: str | None = field(default=None, repr=False, compare=False)
+    _config_snapshot_initialized: bool = field(default=False, repr=False, compare=False)
+
+    def __post_init__(self):
+        if not self.strategy_config_snapshot:
+            self.strategy_config_snapshot = self._current_strategy_config()
+
+    def _current_strategy_config(self) -> dict[str, Any]:
+        return {
+            "enabled": bool(self.enabled),
+            "display_name": self.display_name,
+            "option": deepcopy(self.option_config),
+        }
 
     def set_option_universe(self, contracts: list[dict]) -> None:
         with self._lock:
@@ -95,6 +108,7 @@ class StrategyContext:
             self.alert_state = {}
             self.runtime_metadata = {"created_at": market_now().isoformat()}
             self._restored_date = None
+            self._config_snapshot_initialized = False
         return True
 
     def append_event(self, event: dict, *, kind: str) -> None:
@@ -120,11 +134,10 @@ class StrategyContext:
                 "trading_date": self.trading_date,
                 "underlying": self.underlying,
                 "underlying_instrument_key": self.index_instrument_key,
-                "strategy_config": {
-                    "enabled": self.enabled,
-                    "display_name": self.display_name,
-                    "option": deepcopy(self.option_config),
-                },
+                # Keep the effective configuration captured when this
+                # trading-date context was initialized. Later runtime edits
+                # affect processing but do not rewrite historical metadata.
+                "strategy_config": deepcopy(self.strategy_config_snapshot),
                 "option_universe": deepcopy(self.option_universe),
                 "opening_range": deepcopy(self.opening_range),
                 "ema": {"state": deepcopy(self.ema_state), "events": deepcopy(self.ema_events)},
@@ -157,6 +170,10 @@ class StrategyContext:
             self.isolation_state = deepcopy(document.get("isolation") or {})
             self.alert_state = deepcopy(document.get("alerts") or {})
             self.runtime_metadata = deepcopy(document.get("metadata") or {})
+            saved_config = document.get("strategy_config")
+            if isinstance(saved_config, dict) and saved_config:
+                self.strategy_config_snapshot = deepcopy(saved_config)
+                self._config_snapshot_initialized = True
             self._restored_date = self.trading_date
 
 
@@ -182,6 +199,19 @@ def get_strategy_contexts(*, active_only: bool = True, restore: bool = True) -> 
         if not _contexts:
             _contexts.update(_configured_contexts())
         contexts = dict(_contexts)
+    # RuntimeConfigService is the one runtime override mechanism. Refresh the
+    # live fields on every access; the per-day persisted config snapshot stays
+    # immutable until the next trading date.
+    from services.runtime_config_service import runtime_config_service
+    for context in contexts.values():
+        effective = runtime_config_service.get_strategy_settings(context.underlying)
+        context.enabled = bool(effective["enabled"])
+        context.option_config = deepcopy(effective["option"])
+        context.display_name = effective["display_name"]
+        changed_date = context.ensure_trading_date()
+        if context.enabled and (changed_date or not context._config_snapshot_initialized):
+            context.strategy_config_snapshot = context._current_strategy_config()
+            context._config_snapshot_initialized = True
     if active_only:
         contexts = {key: value for key, value in contexts.items() if value.enabled}
     if restore:
@@ -233,7 +263,10 @@ def get_active_strategy_summary() -> list[dict]:
     return [
         {"underlying": context.underlying, "instrument_key": context.index_instrument_key,
          "display_name": context.display_name, "enabled": context.enabled,
-         "trading_date": context.trading_date}
+         "trading_date": context.trading_date,
+         "strike_step": context.option_config.get("strike_step"),
+         "strike_from": context.option_config.get("strike_from"),
+         "strike_to": context.option_config.get("strike_to")}
         for context in get_strategy_contexts().values()
     ]
 

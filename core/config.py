@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
+from core.instrument_specs import INDEX_INSTRUMENT_SPECS, validate_strike_range
 
 load_dotenv()
 
@@ -544,26 +545,33 @@ MARKET_CLOSE_HOUR = _cfg_int("market.close_hour", "MARKET_CLOSE_HOUR", 15)
 MARKET_CLOSE_MINUTE = _cfg_int("market.close_minute", "MARKET_CLOSE_MINUTE", 30)
 
 MAIN_NIFTY_SECURITY = _cfg_str(
-    "market.main_nifty_security", "MAIN_NIFTY_SECURITY", "NSE_INDEX|Nifty 50"
+    "market.main_nifty_security",
+    "MAIN_NIFTY_SECURITY",
+    INDEX_INSTRUMENT_SPECS["NIFTY"].instrument_key,
 )
 
-# Strategy underlyings share the generic strategy engine. NIFTY remains the
-# backwards-compatible default; other indexes are opt-in until configured.
+# Instrument identity and exchange-specific strike intervals are centralized
+# in core.instrument_specs. Enablement and strike boundaries are runtime
+# strategy configuration (environment/JSON defaults, optionally overridden
+# by Mongo through RuntimeConfigService).
 STRATEGY_UNDERLYINGS = {
     "NIFTY": {
         "enabled": _cfg_bool("strategies.nifty.enabled", "STRATEGY_NIFTY_ENABLED", True),
-        "instrument_key": MAIN_NIFTY_SECURITY,
-        "display_name": "NIFTY 50",
+        "instrument_key": MAIN_NIFTY_SECURITY or INDEX_INSTRUMENT_SPECS["NIFTY"].instrument_key,
+        "display_name": INDEX_INSTRUMENT_SPECS["NIFTY"].display_name,
+        "instrument_spec": INDEX_INSTRUMENT_SPECS["NIFTY"],
     },
     "BANKNIFTY": {
         "enabled": _cfg_bool("strategies.banknifty.enabled", "STRATEGY_BANKNIFTY_ENABLED", False),
-        "instrument_key": _cfg_str("strategies.banknifty.instrument_key", "BANKNIFTY_SECURITY", "NSE_INDEX|Nifty Bank"),
-        "display_name": "NIFTY BANK",
+        "instrument_key": _cfg_str("strategies.banknifty.instrument_key", "BANKNIFTY_SECURITY", INDEX_INSTRUMENT_SPECS["BANKNIFTY"].instrument_key),
+        "display_name": INDEX_INSTRUMENT_SPECS["BANKNIFTY"].display_name,
+        "instrument_spec": INDEX_INSTRUMENT_SPECS["BANKNIFTY"],
     },
     "SENSEX": {
-        "enabled": _cfg_bool("strategies.sensex.enabled", "STRATEGY_SENSEX_ENABLED", False),
-        "instrument_key": _cfg_str("strategies.sensex.instrument_key", "SENSEX_SECURITY", "BSE_INDEX|SENSEX"),
-        "display_name": "SENSEX",
+        "enabled": _cfg_bool("strategies.sensex.enabled", "STRATEGY_SENSEX_ENABLED", True),
+        "instrument_key": _cfg_str("strategies.sensex.instrument_key", "SENSEX_SECURITY", INDEX_INSTRUMENT_SPECS["SENSEX"].instrument_key),
+        "display_name": INDEX_INSTRUMENT_SPECS["SENSEX"].display_name,
+        "instrument_spec": INDEX_INSTRUMENT_SPECS["SENSEX"],
     },
 }
 ACTIVE_STRATEGY_UNDERLYINGS = tuple(
@@ -577,7 +585,11 @@ if STRIKE_FROM > STRIKE_TO:
 
 for _underlying_name, _settings in STRATEGY_UNDERLYINGS.items():
     _slug = _underlying_name.lower()
-    _fallback_range = (STRIKE_FROM, STRIKE_TO) if _underlying_name == "NIFTY" else (None, None)
+    _fallback_range = (
+        (STRIKE_FROM, STRIKE_TO) if _underlying_name == "NIFTY"
+        else (80000, 82000) if _underlying_name == "SENSEX"
+        else (None, None)
+    )
     _range_from_raw = _cfg(
         f"strategies.{_slug}.strike_from",
         f"STRATEGY_{_underlying_name}_STRIKE_FROM",
@@ -591,14 +603,20 @@ for _underlying_name, _settings in STRATEGY_UNDERLYINGS.items():
     try:
         _range_from = float(_range_from_raw) if _range_from_raw is not None else None
         _range_to = float(_range_to_raw) if _range_to_raw is not None else None
-    except (TypeError, ValueError):
-        _range_from, _range_to = _fallback_range
-    _settings["option"] = {"strike_from": _range_from, "strike_to": _range_to}
-    if (_range_from is not None and _range_to is not None
-            and _range_from > _range_to):
-        _settings["option"]["strike_from"], _settings["option"]["strike_to"] = (
-            _settings["option"]["strike_to"], _settings["option"]["strike_from"]
-        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"Invalid {_underlying_name} strike range: strike boundaries must be numeric"
+        ) from exc
+    _strike_step = _settings["instrument_spec"].strike_step
+    _range_from, _range_to = validate_strike_range(
+        _underlying_name, _range_from, _range_to, _strike_step
+    )
+    _settings["strike_step"] = _strike_step
+    _settings["option"] = {
+        "strike_from": _range_from,
+        "strike_to": _range_to,
+        "strike_step": _strike_step,
+    }
 
 
 # ===========================================================================

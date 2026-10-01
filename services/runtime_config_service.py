@@ -31,6 +31,10 @@ CONFIG_NAME_TOUCH_ALERT_MAX_INSTRUMENTS = "OPENING_RANGE_TOUCH_ALERT_MAX_INSTRUM
 CONFIG_NAME_TOUCH_ALERT_BATCH_SECONDS = "OPENING_RANGE_TOUCH_ALERT_BATCH_SECONDS"
 
 
+def _strategy_config_name(underlying, suffix):
+    return f"STRATEGY_{str(underlying).upper()}_{suffix}"
+
+
 ALLOWED_TOUCH_LEVELS = {"R1", "R2", "R3", "S1", "S2", "S3"}
 
 
@@ -217,6 +221,37 @@ CONFIG_REGISTRY = {
         suggested_values=[5, 10, 15, 30],
     ),
 }
+
+# Per-index enablement and range are runtime-editable through this same Mongo
+# registry. Instrument identity and strike_step remain static in
+# core.instrument_specs and are deliberately not registered as overrides.
+for _underlying, _settings in config.STRATEGY_UNDERLYINGS.items():
+    _option = _settings.get("option") or {}
+    _enabled_name = _strategy_config_name(_underlying, "ENABLED")
+    _from_name = _strategy_config_name(_underlying, "STRIKE_FROM")
+    _to_name = _strategy_config_name(_underlying, "STRIKE_TO")
+    CONFIG_REGISTRY[_enabled_name] = build_registry_item(
+        label=f"{_underlying} Strategy Enabled",
+        description=f"Enables the {_underlying} strategy context.",
+        category="strategy_indexes",
+        value_type="bool",
+        default=bool(_settings.get("enabled")),
+        suggested_values=[True, False],
+    )
+    for _name, _key, _label in (
+        (_from_name, "strike_from", "Strike From"),
+        (_to_name, "strike_to", "Strike To"),
+    ):
+        CONFIG_REGISTRY[_name] = build_registry_item(
+            label=f"{_underlying} {_label}",
+            description=f"Inclusive {_underlying} option strike filter boundary. Must align to its static strike step.",
+            category="strategy_indexes",
+            value_type="float",
+            default=_option.get(_key),
+            minimum=0,
+            maximum=1000000,
+            recalculation_required=True,
+        )
 
 
 class RuntimeConfigError(Exception):
@@ -684,6 +719,70 @@ class RuntimeConfigService:
             minimum_price = self.get(CONFIG_NAME_BUDGET_MIN_PRICE)
             if float(value) < float(minimum_price):
                 raise RuntimeConfigValidationError("EMA_ALERT_BUDGET_MAX_PRICE cannot be less than EMA_ALERT_BUDGET_MIN_PRICE.")
+        if name.startswith("STRATEGY_") and name.endswith(("_STRIKE_FROM", "_STRIKE_TO")):
+            underlying = name[len("STRATEGY_"):].split("_STRIKE_", 1)[0]
+            spec_settings = config.STRATEGY_UNDERLYINGS.get(underlying, {})
+            step = int(spec_settings.get("strike_step") or 0)
+            if step and (not float(value).is_integer() or int(value) % step):
+                raise RuntimeConfigValidationError(
+                    f"Invalid {underlying} strike range: {value} is not aligned to strike step {step}."
+                )
+            counterpart = _strategy_config_name(
+                underlying, "STRIKE_TO" if name.endswith("_STRIKE_FROM") else "STRIKE_FROM"
+            )
+            other_value = self.get(counterpart, None)
+            if other_value is not None:
+                lower, upper = (float(value), float(other_value)) if name.endswith("_STRIKE_FROM") else (float(other_value), float(value))
+                if lower > upper:
+                    raise RuntimeConfigValidationError(
+                        f"Invalid {underlying} strike range: {lower:g} is greater than {upper:g}."
+                    )
+        if name.startswith("STRATEGY_") and name.endswith("_ENABLED") and bool(value):
+            underlying = name[len("STRATEGY_"):-len("_ENABLED")]
+            settings = config.STRATEGY_UNDERLYINGS.get(underlying, {})
+            lower = self.get(_strategy_config_name(underlying, "STRIKE_FROM"), settings.get("option", {}).get("strike_from"))
+            upper = self.get(_strategy_config_name(underlying, "STRIKE_TO"), settings.get("option", {}).get("strike_to"))
+            from core.instrument_specs import validate_strike_range
+            try:
+                validate_strike_range(underlying, lower, upper, settings.get("strike_step"))
+            except (TypeError, ValueError) as exc:
+                raise RuntimeConfigValidationError(str(exc)) from exc
+
+    def get_strategy_settings(self, underlying):
+        """Return validated effective runtime settings plus static metadata."""
+        normalized = str(underlying or "").strip().upper()
+        settings = config.STRATEGY_UNDERLYINGS.get(normalized)
+        if settings is None:
+            raise RuntimeConfigNotFoundError(f"Unsupported strategy underlying: {normalized}")
+        enabled = self.get_bool(_strategy_config_name(normalized, "ENABLED"), settings["enabled"])
+        strike_from = self.get(_strategy_config_name(normalized, "STRIKE_FROM"), settings["option"].get("strike_from"))
+        strike_to = self.get(_strategy_config_name(normalized, "STRIKE_TO"), settings["option"].get("strike_to"))
+        try:
+            strike_from = float(strike_from) if strike_from is not None else None
+            strike_to = float(strike_to) if strike_to is not None else None
+            if enabled or (strike_from is not None and strike_to is not None):
+                from core.instrument_specs import validate_strike_range
+                strike_from, strike_to = validate_strike_range(
+                    normalized, strike_from, strike_to, settings["strike_step"]
+                )
+            elif strike_from is not None or strike_to is not None:
+                from core.instrument_specs import validate_strike_range
+                boundary = strike_from if strike_from is not None else strike_to
+                validate_strike_range(normalized, boundary, boundary, settings["strike_step"])
+        except (TypeError, ValueError) as exc:
+            raise RuntimeConfigValidationError(str(exc)) from exc
+        return {
+            "underlying": normalized,
+            "instrument_key": settings["instrument_key"],
+            "display_name": settings["display_name"],
+            "enabled": enabled,
+            "strike_step": settings["strike_step"],
+            "option": {
+                "strike_from": strike_from,
+                "strike_to": strike_to,
+                "strike_step": settings["strike_step"],
+            },
+        }
 
     @staticmethod
     def _validate_limits(name, value, metadata):

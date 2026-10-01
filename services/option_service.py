@@ -267,7 +267,20 @@ def build_enriched_order_instrument(contract: dict, option_type: str, market_dat
     }
 
 
-def get_nearest_expiry_contracts(contracts: list, strike_range: tuple[float, float] | None = None, use_global_range: bool = True) -> tuple[str | None, list]:
+def filter_contracts_by_strike_spec(contracts: list, strike_range=None, strike_step=None) -> list:
+    """Filter actual provider contracts by inclusive bounds and static step.
+
+    This function never constructs contracts; it only retains provider rows
+    whose strike is valid for the current underlying's specification.
+    """
+    from core.instrument_specs import filter_provider_contracts
+    lower, upper = strike_range if strike_range is not None else (None, None)
+    return filter_provider_contracts(
+        contracts, strike_from=lower, strike_to=upper, strike_step=strike_step
+    )
+
+
+def get_nearest_expiry_contracts(contracts: list, strike_range: tuple[float, float] | None = None, use_global_range: bool = True, strike_step: int | None = None) -> tuple[str | None, list]:
     if not contracts:
         return None, []
     today = datetime.now().date()
@@ -291,8 +304,10 @@ def get_nearest_expiry_contracts(contracts: list, strike_range: tuple[float, flo
         strike_from, strike_to = map(float, strike_range)
     else:
         strike_from = strike_to = None
-    if strike_from is not None and strike_to is not None:
-        matching_contracts = [item for item in matching_contracts if (item.get("strike_price") is not None and strike_from <= safe_float(item.get("strike_price")) <= strike_to)]
+    selected_range = (strike_from, strike_to) if strike_from is not None and strike_to is not None else None
+    matching_contracts = filter_contracts_by_strike_spec(
+        matching_contracts, strike_range=selected_range, strike_step=strike_step
+    )
     return nearest_date_text, matching_contracts
 
 
@@ -682,12 +697,11 @@ def _provider_underlying_matches(expected: str, provider_symbol: Any) -> bool:
     if provider_symbol is None or str(provider_symbol).strip() == "":
         return True
     normalized = "".join(ch for ch in str(provider_symbol).upper() if ch.isalnum())
-    aliases = {
-        "NIFTY": {"NIFTY", "NIFTY50", "NIFTYINDEX"},
-        "BANKNIFTY": {"BANKNIFTY", "NIFTYBANK", "NIFTYBANKINDEX"},
-        "SENSEX": {"SENSEX", "BSESENSEX", "SPBSESENSEX"},
-    }
-    return normalized in aliases.get(str(expected).upper(), {str(expected).upper()})
+    from core.instrument_specs import INDEX_INSTRUMENT_SPECS
+    spec = INDEX_INSTRUMENT_SPECS.get(str(expected).upper())
+    aliases = {"".join(ch for ch in value.upper() if ch.isalnum())
+               for value in (spec.provider_underlying_symbols if spec else (expected,))}
+    return normalized in aliases
 
 
 def _build_underlying_option_result(underlying: str, index_key: str, result: dict) -> None:
@@ -696,7 +710,8 @@ def _build_underlying_option_result(underlying: str, index_key: str, result: dic
     """
     from services.strategy_context import get_strategy_contexts, persist_strategy_context
 
-    contexts = get_strategy_contexts()
+    all_contexts = get_strategy_contexts(active_only=False)
+    contexts = {key: value for key, value in all_contexts.items() if value.enabled}
     context = contexts.get(underlying)
     if context is None:
         return
@@ -736,6 +751,12 @@ def _build_underlying_option_result(underlying: str, index_key: str, result: dic
                 "nearest_expiry": expiries.get(active.underlying),
                 "total_contracts": len(active.option_universe),
                 "instrument_keys": list(active.option_universe),
+                "underlying": active.underlying,
+                "enabled": active.enabled,
+                "instrument_key": active.index_instrument_key,
+                "strike_step": active.option_config.get("strike_step"),
+                "strike_from": active.option_config.get("strike_from"),
+                "strike_to": active.option_config.get("strike_to"),
             }
             for active in contexts.values()
         }
@@ -746,13 +767,21 @@ def get_options_contracts(instrument_key: str | None = None, expiry_date: str | 
         instrument_key = getattr(config, "MAIN_NIFTY_SECURITY", "NSE_INDEX|Nifty 50")
     underlying = next((name for name, settings in config.STRATEGY_UNDERLYINGS.items()
                        if str(settings.get("instrument_key") or "").strip() == str(instrument_key).strip()), None)
-    if underlying and not config.STRATEGY_UNDERLYINGS[underlying].get("enabled"):
-        logger.info("Skipping option load for disabled underlying=%s", underlying)
-        return None
     settings = config.STRATEGY_UNDERLYINGS.get(underlying, {}) if underlying else {}
+    if underlying:
+        from services.runtime_config_service import runtime_config_service
+        settings = runtime_config_service.get_strategy_settings(underlying)
+        if not settings["enabled"]:
+            logger.info("Skipping option load for disabled underlying=%s", underlying)
+            return None
     option_config = settings.get("option") or {}
     strike_from = option_config.get("strike_from", config.STRIKE_FROM)
     strike_to = option_config.get("strike_to", config.STRIKE_TO)
+    configured_range = (
+        (strike_from, strike_to)
+        if strike_from is not None and strike_to is not None
+        else None
+    )
     access_token = token_service.get_access_token()
     if not access_token:
         logger.error("Failed to retrieve access token.")
@@ -786,15 +815,11 @@ def get_options_contracts(instrument_key: str | None = None, expiry_date: str | 
                 valid_contracts.append(contract)
             all_contracts = valid_contracts
         if filter_nearest and not expiry_date:
-            configured_range = (
-                (strike_from, strike_to)
-                if strike_from is not None and strike_to is not None
-                else None
-            )
             nearest_expiry, filtered_contracts = get_nearest_expiry_contracts(
                 all_contracts,
                 strike_range=configured_range,
                 use_global_range=not bool(underlying),
+                strike_step=settings.get("strike_step") if underlying else None,
             )
             if underlying:
                 for contract in filtered_contracts:
@@ -803,6 +828,12 @@ def get_options_contracts(instrument_key: str | None = None, expiry_date: str | 
             final_output = {"status": response_dict.get("status", "success"), "nearest_expiry": nearest_expiry, "total_contracts": len(filtered_contracts), "data": filtered_contracts}
         else:
             cleaned_contracts = [clean_contract_data(item) for item in all_contracts if isinstance(item, dict)]
+            if underlying:
+                cleaned_contracts = filter_contracts_by_strike_spec(
+                    cleaned_contracts,
+                    strike_range=configured_range,
+                    strike_step=settings.get("strike_step"),
+                )
             if underlying:
                 for contract in cleaned_contracts:
                     contract["underlying"] = underlying
@@ -844,7 +875,20 @@ def load_options_for_enabled_underlyings(save_data: bool = True) -> dict:
     """Load each enabled index option chain into its own strategy context."""
     from services.strategy_context import get_strategy_contexts
 
-    contexts = get_strategy_contexts()
+    all_contexts = get_strategy_contexts(active_only=False)
+    for context in all_contexts.values():
+        if context.enabled:
+            logger.info(
+                "Strategy index enabled: %s instrument=%s strike_range=%s-%s strike_step=%s",
+                context.underlying,
+                context.index_instrument_key,
+                context.option_config.get("strike_from"),
+                context.option_config.get("strike_to"),
+                context.option_config.get("strike_step"),
+            )
+        else:
+            logger.info("Strategy index disabled: %s", context.underlying)
+    contexts = {key: value for key, value in all_contexts.items() if value.enabled}
     if not contexts:
         with _cache_lock:
             options_cache.update({
@@ -897,15 +941,23 @@ def get_options_cache_summary() -> dict:
 
 
 def get_chart_instruments() -> list:
-    instruments = [
-        {key: feed.get(key) for key in (
-            "instrument_key", "trading_symbol", "instrument_type", "strike_price", "expiry", "underlying"
-        )}
-        for settings in getattr(config, "STRATEGY_UNDERLYINGS", {}).values()
-        if settings.get("enabled")
-        for feed in [get_feed_by_instrument_key(settings["instrument_key"])]
-        if feed
-    ]
+    from services.strategy_context import get_strategy_contexts
+    instruments = []
+    for context in get_strategy_contexts().values():
+        feed = get_feed_by_instrument_key(context.index_instrument_key)
+        if feed:
+            index_instrument = {
+                key: feed.get(key)
+                for key in ("instrument_key", "trading_symbol", "instrument_type", "strike_price", "expiry", "underlying")
+            }
+            index_instrument.update({
+                "underlying": context.underlying,
+                "enabled": context.enabled,
+                "strike_step": context.option_config.get("strike_step"),
+                "strike_from": context.option_config.get("strike_from"),
+                "strike_to": context.option_config.get("strike_to"),
+            })
+            instruments.append(index_instrument)
     for contract in get_cached_option_contracts():
         instruments.append({
             "instrument_key": contract.get("instrument_key"),
@@ -951,6 +1003,7 @@ __all__ = [
     "get_instrument_market_snapshot",
     "build_enriched_order_instrument",
     "get_nearest_expiry_contracts",
+    "filter_contracts_by_strike_spec",
     "get_subscribed_instrument_keys",
     "get_live_websocket_instrument_keys",
     "get_cached_option_contracts",

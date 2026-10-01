@@ -57,8 +57,13 @@ class ManualInstrumentIsolationService:
 
     def _get_configured_strike_range(self, underlying: str | None = None) -> tuple[float, float]:
         if underlying:
-            settings = getattr(config, "STRATEGY_UNDERLYINGS", {}).get(str(underlying).upper(), {})
-            option = settings.get("option") or {}
+            try:
+                from services.strategy_context import get_strategy_context
+                context = get_strategy_context(str(underlying).upper(), active_only=True)
+                option = context.option_config if context else {}
+            except Exception:
+                settings = getattr(config, "STRATEGY_UNDERLYINGS", {}).get(str(underlying).upper(), {})
+                option = settings.get("option") or {}
             if option.get("strike_from") is not None and option.get("strike_to") is not None:
                 low, high = float(option["strike_from"]), float(option["strike_to"])
                 return (min(low, high), max(low, high))

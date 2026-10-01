@@ -79,7 +79,7 @@ async def get_loaded_instruments(
         default=True,
         description=(
             "When true, returns only instruments whose strike price is "
-            "between STRIKE_FROM and STRIKE_TO. "
+            "between each recognized underlying's configured range (legacy/unknown instruments use STRIKE_FROM and STRIKE_TO). "
             "When false, returns all loaded instruments."
         ),
     ),
@@ -142,6 +142,34 @@ async def get_loaded_instruments(
             strike_from,
         )
 
+    try:
+        from services.strategy_context import get_active_strategy_summary
+        strategy_indexes = get_active_strategy_summary()
+    except Exception:
+        strategy_indexes = []
+    per_underlying_config = {
+        str(item.get("underlying") or "").upper(): item
+        for item in strategy_indexes
+        if isinstance(item, dict) and item.get("underlying")
+    }
+
+    def matches_configured_range(instrument):
+        underlying = str(instrument.get("underlying") or "").upper()
+        index_config = per_underlying_config.get(underlying)
+        strike = safe_float(instrument.get("strike_price"))
+        if strike is None:
+            return False
+        if index_config is None:
+            return is_in_strike_range(instrument, strike_from, strike_to)
+        lower = index_config.get("strike_from")
+        upper = index_config.get("strike_to")
+        step = index_config.get("strike_step")
+        if lower is not None and strike < float(lower):
+            return False
+        if upper is not None and strike > float(upper):
+            return False
+        return not step or (strike.is_integer() and int(strike) % int(step) == 0)
+
     total_loaded_instruments = len(
         loaded_instruments,
     )
@@ -151,11 +179,7 @@ async def get_loaded_instruments(
             instrument
             for instrument in loaded_instruments
             if isinstance(instrument, dict)
-            and is_in_strike_range(
-                instrument=instrument,
-                strike_from=strike_from,
-                strike_to=strike_to,
-            )
+            and matches_configured_range(instrument)
         ]
 
         filter_mode = "strike_range"
@@ -196,10 +220,11 @@ async def get_loaded_instruments(
         ),
         "filter": {
             "range": range,
-            "mode": filter_mode,
+            "mode": "per_index_strike_range" if range else filter_mode,
             "strike_from": strike_from,
             "strike_to": strike_to,
             "range_inclusive": True,
+            "per_index": per_underlying_config,
         },
         "nearest_expiry": options_cache.get(
             "nearest_expiry",
@@ -212,6 +237,7 @@ async def get_loaded_instruments(
         "total_subscribed_instruments": len(
             subscribed_keys,
         ),
+        "strategy_indexes": strategy_indexes,
         "returned_instruments_count": len(
             returned_instruments,
         ),
