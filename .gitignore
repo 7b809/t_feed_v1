@@ -26,6 +26,8 @@ venv/
 test_logs
 output
 data
+files.txt
+file.txt
 **/migrations/*.pyc
 **/migrations/__pycache__/
 logs

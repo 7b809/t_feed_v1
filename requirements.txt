@@ -1,15 +1,5 @@
 fastapi
 uvicorn
-upstox-python-sdk
 pymongo
 python-dotenv
-pydantic
-pydantic-settings
-websocket-client
-requests
-pandas
-numpy
-apscheduler
-jinja2
-dnspython
-tzdata 
+upstox-python-sdk
