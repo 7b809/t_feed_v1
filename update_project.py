@@ -15,6 +15,19 @@ STOP_SCRIPT = "stop.sh"
 LOGS_DIR = os.path.join(PROJECT_DIR, "logs")
 META_DATA_DIR = os.path.join(PROJECT_DIR, "meta_data")
 
+# ---------------------------------------------------------------------------
+# Virtualenv
+# ---------------------------------------------------------------------------
+# The app is started via start.sh, which expects the `myenv` virtualenv.
+# This script creates it on demand and installs requirements.txt so a
+# fresh checkout can be brought up with a single command.
+MYENV_DIR = os.path.join(PROJECT_DIR, "myenv")
+REQUIREMENTS_FILE = "requirements.txt"
+
+# Upgrade pip inside the venv before installing requirements. Best-effort
+# — a failure here never aborts the update.
+UPGRADE_PIP = True
+
 
 # ---------------------------------------------------------------------------
 # Path policy
@@ -43,7 +56,8 @@ PRESERVE_PATHS = [
     "logs",             # protect the live log file while the app runs
     ".env",             # secrets — must never be deleted
     ".env.local",       # optional local overrides
-    ".venv",            # local virtualenv (if present)
+    "myenv",            # project virtualenv created by this script
+    ".venv",            # alternative virtualenv directory name
     "venv",             # alternative virtualenv directory name
 ]
 
@@ -54,7 +68,6 @@ REMOVE_PATHS = [
     ".pytest_cache",
     ".mypy_cache",
     ".ruff_cache",
-    "data",
 ]
 
 TIMEZONE = "Asia/Kolkata"
@@ -193,7 +206,15 @@ def run_command(
     command: list[str],
     step_name: str,
     check: bool = True,
+    env: dict | None = None,
 ) -> None:
+    """
+    Run a subprocess command from PROJECT_DIR.
+
+    `env` — optional environment dict. When provided, it REPLACES the
+    process environment for the child. Pass a copy of os.environ (see
+    `_venv_env`) if you only want to overlay changes.
+    """
     print()
     print(f"> {' '.join(command)}")
 
@@ -201,6 +222,7 @@ def run_command(
         result = subprocess.run(
             command,
             cwd=PROJECT_DIR,
+            env=env,
         )
 
         if result.returncode != 0:
@@ -244,6 +266,173 @@ def run_command(
 
         if check:
             sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
+# Virtualenv setup
+# ---------------------------------------------------------------------------
+def _venv_python() -> str:
+    """Absolute path to the venv's python interpreter (platform-aware)."""
+    if os.name == "nt":
+        return os.path.join(MYENV_DIR, "Scripts", "python.exe")
+    return os.path.join(MYENV_DIR, "bin", "python")
+
+
+def _venv_env() -> dict:
+    """
+    Return a copy of os.environ with the venv activated:
+
+      * VIRTUAL_ENV is set to MYENV_DIR
+      * PATH is prefixed with the venv's bin/ (POSIX) or Scripts/ (Windows)
+      * PYTHONHOME is removed (it can break a venv)
+
+    This emulates what `source myenv/bin/activate` does in a shell.
+    Subprocesses that receive this env dict behave as if they were
+    launched from an activated venv.
+    """
+    env = os.environ.copy()
+    env["VIRTUAL_ENV"] = MYENV_DIR
+    env.pop("PYTHONHOME", None)
+
+    if os.name == "nt":
+        bin_dir = os.path.join(MYENV_DIR, "Scripts")
+    else:
+        bin_dir = os.path.join(MYENV_DIR, "bin")
+
+    env["PATH"] = bin_dir + os.pathsep + env.get("PATH", "")
+    return env
+
+
+def setup_virtualenv() -> dict:
+    """
+    Ensure `myenv` exists at the project root and install (or refresh)
+    all dependencies from requirements.txt.
+
+    Returns the activated environment dict (see `_venv_env`) so the
+    caller can pass it to subsequent subprocess calls.
+    """
+    print("\n==========================================")
+    print("  Preparing Virtual Environment")
+    print("==========================================")
+
+    send_telegram(
+        title="Virtualenv Setup Started",
+        message=f"Preparing virtualenv at {MYENV_DIR}.",
+        level="INFO",
+    )
+
+    venv_python = _venv_python()
+
+    if os.path.isdir(MYENV_DIR) and os.path.isfile(venv_python):
+        print(f"\nVirtualenv already present: {MYENV_DIR}")
+    else:
+        if os.path.isdir(MYENV_DIR):
+            message = (
+                f"Virtualenv directory exists but is incomplete: {MYENV_DIR}\n"
+                f"Removing and recreating."
+            )
+            print(f"\nWARNING: {message}")
+            send_telegram(
+                title="Virtualenv Incomplete",
+                message=message,
+                level="WARNING",
+            )
+            shutil.rmtree(MYENV_DIR, ignore_errors=True)
+
+        print(f"\nCreating virtualenv: {MYENV_DIR}")
+
+        send_telegram(
+            title="Virtualenv Create Started",
+            message="Creating the project virtualenv.",
+            level="INFO",
+        )
+
+        run_command(
+            [sys.executable, "-m", "venv", "myenv"],
+            step_name="Virtualenv Create",
+        )
+
+        if not os.path.isfile(venv_python):
+            message = (
+                "Virtualenv python is missing after creation.\n"
+                f"Expected: {venv_python}\n"
+                "Check the Python installation and try again."
+            )
+            print(f"\nERROR: {message}")
+            send_telegram(
+                title="Virtualenv Broken",
+                message=message,
+                level="ERROR",
+            )
+            sys.exit(1)
+
+    venv_env = _venv_env()
+
+    # ---- Optional: upgrade pip -------------------------------------
+    if UPGRADE_PIP:
+        print("\nUpgrading pip inside the virtualenv...")
+
+        run_command(
+            [venv_python, "-m", "pip", "install", "--upgrade", "pip"],
+            step_name="Pip Upgrade",
+            check=False,
+            env=venv_env,
+        )
+
+    # ---- Install / refresh requirements ----------------------------
+    requirements_path = os.path.join(PROJECT_DIR, REQUIREMENTS_FILE)
+
+    if not os.path.isfile(requirements_path):
+        message = (
+            f"{REQUIREMENTS_FILE} not found at project root.\n"
+            f"Expected: {requirements_path}\n"
+            "Skipping dependency install."
+        )
+        print(f"\nWARNING: {message}")
+        send_telegram(
+            title="Requirements Missing",
+            message=message,
+            level="WARNING",
+        )
+        return venv_env
+
+    print(f"\nInstalling dependencies from {REQUIREMENTS_FILE}...")
+
+    send_telegram(
+        title="Requirements Install Started",
+        message="Installing dependencies from requirements.txt.",
+        level="INFO",
+    )
+
+    run_command(
+        [
+            venv_python,
+            "-m",
+            "pip",
+            "install",
+            "-r",
+            REQUIREMENTS_FILE,
+        ],
+        step_name="Requirements Install",
+        env=venv_env,
+    )
+
+    print("\nVirtualenv ready:")
+    print(f"  Directory:  {MYENV_DIR}")
+    print(f"  Interpreter:{venv_python}")
+    print(f"  Python:     {sys.version.split()[0]}")
+
+    send_telegram(
+        title="Virtualenv Setup Completed",
+        message=(
+            "Virtualenv setup completed successfully.\n"
+            f"Directory: {MYENV_DIR}\n"
+            "Requirements installed."
+        ),
+        level="SUCCESS",
+    )
+
+    return venv_env
 
 
 # ---------------------------------------------------------------------------
@@ -462,10 +651,13 @@ def main() -> None:
     )
 
     try:
-        # 1. Backup logs
+        # 1. Prepare virtualenv (create if missing, install requirements)
+        venv_env = setup_virtualenv()
+
+        # 2. Backup logs
         backup_logs()
 
-        # 2. Stop application
+        # 3. Stop application
         stop_script = os.path.join(
             PROJECT_DIR,
             STOP_SCRIPT,
@@ -484,6 +676,7 @@ def main() -> None:
                 ["bash", STOP_SCRIPT],
                 step_name="Application Stop",
                 check=False,
+                env=venv_env,
             )
 
         else:
@@ -497,7 +690,7 @@ def main() -> None:
                 level="WARNING",
             )
 
-        # 3. Fetch latest Git information
+        # 4. Fetch latest Git information
         print("\nFetching latest Git information...")
 
         run_command(
@@ -505,7 +698,7 @@ def main() -> None:
             step_name="Git Fetch",
         )
 
-        # 4. Reset tracked changes
+        # 5. Reset tracked changes
         print("\nResetting all local changes...")
 
         run_command(
@@ -513,15 +706,15 @@ def main() -> None:
             step_name="Git Reset",
         )
 
-        # 5. Remove explicitly configured folders
+        # 6. Remove explicitly configured folders.
         #    Runs AFTER git reset (so tracked files are already restored)
         #    and BEFORE git clean (so ignored generated folders that git
         #    clean would normally skip are still removed here).
         remove_folders()
 
-        # 6. Remove remaining untracked files and directories.
-        #    Preserve paths are excluded so runtime state, secrets, and
-        #    cached market data survive the update.
+        # 7. Remove remaining untracked files and directories.
+        #    Preserve paths are excluded so runtime state, secrets,
+        #    the virtualenv, and cached market data survive.
         print("\n==========================================")
         print("  Running Git Clean")
         print("==========================================")
@@ -539,7 +732,7 @@ def main() -> None:
             step_name="Git Clean",
         )
 
-        # 7. Pull latest code
+        # 8. Pull latest code
         print("\nPulling latest code...")
 
         run_command(
@@ -547,7 +740,7 @@ def main() -> None:
             step_name="Git Pull",
         )
 
-        # 8. Set script permissions
+        # 9. Set script permissions
         print("\nSetting script permissions...")
 
         send_telegram(
@@ -600,7 +793,7 @@ def main() -> None:
                 level="WARNING",
             )
 
-        # 9. Show final Git status
+        # 10. Show final Git status
         print("\nFinal Git status:")
 
         run_command(
@@ -608,7 +801,7 @@ def main() -> None:
             step_name="Final Git Status",
         )
 
-        # 10. Start application
+        # 11. Start application
         if os.path.exists(start_script):
             print("\nStarting application...")
 
@@ -621,6 +814,7 @@ def main() -> None:
             run_command(
                 ["bash", START_SCRIPT],
                 step_name="Application Start",
+                env=venv_env,
             )
 
         else:
