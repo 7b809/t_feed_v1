@@ -1,0 +1,1368 @@
+{% extends "base.html" %}
+
+{% block head %}
+<style>
+    /* Minimal custom CSS only for things Bootstrap doesn't provide out of the box. */
+
+    /* Tint badges (Bootstrap has bg-* but our palette is semi-transparent). */
+    .badge-tint-success {
+        background-color: rgba(34, 197, 94, 0.14) !important;
+        color: #4ade80 !important;
+        border: 1px solid rgba(74, 222, 128, 0.30) !important;
+    }
+    .badge-tint-danger {
+        background-color: rgba(239, 68, 68, 0.14) !important;
+        color: #f87171 !important;
+        border: 1px solid rgba(248, 113, 113, 0.30) !important;
+    }
+    .badge-tint-warning {
+        background-color: rgba(245, 158, 11, 0.14) !important;
+        color: #fbbf24 !important;
+        border: 1px solid rgba(251, 191, 36, 0.30) !important;
+    }
+    .badge-tint-secondary {
+        background-color: rgba(100, 116, 139, 0.18) !important;
+        color: #cbd5e1 !important;
+        border: 1px solid rgba(148, 163, 184, 0.30) !important;
+    }
+    .badge-tint-primary {
+        background-color: rgba(59, 130, 246, 0.14) !important;
+        color: #93c5fd !important;
+        border: 1px solid rgba(96, 165, 250, 0.30) !important;
+    }
+    .badge-tint-info {
+        background-color: rgba(6, 182, 212, 0.11) !important;
+        color: #67e8f9 !important;
+        border: 1px solid rgba(34, 211, 238, 0.25) !important;
+    }
+    .badge-tint-purple {
+        background-color: rgba(168, 85, 247, 0.12) !important;
+        color: #d8b4fe !important;
+        border: 1px solid rgba(192, 132, 252, 0.28) !important;
+    }
+
+    /* Keep the wide table scrollable without squashing columns. */
+    .orders-table-scroll .table {
+        min-width: 1520px;
+    }
+
+    /* Symbol sub-token under the main symbol name. */
+    .orders-symbol-token {
+        font-size: 0.68rem;
+    }
+
+    /* Truncate long status message button. */
+    .orders-message-button {
+        max-width: 225px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        padding: 0;
+        border: 0;
+        background: transparent;
+        color: #fca5a5;
+        font-size: 0.74rem;
+        text-align: left;
+    }
+    .orders-message-button:hover {
+        color: #fecaca;
+        text-decoration: underline;
+    }
+
+    /* Monospace block used inside the modal. */
+    .orders-message-detail {
+        font-family: Consolas, monospace;
+        font-size: 0.78rem;
+        line-height: 1.6;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+    }
+
+    /* Tabular numbers for prices / quantities. */
+    .orders-num {
+        font-variant-numeric: tabular-nums;
+    }
+
+    /* Sortable header cursor. */
+    .orders-table-scroll th.sortable {
+        cursor: pointer;
+        user-select: none;
+        white-space: nowrap;
+    }
+
+    /* Spin animation for the refresh icon. */
+    .orders-refresh-button.loading i.bi-arrow-clockwise {
+        display: inline-block;
+        animation: orders-spin 0.8s linear infinite;
+    }
+    @keyframes orders-spin {
+        to { transform: rotate(360deg); }
+    }
+
+    /* Softer card backdrop for dark theme. */
+    .orders-card {
+        background-color: rgba(30, 41, 59, 0.78) !important;
+        border: 1px solid rgba(148, 163, 184, 0.16) !important;
+        backdrop-filter: blur(10px);
+    }
+    .orders-input-dark {
+        background-color: rgba(15, 23, 42, 0.75) !important;
+        border-color: #334155 !important;
+        color: #e2e8f0 !important;
+    }
+    .orders-input-dark::placeholder {
+        color: #64748b !important;
+    }
+    .orders-input-dark:focus {
+        background-color: rgba(15, 23, 42, 0.9) !important;
+        border-color: #3b82f6 !important;
+        box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.14) !important;
+        color: #e2e8f0 !important;
+    }
+    .orders-input-dark option {
+        background-color: #1e293b;
+        color: #e2e8f0;
+    }
+
+    /* ---------- Serial number cell in table ---------- */
+    .orders-serial-badge {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 34px;
+        height: 26px;
+        padding: 0 8px;
+        border-radius: 8px;
+        background: rgba(59, 130, 246, 0.14);
+        color: #93c5fd;
+        border: 1px solid rgba(96, 165, 250, 0.30);
+        font-size: 0.72rem;
+        font-weight: 700;
+        font-variant-numeric: tabular-nums;
+    }
+
+    /* ---------- Card view ---------- */
+    .orders-card-view .order-item-card {
+        height: 100%;
+        background-color: rgba(15, 23, 42, 0.65) !important;
+        border: 1px solid rgba(148, 163, 184, 0.18) !important;
+        border-radius: 14px;
+        transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+    }
+    .orders-card-view .order-item-card:hover {
+        transform: translateY(-2px);
+        border-color: rgba(96, 165, 250, 0.45) !important;
+        box-shadow: 0 10px 24px rgba(0, 0, 0, 0.25);
+    }
+
+    .order-item-serial {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 38px;
+        height: 30px;
+        padding: 0 10px;
+        border-radius: 8px;
+        background: linear-gradient(135deg, #2563eb, #7c3aed);
+        color: #ffffff;
+        font-size: 0.78rem;
+        font-weight: 800;
+        font-variant-numeric: tabular-nums;
+        box-shadow: 0 0 12px rgba(37, 99, 235, 0.35);
+    }
+
+    .order-item-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 8px;
+        padding: 4px 0;
+        font-size: 0.78rem;
+    }
+    .order-item-row .label {
+        color: #94a3b8;
+        text-transform: uppercase;
+        letter-spacing: 0.3px;
+        font-weight: 600;
+        font-size: 0.68rem;
+    }
+    .order-item-row .value {
+        color: #e2e8f0;
+        font-weight: 600;
+        font-variant-numeric: tabular-nums;
+        text-align: right;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        max-width: 62%;
+    }
+
+    /* View toggle buttons (table / cards) */
+    .orders-view-toggle .btn {
+        min-width: 40px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        border-color: #334155;
+        color: #94a3b8;
+    }
+    .orders-view-toggle .btn.active,
+    .orders-view-toggle .btn:hover {
+        background-color: rgba(59, 130, 246, 0.18);
+        border-color: rgba(96, 165, 250, 0.45);
+        color: #bfdbfe;
+    }
+
+    /* Quick filter pills (All / Buy / Sell / ...) */
+    .orders-quick-filters .btn {
+        border-radius: 20px;
+        padding: 4px 12px;
+        font-size: 0.74rem;
+        font-weight: 700;
+        letter-spacing: 0.3px;
+        border: 1px solid #334155;
+        color: #cbd5e1;
+        background: rgba(15, 23, 42, 0.65);
+    }
+    .orders-quick-filters .btn:hover {
+        border-color: rgba(96, 165, 250, 0.45);
+        color: #ffffff;
+    }
+    .orders-quick-filters .btn.active {
+        background: rgba(59, 130, 246, 0.20);
+        border-color: rgba(96, 165, 250, 0.65);
+        color: #bfdbfe;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<section class="container-fluid py-4">
+    <div class="mx-auto" style="max-width: 1700px;">
+
+        {# ---------------- Header ---------------- #}
+        <div class="d-flex flex-column flex-lg-row justify-content-between align-items-start gap-3 mb-4">
+            <div>
+                <h1 class="h3 fw-bold text-light mb-1">
+                    <i class="bi bi-receipt-cutoff me-2 text-primary"></i>
+                    Today's Orders
+                </h1>
+                <p class="text-secondary mb-0 small">
+                    Monitor all orders placed during the current trading day.
+                </p>
+            </div>
+
+            <div class="d-flex flex-wrap align-items-center gap-2">
+                <div class="d-inline-flex align-items-center gap-2 px-3 py-2 rounded-3 border border-secondary-subtle bg-dark bg-opacity-50 small text-secondary">
+                    <i class="bi bi-clock"></i>
+                    <span id="ordersLastUpdated">Not updated yet</span>
+                </div>
+
+                <button
+                    id="ordersRefreshButton"
+                    class="btn btn-outline-primary orders-refresh-button d-inline-flex align-items-center gap-2"
+                    type="button"
+                    onclick="loadOrders()"
+                >
+                    <i class="bi bi-arrow-clockwise"></i>
+                    <span>Refresh</span>
+                </button>
+            </div>
+        </div>
+
+        {# ---------------- Error box ---------------- #}
+        <div
+            id="ordersErrorBox"
+            class="alert alert-danger d-none align-items-start gap-2 mb-4"
+            role="alert"
+        >
+            <i class="bi bi-exclamation-triangle-fill mt-1"></i>
+            <div id="ordersErrorMessage"></div>
+        </div>
+
+        {# ---------------- Summary cards ---------------- #}
+        <div class="row g-3 mb-4">
+            <div class="col-6 col-md-4 col-xl-2">
+                <div class="card orders-card text-primary h-100">
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <span class="text-secondary text-uppercase fw-semibold small">Total Orders</span>
+                            <span class="badge bg-primary rounded-3 p-2">
+                                <i class="bi bi-list-check text-white"></i>
+                            </span>
+                        </div>
+                        <div id="ordersTotalCount" class="fs-3 fw-bold mt-3">0</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-6 col-md-4 col-xl-2">
+                <div class="card orders-card text-success h-100">
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <span class="text-secondary text-uppercase fw-semibold small">Completed</span>
+                            <span class="badge bg-success rounded-3 p-2">
+                                <i class="bi bi-check-circle-fill text-white"></i>
+                            </span>
+                        </div>
+                        <div id="ordersCompleteCount" class="fs-3 fw-bold mt-3">0</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-6 col-md-4 col-xl-2">
+                <div class="card orders-card text-danger h-100">
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <span class="text-secondary text-uppercase fw-semibold small">Rejected</span>
+                            <span class="badge bg-danger rounded-3 p-2">
+                                <i class="bi bi-x-circle-fill text-white"></i>
+                            </span>
+                        </div>
+                        <div id="ordersRejectedCount" class="fs-3 fw-bold mt-3">0</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-6 col-md-4 col-xl-2">
+                <div class="card orders-card text-warning h-100">
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <span class="text-secondary text-uppercase fw-semibold small">Open / Pending</span>
+                            <span class="badge bg-warning rounded-3 p-2">
+                                <i class="bi bi-hourglass-split text-dark"></i>
+                            </span>
+                        </div>
+                        <div id="ordersPendingCount" class="fs-3 fw-bold mt-3">0</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-6 col-md-4 col-xl-2">
+                <div class="card orders-card text-info h-100">
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <span class="text-secondary text-uppercase fw-semibold small">Buy Orders</span>
+                            <span class="badge bg-info rounded-3 p-2">
+                                <i class="bi bi-arrow-down-left-circle-fill text-dark"></i>
+                            </span>
+                        </div>
+                        <div id="ordersBuyCount" class="fs-3 fw-bold mt-3">0</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-6 col-md-4 col-xl-2">
+                <div class="card orders-card text-info h-100">
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <span class="text-secondary text-uppercase fw-semibold small">Sell Orders</span>
+                            <span class="badge bg-info rounded-3 p-2">
+                                <i class="bi bi-arrow-up-right-circle-fill text-dark"></i>
+                            </span>
+                        </div>
+                        <div id="ordersSellCount" class="fs-3 fw-bold mt-3">0</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        {# ---------------- Filters ---------------- #}
+        <div class="card orders-card mb-4">
+            <div class="card-body">
+                <div class="row g-3 align-items-end">
+                    <div class="col-12 col-lg-4">
+                        <label class="form-label text-secondary text-uppercase small fw-semibold" for="ordersSearch">
+                            Search
+                        </label>
+                        <div class="input-group">
+                            <span class="input-group-text orders-input-dark border-end-0">
+                                <i class="bi bi-search text-secondary"></i>
+                            </span>
+                            <input
+                                id="ordersSearch"
+                                class="form-control orders-input-dark border-start-0"
+                                type="search"
+                                placeholder="Symbol, order ID, token or tag"
+                            />
+                        </div>
+                    </div>
+
+                    <div class="col-6 col-lg-2">
+                        <label class="form-label text-secondary text-uppercase small fw-semibold" for="ordersStatusFilter">
+                            Status
+                        </label>
+                        <select id="ordersStatusFilter" class="form-select orders-input-dark">
+                            <option value="">All statuses</option>
+                        </select>
+                    </div>
+
+                    <div class="col-6 col-lg-2">
+                        <label class="form-label text-secondary text-uppercase small fw-semibold" for="ordersSideFilter">
+                            Side
+                        </label>
+                        <select id="ordersSideFilter" class="form-select orders-input-dark">
+                            <option value="">Buy and Sell</option>
+                            <option value="BUY">Buy</option>
+                            <option value="SELL">Sell</option>
+                        </select>
+                    </div>
+
+                    <div class="col-6 col-lg-2">
+                        <label class="form-label text-secondary text-uppercase small fw-semibold" for="ordersProductFilter">
+                            Product
+                        </label>
+                        <select id="ordersProductFilter" class="form-select orders-input-dark">
+                            <option value="">All products</option>
+                        </select>
+                    </div>
+
+                    <div class="col-6 col-lg-2">
+                        <label class="form-label text-secondary text-uppercase small fw-semibold" for="ordersTagFilter">
+                            Tag
+                        </label>
+                        <select id="ordersTagFilter" class="form-select orders-input-dark">
+                            <option value="">All tags</option>
+                        </select>
+                    </div>
+
+                    <div class="col-12 col-lg-2">
+                        <button
+                            id="ordersClearFilters"
+                            class="btn btn-outline-secondary w-100"
+                            type="button"
+                        >
+                            <i class="bi bi-funnel me-1"></i>
+                            Clear
+                        </button>
+                    </div>
+                </div>
+
+                {# Quick filters: All / Buy / Sell / Complete / Rejected / Pending #}
+                <div class="orders-quick-filters d-flex flex-wrap gap-2 mt-3">
+                    <button type="button" class="btn active" data-quick-filter="all">
+                        <i class="bi bi-grid me-1"></i>All
+                    </button>
+                    <button type="button" class="btn" data-quick-filter="buy">
+                        <i class="bi bi-arrow-down-left-circle me-1"></i>Buy only
+                    </button>
+                    <button type="button" class="btn" data-quick-filter="sell">
+                        <i class="bi bi-arrow-up-right-circle me-1"></i>Sell only
+                    </button>
+                    <button type="button" class="btn" data-quick-filter="complete">
+                        <i class="bi bi-check-circle me-1"></i>Complete
+                    </button>
+                    <button type="button" class="btn" data-quick-filter="rejected">
+                        <i class="bi bi-x-circle me-1"></i>Rejected
+                    </button>
+                    <button type="button" class="btn" data-quick-filter="pending">
+                        <i class="bi bi-hourglass-split me-1"></i>Pending
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        {# ---------------- Orders panel (table / cards) ---------------- #}
+        <div class="card orders-card overflow-hidden">
+            <div class="card-header border-secondary-subtle d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-2 bg-transparent">
+                <div class="d-flex align-items-center gap-2 text-secondary small fw-semibold">
+                    <i class="bi bi-table"></i>
+                    <span>Showing</span>
+                    <span id="ordersResultCount" class="badge bg-primary-subtle text-primary-emphasis">0</span>
+                    <span>orders</span>
+                </div>
+
+                <div class="d-flex flex-wrap align-items-center gap-3">
+                    {# View toggle #}
+                    <div class="btn-group orders-view-toggle" role="group" aria-label="View mode">
+                        <button
+                            type="button"
+                            class="btn btn-sm active"
+                            id="ordersViewTableButton"
+                            data-view="table"
+                            title="Table view"
+                        >
+                            <i class="bi bi-list-ul"></i>
+                            <span class="d-none d-md-inline ms-1">Table</span>
+                        </button>
+                        <button
+                            type="button"
+                            class="btn btn-sm"
+                            id="ordersViewCardsButton"
+                            data-view="cards"
+                            title="Card view"
+                        >
+                            <i class="bi bi-grid-3x3-gap"></i>
+                            <span class="d-none d-md-inline ms-1">Cards</span>
+                        </button>
+                    </div>
+
+                    <div class="form-check form-switch d-flex align-items-center gap-2 text-secondary small mb-0">
+                        <input
+                            id="ordersAutoRefresh"
+                            class="form-check-input"
+                            type="checkbox"
+                            role="switch"
+                            checked
+                        />
+                        <label class="form-check-label" for="ordersAutoRefresh">
+                            Auto-refresh every 15 seconds
+                        </label>
+                    </div>
+                </div>
+            </div>
+
+            {# Loading state #}
+            <div id="ordersLoadingState" class="d-flex align-items-center justify-content-center text-center py-5">
+                <div>
+                    <div class="spinner-border text-primary mb-3" role="status"></div>
+                    <div class="fw-bold text-light">Loading today's orders</div>
+                    <p class="text-secondary small mb-0">
+                        Retrieving the latest order book from Upstox.
+                    </p>
+                </div>
+            </div>
+
+            {# Empty state #}
+            <div id="ordersEmptyState" class="d-none align-items-center justify-content-center text-center py-5">
+                <div class="px-3">
+                    <div class="d-inline-flex align-items-center justify-content-center rounded-4 bg-primary-subtle text-primary mb-3"
+                         style="width: 64px; height: 64px; font-size: 1.8rem;">
+                        <i class="bi bi-inbox"></i>
+                    </div>
+                    <div class="fw-bold text-light mb-1">No orders found</div>
+                    <p id="ordersEmptyMessage" class="text-secondary small mb-0">
+                        There are no orders available for the current trading day.
+                    </p>
+                </div>
+            </div>
+
+            {# Table #}
+            <div id="ordersTableContainer" class="table-responsive orders-table-scroll d-none">
+                <table class="table table-dark table-hover table-borderless align-middle mb-0">
+                    <thead class="border-bottom border-secondary-subtle">
+                        <tr class="text-secondary text-uppercase small">
+                            <th style="width: 60px;">#</th>
+                            <th class="sortable" data-sort-key="order_timestamp">
+                                Time <i class="bi bi-arrow-down-up text-secondary ms-1"></i>
+                            </th>
+                            <th>Symbol</th>
+                            <th>Side</th>
+                            <th>Type</th>
+                            <th>Product</th>
+                            <th class="sortable" data-sort-key="quantity">
+                                Quantity <i class="bi bi-arrow-down-up text-secondary ms-1"></i>
+                            </th>
+                            <th class="sortable" data-sort-key="price">
+                                Price <i class="bi bi-arrow-down-up text-secondary ms-1"></i>
+                            </th>
+                            <th>Average</th>
+                            <th>Filled</th>
+                            <th>Status</th>
+                            <th>Order ID</th>
+                            <th>Tag</th>
+                            <th>Message</th>
+                        </tr>
+                    </thead>
+                    <tbody id="ordersTableBody"></tbody>
+                </table>
+            </div>
+
+            {# Card view #}
+            <div id="ordersCardsContainer" class="orders-card-view d-none p-3">
+                <div id="ordersCardsGrid" class="row g-3"></div>
+            </div>
+        </div>
+    </div>
+</section>
+
+{# ---------------- Message modal ---------------- #}
+<div class="modal fade" id="ordersMessageModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-centered">
+        <div class="modal-content bg-dark text-light border border-secondary-subtle">
+            <div class="modal-header border-secondary-subtle">
+                <h5 class="modal-title">
+                    <i class="bi bi-info-circle me-2 text-warning"></i>
+                    Order Details
+                </h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+
+            <div class="modal-body">
+                <div class="mb-3">
+                    <div class="text-secondary text-uppercase small fw-semibold mb-1">Order ID</div>
+                    <div id="ordersModalOrderId" class="orders-message-detail p-3 rounded-3 bg-black border border-secondary-subtle text-light"></div>
+                </div>
+
+                <div class="mb-3">
+                    <div class="text-secondary text-uppercase small fw-semibold mb-1">Status message</div>
+                    <div id="ordersModalStatusMessage" class="orders-message-detail p-3 rounded-3 bg-black border border-secondary-subtle text-light"></div>
+                </div>
+
+                <div>
+                    <div class="text-secondary text-uppercase small fw-semibold mb-1">Raw status message</div>
+                    <div id="ordersModalRawMessage" class="orders-message-detail p-3 rounded-3 bg-black border border-secondary-subtle text-light"></div>
+                </div>
+            </div>
+
+            <div class="modal-footer border-secondary-subtle">
+                <button type="button" class="btn btn-outline-light btn-sm" data-bs-dismiss="modal">
+                    Close
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    (() => {
+        const state = {
+            allOrders: [],
+            filteredOrders: [],
+            loading: false,
+            sortKey: "order_timestamp",
+            sortDirection: "desc",
+            refreshTimer: null,
+            viewMode: "table",        // "table" | "cards"
+            quickFilter: "all"        // all | buy | sell | complete | rejected | pending
+        };
+
+        const elements = {
+            refreshButton: document.getElementById("ordersRefreshButton"),
+            lastUpdated: document.getElementById("ordersLastUpdated"),
+            errorBox: document.getElementById("ordersErrorBox"),
+            errorMessage: document.getElementById("ordersErrorMessage"),
+            loadingState: document.getElementById("ordersLoadingState"),
+            emptyState: document.getElementById("ordersEmptyState"),
+            emptyMessage: document.getElementById("ordersEmptyMessage"),
+            tableContainer: document.getElementById("ordersTableContainer"),
+            tableBody: document.getElementById("ordersTableBody"),
+            cardsContainer: document.getElementById("ordersCardsContainer"),
+            cardsGrid: document.getElementById("ordersCardsGrid"),
+            resultCount: document.getElementById("ordersResultCount"),
+            search: document.getElementById("ordersSearch"),
+            statusFilter: document.getElementById("ordersStatusFilter"),
+            sideFilter: document.getElementById("ordersSideFilter"),
+            productFilter: document.getElementById("ordersProductFilter"),
+            tagFilter: document.getElementById("ordersTagFilter"),
+            clearFilters: document.getElementById("ordersClearFilters"),
+            autoRefresh: document.getElementById("ordersAutoRefresh"),
+            viewTableButton: document.getElementById("ordersViewTableButton"),
+            viewCardsButton: document.getElementById("ordersViewCardsButton"),
+            totalCount: document.getElementById("ordersTotalCount"),
+            completeCount: document.getElementById("ordersCompleteCount"),
+            rejectedCount: document.getElementById("ordersRejectedCount"),
+            pendingCount: document.getElementById("ordersPendingCount"),
+            buyCount: document.getElementById("ordersBuyCount"),
+            sellCount: document.getElementById("ordersSellCount"),
+            modalOrderId: document.getElementById("ordersModalOrderId"),
+            modalStatusMessage: document.getElementById("ordersModalStatusMessage"),
+            modalRawMessage: document.getElementById("ordersModalRawMessage")
+        };
+
+        function normalize(value) {
+            return String(value ?? "").trim();
+        }
+
+        function normalizeUpper(value) {
+            return normalize(value).toUpperCase();
+        }
+
+        function escapeHtml(value) {
+            return normalize(value)
+                .replaceAll("&", "&amp;")
+                .replaceAll("<", "&lt;")
+                .replaceAll(">", "&gt;")
+                .replaceAll('"', "&quot;")
+                .replaceAll("'", "&#039;");
+        }
+
+        function formatNumber(value, decimals = 2) {
+            const number = Number(value);
+            if (!Number.isFinite(number)) return "0";
+            return number.toLocaleString("en-IN", {
+                minimumFractionDigits: decimals,
+                maximumFractionDigits: decimals
+            });
+        }
+
+        function formatQuantity(value) {
+            const number = Number(value);
+            if (!Number.isFinite(number)) return "0";
+            return number.toLocaleString("en-IN");
+        }
+
+        function formatOrderTime(timestamp) {
+            const value = normalize(timestamp);
+            if (!value) return "-";
+            const parts = value.split(" ");
+            return parts.length === 2 ? parts[1] : value;
+        }
+
+        function getTradingSymbol(order) {
+            return order.trading_symbol || order.tradingsymbol || "-";
+        }
+
+        function getStatusBadgeClass(status) {
+            const s = normalizeUpper(status);
+            if (s === "COMPLETE" || s === "COMPLETED") return "badge-tint-success";
+            if (s === "REJECTED") return "badge-tint-danger";
+            if (s === "CANCELLED" || s === "CANCELED") return "badge-tint-secondary";
+            if (
+                s === "OPEN" ||
+                s === "PENDING" ||
+                s === "TRIGGER PENDING" ||
+                s === "VALIDATION PENDING" ||
+                s === "PUT ORDER REQ RECEIVED" ||
+                s === "MODIFY VALIDATION PENDING" ||
+                s === "MODIFY PENDING" ||
+                s === "NOT MODIFIED"
+            ) return "badge-tint-warning";
+            return "badge-tint-primary";
+        }
+
+        function isPendingStatus(status) {
+            const s = normalizeUpper(status);
+            return [
+                "OPEN",
+                "PENDING",
+                "TRIGGER PENDING",
+                "VALIDATION PENDING",
+                "PUT ORDER REQ RECEIVED",
+                "MODIFY VALIDATION PENDING",
+                "MODIFY PENDING",
+                "NOT MODIFIED"
+            ].includes(s);
+        }
+
+        function hasActiveFilters() {
+            return Boolean(
+                normalize(elements.search.value) ||
+                normalize(elements.statusFilter.value) ||
+                normalize(elements.sideFilter.value) ||
+                normalize(elements.productFilter.value) ||
+                normalize(elements.tagFilter.value) ||
+                state.quickFilter !== "all"
+            );
+        }
+
+        function setLoading(isLoading) {
+            state.loading = isLoading;
+            elements.refreshButton.disabled = isLoading;
+            elements.refreshButton.classList.toggle("loading", isLoading);
+
+            if (isLoading && state.allOrders.length === 0) {
+                elements.loadingState.classList.remove("d-none");
+                elements.loadingState.classList.add("d-flex");
+                elements.emptyState.classList.add("d-none");
+                elements.emptyState.classList.remove("d-flex");
+                elements.tableContainer.classList.add("d-none");
+                elements.cardsContainer.classList.add("d-none");
+            }
+        }
+
+        function showError(message) {
+            elements.errorMessage.textContent =
+                message || "Unable to retrieve today's order book.";
+            elements.errorBox.classList.remove("d-none");
+            elements.errorBox.classList.add("d-flex");
+        }
+
+        function hideError() {
+            elements.errorBox.classList.add("d-none");
+            elements.errorBox.classList.remove("d-flex");
+            elements.errorMessage.textContent = "";
+        }
+
+        function updateSummary() {
+            const orders = state.allOrders;
+
+            const completed = orders.filter(
+                order => normalizeUpper(order.status) === "COMPLETE"
+            ).length;
+
+            const rejected = orders.filter(
+                order => normalizeUpper(order.status) === "REJECTED"
+            ).length;
+
+            const pending = orders.filter(
+                order => isPendingStatus(order.status)
+            ).length;
+
+            const buys = orders.filter(
+                order => normalizeUpper(order.transaction_type) === "BUY"
+            ).length;
+
+            const sells = orders.filter(
+                order => normalizeUpper(order.transaction_type) === "SELL"
+            ).length;
+
+            elements.totalCount.textContent = orders.length;
+            elements.completeCount.textContent = completed;
+            elements.rejectedCount.textContent = rejected;
+            elements.pendingCount.textContent = pending;
+            elements.buyCount.textContent = buys;
+            elements.sellCount.textContent = sells;
+        }
+
+        function setSelectOptions(selectElement, values, defaultLabel) {
+            const currentValue = selectElement.value;
+            const uniqueValues = [...new Set(
+                values.map(value => normalize(value)).filter(Boolean)
+            )].sort((a, b) => a.localeCompare(b));
+
+            selectElement.innerHTML = "";
+
+            const defaultOption = document.createElement("option");
+            defaultOption.value = "";
+            defaultOption.textContent = defaultLabel;
+            selectElement.appendChild(defaultOption);
+
+            uniqueValues.forEach(value => {
+                const option = document.createElement("option");
+                option.value = value;
+                option.textContent = value;
+                selectElement.appendChild(option);
+            });
+
+            if (uniqueValues.includes(currentValue)) {
+                selectElement.value = currentValue;
+            }
+        }
+
+        function updateFilterOptions() {
+            setSelectOptions(
+                elements.statusFilter,
+                state.allOrders.map(order => order.status),
+                "All statuses"
+            );
+
+            setSelectOptions(
+                elements.productFilter,
+                state.allOrders.map(order => order.product),
+                "All products"
+            );
+
+            setSelectOptions(
+                elements.tagFilter,
+                state.allOrders.map(order => order.tag),
+                "All tags"
+            );
+        }
+
+        function getSortValue(order, key) {
+            if (["quantity", "price", "average_price"].includes(key)) {
+                return Number(order[key]) || 0;
+            }
+            return normalize(order[key]).toLowerCase();
+        }
+
+        function sortOrders(orders) {
+            return [...orders].sort((first, second) => {
+                const firstValue = getSortValue(first, state.sortKey);
+                const secondValue = getSortValue(second, state.sortKey);
+
+                let result = 0;
+                if (firstValue < secondValue) result = -1;
+                else if (firstValue > secondValue) result = 1;
+
+                return state.sortDirection === "asc" ? result : -result;
+            });
+        }
+
+        // Applies the quick filter pill (All / Buy / Sell / Complete / Rejected / Pending)
+        function applyQuickFilter(order) {
+            const qf = state.quickFilter;
+            if (qf === "all") return true;
+
+            const side = normalizeUpper(order.transaction_type);
+            const status = normalizeUpper(order.status);
+
+            if (qf === "buy") return side === "BUY";
+            if (qf === "sell") return side === "SELL";
+            if (qf === "complete") return status === "COMPLETE" || status === "COMPLETED";
+            if (qf === "rejected") return status === "REJECTED";
+            if (qf === "pending") return isPendingStatus(status);
+
+            return true;
+        }
+
+        function applyFilters() {
+            const searchValue = normalize(elements.search.value).toLowerCase();
+            const statusValue = normalizeUpper(elements.statusFilter.value);
+            const sideValue = normalizeUpper(elements.sideFilter.value);
+            const productValue = normalizeUpper(elements.productFilter.value);
+            const tagValue = normalizeUpper(elements.tagFilter.value);
+
+            state.filteredOrders = state.allOrders.filter(order => {
+                const searchableText = [
+                    getTradingSymbol(order),
+                    order.order_id,
+                    order.instrument_token,
+                    order.tag,
+                    order.status,
+                    order.transaction_type,
+                    order.order_type
+                ]
+                    .map(normalize)
+                    .join(" ")
+                    .toLowerCase();
+
+                const matchesSearch =
+                    !searchValue || searchableText.includes(searchValue);
+                const matchesStatus =
+                    !statusValue || normalizeUpper(order.status) === statusValue;
+                const matchesSide =
+                    !sideValue || normalizeUpper(order.transaction_type) === sideValue;
+                const matchesProduct =
+                    !productValue || normalizeUpper(order.product) === productValue;
+                const matchesTag =
+                    !tagValue || normalizeUpper(order.tag) === tagValue;
+                const matchesQuick = applyQuickFilter(order);
+
+                return (
+                    matchesSearch &&
+                    matchesStatus &&
+                    matchesSide &&
+                    matchesProduct &&
+                    matchesTag &&
+                    matchesQuick
+                );
+            });
+
+            state.filteredOrders = sortOrders(state.filteredOrders);
+            renderOrders();
+        }
+
+        function renderOrders() {
+            elements.loadingState.classList.add("d-none");
+            elements.loadingState.classList.remove("d-flex");
+            elements.resultCount.textContent = state.filteredOrders.length;
+
+            if (state.filteredOrders.length === 0) {
+                elements.tableContainer.classList.add("d-none");
+                elements.cardsContainer.classList.add("d-none");
+                elements.emptyState.classList.remove("d-none");
+                elements.emptyState.classList.add("d-flex");
+
+                elements.emptyMessage.textContent = hasActiveFilters()
+                    ? "No orders match the selected filters."
+                    : "There are no orders available for the current trading day.";
+
+                return;
+            }
+
+            elements.emptyState.classList.add("d-none");
+            elements.emptyState.classList.remove("d-flex");
+
+            if (state.viewMode === "cards") {
+                elements.tableContainer.classList.add("d-none");
+                elements.cardsContainer.classList.remove("d-none");
+                renderCards();
+            } else {
+                elements.cardsContainer.classList.add("d-none");
+                elements.tableContainer.classList.remove("d-none");
+                renderTable();
+            }
+        }
+
+        // ---------------- TABLE VIEW ----------------
+        function renderTable() {
+            elements.tableBody.innerHTML = state.filteredOrders
+                .map((order, index) => {
+                    const serial = index + 1;
+                    const symbol = getTradingSymbol(order);
+                    const side = normalizeUpper(order.transaction_type) || "-";
+                    const status = normalize(order.status) || "unknown";
+                    const statusClass = getStatusBadgeClass(status);
+
+                    const sideClass = side === "BUY"
+                        ? "badge-tint-success"
+                        : "badge-tint-danger";
+
+                    const message =
+                        order.status_message ||
+                        order.status_message_raw ||
+                        "";
+
+                    const rowIndex = state.allOrders.indexOf(order);
+
+                    return `
+                        <tr>
+                            <td>
+                                <span class="orders-serial-badge">#${serial}</span>
+                            </td>
+                            <td class="text-secondary small">
+                                <span title="${escapeHtml(order.order_timestamp)}">
+                                    ${escapeHtml(formatOrderTime(order.order_timestamp))}
+                                </span>
+                            </td>
+                            <td>
+                                <div class="d-flex flex-column">
+                                    <span class="fw-semibold text-light">${escapeHtml(symbol)}</span>
+                                    <span class="text-secondary orders-symbol-token">${escapeHtml(order.instrument_token || "-")}</span>
+                                </div>
+                            </td>
+                            <td>
+                                <span class="badge rounded-pill ${sideClass}">${escapeHtml(side)}</span>
+                            </td>
+                            <td>
+                                <span class="badge rounded-pill badge-tint-info">${escapeHtml(order.order_type || "-")}</span>
+                            </td>
+                            <td>
+                                <span class="badge rounded-pill badge-tint-purple">${escapeHtml(order.product || "-")}</span>
+                            </td>
+                            <td class="orders-num">${formatQuantity(order.quantity)}</td>
+                            <td class="orders-num text-light fw-semibold">₹${formatNumber(order.price)}</td>
+                            <td class="orders-num text-light fw-semibold">₹${formatNumber(order.average_price)}</td>
+                            <td class="orders-num">
+                                ${formatQuantity(order.filled_quantity)}
+                                <span class="text-secondary">/ ${formatQuantity(order.quantity)}</span>
+                            </td>
+                            <td>
+                                <span class="badge rounded-pill ${statusClass}">${escapeHtml(status)}</span>
+                            </td>
+                            <td class="text-secondary small">
+                                <span title="${escapeHtml(order.order_id)}">${escapeHtml(order.order_id || "-")}</span>
+                            </td>
+                            <td class="text-secondary small">${escapeHtml(order.tag || "-")}</td>
+                            <td style="max-width: 245px;">
+                                ${
+                                    message
+                                        ? `<button
+                                                type="button"
+                                                class="orders-message-button"
+                                                data-order-index="${rowIndex}"
+                                                title="${escapeHtml(message)}"
+                                            >${escapeHtml(message)}</button>`
+                                        : `<span class="text-secondary">-</span>`
+                                }
+                            </td>
+                        </tr>
+                    `;
+                })
+                .join("");
+
+            document
+                .querySelectorAll(".orders-message-button")
+                .forEach(button => {
+                    button.addEventListener("click", () => {
+                        openMessageModal(Number(button.dataset.orderIndex));
+                    });
+                });
+        }
+
+        // ---------------- CARD VIEW ----------------
+        function renderCards() {
+            elements.cardsGrid.innerHTML = state.filteredOrders
+                .map((order, index) => {
+                    const serial = index + 1;
+                    const symbol = getTradingSymbol(order);
+                    const side = normalizeUpper(order.transaction_type) || "-";
+                    const status = normalize(order.status) || "unknown";
+                    const statusClass = getStatusBadgeClass(status);
+                    const sideClass = side === "BUY"
+                        ? "badge-tint-success"
+                        : "badge-tint-danger";
+
+                    const message =
+                        order.status_message ||
+                        order.status_message_raw ||
+                        "";
+
+                    const rowIndex = state.allOrders.indexOf(order);
+
+                    return `
+                        <div class="col-12 col-md-6 col-xl-4">
+                            <div class="card order-item-card">
+                                <div class="card-body p-3">
+
+                                    {# Serial + side #}
+                                    <div class="d-flex justify-content-between align-items-center mb-3">
+                                        <span class="order-item-serial">#${serial}</span>
+                                        <span class="badge rounded-pill ${sideClass}">${escapeHtml(side)}</span>
+                                    </div>
+
+                                    {# Symbol #}
+                                    <div class="mb-3">
+                                        <div class="fw-bold text-light text-truncate" title="${escapeHtml(symbol)}">
+                                            ${escapeHtml(symbol)}
+                                        </div>
+                                        <div class="text-secondary orders-symbol-token text-truncate" title="${escapeHtml(order.instrument_token || '-')}">
+                                            ${escapeHtml(order.instrument_token || "-")}
+                                        </div>
+                                    </div>
+
+                                    {# Key rows #}
+                                    <div class="order-item-row">
+                                        <span class="label">Time</span>
+                                        <span class="value">${escapeHtml(formatOrderTime(order.order_timestamp))}</span>
+                                    </div>
+                                    <div class="order-item-row">
+                                        <span class="label">Type</span>
+                                        <span class="value">${escapeHtml(order.order_type || "-")}</span>
+                                    </div>
+                                    <div class="order-item-row">
+                                        <span class="label">Product</span>
+                                        <span class="value">${escapeHtml(order.product || "-")}</span>
+                                    </div>
+                                    <div class="order-item-row">
+                                        <span class="label">Qty</span>
+                                        <span class="value">${formatQuantity(order.quantity)}</span>
+                                    </div>
+                                    <div class="order-item-row">
+                                        <span class="label">Price</span>
+                                        <span class="value">₹${formatNumber(order.price)}</span>
+                                    </div>
+                                    <div class="order-item-row">
+                                        <span class="label">Avg</span>
+                                        <span class="value">₹${formatNumber(order.average_price)}</span>
+                                    </div>
+                                    <div class="order-item-row">
+                                        <span class="label">Filled</span>
+                                        <span class="value">
+                                            ${formatQuantity(order.filled_quantity)} / ${formatQuantity(order.quantity)}
+                                        </span>
+                                    </div>
+                                    <div class="order-item-row">
+                                        <span class="label">Tag</span>
+                                        <span class="value">${escapeHtml(order.tag || "-")}</span>
+                                    </div>
+
+                                    {# Status #}
+                                    <div class="d-flex justify-content-between align-items-center mt-3 mb-2">
+                                        <span class="label text-uppercase small text-secondary fw-semibold">Status</span>
+                                        <span class="badge rounded-pill ${statusClass}">${escapeHtml(status)}</span>
+                                    </div>
+
+                                    {# Order ID #}
+                                    <div class="small text-secondary text-truncate mb-3" title="${escapeHtml(order.order_id || '-')}">
+                                        <i class="bi bi-hash"></i> ${escapeHtml(order.order_id || "-")}
+                                    </div>
+
+                                    {# Message button #}
+                                    ${
+                                        message
+                                            ? `<button
+                                                    type="button"
+                                                    class="btn btn-sm btn-outline-warning w-100 orders-card-message-button"
+                                                    data-order-index="${rowIndex}"
+                                                >
+                                                    <i class="bi bi-chat-left-text me-1"></i>
+                                                    View message
+                                                </button>`
+                                            : `<button type="button" class="btn btn-sm btn-outline-secondary w-100" disabled>
+                                                    <i class="bi bi-dash-circle me-1"></i>
+                                                    No message
+                                                </button>`
+                                    }
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                })
+                .join("");
+
+            document
+                .querySelectorAll(".orders-card-message-button")
+                .forEach(button => {
+                    button.addEventListener("click", () => {
+                        openMessageModal(Number(button.dataset.orderIndex));
+                    });
+                });
+        }
+
+        function openMessageModal(orderIndex) {
+            const order = state.allOrders[orderIndex];
+            if (!order) return;
+
+            elements.modalOrderId.textContent = order.order_id || "Not available";
+            elements.modalStatusMessage.textContent =
+                order.status_message || "No status message";
+            elements.modalRawMessage.textContent =
+                order.status_message_raw || "No raw status message";
+
+            const modal = bootstrap.Modal.getOrCreateInstance(
+                document.getElementById("ordersMessageModal")
+            );
+            modal.show();
+        }
+
+        function updateLastUpdated() {
+            const now = new Date();
+            elements.lastUpdated.textContent =
+                `Updated ${now.toLocaleTimeString("en-IN", {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                    second: "2-digit"
+                })}`;
+        }
+
+        async function loadOrders() {
+            if (state.loading) return;
+
+            setLoading(true);
+            hideError();
+
+            try {
+                const response = await fetch(`${window.apiHost}/api/orders`, {
+                    method: "GET",
+                    headers: { Accept: "application/json" },
+                    cache: "no-store"
+                });
+
+                let payload;
+                try {
+                    payload = await response.json();
+                } catch {
+                    throw new Error(
+                        `The server returned an invalid response (${response.status}).`
+                    );
+                }
+
+                if (!response.ok || payload.success === false) {
+                    throw new Error(
+                        payload.message ||
+                        payload.error ||
+                        `Unable to retrieve orders (${response.status}).`
+                    );
+                }
+
+                state.allOrders = Array.isArray(payload.data) ? payload.data : [];
+
+                updateSummary();
+                updateFilterOptions();
+                applyFilters();
+                updateLastUpdated();
+            } catch (error) {
+                console.error("Failed to load orders:", error);
+
+                showError(error.message || "Unable to retrieve today's order book.");
+
+                if (state.allOrders.length === 0) {
+                    elements.loadingState.classList.add("d-none");
+                    elements.loadingState.classList.remove("d-flex");
+                    elements.tableContainer.classList.add("d-none");
+                    elements.cardsContainer.classList.add("d-none");
+                    elements.emptyState.classList.remove("d-none");
+                    elements.emptyState.classList.add("d-flex");
+                    elements.emptyMessage.textContent =
+                        "The order book could not be loaded. Check the access token and API connection.";
+                }
+            } finally {
+                setLoading(false);
+            }
+        }
+
+        function clearFilters() {
+            elements.search.value = "";
+            elements.statusFilter.value = "";
+            elements.sideFilter.value = "";
+            elements.productFilter.value = "";
+            elements.tagFilter.value = "";
+
+            state.quickFilter = "all";
+            document
+                .querySelectorAll(".orders-quick-filters .btn")
+                .forEach(btn => btn.classList.toggle("active", btn.dataset.quickFilter === "all"));
+
+            applyFilters();
+        }
+
+        function configureAutoRefresh() {
+            if (state.refreshTimer) {
+                clearInterval(state.refreshTimer);
+                state.refreshTimer = null;
+            }
+
+            if (elements.autoRefresh.checked) {
+                state.refreshTimer = setInterval(() => {
+                    if (!document.hidden) loadOrders();
+                }, 15000);
+            }
+        }
+
+        function configureSorting() {
+            document
+                .querySelectorAll(".orders-table-scroll th.sortable")
+                .forEach(header => {
+                    header.addEventListener("click", () => {
+                        const sortKey = header.dataset.sortKey;
+
+                        if (state.sortKey === sortKey) {
+                            state.sortDirection =
+                                state.sortDirection === "asc" ? "desc" : "asc";
+                        } else {
+                            state.sortKey = sortKey;
+                            state.sortDirection = "asc";
+                        }
+
+                        applyFilters();
+                    });
+                });
+        }
+
+        function configureViewToggle() {
+            elements.viewTableButton.addEventListener("click", () => {
+                state.viewMode = "table";
+                elements.viewTableButton.classList.add("active");
+                elements.viewCardsButton.classList.remove("active");
+                renderOrders();
+            });
+
+            elements.viewCardsButton.addEventListener("click", () => {
+                state.viewMode = "cards";
+                elements.viewCardsButton.classList.add("active");
+                elements.viewTableButton.classList.remove("active");
+                renderOrders();
+            });
+        }
+
+        function configureQuickFilters() {
+            document
+                .querySelectorAll(".orders-quick-filters .btn")
+                .forEach(button => {
+                    button.addEventListener("click", () => {
+                        const qf = button.dataset.quickFilter || "all";
+                        state.quickFilter = qf;
+
+                        document
+                            .querySelectorAll(".orders-quick-filters .btn")
+                            .forEach(btn => btn.classList.toggle("active", btn === button));
+
+                        applyFilters();
+                    });
+                });
+        }
+
+        elements.search.addEventListener("input", applyFilters);
+        elements.statusFilter.addEventListener("change", applyFilters);
+        elements.sideFilter.addEventListener("change", applyFilters);
+        elements.productFilter.addEventListener("change", applyFilters);
+        elements.tagFilter.addEventListener("change", applyFilters);
+        elements.clearFilters.addEventListener("click", clearFilters);
+        elements.autoRefresh.addEventListener("change", configureAutoRefresh);
+
+        document.addEventListener("visibilitychange", () => {
+            if (!document.hidden && elements.autoRefresh.checked) {
+                loadOrders();
+            }
+        });
+
+        window.addEventListener("beforeunload", () => {
+            if (state.refreshTimer) clearInterval(state.refreshTimer);
+        });
+
+        window.loadOrders = loadOrders;
+
+        configureSorting();
+        configureViewToggle();
+        configureQuickFilters();
+        configureAutoRefresh();
+        loadOrders();
+    })();
+</script>
+{% endblock %}

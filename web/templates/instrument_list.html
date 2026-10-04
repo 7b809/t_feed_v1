@@ -1,0 +1,930 @@
+{% extends "base.html" %}
+
+{% block title %}{{ page_title or "Chart Instruments" }}{% endblock %}
+
+{% block head %}
+
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" />
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+
+    <style>
+        :root {
+            --bg-body: #f4f7fe;
+            --bg-card: #ffffff;
+            --text-primary: #1b2559;
+            --text-secondary: #707eae;
+            --text-muted: #8f9bba;
+            --border-color: #e9edf7;
+            --accent-blue: #4318ff;
+            --accent-call: #05cd99;
+            --accent-put: #ee5d50;
+            --card-shadow: 0px 18px 40px rgba(112, 144, 176, 0.12);
+        }
+
+        body {
+            background-color: var(--bg-body);
+            color: var(--text-primary);
+            font-family: 'Plus Jakarta Sans', sans-serif;
+            min-height: 100vh;
+        }
+
+        .page-header {
+            background: #ffffff;
+            border-bottom: 1px solid var(--border-color);
+            padding: 16px 32px;
+            box-shadow: 0px 4px 20px rgba(112, 144, 176, 0.06);
+        }
+
+        .brand-icon {
+            width: 40px;
+            height: 40px;
+            background: linear-gradient(135deg, #868CFF 0%, #4318FF 100%);
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 20px;
+            box-shadow: 0px 6px 14px rgba(67, 24, 255, 0.35);
+        }
+
+        .instrument-panel {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 20px;
+            box-shadow: var(--card-shadow);
+            overflow: hidden;
+        }
+
+        .panel-header {
+            background: #ffffff;
+            padding: 20px 24px 16px 24px;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .search-group { position: relative; }
+
+        .search-group .bi-search {
+            position: absolute;
+            left: 16px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: var(--text-secondary);
+            font-size: 16px;
+        }
+
+        .search-box {
+            background-color: #f4f7fe;
+            border: 1px solid transparent;
+            border-radius: 14px;
+            padding: 12px 16px 12px 46px;
+            font-size: 14px;
+            font-weight: 500;
+            color: var(--text-primary);
+            transition: all 0.2s ease-in-out;
+        }
+
+        .search-box:focus {
+            background-color: #ffffff;
+            border-color: var(--accent-blue);
+            box-shadow: 0px 0px 0px 4px rgba(67, 24, 255, 0.1);
+            outline: none;
+        }
+
+        /* Reset button */
+        .reset-btn {
+            border: 1px solid var(--border-color);
+            background: #ffffff;
+            color: var(--text-secondary);
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 700;
+            padding: 8px 14px;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            transition: all 0.15s ease;
+            white-space: nowrap;
+            flex-shrink: 0;
+        }
+
+        .reset-btn:hover:not(:disabled) {
+            border-color: var(--accent-blue);
+            color: var(--accent-blue);
+            background: rgba(67, 24, 255, 0.04);
+        }
+
+        .reset-btn:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+
+        .reset-btn i { font-size: 13px; }
+
+        .category-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-top: 14px;
+        }
+
+        .category-pill {
+            border: 1px solid var(--border-color);
+            background: #ffffff;
+            color: var(--text-secondary);
+            font-weight: 700;
+            font-size: 12px;
+            padding: 7px 14px;
+            border-radius: 30px;
+            cursor: pointer;
+            transition: all 0.15s ease;
+            white-space: nowrap;
+        }
+
+        .category-pill:hover {
+            color: var(--accent-blue);
+            border-color: rgba(67, 24, 255, 0.3);
+        }
+
+        .category-pill.active {
+            background: var(--accent-blue);
+            color: #ffffff;
+            border-color: var(--accent-blue);
+            box-shadow: 0 4px 12px rgba(67, 24, 255, 0.25);
+        }
+
+        .panel-body {
+            max-height: calc(100vh - 320px);
+            min-height: 260px;
+            padding: 24px;
+            overflow-y: auto;
+        }
+
+        .panel-body::-webkit-scrollbar { width: 6px; }
+        .panel-body::-webkit-scrollbar-track { background: #f4f7fe; }
+        .panel-body::-webkit-scrollbar-thumb { background: #d0d9f0; border-radius: 10px; }
+
+        .instrument-card {
+            display: block;
+            background: #1e293b;
+            border: 1px solid #334155;
+            border-radius: 14px;
+            padding: 16px 20px;
+            margin-bottom: 10px;
+            text-decoration: none;
+            color: #f8fafc;
+            transition: all 0.2s ease-in-out;
+            box-shadow: 0px 4px 12px rgba(0, 0, 0, 0.15);
+        }
+
+        .instrument-card:hover {
+            background: #273449;
+            border-color: #475569;
+            color: #ffffff;
+            transform: translateY(-2px);
+            box-shadow: 0px 8px 20px rgba(0, 0, 0, 0.22);
+        }
+
+        .instrument-card .instrument-symbol {
+            color: #ffffff;
+            font-weight: 700;
+            font-size: 15px;
+        }
+
+        .instrument-card .instrument-key {
+            color: #94a3b8;
+            font-size: 11px;
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            margin-top: 3px;
+            word-break: break-all;
+        }
+
+        .instrument-card .instrument-meta {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-top: 8px;
+        }
+
+        .instrument-card .meta-chip {
+            display: inline-block;
+            padding: 2px 8px;
+            background: rgba(148, 163, 184, 0.18);
+            border-radius: 6px;
+            font-size: 10px;
+            font-weight: 700;
+            color: #cbd5e1;
+            letter-spacing: 0.3px;
+            text-transform: uppercase;
+        }
+
+        .instrument-card .meta-chip.chip-ce {
+            background: rgba(5, 205, 153, 0.15);
+            color: var(--accent-call);
+        }
+
+        .instrument-card .meta-chip.chip-pe {
+            background: rgba(238, 93, 80, 0.15);
+            color: var(--accent-put);
+        }
+
+        .instrument-card .meta-chip.chip-expiry {
+            background: rgba(245, 196, 81, 0.18);
+            color: #f5c451;
+        }
+
+        .instrument-card .view-chart-btn {
+            background: rgba(255, 255, 255, 0.08);
+            color: #ffffff;
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            border-radius: 30px;
+            padding: 6px 14px;
+            font-size: 12px;
+            font-weight: 700;
+            transition: all 0.15s ease;
+            flex-shrink: 0;
+        }
+
+        .instrument-card:hover .view-chart-btn {
+            background: var(--accent-blue);
+            border-color: var(--accent-blue);
+        }
+
+        .empty-message,
+        .no-results {
+            color: var(--text-muted);
+            font-size: 13px;
+            font-weight: 600;
+        }
+
+        .loading-state {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 50px 20px;
+            color: var(--text-muted);
+        }
+
+        .loading-state .spinner-border {
+            color: var(--accent-blue);
+            margin-bottom: 14px;
+        }
+
+        .panel-footer {
+            padding: 14px 24px;
+            background: #ffffff;
+            border-top: 1px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+
+        .panel-footer .pagination-info {
+            font-size: 12px;
+            color: var(--text-secondary);
+            font-weight: 600;
+        }
+
+        .pagination-buttons {
+            display: flex;
+            gap: 6px;
+        }
+
+        .pagination-btn {
+            border: 1px solid var(--border-color);
+            background: #ffffff;
+            color: var(--text-primary);
+            border-radius: 10px;
+            padding: 6px 14px;
+            font-size: 12px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: all 0.15s ease;
+        }
+
+        .pagination-btn:hover:not(:disabled) {
+            background: var(--accent-blue);
+            color: #ffffff;
+            border-color: var(--accent-blue);
+        }
+
+        .pagination-btn:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+
+        [hidden] { display: none !important; }
+    </style>
+{% endblock %}
+
+{% block content %}
+<header class="page-header d-flex align-items-center justify-content-between flex-wrap gap-3">
+    <div class="d-flex align-items-center gap-3">
+        <div class="brand-icon">
+            <i class="bi bi-graph-up-arrow"></i>
+        </div>
+        <div>
+            <h1 class="h5 mb-0 fw-bold" style="color: var(--text-primary);">Chart Instruments</h1>
+            <span class="small text-muted fw-medium">Search and chart any Upstox instrument</span>
+        </div>
+    </div>
+
+    <div class="badge px-3 py-2 rounded-pill"
+         style="background: rgba(67, 24, 255, 0.08); color: var(--accent-blue); font-size: 12px; font-weight: 700;">
+        <i class="bi bi-database-fill me-1"></i>
+        <span id="resultCountBadge">0 results</span>
+    </div>
+</header>
+
+<main class="container py-4">
+    <div class="row justify-content-center">
+        <div class="col-12 col-lg-11 col-xl-9">
+            <section class="instrument-panel">
+
+                <div class="panel-header">
+                    <div class="row g-3 align-items-center">
+                        <div class="col-12 col-md-7">
+                            <div class="search-group">
+                                <i class="bi bi-search"></i>
+                                <input
+                                    type="search"
+                                    id="searchInput"
+                                    class="form-control search-box"
+                                    placeholder="Search symbol, name, ISIN or strike (e.g. RELIANCE, NIFTY 24000 CE)..."
+                                    autocomplete="off"
+                                />
+                            </div>
+                        </div>
+
+                        <div class="col-12 col-md-5">
+                            <div class="d-flex align-items-center justify-content-md-end gap-2">
+                                <select id="expiryFilter"
+                                        class="form-select form-select-sm"
+                                        style="border-radius: 12px; border-color: var(--border-color); font-size: 12px; font-weight: 700; min-width: 150px;">
+                                    <option value="">Any expiry</option>
+                                    <option value="current_week">Current week</option>
+                                    <option value="next_week">Next week</option>
+                                    <option value="current_month">Current month</option>
+                                    <option value="next_month">Next month</option>
+                                </select>
+
+                                <!-- Reset all selected options to default -->
+                                <button type="button"
+                                        id="resetFiltersBtn"
+                                        class="reset-btn"
+                                        title="Reset all filters and search back to default"
+                                        disabled>
+                                    <i class="bi bi-arrow-counterclockwise"></i>
+                                    <span>Reset</span>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Category pills -->
+                    <div class="category-row" id="categoryRow">
+                        <button type="button" class="category-pill" data-category="all">
+                            <i class="bi bi-grid-3x3-gap-fill me-1"></i>All
+                        </button>
+                        <button type="button" class="category-pill active" data-category="index">
+                            <i class="bi bi-bar-chart-line-fill me-1"></i>Index
+                        </button>
+                        <button type="button" class="category-pill" data-category="options">
+                            <i class="bi bi-diagram-3-fill me-1"></i>Options
+                        </button>
+                        <button type="button" class="category-pill" data-category="futures">
+                            <i class="bi bi-calendar-check me-1"></i>Futures
+                        </button>
+                        <button type="button" class="category-pill" data-category="equities">
+                            <i class="bi bi-briefcase-fill me-1"></i>Equities
+                        </button>
+                        <button type="button" class="category-pill" data-category="commodities">
+                            <i class="bi bi-box-seam-fill me-1"></i>Commodities
+                        </button>
+                        <button type="button" class="category-pill" data-category="currency">
+                            <i class="bi bi-currency-exchange me-1"></i>Currency
+                        </button>
+                    </div>
+                </div>
+
+                <div class="panel-body">
+                    <div id="resultsContainer"></div>
+
+                    <div id="resultsLoading" class="loading-state" hidden>
+                        <div class="spinner-border" role="status"></div>
+                        <div class="fw-bold" style="color: var(--text-primary);">Fetching instruments…</div>
+                        <div class="small">Querying Upstox instruments search</div>
+                    </div>
+
+                    <div id="resultsEmpty" class="text-center py-5" hidden>
+                        <i class="bi bi-inbox fs-1 d-block mb-2" style="color: var(--text-muted);"></i>
+                        <div class="no-results" id="emptyMessage">No instruments found.</div>
+                    </div>
+                </div>
+
+                <div class="panel-footer">
+                    <div class="pagination-info">
+                        <span id="paginationSummary">—</span>
+                    </div>
+                    <div class="pagination-buttons">
+                        <button type="button" class="pagination-btn" id="prevPageBtn" disabled>
+                            <i class="bi bi-chevron-left"></i> Prev
+                        </button>
+                        <button type="button" class="pagination-btn" id="nextPageBtn" disabled>
+                            Next <i class="bi bi-chevron-right"></i>
+                        </button>
+                    </div>
+                </div>
+
+            </section>
+        </div>
+    </div>
+</main>
+
+<!-- Server-rendered fallback indexes (used when no token / API unavailable) -->
+<script id="server-indexes-data" type="application/json">{{ indexes | tojson }}</script>
+{% endblock %}
+
+{% block scripts %}
+<script>
+/* ============================================================
+   Instrument Search — pure navigation list.
+
+   This page ONLY renders the search results.
+   - Subscription to the upstream market streamer happens on the
+     chart page, not here.
+   - Clicking any card navigates directly to /chart/<key>.
+   - The chart page handles: subscribe, historical candles,
+     intraday candles, live WebSocket, and unsubscribe on close.
+   ============================================================ */
+
+(function () {
+    "use strict";
+
+    // -------------------------------------------------------------------
+    // Config
+    // -------------------------------------------------------------------
+    const apiBase = () => window.apiHost || window.location.origin;
+
+    const RECORDS_PER_PAGE = 20;
+    const SEARCH_DEBOUNCE_MS = 380;
+
+    // Default state — used by the Reset button to restore everything.
+    const DEFAULT_STATE = {
+        category: "index",
+        query: "",
+        expiry: "",
+        page: 1,
+    };
+
+    const CATEGORY_CONFIG = {
+        all: {
+            label: "All",
+            apiFilters: {},
+            needsQuery: true,
+        },
+        index: {
+            label: "Index",
+            apiFilters: { segments: "INDEX", exchanges: "NSE" },
+            needsQuery: false,
+            defaultQuery: "NIFTY",
+        },
+        options: {
+            label: "Options",
+            apiFilters: { segments: "FO", instrument_types: "CE,PE" },
+            needsQuery: true,
+            defaultQuery: "NIFTY",
+        },
+        futures: {
+            label: "Futures",
+            apiFilters: { segments: "FO", instrument_types: "FUT" },
+            needsQuery: true,
+            defaultQuery: "NIFTY",
+        },
+        equities: {
+            label: "Equities",
+            apiFilters: { segments: "EQ" },
+            needsQuery: true,
+        },
+        commodities: {
+            label: "Commodities",
+            apiFilters: { exchanges: "MCX" },
+            needsQuery: true,
+            defaultQuery: "CRUDE",
+        },
+        currency: {
+            label: "Currency",
+            apiFilters: { segments: "CURR" },
+            needsQuery: true,
+            defaultQuery: "USD",
+        },
+    };
+
+    // -------------------------------------------------------------------
+    // State
+    // -------------------------------------------------------------------
+    const state = {
+        category: DEFAULT_STATE.category,
+        query: DEFAULT_STATE.query,
+        expiry: DEFAULT_STATE.expiry,
+        page: DEFAULT_STATE.page,
+        totalPages: 1,
+        totalRecords: 0,
+        loading: false,
+        results: [],
+    };
+
+    let serverIndexes = [];
+    try {
+        serverIndexes = JSON.parse(
+            document.getElementById("server-indexes-data")?.textContent || "[]"
+        );
+    } catch (err) {
+        console.warn("Unable to parse server-indexes-data:", err);
+    }
+
+    // -------------------------------------------------------------------
+    // DOM refs
+    // -------------------------------------------------------------------
+    const searchInput       = document.getElementById("searchInput");
+    const expiryFilter      = document.getElementById("expiryFilter");
+    const resetFiltersBtn   = document.getElementById("resetFiltersBtn");
+    const categoryRow       = document.getElementById("categoryRow");
+    const resultsContainer  = document.getElementById("resultsContainer");
+    const resultsLoading    = document.getElementById("resultsLoading");
+    const resultsEmpty      = document.getElementById("resultsEmpty");
+    const emptyMessage      = document.getElementById("emptyMessage");
+    const resultCountBadge  = document.getElementById("resultCountBadge");
+    const paginationSummary = document.getElementById("paginationSummary");
+    const prevPageBtn       = document.getElementById("prevPageBtn");
+    const nextPageBtn       = document.getElementById("nextPageBtn");
+
+    // -------------------------------------------------------------------
+    // Utilities
+    // -------------------------------------------------------------------
+    function escapeHtml(value) {
+        return String(value ?? "")
+            .replaceAll("&", "&amp;")
+            .replaceAll("<", "&lt;")
+            .replaceAll(">", "&gt;")
+            .replaceAll('"', "&quot;")
+            .replaceAll("'", "&#039;");
+    }
+
+    function debounce(fn, ms) {
+        let timer = null;
+        return function (...args) {
+            if (timer) clearTimeout(timer);
+            timer = setTimeout(() => fn.apply(this, args), ms);
+        };
+    }
+
+    /**
+     * Returns true when the current state differs from DEFAULT_STATE.
+     * Used to enable/disable the Reset button.
+     */
+    function hasActiveFilters() {
+        if (String(state.category || "").toLowerCase() !== DEFAULT_STATE.category) return true;
+        if (String(state.query || "").trim() !== DEFAULT_STATE.query) return true;
+        if (String(state.expiry || "").trim() !== DEFAULT_STATE.expiry) return true;
+        // Page is not user-facing as a "filter" but should still count
+        if (state.page > 1) return true;
+        return false;
+    }
+
+    function updateResetButtonState() {
+        if (!resetFiltersBtn) return;
+        resetFiltersBtn.disabled = !hasActiveFilters();
+    }
+
+    // -------------------------------------------------------------------
+    // Rendering
+    // -------------------------------------------------------------------
+    function setLoading(value) {
+        state.loading = value;
+        resultsLoading.hidden = !value;
+        if (value) {
+            resultsEmpty.hidden = true;
+            resultsContainer.innerHTML = "";
+        }
+    }
+
+    function updatePaginationUI() {
+        resultCountBadge.textContent =
+            `${state.totalRecords} result${state.totalRecords === 1 ? "" : "s"}`;
+
+        if (state.totalRecords === 0) {
+            paginationSummary.textContent = "—";
+        } else {
+            const from = (state.page - 1) * RECORDS_PER_PAGE + 1;
+            const to = Math.min(state.page * RECORDS_PER_PAGE, state.totalRecords);
+            paginationSummary.textContent =
+                `Showing ${from}–${to} of ${state.totalRecords} • Page ${state.page} of ${state.totalPages}`;
+        }
+
+        prevPageBtn.disabled = state.loading || state.page <= 1;
+        nextPageBtn.disabled = state.loading || state.page >= state.totalPages;
+    }
+
+    function renderResults(items) {
+        if (!items || items.length === 0) {
+            resultsContainer.innerHTML = "";
+            resultsEmpty.hidden = false;
+            return;
+        }
+
+        resultsEmpty.hidden = true;
+        resultsContainer.innerHTML = items.map(renderInstrumentCard).join("");
+    }
+
+    function renderInstrumentCard(item) {
+        const key = item.instrument_key || "";
+        const symbol = item.trading_symbol || item.short_name || key;
+        const strike = item.strike_price != null ? Number(item.strike_price) : null;
+        const optionType = (item.instrument_type || "").toUpperCase();
+        const expiry = item.expiry || "";
+        const underlying = item.underlying_symbol || "";
+        const exchange = item.exchange || "";
+        const segment = item.segment || "";
+
+        // Title: prefer "<underlying> <strike> <CE/PE>" for options
+        let title = symbol;
+        if (strike != null && (optionType === "CE" || optionType === "PE")) {
+            title = `${underlying || symbol} ${strike} ${optionType}`.trim();
+        } else if (underlying && symbol && !symbol.toUpperCase().includes(underlying.toUpperCase())) {
+            title = `${underlying} · ${symbol}`;
+        }
+
+        const chips = [];
+        if (exchange) chips.push(`<span class="meta-chip">${escapeHtml(exchange)}</span>`);
+        if (segment) chips.push(`<span class="meta-chip">${escapeHtml(segment)}</span>`);
+        if (optionType === "CE") chips.push(`<span class="meta-chip chip-ce">CE</span>`);
+        if (optionType === "PE") chips.push(`<span class="meta-chip chip-pe">PE</span>`);
+        if (optionType && optionType !== "CE" && optionType !== "PE") {
+            chips.push(`<span class="meta-chip">${escapeHtml(optionType)}</span>`);
+        }
+        if (expiry) chips.push(`<span class="meta-chip chip-expiry">${escapeHtml(expiry)}</span>`);
+        if (strike != null && optionType !== "CE" && optionType !== "PE") {
+            chips.push(`<span class="meta-chip">Strike ${strike}</span>`);
+        }
+
+        return `
+            <a href="/chart/${encodeURIComponent(key)}"
+               class="instrument-card"
+               data-instrument-key="${escapeHtml(key)}">
+                <div class="d-flex align-items-center justify-content-between gap-3">
+                    <div class="flex-grow-1" style="min-width: 0;">
+                        <div class="instrument-symbol text-truncate">${escapeHtml(title)}</div>
+                        <div class="instrument-key text-truncate">${escapeHtml(key)}</div>
+                        <div class="instrument-meta">${chips.join("")}</div>
+                    </div>
+                    <button type="button" class="view-chart-btn" tabindex="-1">
+                        View Chart <i class="bi bi-arrow-right ms-1"></i>
+                    </button>
+                </div>
+            </a>
+        `;
+    }
+
+    function renderServerIndexes() {
+        if (!serverIndexes || serverIndexes.length === 0) {
+            resultsContainer.innerHTML = "";
+            resultsEmpty.hidden = false;
+            emptyMessage.textContent =
+                "No enabled indexes available. Configure MAIN_INDEXES and restart the app.";
+            resultCountBadge.textContent = "0 results";
+            paginationSummary.textContent = "—";
+            prevPageBtn.disabled = true;
+            nextPageBtn.disabled = true;
+            return;
+        }
+
+        resultsEmpty.hidden = true;
+
+        const items = serverIndexes.map((idx) => ({
+            instrument_key: idx.instrument_key,
+            trading_symbol: idx.display_name || idx.name,
+            short_name: idx.display_name || idx.name,
+            instrument_type: "INDEX",
+            exchange: (idx.instrument_key || "").split("_")[0] || "NSE",
+            segment: "INDEX",
+        }));
+
+        renderResults(items);
+        resultCountBadge.textContent = `${items.length} indexes`;
+        paginationSummary.textContent =
+            `${items.length} enabled index${items.length === 1 ? "" : "es"}`;
+        prevPageBtn.disabled = true;
+        nextPageBtn.disabled = true;
+    }
+
+    // -------------------------------------------------------------------
+    // API-driven fetch
+    // -------------------------------------------------------------------
+    async function fetchCategoryResults() {
+        const cfg = CATEGORY_CONFIG[state.category] || CATEGORY_CONFIG.all;
+
+        // Index tab with empty query → use server-rendered indexes.
+        if (state.category === "index" && !state.query && state.page === 1) {
+            renderServerIndexes();
+            updateResetButtonState();
+            return;
+        }
+
+        const query = (state.query || cfg.defaultQuery || "").trim();
+
+        if (!query && cfg.needsQuery) {
+            resultsContainer.innerHTML = "";
+            resultsEmpty.hidden = false;
+            emptyMessage.textContent = `Type to search ${cfg.label.toLowerCase()}…`;
+            resultCountBadge.textContent = "0 results";
+            paginationSummary.textContent = "—";
+            prevPageBtn.disabled = true;
+            nextPageBtn.disabled = true;
+            updateResetButtonState();
+            return;
+        }
+
+        const params = new URLSearchParams();
+        params.set("query", query || "NIFTY");
+        params.set("page_number", String(state.page));
+        params.set("records", String(RECORDS_PER_PAGE));
+
+        for (const [k, v] of Object.entries(cfg.apiFilters || {})) {
+            if (v != null && v !== "") params.set(k, v);
+        }
+        if (state.expiry) params.set("expiry", state.expiry);
+
+        setLoading(true);
+        updatePaginationUI();
+
+        try {
+            const resp = await fetch(
+                `${apiBase()}/upstox/instruments/search?${params.toString()}`,
+                { headers: { Accept: "application/json" } }
+            );
+
+            let payload = null;
+            try { payload = await resp.json(); } catch (_) { /* ignore */ }
+
+            if (!resp.ok) {
+                const reason =
+                    (payload && (payload.error || payload.detail || payload.message)) ||
+                    `HTTP ${resp.status}`;
+                throw new Error(reason);
+            }
+
+            const items =
+                (payload && Array.isArray(payload.data) && payload.data) ||
+                (payload && Array.isArray(payload.data?.data) && payload.data.data) ||
+                [];
+
+            const meta =
+                (payload && payload.meta_data?.page) ||
+                (payload && payload.data?.meta_data?.page) ||
+                {};
+
+            state.results = items;
+            state.totalRecords = Number(meta.total_records ?? items.length) || items.length;
+            state.totalPages   = Number(meta.total_pages ?? 1) || 1;
+            state.page         = Number(meta.page_number ?? state.page) || state.page;
+
+            renderResults(items);
+            updatePaginationUI();
+
+            if (items.length === 0) {
+                resultsEmpty.hidden = false;
+                emptyMessage.textContent = "No instruments matched your search.";
+            }
+        } catch (err) {
+            console.error("Search failed:", err);
+            resultsContainer.innerHTML = "";
+            resultsEmpty.hidden = false;
+            emptyMessage.textContent = `Search failed: ${err.message || err}`;
+            state.results = [];
+            state.totalRecords = 0;
+            state.totalPages = 1;
+            updatePaginationUI();
+        } finally {
+            setLoading(false);
+            updatePaginationUI();
+            updateResetButtonState();
+        }
+    }
+
+    // -------------------------------------------------------------------
+    // Category pills
+    // -------------------------------------------------------------------
+    function setCategory(category) {
+        if (!(category in CATEGORY_CONFIG)) return;
+        state.category = category;
+        state.page = 1;
+        categoryRow.querySelectorAll(".category-pill").forEach((pill) => {
+            pill.classList.toggle("active", pill.dataset.category === category);
+        });
+        updateResetButtonState();
+        fetchCategoryResults();
+    }
+
+    categoryRow.addEventListener("click", (event) => {
+        const pill = event.target.closest(".category-pill");
+        if (!pill) return;
+        setCategory(pill.dataset.category);
+    });
+
+    // -------------------------------------------------------------------
+    // Search input (debounced)
+    // -------------------------------------------------------------------
+    searchInput.addEventListener("input", debounce(() => {
+        state.query = searchInput.value.trim();
+        state.page = 1;
+        updateResetButtonState();
+        fetchCategoryResults();
+    }, SEARCH_DEBOUNCE_MS));
+
+    searchInput.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") {
+            event.preventDefault();
+            state.query = searchInput.value.trim();
+            state.page = 1;
+            updateResetButtonState();
+            fetchCategoryResults();
+        }
+    });
+
+    // -------------------------------------------------------------------
+    // Expiry filter
+    // -------------------------------------------------------------------
+    expiryFilter.addEventListener("change", () => {
+        state.expiry = expiryFilter.value;
+        state.page = 1;
+        updateResetButtonState();
+        fetchCategoryResults();
+    });
+
+    // -------------------------------------------------------------------
+    // Reset button — restore DEFAULT_STATE and re-fetch
+    // -------------------------------------------------------------------
+    function resetAllFilters() {
+        // 1) Reset internal state
+        state.category = DEFAULT_STATE.category;
+        state.query = DEFAULT_STATE.query;
+        state.expiry = DEFAULT_STATE.expiry;
+        state.page = DEFAULT_STATE.page;
+        state.totalPages = 1;
+        state.totalRecords = 0;
+
+        // 2) Reset search input
+        searchInput.value = "";
+
+        // 3) Reset expiry select
+        expiryFilter.value = "";
+
+        // 4) Reset category pills to default
+        categoryRow.querySelectorAll(".category-pill").forEach((pill) => {
+            pill.classList.toggle(
+                "active",
+                pill.dataset.category === DEFAULT_STATE.category
+            );
+        });
+
+        // 5) Sync the Reset button's own enabled state
+        updateResetButtonState();
+
+        // 6) Re-fetch / re-render for the default state
+        fetchCategoryResults();
+    }
+
+    if (resetFiltersBtn) {
+        resetFiltersBtn.addEventListener("click", resetAllFilters);
+    }
+
+    // -------------------------------------------------------------------
+    // Pagination
+    // -------------------------------------------------------------------
+    prevPageBtn.addEventListener("click", () => {
+        if (state.page <= 1 || state.loading) return;
+        state.page -= 1;
+        updateResetButtonState();
+        fetchCategoryResults();
+    });
+
+    nextPageBtn.addEventListener("click", () => {
+        if (state.page >= state.totalPages || state.loading) return;
+        state.page += 1;
+        updateResetButtonState();
+        fetchCategoryResults();
+    });
+
+    // -------------------------------------------------------------------
+    // Boot
+    // -------------------------------------------------------------------
+    updateResetButtonState();
+    fetchCategoryResults();
+})();
+</script>
+{% endblock %}

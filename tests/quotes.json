@@ -1,0 +1,69 @@
+{
+  "started_at": "2026-10-04T12:35:41.725790+05:30",
+  "finished_at": "2026-10-04T12:35:49.520799+05:30",
+  "interval": "1d",
+  "fetch_all": false,
+  "results": {
+    "NIFTY": {
+      "status": "failed",
+      "requested": 20,
+      "fetched": 0,
+      "failed": 20,
+      "batch_size": 10,
+      "interval": "1d",
+      "data": {},
+      "failed_keys": [
+        "NSE_FO|40699",
+        "NSE_FO|40779",
+        "NSE_FO|40789",
+        "NSE_FO|40812",
+        "NSE_FO|40804",
+        "NSE_FO|40743",
+        "NSE_FO|40782",
+        "NSE_FO|40790",
+        "NSE_FO|40750",
+        "NSE_FO|40700",
+        "NSE_FO|40742",
+        "NSE_FO|40716",
+        "NSE_FO|40715",
+        "NSE_FO|40757",
+        "NSE_FO|40746",
+        "NSE_FO|40786",
+        "NSE_FO|40701",
+        "NSE_FO|40698",
+        "NSE_FO|40721",
+        "NSE_FO|40711"
+      ],
+      "rl_429s": 0,
+      "index": "NIFTY",
+      "sampled": [
+        "NSE_FO|40699",
+        "NSE_FO|40779",
+        "NSE_FO|40789",
+        "NSE_FO|40812",
+        "NSE_FO|40804",
+        "NSE_FO|40743",
+        "NSE_FO|40782",
+        "NSE_FO|40790",
+        "NSE_FO|40750",
+        "NSE_FO|40700",
+        "NSE_FO|40742",
+        "NSE_FO|40716",
+        "NSE_FO|40715",
+        "NSE_FO|40757",
+        "NSE_FO|40746",
+        "NSE_FO|40786",
+        "NSE_FO|40701",
+        "NSE_FO|40698",
+        "NSE_FO|40721",
+        "NSE_FO|40711"
+      ]
+    }
+  },
+  "summary": {
+    "indexes": 1,
+    "requested": 20,
+    "fetched": 0,
+    "failed": 20
+  }
+}

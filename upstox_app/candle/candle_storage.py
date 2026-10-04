@@ -5,8 +5,9 @@ Layout:
     data/readonly/<INDEX_NAME>/candles/<strike>_<CE|PE>.json
 
 Write-once semantics: callers should check `exists()` first.
-The daily refresh path uses `overwrite()` and `stored_expiry()` to
-detect and rewrite stale files after option rollover.
+Freshness: `is_fresh()` and `stale_contracts()` decide whether a file
+still represents the latest available market data. Used by both the
+startup loader and the daily refresh so stale files are refetched.
 """
 import json
 import os
@@ -57,15 +58,11 @@ class CandleStorage:
     # ---- read/write ----------------------------------------------------
     def save(self, index_name: str, strike: Any, option_type: str,
              payload: Dict[str, Any]) -> Path:
-        """Write (or overwrite) a candle file atomically, then mark it readonly."""
         path = self.candle_path(index_name, strike, option_type)
         with self._lock:
             tmp = path.with_suffix(".json.tmp")
             with open(tmp, "w", encoding="utf-8") as fh:
                 json.dump(payload, fh, indent=2, default=str)
-            # Windows safety: clear the readonly attribute on the target
-            # before replacing it, since os.replace() refuses to clobber a
-            # readonly file there.
             self._make_writable(path)
             tmp.replace(path)
             self._apply_readonly(path)
@@ -73,10 +70,6 @@ class CandleStorage:
 
     def overwrite(self, index_name: str, strike: Any, option_type: str,
                   payload: Dict[str, Any]) -> Path:
-        """
-        Explicitly bypasses write-once. Used by the daily refresh when a
-        stored file's expiry no longer matches the current contract.
-        """
         return self.save(index_name, strike, option_type, payload)
 
     def load(self, index_name: str, strike: Any, option_type: str) -> Optional[Dict[str, Any]]:
@@ -86,19 +79,69 @@ class CandleStorage:
         try:
             with open(path, "r", encoding="utf-8") as fh:
                 return json.load(fh)
-        except Exception as exc:  # pragma: no cover
+        except Exception as exc:  # noqa: BLE001
             logger.warning(f"Failed to read candle file | path={path} | err={exc}")
             return None
 
     def stored_expiry(self, index_name: str, strike: Any, option_type: str) -> Optional[str]:
-        """Return the expiry recorded in a stored candle file, or None."""
         data = self.load(index_name, strike, option_type)
         if not isinstance(data, dict):
             return None
         expiry = data.get("expiry")
         return str(expiry) if expiry else None
 
+    # ---- freshness -----------------------------------------------------
+    def is_fresh(
+        self,
+        index_name: str,
+        strike: Any,
+        option_type: str,
+        last_market_day_iso: str,
+    ) -> bool:
+        """
+        A file is fresh when:
+          - it exists
+          - status is "success"
+          - historical_count > 0 (non-empty candles array for the historical side)
+          - its stored to_date is >= last_market_day_iso
+        """
+        data = self.load(index_name, strike, option_type)
+        if not isinstance(data, dict):
+            return False
+        if data.get("status") != "success":
+            return False
+        try:
+            if int(data.get("historical_count") or 0) <= 0:
+                return False
+        except (TypeError, ValueError):
+            return False
+        stored_to = data.get("to_date")
+        if not stored_to or str(stored_to) < last_market_day_iso:
+            return False
+        return True
+
+    def stale_contracts(
+        self,
+        index_name: str,
+        contracts: List[Dict[str, Any]],
+        last_market_day_iso: str,
+    ) -> List[Dict[str, Any]]:
+        """
+        Contracts that need (re)fetching. Missing files count as stale
+        because `is_fresh` returns False for them.
+        """
+        stale: List[Dict[str, Any]] = []
+        for c in contracts:
+            strike = c.get("strike_price")
+            otype = c.get("option_type") or c.get("instrument_type")
+            if strike is None or not otype:
+                continue
+            if not self.is_fresh(index_name, strike, otype, last_market_day_iso):
+                stale.append(c)
+        return stale
+
     def missing_contracts(self, index_name: str, contracts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Legacy existence-only check. Kept for backward compatibility."""
         missing: List[Dict[str, Any]] = []
         for c in contracts:
             strike = c.get("strike_price")
@@ -116,8 +159,6 @@ class CandleStorage:
         try:
             os.chmod(path, stat.S_IWRITE | stat.S_IREAD)
         except Exception:
-            # Non-fatal: on POSIX this is often a no-op because the
-            # directory-level write permission is what matters.
             pass
 
     def _apply_readonly(self, path: Path) -> None:

@@ -1,27 +1,14 @@
 """
 Candle loader.
 
-- Historical (yesterday and back) via HistoryV3Api.get_historical_candle_data1
-- Intraday (today)               via HistoryV3Api.get_intra_day_candle_data
-- No access token required for either call (per official SDK).
-- Writes are readonly, write-once, per contract.
-
-Parallelism & batching:
-- Each contract is processed on a worker thread (ThreadPoolExecutor).
-- Historical requests are split into windows of at most
-  OPTIONS_CANDLES_MAX_DAYS_PER_REQUEST days (default 7).
-- A total window of N days becomes ceil(N / max_days) calls per contract.
-
-Rate limiting (Cloudflare 429):
-- A process-wide RateLimiter parks every worker when a 429 is seen.
-- The affected window is retried after cooldown with exponential backoff.
-
-Daily refresh (09:00 IST by default):
-- refresh_if_outdated() reloads contracts and rewrites any readonly
-  candle file whose stored `expiry` no longer matches the live one.
-- Files with matching expiry are left untouched (write-once still holds).
+- Historical + intraday fetch with 7-day batching and thread pool.
+- Process-wide RateLimiter for Cloudflare 429s.
+- Freshness check: files are treated as stale (and refetched) when
+  missing, empty, status!=success, or when their stored `to_date` is
+  behind the last market day.
+- Freshness is applied on startup (ensure_index) and on daily refresh
+  (refresh_if_outdated).
 """
-
 import importlib
 import threading
 import time
@@ -36,13 +23,11 @@ from core.config import core_config
 from core.logger import get_logger
 from upstox_app.candle.candle_storage import candle_storage
 from upstox_app.common.config import upstox_config
+from upstox_app.common.market_day import last_market_day
 
 logger = get_logger(__name__)
 
 _thread_local = threading.local()
-
-
-# ---- config access ---------------------------------------------------------
 
 
 def _cfg(name: str, default: Any) -> Any:
@@ -209,7 +194,6 @@ def _call_with_retry(label: str, fn, *args, **kwargs) -> Tuple[Optional[Any], Op
 class CandleService:
     def __init__(self) -> None:
         self._lock = threading.RLock()
-        # Separate lock so the daily refresh cannot collide with a manual load.
         self._refresh_lock = threading.RLock()
 
     # ---- per-contract --------------------------------------------------
@@ -262,7 +246,7 @@ class CandleService:
         max_days = int(_cfg("CANDLES_MAX_DAYS_PER_REQUEST", 7))
 
         today = date.today()
-        yesterday = today - timedelta(days=1)
+        yesterday = last_market_day(today)
         from_date = yesterday - timedelta(days=days - 1)
 
         historical, hist_errors, windows_total, windows_failed = self._fetch_historical_batched(
@@ -294,7 +278,6 @@ class CandleService:
             "instrument_key": instrument_key,
             "strike_price": strike,
             "option_type": otype,
-            # `expiry` is authoritative for the daily refresh comparison.
             "expiry": contract.get("expiry"),
             "trading_symbol": contract.get("trading_symbol"),
             "unit": unit,
@@ -334,7 +317,6 @@ class CandleService:
         return path, str(strike), str(otype), outcome
 
     def _process_contract_overwrite(self, index_name: str, contract: Dict[str, Any]) -> Tuple[Path, str, str, Dict[str, Any]]:
-        """Same as _process_contract but explicitly bypasses write-once."""
         strike = contract.get("strike_price")
         otype = contract.get("option_type") or contract.get("instrument_type")
         payload, outcome = self._build_payload(index_name, contract)
@@ -384,27 +366,32 @@ class CandleService:
                 f"| count={len(contracts)} | reason=module cache unavailable"
             )
 
-        missing = candle_storage.missing_contracts(index_name, contracts)
-        result["missing_before"] = len(missing)
-        result["already_present"] = len(contracts) - len(missing)
+        # Freshness: stale includes missing, empty, old, or non-success files.
+        last_md = last_market_day().isoformat()
+        stale = candle_storage.stale_contracts(index_name, contracts, last_md)
+        result["missing_before"] = len(stale)
+        result["already_present"] = len(contracts) - len(stale)
 
-        if not missing:
-            logger.info(f"All candle files already present | index={index_name} | contracts={len(contracts)}")
+        if not stale:
+            logger.info(
+                f"All candle files fresh | index={index_name} | contracts={len(contracts)} | up_to={last_md}"
+            )
             return result
 
         max_workers = max(1, int(_cfg("CANDLES_MAX_WORKERS", 4)))
         progress_every = max(1, int(_cfg("CANDLES_PROGRESS_EVERY", 10)))
         request_delay = float(_cfg("CANDLES_REQUEST_DELAY_SEC", 0.5))
-        total_missing = len(missing)
+        total_missing = len(stale)
 
         logger.info(
-            f"Fetching candles | index={index_name} | missing={total_missing} of {len(contracts)} "
-            f"| workers={max_workers} | request_delay={request_delay}s | progress_every={progress_every}"
+            f"Fetching candles | index={index_name} | stale={total_missing} of {len(contracts)} "
+            f"| up_to={last_md} | workers={max_workers} | request_delay={request_delay}s "
+            f"| progress_every={progress_every}"
         )
 
         completed = 0
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
-            future_map = {pool.submit(self._process_contract, index_name, c): c for c in missing}
+            future_map = {pool.submit(self._process_contract, index_name, c): c for c in stale}
             for future in as_completed(future_map):
                 contract = future_map[future]
                 strike = contract.get("strike_price")
@@ -454,7 +441,7 @@ class CandleService:
 
         rl = _rate_limiter.snapshot()
         logger.info(
-            "Candle summary | index=%s | total=%d | present=%d | missing=%d "
+            "Candle summary | index=%s | total=%d | fresh=%d | stale=%d "
             "| fetched=%d | full=%d | partial=%d | failed=%d "
             "| contracts_source=%s | fallback_used=%s | rl_429s=%d",
             index_name, result["total_contracts"], result["already_present"],
@@ -509,7 +496,7 @@ class CandleService:
         t = summary["totals"]
         rl = _rate_limiter.snapshot()
         logger.info(
-            "Candle GLOBAL summary | indexes=%d | total=%d | present=%d | missing=%d "
+            "Candle GLOBAL summary | indexes=%d | total=%d | fresh=%d | stale=%d "
             "| fetched=%d | full=%d | partial=%d | failed=%d "
             "| module_indexes=%s | fallback_indexes=%s | rl_429s=%d",
             t["indexes"], t["total_contracts"], t["already_present"],
@@ -522,16 +509,9 @@ class CandleService:
     # ---- daily refresh -------------------------------------------------
     def refresh_if_outdated(self, force_reload_options: bool = True) -> Dict[str, Any]:
         """
-        Daily check. For each enabled index:
-
-          1. (optionally) reload fresh option contracts, writing the
-             runtime snapshot in the process.
-          2. For each current contract, compare its `expiry` with the
-             expiry stored in the readonly candle file.
-          3. If they differ, the file belongs to a rolled-over contract
-             and is rewritten with fresh candles.
-
-        Files whose expiry already matches are left untouched.
+        Daily check. Refetches a contract when:
+          - its stored `expiry` != the live contract's expiry, OR
+          - its candle file is stale (missing / empty / old / status!=success).
         """
         summary: Dict[str, Any] = {
             "enabled": bool(_cfg("CANDLES_DAILY_REFRESH_ENABLED", True)),
@@ -541,6 +521,8 @@ class CandleService:
             "totals": {
                 "indexes_checked": 0,
                 "contracts_checked": 0,
+                "expiry_changed": 0,
+                "stale": 0,
                 "outdated": 0,
                 "refreshed": 0,
                 "failed": 0,
@@ -552,7 +534,6 @@ class CandleService:
             return summary
 
         with self._refresh_lock:
-            # Step 1: fresh option contracts on every index.
             if force_reload_options:
                 try:
                     from upstox_app.option.option_service import load_enabled_indexes
@@ -563,7 +544,6 @@ class CandleService:
                     logger.warning("Daily refresh | option reload failed | err=%s", exc)
                     summary["option_reload"] = {"error": str(exc)}
 
-            # Step 2 + 3: per-index comparison and refresh.
             for name, meta in core_config.MAIN_INDEXES.items():
                 if not meta.get("enabled"):
                     continue
@@ -572,6 +552,8 @@ class CandleService:
                 t = summary["totals"]
                 t["indexes_checked"] += 1
                 t["contracts_checked"] += res["contracts_checked"]
+                t["expiry_changed"] += res["expiry_changed"]
+                t["stale"] += res["stale"]
                 t["outdated"] += res["outdated"]
                 t["refreshed"] += res["refreshed"]
                 t["failed"] += res["failed"]
@@ -580,10 +562,10 @@ class CandleService:
 
         t = summary["totals"]
         logger.info(
-            "Candle daily refresh summary | indexes=%d | checked=%d | outdated=%d "
-            "| refreshed=%d | failed=%d | stale_indexes=%s",
-            t["indexes_checked"], t["contracts_checked"], t["outdated"],
-            t["refreshed"], t["failed"], t["stale_indexes"],
+            "Candle daily refresh summary | indexes=%d | checked=%d | expiry_changed=%d "
+            "| stale=%d | outdated=%d | refreshed=%d | failed=%d | stale_indexes=%s",
+            t["indexes_checked"], t["contracts_checked"], t["expiry_changed"],
+            t["stale"], t["outdated"], t["refreshed"], t["failed"], t["stale_indexes"],
         )
         return summary
 
@@ -592,6 +574,8 @@ class CandleService:
         result: Dict[str, Any] = {
             "index_name": index_name,
             "contracts_checked": 0,
+            "expiry_changed": 0,
+            "stale": 0,
             "outdated": 0,
             "refreshed": 0,
             "failed": 0,
@@ -604,42 +588,52 @@ class CandleService:
             logger.warning("Daily refresh | no contracts for index=%s", index_name)
             return result
 
+        last_md = last_market_day().isoformat()
         stale: List[Dict[str, Any]] = []
         for c in contracts:
             strike = c.get("strike_price")
             otype = c.get("option_type") or c.get("instrument_type")
             current_expiry = c.get("expiry")
-            if strike is None or not otype or not current_expiry:
+            if strike is None or not otype:
                 continue
 
             result["contracts_checked"] += 1
-            stored = candle_storage.stored_expiry(index_name, strike, otype)
-            # No file yet means it will be handled by the normal missing path,
-            # not by the "outdated" path.
-            if stored is None:
-                continue
-            if stored != str(current_expiry):
+            stored_expiry = candle_storage.stored_expiry(index_name, strike, otype)
+            expiry_changed = bool(
+                stored_expiry is not None
+                and current_expiry is not None
+                and stored_expiry != str(current_expiry)
+            )
+            fresh = candle_storage.is_fresh(index_name, strike, otype, last_md)
+
+            if expiry_changed or not fresh:
                 stale.append(c)
-                result["stale_contracts"].append(
-                    {
-                        "strike": strike,
-                        "type": otype,
-                        "stored_expiry": stored,
-                        "current_expiry": str(current_expiry),
-                    }
-                )
+                result["stale_contracts"].append({
+                    "strike": strike,
+                    "type": otype,
+                    "expiry_changed": expiry_changed,
+                    "was_fresh": fresh,
+                    "stored_expiry": stored_expiry,
+                    "current_expiry": str(current_expiry) if current_expiry else None,
+                })
+                if expiry_changed:
+                    result["expiry_changed"] += 1
+                if not fresh:
+                    result["stale"] += 1
 
         result["outdated"] = len(stale)
         if not stale:
             logger.info(
-                "Daily refresh | index=%s | checked=%d | all up to date",
-                index_name, result["contracts_checked"],
+                "Daily refresh | index=%s | checked=%d | all fresh | up_to=%s",
+                index_name, result["contracts_checked"], last_md,
             )
             return result
 
         logger.info(
-            "Daily refresh | index=%s | checked=%d | outdated=%d | refreshing...",
+            "Daily refresh | index=%s | checked=%d | outdated=%d "
+            "(expiry_changed=%d stale=%d) | refreshing...",
             index_name, result["contracts_checked"], len(stale),
+            result["expiry_changed"], result["stale"],
         )
 
         max_workers = max(1, int(_cfg("CANDLES_MAX_WORKERS", 4)))
@@ -662,7 +656,6 @@ class CandleService:
                         "Daily refresh failed | index=%s | strike=%s | type=%s | err=%s",
                         index_name, strike, otype, exc,
                     )
-
         return result
 
     # ---- helpers -------------------------------------------------------

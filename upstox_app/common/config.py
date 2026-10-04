@@ -300,6 +300,30 @@ class UpstoxAppConfig:
     CANDLES_DAILY_REFRESH_ENABLED = _env_bool("OPTIONS_CANDLES_DAILY_REFRESH_ENABLED", True)
     CANDLES_DAILY_REFRESH_TIME = _env_str("OPTIONS_CANDLES_DAILY_REFRESH_TIME", "09:00")
 
+    # ---- Crossover (EMA) -------------------------------------------------
+    CROSSOVER_ENABLED = _env_bool("CROSSOVER_ENABLED", True)
+    CROSSOVER_EMA_FAST = _env_int("CROSSOVER_EMA_FAST", 9)
+    CROSSOVER_EMA_SLOW = _env_int("CROSSOVER_EMA_SLOW", 21)
+    CROSSOVER_CALC_ON_STARTUP = _env_bool("CROSSOVER_CALC_ON_STARTUP", True)
+    CROSSOVER_CALC_ON_DAILY_REFRESH = _env_bool("CROSSOVER_CALC_ON_DAILY_REFRESH", True)
+
+    # ---- Market quotes --------------------------------------------------
+        # ---- Market quotes --------------------------------------------------
+    # Interval accepts the SDK code (I1, I1_5, I1_15, I1_30, I1_H, I1_D,
+    # I1_W, I1_MO) or a human alias (1m, 5m, 15m, 30m, 1h, 1d, 1w, 1mo).
+    # `fetch_quote.normalise_interval` converts aliases to SDK codes.
+    QUOTES_ENABLED = _env_bool("QUOTES_ENABLED", True)
+    QUOTES_BATCH_SIZE = _env_int("QUOTES_BATCH_SIZE", 10)
+    QUOTES_INTERVAL = _env_str("QUOTES_INTERVAL", "I1")
+    QUOTES_REQUEST_DELAY_SEC = _env_float("QUOTES_REQUEST_DELAY_SEC", 0.2)
+    QUOTES_RATE_LIMIT_BASE_COOLDOWN_SEC = _env_float(
+        "QUOTES_RATE_LIMIT_BASE_COOLDOWN_SEC", 30.0
+    )
+    QUOTES_RATE_LIMIT_MAX_COOLDOWN_SEC = _env_float(
+        "QUOTES_RATE_LIMIT_MAX_COOLDOWN_SEC", 300.0
+    )
+
+
 # =============================================================
 # Singleton
 # =============================================================

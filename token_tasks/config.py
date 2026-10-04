@@ -1,33 +1,47 @@
 """
 token_tasks/config.py
-Feature-scoped configuration for the token tasks module.
-Only things related to the token collection live here.
+
+Environment-backed configuration for the token task.
 """
 import os
 
-from dotenv import load_dotenv
+from core.logger import get_logger
 
-load_dotenv()
+logger = get_logger(__name__)
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return str(raw).strip().lower() in ("1", "true", "yes", "y", "on")
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _env_str(name: str, default: str) -> str:
+    return os.getenv(name, default)
 
 
 class TokenConfig:
-    """Token-task specific configuration."""
+    # ---- Mongo document ------------------------------------------------
+    COLLECTION_NAME = _env_str("TOKEN_COLLECTION_NAME", "upstox_tokens")
+    DOC_ID = _env_str("TOKEN_DOC_ID", "upstox_access_token")
 
-    # Which collection and which document inside it
-    COLLECTION_NAME: str = os.getenv("TOKEN_COLLECTION_NAME", "tokens")
-    DOC_ID: str = os.getenv("TOKEN_DOC_ID", "upstox_access_token")
+    # ---- Refresh scheduler --------------------------------------------
+    REFRESH_INTERVAL_SECONDS = _env_int("TOKEN_REFRESH_INTERVAL_SECONDS", 1800)
+    LOAD_ON_STARTUP = _env_bool("TOKEN_LOAD_ON_STARTUP", True)
 
-    # Cache refresh interval (default 30 min = 1800s)
-    REFRESH_INTERVAL_SECONDS: int = int(
-        os.getenv("TOKEN_REFRESH_INTERVAL_SECONDS", "1800")
-    )
-
-    # Load into cache immediately on startup / restart
-    LOAD_ON_STARTUP: bool = os.getenv("TOKEN_LOAD_ON_STARTUP", "true").lower() in (
-        "1",
-        "true",
-        "yes",
-    )
+    # ---- Health watchdog ----------------------------------------------
+    WATCHDOG_ENABLED = _env_bool("TOKEN_WATCHDOG_ENABLED", True)
+    WATCHDOG_INTERVAL_SEC = _env_int("TOKEN_WATCHDOG_INTERVAL_SEC", 300)
+    WATCHDOG_NOTIFY_COOLDOWN_SEC = _env_int("TOKEN_WATCHDOG_NOTIFY_COOLDOWN_SEC", 1800)
+    WATCHDOG_RUN_ON_START = _env_bool("TOKEN_WATCHDOG_RUN_ON_START", False)
 
 
 token_config = TokenConfig()

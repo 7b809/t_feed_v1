@@ -4,31 +4,26 @@ candle_scheduler.py
 Daily candle refresh scheduler.
 
 Fires once per day at OPTIONS_CANDLES_DAILY_REFRESH_TIME IST (default
-09:00). On each fire, it calls candle_service.refresh_if_outdated(),
-which reloads option contracts and rewrites any readonly candle file
-whose stored `expiry` no longer matches the live contract.
+09:00). On each fire it:
 
-Startup behaviour:
-- If the app starts AFTER the scheduled time and the refresh has not
-  yet run today, it runs immediately once (opt-in via
-  OPTIONS_CANDLES_RUN_IF_MISSED, default true).
-- If the app starts BEFORE the scheduled time, it waits for the next
-  fire as normal.
-
-Runs as a single asyncio task. Independent from the token scheduler.
+  1. Reloads option contracts.
+  2. Rewrites any candle file that is stale (missing/empty/old) or whose
+     stored expiry no longer matches the live contract.
+  3. Recomputes 9/21 EMA crossovers for every contract.
+  4. Bulk-subscribes every enabled index and every option contract that
+     is not already on the market streamer.
 """
-
 import asyncio
 from datetime import datetime, time, timedelta, timezone
 from typing import Optional
 
 from core.logger import get_logger
 from upstox_app.candle.candle_service import candle_service
+from upstox_app.candle.crossover_service import crossover_service
 from upstox_app.common.config import upstox_config
 
 logger = get_logger(__name__)
 
-# India Standard Time — no DST, so a fixed offset is safe.
 IST = timezone(timedelta(hours=5, minutes=30))
 
 
@@ -40,8 +35,7 @@ class CandleScheduler:
     def __init__(self) -> None:
         self._task: Optional[asyncio.Task] = None
         self._stop_event: Optional[asyncio.Event] = None
-        # Tracks the last calendar date (IST) on which the refresh ran.
-        # Used to decide whether a "missed" run should fire on startup.
+        self._running = False
         self._last_run_date: Optional[str] = None
 
     # ---- lifecycle -----------------------------------------------------
@@ -52,8 +46,7 @@ class CandleScheduler:
         self._stop_event = asyncio.Event()
         self._task = asyncio.create_task(self._run_loop())
         logger.info(
-            "Candle daily refresh scheduler started | daily_time=%s IST "
-            "| run_if_missed=%s",
+            "Candle daily refresh scheduler started | daily_time=%s IST | run_if_missed=%s",
             _cfg("CANDLES_DAILY_REFRESH_TIME", "09:00"),
             bool(_cfg("CANDLES_RUN_IF_MISSED", True)),
         )
@@ -78,36 +71,27 @@ class CandleScheduler:
 
     # ---- loop ----------------------------------------------------------
     async def _run_loop(self) -> None:
-        # Optional: run immediately if we started after today's scheduled
-        # time and haven't run yet today.
         if bool(_cfg("CANDLES_RUN_IF_MISSED", True)):
             today_str = datetime.now(IST).date().isoformat()
             if self._last_run_date != today_str and self._is_past_todays_slot():
-                logger.info(
-                    "Candle scheduler | start after scheduled time | running once now"
-                )
+                logger.info("Candle scheduler | start after scheduled time | running once now")
                 await self._run_once()
 
         while self._stop_event and not self._stop_event.is_set():
             next_run = self._next_run_at()
             now = datetime.now(IST)
             wait_sec = max(1.0, (next_run - now).total_seconds())
-
             logger.info(
                 "Candle scheduler | now=%s next=%s wait=%.0fs (%.1fh)",
                 now.isoformat(timespec="seconds"),
                 next_run.isoformat(timespec="seconds"),
-                wait_sec,
-                wait_sec / 3600.0,
+                wait_sec, wait_sec / 3600.0,
             )
-
             try:
-                # Wakes immediately if stop() is called.
                 await asyncio.wait_for(self._stop_event.wait(), timeout=wait_sec)
-                return  # stop requested
+                return
             except asyncio.TimeoutError:
                 pass
-
             await self._run_once()
 
     async def _run_once(self) -> None:
@@ -115,44 +99,71 @@ class CandleScheduler:
             logger.info("Candle daily refresh disabled; skipping run")
             return
 
-        # Best-effort guard against overlapping runs.
-        already_running = self._task is not None and getattr(
-            self, "_running", False
-        )
-        if already_running:
+        if self._running:
             logger.warning("Candle daily refresh already in progress; skipping")
             return
         self._running = True
 
         logger.info("=" * 60)
         logger.info("Candle daily refresh starting")
+
+        # 1) Refresh candle files.
         try:
-            summary = await asyncio.to_thread(
-                candle_service.refresh_if_outdated, True
-            )
+            summary = await asyncio.to_thread(candle_service.refresh_if_outdated, True)
             t = summary.get("totals", {})
             logger.info(
                 "Candle daily refresh done | indexes=%d | checked=%d "
-                "| outdated=%d | refreshed=%d | failed=%d | stale_indexes=%s",
+                "| expiry_changed=%d | stale=%d | outdated=%d | refreshed=%d "
+                "| failed=%d | stale_indexes=%s",
                 t.get("indexes_checked", 0),
                 t.get("contracts_checked", 0),
+                t.get("expiry_changed", 0),
+                t.get("stale", 0),
                 t.get("outdated", 0),
                 t.get("refreshed", 0),
                 t.get("failed", 0),
                 t.get("stale_indexes", []),
             )
-            # Mark this calendar day as done, regardless of how many
-            # files were actually rewritten.
-            self._last_run_date = datetime.now(IST).date().isoformat()
         except Exception as exc:  # noqa: BLE001
             logger.exception("Candle daily refresh failed: %s", exc)
         finally:
             self._running = False
+
+        # 2) Recompute crossovers on the freshly written candles.
+        if bool(_cfg("CROSSOVER_CALC_ON_DAILY_REFRESH", True)):
+            try:
+                logger.info("Daily crossovers starting")
+                cross = await asyncio.to_thread(crossover_service.calculate_all_enabled)
+                ct = cross.get("totals", {})
+                logger.info(
+                    "Daily crossovers done | indexes=%d | total=%d "
+                    "| historic_ok=%d historic_empty=%d "
+                    "| intraday_ok=%d intraday_empty=%d | errors=%d",
+                    ct.get("indexes", 0), ct.get("total_contracts", 0),
+                    ct.get("historic_success", 0), ct.get("historic_empty", 0),
+                    ct.get("intraday_success", 0), ct.get("intraday_empty", 0),
+                    ct.get("errors", 0),
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("Daily crossover computation failed: %s", exc)
+
+        # 3) Bulk-subscribe every enabled index + option contract.
+        try:
+            from upstox_app.streamer.streamer_manager import subscribe_all_on_refresh
+            logger.info("Daily subscribe-all starting")
+            sub = await asyncio.to_thread(subscribe_all_on_refresh)
+            logger.info("Daily subscribe-all done | %s", sub)
+        except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "Daily subscribe-all failed | step=streamer_manager | reason=%s",
+                f"{type(exc).__name__}: {str(exc)[:150]}",
+            )
+
+        self._last_run_date = datetime.now(IST).date().isoformat()
         logger.info("=" * 60)
 
     # ---- helpers -------------------------------------------------------
     def _scheduled_time(self) -> time:
-        """Parse CANDLES_DAILY_REFRESH_TIME (HH:MM) into a time object."""
         time_str = str(_cfg("CANDLES_DAILY_REFRESH_TIME", "09:00"))
         try:
             hh, mm = time_str.split(":")
@@ -165,7 +176,6 @@ class CandleScheduler:
             return time(9, 0, 0)
 
     def _is_past_todays_slot(self) -> bool:
-        """True if the current IST clock is at or past today's slot."""
         now = datetime.now(IST)
         slot = self._scheduled_time()
         today_slot = now.replace(
@@ -184,7 +194,6 @@ class CandleScheduler:
         return target
 
     def status(self) -> dict:
-        """Small introspection helper for /health or debug endpoints."""
         now = datetime.now(IST)
         slot = self._scheduled_time()
         today_slot = now.replace(
@@ -197,8 +206,7 @@ class CandleScheduler:
             "now_ist": now.isoformat(timespec="seconds"),
             "last_run_date": self._last_run_date,
             "next_run_at": self._next_run_at().isoformat(timespec="seconds")
-            if self._task and not self._task.done()
-            else None,
+            if self._task and not self._task.done() else None,
             "run_if_missed": bool(_cfg("CANDLES_RUN_IF_MISSED", True)),
             "missed_today": self._last_run_date
             != today_slot.date().isoformat()

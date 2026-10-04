@@ -3,3 +3,5 @@ uvicorn
 pymongo
 python-dotenv
 upstox-python-sdk
+jinja2
+python-multipart

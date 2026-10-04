@@ -1,528 +1,331 @@
-
 """
 token_tasks/service.py
 
-Responsibilities:
-    - In-memory cache of the Upstox token document.
-    - Load token document from MongoDB.
-    - Refresh token cache every 30 minutes.
-    - Validate tokens against Upstox.
-    - Save / update token document with validation metadata.
-    - Provide cache status and validation helpers.
+Single-owner in-memory cache for the Upstox access token.
 
-Security:
-    - Never log the access token.
-    - Never log a token preview.
-    - Never expose the access token through cache-status responses.
+Responsibilities
+----------------
+- Load the token document from MongoDB into a plain in-memory object.
+- Expose a safe accessor (`get_access_token`) for internal consumers.
+- Provide an upsert path (`upsert_token`) used by the API and telegram.
+- Provide `save_and_reload`, which validates a new token, upserts it, and
+  refreshes the cache in one step.
+- Never leak the raw token through any "status"/"meta" helper.
+
+Concurrency
+-----------
+All state is guarded by a single `threading.RLock`.
+
+Logging
+-------
+Every failure is logged as a single-line summary
+`service::<method> failed | step=<what> | reason=<type: short msg>`.
+
+Mongo interface discovery
+-------------------------
+Different MongoManager implementations expose the database differently.
+`_collection()` tries, in order:
+  1. mongo_manager.get_database()
+  2. mongo_manager.get_db()
+  3. mongo_manager.database
+  4. mongo_manager.db
+  5. mongo_manager.client[DB_NAME]      (raw pymongo client)
+  6. mongo_manager._client[DB_NAME]     (private fallback)
+
+Profile validation
+------------------
+Profile validation is delegated to `token_tasks._profile.validate_profile`,
+which probes the `upstox_app.profile` package for any of several known
+function names and falls back to the raw Upstox SDK if none is found.
+This module no longer imports `get_profile_status` directly, because that
+name has moved between versions of the project.
 """
-
 import threading
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from typing import Any, Dict, Optional
 
-from core.config import mongo_manager
+from core.config import core_config, mongo_manager
 from core.logger import get_logger
 from token_tasks.config import token_config
-from token_tasks.validator import UPSTOX_BROKER, validate_upstox_token
-
 
 logger = get_logger(__name__)
 
 
-# IST (UTC+05:30)
-IST = timezone(timedelta(hours=5, minutes=30))
+def _short(exc: BaseException) -> str:
+    """Compact 'Type: message' string, capped to keep log lines readable."""
+    msg = str(exc).strip().splitlines()[0] if str(exc).strip() else ""
+    if len(msg) > 160:
+        msg = msg[:160] + "…"
+    return f"{type(exc).__name__}: {msg}" if msg else type(exc).__name__
 
 
-def now_ist() -> datetime:
-    """Return current time in IST."""
-    return datetime.now(IST)
+def _db_name() -> str:
+    """Resolve the database name from every plausible config location."""
+    for attr in ("MONGO_DB_NAME", "DB_NAME", "MONGO_DATABASE"):
+        value = getattr(core_config, attr, None)
+        if value:
+            return str(value)
+    return "trading"
 
 
-def now_ist_iso() -> str:
-    """Return current time in IST as an ISO-8601 string."""
-    return now_ist().isoformat()
+def _resolve_database():
+    """
+    Return a pymongo Database handle from whatever interface the current
+    MongoManager exposes. Raises RuntimeError if none of the probes work.
+    """
+    mm = mongo_manager
+
+    # 1-2) method-based access
+    for name in ("get_database", "get_db", "get_database_name"):
+        fn = getattr(mm, name, None)
+        if callable(fn):
+            try:
+                db = fn() if name != "get_database_name" else None
+                if db is not None and not isinstance(db, str):
+                    return db
+            except Exception:  # noqa: BLE001
+                pass
+
+    # 3-4) attribute-based access
+    for name in ("database", "db"):
+        db = getattr(mm, name, None)
+        if db is not None and not isinstance(db, str):
+            # Some managers expose `db` as the DB *name* string.
+            if hasattr(db, "get_collection") or hasattr(db, "__getitem__"):
+                return db
+
+    # 5-6) raw pymongo client fallback
+    for client_attr in ("client", "_client"):
+        client = getattr(mm, client_attr, None)
+        if client is None:
+            continue
+        try:
+            return client[_db_name()]
+        except Exception:  # noqa: BLE001
+            pass
+
+    raise RuntimeError(
+        "MongoManager exposes neither get_database()/db/database nor a "
+        "pymongo client attribute"
+    )
 
 
 class TokenService:
     """
-    In-memory cache of the token document and MongoDB write helpers.
-
-    The actual access token is kept only internally and is never
-    intentionally written to logs.
+    Mongo-backed in-memory token cache.
     """
 
     def __init__(self) -> None:
-        self._lock = threading.Lock()
-
+        self._lock = threading.RLock()
         self._cached_doc: Optional[Dict[str, Any]] = None
-
-        self._last_loaded_at: Optional[datetime] = None
-
+        self._loaded_at: Optional[str] = None
         self._last_error: Optional[str] = None
 
-        self._refresh_count: int = 0
+    # ------------------------------------------------------------------
+    # Collection / database helpers
+    # ------------------------------------------------------------------
 
-    # =========================================================
-    # MongoDB
-    # =========================================================
+    def _collection(self):
+        """Return the pymongo collection holding the token document."""
+        db = _resolve_database()
+        return db[token_config.COLLECTION_NAME]
 
     @property
-    def collection(self):
-        """Return the configured token collection."""
+    def doc_id(self) -> str:
+        return token_config.DOC_ID
 
-        return mongo_manager.get_db()[
-            token_config.COLLECTION_NAME
-        ]
+    # ------------------------------------------------------------------
+    # Cache lifecycle
+    # ------------------------------------------------------------------
 
-    # =========================================================
-    # Load / Refresh
-    # =========================================================
-
-    def load_token(self) -> Optional[Dict[str, Any]]:
-        """
-        Fetch the token document from MongoDB and replace
-        the in-memory cache.
-
-        Returns:
-            Token document if successful, otherwise None.
-        """
-
-        doc_id = token_config.DOC_ID
-        collection_name = token_config.COLLECTION_NAME
-
-        logger.info(
-            "Loading token document | collection=%s | doc_id=%s",
-            collection_name,
-            doc_id,
-        )
+    def load_token(self) -> bool:
+        """Load (or reload) the token from MongoDB into the cache."""
+        try:
+            collection = self._collection()
+        except Exception as exc:  # noqa: BLE001
+            self._last_error = _short(exc)
+            logger.error(
+                "service::load_token failed | step=resolve collection | reason=%s",
+                self._last_error,
+            )
+            return False
 
         try:
-            doc = self.collection.find_one(
-                {"_id": doc_id}
-            )
-
+            doc = collection.find_one({"_id": self.doc_id})
         except Exception as exc:  # noqa: BLE001
-            self._last_error = str(exc)
-
-            logger.exception(
-                "MongoDB read failed for token document"
+            self._last_error = _short(exc)
+            logger.error(
+                "service::load_token failed | step=mongo find_one | reason=%s",
+                self._last_error,
             )
-
-            return None
-
-        if not doc:
-            self._last_error = (
-                f"Token document '{doc_id}' "
-                f"not found in '{collection_name}'"
-            )
-
-            logger.warning(
-                "Token document not found | doc_id=%s",
-                doc_id,
-            )
-
-            return None
-
-        # -----------------------------------------------------
-        # Update in-memory cache
-        # -----------------------------------------------------
+            return False
 
         with self._lock:
-            self._cached_doc = doc
-            self._last_loaded_at = now_ist()
+            if doc is None:
+                self._cached_doc = None
+                self._loaded_at = datetime.now().astimezone().isoformat()
+                self._last_error = "document not found"
+                logger.warning(
+                    "service::load_token | doc missing | _id=%s", self.doc_id
+                )
+                return False
+
+            self._cached_doc = dict(doc)
+            self._loaded_at = datetime.now().astimezone().isoformat()
             self._last_error = None
-            self._refresh_count += 1
-
-        # -----------------------------------------------------
-        # IMPORTANT:
-        # Never log access_token or any token preview.
-        # -----------------------------------------------------
 
         logger.info(
-            "Token cache updated successfully | "
-            "doc_updated_at=%s | source=%s",
-            doc.get("updated_at"),
-            doc.get("source"),
+            "service::load_token | loaded | source=%s | updated_at=%s",
+            self._cached_doc.get("source", "unknown"),
+            self._cached_doc.get("updated_at", "unknown"),
         )
+        return True
 
-        return doc
-
-    def refresh_token(self) -> Optional[Dict[str, Any]]:
-        """
-        Refresh the in-memory token cache.
-
-        Called by the scheduler every configured interval.
-        """
-
-        logger.info(
-            "Refreshing token cache from MongoDB"
-        )
-
+    def refresh_token(self) -> bool:
+        """Alias used by the scheduler loop."""
         return self.load_token()
 
-    # =========================================================
-    # Save / Update
-    # =========================================================
-
-    def save_token(
-        self,
-        access_token: str,
-        source: str = "api",
-    ) -> Dict[str, Any]:
-        """
-        Validate the supplied token and upsert it into MongoDB.
-
-        The following fields are updated:
-
-            access_token
-            updated_at
-            source
-            last_validation_status
-            last_validation_status_text
-            last_validated_at
-            last_validation_error
-            last_profile_user_id
-            last_profile_user_name
-            last_profile_broker
-
-        created_at is only set on first insert.
-
-        The in-memory cache is refreshed after a successful
-        database write.
-
-        IMPORTANT:
-            The access token is never logged.
-        """
-
-        access_token = (
-            access_token or ""
-        ).strip()
-
-        source = (
-            source or "api"
-        ).strip().lower()
-
-        doc_id = token_config.DOC_ID
-        collection_name = token_config.COLLECTION_NAME
-
-        # -----------------------------------------------------
-        # Request logging
-        # -----------------------------------------------------
-
-        logger.info(
-            "save_token requested | source=%s | token_present=%s",
-            source,
-            bool(access_token),
-        )
-
-        # -----------------------------------------------------
-        # Validate token against Upstox
-        # -----------------------------------------------------
-
-        validation = validate_upstox_token(
-            access_token
-        )
-
-        now = now_ist_iso()
-
-        # -----------------------------------------------------
-        # Build MongoDB update payload
-        # -----------------------------------------------------
-
-        update_fields: Dict[str, Any] = {
-            "access_token": access_token,
-            "updated_at": now,
-            "source": source,
-            "last_validation_status": validation[
-                "status"
-            ],
-            "last_validation_status_text": validation[
-                "status_text"
-            ],
-            "last_validated_at": now,
-            "last_validation_error": (
-                None
-                if validation["valid"]
-                else validation["message"]
-            ),
-            "last_profile_user_id": validation[
-                "user_id"
-            ],
-            "last_profile_user_name": validation[
-                "user_name"
-            ],
-            "last_profile_broker": validation.get(
-                "broker",
-                UPSTOX_BROKER,
-            ),
-        }
-
-        # -----------------------------------------------------
-        # MongoDB upsert
-        # -----------------------------------------------------
-
-        try:
-            result = self.collection.update_one(
-                {"_id": doc_id},
-                {
-                    "$set": update_fields,
-                    "$setOnInsert": {
-                        "created_at": now
-                    },
-                },
-                upsert=True,
-            )
-
-        except Exception:  # noqa: BLE001
-            logger.exception(
-                "Failed to upsert token document"
-            )
-
-            return {
-                "saved": False,
-                "valid": validation["valid"],
-                "validation": validation,
-                "error": (
-                    "Failed to save token document"
-                ),
-            }
-
-        logger.info(
-            "Token document upserted | "
-            "collection=%s | "
-            "doc_id=%s | "
-            "matched=%s | "
-            "created=%s | "
-            "validation=%s",
-            collection_name,
-            doc_id,
-            result.matched_count,
-            bool(result.upserted_id),
-            validation["status"],
-        )
-
-        # -----------------------------------------------------
-        # Refresh in-memory cache
-        # -----------------------------------------------------
-
-        cached_doc = self.load_token()
-
-        if cached_doc is None:
-            logger.warning(
-                "Token document saved but cache refresh failed"
-            )
-
-        else:
-            logger.info(
-                "Token cache refreshed after token save"
-            )
-
-        # -----------------------------------------------------
-        # Return result
-        # -----------------------------------------------------
-
-        return {
-            "saved": True,
-            "valid": validation["valid"],
-            "validation": validation,
-            "created": bool(
-                result.upserted_id
-            ),
-            "updated": result.matched_count > 0,
-            "updated_at": now,
-            "source": source,
-        }
-
-    # =========================================================
-    # Validation
-    # =========================================================
-
-    def validate_only(
-        self,
-        access_token: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """
-        Validate a token without persisting it.
-
-        If access_token is supplied:
-            Validate the supplied token.
-
-        If access_token is not supplied:
-            Validate the currently cached token.
-        """
-
-        mode = (
-            "explicit"
-            if access_token
-            else "cache"
-        )
-
-        logger.info(
-            "validate_only requested | mode=%s",
-            mode,
-        )
-
-        return validate_upstox_token(
-            access_token
-        )
-
-    def validate_cached(self) -> Dict[str, Any]:
-        """
-        Validate the token currently in memory.
-
-        Does not read MongoDB.
-
-        Returns an error immediately if no token
-        is currently cached.
-        """
-
-        cached_token = self.get_access_token()
-
-        if not cached_token:
-            logger.warning(
-                "validate_cached called but token cache is empty"
-            )
-
-            return {
-                "valid": False,
-                "status": "error",
-                "status_text": "cache_empty",
-                "user_id": None,
-                "user_name": None,
-                "broker": UPSTOX_BROKER,
-                "message": "No token in cache",
-                "token_source": "cache",
-            }
-
-        logger.info(
-            "Validating cached token"
-        )
-
-        return validate_upstox_token(
-            cached_token
-        )
-
-    # =========================================================
-    # Cache Accessors
-    # =========================================================
-
-    def get_token_doc(
-        self,
-    ) -> Optional[Dict[str, Any]]:
-        """
-        Return the cached token document.
-
-        Internal callers may use this when they actually
-        need the complete document.
-        """
-
-        with self._lock:
-            return self._cached_doc
-
-    def get_access_token(
-        self,
-    ) -> Optional[str]:
-        """
-        Return the cached access token.
-
-        IMPORTANT:
-            Caller must never log this value.
-        """
-
-        doc = self.get_token_doc()
-
-        if not doc:
-            return None
-
-        return doc.get("access_token")
-
-    def get_cache_status(
-        self,
-    ) -> Dict[str, Any]:
-        """
-        Return safe cache status information.
-
-        The actual access token is NEVER included.
-        """
-
-        with self._lock:
-            doc = self._cached_doc
-
-            return {
-                "cached": doc is not None,
-
-                "collection": (
-                    token_config.COLLECTION_NAME
-                ),
-
-                "doc_id": token_config.DOC_ID,
-
-                "refresh_interval_seconds": (
-                    token_config.REFRESH_INTERVAL_SECONDS
-                ),
-
-                "refresh_count": (
-                    self._refresh_count
-                ),
-
-                "last_loaded_at": (
-                    self._last_loaded_at.isoformat()
-                    if self._last_loaded_at
-                    else None
-                ),
-
-                "last_error": (
-                    self._last_error
-                ),
-
-                "has_access_token": bool(
-                    doc
-                    and doc.get("access_token")
-                ),
-
-                "source": (
-                    doc.get("source")
-                    if doc
-                    else None
-                ),
-
-                "doc_updated_at": (
-                    doc.get("updated_at")
-                    if doc
-                    else None
-                ),
-
-                "last_validation_status": (
-                    doc.get(
-                        "last_validation_status"
-                    )
-                    if doc
-                    else None
-                ),
-            }
-
-    # =========================================================
-    # Cache Management
-    # =========================================================
-
     def clear_cache(self) -> None:
-        """
-        Clear the in-memory token cache.
-
-        Does not delete or modify the MongoDB document.
-        """
-
+        """Drop the in-memory cache without touching MongoDB."""
         with self._lock:
             self._cached_doc = None
-            self._last_loaded_at = None
+            self._loaded_at = None
+        logger.info("service::clear_cache | cache cleared")
+
+    # ------------------------------------------------------------------
+    # Safe accessors
+    # ------------------------------------------------------------------
+
+    def get_access_token(self) -> Optional[str]:
+        with self._lock:
+            if not self._cached_doc:
+                return None
+            token = self._cached_doc.get("access_token")
+        return str(token) if token else None
+
+    def is_cache_loaded(self) -> bool:
+        with self._lock:
+            return bool(self._cached_doc and self._cached_doc.get("access_token"))
+
+    def get_cached_doc(self) -> Optional[Dict[str, Any]]:
+        with self._lock:
+            return dict(self._cached_doc) if self._cached_doc else None
+
+    def status_meta(self) -> Dict[str, Any]:
+        """Safe metadata for /token/status. No token / identity fields."""
+        with self._lock:
+            doc = self._cached_doc or {}
+            return {
+                "loaded": bool(doc.get("access_token")),
+                "doc_id": self.doc_id,
+                "loaded_at": self._loaded_at,
+                "source": doc.get("source"),
+                "updated_at": doc.get("updated_at"),
+                "last_error": self._last_error,
+            }
+
+    # ------------------------------------------------------------------
+    # Write paths
+    # ------------------------------------------------------------------
+
+    def upsert_token(self, access_token: str, source: str = "manual") -> bool:
+        """Upsert a token document into MongoDB (no validation, no cache touch)."""
+        if not access_token:
+            logger.warning("service::upsert_token | empty token rejected")
+            return False
+
+        now_iso = datetime.now().astimezone().isoformat()
+        doc = {
+            "_id": self.doc_id,
+            "access_token": access_token,
+            "source": source,
+            "updated_at": now_iso,
+        }
+
+        try:
+            collection = self._collection()
+            collection.replace_one({"_id": self.doc_id}, doc, upsert=True)
+        except Exception as exc:  # noqa: BLE001
+            self._last_error = _short(exc)
+            logger.error(
+                "service::upsert_token failed | step=mongo replace_one | reason=%s",
+                self._last_error,
+            )
+            return False
 
         logger.info(
-            "Token cache cleared"
+            "service::upsert_token | saved | source=%s | updated_at=%s",
+            source, now_iso,
         )
+        return True
+
+    # ------------------------------------------------------------------
+    # Validate + upsert + reload in one step
+    # ------------------------------------------------------------------
+
+    def save_and_reload(
+        self, access_token: str, source: str = "manual"
+    ) -> Dict[str, Any]:
+        """
+        Validate an explicit token, upsert it into MongoDB, and reload the
+        local cache. Returns:
+            {"saved": bool, "validated": bool, "error": str | None}
+        Never raises.
+
+        Validation goes through `token_tasks._profile.validate_profile`,
+        which probes several known function names on the
+        `upstox_app.profile` package and falls back to the raw Upstox SDK.
+        """
+        result: Dict[str, Any] = {
+            "saved": False,
+            "validated": False,
+            "error": None,
+        }
+
+        if not access_token:
+            result["error"] = "empty token"
+            return result
+
+        # 1) Validate via the shared profile resolver.
+        try:
+            from token_tasks._profile import validate_profile
+            profile = validate_profile(access_token)
+            valid = bool(profile.get("valid")) if isinstance(profile, dict) else False
+            profile_error = profile.get("error") if isinstance(profile, dict) else None
+        except Exception as exc:  # noqa: BLE001
+            result["error"] = f"validation error: {_short(exc)}"
+            logger.error(
+                "service::save_and_reload failed | step=validate token | reason=%s",
+                _short(exc),
+            )
+            return result
+
+        if not valid:
+            result["error"] = profile_error or "profile rejected token"
+            logger.warning(
+                "service::save_and_reload | token rejected by profile API | reason=%s",
+                result["error"],
+            )
+            return result
+        result["validated"] = True
+
+        # 2) Upsert into MongoDB
+        if not self.upsert_token(access_token, source=source):
+            result["error"] = "mongo upsert failed"
+            return result
+
+        # 3) Reload cache
+        if not self.load_token():
+            result["error"] = "cache reload failed"
+            return result
+
+        result["saved"] = True
+        logger.info("service::save_and_reload | success | source=%s", source)
+        return result
 
 
-# =============================================================
+# ---------------------------------------------------------------------------
 # Module-level singleton
-# =============================================================
+# ---------------------------------------------------------------------------
 
 token_service = TokenService()
