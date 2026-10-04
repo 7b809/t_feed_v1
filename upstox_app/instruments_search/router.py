@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 from typing import Any, Dict, Optional
 
@@ -15,7 +16,6 @@ from upstox_app.instruments_search.schemas import InstrumentSearchQuery
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/upstox/instruments", tags=["instruments-search"])
-
 
 # ---------------------------------------------------------------------------
 # Core search endpoint (GET)
@@ -78,7 +78,6 @@ async def search_instruments(
 
     return result.get("data")
 
-
 # ---------------------------------------------------------------------------
 # POST variant
 # ---------------------------------------------------------------------------
@@ -112,7 +111,6 @@ async def search_instruments_post(payload: InstrumentSearchQuery = Body(...)) ->
 
     return result.get("data")
 
-
 # ---------------------------------------------------------------------------
 # Resolve a single instrument key
 # ---------------------------------------------------------------------------
@@ -141,7 +139,6 @@ async def resolve_instrument_key(
         )
 
     return result.get("data")
-
 
 # ---------------------------------------------------------------------------
 # ATM option chain helper
@@ -181,7 +178,6 @@ async def option_chain_atm(
 
     return result.get("data")
 
-
 # ---------------------------------------------------------------------------
 # Subscribe an instrument to the upstream market streamer
 # ---------------------------------------------------------------------------
@@ -190,7 +186,6 @@ async def _maybe_await(value: Any) -> Any:
     if inspect.isawaitable(value):
         return await value
     return value
-
 
 async def _subscribe_via_streamer(
     instrument_key: str, mode: str = "full"
@@ -250,30 +245,31 @@ async def _subscribe_via_streamer(
                     break
 
     # ---- 3) HTTP loopback to the existing REST endpoint ------------------
+    # Uses `requests` via asyncio.to_thread so the event loop stays free.
     try:
-        import httpx  # type: ignore
+        import requests  # type: ignore
 
-        async with httpx.AsyncClient(
-            base_url="http://127.0.0.1:8000", timeout=10.0
-        ) as client:
-            r = await client.post(
-                "/upstox/market/subscribe",
+        def _do_post() -> "requests.Response":
+            return requests.post(
+                "http://127.0.0.1:8000/upstox/market/subscribe",
                 json={"instrument_keys": [instrument_key], "mode": mode},
+                timeout=10.0,
             )
-            if r.status_code < 400:
-                try:
-                    payload = r.json()
-                except Exception:
-                    payload = {"raw": r.text}
-                return {
-                    "source": "http:/upstox/market/subscribe",
-                    "result": payload,
-                }
+
+        r = await asyncio.to_thread(_do_post)
+        if r.status_code < 400:
+            try:
+                payload = r.json()
+            except Exception:
+                payload = {"raw": r.text}
+            return {
+                "source": "http:/upstox/market/subscribe",
+                "result": payload,
+            }
     except Exception as exc:
         logger.debug("HTTP subscribe failed: %s", exc)
 
     return None
-
 
 @router.post(
     "/subscribe",
@@ -314,7 +310,6 @@ async def subscribe_instrument(payload: Dict[str, Any] = Body(...)) -> Any:
         "source": result.get("source"),
         "message": "Subscription accepted.",
     }
-
 
 # ---------------------------------------------------------------------------
 # Health / config introspection

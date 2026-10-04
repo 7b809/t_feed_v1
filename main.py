@@ -2,7 +2,8 @@
 main.py
 Application entrypoint. Composition + uvicorn only.
 
-Everything else lives in core/, token_tasks/, upstox_app/, api/, or web/:
+Everything else lives in core/, token_tasks/, upstox_app/, api/, web/, or
+ema_app/:
     - startup / shutdown wiring ......... core/lifespan.py
     - health + root endpoints ........... core/health.py
     - MongoDB singleton ................. core/config.py
@@ -21,6 +22,12 @@ Everything else lives in core/, token_tasks/, upstox_app/, api/, or web/:
     - Web UI (templates + APIs + WS) .... web/page_router.py
                                           web/api_router.py
                                           web/ws_router.py
+    - EMA app (all-instrument engine) ... ema_app/router.py
+                                          ema_app/ws_router.py
+    - Isolation layer (per-index winner)  ema_app/isolation/router.py
+                                          ema_app/isolation/service.py
+                                          ema_app/isolation/order_service.py
+                                          ema_app/isolation/order_storage.py
 """
 from fastapi import FastAPI
 
@@ -44,6 +51,13 @@ from api import api_router
 from web.page_router import router as web_page_router
 from web.api_router import router as web_api_router
 from web.ws_router import router as web_ws_router
+
+# ---- EMA app (live 9/21 cross streamer) ------------------------------------
+from ema_app.router import router as ema_app_router
+from ema_app.ws_router import router as ema_app_ws_router
+
+# ---- Isolation layer (per-index winner + order placement) ------------------
+from ema_app.isolation.router import router as isolation_router
 
 
 # Configure logging before anything else
@@ -85,10 +99,20 @@ def create_app() -> FastAPI:
     app.include_router(web_api_router)
     app.include_router(web_ws_router)
 
+    # ---- EMA app (live 9/21 cross streamer) -------------------------------
+    app.include_router(ema_app_router)
+    app.include_router(ema_app_ws_router)
+
+    # ---- Isolation layer (HTTP endpoints for per-index winner) ------------
+    # WebSocket delivery for isolated alerts goes through the EMA app's
+    # hub (frames carry type="isolated_ema_alert"), so no separate WS
+    # router is registered here.
+    app.include_router(isolation_router)
+
     logger.info(
         "Routers registered | web-pages + health + token + upstox + "
         "upstox-ws + options + candles + quotes + api + instruments-search + "
-        "web(api/ws)"
+        "web(api/ws) + ema-app + isolation"
     )
     return app
 

@@ -408,7 +408,7 @@ def load_orders() -> Dict[str, Any]:
     Never raises.
     """
     try:
-        from upstox_app.order_book_service import order_book_service  # type: ignore
+        from upstox_app.portfolio.order_book_service import order_book_service  # type: ignore
     except Exception as exc:
         logger.warning("OrderBookService unavailable: %s", exc)
         return {

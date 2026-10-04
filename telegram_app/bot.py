@@ -10,6 +10,13 @@ On start():
     commands issued before the current run are ignored.
   - Records the process start time so the handler can additionally
     reject stale message timestamps as a belt-and-suspenders check.
+
+Isolation flow:
+  This module owns the manual-isolation flow (interactive /isolate,
+  /unisolate, and /cancel) via `telegram_app.isolation_flow`. Any
+  message that belongs to an in-progress isolation flow is consumed
+  here and never reaches the user handler, so the handler stays
+  unchanged and focused on its existing commands.
 """
 import threading
 import time
@@ -17,6 +24,7 @@ from datetime import datetime, timezone
 from typing import Callable, Optional
 
 from core.logger import get_logger
+from telegram_app import isolation_flow
 from telegram_app.config import telegram_config
 from telegram_app.telegram_msg import (
     flush_pending_updates,
@@ -117,6 +125,72 @@ class TelegramBot:
                 if self._stop_event.wait(telegram_config.POLLING_RETRY_SEC):
                     return
 
+    # ---- isolation flow dispatch ---------------------------------------
+    def _maybe_handle_isolation(self, text: str, chat_id: int) -> bool:
+        """
+        Handle any message that belongs to the manual-isolation flow.
+
+        Returns True when the message was consumed (reply already sent)
+        so the caller should return. Returns False when the message is
+        unrelated and should be dispatched to the user handler.
+
+        Priority order:
+          1. Active interactive flow  -> feed the message as the next step
+          2. Direct /isolate command  -> start one-shot or interactive
+          3. Direct /unisolate command-> start one-shot or interactive
+          4. /cancel                  -> cancel isolation flow if active,
+                                         otherwise fall through so the
+                                         existing token-save cancel still
+                                         gets a chance
+        Never raises: all exceptions are logged and swallowed.
+        """
+        try:
+            # 1) Interactive flow already in progress for this chat?
+            reply = isolation_flow.feed_message(chat_id, text)
+            if reply is not None:
+                send_message(reply.text)
+                return True
+
+            # Parse the command token; strip "@botname" suffix if present.
+            parts = text.split()
+            if not parts:
+                return False
+
+            command = parts[0].split("@", 1)[0].lower()
+            args = parts[1:]
+
+            # 2) /isolate
+            if command == "/isolate":
+                reply = isolation_flow.start_isolate(chat_id, args)
+                send_message(reply.text)
+                return True
+
+            # 3) /unisolate
+            if command == "/unisolate":
+                reply = isolation_flow.start_unisolate(chat_id, args)
+                send_message(reply.text)
+                return True
+
+            # 4) /cancel — try isolation flow first, fall through if not
+            #    active so the existing token-save /cancel still works.
+            if command == "/cancel":
+                reply = isolation_flow.cancel_flow(chat_id)
+                if reply is not None:
+                    send_message(reply.text)
+                    return True
+                return False
+
+            return False
+
+        except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "bot::_maybe_handle_isolation failed | step=dispatch | reason=%s",
+                f"{type(exc).__name__}: {str(exc)[:150]}",
+            )
+            # Do not consume the message; let the handler attempt it.
+            return False
+
+    # ---- update handling -----------------------------------------------
     def _handle_update(self, update: dict) -> None:
         try:
             update_id = update.get("update_id")
@@ -147,6 +221,24 @@ class TelegramBot:
 
             if not text:
                 return
+
+            # ---- Isolation flow intercept --------------------------------
+            # Runs BEFORE the user handler so that:
+            #   * an in-progress interactive flow consumes the next message
+            #     (e.g. "NIFTY") without the handler misinterpreting it
+            #   * /isolate, /unisolate, and /cancel are routed to the
+            #     isolation flow when relevant
+            # If the flow is not active and the command is not one of
+            # those three, this returns False and we fall through to the
+            # normal handler dispatch.
+            try:
+                chat_id_int = int(chat_id)
+            except (TypeError, ValueError):
+                chat_id_int = 0
+
+            if self._maybe_handle_isolation(text, chat_id_int):
+                return
+            # -------------------------------------------------------------
 
             if self._handler is None:
                 send_message("⚠️ Bot is not ready yet.")

@@ -1,19 +1,24 @@
 """
 Instrument Search service.
 
-Wraps Upstox `GET /v2/instruments/search` — no SDK dependency, uses httpx
-directly so it works even if the Upstox SDK version in the project doesn't
-expose this endpoint yet.
+Wraps Upstox `GET /v2/instruments/search` — no SDK dependency, uses
+`requests` directly so it works even if the Upstox SDK version in the
+project doesn't expose this endpoint yet.
 
 Auth: pulls the access token from `token_service` on every call, so token
 refreshes are picked up automatically without restarting the app.
+
+Async interface preserved: the blocking `requests.get` call is executed
+via `asyncio.to_thread(...)` so the event loop is never blocked. Callers
+(the FastAPI router) can still `await search_instruments(...)` unchanged.
 """
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Dict, Optional
 
-import httpx
+import requests
 
 from core.logger import get_logger
 
@@ -21,8 +26,8 @@ logger = get_logger(__name__)
 
 UPSTOX_SEARCH_URL = "https://api.upstox.com/v2/instruments/search"
 
-# Sensible default timeout — the search endpoint is lightweight but Upstox
-# can be slow under load.
+# Sensible default timeout — the search endpoint is lightweight but
+# Upstox can be slow under load.
 DEFAULT_TIMEOUT_SEC = 30.0
 
 # Allowed filter values — kept in one place for validation messages.
@@ -74,6 +79,24 @@ def _build_params(
     return params
 
 
+def _do_get_sync(
+    url: str,
+    headers: Dict[str, str],
+    params: Dict[str, Any],
+    timeout: float,
+) -> "requests.Response":
+    """
+    Run the blocking HTTP GET. Executed via `asyncio.to_thread(...)` from
+    the async caller so the event loop is never blocked on the round-trip.
+    """
+    return requests.get(
+        url,
+        headers=headers,
+        params=params,
+        timeout=timeout,
+    )
+
+
 async def search_instruments(
     query: str,
     exchanges: Optional[str] = None,
@@ -116,8 +139,13 @@ async def search_instruments(
     )
 
     try:
-        async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT_SEC) as client:
-            response = await client.get(UPSTOX_SEARCH_URL, headers=headers, params=params)
+        response = await asyncio.to_thread(
+            _do_get_sync,
+            UPSTOX_SEARCH_URL,
+            headers,
+            params,
+            DEFAULT_TIMEOUT_SEC,
+        )
 
         try:
             payload = response.json()
@@ -144,12 +172,19 @@ async def search_instruments(
             "data": payload,
         }
 
-    except httpx.TimeoutException:
+    except requests.Timeout:
         logger.warning("Instrument search timed out | query=%s", query)
         return {
             "success": False,
             "status_code": 504,
             "error": f"Upstox instrument search timed out after {DEFAULT_TIMEOUT_SEC}s.",
+        }
+    except requests.RequestException as exc:
+        logger.exception("Instrument search failed | query=%s", query)
+        return {
+            "success": False,
+            "status_code": 502,
+            "error": f"Upstox instrument search request failed: {exc}",
         }
     except Exception as exc:
         logger.exception("Instrument search failed | query=%s", query)

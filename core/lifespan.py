@@ -26,6 +26,10 @@ Pipeline (valid-token path):
  12. Crossover compute (historic + intraday)
  13. Daily candle refresh scheduler
  14. Bulk option subscribe (startup-only, gated)
+ 15. EMA app: wire cross listener + attach tick sink + start session scheduler
+     (initial backfill only runs when we are inside the trading session)
+ 16. Isolation layer: register metadata + hook base-engine listeners +
+     start per-index winner selection (session-gated)
 
 Hard refresh (triggered by /refresh, POST /api/instruments/refresh, or
 after a successful token save):
@@ -35,11 +39,28 @@ after a successful token save):
   4. candles ensure (freshness-aware)
   5. crossovers recompute
   6. subscribe-all (enabled indexes + every option contract)
+  7. EMA app: ensure started + backfill EMA state from disk (session-gated)
+  8. Isolation layer: re-register instrument metadata for the new chain
+
+The EMA app is a live 9/21 crossover service that consumes market-streamer
+ticks, aggregates them into per-minute candles, detects crosses on candle
+close, persists only the crosses to data/runtime/<INDEX>/<strike>_<TYPE>/
+intraday_cross.json, and fans them out to WebSocket clients with rich
+client-side filtering (underlying / strike / option_type / expiry / key).
+
+The Isolation layer sits on top of the EMA app. It consumes the finalized
+candle stream to detect opening-range touches, picks one option contract
+per enabled index per day (the "isolated" instrument), and for that
+instrument only, enriches its EMA crosses into a full alert payload
+(order suggestion + budget-filtered shortlist), broadcasts them over a
+dedicated WebSocket frame, places orders per the config flag, and
+persists each alert to MongoDB keyed by YYYY-MM-DD with HH_MM_SS entries.
 """
 
 import asyncio
+import importlib
 from contextlib import asynccontextmanager
-from typing import Any, AsyncIterator, Dict
+from typing import Any, AsyncIterator, Dict, Optional
 
 from core.config import core_config, mongo_manager
 from core.logger import get_logger
@@ -67,11 +88,312 @@ from upstox_app.streamer.streamer_manager import (
 )
 from upstox_app.streamer.ws_manager import set_event_loop
 
+# ---- EMA app ---------------------------------------------------------------
+from ema_app.scheduler import (
+    start_scheduler as start_ema_scheduler,
+    stop_scheduler as stop_ema_scheduler,
+)
+from ema_app.service import ema_service, is_inside_session
+from ema_app.ws_manager import ema_ws_manager
+
+# ---- Isolation layer -------------------------------------------------------
+from ema_app.isolation.service import isolation_service
+from ema_app.isolation.order_storage import isolated_order_storage
+from ema_app.isolation.state import isolation_store
+
 logger = get_logger(__name__)
 
 
 def _short(exc: BaseException) -> str:
     return f"{type(exc).__name__}: {str(exc)[:150]}"
+
+
+# ---------------------------------------------------------------------------
+# EMA app wiring helpers
+# ---------------------------------------------------------------------------
+
+# Module-level flag so `_ensure_ema_app_started()` is idempotent across
+# startup + any number of hard refreshes.
+_ema_app_started: bool = False
+
+# Module-level flag so `_ensure_isolation_started()` is idempotent too.
+_isolation_started: bool = False
+
+
+def _try_attach_sink_on(target: Any, label: str, sink) -> bool:
+    """
+    Try to register `sink` on `target` using any of the common method names.
+    `target` may be a module, a class instance, or a class.
+
+    Returns True on the first successful registration.
+    """
+    candidates = (
+        "register_tick_listener",
+        "add_tick_listener",
+        "register_listener",
+        "on_tick",
+    )
+    for attr in candidates:
+        fn = getattr(target, attr, None)
+        if not callable(fn):
+            continue
+        try:
+            fn(sink)
+            logger.info("EMA tick sink attached | source=%s.%s", label, attr)
+            return True
+        except Exception as exc:
+            logger.debug("%s.%s failed: %s", label, attr, exc)
+    return False
+
+
+def _attach_ema_tick_sink() -> bool:
+    """
+    Attach `ema_service.ingest_tick` to the market streamer.
+
+    Probes multiple entry points in this order:
+      1. upstox_app.streamer.streamer_manager as a MODULE (top-level function)
+      2. A `streamer_manager` singleton inside that module (if exposed)
+      3. upstox_app.market.market_streamer as a MODULE (top-level function)
+      4. A `market_streamer` singleton inside that module (if exposed)
+
+    Returns True if a hook was successfully registered.
+
+    If all probes fail, the EMA app still runs (scheduler + persistence +
+    WebSocket + backfill) but it will receive no live ticks. You must then
+    add a `register_tick_listener(fn)` method either at module level inside
+    `upstox_app/streamer/streamer_manager.py` or as a method on a
+    `streamer_manager` singleton — and call every registered listener from
+    the streamer's on_message callback.
+    """
+    sink = ema_service.ingest_tick
+
+    # ---- 1. streamer_manager module + optional singleton ------------------
+    try:
+        module = importlib.import_module("upstox_app.streamer.streamer_manager")
+
+        # 1a. Top-level function on the module
+        if _try_attach_sink_on(module, "streamer_manager(module)", sink):
+            return True
+
+        # 1b. A `streamer_manager` singleton inside the module (if exposed)
+        singleton = getattr(module, "streamer_manager", None)
+        if singleton is not None:
+            if _try_attach_sink_on(singleton, "streamer_manager.singleton", sink):
+                return True
+    except Exception as exc:
+        logger.debug("streamer_manager module probe failed: %s", exc)
+
+    # ---- 2. market_streamer module + optional singleton -------------------
+    try:
+        module = importlib.import_module("upstox_app.market.market_streamer")
+
+        if _try_attach_sink_on(module, "market_streamer(module)", sink):
+            return True
+
+        singleton = getattr(module, "market_streamer", None)
+        if singleton is not None:
+            if _try_attach_sink_on(singleton, "market_streamer.singleton", sink):
+                return True
+    except Exception as exc:
+        logger.debug("market_streamer module probe failed: %s", exc)
+
+    return False
+
+
+async def _ema_backfill_all() -> int:
+    """
+    Rebuild EMA state for every tracked instrument from the on-disk candle
+    series + today's intraday. Called on startup and after every hard
+    refresh — but ONLY when inside the trading session.
+
+    Returns the number of instruments that were successfully backfilled.
+    """
+    keys = ema_service.instrument_keys()
+    if not keys:
+        return 0
+
+    logger.info("EMA app: backfilling %d instruments", len(keys))
+
+    done = 0
+    for key in keys:
+        try:
+            n = ema_service.backfill_instrument(key)
+            if n:
+                done += 1
+        except Exception as exc:
+            logger.warning("EMA backfill %s failed: %s", key, exc)
+
+    logger.info("EMA app: backfill done | instruments=%d", done)
+    return done
+
+
+async def _ensure_ema_app_started() -> None:
+    """
+    Idempotently wire the EMA app:
+
+      1. Register the cross listener so crosses broadcast through the WS hub
+      2. Attach the tick sink to the market streamer (best-effort)
+      3. Start the session scheduler (09:14 → 15:30 IST)
+    """
+    global _ema_app_started
+    if _ema_app_started:
+        return
+
+    # ---- 1. cross listener → WebSocket broadcast ------------------------
+    try:
+        loop = asyncio.get_running_loop()
+        ema_service.register_cross_listener(
+            lambda cross: ema_ws_manager.broadcast_threadsafe(cross, loop)
+        )
+    except Exception as exc:
+        logger.warning(
+            "EMA cross listener registration failed | reason=%s", _short(exc)
+        )
+
+    # ---- 2. tick sink ---------------------------------------------------
+    try:
+        attached = _attach_ema_tick_sink()
+        ema_service.mark_streamer_attached(attached)
+        if not attached:
+            logger.warning(
+                "EMA tick sink NOT attached — no live ticks will flow. "
+                "Add a top-level register_tick_listener(fn) in "
+                "upstox_app/streamer/streamer_manager.py and call every "
+                "registered listener from the SDK's on_message callback."
+            )
+    except Exception as exc:
+        logger.warning("EMA tick sink attach failed | reason=%s", _short(exc))
+
+    # ---- 3. session scheduler ------------------------------------------
+    try:
+        await start_ema_scheduler()
+        _ema_app_started = True
+        logger.info("EMA app wired and scheduler started")
+    except Exception as exc:
+        logger.error("EMA scheduler start failed | reason=%s", _short(exc))
+
+
+async def _stop_ema_app() -> None:
+    """Stop the EMA session scheduler and reset the start flag."""
+    global _ema_app_started
+    try:
+        await stop_ema_scheduler()
+        _ema_app_started = False
+        logger.info("EMA app scheduler stopped")
+    except Exception as exc:
+        logger.error("EMA scheduler stop failed | reason=%s", _short(exc))
+
+
+# ---------------------------------------------------------------------------
+# Isolation layer wiring helpers
+# ---------------------------------------------------------------------------
+
+
+def _load_instruments_for_isolation() -> list:
+    """
+    Load the universe of option contracts that the isolation layer will
+    watch for opening-range touches. Uses the same sources as the EMA
+    instrument loader, so they stay in lockstep.
+    """
+    return _load_instruments_for_ema()
+
+
+async def _ensure_isolation_started() -> None:
+    """
+    Idempotently wire the isolation layer on top of the EMA app:
+
+      1. Register the contract metadata cache (strike / type / expiry /
+         lot_size) for every tracked instrument.
+      2. Hook the base engine's cross listener so crosses on the current
+         isolated instrument reach `isolation_service.on_cross`.
+      3. Hook a broadcast listener so isolated alerts reach the WS hub.
+      4. Call `isolation_service.start(ema_service)` which registers a
+         candle listener and loads any persisted isolation state for today.
+
+    Safe to call multiple times; only the first call has an effect.
+    """
+    global _isolation_started
+    if _isolation_started:
+        return
+
+    # ---- 1. metadata ----------------------------------------------------
+    try:
+        instruments = _load_instruments_for_isolation()
+        if instruments:
+            isolation_service.register_instrument_metadata(instruments)
+    except Exception as exc:
+        logger.warning("Isolation: metadata registration failed: %s", _short(exc))
+
+    # ---- 2. cross listener ---------------------------------------------
+    # NOTE: this REPLACES the base engine's cross listener with a chain
+    # that notifies the WS hub AND the isolation service. Both must fire.
+    try:
+        loop = asyncio.get_running_loop()
+
+        def _cross_fanout(cross: Dict[str, Any]) -> None:
+            # 1) Broadcast every cross through the base WS hub
+            try:
+                ema_ws_manager.broadcast_threadsafe(cross, loop)
+            except Exception:
+                pass
+
+            # 2) Feed the isolation layer (it filters internally)
+            try:
+                isolation_service.on_cross(cross)
+            except Exception as exc:
+                logger.warning("Isolation cross handler failed: %s", exc)
+
+        ema_service.register_cross_listener(_cross_fanout)
+        logger.info("Isolation: cross fanout registered on EMA engine")
+    except Exception as exc:
+        logger.warning("Isolation: cross fanout registration failed: %s", _short(exc))
+
+    # ---- 3. broadcast listener for isolated alerts ----------------------
+    try:
+        loop = asyncio.get_running_loop()
+
+        def _broadcast_isolated(payload: Dict[str, Any]) -> None:
+            try:
+                ema_ws_manager.broadcast_threadsafe(
+                    {"type": "isolated_ema_alert", **payload}, loop
+                )
+            except Exception as exc:
+                logger.warning("Isolation broadcast failed: %s", exc)
+
+        isolation_service.register_broadcast_listener(_broadcast_isolated)
+        logger.info("Isolation: broadcast listener registered")
+    except Exception as exc:
+        logger.warning("Isolation: broadcast listener failed: %s", _short(exc))
+
+    # ---- 4. start (hooks candle listener + loads persisted state) -------
+    try:
+        isolation_service.start(ema_service)
+        _isolation_started = True
+        logger.info("Isolation layer wired and started")
+    except Exception as exc:
+        logger.error("Isolation layer start failed | reason=%s", _short(exc))
+
+
+async def _stop_isolation() -> None:
+    """Stop the isolation layer, flush state, close Mongo."""
+    global _isolation_started
+    try:
+        isolation_service.stop()
+    except Exception as exc:
+        logger.error("Isolation stop failed | reason=%s", _short(exc))
+
+    try:
+        isolation_store.save_all()
+    except Exception as exc:
+        logger.warning("Isolation store save failed | reason=%s", _short(exc))
+
+    try:
+        isolated_order_storage.close()
+    except Exception as exc:
+        logger.warning("Isolation order storage close failed | reason=%s", _short(exc))
+
+    _isolation_started = False
+    logger.info("Isolation layer stopped")
 
 
 # ---------------------------------------------------------------------------
@@ -105,7 +427,10 @@ async def _run_hard_refresh(trigger: str) -> Dict[str, Any]:
     """
     Full pipeline refresh used by /refresh and post-save flow.
 
-    Steps: token -> indexes -> contracts -> candles -> crossovers -> subscribe-all.
+    Steps: token -> indexes -> contracts -> candles -> crossovers -> subscribe-all
+           -> EMA app (ensure started + backfill, session-gated)
+           -> Isolation (re-register metadata).
+
     Every step is isolated so a failure in one does not abort the rest.
     """
     telegram_manager.notify_hard_refresh_started(trigger=trigger)
@@ -186,8 +511,92 @@ async def _run_hard_refresh(trigger: str) -> Dict[str, Any]:
         )
         summary["steps"]["subscribe_all"] = "error"
 
+    # 7) EMA app — ensure started, register instruments, session-gated backfill
+    try:
+        await _ensure_ema_app_started()
+
+        # Register instruments from the freshly-loaded option chains
+        try:
+            instruments = _load_instruments_for_ema()
+            if instruments:
+                ema_service.register_instruments(instruments)
+        except Exception as exc:
+            logger.warning("EMA instrument registration failed: %s", _short(exc))
+
+        if is_inside_session():
+            backfilled = await _ema_backfill_all()
+            summary["steps"]["ema_app"] = f"backfilled={backfilled}"
+        else:
+            summary["steps"]["ema_app"] = "skipped (outside session)"
+    except Exception as exc:  # noqa: BLE001
+        logger.error(
+            "lifespan::hard_refresh ema_app step failed | reason=%s", _short(exc)
+        )
+        summary["steps"]["ema_app"] = "error"
+
+    # 8) Isolation — ensure started, then re-register metadata for the new chain
+    try:
+        await _ensure_isolation_started()
+
+        try:
+            instruments = _load_instruments_for_isolation()
+            if instruments:
+                isolation_service.register_instrument_metadata(instruments)
+                summary["steps"]["isolation"] = f"metadata={len(instruments)}"
+            else:
+                summary["steps"]["isolation"] = "no instruments"
+        except Exception as exc:
+            logger.warning("Isolation metadata re-register failed: %s", _short(exc))
+            summary["steps"]["isolation"] = "metadata error"
+    except Exception as exc:  # noqa: BLE001
+        logger.error(
+            "lifespan::hard_refresh isolation step failed | reason=%s", _short(exc)
+        )
+        summary["steps"]["isolation"] = "error"
+
     telegram_manager.notify_hard_refresh_done(summary)
     return summary
+
+
+def _load_instruments_for_ema() -> list:
+    """
+    Load the full instrument universe for the EMA app.
+
+    Tries the web helper first (which merges every enabled index), then the
+    option service, then runtime snapshots.
+    """
+    # 1) Web helper
+    try:
+        from web.service import load_all_option_instruments  # type: ignore
+
+        instruments = load_all_option_instruments()
+        if instruments:
+            return instruments
+    except Exception:
+        pass
+
+    # 2) Option service per index
+    out: list = []
+    try:
+        from upstox_app.common.config import MAIN_INDEXES  # type: ignore
+        from upstox_app.option.option_service import option_service  # type: ignore
+
+        indexes = (
+            list(MAIN_INDEXES.keys())
+            if isinstance(MAIN_INDEXES, dict)
+            else list(MAIN_INDEXES or [])
+        )
+        for idx in indexes:
+            try:
+                contracts = option_service.get_contracts(str(idx).upper())
+                if contracts:
+                    out.extend(contracts)
+            except Exception:
+                continue
+    except Exception:
+        pass
+
+    return out
 
 
 def _handle_refresh_sync(trigger: str) -> None:
@@ -289,6 +698,8 @@ async def app_lifespan(_app) -> AsyncIterator[None]:
                 "Crossover compute",
                 "Daily refresh scheduler",
                 "Bulk option subscribe",
+                "EMA app scheduler",
+                "Isolation layer",
             ]
         )
         telegram_manager.notify_token_invalid(health)
@@ -411,6 +822,47 @@ async def app_lifespan(_app) -> AsyncIterator[None]:
     else:
         steps_skipped.append("Option bulk-subscribe (disabled)")
 
+    # EMA app — register instruments, wire listeners, start scheduler.
+    # Backfill is session-gated: outside 09:15–15:30 IST on weekdays it is
+    # skipped (the scheduler will do it at 09:14 tomorrow), which avoids
+    # hundreds of wasted HTTP calls to Upstox.
+    try:
+        instruments = _load_instruments_for_ema()
+        if instruments:
+            ema_service.register_instruments(instruments)
+            logger.info("EMA app: registered %d instruments", len(instruments))
+        await _ensure_ema_app_started()
+
+        if is_inside_session():
+            try:
+                backfilled = await _ema_backfill_all()
+                if backfilled:
+                    logger.info(
+                        "EMA app: initial backfill done | instruments=%d",
+                        backfilled,
+                    )
+            except Exception as exc:
+                logger.warning("EMA initial backfill failed: %s", _short(exc))
+        else:
+            logger.info(
+                "EMA app: skipping initial backfill — outside trading session"
+            )
+
+        steps_done.append("EMA app started")
+    except Exception as exc:  # noqa: BLE001
+        logger.error("lifespan::ema app startup failed | reason=%s", _short(exc))
+        steps_skipped.append("EMA app (error)")
+
+    # Isolation layer — sits on top of the EMA app. Registers metadata,
+    # hooks the base engine's cross + candle listeners, wires the WS hub
+    # for isolated alerts, and rehydrates any persisted per-index state.
+    try:
+        await _ensure_isolation_started()
+        steps_done.append("Isolation layer started")
+    except Exception as exc:  # noqa: BLE001
+        logger.error("lifespan::isolation startup failed | reason=%s", _short(exc))
+        steps_skipped.append("Isolation layer (error)")
+
     telegram_manager.notify_project_started(
         steps_done=steps_done, steps_skipped=steps_skipped, token_valid=True
     )
@@ -426,6 +878,18 @@ async def app_lifespan(_app) -> AsyncIterator[None]:
 async def _shutdown() -> None:
     logger.info("Shutting down application...")
     telegram_manager.notify_project_stopping()
+
+    # ---- Isolation layer first (flush state, close order-storage Mongo) --
+    try:
+        await _stop_isolation()
+    except Exception as exc:  # noqa: BLE001
+        logger.error("lifespan::isolation stop failed | reason=%s", _short(exc))
+
+    # ---- EMA app next (before streamers stop, so it stops cleanly) ------
+    try:
+        await _stop_ema_app()
+    except Exception as exc:  # noqa: BLE001
+        logger.error("lifespan::ema app stop failed | reason=%s", _short(exc))
 
     try:
         await token_watchdog.stop()
