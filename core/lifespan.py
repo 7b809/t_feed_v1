@@ -130,7 +130,10 @@ def _try_attach_sink_on(target: Any, label: str, sink) -> bool:
     candidates = (
         "register_tick_listener",
         "add_tick_listener",
+        "set_tick_listener",
+        "register_tick",
         "register_listener",
+        "add_listener",
         "on_tick",
     )
     for attr in candidates:
@@ -157,13 +160,6 @@ def _attach_ema_tick_sink() -> bool:
       4. A `market_streamer` singleton inside that module (if exposed)
 
     Returns True if a hook was successfully registered.
-
-    If all probes fail, the EMA app still runs (scheduler + persistence +
-    WebSocket + backfill) but it will receive no live ticks. You must then
-    add a `register_tick_listener(fn)` method either at module level inside
-    `upstox_app/streamer/streamer_manager.py` or as a method on a
-    `streamer_manager` singleton — and call every registered listener from
-    the streamer's on_message callback.
     """
     sink = ema_service.ingest_tick
 
@@ -171,11 +167,9 @@ def _attach_ema_tick_sink() -> bool:
     try:
         module = importlib.import_module("upstox_app.streamer.streamer_manager")
 
-        # 1a. Top-level function on the module
         if _try_attach_sink_on(module, "streamer_manager(module)", sink):
             return True
 
-        # 1b. A `streamer_manager` singleton inside the module (if exposed)
         singleton = getattr(module, "streamer_manager", None)
         if singleton is not None:
             if _try_attach_sink_on(singleton, "streamer_manager.singleton", sink):
@@ -205,8 +199,6 @@ async def _ema_backfill_all() -> int:
     Rebuild EMA state for every tracked instrument from the on-disk candle
     series + today's intraday. Called on startup and after every hard
     refresh — but ONLY when inside the trading session.
-
-    Returns the number of instruments that were successfully backfilled.
     """
     keys = ema_service.instrument_keys()
     if not keys:
@@ -282,6 +274,108 @@ async def _stop_ema_app() -> None:
         logger.info("EMA app scheduler stopped")
     except Exception as exc:
         logger.error("EMA scheduler stop failed | reason=%s", _short(exc))
+
+
+# ---------------------------------------------------------------------------
+# Streamer health diagnostics
+# ---------------------------------------------------------------------------
+
+
+def _diagnose_streamer_health() -> None:
+    """
+    Report the health of the upstream market streamer AND the tick flow.
+
+    >>> FIX: previous version looked for a symbol named `streamer_manager`
+    inside upstox_app.streamer.streamer_manager, which doesn't exist — so
+    `connected` was always None and every run printed a false "not
+    connected" warning during market hours. This version uses the module-
+    level `market_streamer_status()` accessor (which is what the module
+    actually exports) and also surfaces tick-flow statistics so the log
+    tells you at a glance whether ticks are arriving.
+
+    Does not raise.
+    """
+    try:
+        from upstox_app.streamer import streamer_manager as sm_mod  # type: ignore
+    except Exception as exc:
+        logger.warning(
+            "Streamer health: cannot import streamer_manager (%s)", _short(exc)
+        )
+        return
+
+    in_session = False
+    try:
+        in_session = bool(is_inside_session())
+    except Exception:
+        in_session = False
+
+    # ---- Streamer status -------------------------------------------------
+    status: Optional[Dict[str, Any]] = None
+    for fn_name in ("market_streamer_status", "status_all", "get_status"):
+        fn = getattr(sm_mod, fn_name, None)
+        if callable(fn):
+            try:
+                status = fn()
+                break
+            except Exception as exc:
+                logger.debug("Streamer health: %s failed | %s", fn_name, _short(exc))
+
+    connected: Optional[bool] = None
+    if isinstance(status, dict):
+        connected = status.get("connected")
+        if connected is None and isinstance(status.get("market"), dict):
+            connected = status["market"].get("connected")
+
+    if connected is True:
+        logger.info("Streamer health | connected=True | session=%s", in_session)
+    elif not in_session:
+        logger.info(
+            "Streamer health | connected=%s | session=False (outside market hours)",
+            connected,
+        )
+    else:
+        logger.warning(
+            "STREAMER NOT CONNECTED DURING MARKET HOURS | connected=%s | "
+            "check UPSTOX_AUTO_CONNECT_ON_STARTUP, UPSTOX_CONNECT_TIMEOUT_SEC, "
+            "token validity, and upstox_app/streamer/streamer_manager.start_all()",
+            connected,
+        )
+
+    # ---- Tick flow -------------------------------------------------------
+    stats: Optional[Dict[str, Any]] = None
+    try:
+        getter = getattr(sm_mod, "get_tick_stats", None)
+        if callable(getter):
+            stats = getter()
+    except Exception:
+        stats = None
+
+    if isinstance(stats, dict):
+        total = stats.get("total_ticks", 0)
+        keys_n = stats.get("keys_seen_count", 0)
+        last_age = stats.get("last_tick_age_sec")
+        listeners_n = stats.get("listeners", 0)
+        log_enabled = stats.get("tick_log_enabled", False)
+        log_file = stats.get("tick_log_file")
+
+        # If the split log is on, the tick-flow line goes to that file
+        # automatically (via _tick_log inside streamer_manager). We only
+        # emit here as a top-level boot summary so the operator sees it
+        # on the main log once, regardless of the split.
+        if total == 0 and in_session:
+            logger.warning(
+                "TICK FLOW: 0 ticks received during market hours | "
+                "listeners=%d | likely cause: market_streamer.on_message "
+                "does not call streamer_manager._fanout_tick(msg)",
+                listeners_n,
+            )
+        else:
+            logger.info(
+                "Tick flow | total=%d | keys_seen=%d | listeners=%d | last_age=%s%s",
+                total, keys_n, listeners_n,
+                f"{last_age:.1f}s" if last_age is not None else "never",
+                f" | detail_log={log_file}" if log_enabled else "",
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -515,7 +609,14 @@ async def _run_hard_refresh(trigger: str) -> Dict[str, Any]:
     try:
         await _ensure_ema_app_started()
 
-        # Register instruments from the freshly-loaded option chains
+        # Re-attach the tick sink after a hard refresh. The SDK streamer may
+        # have been rebuilt when the token changed, so the previous listener
+        # registration can be stale.
+        try:
+            _attach_ema_tick_sink()
+        except Exception as exc:
+            logger.debug("EMA tick sink re-attach failed: %s", _short(exc))
+
         try:
             instruments = _load_instruments_for_ema()
             if instruments:
@@ -554,6 +655,12 @@ async def _run_hard_refresh(trigger: str) -> Dict[str, Any]:
         )
         summary["steps"]["isolation"] = "error"
 
+    # After a hard refresh, re-check streamer + tick health.
+    try:
+        _diagnose_streamer_health()
+    except Exception:
+        pass
+
     telegram_manager.notify_hard_refresh_done(summary)
     return summary
 
@@ -575,7 +682,7 @@ def _load_instruments_for_ema() -> list:
     except Exception:
         pass
 
-    # 2) Option service per index
+    # 2) Option service — try new API first, then old.
     out: list = []
     try:
         from upstox_app.common.config import MAIN_INDEXES  # type: ignore
@@ -587,12 +694,30 @@ def _load_instruments_for_ema() -> list:
             else list(MAIN_INDEXES or [])
         )
         for idx in indexes:
-            try:
-                contracts = option_service.get_contracts(str(idx).upper())
-                if contracts:
-                    out.extend(contracts)
-            except Exception:
-                continue
+            idx_name = str(idx).upper()
+            contracts = None
+
+            getter = getattr(option_service, "get_contracts_for_index", None)
+            if callable(getter):
+                try:
+                    contracts = getter(idx_name)
+                except Exception as exc:
+                    logger.debug(
+                        "get_contracts_for_index(%s) failed: %s", idx_name, exc
+                    )
+
+            if not contracts:
+                getter = getattr(option_service, "get_contracts", None)
+                if callable(getter):
+                    try:
+                        contracts = getter(idx_name)
+                    except Exception as exc:
+                        logger.debug(
+                            "get_contracts(%s) failed: %s", idx_name, exc
+                        )
+
+            if contracts:
+                out.extend(contracts)
     except Exception:
         pass
 
@@ -753,6 +878,14 @@ async def app_lifespan(_app) -> AsyncIterator[None]:
             steps_done.append("Streamers connected")
         except Exception as exc:  # noqa: BLE001
             logger.error("lifespan::streamer start failed | reason=%s", _short(exc))
+            steps_skipped.append("Streamer connect (error)")
+    else:
+        logger.warning(
+            "Streamer auto-connect DISABLED (UPSTOX_AUTO_CONNECT_ON_STARTUP=false) — "
+            "no upstream connection will be established at startup. "
+            "Subscriptions will queue until connect() is called explicitly."
+        )
+        steps_skipped.append("Streamer connect (disabled)")
 
     # Index subscription
     if index_subscription_enabled():
@@ -823,9 +956,6 @@ async def app_lifespan(_app) -> AsyncIterator[None]:
         steps_skipped.append("Option bulk-subscribe (disabled)")
 
     # EMA app — register instruments, wire listeners, start scheduler.
-    # Backfill is session-gated: outside 09:15–15:30 IST on weekdays it is
-    # skipped (the scheduler will do it at 09:14 tomorrow), which avoids
-    # hundreds of wasted HTTP calls to Upstox.
     try:
         instruments = _load_instruments_for_ema()
         if instruments:
@@ -862,6 +992,12 @@ async def app_lifespan(_app) -> AsyncIterator[None]:
     except Exception as exc:  # noqa: BLE001
         logger.error("lifespan::isolation startup failed | reason=%s", _short(exc))
         steps_skipped.append("Isolation layer (error)")
+
+    # Report streamer + tick health right before declaring startup complete.
+    try:
+        _diagnose_streamer_health()
+    except Exception:
+        pass
 
     telegram_manager.notify_project_started(
         steps_done=steps_done, steps_skipped=steps_skipped, token_valid=True

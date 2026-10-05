@@ -6,11 +6,13 @@ MarketDataStreamerV3 service with:
     - fanout to downstream WebSocket clients
     - wait-for-open handshake
     - graceful handling of socket-closed during out-of-market-hours
+    - raw message listener registry (used by the EMA engine)
 
 Security:
     The access token is never logged or returned.
 """
 import threading
+import time
 from collections import deque
 from typing import Any, Callable, Deque, Dict, List, Optional, Tuple
 
@@ -34,6 +36,51 @@ logger = get_logger(__name__)
 VALID_MODES = ("ltpc", "full", "option_greeks", "full_d30")
 
 
+# ---------------------------------------------------------------------------
+# Module-level message listener registry
+# ---------------------------------------------------------------------------
+# streamer_manager._auto_wire_market_streamer() probes the module for a
+# callable named `register_message_listener` at import time. When it finds
+# this one, it registers `_fanout_tick` (which in turn fans out to every
+# listener the EMA engine has registered via register_tick_listener).
+#
+# We also expose the same registry on the class, so `market_streamer.
+# register_message_listener(fn)` works from anywhere.
+_message_listeners: List[Callable[[Any], None]] = []
+_message_listeners_lock = threading.RLock()
+
+
+def register_message_listener(fn: Callable[[Any], None]) -> None:
+    """Register a callable to receive every raw SDK message."""
+    if not callable(fn):
+        return
+    with _message_listeners_lock:
+        if fn in _message_listeners:
+            return
+        _message_listeners.append(fn)
+        count = len(_message_listeners)
+    logger.info(
+        "market_streamer: message listener registered | count=%d | fn=%s",
+        count,
+        getattr(fn, "__qualname__", None) or getattr(fn, "__name__", repr(fn)),
+    )
+
+
+def _fanout_message(message: Any) -> None:
+    """Fan a raw SDK message out to every registered listener."""
+    with _message_listeners_lock:
+        listeners = tuple(_message_listeners)
+    for fn in listeners:
+        try:
+            fn(message)
+        except Exception:
+            logger.exception(
+                "market_streamer: message listener raised | fn=%s",
+                getattr(fn, "__qualname__", None)
+                or getattr(fn, "__name__", repr(fn)),
+            )
+
+
 class MarketStreamerService:
     """Singleton wrapper around a single MarketDataStreamerV3 instance."""
 
@@ -47,6 +94,13 @@ class MarketStreamerService:
 
         # Set inside on_open; connect() waits on this before returning.
         self._opened_event: threading.Event = threading.Event()
+
+        # ---- Raw-message accounting -------------------------------------
+        # Cheap counters so status() can prove ticks are arriving, without
+        # logging every message.
+        self._msg_count: int = 0
+        self._first_msg_at: Optional[float] = None
+        self._last_msg_at: Optional[float] = None
 
     # ── helpers ──────────────────────────────────────────────────
     def _build_config(self):
@@ -113,6 +167,13 @@ class MarketStreamerService:
         """True only after on_open has fired AND the socket hasn't been closed."""
         return self._connected and self._opened_event.is_set()
 
+    # ---- Instance-level listener API -------------------------------------
+    # Delegates to the module-level registry, so `market_streamer.
+    # register_message_listener(fn)` works from any caller and is what the
+    # streamer_manager auto-wire probe finds on the singleton.
+    def register_message_listener(self, fn: Callable[[Any], None]) -> None:
+        register_message_listener(fn)
+
     # ── lifecycle ────────────────────────────────────────────────
     def connect(
         self,
@@ -176,9 +237,25 @@ class MarketStreamerService:
                         logger.exception("on_open hook failed")
 
             def on_message(message):
+                now = time.time()
                 with self._lock:
                     self._messages.append(message)
+                    self._msg_count += 1
+                    if self._first_msg_at is None:
+                        self._first_msg_at = now
+                        logger.info(
+                            "market_streamer: first raw message received | "
+                            "listeners=%d",
+                            len(_message_listeners),
+                        )
+                    self._last_msg_at = now
+
+                # 1) Downstream WS hub (/all-feeds, /ws/market)
                 fanout_market_message(message)
+
+                # 2) Registered listeners (EMA engine, isolation, etc.)
+                # This is the hop that was missing before.
+                _fanout_message(message)
 
             def on_error(err):
                 logger.error("Market streamer error: %s", err)
@@ -427,6 +504,9 @@ class MarketStreamerService:
 
     def status(self) -> Dict[str, Any]:
         with self._lock:
+            now = time.time()
+            last_age = (now - self._last_msg_at) if self._last_msg_at else None
+            first_age = (now - self._first_msg_at) if self._first_msg_at else None
             return {
                 "name": "market",
                 "connected": self.is_connected(),
@@ -434,6 +514,10 @@ class MarketStreamerService:
                 "subscribed_keys": sorted(self._subscriptions.keys()),
                 "message_buffer_size": self._messages.maxlen or 0,
                 "message_count": len(self._messages),
+                "total_messages_received": self._msg_count,
+                "first_message_age_sec": first_age,
+                "last_message_age_sec": last_age,
+                "message_listeners": len(_message_listeners),
                 "market_open": is_market_open(),
                 "market_state": market_state_text(),
             }

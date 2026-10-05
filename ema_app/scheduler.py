@@ -44,6 +44,20 @@ def _seconds_until(target: datetime) -> float:
     return max(0.0, (target - _now_ist()).total_seconds())
 
 
+def _short(exc: BaseException) -> str:
+    msg = str(exc).strip().splitlines()[0] if str(exc).strip() else ""
+    if len(msg) > 160:
+        msg = msg[:160] + "…"
+    return f"{type(exc).__name__}: {msg}" if msg else type(exc).__name__
+
+
+# >>> CHANGE #6: configurable subscribe mode for the EMA engine.
+# EMA needs OHLC to aggregate minute bars, so the default is "full".
+# Operators can override via EMA_APP_SUBSCRIBE_MODE.
+def _ema_subscribe_mode() -> str:
+    return str(getattr(ema_config, "subscribe_mode", None) or "full")
+
+
 # ---------------------------------------------------------------------------
 # Finalize loop
 # ---------------------------------------------------------------------------
@@ -143,6 +157,22 @@ async def _sleep_short(stop_event: asyncio.Event, seconds: float) -> None:
 # ---------------------------------------------------------------------------
 # Arm + backfill
 # ---------------------------------------------------------------------------
+
+
+# >>> CHANGE #1, #2, #4: rewritten _arm_session.
+#
+# What was wrong before:
+#   from upstox_app.streamer.streamer_manager import streamer_manager
+# `upstox_app/streamer/streamer_manager.py` exports module-level functions
+# (auto_connect_enabled, subscribe_enabled_indexes, ...), NOT a symbol
+# called `streamer_manager`. So the import raised ImportError every arm,
+# logged as "EMA streamer unavailable", and left subscribed=0.
+#
+# The correct call path per README is:
+#   market_streamer.subscribe(keys, mode)
+#
+# We also try `subscribe_instruments` on the market_streamer instance as a
+# fallback for older wrapper versions, and log the outcome.
 async def _arm_session() -> None:
     instruments = _load_instruments()
     ema_service.register_instruments(instruments)
@@ -151,24 +181,65 @@ async def _arm_session() -> None:
 
     keys = ema_service.instrument_keys()
     if not keys:
+        logger.info("EMA app: armed | instruments=0 | nothing to subscribe")
         return
 
+    mode = _ema_subscribe_mode()
     subscribed = 0
-    try:
-        from upstox_app.streamer.streamer_manager import streamer_manager  # type: ignore
-        for attr in ("subscribe", "subscribe_instruments"):
-            fn = getattr(streamer_manager, attr, None)
-            if callable(fn):
-                try:
-                    fn(keys)
-                    subscribed = len(keys)
-                    break
-                except Exception as exc:
-                    logger.warning("EMA streamer subscribe via %s failed: %s", attr, exc)
-    except Exception as exc:
-        logger.warning("EMA streamer unavailable: %s", exc)
+    rejected = 0
+    error: Optional[str] = None
 
-    logger.info("EMA app: armed | instruments=%d subscribed=%d", len(keys), subscribed)
+    # ---- Preferred path: market_streamer.subscribe ---------------------
+    try:
+        from upstox_app.market.market_streamer import market_streamer  # type: ignore
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("EMA arm: market_streamer import failed | %s", _short(exc))
+        market_streamer = None  # type: ignore
+
+    if market_streamer is not None:
+        fn = getattr(market_streamer, "subscribe", None)
+        if callable(fn):
+            try:
+                applied, skipped = fn(keys, mode)
+                subscribed = len(applied or [])
+                rejected = len(skipped or [])
+            except Exception as exc:  # noqa: BLE001
+                error = _short(exc)
+                logger.warning(
+                    "EMA arm: market_streamer.subscribe failed | %s", error
+                )
+        else:
+            # Older wrappers used subscribe_instruments.
+            alt = getattr(market_streamer, "subscribe_instruments", None)
+            if callable(alt):
+                try:
+                    alt(keys, mode)
+                    subscribed = len(keys)
+                except Exception as exc:  # noqa: BLE001
+                    error = _short(exc)
+                    logger.warning(
+                        "EMA arm: market_streamer.subscribe_instruments failed | %s",
+                        error,
+                    )
+            else:
+                error = "market_streamer has no subscribe()"
+                logger.warning("EMA arm: %s", error)
+
+    logger.info(
+        "EMA app: armed | instruments=%d | mode=%s | subscribed=%d | rejected=%d",
+        len(keys), mode, subscribed, rejected,
+    )
+
+    # >>> CHANGE #4: loud warning when nothing got subscribed. Without
+    # ticks flowing, EMA detection will never fire and the operator needs
+    # to know why.
+    if subscribed == 0:
+        logger.warning(
+            "EMA app: NO instruments subscribed upstream — no live ticks will "
+            "reach the EMA engine. Check that the market streamer is connected "
+            "and that market_streamer.subscribe(keys, %r) succeeded. error=%s",
+            mode, error or "none",
+        )
 
 
 async def _backfill_all() -> None:
@@ -189,17 +260,26 @@ async def _backfill_all() -> None:
 # ---------------------------------------------------------------------------
 # Instrument universe
 # ---------------------------------------------------------------------------
+
+
+# >>> CHANGE #3, #5: rewritten _load_instruments.
+#
+# Previously called option_service.get_contracts(idx) — the older API.
+# README latent issue #1 flagged the API drift. We now try the newer
+# `get_contracts_for_index(idx)` first and fall back to `get_contracts`.
+# The runtime-snapshot fallback now handles both shapes of the file.
 def _load_instruments() -> list:
-    # 1) Web helper
+    # 1) Web helper (merges every enabled index)
     try:
         from web.service import load_all_option_instruments  # type: ignore
+
         instruments = load_all_option_instruments()
         if instruments:
             return instruments
     except Exception:
         pass
 
-    # 2) Option service
+    # 2) Option service — try new API, then old.
     out: list = []
     try:
         from upstox_app.common.config import MAIN_INDEXES  # type: ignore
@@ -211,12 +291,35 @@ def _load_instruments() -> list:
             else list(MAIN_INDEXES or [])
         )
         for idx in indexes:
-            try:
-                contracts = option_service.get_contracts(str(idx).upper())
-                if contracts:
-                    out.extend(contracts)
-            except Exception:
-                continue
+            idx_name = str(idx).upper()
+
+            contracts = None
+
+            # Preferred: get_contracts_for_index
+            getter = getattr(option_service, "get_contracts_for_index", None)
+            if callable(getter):
+                try:
+                    contracts = getter(idx_name)
+                except Exception as exc:
+                    logger.debug(
+                        "EMA _load_instruments: get_contracts_for_index(%s) failed: %s",
+                        idx_name, _short(exc),
+                    )
+
+            # Fallback: get_contracts
+            if not contracts:
+                getter = getattr(option_service, "get_contracts", None)
+                if callable(getter):
+                    try:
+                        contracts = getter(idx_name)
+                    except Exception as exc:
+                        logger.debug(
+                            "EMA _load_instruments: get_contracts(%s) failed: %s",
+                            idx_name, _short(exc),
+                        )
+
+            if contracts:
+                out.extend(contracts)
     except Exception:
         pass
 
@@ -227,19 +330,24 @@ def _load_instruments() -> list:
     import json
     from pathlib import Path
 
-    runtime = Path(__file__).resolve().parent.parent / "data" / "runtime" / "options"
+    runtime = (
+        Path(__file__).resolve().parent.parent / "data" / "runtime" / "options"
+    )
     if runtime.exists():
         for f in runtime.glob("*.json"):
-            if f.name.startswith("_"):
+            # >>> CHANGE #5: skip metadata explicitly, not just by "_" prefix.
+            if f.name.startswith("_") or f.name == "_meta.json":
                 continue
             try:
                 with f.open("r", encoding="utf-8") as fh:
                     payload = json.load(fh)
-                raw = payload.get("contracts") if isinstance(payload, dict) else payload
-                if isinstance(raw, list):
-                    out.extend([c for c in raw if isinstance(c, dict)])
             except Exception:
                 continue
+
+            # Support both {"contracts": [...]} and a bare list.
+            raw = payload.get("contracts") if isinstance(payload, dict) else payload
+            if isinstance(raw, list):
+                out.extend([c for c in raw if isinstance(c, dict)])
 
     return out
 

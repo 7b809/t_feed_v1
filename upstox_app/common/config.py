@@ -133,7 +133,7 @@ class UpstoxAppConfig:
 
     AUTO_CONNECT_ON_STARTUP: bool = _env_bool(
         "UPSTOX_AUTO_CONNECT_ON_STARTUP",
-        False,
+        True,
     )
 
     SUBSCRIBE_INDEXES_ON_STARTUP: bool = _env_bool(
