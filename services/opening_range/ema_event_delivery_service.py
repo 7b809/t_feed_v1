@@ -64,6 +64,9 @@ class EMAEventDeliveryService:
                 "success": False,
                 "order_status": None,
                 "selected_instrument": None,
+                "order_target_mode": None,
+                "selection_reason": None,
+                "order_target": None,
                 "order_id": None,
                 "error": None,
             },
@@ -88,6 +91,7 @@ class EMAEventDeliveryService:
             },
             "warnings": [],
             "errors": [],
+            "order_target": None,
         }
 
     def _send_telegram(
@@ -476,7 +480,36 @@ class EMAEventDeliveryService:
             "trading_symbol": (selected_instrument.get("trading_symbol")),
             "live_ltp": selected_instrument.get("live_ltp"),
             "lot_size": selected_instrument.get("lot_size"),
+            "option_type": selected_instrument.get("option_type")
+            or selected_instrument.get("instrument_type"),
+            "instrument_type": selected_instrument.get("instrument_type")
+            or selected_instrument.get("option_type"),
+            "strike_price": selected_instrument.get("strike_price"),
+            "expiry": selected_instrument.get("expiry"),
+            "underlying_symbol": selected_instrument.get("underlying_symbol"),
         }
+
+    @staticmethod
+    def _get_ema_cross_direction(payload: dict[str, Any]) -> str:
+        ema = payload.get("ema")
+        if not isinstance(ema, dict):
+            ema = {}
+        raw_event = payload.get("raw_ema_event")
+        if not isinstance(raw_event, dict):
+            raw_event = {}
+        direction = str(
+            ema.get("cross_type")
+            or ema.get("direction")
+            or ema.get("current_signal")
+            or payload.get("direction")
+            or raw_event.get("cross_type")
+            or ""
+        ).strip().lower()
+        if "bullish" in direction or direction in {"buy", "long", "up"}:
+            return "bullish"
+        if "bearish" in direction or direction in {"sell", "short", "down"}:
+            return "bearish"
+        return "unknown"
 
     @staticmethod
     def _resolve_isolated_order_instrument(
@@ -486,22 +519,8 @@ class EMAEventDeliveryService:
         if not isinstance(isolated, dict):
             isolated = {}
 
-        ema = payload.get("ema")
-        if not isinstance(ema, dict):
-            ema = {}
-        raw_event = payload.get("raw_ema_event")
-        if not isinstance(raw_event, dict):
-            raw_event = {}
-        raw_direction = str(
-            ema.get("direction")
-            or payload.get("direction")
-            or raw_event.get("cross_type", "")
-        ).strip().lower()
-        if "bullish" in raw_direction or raw_direction in {"buy", "long", "up"}:
-            direction = "bullish"
-        elif "bearish" in raw_direction or raw_direction in {"sell", "short", "down"}:
-            direction = "bearish"
-        else:
+        direction = EMAEventDeliveryService._get_ema_cross_direction(payload)
+        if direction == "unknown":
             logger.warning(
                 "Cannot resolve EMA order target without a known direction. event_id=%s",
                 payload.get("event_id"),
@@ -604,35 +623,145 @@ class EMAEventDeliveryService:
         )
         return None
 
-    def _place_isolated_order_instrument(
-        self, payload: dict[str, Any]
+    def _resolve_order_target(self, payload: dict[str, Any]) -> dict[str, Any]:
+        isolated_mode = bool(
+            getattr(config, "EMA_ORDER_USE_ISOLATED_INSTRUMENT", True)
+        )
+        mode = "isolated" if isolated_mode else "budget"
+        direction = self._get_ema_cross_direction(payload)
+
+        if isolated_mode:
+            instrument = self._resolve_isolated_order_instrument(payload)
+            if direction == "bullish":
+                selection_reason = "bullish_uses_isolated_instrument"
+            elif direction == "bearish":
+                selection_reason = "bearish_uses_opposite_side_contract"
+            else:
+                selection_reason = "ema_direction_unavailable"
+        else:
+            instrument = self._select_lowest_budget_instrument(payload)
+            selection_reason = "lowest_valid_budget_instrument"
+
+        target = {
+            "mode": mode,
+            "selection_reason": selection_reason,
+            "instrument": deepcopy(instrument) if instrument else None,
+            "resolved": bool(instrument),
+            "error": None,
+        }
+        if not instrument:
+            strategy_instrument = payload.get("instrument")
+            if not isinstance(strategy_instrument, dict) or not strategy_instrument.get(
+                "instrument_key"
+            ):
+                target["error"] = "The isolated strategy instrument is unavailable."
+            elif isolated_mode and direction == "bearish":
+                target["error"] = "No matching opposite-side contract was found."
+            elif isolated_mode and direction == "unknown":
+                target["error"] = "The EMA direction is unavailable."
+            elif isolated_mode:
+                target["error"] = "The isolated instrument is missing required order data."
+            else:
+                target["error"] = "No valid budget-range instrument was found."
+        selected_key = (instrument or {}).get("instrument_key")
+        strategy_instrument = payload.get("instrument")
+        if not isinstance(strategy_instrument, dict):
+            strategy_instrument = {}
+        isolated_key = strategy_instrument.get("instrument_key")
+        logger.info(
+            "EMA order target resolved. event_id=%s, mode=%s, cross=%s, isolated_instrument=%s, order_instrument=%s, selection_reason=%s",
+            payload.get("event_id"),
+            mode,
+            direction,
+            isolated_key,
+            selected_key,
+            selection_reason,
+        )
+        return target
+
+    @staticmethod
+    def _apply_order_target_to_result(
+        result: dict[str, Any], order_target: dict[str, Any]
     ) -> dict[str, Any]:
-        selected = self._resolve_isolated_order_instrument(payload)
-        if not selected:
-            return {
+        target_instrument = order_target.get("instrument")
+        result.update(
+            {
+                "order_target_mode": order_target.get("mode"),
+                "selection_reason": order_target.get("selection_reason"),
+                "order_target": deepcopy(order_target),
+                "selected_instrument": deepcopy(target_instrument),
+            }
+        )
+        return result
+
+    def _execute_order_target(
+        self,
+        *,
+        payload: dict[str, Any],
+        order_target: dict[str, Any],
+    ) -> dict[str, Any]:
+        selected = order_target.get("instrument")
+        if not isinstance(selected, dict) or not selected:
+            failure = {
                 "success": False,
-                "order_status": "NO_VALID_ISOLATED_ORDER_INSTRUMENT",
+                "order_status": "NO_VALID_ORDER_INSTRUMENT",
                 "selected_instrument": None,
                 "order_id": None,
-                "error": "No valid isolated or corresponding opposite-side instrument was found.",
+                "error": order_target.get("error") or "No valid order instrument was found.",
             }
+            return self._apply_order_target_to_result(failure, order_target)
 
         order_instrument = self._build_order_instrument(selected)
+        strategy_instrument = payload.get("instrument")
+        order_instrument.update(
+            {
+                "strategy_instrument": deepcopy(
+                    strategy_instrument if isinstance(strategy_instrument, dict) else {}
+                ),
+                "order_target_mode": order_target.get("mode"),
+                "order_selection_reason": order_target.get("selection_reason"),
+                "order_target": deepcopy(order_target),
+            }
+        )
+        if not order_instrument.get("instrument_key") or not order_instrument.get("trading_symbol"):
+            failure = {
+                "success": False,
+                "order_status": "INVALID_ORDER_INSTRUMENT",
+                "selected_instrument": deepcopy(selected),
+                "order_id": None,
+                "error": "Resolved order instrument is missing its key or trading symbol.",
+            }
+            return self._apply_order_target_to_result(failure, order_target)
+
         try:
             raw_result = process_selected_instrument(deepcopy(order_instrument))
-            return self._normalize_order_result(raw_result, order_instrument)
+            normalized = self._normalize_order_result(raw_result, order_instrument)
+            # Keep the complete canonical contract metadata alongside the processor's
+            # execution result, whose selected_instrument is intentionally normalized.
+            normalized["selected_instrument"] = deepcopy(selected)
+            return self._apply_order_target_to_result(normalized, order_target)
         except Exception as exc:
             logger.exception(
-                "Isolated EMA order processing failed. event_id=%s",
-                payload.get("event_id"),
+                "EMA order target processing failed. event_id=%s, instrument_key=%s",
+                payload.get("event_id"), order_instrument.get("instrument_key"),
             )
-            return {
+            failure = {
                 "success": False,
                 "order_status": "ORDER_PROCESSING_EXCEPTION",
-                "selected_instrument": order_instrument,
+                "selected_instrument": deepcopy(selected),
                 "order_id": None,
                 "error": f"{type(exc).__name__}: {exc}",
             }
+            return self._apply_order_target_to_result(failure, order_target)
+
+    def _place_isolated_order_instrument(
+        self,
+        payload: dict[str, Any],
+        order_target: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        if order_target is None:
+            order_target = self._resolve_order_target(payload)
+        return self._execute_order_target(payload=payload, order_target=order_target)
 
     @staticmethod
     def _normalize_order_result(
@@ -699,90 +828,11 @@ class EMAEventDeliveryService:
     def _place_lowest_budget_instrument(
         self,
         payload: dict[str, Any],
+        order_target: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        selected = self._select_lowest_budget_instrument(payload)
-
-        if not selected:
-            return {
-                "success": False,
-                "order_status": ("NO_VALID_BUDGET_INSTRUMENT"),
-                "selected_instrument": None,
-                "order_id": None,
-                "error": ("No valid lowest budget-range " "instrument was found."),
-            }
-
-        order_instrument = self._build_order_instrument(selected)
-
-        if not order_instrument.get("instrument_key"):
-            return {
-                "success": False,
-                "order_status": ("INVALID_ORDER_INSTRUMENT"),
-                "selected_instrument": (order_instrument),
-                "order_id": None,
-                "error": ("Selected instrument is missing " "instrument_key."),
-            }
-
-        if not order_instrument.get("trading_symbol"):
-            return {
-                "success": False,
-                "order_status": ("INVALID_ORDER_INSTRUMENT"),
-                "selected_instrument": (order_instrument),
-                "order_id": None,
-                "error": ("Selected instrument is missing " "trading_symbol."),
-            }
-
-        logger.info(
-            "Submitting sandbox order for lowest "
-            "budget-range instrument. "
-            "event_id=%s, instrument_key=%s, "
-            "trading_symbol=%s, live_ltp=%s, "
-            "lot_size=%s",
-            payload.get("event_id"),
-            order_instrument.get("instrument_key"),
-            order_instrument.get("trading_symbol"),
-            order_instrument.get("live_ltp"),
-            order_instrument.get("lot_size"),
-        )
-
-        try:
-            raw_result = process_selected_instrument(deepcopy(order_instrument))
-
-            order_result = self._normalize_order_result(
-                raw_result=raw_result,
-                order_instrument=order_instrument,
-            )
-
-            logger.info(
-                "Sandbox order workflow completed. "
-                "event_id=%s, instrument_key=%s, "
-                "success=%s, order_status=%s, "
-                "order_id=%s, error=%s",
-                payload.get("event_id"),
-                order_instrument.get("instrument_key"),
-                order_result.get("success"),
-                order_result.get("order_status"),
-                order_result.get("order_id"),
-                order_result.get("error"),
-            )
-
-            return order_result
-
-        except Exception as exc:
-            logger.exception(
-                "Lowest budget-range sandbox order "
-                "processing failed. "
-                "event_id=%s, instrument_key=%s",
-                payload.get("event_id"),
-                order_instrument.get("instrument_key"),
-            )
-
-            return {
-                "success": False,
-                "order_status": ("ORDER_PROCESSING_EXCEPTION"),
-                "selected_instrument": (order_instrument),
-                "order_id": None,
-                "error": (f"{type(exc).__name__}: {exc}"),
-            }
+        if order_target is None:
+            order_target = self._resolve_order_target(payload)
+        return self._execute_order_target(payload=payload, order_target=order_target)
 
     @staticmethod
     def _get_simulation_flags(
@@ -886,6 +936,16 @@ class EMAEventDeliveryService:
         elif not order_enabled:
             result["order"]["order_status"] = "DISABLED"
 
+        isolated_mode = bool(
+            getattr(config, "EMA_ORDER_USE_ISOLATED_INSTRUMENT", True)
+        )
+        order_target = self._resolve_order_target(payload)
+        # Keep the trigger instrument intact; add the actual execution target as a
+        # separate field so every downstream consumer sees the same selection.
+        payload["order_target"] = deepcopy(order_target)
+        result["order_target"] = deepcopy(order_target)
+        self._apply_order_target_to_result(result["order"], order_target)
+
         result.update(
             {
                 "event_id": event_id,
@@ -903,6 +963,7 @@ class EMAEventDeliveryService:
         logger.info(
             "EMA event processing started. "
             "event_id=%s, instrument_key=%s, "
+            "cross=%s, isolated_order_mode=%s, "
             "telegram_enabled=%s, "
             "algo_app_enabled=%s, "
             "order_enabled=%s, save_event=%s, "
@@ -910,6 +971,8 @@ class EMAEventDeliveryService:
             "budget_instruments=%s",
             event_id,
             instrument_key,
+            self._get_ema_cross_direction(payload),
+            isolated_mode,
             telegram_enabled,
             algo_app_enabled,
             order_enabled,
@@ -917,6 +980,25 @@ class EMAEventDeliveryService:
             is_simulation,
             is_dry_run,
             len(self._get_budget_instruments(payload)),
+        )
+
+        target_instrument = order_target.get("instrument") or {}
+        target_symbol = (
+            target_instrument.get("trading_symbol")
+            or target_instrument.get("instrument_key")
+            or "unresolved"
+        )
+        ema_payload = payload.get("ema")
+        if not isinstance(ema_payload, dict):
+            ema_payload = {}
+        cross_type = ema_payload.get("cross_type")
+        telegram_message = (
+            f"{telegram_message}\n\n"
+            f"EMA Cross: {cross_type or self._get_ema_cross_direction(payload)}\n"
+            f"Isolated Instrument: {instrument.get('trading_symbol') or instrument_key or 'unavailable'}\n"
+            f"Order Target Mode: {order_target.get('mode', 'unknown').upper()}\n"
+            f"Order Instrument: {target_symbol}\n"
+            f"Selection Reason: {order_target.get('selection_reason')}"
         )
 
         if telegram_enabled:
@@ -977,12 +1059,14 @@ class EMAEventDeliveryService:
             result["order"]["attempted"] = True
 
             try:
-                if bool(
-                    getattr(config, "EMA_ORDER_USE_ISOLATED_INSTRUMENT", True)
-                ):
-                    order_result = self._place_isolated_order_instrument(payload)
+                if order_target.get("mode") == "isolated":
+                    order_result = self._place_isolated_order_instrument(
+                        payload, order_target
+                    )
                 else:
-                    order_result = self._place_lowest_budget_instrument(payload)
+                    order_result = self._place_lowest_budget_instrument(
+                        payload, order_target
+                    )
 
                 if isinstance(order_result, dict):
                     result["order"].update(order_result)
@@ -1002,10 +1086,15 @@ class EMAEventDeliveryService:
                             "Sandbox order workflow "
                             "completed.\n"
                             f"Event ID: {event_id}\n"
-                            f"EMA Instrument: "
-                            f"{instrument_key}\n"
-                            f"Selected Instrument: "
-                            f"{result['order'].get('selected_instrument')}\n"
+                            f"EMA Cross: {cross_type or self._get_ema_cross_direction(payload)}\n"
+                            f"Isolated Instrument: "
+                            f"{instrument.get('trading_symbol') or instrument_key}\n"
+                            f"Order Target Mode: "
+                            f"{result['order'].get('order_target_mode', 'unknown').upper()}\n"
+                            f"Order Instrument: "
+                            f"{(result['order'].get('selected_instrument') or {}).get('trading_symbol') or (result['order'].get('selected_instrument') or {}).get('instrument_key') or 'unresolved'}\n"
+                            f"Selection Reason: "
+                            f"{result['order'].get('selection_reason')}\n"
                             f"Order Status: "
                             f"{result['order'].get('order_status')}\n"
                             f"Order ID: "

@@ -16,6 +16,11 @@
   rel="stylesheet"
 />
 
+<!-- Lightweight Charts (same build used by chart.html) -->
+<link rel="preconnect" href="https://unpkg.com" crossorigin />
+<link rel="dns-prefetch" href="https://unpkg.com" />
+<script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
+
 <style>
   :root {
     --bg-body: #f4f7fe;
@@ -31,6 +36,19 @@
     --accent-yellow: #ffb547;
     --accent-purple: #868cff;
     --card-shadow: 0 18px 40px rgba(112, 144, 176, 0.12);
+
+    /* Chart palette (mirrors chart.html) */
+    --chart-bg: #131722;
+    --chart-surface: #1e222d;
+    --chart-surface-2: #2a2e39;
+    --chart-border: #2a2e39;
+    --chart-text: #d1d4dc;
+    --chart-muted: #787b86;
+    --chart-blue: #2962ff;
+    --chart-green: #089981;
+    --chart-red: #f23645;
+    --chart-yellow: #f5c451;
+    --chart-shadow: 0 12px 30px rgba(0, 0, 0, 0.5);
   }
 
   body {
@@ -67,9 +85,7 @@
     box-shadow: var(--card-shadow);
     padding: 20px;
     height: 100%;
-    transition:
-      transform 0.2s ease,
-      box-shadow 0.2s ease;
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
   }
 
   .card-custom:hover {
@@ -157,10 +173,7 @@
     border: 1px solid var(--border-color);
   }
 
-  .table-custom {
-    margin-bottom: 0;
-    font-size: 13px;
-  }
+  .table-custom { margin-bottom: 0; font-size: 13px; }
 
   .table-custom th {
     background: #f4f7fe;
@@ -194,30 +207,11 @@
     white-space: nowrap;
   }
 
-  .badge-green {
-    background: rgba(5, 205, 153, 0.12);
-    color: var(--accent-green);
-  }
-
-  .badge-red {
-    background: rgba(238, 93, 80, 0.12);
-    color: var(--accent-red);
-  }
-
-  .badge-yellow {
-    background: rgba(255, 181, 71, 0.15);
-    color: #d97706;
-  }
-
-  .badge-blue {
-    background: rgba(67, 24, 255, 0.1);
-    color: var(--accent-blue);
-  }
-
-  .badge-purple {
-    background: rgba(134, 140, 255, 0.15);
-    color: #5b21b6;
-  }
+  .badge-green { background: rgba(5, 205, 153, 0.12); color: var(--accent-green); }
+  .badge-red   { background: rgba(238, 93, 80, 0.12); color: var(--accent-red); }
+  .badge-yellow{ background: rgba(255, 181, 71, 0.15); color: #d97706; }
+  .badge-blue  { background: rgba(67, 24, 255, 0.1); color: var(--accent-blue); }
+  .badge-purple{ background: rgba(134, 140, 255, 0.15); color: #5b21b6; }
 
   .decision-badge {
     display: inline-flex;
@@ -230,20 +224,9 @@
     letter-spacing: 0.4px;
   }
 
-  .decision-badge.yes {
-    background: rgba(5, 205, 153, 0.12);
-    color: var(--accent-green);
-  }
-
-  .decision-badge.no {
-    background: rgba(238, 93, 80, 0.12);
-    color: var(--accent-red);
-  }
-
-  .decision-badge.pending {
-    background: rgba(255, 181, 71, 0.15);
-    color: #d97706;
-  }
+  .decision-badge.yes     { background: rgba(5, 205, 153, 0.12); color: var(--accent-green); }
+  .decision-badge.no      { background: rgba(238, 93, 80, 0.12); color: var(--accent-red); }
+  .decision-badge.pending { background: rgba(255, 181, 71, 0.15); color: #d97706; }
 
   .decision-reason {
     background: #f4f7fe;
@@ -257,33 +240,13 @@
     line-height: 1.6;
   }
 
-  .decision-reason.selected {
-    border-left-color: var(--accent-green);
-    background: rgba(5, 205, 153, 0.06);
-  }
+  .decision-reason.selected { border-left-color: var(--accent-green); background: rgba(5, 205, 153, 0.06); }
+  .decision-reason.failed   { border-left-color: var(--accent-red);   background: rgba(238, 93, 80, 0.06); }
 
-  .decision-reason.failed {
-    border-left-color: var(--accent-red);
-    background: rgba(238, 93, 80, 0.06);
-  }
-
-  .diagnostic-selected-row td {
-    background: rgba(5, 205, 153, 0.07) !important;
-  }
-
-  .diagnostic-instrument {
-    min-width: 170px;
-  }
-
-  .diagnostic-reason {
-    min-width: 320px;
-    white-space: normal;
-    line-height: 1.5;
-  }
-
-  .diagnostic-actions {
-    white-space: nowrap;
-  }
+  .diagnostic-selected-row td { background: rgba(5, 205, 153, 0.07) !important; }
+  .diagnostic-instrument { min-width: 170px; }
+  .diagnostic-reason { min-width: 320px; white-space: normal; line-height: 1.5; }
+  .diagnostic-actions { white-space: nowrap; }
 
   .event-feed {
     max-height: 380px;
@@ -322,14 +285,213 @@
     padding: 8px 16px;
     transition: all 0.2s ease;
   }
+
+  /* ============================================================
+     ISOLATED INSTRUMENT CHART — styles
+     ============================================================ */
+  .iso-chart-wrap {
+    background: #ffffff;
+    border: 1px solid var(--border-color);
+    border-radius: 20px;
+    box-shadow: var(--card-shadow);
+    padding: 16px;
+    margin-bottom: 24px;
+  }
+  .iso-chart-header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 12px;
+  }
+  .iso-chart-title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 15px;
+    font-weight: 800;
+    color: var(--text-primary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin: 0;
+  }
+  .iso-chart-title i { color: var(--accent-blue); }
+  .iso-chart-subtitle {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-muted);
+    margin: 0;
+  }
+  .iso-chart-symbol-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 12px;
+    border-radius: 20px;
+    background: rgba(67, 24, 255, 0.08);
+    color: var(--accent-blue);
+    font-size: 12px;
+    font-weight: 800;
+    letter-spacing: 0.3px;
+  }
+  .iso-chart-live-price {
+    font-size: 18px;
+    font-weight: 800;
+    color: var(--accent-blue);
+    margin-left: 6px;
+  }
+  .iso-chart-price-up   { color: var(--accent-green) !important; }
+  .iso-chart-price-down { color: var(--accent-red) !important; }
+
+  /* Chart viewport */
+  .iso-chart-card {
+    position: relative;
+    width: 100%;
+    height: clamp(340px, calc(100vh - 320px), 720px);
+    min-height: 340px;
+    background: var(--chart-bg);
+    border: 1px solid var(--chart-border);
+    border-radius: 14px;
+    overflow: hidden;
+    box-shadow: 0 6px 22px rgba(15, 23, 42, 0.22);
+  }
+  #isolatedChart { width: 100%; height: 100%; }
+
+  /* Loading overlay */
+  .iso-chart-loading-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 500;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    background: radial-gradient(circle at center, rgba(19,23,34,0.92), rgba(19,23,34,0.98));
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    transition: opacity 0.35s ease, visibility 0.35s ease;
+    color: var(--chart-text);
+    pointer-events: all;
+  }
+  .iso-chart-loading-overlay.hidden {
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+  }
+  .iso-chart-loading-overlay .iso-loader-spinner {
+    width: 46px; height: 46px; border-radius: 50%;
+    border: 3px solid rgba(41,98,255,0.25);
+    border-top-color: var(--chart-blue);
+    animation: isoSpin 0.9s linear infinite;
+  }
+  @keyframes isoSpin { to { transform: rotate(360deg); } }
+  .iso-loader-title {
+    font-size: 13px; font-weight: 800;
+    letter-spacing: 0.06em; text-transform: uppercase; color: #ffffff;
+  }
+  .iso-loader-status {
+    font-size: 12px; color: var(--chart-muted); font-weight: 600;
+    letter-spacing: 0.02em; min-height: 16px; text-align: center;
+    padding: 0 16px; max-width: 90%;
+  }
+
+  /* Level badges bar */
+  .iso-level-status-bar {
+    position: absolute;
+    z-index: 90;
+    top: 12px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 6px 10px;
+    border: 1px solid var(--chart-border);
+    border-radius: 20px;
+    background: rgba(30,34,45,0.92);
+    backdrop-filter: blur(12px);
+    box-shadow: var(--chart-shadow);
+    max-width: calc(100% - 32px);
+  }
+  .iso-level-status-bar .badge {
+    font-size: 10px; font-weight: 700; padding: 3px 8px;
+    letter-spacing: 0.02em;
+  }
+  .iso-level-status-bar .badge.level-r { background: rgba(242,54,69,0.18) !important; color: #ff8a95 !important; }
+  .iso-level-status-bar .badge.level-s { background: rgba(8,153,129,0.18) !important; color: #6ee7c2 !important; }
+
+  /* History load banner */
+  .iso-history-load-banner {
+    position: absolute; top: 60px; left: 50%; transform: translateX(-50%);
+    z-index: 90; display: none; align-items: center; gap: 8px;
+    padding: 6px 14px; border-radius: 20px;
+    background: var(--chart-surface-2); border: 1px solid var(--chart-blue);
+    color: #ffffff; font-size: 12px; font-weight: 600;
+    box-shadow: var(--chart-shadow); cursor: pointer;
+    max-width: calc(100% - 32px);
+  }
+  .iso-history-load-banner:hover { background: var(--chart-blue); }
+
+  /* HTML overlay labels for level lines */
+  .iso-level-label-layer {
+    position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+    overflow: hidden; pointer-events: none; z-index: 5;
+  }
+  .iso-level-line-label {
+    position: absolute; display: none; transform: translateY(-50%);
+    padding: 1px 5px; font-size: 10px; font-weight: 700; line-height: 1.2;
+    color: #ffffff; border-radius: 3px; white-space: nowrap;
+    pointer-events: none; z-index: 6;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.25);
+  }
+
+  /* Crosshair tooltip */
+  .iso-chart-tooltip {
+    position: absolute; display: none; z-index: 30; pointer-events: none;
+    padding: 8px 10px; border: 1px solid var(--chart-border);
+    border-radius: 8px; background: rgba(30,34,45,0.96);
+    color: var(--chart-text); font-size: 11px; line-height: 1.45;
+    box-shadow: var(--chart-shadow); backdrop-filter: blur(8px);
+    min-width: 120px;
+  }
+
+  /* Empty/placeholder state */
+  .iso-chart-empty {
+    position: absolute; inset: 0; z-index: 60;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    gap: 10px; padding: 20px;
+    background: rgba(19,23,34,0.75);
+    color: var(--chart-muted);
+    text-align: center;
+    backdrop-filter: blur(4px);
+  }
+  .iso-chart-empty i { font-size: 32px; opacity: 0.55; }
+  .iso-chart-empty .iso-chart-empty-title {
+    font-size: 13px; font-weight: 800; text-transform: uppercase;
+    letter-spacing: 0.06em; color: #ffffff;
+  }
+  .iso-chart-empty .iso-chart-empty-desc {
+    font-size: 12px; font-weight: 600; max-width: 420px;
+  }
+  .iso-chart-empty.hidden { display: none; }
+
+  @media (max-width: 720px) {
+    .iso-chart-card { height: clamp(300px, calc(100vh - 260px), 560px); min-height: 300px; }
+    .iso-chart-symbol-chip { font-size: 11px; padding: 4px 10px; }
+    .iso-level-status-bar .badge { font-size: 9px; padding: 2px 6px; }
+    .iso-history-load-banner { font-size: 11px; padding: 5px 10px; top: 56px; }
+  }
 </style>
 {% endblock %}
 
 {% block content %}
 <div class="dashboard-header mb-4">
-  <div
-    class="d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-3"
-  >
+  <div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-3">
     <div class="d-flex align-items-center gap-3">
       <div class="brand-icon">
         <i class="bi bi-activity"></i>
@@ -346,39 +508,21 @@
     </div>
 
     <div class="d-flex flex-wrap gap-2">
-      <button
-        class="btn btn-light btn-action text-primary"
-        type="button"
-        onclick="loadDashboard()"
-      >
-        <i class="bi bi-arrow-clockwise me-1"></i>
-        Refresh
+      <button class="btn btn-light btn-action text-primary" type="button" onclick="loadDashboard()">
+        <i class="bi bi-arrow-clockwise me-1"></i> Refresh
       </button>
 
-      <button
-        class="btn btn-primary btn-action"
-        type="button"
-        style="background: var(--accent-blue); border: none"
-        onclick="triggerOpeningRangeFetch()"
-      >
-        <i class="bi bi-lightning-charge-fill me-1"></i>
-        Fetch OR
+      <button class="btn btn-primary btn-action" type="button"
+              style="background: var(--accent-blue); border: none"
+              onclick="triggerOpeningRangeFetch()">
+        <i class="bi bi-lightning-charge-fill me-1"></i> Fetch OR
       </button>
 
-      <button
-        class="btn btn-outline-secondary btn-action"
-        type="button"
-        onclick="clearLiveEvents()"
-      >
-        <i class="bi bi-trash me-1"></i>
-        Clear Feed
+      <button class="btn btn-outline-secondary btn-action" type="button" onclick="clearLiveEvents()">
+        <i class="bi bi-trash me-1"></i> Clear Feed
       </button>
 
-      <button
-        class="btn btn-dark btn-action"
-        type="button"
-        onclick="toggleAutoRefresh()"
-      >
+      <button class="btn btn-dark btn-action" type="button" onclick="toggleAutoRefresh()">
         Auto Refresh:
         <span id="autoRefreshText" class="badge bg-success ms-1">ON</span>
       </button>
@@ -387,287 +531,184 @@
 </div>
 
 <div class="container-fluid px-4 pb-5">
+
+  <!-- ============================================================
+       ISOLATED INSTRUMENT CHART (only plotted chart, EMA crosses
+       flags only, OR level lines. Reference: chart.html)
+       ============================================================ -->
+  <div class="iso-chart-wrap" id="isolatedChartWrap">
+    <div class="iso-chart-header">
+      <div>
+        <h2 class="iso-chart-title">
+          <i class="bi bi-graph-up-arrow"></i>
+          Isolated Instrument Chart
+          <span id="isoChartSymbolChip" class="iso-chart-symbol-chip d-none">
+            <i class="bi bi-crosshair"></i>
+            <span id="isoChartSymbolText">-</span>
+          </span>
+          <span id="isoChartLivePrice" class="iso-chart-live-price">--</span>
+        </h2>
+        <p class="iso-chart-subtitle mb-0">
+          Opening Range levels · EMA 9 / 21 crossover markers (crosses only, no EMA lines)
+        </p>
+      </div>
+
+      <div class="d-flex align-items-center gap-2">
+        <span id="isoChartConnectionStatus"
+              class="badge-custom badge-blue"
+              title="Live feed connection status">
+          <i class="bi bi-wifi me-1"></i>
+          <span id="isoChartConnectionText">Idle</span>
+        </span>
+
+        <button type="button"
+                class="btn btn-light btn-action text-primary"
+                id="isoChartFitBtn"
+                title="Fit all candles in view">
+          <i class="bi bi-arrows-fullscreen me-1"></i> Fit
+        </button>
+      </div>
+    </div>
+
+    <div class="iso-chart-card" id="isoChartCard">
+      <div id="isolatedChart"></div>
+
+      <!-- Loading overlay -->
+      <div class="iso-chart-loading-overlay"
+           id="isoChartLoadingOverlay"
+           aria-live="polite"
+           aria-busy="true">
+        <div class="iso-loader-spinner"></div>
+        <div class="iso-loader-title" id="isoChartLoaderTitle">Loading Chart</div>
+        <div class="iso-loader-status" id="isoChartLoaderStatus">Waiting for isolated instrument…</div>
+      </div>
+
+      <!-- Level badges -->
+      <div class="iso-level-status-bar" id="isoChartLevelStatus">
+        <span class="badge rounded-pill level-r" data-level="r1">R1</span>
+        <span class="badge rounded-pill level-r" data-level="r2">R2</span>
+        <span class="badge rounded-pill level-r" data-level="r3">R3</span>
+        <span class="badge rounded-pill level-s" data-level="s1">S1</span>
+        <span class="badge rounded-pill level-s" data-level="s2">S2</span>
+        <span class="badge rounded-pill level-s" data-level="s3">S3</span>
+      </div>
+
+      <!-- History banner -->
+      <div class="iso-history-load-banner" id="isoChartHistoryBanner">
+        <i class="bi bi-clock-history"></i>
+        <span>Load past historical data?</span>
+        <button class="btn btn-sm btn-primary py-0 px-2 rounded-pill ms-2"
+                id="isoChartLoadHistoryBtn">Load</button>
+      </div>
+
+      <!-- Empty placeholder (shown when no isolated instrument yet) -->
+      <div class="iso-chart-empty" id="isoChartEmptyState">
+        <i class="bi bi-hourglass-split"></i>
+        <div class="iso-chart-empty-title">No isolated instrument yet</div>
+        <div class="iso-chart-empty-desc">
+          The chart will appear here once an instrument has been isolated
+          for EMA Telegram alerts (auto backfill or manual isolation).
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       METRICS ROW
+       ============================================================ -->
   <div class="row g-3 mb-4">
     <div class="col-12 col-sm-6 col-xl-3">
       <div class="card-custom">
-        <div class="card-title-custom">
-          <i class="bi bi-wifi text-primary"></i>
-          Connection
-        </div>
-
-        <div class="mb-2">
-          <span id="apiDot" class="status-dot"></span>
-          <span id="apiStatus" class="fw-bold">API checking...</span>
-        </div>
-
-        <div class="mb-2">
-          <span id="emaWsDot" class="status-dot"></span>
-          <span id="emaWsStatus" class="fw-bold text-muted">
-            EMA WS Disconnected
-          </span>
-        </div>
-
-        <div class="mb-2">
-          <span id="orWsDot" class="status-dot"></span>
-          <span id="orWsStatus" class="fw-bold text-muted">
-            OR WS Disconnected
-          </span>
-        </div>
-
-        <span class="small text-muted" id="lastUpdated">
-          Last updated: -
-        </span>
+        <div class="card-title-custom"><i class="bi bi-wifi text-primary"></i> Connection</div>
+        <div class="mb-2"><span id="apiDot" class="status-dot"></span><span id="apiStatus" class="fw-bold">API checking...</span></div>
+        <div class="mb-2"><span id="emaWsDot" class="status-dot"></span><span id="emaWsStatus" class="fw-bold text-muted">EMA WS Disconnected</span></div>
+        <div class="mb-2"><span id="orWsDot" class="status-dot"></span><span id="orWsStatus" class="fw-bold text-muted">OR WS Disconnected</span></div>
+        <span class="small text-muted" id="lastUpdated">Last updated: -</span>
       </div>
     </div>
 
     <div class="col-12 col-sm-6 col-xl-3">
       <div class="card-custom">
-        <div class="card-title-custom">
-          <i class="bi bi-sliders text-primary"></i>
-          EMA Mode
-        </div>
-
+        <div class="card-title-custom"><i class="bi bi-sliders text-primary"></i> EMA Mode</div>
         <div id="emaModeMetric" class="metric-value">-</div>
-        <div class="metric-label" id="emaModeDescription">
-          Waiting for data...
-        </div>
+        <div class="metric-label" id="emaModeDescription">Waiting for data...</div>
       </div>
     </div>
 
     <div class="col-12 col-sm-6 col-xl-3">
       <div class="card-custom">
-        <div class="card-title-custom">
-          <i class="bi bi-funnel-fill text-primary"></i>
-          Isolated Status
-        </div>
-
+        <div class="card-title-custom"><i class="bi bi-funnel-fill text-primary"></i> Isolated Status</div>
         <div id="isolatedMetric" class="metric-value">-</div>
-        <div class="metric-label" id="isolatedMessage">
-          Waiting for data...
-        </div>
+        <div class="metric-label" id="isolatedMessage">Waiting for data...</div>
       </div>
     </div>
 
     <div class="col-12 col-sm-6 col-xl-3">
       <div class="card-custom">
-        <div class="card-title-custom">
-          <i class="bi bi-bell-fill text-primary"></i>
-          EMA Alerts Today
-        </div>
-
+        <div class="card-title-custom"><i class="bi bi-bell-fill text-primary"></i> EMA Alerts Today</div>
         <div id="alertCountMetric" class="metric-value">0</div>
         <div class="metric-label">Isolated instrument alerts</div>
       </div>
     </div>
   </div>
 
+  <!-- ============================================================
+       ISOLATED + OPENING RANGE DETAILS
+       ============================================================ -->
   <div class="row g-3 mb-4">
     <div class="col-12 col-lg-6">
       <div class="card-custom">
-        <div class="card-title-custom">
-          <i class="bi bi-crosshair text-primary"></i>
-          Today's Isolated Instrument
-        </div>
-
+        <div class="card-title-custom"><i class="bi bi-crosshair text-primary"></i> Today's Isolated Instrument</div>
         <div class="row g-2">
-          <div class="col-6">
-            <div class="kv-card">
-              <div class="k">Instrument</div>
-              <div class="v" id="isoInstrument">-</div>
-            </div>
-          </div>
-
-          <div class="col-6">
-            <div class="kv-card">
-              <div class="k">Instrument Key</div>
-              <div class="v" id="isoInstrumentKey">-</div>
-            </div>
-          </div>
-
-          <div class="col-6">
-            <div class="kv-card">
-              <div class="k">Selected Level</div>
-              <div class="v" id="isoLevel">-</div>
-            </div>
-          </div>
-
-          <div class="col-6">
-            <div class="kv-card">
-              <div class="k">Level Value</div>
-              <div class="v" id="isoLevelValue">-</div>
-            </div>
-          </div>
-
-          <div class="col-6">
-            <div class="kv-card">
-              <div class="k">Trigger</div>
-              <div class="v" id="isoTrigger">-</div>
-            </div>
-          </div>
-
-          <div class="col-6">
-            <div class="kv-card">
-              <div class="k">Touch Time</div>
-              <div class="v" id="isoTouchTime">-</div>
-            </div>
-          </div>
-
-          <div class="col-6">
-            <div class="kv-card">
-              <div class="k">Ref Average</div>
-              <div class="v" id="isoReferenceAverage">-</div>
-            </div>
-          </div>
-
-          <div class="col-6">
-            <div class="kv-card">
-              <div class="k">NIFTY LTP</div>
-              <div class="v" id="isoNiftyLtp">-</div>
-            </div>
-          </div>
+          <div class="col-6"><div class="kv-card"><div class="k">Instrument</div><div class="v" id="isoInstrument">-</div></div></div>
+          <div class="col-6"><div class="kv-card"><div class="k">Instrument Key</div><div class="v" id="isoInstrumentKey">-</div></div></div>
+          <div class="col-6"><div class="kv-card"><div class="k">Selected Level</div><div class="v" id="isoLevel">-</div></div></div>
+          <div class="col-6"><div class="kv-card"><div class="k">Level Value</div><div class="v" id="isoLevelValue">-</div></div></div>
+          <div class="col-6"><div class="kv-card"><div class="k">Trigger</div><div class="v" id="isoTrigger">-</div></div></div>
+          <div class="col-6"><div class="kv-card"><div class="k">Touch Time</div><div class="v" id="isoTouchTime">-</div></div></div>
+          <div class="col-6"><div class="kv-card"><div class="k">Ref Average</div><div class="v" id="isoReferenceAverage">-</div></div></div>
+          <div class="col-6"><div class="kv-card"><div class="k">NIFTY LTP</div><div class="v" id="isoNiftyLtp">-</div></div></div>
         </div>
       </div>
     </div>
 
     <div class="col-12 col-lg-6">
       <div class="card-custom">
-        <div class="card-title-custom">
-          <i class="bi bi-bar-chart-steps text-primary"></i>
-          Opening Range Status
-        </div>
-
+        <div class="card-title-custom"><i class="bi bi-bar-chart-steps text-primary"></i> Opening Range Status</div>
         <div class="row g-2">
-          <div class="col-6">
-            <div class="kv-card">
-              <div class="k">Status</div>
-              <div class="v" id="orStatus">-</div>
-            </div>
-          </div>
-
-          <div class="col-6">
-            <div class="kv-card">
-              <div class="k">Date</div>
-              <div class="v" id="orDate">-</div>
-            </div>
-          </div>
-
-          <div class="col-6">
-            <div class="kv-card">
-              <div class="k">Total Instruments</div>
-              <div class="v" id="orTotal">-</div>
-            </div>
-          </div>
-
-          <div class="col-6">
-            <div class="kv-card">
-              <div class="k">Success</div>
-              <div class="v" id="orSuccess">-</div>
-            </div>
-          </div>
-
-          <div class="col-6">
-            <div class="kv-card">
-              <div class="k">Touch Events</div>
-              <div class="v" id="orTouchCount">-</div>
-            </div>
-          </div>
-
-          <div class="col-6">
-            <div class="kv-card">
-              <div class="k">Main Index LTP</div>
-              <div class="v" id="orMainLtp">-</div>
-            </div>
-          </div>
+          <div class="col-6"><div class="kv-card"><div class="k">Status</div><div class="v" id="orStatus">-</div></div></div>
+          <div class="col-6"><div class="kv-card"><div class="k">Date</div><div class="v" id="orDate">-</div></div></div>
+          <div class="col-6"><div class="kv-card"><div class="k">Total Instruments</div><div class="v" id="orTotal">-</div></div></div>
+          <div class="col-6"><div class="kv-card"><div class="k">Success</div><div class="v" id="orSuccess">-</div></div></div>
+          <div class="col-6"><div class="kv-card"><div class="k">Touch Events</div><div class="v" id="orTouchCount">-</div></div></div>
+          <div class="col-6"><div class="kv-card"><div class="k">Main Index LTP</div><div class="v" id="orMainLtp">-</div></div></div>
         </div>
       </div>
     </div>
   </div>
 
+  <!-- ============================================================
+       BACKFILL ISOLATION EVALUATION
+       ============================================================ -->
   <div class="row g-3 mb-4">
     <div class="col-12">
       <div class="card-custom">
-        <div class="card-title-custom">
-          <i class="bi bi-search text-primary"></i>
-          Backfill Isolation Evaluation
-        </div>
-
+        <div class="card-title-custom"><i class="bi bi-search text-primary"></i> Backfill Isolation Evaluation</div>
         <div class="row g-2">
-          <div class="col-6 col-md-3 col-xl-2">
-            <div class="kv-card">
-              <div class="k">Evaluated</div>
-              <div class="v" id="backfillEvaluated">-</div>
-            </div>
-          </div>
-
-          <div class="col-6 col-md-3 col-xl-2">
-            <div class="kv-card">
-              <div class="k">Instrument Isolated</div>
-              <div class="v" id="backfillIsolated">-</div>
-            </div>
-          </div>
-
-          <div class="col-6 col-md-3 col-xl-2">
-            <div class="kv-card">
-              <div class="k">Status</div>
-              <div class="v" id="backfillStatus">-</div>
-            </div>
-          </div>
-
-          <div class="col-6 col-md-3 col-xl-2">
-            <div class="kv-card">
-              <div class="k">Evaluated Instruments</div>
-              <div class="v" id="backfillEvaluatedInstruments">-</div>
-            </div>
-          </div>
-
-          <div class="col-6 col-md-3 col-xl-2">
-            <div class="kv-card">
-              <div class="k">Instruments With Touch</div>
-              <div class="v" id="backfillInstrumentsWithTouch">-</div>
-            </div>
-          </div>
-
-          <div class="col-6 col-md-3 col-xl-2">
-            <div class="kv-card">
-              <div class="k">Touch Events</div>
-              <div class="v" id="backfillTouchEventsCount">-</div>
-            </div>
-          </div>
-
-          <div class="col-12 col-md-4">
-            <div class="kv-card">
-              <div class="k">Selected Instrument</div>
-              <div class="v" id="backfillSelectedInstrument">-</div>
-            </div>
-          </div>
-
-          <div class="col-6 col-md-2">
-            <div class="kv-card">
-              <div class="k">Selected Level</div>
-              <div class="v" id="backfillSelectedLevel">-</div>
-            </div>
-          </div>
-
-          <div class="col-6 col-md-3">
-            <div class="kv-card">
-              <div class="k">Touch Time</div>
-              <div class="v" id="backfillTouchTime">-</div>
-            </div>
-          </div>
-
-          <div class="col-12 col-md-3">
-            <div class="kv-card">
-              <div class="k">Reason Code</div>
-              <div class="v" id="backfillReasonCode">-</div>
-            </div>
-          </div>
-
+          <div class="col-6 col-md-3 col-xl-2"><div class="kv-card"><div class="k">Evaluated</div><div class="v" id="backfillEvaluated">-</div></div></div>
+          <div class="col-6 col-md-3 col-xl-2"><div class="kv-card"><div class="k">Instrument Isolated</div><div class="v" id="backfillIsolated">-</div></div></div>
+          <div class="col-6 col-md-3 col-xl-2"><div class="kv-card"><div class="k">Status</div><div class="v" id="backfillStatus">-</div></div></div>
+          <div class="col-6 col-md-3 col-xl-2"><div class="kv-card"><div class="k">Evaluated Instruments</div><div class="v" id="backfillEvaluatedInstruments">-</div></div></div>
+          <div class="col-6 col-md-3 col-xl-2"><div class="kv-card"><div class="k">Instruments With Touch</div><div class="v" id="backfillInstrumentsWithTouch">-</div></div></div>
+          <div class="col-6 col-md-3 col-xl-2"><div class="kv-card"><div class="k">Touch Events</div><div class="v" id="backfillTouchEventsCount">-</div></div></div>
+          <div class="col-12 col-md-4"><div class="kv-card"><div class="k">Selected Instrument</div><div class="v" id="backfillSelectedInstrument">-</div></div></div>
+          <div class="col-6 col-md-2"><div class="kv-card"><div class="k">Selected Level</div><div class="v" id="backfillSelectedLevel">-</div></div></div>
+          <div class="col-6 col-md-3"><div class="kv-card"><div class="k">Touch Time</div><div class="v" id="backfillTouchTime">-</div></div></div>
+          <div class="col-12 col-md-3"><div class="kv-card"><div class="k">Reason Code</div><div class="v" id="backfillReasonCode">-</div></div></div>
           <div class="col-12">
             <div class="decision-reason" id="backfillReasonContainer">
               <div class="k">Isolation Decision Reason</div>
-              <div id="backfillReason">
-                Waiting for backfill isolation data...
-              </div>
+              <div id="backfillReason">Waiting for backfill isolation data...</div>
             </div>
           </div>
         </div>
@@ -675,42 +716,28 @@
     </div>
   </div>
 
+  <!-- ============================================================
+       DIAGNOSTICS TABLE
+       ============================================================ -->
   <div class="row g-3 mb-4">
     <div class="col-12">
       <div class="card-custom">
-        <div
-          class="d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-2 mb-3"
-        >
+        <div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-2 mb-3">
           <div class="card-title-custom mb-0">
             <i class="bi bi-list-check text-primary"></i>
             Backfill Instrument Isolation Diagnostics
           </div>
-
           <div class="d-flex flex-wrap align-items-center gap-3">
             <div class="form-check form-switch mb-0">
-              <input
-                class="form-check-input"
-                type="checkbox"
-                role="switch"
-                id="showAllDiagnosticsToggle"
-                aria-label="Show All Instruments"
-              />
-              <label
-                class="form-check-label small fw-semibold"
-                for="showAllDiagnosticsToggle"
-              >
+              <input class="form-check-input" type="checkbox" role="switch"
+                     id="showAllDiagnosticsToggle" aria-label="Show All Instruments" />
+              <label class="form-check-label small fw-semibold" for="showAllDiagnosticsToggle">
                 Show All Instruments
               </label>
             </div>
-
             <div class="d-flex align-items-center gap-2">
               <span class="small text-muted">Records:</span>
-              <span
-                id="backfillDiagnosticsCount"
-                class="badge-custom badge-blue"
-              >
-                0
-              </span>
+              <span id="backfillDiagnosticsCount" class="badge-custom badge-blue">0</span>
             </div>
           </div>
         </div>
@@ -719,25 +746,13 @@
           <table class="table table-custom table-hover">
             <thead>
               <tr>
-                <th>Instrument</th>
-                <th>Key</th>
-                <th>Status</th>
-                <th>Touch Found</th>
-                <th>Events</th>
-                <th>Levels</th>
-                <th>Isolated</th>
-                <th>Reason Code</th>
-                <th>Reason</th>
-                <th>Actions</th>
+                <th>Instrument</th><th>Key</th><th>Status</th><th>Touch Found</th>
+                <th>Events</th><th>Levels</th><th>Isolated</th><th>Reason Code</th>
+                <th>Reason</th><th>Actions</th>
               </tr>
             </thead>
-
             <tbody id="backfillDiagnosticsTableBody">
-              <tr>
-                <td colspan="10" class="text-center text-muted py-4">
-                  No Opening Range-touched instruments found.
-                </td>
-              </tr>
+              <tr><td colspan="10" class="text-center text-muted py-4">No Opening Range-touched instruments found.</td></tr>
             </tbody>
           </table>
         </div>
@@ -746,33 +761,17 @@
 
     <div class="col-12">
       <div class="card-custom">
-        <div class="card-title-custom">
-          <i class="bi bi-clock-history text-primary"></i>
-          Isolated EMA Alert History
-        </div>
-
+        <div class="card-title-custom"><i class="bi bi-clock-history text-primary"></i> Isolated EMA Alert History</div>
         <div class="table-container">
           <table class="table table-custom table-hover">
             <thead>
               <tr>
-                <th>Time</th>
-                <th>Instrument</th>
-                <th>Level</th>
-                <th>Cross</th>
-                <th>Mode</th>
-                <th>Price</th>
-                <th>EMA Fast</th>
-                <th>EMA Slow</th>
-                <th>NIFTY</th>
+                <th>Time</th><th>Instrument</th><th>Level</th><th>Cross</th><th>Mode</th>
+                <th>Price</th><th>EMA Fast</th><th>EMA Slow</th><th>NIFTY</th>
               </tr>
             </thead>
-
             <tbody id="alertsTableBody">
-              <tr>
-                <td colspan="9" class="text-center text-muted py-4">
-                  No alerts loaded.
-                </td>
-              </tr>
+              <tr><td colspan="9" class="text-center text-muted py-4">No alerts loaded.</td></tr>
             </tbody>
           </table>
         </div>
@@ -781,30 +780,14 @@
 
     <div class="col-12 col-lg-6">
       <div class="card-custom">
-        <div class="card-title-custom">
-          <i class="bi bi-hand-index-thumb text-primary"></i>
-          Recent Opening Range Touches
-        </div>
-
+        <div class="card-title-custom"><i class="bi bi-hand-index-thumb text-primary"></i> Recent Opening Range Touches</div>
         <div class="table-container">
           <table class="table table-custom table-hover">
             <thead>
-              <tr>
-                <th>Time</th>
-                <th>Instrument</th>
-                <th>Level</th>
-                <th>Trigger</th>
-                <th>Source</th>
-                <th>NIFTY</th>
-              </tr>
+              <tr><th>Time</th><th>Instrument</th><th>Level</th><th>Trigger</th><th>Source</th><th>NIFTY</th></tr>
             </thead>
-
             <tbody id="touchEventsTableBody">
-              <tr>
-                <td colspan="6" class="text-center text-muted py-4">
-                  No touch events loaded.
-                </td>
-              </tr>
+              <tr><td colspan="6" class="text-center text-muted py-4">No touch events loaded.</td></tr>
             </tbody>
           </table>
         </div>
@@ -813,11 +796,7 @@
 
     <div class="col-12 col-lg-6">
       <div class="card-custom">
-        <div class="card-title-custom">
-          <i class="bi bi-broadcast text-primary"></i>
-          Live WebSocket Events
-        </div>
-
+        <div class="card-title-custom"><i class="bi bi-broadcast text-primary"></i> Live WebSocket Events</div>
         <div class="event-feed" id="liveEventsList">
           <div class="event-card text-center text-muted py-4">
             <i class="bi bi-pulse fs-3 d-block mb-1"></i>
@@ -828,30 +807,22 @@
     </div>
   </div>
 
+  <!-- ============================================================
+       RAW SNAPSHOT
+       ============================================================ -->
   <div class="row">
     <div class="col-12">
       <div class="card-custom">
-        <div
-          class="d-flex flex-column flex-sm-row justify-content-between align-items-sm-center gap-2"
-        >
+        <div class="d-flex flex-column flex-sm-row justify-content-between align-items-sm-center gap-2">
           <div class="card-title-custom mb-0">
-            <i class="bi bi-code-slash text-primary"></i>
-            Dashboard Raw Snapshot
+            <i class="bi bi-code-slash text-primary"></i> Dashboard Raw Snapshot
           </div>
-
-          <button
-            class="btn btn-light btn-action text-primary"
-            type="button"
-            data-bs-toggle="collapse"
-            data-bs-target="#rawSnapshotCollapse"
-            aria-expanded="false"
-            aria-controls="rawSnapshotCollapse"
-          >
-            <i class="bi bi-chevron-down me-1"></i>
-            Show Snapshot
+          <button class="btn btn-light btn-action text-primary" type="button"
+                  data-bs-toggle="collapse" data-bs-target="#rawSnapshotCollapse"
+                  aria-expanded="false" aria-controls="rawSnapshotCollapse">
+            <i class="bi bi-chevron-down me-1"></i> Show Snapshot
           </button>
         </div>
-
         <div class="collapse mt-3" id="rawSnapshotCollapse">
           <pre id="rawSnapshot" class="json-preview mb-0">Waiting for data...</pre>
         </div>
@@ -863,13 +834,8 @@
 <!-- ============================================================
      Manual Instrument Isolation Confirmation Modal
      ============================================================ -->
-<div
-  class="modal fade"
-  id="manualIsolationModal"
-  tabindex="-1"
-  aria-labelledby="manualIsolationModalLabel"
-  aria-hidden="true"
->
+<div class="modal fade" id="manualIsolationModal" tabindex="-1"
+     aria-labelledby="manualIsolationModalLabel" aria-hidden="true">
   <div class="modal-dialog modal-dialog-centered">
     <div class="modal-content">
       <div class="modal-header">
@@ -877,85 +843,36 @@
           <i class="bi bi-crosshair me-2 text-primary"></i>
           Manual Instrument Isolation
         </h5>
-
-        <button
-          type="button"
-          class="btn-close"
-          data-bs-dismiss="modal"
-          aria-label="Close"
-        ></button>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
       </div>
-
       <div class="modal-body">
         <div class="row g-2 mb-3">
-          <div class="col-6">
-            <div class="kv-card">
-              <div class="k">Strike</div>
-              <div class="v" id="manualIsolationStrike">-</div>
-            </div>
-          </div>
-
-          <div class="col-6">
-            <div class="kv-card">
-              <div class="k">Option Type</div>
-              <div class="v" id="manualIsolationOptionType">-</div>
-            </div>
-          </div>
-
-          <div class="col-12">
-            <div class="kv-card">
-              <div class="k">Level</div>
-              <div class="v" id="manualIsolationLevel">-</div>
-            </div>
-          </div>
+          <div class="col-6"><div class="kv-card"><div class="k">Strike</div><div class="v" id="manualIsolationStrike">-</div></div></div>
+          <div class="col-6"><div class="kv-card"><div class="k">Option Type</div><div class="v" id="manualIsolationOptionType">-</div></div></div>
+          <div class="col-12"><div class="kv-card"><div class="k">Level</div><div class="v" id="manualIsolationLevel">-</div></div></div>
         </div>
-
-        <p class="mb-0 fw-semibold">
-          Are you sure you want to isolate this instrument?
-        </p>
-
-        <div
-          id="manualIsolationError"
-          class="alert alert-danger mt-3 mb-0 d-none"
-          role="alert"
-          aria-live="polite"
-        ></div>
+        <p class="mb-0 fw-semibold">Are you sure you want to isolate this instrument?</p>
+        <div id="manualIsolationError" class="alert alert-danger mt-3 mb-0 d-none" role="alert" aria-live="polite"></div>
       </div>
-
       <div class="modal-footer">
-        <button
-          type="button"
-          class="btn btn-light btn-action"
-          data-bs-dismiss="modal"
-          id="manualIsolationCancelBtn"
-        >
-          Cancel
-        </button>
-
-        <button
-          type="button"
-          class="btn btn-success btn-action"
-          id="manualIsolationConfirmBtn"
-        >
-          Confirm
-        </button>
+        <button type="button" class="btn btn-light btn-action" data-bs-dismiss="modal" id="manualIsolationCancelBtn">Cancel</button>
+        <button type="button" class="btn btn-success btn-action" id="manualIsolationConfirmBtn">Confirm</button>
       </div>
     </div>
   </div>
 </div>
 
-<!-- Toast container for notifications -->
-<div
-  class="toast-container position-fixed top-0 end-0 p-3"
-  id="dashboardToastContainer"
-  style="z-index: 1100"
-></div>
+<!-- Toast container -->
+<div class="toast-container position-fixed top-0 end-0 p-3" id="dashboardToastContainer" style="z-index: 1100"></div>
 {% endblock %}
 
 {% block scripts %}
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 
 <script>
+  /* ==============================================================
+     DASHBOARD STATE + HELPERS (existing behaviour, unchanged)
+     ============================================================== */
   const state = {
     autoRefresh: true,
     refreshIntervalMs: 15000,
@@ -968,10 +885,9 @@
     maxLiveEvents: 50,
     backfillDiagnostics: [],
     pendingManualIsolation: null,
+    currentIsolatedInstrumentKey: null,   // NEW – cached for the chart
   };
 
-  // Diagnostics as currently rendered (visible + ordered). Used by
-  // row action handlers so we never have to embed raw strings in HTML.
   let renderedDiagnostics = [];
 
   function apiBase() {
@@ -985,27 +901,18 @@
   }
 
   function safe(value, fallback = "-") {
-    if (value === null || value === undefined || value === "") {
-      return fallback;
-    }
-
+    if (value === null || value === undefined || value === "") return fallback;
     return value;
   }
 
   function setText(id, value) {
     const element = document.getElementById(id);
-
-    if (element) {
-      element.textContent = safe(value);
-    }
+    if (element) element.textContent = safe(value);
   }
 
   function setHtml(id, value) {
     const element = document.getElementById(id);
-
-    if (element) {
-      element.innerHTML = value;
-    }
+    if (element) element.innerHTML = value;
   }
 
   function escapeHtml(value) {
@@ -1020,14 +927,8 @@
   function setApiStatus(ok, text) {
     const dot = document.getElementById("apiDot");
     const status = document.getElementById("apiStatus");
-
-    if (dot) {
-      dot.className = ok ? "status-dot ok" : "status-dot";
-    }
-
-    if (status) {
-      status.textContent = text;
-    }
+    if (dot) dot.className = ok ? "status-dot ok" : "status-dot";
+    if (status) status.textContent = text;
   }
 
   function setWsStatus(kind, ok, text) {
@@ -1035,14 +936,8 @@
     const statusId = kind === "ema" ? "emaWsStatus" : "orWsStatus";
     const dot = document.getElementById(dotId);
     const status = document.getElementById(statusId);
-
-    if (dot) {
-      dot.className = ok ? "status-dot ok" : "status-dot";
-    }
-
-    if (status) {
-      status.textContent = text;
-    }
+    if (dot) dot.className = ok ? "status-dot ok" : "status-dot";
+    if (status) status.textContent = text;
   }
 
   function badge(text, type) {
@@ -1054,627 +949,249 @@
         blue: "badge-custom badge-blue",
         purple: "badge-custom badge-purple",
       }[type] || "badge-custom badge-blue";
-
     return `<span class="${className}">${escapeHtml(safe(text))}</span>`;
   }
 
   function formatInstrument(contractInfo, instrumentKey) {
-    const info =
-      contractInfo && typeof contractInfo === "object"
-        ? contractInfo
-        : {};
-
+    const info = contractInfo && typeof contractInfo === "object" ? contractInfo : {};
     const strike = info.strike_price;
     const optionType = info.instrument_type || info.option_type;
-    const symbol =
-      info.trading_symbol ||
-      info.tradingsymbol ||
-      info.instrument_key ||
-      instrumentKey;
-
+    const symbol = info.trading_symbol || info.tradingsymbol || info.instrument_key || instrumentKey;
     const primary = [strike, optionType]
-      .filter(
-        (value) =>
-          value !== null &&
-          value !== undefined &&
-          value !== "",
-      )
+      .filter((v) => v !== null && v !== undefined && v !== "")
       .join(" ");
-
-    if (primary && symbol && String(symbol) !== primary) {
-      return `${primary} | ${symbol}`;
-    }
-
+    if (primary && symbol && String(symbol) !== primary) return `${primary} | ${symbol}`;
     return primary || safe(symbol || instrumentKey);
   }
 
   async function getJson(url) {
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        Accept: "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      throw new Error(
-        `${response.status} ${response.statusText}`,
-      );
-    }
-
+    const response = await fetch(url, { method: "GET", headers: { Accept: "application/json" } });
+    if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
     return response.json();
   }
 
   async function postJson(url) {
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        Accept: "application/json",
-      },
-    });
-
+    const response = await fetch(url, { method: "POST", headers: { Accept: "application/json" } });
     if (!response.ok) {
       let detail = `${response.status} ${response.statusText}`;
-
       try {
         const body = await response.json();
-
         if (body && typeof body === "object") {
-          const message =
-            body.detail ||
-            body.message ||
-            body.error;
-
-          if (message) {
-            detail = `${response.status} ${response.statusText}: ${message}`;
-          }
+          const message = body.detail || body.message || body.error;
+          if (message) detail = `${response.status} ${response.statusText}: ${message}`;
         }
-      } catch (parseError) {
-        // Response body was not JSON; keep the status text.
-      }
-
+      } catch (parseError) { /* ignore */ }
       throw new Error(detail);
     }
-
     return response.json();
   }
 
   function getLiveEmaMode(data) {
-    return (
-      data?.live_ema_calculation || {
-        flag: false,
-        mode: "candle_close",
-        description:
-          "completed candle close based EMA calculation",
-      }
-    );
+    return data?.live_ema_calculation || {
+      flag: false,
+      mode: "candle_close",
+      description: "completed candle close based EMA calculation",
+    };
   }
 
-  /* ============================================================
-     Diagnostics filter helpers
-     ============================================================ */
-
   function isShowAllDiagnostics() {
-    const toggle = document.getElementById(
-      "showAllDiagnosticsToggle",
-    );
-
+    const toggle = document.getElementById("showAllDiagnosticsToggle");
     return Boolean(toggle && toggle.checked);
   }
 
   function getVisibleDiagnostics(diagnostics) {
-    const list = Array.isArray(diagnostics)
-      ? diagnostics
-      : [];
-
-    if (isShowAllDiagnostics()) {
-      return list;
-    }
-
-    return list.filter(
-      (diagnostic) =>
-        diagnostic &&
-        diagnostic.backfill_touch_found === true,
-    );
+    const list = Array.isArray(diagnostics) ? diagnostics : [];
+    if (isShowAllDiagnostics()) return list;
+    return list.filter((d) => d && d.backfill_touch_found === true);
   }
 
-  /* ============================================================
-     Notifications
-     ============================================================ */
-
   function showToast(message, type = "success") {
-    const container = document.getElementById(
-      "dashboardToastContainer",
-    );
-
-    if (!container) {
-      return;
-    }
-
+    const container = document.getElementById("dashboardToastContainer");
+    if (!container) return;
     const toastEl = document.createElement("div");
-    toastEl.className =
-      `toast align-items-center text-bg-${type} border-0`;
+    toastEl.className = `toast align-items-center text-bg-${type} border-0`;
     toastEl.setAttribute("role", "alert");
     toastEl.setAttribute("aria-live", "assertive");
     toastEl.setAttribute("aria-atomic", "true");
-
     toastEl.innerHTML = `
       <div class="d-flex">
         <div class="toast-body">${escapeHtml(message)}</div>
-        <button
-          type="button"
-          class="btn-close btn-close-white me-2 m-auto"
-          data-bs-dismiss="toast"
-          aria-label="Close"
-        ></button>
-      </div>
-    `;
-
+        <button type="button" class="btn-close btn-close-white me-2 m-auto"
+                data-bs-dismiss="toast" aria-label="Close"></button>
+      </div>`;
     container.appendChild(toastEl);
-
     if (window.bootstrap && bootstrap.Toast) {
-      const toast = bootstrap.Toast.getOrCreateInstance(
-        toastEl,
-        { delay: 4000 },
-      );
-
-      toastEl.addEventListener("hidden.bs.toast", () => {
-        toastEl.remove();
-      });
-
+      const toast = bootstrap.Toast.getOrCreateInstance(toastEl, { delay: 4000 });
+      toastEl.addEventListener("hidden.bs.toast", () => toastEl.remove());
       toast.show();
     } else {
       setTimeout(() => toastEl.remove(), 4000);
     }
   }
 
-  /* ============================================================
-     Backfill isolation evaluation panel
-     ============================================================ */
-
+  /* ==============================================================
+     BACKFILL / DIAGNOSTICS RENDERING (unchanged)
+     ============================================================== */
   function renderBackfillIsolation(data, openingStatus) {
-    const backfill =
-      data.backfill_isolation ||
-      openingStatus.backfill_isolation ||
-      {};
-
+    const backfill = data.backfill_isolation || openingStatus.backfill_isolation || {};
     const evaluated = Boolean(backfill.evaluated);
     const isolated = Boolean(backfill.isolated);
 
-    setHtml(
-      "backfillEvaluated",
-      evaluated
-        ? `
-          <span class="decision-badge yes">
-            <i class="bi bi-check-circle-fill"></i>
-            YES
-          </span>
-        `
-        : `
-          <span class="decision-badge pending">
-            <i class="bi bi-hourglass-split"></i>
-            NOT YET
-          </span>
-        `,
-    );
+    setHtml("backfillEvaluated", evaluated
+      ? `<span class="decision-badge yes"><i class="bi bi-check-circle-fill"></i> YES</span>`
+      : `<span class="decision-badge pending"><i class="bi bi-hourglass-split"></i> NOT YET</span>`);
 
-    let isolationBadge = `
-      <span class="decision-badge pending">
-        <i class="bi bi-dash-circle-fill"></i>
-        NOT EVALUATED
-      </span>
-    `;
-
+    let isolationBadge = `<span class="decision-badge pending"><i class="bi bi-dash-circle-fill"></i> NOT EVALUATED</span>`;
     if (evaluated && isolated) {
-      isolationBadge = `
-        <span class="decision-badge yes">
-          <i class="bi bi-check-circle-fill"></i>
-          YES
-        </span>
-      `;
+      isolationBadge = `<span class="decision-badge yes"><i class="bi bi-check-circle-fill"></i> YES</span>`;
     } else if (evaluated) {
-      isolationBadge = `
-        <span class="decision-badge no">
-          <i class="bi bi-x-circle-fill"></i>
-          NO
-        </span>
-      `;
+      isolationBadge = `<span class="decision-badge no"><i class="bi bi-x-circle-fill"></i> NO</span>`;
     }
-
     setHtml("backfillIsolated", isolationBadge);
 
-    const selectedDiagnostic =
-      backfill.selected_diagnostic || {};
-
+    const selectedDiagnostic = backfill.selected_diagnostic || {};
     const selectedInstrument = isolated
-      ? formatInstrument(
-          selectedDiagnostic.contract_info,
-          backfill.selected_instrument_key,
-        )
+      ? formatInstrument(selectedDiagnostic.contract_info, backfill.selected_instrument_key)
       : "-";
 
-    setText(
-      "backfillStatus",
-      backfill.status || "not_evaluated",
-    );
-    setText(
-      "backfillEvaluatedInstruments",
-      backfill.evaluated_instruments ?? 0,
-    );
-    setText(
-      "backfillInstrumentsWithTouch",
-      backfill.instruments_with_touch ?? 0,
-    );
-    setText(
-      "backfillTouchEventsCount",
-      backfill.backfill_touch_events_count ?? 0,
-    );
-    setText(
-      "backfillSelectedInstrument",
-      selectedInstrument,
-    );
-    setText(
-      "backfillSelectedLevel",
-      backfill.selected_level,
-    );
+    setText("backfillStatus", backfill.status || "not_evaluated");
+    setText("backfillEvaluatedInstruments", backfill.evaluated_instruments ?? 0);
+    setText("backfillInstrumentsWithTouch", backfill.instruments_with_touch ?? 0);
+    setText("backfillTouchEventsCount", backfill.backfill_touch_events_count ?? 0);
+    setText("backfillSelectedInstrument", selectedInstrument);
+    setText("backfillSelectedLevel", backfill.selected_level);
     setText("backfillTouchTime", backfill.touch_time);
-    setText(
-      "backfillReasonCode",
-      backfill.reason_code,
-    );
-    setText(
-      "backfillReason",
-      backfill.reason ||
-        "Backfill isolation information is not available.",
-    );
+    setText("backfillReasonCode", backfill.reason_code);
+    setText("backfillReason", backfill.reason || "Backfill isolation information is not available.");
 
-    const reasonContainer = document.getElementById(
-      "backfillReasonContainer",
-    );
-
+    const reasonContainer = document.getElementById("backfillReasonContainer");
     if (reasonContainer) {
-      reasonContainer.classList.remove(
-        "selected",
-        "failed",
-      );
-
-      if (isolated) {
-        reasonContainer.classList.add("selected");
-      } else if (
-        evaluated &&
-        backfill.status === "failed"
-      ) {
-        reasonContainer.classList.add("failed");
-      }
+      reasonContainer.classList.remove("selected", "failed");
+      if (isolated) reasonContainer.classList.add("selected");
+      else if (evaluated && backfill.status === "failed") reasonContainer.classList.add("failed");
     }
 
-    // Keep the original call signature. renderBackfillDiagnostics
-    // internally applies the "Show All" filter and stores state.
-    renderBackfillDiagnostics(
-      Array.isArray(backfill.diagnostics)
-        ? backfill.diagnostics
-        : [],
-    );
+    renderBackfillDiagnostics(Array.isArray(backfill.diagnostics) ? backfill.diagnostics : []);
   }
 
-  /* ============================================================
-     Diagnostics table
-     ============================================================ */
-
   function renderBackfillDiagnostics(diagnostics) {
-    const tbody = document.getElementById(
-      "backfillDiagnosticsTableBody",
-    );
-
-    // Retain the complete backend array in frontend state so the
-    // toggle can re-render without re-fetching.
-    state.backfillDiagnostics = Array.isArray(diagnostics)
-      ? diagnostics
-      : [];
-
-    const visible = getVisibleDiagnostics(
-      state.backfillDiagnostics,
-    );
-
-    setText(
-      "backfillDiagnosticsCount",
-      visible.length,
-    );
-
-    if (!tbody) {
-      return;
-    }
+    const tbody = document.getElementById("backfillDiagnosticsTableBody");
+    state.backfillDiagnostics = Array.isArray(diagnostics) ? diagnostics : [];
+    const visible = getVisibleDiagnostics(state.backfillDiagnostics);
+    setText("backfillDiagnosticsCount", visible.length);
+    if (!tbody) return;
 
     if (!visible.length) {
       renderedDiagnostics = [];
-
       const emptyMessage = isShowAllDiagnostics()
         ? "No backfill isolation diagnostics found."
         : "No Opening Range-touched instruments found.";
-
-      tbody.innerHTML = `
-        <tr>
-          <td colspan="10" class="text-center text-muted py-4">
-            ${escapeHtml(emptyMessage)}
-          </td>
-        </tr>
-      `;
+      tbody.innerHTML = `<tr><td colspan="10" class="text-center text-muted py-4">${escapeHtml(emptyMessage)}</td></tr>`;
       return;
     }
 
-    const orderedDiagnostics = visible
-      .slice()
-      .sort((left, right) => {
-        if (left.isolated && !right.isolated) {
-          return -1;
-        }
-
-        if (!left.isolated && right.isolated) {
-          return 1;
-        }
-
-        if (
-          left.backfill_touch_found &&
-          !right.backfill_touch_found
-        ) {
-          return -1;
-        }
-
-        if (
-          !left.backfill_touch_found &&
-          right.backfill_touch_found
-        ) {
-          return 1;
-        }
-
-        return String(
-          left.instrument_key || "",
-        ).localeCompare(
-          String(right.instrument_key || ""),
-        );
-      });
-
+    const orderedDiagnostics = visible.slice().sort((l, r) => {
+      if (l.isolated && !r.isolated) return -1;
+      if (!l.isolated && r.isolated) return 1;
+      if (l.backfill_touch_found && !r.backfill_touch_found) return -1;
+      if (!l.backfill_touch_found && r.backfill_touch_found) return 1;
+      return String(l.instrument_key || "").localeCompare(String(r.instrument_key || ""));
+    });
     renderedDiagnostics = orderedDiagnostics;
 
-    tbody.innerHTML = orderedDiagnostics
-      .map((diagnostic, index) => {
-        const instrument = formatInstrument(
-          diagnostic.contract_info,
-          diagnostic.instrument_key,
-        );
+    tbody.innerHTML = orderedDiagnostics.map((diagnostic, index) => {
+      const instrument = formatInstrument(diagnostic.contract_info, diagnostic.instrument_key);
+      const statusType = diagnostic.status === "success" ? "green"
+        : diagnostic.status === "failed" ? "red" : "yellow";
+      const touchBadge = diagnostic.backfill_touch_found ? badge("YES", "green") : badge("NO", "yellow");
+      const isolatedBadge = diagnostic.isolated ? badge("YES", "green") : badge("NO", "red");
+      const levels = Array.isArray(diagnostic.touch_levels) ? diagnostic.touch_levels.join(", ") : "-";
+      const rowClass = diagnostic.isolated ? "diagnostic-selected-row" : "";
 
-        const statusType =
-          diagnostic.status === "success"
-            ? "green"
-            : diagnostic.status === "failed"
-              ? "red"
-              : "yellow";
-
-        const touchBadge =
-          diagnostic.backfill_touch_found
-            ? badge("YES", "green")
-            : badge("NO", "yellow");
-
-        const isolatedBadge = diagnostic.isolated
-          ? badge("YES", "green")
-          : badge("NO", "red");
-
-        const levels = Array.isArray(
-          diagnostic.touch_levels,
-        )
-          ? diagnostic.touch_levels.join(", ")
-          : "-";
-
-        const rowClass = diagnostic.isolated
-          ? "diagnostic-selected-row"
-          : "";
-
-        return `
-          <tr class="${rowClass}" data-row-index="${index}">
-            <td class="diagnostic-instrument">
-              ${escapeHtml(instrument)}
-            </td>
-            <td>
-              ${escapeHtml(
-                safe(diagnostic.instrument_key),
-              )}
-            </td>
-            <td>
-              ${badge(
-                diagnostic.status || "unknown",
-                statusType,
-              )}
-            </td>
-            <td>${touchBadge}</td>
-            <td>
-              ${escapeHtml(
-                safe(
-                  diagnostic.backfill_touch_events_count,
-                  0,
-                ),
-              )}
-            </td>
-            <td>${escapeHtml(safe(levels))}</td>
-            <td>${isolatedBadge}</td>
-            <td>
-              ${badge(
-                diagnostic.reason_code || "unknown",
-                diagnostic.isolated
-                  ? "green"
-                  : "blue",
-              )}
-            </td>
-            <td class="diagnostic-reason">
-              ${escapeHtml(
-                safe(diagnostic.reason),
-              )}
-            </td>
-            <td class="diagnostic-actions">
-              <div class="d-flex gap-1">
-                <button
-                  type="button"
-                  class="btn btn-sm btn-outline-primary"
-                  title="Open Instrument Chart"
-                  aria-label="Open Instrument Chart"
-                  data-action="chart"
-                  data-row-index="${index}"
-                >
-                  <i class="bi bi-bar-chart-line"></i>
-                </button>
-
-                <button
-                  type="button"
-                  class="btn btn-sm btn-outline-success"
-                  title="Manually Isolate Instrument"
-                  aria-label="Manually Isolate Instrument"
-                  data-action="isolate"
-                  data-row-index="${index}"
-                >
-                  <i class="bi bi-crosshair"></i>
-                </button>
-              </div>
-            </td>
-          </tr>
-        `;
-      })
-      .join("");
+      return `
+        <tr class="${rowClass}" data-row-index="${index}">
+          <td class="diagnostic-instrument">${escapeHtml(instrument)}</td>
+          <td>${escapeHtml(safe(diagnostic.instrument_key))}</td>
+          <td>${badge(diagnostic.status || "unknown", statusType)}</td>
+          <td>${touchBadge}</td>
+          <td>${escapeHtml(safe(diagnostic.backfill_touch_events_count, 0))}</td>
+          <td>${escapeHtml(safe(levels))}</td>
+          <td>${isolatedBadge}</td>
+          <td>${badge(diagnostic.reason_code || "unknown", diagnostic.isolated ? "green" : "blue")}</td>
+          <td class="diagnostic-reason">${escapeHtml(safe(diagnostic.reason))}</td>
+          <td class="diagnostic-actions">
+            <div class="d-flex gap-1">
+              <button type="button" class="btn btn-sm btn-outline-primary"
+                      title="Open Instrument Chart" aria-label="Open Instrument Chart"
+                      data-action="chart" data-row-index="${index}">
+                <i class="bi bi-bar-chart-line"></i>
+              </button>
+              <button type="button" class="btn btn-sm btn-outline-success"
+                      title="Manually Isolate Instrument" aria-label="Manually Isolate Instrument"
+                      data-action="isolate" data-row-index="${index}">
+                <i class="bi bi-crosshair"></i>
+              </button>
+            </div>
+          </td>
+        </tr>`;
+    }).join("");
   }
-
-  /* ============================================================
-     Row actions
-     ============================================================ */
 
   function openInstrumentChart(instrumentKey) {
-  if (!instrumentKey) {
-    return;
+    if (!instrumentKey) return;
+    window.open(`/chart/${encodeURIComponent(instrumentKey)}`, "_blank", "noopener,noreferrer");
   }
 
-  const chartUrl =
-    `/chart/${encodeURIComponent(instrumentKey)}`;
-
-  window.open(chartUrl, "_blank", "noopener,noreferrer");
-}
-
   function getDiagnosticStrikeAndOptionType(diagnostic) {
-    const contractInfo =
-      (diagnostic && diagnostic.contract_info) || {};
-
-    const strike = contractInfo.strike_price;
-    const optionType =
-      contractInfo.instrument_type ||
-      contractInfo.option_type;
-
-    return { strike, optionType };
+    const contractInfo = (diagnostic && diagnostic.contract_info) || {};
+    return {
+      strike: contractInfo.strike_price,
+      optionType: contractInfo.instrument_type || contractInfo.option_type,
+    };
   }
 
   function getDiagnosticLevelsText(diagnostic) {
-    const levels = Array.isArray(
-      diagnostic && diagnostic.touch_levels,
-    )
-      ? diagnostic.touch_levels.filter(
-          (level) =>
-            level !== null &&
-            level !== undefined &&
-            level !== "",
-        )
+    const levels = Array.isArray(diagnostic && diagnostic.touch_levels)
+      ? diagnostic.touch_levels.filter((l) => l !== null && l !== undefined && l !== "")
       : [];
-
-    if (!levels.length) {
-      return "-";
-    }
-
-    return levels.join(", ");
+    return levels.length ? levels.join(", ") : "-";
   }
 
   function openManualIsolationModal(diagnostic) {
-    if (!diagnostic) {
-      return;
-    }
-
-    const { strike, optionType } =
-      getDiagnosticStrikeAndOptionType(diagnostic);
-
+    if (!diagnostic) return;
+    const { strike, optionType } = getDiagnosticStrikeAndOptionType(diagnostic);
     state.pendingManualIsolation = diagnostic;
-
     setText("manualIsolationStrike", strike);
     setText("manualIsolationOptionType", optionType);
-    setText(
-      "manualIsolationLevel",
-      getDiagnosticLevelsText(diagnostic),
-    );
+    setText("manualIsolationLevel", getDiagnosticLevelsText(diagnostic));
 
-    const errorEl = document.getElementById(
-      "manualIsolationError",
-    );
+    const errorEl = document.getElementById("manualIsolationError");
+    if (errorEl) { errorEl.textContent = ""; errorEl.classList.add("d-none"); }
 
-    if (errorEl) {
-      errorEl.textContent = "";
-      errorEl.classList.add("d-none");
-    }
+    const confirmBtn = document.getElementById("manualIsolationConfirmBtn");
+    if (confirmBtn) { confirmBtn.disabled = false; confirmBtn.textContent = "Confirm"; }
 
-    const confirmBtn = document.getElementById(
-      "manualIsolationConfirmBtn",
-    );
-
-    if (confirmBtn) {
-      confirmBtn.disabled = false;
-      confirmBtn.textContent = "Confirm";
-    }
-
-    const modalEl = document.getElementById(
-      "manualIsolationModal",
-    );
-
+    const modalEl = document.getElementById("manualIsolationModal");
     if (modalEl && window.bootstrap && bootstrap.Modal) {
       bootstrap.Modal.getOrCreateInstance(modalEl).show();
     }
   }
 
   async function confirmManualIsolation() {
-    const confirmBtn = document.getElementById(
-      "manualIsolationConfirmBtn",
-    );
-    const errorEl = document.getElementById(
-      "manualIsolationError",
-    );
+    const confirmBtn = document.getElementById("manualIsolationConfirmBtn");
+    const errorEl = document.getElementById("manualIsolationError");
 
-    const showError = (message) => {
-      if (errorEl) {
-        errorEl.textContent = message;
-        errorEl.classList.remove("d-none");
-      }
-    };
-
-    const hideError = () => {
-      if (errorEl) {
-        errorEl.textContent = "";
-        errorEl.classList.add("d-none");
-      }
-    };
+    const showError = (msg) => { if (errorEl) { errorEl.textContent = msg; errorEl.classList.remove("d-none"); } };
+    const hideError = () => { if (errorEl) { errorEl.textContent = ""; errorEl.classList.add("d-none"); } };
 
     hideError();
-
     const diagnostic = state.pendingManualIsolation;
+    if (!diagnostic) { showError("No diagnostic selected."); return; }
 
-    if (!diagnostic) {
-      showError("No diagnostic selected.");
-      return;
-    }
-
-    const { strike, optionType } =
-      getDiagnosticStrikeAndOptionType(diagnostic);
-
-    if (
-      strike === null ||
-      strike === undefined ||
-      strike === "" ||
-      optionType === null ||
-      optionType === undefined ||
-      optionType === ""
-    ) {
-      showError(
-        "Missing strike or option type for this diagnostic.",
-      );
+    const { strike, optionType } = getDiagnosticStrikeAndOptionType(diagnostic);
+    if (strike === null || strike === undefined || strike === "" ||
+        optionType === null || optionType === undefined || optionType === "") {
+      showError("Missing strike or option type for this diagnostic.");
       return;
     }
 
@@ -1684,534 +1201,225 @@
       requested_by: "isolated_ema_dashboard",
     });
 
-    if (confirmBtn) {
-      confirmBtn.disabled = true;
-      confirmBtn.textContent = "Isolating...";
-    }
+    if (confirmBtn) { confirmBtn.disabled = true; confirmBtn.textContent = "Isolating..."; }
 
     try {
-      await postJson(
-        `${apiBase()}/opening-range/isolated-instrument/manual?${params.toString()}`,
-      );
-
-      const modalEl = document.getElementById(
-        "manualIsolationModal",
-      );
-
+      await postJson(`${apiBase()}/opening-range/isolated-instrument/manual?${params.toString()}`);
+      const modalEl = document.getElementById("manualIsolationModal");
       if (modalEl && window.bootstrap && bootstrap.Modal) {
         bootstrap.Modal.getOrCreateInstance(modalEl).hide();
       }
-
       state.pendingManualIsolation = null;
-
       showToast("Instrument isolated successfully.", "success");
-
       await loadDashboard();
     } catch (error) {
       console.error(error);
-      showError(
-        `Manual isolation failed: ${error.message}`,
-      );
+      showError(`Manual isolation failed: ${error.message}`);
     } finally {
-      if (confirmBtn) {
-        confirmBtn.disabled = false;
-        confirmBtn.textContent = "Confirm";
-      }
+      if (confirmBtn) { confirmBtn.disabled = false; confirmBtn.textContent = "Confirm"; }
     }
   }
 
-  /* ============================================================
-     Dashboard rendering
-     ============================================================ */
-
+  /* ==============================================================
+     DASHBOARD RENDERING
+     ============================================================== */
   function renderDashboard(data) {
-    const openingStatus =
-      data.opening_range_status || {};
-
-    const isolated =
-      data.isolated_instrument ||
-      data.selected_or_instrument ||
-      openingStatus.isolated_instrument ||
-      {};
+    const openingStatus = data.opening_range_status || {};
+    const isolated = data.isolated_instrument
+      || data.selected_or_instrument
+      || openingStatus.isolated_instrument
+      || {};
 
     const emaMode = getLiveEmaMode(data);
 
     renderBackfillIsolation(data, openingStatus);
 
     setText("emaModeMetric", emaMode.mode);
-    setText(
-      "emaModeDescription",
-      emaMode.description,
-    );
+    setText("emaModeDescription", emaMode.description);
 
     const selected = Boolean(isolated.selected);
 
-    setText(
-      "isolatedMetric",
-      selected ? "YES" : "NO",
-    );
-
-    setText(
-      "isolatedMessage",
-      selected
-        ? isolated.selection_reason ||
-            data.backfill_isolation?.reason ||
-            "Instrument isolated for EMA Telegram alerts."
-        : data.backfill_isolation?.reason ||
-            "No isolated instrument selected yet.",
-    );
+    setText("isolatedMetric", selected ? "YES" : "NO");
+    setText("isolatedMessage", selected
+      ? (isolated.selection_reason || data.backfill_isolation?.reason || "Instrument isolated for EMA Telegram alerts.")
+      : (data.backfill_isolation?.reason || "No isolated instrument selected yet."));
 
     const info = isolated.contract_info || {};
 
-    setText(
-      "isoInstrument",
-      selected
-        ? formatInstrument(
-            info,
-            isolated.instrument_key,
-          )
-        : "-",
-    );
-    setText(
-      "isoInstrumentKey",
-      isolated.instrument_key,
-    );
+    setText("isoInstrument", selected ? formatInstrument(info, isolated.instrument_key) : "-");
+    setText("isoInstrumentKey", isolated.instrument_key);
     setText("isoLevel", isolated.selected_level);
-    setText(
-      "isoLevelValue",
-      isolated.level_value,
-    );
-    setText(
-      "isoTrigger",
-      isolated.trigger_field
-        ? `${isolated.trigger_field}: ${safe(
-            isolated.trigger_price,
-          )}`
-        : "-",
-    );
-    setText(
-      "isoTouchTime",
-      isolated.touch_time,
-    );
-    setText(
-      "isoReferenceAverage",
-      isolated.reference_average,
-    );
-    setText(
-      "isoNiftyLtp",
-      isolated.latest_main_index_ltp,
-    );
+    setText("isoLevelValue", isolated.level_value);
+    setText("isoTrigger", isolated.trigger_field
+      ? `${isolated.trigger_field}: ${safe(isolated.trigger_price)}`
+      : "-");
+    setText("isoTouchTime", isolated.touch_time);
+    setText("isoReferenceAverage", isolated.reference_average);
+    setText("isoNiftyLtp", isolated.latest_main_index_ltp);
 
     setText("orStatus", openingStatus.status);
     setText("orDate", openingStatus.date);
-    setText(
-      "orTotal",
-      openingStatus.total_instruments,
-    );
-    setText(
-      "orSuccess",
-      openingStatus.success_count,
-    );
-    setText(
-      "orTouchCount",
-      openingStatus.touch_events_count ??
-        data.recent_touch_events_count ??
-        data.backfill_isolation
-          ?.backfill_touch_events_count ??
-        0,
-    );
-    setText(
-      "orMainLtp",
-      openingStatus.latest_main_index_ltp ??
-        data.latest_main_index_ltp,
-    );
+    setText("orTotal", openingStatus.total_instruments);
+    setText("orSuccess", openingStatus.success_count);
+    setText("orTouchCount", openingStatus.touch_events_count
+      ?? data.recent_touch_events_count
+      ?? data.backfill_isolation?.backfill_touch_events_count
+      ?? 0);
+    setText("orMainLtp", openingStatus.latest_main_index_ltp ?? data.latest_main_index_ltp);
 
-    setText(
-      "alertCountMetric",
-      data.isolated_ema_alerts_count ??
-        openingStatus.isolated_ema_alerts_count ??
-        isolated.ema_alerts_count ??
-        0,
-    );
+    setText("alertCountMetric", data.isolated_ema_alerts_count
+      ?? openingStatus.isolated_ema_alerts_count
+      ?? isolated.ema_alerts_count
+      ?? 0);
 
-    renderAlerts(
-      Array.isArray(data.isolated_ema_alerts)
-        ? data.isolated_ema_alerts
-        : [],
-    );
+    renderAlerts(Array.isArray(data.isolated_ema_alerts) ? data.isolated_ema_alerts : []);
+    renderTouchEvents(Array.isArray(data.recent_touch_events) ? data.recent_touch_events : []);
 
-    renderTouchEvents(
-      Array.isArray(data.recent_touch_events)
-        ? data.recent_touch_events
-        : [],
-    );
+    /* ============================================================
+       HOOK: hand the isolated instrument off to the chart module.
+       The chart module decides whether the instrument changed and
+       only reloads candles when it did. If nothing is selected, it
+       shows the empty state.
+       ============================================================ */
+    try {
+      if (window.isolatedChart && typeof window.isolatedChart.setIsolatedInstrument === "function") {
+        window.isolatedChart.setIsolatedInstrument(selected ? {
+          instrument_key: isolated.instrument_key || null,
+          contract_info: info,
+          selected_level: isolated.selected_level || null,
+          levels: data.opening_range_status?.levels || null,
+        } : null);
+      }
+    } catch (err) {
+      console.warn("isolatedChart hook failed:", err);
+    }
   }
 
   function renderAlerts(alerts) {
-    const tbody = document.getElementById(
-      "alertsTableBody",
-    );
-
-    if (!tbody) {
-      return;
-    }
-
+    const tbody = document.getElementById("alertsTableBody");
+    if (!tbody) return;
     if (!alerts.length) {
-      tbody.innerHTML = `
-        <tr>
-          <td colspan="9" class="text-center text-muted py-4">
-            No isolated EMA alerts found.
-          </td>
-        </tr>
-      `;
+      tbody.innerHTML = `<tr><td colspan="9" class="text-center text-muted py-4">No isolated EMA alerts found.</td></tr>`;
       return;
     }
+    tbody.innerHTML = alerts.slice().reverse().map((record) => {
+      const event = record.ema_event || {};
+      const info = record.contract_info || event.contract_info || event.info || {};
+      const mode = record.ema_calculation_mode || event.ema_calculation_mode || "-";
+      const modeBadge = mode === "tick_ltp" ? badge(mode, "purple") : badge(mode, "blue");
+      const crossType = event.cross_type || "-";
+      const crossBadge = String(crossType).includes("bullish") ? badge(crossType, "green") : badge(crossType, "red");
 
-    tbody.innerHTML = alerts
-      .slice()
-      .reverse()
-      .map((record) => {
-        const event = record.ema_event || {};
-        const info =
-          record.contract_info ||
-          event.contract_info ||
-          event.info ||
-          {};
-
-        const mode =
-          record.ema_calculation_mode ||
-          event.ema_calculation_mode ||
-          "-";
-
-        const modeBadge =
-          mode === "tick_ltp"
-            ? badge(mode, "purple")
-            : badge(mode, "blue");
-
-        const crossType =
-          event.cross_type || "-";
-
-        const crossBadge = String(
-          crossType,
-        ).includes("bullish")
-          ? badge(crossType, "green")
-          : badge(crossType, "red");
-
-        return `
-          <tr>
-            <td>
-              ${escapeHtml(
-                safe(
-                  record.created_at ||
-                    event.timestamp,
-                ),
-              )}
-            </td>
-            <td>
-              ${escapeHtml(
-                formatInstrument(
-                  info,
-                  record.instrument_key ||
-                    event.instrument_key,
-                ),
-              )}
-            </td>
-            <td>
-              ${escapeHtml(
-                safe(record.selected_level),
-              )}
-            </td>
-            <td>${crossBadge}</td>
-            <td>${modeBadge}</td>
-            <td>
-              ${escapeHtml(
-                safe(event.close || event.ltp),
-              )}
-            </td>
-            <td>
-              ${escapeHtml(
-                safe(event.ema_fast),
-              )}
-            </td>
-            <td>
-              ${escapeHtml(
-                safe(event.ema_slow),
-              )}
-            </td>
-            <td>
-              ${escapeHtml(
-                safe(record.nifty_ltp),
-              )}
-            </td>
-          </tr>
-        `;
-      })
-      .join("");
+      return `
+        <tr>
+          <td>${escapeHtml(safe(record.created_at || event.timestamp))}</td>
+          <td>${escapeHtml(formatInstrument(info, record.instrument_key || event.instrument_key))}</td>
+          <td>${escapeHtml(safe(record.selected_level))}</td>
+          <td>${crossBadge}</td>
+          <td>${modeBadge}</td>
+          <td>${escapeHtml(safe(event.close || event.ltp))}</td>
+          <td>${escapeHtml(safe(event.ema_fast))}</td>
+          <td>${escapeHtml(safe(event.ema_slow))}</td>
+          <td>${escapeHtml(safe(record.nifty_ltp))}</td>
+        </tr>`;
+    }).join("");
   }
 
   function renderTouchEvents(events) {
-    const tbody = document.getElementById(
-      "touchEventsTableBody",
-    );
-
-    if (!tbody) {
-      return;
-    }
-
+    const tbody = document.getElementById("touchEventsTableBody");
+    if (!tbody) return;
     if (!events.length) {
-      tbody.innerHTML = `
-        <tr>
-          <td colspan="6" class="text-center text-muted py-4">
-            No Opening Range touch events found.
-          </td>
-        </tr>
-      `;
+      tbody.innerHTML = `<tr><td colspan="6" class="text-center text-muted py-4">No Opening Range touch events found.</td></tr>`;
       return;
     }
-
-    tbody.innerHTML = events
-      .slice()
-      .reverse()
-      .map((event) => {
-        const info = event.contract_info || {};
-        const level = String(
-          event.level || "-",
-        ).toUpperCase();
-
-        const levelBadge = level.startsWith("R")
-          ? badge(level, "green")
-          : badge(level, "red");
-
-        return `
-          <tr>
-            <td>
-              ${escapeHtml(
-                safe(
-                  event.touch_time ||
-                    event.created_at,
-                ),
-              )}
-            </td>
-            <td>
-              ${escapeHtml(
-                formatInstrument(
-                  info,
-                  event.instrument_key,
-                ),
-              )}
-            </td>
-            <td>${levelBadge}</td>
-            <td>
-              ${escapeHtml(
-                safe(event.trigger_field),
-              )}:
-              ${escapeHtml(
-                safe(event.trigger_price),
-              )}
-            </td>
-            <td>
-              ${escapeHtml(
-                safe(event.source),
-              )}
-            </td>
-            <td>
-              ${escapeHtml(
-                safe(event.main_index_ltp),
-              )}
-            </td>
-          </tr>
-        `;
-      })
-      .join("");
+    tbody.innerHTML = events.slice().reverse().map((event) => {
+      const info = event.contract_info || {};
+      const level = String(event.level || "-").toUpperCase();
+      const levelBadge = level.startsWith("R") ? badge(level, "green") : badge(level, "red");
+      return `
+        <tr>
+          <td>${escapeHtml(safe(event.touch_time || event.created_at))}</td>
+          <td>${escapeHtml(formatInstrument(info, event.instrument_key))}</td>
+          <td>${levelBadge}</td>
+          <td>${escapeHtml(safe(event.trigger_field))}: ${escapeHtml(safe(event.trigger_price))}</td>
+          <td>${escapeHtml(safe(event.source))}</td>
+          <td>${escapeHtml(safe(event.main_index_ltp))}</td>
+        </tr>`;
+    }).join("");
   }
 
   async function loadDashboard() {
     try {
       const dashboardData = await getJson(
-        `${apiBase()}/opening-range/dashboard?touch_limit=100&alert_limit=100`,
+        `${apiBase()}/opening-range/dashboard?touch_limit=100&alert_limit=100`
       );
-
       renderDashboard(dashboardData);
 
-      const rawSnapshot =
-        document.getElementById("rawSnapshot");
+      const rawSnapshot = document.getElementById("rawSnapshot");
+      if (rawSnapshot) rawSnapshot.textContent = JSON.stringify(dashboardData, null, 2);
 
-      if (rawSnapshot) {
-        rawSnapshot.textContent = JSON.stringify(
-          dashboardData,
-          null,
-          2,
-        );
-      }
-
-      setText(
-        "lastUpdated",
-        `Last updated: ${new Date().toLocaleTimeString()}`,
-      );
-
+      setText("lastUpdated", `Last updated: ${new Date().toLocaleTimeString()}`);
       setApiStatus(true, "API Connected");
     } catch (error) {
       console.error(error);
-
-      setApiStatus(
-        false,
-        `API Error: ${error.message}`,
-      );
-
-      const rawSnapshot =
-        document.getElementById("rawSnapshot");
-
-      if (rawSnapshot) {
-        rawSnapshot.textContent =
-          `Failed loading dashboard:\n${
-            error.stack || error.message
-          }`;
-      }
+      setApiStatus(false, `API Error: ${error.message}`);
+      const rawSnapshot = document.getElementById("rawSnapshot");
+      if (rawSnapshot) rawSnapshot.textContent = `Failed loading dashboard:\n${error.stack || error.message}`;
     }
   }
 
   async function triggerOpeningRangeFetch() {
-    const shouldRun = confirm(
-      "Run manual Opening Range fetch now? This calls /opening-range/fetch.",
-    );
-
-    if (!shouldRun) {
-      return;
-    }
-
+    const shouldRun = confirm("Run manual Opening Range fetch now? This calls /opening-range/fetch.");
+    if (!shouldRun) return;
     try {
-      setApiStatus(
-        true,
-        "Running Opening Range fetch...",
-      );
-
-      const result = await postJson(
-        `${apiBase()}/opening-range/fetch`,
-      );
-
-      const rawSnapshot =
-        document.getElementById("rawSnapshot");
-
-      if (rawSnapshot) {
-        rawSnapshot.textContent = JSON.stringify(
-          result,
-          null,
-          2,
-        );
-      }
-
+      setApiStatus(true, "Running Opening Range fetch...");
+      const result = await postJson(`${apiBase()}/opening-range/fetch`);
+      const rawSnapshot = document.getElementById("rawSnapshot");
+      if (rawSnapshot) rawSnapshot.textContent = JSON.stringify(result, null, 2);
       await loadDashboard();
     } catch (error) {
       console.error(error);
-      alert(
-        `Opening Range fetch failed: ${error.message}`,
-      );
-
-      setApiStatus(
-        false,
-        `Fetch error: ${error.message}`,
-      );
+      alert(`Opening Range fetch failed: ${error.message}`);
+      setApiStatus(false, `Fetch error: ${error.message}`);
     }
   }
 
   function addLiveEvent(kind, payload) {
-    state.liveEvents.unshift({
-      kind,
-      time: new Date().toLocaleTimeString(),
-      payload,
-    });
-
-    state.liveEvents = state.liveEvents.slice(
-      0,
-      state.maxLiveEvents,
-    );
-
+    state.liveEvents.unshift({ kind, time: new Date().toLocaleTimeString(), payload });
+    state.liveEvents = state.liveEvents.slice(0, state.maxLiveEvents);
     renderLiveEvents();
   }
 
   function renderLiveEvents() {
-    const list = document.getElementById(
-      "liveEventsList",
-    );
-
-    if (!list) {
-      return;
-    }
-
+    const list = document.getElementById("liveEventsList");
+    if (!list) return;
     if (!state.liveEvents.length) {
-      list.innerHTML = `
-        <div class="event-card text-center text-muted py-4">
-          <i class="bi bi-pulse fs-3 d-block mb-1"></i>
-          Waiting for live stream events...
-        </div>
-      `;
+      list.innerHTML = `<div class="event-card text-center text-muted py-4"><i class="bi bi-pulse fs-3 d-block mb-1"></i>Waiting for live stream events...</div>`;
       return;
     }
+    list.innerHTML = state.liveEvents.map((item) => {
+      const payload = item.payload || {};
+      const kindBadge = item.kind === "EMA" ? badge("EMA", "purple") : badge("OR", "yellow");
+      const title = item.kind === "EMA"
+        ? `${safe(payload.cross_type)} | ${safe(payload.instrument_key)}`
+        : `${safe(payload.level || payload.type)} | ${safe(payload.instrument_key)}`;
+      const price = item.kind === "EMA"
+        ? `Price: ${safe(payload.close || payload.ltp)} | Mode: ${safe(payload.ema_calculation_mode)}`
+        : `Trigger: ${safe(payload.trigger_field)} ${safe(payload.trigger_price)}`;
 
-    list.innerHTML = state.liveEvents
-      .map((item) => {
-        const payload = item.payload || {};
-
-        const kindBadge =
-          item.kind === "EMA"
-            ? badge("EMA", "purple")
-            : badge("OR", "yellow");
-
-        const title =
-          item.kind === "EMA"
-            ? `${safe(payload.cross_type)} | ${safe(
-                payload.instrument_key,
-              )}`
-            : `${safe(
-                payload.level || payload.type,
-              )} | ${safe(payload.instrument_key)}`;
-
-        const price =
-          item.kind === "EMA"
-            ? `Price: ${safe(
-                payload.close || payload.ltp,
-              )} | Mode: ${safe(
-                payload.ema_calculation_mode,
-              )}`
-            : `Trigger: ${safe(
-                payload.trigger_field,
-              )} ${safe(payload.trigger_price)}`;
-
-        return `
-          <div class="event-card">
-            <div class="d-flex justify-content-between align-items-center mb-1">
-              <div>
-                ${kindBadge}
-                <strong class="ms-1">
-                  ${escapeHtml(title)}
-                </strong>
-              </div>
-
-              <span class="small text-muted">
-                ${escapeHtml(safe(item.time))}
-              </span>
-            </div>
-
-            <div class="small fw-semibold text-secondary mb-1">
-              ${escapeHtml(price)}
-            </div>
-
-            <details>
-              <summary
-                class="small text-primary"
-                style="cursor: pointer;"
-              >
-                Payload Details
-              </summary>
-
-              <pre class="json-preview mt-2 mb-0">${escapeHtml(
-                JSON.stringify(payload, null, 2),
-              )}</pre>
-            </details>
+      return `
+        <div class="event-card">
+          <div class="d-flex justify-content-between align-items-center mb-1">
+            <div>${kindBadge}<strong class="ms-1">${escapeHtml(title)}</strong></div>
+            <span class="small text-muted">${escapeHtml(safe(item.time))}</span>
           </div>
-        `;
-      })
-      .join("");
+          <div class="small fw-semibold text-secondary mb-1">${escapeHtml(price)}</div>
+          <details>
+            <summary class="small text-primary" style="cursor: pointer;">Payload Details</summary>
+            <pre class="json-preview mt-2 mb-0">${escapeHtml(JSON.stringify(payload, null, 2))}</pre>
+          </details>
+        </div>`;
+    }).join("");
   }
 
   function clearLiveEvents() {
@@ -2220,335 +1428,1047 @@
   }
 
   function scheduleEmaReconnect() {
-    if (state.emaReconnectTimer) {
-      clearTimeout(state.emaReconnectTimer);
-    }
-
-    state.emaReconnectTimer = setTimeout(
-      connectEmaWebSocket,
-      3000,
-    );
+    if (state.emaReconnectTimer) clearTimeout(state.emaReconnectTimer);
+    state.emaReconnectTimer = setTimeout(connectEmaWebSocket, 3000);
   }
 
   function scheduleOpeningRangeReconnect() {
-    if (state.orReconnectTimer) {
-      clearTimeout(state.orReconnectTimer);
-    }
-
-    state.orReconnectTimer = setTimeout(
-      connectOpeningRangeWebSocket,
-      3000,
-    );
+    if (state.orReconnectTimer) clearTimeout(state.orReconnectTimer);
+    state.orReconnectTimer = setTimeout(connectOpeningRangeWebSocket, 3000);
   }
 
   function connectEmaWebSocket() {
     try {
-      if (
-        state.emaSocket &&
-        (
-          state.emaSocket.readyState === WebSocket.OPEN ||
-          state.emaSocket.readyState === WebSocket.CONNECTING
-        )
-      ) {
-        return;
-      }
-
-      state.emaSocket = new WebSocket(
-        `${wsBase()}/ws/ema-crossover`,
-      );
-
-      state.emaSocket.onopen = () => {
-        setWsStatus(
-          "ema",
-          true,
-          "EMA WS Connected",
-        );
-      };
-
+      if (state.emaSocket &&
+          (state.emaSocket.readyState === WebSocket.OPEN ||
+           state.emaSocket.readyState === WebSocket.CONNECTING)) return;
+      state.emaSocket = new WebSocket(`${wsBase()}/ws/ema-crossover`);
+      state.emaSocket.onopen = () => setWsStatus("ema", true, "EMA WS Connected");
       state.emaSocket.onmessage = (event) => {
         try {
           const payload = JSON.parse(event.data);
-
-          if (payload.type === "live_ema_cross") {
-            addLiveEvent("EMA", payload);
-            loadDashboard();
-          }
-        } catch (error) {
-          console.error(
-            "EMA WS parse error",
-            error,
-          );
-        }
+          if (payload.type === "live_ema_cross") { addLiveEvent("EMA", payload); loadDashboard(); }
+        } catch (error) { console.error("EMA WS parse error", error); }
       };
-
-      state.emaSocket.onclose = () => {
-        state.emaSocket = null;
-
-        setWsStatus(
-          "ema",
-          false,
-          "EMA WS Disconnected",
-        );
-
-        scheduleEmaReconnect();
-      };
-
-      state.emaSocket.onerror = () => {
-        setWsStatus(
-          "ema",
-          false,
-          "EMA WS Error",
-        );
-      };
+      state.emaSocket.onclose = () => { state.emaSocket = null; setWsStatus("ema", false, "EMA WS Disconnected"); scheduleEmaReconnect(); };
+      state.emaSocket.onerror = () => setWsStatus("ema", false, "EMA WS Error");
     } catch (error) {
       console.error(error);
-
-      setWsStatus(
-        "ema",
-        false,
-        "EMA WS Failed",
-      );
-
+      setWsStatus("ema", false, "EMA WS Failed");
       scheduleEmaReconnect();
     }
   }
 
   function connectOpeningRangeWebSocket() {
     try {
-      if (
-        state.orSocket &&
-        (
-          state.orSocket.readyState === WebSocket.OPEN ||
-          state.orSocket.readyState === WebSocket.CONNECTING
-        )
-      ) {
-        return;
-      }
-
-      state.orSocket = new WebSocket(
-        `${wsBase()}/ws/opening-range`,
-      );
-
-      state.orSocket.onopen = () => {
-        setWsStatus(
-          "or",
-          true,
-          "OR WS Connected",
-        );
-      };
-
+      if (state.orSocket &&
+          (state.orSocket.readyState === WebSocket.OPEN ||
+           state.orSocket.readyState === WebSocket.CONNECTING)) return;
+      state.orSocket = new WebSocket(`${wsBase()}/ws/opening-range`);
+      state.orSocket.onopen = () => setWsStatus("or", true, "OR WS Connected");
       state.orSocket.onmessage = (event) => {
         try {
           const payload = JSON.parse(event.data);
-          const eventType = String(
-            payload.type || "",
-          );
-
-          if (
-            eventType === "opening_range_touch" ||
-            eventType.startsWith("opening_range")
-          ) {
+          const eventType = String(payload.type || "");
+          if (eventType === "opening_range_touch" || eventType.startsWith("opening_range")) {
             addLiveEvent("OR", payload);
             loadDashboard();
           }
-        } catch (error) {
-          console.error(
-            "OR WS parse error",
-            error,
-          );
-        }
+        } catch (error) { console.error("OR WS parse error", error); }
       };
-
-      state.orSocket.onclose = () => {
-        state.orSocket = null;
-
-        setWsStatus(
-          "or",
-          false,
-          "OR WS Disconnected",
-        );
-
-        scheduleOpeningRangeReconnect();
-      };
-
-      state.orSocket.onerror = () => {
-        setWsStatus(
-          "or",
-          false,
-          "OR WS Error",
-        );
-      };
+      state.orSocket.onclose = () => { state.orSocket = null; setWsStatus("or", false, "OR WS Disconnected"); scheduleOpeningRangeReconnect(); };
+      state.orSocket.onerror = () => setWsStatus("or", false, "OR WS Error");
     } catch (error) {
       console.error(error);
-
-      setWsStatus(
-        "or",
-        false,
-        "OR WS Failed",
-      );
-
+      setWsStatus("or", false, "OR WS Failed");
       scheduleOpeningRangeReconnect();
     }
   }
 
   function toggleAutoRefresh() {
     state.autoRefresh = !state.autoRefresh;
-
-    const element =
-      document.getElementById("autoRefreshText");
-
+    const element = document.getElementById("autoRefreshText");
     if (element) {
-      element.textContent = state.autoRefresh
-        ? "ON"
-        : "OFF";
-
-      element.className = state.autoRefresh
-        ? "badge bg-success ms-1"
-        : "badge bg-danger ms-1";
+      element.textContent = state.autoRefresh ? "ON" : "OFF";
+      element.className = state.autoRefresh ? "badge bg-success ms-1" : "badge bg-danger ms-1";
     }
-
     setupAutoRefresh();
   }
 
   function setupAutoRefresh() {
-    if (state.refreshTimer) {
-      clearInterval(state.refreshTimer);
-      state.refreshTimer = null;
-    }
-
-    if (state.autoRefresh) {
-      state.refreshTimer = setInterval(
-        loadDashboard,
-        state.refreshIntervalMs,
-      );
-    }
+    if (state.refreshTimer) { clearInterval(state.refreshTimer); state.refreshTimer = null; }
+    if (state.autoRefresh) state.refreshTimer = setInterval(loadDashboard, state.refreshIntervalMs);
   }
-
-  /* ============================================================
-     Wiring
-     ============================================================ */
 
   function setupDiagnosticsControls() {
-    const toggle = document.getElementById(
-      "showAllDiagnosticsToggle",
-    );
-
+    const toggle = document.getElementById("showAllDiagnosticsToggle");
     if (toggle) {
-      // Toggle preference is pure frontend UI state. It is never
-      // reset by loadDashboard()/auto-refresh/WebSocket events.
-      toggle.addEventListener("change", () => {
-        renderBackfillDiagnostics(
-          state.backfillDiagnostics,
-        );
-      });
+      toggle.addEventListener("change", () => renderBackfillDiagnostics(state.backfillDiagnostics));
     }
 
-    const tbody = document.getElementById(
-      "backfillDiagnosticsTableBody",
-    );
-
+    const tbody = document.getElementById("backfillDiagnosticsTableBody");
     if (tbody) {
       tbody.addEventListener("click", (event) => {
-        const button = event.target.closest(
-          "button[data-action]",
-        );
-
-        if (!button) {
-          return;
-        }
-
-        const rowIndex = Number(
-          button.getAttribute("data-row-index"),
-        );
-
-        const diagnostic = Number.isInteger(rowIndex)
-          ? renderedDiagnostics[rowIndex]
-          : null;
-
-        if (!diagnostic) {
-          return;
-        }
-
-        if (button.getAttribute("data-action") === "chart") {
-          openInstrumentChart(diagnostic.instrument_key);
-        } else if (
-          button.getAttribute("data-action") === "isolate"
-        ) {
-          openManualIsolationModal(diagnostic);
-        }
+        const button = event.target.closest("button[data-action]");
+        if (!button) return;
+        const rowIndex = Number(button.getAttribute("data-row-index"));
+        const diagnostic = Number.isInteger(rowIndex) ? renderedDiagnostics[rowIndex] : null;
+        if (!diagnostic) return;
+        if (button.getAttribute("data-action") === "chart") openInstrumentChart(diagnostic.instrument_key);
+        else if (button.getAttribute("data-action") === "isolate") openManualIsolationModal(diagnostic);
       });
     }
 
-    const confirmBtn = document.getElementById(
-      "manualIsolationConfirmBtn",
-    );
+    const confirmBtn = document.getElementById("manualIsolationConfirmBtn");
+    if (confirmBtn) confirmBtn.addEventListener("click", confirmManualIsolation);
 
-    if (confirmBtn) {
-      confirmBtn.addEventListener(
-        "click",
-        confirmManualIsolation,
-      );
-    }
-
-    const modalEl = document.getElementById(
-      "manualIsolationModal",
-    );
-
+    const modalEl = document.getElementById("manualIsolationModal");
     if (modalEl) {
-      modalEl.addEventListener(
-        "hidden.bs.modal",
-        () => {
-          state.pendingManualIsolation = null;
-
-          const errorEl = document.getElementById(
-            "manualIsolationError",
-          );
-
-          if (errorEl) {
-            errorEl.textContent = "";
-            errorEl.classList.add("d-none");
-          }
-
-          if (confirmBtn) {
-            confirmBtn.disabled = false;
-            confirmBtn.textContent = "Confirm";
-          }
-        },
-      );
+      modalEl.addEventListener("hidden.bs.modal", () => {
+        state.pendingManualIsolation = null;
+        const errorEl = document.getElementById("manualIsolationError");
+        if (errorEl) { errorEl.textContent = ""; errorEl.classList.add("d-none"); }
+        if (confirmBtn) { confirmBtn.disabled = false; confirmBtn.textContent = "Confirm"; }
+      });
     }
   }
 
-  document.addEventListener(
-    "DOMContentLoaded",
-    () => {
-      setupDiagnosticsControls();
-      loadDashboard();
-      setupAutoRefresh();
-      connectEmaWebSocket();
-      connectOpeningRangeWebSocket();
-    },
-  );
+  document.addEventListener("DOMContentLoaded", () => {
+    setupDiagnosticsControls();
+    loadDashboard();
+    setupAutoRefresh();
+    connectEmaWebSocket();
+    connectOpeningRangeWebSocket();
+  });
 
   window.addEventListener("beforeunload", () => {
-    if (state.refreshTimer) {
-      clearInterval(state.refreshTimer);
-    }
-
-    if (state.emaReconnectTimer) {
-      clearTimeout(state.emaReconnectTimer);
-    }
-
-    if (state.orReconnectTimer) {
-      clearTimeout(state.orReconnectTimer);
-    }
-
-    if (state.emaSocket) {
-      state.emaSocket.close();
-    }
-
-    if (state.orSocket) {
-      state.orSocket.close();
-    }
+    if (state.refreshTimer) clearInterval(state.refreshTimer);
+    if (state.emaReconnectTimer) clearTimeout(state.emaReconnectTimer);
+    if (state.orReconnectTimer) clearTimeout(state.orReconnectTimer);
+    if (state.emaSocket) state.emaSocket.close();
+    if (state.orSocket) state.orSocket.close();
   });
+
+  /* ==============================================================
+     ISOLATED INSTRUMENT CHART MODULE
+     --------------------------------------------------------------
+     - Uses Lightweight Charts (same build as chart.html)
+     - Draws Opening Range level lines (r2, r3, high, avg, low, s2, s3)
+     - Computes EMA 9 / EMA 21 internally but ONLY draws crossover
+       markers (BUY / SELL arrows). No EMA line series are shown.
+     - Live ticks come from /all-feeds (same WS as chart.html).
+     - Historical candles come from the endpoint below. Adjust the
+       constant if your backend uses a different path.
+     ============================================================== */
+  (function initIsolatedChart() {
+    if (typeof LightweightCharts === "undefined") {
+      console.warn("[iso-chart] LightweightCharts not available — chart disabled.");
+      return;
+    }
+
+    /* -------- Endpoints (adjust if backend differs) -------- */
+    const ISO_CANDLES_ENDPOINT = (key, limit = 750) =>
+      `${apiBase()}/api/candles?instrument_key=${encodeURIComponent(key)}&interval=1minute&limit=${limit}`;
+    const ISO_OLDER_CANDLES_ENDPOINT = (key, beforeDate) =>
+      `${apiBase()}/api/older-candles?instrument_key=${encodeURIComponent(key)}&before_date=${beforeDate}`;
+    const ISO_FEED_WS_URL = () => `${wsBase()}/all-feeds`;
+
+    const MAX_RECONNECT_MS = 15000;
+
+    /* -------- DOM -------- */
+    const chartContainer = document.getElementById("isolatedChart");
+    const chartCard = document.getElementById("isoChartCard");
+    const overlay = document.getElementById("isoChartLoadingOverlay");
+    const overlayTitle = document.getElementById("isoChartLoaderTitle");
+    const overlayStatus = document.getElementById("isoChartLoaderStatus");
+    const levelStatusBar = document.getElementById("isoChartLevelStatus");
+    const historyBanner = document.getElementById("isoChartHistoryBanner");
+    const loadHistoryBtn = document.getElementById("isoChartLoadHistoryBtn");
+    const emptyState = document.getElementById("isoChartEmptyState");
+    const symbolChip = document.getElementById("isoChartSymbolChip");
+    const symbolText = document.getElementById("isoChartSymbolText");
+    const livePriceEl = document.getElementById("isoChartLivePrice");
+    const connText = document.getElementById("isoChartConnectionText");
+    const fitBtn = document.getElementById("isoChartFitBtn");
+
+    if (!chartContainer) return;
+
+    /* -------- State -------- */
+    let chart = null;
+    let candleSeries = null;
+    let lastCandle = null;
+    let oldestCandleTime = null;
+    let currentKey = null;
+    let pageClosing = false;
+
+    let chartSocket = null;
+    let wsReconnectTimer = null;
+    let wsReconnectAttempts = 0;
+
+    let isLoadingHistory = false;
+    let hasMoreHistory = true;
+
+    let calculatedOpeningRanges = {};
+    let levelLines = [];
+    let levelLabels = [];
+    let levelLabelLayer = null;
+    let levelLabelUpdateScheduled = false;
+
+    let chartTooltip = null;
+    let currentRenderedDate = null;
+
+    let pendingLevelsHint = null; // supplied by dashboard (opening_range_status.levels)
+
+    /* -------- Loading overlay -------- */
+    function setOverlayStatus(text, title) {
+      if (overlayStatus && typeof text === "string") overlayStatus.textContent = text;
+      if (overlayTitle && typeof title === "string") overlayTitle.textContent = title;
+    }
+    function showOverlay() {
+      if (!overlay) return;
+      overlay.classList.remove("hidden");
+      overlay.setAttribute("aria-busy", "true");
+    }
+    function hideOverlay(delay = 180) {
+      if (!overlay) return;
+      setTimeout(() => {
+        overlay.classList.add("hidden");
+        overlay.setAttribute("aria-busy", "false");
+      }, delay);
+    }
+    function setEmptyVisible(visible) {
+      if (!emptyState) return;
+      emptyState.classList.toggle("hidden", !visible);
+    }
+    function setConn(text, ok) {
+      if (connText) connText.textContent = text;
+      const parent = document.getElementById("isoChartConnectionStatus");
+      if (parent) parent.className = ok ? "badge-custom badge-green" : "badge-custom badge-blue";
+    }
+
+    /* -------- Timestamp helpers -------- */
+    function parseTimestamp(value) {
+      if (value === null || value === undefined || value === "") return null;
+      if (value instanceof Date) {
+        const ms = value.getTime();
+        return Number.isFinite(ms) ? Math.floor(ms / 1000) : null;
+      }
+      const n = Number(value);
+      if (Number.isFinite(n)) {
+        const a = Math.abs(n);
+        if (a >= 1e18) return Math.floor(n / 1e9);
+        if (a >= 1e15) return Math.floor(n / 1e6);
+        if (a >= 1e12) return Math.floor(n / 1e3);
+        return Math.floor(n);
+      }
+      const parsed = Date.parse(String(value).trim());
+      return Number.isFinite(parsed) ? Math.floor(parsed / 1000) : null;
+    }
+
+    function normalizeChartTime(time) {
+      if (time === null || time === undefined) return null;
+      if (typeof time === "number") return Number.isFinite(time) ? time : null;
+      if (typeof time === "string") return parseTimestamp(time);
+      if (typeof time === "object" && Number.isFinite(time.year) &&
+          Number.isFinite(time.month) && Number.isFinite(time.day)) {
+        return Math.floor(Date.UTC(time.year, time.month - 1, time.day) / 1000);
+      }
+      return null;
+    }
+
+    function normalizeCandle(raw) {
+      if (!raw || typeof raw !== "object") return null;
+      const rawTime = raw.time ?? raw.timestamp ?? raw.ts ?? raw.start_time ?? raw.candle_start_time;
+      const time = parseTimestamp(rawTime);
+      const open  = Number(raw.open  ?? raw.o);
+      const high  = Number(raw.high  ?? raw.h);
+      const low   = Number(raw.low   ?? raw.l);
+      const close = Number(raw.close ?? raw.c);
+      if (!Number.isFinite(time) || !Number.isFinite(open) || !Number.isFinite(high) ||
+          !Number.isFinite(low) || !Number.isFinite(close)) return null;
+      return { time, open, high, low, close };
+    }
+
+    function getDateKeyIST(unixSeconds) {
+      if (!Number.isFinite(unixSeconds)) return null;
+      const parts = new Intl.DateTimeFormat("en-CA", {
+        timeZone: "Asia/Kolkata",
+        year: "numeric", month: "2-digit", day: "2-digit",
+      }).formatToParts(new Date(unixSeconds * 1000));
+      const map = {};
+      parts.forEach((p) => { if (p.type !== "literal") map[p.type] = p.value; });
+      return `${map.year}-${map.month}-${map.day}`;
+    }
+
+    /* -------- Opening Range math (same as chart.html) -------- */
+    function calculateOpeningRangeForDay(dayCandles) {
+      if (!Array.isArray(dayCandles) || dayCandles.length === 0) return null;
+      const sorted = dayCandles.slice().sort((a, b) => a.time - b.time);
+      const first = sorted[0];
+      if (!first) return null;
+      const open  = Number(first.open);
+      const high  = Number(first.high);
+      const low   = Number(first.low);
+      const close = Number(first.close);
+      if (![open, high, low, close].every(Number.isFinite)) return null;
+
+      const r1 = high;
+      const s1 = low;
+      const average = (r1 + s1) / 2;
+      const r1Diff = r1 - average;
+      const s1Diff = average - s1;
+
+      return {
+        open, high, low, close, average,
+        levels: {
+          r1, r2: r1 + r1Diff, r3: r1 + 2 * r1Diff,
+          s1, s2: s1 - s1Diff, s3: s1 - 2 * s1Diff,
+        },
+      };
+    }
+
+    function buildOpeningRangesFromCandles(candles) {
+      const grouped = {};
+      (candles || []).forEach((c) => {
+        const key = getDateKeyIST(c.time);
+        if (!key) return;
+        if (!grouped[key]) grouped[key] = [];
+        grouped[key].push(c);
+      });
+      const result = {};
+      Object.keys(grouped).forEach((date) => {
+        const r = calculateOpeningRangeForDay(grouped[date]);
+        if (r) result[date] = r;
+      });
+      return result;
+    }
+
+    /* -------- EMA calculations (cross markers only) -------- */
+    function calculateEMA(candles, length) {
+      if (!Array.isArray(candles) || candles.length === 0 || length <= 0) return [];
+      const k = 2 / (length + 1);
+      const out = [];
+      let prev = null;
+      for (const c of candles) {
+        const close = Number(c.close);
+        if (!Number.isFinite(close)) continue;
+        prev = prev === null ? close : close * k + prev * (1 - k);
+        out.push({ time: c.time, value: prev });
+      }
+      return out;
+    }
+
+    function computeEMACrosses(candles, fastLen = 9, slowLen = 21) {
+      if (!Array.isArray(candles) || candles.length === 0) return [];
+      const fast = calculateEMA(candles, fastLen);
+      const slow = calculateEMA(candles, slowLen);
+      const n = Math.min(fast.length, slow.length);
+      const crosses = [];
+      const byTime = new Map();
+      for (const c of candles) byTime.set(c.time, c);
+
+      for (let i = 1; i < n; i++) {
+        const prevDiff = fast[i - 1].value - slow[i - 1].value;
+        const currDiff = fast[i].value - slow[i].value;
+        if (prevDiff <= 0 && currDiff > 0) {
+          const c = byTime.get(fast[i].time);
+          crosses.push({ time: fast[i].time, type: "bull", price: c ? c.low : fast[i].value });
+        } else if (prevDiff >= 0 && currDiff < 0) {
+          const c = byTime.get(fast[i].time);
+          crosses.push({ time: fast[i].time, type: "bear", price: c ? c.high : fast[i].value });
+        }
+      }
+      return crosses;
+    }
+
+    let markersPrimitive = null;
+
+    function applyMarkers(markers) {
+      if (!candleSeries) return;
+      const list = Array.isArray(markers) ? markers : [];
+      if (typeof LightweightCharts.createSeriesMarkers === "function") {
+        try {
+          if (markersPrimitive) {
+            try { markersPrimitive.setMarkers(list); return; } catch (e) { /* fall through */ }
+          }
+          markersPrimitive = LightweightCharts.createSeriesMarkers(candleSeries, list);
+          return;
+        } catch (err) { console.warn("[iso-chart] createSeriesMarkers failed:", err); }
+      }
+      if (typeof candleSeries.setMarkers === "function") {
+        try { candleSeries.setMarkers(list); return; } catch (err) { /* ignore */ }
+      }
+    }
+
+    function renderEMACrossMarkers(candles) {
+      if (!candleSeries) return;
+      const crosses = computeEMACrosses(candles, 9, 21);
+      const seen = new Set();
+      const markers = [];
+      for (const c of crosses) {
+        if (seen.has(c.time)) continue;
+        seen.add(c.time);
+        const isBull = c.type === "bull";
+        markers.push({
+          time: c.time,
+          position: isBull ? "belowBar" : "aboveBar",
+          color: isBull ? "#089981" : "#f23645",
+          shape: isBull ? "arrowUp" : "arrowDown",
+          text: isBull ? "BUY" : "SELL",
+          size: 2,
+        });
+      }
+      markers.sort((a, b) => a.time - b.time);
+      applyMarkers(markers);
+    }
+
+    /* -------- Level line drawing helpers -------- */
+    function addLineSeriesSafe(options) {
+      if (!chart) return null;
+      try {
+        if (typeof chart.addSeries === "function" && LightweightCharts.LineSeries) {
+          return chart.addSeries(LightweightCharts.LineSeries, options);
+        }
+        if (typeof chart.addLineSeries === "function") return chart.addLineSeries(options);
+      } catch (err) { console.warn("[iso-chart] addLineSeriesSafe failed:", err); }
+      return null;
+    }
+    const getLevelColor = (name) => name.startsWith("r") ? "#f23645" : "#089981";
+    function getRangeLevelColor(key) {
+      if (key === "high") return "#fd7e14";
+      if (key === "low")  return "#20c997";
+      return "#2962ff";
+    }
+
+    function ensureLabelLayer() {
+      if (levelLabelLayer) return levelLabelLayer;
+      if (!chartContainer) return null;
+      if (getComputedStyle(chartContainer).position === "static") chartContainer.style.position = "relative";
+      levelLabelLayer = document.createElement("div");
+      levelLabelLayer.className = "iso-level-label-layer";
+      chartContainer.appendChild(levelLabelLayer);
+      return levelLabelLayer;
+    }
+
+    function createLevelLabel(name, startTime, value, color) {
+      const layer = ensureLabelLayer();
+      if (!layer) return;
+      const el = document.createElement("div");
+      el.className = "iso-level-line-label";
+      el.textContent = `${String(name).toUpperCase()} (${Number(value).toFixed(2)})`;
+      el.style.backgroundColor = color;
+      layer.appendChild(el);
+      levelLabels.push({ element: el, startTime, value, color, levelName: name });
+    }
+
+    function scheduleLevelLabelUpdate() {
+      if (levelLabelUpdateScheduled) return;
+      levelLabelUpdateScheduled = true;
+      requestAnimationFrame(() => {
+        levelLabelUpdateScheduled = false;
+        updateLevelLabelPositions();
+      });
+    }
+
+    function updateLevelLabelPositions() {
+      if (!chart || !candleSeries || !levelLabels.length) return;
+      const timeScale = chart.timeScale();
+      const containerWidth = chartContainer.clientWidth;
+      const containerHeight = chartContainer.clientHeight;
+
+      levelLabels.forEach((label) => {
+        const x = timeScale.timeToCoordinate(label.startTime);
+        const y = candleSeries.priceToCoordinate(label.value);
+        if (x === null || y === null || !Number.isFinite(x) || !Number.isFinite(y)) {
+          label.element.style.display = "none";
+          return;
+        }
+        if (y < -8 || y > containerHeight + 8) { label.element.style.display = "none"; return; }
+        if (x < -120 || x > containerWidth + 120) { label.element.style.display = "none"; return; }
+        label.element.style.display = "block";
+        label.element.style.left = Math.round(x + 4) + "px";
+        label.element.style.top  = Math.round(y) + "px";
+      });
+    }
+
+    function drawDayLevelLine(name, rawValue, startTime, endTime, color, lineStyle) {
+      if (rawValue === null || rawValue === undefined || rawValue === "") return;
+      const value = Number(rawValue);
+      if (!Number.isFinite(value)) return;
+
+      const lineSeries = addLineSeriesSafe({
+        color, lineWidth: 1, lineStyle,
+        priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+        autoscaleInfoProvider: () => null,
+      });
+      if (!lineSeries) return;
+
+      const data = [{ time: startTime, value }];
+      if (endTime !== startTime) data.push({ time: endTime, value });
+
+      try { lineSeries.setData(data); }
+      catch (err) { console.warn("[iso-chart] setData failed for line:", err); return; }
+
+      levelLines.push(lineSeries);
+      createLevelLabel(name, startTime, value, color);
+    }
+
+    function removeLevelLines() {
+      if (chart) {
+        levelLines.forEach((line) => {
+          try { chart.removeSeries(line); } catch (err) { /* ignore */ }
+        });
+      }
+      levelLines = [];
+      levelLabels.forEach((label) => {
+        try { if (label.element?.parentNode) label.element.parentNode.removeChild(label.element); }
+        catch (err) { /* ignore */ }
+      });
+      levelLabels = [];
+    }
+
+    function renderOpeningRangeLines() {
+      removeLevelLines();
+      if (!chart || !candleSeries) return;
+      const dates = Object.keys(calculatedOpeningRanges).sort();
+      if (!dates.length) return;
+
+      const allData = candleSeries.data();
+      dates.forEach((date) => {
+        const or = calculatedOpeningRanges[date];
+        if (!or) return;
+        const dayCandles = allData.filter((c) => getDateKeyIST(c.time) === date);
+        if (!dayCandles.length) return;
+
+        const startTime = dayCandles[0].time;
+        const endTime = dayCandles[dayCandles.length - 1].time;
+        const levels = or.levels || {};
+
+        ["r2", "r3"].forEach((n) =>
+          drawDayLevelLine(n, levels[n], startTime, endTime, getLevelColor(n), LightweightCharts.LineStyle.Dashed)
+        );
+        drawDayLevelLine("high", or.high, startTime, endTime, getRangeLevelColor("high"), LightweightCharts.LineStyle.Solid);
+        drawDayLevelLine("avg",  or.average, startTime, endTime, getRangeLevelColor("avg"),  LightweightCharts.LineStyle.Solid);
+        drawDayLevelLine("low",  or.low,  startTime, endTime, getRangeLevelColor("low"),  LightweightCharts.LineStyle.Solid);
+        ["s2", "s3"].forEach((n) =>
+          drawDayLevelLine(n, levels[n], startTime, endTime, getLevelColor(n), LightweightCharts.LineStyle.Dashed)
+        );
+      });
+
+      scheduleLevelLabelUpdate();
+      updateLevelBadgesForLatestDate();
+    }
+
+    function updateLevelBadgesForLatestDate() {
+      if (!levelStatusBar) return;
+      const dates = Object.keys(calculatedOpeningRanges).sort();
+      if (!dates.length) return;
+      const latest = dates[dates.length - 1];
+      const levels = (calculatedOpeningRanges[latest] && calculatedOpeningRanges[latest].levels) || {};
+      levelStatusBar.querySelectorAll(".badge").forEach((b) => {
+        const name = b.dataset.level;
+        const value = Number(levels[name]);
+        b.textContent = Number.isFinite(value) ? `${name.toUpperCase()} ${value.toFixed(2)}` : name.toUpperCase();
+      });
+    }
+
+    function resetLevelBadges() {
+      if (!levelStatusBar) return;
+      levelStatusBar.querySelectorAll(".badge").forEach((b) => {
+        const name = b.dataset.level;
+        if (name) b.textContent = name.toUpperCase();
+      });
+    }
+
+    /* -------- Tooltip -------- */
+    function ensureTooltip() {
+      if (chartTooltip) return;
+      chartTooltip = document.createElement("div");
+      chartTooltip.className = "iso-chart-tooltip";
+      chartContainer.appendChild(chartTooltip);
+    }
+    function hideTooltip() { if (chartTooltip) chartTooltip.style.display = "none"; }
+    function fmtTime(t) {
+      if (typeof t !== "number") return "";
+      const d = new Date(t * 1000);
+      if (Number.isNaN(d.getTime())) return "";
+      return new Intl.DateTimeFormat("en-IN", {
+        timeZone: "Asia/Kolkata", year: "numeric", month: "short", day: "2-digit",
+        hour: "2-digit", minute: "2-digit", hour12: false,
+      }).format(d);
+    }
+    function fmtPrice(v) { const n = Number(v); return Number.isFinite(n) ? n.toFixed(2) : "—"; }
+
+    function handleCrosshairMove(param) {
+      if (!chartTooltip || !candleSeries) return;
+      if (!param || !param.time || !param.point) { hideTooltip(); return; }
+      const data = param.seriesData ? param.seriesData.get(candleSeries) : null;
+      if (!data) { hideTooltip(); return; }
+
+      chartTooltip.innerHTML = `
+        <div style="font-weight:600;margin-bottom:4px;">${fmtTime(param.time)}</div>
+        <div>O: <strong>${fmtPrice(data.open)}</strong></div>
+        <div>H: <strong>${fmtPrice(data.high)}</strong></div>
+        <div>L: <strong>${fmtPrice(data.low)}</strong></div>
+        <div>C: <strong>${fmtPrice(data.close)}</strong></div>`;
+      chartTooltip.style.display = "block";
+
+      const tw = chartTooltip.offsetWidth, th = chartTooltip.offsetHeight;
+      let left = param.point.x + 15, top = param.point.y + 15;
+      if (left + tw > chartContainer.clientWidth) left = param.point.x - tw - 15;
+      if (top + th > chartContainer.clientHeight) top = param.point.y - th - 15;
+      chartTooltip.style.left = Math.max(5, left) + "px";
+      chartTooltip.style.top = Math.max(5, top) + "px";
+    }
+
+    /* -------- Live price badge -------- */
+    function updateLivePriceBadge(ltp) {
+      if (!Number.isFinite(ltp) || !livePriceEl) return;
+      livePriceEl.textContent = ltp.toFixed(2);
+      livePriceEl.classList.remove("iso-chart-price-up", "iso-chart-price-down");
+    }
+    function updateLivePriceWithDirection(prevClose, ltp) {
+      if (!livePriceEl) return;
+      livePriceEl.textContent = Number(ltp).toFixed(2);
+      livePriceEl.classList.remove("iso-chart-price-up", "iso-chart-price-down");
+      if (Number.isFinite(prevClose)) {
+        if (ltp > prevClose) livePriceEl.classList.add("iso-chart-price-up");
+        else if (ltp < prevClose) livePriceEl.classList.add("iso-chart-price-down");
+      }
+    }
+
+    /* -------- WS payload helpers -------- */
+    function getPayloadInstrumentKey(payload) {
+      if (!payload || typeof payload !== "object") return null;
+      return payload.instrument_key ?? payload.instrumentKey ?? payload.key ??
+             payload.info?.instrument_key ??
+             payload.data?.instrument_key ?? payload.data?.instrumentKey ??
+             payload.feed?.instrument_key ?? payload.feed?.instrumentKey ?? null;
+    }
+    function getPayloadLtp(payload) {
+      if (!payload || typeof payload !== "object") return null;
+      const raw = payload.ltp ?? payload.live_ltp ?? payload.last_price ??
+                  payload.data?.ltp ?? payload.data?.live_ltp ?? payload.data?.last_price ??
+                  payload.feed?.ltp ?? payload.feed?.live_ltp;
+      const n = Number(raw);
+      return Number.isFinite(n) ? n : null;
+    }
+    function getPayloadTimestamp(payload) {
+      if (!payload || typeof payload !== "object") return Math.floor(Date.now() / 1000);
+      return parseTimestamp(
+        payload.timestamp ?? payload.time ?? payload.ts ?? payload.updated_at ??
+        payload.data?.timestamp ?? payload.data?.time ?? payload.feed?.timestamp
+      ) ?? Math.floor(Date.now() / 1000);
+    }
+    function getPayloadCandle(payload) {
+      if (!payload || typeof payload !== "object") return null;
+      const candidates = [
+        payload.candle, payload.latest_candle, payload.completed_candle, payload.live_candle,
+        payload.data?.candle, payload.data?.latest_candle, payload.data?.completed_candle, payload.data?.live_candle,
+        payload.feed?.candle, payload.feed?.latest_candle,
+      ];
+      for (const c of candidates) {
+        const candle = normalizeCandle(c);
+        if (candle) return candle;
+      }
+      return null;
+    }
+
+    /* -------- Candle updates -------- */
+    function applyCandleUpdate(candle) {
+      if (!candleSeries || !candle) return;
+      if (lastCandle && candle.time < lastCandle.time) return;
+      candleSeries.update(candle);
+      lastCandle = candle;
+      updateLivePriceBadge(candle.close);
+
+      // Only recompute cross markers (no EMA lines are drawn)
+      const data = candleSeries.data();
+      renderEMACrossMarkers(data);
+
+      const prevDate = currentRenderedDate;
+      const newDate = getDateKeyIST(candle.time);
+      if (newDate && newDate !== prevDate) {
+        currentRenderedDate = newDate;
+        renderOpeningRangeLines();
+      }
+    }
+
+    function updateFromLtp(ltp, timestamp) {
+      if (!Number.isFinite(ltp) || !candleSeries) return;
+      updateLivePriceBadge(ltp);
+      const minuteTs = Math.floor((timestamp || Math.floor(Date.now() / 1000)) / 60) * 60;
+      if (!lastCandle || minuteTs > lastCandle.time) {
+        applyCandleUpdate({ time: minuteTs, open: ltp, high: ltp, low: ltp, close: ltp });
+        return;
+      }
+      if (minuteTs < lastCandle.time) return;
+      applyCandleUpdate({
+        time: lastCandle.time,
+        open: lastCandle.open,
+        high: Math.max(lastCandle.high, ltp),
+        low: Math.min(lastCandle.low, ltp),
+        close: ltp,
+      });
+    }
+
+    /* -------- Chart creation -------- */
+    function createChart(candles) {
+      chart = LightweightCharts.createChart(chartContainer, {
+        width: chartContainer.clientWidth,
+        height: chartContainer.clientHeight,
+        layout: { background: { color: "#131722" }, textColor: "#d1d4dc" },
+        grid: { vertLines: { color: "#2a2e39" }, horzLines: { color: "#2a2e39" } },
+        crosshair: {
+          mode: LightweightCharts.CrosshairMode.Normal,
+          vertLine: { labelBackgroundColor: "#2962ff", labelBorderColor: "#2962ff" },
+        },
+        rightPriceScale: {
+          borderColor: "#2a2e39",
+          scaleMargins: { top: 0.08, bottom: 0.08 },
+          autoScale: true,
+        },
+        timeScale: {
+          borderColor: "#2a2e39",
+          timeVisible: true, secondsVisible: false,
+          rightOffset: 6, barSpacing: 8, minBarSpacing: 3,
+          fixLeftEdge: false, fixRightEdge: false,
+          lockVisibleTimeRangeOnResize: false,
+          tickMarkFormatter: (time, type) => {
+            const d = new Date(time * 1000);
+            if (!Number.isFinite(d.getTime())) return "";
+            const TM = LightweightCharts.TickMarkType || {};
+            if (type === TM.Year || type === TM.Month || type === TM.DayOfMonth) {
+              return new Intl.DateTimeFormat("en-IN", {
+                timeZone: "Asia/Kolkata", day: "2-digit", month: "2-digit", year: "2-digit"
+              }).format(d);
+            }
+            return new Intl.DateTimeFormat("en-IN", {
+              timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", hour12: false
+            }).format(d);
+          },
+        },
+        localization: {
+          locale: "en-IN",
+          timeFormatter: (time) => {
+            const d = new Date(time * 1000);
+            if (!Number.isFinite(d.getTime())) return "";
+            return new Intl.DateTimeFormat("en-IN", {
+              timeZone: "Asia/Kolkata", weekday: "short", day: "2-digit", month: "short",
+              year: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
+            }).format(d);
+          },
+        },
+      });
+
+      const candleOpts = {
+        upColor: "#089981", downColor: "#f23645",
+        borderUpColor: "#089981", borderDownColor: "#f23645",
+        wickUpColor: "#089981", wickDownColor: "#f23645",
+        priceFormat: { type: "price", precision: 2, minMove: 0.05 },
+      };
+
+      if (typeof chart.addSeries === "function" && LightweightCharts.CandlestickSeries) {
+        candleSeries = chart.addSeries(LightweightCharts.CandlestickSeries, candleOpts);
+      } else if (typeof chart.addCandlestickSeries === "function") {
+        candleSeries = chart.addCandlestickSeries(candleOpts);
+      }
+      if (!candleSeries) throw new Error("Unable to create candlestick series");
+
+      if (Array.isArray(candles) && candles.length) {
+        candleSeries.setData(candles);
+        lastCandle = candles[candles.length - 1];
+        oldestCandleTime = candles[0].time;
+        updateLivePriceBadge(lastCandle.close);
+        chart.timeScale().fitContent();
+        currentRenderedDate = getDateKeyIST(lastCandle.time);
+      }
+
+      ensureLabelLayer();
+      ensureTooltip();
+      chart.subscribeCrosshairMove(handleCrosshairMove);
+      chart.timeScale().subscribeVisibleTimeRangeChange(() => scheduleLevelLabelUpdate());
+      chart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
+        scheduleLevelLabelUpdate();
+        if (!range || isLoadingHistory || !hasMoreHistory) {
+          if (historyBanner) historyBanner.style.display = "none";
+          return;
+        }
+        if (historyBanner) historyBanner.style.display = range.from < 5 ? "flex" : "none";
+      });
+
+      // Opening Range levels
+      calculatedOpeningRanges = buildOpeningRangesFromCandles(candles);
+      renderOpeningRangeLines();
+
+      // EMA cross markers only (no EMA lines)
+      renderEMACrossMarkers(candles);
+
+      // Resize handling
+      const resize = () => {
+        if (!chart) return;
+        chart.applyOptions({
+          width: chartContainer.clientWidth,
+          height: chartContainer.clientHeight,
+        });
+        scheduleLevelLabelUpdate();
+      };
+      window.addEventListener("resize", resize);
+      window.addEventListener("orientationchange", () => setTimeout(resize, 200));
+      if (typeof ResizeObserver !== "undefined") {
+        try { new ResizeObserver(resize).observe(chartCard); } catch (e) { /* ignore */ }
+      }
+    }
+
+    /* -------- WS lifecycle -------- */
+    function wsSetStatus(text, ok) {
+      setConn(text, ok);
+    }
+
+    function scheduleReconnect() {
+      if (pageClosing || wsReconnectTimer) return;
+      wsReconnectAttempts += 1;
+      const delay = Math.min(1000 * Math.pow(2, wsReconnectAttempts - 1), MAX_RECONNECT_MS);
+      wsSetStatus(`Retry ${Math.ceil(delay / 1000)}s`, false);
+      wsReconnectTimer = window.setTimeout(() => {
+        wsReconnectTimer = null;
+        connectWS();
+      }, delay);
+    }
+
+    function connectWS() {
+      if (!currentKey || pageClosing) return;
+      if (chartSocket &&
+          (chartSocket.readyState === WebSocket.OPEN ||
+           chartSocket.readyState === WebSocket.CONNECTING)) return;
+
+      wsSetStatus("Connecting…", false);
+      try {
+        chartSocket = new WebSocket(ISO_FEED_WS_URL());
+      } catch (err) {
+        console.error("[iso-chart] WS create failed:", err);
+        chartSocket = null;
+        scheduleReconnect();
+        return;
+      }
+
+      chartSocket.addEventListener("open", () => {
+        wsReconnectAttempts = 0;
+        wsSetStatus("Live", true);
+      });
+
+      chartSocket.addEventListener("message", (event) => {
+        let payload;
+        try { payload = JSON.parse(event.data); } catch (e) { return; }
+        if (!payload || typeof payload !== "object") return;
+        if (payload.type === "connected" || payload.type === "subscribed" ||
+            payload.type === "ping" || payload.event === "ping") return;
+
+        const payloadKey = getPayloadInstrumentKey(payload);
+        if (!payloadKey || payloadKey !== currentKey) return;
+
+        const candle = getPayloadCandle(payload);
+        if (candle) { applyCandleUpdate(candle); return; }
+
+        const ltp = getPayloadLtp(payload);
+        if (ltp === null) return;
+        updateFromLtp(ltp, getPayloadTimestamp(payload));
+      });
+
+      chartSocket.addEventListener("error", (err) => {
+        console.warn("[iso-chart] WS error:", err);
+      });
+
+      chartSocket.addEventListener("close", () => {
+        chartSocket = null;
+        if (!pageClosing) {
+          wsSetStatus("Disconnected", false);
+          scheduleReconnect();
+        }
+      });
+    }
+
+    function disconnectWS() {
+      if (wsReconnectTimer) { clearTimeout(wsReconnectTimer); wsReconnectTimer = null; }
+      if (chartSocket) {
+        try { chartSocket.close(1000, "chart closed"); } catch (e) { /* ignore */ }
+        chartSocket = null;
+      }
+      wsSetStatus("Idle", false);
+    }
+
+    /* -------- Historical fetch -------- */
+    async function fetchInitialCandles(instrumentKey) {
+      const resp = await fetch(ISO_CANDLES_ENDPOINT(instrumentKey), {
+        headers: { Accept: "application/json" },
+      });
+      if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`);
+      const body = await resp.json();
+
+      // Accept multiple possible shapes:
+      //   { candles: [...] }   OR   { data: { candles: [...] } }   OR   [...]
+      let raw = [];
+      if (Array.isArray(body)) raw = body;
+      else if (Array.isArray(body?.candles)) raw = body.candles;
+      else if (Array.isArray(body?.data?.candles)) raw = body.data.candles;
+      else if (Array.isArray(body?.data)) raw = body.data;
+
+      const cleaned = raw.map(normalizeCandle).filter(Boolean);
+      cleaned.sort((a, b) => a.time - b.time);
+      return cleaned.filter((c, i, arr) => i === arr.length - 1 || c.time !== arr[i + 1].time);
+    }
+
+    async function loadOlderHistory() {
+      if (isLoadingHistory || !hasMoreHistory || !oldestCandleTime || !currentKey) return;
+      isLoadingHistory = true;
+      if (loadHistoryBtn) { loadHistoryBtn.disabled = true; loadHistoryBtn.textContent = "Loading…"; }
+      if (historyBanner) historyBanner.style.display = "none";
+
+      const beforeDate = new Date(oldestCandleTime * 1000).toISOString().split("T")[0];
+      try {
+        const resp = await fetch(ISO_OLDER_CANDLES_ENDPOINT(currentKey, beforeDate), {
+          headers: { Accept: "application/json" },
+        });
+        const body = await resp.json();
+        const raw = Array.isArray(body?.candles) ? body.candles : [];
+        if (raw.length) {
+          const older = raw.map(normalizeCandle).filter(Boolean);
+          const current = candleSeries.data();
+          const merged = new Map();
+          older.forEach((c) => merged.set(c.time, c));
+          current.forEach((c) => merged.set(c.time, c));
+          const combined = Array.from(merged.values()).sort((a, b) => a.time - b.time);
+
+          candleSeries.setData(combined);
+          oldestCandleTime = combined[0].time;
+          hasMoreHistory = body?.has_more ?? true;
+
+          calculatedOpeningRanges = buildOpeningRangesFromCandles(combined);
+          renderOpeningRangeLines();
+          renderEMACrossMarkers(combined);
+        } else {
+          hasMoreHistory = false;
+        }
+      } catch (err) {
+        console.error("[iso-chart] older candles fetch failed:", err);
+      } finally {
+        isLoadingHistory = false;
+        if (loadHistoryBtn) { loadHistoryBtn.disabled = false; loadHistoryBtn.textContent = "Load"; }
+      }
+    }
+
+    /* -------- Public API -------- */
+    async function loadInstrument(instrument) {
+      if (!instrument || !instrument.instrument_key) {
+        // No isolated instrument — reset to empty state
+        currentKey = null;
+        disconnectWS();
+        if (chart) {
+          try { chart.remove(); } catch (e) { /* ignore */ }
+          chart = null; candleSeries = null; markersPrimitive = null;
+        }
+        lastCandle = null;
+        oldestCandleTime = null;
+        levelLines = []; levelLabels = [];
+        calculatedOpeningRanges = {};
+        resetLevelBadges();
+        if (historyBanner) historyBanner.style.display = "none";
+        if (symbolChip) symbolChip.classList.add("d-none");
+        if (livePriceEl) livePriceEl.textContent = "--";
+        setEmptyVisible(true);
+        hideOverlay(0);
+        return;
+      }
+
+      const key = instrument.instrument_key;
+      if (key === currentKey && chart) {
+        // Same instrument already loaded — just refresh the symbol chip
+        if (symbolText) symbolText.textContent = instrument.contract_info?.trading_symbol || key;
+        if (symbolChip) symbolChip.classList.remove("d-none");
+        return;
+      }
+
+      // New instrument — reset chart fully
+      currentKey = key;
+      setEmptyVisible(false);
+      showOverlay();
+      setOverlayStatus("Fetching candles…", "Loading Chart");
+      setConn("Connecting…", false);
+
+      if (symbolText) symbolText.textContent = instrument.contract_info?.trading_symbol || key;
+      if (symbolChip) symbolChip.classList.remove("d-none");
+      if (livePriceEl) livePriceEl.textContent = "--";
+
+      // Clean up previous chart
+      disconnectWS();
+      if (chart) {
+        try { chart.remove(); } catch (e) { /* ignore */ }
+        chart = null; candleSeries = null; markersPrimitive = null;
+      }
+      levelLines = []; levelLabels = [];
+      calculatedOpeningRanges = {};
+      lastCandle = null;
+      oldestCandleTime = null;
+      hasMoreHistory = true;
+
+      let candles = [];
+      try {
+        candles = await fetchInitialCandles(key);
+      } catch (err) {
+        console.error("[iso-chart] initial candles fetch failed:", err);
+        setOverlayStatus("Failed to load candles", "Error");
+        hideOverlay(800);
+        return;
+      }
+
+      setOverlayStatus("Building chart…", "Loading Chart");
+      await new Promise((r) => requestAnimationFrame(r));
+
+      try {
+        createChart(candles);
+      } catch (err) {
+        console.error("[iso-chart] createChart failed:", err);
+        setOverlayStatus("Chart failed to render", "Error");
+        hideOverlay(800);
+        return;
+      }
+
+      hideOverlay(200);
+      connectWS();
+    }
+
+    function setIsolatedInstrument(isolated) {
+      // `isolated` = { instrument_key, contract_info, selected_level, levels } or null
+      // Debounce multiple back-to-back calls from rapid dashboard refreshes.
+      clearTimeout(setIsolatedInstrument._t);
+      setIsolatedInstrument._t = setTimeout(() => {
+        loadInstrument(isolated || null);
+      }, 120);
+    }
+
+    if (loadHistoryBtn) loadHistoryBtn.addEventListener("click", loadOlderHistory);
+    if (fitBtn) fitBtn.addEventListener("click", () => {
+      if (chart) chart.timeScale().fitContent();
+    });
+
+    window.addEventListener("beforeunload", () => {
+      pageClosing = true;
+      disconnectWS();
+    });
+
+    // Initial state — no instrument yet
+    setEmptyVisible(true);
+    hideOverlay(0);
+    resetLevelBadges();
+    setConn("Idle", false);
+
+    // Expose API for the dashboard's renderDashboard()
+    window.isolatedChart = {
+      setIsolatedInstrument,
+      loadOlderHistory,
+      fitContent: () => { if (chart) chart.timeScale().fitContent(); },
+      getCurrentKey: () => currentKey,
+    };
+  })();
 </script>
 {% endblock %}

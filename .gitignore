@@ -32,9 +32,7 @@ logs
 test_logs
 .env
 temp
-tests
-!tests/
-!tests/test_r3_isolation_trigger.py
+tests/
 test
 db.sqlite3
 # Distribution / packaging

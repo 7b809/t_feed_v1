@@ -271,6 +271,7 @@ class IsolatedInstrumentEventSavingService:
         duplicate_control = payload.get("duplicate_control") or {}
         market_snapshot = payload.get("market_snapshot") or {}
         order_suggestion = payload.get("order_suggestion") or {}
+        order_target = payload.get("order_target") or {}
         simulation_data = payload.get("simulation") or {}
 
         if not isinstance(ema_data, dict):
@@ -284,6 +285,13 @@ class IsolatedInstrumentEventSavingService:
 
         if not isinstance(order_suggestion, dict):
             order_suggestion = {}
+
+        if not isinstance(order_target, dict):
+            order_target = {}
+
+        order_instrument = order_target.get("instrument")
+        if not isinstance(order_instrument, dict):
+            order_instrument = {}
 
         if not isinstance(simulation_data, dict):
             simulation_data = {}
@@ -306,6 +314,24 @@ class IsolatedInstrumentEventSavingService:
             "suggested_order_side": order_suggestion.get(
                 "suggested_order_side"
             ),
+            "order_target_mode": order_target.get("mode"),
+            "order_selection_reason": order_target.get("selection_reason"),
+            "order_target_resolved": bool(order_target.get("resolved")),
+            "order_instrument_key": order_instrument.get("instrument_key"),
+            "order_trading_symbol": order_instrument.get("trading_symbol"),
+            "order_option_type": (
+                order_instrument.get("option_type")
+                or order_instrument.get("instrument_type")
+            ),
+            "order_strike_price": order_instrument.get("strike_price"),
+            "order_expiry": order_instrument.get("expiry"),
+            "order_lot_size": order_instrument.get("lot_size"),
+            "order_live_ltp": (
+                order_instrument.get("live_ltp")
+                if order_instrument.get("live_ltp") is not None
+                else order_instrument.get("ltp")
+            ),
+            "order_target": deepcopy(order_target),
             "nifty_ltp": market_snapshot.get("nifty_ltp"),
             "isolated_instrument_ltp": market_snapshot.get(
                 "isolated_instrument_ltp"

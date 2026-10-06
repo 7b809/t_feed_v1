@@ -251,11 +251,25 @@
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 
 <script>
-    // Safely assign global host variable to prevent redeclaration errors
-    window.apiHost = window.apiHost || window.location.origin;
+    // ============================================================
+    // EXTERNAL FEED SERVICE CONFIGURATION
+    // ------------------------------------------------------------
+    // The backend (FastAPI app that serves the Upstox feed, EMA
+    // alerts, opening-range data, orders, logs, etc.) is deployed
+    // externally at feed.novag7.in.
+    //
+    // Every template that extends base.html inherits these globals.
+    // Override them BEFORE including this template if you need to
+    // point to a different environment (e.g. local dev / staging).
+    // ============================================================
+    window.FEED_BASE_URL = window.FEED_BASE_URL || 'https://feed.novag7.in';
+    window.FEED_WS_URL   = window.FEED_WS_URL   || 'wss://feed.novag7.in';
+
+    // Backwards-compatible alias — many templates read window.apiHost
+    window.apiHost = window.apiHost || window.FEED_BASE_URL;
 
     function openIsolatedDashboard() {
-        window.location.href = `${window.apiHost}/isolated-dashboard`;
+        window.location.href = `${window.FEED_BASE_URL}/isolated-dashboard`;
     }
 </script>
 

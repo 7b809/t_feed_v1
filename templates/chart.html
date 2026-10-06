@@ -1044,6 +1044,12 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
 {% endblock %}
 {% block scripts %}
 <script>
+
+  // Fallback in case base.html globals are missing
+window.FEED_BASE_URL = window.FEED_BASE_URL || 'https://feed.novag7.in';
+window.FEED_WS_URL   = window.FEED_WS_URL   || 'wss://feed.novag7.in';
+window.apiHost       = window.apiHost       || window.FEED_BASE_URL;
+
 // ============================================================
 // CHART LOADING OVERLAY CONTROLLER
 // ============================================================
@@ -2233,8 +2239,7 @@ async function loadOlderHistoricalData() {
 
   const beforeDateString = new Date(oldestCandleTime * 1000).toISOString().split("T")[0];
   try {
-    const response = await fetch(`/api/older-candles?instrument_key=${encodeURIComponent(currentInstrumentKey)}&before_date=${beforeDateString}`);
-    const result = await response.json();
+    const response = await fetch(`${window.FEED_BASE_URL}/api/older-candles?instrument_key=${encodeURIComponent(currentInstrumentKey)}&before_date=${beforeDateString}`);    const result = await response.json();
     if (result && Array.isArray(result.candles) && result.candles.length > 0) {
       const olderCandles = result.candles.map(normalizeCandle).filter(c => c !== null);
       const currentData = candleSeries.data();
@@ -2287,8 +2292,8 @@ function processWebSocketMessage(event) {
 // WEBSOCKET URL
 // ============================================================
 function getWebSocketUrl() {
-  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  return protocol + "//" + window.location.host + "/all-feeds";
+  // External feed service — WebSocket endpoint
+  return window.FEED_WS_URL + "/all-feeds";
 }
 
 // ============================================================

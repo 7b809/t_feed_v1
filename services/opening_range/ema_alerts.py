@@ -2157,6 +2157,7 @@ def process_selected_or_ema_cross_alert_detailed(
                 save_event=True,
                 processing_status=processing_status,
             )
+            result["payload"] = deepcopy(payload)
 
             event_saving_result = event_saving_delivery_result.get("mongo") or {}
 
@@ -2194,6 +2195,11 @@ def process_selected_or_ema_cross_alert_detailed(
             save_event=True,
             processing_status=None,
         )
+
+        # Delivery resolves and annotates the canonical execution target. Refresh
+        # the returned payload so callers and later state snapshots see that same
+        # decision while the isolated strategy instrument remains unchanged.
+        result["payload"] = deepcopy(payload)
 
         result["delivery"] = {
             "telegram": deepcopy(delivery_result.get("telegram") or {}),
@@ -2295,6 +2301,17 @@ def process_selected_or_ema_cross_alert_detailed(
             "suggested_order_instruments": deepcopy(enriched_nearest_instruments),
             "budget_range_instruments": deepcopy(enriched_budget_instruments),
             "payload": deepcopy(payload),
+            "order_target": deepcopy(payload.get("order_target")),
+            "order_target_mode": (
+                (payload.get("order_target") or {}).get("mode")
+                if isinstance(payload.get("order_target"), dict)
+                else None
+            ),
+            "order_selection_reason": (
+                (payload.get("order_target") or {}).get("selection_reason")
+                if isinstance(payload.get("order_target"), dict)
+                else None
+            ),
             "delivery": deepcopy(result["delivery"]),
             "order": deepcopy(order_result),
             "order_mongo": deepcopy(order_mongo_result),
