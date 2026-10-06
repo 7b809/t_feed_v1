@@ -227,6 +227,12 @@
       box-shadow: 0 0 0 4px rgba(239, 68, 68, 0.18);
     }
 
+    /* NEW — closed-market indicator */
+    .status-dot.closed {
+      background: #f59e0b;
+      box-shadow: 0 0 0 4px rgba(245, 158, 11, 0.18);
+    }
+
     /* ---------------------------------------------------------
        Index mini-cards: WHITE islands inside the dark section
     --------------------------------------------------------- */
@@ -313,6 +319,12 @@
     .connection-badge.error {
       background: #fee2e2;
       color: #b91c1c;
+    }
+
+    /* NEW — offline badge shown outside market hours */
+    .connection-badge.offline {
+      background: #fef3c7;
+      color: #b45309;
     }
 
     .market-price-section {
@@ -720,10 +732,18 @@
         Upstox Market Stream Gateway
       </h1>
 
-      <span class="gateway-pill">
-        <span id="gatewayStatusDot" class="status-dot"></span>
-        <span id="gatewayStatusText">Checking gateway</span>
-      </span>
+      <div class="d-flex flex-wrap align-items-center gap-2">
+        <!-- NEW — Market session status (IST, Mon–Fri, 09:00–15:40) -->
+        <span class="gateway-pill" id="marketSessionPill" title="Indian market session status (IST)">
+          <span id="marketSessionDot" class="status-dot"></span>
+          <span id="marketSessionText">Checking market session…</span>
+        </span>
+
+        <span class="gateway-pill">
+          <span id="gatewayStatusDot" class="status-dot"></span>
+          <span id="gatewayStatusText">Checking gateway</span>
+        </span>
+      </div>
     </div>
 
     <!-- Live index market -->
@@ -747,6 +767,8 @@
       <div class="card-body">
         <p class="muted-note mb-3">
           Live market values from the configured startup index subscriptions.
+          Streams are active <strong>only during Indian market hours</strong>
+          (Mon–Fri, 09:00–15:40 IST).
         </p>
 
         <div id="indexCards" class="row g-3">
@@ -1037,11 +1059,112 @@
   ></script>
 
   <script>
+    /* =============================================================
+       MARKET SESSION (IST) — helpers
+       -------------------------------------------------------------
+       Indian market session, per requirement:
+         Mon–Fri, 09:00 → 15:40 IST (inclusive of 09:00, exclusive of 15:40)
+       We hard-code IST as UTC+05:30 (India observes no DST).
+       ============================================================= */
+    const IST_OFFSET_MS = (5 * 60 + 30) * 60 * 1000; // +05:30 in ms
+
+    const MARKET_OPEN_HOUR   = 9;
+    const MARKET_OPEN_MIN    = 0;
+    const MARKET_CLOSE_HOUR  = 15;
+    const MARKET_CLOSE_MIN   = 40;
+
+    // Returns a Date whose UTC fields read as IST fields.
+    function getISTShifted(date = new Date()) {
+      return new Date(date.getTime() + IST_OFFSET_MS);
+    }
+
+    // Returns { year, month(0-based), day, hours, minutes, seconds, dayOfWeek } for IST.
+    function getISTComponents(date = new Date()) {
+      const s = getISTShifted(date);
+      return {
+        year: s.getUTCFullYear(),
+        month: s.getUTCMonth(),
+        day: s.getUTCDate(),
+        hours: s.getUTCHours(),
+        minutes: s.getUTCMinutes(),
+        seconds: s.getUTCSeconds(),
+        dayOfWeek: s.getUTCDay(), // 0=Sun, 6=Sat
+      };
+    }
+
+    // Build a real Date for the given IST wall-clock time.
+    function fromIST(year, month, day, hours, minutes, seconds = 0) {
+      return new Date(
+        Date.UTC(year, month, day, hours, minutes, seconds) - IST_OFFSET_MS
+      );
+    }
+
+    function isWeekdayIST(date = new Date()) {
+      const d = getISTComponents(date).dayOfWeek;
+      return d !== 0 && d !== 6;
+    }
+
+    function isWithinMarketHours(date = new Date()) {
+      if (!isWeekdayIST(date)) return false;
+      const c = getISTComponents(date);
+      const mins = c.hours * 60 + c.minutes;
+      const openMins = MARKET_OPEN_HOUR * 60 + MARKET_OPEN_MIN;
+      const closeMins = MARKET_CLOSE_HOUR * 60 + MARKET_CLOSE_MIN;
+      return mins >= openMins && mins < closeMins;
+    }
+
+    // Returns a Date (real UTC ms) for the next market open strictly after `from`.
+    function getNextMarketOpen(from = new Date()) {
+      for (let i = 0; i < 14; i++) {
+        // Start each iteration at IST 00:00 of the candidate day
+        const start = fromIST(
+          getISTComponents(from).year,
+          getISTComponents(from).month,
+          getISTComponents(from).day + i,
+          0, 0, 0
+        );
+        const c = getISTComponents(start);
+        if (c.dayOfWeek === 0 || c.dayOfWeek === 6) continue;
+
+        const openToday = fromIST(
+          c.year, c.month, c.day, MARKET_OPEN_HOUR, MARKET_OPEN_MIN, 0
+        );
+        if (openToday.getTime() > from.getTime()) return openToday;
+      }
+      return null;
+    }
+
+    // Returns a Date for today's market close (15:40 IST).
+    function getTodayMarketClose(from = new Date()) {
+      const c = getISTComponents(from);
+      return fromIST(c.year, c.month, c.day, MARKET_CLOSE_HOUR, MARKET_CLOSE_MIN, 0);
+    }
+
+    // Format a positive ms duration as "HH:MM:SS" or "Dd HHh MMm" for long spans.
+    function formatDuration(ms) {
+      if (!Number.isFinite(ms) || ms <= 0) return "00:00:00";
+      const totalSeconds = Math.floor(ms / 1000);
+      const days = Math.floor(totalSeconds / 86400);
+      const hours = Math.floor((totalSeconds % 86400) / 3600);
+      const minutes = Math.floor((totalSeconds % 3600) / 60);
+      const seconds = totalSeconds % 60;
+      const pad = (n) => String(n).padStart(2, "0");
+      if (days > 0) return `${days}d ${pad(hours)}h ${pad(minutes)}m`;
+      return `${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
+    }
+
+    /* =============================================================
+       EXISTING GATEWAY STATE + HELPERS
+       ============================================================= */
     const indexSockets = new Map();
     const previousPrices = new Map();
 
     let subscriptionsLoaded = false;
     let actionMessageTimer = null;
+
+    // NEW — market session tick state
+    let marketTickInterval = null;
+    let lastMarketOpenState = null;
 
     const headers = () => ({
       "Content-Type": "application/json"
@@ -1059,107 +1182,60 @@
     const toSafeId = (value) => {
       let hash = 0;
       const text = String(value || "");
-
-      for (
-        let index = 0;
-        index < text.length;
-        index += 1
-      ) {
-        hash = (
-          (hash << 5) -
-          hash +
-          text.charCodeAt(index)
-        ) | 0;
+      for (let index = 0; index < text.length; index += 1) {
+        hash = ((hash << 5) - hash + text.charCodeAt(index)) | 0;
       }
-
       return `instrument-${Math.abs(hash)}`;
     };
 
     const subscriptionBody = () => {
       return JSON.stringify({
         instrument_keys: [
-          document
-            .getElementById("instrumentKey")
-            .value
-            .trim()
+          document.getElementById("instrumentKey").value.trim()
         ],
-        mode: document
-          .getElementById("mode")
-          .value
+        mode: document.getElementById("mode").value
       });
     };
 
-    async function request(
-      path,
-      options = {}
-    ) {
-      const response = await fetch(
-        path,
-        {
-          ...options,
-          headers: {
-            ...headers(),
-            ...(options.headers || {})
-          }
-        }
-      );
+    async function request(path, options = {}) {
+      const response = await fetch(path, {
+        ...options,
+        headers: { ...headers(), ...(options.headers || {}) }
+      });
 
       let data;
-
       try {
         data = await response.json();
       } catch {
-        data = {
-          detail: "Server returned an invalid response"
-        };
+        data = { detail: "Server returned an invalid response" };
       }
 
       if (!response.ok) {
-        throw new Error(
-          data.detail || JSON.stringify(data)
-        );
+        throw new Error(data.detail || JSON.stringify(data));
       }
 
       return data;
     }
 
-    function showActionMessage(
-      message,
-      type = "success"
-    ) {
-      const element = document.getElementById(
-        "actionMessage"
-      );
+    function showActionMessage(message, type = "success") {
+      const element = document.getElementById("actionMessage");
 
       if (actionMessageTimer) {
         clearTimeout(actionMessageTimer);
       }
 
-      element.className = (
-        `alert alert-${type} mt-3 mb-0`
-      );
-
+      element.className = `alert alert-${type} mt-3 mb-0`;
       element.textContent = message;
       element.classList.remove("d-none");
 
-      actionMessageTimer = setTimeout(
-        () => {
-          element.classList.add("d-none");
-        },
-        5000
-      );
+      actionMessageTimer = setTimeout(() => {
+        element.classList.add("d-none");
+      }, 5000);
     }
 
-    function setGatewayStatus(
-      connected
-    ) {
-      const dot = document.getElementById(
-        "gatewayStatusDot"
-      );
-
-      const text = document.getElementById(
-        "gatewayStatusText"
-      );
+    function setGatewayStatus(connected) {
+      const dot = document.getElementById("gatewayStatusDot");
+      const text = document.getElementById("gatewayStatusText");
 
       if (connected) {
         dot.className = "status-dot connected";
@@ -1170,30 +1246,106 @@
       }
     }
 
+    /* =============================================================
+       NEW — MARKET SESSION UI + TICK LOOP
+       ============================================================= */
+    function updateMarketSessionUI() {
+      const dot = document.getElementById("marketSessionDot");
+      const text = document.getElementById("marketSessionText");
+      if (!dot || !text) return;
+
+      const now = new Date();
+
+      if (isWithinMarketHours(now)) {
+        const closeAt = getTodayMarketClose(now);
+        const remain = closeAt.getTime() - now.getTime();
+        dot.className = "status-dot connected";
+        text.textContent = `Market open · closes in ${formatDuration(remain)}`;
+        return;
+      }
+
+      const nextOpen = getNextMarketOpen(now);
+      dot.className = "status-dot closed";
+      if (nextOpen) {
+        const remain = nextOpen.getTime() - now.getTime();
+        text.textContent = `Market closed · opens in ${formatDuration(remain)}`;
+      } else {
+        text.textContent = "Market closed";
+      }
+    }
+
+    function markAllCardsOffline() {
+      for (const key of Array.from(indexSockets.keys())) {
+        updateIndexConnectionStatus(key, "offline");
+      }
+      // Also mark any rendered card that has no open socket
+      document.querySelectorAll("[id^='instrument-'][id$='-connection']").forEach((badge) => {
+        // Extract key from parent card DOM
+        const card = badge.closest(".index-card");
+        if (!card) return;
+        const keyEl = card.querySelector(".index-key");
+        if (!keyEl) return;
+        const key = keyEl.textContent.trim();
+        if (key && !indexSockets.has(key)) {
+          updateIndexConnectionStatus(key, "offline");
+        }
+      });
+    }
+
+    function marketTick() {
+      const isOpen = isWithinMarketHours(new Date());
+      const wasOpen = lastMarketOpenState;
+
+      updateMarketSessionUI();
+
+      // closed → open transition: (re)start feeds
+      if (isOpen && wasOpen === false) {
+        // Clear any per-card timers first, then reload feeds.
+        subscriptionsLoaded = false;
+        loadStartupIndexes(true);
+      }
+
+      // open → closed transition: shut everything down gracefully
+      if (!isOpen && wasOpen === true) {
+        closeAllIndexSockets();
+        markAllCardsOffline();
+      }
+
+      // First tick — prime the state without triggering transitions
+      if (wasOpen === null) {
+        if (!isOpen) markAllCardsOffline();
+      }
+
+      lastMarketOpenState = isOpen;
+    }
+
+    function startMarketTick() {
+      if (marketTickInterval) return;
+      marketTickInterval = setInterval(marketTick, 1000);
+      marketTick(); // immediate first pass
+    }
+
+    /* =============================================================
+       HEALTH
+       ============================================================= */
     async function loadHealth() {
       try {
-        const data = await request(
-          "/api/health"
-        );
-
-        setGatewayStatus(
-          Boolean(data.upstox_connected)
-        );
+        const data = await request("/api/health");
+        setGatewayStatus(Boolean(data.upstox_connected));
       } catch {
         setGatewayStatus(false);
       }
     }
 
-    async function loadStartupIndexes(
-      forceReconnect = false
-    ) {
+    /* =============================================================
+       STARTUP INDEXES + CARDS
+       ============================================================= */
+    async function loadStartupIndexes(forceReconnect = false) {
       if (forceReconnect) {
         closeAllIndexSockets();
       }
 
-      const container = document.getElementById(
-        "indexCards"
-      );
+      const container = document.getElementById("indexCards");
 
       container.innerHTML = `
         <div class="col-12">
@@ -1205,42 +1357,18 @@
       `;
 
       try {
-        const data = await request(
-          "/api/subscriptions"
-        );
+        const data = await request("/api/subscriptions");
 
-        const active = Array.isArray(
-          data.active
-        )
-          ? data.active
-          : [];
+        const active = Array.isArray(data.active) ? data.active : [];
+        const history = Array.isArray(data.last_7_days) ? data.last_7_days : [];
 
-        const history = Array.isArray(
-          data.last_7_days
-        )
-          ? data.last_7_days
-          : [];
+        const startupIndexes = active.filter((item) => {
+          return item.source === "startup_underlying";
+        });
 
-        const startupIndexes = active.filter(
-          (item) => {
-            return (
-              item.source === "startup_underlying"
-            );
-          }
-        );
-
-        setSubscriptionCounters(
-          active.length,
-          history.length
-        );
-
-        renderIndexCards(
-          startupIndexes
-        );
-
-        connectAllIndexFeeds(
-          startupIndexes
-        );
+        setSubscriptionCounters(active.length, history.length);
+        renderIndexCards(startupIndexes);
+        connectAllIndexFeeds(startupIndexes);
       } catch (error) {
         container.innerHTML = `
           <div class="col-12">
@@ -1252,46 +1380,24 @@
       }
     }
 
-    function getIndexDisplayName(
-      instrumentKey
-    ) {
-      const parts = String(
-        instrumentKey || ""
-      ).split("|");
-
+    function getIndexDisplayName(instrumentKey) {
+      const parts = String(instrumentKey || "").split("|");
       if (parts.length > 1) {
         return parts.slice(1).join("|");
       }
-
       return instrumentKey || "Unknown";
     }
 
-    function getExchangeName(
-      instrumentKey
-    ) {
-      const key = String(
-        instrumentKey || ""
-      );
-
-      if (key.startsWith("NSE_")) {
-        return "NSE";
-      }
-
-      if (key.startsWith("BSE_")) {
-        return "BSE";
-      }
-
-      if (key.startsWith("MCX_")) {
-        return "MCX";
-      }
-
+    function getExchangeName(instrumentKey) {
+      const key = String(instrumentKey || "");
+      if (key.startsWith("NSE_")) return "NSE";
+      if (key.startsWith("BSE_")) return "BSE";
+      if (key.startsWith("MCX_")) return "MCX";
       return "Unknown";
     }
 
     function renderIndexCards(items) {
-      const container = document.getElementById(
-        "indexCards"
-      );
+      const container = document.getElementById("indexCards");
 
       if (!items.length) {
         container.innerHTML = `
@@ -1301,210 +1407,146 @@
             </div>
           </div>
         `;
-
         return;
       }
 
-      container.innerHTML = items.map(
-        (item) => {
-          const key = item.instrument_key || "";
-          const mode = item.mode || "full";
-          const id = toSafeId(key);
+      const initiallyOpen = isWithinMarketHours();
 
-          return `
-            <div class="col-md-6 col-xl-4">
-              <div
-                id="${id}-card"
-                class="index-card"
-              >
-                <div class="index-card-header">
-                  <div class="index-icon">
-                    <i class="bi bi-graph-up-arrow"></i>
-                  </div>
+      container.innerHTML = items.map((item) => {
+        const key = item.instrument_key || "";
+        const mode = item.mode || "full";
+        const id = toSafeId(key);
 
-                  <div class="flex-grow-1 overflow-hidden">
-                    <div class="d-flex justify-content-between gap-2">
-                      <div>
-                        <div class="index-name">
-                          ${escapeHtml(
-                            getIndexDisplayName(key)
-                          )}
-                        </div>
+        const badgeClass = initiallyOpen
+          ? "connection-badge connecting"
+          : "connection-badge offline";
+        const badgeDotClass = initiallyOpen
+          ? "status-dot connecting"
+          : "status-dot closed";
+        const badgeLabel = initiallyOpen ? "Connecting" : "Offline";
 
-                        <div class="index-key">
-                          ${escapeHtml(key)}
-                        </div>
+        return `
+          <div class="col-md-6 col-xl-4">
+            <div id="${id}-card" class="index-card">
+              <div class="index-card-header">
+                <div class="index-icon">
+                  <i class="bi bi-graph-up-arrow"></i>
+                </div>
+
+                <div class="flex-grow-1 overflow-hidden">
+                  <div class="d-flex justify-content-between gap-2">
+                    <div>
+                      <div class="index-name">
+                        ${escapeHtml(getIndexDisplayName(key))}
                       </div>
 
-                      <span
-                        id="${id}-connection"
-                        class="connection-badge connecting"
-                      >
-                        <span class="status-dot connecting"></span>
-                        Connecting
-                      </span>
+                      <div class="index-key">
+                        ${escapeHtml(key)}
+                      </div>
                     </div>
+
+                    <span id="${id}-connection" class="${badgeClass}">
+                      <span class="${badgeDotClass}"></span>
+                      ${badgeLabel}
+                    </span>
                   </div>
-                </div>
-
-                <div class="market-price-section">
-                  <div class="market-price-label">
-                    Last traded price
-                  </div>
-
-                  <div
-                    id="${id}-price"
-                    class="market-price waiting"
-                  >
-                    Waiting
-                  </div>
-
-                  <div
-                    id="${id}-change"
-                    class="market-change neutral"
-                  >
-                    <i class="bi bi-dash"></i>
-                    Awaiting market data
-                  </div>
-                </div>
-
-                <div class="market-stats">
-                  <div class="market-stat">
-                    <div class="market-stat-label">
-                      Open
-                    </div>
-
-                    <div
-                      id="${id}-open"
-                      class="market-stat-value"
-                    >
-                      --
-                    </div>
-                  </div>
-
-                  <div class="market-stat">
-                    <div class="market-stat-label">
-                      High
-                    </div>
-
-                    <div
-                      id="${id}-high"
-                      class="market-stat-value"
-                    >
-                      --
-                    </div>
-                  </div>
-
-                  <div class="market-stat">
-                    <div class="market-stat-label">
-                      Low
-                    </div>
-
-                    <div
-                      id="${id}-low"
-                      class="market-stat-value"
-                    >
-                      --
-                    </div>
-                  </div>
-
-                  <div class="market-stat">
-                    <div class="market-stat-label">
-                      Previous close
-                    </div>
-
-                    <div
-                      id="${id}-close"
-                      class="market-stat-value"
-                    >
-                      --
-                    </div>
-                  </div>
-
-                  <div class="market-stat">
-                    <div class="market-stat-label">
-                      Exchange
-                    </div>
-
-                    <div class="market-stat-value">
-                      ${escapeHtml(
-                        getExchangeName(key)
-                      )}
-                    </div>
-                  </div>
-
-                  <div class="market-stat">
-                    <div class="market-stat-label">
-                      Mode
-                    </div>
-
-                    <div class="market-stat-value">
-                      ${escapeHtml(mode)}
-                    </div>
-                  </div>
-                </div>
-
-                <div class="market-footer">
-                  <span class="tick-indicator">
-                    <span
-                      id="${id}-pulse"
-                      class="status-dot"
-                    ></span>
-
-                    <span>Live</span>
-                  </span>
-
-                  <span id="${id}-updated">
-                    Waiting for market data
-                  </span>
                 </div>
               </div>
+
+              <div class="market-price-section">
+                <div class="market-price-label">
+                  Last traded price
+                </div>
+
+                <div id="${id}-price" class="market-price waiting">
+                  Waiting
+                </div>
+
+                <div id="${id}-change" class="market-change neutral">
+                  <i class="bi bi-dash"></i>
+                  Awaiting market data
+                </div>
+              </div>
+
+              <div class="market-stats">
+                <div class="market-stat">
+                  <div class="market-stat-label">Open</div>
+                  <div id="${id}-open" class="market-stat-value">--</div>
+                </div>
+
+                <div class="market-stat">
+                  <div class="market-stat-label">High</div>
+                  <div id="${id}-high" class="market-stat-value">--</div>
+                </div>
+
+                <div class="market-stat">
+                  <div class="market-stat-label">Low</div>
+                  <div id="${id}-low" class="market-stat-value">--</div>
+                </div>
+
+                <div class="market-stat">
+                  <div class="market-stat-label">Previous close</div>
+                  <div id="${id}-close" class="market-stat-value">--</div>
+                </div>
+
+                <div class="market-stat">
+                  <div class="market-stat-label">Exchange</div>
+                  <div class="market-stat-value">
+                    ${escapeHtml(getExchangeName(key))}
+                  </div>
+                </div>
+
+                <div class="market-stat">
+                  <div class="market-stat-label">Mode</div>
+                  <div class="market-stat-value">${escapeHtml(mode)}</div>
+                </div>
+              </div>
+
+              <div class="market-footer">
+                <span class="tick-indicator">
+                  <span id="${id}-pulse" class="status-dot"></span>
+                  <span id="${id}-live-text">${initiallyOpen ? "Live" : "Offline"}</span>
+                </span>
+
+                <span id="${id}-updated">
+                  ${initiallyOpen ? "Waiting for market data" : "Market closed"}
+                </span>
+              </div>
             </div>
-          `;
-        }
-      ).join("");
+          </div>
+        `;
+      }).join("");
     }
 
     function connectAllIndexFeeds(items) {
-      const activeKeys = new Set(
-        items.map(
-          (item) => item.instrument_key
-        )
-      );
+      const activeKeys = new Set(items.map((item) => item.instrument_key));
 
-      for (
-        const key of indexSockets.keys()
-      ) {
+      for (const key of indexSockets.keys()) {
         if (!activeKeys.has(key)) {
           closeIndexSocket(key);
         }
       }
 
       for (const item of items) {
-        connectIndexFeed(
-          item.instrument_key
-        );
+        connectIndexFeed(item.instrument_key);
       }
     }
 
-    function connectIndexFeed(
-      instrumentKey
-    ) {
-      const key = String(
-        instrumentKey || ""
-      ).trim();
+    function connectIndexFeed(instrumentKey) {
+      const key = String(instrumentKey || "").trim();
+      if (!key) return;
 
-      if (!key) {
+      // -------- MARKET HOURS GUARD --------
+      if (!isWithinMarketHours()) {
+        closeIndexSocket(key);
+        updateIndexConnectionStatus(key, "offline");
         return;
       }
+      // ------------------------------------
 
       closeIndexSocket(key);
 
-      const scheme = (
-        location.protocol === "https:"
-          ? "wss"
-          : "ws"
-      );
+      const scheme = location.protocol === "https:" ? "wss" : "ws";
 
       const websocketUrl = (
         `${scheme}://${location.host}` +
@@ -1513,82 +1555,51 @@
       );
 
       const state = {
-        socket: new WebSocket(
-          websocketUrl
-        ),
+        socket: new WebSocket(websocketUrl),
         reconnectTimer: null,
         manuallyClosed: false
       };
 
-      indexSockets.set(
-        key,
-        state
-      );
-
-      updateIndexConnectionStatus(
-        key,
-        "connecting"
-      );
+      indexSockets.set(key, state);
+      updateIndexConnectionStatus(key, "connecting");
 
       state.socket.onopen = () => {
-        updateIndexConnectionStatus(
-          key,
-          "connected"
-        );
+        updateIndexConnectionStatus(key, "connected");
       };
 
-      state.socket.onmessage = (
-        event
-      ) => {
-        handleIndexFeedMessage(
-          key,
-          event.data
-        );
+      state.socket.onmessage = (event) => {
+        handleIndexFeedMessage(key, event.data);
       };
 
       state.socket.onerror = () => {
-        updateIndexConnectionStatus(
-          key,
-          "error"
-        );
+        updateIndexConnectionStatus(key, "error");
       };
 
       state.socket.onclose = () => {
-        if (state.manuallyClosed) {
+        if (state.manuallyClosed) return;
+
+        // If market has closed, do NOT schedule a retry.
+        if (!isWithinMarketHours()) {
+          updateIndexConnectionStatus(key, "offline");
           return;
         }
 
-        updateIndexConnectionStatus(
-          key,
-          "disconnected"
-        );
+        updateIndexConnectionStatus(key, "disconnected");
 
-        state.reconnectTimer = setTimeout(
-          () => {
-            connectIndexFeed(key);
-          },
-          5000
-        );
+        state.reconnectTimer = setTimeout(() => {
+          connectIndexFeed(key);
+        }, 5000);
       };
     }
 
-    function closeIndexSocket(
-      instrumentKey
-    ) {
-      const state = indexSockets.get(
-        instrumentKey
-      );
-
-      if (!state) {
-        return;
-      }
+    function closeIndexSocket(instrumentKey) {
+      const state = indexSockets.get(instrumentKey);
+      if (!state) return;
 
       state.manuallyClosed = true;
 
       if (state.reconnectTimer) {
-        clearTimeout(
-          state.reconnectTimer
-        );
+        clearTimeout(state.reconnectTimer);
       }
 
       if (
@@ -1598,32 +1609,22 @@
         state.socket.close();
       }
 
-      indexSockets.delete(
-        instrumentKey
-      );
+      indexSockets.delete(instrumentKey);
     }
 
     function closeAllIndexSockets() {
-      for (
-        const key of Array.from(
-          indexSockets.keys()
-        )
-      ) {
+      for (const key of Array.from(indexSockets.keys())) {
         closeIndexSocket(key);
       }
     }
 
-    function updateIndexConnectionStatus(
-      instrumentKey,
-      status
-    ) {
-      const id = toSafeId(
-        instrumentKey
-      );
+    function updateIndexConnectionStatus(instrumentKey, status) {
+      const id = toSafeId(instrumentKey);
 
-      const badge = document.getElementById(
-        `${id}-connection`
-      );
+      const badge = document.getElementById(`${id}-connection`);
+      const pulse = document.getElementById(`${id}-pulse`);
+      const liveText = document.getElementById(`${id}-live-text`);
+      const updated = document.getElementById(`${id}-updated`);
 
       const states = {
         connecting: {
@@ -1645,36 +1646,39 @@
           text: "Error",
           badge: "connection-badge error",
           dot: "status-dot error"
+        },
+        // NEW — shown outside market hours
+        offline: {
+          text: "Offline",
+          badge: "connection-badge offline",
+          dot: "status-dot closed"
         }
       };
 
-      if (!badge) {
-        return;
+      const selected = states[status] || states.error;
+
+      if (badge) {
+        badge.className = selected.badge;
+        badge.innerHTML = `
+          <span class="${selected.dot}"></span>
+          ${selected.text}
+        `;
       }
 
-      const selected = (
-        states[status] ||
-        states.error
-      );
-
-      badge.className = selected.badge;
-
-      badge.innerHTML = `
-        <span class="${selected.dot}"></span>
-        ${selected.text}
-      `;
+      // Keep footer indicator in sync
+      if (status === "offline") {
+        if (pulse) pulse.className = "status-dot";
+        if (liveText) liveText.textContent = "Offline";
+        if (updated) updated.textContent = "Market closed";
+      } else if (status === "connected") {
+        if (liveText) liveText.textContent = "Live";
+      }
     }
 
-    function handleIndexFeedMessage(
-      instrumentKey,
-      rawMessage
-    ) {
+    function handleIndexFeedMessage(instrumentKey, rawMessage) {
       let payload;
-
       try {
-        payload = JSON.parse(
-          rawMessage
-        );
+        payload = JSON.parse(rawMessage);
       } catch {
         return;
       }
@@ -1686,205 +1690,100 @@
         return;
       }
 
-      const marketData = extractIndexMarketData(
-        payload
-      );
+      const marketData = extractIndexMarketData(payload);
+      if (!marketData) return;
 
-      if (!marketData) {
-        return;
-      }
-
-      updateIndexCard(
-        instrumentKey,
-        marketData
-      );
+      updateIndexCard(instrumentKey, marketData);
     }
 
-    function extractIndexMarketData(
-      payload
-    ) {
+    function extractIndexMarketData(payload) {
       const feed = payload?.feed;
+      if (!feed) return null;
 
-      if (!feed) {
-        return null;
-      }
+      const indexFeed = feed?.fullFeed?.indexFF;
+      const marketFeed = feed?.fullFeed?.marketFF;
 
-      const indexFeed = (
-        feed?.fullFeed?.indexFF
-      );
-
-      const marketFeed = (
-        feed?.fullFeed?.marketFF
-      );
-
-      const ltpc = (
+      const ltpc =
         indexFeed?.ltpc ??
         marketFeed?.ltpc ??
         feed?.ltpc ??
-        feed?.firstLevelWithGreeks?.ltpc
-      );
+        feed?.firstLevelWithGreeks?.ltpc;
 
-      if (!ltpc) {
-        return null;
-      }
+      if (!ltpc) return null;
 
-      const ohlcItems = (
+      const ohlcItems =
         indexFeed?.marketOHLC?.ohlc ??
         marketFeed?.marketOHLC?.ohlc ??
-        []
-      );
+        [];
 
-      const dailyOhlc = Array.isArray(
-        ohlcItems
-      )
-        ? (
-          ohlcItems.find(
-            (item) => (
-              String(
-                item?.interval || ""
-              ).toLowerCase() === "1d"
-            )
-          ) || null
-        )
+      const dailyOhlc = Array.isArray(ohlcItems)
+        ? (ohlcItems.find((item) =>
+            String(item?.interval || "").toLowerCase() === "1d"
+          ) || null)
         : null;
 
-      const ltp = toNumberOrNull(
-        ltpc.ltp
-      );
+      const ltp = toNumberOrNull(ltpc.ltp);
+      const previousClose = toNumberOrNull(ltpc.cp);
 
-      const previousClose = toNumberOrNull(
-        ltpc.cp
-      );
-
-      const absoluteChange = (
-        ltp !== null &&
-        previousClose !== null
+      const absoluteChange =
+        ltp !== null && previousClose !== null
           ? ltp - previousClose
-          : null
-      );
+          : null;
 
-      const percentageChange = (
+      const percentageChange =
         absoluteChange !== null &&
         previousClose !== null &&
         previousClose !== 0
-          ? (
-            absoluteChange /
-            previousClose
-          ) * 100
-          : null
-      );
+          ? (absoluteChange / previousClose) * 100
+          : null;
 
       return {
         ltp,
         previousClose,
         absoluteChange,
         percentageChange,
-        lastTradeTime: normalizeTimestamp(
-          ltpc.ltt
-        ),
-        open: toNumberOrNull(
-          dailyOhlc?.open
-        ),
-        high: toNumberOrNull(
-          dailyOhlc?.high
-        ),
-        low: toNumberOrNull(
-          dailyOhlc?.low
-        ),
-        dayClose: toNumberOrNull(
-          dailyOhlc?.close
-        )
+        lastTradeTime: normalizeTimestamp(ltpc.ltt),
+        open: toNumberOrNull(dailyOhlc?.open),
+        high: toNumberOrNull(dailyOhlc?.high),
+        low: toNumberOrNull(dailyOhlc?.low),
+        dayClose: toNumberOrNull(dailyOhlc?.close)
       };
     }
 
-    function toNumberOrNull(
-      value
-    ) {
-      if (
-        value === null ||
-        value === undefined ||
-        value === ""
-      ) {
+    function toNumberOrNull(value) {
+      if (value === null || value === undefined || value === "") {
         return null;
       }
-
       const number = Number(value);
-
-      return Number.isFinite(number)
-        ? number
-        : null;
+      return Number.isFinite(number) ? number : null;
     }
 
-    function normalizeTimestamp(
-      value
-    ) {
+    function normalizeTimestamp(value) {
       const timestamp = Number(value);
-
-      if (!Number.isFinite(timestamp)) {
-        return null;
-      }
-
-      if (timestamp < 1000000000000) {
-        return timestamp * 1000;
-      }
-
+      if (!Number.isFinite(timestamp)) return null;
+      if (timestamp < 1000000000000) return timestamp * 1000;
       return timestamp;
     }
 
-    function updateIndexCard(
-      instrumentKey,
-      marketData
-    ) {
-      const id = toSafeId(
-        instrumentKey
-      );
+    function updateIndexCard(instrumentKey, marketData) {
+      const id = toSafeId(instrumentKey);
 
-      const priceElement = document.getElementById(
-        `${id}-price`
-      );
+      const priceElement = document.getElementById(`${id}-price`);
+      const pulseElement = document.getElementById(`${id}-pulse`);
 
-      const pulseElement = document.getElementById(
-        `${id}-pulse`
-      );
+      const previousPrice = previousPrices.get(instrumentKey);
 
-      const previousPrice = previousPrices.get(
-        instrumentKey
-      );
+      if (priceElement && marketData.ltp !== null) {
+        priceElement.className = "market-price";
+        priceElement.textContent = formatPrice(marketData.ltp);
 
-      if (
-        priceElement &&
-        marketData.ltp !== null
-      ) {
-        priceElement.className = (
-          "market-price"
-        );
-
-        priceElement.textContent = formatPrice(
-          marketData.ltp
-        );
-
-        if (
-          previousPrice !== undefined &&
-          marketData.ltp > previousPrice
-        ) {
-          flashPrice(
-            priceElement,
-            "positive-flash"
-          );
-        } else if (
-          previousPrice !== undefined &&
-          marketData.ltp < previousPrice
-        ) {
-          flashPrice(
-            priceElement,
-            "negative-flash"
-          );
+        if (previousPrice !== undefined && marketData.ltp > previousPrice) {
+          flashPrice(priceElement, "positive-flash");
+        } else if (previousPrice !== undefined && marketData.ltp < previousPrice) {
+          flashPrice(priceElement, "negative-flash");
         }
 
-        previousPrices.set(
-          instrumentKey,
-          marketData.ltp
-        );
+        previousPrices.set(instrumentKey, marketData.ltp);
       }
 
       updateChangeBadge(
@@ -1893,297 +1792,144 @@
         marketData.percentageChange
       );
 
-      setText(
-        `${id}-open`,
-        formatPriceOrPlaceholder(
-          marketData.open
-        )
-      );
-
-      setText(
-        `${id}-high`,
-        formatPriceOrPlaceholder(
-          marketData.high
-        )
-      );
-
-      setText(
-        `${id}-low`,
-        formatPriceOrPlaceholder(
-          marketData.low
-        )
-      );
-
-      setText(
-        `${id}-close`,
-        formatPriceOrPlaceholder(
-          marketData.previousClose
-        )
-      );
+      setText(`${id}-open`, formatPriceOrPlaceholder(marketData.open));
+      setText(`${id}-high`, formatPriceOrPlaceholder(marketData.high));
+      setText(`${id}-low`, formatPriceOrPlaceholder(marketData.low));
+      setText(`${id}-close`, formatPriceOrPlaceholder(marketData.previousClose));
 
       setText(
         `${id}-updated`,
         marketData.lastTradeTime
-          ? formatMarketTime(
-            marketData.lastTradeTime
-          )
+          ? formatMarketTime(marketData.lastTradeTime)
           : formatCurrentTime()
       );
 
       if (pulseElement) {
-        pulseElement.className = (
-          "tick-pulse"
-        );
+        pulseElement.className = "tick-pulse";
       }
     }
 
-    function updateChangeBadge(
-      elementId,
-      change,
-      percentage
-    ) {
-      const element = document.getElementById(
-        elementId
-      );
+    function updateChangeBadge(elementId, change, percentage) {
+      const element = document.getElementById(elementId);
+      if (!element) return;
 
-      if (!element) {
-        return;
-      }
-
-      if (
-        change === null ||
-        percentage === null
-      ) {
-        element.className = (
-          "market-change neutral"
-        );
-
+      if (change === null || percentage === null) {
+        element.className = "market-change neutral";
         element.innerHTML = `
           <i class="bi bi-dash"></i>
           Change unavailable
         `;
-
         return;
       }
 
       if (change > 0) {
-        element.className = (
-          "market-change positive"
-        );
-
+        element.className = "market-change positive";
         element.innerHTML = `
           <i class="bi bi-caret-up-fill"></i>
-          ${escapeHtml(
-            formatSignedNumber(change)
-          )}
-          (${escapeHtml(
-            formatSignedPercent(percentage)
-          )})
+          ${escapeHtml(formatSignedNumber(change))}
+          (${escapeHtml(formatSignedPercent(percentage))})
         `;
-
         return;
       }
 
       if (change < 0) {
-        element.className = (
-          "market-change negative"
-        );
-
+        element.className = "market-change negative";
         element.innerHTML = `
           <i class="bi bi-caret-down-fill"></i>
-          ${escapeHtml(
-            formatSignedNumber(change)
-          )}
-          (${escapeHtml(
-            formatSignedPercent(percentage)
-          )})
+          ${escapeHtml(formatSignedNumber(change))}
+          (${escapeHtml(formatSignedPercent(percentage))})
         `;
-
         return;
       }
 
-      element.className = (
-        "market-change neutral"
-      );
-
+      element.className = "market-change neutral";
       element.innerHTML = `
         <i class="bi bi-dash"></i>
         0.00 (0.00%)
       `;
     }
 
-    function flashPrice(
-      element,
-      className
-    ) {
-      element.classList.remove(
-        "positive-flash",
-        "negative-flash"
-      );
-
+    function flashPrice(element, className) {
+      element.classList.remove("positive-flash", "negative-flash");
       void element.offsetWidth;
-
-      element.classList.add(
-        className
-      );
+      element.classList.add(className);
     }
 
-    function setText(
-      elementId,
-      value
-    ) {
-      const element = document.getElementById(
-        elementId
-      );
-
-      if (element) {
-        element.textContent = value;
-      }
+    function setText(elementId, value) {
+      const element = document.getElementById(elementId);
+      if (element) element.textContent = value;
     }
 
-    function formatPrice(
-      value
-    ) {
-      return Number(value).toLocaleString(
-        "en-IN",
-        {
-          minimumFractionDigits: 2,
-          maximumFractionDigits: 2
-        }
-      );
+    function formatPrice(value) {
+      return Number(value).toLocaleString("en-IN", {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2
+      });
     }
 
-    function formatPriceOrPlaceholder(
-      value
-    ) {
-      return value === null
-        ? "--"
-        : formatPrice(value);
+    function formatPriceOrPlaceholder(value) {
+      return value === null ? "--" : formatPrice(value);
     }
 
-    function formatSignedNumber(
-      value
-    ) {
-      const prefix = value > 0
-        ? "+"
-        : "";
-
+    function formatSignedNumber(value) {
+      const prefix = value > 0 ? "+" : "";
       return (
         prefix +
-        Number(value).toLocaleString(
-          "en-IN",
-          {
-            minimumFractionDigits: 2,
-            maximumFractionDigits: 2
-          }
-        )
+        Number(value).toLocaleString("en-IN", {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2
+        })
       );
     }
 
-    function formatSignedPercent(
-      value
-    ) {
-      const prefix = value > 0
-        ? "+"
-        : "";
-
-      return (
-        `${prefix}${Number(value).toFixed(2)}%`
-      );
+    function formatSignedPercent(value) {
+      const prefix = value > 0 ? "+" : "";
+      return `${prefix}${Number(value).toFixed(2)}%`;
     }
 
-    function formatMarketTime(
-      timestamp
-    ) {
-      const date = new Date(
-        timestamp
-      );
-
-      if (
-        Number.isNaN(
-          date.getTime()
-        )
-      ) {
-        return formatCurrentTime();
-      }
-
-      return date.toLocaleTimeString(
-        "en-IN",
-        {
-          timeZone: "Asia/Kolkata",
-          hour: "2-digit",
-          minute: "2-digit",
-          second: "2-digit"
-        }
-      );
+    function formatMarketTime(timestamp) {
+      const date = new Date(timestamp);
+      if (Number.isNaN(date.getTime())) return formatCurrentTime();
+      return date.toLocaleTimeString("en-IN", {
+        timeZone: "Asia/Kolkata",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit"
+      });
     }
 
     function formatCurrentTime() {
-      return new Date().toLocaleTimeString(
-        "en-IN",
-        {
-          timeZone: "Asia/Kolkata",
-          hour: "2-digit",
-          minute: "2-digit",
-          second: "2-digit"
-        }
-      );
+      return new Date().toLocaleTimeString("en-IN", {
+        timeZone: "Asia/Kolkata",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit"
+      });
     }
 
+    /* =============================================================
+       SEARCH
+       ============================================================= */
     async function search() {
-      const query = document
-        .getElementById("query")
-        .value
-        .trim();
+      const query = document.getElementById("query").value.trim();
 
       if (query.length < 2) {
-        showActionMessage(
-          "Enter at least two characters.",
-          "warning"
-        );
-
+        showActionMessage("Enter at least two characters.", "warning");
         return;
       }
 
-      const parameters = new URLSearchParams({
-        query,
-        records: "30"
-      });
+      const parameters = new URLSearchParams({ query, records: "30" });
 
-      const exchange = document
-        .getElementById("exchange")
-        .value;
+      const exchange = document.getElementById("exchange").value;
+      const segment = document.getElementById("segment").value;
 
-      const segment = document
-        .getElementById("segment")
-        .value;
+      if (exchange) parameters.set("exchanges", exchange);
+      if (segment) parameters.set("segments", segment);
 
-      if (exchange) {
-        parameters.set(
-          "exchanges",
-          exchange
-        );
-      }
+      const container = document.getElementById("results");
+      const button = document.getElementById("searchButton");
 
-      if (segment) {
-        parameters.set(
-          "segments",
-          segment
-        );
-      }
-
-      const container = document.getElementById(
-        "results"
-      );
-
-      const button = document.getElementById(
-        "searchButton"
-      );
-
-      container.classList.remove(
-        "d-none"
-      );
-
+      container.classList.remove("d-none");
       container.innerHTML = `
         <div class="text-center text-secondary py-4">
           Searching instruments...
@@ -2196,12 +1942,7 @@
         const data = await request(
           `/api/instruments/search?${parameters.toString()}`
         );
-
-        renderResults(
-          Array.isArray(data.data)
-            ? data.data
-            : []
-        );
+        renderResults(Array.isArray(data.data) ? data.data : []);
       } catch (error) {
         container.innerHTML = `
           <div class="alert alert-danger m-3">
@@ -2214,17 +1955,10 @@
     }
 
     function renderResults(items) {
-      const container = document.getElementById(
-        "results"
-      );
+      const container = document.getElementById("results");
 
       if (!items.length) {
-        container.innerHTML = `
-          <div class="empty-box">
-            No instruments found.
-          </div>
-        `;
-
+        container.innerHTML = `<div class="empty-box">No instruments found.</div>`;
         return;
       }
 
@@ -2239,36 +1973,16 @@
                 <th>Instrument key</th>
               </tr>
             </thead>
-
             <tbody>
               ${items.map((item) => `
                 <tr
                   class="clickable-row"
-                  data-result-key="${escapeHtml(
-                    item.instrument_key || ""
-                  )}"
+                  data-result-key="${escapeHtml(item.instrument_key || "")}"
                 >
-                  <td>
-                    ${escapeHtml(item.name || "N/A")}
-                  </td>
-
-                  <td>
-                    ${escapeHtml(
-                      item.trading_symbol || "N/A"
-                    )}
-                  </td>
-
-                  <td>
-                    ${escapeHtml(item.segment || "N/A")}
-                  </td>
-
-                  <td>
-                    <code>
-                      ${escapeHtml(
-                        item.instrument_key || ""
-                      )}
-                    </code>
-                  </td>
+                  <td>${escapeHtml(item.name || "N/A")}</td>
+                  <td>${escapeHtml(item.trading_symbol || "N/A")}</td>
+                  <td>${escapeHtml(item.segment || "N/A")}</td>
+                  <td><code>${escapeHtml(item.instrument_key || "")}</code></td>
                 </tr>
               `).join("")}
             </tbody>
@@ -2277,380 +1991,184 @@
       `;
 
       container
-        .querySelectorAll(
-          "[data-result-key]"
-        )
+        .querySelectorAll("[data-result-key]")
         .forEach((row) => {
-          row.addEventListener(
-            "click",
-            () => {
-              document.getElementById(
-                "instrumentKey"
-              ).value = row.dataset.resultKey;
-            }
-          );
+          row.addEventListener("click", () => {
+            document.getElementById("instrumentKey").value = row.dataset.resultKey;
+          });
         });
     }
 
+    /* =============================================================
+       SUBSCRIPTION ACTIONS
+       ============================================================= */
     async function subscribe() {
       await performSubscriptionAction(
-        "/api/subscriptions",
-        "POST",
-        "Subscription completed"
+        "/api/subscriptions", "POST", "Subscription completed"
       );
     }
 
     async function changeMode() {
       await performSubscriptionAction(
-        "/api/subscriptions/mode",
-        "PATCH",
-        "Mode changed"
+        "/api/subscriptions/mode", "PATCH", "Mode changed"
       );
     }
 
     async function unsubscribe() {
       await performSubscriptionAction(
-        "/api/subscriptions",
-        "DELETE",
-        "Unsubscribe completed"
+        "/api/subscriptions", "DELETE", "Unsubscribe completed"
       );
     }
 
-    async function performSubscriptionAction(
-      path,
-      method,
-      successMessage
-    ) {
-      const key = document
-        .getElementById("instrumentKey")
-        .value
-        .trim();
+    async function performSubscriptionAction(path, method, successMessage) {
+      const key = document.getElementById("instrumentKey").value.trim();
 
       if (!key) {
-        showActionMessage(
-          "Instrument key is required.",
-          "warning"
-        );
-
+        showActionMessage("Instrument key is required.", "warning");
         return;
       }
 
       try {
-        await request(
-          path,
-          {
-            method,
-            body: subscriptionBody()
-          }
-        );
-
+        await request(path, { method, body: subscriptionBody() });
         subscriptionsLoaded = false;
-
         await loadStartupIndexes();
-
-        showActionMessage(
-          successMessage,
-          "success"
-        );
+        showActionMessage(successMessage, "success");
       } catch (error) {
-        showActionMessage(
-          error.message,
-          "danger"
-        );
+        showActionMessage(error.message, "danger");
       }
     }
 
     async function hardRefresh() {
-      showActionMessage(
-        "Refreshing token and subscriptions...",
-        "info"
-      );
+      showActionMessage("Refreshing token and subscriptions...", "info");
 
       try {
-        await request(
-          "/api/token/hard-refresh",
-          {
-            method: "POST"
-          }
-        );
-
+        await request("/api/token/hard-refresh", { method: "POST" });
         subscriptionsLoaded = false;
-
-        await Promise.all([
-          loadHealth(),
-          loadStartupIndexes(true)
-        ]);
-
-        showActionMessage(
-          "Hard refresh completed.",
-          "success"
-        );
+        await Promise.all([loadHealth(), loadStartupIndexes(true)]);
+        showActionMessage("Hard refresh completed.", "success");
       } catch (error) {
-        showActionMessage(
-          error.message,
-          "danger"
-        );
+        showActionMessage(error.message, "danger");
       }
     }
 
-    function setSubscriptionCounters(
-      activeCount,
-      historyCount
-    ) {
-      document.getElementById(
-        "subscriptionCount"
-      ).textContent = String(
-        activeCount
-      );
-
-      document.getElementById(
-        "activeSubscriptionCount"
-      ).textContent = String(
-        activeCount
-      );
-
-      document.getElementById(
-        "historyCount"
-      ).textContent = String(
-        historyCount
-      );
+    /* =============================================================
+       SUBSCRIPTIONS + HISTORY
+       ============================================================= */
+    function setSubscriptionCounters(activeCount, historyCount) {
+      document.getElementById("subscriptionCount").textContent = String(activeCount);
+      document.getElementById("activeSubscriptionCount").textContent = String(activeCount);
+      document.getElementById("historyCount").textContent = String(historyCount);
     }
 
-    async function loadSubscriptions(
-      force = false
-    ) {
-      if (
-        subscriptionsLoaded &&
-        !force
-      ) {
-        return;
-      }
+    async function loadSubscriptions(force = false) {
+      if (subscriptionsLoaded && !force) return;
 
       try {
-        const data = await request(
-          "/api/subscriptions"
-        );
+        const data = await request("/api/subscriptions");
+        const active = Array.isArray(data.active) ? data.active : [];
+        const history = Array.isArray(data.last_7_days) ? data.last_7_days : [];
 
-        const active = Array.isArray(
-          data.active
-        )
-          ? data.active
-          : [];
-
-        const history = Array.isArray(
-          data.last_7_days
-        )
-          ? data.last_7_days
-          : [];
-
-        setSubscriptionCounters(
-          active.length,
-          history.length
-        );
-
-        renderActiveSubscriptions(
-          active
-        );
-
-        renderSubscriptionHistory(
-          history
-        );
-
+        setSubscriptionCounters(active.length, history.length);
+        renderActiveSubscriptions(active);
+        renderSubscriptionHistory(history);
         subscriptionsLoaded = true;
       } catch (error) {
-        showActionMessage(
-          error.message,
-          "danger"
-        );
+        showActionMessage(error.message, "danger");
       }
     }
 
-    function renderActiveSubscriptions(
-      items
-    ) {
-      const container = document.getElementById(
-        "activeSubscriptions"
-      );
+    function renderActiveSubscriptions(items) {
+      const container = document.getElementById("activeSubscriptions");
 
       if (!items.length) {
-        container.innerHTML = `
-          <div class="empty-box">
-            No active subscriptions.
-          </div>
-        `;
-
+        container.innerHTML = `<div class="empty-box">No active subscriptions.</div>`;
         return;
       }
 
-      container.innerHTML = items.map(
-        (item) => {
-          const details = [
-            `Source: ${item.source || "manual"}`,
-            item.instrument_type
-              ? `Type: ${item.instrument_type}`
-              : "",
-            item.strike_price !== undefined
-              ? `Strike: ${item.strike_price}`
-              : "",
-            item.expiry
-              ? `Expiry: ${item.expiry}`
-              : ""
-          ]
-            .filter(Boolean)
-            .join(" | ");
+      container.innerHTML = items.map((item) => {
+        const details = [
+          `Source: ${item.source || "manual"}`,
+          item.instrument_type ? `Type: ${item.instrument_type}` : "",
+          item.strike_price !== undefined ? `Strike: ${item.strike_price}` : "",
+          item.expiry ? `Expiry: ${item.expiry}` : ""
+        ].filter(Boolean).join(" | ");
 
-          return `
-            <div class="subscription-item">
-              <div>
-                <div class="subscription-key">
-                  ${escapeHtml(
-                    item.instrument_key || ""
-                  )}
-                </div>
-
-                <div class="subscription-details">
-                  ${escapeHtml(details)}
-                </div>
-              </div>
-
-              <span class="badge-mode">
-                ${escapeHtml(
-                  item.mode || "N/A"
-                )}
-              </span>
+        return `
+          <div class="subscription-item">
+            <div>
+              <div class="subscription-key">${escapeHtml(item.instrument_key || "")}</div>
+              <div class="subscription-details">${escapeHtml(details)}</div>
             </div>
-          `;
-        }
-      ).join("");
+            <span class="badge-mode">${escapeHtml(item.mode || "N/A")}</span>
+          </div>
+        `;
+      }).join("");
     }
 
-    function renderSubscriptionHistory(
-      items
-    ) {
-      const container = document.getElementById(
-        "subscriptionEvents"
-      );
+    function renderSubscriptionHistory(items) {
+      const container = document.getElementById("subscriptionEvents");
 
       if (!items.length) {
-        container.innerHTML = `
-          <div class="empty-box">
-            No subscription history.
-          </div>
-        `;
-
+        container.innerHTML = `<div class="empty-box">No subscription history.</div>`;
         return;
       }
 
-      container.innerHTML = items.map(
-        (item) => `
-          <div class="history-item">
-            <div class="d-flex justify-content-between gap-2">
-              <span class="history-action">
-                ${escapeHtml(
-                  item.action || "unknown"
-                )}
-              </span>
-
-              <span class="history-time">
-                ${escapeHtml(
-                  formatDateTime(
-                    item.created_at
-                  )
-                )}
-              </span>
-            </div>
-
-            <div class="subscription-key mt-2">
-              ${escapeHtml(
-                item.instrument_key || ""
-              )}
-            </div>
-
-            <div class="subscription-details">
-              Mode: ${escapeHtml(
-                item.mode || "N/A"
-              )}
-              |
-              Source: ${escapeHtml(
-                item.source || "N/A"
-              )}
-            </div>
+      container.innerHTML = items.map((item) => `
+        <div class="history-item">
+          <div class="d-flex justify-content-between gap-2">
+            <span class="history-action">${escapeHtml(item.action || "unknown")}</span>
+            <span class="history-time">${escapeHtml(formatDateTime(item.created_at))}</span>
           </div>
-        `
-      ).join("");
+          <div class="subscription-key mt-2">${escapeHtml(item.instrument_key || "")}</div>
+          <div class="subscription-details">
+            Mode: ${escapeHtml(item.mode || "N/A")} | Source: ${escapeHtml(item.source || "N/A")}
+          </div>
+        </div>
+      `).join("");
     }
 
     function formatDateTime(value) {
-      if (!value) {
-        return "N/A";
-      }
-
+      if (!value) return "N/A";
       const date = new Date(value);
-
-      if (
-        Number.isNaN(
-          date.getTime()
-        )
-      ) {
-        return String(value);
-      }
-
-      return date.toLocaleString(
-        "en-IN",
-        {
-          timeZone: "Asia/Kolkata",
-          year: "numeric",
-          month: "short",
-          day: "2-digit",
-          hour: "2-digit",
-          minute: "2-digit",
-          second: "2-digit"
-        }
-      );
+      if (Number.isNaN(date.getTime())) return String(value);
+      return date.toLocaleString("en-IN", {
+        timeZone: "Asia/Kolkata",
+        year: "numeric", month: "short", day: "2-digit",
+        hour: "2-digit", minute: "2-digit", second: "2-digit"
+      });
     }
 
+    /* =============================================================
+       WIRING
+       ============================================================= */
     document
-      .getElementById(
-        "subscriptionHistory"
-      )
-      .addEventListener(
-        "show.bs.collapse",
-        () => {
-          loadSubscriptions(false);
-        }
-      );
+      .getElementById("subscriptionHistory")
+      .addEventListener("show.bs.collapse", () => {
+        loadSubscriptions(false);
+      });
 
     document
       .getElementById("query")
-      .addEventListener(
-        "keydown",
-        (event) => {
-          if (event.key === "Enter") {
-            event.preventDefault();
-            search();
-          }
+      .addEventListener("keydown", (event) => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          search();
         }
-      );
+      });
 
-    window.addEventListener(
-      "beforeunload",
-      closeAllIndexSockets
-    );
+    window.addEventListener("beforeunload", () => {
+      if (marketTickInterval) clearInterval(marketTickInterval);
+      closeAllIndexSockets();
+    });
 
-    window.addEventListener(
-      "load",
-      async () => {
-        await Promise.all([
-          loadHealth(),
-          loadStartupIndexes()
-        ]);
+    window.addEventListener("load", async () => {
+      // Start the market-session tick loop FIRST so the header pill
+      // updates immediately and the state machine is primed.
+      startMarketTick();
 
-        setInterval(
-          loadHealth,
-          30000
-        );
-      }
-    );
+      await Promise.all([loadHealth(), loadStartupIndexes()]);
+      setInterval(loadHealth, 30000);
+    });
   </script>
 </body>
 </html>
