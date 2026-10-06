@@ -1,9 +1,27 @@
+# --- Web framework ---
 fastapi
-uvicorn
+uvicorn[standard]
+
+# --- WebSocket protocol implementation ---
+# Required by uvicorn to accept the /ws/market upgrade.
+# Already pulled in by uvicorn[standard], but listed explicitly so
+# the dependency survives a switch to plain `uvicorn`.
+websockets
+
+# --- Upstox market data SDK ---
 upstox-python-sdk
+
+# --- MongoDB ---
 pymongo
-APScheduler
+
+# --- HTTP client (Upstox REST: option contracts, instrument search) ---
 httpx
+
+# --- Scheduler (09:00 IST token refresh cron) ---
+APScheduler
+
+# --- Templating (Jinja2Templates in app/main.py) ---
 jinja2
-pydantic-settings
+
+# --- Env loading (load_dotenv in app/config.py) ---
 python-dotenv
