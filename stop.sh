@@ -1,17 +1,21 @@
 #!/bin/bash
 
-APP_NAME="upstox_order_receiver"
+APP_NAME="upstox_market_stream"
+PORT=8001
+
 PID_FILE="${APP_NAME}.pid"
 
 echo "=========================================="
-echo "  Upstox Order Request Receiver"
+echo "  Upstox Market Stream Gateway"
 echo "=========================================="
 echo
 echo "Stopping FastAPI application..."
+echo "Port: $PORT"
 echo
 
 if [ ! -f "$PID_FILE" ]; then
     echo "Application is not running."
+    echo "PID file not found: $PID_FILE"
     exit 0
 fi
 
@@ -68,4 +72,38 @@ rm -f "$PID_FILE"
 
 echo
 echo "PID file removed."
+
+# ------------------------------------------------------------------
+# Safety check: is anything still holding the port?
+# ------------------------------------------------------------------
+# The PID file only knows about the process start.sh launched. If an
+# orphan Uvicorn (or a manually-started instance) is still bound to
+# the port, the next start.sh run will fail with "address already in
+# use". Surface that here so it is not a surprise later.
+# ------------------------------------------------------------------
+if command -v lsof >/dev/null 2>&1; then
+    PORT_PIDS=$(lsof -ti tcp:"$PORT" 2>/dev/null)
+
+    if [ -n "$PORT_PIDS" ]; then
+        echo
+        echo "WARNING: Port $PORT is still in use by PID(s): $PORT_PIDS"
+        echo "These processes are not tracked by $PID_FILE."
+        echo "You may need to stop them manually, for example:"
+        echo "  kill -9 $PORT_PIDS"
+    else
+        echo "Port $PORT is free."
+    fi
+elif command -v ss >/dev/null 2>&1; then
+    if ss -ltn "sport = :$PORT" 2>/dev/null | grep -q ":$PORT"; then
+        echo
+        echo "WARNING: Port $PORT appears to still be in use."
+        echo "Run: ss -ltnp | grep :$PORT   to identify the process."
+    else
+        echo "Port $PORT is free."
+    fi
+else
+    echo "Port check skipped (lsof/ss not available)."
+fi
+
+echo
 echo "Done."

@@ -2,7 +2,9 @@ import asyncio
 import json
 import threading
 from concurrent.futures import Future
+from datetime import date, datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import httpx
 import upstox_client
@@ -31,6 +33,17 @@ class UpstoxMarketService:
         "option_greeks",
         "full_d30",
     }
+
+    # Recognised keywords for STARTUP_OPTION_EXPIRY.
+    # Anything else is treated as an explicit YYYY-MM-DD date.
+    EXPIRY_KEYWORDS = {
+        "current_week",
+        "next_week",
+        "current_month",
+        "next_month",
+    }
+
+    TIMEZONE = "Asia/Kolkata"
 
     def __init__(
         self,
@@ -144,32 +157,40 @@ class UpstoxMarketService:
 
             raise
 
+    # ------------------------------------------------------------------
+    # Option contracts
+    # ------------------------------------------------------------------
     def fetch_option_contracts(
         self,
         instrument_key: str,
-        expiry_date: str,
+        expiry_date: str | None = None,
     ) -> list[dict[str, Any]]:
         if not self.access_token:
             raise RuntimeError(
-                "Cannot fetch option contracts because " "the access token is empty"
+                "Cannot fetch option contracts because the access token is empty"
             )
 
         logger.info(
-            "Fetching option contracts | " "underlying=%s | expiry=%s",
+            "Fetching option contracts | underlying=%s | expiry=%s",
             instrument_key,
-            expiry_date,
+            expiry_date if expiry_date else "<all>",
         )
 
         headers = {
             "Accept": "application/json",
             "Content-Type": "application/json",
-            "Authorization": (f"Bearer {self.access_token}"),
+            "Authorization": f"Bearer {self.access_token}",
         }
 
-        params = {
+        params: dict[str, Any] = {
             "instrument_key": instrument_key,
-            "expiry_date": expiry_date,
         }
+
+        # Only send expiry_date when an explicit date was supplied.
+        # When expiry_date is None we get every listed contract so we
+        # can resolve a keyword like "current_week" locally.
+        if expiry_date:
+            params["expiry_date"] = expiry_date
 
         try:
             with httpx.Client(timeout=30.0) as client:
@@ -186,29 +207,25 @@ class UpstoxMarketService:
 
             except ValueError as exc:
                 raise RuntimeError(
-                    "Upstox option contracts API " "returned invalid JSON"
+                    "Upstox option contracts API returned invalid JSON"
                 ) from exc
 
             if payload.get("status") != "success":
                 raise RuntimeError(
-                    "Upstox option contracts API " f"returned failure: {payload}"
+                    f"Upstox option contracts API returned failure: {payload}"
                 )
 
-            contracts = payload.get(
-                "data",
-                [],
-            )
+            contracts = payload.get("data", [])
 
-            if not isinstance(
-                contracts,
-                list,
-            ):
-                raise RuntimeError("Option contracts response data " "is not a list")
+            if not isinstance(contracts, list):
+                raise RuntimeError(
+                    "Option contracts response data is not a list"
+                )
 
             logger.info(
-                "Option contracts fetched | " "underlying=%s | expiry=%s | count=%s",
+                "Option contracts fetched | underlying=%s | expiry=%s | count=%s",
                 instrument_key,
-                expiry_date,
+                expiry_date if expiry_date else "<all>",
                 len(contracts),
             )
 
@@ -216,11 +233,10 @@ class UpstoxMarketService:
 
         except httpx.TimeoutException:
             logger.exception(
-                "Option contracts request timed out | " "underlying=%s | expiry=%s",
+                "Option contracts request timed out | underlying=%s | expiry=%s",
                 instrument_key,
                 expiry_date,
             )
-
             raise
 
         except httpx.HTTPStatusError as exc:
@@ -234,26 +250,115 @@ class UpstoxMarketService:
                 exc.response.text[:1000],
                 exc_info=True,
             )
-
             raise
 
         except httpx.RequestError:
             logger.exception(
-                "Option contracts request failed | " "underlying=%s | expiry=%s",
+                "Option contracts request failed | underlying=%s | expiry=%s",
                 instrument_key,
                 expiry_date,
             )
-
             raise
 
         except Exception:
             logger.exception(
-                "Unexpected option contracts failure | " "underlying=%s | expiry=%s",
+                "Unexpected option contracts failure | underlying=%s | expiry=%s",
                 instrument_key,
                 expiry_date,
             )
-
             raise
+
+    def _resolve_expiry_keyword(
+        self,
+        contracts: list[dict[str, Any]],
+        keyword: str,
+    ) -> str | None:
+        """
+        Resolve an expiry keyword to a concrete YYYY-MM-DD expiry date,
+        using the set of expiries returned by the Upstox option contracts
+        API.
+
+        Semantics:
+            current_week  -> nearest upcoming expiry (>= today)
+            next_week     -> second nearest upcoming expiry
+            current_month -> nearest upcoming expiry in the current calendar month
+            next_month    -> nearest upcoming expiry in the next calendar month
+        """
+        keyword = keyword.strip().lower()
+
+        today = datetime.now(ZoneInfo(self.TIMEZONE)).date()
+
+        expiries = sorted(
+            {
+                str(contract.get("expiry"))
+                for contract in contracts
+                if contract.get("expiry")
+            }
+        )
+
+        parsed: list[tuple[str, date]] = []
+        for expiry_str in expiries:
+            try:
+                parsed.append(
+                    (expiry_str, date.fromisoformat(expiry_str))
+                )
+            except ValueError:
+                continue
+
+        upcoming = [(raw, d) for raw, d in parsed if d >= today]
+
+        if not upcoming:
+            logger.warning(
+                "No upcoming expiries available for keyword | keyword=%s",
+                keyword,
+            )
+            return None
+
+        if keyword == "current_week":
+            return upcoming[0][0]
+
+        if keyword == "next_week":
+            if len(upcoming) < 2:
+                logger.warning(
+                    "next_week requested but fewer than two upcoming "
+                    "expiries exist | keyword=%s",
+                    keyword,
+                )
+                return None
+            return upcoming[1][0]
+
+        if keyword == "current_month":
+            for raw, d in upcoming:
+                if d.month == today.month and d.year == today.year:
+                    return raw
+            logger.warning(
+                "No upcoming expiry in current month | keyword=%s | today=%s",
+                keyword,
+                today,
+            )
+            return None
+
+        if keyword == "next_month":
+            # Compute the next calendar month relative to today.
+            if today.month == 12:
+                target_year = today.year + 1
+                target_month = 1
+            else:
+                target_year = today.year
+                target_month = today.month + 1
+
+            for raw, d in upcoming:
+                if d.month == target_month and d.year == target_year:
+                    return raw
+
+            logger.warning(
+                "No upcoming expiry in next month | keyword=%s | today=%s",
+                keyword,
+                today,
+            )
+            return None
+
+        return None
 
     def filter_option_contracts(
         self,
@@ -265,9 +370,7 @@ class UpstoxMarketService:
 
         for contract in contracts:
             instrument_key = contract.get("instrument_key")
-
             instrument_type = contract.get("instrument_type")
-
             strike_price = contract.get("strike_price")
 
             if not instrument_key:
@@ -281,16 +384,13 @@ class UpstoxMarketService:
 
             try:
                 numeric_strike = float(strike_price)
-
             except (TypeError, ValueError):
                 logger.warning(
-                    "Ignoring option contract with "
-                    "invalid strike | instrument_key=%s | "
-                    "strike_price=%s",
+                    "Ignoring option contract with invalid strike | "
+                    "instrument_key=%s | strike_price=%s",
                     instrument_key,
                     strike_price,
                 )
-
                 continue
 
             if start_range <= numeric_strike <= end_range:
@@ -298,16 +398,8 @@ class UpstoxMarketService:
 
         selected_contracts.sort(
             key=lambda item: (
-                float(
-                    item.get(
-                        "strike_price",
-                        0,
-                    )
-                ),
-                item.get(
-                    "instrument_type",
-                    "",
-                ),
+                float(item.get("strike_price", 0)),
+                item.get("instrument_type", ""),
             )
         )
 
@@ -329,42 +421,37 @@ class UpstoxMarketService:
             "startup option subscription mode",
         )
 
-        expiry_date = str(settings.startup_option_expiry).strip()
+        expiry_setting = str(settings.startup_option_expiry).strip()
 
-        if not expiry_date:
+        if not expiry_setting:
             raise ValueError("Startup option expiry is empty")
 
+        expiry_is_keyword = expiry_setting.lower() in self.EXPIRY_KEYWORDS
+
         desired_subscriptions: list[dict[str, Any]] = []
-
         underlying_results: list[dict[str, Any]] = []
-
         configured_underlyings: set[str] = set()
 
         for startup_item in settings.startup_subscribe_list:
             underlying_key = str(
-                startup_item.get(
-                    "instrument_name",
-                    "",
-                )
+                startup_item.get("instrument_name", "")
             ).strip()
 
             if not underlying_key:
                 raise ValueError(
-                    "Startup subscription configuration " "is missing instrument_name"
+                    "Startup subscription configuration is missing instrument_name"
                 )
 
             if underlying_key in configured_underlyings:
                 logger.warning(
-                    "Duplicate startup underlying ignored | " "underlying=%s",
+                    "Duplicate startup underlying ignored | underlying=%s",
                     underlying_key,
                 )
-
                 continue
 
             configured_underlyings.add(underlying_key)
 
             start_range = startup_item.get("start_range")
-
             end_range = startup_item.get("end_range")
 
             if start_range is None or end_range is None:
@@ -375,53 +462,74 @@ class UpstoxMarketService:
                 )
 
             index_mode = self._validate_mode(
-                startup_item.get(
-                    "index_mode",
-                    default_index_mode,
-                ),
-                ("index subscription mode for " f"{underlying_key}"),
+                startup_item.get("index_mode", default_index_mode),
+                f"index subscription mode for {underlying_key}",
             )
 
             option_mode = self._validate_mode(
-                startup_item.get(
-                    "option_mode",
-                    default_option_mode,
-                ),
-                ("option subscription mode for " f"{underlying_key}"),
+                startup_item.get("option_mode", default_option_mode),
+                f"option subscription mode for {underlying_key}",
             )
 
             try:
                 numeric_start_range = float(start_range)
-
                 numeric_end_range = float(end_range)
-
             except (TypeError, ValueError) as exc:
                 raise ValueError(
-                    "Invalid startup strike range for " f"{underlying_key}"
+                    f"Invalid startup strike range for {underlying_key}"
                 ) from exc
 
             if numeric_start_range > numeric_end_range:
                 logger.warning(
                     "Startup strike range reversed | "
-                    "underlying=%s | start_range=%s | "
-                    "end_range=%s",
+                    "underlying=%s | start_range=%s | end_range=%s",
                     underlying_key,
                     numeric_start_range,
                     numeric_end_range,
                 )
-
-                (
-                    numeric_start_range,
-                    numeric_end_range,
-                ) = (
+                numeric_start_range, numeric_end_range = (
                     numeric_end_range,
                     numeric_start_range,
                 )
 
-            contracts = self.fetch_option_contracts(
-                instrument_key=underlying_key,
-                expiry_date=expiry_date,
-            )
+            # -------- Fetch contracts ----------------------------------
+            # Explicit date -> pass through to the API.
+            # Keyword       -> fetch all and resolve locally.
+            if expiry_is_keyword:
+                raw_contracts = self.fetch_option_contracts(
+                    instrument_key=underlying_key,
+                    expiry_date=None,
+                )
+
+                resolved_expiry = self._resolve_expiry_keyword(
+                    raw_contracts,
+                    expiry_setting,
+                )
+
+                if resolved_expiry is None:
+                    logger.warning(
+                        "Startup expiry keyword could not be resolved | "
+                        "underlying=%s | keyword=%s",
+                        underlying_key,
+                        expiry_setting,
+                    )
+                    contracts = []
+                    expiry_for_records = None
+                else:
+                    contracts = [
+                        contract
+                        for contract in raw_contracts
+                        if str(contract.get("expiry")) == resolved_expiry
+                    ]
+                    expiry_for_records = resolved_expiry
+
+            else:
+                contracts = self.fetch_option_contracts(
+                    instrument_key=underlying_key,
+                    expiry_date=expiry_setting,
+                )
+                resolved_expiry = expiry_setting
+                expiry_for_records = expiry_setting
 
             selected_contracts = self.filter_option_contracts(
                 contracts=contracts,
@@ -431,10 +539,10 @@ class UpstoxMarketService:
 
             desired_subscriptions.append(
                 {
-                    "instrument_key": (underlying_key),
+                    "instrument_key": underlying_key,
                     "mode": index_mode,
-                    "source": ("startup_underlying"),
-                    "underlying_key": (underlying_key),
+                    "source": "startup_underlying",
+                    "underlying_key": underlying_key,
                 }
             )
 
@@ -446,7 +554,6 @@ class UpstoxMarketService:
 
                 if instrument_type == "CE":
                     ce_count += 1
-
                 elif instrument_type == "PE":
                     pe_count += 1
 
@@ -454,23 +561,24 @@ class UpstoxMarketService:
                     {
                         "instrument_key": contract["instrument_key"],
                         "mode": option_mode,
-                        "source": ("startup_option"),
-                        "underlying_key": (underlying_key),
-                        "instrument_type": (instrument_type),
-                        "strike_price": (contract.get("strike_price")),
-                        "expiry": (contract.get("expiry")),
-                        "trading_symbol": (contract.get("trading_symbol")),
+                        "source": "startup_option",
+                        "underlying_key": underlying_key,
+                        "instrument_type": instrument_type,
+                        "strike_price": contract.get("strike_price"),
+                        "expiry": contract.get("expiry"),
+                        "trading_symbol": contract.get("trading_symbol"),
                     }
                 )
 
             underlying_results.append(
                 {
-                    "underlying_key": (underlying_key),
+                    "underlying_key": underlying_key,
                     "index_mode": index_mode,
                     "option_mode": option_mode,
-                    "start_range": (numeric_start_range),
-                    "end_range": (numeric_end_range),
-                    "expiry": expiry_date,
+                    "start_range": numeric_start_range,
+                    "end_range": numeric_end_range,
+                    "expiry": expiry_for_records,
+                    "expiry_setting": expiry_setting,
                     "call_contracts": ce_count,
                     "put_contracts": pe_count,
                     "total_option_contracts": len(selected_contracts),
@@ -484,7 +592,7 @@ class UpstoxMarketService:
                 "start_range=%s | end_range=%s | "
                 "CE=%s | PE=%s | total=%s",
                 underlying_key,
-                expiry_date,
+                expiry_for_records,
                 index_mode,
                 option_mode,
                 numeric_start_range,
@@ -494,10 +602,7 @@ class UpstoxMarketService:
                 len(selected_contracts),
             )
 
-        return (
-            desired_subscriptions,
-            underlying_results,
-        )
+        return desired_subscriptions, underlying_results
 
     def synchronize_startup_subscriptions(
         self,
@@ -509,14 +614,10 @@ class UpstoxMarketService:
             underlying_results,
         ) = self.prepare_startup_subscriptions()
 
-        desired_by_key: dict[
-            str,
-            dict[str, Any],
-        ] = {}
+        desired_by_key: dict[str, dict[str, Any]] = {}
 
         for subscription in desired_subscriptions:
             instrument_key = subscription["instrument_key"]
-
             desired_by_key[instrument_key] = subscription
 
         for subscription in desired_by_key.values():
@@ -540,25 +641,25 @@ class UpstoxMarketService:
         index_subscription_count = sum(
             1
             for subscription in desired_by_key.values()
-            if (subscription.get("source") == "startup_underlying")
+            if subscription.get("source") == "startup_underlying"
         )
 
         option_subscription_count = sum(
             1
             for subscription in desired_by_key.values()
-            if (subscription.get("source") == "startup_option")
+            if subscription.get("source") == "startup_option"
         )
 
         result = {
-            "expiry": (settings.startup_option_expiry),
-            "default_index_mode": (settings.startup_index_subscription_mode),
-            "default_option_mode": (settings.startup_option_subscription_mode),
+            "expiry_setting": settings.startup_option_expiry,
+            "default_index_mode": settings.startup_index_subscription_mode,
+            "default_option_mode": settings.startup_option_subscription_mode,
             "underlyings": underlying_results,
-            "index_subscription_count": (index_subscription_count),
-            "option_subscription_count": (option_subscription_count),
+            "index_subscription_count": index_subscription_count,
+            "option_subscription_count": option_subscription_count,
             "desired_subscription_count": len(desired_instrument_keys),
             "stale_removed_count": len(stale_instrument_keys),
-            "stale_removed": (stale_instrument_keys),
+            "stale_removed": stale_instrument_keys,
         }
 
         logger.info(
@@ -584,32 +685,31 @@ class UpstoxMarketService:
 
                 if not token:
                     raise RuntimeError(
-                        "No Upstox access token " "found in the database"
+                        "No Upstox access token found in the database"
                     )
 
                 token_changed = token != self.access_token
-
                 self.access_token = token
 
                 logger.info(
-                    "Access token loaded | " "token_changed=%s",
+                    "Access token loaded | token_changed=%s",
                     token_changed,
                 )
 
                 if self.streamer is not None:
-                    logger.info("Disconnecting existing Upstox " "market data streamer")
+                    logger.info(
+                        "Disconnecting existing Upstox market data streamer"
+                    )
 
                     try:
                         self.streamer.disconnect()
-
                         logger.info(
-                            "Existing Upstox market data " "streamer disconnected"
+                            "Existing Upstox market data streamer disconnected"
                         )
-
                     except Exception:
                         logger.exception(
-                            "Failed to disconnect existing "
-                            "streamer; continuing with refresh"
+                            "Failed to disconnect existing streamer; "
+                            "continuing with refresh"
                         )
 
                 self.connected = False
@@ -621,7 +721,7 @@ class UpstoxMarketService:
 
                 if self.streamer is None:
                     raise RuntimeError(
-                        "Upstox market data streamer " "was not initialized"
+                        "Upstox market data streamer was not initialized"
                     )
 
                 logger.info("Connecting Upstox market data streamer")
@@ -631,13 +731,12 @@ class UpstoxMarketService:
                 result = {
                     "status": "reconnecting",
                     "token_changed": token_changed,
-                    "startup_subscriptions": (synchronization_result),
+                    "startup_subscriptions": synchronization_result,
                 }
 
                 logger.info(
                     "Streamer reconnection requested | "
-                    "token_changed=%s | "
-                    "managed_subscription_count=%s",
+                    "token_changed=%s | managed_subscription_count=%s",
                     token_changed,
                     synchronization_result.get("desired_subscription_count"),
                 )
@@ -646,15 +745,12 @@ class UpstoxMarketService:
 
             except Exception:
                 self.connected = False
-
-                logger.exception("Token refresh and streamer " "reconnection failed")
-
+                logger.exception(
+                    "Token refresh and streamer reconnection failed"
+                )
                 raise
 
-    def _on_open(
-        self,
-        *args: Any,
-    ) -> None:
+    def _on_open(self, *args: Any) -> None:
         logger.info("Upstox streamer open event received")
 
         try:
@@ -663,147 +759,103 @@ class UpstoxMarketService:
             subscriptions = self.database.list_active()
 
             logger.info(
-                "Restoring active subscriptions | " "count=%s",
+                "Restoring active subscriptions | count=%s",
                 len(subscriptions),
             )
 
             if not subscriptions:
                 logger.info("No active subscriptions to restore")
-
                 return
 
             if self.streamer is None:
                 raise RuntimeError(
-                    "Cannot restore subscriptions " "because streamer is unavailable"
+                    "Cannot restore subscriptions because streamer is unavailable"
                 )
 
-            grouped: dict[
-                str,
-                list[str],
-            ] = {}
+            grouped: dict[str, list[str]] = {}
 
             for item in subscriptions:
                 instrument_key = str(
-                    item.get(
-                        "instrument_key",
-                        "",
-                    )
+                    item.get("instrument_key", "")
                 ).strip()
-
-                mode = str(
-                    item.get(
-                        "mode",
-                        "",
-                    )
-                ).strip()
+                mode = str(item.get("mode", "")).strip()
 
                 if not instrument_key or not mode:
                     logger.warning(
-                        "Skipping invalid subscription " "record | record=%s",
+                        "Skipping invalid subscription record | record=%s",
                         item,
                     )
-
                     continue
 
                 try:
                     validated_mode = self._validate_mode(
                         mode,
-                        ("stored subscription " "mode"),
+                        "stored subscription mode",
                     )
-
                 except ValueError:
                     logger.exception(
-                        "Skipping subscription with " "invalid mode | record=%s",
+                        "Skipping subscription with invalid mode | record=%s",
                         item,
                     )
-
                     continue
 
-                grouped.setdefault(
-                    validated_mode,
-                    [],
-                ).append(instrument_key)
+                grouped.setdefault(validated_mode, []).append(instrument_key)
 
             for mode, instrument_keys in grouped.items():
                 try:
-                    self.streamer.subscribe(
-                        instrument_keys,
-                        mode,
-                    )
-
+                    self.streamer.subscribe(instrument_keys, mode)
                     logger.info(
-                        "Subscriptions restored | " "mode=%s | count=%s",
+                        "Subscriptions restored | mode=%s | count=%s",
                         mode,
                         len(instrument_keys),
                     )
-
                 except Exception:
                     logger.exception(
-                        "Failed to restore subscription " "group | mode=%s | count=%s",
+                        "Failed to restore subscription group | mode=%s | count=%s",
                         mode,
                         len(instrument_keys),
                     )
 
             logger.info(
-                "Active subscription restoration " "completed | groups=%s",
+                "Active subscription restoration completed | groups=%s",
                 len(grouped),
             )
 
         except Exception:
             self.connected = False
+            logger.exception(
+                "Failed while processing Upstox streamer open event"
+            )
 
-            logger.exception("Failed while processing Upstox " "streamer open event")
-
-    def _on_message(
-        self,
-        message: Any,
-    ) -> None:
+    def _on_message(self, message: Any) -> None:
         try:
-            if isinstance(
-                message,
-                str,
-            ):
+            if isinstance(message, str):
                 try:
                     payload = json.loads(message)
-
                 except json.JSONDecodeError:
                     logger.warning(
-                        "Received non-JSON string from "
-                        "Upstox streamer | "
+                        "Received non-JSON string from Upstox streamer | "
                         "message_length=%s",
                         len(message),
                     )
-
                     return
-
             else:
                 payload = message
 
-            if not isinstance(
-                payload,
-                dict,
-            ):
+            if not isinstance(payload, dict):
                 logger.warning(
-                    "Ignoring unexpected Upstox " "message type | type=%s",
+                    "Ignoring unexpected Upstox message type | type=%s",
                     type(payload).__name__,
                 )
-
                 return
 
-            feeds = payload.get(
-                "feeds",
-                {},
-            )
+            feeds = payload.get("feeds", {})
 
-            if not isinstance(
-                feeds,
-                dict,
-            ):
+            if not isinstance(feeds, dict):
                 logger.warning(
-                    "Ignoring message with invalid " "feeds value | type=%s",
+                    "Ignoring message with invalid feeds value | type=%s",
                     type(feeds).__name__,
                 )
-
                 return
 
             if not feeds:
@@ -811,20 +863,18 @@ class UpstoxMarketService:
 
             if self.loop is None:
                 logger.error(
-                    "Cannot broadcast market feeds " "because event loop is not set"
+                    "Cannot broadcast market feeds because event loop is not set"
                 )
-
                 return
 
             if self.loop.is_closed():
                 logger.error(
-                    "Cannot broadcast market feeds " "because event loop is closed"
+                    "Cannot broadcast market feeds because event loop is closed"
                 )
-
                 return
 
             logger.debug(
-                "Market feed message received | " "instrument_count=%s",
+                "Market feed message received | instrument_count=%s",
                 len(feeds),
             )
 
@@ -836,10 +886,7 @@ class UpstoxMarketService:
 
                 try:
                     future = asyncio.run_coroutine_threadsafe(
-                        self.hub.broadcast(
-                            instrument_key,
-                            event,
-                        ),
+                        self.hub.broadcast(instrument_key, event),
                         self.loop,
                     )
 
@@ -852,13 +899,13 @@ class UpstoxMarketService:
 
                 except Exception:
                     logger.exception(
-                        "Failed to schedule market feed "
-                        "broadcast | instrument_key=%s",
+                        "Failed to schedule market feed broadcast | "
+                        "instrument_key=%s",
                         instrument_key,
                     )
 
         except Exception:
-            logger.exception("Failed to process Upstox " "market feed message")
+            logger.exception("Failed to process Upstox market feed message")
 
     def _on_broadcast_complete(
         self,
@@ -870,57 +917,38 @@ class UpstoxMarketService:
 
         except asyncio.CancelledError:
             logger.debug(
-                "Market feed broadcast cancelled | " "instrument_key=%s",
+                "Market feed broadcast cancelled | instrument_key=%s",
                 instrument_key,
             )
 
         except Exception:
             logger.exception(
-                "Market feed broadcast failed | " "instrument_key=%s",
+                "Market feed broadcast failed | instrument_key=%s",
                 instrument_key,
             )
 
-    def _on_error(
-        self,
-        error: Any,
-    ) -> None:
+    def _on_error(self, error: Any) -> None:
         self.connected = False
 
-        if isinstance(
-            error,
-            BaseException,
-        ):
+        if isinstance(error, BaseException):
             logger.error(
-                "Upstox streamer error | " "error_type=%s | error=%s",
+                "Upstox streamer error | error_type=%s | error=%s",
                 type(error).__name__,
                 error,
-                exc_info=(
-                    type(error),
-                    error,
-                    error.__traceback__,
-                ),
+                exc_info=(type(error), error, error.__traceback__),
             )
-
         else:
-            logger.error(
-                "Upstox streamer error | error=%s",
-                error,
-            )
+            logger.error("Upstox streamer error | error=%s", error)
 
-    def _on_close(
-        self,
-        *args: Any,
-    ) -> None:
+    def _on_close(self, *args: Any) -> None:
         self.connected = False
 
         logger.warning(
-            "Upstox streamer connection closed | " "details=%s",
+            "Upstox streamer connection closed | details=%s",
             args if args else "not provided",
         )
 
-    def _require_streamer(
-        self,
-    ) -> Any:
+    def _require_streamer(self) -> Any:
         if self.streamer is None:
             raise RuntimeError("Upstox streamer is not initialized")
 
@@ -931,10 +959,7 @@ class UpstoxMarketService:
         instrument_keys: list[str],
         mode: str,
     ) -> dict[str, list[str]]:
-        validated_mode = self._validate_mode(
-            mode,
-            "subscription mode",
-        )
+        validated_mode = self._validate_mode(mode, "subscription mode")
 
         normalized_keys = list(
             dict.fromkeys(
@@ -943,7 +968,7 @@ class UpstoxMarketService:
         )
 
         logger.info(
-            "Subscription operation started | " "requested_count=%s | mode=%s",
+            "Subscription operation started | requested_count=%s | mode=%s",
             len(normalized_keys),
             validated_mode,
         )
@@ -953,7 +978,8 @@ class UpstoxMarketService:
                 streamer = self._require_streamer()
 
                 active = {
-                    item["instrument_key"]: item for item in self.database.list_active()
+                    item["instrument_key"]: item
+                    for item in self.database.list_active()
                 }
 
                 new_keys: list[str] = []
@@ -963,18 +989,13 @@ class UpstoxMarketService:
                 for key in normalized_keys:
                     if key not in active:
                         new_keys.append(key)
-
                     elif active[key]["mode"] == validated_mode:
                         unchanged.append(key)
-
                     else:
                         mode_changes.append(key)
 
                 if new_keys:
-                    streamer.subscribe(
-                        new_keys,
-                        validated_mode,
-                    )
+                    streamer.subscribe(new_keys, validated_mode)
 
                     for key in new_keys:
                         self.database.upsert_active(
@@ -984,16 +1005,10 @@ class UpstoxMarketService:
                         )
 
                 if mode_changes:
-                    streamer.change_mode(
-                        mode_changes,
-                        validated_mode,
-                    )
+                    streamer.change_mode(mode_changes, validated_mode)
 
                     for key in mode_changes:
-                        self.database.change_mode(
-                            key,
-                            validated_mode,
-                        )
+                        self.database.change_mode(key, validated_mode)
 
                 result = {
                     "subscribed": new_keys,
@@ -1003,8 +1018,7 @@ class UpstoxMarketService:
 
                 logger.info(
                     "Subscription operation completed | "
-                    "subscribed=%s | mode_changed=%s | "
-                    "unchanged=%s",
+                    "subscribed=%s | mode_changed=%s | unchanged=%s",
                     len(new_keys),
                     len(mode_changes),
                     len(unchanged),
@@ -1014,11 +1028,11 @@ class UpstoxMarketService:
 
             except Exception:
                 logger.exception(
-                    "Subscription operation failed | " "requested_count=%s | mode=%s",
+                    "Subscription operation failed | "
+                    "requested_count=%s | mode=%s",
                     len(normalized_keys),
                     validated_mode,
                 )
-
                 raise
 
     def unsubscribe(
@@ -1032,7 +1046,7 @@ class UpstoxMarketService:
         )
 
         logger.info(
-            "Unsubscribe operation started | " "requested_count=%s",
+            "Unsubscribe operation started | requested_count=%s",
             len(normalized_keys),
         )
 
@@ -1041,11 +1055,11 @@ class UpstoxMarketService:
                 streamer = self._require_streamer()
 
                 active_keys = {
-                    item["instrument_key"] for item in self.database.list_active()
+                    item["instrument_key"]
+                    for item in self.database.list_active()
                 }
 
                 removable = [key for key in normalized_keys if key in active_keys]
-
                 missing = [key for key in normalized_keys if key not in active_keys]
 
                 if removable:
@@ -1056,8 +1070,7 @@ class UpstoxMarketService:
 
                 logger.info(
                     "Unsubscribe operation completed | "
-                    "unsubscribed=%s | "
-                    "not_subscribed=%s",
+                    "unsubscribed=%s | not_subscribed=%s",
                     len(removable),
                     len(missing),
                 )
@@ -1069,10 +1082,9 @@ class UpstoxMarketService:
 
             except Exception:
                 logger.exception(
-                    "Unsubscribe operation failed | " "requested_count=%s",
+                    "Unsubscribe operation failed | requested_count=%s",
                     len(normalized_keys),
                 )
-
                 raise
 
     def change_mode(
@@ -1080,10 +1092,7 @@ class UpstoxMarketService:
         instrument_keys: list[str],
         mode: str,
     ) -> dict[str, list[str]]:
-        validated_mode = self._validate_mode(
-            mode,
-            "subscription mode",
-        )
+        validated_mode = self._validate_mode(mode, "subscription mode")
 
         normalized_keys = list(
             dict.fromkeys(
@@ -1092,7 +1101,7 @@ class UpstoxMarketService:
         )
 
         logger.info(
-            "Mode change operation started | " "requested_count=%s | mode=%s",
+            "Mode change operation started | requested_count=%s | mode=%s",
             len(normalized_keys),
             validated_mode,
         )
@@ -1102,39 +1111,31 @@ class UpstoxMarketService:
                 streamer = self._require_streamer()
 
                 active = {
-                    item["instrument_key"]: item for item in self.database.list_active()
+                    item["instrument_key"]: item
+                    for item in self.database.list_active()
                 }
 
                 changeable = [
                     key
                     for key in normalized_keys
-                    if (key in active and active[key]["mode"] != validated_mode)
+                    if key in active and active[key]["mode"] != validated_mode
                 ]
-
                 unchanged = [
                     key
                     for key in normalized_keys
-                    if (key in active and active[key]["mode"] == validated_mode)
+                    if key in active and active[key]["mode"] == validated_mode
                 ]
-
                 missing = [key for key in normalized_keys if key not in active]
 
                 if changeable:
-                    streamer.change_mode(
-                        changeable,
-                        validated_mode,
-                    )
+                    streamer.change_mode(changeable, validated_mode)
 
                     for key in changeable:
-                        self.database.change_mode(
-                            key,
-                            validated_mode,
-                        )
+                        self.database.change_mode(key, validated_mode)
 
                 logger.info(
                     "Mode change operation completed | "
-                    "changed=%s | unchanged=%s | "
-                    "missing=%s | mode=%s",
+                    "changed=%s | unchanged=%s | missing=%s | mode=%s",
                     len(changeable),
                     len(unchanged),
                     len(missing),
@@ -1149,11 +1150,11 @@ class UpstoxMarketService:
 
             except Exception:
                 logger.exception(
-                    "Mode change operation failed | " "requested_count=%s | mode=%s",
+                    "Mode change operation failed | "
+                    "requested_count=%s | mode=%s",
                     len(normalized_keys),
                     validated_mode,
                 )
-
                 raise
 
     async def search_instruments(
@@ -1163,11 +1164,11 @@ class UpstoxMarketService:
         filtered_params = {
             key: value
             for key, value in params.items()
-            if (value is not None and value != "")
+            if value is not None and value != ""
         }
 
         logger.info(
-            "Instrument search started | " "query=%s | page=%s | records=%s",
+            "Instrument search started | query=%s | page=%s | records=%s",
             filtered_params.get("query"),
             filtered_params.get("page_number"),
             filtered_params.get("records"),
@@ -1176,12 +1177,12 @@ class UpstoxMarketService:
         try:
             if not self.access_token:
                 raise RuntimeError(
-                    "Cannot search instruments " "because access token is empty"
+                    "Cannot search instruments because access token is empty"
                 )
 
             headers = {
                 "Accept": "application/json",
-                "Authorization": (f"Bearer {self.access_token}"),
+                "Authorization": f"Bearer {self.access_token}",
             }
 
             async with httpx.AsyncClient(timeout=20.0) as client:
@@ -1195,14 +1196,13 @@ class UpstoxMarketService:
 
             try:
                 result = response.json()
-
             except ValueError as exc:
                 raise RuntimeError(
-                    "Upstox instrument search " "returned an invalid response"
+                    "Upstox instrument search returned an invalid response"
                 ) from exc
 
             logger.info(
-                "Instrument search completed | " "query=%s | status_code=%s",
+                "Instrument search completed | query=%s | status_code=%s",
                 filtered_params.get("query"),
                 response.status_code,
             )
@@ -1211,39 +1211,34 @@ class UpstoxMarketService:
 
         except httpx.TimeoutException:
             logger.exception(
-                "Upstox instrument search timed out | " "query=%s",
+                "Upstox instrument search timed out | query=%s",
                 filtered_params.get("query"),
             )
-
             raise
 
         except httpx.HTTPStatusError as exc:
             logger.error(
                 "Upstox instrument search HTTP error | "
-                "query=%s | status_code=%s | "
-                "response=%s",
+                "query=%s | status_code=%s | response=%s",
                 filtered_params.get("query"),
                 exc.response.status_code,
                 exc.response.text[:1000],
                 exc_info=True,
             )
-
             raise
 
         except httpx.RequestError:
             logger.exception(
-                "Upstox instrument search request " "failed | query=%s",
+                "Upstox instrument search request failed | query=%s",
                 filtered_params.get("query"),
             )
-
             raise
 
         except Exception:
             logger.exception(
-                "Unexpected instrument search failure | " "query=%s",
+                "Unexpected instrument search failure | query=%s",
                 filtered_params.get("query"),
             )
-
             raise
 
     def stop(self) -> None:
@@ -1254,23 +1249,18 @@ class UpstoxMarketService:
 
             if self.streamer is None:
                 logger.info(
-                    "Upstox market service already "
-                    "stopped; streamer is not initialized"
+                    "Upstox market service already stopped; "
+                    "streamer is not initialized"
                 )
-
                 return
 
             try:
                 self.streamer.disconnect()
-
                 logger.info("Upstox streamer disconnected successfully")
-
             except Exception:
                 logger.exception(
-                    "Failed to disconnect Upstox " "streamer during shutdown"
+                    "Failed to disconnect Upstox streamer during shutdown"
                 )
-
             finally:
                 self.streamer = None
-
                 logger.info("Upstox market service stopped")

@@ -13,12 +13,19 @@ class Database:
     ]
 
     def __init__(self) -> None:
+        # Single client, two logical databases:
+        #   * self.token_db — read-only, holds the Upstox access token
+        #   * self.db       — owned by this service, holds subscriptions
         self.client = MongoClient(
             settings.mongodb_uri,
             serverSelectionTimeoutMS=5000,
         )
+
         self.db = self.client[settings.mongodb_db]
-        self.tokens = self.db[settings.token_collection]
+        self.token_db = self.client[settings.token_mongodb_db]
+
+        self.tokens = self.token_db[settings.token_collection]
+
         self.active = self.db["market_subscriptions"]
         self.events = self.db["market_subscription_events"]
 
@@ -26,6 +33,8 @@ class Database:
         self.client.admin.command("ping")
 
     def ensure_indexes(self) -> None:
+        # Indexes only apply to the application DB.
+        # The token DB is external and must not be modified.
         self.active.create_index(
             [("instrument_key", ASCENDING)],
             unique=True,

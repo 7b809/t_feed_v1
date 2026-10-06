@@ -1,7 +1,7 @@
 #!/bin/bash
 
-APP_NAME="upstox_order_receiver"
-PORT=8010
+APP_NAME="upstox_market_stream"
+PORT=8001
 
 PID_FILE="${APP_NAME}.pid"
 LOG_DIR="logs"
@@ -9,7 +9,7 @@ VENV_DIR="myenv"
 REQUIREMENTS_FILE="requirements.txt"
 
 echo "=========================================="
-echo "  Upstox Order Request Receiver"
+echo "  Upstox Market Stream Gateway"
 echo "=========================================="
 echo
 echo "Starting FastAPI application..."
@@ -87,7 +87,7 @@ echo "Host: 0.0.0.0"
 echo "Port: $PORT"
 echo
 
-nohup "$PYTHON" -m uvicorn main:app \
+nohup "$PYTHON" -m uvicorn app.main:app \
     --host 0.0.0.0 \
     --port "$PORT" \
     >/dev/null 2>&1 &

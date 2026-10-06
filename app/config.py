@@ -1,18 +1,29 @@
 from dotenv import load_dotenv
 import os
 
-
 load_dotenv()
 
 
 class Settings:
+    # ----------------------------------------------------------
+    # MongoDB
+    # ----------------------------------------------------------
     mongodb_uri: str = os.getenv(
         "MONGODB_URI",
         "mongodb://localhost:27017",
     )
 
+    # Application database — this service reads/writes its own state here.
     mongodb_db: str = os.getenv(
         "MONGODB_DB",
+        "UPSTOX_APP_v3",
+    )
+
+    # Token source database — read-only. Kept separate because the token
+    # is produced by an external process (e.g. Telegram login flow) and
+    # must not be coupled to this service's schema.
+    token_mongodb_db: str = os.getenv(
+        "TOKEN_MONGODB_DB",
         "UPSTOX_APP",
     )
 
@@ -26,6 +37,9 @@ class Settings:
         "upstox_access_token",
     )
 
+    # ----------------------------------------------------------
+    # FastAPI
+    # ----------------------------------------------------------
     app_host: str = os.getenv(
         "APP_HOST",
         "0.0.0.0",
@@ -34,7 +48,7 @@ class Settings:
     app_port: int = int(
         os.getenv(
             "APP_PORT",
-            "8000",
+            "8001",
         )
     )
 
@@ -43,6 +57,9 @@ class Settings:
         "change-me",
     )
 
+    # ----------------------------------------------------------
+    # Startup subscriptions
+    # ----------------------------------------------------------
     startup_index_subscription_mode: str = os.getenv(
         "STARTUP_INDEX_SUBSCRIPTION_MODE",
         "ltpc",
@@ -53,6 +70,8 @@ class Settings:
         "ltpc",
     )
 
+    # Either an explicit date (YYYY-MM-DD) or a keyword:
+    #   current_week | next_week | current_month | next_month
     startup_option_expiry: str = os.getenv(
         "STARTUP_OPTION_EXPIRY",
         "current_week",
