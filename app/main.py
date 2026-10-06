@@ -19,6 +19,7 @@ from fastapi import (
     WebSocket,
     WebSocketDisconnect,
 )
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.templating import Jinja2Templates
 
@@ -28,7 +29,6 @@ from app.models import SubscriptionRequest
 from app.upstox_service import UpstoxMarketService
 from app.websockets import WebSocketHub
 
-
 logger = get_logger(__file__)
 
 database = Database()
@@ -37,9 +37,7 @@ market = UpstoxMarketService(database, hub)
 
 scheduler = AsyncIOScheduler(timezone="Asia/Kolkata")
 
-templates = Jinja2Templates(
-    directory=str(Path(__file__).parent / "templates")
-)
+templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 
 
 def scheduler_event_listener(event: JobExecutionEvent) -> None:
@@ -131,17 +129,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator:
                 market.stop()
                 logger.info("Upstox market service stopped")
             except Exception:
-                logger.exception(
-                    "Failed to stop Upstox market service cleanly"
-                )
+                logger.exception("Failed to stop Upstox market service cleanly")
 
         try:
             database.close()
             logger.info("Database connection closed")
         except Exception:
-            logger.exception(
-                "Failed to close database connection cleanly"
-            )
+            logger.exception("Failed to close database connection cleanly")
 
         logger.info("Application shutdown completed")
 
@@ -153,17 +147,40 @@ app = FastAPI(
 )
 
 
+# ============================================================
+# CORS — DUMMY / TESTING STAGE: ALLOW EVERYTHING
+# ------------------------------------------------------------
+# NOTE:
+#   * allow_origins=["*"] MUST NOT be combined with
+#     allow_credentials=True — per the CORS spec, browsers
+#     silently reject the response. We therefore keep
+#     allow_credentials=False so the wildcard actually works.
+#   * This is intentionally permissive and is ONLY safe for a
+#     dummy / staging environment. Tighten allow_origins to an
+#     explicit list before going to production.
+#   * CORSMiddleware does NOT apply to WebSocket connections.
+#     Browsers do not enforce CORS on WS handshakes, so the
+#     /ws/market, /all-feeds, /ws/ema-crossover, etc. endpoints
+#     will work cross-origin without extra configuration.
+# ============================================================
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["*"],
+    max_age=600,
+)
+
+
 @app.middleware("http")
 async def request_logging_middleware(
     request: Request,
     call_next: Callable[..., Any],
 ) -> Response:
     start_time = perf_counter()
-    client_host = (
-        request.client.host
-        if request.client
-        else "unknown"
-    )
+    client_host = request.client.host if request.client else "unknown"
 
     logger.info(
         "HTTP request started | method=%s | path=%s | client=%s",
@@ -175,9 +192,7 @@ async def request_logging_middleware(
     try:
         response = await call_next(request)
 
-        duration_ms = (
-            perf_counter() - start_time
-        ) * 1000
+        duration_ms = (perf_counter() - start_time) * 1000
 
         logger.info(
             "HTTP request completed | method=%s | path=%s | "
@@ -191,9 +206,7 @@ async def request_logging_middleware(
         return response
 
     except Exception:
-        duration_ms = (
-            perf_counter() - start_time
-        ) * 1000
+        duration_ms = (perf_counter() - start_time) * 1000
 
         logger.exception(
             "Unhandled HTTP request exception | method=%s | "
@@ -219,8 +232,7 @@ async def http_exception_handler(
 ) -> JSONResponse:
     if exc.status_code >= 500:
         logger.error(
-            "HTTP exception | method=%s | path=%s | "
-            "status=%s | detail=%s",
+            "HTTP exception | method=%s | path=%s | " "status=%s | detail=%s",
             request.method,
             request.url.path,
             exc.status_code,
@@ -228,8 +240,7 @@ async def http_exception_handler(
         )
     else:
         logger.warning(
-            "HTTP exception | method=%s | path=%s | "
-            "status=%s | detail=%s",
+            "HTTP exception | method=%s | path=%s | " "status=%s | detail=%s",
             request.method,
             request.url.path,
             exc.status_code,
@@ -274,9 +285,7 @@ def health() -> dict[str, Any]:
         health_status = {
             "status": "ok",
             "upstox_connected": market.connected,
-            "active_subscriptions": len(
-                active_subscriptions
-            ),
+            "active_subscriptions": len(active_subscriptions),
             "websocket_clients": hub.client_counts(),
         }
 
@@ -319,8 +328,7 @@ async def search_instruments(
     ),
 ) -> Any:
     logger.info(
-        "Instrument search requested | query=%s | "
-        "page=%s | records=%s",
+        "Instrument search requested | query=%s | " "page=%s | records=%s",
         query,
         page_number,
         records,
@@ -338,9 +346,7 @@ async def search_instruments(
     }
 
     try:
-        result = await market.search_instruments(
-            search_parameters
-        )
+        result = await market.search_instruments(search_parameters)
 
         logger.info(
             "Instrument search completed | query=%s",
@@ -408,9 +414,7 @@ def unsubscribe(
     )
 
     try:
-        result = market.unsubscribe(
-            body.instrument_keys
-        )
+        result = market.unsubscribe(body.instrument_keys)
 
         logger.info(
             "Unsubscribe completed | instrument_count=%s",
@@ -436,8 +440,7 @@ def change_mode(
     body: SubscriptionRequest,
 ) -> Any:
     logger.info(
-        "Subscription mode change requested | "
-        "instrument_count=%s | mode=%s",
+        "Subscription mode change requested | " "instrument_count=%s | mode=%s",
         len(body.instrument_keys),
         body.mode,
     )
@@ -449,8 +452,7 @@ def change_mode(
         )
 
         logger.info(
-            "Subscription mode changed | "
-            "instrument_count=%s | mode=%s",
+            "Subscription mode changed | " "instrument_count=%s | mode=%s",
             len(body.instrument_keys),
             body.mode,
         )
@@ -459,8 +461,7 @@ def change_mode(
 
     except Exception as exc:
         logger.exception(
-            "Subscription mode change failed | "
-            "instrument_count=%s | mode=%s",
+            "Subscription mode change failed | " "instrument_count=%s | mode=%s",
             len(body.instrument_keys),
             body.mode,
         )
@@ -488,9 +489,7 @@ def list_subscriptions() -> dict[str, Any]:
         }
 
     except Exception as exc:
-        logger.exception(
-            "Failed to list subscriptions"
-        )
+        logger.exception("Failed to list subscriptions")
 
         raise HTTPException(
             status_code=502,
@@ -500,25 +499,17 @@ def list_subscriptions() -> dict[str, Any]:
 
 @app.post("/api/token/hard-refresh")
 def hard_refresh() -> Any:
-    logger.warning(
-        "Manual token hard refresh requested"
-    )
+    logger.warning("Manual token hard refresh requested")
 
     try:
-        result = (
-            market.refresh_token_and_reconnect()
-        )
+        result = market.refresh_token_and_reconnect()
 
-        logger.info(
-            "Manual token hard refresh completed"
-        )
+        logger.info("Manual token hard refresh completed")
 
         return result
 
     except Exception as exc:
-        logger.exception(
-            "Manual token hard refresh failed"
-        )
+        logger.exception("Manual token hard refresh failed")
 
         raise HTTPException(
             status_code=502,
@@ -531,15 +522,10 @@ async def instrument_feed(
     websocket: WebSocket,
     instrument_key: str = Query(...),
 ) -> None:
-    client_host = (
-        websocket.client.host
-        if websocket.client
-        else "unknown"
-    )
+    client_host = websocket.client.host if websocket.client else "unknown"
 
     logger.info(
-        "WebSocket connection requested | "
-        "instrument_key=%s | client=%s",
+        "WebSocket connection requested | " "instrument_key=%s | client=%s",
         instrument_key,
         client_host,
     )
@@ -554,8 +540,7 @@ async def instrument_feed(
         connected = True
 
         logger.info(
-            "WebSocket connected | "
-            "instrument_key=%s | client=%s",
+            "WebSocket connected | " "instrument_key=%s | client=%s",
             instrument_key,
             client_host,
         )
@@ -565,16 +550,14 @@ async def instrument_feed(
 
     except WebSocketDisconnect:
         logger.info(
-            "WebSocket disconnected | "
-            "instrument_key=%s | client=%s",
+            "WebSocket disconnected | " "instrument_key=%s | client=%s",
             instrument_key,
             client_host,
         )
 
     except asyncio.CancelledError:
         logger.warning(
-            "WebSocket task cancelled | "
-            "instrument_key=%s | client=%s",
+            "WebSocket task cancelled | " "instrument_key=%s | client=%s",
             instrument_key,
             client_host,
         )
@@ -582,8 +565,7 @@ async def instrument_feed(
 
     except Exception:
         logger.exception(
-            "Unexpected WebSocket failure | "
-            "instrument_key=%s | client=%s",
+            "Unexpected WebSocket failure | " "instrument_key=%s | client=%s",
             instrument_key,
             client_host,
         )
@@ -595,8 +577,7 @@ async def instrument_feed(
             )
         except Exception:
             logger.debug(
-                "WebSocket was already closed | "
-                "instrument_key=%s",
+                "WebSocket was already closed | " "instrument_key=%s",
                 instrument_key,
                 exc_info=True,
             )
@@ -610,16 +591,14 @@ async def instrument_feed(
                 )
 
                 logger.info(
-                    "WebSocket cleanup completed | "
-                    "instrument_key=%s | client=%s",
+                    "WebSocket cleanup completed | " "instrument_key=%s | client=%s",
                     instrument_key,
                     client_host,
                 )
 
             except asyncio.CancelledError:
                 logger.warning(
-                    "WebSocket cleanup cancelled | "
-                    "instrument_key=%s | client=%s",
+                    "WebSocket cleanup cancelled | " "instrument_key=%s | client=%s",
                     instrument_key,
                     client_host,
                 )
@@ -627,8 +606,7 @@ async def instrument_feed(
 
             except Exception:
                 logger.exception(
-                    "WebSocket cleanup failed | "
-                    "instrument_key=%s | client=%s",
+                    "WebSocket cleanup failed | " "instrument_key=%s | client=%s",
                     instrument_key,
                     client_host,
                 )
