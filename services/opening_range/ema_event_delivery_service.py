@@ -479,6 +479,162 @@ class EMAEventDeliveryService:
         }
 
     @staticmethod
+    def _resolve_isolated_order_instrument(
+        payload: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        isolated = payload.get("instrument")
+        if not isinstance(isolated, dict):
+            isolated = {}
+
+        ema = payload.get("ema")
+        if not isinstance(ema, dict):
+            ema = {}
+        raw_event = payload.get("raw_ema_event")
+        if not isinstance(raw_event, dict):
+            raw_event = {}
+        raw_direction = str(
+            ema.get("direction")
+            or payload.get("direction")
+            or raw_event.get("cross_type", "")
+        ).strip().lower()
+        if "bullish" in raw_direction or raw_direction in {"buy", "long", "up"}:
+            direction = "bullish"
+        elif "bearish" in raw_direction or raw_direction in {"sell", "short", "down"}:
+            direction = "bearish"
+        else:
+            logger.warning(
+                "Cannot resolve EMA order target without a known direction. event_id=%s",
+                payload.get("event_id"),
+            )
+            return None
+
+        instrument_key = str(isolated.get("instrument_key") or "").strip()
+        trading_symbol = str(isolated.get("trading_symbol") or "").strip()
+        lot_size = isolated.get("lot_size")
+        option_type = str(
+            isolated.get("option_type") or isolated.get("instrument_type") or ""
+        ).strip().upper()
+
+        if direction == "bullish":
+            try:
+                valid_lot_size = int(lot_size) > 0
+            except (TypeError, ValueError, OverflowError):
+                valid_lot_size = False
+            if not instrument_key or not trading_symbol or not valid_lot_size:
+                logger.warning(
+                    "Isolated EMA order target is missing required instrument data. event_id=%s",
+                    payload.get("event_id"),
+                )
+                return None
+            selected = deepcopy(isolated)
+            selected["lot_size"] = int(lot_size)
+            return selected
+
+        opposite_type = {"CE": "PE", "CALL": "PE", "PE": "CE", "PUT": "CE"}.get(
+            option_type
+        )
+        strike = isolated.get("strike_price")
+        underlying = str(isolated.get("underlying_symbol") or "").strip().upper()
+        expiry = str(isolated.get("expiry") or "").strip()[:10]
+        if not opposite_type or strike is None or not underlying or not expiry:
+            logger.warning(
+                "Isolated EMA contract lacks fields needed for opposite-side lookup. event_id=%s",
+                payload.get("event_id"),
+            )
+            return None
+
+        candidates: list[dict[str, Any]] = []
+        suggestion = payload.get("order_suggestion")
+        if isinstance(suggestion, dict):
+            nearest = suggestion.get("nearest_instruments")
+            if isinstance(nearest, list):
+                candidates.extend(item for item in nearest if isinstance(item, dict))
+
+        # The option cache is the existing instrument catalog and provides an exact
+        # strike/type/expiry lookup when the contract is not in the nearest payload.
+        try:
+            from services.option_service import get_cached_option_contracts
+
+            candidates.extend(get_cached_option_contracts())
+        except Exception:
+            logger.exception("Could not read the option contract cache for EMA target resolution.")
+
+        for candidate in candidates:
+            candidate_key = str(candidate.get("instrument_key") or "").strip()
+            candidate_symbol = str(candidate.get("trading_symbol") or "").strip()
+            candidate_type = str(
+                candidate.get("option_type") or candidate.get("instrument_type") or ""
+            ).strip().upper()
+            candidate_underlying = str(candidate.get("underlying_symbol") or "").strip().upper()
+            candidate_expiry = str(candidate.get("expiry") or "").strip()[:10]
+            try:
+                same_strike = float(candidate.get("strike_price")) == float(strike)
+            except (TypeError, ValueError, OverflowError):
+                same_strike = False
+            try:
+                candidate_lot_size = int(candidate.get("lot_size") or 0)
+            except (TypeError, ValueError, OverflowError):
+                candidate_lot_size = 0
+            if not (
+                candidate_key
+                and candidate_symbol
+                and candidate_type in {opposite_type, "CALL" if opposite_type == "CE" else "PUT"}
+                and same_strike
+                and candidate_underlying == underlying
+                and candidate_expiry == expiry
+                and candidate_lot_size > 0
+            ):
+                continue
+
+            selected = deepcopy(candidate)
+            selected["instrument_key"] = candidate_key
+            selected["trading_symbol"] = candidate_symbol
+            selected["instrument_type"] = opposite_type
+            selected["option_type"] = opposite_type
+            selected["lot_size"] = candidate_lot_size
+            logger.info(
+                "Resolved opposite-side EMA order instrument. event_id=%s, instrument_key=%s, strike=%s, expiry=%s",
+                payload.get("event_id"), candidate_key, strike, expiry,
+            )
+            return selected
+
+        logger.warning(
+            "No matching opposite-side contract found; EMA order skipped. event_id=%s, type=%s, strike=%s, expiry=%s",
+            payload.get("event_id"), opposite_type, strike, expiry,
+        )
+        return None
+
+    def _place_isolated_order_instrument(
+        self, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        selected = self._resolve_isolated_order_instrument(payload)
+        if not selected:
+            return {
+                "success": False,
+                "order_status": "NO_VALID_ISOLATED_ORDER_INSTRUMENT",
+                "selected_instrument": None,
+                "order_id": None,
+                "error": "No valid isolated or corresponding opposite-side instrument was found.",
+            }
+
+        order_instrument = self._build_order_instrument(selected)
+        try:
+            raw_result = process_selected_instrument(deepcopy(order_instrument))
+            return self._normalize_order_result(raw_result, order_instrument)
+        except Exception as exc:
+            logger.exception(
+                "Isolated EMA order processing failed. event_id=%s",
+                payload.get("event_id"),
+            )
+            return {
+                "success": False,
+                "order_status": "ORDER_PROCESSING_EXCEPTION",
+                "selected_instrument": order_instrument,
+                "order_id": None,
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+
+    @staticmethod
     def _normalize_order_result(
         raw_result: Any,
         order_instrument: dict[str, Any],
@@ -821,7 +977,12 @@ class EMAEventDeliveryService:
             result["order"]["attempted"] = True
 
             try:
-                order_result = self._place_lowest_budget_instrument(payload)
+                if bool(
+                    getattr(config, "EMA_ORDER_USE_ISOLATED_INSTRUMENT", True)
+                ):
+                    order_result = self._place_isolated_order_instrument(payload)
+                else:
+                    order_result = self._place_lowest_budget_instrument(payload)
 
                 if isinstance(order_result, dict):
                     result["order"].update(order_result)

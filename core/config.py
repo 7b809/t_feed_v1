@@ -978,6 +978,12 @@ EMA_ALERT_MAX_ORDER_INSTRUMENTS = max(
 )
 
 # EMA ALERT — budget range
+EMA_ORDER_USE_ISOLATED_INSTRUMENT = _cfg_bool(
+    "ema_alert.order_use_isolated_instrument",
+    "EMA_ORDER_USE_ISOLATED_INSTRUMENT",
+    True,
+)
+
 EMA_ALERT_BUDGET_RANGE_ENABLED = _cfg_bool(
     "ema_alert.budget_range_enabled", "EMA_ALERT_BUDGET_RANGE_ENABLED", True
 )
