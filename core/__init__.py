@@ -1,1 +1,0 @@
-"""Core package: global config + logging."""

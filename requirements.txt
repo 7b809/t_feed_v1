@@ -1,8 +1,9 @@
 fastapi
 uvicorn
-pymongo
-python-dotenv
 upstox-python-sdk
+pymongo
+APScheduler
+httpx
 jinja2
-python-multipart
-requests
+pydantic-settings
+python-dotenv
