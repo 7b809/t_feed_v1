@@ -747,17 +747,6 @@ def _build_instrument_details(
         "trading_symbol": trading_symbol,
         "live_ltp": live_ltp,
         "lot_size": lot_size,
-        "option_type": selected_instrument.get("option_type")
-        or selected_instrument.get("instrument_type"),
-        "instrument_type": selected_instrument.get("instrument_type")
-        or selected_instrument.get("option_type"),
-        "strike_price": selected_instrument.get("strike_price"),
-        "expiry": selected_instrument.get("expiry"),
-        "underlying_symbol": selected_instrument.get("underlying_symbol"),
-        "strategy_instrument": selected_instrument.get("strategy_instrument"),
-        "order_target_mode": selected_instrument.get("order_target_mode"),
-        "order_selection_reason": selected_instrument.get("order_selection_reason"),
-        "order_target": selected_instrument.get("order_target"),
     }
 
 
@@ -902,10 +891,6 @@ def _save_active_buy_order(
             "lot_size": instrument_details.get("lot_size"),
             "buy_live_ltp": instrument_details.get("live_ltp"),
             "live_ltp": instrument_details.get("live_ltp"),
-            "strategy_instrument": instrument_details.get("strategy_instrument"),
-            "order_target_mode": instrument_details.get("order_target_mode"),
-            "order_selection_reason": instrument_details.get("order_selection_reason"),
-            "order_target": instrument_details.get("order_target"),
             "order_id": order_id,
             "buy_order_id": order_id,
             "place_order_result": place_order_result,
@@ -1067,10 +1052,6 @@ def _append_order_history_entry(
         "trading_symbol": instrument_details.get("trading_symbol"),
         "lot_size": instrument_details.get("lot_size"),
         "live_ltp": instrument_details.get("live_ltp"),
-        "strategy_instrument": instrument_details.get("strategy_instrument"),
-        "order_target_mode": instrument_details.get("order_target_mode"),
-        "order_selection_reason": instrument_details.get("order_selection_reason"),
-        "order_target": instrument_details.get("order_target"),
         "order_status": order_status,
         "success": bool(success),
         "executed": bool(executed),
@@ -2311,15 +2292,6 @@ def process_selected_instrument(
         "trading_symbol": trading_symbol,
         "live_ltp": live_ltp,
         "lot_size": lot_size,
-        "option_type": instrument_details.get("option_type"),
-        "instrument_type": instrument_details.get("instrument_type"),
-        "strike_price": instrument_details.get("strike_price"),
-        "expiry": instrument_details.get("expiry"),
-        "underlying_symbol": instrument_details.get("underlying_symbol"),
-        "strategy_instrument": instrument_details.get("strategy_instrument"),
-        "order_target_mode": instrument_details.get("order_target_mode"),
-        "order_selection_reason": instrument_details.get("order_selection_reason"),
-        "order_target": instrument_details.get("order_target"),
     }
 
     # ------------------------------------------------------------------

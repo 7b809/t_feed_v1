@@ -338,43 +338,24 @@ class OrderSavingService:
         if not isinstance(payload_instrument, dict):
             payload_instrument = {}
 
-        order_target = payload.get("order_target")
-        has_canonical_target = isinstance(order_target, dict)
-        target_instrument = (
-            order_target.get("instrument") if has_canonical_target else None
-        )
-        if not isinstance(target_instrument, dict):
-            target_instrument = {}
-
-        # The result may contain fresher execution values, while the target carries
-        # full option metadata. Never use the isolated strategy instrument as an
-        # order fallback when a canonical target is present but unresolved.
-        if has_canonical_target:
-            ordered_source = {**selected_instrument, **target_instrument}
-            execution_ltp = OrderSavingService._first_not_none(
-                selected_instrument.get("live_ltp"),
-                selected_instrument.get("ltp"),
-            )
-            if execution_ltp is not None:
-                ordered_source["live_ltp"] = execution_ltp
-        else:
-            ordered_source = selected_instrument or payload_instrument
-
-        instrument_key = ordered_source.get(
+        instrument_key = selected_instrument.get(
             "instrument_key"
-        )
+        ) or payload_instrument.get("instrument_key")
 
-        trading_symbol = ordered_source.get(
+        trading_symbol = selected_instrument.get(
             "trading_symbol"
-        )
+        ) or payload_instrument.get("trading_symbol")
 
         live_ltp = OrderSavingService._first_not_none(
-            ordered_source.get("live_ltp"),
-            ordered_source.get("ltp"),
+            selected_instrument.get("live_ltp"),
+            selected_instrument.get("ltp"),
+            payload_instrument.get("live_ltp"),
+            payload_instrument.get("ltp"),
         )
 
         lot_size = OrderSavingService._first_not_none(
-            ordered_source.get("lot_size"),
+            selected_instrument.get("lot_size"),
+            payload_instrument.get("lot_size"),
         )
 
         return {
@@ -382,11 +363,6 @@ class OrderSavingService:
             "trading_symbol": (OrderSavingService._normalize_text(trading_symbol)),
             "live_ltp": live_ltp,
             "lot_size": lot_size,
-            "option_type": ordered_source.get("option_type")
-            or ordered_source.get("instrument_type"),
-            "strike_price": ordered_source.get("strike_price"),
-            "expiry": ordered_source.get("expiry"),
-            "underlying_symbol": ordered_source.get("underlying_symbol"),
         }
 
     # ------------------------------------------------------------------
@@ -515,13 +491,6 @@ class OrderSavingService:
         if not isinstance(order_suggestion, dict):
             order_suggestion = {}
 
-        order_target = payload.get("order_target")
-        if not isinstance(order_target, dict):
-            order_target = {}
-        target_instrument = order_target.get("instrument")
-        if not isinstance(target_instrument, dict):
-            target_instrument = {}
-
         simulation = payload.get("simulation")
 
         if not isinstance(simulation, dict):
@@ -545,9 +514,6 @@ class OrderSavingService:
             "current_signal": ema_data.get("current_signal"),
             "direction": duplicate_control.get("direction"),
             "suggested_order_side": (order_suggestion.get("suggested_order_side")),
-            "order_target_mode": order_target.get("mode"),
-            "order_selection_reason": order_target.get("selection_reason"),
-            "order_instrument_key": target_instrument.get("instrument_key"),
             "underlying_spot_price": (market_snapshot.get("underlying_spot_price")),
             "nifty_ltp": market_snapshot.get("nifty_ltp"),
             "is_simulation": bool(payload.get("is_simulation")),
@@ -570,27 +536,6 @@ class OrderSavingService:
             payload=payload,
             order_result=order_result,
         )
-
-        strategy_source = payload.get("instrument")
-        if not isinstance(strategy_source, dict):
-            strategy_source = {}
-        strategy_instrument = {
-            key: strategy_source.get(key)
-            for key in (
-                "instrument_key",
-                "trading_symbol",
-                "underlying_symbol",
-                "option_type",
-                "instrument_type",
-                "strike_price",
-                "expiry",
-                "lot_size",
-                "live_ltp",
-            )
-        }
-        order_target = payload.get("order_target")
-        if not isinstance(order_target, dict):
-            order_target = {}
 
         success = bool(order_result.get("success"))
 
@@ -618,11 +563,6 @@ class OrderSavingService:
             "instrument_key": (instrument_details.get("instrument_key")),
             "trading_symbol": (instrument_details.get("trading_symbol")),
             "instrument": instrument_details,
-            "strategy_instrument": strategy_instrument,
-            "ordered_instrument": deepcopy(instrument_details),
-            "order_target_mode": order_target.get("mode"),
-            "order_selection_reason": order_target.get("selection_reason"),
-            "order_target": deepcopy(order_target) if order_target else None,
             "order_status": order_status,
             "success": success,
             "executed": executed,
