@@ -17,6 +17,10 @@ echo
 
 mkdir -p "$LOG_DIR"
 
+# --------------------------------------------------
+# Check if application is already running
+# --------------------------------------------------
+
 if [ -f "$PID_FILE" ]; then
     PID=$(cat "$PID_FILE")
 
@@ -31,6 +35,10 @@ if [ -f "$PID_FILE" ]; then
     fi
 fi
 
+# --------------------------------------------------
+# Create virtual environment if it does not exist
+# --------------------------------------------------
+
 if [ ! -d "$VENV_DIR" ]; then
     echo
     echo "Virtual environment not found."
@@ -43,60 +51,119 @@ if [ ! -d "$VENV_DIR" ]; then
     fi
 
     echo "Virtual environment created."
-
-    if [ -f "$REQUIREMENTS_FILE" ]; then
-        echo
-        echo "Installing Python packages..."
-
-        if ! "$VENV_DIR/bin/python" -m pip install --upgrade pip; then
-            echo
-            echo "ERROR: Failed to upgrade pip."
-            exit 1
-        fi
-
-        if ! "$VENV_DIR/bin/python" -m pip install -r "$REQUIREMENTS_FILE"; then
-            echo
-            echo "ERROR: Failed to install Python packages."
-            exit 1
-        fi
-
-        echo
-        echo "Python packages installed successfully."
-    else
-        echo
-        echo "WARNING: $REQUIREMENTS_FILE not found."
-    fi
-else
-    echo
-    echo "Virtual environment already exists."
-    echo "Skipping environment creation and package installation."
 fi
 
+# --------------------------------------------------
+# Activate virtual environment
+# --------------------------------------------------
+
+if [ ! -f "$VENV_DIR/bin/activate" ]; then
+    echo
+    echo "ERROR: Virtual environment activation script not found:"
+    echo "$VENV_DIR/bin/activate"
+    exit 1
+fi
+
+echo
+echo "Activating virtual environment..."
+source "$VENV_DIR/bin/activate"
+
+if [ $? -ne 0 ]; then
+    echo
+    echo "ERROR: Failed to activate virtual environment."
+    exit 1
+fi
+
+echo "Virtual environment activated."
+
+# --------------------------------------------------
+# Verify Python from virtual environment
+# --------------------------------------------------
+
 PYTHON="$VENV_DIR/bin/python"
+PIP="$VENV_DIR/bin/pip"
 
 if [ ! -x "$PYTHON" ]; then
     echo
-    echo "ERROR: Virtual environment Python not found or not executable:"
+    echo "ERROR: Virtual environment Python not found:"
     echo "$PYTHON"
     exit 1
 fi
 
 echo
+echo "Python environment:"
+echo "Python: $(which python)"
+echo "Version: $(python --version)"
+echo "Pip: $(which pip)"
+echo
+
+# --------------------------------------------------
+# Install requirements if requirements.txt exists
+# --------------------------------------------------
+
+if [ -f "$REQUIREMENTS_FILE" ]; then
+    echo "Checking Python dependencies..."
+
+    if ! "$PYTHON" -m pip install -r "$REQUIREMENTS_FILE"; then
+        echo
+        echo "ERROR: Failed to install Python packages."
+        exit 1
+    fi
+
+    echo
+    echo "Python dependencies are ready."
+else
+    echo
+    echo "WARNING: $REQUIREMENTS_FILE not found."
+    echo "Skipping dependency installation."
+fi
+
+# --------------------------------------------------
+# Verify required Upstox package
+# --------------------------------------------------
+
+echo
+echo "Checking required Python packages..."
+
+if ! "$PYTHON" -c "import upstox_client; print('upstox_client: OK')"; then
+    echo
+    echo "ERROR: upstox_client is not installed in the virtual environment."
+    echo
+    echo "Install it using:"
+    echo "  $PYTHON -m pip install upstox-python-sdk"
+    exit 1
+fi
+
+echo "upstox_client: OK"
+
+# --------------------------------------------------
+# Start FastAPI
+# --------------------------------------------------
+
+echo
 echo "Starting FastAPI..."
 echo "Host: 0.0.0.0"
 echo "Port: $PORT"
+echo "Python: $PYTHON"
 echo
+
+# Keep startup errors in a dedicated log instead of /dev/null.
+STARTUP_LOG="$LOG_DIR/fastapi_startup.log"
 
 nohup "$PYTHON" -m uvicorn main:app \
     --host 0.0.0.0 \
     --port "$PORT" \
-    >/dev/null 2>&1 &
+    >"$STARTUP_LOG" 2>&1 &
 
 PID=$!
 
 echo "$PID" > "$PID_FILE"
 
 sleep 2
+
+# --------------------------------------------------
+# Verify application process
+# --------------------------------------------------
 
 if kill -0 "$PID" 2>/dev/null; then
     echo
@@ -106,15 +173,28 @@ if kill -0 "$PID" 2>/dev/null; then
     echo "PID:    $PID"
     echo "Port:   $PORT"
     echo "Python: $PYTHON"
-    echo "Logs:   Managed by application logging"
+    echo "Venv:   $VENV_DIR"
+    echo "Startup log: $STARTUP_LOG"
     echo
 else
     echo
+    echo "=========================================="
     echo "ERROR: Application failed to start."
+    echo "=========================================="
+    echo
+    echo "Startup log:"
+    echo "  $STARTUP_LOG"
+    echo
+    echo "Last 50 lines:"
+    echo "------------------------------------------"
+
+    if [ -f "$STARTUP_LOG" ]; then
+        tail -n 50 "$STARTUP_LOG"
+    fi
+
+    echo "------------------------------------------"
 
     rm -f "$PID_FILE"
 
-    echo
-    echo "Check the application log files in: $LOG_DIR"
     exit 1
 fi
