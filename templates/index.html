@@ -407,7 +407,7 @@
                         </span>
 
                         <span id="status-all" class="opt-feed-status-pill opt-feed-pill-disconnected">
-                            /all-feeds: Off
+                            Feed: Off
                         </span>
                     </div>
                 </div>
@@ -499,130 +499,516 @@
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 
 <script>
-    // Use window assignment or scoped declarations to prevent duplicate identifier errors
-    window.wsProtocol = window.wsProtocol || (window.location.protocol === "https:" ? "wss" : "ws");
-    window.wsHost = window.wsHost || `${window.wsProtocol}://${window.location.host}`;
-    window.apiHost = window.apiHost || `${window.location.protocol}//${window.location.host}`;
+    // ============================================================
+    // EXTERNAL FEED (novag7) CONFIGURATION
+    // ------------------------------------------------------------
+    // Live data is streamed via ONE WEBSOCKET PER INSTRUMENT from
+    // the external feed. The subscriptions list is fetched from
+    // https://feed.novag7.in/api/subscriptions.
+    //
+    // Local backend APIs (refresh status / manual refresh / isolated
+    // dashboard) are still served from window.location.host.
+    // ============================================================
+    const EXTERNAL_FEED_WS_BASE  = "wss://feed.novag7.in/ws/market";
+    const EXTERNAL_FEED_API_BASE = "https://feed.novag7.in";
+    const NIFTY_INDEX_KEY        = "NSE_INDEX|Nifty 50";
 
-    const optionFeedsStore = new Map();
+    const MAX_RECONNECT_DELAY_MS = 15000;
+    const SOCKET_OPEN_STAGGER_MS = 60;   // spread socket opens to avoid bursts
+
+    // Local backend (unchanged)
+    const apiHost = `${window.location.protocol}//${window.location.host}`;
+
+    // ---------- State ----------
+    const optionFeedsStore = new Map();  // instrument_key -> normalized tick
+    const socketRegistry   = new Map();  // instrument_key -> entry { subscription, ws, reconnectAttempts, reconnectTimer, stopped }
+
     let niftyTick = null;
+    let socketOpenCounter = 0;
     const nearestCardsPerSide = 6;
 
-    function openIsolatedDashboard() {
-        window.location.href = `${window.apiHost}/isolated-dashboard`;
+    // ---------- Small numeric helpers ----------
+    function toFiniteNumber(value) {
+        if (value === null || value === undefined || value === "") return null;
+        const n = Number(value);
+        return Number.isFinite(n) ? n : null;
     }
 
-    function connectAllFeeds() {
-        const ws = new WebSocket(`${wsHost}/all-feeds`);
-        const statusBadge = document.getElementById("status-all");
-
-        ws.onopen = () => {
-            statusBadge.className = "opt-feed-status-pill opt-feed-pill-connected";
-            statusBadge.textContent = "/all-feeds: Live";
-        };
-
-        ws.onmessage = (event) => {
-            const tick = JSON.parse(event.data);
-
-            if (tick.type === "connected" || tick.type === "ping") return;
-            if (tick.type === "error") {
-                console.error("All feeds error:", tick);
-                return;
-            }
-            if (!tick.instrument_key) return;
-
-            if (isNiftyIndexTick(tick)) {
-                niftyTick = tick;
-                updateNiftyHeader(tick);
-                renderNearestOptionCards();
-                return;
-            }
-
-            if (isOptionTick(tick)) {
-                optionFeedsStore.set(tick.instrument_key, tick);
-                renderNearestOptionCards();
-            }
-        };
-
-        ws.onerror = (event) => {
-            console.error("All-feeds websocket error:", event);
-        };
-
-        ws.onclose = () => {
-            statusBadge.className = "opt-feed-status-pill opt-feed-pill-disconnected";
-            statusBadge.textContent = "/all-feeds: Disconnected";
-            setTimeout(connectAllFeeds, 3000);
-        };
-    }
-
-    function isNiftyIndexTick(tick) {
-        const info = tick.info || {};
-        const key = String(tick.instrument_key || "");
-        const symbol = String(info.trading_symbol || info.underlying_symbol || "");
-
-        return (
-            String(info.instrument_type || "").toUpperCase() === "INDEX" ||
-            key.includes("NSE_INDEX|Nifty 50") ||
-            symbol.toUpperCase().includes("NIFTY 50")
-        );
-    }
-
-    function isOptionTick(tick) {
-        const instrumentType = String(tick.info?.instrument_type || "").toUpperCase();
-        return instrumentType === "CE" || instrumentType === "PE";
+    function firstFiniteNumber(...values) {
+        for (const v of values) {
+            const n = toFiniteNumber(v);
+            if (n !== null) return n;
+        }
+        return null;
     }
 
     function formatNumber(value, decimals = 2) {
-        const numberValue = Number(value || 0);
-        return numberValue.toFixed(decimals);
+        const n = toFiniteNumber(value);
+        if (n === null) return "--";
+        return n.toFixed(decimals);
     }
 
     function formatInteger(value) {
-        const numberValue = Number(value || 0);
-        return numberValue.toLocaleString();
+        const n = toFiniteNumber(value);
+        if (n === null) return "--";
+        return Math.round(n).toLocaleString();
     }
 
     function getChangeClass(value) {
         return Number(value || 0) >= 0 ? "opt-feed-trend-up" : "opt-feed-trend-down";
     }
 
+    // ============================================================
+    // LOCAL ACTIONS (unchanged)
+    // ============================================================
+    function openIsolatedDashboard() {
+        window.location.href = `${apiHost}/isolated-dashboard`;
+    }
+
+    // ============================================================
+    // SUBSCRIPTION CLASSIFICATION
+    // ============================================================
+    function isNiftyIndexSubscription(subscription) {
+        if (!subscription) return false;
+        const type   = String(subscription.instrument_type || "").toUpperCase();
+        const key    = String(subscription.instrument_key || "");
+        const symbol = String(subscription.trading_symbol || "").toUpperCase();
+
+        return (
+            type === "INDEX" ||
+            key.includes("NSE_INDEX|Nifty 50") ||
+            key === NIFTY_INDEX_KEY ||
+            symbol.includes("NIFTY 50")
+        );
+    }
+
+    function isOptionSubscription(subscription) {
+        if (!subscription) return false;
+        const type   = String(subscription.instrument_type || "").toUpperCase();
+        if (type === "CE" || type === "PE" || type === "CALL" || type === "PUT") return true;
+        // Fallback: infer from the trading symbol
+        const symbol = String(subscription.trading_symbol || "").toUpperCase();
+        return /\b(CE|PE)\b/.test(symbol);
+    }
+
+    function buildInfoFromSubscription(subscription) {
+        return {
+            instrument_key:    subscription.instrument_key,
+            trading_symbol:    subscription.trading_symbol || subscription.instrument_key,
+            instrument_type:   subscription.instrument_type || "",
+            strike_price:      (subscription.strike_price !== undefined) ? subscription.strike_price : null,
+            expiry:            subscription.expiry || null,
+            underlying_symbol: subscription.underlying_key || subscription.underlying_symbol || null,
+            mode:              subscription.mode || null,
+        };
+    }
+
+    // ============================================================
+    // PAYLOAD NORMALIZER
+    // ------------------------------------------------------------
+    // External feed payload (ltpc mode):
+    //   {
+    //     "instrument_key": "...",
+    //     "feed": { "ltpc": { "ltp": ..., "ltt": "...", "cp": ... } }
+    //   }
+    // Full mode payloads may also carry OHLC / OI / optionGreeks.
+    // Legacy shapes (change, change_pct, greeks, oi) are tolerated.
+    // ============================================================
+    function unwrapPayload(payload) {
+        if (
+            payload && typeof payload === "object" &&
+            payload.data && typeof payload.data === "object" &&
+            (payload.data.feed || payload.data.instrument_key)
+        ) {
+            return payload.data;
+        }
+        return payload;
+    }
+
+    function normalizeTick(subscription, payload) {
+        const feed     = payload.feed || {};
+        const ltpc     = feed.ltpc || {};
+        const marketFF = feed.marketFF || feed.market_ff || {};
+        const indexFF  = feed.indexFF  || feed.index_ff  || {};
+        const ohlc     = marketFF.ohlc || indexFF.ohlc || feed.ohlc || {};
+
+        const ltp       = firstFiniteNumber(ltpc.ltp, marketFF.ltp, indexFF.ltp, feed.ltp, payload.ltp);
+        const prevClose = firstFiniteNumber(ltpc.cp,  marketFF.cp,  indexFF.cp,  feed.cp,  payload.cp);
+
+        let change    = firstFiniteNumber(marketFF.change, indexFF.change, payload.change);
+        let changePct = firstFiniteNumber(
+            marketFF.changePct, marketFF.change_pct,
+            indexFF.changePct,  indexFF.change_pct,
+            payload.change_pct
+        );
+
+        if (change === null && ltp !== null && prevClose !== null) {
+            change = ltp - prevClose;
+        }
+        if (changePct === null && change !== null && prevClose !== null && prevClose !== 0) {
+            changePct = (change / prevClose) * 100;
+        }
+
+        const open  = firstFiniteNumber(ohlc.open,  marketFF.open,  indexFF.open,  payload.open);
+        const high  = firstFiniteNumber(ohlc.high,  marketFF.high,  indexFF.high,  payload.high);
+        const low   = firstFiniteNumber(ohlc.low,   marketFF.low,   indexFF.low,   payload.low);
+        const close = firstFiniteNumber(ohlc.close, marketFF.close, indexFF.close, payload.close);
+
+        const volume = firstFiniteNumber(marketFF.volume, feed.volume, payload.volume);
+        const oi     = firstFiniteNumber(
+            feed.oi, feed.open_interest,
+            marketFF.oi, marketFF.open_interest,
+            payload.oi, payload.open_interest
+        );
+
+        const greeksRaw =
+            feed.optionGreeks || feed.option_greeks || feed.greeks ||
+            payload.greeks || {};
+
+        const greeks = {
+            iv:    firstFiniteNumber(greeksRaw.iv, greeksRaw.iv_value, greeksRaw.implied_volatility),
+            delta: firstFiniteNumber(greeksRaw.delta),
+            theta: firstFiniteNumber(greeksRaw.theta),
+            gamma: firstFiniteNumber(greeksRaw.gamma),
+            vega:  firstFiniteNumber(greeksRaw.vega),
+        };
+
+        return {
+            instrument_key: subscription.instrument_key,
+            info: buildInfoFromSubscription(subscription),
+            ltp:        (ltp !== null) ? ltp : 0,
+            prev_close: (prevClose !== null) ? prevClose : 0,
+            change:     (change !== null) ? change : 0,
+            change_pct: (changePct !== null) ? changePct : 0,
+            open:  open,
+            high:  high,
+            low:   low,
+            close: close,
+            volume: volume,
+            oi:     oi,
+            greeks: greeks,
+            ltt:    firstFiniteNumber(ltpc.ltt, payload.ltt),
+            ts:     Date.now(),
+        };
+    }
+
+    // ============================================================
+    // SOCKET MANAGEMENT (one per instrument)
+    // ============================================================
+    function enqueueSubscription(subscription) {
+        const delay = socketOpenCounter * SOCKET_OPEN_STAGGER_MS;
+        socketOpenCounter += 1;
+        window.setTimeout(() => subscribeInstrument(subscription), delay);
+    }
+
+    function subscribeInstrument(subscription) {
+        const key = subscription && subscription.instrument_key;
+        if (!key) return;
+        if (socketRegistry.has(key)) return;
+
+        const entry = {
+            subscription,
+            ws: null,
+            reconnectAttempts: 0,
+            reconnectTimer: null,
+            stopped: false,
+        };
+        socketRegistry.set(key, entry);
+
+        // Seed the store immediately so the cards layout is populated
+        // even before the very first tick arrives.
+        if (!isNiftyIndexSubscription(subscription) && isOptionSubscription(subscription)) {
+            if (!optionFeedsStore.has(key)) {
+                optionFeedsStore.set(key, {
+                    instrument_key: key,
+                    info: buildInfoFromSubscription(subscription),
+                    ltp: 0,
+                    prev_close: 0,
+                    change: 0,
+                    change_pct: 0,
+                    open: null,
+                    high: null,
+                    low: null,
+                    close: null,
+                    volume: null,
+                    oi: null,
+                    greeks: { iv: null, delta: null, theta: null, gamma: null, vega: null },
+                    ts: null,
+                });
+            }
+        }
+
+        openInstrumentSocket(entry);
+        updateFeedStatus();
+    }
+
+    function openInstrumentSocket(entry) {
+        if (entry.stopped) return;
+        const key = entry.subscription.instrument_key;
+        const wsUrl = `${EXTERNAL_FEED_WS_BASE}?instrument_key=${encodeURIComponent(key)}`;
+
+        let ws;
+        try {
+            ws = new WebSocket(wsUrl);
+        } catch (err) {
+            console.error("Unable to create WebSocket for", key, err);
+            scheduleInstrumentReconnect(entry);
+            return;
+        }
+        entry.ws = ws;
+
+        ws.onopen = () => {
+            entry.reconnectAttempts = 0;
+            updateFeedStatus();
+        };
+
+        ws.onmessage = (event) => {
+            try {
+                handleInstrumentMessage(entry.subscription, event);
+            } catch (err) {
+                console.error("Error handling feed message for", key, err);
+            }
+        };
+
+        ws.onerror = (event) => {
+            console.error("Feed error for", key, event);
+        };
+
+        ws.onclose = () => {
+            entry.ws = null;
+            updateFeedStatus();
+            if (!entry.stopped) scheduleInstrumentReconnect(entry);
+        };
+    }
+
+    function scheduleInstrumentReconnect(entry) {
+        if (entry.stopped || entry.reconnectTimer) return;
+        entry.reconnectAttempts += 1;
+        const delay = Math.min(
+            1000 * Math.pow(2, entry.reconnectAttempts - 1),
+            MAX_RECONNECT_DELAY_MS
+        );
+        entry.reconnectTimer = window.setTimeout(() => {
+            entry.reconnectTimer = null;
+            openInstrumentSocket(entry);
+        }, delay);
+    }
+
+    function closeInstrumentSocket(entry) {
+        entry.stopped = true;
+        if (entry.reconnectTimer) {
+            clearTimeout(entry.reconnectTimer);
+            entry.reconnectTimer = null;
+        }
+        try { entry.ws && entry.ws.close(1000, "Unsubscribed"); } catch (e) {}
+        entry.ws = null;
+    }
+
+    function handleInstrumentMessage(subscription, event) {
+        let payload;
+        try { payload = JSON.parse(event.data); } catch (e) { return; }
+        if (!payload || typeof payload !== "object") return;
+
+        // Ignore control frames
+        const type = payload.type || payload.event;
+        if (type === "connected" || type === "subscribed" ||
+            type === "ping" || type === "pong" ||
+            type === "heartbeat") {
+            return;
+        }
+
+        payload = unwrapPayload(payload);
+
+        if (isNiftyIndexSubscription(subscription)) {
+            const tick = normalizeTick(subscription, payload);
+            niftyTick = tick;
+            updateNiftyHeader(tick);
+            renderNearestOptionCards();
+            return;
+        }
+
+        if (isOptionSubscription(subscription)) {
+            const normalized = normalizeTick(subscription, payload);
+            const previous = optionFeedsStore.get(subscription.instrument_key);
+            const merged = previous
+                ? { ...previous, ...normalized, info: { ...previous.info, ...normalized.info } }
+                : normalized;
+            optionFeedsStore.set(subscription.instrument_key, merged);
+            renderNearestOptionCards();
+        }
+    }
+
+    // ============================================================
+    // FEED STATUS BADGE
+    // ============================================================
+    function updateFeedStatus() {
+        const badge = document.getElementById("status-all");
+        if (!badge) return;
+
+        const total = socketRegistry.size;
+        let open = 0;
+        let connecting = 0;
+
+        for (const entry of socketRegistry.values()) {
+            if (!entry.ws) continue;
+            if (entry.ws.readyState === WebSocket.OPEN) open += 1;
+            else if (entry.ws.readyState === WebSocket.CONNECTING) connecting += 1;
+        }
+
+        if (total === 0) {
+            badge.className = "opt-feed-status-pill opt-feed-pill-disconnected";
+            badge.textContent = "Feed: Off";
+            return;
+        }
+
+        if (open === total) {
+            badge.className = "opt-feed-status-pill opt-feed-pill-connected";
+            badge.textContent = `Feed: ${open}/${total} live`;
+        } else if (open > 0) {
+            badge.className = "opt-feed-status-pill opt-feed-pill-refreshing";
+            badge.textContent = `Feed: ${open}/${total} live`;
+        } else if (connecting > 0) {
+            badge.className = "opt-feed-status-pill opt-feed-pill-refreshing";
+            badge.textContent = `Feed: connecting (${connecting}/${total})`;
+        } else {
+            badge.className = "opt-feed-status-pill opt-feed-pill-disconnected";
+            badge.textContent = `Feed: ${open}/${total} live`;
+        }
+    }
+
+    // ============================================================
+    // SUBSCRIPTIONS FETCH + RECONCILE
+    // ============================================================
+    async function fetchSubscriptions() {
+        const response = await fetch(`${EXTERNAL_FEED_API_BASE}/api/subscriptions`, {
+            method: "GET",
+            headers: { Accept: "application/json" }
+        });
+        if (!response.ok) {
+            throw new Error(`Subscriptions request failed: ${response.status}`);
+        }
+        const data = await response.json();
+        const active = Array.isArray(data && data.active) ? data.active.slice() : [];
+
+        // Always ensure the NIFTY 50 index is subscribed — the header
+        // needs it, even if the backend doesn't include it in the list.
+        const hasNifty = active.some((s) => s && s.instrument_key === NIFTY_INDEX_KEY);
+        if (!hasNifty) {
+            active.push({
+                instrument_key: NIFTY_INDEX_KEY,
+                instrument_type: "INDEX",
+                trading_symbol: "NIFTY 50",
+                mode: "ltpc",
+                source: "synthetic",
+            });
+        }
+
+        return active;
+    }
+
+    function reconcileSubscriptions(activeSubscriptions) {
+        const activeKeys = new Set();
+        activeSubscriptions.forEach((sub) => {
+            if (sub && sub.instrument_key) activeKeys.add(sub.instrument_key);
+        });
+
+        // Tear down sockets for instruments that dropped out of the list
+        for (const [key, entry] of Array.from(socketRegistry.entries())) {
+            if (!activeKeys.has(key)) {
+                closeInstrumentSocket(entry);
+                socketRegistry.delete(key);
+                optionFeedsStore.delete(key);
+            }
+        }
+
+        // Add new subscriptions
+        activeSubscriptions.forEach((sub) => {
+            if (!socketRegistry.has(sub.instrument_key)) {
+                enqueueSubscription(sub);
+            }
+        });
+
+        // Clean-up nifty tick if the index was unsubscribed (should not happen
+        // because we always ensure it's present, but keep it defensive).
+        if (!activeKeys.has(NIFTY_INDEX_KEY)) {
+            niftyTick = null;
+        }
+
+        updateFeedStatus();
+        renderNearestOptionCards();
+    }
+
+    async function bootstrapExternalFeeds() {
+        updateFeedStatus();
+        try {
+            const active = await fetchSubscriptions();
+            reconcileSubscriptions(active);
+        } catch (err) {
+            console.error("Failed to load external feed subscriptions:", err);
+            // Retry once after a short delay
+            setTimeout(async () => {
+                try {
+                    const active = await fetchSubscriptions();
+                    reconcileSubscriptions(active);
+                } catch (err2) {
+                    console.error("Second subscriptions attempt failed:", err2);
+                }
+            }, 3000);
+        }
+    }
+
+    // ============================================================
+    // HEADER + NEAREST OPTIONS RENDERING
+    // ============================================================
     function updateNiftyHeader(tick) {
-        const ltp = Number(tick.ltp || 0);
-        const change = Number(tick.change || 0);
+        const ltp       = Number(tick.ltp || 0);
+        const change    = Number(tick.change || 0);
         const changePct = Number(tick.change_pct || 0);
         const changeClass = getChangeClass(change);
 
         const niftyLtp = document.getElementById("nifty-ltp");
-        niftyLtp.className = `opt-feed-index-price ${changeClass}`;
-        niftyLtp.textContent = `NIFTY 50 ₹${formatNumber(ltp)}`;
+        if (niftyLtp) {
+            niftyLtp.className = `opt-feed-index-price ${changeClass}`;
+            niftyLtp.textContent = `NIFTY 50 ₹${formatNumber(ltp)}`;
+        }
 
-        document.getElementById("nifty-change").innerHTML = `
-            Change:
-            <span class="${changeClass} fw-bold">
-                ${change >= 0 ? "+" : ""}
-                ${formatNumber(change)}
-                (${formatNumber(changePct)}%)
-            </span>
-        `;
+        const niftyChange = document.getElementById("nifty-change");
+        if (niftyChange) {
+            niftyChange.innerHTML = `
+                Change:
+                <span class="${changeClass} fw-bold">
+                    ${change >= 0 ? "+" : ""}
+                    ${formatNumber(change)}
+                    (${formatNumber(changePct)}%)
+                </span>
+            `;
+        }
 
-        document.getElementById("nifty-ohlc").textContent =
-            `O: ${formatNumber(tick.open)} | H: ${formatNumber(tick.high)} | L: ${formatNumber(tick.low)}`;
+        const niftyOhlc = document.getElementById("nifty-ohlc");
+        if (niftyOhlc) {
+            niftyOhlc.textContent =
+                `O: ${formatNumber(tick.open)} | H: ${formatNumber(tick.high)} | L: ${formatNumber(tick.low)}`;
+        }
 
-        document.getElementById("nifty-updated").textContent =
-            `Updated: ${new Date().toLocaleTimeString()}`;
+        const niftyUpdated = document.getElementById("nifty-updated");
+        if (niftyUpdated) {
+            niftyUpdated.textContent = `Updated: ${new Date().toLocaleTimeString()}`;
+        }
 
-        document.getElementById("atm-reference").textContent = `₹${formatNumber(ltp)}`;
+        const atmRef = document.getElementById("atm-reference");
+        if (atmRef) {
+            atmRef.textContent = `₹${formatNumber(ltp)}`;
+        }
     }
 
     function getNearestOptions(optionType) {
         if (!niftyTick || !Number(niftyTick.ltp || 0)) return [];
-
         const niftyLtp = Number(niftyTick.ltp || 0);
 
         return Array.from(optionFeedsStore.values())
             .filter((tick) => {
-                const info = tick.info || {};
-                return String(info.instrument_type || "").toUpperCase() === optionType;
+                const type = String(tick.info?.instrument_type || "").toUpperCase();
+                return type === optionType;
             })
             .filter((tick) => tick.info?.strike_price !== null && tick.info?.strike_price !== undefined)
             .sort((a, b) => {
@@ -630,10 +1016,7 @@
                 const strikeB = Number(b.info?.strike_price || 0);
                 const distanceA = Math.abs(strikeA - niftyLtp);
                 const distanceB = Math.abs(strikeB - niftyLtp);
-
-                if (distanceA !== distanceB) {
-                    return distanceA - distanceB;
-                }
+                if (distanceA !== distanceB) return distanceA - distanceB;
                 return strikeA - strikeB;
             })
             .slice(0, nearestCardsPerSide);
@@ -642,12 +1025,15 @@
     function renderNearestOptionCards() {
         const ceContainer = document.getElementById("ce-container");
         const peContainer = document.getElementById("pe-container");
+        if (!ceContainer || !peContainer) return;
 
         const nearestCE = getNearestOptions("CE");
         const nearestPE = getNearestOptions("PE");
 
-        document.getElementById("ce-count").textContent = `${nearestCE.length} active`;
-        document.getElementById("pe-count").textContent = `${nearestPE.length} active`;
+        const ceCount = document.getElementById("ce-count");
+        const peCount = document.getElementById("pe-count");
+        if (ceCount) ceCount.textContent = `${nearestCE.length} active`;
+        if (peCount) peCount.textContent = `${nearestPE.length} active`;
 
         renderOptionCards(ceContainer, nearestCE, "CE");
         renderOptionCards(peContainer, nearestPE, "PE");
@@ -670,7 +1056,7 @@
             container.innerHTML = `
                 <div class="opt-feed-empty-box">
                     <i class="bi bi-broadcast fs-4 d-block mb-2"></i>
-                    Waiting for ${optionType} option ticks from /all-feeds.
+                    Waiting for ${optionType} option ticks from the external feed.
                 </div>
             `;
             return;
@@ -679,21 +1065,21 @@
         const niftyLtp = Number(niftyTick.ltp || 0);
 
         ticks.forEach((tick, index) => {
-            const info = tick.info || {};
-            const strike = Number(info.strike_price || 0);
-            const symbol = info.trading_symbol || tick.instrument_key;
+            const info     = tick.info || {};
+            const strike   = Number(info.strike_price || 0);
+            const symbol   = info.trading_symbol || tick.instrument_key;
             const distance = Math.abs(strike - niftyLtp);
-            const change = Number(tick.change || 0);
-            const changePct = Number(tick.change_pct || 0);
-            const ltp = Number(tick.ltp || 0);
+            const change   = Number(tick.change || 0);
+            const changePct= Number(tick.change_pct || 0);
+            const ltp      = Number(tick.ltp || 0);
             const changeClass = getChangeClass(change);
 
             const card = document.createElement("div");
             card.className = index === 0 ? "opt-feed-option-card is-atm-card" : "opt-feed-option-card";
 
             const greeks = tick.greeks || {};
-            const rawIv = Number(greeks.iv || 0);
-            const ivPct = rawIv <= 1.0 ? rawIv * 100 : rawIv;
+            const rawIv  = toFiniteNumber(greeks.iv);
+            const ivPct  = (rawIv !== null) ? (rawIv <= 1.0 ? rawIv * 100 : rawIv) : null;
 
             card.innerHTML = `
                 ${index === 0 ? `<div class="opt-feed-atm-tag">NEAREST</div>` : ""}
@@ -742,7 +1128,7 @@
                     <div class="opt-feed-greeks-heading">Option Greeks</div>
                     <div class="opt-feed-data-row">
                         <span class="opt-feed-data-label">IV</span>
-                        <span>${formatNumber(ivPct)}%</span>
+                        <span>${formatNumber(ivPct)}${ivPct !== null ? "%" : ""}</span>
                     </div>
                     <div class="opt-feed-data-row">
                         <span class="opt-feed-data-label">Delta</span>
@@ -759,14 +1145,17 @@
         });
     }
 
+    // ============================================================
+    // MANUAL REFRESH (local backend, unchanged endpoints)
+    // ============================================================
     function setRefreshUi(state, message) {
-        const statusBadge = document.getElementById("refresh-status");
-        const refreshPanel = document.getElementById("refresh-panel");
+        const statusBadge    = document.getElementById("refresh-status");
+        const refreshPanel   = document.getElementById("refresh-panel");
         const refreshMessage = document.getElementById("refresh-message");
-        const refreshButton = document.getElementById("manual-refresh-btn");
+        const refreshButton  = document.getElementById("manual-refresh-btn");
 
-        refreshPanel.classList.add("is-visible");
-        refreshMessage.textContent = message || "";
+        if (refreshPanel) refreshPanel.classList.add("is-visible");
+        if (refreshMessage) refreshMessage.textContent = message || "";
 
         if (state === "running") {
             statusBadge.className = "opt-feed-status-pill opt-feed-pill-refreshing";
@@ -800,7 +1189,6 @@
                 method: "GET",
                 headers: { Accept: "application/json" }
             });
-
             if (!response.ok) return;
 
             const data = await response.json();
@@ -832,7 +1220,6 @@
         const confirmed = window.confirm(
             "This will refresh token, fetch fresh instruments, update subscription keys, and restart the Upstox streamer. Continue?"
         );
-
         if (!confirmed) return;
 
         setRefreshUi(
@@ -845,7 +1232,6 @@
                 method: "POST",
                 headers: { Accept: "application/json" }
             });
-
             const data = await response.json();
 
             if (!response.ok) {
@@ -858,14 +1244,31 @@
                 "success",
                 `Manual hard refresh completed successfully.\n\nStarted At: ${data.started_at || "N/A"}\nCompleted At: ${data.completed_at || "N/A"}\nNearest Expiry: ${data.nearest_expiry || "N/A"}\nTotal Contracts: ${data.total_contracts || 0}\nSubscribed Instruments: ${data.subscribed_instruments || 0}\nFeed Mode: ${data.feed_mode || "N/A"}`
             );
+
+            // Subscriptions may have changed — reconcile external feed sockets.
+            setTimeout(() => {
+                bootstrapExternalFeeds().catch((err) =>
+                    console.error("Post-refresh subscription refresh failed:", err)
+                );
+            }, 800);
         } catch (error) {
             console.error("Manual hard refresh request failed:", error);
             setRefreshUi("failed", `Manual hard refresh request failed.\n\n${error}`);
         }
     }
 
-    connectAllFeeds();
+    // ============================================================
+    // BOOTSTRAP
+    // ============================================================
+    bootstrapExternalFeeds();
     loadRefreshStatus();
     renderNearestOptionCards();
+
+    // Stop all sockets on unload so we don't leak connections.
+    window.addEventListener("beforeunload", () => {
+        for (const entry of socketRegistry.values()) {
+            closeInstrumentSocket(entry);
+        }
+    });
 </script>
 {% endblock %}

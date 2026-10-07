@@ -1045,6 +1045,15 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
 {% block scripts %}
 <script>
 // ============================================================
+// EXTERNAL FEED CONFIGURATION
+// ------------------------------------------------------------
+// Live chart data is streamed directly from the external
+// novag7 feed, scoped to the current instrument only.
+// Everything else (historical candle API, etc.) is unchanged.
+// ============================================================
+const EXTERNAL_FEED_WS_BASE = "wss://feed.novag7.in/ws/market";
+
+// ============================================================
 // CHART LOADING OVERLAY CONTROLLER
 // ============================================================
 const LoadingOverlay = (function () {
@@ -2122,10 +2131,60 @@ function normalizeCandle(rawCandle) {
 
 // ============================================================
 // PAYLOAD HELPERS
+// ------------------------------------------------------------
+// These are tuned to work with the external novag7 feed payloads
+// which look like:
+//   {
+//     "instrument_key": "NSE_INDEX|Nifty 50",
+//     "feed": { "ltpc": { "ltp": 22680.95, "ltt": "1791348706000", "cp": 22776.1 } }
+//   }
+// Legacy internal-feed shapes are still tolerated as fallbacks.
 // ============================================================
-function getPayloadInstrumentKey(payload) { if (!payload || typeof payload !== "object") return null; return payload.instrument_key ?? payload.instrumentKey ?? payload.key ?? payload.info?.instrument_key ?? payload.data?.instrument_key ?? payload.data?.instrumentKey ?? payload.feed?.instrument_key ?? payload.feed?.instrumentKey ?? null; }
-function getPayloadLtp(payload) { if (!payload || typeof payload !== "object") return null; const rawLtp = payload.ltp ?? payload.live_ltp ?? payload.last_price ?? payload.data?.ltp ?? payload.data?.live_ltp ?? payload.data?.last_price ?? payload.feed?.ltp ?? payload.feed?.live_ltp; const ltp = Number(rawLtp); return Number.isFinite(ltp) ? ltp : null; }
-function getPayloadTimestamp(payload) { if (!payload || typeof payload !== "object") return Math.floor(Date.now() / 1000); return parseTimestamp(payload.timestamp ?? payload.time ?? payload.ts ?? payload.updated_at ?? payload.data?.timestamp ?? payload.data?.time ?? payload.feed?.timestamp) ?? Math.floor(Date.now() / 1000); }
+function getPayloadInstrumentKey(payload) {
+  if (!payload || typeof payload !== "object") return null;
+  return payload.instrument_key ??
+    payload.instrumentKey ??
+    payload.key ??
+    payload.info?.instrument_key ??
+    payload.data?.instrument_key ??
+    payload.data?.instrumentKey ??
+    payload.feed?.instrument_key ??
+    payload.feed?.instrumentKey ??
+    null;
+}
+
+function getPayloadLtp(payload) {
+  if (!payload || typeof payload !== "object") return null;
+  const rawLtp =
+    payload.ltp ??
+    payload.live_ltp ??
+    payload.last_price ??
+    payload.feed?.ltpc?.ltp ??          // <-- external novag7 feed
+    payload.feed?.ltp ??
+    payload.feed?.live_ltp ??
+    payload.data?.ltp ??
+    payload.data?.live_ltp ??
+    payload.data?.last_price ??
+    payload.data?.feed?.ltpc?.ltp;      // <-- external novag7 feed (nested)
+  const ltp = Number(rawLtp);
+  return Number.isFinite(ltp) ? ltp : null;
+}
+
+function getPayloadTimestamp(payload) {
+  if (!payload || typeof payload !== "object") return Math.floor(Date.now() / 1000);
+  return parseTimestamp(
+    payload.timestamp ??
+    payload.time ??
+    payload.ts ??
+    payload.updated_at ??
+    payload.feed?.ltpc?.ltt ??          // <-- external novag7 feed (ms string)
+    payload.feed?.timestamp ??
+    payload.data?.timestamp ??
+    payload.data?.time ??
+    payload.data?.feed?.ltpc?.ltt       // <-- external novag7 feed (nested)
+  ) ?? Math.floor(Date.now() / 1000);
+}
+
 function getPayloadCandle(payload) {
   if (!payload || typeof payload !== "object") return null;
   const candidates = [payload.candle, payload.latest_candle, payload.completed_candle, payload.live_candle, payload.data?.candle, payload.data?.latest_candle, payload.data?.completed_candle, payload.data?.live_candle, payload.feed?.candle, payload.feed?.latest_candle];
@@ -2221,6 +2280,7 @@ function updateCandleFromLtp(ltp, timestamp) {
 
 // ============================================================
 // LOAD OLDER HISTORICAL DATA  (with buffering overlay)
+// NOTE: Historical data still uses the existing backend API.
 // ============================================================
 async function loadOlderHistoricalData() {
   if (isLoadingHistory || !hasMoreHistory || !oldestCandleTime) return;
@@ -2284,11 +2344,16 @@ function processWebSocketMessage(event) {
 }
 
 // ============================================================
-// WEBSOCKET URL
+// WEBSOCKET URL — EXTERNAL NOVAG7 FEED (per instrument)
+// ------------------------------------------------------------
+// The feed URL is scoped to the current instrument only. This
+// matches the Python logger's behaviour:
+//   quote(INSTRUMENT_KEY, safe="")  ->  NSE_INDEX%7CNifty%2050
+// encodeURIComponent produces the same encoding for "|" and " ".
 // ============================================================
 function getWebSocketUrl() {
-  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  return protocol + "//" + window.location.host + "/all-feeds";
+  const encodedKey = encodeURIComponent(currentInstrumentKey);
+  return `${EXTERNAL_FEED_WS_BASE}?instrument_key=${encodedKey}`;
 }
 
 // ============================================================
@@ -2303,14 +2368,27 @@ function scheduleReconnect() {
 }
 
 // ============================================================
-// CONNECT WEBSOCKET
+// CONNECT WEBSOCKET (external novag7 feed)
 // ============================================================
 function connectWebSocket() {
   if (!currentInstrumentKey || pageClosing) return;
   if (chartSocket && (chartSocket.readyState === WebSocket.OPEN || chartSocket.readyState === WebSocket.CONNECTING)) return;
   setConnectionStatus("connecting", "Connecting");
-  try { chartSocket = new WebSocket(getWebSocketUrl()); } catch (error) { console.error("Unable to create WebSocket:", error); chartSocket = null; scheduleReconnect(); return; }
-  chartSocket.addEventListener("open", () => { reconnectAttempts = 0; setConnectionStatus("connected", "Live"); });
+  try {
+    const wsUrl = getWebSocketUrl();
+    if (window.__DEBUG_WS__) console.log("[ws] connecting to", wsUrl);
+    chartSocket = new WebSocket(wsUrl);
+  } catch (error) {
+    console.error("Unable to create WebSocket:", error);
+    chartSocket = null;
+    scheduleReconnect();
+    return;
+  }
+  chartSocket.addEventListener("open", () => {
+    reconnectAttempts = 0;
+    setConnectionStatus("connected", "Live");
+    if (window.__DEBUG_WS__) console.log("[ws] open:", getWebSocketUrl());
+  });
   chartSocket.addEventListener("message", processWebSocketMessage);
   chartSocket.addEventListener("error", error => console.error("Chart WebSocket error:", error));
   chartSocket.addEventListener("close", () => { chartSocket = null; if (!pageClosing) scheduleReconnect(); });
@@ -2838,7 +2916,8 @@ async function bootstrapChart() {
     LoadingOverlay.setStatus("Ready");
     LoadingOverlay.hide(260);
 
-    // Now that the chart is visible, open the WebSocket.
+    // Now that the chart is visible, open the external WebSocket feed
+    // scoped to the current instrument only.
     try {
       connectWebSocket();
     } catch (err) {
