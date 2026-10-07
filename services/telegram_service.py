@@ -924,7 +924,7 @@ class TelegramService:
     ) -> bool:
         if success:
             message = (
-                "Upstox streamer subscription is active.\n\n"
+                "Novag7 live feed subscription is active.\n\n"
                 f"Subscribed Instruments: {subscribed_keys_count}\n"
                 f"Feed Mode: {feed_mode}"
             )
@@ -936,7 +936,7 @@ class TelegramService:
                 notification_context="feed_subscription_success",
             )
 
-        message = "Upstox feed subscription failed."
+        message = "Novag7 feed subscription failed."
 
         if error:
             message += f"\nError: {error}"

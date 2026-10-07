@@ -62,7 +62,7 @@ from services.runtime_config_service import (
 )
 from services.telegram_service import telegram_service
 from services.token_service import token_service
-from services.upstox_websocket import upstox_streamer
+from services.novag7_websocket import novag7_feed_manager
 from services.ema_engine import internal_ema_engine
 from token_tasks.telegram_token_bot import telegram_token_bot
 from token_tasks.token_monitor import (
@@ -1129,7 +1129,7 @@ def run_daily_market_hard_refresh():
             "3. Update subscription cache\n"
             "4. Fetch historical candles\n"
             "5. Initialize live EMA state\n"
-            "6. Restart Upstox streamer\n\n"
+            "6. Restart Novag7 feed manager\n\n"
             f"EMA Mode: "
             f"{get_live_ema_calculation_mode_text()}\n"
             f"{get_ema_order_side_rule_text()}"
@@ -1205,14 +1205,14 @@ def run_daily_market_hard_refresh():
             )
 
         loop = getattr(
-            upstox_streamer,
+            novag7_feed_manager,
             "loop",
             None,
         )
 
         if loop and loop.is_running():
             future = asyncio.run_coroutine_threadsafe(
-                upstox_streamer.restart(),
+                novag7_feed_manager.reconcile_subscriptions(),
                 loop,
             )
 
@@ -1264,7 +1264,7 @@ def run_daily_market_hard_refresh():
 
         else:
             warning_message = (
-                "Upstox streamer event loop is unavailable. "
+                "Novag7 feed manager event loop is unavailable. "
                 "Cache and EMA state were refreshed, but "
                 "streamer restart was skipped."
             )
@@ -1718,11 +1718,11 @@ def run_instrument_recovery():
                 history_summary.get("live_ema_initialized"),
             )
 
-        loop = getattr(upstox_streamer, "loop", None)
+        loop = getattr(novag7_feed_manager, "loop", None)
 
         if loop and loop.is_running():
             future = asyncio.run_coroutine_threadsafe(
-                upstox_streamer.restart(),
+                novag7_feed_manager.reconcile_subscriptions(),
                 loop,
             )
 
@@ -1747,7 +1747,7 @@ def run_instrument_recovery():
                             "Instrument subscription has been recovered.\n\n"
                             f"Subscribed Instruments: {len(recovered_keys)}\n"
                             f"Feed Mode: {config.WEBSOCKET_FEED_MODE}\n"
-                            "Upstox streamer restarted with the recovered keys."
+                            "Novag7 feed manager reconciled with the recovered keys."
                         ),
                         level="INFO",
                     )
@@ -2072,7 +2072,7 @@ async def app_lifespan(
         scheduler = start_scheduler()
         telegram_bot_started = telegram_token_bot.start()
 
-        await upstox_streamer.start()
+        await novag7_feed_manager.start()
         streamer_started = True
 
         subscribed_keys = (
@@ -2098,7 +2098,7 @@ async def app_lifespan(
                     "Telegram bot: running\n"
                     "Scheduler: running\n"
                     "FastAPI: running\n"
-                    "Upstox streamer: running in waiting/recovery mode\n\n"
+                    "Novag7 feed manager: running in waiting/recovery mode\n\n"
                     "The instrument recovery job will retry automatically."
                 ),
                 level="WARNING",
@@ -2150,10 +2150,10 @@ async def app_lifespan(
 
         try:
             if streamer_started:
-                await upstox_streamer.stop()
+                await novag7_feed_manager.stop()
         except Exception as ex:
-            shutdown_errors.append(f"Upstox streamer: {type(ex).__name__}: {ex}")
-            logger.exception("Upstox streamer shutdown failed.")
+            shutdown_errors.append(f"Novag7 feed manager: {type(ex).__name__}: {ex}")
+            logger.exception("Novag7 feed manager shutdown failed.")
 
         try:
             internal_ema_engine.is_running = False

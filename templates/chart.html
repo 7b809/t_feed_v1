@@ -1045,13 +1045,12 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
 {% block scripts %}
 <script>
 // ============================================================
-// EXTERNAL FEED CONFIGURATION
+// Backend live feed configuration
 // ------------------------------------------------------------
-// Live chart data is streamed directly from the external
-// novag7 feed, scoped to the current instrument only.
+// Live chart data is streamed through the application WebSocket.
 // Everything else (historical candle API, etc.) is unchanged.
 // ============================================================
-const EXTERNAL_FEED_WS_BASE = "wss://feed.novag7.in/ws/market";
+const BACKEND_FEED_WS_URL = `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}/all-feeds`;
 
 // ============================================================
 // CHART LOADING OVERLAY CONTROLLER
@@ -2344,16 +2343,10 @@ function processWebSocketMessage(event) {
 }
 
 // ============================================================
-// WEBSOCKET URL — EXTERNAL NOVAG7 FEED (per instrument)
-// ------------------------------------------------------------
-// The feed URL is scoped to the current instrument only. This
-// matches the Python logger's behaviour:
-//   quote(INSTRUMENT_KEY, safe="")  ->  NSE_INDEX%7CNifty%2050
-// encodeURIComponent produces the same encoding for "|" and " ".
+// WEBSOCKET URL — APPLICATION FEED
 // ============================================================
 function getWebSocketUrl() {
-  const encodedKey = encodeURIComponent(currentInstrumentKey);
-  return `${EXTERNAL_FEED_WS_BASE}?instrument_key=${encodedKey}`;
+  return BACKEND_FEED_WS_URL;
 }
 
 // ============================================================
@@ -2368,7 +2361,7 @@ function scheduleReconnect() {
 }
 
 // ============================================================
-// CONNECT WEBSOCKET (external novag7 feed)
+// CONNECT WEBSOCKET (application feed)
 // ============================================================
 function connectWebSocket() {
   if (!currentInstrumentKey || pageClosing) return;

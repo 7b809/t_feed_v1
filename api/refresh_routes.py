@@ -9,7 +9,7 @@ from core import config
 from core.logger import get_logger
 from services.option_service import get_options_contracts, options_cache
 from services.token_service import token_service
-from services.upstox_websocket import upstox_streamer
+from services.novag7_websocket import novag7_feed_manager
 from services.telegram_service import telegram_service
 from services.history_service import fetch_historical_candles_for_all_subscribed
 from services.opening_range_service import (
@@ -129,7 +129,7 @@ async def manual_market_refresh():
     6. Validate subscribed instruments.
     7. Fetch historical candles for all subscribed instruments.
     8. Calculate historical EMA and initialize live EMA state.
-    9. Restart Upstox streamer so latest keys are subscribed.
+    9. Reconcile live feed manager so latest keys are subscribed.
     10. Send token refresh Telegram status.
     11. Send instrument/subscription Telegram status.
     12. Send historical EMA Telegram status.
@@ -186,7 +186,7 @@ async def manual_market_refresh():
                 "4. Update subscription cache\n"
                 "5. Fetch historical candles and calculate EMA\n"
                 "6. Initialize live EMA state for all instruments\n"
-                "7. Restart Upstox streamer\n\n"
+                "7. Reconcile Novag7 feed manager\n\n"
                 "Opening Range Hard Refresh Rule:\n"
                 "8. Opening Range steps 14-21 run only when market time "
                 "is between 09:15 and 15:45 using MARKET_TIMEZONE.\n\n"
@@ -452,19 +452,12 @@ async def manual_market_refresh():
             )
 
             # ============================================================
-            # 4. Restart Upstox streamer so latest keys are subscribed
+            # 4. Reconcile Novag7 feed manager so latest keys are subscribed
             # ============================================================
 
-            logger.info("Manual refresh: restarting Upstox streamer...")
+            logger.info("Manual refresh: reconciling Novag7 feed manager...")
 
-            if hasattr(upstox_streamer, "restart"):
-                await upstox_streamer.restart()
-            else:
-                await upstox_streamer.stop()
-
-                await asyncio.sleep(2)
-
-                await upstox_streamer.start()
+            await novag7_feed_manager.reconcile_subscriptions()
 
             telegram_service.send_subscription_message(
                 success=True,
@@ -769,7 +762,7 @@ async def manual_market_refresh():
                         if history_summary
                         else None
                     ),
-                    "upstox_streamer_restarted": True,
+                    "novag7_feed_manager_restarted": True,
                 },
                 # ========================================================
                 # HISTORICAL EMA

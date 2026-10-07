@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 from core import config
 from core.logger import get_logger
 from services.option_service import options_cache
-from services.upstox_websocket import upstox_streamer
+from services.novag7_websocket import novag7_feed_manager
 
 
 logger = get_logger(__file__)
@@ -58,7 +58,7 @@ class ServiceControlService:
         return result
 
     def get_status(self) -> dict[str, Any]:
-        loop = getattr(upstox_streamer, "loop", None)
+        loop = getattr(novag7_feed_manager, "loop", None)
 
         return {
             "success": True,
@@ -325,7 +325,7 @@ class ServiceControlService:
         )
 
     def restart_streamer(self) -> ServiceActionResult:
-        loop = getattr(upstox_streamer, "loop", None)
+        loop = getattr(novag7_feed_manager, "loop", None)
 
         if not loop or not loop.is_running():
             return self._save_result(
@@ -333,7 +333,7 @@ class ServiceControlService:
                     success=False,
                     action="restart_streamer",
                     message=(
-                        "Upstox streamer event loop is unavailable."
+                        "Novag7 feed manager event loop is unavailable."
                     ),
                     timestamp=self._now(),
                 )
@@ -341,7 +341,7 @@ class ServiceControlService:
 
         try:
             future = asyncio.run_coroutine_threadsafe(
-                upstox_streamer.restart(),
+                novag7_feed_manager.restart(),
                 loop,
             )
 
@@ -355,7 +355,7 @@ class ServiceControlService:
                 ServiceActionResult(
                     success=True,
                     action="restart_streamer",
-                    message="Upstox streamer restarted.",
+                    message="Novag7 feed manager restarted.",
                     timestamp=self._now(),
                     details={
                         "subscribed_instruments": len(
@@ -371,14 +371,14 @@ class ServiceControlService:
 
         except Exception as ex:
             logger.exception(
-                "Upstox streamer restart failed."
+                "Novag7 feed manager restart failed."
             )
 
             return self._save_result(
                 ServiceActionResult(
                     success=False,
                     action="restart_streamer",
-                    message="Upstox streamer restart failed.",
+                    message="Novag7 feed manager restart failed.",
                     timestamp=self._now(),
                     details={
                         "error": f"{type(ex).__name__}: {ex}",

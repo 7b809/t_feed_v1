@@ -500,21 +500,17 @@
 
 <script>
     // ============================================================
-    // EXTERNAL FEED (novag7) CONFIGURATION
+    // Backend-owned live feed WebSocket configuration
     // ------------------------------------------------------------
-    // Live data is streamed via ONE WEBSOCKET PER INSTRUMENT from
-    // the external feed. The subscriptions list is fetched from
-    // https://feed.novag7.in/api/subscriptions.
+    // Live data comes from the application's all-feeds WebSocket.
     //
     // Local backend APIs (refresh status / manual refresh / isolated
     // dashboard) are still served from window.location.host.
     // ============================================================
-    const EXTERNAL_FEED_WS_BASE  = "wss://feed.novag7.in/ws/market";
-    const EXTERNAL_FEED_API_BASE = "https://feed.novag7.in";
+    const BACKEND_FEED_WS_URL = `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}/all-feeds`;
     const NIFTY_INDEX_KEY        = "NSE_INDEX|Nifty 50";
 
     const MAX_RECONNECT_DELAY_MS = 15000;
-    const SOCKET_OPEN_STAGGER_MS = 60;   // spread socket opens to avoid bursts
 
     // Local backend (unchanged)
     const apiHost = `${window.location.protocol}//${window.location.host}`;
@@ -522,9 +518,9 @@
     // ---------- State ----------
     const optionFeedsStore = new Map();  // instrument_key -> normalized tick
     const socketRegistry   = new Map();  // instrument_key -> entry { subscription, ws, reconnectAttempts, reconnectTimer, stopped }
+    let backendFeedSocket = null;
 
     let niftyTick = null;
-    let socketOpenCounter = 0;
     const nearestCardsPerSide = 6;
 
     // ---------- Small numeric helpers ----------
@@ -633,12 +629,12 @@
         const ohlc     = marketFF.ohlc || indexFF.ohlc || feed.ohlc || {};
 
         const ltp       = firstFiniteNumber(ltpc.ltp, marketFF.ltp, indexFF.ltp, feed.ltp, payload.ltp);
-        const prevClose = firstFiniteNumber(ltpc.cp,  marketFF.cp,  indexFF.cp,  feed.cp,  payload.cp);
+        const prevClose = firstFiniteNumber(ltpc.cp, marketFF.cp, indexFF.cp, feed.cp, payload.prev_close, payload.close, payload.cp);
 
         let change    = firstFiniteNumber(marketFF.change, indexFF.change, payload.change);
         let changePct = firstFiniteNumber(
             marketFF.changePct, marketFF.change_pct,
-            indexFF.changePct,  indexFF.change_pct,
+            indexFF.changePct, indexFF.change_pct,
             payload.change_pct
         );
 
@@ -693,12 +689,10 @@
     }
 
     // ============================================================
-    // SOCKET MANAGEMENT (one per instrument)
+    // SOCKET MANAGEMENT (one application socket, instrument-keyed UI state)
     // ============================================================
     function enqueueSubscription(subscription) {
-        const delay = socketOpenCounter * SOCKET_OPEN_STAGGER_MS;
-        socketOpenCounter += 1;
-        window.setTimeout(() => subscribeInstrument(subscription), delay);
+        subscribeInstrument(subscription);
     }
 
     function subscribeInstrument(subscription) {
@@ -745,28 +739,42 @@
     function openInstrumentSocket(entry) {
         if (entry.stopped) return;
         const key = entry.subscription.instrument_key;
-        const wsUrl = `${EXTERNAL_FEED_WS_BASE}?instrument_key=${encodeURIComponent(key)}`;
+        if (backendFeedSocket && (backendFeedSocket.readyState === WebSocket.OPEN || backendFeedSocket.readyState === WebSocket.CONNECTING)) {
+            entry.ws = backendFeedSocket;
+            return;
+        }
 
         let ws;
         try {
-            ws = new WebSocket(wsUrl);
+            ws = new WebSocket(BACKEND_FEED_WS_URL);
         } catch (err) {
             console.error("Unable to create WebSocket for", key, err);
             scheduleInstrumentReconnect(entry);
             return;
         }
         entry.ws = ws;
+        backendFeedSocket = ws;
 
         ws.onopen = () => {
-            entry.reconnectAttempts = 0;
+            if (backendFeedSocket !== ws) {
+                ws.close(1000, "Superseded backend socket");
+                return;
+            }
+            for (const current of socketRegistry.values()) {
+                current.ws = ws;
+                current.reconnectAttempts = 0;
+            }
             updateFeedStatus();
         };
 
         ws.onmessage = (event) => {
             try {
-                handleInstrumentMessage(entry.subscription, event);
+                const payload = JSON.parse(event.data);
+                if (!payload || !payload.instrument_key) return;
+                const current = socketRegistry.get(payload.instrument_key);
+                if (current && !current.stopped) handleInstrumentMessage(current.subscription, event);
             } catch (err) {
-                console.error("Error handling feed message for", key, err);
+                console.error("Error handling backend feed message", err);
             }
         };
 
@@ -775,14 +783,17 @@
         };
 
         ws.onclose = () => {
-            entry.ws = null;
+            if (backendFeedSocket !== ws) return;
+            backendFeedSocket = null;
+            for (const current of socketRegistry.values()) current.ws = null;
             updateFeedStatus();
-            if (!entry.stopped) scheduleInstrumentReconnect(entry);
+            const active = Array.from(socketRegistry.values()).find(current => !current.stopped);
+            if (active) scheduleInstrumentReconnect(active);
         };
     }
 
     function scheduleInstrumentReconnect(entry) {
-        if (entry.stopped || entry.reconnectTimer) return;
+        if (entry.stopped || entry.reconnectTimer || backendFeedSocket) return;
         entry.reconnectAttempts += 1;
         const delay = Math.min(
             1000 * Math.pow(2, entry.reconnectAttempts - 1),
@@ -800,7 +811,10 @@
             clearTimeout(entry.reconnectTimer);
             entry.reconnectTimer = null;
         }
-        try { entry.ws && entry.ws.close(1000, "Unsubscribed"); } catch (e) {}
+        if (socketRegistry.size <= 1) {
+            try { backendFeedSocket && backendFeedSocket.close(1000, "No active subscriptions"); } catch (e) {}
+            backendFeedSocket = null;
+        }
         entry.ws = null;
     }
 
@@ -880,7 +894,7 @@
     // SUBSCRIPTIONS FETCH + RECONCILE
     // ============================================================
     async function fetchSubscriptions() {
-        const response = await fetch(`${EXTERNAL_FEED_API_BASE}/api/subscriptions`, {
+        const response = await fetch("/api/live-subscriptions", {
             method: "GET",
             headers: { Accept: "application/json" }
         });
@@ -1218,7 +1232,7 @@
 
     async function triggerManualRefresh() {
         const confirmed = window.confirm(
-            "This will refresh token, fetch fresh instruments, update subscription keys, and restart the Upstox streamer. Continue?"
+            "This will refresh token, fetch fresh instruments, update subscription keys, and reconcile the live feed. Continue?"
         );
         if (!confirmed) return;
 
@@ -1245,7 +1259,7 @@
                 `Manual hard refresh completed successfully.\n\nStarted At: ${data.started_at || "N/A"}\nCompleted At: ${data.completed_at || "N/A"}\nNearest Expiry: ${data.nearest_expiry || "N/A"}\nTotal Contracts: ${data.total_contracts || 0}\nSubscribed Instruments: ${data.subscribed_instruments || 0}\nFeed Mode: ${data.feed_mode || "N/A"}`
             );
 
-            // Subscriptions may have changed — reconcile external feed sockets.
+            // Subscriptions may have changed — refresh against the backend cache.
             setTimeout(() => {
                 bootstrapExternalFeeds().catch((err) =>
                     console.error("Post-refresh subscription refresh failed:", err)
@@ -1264,11 +1278,9 @@
     loadRefreshStatus();
     renderNearestOptionCards();
 
-    // Stop all sockets on unload so we don't leak connections.
+    // Stop the single application WebSocket on unload.
     window.addEventListener("beforeunload", () => {
-        for (const entry of socketRegistry.values()) {
-            closeInstrumentSocket(entry);
-        }
+        if (backendFeedSocket) backendFeedSocket.close(1000, "Page closed");
     });
 </script>
 {% endblock %}

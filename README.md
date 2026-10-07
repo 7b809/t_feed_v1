@@ -19,7 +19,7 @@ python -m uvicorn main:app --host 0.0.0.0 --port 8000
 
 At startup, the FastAPI lifespan initializes runtime configuration, refreshes the Upstox token from MongoDB, loads option contracts and builds the subscription list, then fetches historical and current-day intraday candles. The historical calculation seeds the internal EMA state. The application also catches up Opening Range data when its scheduled time has passed and today's result is unavailable.
 
-The scheduler starts the internal completed-candle poller alongside token checks, instrument recovery, daily refresh, Opening Range refresh, and log archiving. The Upstox market-data WebSocket streams option ticks to `services/upstox_websocket.py`. EMA candle processing uses Upstox's intraday candle API: on a once-per-minute poll during configured market hours, the engine processes returned candles whose minute has completed. It updates state once per instrument and candle timestamp.
+The scheduler starts the internal completed-candle poller alongside token checks, instrument recovery, daily refresh, Opening Range refresh, and log archiving. The Novag7 market-data WebSocket streams one connection per subscribed instrument through `services/novag7_websocket.py`. EMA candle processing continues to use Upstox's intraday candle API: on a once-per-minute poll during configured market hours, the engine processes returned candles whose minute has completed. It updates state once per instrument and candle timestamp.
 
 When EMA 9 crosses EMA 21, the engine builds one event, adds Opening Range context when available, passes it to the existing selected-instrument alert/isolation workflow, appends the event to a JSONL log, retains a bounded in-memory event history, and schedules a broadcast to connected WebSocket clients. REST clients can read current EMA state and in-memory crossover history.
 
@@ -99,11 +99,11 @@ The option and EMA inputs are separate: the Upstox market stream supplies live t
 
 1. `services/token_service.py` loads the Upstox access token from the configured MongoDB token document. Startup and refresh workflows call the token service before loading market data.
 2. `services/option_service.py` fetches option contracts, selects the nearest expiry and configured strike range, and stores contract metadata and subscription keys in `options_cache`.
-3. `services/upstox_websocket.py` starts `MarketDataStreamerV3` for the selected keys and configured feed mode.
+3. `services/novag7_websocket.py` reconciles the subscription cache and opens one Novag7 WebSocket per selected instrument.
 4. Incoming ticks are decoded and matched to cached contract information. `services/opening_range_service.py` receives ticks for live touch processing. `ws_feed.broadcaster` sends market ticks to eligible `/all-feeds`, `/ws`, and matching `/option` clients.
 5. EMA calculation is performed by the separate internal candle poller described below; tick prices do not trigger repeated EMA calculations.
 
-Relevant implementation files are `services/token_service.py`, `services/option_service.py`, `services/upstox_websocket.py`, `services/history_service.py`, and `ws_feed/broadcaster.py`.
+Relevant implementation files are `services/token_service.py`, `services/option_service.py`, `services/novag7_websocket.py`, `services/history_service.py`, and `ws_feed/broadcaster.py`.
 
 ## EMA Engine
  
@@ -255,7 +255,7 @@ The table lists the migration and immediate integration fixes reflected in the c
 | 4 | `main.py` | Started/stopped external EMA client | Registers the internal poll job with the existing scheduler, wires its event loop, reports startup state, and shuts down the internal engine | Modified |
 | 5 | `core/config.py` | Included external EMA URL/output/reconnect settings | Removes external EMA settings; adds configured market-close hour/minute for the poller | Modified |
 | 6 | `requirements.txt` | Included the separate `websockets` client dependency | Removes that external-client dependency | Modified |
-| 7 | `services/upstox_websocket.py` | Reported external EMA feed status/mode | Reports the internal engine status/mode; retains live tick and OR processing | Modified |
+| 7 | `services/novag7_websocket.py` | Manages the Novag7 per-instrument feed | Reports provider, connection and internal completed-candle EMA status | Added |
 | 8 | `services/ema_alert_simulation_service.py` | Read live EMA state from the external-feed cache | Reads internal EMA state | Modified |
 | 9 | `ws_feed/websocket_routes.py` | Described/served the consumer-side external event route only | Exposes `/ws/ema` and instrument path alias, sends initial state, and identifies the internal event source in current route flow | Modified |
 | 10 | `api/history_routes.py` | No dedicated internal EMA state route | Adds `GET /history/live-ema/state` for current state and in-memory crossovers | Modified |
@@ -300,7 +300,7 @@ Opening Range startup catch-up when applicable
 Existing scheduler + Telegram token bot + Upstox market streamer
 ```
 
-The daily hard refresh reloads the token and option subscriptions, refreshes historical EMA initialization, and restarts the Upstox streamer with current subscriptions. The scheduler also runs the internal EMA poll every 10 seconds; the engine itself enforces its once-per-minute and market-time gates. The Opening Range fetch has its own configured daily schedule.
+The daily hard refresh reloads the token and option subscriptions, refreshes historical EMA initialization, and reconciles the Novag7 feed manager with current subscriptions while retaining unchanged connections. The scheduler also runs the internal EMA poll every 10 seconds; the engine itself enforces its once-per-minute and market-time gates. The Opening Range fetch has its own configured daily schedule.
 
 ### Market processing
 
@@ -308,7 +308,7 @@ Upstox ticks feed option/WebSocket and OR touch processing. Separately, the EMA 
 
 ### Shutdown
 
-The FastAPI lifespan stops the Telegram token bot when it was started, stops the Upstox streamer, marks the internal EMA engine stopped, shuts down the scheduler, closes runtime configuration, and sends the configured shutdown notification. Cleanup errors are logged and included in shutdown reporting where possible.
+The FastAPI lifespan stops the Telegram token bot when it was started, closes all Novag7 instrument connections, marks the internal EMA engine stopped, shuts down the scheduler, closes runtime configuration, and sends the configured shutdown notification. Cleanup errors are logged and included in shutdown reporting where possible.
 
 ## Error Handling
 

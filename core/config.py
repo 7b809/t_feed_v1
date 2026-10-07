@@ -554,6 +554,15 @@ if STRIKE_FROM > STRIKE_TO:
 # WEBSOCKET / HISTORICAL CANDLES
 # ===========================================================================
 WEBSOCKET_FEED_MODE = _cfg_str("websocket.feed_mode", "WEBSOCKET_FEED_MODE", "full")
+LIVE_FEED_PROVIDER = _cfg_str("live_feed.provider", "LIVE_FEED_PROVIDER", "novag7").lower()
+NOVAG7_ENABLED = _cfg_bool("novag7.enabled", "NOVAG7_ENABLED", True)
+NOVAG7_WS_BASE_URL = _cfg_str("novag7.ws_base_url", "NOVAG7_WS_BASE_URL", "wss://feed.novag7.in/ws/market")
+NOVAG7_PING_INTERVAL = _cfg_int("novag7.ping_interval", "NOVAG7_PING_INTERVAL", 20)
+NOVAG7_PING_TIMEOUT = _cfg_int("novag7.ping_timeout", "NOVAG7_PING_TIMEOUT", 20)
+NOVAG7_CLOSE_TIMEOUT = _cfg_int("novag7.close_timeout", "NOVAG7_CLOSE_TIMEOUT", 10)
+NOVAG7_RECONNECT_INITIAL_DELAY = _cfg_int("novag7.reconnect_initial_delay", "NOVAG7_RECONNECT_INITIAL_DELAY", 5)
+NOVAG7_RECONNECT_MAX_DELAY = _cfg_int("novag7.reconnect_max_delay", "NOVAG7_RECONNECT_MAX_DELAY", 30)
+NOVAG7_RECONCILE_INTERVAL = _cfg_int("novag7.reconcile_interval", "NOVAG7_RECONCILE_INTERVAL", 5)
 
 HISTORICAL_CANDLE_ENABLED = _cfg_bool(
     "historical_candle.enabled", "HISTORICAL_CANDLE_ENABLED", True

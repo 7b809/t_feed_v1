@@ -6,6 +6,7 @@ python-dotenv
 pydantic
 pydantic-settings
 websocket-client
+websockets>=12
 requests
 pandas
 numpy
