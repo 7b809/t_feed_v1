@@ -787,13 +787,13 @@ OPENING_RANGE_ISOLATION_AVERAGE_WINDOW_POINTS = max(
 OPENING_RANGE_ISOLATION_TOUCH_LEVELS = _cfg_list(
     "opening_range_isolated.touch_levels",
     "OPENING_RANGE_ISOLATION_TOUCH_LEVELS",
-    ["R3"],
+    ["S3"],
     uppercase=True,
 )
 OPENING_RANGE_ISOLATION_PRIORITY_LEVELS = _cfg_list(
     "opening_range_isolated.priority_levels",
     "OPENING_RANGE_ISOLATION_PRIORITY_LEVELS",
-    ["R3"],
+    ["S3"],
     uppercase=True,
 )
 OPENING_RANGE_ISOLATED_INSTRUMENT_NOTIFY_ENABLED = _cfg_bool(
