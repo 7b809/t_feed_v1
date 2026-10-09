@@ -170,3 +170,52 @@ def get_file_write_lock(path: Path) -> threading.Lock:
             lock = threading.Lock()
             _write_locks[key] = lock
         return lock
+
+
+# ---------------------------------------------------------------------------
+# Lookup helpers for the read APIs
+# ---------------------------------------------------------------------------
+def normalize_strike(value: Any) -> str:
+    """Turn 24450 / '24450' / 24450.0 into '24450'."""
+    try:
+        num = float(value)
+    except (TypeError, ValueError):
+        return str(value).strip()
+    return str(int(num)) if num.is_integer() else str(num)
+
+
+def build_dir_from_parts(
+    underlying: str,
+    strike: Any | None = None,
+    strike_type: str | None = None,
+) -> Path:
+    """Build the instrument directory from its parts.
+
+    - If ``strike`` is provided, the folder is ``<strike>_<type>`` (options).
+    - Otherwise the folder is ``<type>`` (futures) or ``spot`` (index/underlying).
+    """
+    underlying_key = normalize_underlying_name(underlying)
+
+    if strike is not None and str(strike).strip() != "":
+        folder = normalize_strike(strike)
+        if strike_type:
+            folder = f"{folder}_{strike_type.strip().upper()}"
+        return settings.data_dir / underlying_key / folder
+
+    if strike_type:
+        return settings.data_dir / underlying_key / strike_type.strip().upper()
+    return settings.data_dir / underlying_key / "spot"
+
+
+def build_dir_from_instrument_key(instrument_key: str) -> Path | None:
+    """Resolve a directory from an ``instrument_key`` alone.
+
+    - Index rows (``NSE_INDEX|Nifty 50``) → ``data/index/<name>/``
+    - Options/futures rows (``NSE_FO|44694``) → we cannot recover the strike
+      from the key alone, so callers should use the subscriptions snapshot
+      instead. This helper is only used for the index case.
+    """
+    if instrument_key.startswith("NSE_INDEX|") or instrument_key.startswith("BSE_INDEX|"):
+        name = instrument_key.split("|", 1)[1]
+        return settings.data_dir / "index" / normalize_underlying_name(name)
+    return None    
