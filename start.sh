@@ -1,7 +1,7 @@
 #!/bin/bash
 
 APP_NAME="upstox_market_stream"
-PORT=8001
+PORT=8002
 
 PID_FILE="${APP_NAME}.pid"
 LOG_DIR="logs"
