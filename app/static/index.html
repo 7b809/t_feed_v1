@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ordered Instrument Jobs</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <main>
+    <header>
+      <div><p class="eyebrow">SUBSCRIPTION JOBS</p><h1>Ordered instruments</h1></div>
+      <button id="refresh">Hard refresh</button>
+    </header>
+    <section class="stats">
+      <div><strong id="unique">0</strong><span>Unique</span></div>
+      <div><strong id="duplicates">0</strong><span>Duplicates removed</span></div>
+      <div><strong id="invalid">0</strong><span>Invalid skipped</span></div>
+    </section>
+    <section class="toolbar">
+      <input id="search" placeholder="Search symbol, key, expiry, type...">
+      <span id="status">Loading...</span>
+    </section>
+    <section id="jobs" class="jobs"></section>
+  </main>
+  <script src="/static/app.js"></script>
+</body>
+</html>

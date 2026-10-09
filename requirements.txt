@@ -1,14 +1,8 @@
 fastapi
 uvicorn
+httpx
 python-dotenv
 pydantic
-pydantic-settings
-requests
-httpx
-pymongo
-motor
-websockets
-python-dateutil
-pytz
-tzdata
 upstox-python-sdk
+tzdata
+requests

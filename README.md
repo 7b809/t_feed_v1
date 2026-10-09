@@ -1,78 +1,136 @@
-# NIFTY EMA Crossover Project
+# Ordered Instrument Jobs FastAPI
 
-This service refreshes nearest-expiry NIFTY option contracts on weekdays at 09:00 Asia/Kolkata, filters the configured strike range, optionally selects a random test subset, builds EMA 9/21 state from historical plus current-day intraday candles, and then processes the V3 `prev_ohlc` completed one-minute candle once per minute.
+A FastAPI application that keeps a rolling local cache of 1-minute candles
+for every subscribed instrument, derives 9/21 EMA crossings from them, and
+also detects new crosses live during market hours.
+
+Five chained jobs run on startup and on demand:
+
+1. **Subscriptions** — fetch the upstream `active` list, de-duplicate by
+   `instrument_key`, preserve upstream order.
+2. **Historical candles** — ensure the last `HISTORY_LOOKBACK_DAYS` (default
+   **10**) of 1-minute candles are cached locally. Missing windows are pulled
+   from Upstox `HistoryV3Api` in 7-day chunks.
+3. **Intraday candles** — during the market window (`MARKET_OPEN_TIME` to
+   `MARKET_CLOSE_TIME` in `MARKET_TIMEZONE`), fetch today's 1-minute candles
+   and merge them into the same file.
+4. **Batch EMA crosses** — compute 9/21 EMA crossings from each candle file
+   and rewrite `ema_crosses.json`.
+5. **Live EMA crosses** — while inside the market window, tick every minute
+   at `minute boundary + LIVE_EMA_TICK_OFFSET_SECONDS`, fetch fresh intraday
+   candles, and append only *new* crosses to `ema_crosses.json`.
+
+## File layout
+
+```
+data/<underlying>/<strike>_<instrument_type>/historical.json
+data/<underlying>/<strike>_<instrument_type>/ema_crosses.json
+```
+
+Examples:
+
+```
+data/nifty/25000_CE/historical.json
+data/nifty/25000_CE/ema_crosses.json
+data/sensex/70100_PE/historical.json
+data/nifty/spot/historical.json            # non-option rows
+```
+
+`historical.json` is the single source of truth for candles.
+`ema_crosses.json` is derived from it (batch job) and appended to live.
+
+## Project behavior
+
+- **Application start / restart**: runs jobs 1–4 in order, then starts job 5
+  as a background task.
+- **Normal browser refresh**: reads the current in-memory ordered list.
+- **Hard refresh** (`POST /api/hard-refresh`): runs jobs 1–4; job 5 keeps
+  running in the background.
+- **Manual jobs**: `/api/historical-refresh`, `/api/intraday-refresh`,
+  `/api/ema-refresh`, `/api/live-ema/tick`.
+- **Failed refresh**: previously loaded good data remains available.
+- **Concurrency**: bounded by `HISTORY_MAX_CONCURRENCY` for every job.
+- **Configuration**: `app/core/config.py` loads `.env` via `python-dotenv`.
+- **Logging**: console + rotating file (`LOG_FILE`).
+- **Timezone**: all market-window logic uses `MARKET_TIMEZONE`
+  (default `Asia/Kolkata`).
+
+## EMA cross semantics
+
+- Standard SMA-seeded EMA, `k = 2 / (period + 1)`.
+- Fast/slow periods from `EMA_FAST_PERIOD` (default 9) and `EMA_SLOW_PERIOD`
+  (default 21).
+- **Bullish cross**: `fast − slow` goes from `<= 0` to `> 0`.
+- **Bearish cross**: `fast − slow` goes from `>= 0` to `< 0`.
+- Live-detected events are tagged with `"detected_by": "live"`; batch events
+  have no such tag.
 
 ## Setup
 
-1. Copy `.env.example` to `.env`.
-2. Configure MongoDB and strike range values.
-3. Store the Upstox token document:
-
-```json
-{"_id": "upstox_access_token", "access_token": "YOUR_TOKEN"}
-```
-
-4. Install dependencies:
-
 ```bash
+python -m venv .venv
+source .venv/bin/activate
+# Windows PowerShell: .venv\Scripts\Activate.ps1
 pip install -r requirements.txt
+cp .env.example .env
+uvicorn app.main:app --reload
 ```
 
-5. Run:
+Open `http://127.0.0.1:8000`.
 
-```bash
-python main.py
-```
+## Configuration
 
-## Flow
+All settings are read from `.env`:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `SUBSCRIPTIONS_API_URL` | `https://feed.novag7.in/api/subscriptions` | Upstream subscriptions endpoint. |
+| `REQUEST_TIMEOUT_SECONDS` | `30` | HTTP timeout for the subscriptions fetch. |
+| `LOG_LEVEL` | `INFO` | Root log level. |
+| `LOG_FILE` | `logs/app.log` | Rotating log file path. |
+| `DATA_DIR` | `data` | Root directory for cached files. |
+| `HISTORY_LOOKBACK_DAYS` | `10` | Rolling window of candles to keep. |
+| `HISTORY_MAX_CONCURRENCY` | `8` | Max in-flight instruments per job. |
+| `MARKET_TIMEZONE` | `Asia/Kolkata` | Timezone used to evaluate the market window. |
+| `MARKET_OPEN_TIME` | `09:15` | Intraday window start. |
+| `MARKET_CLOSE_TIME` | `15:40` | Intraday window end. |
+| `EMA_FAST_PERIOD` | `9` | Fast EMA period. |
+| `EMA_SLOW_PERIOD` | `21` | Slow EMA period. |
+| `LIVE_EMA_ENABLED` | `true` | Start the live polling job at startup. |
+| `LIVE_EMA_TICK_OFFSET_SECONDS` | `10` | Seconds after each minute boundary to fire the tick. |
+| `LIVE_EMA_IDLE_SLEEP_SECONDS` | `30` | Sleep when outside market hours before re-checking. |
+
+## API routes
 
 ```text
-Start/restart
-  -> load settings from core/config.py
-  -> load token from MongoDB
-  -> restore today's selection/state when valid
-  -> otherwise refresh contracts after 09:00
-  -> historical + intraday EMA warmup
-  -> after each minute boundary plus delay
-  -> fetch V3 I1 OHLC in batches
-  -> consume prev_ohlc only
-  -> skip duplicate timestamp
-  -> update EMA state
-  -> save crossover only when bullish/bearish cross occurs
-  -> repeat until market close
-  -> next weekday refresh at 09:00
+GET  /api/instruments
+POST /api/hard-refresh
+POST /api/historical-refresh
+POST /api/intraday-refresh
+POST /api/ema-refresh
+GET  /api/live-ema/status
+POST /api/live-ema/start
+POST /api/live-ema/stop
+POST /api/live-ema/tick
+GET  /api/health
+GET  /docs
 ```
 
-## Data
-
-- `data/nearest_nifty_option_contracts.json`: filtered nearest-expiry contracts
-- `data/runtime/selected_contracts.json`: fixed daily selection used by all services
-- `data/runtime/service_state.json`: scheduler state
-- `data/ema_state/*.json`: incremental EMA continuation state
-- `data/crossovers/YYYY-MM-DD/*.json`: crossover-only records
-- `data/candles/YYYY-MM-DD/*.json`: optional completed-candle journal
-
-`TEST_FLAG=true` chooses one random daily subset. `TEST_FLAG=false` processes all valid contracts in the configured range. The service uses `MarketQuoteV3Api.get_market_quote_ohlc("I1", instrument_key=...)` and reads `prev_ohlc` as the completed candle.
-
-## Control API
-
-The API listens on `API_HOST:API_PORT`. Administrative endpoints require `X-API-Key`.
+Manual jobs:
 
 ```bash
-curl http://localhost:8000/health
-
-curl -X POST http://localhost:8000/hard-refresh \
-  -H "X-API-Key: change-this-secret"
-
-curl http://localhost:8000/hard-refresh/JOB_ID \
-  -H "X-API-Key: change-this-secret"
-
-curl http://localhost:8000/state \
-  -H "X-API-Key: change-this-secret"
+curl -X POST http://127.0.0.1:8000/api/hard-refresh
+curl -X POST http://127.0.0.1:8000/api/ema-refresh
+curl -X POST http://127.0.0.1:8000/api/live-ema/tick
+curl http://127.0.0.1:8000/api/live-ema/status
 ```
 
-`POST /hard-refresh` returns HTTP 202 and executes contract refresh, selection, historical retrieval, intraday retrieval, EMA rebuild, crossover persistence, and state persistence in a dedicated thread. Only one refresh job can run at a time.
+## Git push
 
-## Telegram
-
-Set `TELEGRAM_ENABLED=true`, `TELEGRAM_BOT_TOKEN`, and `TELEGRAM_CHAT_ID`. Notifications are sent for service lifecycle, refresh completion/failure, scheduler errors, and EMA crossovers. Telegram failure is logged and does not stop market processing.
+```bash
+git init
+git add .
+git commit -m "Add live EMA cross polling job"
+git branch -M main
+git remote add origin <YOUR_GITHUB_REPOSITORY_URL>
+git push -u origin main

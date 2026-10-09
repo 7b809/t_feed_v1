@@ -14,6 +14,7 @@ file.txt
 *.ini
 # C extensions
 *.so
+temp
 myenv/
 venv/
  files.txt
