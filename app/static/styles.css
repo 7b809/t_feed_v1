@@ -50,15 +50,80 @@ tr.row-live:hover > td {
 }
 
 /* ================================================================== */
+/*  Custom scrollbars — reused by the file list and the log viewer.   */
+/* ================================================================== */
+
+/* Firefox */
+.log-file-list,
+.log-viewer,
+.log-viewer-wrap {
+  scrollbar-width: thin;
+  scrollbar-color: var(--bs-secondary-bg) transparent;
+}
+
+/* Chromium / WebKit / Edge / Safari */
+.log-file-list::-webkit-scrollbar,
+.log-viewer::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.log-file-list::-webkit-scrollbar-track,
+.log-viewer::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.log-file-list::-webkit-scrollbar-thumb,
+.log-viewer::-webkit-scrollbar-thumb {
+  background-color: rgba(108, 117, 125, 0.45);
+  border-radius: 10px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+.log-file-list::-webkit-scrollbar-thumb:hover,
+.log-viewer::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(108, 117, 125, 0.75);
+  background-clip: padding-box;
+}
+
+.log-file-list::-webkit-scrollbar-corner,
+.log-viewer::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* ================================================================== */
 /*  Logs dashboard                                                    */
 /* ================================================================== */
+
+/* --- Shared card chrome ------------------------------------------- */
+.card-scroll {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;      /* clip children; scrolling happens inside */
+}
+
+.card-scroll > .card-header,
+.card-scroll > .card-footer,
+.card-scroll > .log-toolbar {
+  flex: 0 0 auto;
+}
+
+.card-scroll > .card-body {
+  flex: 1 1 auto;
+  min-height: 0;         /* critical: lets the inner overflow work */
+  overflow: hidden;
+  padding: 0;
+}
 
 /* --- File list (left sidebar) ------------------------------------- */
 .log-file-list {
   max-height: calc(100vh - 340px);
   min-height: 200px;
   overflow-y: auto;
+  overflow-x: hidden;
   overscroll-behavior: contain;
+  position: relative;
 }
 
 .log-file-list .list-group-item {
@@ -68,6 +133,7 @@ tr.row-live:hover > td {
   border-radius: 0;
   padding: .55rem .75rem;
   color: var(--bs-body-color);
+  transition: background-color .12s ease, border-color .12s ease;
 }
 
 .log-file-list .list-group-item:hover {
@@ -82,6 +148,11 @@ tr.row-live:hover > td {
 
 .log-file-list .list-group-item.active .fw-semibold {
   color: var(--bs-primary-text-emphasis);
+}
+
+/* Name is the only part allowed to shrink; keep the badge intact. */
+.log-file-list .list-group-item .fw-semibold {
+  min-width: 0;
 }
 
 /* --- Log viewer (right panel) ------------------------------------- */
@@ -130,9 +201,10 @@ tr.row-live:hover > td {
   min-width: 220px;
 }
 
+/* --- Responsive --------------------------------------------------- */
 @media (max-width: 991.98px) {
   .log-file-list {
-    max-height: 260px;
+    max-height: 280px;
   }
   .log-viewer {
     height: 60vh;

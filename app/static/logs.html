@@ -49,7 +49,9 @@
       <!-- Sidebar: file list + filename search                         -->
       <!-- ============================================================ -->
       <div class="col-12 col-lg-3 col-xxl-2">
-        <div class="card border-0 shadow-sm h-100">
+        <div class="card card-scroll border-0 shadow-sm h-100">
+
+          <!-- Pinned header -->
           <div class="card-header bg-body-secondary d-flex justify-content-between align-items-center">
             <span class="fw-bold text-uppercase small">
               <i class="bi bi-folder2-open me-1"></i>Log files
@@ -57,7 +59,8 @@
             <span id="file-count" class="badge text-bg-secondary">0</span>
           </div>
 
-          <div class="card-body border-bottom">
+          <!-- Pinned controls -->
+          <div class="card-body card-body-fixed border-bottom">
             <div class="input-group input-group-sm mb-2">
               <span class="input-group-text bg-body-secondary">
                 <i class="bi bi-search"></i>
@@ -99,7 +102,9 @@
             </div>
           </div>
 
-          <div id="file-list" class="list-group list-group-flush log-file-list">
+          <!-- Scrollable file list -->
+          <div id="file-list"
+               class="list-group list-group-flush log-file-list flex-grow-1">
             <div class="list-group-item text-secondary small">Loading…</div>
           </div>
         </div>
@@ -109,7 +114,9 @@
       <!-- Viewer                                                        -->
       <!-- ============================================================ -->
       <div class="col-12 col-lg-9 col-xxl-10">
-        <div class="card border-0 shadow-sm h-100">
+        <div class="card card-scroll border-0 shadow-sm h-100">
+
+          <!-- Pinned header with title + action buttons -->
           <div class="card-header bg-body-secondary d-flex flex-wrap gap-2
                       justify-content-between align-items-center">
             <div class="d-flex align-items-center gap-2 text-truncate">
@@ -161,8 +168,10 @@
             </div>
           </div>
 
-          <div class="card-body p-0">
-            <!-- Toolbar: in-content search -->
+          <!-- Body: fixed toolbar on top, scrollable log fills the rest -->
+          <div class="card-body p-0 log-viewer-body">
+
+            <!-- Pinned toolbar: in-content search + options -->
             <div class="log-toolbar border-bottom px-3 py-2 d-flex flex-wrap
                         gap-2 align-items-center bg-body-tertiary">
               <div class="input-group input-group-sm" style="max-width: 380px;">
@@ -199,9 +208,12 @@
               </div>
             </div>
 
-            <pre id="log-content" class="log-viewer"><span class="text-secondary">Select a log file from the left to view its contents.</span></pre>
+            <!-- Scrollable log content -->
+            <pre id="log-content"
+                 class="log-viewer"><span class="text-secondary">Select a log file from the left to view its contents.</span></pre>
           </div>
 
+          <!-- Pinned footer -->
           <div class="card-footer bg-body-secondary small text-secondary
                       d-flex justify-content-between flex-wrap gap-2">
             <span id="footer-info" class="text-truncate">—</span>
