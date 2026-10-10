@@ -88,4 +88,9 @@ class Settings:
         os.getenv("LIVE_EMA_INTERVAL_SECONDS", "60")
     )
 
+    # Daily maintenance refresh (jobs 1 → 4) on market days (Mon–Fri).
+    # Runs once per day at ``daily_refresh_time`` in ``market_timezone``.
+    daily_refresh_enabled: bool = _env_bool("DAILY_REFRESH_ENABLED", True)
+    daily_refresh_time: str = os.getenv("DAILY_REFRESH_TIME", "08:40")
+
 settings = Settings()

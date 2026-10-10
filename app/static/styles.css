@@ -48,3 +48,93 @@ tr.row-live:hover > td {
   letter-spacing: .04em;
   border-top: 0;
 }
+
+/* ================================================================== */
+/*  Logs dashboard                                                    */
+/* ================================================================== */
+
+/* --- File list (left sidebar) ------------------------------------- */
+.log-file-list {
+  max-height: calc(100vh - 340px);
+  min-height: 200px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.log-file-list .list-group-item {
+  background: transparent;
+  border-left: 3px solid transparent;
+  border-right: 0;
+  border-radius: 0;
+  padding: .55rem .75rem;
+  color: var(--bs-body-color);
+}
+
+.log-file-list .list-group-item:hover {
+  background: var(--bs-secondary-bg);
+}
+
+.log-file-list .list-group-item.active {
+  background: var(--bs-primary-bg-subtle);
+  color: var(--bs-body-color);
+  border-left-color: var(--bs-primary);
+}
+
+.log-file-list .list-group-item.active .fw-semibold {
+  color: var(--bs-primary-text-emphasis);
+}
+
+/* --- Log viewer (right panel) ------------------------------------- */
+.log-viewer {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas,
+               "Liberation Mono", "Courier New", monospace;
+  font-size: 13px;
+  line-height: 1.55;
+  white-space: pre;
+  overflow: auto;
+  padding: .9rem 1rem;
+  margin: 0;
+  height: calc(100vh - 320px);
+  min-height: 320px;
+  background: var(--bs-body-bg);
+  color: var(--bs-body-color);
+  tab-size: 4;
+  overscroll-behavior: contain;
+}
+
+.log-viewer.log-wrap {
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.log-viewer mark {
+  background: #ffd54f;
+  color: #111;
+  padding: 0 1px;
+  border-radius: 2px;
+}
+
+/* --- Toolbar above the log viewer --------------------------------- */
+.log-toolbar {
+  position: relative;
+  z-index: 1;
+}
+
+.log-toolbar .input-group .form-control:focus {
+  box-shadow: none;
+}
+
+/* --- Misc --------------------------------------------------------- */
+#toast .toast {
+  min-width: 220px;
+}
+
+@media (max-width: 991.98px) {
+  .log-file-list {
+    max-height: 260px;
+  }
+  .log-viewer {
+    height: 60vh;
+  }
+}
