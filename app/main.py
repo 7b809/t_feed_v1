@@ -23,6 +23,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.templating import Jinja2Templates
 
+from app.config import settings
 from app.database import Database
 from app.logger import get_logger
 from app.models import SubscriptionRequest
@@ -35,10 +36,9 @@ database = Database()
 hub = WebSocketHub()
 market = UpstoxMarketService(database, hub)
 
-scheduler = AsyncIOScheduler(timezone="Asia/Kolkata")
+scheduler = AsyncIOScheduler(timezone=settings.token_refresh_timezone)
 
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
-
 
 def scheduler_event_listener(event: JobExecutionEvent) -> None:
     if event.exception:
@@ -57,7 +57,6 @@ def scheduler_event_listener(event: JobExecutionEvent) -> None:
             "Scheduled job completed successfully | job_id=%s",
             event.job_id,
         )
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator:
@@ -85,27 +84,37 @@ async def lifespan(app: FastAPI) -> AsyncIterator:
             EVENT_JOB_EXECUTED | EVENT_JOB_ERROR,
         )
 
-        scheduler.add_job(
-            market.refresh_token_and_reconnect,
-            CronTrigger(
-                day_of_week="mon-fri",
-                hour=9,
-                minute=0,
-                timezone="Asia/Kolkata",
-            ),
-            id="weekday_token_refresh",
-            replace_existing=True,
-            coalesce=True,
-            max_instances=1,
-        )
+        if settings.token_refresh_enabled:
+            scheduler.add_job(
+                market.refresh_token_and_reconnect,
+                CronTrigger(
+                    day_of_week=settings.token_refresh_day_of_week,
+                    hour=settings.token_refresh_hour,
+                    minute=settings.token_refresh_minute,
+                    timezone=settings.token_refresh_timezone,
+                ),
+                id="token_refresh",
+                replace_existing=True,
+                coalesce=True,
+                max_instances=1,
+            )
+
+            logger.info(
+                "Scheduler configured | token_refresh_schedule=%s %02d:%02d %s",
+                settings.token_refresh_day_of_week,
+                settings.token_refresh_hour,
+                settings.token_refresh_minute,
+                settings.token_refresh_timezone,
+            )
+        else:
+            logger.info(
+                "Token refresh schedule disabled via TOKEN_REFRESH_ENABLED"
+            )
 
         scheduler.start()
         scheduler_started = True
 
-        logger.info(
-            "Scheduler started | "
-            "token_refresh_schedule=Monday-Friday 09:00 Asia/Kolkata"
-        )
+        logger.info("Scheduler started")
         logger.info("Application startup completed")
 
         yield
@@ -139,13 +148,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator:
 
         logger.info("Application shutdown completed")
 
-
 app = FastAPI(
     title="Upstox Market Stream Gateway",
     version="1.0.0",
     lifespan=lifespan,
 )
-
 
 # ============================================================
 # CORS — DUMMY / TESTING STAGE: ALLOW EVERYTHING
@@ -172,7 +179,6 @@ app.add_middleware(
     expose_headers=["*"],
     max_age=600,
 )
-
 
 @app.middleware("http")
 async def request_logging_middleware(
@@ -224,7 +230,6 @@ async def request_logging_middleware(
             },
         )
 
-
 @app.exception_handler(HTTPException)
 async def http_exception_handler(
     request: Request,
@@ -255,7 +260,6 @@ async def http_exception_handler(
         headers=exc.headers,
     )
 
-
 @app.get(
     "/",
     response_class=HTMLResponse,
@@ -275,7 +279,6 @@ async def index(request: Request) -> HTMLResponse:
             status_code=500,
             detail="Failed to render index page",
         ) from exc
-
 
 @app.get("/api/health")
 def health() -> dict[str, Any]:
@@ -303,7 +306,6 @@ def health() -> dict[str, Any]:
             status_code=503,
             detail="Health check failed",
         ) from exc
-
 
 @app.get("/api/instruments/search")
 async def search_instruments(
@@ -366,7 +368,6 @@ async def search_instruments(
             detail="Instrument search service failed",
         ) from exc
 
-
 @app.post("/api/subscriptions")
 def subscribe(
     body: SubscriptionRequest,
@@ -403,7 +404,6 @@ def subscribe(
             detail="Failed to create subscriptions",
         ) from exc
 
-
 @app.delete("/api/subscriptions")
 def unsubscribe(
     body: SubscriptionRequest,
@@ -433,7 +433,6 @@ def unsubscribe(
             status_code=502,
             detail="Failed to remove subscriptions",
         ) from exc
-
 
 @app.patch("/api/subscriptions/mode")
 def change_mode(
@@ -471,7 +470,6 @@ def change_mode(
             detail="Failed to change subscription mode",
         ) from exc
 
-
 @app.get("/api/subscriptions")
 def list_subscriptions() -> dict[str, Any]:
     try:
@@ -496,7 +494,6 @@ def list_subscriptions() -> dict[str, Any]:
             detail="Failed to retrieve subscriptions",
         ) from exc
 
-
 @app.post("/api/token/hard-refresh")
 def hard_refresh() -> Any:
     logger.warning("Manual token hard refresh requested")
@@ -515,7 +512,6 @@ def hard_refresh() -> Any:
             status_code=502,
             detail="Token refresh failed",
         ) from exc
-
 
 @app.websocket("/ws/market")
 async def instrument_feed(

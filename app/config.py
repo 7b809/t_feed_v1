@@ -1,8 +1,8 @@
 from dotenv import load_dotenv
 import os
+from zoneinfo import ZoneInfo
 
 load_dotenv()
-
 
 class Settings:
     # ----------------------------------------------------------
@@ -58,6 +58,53 @@ class Settings:
     )
 
     # ----------------------------------------------------------
+    # Token refresh schedule
+    # ----------------------------------------------------------
+    # Loaded from environment so the daily/weekly refresh can be
+    # tuned without code changes.
+    #
+    # TOKEN_REFRESH_ENABLED      : true/false — master switch
+    # TOKEN_REFRESH_DAY_OF_WEEK  : APScheduler day_of_week expression,
+    #                              e.g. "mon-fri", "*", "mon,wed,fri"
+    # TOKEN_REFRESH_HOUR         : 0-23
+    # TOKEN_REFRESH_MINUTE       : 0-59
+    # TOKEN_REFRESH_TIMEZONE     : IANA timezone name
+    # ----------------------------------------------------------
+    token_refresh_enabled: bool = os.getenv(
+        "TOKEN_REFRESH_ENABLED",
+        "true",
+    ).strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+    token_refresh_day_of_week: str = os.getenv(
+        "TOKEN_REFRESH_DAY_OF_WEEK",
+        "mon-fri",
+    ).strip()
+
+    token_refresh_hour: int = int(
+        os.getenv(
+            "TOKEN_REFRESH_HOUR",
+            "8",
+        )
+    )
+
+    token_refresh_minute: int = int(
+        os.getenv(
+            "TOKEN_REFRESH_MINUTE",
+            "0",
+        )
+    )
+
+    token_refresh_timezone: str = os.getenv(
+        "TOKEN_REFRESH_TIMEZONE",
+        "Asia/Kolkata",
+    ).strip()
+
+    # ----------------------------------------------------------
     # Startup subscriptions
     # ----------------------------------------------------------
     startup_index_subscription_mode: str = os.getenv(
@@ -103,6 +150,7 @@ class Settings:
 
     def __init__(self) -> None:
         self._validate_modes()
+        self._validate_refresh_schedule()
 
     def _validate_modes(self) -> None:
         if (
@@ -148,5 +196,35 @@ class Settings:
                     f"{option_mode}"
                 )
 
+    def _validate_refresh_schedule(self) -> None:
+        if not (0 <= self.token_refresh_hour <= 23):
+            raise ValueError(
+                "Invalid TOKEN_REFRESH_HOUR: "
+                f"{self.token_refresh_hour} (expected 0-23)"
+            )
+
+        if not (0 <= self.token_refresh_minute <= 59):
+            raise ValueError(
+                "Invalid TOKEN_REFRESH_MINUTE: "
+                f"{self.token_refresh_minute} (expected 0-59)"
+            )
+
+        if not self.token_refresh_day_of_week:
+            raise ValueError(
+                "TOKEN_REFRESH_DAY_OF_WEEK must not be empty"
+            )
+
+        if not self.token_refresh_timezone:
+            raise ValueError(
+                "TOKEN_REFRESH_TIMEZONE must not be empty"
+            )
+
+        try:
+            ZoneInfo(self.token_refresh_timezone)
+        except Exception as exc:
+            raise ValueError(
+                "Invalid TOKEN_REFRESH_TIMEZONE: "
+                f"{self.token_refresh_timezone}"
+            ) from exc
 
 settings = Settings()
