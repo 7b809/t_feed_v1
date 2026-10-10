@@ -1,18 +1,37 @@
 """Read-only API for the application's log directory.
 
+Two log layers are exposed:
+
+* **Combined** — the "project" log (``settings.log_file``, e.g.
+  ``logs/app.log``) that receives every record from every module.
+* **Per-module** — one file per Python module that calls
+  ``get_logger(__name__)``, living inside ``settings.module_log_dir``
+  (default ``logs/modules/``).
+
 Endpoints
 ---------
 GET /api/logs
-    List every file in the configured log directory with basic metadata.
+    List files, newest first. By default includes both combined and
+    per-module logs; each entry carries a ``source`` field
+    (``"combined"`` or ``"module"``). Pass ``include_modules=false`` to
+    list only the combined directory.
+
+GET /api/logs/modules
+    List only the per-module log files.
+
+GET /api/logs/modules/{filename}
+    Read a single per-module log file. Supports ``tail``, ``lines``, and
+    ``grep`` (see below).
 
 GET /api/logs/{filename}
-    Return the contents of a single log file. Supports:
+    Read a single combined log file. Same query options.
 
-    * ``tail`` — return only the last N lines (default: all lines).
-    * ``lines`` — maximum number of lines to return from the tail.
-    * ``grep`` — case-insensitive substring filter applied after tail.
+For both read endpoints:
+    * ``tail``  — return only the last N lines (default: all lines).
+    * ``lines`` — maximum number of trailing lines when ``tail=true``.
+    * ``grep``  — case-insensitive substring filter applied after tail.
 
-The filename is validated against the actual directory listing so path
+The filenames are validated against the actual directory listing so path
 traversal (``..``, absolute paths, symlinks pointing outside the log
 folder) is rejected before any read is attempted.
 """
@@ -32,7 +51,11 @@ logger = get_logger(__name__)
 
 router = APIRouter(prefix="/api/logs", tags=["logs"])
 
+# Combined ("project") log directory — where settings.log_file lives.
 LOG_DIR: Path = settings.log_file.parent
+
+# Per-module log directory.
+MODULE_LOG_DIR: Path = settings.module_log_dir
 
 # Cap on how much we will ever read from a single log file. 8 MB is
 # generous for text logs and protects the server from a runaway file.
@@ -42,21 +65,26 @@ MAX_READ_BYTES = 8 * 1024 * 1024
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-def _ensure_log_dir() -> Path:
-    LOG_DIR.mkdir(parents=True, exist_ok=True)
-    return LOG_DIR
+def _ensure_dir(path: Path) -> Path:
+    path.mkdir(parents=True, exist_ok=True)
+    return path
 
 
-def _safe_log_path(filename: str) -> Path:
-    """Resolve ``filename`` inside LOG_DIR, rejecting any escape attempts."""
+def _safe_path(directory: Path, filename: str) -> Path:
+    """Resolve ``filename`` inside ``directory``, rejecting escape attempts."""
     if not filename or filename.strip() != filename:
         raise HTTPException(status_code=400, detail="Invalid filename")
 
-    candidate = (LOG_DIR / filename).resolve()
-    log_dir_resolved = LOG_DIR.resolve()
+    # Log files never live in subdirectories of these folders, so reject
+    # any separator early as defense-in-depth.
+    if "/" in filename or "\\" in filename:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+
+    candidate = (directory / filename).resolve()
+    dir_resolved = directory.resolve()
 
     try:
-        candidate.relative_to(log_dir_resolved)
+        candidate.relative_to(dir_resolved)
     except ValueError:
         # Attempted traversal outside the log directory.
         raise HTTPException(status_code=400, detail="Invalid filename")
@@ -67,10 +95,11 @@ def _safe_log_path(filename: str) -> Path:
     return candidate
 
 
-def _file_info(path: Path) -> dict[str, Any]:
+def _file_info(path: Path, source: str) -> dict[str, Any]:
     stat = path.stat()
     return {
         "name": path.name,
+        "source": source,  # "combined" or "module"
         "size_bytes": stat.st_size,
         "modified_at": datetime.fromtimestamp(
             stat.st_mtime, tz=timezone.utc
@@ -81,60 +110,30 @@ def _file_info(path: Path) -> dict[str, Any]:
     }
 
 
-# ---------------------------------------------------------------------------
-# List
-# ---------------------------------------------------------------------------
-@router.get("")
-async def list_logs() -> dict[str, Any]:
-    """List every file in the log directory, newest first."""
-    log_dir = _ensure_log_dir()
-    files: list[dict[str, Any]] = []
+def _list_files(directory: Path, source: str) -> list[dict[str, Any]]:
+    if not directory.exists():
+        return []
 
-    for entry in log_dir.iterdir():
+    files: list[dict[str, Any]] = []
+    for entry in directory.iterdir():
         try:
             if not entry.is_file():
                 continue
-            files.append(_file_info(entry))
+            files.append(_file_info(entry, source))
         except Exception:
             logger.exception("Unable to stat log file: %s", entry)
-
-    files.sort(key=lambda f: f["modified_at"], reverse=True)
-
-    return {
-        "directory": str(log_dir),
-        "count": len(files),
-        "files": files,
-    }
+    return files
 
 
-# ---------------------------------------------------------------------------
-# Read
-# ---------------------------------------------------------------------------
-@router.get("/{filename}")
-async def read_log(
+def _read_log_file(
+    directory: Path,
     filename: str,
-    tail: bool = Query(
-        default=False,
-        description="If true, only the last N lines are returned.",
-    ),
-    lines: int = Query(
-        default=200,
-        ge=1,
-        le=100_000,
-        description="Maximum number of trailing lines when tail=true.",
-    ),
-    grep: str | None = Query(
-        default=None,
-        description="Case-insensitive substring filter applied after tail.",
-    ),
+    source: str,
+    tail: bool,
+    lines: int,
+    grep: str | None,
 ) -> dict[str, Any]:
-    """Return the contents of a log file.
-
-    By default the whole file is returned. With ``tail=true`` only the last
-    ``lines`` lines are returned. ``grep`` further filters those lines by a
-    case-insensitive substring match.
-    """
-    path = _safe_log_path(filename)
+    path = _safe_path(directory, filename)
     stat = path.stat()
 
     if stat.st_size > MAX_READ_BYTES:
@@ -157,6 +156,7 @@ async def read_log(
         ) from exc
 
     all_lines = text.splitlines()
+    total_lines = len(all_lines)
 
     if tail:
         all_lines = all_lines[-lines:]
@@ -167,14 +167,132 @@ async def read_log(
 
     return {
         "name": path.name,
+        "source": source,
         "path": str(path),
         "size_bytes": stat.st_size,
         "modified_at": datetime.fromtimestamp(
             stat.st_mtime, tz=timezone.utc
         ).isoformat(),
-        "total_lines": len(text.splitlines()),
+        "total_lines": total_lines,
         "returned_lines": len(all_lines),
         "tail": tail,
         "grep": grep,
         "content": "\n".join(all_lines),
     }
+
+
+# ---------------------------------------------------------------------------
+# List
+# ---------------------------------------------------------------------------
+@router.get("")
+async def list_logs(
+    include_modules: bool = Query(
+        default=True,
+        description=(
+            "When true (default), per-module log files from MODULE_LOG_DIR "
+            "are included alongside the combined logs. Each entry's "
+            "'source' field distinguishes the two."
+        ),
+    ),
+) -> dict[str, Any]:
+    """List log files, newest first.
+
+    Includes the combined ("project") log directory and, when
+    ``include_modules=true``, the per-module log directory. Each entry
+    carries a ``source`` field: ``"combined"`` or ``"module"``.
+    """
+    combined_dir = _ensure_dir(LOG_DIR)
+    files = _list_files(combined_dir, "combined")
+
+    modules_dir = MODULE_LOG_DIR
+    if include_modules and settings.module_logs_enabled and modules_dir.exists():
+        files.extend(_list_files(modules_dir, "module"))
+
+    files.sort(key=lambda f: f["modified_at"], reverse=True)
+
+    return {
+        "directory": str(combined_dir),
+        "module_directory": str(modules_dir),
+        "module_logs_enabled": settings.module_logs_enabled,
+        "count": len(files),
+        "files": files,
+    }
+
+
+@router.get("/modules")
+async def list_module_logs() -> dict[str, Any]:
+    """List every per-module log file, newest first."""
+    if not settings.module_logs_enabled:
+        raise HTTPException(
+            status_code=404,
+            detail="Per-module logging is disabled (MODULE_LOGS_ENABLED=false)",
+        )
+
+    module_dir = _ensure_dir(MODULE_LOG_DIR)
+    files = _list_files(module_dir, "module")
+    files.sort(key=lambda f: f["modified_at"], reverse=True)
+
+    return {
+        "directory": str(module_dir),
+        "count": len(files),
+        "files": files,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Read — per-module logs (must be declared before /{filename})
+# ---------------------------------------------------------------------------
+@router.get("/modules/{filename}")
+async def read_module_log(
+    filename: str,
+    tail: bool = Query(
+        default=False,
+        description="If true, only the last N lines are returned.",
+    ),
+    lines: int = Query(
+        default=200,
+        ge=1,
+        le=100_000,
+        description="Maximum number of trailing lines when tail=true.",
+    ),
+    grep: str | None = Query(
+        default=None,
+        description="Case-insensitive substring filter applied after tail.",
+    ),
+) -> dict[str, Any]:
+    """Return the contents of a per-module log file."""
+    if not settings.module_logs_enabled:
+        raise HTTPException(
+            status_code=404,
+            detail="Per-module logging is disabled (MODULE_LOGS_ENABLED=false)",
+        )
+
+    _ensure_dir(MODULE_LOG_DIR)
+    return _read_log_file(
+        MODULE_LOG_DIR, filename, "module", tail, lines, grep
+    )
+
+
+# ---------------------------------------------------------------------------
+# Read — combined logs
+# ---------------------------------------------------------------------------
+@router.get("/{filename}")
+async def read_log(
+    filename: str,
+    tail: bool = Query(
+        default=False,
+        description="If true, only the last N lines are returned.",
+    ),
+    lines: int = Query(
+        default=200,
+        ge=1,
+        le=100_000,
+        description="Maximum number of trailing lines when tail=true.",
+    ),
+    grep: str | None = Query(
+        default=None,
+        description="Case-insensitive substring filter applied after tail.",
+    ),
+) -> dict[str, Any]:
+    """Return the contents of a combined ("project") log file."""
+    return _read_log_file(LOG_DIR, filename, "combined", tail, lines, grep)

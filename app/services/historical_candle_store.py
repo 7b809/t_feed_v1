@@ -21,6 +21,13 @@ single source of truth.
 
 All instruments are processed concurrently, bounded by
 ``settings.history_max_concurrency``.
+
+Logging
+-------
+Dict payloads (job summaries, skip summaries) are emitted as JSON via
+``json_log``. When ``settings.instrument_errors_only`` is True, per-instrument
+progress lines are suppressed and only errors raised while processing an
+instrument are logged. Job-level start/finish summaries are always logged.
 """
 
 from __future__ import annotations
@@ -33,12 +40,11 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from app.core.config import settings
-from app.core.logger import get_logger
+from app.core.logger import get_logger, json_log
 from app.services.instrument_paths import build_candle_path
 from app.services.upstox_fetcher import fetch_historical, fetch_intraday
 
 logger = get_logger(__name__)
-
 
 def _parse_hhmm(value: str) -> dt_time:
     try:
@@ -47,7 +53,6 @@ def _parse_hhmm(value: str) -> dt_time:
     except Exception:
         logger.warning("Invalid time value '%s'; falling back to 00:00", value)
         return dt_time(0, 0)
-
 
 class HistoricalCandleStore:
     def __init__(self) -> None:
@@ -159,11 +164,13 @@ class HistoricalCandleStore:
                 "last_run_at": self.last_run_at,
                 "last_error": self.last_error,
             }
-            logger.info("Historical candle job completed; %s", summary)
+            logger.info("Historical candle job completed; %s", json_log(summary))
             return summary
 
     def _report_progress(self, instrument_key: str, outcome: str) -> None:
         self._processed_count += 1
+        if settings.instrument_errors_only:
+            return
         logger.info(
             "Historical candle job progress: %d/%d processed "
             "(fetched=%d skipped=%d failed=%d) last=%s [%s]",
@@ -191,9 +198,17 @@ class HistoricalCandleStore:
         target_path = build_candle_path(item)
         existing = self._load_existing(target_path)
 
-        if not self._needs_fetch(existing, cutoff, to_date):
+        latest = self._latest_candle_date(existing)
+        expected_last = self._last_market_day(to_date - timedelta(days=1))
+
+        if latest is not None and latest >= expected_last:
             self.skipped_count += 1
-            self._report_progress(instrument_key, "up-to-date")
+            self._report_progress(
+                instrument_key,
+                f"up-to-date latest={latest.isoformat()} "
+                f"expected_last={expected_last.isoformat()} "
+                f"candles={len(existing)}",
+            )
             return
 
         assert self._semaphore is not None
@@ -205,16 +220,32 @@ class HistoricalCandleStore:
             except Exception:
                 self.failed_count += 1
                 logger.exception(
-                    "Historical candle fetch failed; instrument=%s",
+                    "Historical candle fetch failed; instrument=%s "
+                    "range=%s..%s local_latest=%s expected_last=%s",
                     instrument_key,
+                    cutoff.isoformat(),
+                    to_date.isoformat(),
+                    latest.isoformat() if latest else "none",
+                    expected_last.isoformat(),
                 )
-                self._report_progress(instrument_key, "fetch-failed")
+                self._report_progress(
+                    instrument_key,
+                    f"fetch-failed latest={latest.isoformat() if latest else 'none'} "
+                    f"expected_last={expected_last.isoformat()}",
+                )
                 return
 
         merged = self._merge_and_trim(existing, candles, cutoff)
         self._save(target_path, merged)
         self.fetched_count += 1
-        self._report_progress(instrument_key, f"fetched={len(merged)}")
+
+        merged_latest = self._latest_candle_date(merged)
+        self._report_progress(
+            instrument_key,
+            f"fetched={len(candles)} stored={len(merged)} "
+            f"range={cutoff.isoformat()}..{to_date.isoformat()} "
+            f"latest={merged_latest.isoformat() if merged_latest else 'none'}",
+        )
 
     # ------------------------------------------------------------------ #
     # Job 3                                                              #
@@ -236,8 +267,9 @@ class HistoricalCandleStore:
                         f"{settings.market_timezone})"
                     ),
                     "now_market_tz": now_local.isoformat(),
+                    "today": now_local.date().isoformat(),
                 }
-                logger.info("Intraday candle job skipped; %s", summary)
+                logger.info("Intraday candle job skipped; %s", json_log(summary))
                 return summary
 
             logger.info(
@@ -253,6 +285,7 @@ class HistoricalCandleStore:
 
             lookback = max(1, settings.history_lookback_days)
             cutoff = date.today() - timedelta(days=lookback)
+            today = now_local.date()
 
             concurrency = max(1, settings.history_max_concurrency)
             self._semaphore = asyncio.Semaphore(concurrency)
@@ -261,8 +294,9 @@ class HistoricalCandleStore:
             self._intraday_total_count = len(valid_instruments)
 
             logger.info(
-                "Intraday candle job queue ready; total=%d window=%s-%s tz=%s cutoff=%s",
+                "Intraday candle job queue ready; total=%d today=%s window=%s-%s tz=%s cutoff=%s",
                 self._intraday_total_count,
+                today.isoformat(),
                 settings.market_open_time,
                 settings.market_close_time,
                 settings.market_timezone,
@@ -294,10 +328,11 @@ class HistoricalCandleStore:
                 "updated": self.intraday_updated_count,
                 "empty": self.intraday_empty_count,
                 "failed": self.intraday_failed_count,
+                "today": today.isoformat(),
                 "last_run_at": self.intraday_last_run_at,
                 "last_error": self.intraday_last_error,
             }
-            logger.info("Intraday candle job completed; %s", summary)
+            logger.info("Intraday candle job completed; %s", json_log(summary))
             return summary
 
     def _report_intraday_progress(
@@ -306,6 +341,8 @@ class HistoricalCandleStore:
         outcome: str,
     ) -> None:
         self._intraday_processed_count += 1
+        if settings.instrument_errors_only:
+            return
         logger.info(
             "Intraday candle job progress: %d/%d processed "
             "(updated=%d empty=%d failed=%d) last=%s [%s]",
@@ -331,6 +368,8 @@ class HistoricalCandleStore:
 
         target_path = build_candle_path(item)
         existing = self._load_existing(target_path)
+        local_latest = self._latest_candle_date(existing)
+        today = self._now_market_tz().date()
 
         assert self._semaphore is not None
         async with self._semaphore:
@@ -341,22 +380,40 @@ class HistoricalCandleStore:
             except Exception:
                 self.intraday_failed_count += 1
                 logger.exception(
-                    "Intraday candle fetch failed; instrument=%s",
+                    "Intraday candle fetch failed; instrument=%s "
+                    "today=%s local_latest=%s",
                     instrument_key,
+                    today.isoformat(),
+                    local_latest.isoformat() if local_latest else "none",
                 )
-                self._report_intraday_progress(instrument_key, "fetch-failed")
+                self._report_intraday_progress(
+                    instrument_key,
+                    f"fetch-failed today={today.isoformat()} "
+                    f"local_latest={local_latest.isoformat() if local_latest else 'none'}",
+                )
                 return
 
         if not candles:
             self.intraday_empty_count += 1
-            self._report_intraday_progress(instrument_key, "empty")
+            self._report_intraday_progress(
+                instrument_key,
+                f"empty today={today.isoformat()} "
+                f"local_latest={local_latest.isoformat() if local_latest else 'none'}",
+            )
             return
 
         merged = self._merge_and_trim(existing, candles, cutoff)
         self._save(target_path, merged)
         self.intraday_updated_count += 1
+
+        new_latest = self._latest_candle_date(candles)
+        merged_latest = self._latest_candle_date(merged)
         self._report_intraday_progress(
-            instrument_key, f"today_candles={len(candles)} total={len(merged)}"
+            instrument_key,
+            f"today_candles={len(candles)} day={today.isoformat()} "
+            f"newest_today={new_latest.isoformat() if new_latest else 'none'} "
+            f"stored={len(merged)} "
+            f"latest={merged_latest.isoformat() if merged_latest else 'none'}",
         )
 
     # ------------------------------------------------------------------ #
@@ -396,19 +453,25 @@ class HistoricalCandleStore:
         if not existing:
             return True
 
-        latest: date | None = None
-        for candle in existing:
-            day = self._candle_date(candle.get("timestamp"))
-            if day is None:
-                continue
-            if latest is None or day > latest:
-                latest = day
-
+        latest = self._latest_candle_date(existing)
         if latest is None:
             return True
 
         expected_last = self._last_market_day(to_date - timedelta(days=1))
         return latest < expected_last
+
+    def _latest_candle_date(
+        self, candles: list[dict[str, Any]]
+    ) -> date | None:
+        """Return the most recent date present in a list of candles."""
+        latest: date | None = None
+        for candle in candles:
+            day = self._candle_date(candle.get("timestamp"))
+            if day is None:
+                continue
+            if latest is None or day > latest:
+                latest = day
+        return latest
 
     @staticmethod
     def _last_market_day(day: date) -> date:
@@ -449,6 +512,5 @@ class HistoricalCandleStore:
             merged[str(ts)] = candle
 
         return sorted(merged.values(), key=lambda c: str(c.get("timestamp", "")))
-
 
 historical_candle_store = HistoricalCandleStore()

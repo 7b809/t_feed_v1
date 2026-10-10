@@ -5,6 +5,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.api.candle_routes import router as candle_router
+from app.api.live_ema_ws_routes import router as live_ema_ws_router
 from app.api.logs_routes import router as logs_router
 from app.api.routes import router
 from app.core.lifespan import lifespan
@@ -16,13 +17,14 @@ STATIC_DIR = Path(__file__).parent / "static"
 
 app = FastAPI(
     title="Ordered Instrument Jobs",
-    version="1.3.0",
+    version="1.4.0",
     lifespan=lifespan,
 )
 
 app.include_router(router)
 app.include_router(candle_router)
 app.include_router(logs_router)
+app.include_router(live_ema_ws_router)
 
 app.mount(
     "/static",

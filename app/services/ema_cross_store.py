@@ -7,6 +7,13 @@ computes fast/slow EMA series, detects crosses, and writes
 Cross detection:
 - Bullish: fast - slow transitions from ``<= 0`` to ``> 0``.
 - Bearish: fast - slow transitions from ``>= 0`` to ``< 0``.
+
+Logging
+-------
+Dict payloads (job summary) are emitted as JSON via ``json_log``.
+When ``settings.instrument_errors_only`` is True, per-instrument progress
+lines are suppressed and only errors raised while computing an instrument
+are logged. Job-level start/finish summaries are always logged.
 """
 
 from __future__ import annotations
@@ -18,7 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from app.core.config import settings
-from app.core.logger import get_logger
+from app.core.logger import get_logger, json_log
 from app.services.ema_utils import classify_cross, compute_ema, to_float
 from app.services.instrument_paths import (
     build_candle_path,
@@ -27,7 +34,6 @@ from app.services.instrument_paths import (
 )
 
 logger = get_logger(__name__)
-
 
 def _detect_crosses(
     candles: list[dict[str, Any]],
@@ -58,7 +64,6 @@ def _detect_crosses(
             }
         )
     return events
-
 
 class EmaCrossStore:
     def __init__(self) -> None:
@@ -139,11 +144,13 @@ class EmaCrossStore:
                 "last_run_at": self.last_run_at,
                 "last_error": self.last_error,
             }
-            logger.info("EMA cross job completed; %s", summary)
+            logger.info("EMA cross job completed; %s", json_log(summary))
             return summary
 
     def _report_progress(self, instrument_key: str, outcome: str) -> None:
         self._processed_count += 1
+        if settings.instrument_errors_only:
+            return
         logger.info(
             "EMA cross job progress: %d/%d processed "
             "(computed=%d empty=%d failed=%d total_crosses=%d) last=%s [%s]",
@@ -247,6 +254,5 @@ class EmaCrossStore:
         if not isinstance(candles, list):
             return []
         return [c for c in candles if isinstance(c, dict)]
-
 
 ema_cross_store = EmaCrossStore()

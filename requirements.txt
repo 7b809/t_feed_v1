@@ -6,3 +6,4 @@ pydantic
 upstox-python-sdk
 tzdata
 requests
+websockets

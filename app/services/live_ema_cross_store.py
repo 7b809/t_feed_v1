@@ -19,6 +19,32 @@ their files live under ``data/index/<name>/`` thanks to
 ``instrument_paths``.
 
 Time-of-day logic uses ``settings.market_timezone`` (default Asia/Kolkata).
+
+Logging
+-------
+Per tick, exactly three kinds of lines are emitted (subject to the gating
+rules below):
+
+* **Start** — ``Live EMA tick #N starting; total=T test_mode=...``
+* **Progress** — ``Live EMA tick #N progress; processed=X/T`` emitted
+  roughly 10 times per tick (every ``max(1, T // 10)`` instruments), plus
+  once at completion.
+* **Complete** — ``Live EMA tick #N complete; processed=X/T new_crosses=...
+  ... elapsed=E.EEs next_tick_in=R.RRs`` where ``next_tick_in`` is the
+  number of seconds until the next scheduled tick.
+
+A new cross is still reported individually:
+``Live EMA cross: <instrument> <type> ts=... close=... fast=... slow=...``
+and errors from individual instruments are still logged via
+``logger.exception``.
+
+Gating
+------
+* ``INSTRUMENT_ERRORS_ONLY=true`` suppresses the start/progress/complete
+  lines. Cross-detection lines and errors are always emitted.
+* ``EMA_TEST_MODE=true`` forces the verbose (start/progress/complete)
+  lines on, regardless of ``INSTRUMENT_ERRORS_ONLY``, and ignores the
+  market-hours window so the job ticks 24x7.
 """
 
 from __future__ import annotations
@@ -42,7 +68,6 @@ from app.services.upstox_fetcher import fetch_intraday
 
 logger = get_logger(__name__)
 
-
 def _parse_hhmm(value: str) -> dt_time:
     try:
         hh, mm = value.strip().split(":")
@@ -50,7 +75,6 @@ def _parse_hhmm(value: str) -> dt_time:
     except Exception:
         logger.warning("Invalid time value '%s'; falling back to 00:00", value)
         return dt_time(0, 0)
-
 
 class LiveEmaCrossStore:
     def __init__(self) -> None:
@@ -87,11 +111,12 @@ class LiveEmaCrossStore:
         self.started_at = datetime.now(timezone.utc).isoformat()
         self.stopped_at = None
         logger.info(
-            "Live EMA cross job starting; tick_offset=%ds tz=%s window=%s-%s",
+            "Live EMA cross job starting; tick_offset=%ds tz=%s window=%s-%s test_mode=%s",
             settings.live_ema_tick_offset_seconds,
             settings.market_timezone,
             settings.market_open_time,
             settings.market_close_time,
+            settings.ema_test_mode,
         )
         return {"started": True}
 
@@ -155,6 +180,11 @@ class LiveEmaCrossStore:
         return datetime.now(tz)
 
     def _is_market_hours(self, now: datetime) -> bool:
+        # In test mode the market window is ignored entirely so the tick
+        # fires every minute, 24x7.
+        if settings.ema_test_mode:
+            return True
+
         if now.weekday() >= 5:
             return False
         open_t = _parse_hhmm(settings.market_open_time)
@@ -183,40 +213,87 @@ class LiveEmaCrossStore:
     async def _tick(self, instruments: list[dict[str, Any]]) -> None:
         async with self._tick_lock:
             valid = [i for i in instruments if isinstance(i, dict)]
+            total = len(valid)
+
             self.total_ticks += 1
             tick_start = datetime.now(timezone.utc)
             self.last_tick_started_at = tick_start.isoformat()
             self.last_tick_error = None
 
-            logger.info(
-                "Live EMA cross tick #%d starting; instruments=%d",
-                self.total_ticks,
-                len(valid),
-            )
+            # Verbose = start/progress/complete lines are emitted.
+            verbose = settings.ema_test_mode or not settings.instrument_errors_only
+
+            if verbose:
+                logger.info(
+                    "Live EMA tick #%d starting; total=%d test_mode=%s",
+                    self.total_ticks,
+                    total,
+                    settings.ema_test_mode,
+                )
 
             concurrency = max(1, settings.history_max_concurrency)
             semaphore = asyncio.Semaphore(concurrency)
 
             instruments_checked = 0
             new_crosses = 0
+            no_data = 0
+            insufficient = 0
+            warmup = 0
+            no_cross = 0
+            duplicate = 0
+            failed = 0
+
+            # Emit roughly 10 progress lines per tick.
+            progress_interval = max(1, total // 10) if total else 1
 
             async def process(item: dict[str, Any]) -> None:
                 nonlocal instruments_checked, new_crosses
+                nonlocal no_data, insufficient, warmup, no_cross, duplicate, failed
+
+                instrument_key = item.get("instrument_key")
+
                 async with semaphore:
                     try:
-                        event = await asyncio.to_thread(self._process_tick, item)
+                        status, event = await asyncio.to_thread(
+                            self._process_tick, item
+                        )
                     except Exception:
+                        failed += 1
                         logger.exception(
                             "Live EMA tick failed; instrument=%s",
-                            item.get("instrument_key"),
+                            instrument_key,
                         )
+                        instruments_checked += 1
+                        if (
+                            verbose
+                            and instruments_checked % progress_interval == 0
+                        ):
+                            logger.info(
+                                "Live EMA tick #%d progress; processed=%d/%d",
+                                self.total_ticks,
+                                instruments_checked,
+                                total,
+                            )
                         return
+
                     instruments_checked += 1
-                    if event:
+
+                    if status == "no-intraday":
+                        no_data += 1
+                    elif status == "insufficient-candles":
+                        insufficient += 1
+                    elif status == "ema-warmup":
+                        warmup += 1
+                    elif status == "no-cross":
+                        no_cross += 1
+                    elif status == "duplicate-cross":
+                        duplicate += 1
+                    elif status == "cross":
                         new_crosses += 1
+                        assert event is not None
                         logger.info(
                             "Live EMA cross: %s %s ts=%s close=%s fast=%.4f slow=%.4f",
-                            item.get("instrument_key"),
+                            instrument_key,
                             event["type"],
                             event["timestamp"],
                             event.get("close"),
@@ -224,35 +301,75 @@ class LiveEmaCrossStore:
                             event["ema_slow"],
                         )
 
+                    if verbose and instruments_checked % progress_interval == 0:
+                        logger.info(
+                            "Live EMA tick #%d progress; processed=%d/%d",
+                            self.total_ticks,
+                            instruments_checked,
+                            total,
+                        )
+
             await asyncio.gather(*(asyncio.create_task(process(i)) for i in valid))
 
-            self.last_tick_completed_at = datetime.now(timezone.utc).isoformat()
+            tick_end_utc = datetime.now(timezone.utc)
+            self.last_tick_completed_at = tick_end_utc.isoformat()
             self.last_tick_instruments = instruments_checked
             self.last_tick_new_crosses = new_crosses
             self.total_crosses_detected += new_crosses
 
-            elapsed = (
-                datetime.fromisoformat(self.last_tick_completed_at) - tick_start
-            ).total_seconds()
-            logger.info(
-                "Live EMA cross tick #%d completed; checked=%d new_crosses=%d elapsed=%.2fs",
-                self.total_ticks,
-                instruments_checked,
-                new_crosses,
-                elapsed,
-            )
+            if verbose:
+                elapsed = (tick_end_utc - tick_start).total_seconds()
+
+                # How long until the next scheduled tick (same clock the
+                # run loop uses). Computed in market tz, then converted
+                # to a delta in seconds.
+                now_market = self._now_market_tz()
+                next_tick = self._next_tick(now_market)
+                next_tick_in = (next_tick - now_market).total_seconds()
+
+                logger.info(
+                    "Live EMA tick #%d complete; processed=%d/%d new_crosses=%d "
+                    "no_data=%d insufficient=%d warmup=%d no_cross=%d "
+                    "duplicate=%d failed=%d elapsed=%.2fs next_tick_in=%.2fs",
+                    self.total_ticks,
+                    instruments_checked,
+                    total,
+                    new_crosses,
+                    no_data,
+                    insufficient,
+                    warmup,
+                    no_cross,
+                    duplicate,
+                    failed,
+                    elapsed,
+                    next_tick_in,
+                )
 
     # ------------------------------------------------------------------ #
     # Per-instrument tick (worker thread)                                #
     # ------------------------------------------------------------------ #
-    def _process_tick(self, item: dict[str, Any]) -> dict[str, Any] | None:
+    def _process_tick(
+        self, item: dict[str, Any]
+    ) -> tuple[str, dict[str, Any] | None]:
+        """Process one instrument.
+
+        Returns ``(status, event)`` where ``status`` is one of:
+
+        * ``"invalid-key"``          — missing / blank ``instrument_key``
+        * ``"no-intraday"``          — upstream returned no candles
+        * ``"insufficient-candles"`` — merged history too short for EMA
+        * ``"ema-warmup"``           — EMA series not ready at last index
+        * ``"no-cross"``             — EMAs ready, no cross this minute
+        * ``"duplicate-cross"``      — cross already recorded for this ts
+        * ``"cross"``                — new cross (event is the payload)
+        """
         instrument_key = item.get("instrument_key")
         if not isinstance(instrument_key, str) or not instrument_key.strip():
-            return None
+            return "invalid-key", None
 
         intraday = fetch_intraday(instrument_key)
         if not intraday:
-            return None
+            return "no-intraday", None
 
         candle_path = build_candle_path(item)
         historical = self._load_candles(candle_path)
@@ -274,7 +391,7 @@ class LiveEmaCrossStore:
         fast = settings.ema_fast_period
         slow = settings.ema_slow_period
         if len(merged) < max(fast, slow) + 1:
-            return None
+            return "insufficient-candles", None
 
         closes = [to_float(c.get("close")) or 0.0 for c in merged]
         fast_emas = compute_ema(closes, fast)
@@ -284,11 +401,11 @@ class LiveEmaCrossStore:
         fp, sp = fast_emas[i - 1], slow_emas[i - 1]
         fc, sc = fast_emas[i], slow_emas[i]
         if None in (fp, sp, fc, sc):
-            return None
+            return "ema-warmup", None
 
         cross_type = classify_cross(float(fp) - float(sp), float(fc) - float(sc))
         if cross_type is None:
-            return None
+            return "no-cross", None
 
         last_ts = merged[i].get("timestamp")
         cross_path = build_ema_cross_path(item)
@@ -297,7 +414,7 @@ class LiveEmaCrossStore:
         with lock:
             existing = self._load_crosses(cross_path)
             if any(c.get("timestamp") == last_ts for c in existing["crosses"]):
-                return None
+                return "duplicate-cross", None
 
             event = {
                 "index": i,
@@ -320,7 +437,7 @@ class LiveEmaCrossStore:
             existing["updated_at"] = datetime.now(timezone.utc).isoformat()
             self._save_json(cross_path, existing)
 
-        return event
+        return "cross", event
 
     # ------------------------------------------------------------------ #
     # IO helpers                                                         #
@@ -357,6 +474,5 @@ class LiveEmaCrossStore:
         tmp = path.with_suffix(path.suffix + ".tmp")
         tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         tmp.replace(path)
-
 
 live_ema_cross_store = LiveEmaCrossStore()

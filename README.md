@@ -65,6 +65,46 @@ data/nifty/spot/historical.json            # non-option rows
 - Live-detected events are tagged with `"detected_by": "live"`; batch events
   have no such tag.
 
+## Live EMA test mode
+
+Set `EMA_TEST_MODE=true` to run the live EMA job outside the market window.
+
+While test mode is on:
+
+- The market-hours gate is bypassed — the job ticks **every minute, 24×7**,
+  using the same `LIVE_EMA_TICK_OFFSET_SECONDS` offset.
+- Every tick emits a per-instrument outcome line, e.g.
+  ```
+  Live EMA tick check; instrument=NSE_FO|44694 result=no-cross
+  ```
+  even when `INSTRUMENT_ERRORS_ONLY=true`.
+- Every tick emits a compact summary:
+  ```
+  Live EMA cross tick #42 completed; checked=156 new_crosses=0 no_data=2
+  insufficient=0 warmup=0 no_cross=152 duplicate=2 failed=0 elapsed=1.83s
+  ```
+
+Per-instrument `result=` values:
+
+| Result | Meaning |
+|---|---|
+| `invalid-key` | Instrument row is missing a usable `instrument_key`. |
+| `no-intraday` | Upstream intraday endpoint returned no candles. |
+| `insufficient-candles` | Merged history is shorter than the slow EMA needs. |
+| `ema-warmup` | EMA series isn't populated at the last two indices yet. |
+| `no-cross` | EMAs ready, no bullish/bearish transition this minute. |
+| `duplicate-cross` | Cross detected but already recorded for this timestamp. |
+| `cross` | New cross written to `ema_crosses.json`. |
+
+Test mode is meant to be temporary; leave it off in production so the job
+keeps respecting the market window.
+
+## Configuration (updated rows)
+
+| Variable | Default | Purpose |
+|---|---|---|
+| ... | ... | ... |
+| `EMA_TEST_MODE` | `false` | When `true`, the live EMA job ignores market hours, ticks every minute, and logs per-instrument outcomes + per-tick summaries on every tick. |
 ## Setup
 
 ```bash
