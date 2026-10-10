@@ -20,6 +20,25 @@ callback. A partial candle can never raise an alert.
 
 The upstream feed itself suppresses non-market-hours data, so no
 market-hours gate is needed here.
+
+Feed visibility
+---------------
+For every instrument this store also tracks a small "feed status" record:
+
+    {
+        "status":         "pending" | "connecting" | "connected"
+                          | "closed" | "error" | "stopped",
+        "detail":         <str | None>,
+        "connected_at":   <ISO ts | None>,
+        "last_status_at": <ISO ts | None>,
+        "last_ltp":       <float | None>,
+        "last_tick_at":   <ISO ts | None>,
+        "total_ticks":    int,
+    }
+
+``feed_status_snapshot()`` returns these records along with global counters
+so the API and the bundled web UI can render a "live LTP mode" indicator
+for every instrument whose upstream feed is currently connected.
 """
 
 from __future__ import annotations
@@ -65,6 +84,9 @@ class LiveLtpEmaStore:
         self._series: dict[str, list[dict[str, Any]]] = {}
         self._file_mtime: dict[str, float] = {}
 
+        # Per-instrument feed visibility (see module docstring).
+        self._feed_status: dict[str, dict[str, Any]] = {}
+
     # ------------------------------------------------------------------ #
     # Lifecycle                                                          #
     # ------------------------------------------------------------------ #
@@ -84,6 +106,22 @@ class LiveLtpEmaStore:
             str(i.get("instrument_key")): i
             for i in instruments
             if isinstance(i.get("instrument_key"), str)
+        }
+
+        # Initialise the per-instrument feed visibility records before
+        # any client is started, so the very first status callback finds
+        # an entry to update.
+        self._feed_status = {
+            key: {
+                "status": "pending",
+                "detail": None,
+                "connected_at": None,
+                "last_status_at": None,
+                "last_ltp": None,
+                "last_tick_at": None,
+                "total_ticks": 0,
+            }
+            for key in self._instruments_by_key
         }
 
         # Prime the in-memory series + mtimes from disk.
@@ -132,6 +170,7 @@ class LiveLtpEmaStore:
         self._instruments_by_key.clear()
         self._series.clear()
         self._file_mtime.clear()
+        self._feed_status.clear()
 
         self.running = False
         self.stopped_at = datetime.now(timezone.utc).isoformat()
@@ -144,6 +183,16 @@ class LiveLtpEmaStore:
     async def _on_upstream_status(
         self, instrument_key: str, status: str, detail: str | None
     ) -> None:
+        now_iso = datetime.now(timezone.utc).isoformat()
+
+        # Record the transition for the frontend.
+        entry = self._feed_status.setdefault(instrument_key, {})
+        entry["status"] = status
+        entry["detail"] = detail
+        entry["last_status_at"] = now_iso
+        if status == "connected":
+            entry["connected_at"] = now_iso
+
         if status in ("connected", "closed", "stopped"):
             logger.info(
                 "Live LTP feed status; instrument=%s status=%s",
@@ -159,13 +208,20 @@ class LiveLtpEmaStore:
             )
         if status == "error":
             self.last_error = detail
-            self.last_error_at = datetime.now(timezone.utc).isoformat()
+            self.last_error_at = now_iso
 
     async def _on_upstream_tick(
         self, instrument_key: str, tick: dict[str, Any]
     ) -> None:
         self.total_ticks_received += 1
-        self.last_tick_at = datetime.now(timezone.utc).isoformat()
+        now_iso = datetime.now(timezone.utc).isoformat()
+        self.last_tick_at = now_iso
+
+        # Update the per-instrument visibility record.
+        entry = self._feed_status.setdefault(instrument_key, {})
+        entry["last_ltp"] = tick.get("ltp")
+        entry["last_tick_at"] = now_iso
+        entry["total_ticks"] = int(entry.get("total_ticks") or 0) + 1
 
         aggregator = self._aggregators.get(instrument_key)
         if aggregator is None:
@@ -181,7 +237,7 @@ class LiveLtpEmaStore:
             instrument_key,
             {
                 "type": "tick",
-                "server_time": datetime.now(timezone.utc).isoformat(),
+                "server_time": now_iso,
                 "instrument_key": instrument_key,
                 "data": {
                     "ltp": tick.get("ltp"),
@@ -462,6 +518,9 @@ class LiveLtpEmaStore:
     # Introspection                                                      #
     # ------------------------------------------------------------------ #
     def status(self) -> dict[str, Any]:
+        connected = sum(
+            1 for v in self._feed_status.values() if v.get("status") == "connected"
+        )
         return {
             "backend": "ltp",
             "running": self.running,
@@ -470,6 +529,7 @@ class LiveLtpEmaStore:
             "interval_seconds": settings.live_ema_interval_seconds,
             "feed_url": settings.live_feed_url,
             "instruments": len(self._feed_clients),
+            "connected_instruments": connected,
             "total_ticks_received": self.total_ticks_received,
             "total_candles_closed": self.total_candles_closed,
             "total_crosses_detected": self.total_crosses_detected,
@@ -478,6 +538,36 @@ class LiveLtpEmaStore:
             "last_error": self.last_error,
             "last_error_at": self.last_error_at,
             "ws_subscriptions": live_ema_ws_hub.subscription_counts(),
+        }
+
+    def feed_status_snapshot(self) -> dict[str, Any]:
+        """Return the per-instrument feed visibility snapshot.
+
+        This is the payload the bundled web UI polls to render a
+        "live LTP mode" badge next to every connected instrument.
+        """
+        records = {k: dict(v) for k, v in self._feed_status.items()}
+        connected = sum(
+            1 for v in records.values() if v.get("status") == "connected"
+        )
+
+        return {
+            "backend": "ltp",
+            "running": self.running,
+            "started_at": self.started_at,
+            "stopped_at": self.stopped_at,
+            "feed_url": settings.live_feed_url,
+            "interval_seconds": settings.live_ema_interval_seconds,
+            "total_instruments": len(records),
+            "connected_instruments": connected,
+            "total_ticks_received": self.total_ticks_received,
+            "total_candles_closed": self.total_candles_closed,
+            "total_crosses_detected": self.total_crosses_detected,
+            "last_tick_at": self.last_tick_at,
+            "last_candle_at": self.last_candle_at,
+            "last_error": self.last_error,
+            "last_error_at": self.last_error_at,
+            "instruments": records,
         }
 
 live_ltp_ema_store = LiveLtpEmaStore()

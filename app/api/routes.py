@@ -130,6 +130,65 @@ async def live_ema_status():
     }
     return payload
 
+@router.get("/live-ema/feed-status")
+async def live_ema_feed_status():
+    """Per-instrument upstream feed status + latest LTP.
+
+    Payload (LTP backend)::
+
+        {
+          "backend": "ltp",
+          "running": true,
+          "feed_url": "wss://...",
+          "interval_seconds": 60,
+          "total_instruments": 156,
+          "connected_instruments": 152,
+          "total_ticks_received": 123456,
+          "last_tick_at": "...",
+          "instruments": {
+            "NSE_INDEX|Nifty 50": {
+              "status": "connected",
+              "last_ltp": 22680.95,
+              "last_tick_at": "...",
+              "total_ticks": 8123,
+              "connected_at": "...",
+              "detail": null
+            },
+            ...
+          }
+        }
+
+    The bundled web UI polls this endpoint (see ``app/static/app.js``)
+    and renders a "LIVE LTP" badge next to each instrument whose
+    ``status`` is ``"connected"``.
+    """
+    from app.core.config import settings
+
+    if settings.use_live_ltp_feed:
+        return live_ltp_ema_store.feed_status_snapshot()
+
+    # REST backend: there is no per-instrument feed socket, so return a
+    # minimal global status block. Clients key off ``backend == "rest"``
+    # and skip the per-instrument badges.
+    return {
+        "backend": "rest",
+        "running": live_ema_cross_store.running,
+        "started_at": live_ema_cross_store.started_at,
+        "stopped_at": live_ema_cross_store.stopped_at,
+        "interval_seconds": settings.live_ema_interval_seconds,
+        "feed_url": None,
+        "total_instruments": 0,
+        "connected_instruments": 0,
+        "total_ticks_received": live_ema_cross_store.total_ticks,
+        "total_candles_closed": 0,
+        "total_crosses_detected": live_ema_cross_store.total_crosses_detected,
+        "last_tick_at": live_ema_cross_store.last_tick_completed_at,
+        "last_candle_at": None,
+        "last_error": live_ema_cross_store.last_tick_error,
+        "last_error_at": None,
+        "instruments": {},
+    }
+
 @router.post("/live-ema/start")
 async def live_ema_start():
     from app.core.config import settings

@@ -1,28 +1,123 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-bs-theme="dark">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Ordered Instrument Jobs</title>
+
+  <!-- Bootstrap 5 + Bootstrap Icons -->
+  <link
+    href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
+    rel="stylesheet">
+  <link
+    href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css"
+    rel="stylesheet">
+
   <link rel="stylesheet" href="/static/styles.css">
 </head>
-<body>
-  <main>
-    <header>
-      <div><p class="eyebrow">SUBSCRIPTION JOBS</p><h1>Ordered instruments</h1></div>
-      <button id="refresh">Hard refresh</button>
-    </header>
-    <section class="stats">
-      <div><strong id="unique">0</strong><span>Unique</span></div>
-      <div><strong id="duplicates">0</strong><span>Duplicates removed</span></div>
-      <div><strong id="invalid">0</strong><span>Invalid skipped</span></div>
-    </section>
-    <section class="toolbar">
-      <input id="search" placeholder="Search symbol, key, expiry, type...">
-      <span id="status">Loading...</span>
-    </section>
-    <section id="jobs" class="jobs"></section>
+<body class="bg-body-tertiary">
+
+  <!-- ================================================================= -->
+  <!-- Top navbar                                                        -->
+  <!-- ================================================================= -->
+  <nav class="navbar navbar-expand bg-body-secondary border-bottom sticky-top">
+    <div class="container-xxl">
+      <div class="d-flex align-items-center gap-3">
+        <i class="bi bi-broadcast-pin fs-3 text-info"></i>
+        <div class="lh-1">
+          <div class="text-uppercase text-info fw-bold"
+               style="font-size:.68rem;letter-spacing:.16em;">
+            Subscription jobs
+          </div>
+          <h1 class="h4 mb-0">Ordered instruments</h1>
+        </div>
+      </div>
+
+      <div class="d-flex align-items-center gap-2">
+        <span id="live-indicator"
+              class="badge rounded-pill text-bg-secondary"
+              title="Live feed backend">
+          <i class="bi bi-plug me-1"></i>FEED OFFLINE
+        </span>
+        <button id="refresh" class="btn btn-info fw-bold text-nowrap">
+          <i class="bi bi-arrow-clockwise me-1"></i>Hard refresh
+        </button>
+      </div>
+    </div>
+  </nav>
+
+  <!-- ================================================================= -->
+  <!-- Main content                                                      -->
+  <!-- ================================================================= -->
+  <main class="container-xxl py-4">
+
+    <!-- Stats row -->
+    <div class="row g-3 mb-3">
+      <div class="col-6 col-lg-3">
+        <div class="card border-0 shadow-sm h-100">
+          <div class="card-body">
+            <div class="text-secondary text-uppercase small fw-semibold">
+              Unique
+            </div>
+            <div id="unique" class="fs-3 fw-bold">0</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="col-6 col-lg-3">
+        <div class="card border-0 shadow-sm h-100">
+          <div class="card-body">
+            <div class="text-secondary text-uppercase small fw-semibold">
+              Duplicates removed
+            </div>
+            <div id="duplicates" class="fs-3 fw-bold">0</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="col-6 col-lg-3">
+        <div class="card border-0 shadow-sm h-100">
+          <div class="card-body">
+            <div class="text-secondary text-uppercase small fw-semibold">
+              Invalid skipped
+            </div>
+            <div id="invalid" class="fs-3 fw-bold">0</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="col-6 col-lg-3">
+        <div class="card border-0 shadow-sm h-100">
+          <div class="card-body">
+            <div class="text-secondary text-uppercase small fw-semibold">
+              Live feeds
+            </div>
+            <div id="live-count" class="fs-3 fw-bold">0</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Search / status toolbar -->
+    <div class="card border-0 shadow-sm mb-3">
+      <div class="card-body d-flex flex-wrap gap-2 align-items-center">
+        <div class="input-group flex-grow-1" style="min-width:220px;">
+          <span class="input-group-text bg-body-secondary">
+            <i class="bi bi-search"></i>
+          </span>
+          <input id="search" class="form-control"
+                 placeholder="Search symbol, key, expiry, type…">
+        </div>
+        <span id="status" class="text-secondary small">Loading…</span>
+      </div>
+    </div>
+
+    <!-- Grouped tables mount here -->
+    <div id="jobs"></div>
+
   </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>
