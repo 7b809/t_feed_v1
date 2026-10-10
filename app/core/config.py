@@ -93,4 +93,16 @@ class Settings:
     daily_refresh_enabled: bool = _env_bool("DAILY_REFRESH_ENABLED", True)
     daily_refresh_time: str = os.getenv("DAILY_REFRESH_TIME", "08:40")
 
+    # ------------------------------------------------------------------
+    # CORS
+    # ------------------------------------------------------------------
+    # Comma-separated list of allowed origins.
+    #   "*"                    -> allow every origin (no credentials)
+    #   "https://a.com,..."    -> explicit allow-list
+    cors_allowed_origins: str = os.getenv("CORS_ALLOWED_ORIGINS", "*")
+
+    # Only honoured when CORS_ALLOWED_ORIGINS is NOT "*".
+    # Required for cookie-based auth; leave false for token auth.
+    cors_allow_credentials: bool = _env_bool("CORS_ALLOW_CREDENTIALS", False)
+
 settings = Settings()
