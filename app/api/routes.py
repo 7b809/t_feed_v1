@@ -1,5 +1,8 @@
-from fastapi import APIRouter, HTTPException
+from urllib.parse import quote
 
+from fastapi import APIRouter, HTTPException, Request
+
+from app.core.config import settings
 from app.services.ema_cross_store import ema_cross_store
 from app.services.historical_candle_store import historical_candle_store
 from app.services.live_ema_cross_store import live_ema_cross_store
@@ -8,13 +11,98 @@ from app.services.subscription_store import subscription_store
 
 router = APIRouter(prefix="/api", tags=["subscriptions"])
 
+# ============================================================
+# LIVE-EMA CONNECT URL HELPERS
+# ------------------------------------------------------------
+# Every row returned by /api/instruments (and inside the
+# subscriptions block of /api/hard-refresh) gets a per-instrument
+# ``connect_url`` pointing at our own live-EMA WebSocket:
+#
+#     wss://<host>/ws/live-ema/by-instrument/<url-encoded key>
+#
+# Base URL resolution order:
+#   1. settings.public_ws_base_url           (if configured)
+#   2. X-Forwarded-Proto / X-Forwarded-Host  (reverse-proxy aware)
+#   3. request.url scheme + Host header
+# ============================================================
+
+WS_LIVE_EMA_PATH = "/ws/live-ema/by-instrument"
+
+
+def _resolve_ws_base_url(request: Request) -> str:
+    configured = getattr(settings, "public_ws_base_url", None)
+    if configured:
+        return str(configured).rstrip("/")
+
+    forwarded_proto = request.headers.get("x-forwarded-proto")
+    scheme = (
+        forwarded_proto.split(",")[0].strip()
+        if forwarded_proto
+        else request.url.scheme
+    )
+    ws_scheme = "wss" if scheme in ("https", "wss") else "ws"
+
+    forwarded_host = request.headers.get("x-forwarded-host")
+    host = (
+        forwarded_host.split(",")[0].strip()
+        if forwarded_host
+        else request.headers.get("host")
+    ) or request.url.netloc
+
+    return f"{ws_scheme}://{host}"
+
+
+def _build_live_ema_connect_url(base_url: str, instrument_key: str) -> str:
+    return f"{base_url}{WS_LIVE_EMA_PATH}/{quote(instrument_key, safe='')}"
+
+
+def _enrich_snapshot_with_connect_urls(
+    snapshot: dict,
+    request: Request,
+) -> dict:
+    """Return a copy of ``snapshot`` with a per-row ``connect_url``."""
+    base_url = _resolve_ws_base_url(request)
+    active = snapshot.get("active", []) or []
+
+    enriched_active = []
+    for item in active:
+        if not isinstance(item, dict):
+            enriched_active.append(item)
+            continue
+
+        ikey = item.get("instrument_key")
+        if isinstance(ikey, str) and ikey.strip():
+            connect_url = _build_live_ema_connect_url(base_url, ikey)
+        else:
+            connect_url = None
+
+        enriched_active.append({**item, "connect_url": connect_url})
+
+    return {
+        **snapshot,
+        "ws_base_url": base_url,
+        "active": enriched_active,
+    }
+
+
+# ---------------------------------------------------------------------------
+# List instruments
+# ---------------------------------------------------------------------------
 @router.get("/instruments")
-async def list_instruments():
-    """Return the current ordered, de-duplicated in-memory list."""
-    return subscription_store.snapshot()
+async def list_instruments(request: Request):
+    """Return the current ordered, de-duplicated in-memory list.
+
+    Each active instrument carries a ``connect_url`` field pointing at
+    our own live-EMA WebSocket for that instrument.
+    """
+    return _enrich_snapshot_with_connect_urls(
+        subscription_store.snapshot(),
+        request,
+    )
+
 
 @router.post("/hard-refresh")
-async def hard_refresh():
+async def hard_refresh(request: Request):
     """Run jobs 1–4 sequentially. Job 5 is a background task and keeps running."""
     try:
         subscription_result = await subscription_store.refresh(
@@ -25,6 +113,16 @@ async def hard_refresh():
             status_code=502,
             detail=f"Unable to refresh subscription data: {exc}",
         ) from exc
+
+    # Enrich the subscriptions block so callers see connect_url here too.
+    try:
+        subscription_result = _enrich_snapshot_with_connect_urls(
+            subscription_result,
+            request,
+        )
+    except Exception:
+        # Never fail the hard refresh just because URL building broke.
+        pass
 
     instruments = subscription_store.snapshot().get("active", [])
 
@@ -57,12 +155,12 @@ async def hard_refresh():
         "live_ema": {"status": _live_ema_status_line()},
     }
 
-def _live_ema_status_line() -> str:
-    from app.core.config import settings
 
+def _live_ema_status_line() -> str:
     if settings.use_live_ltp_feed:
         return "running" if live_ltp_ema_store.running else "stopped"
     return "running" if live_ema_cross_store.running else "stopped"
+
 
 @router.post("/historical-refresh")
 async def historical_refresh():
@@ -74,6 +172,7 @@ async def historical_refresh():
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Historical refresh failed: {exc}") from exc
 
+
 @router.post("/intraday-refresh")
 async def intraday_refresh():
     instruments = subscription_store.snapshot().get("active", [])
@@ -83,6 +182,7 @@ async def intraday_refresh():
         )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Intraday refresh failed: {exc}") from exc
+
 
 @router.post("/ema-refresh")
 async def ema_refresh():
@@ -94,13 +194,12 @@ async def ema_refresh():
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"EMA refresh failed: {exc}") from exc
 
+
 # ---------------------------------------------------------------------------
 # Live EMA cross job (job 5)
 # ---------------------------------------------------------------------------
 @router.get("/live-ema/status")
 async def live_ema_status():
-    from app.core.config import settings
-
     if settings.use_live_ltp_feed:
         payload = live_ltp_ema_store.status()
     else:
@@ -130,46 +229,12 @@ async def live_ema_status():
     }
     return payload
 
+
 @router.get("/live-ema/feed-status")
 async def live_ema_feed_status():
-    """Per-instrument upstream feed status + latest LTP.
-
-    Payload (LTP backend)::
-
-        {
-          "backend": "ltp",
-          "running": true,
-          "feed_url": "wss://...",
-          "interval_seconds": 60,
-          "total_instruments": 156,
-          "connected_instruments": 152,
-          "total_ticks_received": 123456,
-          "last_tick_at": "...",
-          "instruments": {
-            "NSE_INDEX|Nifty 50": {
-              "status": "connected",
-              "last_ltp": 22680.95,
-              "last_tick_at": "...",
-              "total_ticks": 8123,
-              "connected_at": "...",
-              "detail": null
-            },
-            ...
-          }
-        }
-
-    The bundled web UI polls this endpoint (see ``app/static/app.js``)
-    and renders a "LIVE LTP" badge next to each instrument whose
-    ``status`` is ``"connected"``.
-    """
-    from app.core.config import settings
-
     if settings.use_live_ltp_feed:
         return live_ltp_ema_store.feed_status_snapshot()
 
-    # REST backend: there is no per-instrument feed socket, so return a
-    # minimal global status block. Clients key off ``backend == "rest"``
-    # and skip the per-instrument badges.
     return {
         "backend": "rest",
         "running": live_ema_cross_store.running,
@@ -189,10 +254,9 @@ async def live_ema_feed_status():
         "instruments": {},
     }
 
+
 @router.post("/live-ema/start")
 async def live_ema_start():
-    from app.core.config import settings
-
     if not settings.live_ema_enabled:
         raise HTTPException(
             status_code=409,
@@ -206,23 +270,16 @@ async def live_ema_start():
         lambda: subscription_store.snapshot().get("active", [])
     )
 
+
 @router.post("/live-ema/stop")
 async def live_ema_stop():
-    from app.core.config import settings
-
     if settings.use_live_ltp_feed:
         return await live_ltp_ema_store.stop()
     return await live_ema_cross_store.stop()
 
+
 @router.post("/live-ema/tick")
 async def live_ema_tick():
-    """Run a single tick on demand.
-
-    For the LTP backend this just returns the current live state — ticks
-    arrive from the upstream feed, not from a manual trigger.
-    """
-    from app.core.config import settings
-
     if not settings.live_ema_enabled:
         raise HTTPException(
             status_code=409,
@@ -251,10 +308,9 @@ async def live_ema_tick():
         "last_tick_completed_at": live_ema_cross_store.last_tick_completed_at,
     }
 
+
 @router.get("/health")
 async def health():
-    from app.core.config import settings
-
     snapshot = subscription_store.snapshot()
     live_block = (
         live_ltp_ema_store.status()
