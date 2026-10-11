@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from time import perf_counter
 from typing import Any, AsyncIterator, Callable
+from urllib.parse import quote
 
 from apscheduler.events import (
     EVENT_JOB_ERROR,
@@ -40,6 +41,56 @@ scheduler = AsyncIOScheduler(timezone=settings.token_refresh_timezone)
 
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 
+# ============================================================
+# PUBLIC CONNECT URL HELPERS
+# ------------------------------------------------------------
+# Builds the client-facing WebSocket URL for a given
+# instrument key, e.g.
+#
+#   wss://feed.novag7.in/ws/market?instrument_key=BSE_FO%7C1101001
+#
+# Resolution order for the base URL:
+#   1. settings.public_ws_base_url  (if configured)
+#   2. X-Forwarded-Proto / X-Forwarded-Host / Host headers
+#      (so it works correctly behind nginx / a reverse proxy)
+#   3. request.url scheme + netloc as a last resort
+# ============================================================
+
+WS_MARKET_PATH = "/ws/market"
+
+
+def resolve_ws_base_url(request: Request) -> str:
+    configured = getattr(settings, "public_ws_base_url", None)
+
+    if configured:
+        return str(configured).rstrip("/")
+
+    forwarded_proto = request.headers.get("x-forwarded-proto")
+    scheme = (
+        forwarded_proto.split(",")[0].strip()
+        if forwarded_proto
+        else request.url.scheme
+    )
+
+    ws_scheme = "wss" if scheme in ("https", "wss") else "ws"
+
+    forwarded_host = request.headers.get("x-forwarded-host")
+    host = (
+        forwarded_host.split(",")[0].strip()
+        if forwarded_host
+        else request.headers.get("host")
+    ) or request.url.netloc
+
+    return f"{ws_scheme}://{host}"
+
+
+def build_connect_url(base_url: str, instrument_key: str) -> str:
+    return (
+        f"{base_url}{WS_MARKET_PATH}"
+        f"?instrument_key={quote(instrument_key, safe='')}"
+    )
+
+
 def scheduler_event_listener(event: JobExecutionEvent) -> None:
     if event.exception:
         logger.error(
@@ -57,6 +108,7 @@ def scheduler_event_listener(event: JobExecutionEvent) -> None:
             "Scheduled job completed successfully | job_id=%s",
             event.job_id,
         )
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator:
@@ -148,6 +200,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator:
 
         logger.info("Application shutdown completed")
 
+
 app = FastAPI(
     title="Upstox Market Stream Gateway",
     version="1.0.0",
@@ -179,6 +232,7 @@ app.add_middleware(
     expose_headers=["*"],
     max_age=600,
 )
+
 
 @app.middleware("http")
 async def request_logging_middleware(
@@ -230,6 +284,7 @@ async def request_logging_middleware(
             },
         )
 
+
 @app.exception_handler(HTTPException)
 async def http_exception_handler(
     request: Request,
@@ -260,6 +315,7 @@ async def http_exception_handler(
         headers=exc.headers,
     )
 
+
 @app.get(
     "/",
     response_class=HTMLResponse,
@@ -279,6 +335,7 @@ async def index(request: Request) -> HTMLResponse:
             status_code=500,
             detail="Failed to render index page",
         ) from exc
+
 
 @app.get("/api/health")
 def health() -> dict[str, Any]:
@@ -306,6 +363,7 @@ def health() -> dict[str, Any]:
             status_code=503,
             detail="Health check failed",
         ) from exc
+
 
 @app.get("/api/instruments/search")
 async def search_instruments(
@@ -368,6 +426,7 @@ async def search_instruments(
             detail="Instrument search service failed",
         ) from exc
 
+
 @app.post("/api/subscriptions")
 def subscribe(
     body: SubscriptionRequest,
@@ -404,6 +463,7 @@ def subscribe(
             detail="Failed to create subscriptions",
         ) from exc
 
+
 @app.delete("/api/subscriptions")
 def unsubscribe(
     body: SubscriptionRequest,
@@ -433,6 +493,7 @@ def unsubscribe(
             status_code=502,
             detail="Failed to remove subscriptions",
         ) from exc
+
 
 @app.patch("/api/subscriptions/mode")
 def change_mode(
@@ -470,19 +531,35 @@ def change_mode(
             detail="Failed to change subscription mode",
         ) from exc
 
+
 @app.get("/api/subscriptions")
-def list_subscriptions() -> dict[str, Any]:
+def list_subscriptions(request: Request) -> dict[str, Any]:
     try:
         active_subscriptions = database.list_active()
         recent_events = database.recent_events()
 
+        ws_base_url = resolve_ws_base_url(request)
+
+        enriched_active = [
+            {
+                **subscription,
+                "connect_url": build_connect_url(
+                    ws_base_url,
+                    subscription["instrument_key"],
+                ),
+            }
+            for subscription in active_subscriptions
+        ]
+
         logger.info(
-            "Subscriptions listed | active_count=%s",
-            len(active_subscriptions),
+            "Subscriptions listed | active_count=%s | ws_base_url=%s",
+            len(enriched_active),
+            ws_base_url,
         )
 
         return {
-            "active": active_subscriptions,
+            "ws_base_url": ws_base_url,
+            "active": enriched_active,
             "last_7_days": recent_events,
         }
 
@@ -493,6 +570,7 @@ def list_subscriptions() -> dict[str, Any]:
             status_code=502,
             detail="Failed to retrieve subscriptions",
         ) from exc
+
 
 @app.post("/api/token/hard-refresh")
 def hard_refresh() -> Any:
@@ -512,6 +590,7 @@ def hard_refresh() -> Any:
             status_code=502,
             detail="Token refresh failed",
         ) from exc
+
 
 @app.websocket("/ws/market")
 async def instrument_feed(
