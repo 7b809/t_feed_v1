@@ -5,7 +5,7 @@ pymongo
 python-dotenv
 requests
 apscheduler
-websockets>=12
+websockets
 jinja2
 dnspython
 tzdata
