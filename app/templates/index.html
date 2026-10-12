@@ -1,0 +1,410 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NovaG7 Socket Dashboard</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="top">
+  <div>
+    <p class="eyebrow">LIVE SOCKET MONITOR</p>
+    <h1>NovaG7 Socket Dashboard</h1>
+    <p class="sub">Per-instrument EMA + Market Feed capture · India Standard Time (IST)</p>
+  </div>
+  <div class="clock">
+    <span>Current IST</span>
+    <strong id="clock">Loading…</strong>
+    <span id="session">Checking schedule…</span>
+  </div>
+</header>
+
+<main>
+  <section class="banner" id="banner"></section>
+
+  <section class="toolbar">
+    <div>
+      <h2>Connections</h2>
+      <p>
+        Scheduled Monday–Friday, 09:00–15:40 IST ·
+        <span id="worker-summary">—</span>
+        <span id="refresh-info"></span>
+      </p>
+    </div>
+    <div class="actions">
+      <button onclick="action('/api/refresh')">Refresh subscriptions</button>
+      <button onclick="action('/api/sockets/start-all')">Start all</button>
+      <button class="secondary" onclick="action('/api/sockets/stop-all')">Stop all</button>
+    </div>
+  </section>
+
+  <section class="feeds" id="feeds"></section>
+
+  <section class="panel">
+    <div class="panel-head">
+      <div>
+        <h2>Live responses</h2>
+        <p>Each socket shows only its latest raw response. Previous content is cleared before the new one is displayed.</p>
+      </div>
+      <div class="actions">
+        <button class="secondary" onclick="clearView()">Clear view</button>
+      </div>
+    </div>
+
+    <div class="filters">
+      <label for="filter">Socket</label>
+      <select id="filter" onchange="renderMessages()">
+        <option value="all">All sockets</option>
+      </select>
+      <span id="message-count">0 messages in view</span>
+    </div>
+
+    <div id="messages" class="messages">
+      <div class="empty">Waiting for socket responses…</div>
+    </div>
+  </section>
+
+  <section class="panel files">
+    <h2>Saved response files</h2>
+    <div id="files"></div>
+    <p class="note">Files are append-only. One JSON object per line, per instrument.</p>
+  </section>
+</main>
+
+<script>
+let states = {};        // worker_key -> live state
+// One message per socket. Keyed by worker_key.
+const messagesBySocket = new Map();
+let feedsMeta = {};     // feed -> { label, api_url, dir, wanted: [...] }
+let insideSession = false;
+let autoConnectActive = false;
+let lastRefreshAt = null;
+let dashboardSocket;
+
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"']/g, c => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;",
+    '"': "&quot;", "'": "&#39;"
+  }[c]));
+}
+
+function shortTime(s) {
+  if (!s) return "—";
+  try {
+    return new Date(s).toLocaleTimeString("en-IN", {
+      timeZone: "Asia/Kolkata", hour12: false
+    });
+  } catch { return s; }
+}
+
+/* ---------- Market banner ---------- */
+function renderBanner() {
+  const el = document.getElementById("banner");
+  if (autoConnectActive) {
+    el.className = "banner banner-open";
+    el.innerHTML = `<b>Market open.</b> New matching instruments auto-connect. ` +
+                   `Use the buttons below to override individual workers.`;
+  } else {
+    el.className = "banner banner-closed";
+    el.innerHTML = `<b>Market closed.</b> Auto-connect is paused until the next ` +
+                   `weekday 09:00 IST. Manual start is allowed but the scheduler ` +
+                   `will stop workers on its next tick.`;
+  }
+}
+
+/* ---------- Summary line ---------- */
+function renderSummary() {
+  const keys = Object.keys(states);
+  const total = keys.length;
+  const connected = keys.filter(k => states[k].status === "connected").length;
+  document.getElementById("worker-summary").textContent =
+    `${connected}/${total} connected`;
+
+  const info = document.getElementById("refresh-info");
+  if (lastRefreshAt) {
+    info.textContent = " · Last refresh " + shortTime(lastRefreshAt);
+  } else {
+    info.textContent = " · Awaiting first refresh…";
+  }
+}
+
+/* ---------- Feed groups + cards ---------- */
+function renderFeeds() {
+  const root = document.getElementById("feeds");
+  const feedNames = Object.keys(feedsMeta);
+  if (!feedNames.length) {
+    root.innerHTML = `<div class="empty">Loading feed configuration…</div>`;
+    return;
+  }
+
+  root.innerHTML = feedNames.map(feed => {
+    const meta = feedsMeta[feed];
+    const workers = Object.values(states).filter(s => s.feed === feed);
+
+    const cards = workers.map(s => {
+      const status = s.status || "idle";
+      const canStart = status === "idle" || status === "stopped" ||
+                       status === "disconnected" || status === "error";
+      const canStop = status === "connected" || status === "connecting";
+
+      // Show the raw response only. Clear falls back to a placeholder.
+      const rawText = s.last_raw && String(s.last_raw).trim() !== ""
+        ? String(s.last_raw)
+        : "No response yet";
+
+      return `<article class="socket-card">
+        <div class="card-top">
+          <h3>${esc(s.instrument_key || s.key)}</h3>
+          <span class="pill ${esc(status)}">${esc(status)}</span>
+        </div>
+        <p class="url">${esc(s.url || "")}</p>
+        <div class="stats">
+          <div><small>Messages</small><b>${s.messages_received || 0}</b></div>
+          <div><small>Last response (IST)</small><b>${esc(shortTime(s.last_message_at))}</b></div>
+        </div>
+        <div class="last">
+          <small>Last raw response</small>
+          <pre>${esc(rawText)}</pre>
+        </div>
+        ${s.last_error ? `<p class="error">Last error: ${esc(s.last_error)}</p>` : ""}
+        <div class="actions">
+          <button ${canStart ? "" : "disabled"}
+                  onclick="action('/api/sockets/${encodeURIComponent(s.key)}/start')">
+            Start
+          </button>
+          <button class="secondary" ${canStop ? "" : "disabled"}
+                  onclick="action('/api/sockets/${encodeURIComponent(s.key)}/stop')">
+            Stop
+          </button>
+        </div>
+        <p class="file-note">File: <code>${esc(s.file || "")}</code></p>
+      </article>`;
+    }).join("");
+
+    const wanted = (meta.wanted || []).map(w =>
+      `<code>${esc(JSON.stringify(w))}</code>`
+    ).join(" ");
+
+    return `<section class="feed-group">
+      <div class="feed-head">
+        <div>
+          <h2>${esc(meta.label || feed)}</h2>
+          <p>
+            ${workers.length} instrument(s) matched ·
+            source <code>${esc(meta.api_url || "")}</code> ·
+            files under <code>${esc(meta.dir || "")}/</code>
+          </p>
+          ${wanted ? `<p class="wanted">Wanted: ${wanted}</p>` : ""}
+        </div>
+        <div class="actions">
+          <button onclick="action('/api/feeds/${encodeURIComponent(feed)}/start')">Start feed</button>
+          <button class="secondary" onclick="action('/api/feeds/${encodeURIComponent(feed)}/stop')">Stop feed</button>
+        </div>
+      </div>
+      <div class="cards">
+        ${cards || '<div class="empty">No matching instruments yet. Click <b>Refresh subscriptions</b> or wait for the next refresh.</div>'}
+      </div>
+    </section>`;
+  }).join("");
+}
+
+/* ---------- Filter dropdown ---------- */
+function renderFilterOptions() {
+  const sel = document.getElementById("filter");
+  const current = sel.value || "all";
+  const keys = Object.keys(states);
+  sel.innerHTML = `<option value="all">All sockets</option>` + keys.map(k => {
+    const s = states[k];
+    return `<option value="${esc(k)}">${esc(s.instrument_key || k)} (${esc(s.feed || "")})</option>`;
+  }).join("");
+  if ([...sel.options].some(o => o.value === current)) sel.value = current;
+  else sel.value = "all";
+}
+
+/* ---------- Live responses panel ----------
+ * Only the LATEST raw response per socket is kept. When a new response
+ * arrives for a socket, the previous one is replaced (cleared first,
+ * then the new one is shown). This keeps the panel bounded and focused.
+ */
+function renderMessages() {
+  const filter = document.getElementById("filter").value;
+  const all = Array.from(messagesBySocket.values())
+    // newest first
+    .sort((a, b) => (b.received_at || "").localeCompare(a.received_at || ""));
+
+  const selected = all.filter(m => filter === "all" || m.socket === filter);
+  document.getElementById("message-count").textContent =
+    `${selected.length} socket(s) showing latest response`;
+
+  const root = document.getElementById("messages");
+  root.innerHTML = ""; // clear previous content before rendering
+
+  if (!selected.length) {
+    root.innerHTML = '<div class="empty">No responses to display yet.</div>';
+    return;
+  }
+
+  root.innerHTML = selected.map(m => {
+    const rawText = m.raw && String(m.raw).trim() !== ""
+      ? String(m.raw)
+      : "(empty response)";
+    return `
+    <article class="message">
+      <div class="message-head">
+        <b>${esc(m.instrument_key || m.socket)} · ${esc(m.feed || "")}</b>
+        <time>${esc(m.received_at || "")}</time>
+      </div>
+      <pre>${esc(rawText)}</pre>
+    </article>`;
+  }).join("");
+}
+
+/* ---------- Files panel ---------- */
+function renderFiles() {
+  const root = document.getElementById("files");
+  const cards = Object.values(states);
+  if (!cards.length) {
+    root.innerHTML = '<div class="empty">No files yet — waiting for a subscription refresh.</div>';
+    return;
+  }
+  root.innerHTML = cards.map(s => `
+    <div class="file-row">
+      <span>
+        <b>${esc(s.instrument_key || s.key)}</b>
+        <small>${esc((s.feed || "").toUpperCase())} feed · one JSON object per line</small>
+      </span>
+      <code>${esc(s.file || "")}</code>
+    </div>`).join("");
+}
+
+/* ---------- State application ---------- */
+function applyState(s) {
+  if (!s || !s.key) return;
+  states[s.key] = { ...(states[s.key] || {}), ...s };
+  renderFeeds();
+  renderFilterOptions();
+  renderFiles();
+  renderSummary();
+}
+
+function removeState(key) {
+  if (!key) return;
+  delete states[key];
+  messagesBySocket.delete(key);
+  renderFeeds();
+  renderFilterOptions();
+  renderFiles();
+  renderMessages();
+  renderSummary();
+}
+
+function addMessage(m) {
+  if (!m || !m.socket) return;
+  // Clear previous content for this socket, then show the new one.
+  messagesBySocket.delete(m.socket);
+  messagesBySocket.set(m.socket, m);
+  renderMessages();
+}
+
+/* ---------- Actions ---------- */
+async function action(url) {
+  try {
+    const r = await fetch(url, { method: "POST" });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.detail || r.statusText);
+    if (data.warning) console.warn(data.warning);
+    setTimeout(loadStatus, 400);
+  } catch (e) {
+    alert("Action failed: " + e.message);
+  }
+}
+
+function clearView() {
+  messagesBySocket.clear();
+  renderMessages();
+}
+
+/* ---------- Boot / polling ---------- */
+async function loadStatus() {
+  try {
+    const r = await fetch("/api/status");
+    const d = await r.json();
+
+    document.getElementById("clock").textContent =
+      new Date(d.ist_now).toLocaleString("en-IN", {
+        timeZone: "Asia/Kolkata", hour12: false
+      });
+    document.getElementById("session").textContent =
+      d.inside_scheduled_session
+        ? "Inside scheduled session"
+        : "Outside scheduled session";
+
+    insideSession = !!d.inside_scheduled_session;
+    autoConnectActive = !!d.auto_connect_active;
+    lastRefreshAt = d.last_refresh_at || lastRefreshAt;
+    feedsMeta = d.feeds || feedsMeta;
+
+    // Reset states and repopulate from the server snapshot.
+    states = {};
+    Object.values(d.sockets || {}).forEach(s => {
+      if (s && s.key) states[s.key] = s;
+    });
+
+    // Rebuild the per-socket latest-response map from the snapshot's
+    // recent_messages so a page reload shows the last response per
+    // socket, not a growing list.
+    messagesBySocket.clear();
+    (d.recent_messages || []).forEach(m => {
+      if (m && m.socket) messagesBySocket.set(m.socket, m);
+    });
+
+    renderBanner();
+    renderFeeds();
+    renderFilterOptions();
+    renderFiles();
+    renderMessages();
+    renderSummary();
+  } catch (e) { console.error(e); }
+}
+
+function connectDashboard() {
+  const scheme = location.protocol === "https:" ? "wss:" : "ws:";
+  dashboardSocket = new WebSocket(`${scheme}//${location.host}/ws/dashboard`);
+  dashboardSocket.onmessage = event => {
+    const msg = JSON.parse(event.data);
+    if (msg.type === "snapshot") {
+      Object.values(msg.data.sockets || {}).forEach(applyState);
+      // Rebuild the latest-response map from the snapshot.
+      messagesBySocket.clear();
+      (msg.data.recent_messages || []).forEach(m => {
+        if (m && m.socket) messagesBySocket.set(m.socket, m);
+      });
+      renderMessages();
+    } else if (msg.type === "state") {
+      applyState(msg.data);
+    } else if (msg.type === "state_removed") {
+      removeState(msg.data?.key);
+    } else if (msg.type === "message") {
+      addMessage(msg.data);
+    } else if (msg.type === "refresh") {
+      lastRefreshAt = new Date().toISOString();
+      renderSummary();
+    }
+  };
+  dashboardSocket.onclose = () => setTimeout(connectDashboard, 3000);
+}
+
+loadStatus().then(connectDashboard);
+
+setInterval(loadStatus, 30000);
+
+setInterval(() => {
+  document.getElementById("clock").textContent =
+    new Date().toLocaleString("en-IN", {
+      timeZone: "Asia/Kolkata", hour12: false
+    });
+}, 1000);
+</script>
+</body>
+</html>
