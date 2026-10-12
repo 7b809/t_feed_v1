@@ -1,10 +1,10 @@
 #!/bin/bash
 
-APP_NAME="upstox_order_receiver"
+APP_NAME="market_data_foundation"
 PID_FILE="${APP_NAME}.pid"
 
 echo "=========================================="
-echo "  Upstox Order Request Receiver"
+echo "  Market Data Foundation"
 echo "=========================================="
 echo
 echo "Stopping FastAPI application..."

@@ -39,7 +39,6 @@ def send_telegram(
             title=title,
             message=message,
             level=level,
-            notification_context="project_update",
         )
     except Exception as error:
         print(f"WARNING: Telegram notification failed: {error}")
@@ -177,7 +176,7 @@ def backup_logs() -> None:
 
 def main() -> None:
     print("==========================================")
-    print("  Upstox Order Request Receiver")
+    print("  Market Data Foundation")
     print("  Project Update")
     print("==========================================")
 

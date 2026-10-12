@@ -3,14 +3,9 @@ uvicorn
 upstox-python-sdk
 pymongo
 python-dotenv
-pydantic
-pydantic-settings
-websocket-client
-websockets>=12
 requests
-pandas
-numpy
 apscheduler
+websockets>=12
 jinja2
 dnspython
-tzdata 
+tzdata

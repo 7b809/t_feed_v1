@@ -3,7 +3,7 @@ cls
 cd /d "%~dp0"
 
 echo ================================================
-echo      Option Feed Engine
+echo      Market Data Foundation
 echo ================================================
 echo.
 
@@ -59,7 +59,7 @@ python --version
 echo.
 
 echo ================================================
-echo Starting Option Feed Engine with Uvicorn...
+echo Starting Market Data Foundation with Uvicorn...
 echo ================================================
 echo.
 

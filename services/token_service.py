@@ -10,18 +10,22 @@ logger = logging.getLogger(__name__)
 
 class TokenService:
     def __init__(self):
-        self._client = MongoClient(config.MONGO_URI)
-        self._db = self._client[config.MONGO_DB]
-        self._collection = self._db[config.TOKENS_COLLECTION]
-
+        self._client = None
+        self._collection = None
         self._cache = {}
         self._lock = Lock()
+
+    def _get_collection(self):
+        if self._collection is None:
+            self._client = MongoClient(config.MONGO_URI)
+            self._collection = self._client[config.MONGO_DB][config.TOKENS_COLLECTION]
+        return self._collection
 
     def refresh_tokens(self) -> None:
         try:
             logger.info("Fetching token document from MongoDB...")
 
-            doc = self._collection.find_one({"_id": "upstox_access_token"})
+            doc = self._get_collection().find_one({"_id": config.UPSTOX_TOKEN_DOC_ID})
 
             if doc:
                 with self._lock:
@@ -29,13 +33,10 @@ class TokenService:
 
                 logger.info("Token cache refreshed successfully.")
             else:
-                logger.warning("Document '_id: upstox_access_token' not found.")
+                logger.warning("Configured token document was not found.")
 
         except Exception as exc:
-            logger.error(
-                "Error refreshing tokens from MongoDB: %s",
-                exc,
-            )
+            logger.error("Error refreshing tokens from MongoDB (%s).", type(exc).__name__)
 
     def get_access_token(self) -> str | None:
         with self._lock:
@@ -51,10 +52,7 @@ class TokenService:
                 return self._cache.get("access_token")
 
         except Exception as exc:
-            logger.error(
-                "Failed to reload access token: %s",
-                exc,
-            )
+            logger.error("Failed to reload access token (%s).", type(exc).__name__)
 
         return None
 

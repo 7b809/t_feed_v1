@@ -42,18 +42,19 @@ class TokenStore:
 
         self.market_timezone = self._load_market_timezone()
 
-        if not self.mongo_uri:
-            raise RuntimeError("MONGO_URI / MONGO_URL is not configured.")
+        self.client = None
+        self.db = None
+        self._collection = None
 
-        if not self.mongo_db:
-            raise RuntimeError("MONGO_DB is not configured.")
-
-        if not self.collection_name:
-            raise RuntimeError("TOKENS_COLLECTION is not configured.")
-
-        self.client = MongoClient(self.mongo_uri)
-        self.db = self.client[self.mongo_db]
-        self.collection = self.db[self.collection_name]
+    @property
+    def collection(self):
+        if self._collection is None:
+            if not self.mongo_uri or not self.mongo_db or not self.collection_name:
+                raise RuntimeError("MongoDB token storage settings are incomplete.")
+            self.client = MongoClient(self.mongo_uri)
+            self.db = self.client[self.mongo_db]
+            self._collection = self.db[self.collection_name]
+        return self._collection
 
     def _load_market_timezone(self):
         """
@@ -96,10 +97,7 @@ class TokenStore:
             )
 
         except Exception as ex:
-            logger.error(
-                f"Failed reading token document from MongoDB: "
-                f"{type(ex).__name__}: {ex}"
-            )
+            logger.error("Failed reading token document from MongoDB (%s).", type(ex).__name__)
             return None
 
     def get_access_token(self) -> str | None:
@@ -191,10 +189,7 @@ class TokenStore:
             return sanitized_payload
 
         except Exception as ex:
-            logger.error(
-                f"Failed saving Upstox access token to MongoDB: "
-                f"{type(ex).__name__}: {ex}"
-            )
+            logger.error("Failed saving Upstox access token to MongoDB (%s).", type(ex).__name__)
             raise
 
     def update_validation_status(
@@ -253,10 +248,7 @@ class TokenStore:
             return True
 
         except Exception as ex:
-            logger.error(
-                f"Failed updating token validation status: "
-                f"{type(ex).__name__}: {ex}"
-            )
+            logger.error("Failed updating token validation status (%s).", type(ex).__name__)
             return False
 
     def mask_token(self, token: str | None) -> str | None:
@@ -329,7 +321,7 @@ class TokenStore:
             return True
 
         except Exception as ex:
-            logger.error(f"Failed touching token updated_at: {type(ex).__name__}: {ex}")
+            logger.error("Failed touching token updated_at (%s).", type(ex).__name__)
             return False
 
 

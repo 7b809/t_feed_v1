@@ -198,9 +198,9 @@ def fetch_historical_candles(
                         instrument_key, current_start, current_end,
                     )
             except Exception as exc:
-                logger.exception(
-                    "Historical batch fetch failed for %s: %s -> %s: %s",
-                    instrument_key, current_start, current_end, exc,
+                logger.warning(
+                    "Historical batch fetch failed for %s: %s -> %s (%s).",
+                    instrument_key, current_start, current_end, type(exc).__name__,
                 )
         return all_candles
 
@@ -245,9 +245,9 @@ def fetch_historical_candles(
             except Exception as exc:
                 # Should be rare — _fetch_one already returns via the SDK;
                 # any exception here is unexpected.
-                logger.exception(
-                    "Parallel historical batch raised for %s: %s",
-                    instrument_key, exc,
+                logger.warning(
+                    "Parallel historical batch raised for %s (%s).",
+                    instrument_key, type(exc).__name__,
                 )
                 continue
 
@@ -417,9 +417,9 @@ def get_chart_data(
                 max_workers=max_workers,
             )
         except Exception as exc:
-            logger.exception(
-                "Historical candle fetch failed for %s: %s",
-                instrument_key, exc,
+            logger.warning(
+                "Historical candle fetch failed for %s (%s).",
+                instrument_key, type(exc).__name__,
             )
             return []
 
@@ -431,9 +431,9 @@ def get_chart_data(
                 unit=unit,
             )
         except Exception as exc:
-            logger.exception(
-                "Intraday candle fetch failed for %s: %s",
-                instrument_key, exc,
+            logger.warning(
+                "Intraday candle fetch failed for %s (%s).",
+                instrument_key, type(exc).__name__,
             )
             return []
 
@@ -455,9 +455,9 @@ def get_chart_data(
                 try:
                     value = fut.result()
                 except Exception as exc:
-                    logger.exception(
-                        "%s fetch raised at top level for %s: %s",
-                        label, instrument_key, exc,
+                    logger.warning(
+                        "%s fetch raised at top level for %s (%s).",
+                        label, instrument_key, type(exc).__name__,
                     )
                     value = []
 

@@ -1,7 +1,7 @@
 #!/bin/bash
 
-APP_NAME="upstox_order_receiver"
-PORT=8010
+APP_NAME="market_data_foundation"
+PORT=8000
 
 PID_FILE="${APP_NAME}.pid"
 LOG_DIR="logs"
@@ -9,7 +9,7 @@ VENV_DIR="myenv"
 REQUIREMENTS_FILE="requirements.txt"
 
 echo "=========================================="
-echo "  Upstox Order Request Receiver"
+echo "  Market Data Foundation"
 echo "=========================================="
 echo
 echo "Starting FastAPI application..."

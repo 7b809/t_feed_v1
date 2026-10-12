@@ -45,21 +45,9 @@ def response_to_dict(api_response) -> dict:
 
 
 def api_exception_to_message(exception: ApiException) -> str:
-    """
-    Converts Upstox ApiException into readable error text.
-    """
-
-    error_body = getattr(exception, "body", None)
-
-    if error_body:
-        return str(error_body)
-
-    reason = getattr(exception, "reason", None)
-
-    if reason:
-        return str(reason)
-
-    return str(exception)
+    """Return a credential-safe summary without API response bodies or headers."""
+    status = getattr(exception, "status", None)
+    return f"Upstox profile request failed (HTTP {status})." if status else "Upstox profile request failed."
 
 
 class UpstoxTokenClient:
@@ -179,10 +167,7 @@ class UpstoxTokenClient:
                 logger.info("Upstox token validation successful using profile API.")
                 return True, profile, None
 
-            error_message = (
-                "Profile API response did not return success status. "
-                f"response={profile}"
-            )
+            error_message = "Upstox profile response did not indicate success."
 
             logger.warning(error_message)
 
@@ -198,7 +183,7 @@ class UpstoxTokenClient:
             return False, None, error_message
 
         except Exception as ex:
-            error_message = f"{type(ex).__name__}: {ex}"
+            error_message = f"Upstox profile request failed ({type(ex).__name__})."
 
             logger.warning(
                 f"Upstox token validation failed with exception: {error_message}"
@@ -239,7 +224,7 @@ class UpstoxTokenClient:
                 "status": "failed",
                 "api": "get_profile",
                 "error_type": type(ex).__name__,
-                "error": str(ex),
+                "error": f"Upstox profile request failed ({type(ex).__name__}).",
             }
 
     def get_funds_safe(
@@ -275,7 +260,7 @@ class UpstoxTokenClient:
                 "status": "failed",
                 "api": "get_user_fund_margin",
                 "error_type": type(ex).__name__,
-                "error": str(ex),
+                "error": f"Upstox funds request failed ({type(ex).__name__}).",
             }
 
 
