@@ -18,6 +18,13 @@ def _env_bool(name: str, default: bool) -> bool:
         return default
     return raw.strip().lower() in ("1", "true", "yes", "on")
 
+def _env_str(name: str, default: str = "") -> str:
+    """Read a string env var and strip surrounding whitespace/quotes."""
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().strip('"').strip("'")
+
 @dataclass(frozen=True, slots=True)
 class Settings:
     subscriptions_api_url: str = os.getenv(
@@ -104,5 +111,74 @@ class Settings:
     # Only honoured when CORS_ALLOWED_ORIGINS is NOT "*".
     # Required for cookie-based auth; leave false for token auth.
     cors_allow_credentials: bool = _env_bool("CORS_ALLOW_CREDENTIALS", False)
+
+    # ------------------------------------------------------------------
+    # Public WebSocket base URL (optional)
+    # ------------------------------------------------------------------
+    # Used by /api/instruments and /api/hard-refresh to build the
+    # per-instrument ``connect_url`` pointing at our live-EMA WebSocket.
+    #
+    #   ""  (default) -> fall back to the incoming request's scheme/host,
+    #                    honouring X-Forwarded-Proto / X-Forwarded-Host.
+    #   "wss://feed.novag7.in" -> hard-code a public base URL (useful
+    #                    when the app sits behind a reverse proxy).
+    public_ws_base_url: str = _env_str("PUBLIC_WS_BASE_URL", "")
+
+    # ------------------------------------------------------------------
+    # Telegram notifications (optional, best-effort)
+    # ------------------------------------------------------------------
+    #   true  -> send formatted startup/shutdown messages to TELEGRAM_CHAT_ID
+    #   false -> notifications disabled entirely
+    #
+    # No Telegram package is required; the Bot HTTP API is called directly
+    # through ``requests`` from app/services/telegram_service.py.
+    telegram_enabled: bool = _env_bool("TELEGRAM_ENABLED", False)
+
+    # Bot token from @BotFather (e.g. "123456789:AA...").
+    telegram_bot_token: str = _env_str("TELEGRAM_BOT_TOKEN", "")
+
+    # Target chat id. Accepts numeric user ids, negative group ids, or
+    # a channel handle like "@mychannel". Surrounding quotes are stripped.
+    telegram_chat_id: str = _env_str("TELEGRAM_CHAT_ID", "")
+
+    # Per-request timeout for the Telegram API, in seconds.
+    telegram_timeout_seconds: int = int(
+        os.getenv("TELEGRAM_TIMEOUT_SECONDS", "10")
+    )
+
+    # ------------------------------------------------------------------
+    # WebSocket recorder (self-connect for offline replay / analysis)
+    # ------------------------------------------------------------------
+    # When true, a background service opens one WebSocket connection to
+    # our own live-EMA endpoint for the Nifty 50 index, waits for the
+    # first tick, then opens a second connection to a randomly chosen
+    # instrument whose strike is nearest to Nifty 50's LTP. Every frame
+    # received is appended as a single JSON line to a per-session .jsonl
+    # file under ``ws_recorder_dir``.
+    #
+    # NOTE: the recorder is a WebSocket *client* of our own server. It
+    # therefore only sees data when the live EMA backend is active
+    # (USE_LIVE_LTP_FEED=true, LIVE_EMA_ENABLED=true).
+    ws_recorder_enabled: bool = _env_bool("WS_RECORDER_ENABLED", False)
+
+    # Base URL of our own server (the recorder connects to this).
+    # Empty -> fall back to PUBLIC_WS_BASE_URL, then ws://127.0.0.1:8002.
+    ws_recorder_base_url: str = _env_str("WS_RECORDER_BASE_URL", "")
+
+    # Root folder for recorded files.
+    #   <ws_recorder_dir>/<safe_instrument_key>/<YYYYMMDD_HHMMSS>.jsonl
+    ws_recorder_dir: Path = BASE_DIR / os.getenv(
+        "WS_RECORDER_DIR", "ws_records"
+    )
+
+    # The index instrument to record first (the "spot" reference).
+    ws_recorder_nifty_key: str = os.getenv(
+        "WS_RECORDER_NIFTY_KEY", "NSE_INDEX|Nifty 50"
+    )
+
+    # Reconnect backoff for the recorder's own client connections.
+    ws_recorder_reconnect_seconds: int = int(
+        os.getenv("WS_RECORDER_RECONNECT_SECONDS", "5")
+    )
 
 settings = Settings()

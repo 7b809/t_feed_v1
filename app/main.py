@@ -10,6 +10,7 @@ from app.api.candle_routes import router as candle_router
 from app.api.live_ema_ws_routes import router as live_ema_ws_router
 from app.api.logs_routes import router as logs_router
 from app.api.routes import router
+from app.api.ws_samples_routes import router as ws_samples_router
 from app.core.config import settings
 from app.core.lifespan import lifespan
 from app.core.logger import configure_logging
@@ -149,6 +150,7 @@ app.include_router(router)
 app.include_router(candle_router)
 app.include_router(logs_router)
 app.include_router(live_ema_ws_router)
+app.include_router(ws_samples_router)  # <-- NEW: /api/ws-samples/*
 
 app.mount(
     "/static",

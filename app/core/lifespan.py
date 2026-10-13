@@ -14,6 +14,7 @@ from app.services.live_ema_cross_store import live_ema_cross_store
 from app.services.live_ltp_ema_store import live_ltp_ema_store
 from app.services.subscription_store import subscription_store
 from app.services.telegram_service import telegram_service
+from app.services.ws_recorder import ws_recorder_service
 
 logger = get_logger(__name__)
 
@@ -133,7 +134,6 @@ def _set_phase(app: FastAPI, phase: str) -> None:
     try:
         app.state.startup_phase = phase
     except Exception:
-        # Never let bookkeeping crash startup.
         pass
     logger.debug("Startup phase -> %s", phase)
 
@@ -164,6 +164,7 @@ def _telegram_startup_details(
     app_started_at: datetime,
     instruments_count: int,
     live_started: bool,
+    recorder_started: bool,
 ) -> dict:
     """Build the key/value payload for the Telegram 'started' message."""
     return {
@@ -178,6 +179,11 @@ def _telegram_startup_details(
             "ltp feed" if settings.use_live_ltp_feed else "rest polling"
         ),
         "interval_seconds": settings.live_ema_interval_seconds,
+        "ws_recorder": (
+            "enabled"
+            if settings.ws_recorder_enabled and recorder_started
+            else ("disabled" if not settings.ws_recorder_enabled else "failed to start")
+        ),
         "market_window": (
             f"{settings.market_open_time}-{settings.market_close_time} "
             f"{settings.market_timezone}"
@@ -194,6 +200,7 @@ def _telegram_shutdown_details(
     app_started_at: datetime,
     instruments_count: int,
     live_state: dict,
+    recorder_state: dict,
     reason: str,
 ) -> dict:
     """Build the key/value payload for the Telegram 'stopped' message."""
@@ -209,6 +216,8 @@ def _telegram_shutdown_details(
             live_state.get("total_ticks"),
         ),
         "live_crosses": live_state.get("total_crosses_detected"),
+        "recorder_messages": recorder_state.get("total_messages"),
+        "recorder_bytes": recorder_state.get("total_bytes"),
         "stopped_at": datetime.now(timezone.utc).isoformat(),
         "reason": reason,
     }
@@ -367,6 +376,7 @@ async def lifespan(app: FastAPI):
     # Track these for the Telegram startup message.
     startup_instruments: list = []
     live_started = False
+    ws_recorder_started = False
 
     # ---- Job 1: Subscription synchronization --------------------------
 
@@ -525,6 +535,29 @@ async def lifespan(app: FastAPI):
             "Live EMA job disabled via LIVE_EMA_ENABLED"
         )
 
+    # ---- Optional: WebSocket recorder ---------------------------------
+    # Connects to our own live-EMA WebSocket (this same process). The
+    # recorder is a best-effort observer; failures never block startup.
+    #
+    # Note: it only sees live data when USE_LIVE_LTP_FEED=true and
+    # LIVE_EMA_ENABLED=true. Otherwise it will sit on the snapshot only.
+    _set_phase(app, "ws_recorder")
+
+    if settings.ws_recorder_enabled:
+        try:
+            result = await ws_recorder_service.start(
+                lambda: subscription_store.snapshot().get("active", []) or []
+            )
+            ws_recorder_started = bool(result.get("started"))
+            logger.info(
+                "WS recorder start result: %s",
+                json_dumps(result),
+            )
+        except Exception:
+            logger.exception("WS recorder failed to start")
+    else:
+        logger.info("WS recorder disabled via WS_RECORDER_ENABLED")
+
     # ---- Daily maintenance refresh (jobs 1 -> 4) ---------------------
     # Runs once per market day (Mon-Fri) at DAILY_REFRESH_TIME in
     # MARKET_TIMEZONE. Job 5 keeps running in the background.
@@ -552,8 +585,6 @@ async def lifespan(app: FastAPI):
 
     # ------------------------------------------------------------------
     # Mark startup complete — requests are now allowed through the gate.
-    # This must run BEFORE the Telegram send (or before any await that
-    # could hang) so the app becomes reachable even if Telegram is slow.
     # ------------------------------------------------------------------
     _mark_startup_complete(app)
 
@@ -566,6 +597,7 @@ async def lifespan(app: FastAPI):
                 app_started_at=app_started_at,
                 instruments_count=len(startup_instruments),
                 live_started=live_started,
+                recorder_started=ws_recorder_started,
             )
         )
     except Exception:
@@ -579,8 +611,6 @@ async def lifespan(app: FastAPI):
     logger.info("Application shutdown initiated")
 
     # ---- Telegram: application stopping ------------------------------
-    # Fire-and-forget with a short cap so a slow Telegram API never
-    # delays the process exit.
     try:
         live_state: dict = {}
         try:
@@ -597,6 +627,11 @@ async def lifespan(app: FastAPI):
             live_state = {}
 
         try:
+            recorder_state = ws_recorder_service.status() or {}
+        except Exception:
+            recorder_state = {}
+
+        try:
             instruments_count = len(
                 subscription_store.snapshot().get("active", [])
             )
@@ -609,6 +644,7 @@ async def lifespan(app: FastAPI):
                     app_started_at=app_started_at,
                     instruments_count=instruments_count,
                     live_state=live_state,
+                    recorder_state=recorder_state,
                     reason="application shutdown",
                 ),
                 timeout=3,
@@ -623,7 +659,16 @@ async def lifespan(app: FastAPI):
     except Exception:
         logger.exception("Telegram shutdown notification failed")
 
-    # Stop the daily refresh task first so it does not fire mid-shutdown.
+    # Stop the WS recorder before the live EMA jobs so its outgoing
+    # connections are closed cleanly while the WS server is still up.
+    if settings.ws_recorder_enabled and ws_recorder_started:
+        try:
+            await ws_recorder_service.stop()
+            logger.info("WS recorder stopped successfully")
+        except Exception:
+            logger.exception("WS recorder failed to stop cleanly")
+
+    # Stop the daily refresh task so it does not fire mid-shutdown.
     if daily_refresh_task is not None and not daily_refresh_task.done():
         daily_refresh_task.cancel()
         try:
