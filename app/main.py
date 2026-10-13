@@ -1,9 +1,10 @@
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.api.candle_routes import router as candle_router
 from app.api.live_ema_ws_routes import router as live_ema_ws_router
@@ -22,6 +23,90 @@ app = FastAPI(
     version="1.5.0",
     lifespan=lifespan,
 )
+
+# ---------------------------------------------------------------------------
+# Startup gate
+# ---------------------------------------------------------------------------
+# Until ``lifespan`` finishes jobs 1–5 and sets ``app.state.startup_complete``
+# to True, every incoming HTTP request is answered with a 503 "still loading"
+# payload. This is a safety net: with a plain uvicorn server the socket is
+# not bound until the lifespan startup completes, so under normal operation
+# clients never see this. It *does* matter when:
+#
+#   * the app is fronted by a reverse proxy (nginx, Caddy, Cloudflare) that
+#     accepts connections before the backend is ready, or
+#   * an operator is re-running startup on a hot-reload worker, or
+#   * a load balancer runs health checks while the process is booting.
+#
+# Endpoints that must always answer — health checks, docs, the status probe,
+# and static assets — are whitelisted so monitoring and dashboards work
+# during the boot window.
+# ---------------------------------------------------------------------------
+STARTUP_WHITELIST: set[str] = {
+    "/api/health",
+    "/api/startup-status",
+    "/docs",
+    "/docs/oauth2-redirect",
+    "/openapi.json",
+    "/redoc",
+}
+
+# Prefixes that bypass the gate (static assets, favicon, etc.).
+STARTUP_WHITELIST_PREFIXES: tuple[str, ...] = (
+    "/static",
+    "/favicon",
+)
+
+# Message returned while the app is still booting.
+STARTUP_LOADING_MESSAGE = (
+    "Project is still loading. Jobs are being initialised "
+    "(subscriptions, historical candles, intraday candles, EMA crosses, "
+    "live EMA). Please retry in a moment."
+)
+
+
+class StartupGateMiddleware(BaseHTTPMiddleware):
+    """Return HTTP 503 until ``app.state.startup_complete`` is True."""
+
+    async def dispatch(self, request: Request, call_next):
+        # Fast path: startup finished — serve normally.
+        if getattr(request.app.state, "startup_complete", False):
+            return await call_next(request)
+
+        path = request.url.path
+
+        # Always allow the whitelist through (health, docs, static, probe).
+        if path in STARTUP_WHITELIST or path.startswith(
+            STARTUP_WHITELIST_PREFIXES
+        ):
+            return await call_next(request)
+
+        phase = getattr(request.app.state, "startup_phase", "initializing")
+        started_at = getattr(request.app.state, "startup_started_at", None)
+
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "loading",
+                "message": STARTUP_LOADING_MESSAGE,
+                "phase": phase,
+                "started_at": started_at,
+                "retry_after_seconds": 5,
+            },
+            headers={"Retry-After": "5"},
+        )
+
+
+# ---------------------------------------------------------------------------
+# Middleware
+# ---------------------------------------------------------------------------
+# Middleware added later wraps middleware added earlier (Starlette inserts
+# new entries at position 0). We therefore register the startup gate FIRST
+# so that CORS — added SECOND — wraps it. That guarantees 503 responses
+# still carry CORS headers and are readable from the browser.
+# ---------------------------------------------------------------------------
+app.add_middleware(StartupGateMiddleware)
+
 
 # ---------------------------------------------------------------------------
 # CORS
@@ -81,3 +166,29 @@ async def index():
 async def logs_page():
     """Serve the logs dashboard page."""
     return FileResponse(STATIC_DIR / "logs.html")
+
+
+# ---------------------------------------------------------------------------
+# Startup status probe (always reachable, bypasses the gate)
+# ---------------------------------------------------------------------------
+@app.get("/api/startup-status", tags=["health"])
+async def startup_status():
+    """Report whether the app has finished booting.
+
+    Always reachable — even while the StartupGateMiddleware is answering
+    every other route with HTTP 503. Useful for probes, dashboards, and
+    for the bundled web UI to show a "still loading" overlay.
+    """
+    return {
+        "startup_complete": bool(
+            getattr(app.state, "startup_complete", False)
+        ),
+        "phase": getattr(app.state, "startup_phase", "initializing"),
+        "started_at": getattr(app.state, "startup_started_at", None),
+        "completed_at": getattr(app.state, "startup_completed_at", None),
+        "message": (
+            "Ready"
+            if getattr(app.state, "startup_complete", False)
+            else STARTUP_LOADING_MESSAGE
+        ),
+    }

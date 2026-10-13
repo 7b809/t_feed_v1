@@ -1,7 +1,7 @@
 import asyncio
 import json
 from contextlib import asynccontextmanager
-from datetime import datetime, time as dt_time, timedelta
+from datetime import datetime, time as dt_time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI
@@ -13,6 +13,7 @@ from app.services.historical_candle_store import historical_candle_store
 from app.services.live_ema_cross_store import live_ema_cross_store
 from app.services.live_ltp_ema_store import live_ltp_ema_store
 from app.services.subscription_store import subscription_store
+from app.services.telegram_service import telegram_service
 
 logger = get_logger(__name__)
 
@@ -122,6 +123,95 @@ def log_job_summary(label, summary):
         label,
         json_dumps(summary),
     )
+
+# ----------------------------------------------------------------------
+# Startup phase tracking (consumed by StartupGateMiddleware in main.py)
+# ----------------------------------------------------------------------
+
+def _set_phase(app: FastAPI, phase: str) -> None:
+    """Record the current startup phase on ``app.state`` for the gate."""
+    try:
+        app.state.startup_phase = phase
+    except Exception:
+        # Never let bookkeeping crash startup.
+        pass
+    logger.debug("Startup phase -> %s", phase)
+
+def _mark_startup_complete(app: FastAPI) -> None:
+    try:
+        app.state.startup_phase = "ready"
+        app.state.startup_complete = True
+        app.state.startup_completed_at = datetime.now(timezone.utc).isoformat()
+    except Exception:
+        pass
+
+# ----------------------------------------------------------------------
+# Telegram helpers
+# ----------------------------------------------------------------------
+
+def _format_uptime(total_seconds: int) -> str:
+    """Format seconds as ``2h 15m 32s`` (or ``45s`` for short runs)."""
+    total_seconds = max(0, int(total_seconds))
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    if hours:
+        return f"{hours}h {minutes}m {seconds}s"
+    if minutes:
+        return f"{minutes}m {seconds}s"
+    return f"{seconds}s"
+
+def _telegram_startup_details(
+    app_started_at: datetime,
+    instruments_count: int,
+    live_started: bool,
+) -> dict:
+    """Build the key/value payload for the Telegram 'started' message."""
+    return {
+        "project": "Ordered Instrument Jobs",
+        "version": "1.5.0",
+        "instruments": instruments_count,
+        "live_ema": (
+            "enabled" if settings.live_ema_enabled and live_started
+            else ("disabled" if not settings.live_ema_enabled else "failed to start")
+        ),
+        "live_ema_backend": (
+            "ltp feed" if settings.use_live_ltp_feed else "rest polling"
+        ),
+        "interval_seconds": settings.live_ema_interval_seconds,
+        "market_window": (
+            f"{settings.market_open_time}-{settings.market_close_time} "
+            f"{settings.market_timezone}"
+        ),
+        "daily_refresh": (
+            f"{settings.daily_refresh_time} {settings.market_timezone}"
+            if settings.daily_refresh_enabled
+            else "disabled"
+        ),
+        "started_at": app_started_at.isoformat(),
+    }
+
+def _telegram_shutdown_details(
+    app_started_at: datetime,
+    instruments_count: int,
+    live_state: dict,
+    reason: str,
+) -> dict:
+    """Build the key/value payload for the Telegram 'stopped' message."""
+    uptime_seconds = int(
+        (datetime.now(timezone.utc) - app_started_at).total_seconds()
+    )
+    return {
+        "project": "Ordered Instrument Jobs",
+        "uptime": _format_uptime(uptime_seconds),
+        "instruments": instruments_count,
+        "live_ticks": live_state.get(
+            "total_ticks_received",
+            live_state.get("total_ticks"),
+        ),
+        "live_crosses": live_state.get("total_crosses_detected"),
+        "stopped_at": datetime.now(timezone.utc).isoformat(),
+        "reason": reason,
+    }
 
 # ----------------------------------------------------------------------
 # Daily maintenance refresh (jobs 1 -> 4) on market days
@@ -260,9 +350,27 @@ async def _daily_refresh_loop() -> None:
 async def lifespan(app: FastAPI):
     """Manage application startup and shutdown."""
 
+    # ------------------------------------------------------------------
+    # Startup bookkeeping (consumed by StartupGateMiddleware)
+    # ------------------------------------------------------------------
+    app_started_at = datetime.now(timezone.utc)
+    try:
+        app.state.startup_complete = False
+        app.state.startup_phase = "initializing"
+        app.state.startup_started_at = app_started_at.isoformat()
+        app.state.startup_completed_at = None
+    except Exception:
+        pass
+
     logger.info("Application startup initiated")
 
+    # Track these for the Telegram startup message.
+    startup_instruments: list = []
+    live_started = False
+
     # ---- Job 1: Subscription synchronization --------------------------
+
+    _set_phase(app, "subscriptions")
 
     try:
         await subscription_store.refresh(
@@ -296,7 +404,11 @@ async def lifespan(app: FastAPI):
 
         instruments = []
 
+    startup_instruments = instruments
+
     # ---- Job 2: Recent historical candles -----------------------------
+
+    _set_phase(app, "historical")
 
     try:
         summary = await historical_candle_store.ensure_recent_candles(
@@ -316,6 +428,8 @@ async def lifespan(app: FastAPI):
 
     # ---- Job 3: Today's intraday candles -----------------------------
 
+    _set_phase(app, "intraday")
+
     try:
         summary = await historical_candle_store.ensure_intraday_candles(
             instruments,
@@ -333,6 +447,8 @@ async def lifespan(app: FastAPI):
         )
 
     # ---- Job 4: Batch EMA crosses ------------------------------------
+
+    _set_phase(app, "ema_crosses")
 
     try:
         summary = await ema_cross_store.compute_all(
@@ -352,6 +468,8 @@ async def lifespan(app: FastAPI):
 
     # ---- Job 5: Live EMA crosses -------------------------------------
 
+    _set_phase(app, "live_ema")
+
     if settings.live_ema_enabled:
 
         if settings.use_live_ltp_feed:
@@ -366,6 +484,8 @@ async def lifespan(app: FastAPI):
                         [],
                     )
                 )
+
+                live_started = True
 
                 logger.info(
                     "Live LTP EMA job started successfully"
@@ -389,6 +509,8 @@ async def lifespan(app: FastAPI):
                     )
                 )
 
+                live_started = True
+
                 logger.info(
                     "Live EMA cross job started successfully"
                 )
@@ -408,6 +530,8 @@ async def lifespan(app: FastAPI):
     # MARKET_TIMEZONE. Job 5 keeps running in the background.
     daily_refresh_task: asyncio.Task | None = None
 
+    _set_phase(app, "daily_refresh")
+
     if settings.daily_refresh_enabled:
         try:
             daily_refresh_task = asyncio.create_task(
@@ -426,13 +550,78 @@ async def lifespan(app: FastAPI):
             "Daily refresh job disabled via DAILY_REFRESH_ENABLED"
         )
 
+    # ------------------------------------------------------------------
+    # Mark startup complete — requests are now allowed through the gate.
+    # This must run BEFORE the Telegram send (or before any await that
+    # could hang) so the app becomes reachable even if Telegram is slow.
+    # ------------------------------------------------------------------
+    _mark_startup_complete(app)
+
     logger.info("Application startup completed")
 
+    # ---- Telegram: application started (fire-and-forget) -------------
+    try:
+        telegram_service.notify_startup(
+            _telegram_startup_details(
+                app_started_at=app_started_at,
+                instruments_count=len(startup_instruments),
+                live_started=live_started,
+            )
+        )
+    except Exception:
+        logger.exception("Telegram startup notification failed")
+
+    # ------------------------------ yield -----------------------------
     yield
 
     # ---- Shutdown -----------------------------------------------------
 
     logger.info("Application shutdown initiated")
+
+    # ---- Telegram: application stopping ------------------------------
+    # Fire-and-forget with a short cap so a slow Telegram API never
+    # delays the process exit.
+    try:
+        live_state: dict = {}
+        try:
+            if settings.use_live_ltp_feed:
+                live_state = live_ltp_ema_store.status() or {}
+            else:
+                live_state = {
+                    "total_ticks": live_ema_cross_store.total_ticks,
+                    "total_crosses_detected": (
+                        live_ema_cross_store.total_crosses_detected
+                    ),
+                }
+        except Exception:
+            live_state = {}
+
+        try:
+            instruments_count = len(
+                subscription_store.snapshot().get("active", [])
+            )
+        except Exception:
+            instruments_count = 0
+
+        shutdown_task = asyncio.create_task(
+            telegram_service.send_shutdown(
+                _telegram_shutdown_details(
+                    app_started_at=app_started_at,
+                    instruments_count=instruments_count,
+                    live_state=live_state,
+                    reason="application shutdown",
+                ),
+                timeout=3,
+            )
+        )
+        try:
+            await asyncio.wait_for(shutdown_task, timeout=3.5)
+        except asyncio.TimeoutError:
+            shutdown_task.cancel()
+        except Exception:
+            logger.exception("Telegram shutdown notification failed")
+    except Exception:
+        logger.exception("Telegram shutdown notification failed")
 
     # Stop the daily refresh task first so it does not fire mid-shutdown.
     if daily_refresh_task is not None and not daily_refresh_task.done():
