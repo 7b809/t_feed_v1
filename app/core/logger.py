@@ -23,6 +23,11 @@ Two layers of file logging:
 4. Rotation:
    Each log file has a configurable maximum size and backup count.
 
+5. Timestamps:
+   All timestamps are rendered in India Standard Time (Asia/Kolkata)
+   using a 12-hour clock with AM/PM, e.g. "2026-10-14 01:12:38 PM IST".
+   A fixed UTC+05:30 offset is used if the tz database is unavailable.
+
 Records are emitted to the module file and propagate to the root logger,
 so they also appear in the combined project log.
 
@@ -34,11 +39,26 @@ from __future__ import annotations
 import json
 import logging
 import re
+from datetime import datetime, timedelta, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.core.config import settings
+
+
+# ---------------------------------------------------------------------------
+# Timezone handling
+# ---------------------------------------------------------------------------
+
+try:
+    IST = ZoneInfo("Asia/Kolkata")
+    IST_LABEL = "IST"
+except ZoneInfoNotFoundError:
+    # Fallback if the platform lacks the IANA tz database.
+    IST = timezone(timedelta(hours=5, minutes=30), name="IST")
+    IST_LABEL = "IST"
 
 
 # ---------------------------------------------------------------------------
@@ -46,7 +66,28 @@ from app.core.config import settings
 # ---------------------------------------------------------------------------
 
 _LOG_FORMAT = "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
-_FORMATTER = logging.Formatter(_LOG_FORMAT)
+
+# 12-hour format with AM/PM, suffixed with the IST label.
+_IST_DATE_FORMAT = f"%Y-%m-%d %I:%M:%S %p {IST_LABEL}"
+
+
+class ISTFormatter(logging.Formatter):
+    """Formatter that renders timestamps in India Standard Time (12-hour)."""
+
+    def formatTime(self, record: logging.LogRecord, datefmt: str | None = None) -> str:
+        """Return the record's creation time in IST.
+
+        Overrides the default implementation, which uses the system's local
+        timezone and a 24-hour clock. When ``datefmt`` is not provided, the
+        project-wide IST format is used.
+        """
+        dt = datetime.fromtimestamp(record.created, tz=IST)
+        if datefmt:
+            return dt.strftime(datefmt)
+        return dt.strftime(_IST_DATE_FORMAT)
+
+
+_FORMATTER = ISTFormatter(_LOG_FORMAT, datefmt=_IST_DATE_FORMAT)
 
 _MAX_BYTES = 5_000_000
 _BACKUP_COUNT = 3
@@ -295,11 +336,12 @@ def configure_logging() -> None:
 
     root_logger.debug(
         "Logging configured | level=%s | combined_file=%s | "
-        "module_logs_enabled=%s | module_log_dir=%s",
+        "module_logs_enabled=%s | module_log_dir=%s | tz=%s",
         settings.log_level,
         settings.log_file,
         settings.module_logs_enabled,
         settings.module_log_dir,
+        IST_LABEL,
     )
 
 
