@@ -7,13 +7,6 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from api.candles_routes import router as candles_router
-from api.chart_routes import router as chart_router
-from api.chart_websocket_routes import router as chart_websocket_router
-from api.health_routes import router as health_router
-from api.home_routes import router as home_router
-from api.logs_api import router as logs_router
-from api.token_store_routes import router as token_router
 from core import config
 from core.logger import get_logger
 from services.telegram_service import telegram_service
@@ -74,12 +67,4 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-app.include_router(home_router)
-app.include_router(logs_router)
-app.include_router(health_router)
-app.include_router(chart_router)
-app.include_router(chart_websocket_router)
-app.include_router(candles_router)
-app.include_router(token_router)
 
