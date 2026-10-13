@@ -8,6 +8,7 @@ from fastapi import FastAPI
 
 from app.core.config import settings
 from app.core.logger import get_logger
+from app.services.bootstrap_from_backup import bootstrap_from_backup
 from app.services.ema_cross_store import ema_cross_store
 from app.services.historical_candle_store import historical_candle_store
 from app.services.live_ema_cross_store import live_ema_cross_store
@@ -258,18 +259,97 @@ def _next_market_day_run(now: datetime, target: dt_time) -> datetime:
 
     return candidate
 
-async def _run_daily_refresh_once() -> None:
-    """Run jobs 1 -> 4 once and log a compact summary."""
+def _notify_refresh_start(
+    label: str,
+    source: str,
+    started_at: datetime,
+    extra_lines: list[str] | None = None,
+) -> None:
+    """Fire-and-forget Telegram notification for a refresh starting."""
+    try:
+        lines = [
+            f"<b>Source:</b> {source}",
+            f"<b>Started At:</b> {started_at.isoformat()}",
+        ]
+        if extra_lines:
+            lines.extend(extra_lines)
 
+        telegram_service.notify_event(
+            f"{label} Started",
+            lines,
+            level="STARTUP",
+        )
+    except Exception:
+        logger.exception("Telegram %s start notification failed", label)
+
+def _notify_refresh_end(
+    label: str,
+    started_at: datetime,
+    outcomes: dict,
+) -> None:
+    """Fire-and-forget Telegram notification for a refresh finishing.
+
+    Level is SUCCESS when every outcome is clean, WARNING when any of
+    them is a failure string.
+    """
+    try:
+        completed_at = datetime.now(timezone.utc)
+        elapsed = (completed_at - started_at).total_seconds()
+
+        any_failed = any(
+            isinstance(v, str) and v.startswith("failed")
+            for v in outcomes.values()
+        )
+
+        lines = [
+            f"<b>Elapsed:</b> {elapsed:.1f}s",
+            f"<b>Completed At:</b> {completed_at.isoformat()}",
+        ]
+        for key, value in outcomes.items():
+            label_k = key.replace("_", " ").title()
+            lines.append(f"<b>{label_k}:</b> {value}")
+
+        title = (
+            f"{label} Completed"
+            if not any_failed
+            else f"{label} Completed with Errors"
+        )
+        telegram_service.notify_event(
+            title,
+            lines,
+            level="SUCCESS" if not any_failed else "WARNING",
+        )
+    except Exception:
+        logger.exception("Telegram %s completion notification failed", label)
+
+async def _run_daily_refresh_once() -> None:
+    """Run jobs 1 -> 4 once, log a compact summary, and notify via Telegram."""
+
+    started_at = datetime.now(timezone.utc)
     logger.info("Daily maintenance refresh starting")
+
+    _notify_refresh_start(
+        label="Daily Refresh",
+        source="scheduler",
+        started_at=started_at,
+        extra_lines=[
+            f"<b>Scheduled For:</b> {settings.daily_refresh_time} "
+            f"{settings.market_timezone}",
+        ],
+    )
+
+    outcomes: dict[str, str] = {}
 
     # Job 1 — subscriptions
     try:
         await subscription_store.refresh(reason="daily-refresh")
-    except Exception:
+        outcomes["subscriptions"] = "ok"
+    except Exception as exc:
+        outcomes["subscriptions"] = f"failed: {exc}"
         logger.exception("Daily refresh: subscription refresh failed")
 
     instruments = subscription_store.snapshot().get("active", []) or []
+    outcomes["instruments"] = str(len(instruments))
 
     # Job 2 — historical candles
     try:
@@ -277,7 +357,13 @@ async def _run_daily_refresh_once() -> None:
             instruments, reason="daily-refresh"
         )
         log_job_summary("Daily refresh: historical job summary", summary)
-    except Exception:
+        outcomes["historical"] = (
+            f"fetched={summary.get('fetched', 0)} "
+            f"skipped={summary.get('skipped', 0)} "
+            f"failed={summary.get('failed', 0)}"
+        )
+    except Exception as exc:
+        outcomes["historical"] = f"failed: {exc}"
         logger.exception("Daily refresh: historical candle job failed")
 
     # Job 3 — intraday candles (skips itself outside market hours)
@@ -286,7 +372,16 @@ async def _run_daily_refresh_once() -> None:
             instruments, reason="daily-refresh"
         )
         log_job_summary("Daily refresh: intraday job summary", summary)
-    except Exception:
+        if summary.get("skipped"):
+            outcomes["intraday"] = "skipped (outside market hours)"
+        else:
+            outcomes["intraday"] = (
+                f"updated={summary.get('updated', 0)} "
+                f"empty={summary.get('empty', 0)} "
+                f"failed={summary.get('failed', 0)}"
+            )
+    except Exception as exc:
+        outcomes["intraday"] = f"failed: {exc}"
         logger.exception("Daily refresh: intraday candle job failed")
 
     # Job 4 — batch EMA crosses
@@ -295,10 +390,23 @@ async def _run_daily_refresh_once() -> None:
             instruments, reason="daily-refresh"
         )
         log_job_summary("Daily refresh: EMA cross job summary", summary)
-    except Exception:
+        outcomes["ema_crosses"] = (
+            f"computed={summary.get('computed', 0)} "
+            f"empty={summary.get('empty', 0)} "
+            f"failed={summary.get('failed', 0)} "
+            f"total_crosses={summary.get('total_crosses', 0)}"
+        )
+    except Exception as exc:
+        outcomes["ema_crosses"] = f"failed: {exc}"
         logger.exception("Daily refresh: EMA cross job failed")
 
     logger.info("Daily maintenance refresh completed")
+
+    _notify_refresh_end(
+        label="Daily Refresh",
+        started_at=started_at,
+        outcomes=outcomes,
+    )
 
 async def _daily_refresh_loop() -> None:
     """Fire the maintenance refresh once per market day at the configured time.
@@ -377,6 +485,24 @@ async def lifespan(app: FastAPI):
     startup_instruments: list = []
     live_started = False
     ws_recorder_started = False
+
+    # ---- Job 0: Bootstrap data/ from MongoDB / MEGA backup -------------
+    # Runs before Job 1. Extracts the freshest available backup into
+    # data/ so that the subsequent historical job has to fetch much
+    # less from Upstox. Fully best-effort — any failure falls through
+    # to the standard fetch in Job 2.
+    _set_phase(app, "bootstrap")
+
+    try:
+        bootstrap_summary = await bootstrap_from_backup()
+        log_job_summary(
+            "Startup bootstrap-from-backup summary",
+            bootstrap_summary,
+        )
+    except Exception:
+        logger.exception(
+            "Bootstrap from backup failed; proceeding to normal fetch"
+        )
 
     # ---- Job 1: Subscription synchronization --------------------------
 

@@ -7,3 +7,4 @@ upstox-python-sdk
 tzdata
 requests
 websockets
+pymongo

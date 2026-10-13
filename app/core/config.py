@@ -132,7 +132,7 @@ class Settings:
     #
     # No Telegram package is required; the Bot HTTP API is called directly
     # through ``requests`` from app/services/telegram_service.py.
-    telegram_enabled: bool = _env_bool("TELEGRAM_ENABLED", False)
+    telegram_enabled: bool = _env_bool("TELEGRAM_ENABLED", True)
 
     # Bot token from @BotFather (e.g. "123456789:AA...").
     telegram_bot_token: str = _env_str("TELEGRAM_BOT_TOKEN", "")
@@ -179,6 +179,50 @@ class Settings:
     # Reconnect backoff for the recorder's own client connections.
     ws_recorder_reconnect_seconds: int = int(
         os.getenv("WS_RECORDER_RECONNECT_SECONDS", "5")
+    )
+
+    # ------------------------------------------------------------------
+    # Bootstrap from MongoDB / MEGA backup
+    # ------------------------------------------------------------------
+    # On startup, before jobs 1-4, the app tries to seed data/ from the
+    # MongoDB backup document written by the candle-backup project.
+    #
+    # Priority:
+    #   1. Inline Mongo blob (`data` field of the blob doc) — always used
+    #      when present.
+    #   2. MEGA file link (`file_link` of the same doc) — used only when
+    #      the doc's `updated_at`/`updated_at_utc` is from today in
+    #      MARKET_TIMEZONE.
+    #   3. Fall through to the standard Upstox historical fetch (job 2).
+    #
+    # Extraction is incremental by default: existing files on disk are
+    # left in place, so the bootstrap never clobbers fresher data.
+    bootstrap_enabled: bool = _env_bool("BOOTSTRAP_ENABLED", True)
+
+    # When true, extracted files overwrite whatever is already on disk.
+    # Leave false for the safest behaviour.
+    bootstrap_overwrite: bool = _env_bool("BOOTSTRAP_OVERWRITE", False)
+
+    # Mongo connection string for the backup database. Separate from any
+    # other Mongo URL so the app can be pointed at the backup database
+    # without coupling to other settings.
+    bootstrap_mongo_url: str = _env_str("BOOTSTRAP_MONGO_URL", "")
+
+    # Database and collection holding the blob document.
+    bootstrap_mongo_db: str = _env_str(
+        "BOOTSTRAP_MONGO_DB", "UPSTOX_APP_V2"
+    )
+    bootstrap_mongo_blob_collection: str = _env_str(
+        "BOOTSTRAP_MONGO_BLOB_COLLECTION", "backup_collection"
+    )
+    bootstrap_mongo_blob_doc_id: str = _env_str(
+        "BOOTSTRAP_MONGO_BLOB_DOC_ID", "backup_historical_candles"
+    )
+
+    # Server-selection / connect timeout for the bootstrap MongoClient,
+    # in milliseconds.
+    bootstrap_mongo_timeout_ms: int = int(
+        os.getenv("BOOTSTRAP_MONGO_TIMEOUT_MS", "10000")
     )
 
 settings = Settings()
