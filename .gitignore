@@ -16,7 +16,7 @@ myenv/
 *.egg-info/
 build/
 dist/
-
+combined_output.txt
 # Runtime output and generated data
 logs*/
 test_logs/

@@ -1,3 +1,21 @@
+"""Token validity monitoring.
+
+This module is deliberately conservative about what it logs and sends.
+Access tokens, token fragments, and full user identifiers never reach
+the log stream or Telegram at full fidelity — anything that could leak
+a token or personal data goes through a masking helper first.
+
+Rules enforced here:
+
+    * The raw access token is never interpolated into any log line,
+      Telegram message, or returned error string.
+    * User identifiers (user_id, user_name) are masked in logs and
+      Telegram messages.
+    * Any provider error string is passed through ``_sanitize_error``,
+      which redacts JWT-length runs before the string is logged or
+      returned.
+"""
+
 from core import config
 from core.logger import get_logger
 from services.telegram_service import telegram_service
@@ -7,55 +25,84 @@ from token_tasks.upstox_token_client import upstox_token_client
 logger = get_logger(__file__)
 
 
-def get_token_monitor_interval_minutes() -> int:
+# ---------------------------------------------------------------------------
+# Masking / sanitising helpers
+# ---------------------------------------------------------------------------
+
+# Anything this long and unbroken is treated as a token-like value and
+# redacted before it can reach a log handler or Telegram.
+_JWT_MIN_LEN = 40
+
+
+def _mask_pii(value) -> str:
+    """Mask a user id / user name for safe logging.
+
+    Keeps the first 2 and last 2 characters of long values; returns
+    ``***`` for anything too short to partially reveal.
     """
-    Returns token monitor interval in minutes.
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if len(text) <= 4:
+        return "***"
+    return f"{text[:2]}***{text[-2:]}"
 
-    Default:
-        30 minutes
 
-    Config:
-        UPSTOX_TOKEN_CHECK_INTERVAL_MINUTES
+def _sanitize_error(value) -> str:
+    """Redact token-like runs from a provider error string.
+
+    Splits on whitespace and replaces any part that is 40 characters or
+    longer with ``<redacted>``. This covers JWTs, bearer tokens, and
+    long opaque identifiers that could end up inside an exception
+    message.
     """
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    parts = text.split()
+    cleaned = [
+        "<redacted>" if len(part) >= _JWT_MIN_LEN else part
+        for part in parts
+    ]
+    return " ".join(cleaned)
 
+
+def _safe_int(value, default: int = 30) -> int:
     try:
-        interval = int(
-            getattr(
-                config,
-                "UPSTOX_TOKEN_CHECK_INTERVAL_MINUTES",
-                30,
-            )
-        )
+        return max(1, int(value))
+    except (TypeError, ValueError):
+        return default
 
-        return max(1, interval)
 
-    except Exception:
-        return 30
+# ---------------------------------------------------------------------------
+# Public helpers
+# ---------------------------------------------------------------------------
+
+def get_token_monitor_interval_minutes() -> int:
+    """Return the configured token monitor interval, minimum 1 minute."""
+    return _safe_int(
+        getattr(config, "UPSTOX_TOKEN_CHECK_INTERVAL_MINUTES", 30)
+    )
 
 
 def check_upstox_token_validity(
     send_success_message: bool = False,
 ) -> dict:
-    """
-    Background token validity check.
+    """Validate the stored Upstox access token against the provider.
 
-    Logic:
-        1. Read current access token from MongoDB.
-        2. Call Upstox get_profile API using current token.
-        3. If response status is success, token is valid.
-        4. If response fails, token is expired, invalid, or corrupted.
-        5. Update MongoDB validation metadata.
-        6. Send Telegram alert only when token is missing or invalid.
+    Never logs or returns the raw token, token fragments, or the full
+    user profile in log output. All error strings are sanitised before
+    they reach a logger or a Telegram message.
 
     Args:
         send_success_message:
-            If True, sends Telegram success message when token is valid.
-            For scheduled background jobs, keep this False to avoid noise.
+            If True, sends a Telegram success message when the token is
+            valid. For scheduled background jobs keep this False to
+            avoid noise.
 
     Returns:
         Dictionary status payload.
     """
-
     logger.info("Starting Upstox token validity check.")
 
     token = token_store.get_access_token()
@@ -63,11 +110,10 @@ def check_upstox_token_validity(
     if not token:
         message = (
             "Upstox access token is missing in MongoDB.\n\n"
-            "Please use Telegram command /save_token and then paste the latest "
-            "raw Upstox access token."
+            "Please use Telegram command /save_token and then paste the "
+            "latest raw Upstox access token."
         )
-
-        logger.warning(message)
+        logger.warning("Upstox access token missing in MongoDB.")
 
         token_store.update_validation_status(
             is_valid=False,
@@ -98,13 +144,17 @@ def check_upstox_token_validity(
             profile=profile,
         )
 
-        profile_data = profile.get("data", {}) if isinstance(profile, dict) else {}
+        profile_data = (
+            profile.get("data", {}) if isinstance(profile, dict) else {}
+        )
 
+        # Masked identifiers only — raw user_id / user_name never reach
+        # the log stream.
         logger.info(
-            f"Upstox token validation successful. "
-            f"user_id={profile_data.get('user_id')}, "
-            f"user_name={profile_data.get('user_name')}, "
-            f"broker={profile_data.get('broker')}"
+            "Upstox token validation successful. user_id=%s, user_name=%s, broker=%s",
+            _mask_pii(profile_data.get("user_id")),
+            _mask_pii(profile_data.get("user_name")),
+            profile_data.get("broker") or "—",
         )
 
         if send_success_message:
@@ -112,8 +162,8 @@ def check_upstox_token_validity(
                 title="Upstox Token Valid",
                 message=(
                     "Current Upstox access token is valid.\n\n"
-                    f"User ID: {profile_data.get('user_id')}\n"
-                    f"User Name: {profile_data.get('user_name')}\n"
+                    f"User ID: {_mask_pii(profile_data.get('user_id'))}\n"
+                    f"User Name: {_mask_pii(profile_data.get('user_name'))}\n"
                     f"Broker: {profile_data.get('broker')}\n"
                     f"Is Active: {profile_data.get('is_active')}"
                 ),
@@ -127,25 +177,30 @@ def check_upstox_token_validity(
             "profile": profile,
         }
 
+    safe_error = _sanitize_error(error) or "provider validation failed"
+
     token_store.update_validation_status(
         is_valid=False,
         status="profile_failed",
-        error=error,
+        error=safe_error,
         profile=None,
     )
 
-    message = (
+    logger.error(
+        "Upstox token validation failed. reason=%s",
+        safe_error,
+    )
+
+    telegram_message = (
         "Current Upstox access token looks expired, invalid, or corrupted.\n\n"
         "Please use Telegram command /save_token and then paste the latest "
         "raw Upstox access token.\n\n"
-        "Validation Error: provider validation failed."
+        f"Validation Error: {safe_error}"
     )
-
-    logger.error(message)
 
     telegram_service.send_message(
         title="Upstox Token Expired or Invalid",
-        message=message,
+        message=telegram_message,
         level="ERROR",
     )
 
@@ -153,32 +208,17 @@ def check_upstox_token_validity(
         "status": "failed",
         "valid": False,
         "message": "Upstox access token validation failed.",
-        "error": "Upstox token validation failed.",
+        "error": safe_error,
     }
 
 
 def force_token_status_message() -> dict:
-    """
-    Manually validates token and sends Telegram message even if token is valid.
-
-    Useful for:
-        - Telegram /token-status extended checks
-        - Manual debugging
-        - API/debug route if added later
-    """
-
-    return check_upstox_token_validity(
-        send_success_message=True,
-    )
+    """Manually validate the token and always send a Telegram message."""
+    return check_upstox_token_validity(send_success_message=True)
 
 
 def get_token_status_snapshot() -> dict:
-    """
-    Returns current token status snapshot without calling Upstox API.
-
-    This is safe for display because token_store masks access_token.
-    """
-
+    """Return a safe token-status snapshot (token is always masked)."""
     return {
         "status": "success",
         "monitor_interval_minutes": get_token_monitor_interval_minutes(),
