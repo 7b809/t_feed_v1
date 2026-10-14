@@ -12,6 +12,9 @@ from core import config
 from core.logger import get_logger
 from routes.admin_routes import router as admin_router
 from routes.live_routes import router as live_router
+from routes.log_routes import router as log_router
+from routes.page_routes import router as page_router            # <-- NEW
+from routes.upstox_routes import router as upstox_router
 from services.backup_data_service import backup_data_service
 from services.instrument_registry import instrument_registry
 from services.live_broadcast import live_broadcast
@@ -27,10 +30,6 @@ from token_tasks.token_monitor import check_upstox_token_validity
 logger = get_logger(__file__)
 
 
-# ---------------------------------------------------------------------------
-# Schedulers
-# ---------------------------------------------------------------------------
-
 def build_token_monitor_scheduler(scheduler_class=BackgroundScheduler):
     scheduler = scheduler_class(timezone=config.MARKET_TIMEZONE)
     scheduler.add_job(
@@ -41,7 +40,6 @@ def build_token_monitor_scheduler(scheduler_class=BackgroundScheduler):
         replace_existing=True,
         kwargs={"send_success_message": False},
     )
-
     if config.DAILY_REFRESH_ENABLED:
         scheduler.add_job(
             run_daily_refresh,
@@ -53,35 +51,18 @@ def build_token_monitor_scheduler(scheduler_class=BackgroundScheduler):
             replace_existing=True,
             misfire_grace_time=300,
         )
-
     scheduler.start()
     return scheduler
 
 
-# ---------------------------------------------------------------------------
-# Cross handler: persist + broadcast
-# ---------------------------------------------------------------------------
-
 def _wire_cross_handler(loop) -> None:
-    """Hook the EMA engine into the cross store + broadcast hub.
-
-    Both the persist and the broadcast steps run on the worker thread
-    that drives the EMA engine. ``live_broadcast.publish_sync`` is
-    thread-safe and handles the hop onto the asyncio loop internally,
-    so we do not need ``run_coroutine_threadsafe`` here.
-    """
-
     def on_cross(entry, cross):
-        # Persist per-instrument for the day.
         try:
             live_cross_store.save(entry, cross)
         except Exception:
             logger.exception(
-                "Failed persisting live cross for %s",
-                entry["instrument_key"],
+                "Failed persisting live cross for %s", entry["instrument_key"]
             )
-
-        # Broadcast to any subscribed WebSocket clients.
         try:
             live_broadcast.publish_sync("crosses", entry, {"cross": cross})
         except Exception:
@@ -90,18 +71,11 @@ def _wire_cross_handler(loop) -> None:
     live_ema_engine.set_cross_handler(on_cross)
 
 
-# ---------------------------------------------------------------------------
-# Lifespan
-# ---------------------------------------------------------------------------
-
 @asynccontextmanager
 async def app_lifespan(app: FastAPI):
     scheduler = None
     telegram_started = False
     loop = asyncio.get_running_loop()
-
-    # Hand the running loop to the broadcast hub so worker threads (the
-    # Upstox WebSocket driver and the EMA engine) can publish safely.
     live_broadcast.set_loop(loop)
 
     try:
@@ -110,15 +84,12 @@ async def app_lifespan(app: FastAPI):
             "Market engine starting: refreshing token, fetching backup, starting live feed.",
             level="STARTUP",
         )
-
-        # 1. Token
         await asyncio.to_thread(token_service.refresh_tokens)
         try:
             await asyncio.to_thread(check_upstox_token_validity, False)
         except Exception as exc:
             logger.warning("Startup token check failed (%s).", type(exc).__name__)
 
-        # 2. Backup -> extract -> registry -> feed
         try:
             backup = await asyncio.to_thread(backup_data_service.refresh)
             logger.info("Startup backup: %s", backup)
@@ -131,7 +102,6 @@ async def app_lifespan(app: FastAPI):
                 level="ERROR",
             )
 
-        # 3. Live feed wiring
         live_feed_service.set_loop(loop)
         _wire_cross_handler(loop)
         live_cross_store.reset_all()
@@ -140,7 +110,6 @@ async def app_lifespan(app: FastAPI):
         except Exception:
             logger.exception("Live feed start failed")
 
-        # 4. Scheduler + Telegram bot
         scheduler = build_token_monitor_scheduler()
         telegram_started = telegram_token_bot.start()
 
@@ -157,9 +126,7 @@ async def app_lifespan(app: FastAPI):
             ),
             level="SUCCESS",
         )
-
         yield
-
     finally:
         telegram_service.send_message(
             "Application Stopping",
@@ -189,5 +156,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(page_router)             # <-- NEW
 app.include_router(live_router)
 app.include_router(admin_router)
+app.include_router(upstox_router)
+app.include_router(log_router)

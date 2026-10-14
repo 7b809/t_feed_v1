@@ -91,6 +91,37 @@ class LiveFeedService:
         time.sleep(1)
         return self.start()
 
+    def subscribe_instrument(self, instrument_key: str) -> bool:
+        """Subscribe a single instrument on demand without a full restart.
+
+        Adds the key to the local subscription list and asks the
+        underlying streamer to subscribe. Returns False if the streamer
+        is not running or the SDK call fails.
+        """
+        key = str(instrument_key or "").strip()
+        if not key:
+            return False
+        if key in self._subscribed:
+            return True
+
+        self._subscribed.append(key)
+
+        streamer = self._streamer
+        if streamer is None:
+            # Feed not running — start it in the background so the new
+            # key gets picked up on the next connection.
+            if not (self._thread and self._thread.is_alive()):
+                self.start()
+            return True
+
+        try:
+            streamer.subscribe([key], config.UPSTOX_WS_MODE)
+            logger.info("Subscribed on demand: %s", key)
+            return True
+        except Exception:
+            logger.exception("Streamer.subscribe failed for %s", key)
+            return False
+
     # ------------------------------------------------------------------ #
     # Internal run                                                       #
     # ------------------------------------------------------------------ #

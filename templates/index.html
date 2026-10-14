@@ -1,0 +1,1379 @@
+{% extends "base.html" %}
+
+{% block title %}Multi-Index Feed Dashboard | Live Options{% endblock %}
+
+{% block head %}
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" />
+
+<style>
+    :root {
+        --opt-feed-bg-main: #f5f7fb;
+        --opt-feed-card-border: #e5e7eb;
+        --opt-feed-text-dark: #212529;
+        --opt-feed-muted: #6c757d;
+        --opt-feed-primary: #0d6efd;
+        --opt-feed-success: #198754;
+        --opt-feed-danger: #dc3545;
+    }
+
+    body {
+        background-color: var(--opt-feed-bg-main) !important;
+        color: var(--opt-feed-text-dark) !important;
+    }
+
+    .opt-feed-main-wrapper {
+        min-height: calc(100vh - 64px);
+        padding: 24px;
+    }
+
+    /* ============================================================
+       HEADER BANNER
+       ============================================================ */
+    .opt-feed-header-banner {
+        background: linear-gradient(135deg, #0d6efd, #4f8dfd);
+        color: #ffffff;
+        border-radius: 18px;
+        padding: 24px;
+        margin-bottom: 20px;
+        box-shadow: 0 8px 25px rgba(13, 110, 253, 0.15);
+    }
+
+    .opt-feed-header-title {
+        font-size: 1.75rem;
+        font-weight: 700;
+        margin-bottom: 5px;
+    }
+
+    .opt-feed-header-subtitle {
+        opacity: 0.9;
+        font-size: 0.9rem;
+    }
+
+    /* Index Card */
+    .opt-feed-index-card {
+        background: #ffffff;
+        color: var(--opt-feed-text-dark);
+        border: 0;
+        border-radius: 15px;
+        padding: 18px 20px;
+        min-width: 280px;
+        box-shadow: 0 5px 18px rgba(0, 0, 0, 0.08);
+    }
+
+    .opt-feed-index-label {
+        font-size: 0.8rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        color: var(--opt-feed-muted);
+        margin-bottom: 3px;
+    }
+
+    .opt-feed-index-price {
+        font-size: 1.75rem;
+        font-weight: 800;
+        margin-bottom: 6px;
+        transition: color 0.2s;
+    }
+
+    .opt-feed-index-meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px 16px;
+        font-size: 0.75rem;
+        color: var(--opt-feed-muted);
+    }
+
+    /* ============================================================
+       INDEX TABS CARD
+       ============================================================ */
+    .opt-feed-index-tabs-card {
+        background: #ffffff;
+        border: 1px solid var(--opt-feed-card-border);
+        border-radius: 16px;
+        padding: 14px 18px;
+        margin-bottom: 20px;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.04);
+    }
+
+    .opt-feed-index-tabs-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 12px;
+    }
+
+    .opt-feed-index-tabs-title {
+        font-size: 0.78rem;
+        font-weight: 800;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        color: var(--opt-feed-muted);
+    }
+
+    .opt-feed-index-tabs-count {
+        font-size: 0.72rem;
+        font-weight: 700;
+        color: var(--opt-feed-muted);
+        background: #f8f9fa;
+        padding: 4px 10px;
+        border-radius: 20px;
+        border: 1px solid var(--opt-feed-card-border);
+    }
+
+    .opt-feed-index-tabs {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+
+    .opt-feed-index-tab {
+        border: 1px solid var(--opt-feed-card-border);
+        background: #f8f9fa;
+        color: var(--opt-feed-text-dark);
+        border-radius: 12px;
+        padding: 9px 16px;
+        font-size: 0.82rem;
+        font-weight: 700;
+        cursor: pointer;
+        transition: all 0.15s ease;
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        white-space: nowrap;
+    }
+
+    .opt-feed-index-tab:hover {
+        border-color: var(--opt-feed-primary);
+        color: var(--opt-feed-primary);
+        background: #eff5ff;
+    }
+
+    .opt-feed-index-tab.active {
+        background: linear-gradient(135deg, #0d6efd, #4f8dfd);
+        color: #ffffff;
+        border-color: transparent;
+        box-shadow: 0 6px 16px rgba(13, 110, 253, 0.28);
+    }
+
+    .opt-feed-index-tab .tab-count {
+        font-size: 0.7rem;
+        font-weight: 800;
+        opacity: 0.75;
+        background: rgba(0, 0, 0, 0.08);
+        border-radius: 10px;
+        padding: 1px 7px;
+    }
+
+    .opt-feed-index-tab.active .tab-count {
+        background: rgba(255, 255, 255, 0.22);
+    }
+
+    .opt-feed-index-tabs-empty {
+        font-size: 0.85rem;
+        color: var(--opt-feed-muted);
+        padding: 12px 0;
+    }
+
+    /* ============================================================
+       STATUS PILLS + ACTIONS
+       ============================================================ */
+    .opt-feed-status-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 7px 12px;
+        border-radius: 50px;
+        font-size: 0.75rem;
+        font-weight: 700;
+        white-space: nowrap;
+    }
+
+    .opt-feed-status-pill::before {
+        content: "";
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background-color: currentColor;
+    }
+
+    .opt-feed-pill-connected { background: #d1e7dd; color: #146c43; }
+    .opt-feed-pill-disconnected { background: #f8d7da; color: #b02a37; }
+    .opt-feed-pill-refreshing { background: #fff3cd; color: #997404; }
+    .opt-feed-pill-success { background: #d1e7dd; color: #146c43; }
+    .opt-feed-pill-error { background: #f8d7da; color: #b02a37; }
+
+    .opt-feed-btn-action {
+        border-radius: 10px;
+        padding: 9px 15px;
+        font-size: 0.8rem;
+        font-weight: 600;
+    }
+
+    /* ============================================================
+       PANEL CARDS
+       ============================================================ */
+    .opt-feed-panel-card {
+        background: #ffffff;
+        border: 1px solid var(--opt-feed-card-border);
+        border-radius: 16px;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.04);
+        margin-bottom: 24px;
+    }
+
+    .opt-feed-panel-header {
+        padding: 18px 20px;
+        border-bottom: 1px solid var(--opt-feed-card-border);
+    }
+
+    .opt-feed-panel-title {
+        font-size: 1.1rem;
+        font-weight: 700;
+        margin: 0;
+    }
+
+    .opt-feed-panel-subtitle {
+        color: var(--opt-feed-muted);
+        font-size: 0.78rem;
+        margin-top: 3px;
+    }
+
+    .opt-feed-panel-body {
+        padding: 20px;
+    }
+
+    .opt-feed-refresh-drawer { display: none; }
+    .opt-feed-refresh-drawer.is-visible { display: block; }
+
+    .opt-feed-refresh-console {
+        white-space: pre-wrap;
+        font-size: 0.85rem;
+        color: var(--opt-feed-muted);
+        line-height: 1.7;
+        background: #f8f9fa;
+        padding: 14px;
+        border-radius: 10px;
+        font-family: 'JetBrains Mono', 'Courier New', monospace;
+    }
+
+    /* ============================================================
+       OPTION COLUMNS
+       ============================================================ */
+    .opt-feed-column-box {
+        height: 100%;
+        background: #f8f9fa;
+        border: 1px solid var(--opt-feed-card-border);
+        border-radius: 14px;
+        padding: 16px;
+    }
+
+    .opt-feed-column-box.is-ce-column { border-top: 4px solid var(--opt-feed-success); }
+    .opt-feed-column-box.is-pe-column { border-top: 4px solid var(--opt-feed-danger); }
+
+    .opt-feed-column-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 15px;
+    }
+
+    .opt-feed-column-title {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        font-size: 1rem;
+        font-weight: 700;
+        margin: 0;
+    }
+
+    .opt-feed-badge-icon {
+        width: 32px;
+        height: 32px;
+        border-radius: 9px;
+        display: inline-flex;
+        justify-content: center;
+        align-items: center;
+        font-weight: 800;
+        font-size: 0.75rem;
+    }
+
+    .opt-feed-ce-badge { background: #d1e7dd; color: #146c43; }
+    .opt-feed-pe-badge { background: #f8d7da; color: #b02a37; }
+
+    .opt-feed-count-pill {
+        font-size: 0.72rem;
+        color: var(--opt-feed-muted);
+        background: #ffffff;
+        border: 1px solid var(--opt-feed-card-border);
+        padding: 5px 9px;
+        border-radius: 20px;
+    }
+
+    /* ============================================================
+       OPTION CARDS
+       ============================================================ */
+    .opt-feed-cards-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(235px, 1fr));
+        gap: 14px;
+    }
+
+    .opt-feed-option-card {
+        background: #ffffff;
+        border: 1px solid var(--opt-feed-card-border);
+        border-radius: 13px;
+        padding: 15px;
+        position: relative;
+        overflow: hidden;
+        transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+    }
+
+    .opt-feed-option-card:hover {
+        transform: translateY(-3px);
+        box-shadow: 0 8px 22px rgba(0, 0, 0, 0.08);
+        border-color: #b8c4d1;
+    }
+
+    .opt-feed-option-card.is-atm-card {
+        border: 2px solid var(--opt-feed-primary);
+        box-shadow: 0 5px 18px rgba(13, 110, 253, 0.12);
+    }
+
+    .opt-feed-atm-tag {
+        position: absolute;
+        top: 10px;
+        right: -28px;
+        background: var(--opt-feed-primary);
+        color: #ffffff;
+        font-size: 0.6rem;
+        font-weight: 700;
+        padding: 4px 30px;
+        transform: rotate(45deg);
+    }
+
+    .opt-feed-symbol-text {
+        font-weight: 800;
+        font-size: 0.95rem;
+        padding-right: 45px;
+        word-break: break-word;
+    }
+
+    .opt-feed-strike-text {
+        color: var(--opt-feed-muted);
+        font-size: 0.72rem;
+        margin-top: 4px;
+    }
+
+    .opt-feed-ltp-value {
+        font-size: 1.45rem;
+        font-weight: 800;
+        margin: 12px 0;
+    }
+
+    .opt-feed-trend-up { color: var(--opt-feed-success) !important; }
+    .opt-feed-trend-down { color: var(--opt-feed-danger) !important; }
+
+    .opt-feed-data-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 8px;
+        padding: 5px 0;
+        font-size: 0.75rem;
+    }
+
+    .opt-feed-data-label { color: var(--opt-feed-muted); }
+
+    .opt-feed-empty-box {
+        padding: 25px 15px;
+        text-align: center;
+        color: var(--opt-feed-muted);
+        background: #ffffff;
+        border: 1px dashed #ced4da;
+        border-radius: 10px;
+        font-size: 0.8rem;
+    }
+
+    @media (max-width: 992px) {
+        .opt-feed-main-wrapper { padding: 16px; }
+        .opt-feed-header-banner { padding: 20px; }
+    }
+
+    @media (max-width: 576px) {
+        .opt-feed-main-wrapper { padding: 10px; }
+        .opt-feed-header-title { font-size: 1.35rem; }
+        .opt-feed-index-card { min-width: 100%; }
+        .opt-feed-cards-grid { grid-template-columns: 1fr; }
+        .opt-feed-panel-body { padding: 12px; }
+        .opt-feed-column-box { padding: 12px; }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="opt-feed-main-wrapper">
+
+    <!-- ============================================================
+         HEADER BANNER — active index card
+         ============================================================ -->
+    <div class="opt-feed-header-banner">
+        <div class="row align-items-center g-4">
+            <div class="col-lg-5">
+                <div class="opt-feed-header-title">
+                    <i class="bi bi-graph-up-arrow me-2"></i> Multi-Index Feed Dashboard
+                </div>
+                <div class="opt-feed-header-subtitle">
+                    Live monitoring for every subscribed index and its nearest options
+                </div>
+            </div>
+
+            <div class="col-lg-7">
+                <div class="d-flex justify-content-lg-end">
+                    <div class="opt-feed-index-card">
+                        <div class="opt-feed-index-label">
+                            <i class="bi bi-bar-chart-fill me-1"></i>
+                            <span id="active-index-label">Loading instruments…</span>
+                        </div>
+                        <div id="active-index-ltp" class="opt-feed-index-price">--</div>
+                        <div class="opt-feed-index-meta">
+                            <span id="active-index-change">Change: --</span>
+                            <span id="active-index-ohlc">O: -- | H: -- | L: --</span>
+                            <span id="active-index-updated">Updated: --</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ============================================================
+         INDEX SELECTOR TABS
+         ============================================================ -->
+    <div class="opt-feed-index-tabs-card">
+        <div class="opt-feed-index-tabs-header">
+            <div class="opt-feed-index-tabs-title">
+                <i class="bi bi-collection me-1"></i> Available Indices
+            </div>
+            <span class="opt-feed-index-tabs-count" id="index-tabs-count">0</span>
+        </div>
+        <div class="opt-feed-index-tabs" id="index-tabs">
+            <div class="opt-feed-index-tabs-empty">
+                <span class="spinner-border spinner-border-sm me-2"></span>
+                Loading instruments from backup…
+            </div>
+        </div>
+    </div>
+
+    <!-- ============================================================
+         ACTION & STATUS BAR
+         ============================================================ -->
+    <div class="opt-feed-panel-card">
+        <div class="opt-feed-panel-body">
+            <div class="row align-items-center g-3">
+                <div class="col-lg-6">
+                    <div class="d-flex flex-wrap gap-2">
+                        <button
+                            id="isolated-dashboard-btn"
+                            type="button"
+                            class="btn btn-primary opt-feed-btn-action"
+                            onclick="openIsolatedDashboard()"
+                        >
+                            <i class="bi bi-grid-3x3-gap-fill me-1"></i> Isolated EMA Dashboard
+                        </button>
+
+                        <button
+                            id="manual-refresh-btn"
+                            type="button"
+                            class="btn btn-outline-primary opt-feed-btn-action"
+                            onclick="triggerHardRefresh()"
+                        >
+                            <i class="bi bi-arrow-clockwise me-1"></i> Hard Refresh
+                        </button>
+
+                        <button
+                            id="reload-instruments-btn"
+                            type="button"
+                            class="btn btn-outline-secondary opt-feed-btn-action"
+                            onclick="reloadInstruments()"
+                        >
+                            <i class="bi bi-arrow-repeat me-1"></i> Reload Indices
+                        </button>
+                    </div>
+                </div>
+
+                <div class="col-lg-6">
+                    <div class="d-flex flex-wrap justify-content-lg-end gap-2">
+                        <span id="refresh-status" class="opt-feed-status-pill opt-feed-pill-disconnected">
+                            Refresh: Idle
+                        </span>
+
+                        <span id="status-feed" class="opt-feed-status-pill opt-feed-pill-disconnected">
+                            Feed: Off
+                        </span>
+
+                        <span id="status-instruments" class="opt-feed-status-pill opt-feed-pill-disconnected">
+                            0 instruments
+                        </span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ============================================================
+         REFRESH CONSOLE DRAWER
+         ============================================================ -->
+    <div id="refresh-panel" class="opt-feed-panel-card opt-feed-refresh-drawer">
+        <div class="opt-feed-panel-header">
+            <div class="d-flex align-items-center gap-2">
+                <i class="bi bi-arrow-repeat text-primary fs-5"></i>
+                <div>
+                    <h2 class="opt-feed-panel-title">Hard Refresh Status</h2>
+                    <div class="opt-feed-panel-subtitle">Latest backup extraction and feed restart information</div>
+                </div>
+            </div>
+        </div>
+        <div class="opt-feed-panel-body">
+            <div id="refresh-message" class="opt-feed-refresh-console">
+                No refresh triggered yet.
+            </div>
+        </div>
+    </div>
+
+    <!-- ============================================================
+         OPTIONS PANEL — filtered by active underlying
+         ============================================================ -->
+    <div class="opt-feed-panel-card">
+        <div class="opt-feed-panel-header">
+            <div class="row align-items-center g-3">
+                <div class="col-md-7">
+                    <div class="d-flex align-items-center gap-2">
+                        <div class="rounded-3 bg-primary-subtle text-primary d-flex align-items-center justify-content-center" style="width:40px;height:40px;">
+                            <i class="bi bi-lightning-charge-fill"></i>
+                        </div>
+                        <div>
+                            <h2 class="opt-feed-panel-title">
+                                Nearest CE / PE Options
+                                <span id="options-underlying-label" class="text-muted small fw-normal ms-2"></span>
+                            </h2>
+                            <div class="opt-feed-panel-subtitle">
+                                Live options closest to the current <span id="options-underlying-subtitle">index</span> price
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="col-md-5">
+                    <div class="text-md-end">
+                        <span class="text-muted small">ATM Reference</span>
+                        <div id="atm-reference" class="fw-bold text-primary">--</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="opt-feed-panel-body">
+            <div class="row g-4">
+                <!-- CALLS -->
+                <div class="col-xl-6">
+                    <div class="opt-feed-column-box is-ce-column">
+                        <div class="opt-feed-column-header">
+                            <h3 class="opt-feed-column-title">
+                                <span class="opt-feed-badge-icon opt-feed-ce-badge">CE</span>
+                                Nearest Call Options
+                            </h3>
+                            <span id="ce-count" class="opt-feed-count-pill">0 active</span>
+                        </div>
+                        <div id="ce-container" class="opt-feed-cards-grid"></div>
+                    </div>
+                </div>
+
+                <!-- PUTS -->
+                <div class="col-xl-6">
+                    <div class="opt-feed-column-box is-pe-column">
+                        <div class="opt-feed-column-header">
+                            <h3 class="opt-feed-column-title">
+                                <span class="opt-feed-badge-icon opt-feed-pe-badge">PE</span>
+                                Nearest Put Options
+                            </h3>
+                            <span id="pe-count" class="opt-feed-count-pill">0 active</span>
+                        </div>
+                        <div id="pe-container" class="opt-feed-cards-grid"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+
+<script>
+/* ============================================================
+   Endpoints
+   ============================================================ */
+const BACKEND_FEED_WS_URL  = `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/ws/live?all=true`;
+const LIVE_INSTRUMENTS_URL = `/live/instruments`;
+const LIVE_STATUS_URL      = `/live/status`;
+const HARD_REFRESH_URL     = `/admin/hard-refresh`;
+const BACKUP_STATUS_URL    = `/admin/backup-status`;
+const ISOLATED_DASHBOARD   = `/isolated-dashboard`;
+
+const MAX_RECONNECT_DELAY_MS = 15000;
+const NEAREST_CARDS_PER_SIDE = 8;
+
+/* ============================================================
+   State
+   ============================================================ */
+const state = {
+    instruments: [],                     // flat list from /live/instruments
+    indicesByUnderlying: {},             // "NIFTY" -> index instrument entry
+    optionsByUnderlying: {},             // "NIFTY" -> [option entries]
+    selectedUnderlying: null,
+    ticks: {},                           // instrument_key -> { ltp, change, change_pct, open, high, low, ts }
+    ws: null,
+    wsReconnectAttempts: 0,
+    wsReconnectTimer: null,
+    wsConnected: false,
+    backupInfo: null,
+};
+
+/* ============================================================
+   Small helpers
+   ============================================================ */
+function toFiniteNumber(v) {
+    if (v === null || v === undefined || v === "") return null;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+}
+function firstFiniteNumber(...vals) {
+    for (const v of vals) {
+        const n = toFiniteNumber(v);
+        if (n !== null) return n;
+    }
+    return null;
+}
+function formatNumber(v, decimals = 2) {
+    const n = toFiniteNumber(v);
+    return n === null ? "--" : n.toFixed(decimals);
+}
+function formatInteger(v) {
+    const n = toFiniteNumber(v);
+    return n === null ? "--" : Math.round(n).toLocaleString();
+}
+function getChangeClass(v) {
+    return Number(v || 0) >= 0 ? "opt-feed-trend-up" : "opt-feed-trend-down";
+}
+function escapeHtml(s) {
+    return String(s ?? "").replace(/[&<>"']/g, c => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+    }[c]));
+}
+function normalizeUnderlying(v) {
+    return String(v || "").trim().toUpperCase().replace(/\s+/g, "");
+}
+function prettyUnderlying(name) {
+    const n = String(name || "").toUpperCase();
+    if (n === "NIFTY")       return "NIFTY 50";
+    if (n === "BANKNIFTY")   return "BANK NIFTY";
+    if (n === "FINNIFTY")    return "FIN NIFTY";
+    if (n === "MIDCPNIFTY")  return "MIDCAP NIFTY";
+    if (n === "SENSEX")      return "SENSEX";
+    return name || "—";
+}
+
+/* ============================================================
+   Local actions
+   ============================================================ */
+function openIsolatedDashboard() {
+    window.location.href = ISOLATED_DASHBOARD;
+}
+
+/* ============================================================
+   Instruments loading
+   ============================================================ */
+async function fetchInstruments() {
+    const res = await fetch(LIVE_INSTRUMENTS_URL, { headers: { Accept: "application/json" } });
+    if (!res.ok) throw new Error(`Instruments request failed: ${res.status}`);
+    const data = await res.json();
+    return Array.isArray(data?.instruments) ? data.instruments : [];
+}
+
+function groupInstruments(instruments) {
+    const indices = {};
+    const options = {};
+
+    for (const item of instruments) {
+        if (!item || !item.instrument_key) continue;
+
+        const underlying = normalizeUnderlying(item.underlying);
+        if (!underlying) continue;
+
+        const isIndex =
+            item.is_index === true ||
+            String(item.instrument_key).startsWith("NSE_INDEX|") ||
+            String(item.instrument_key).startsWith("BSE_INDEX|");
+
+        if (isIndex) {
+            if (!indices[underlying]) indices[underlying] = item;
+            continue;
+        }
+
+        if (!options[underlying]) options[underlying] = [];
+        options[underlying].push(item);
+    }
+
+    // Sort options per underlying by strike, then type
+    for (const u of Object.keys(options)) {
+        options[u].sort((a, b) => {
+            const sa = Number(a.strike_price || 0);
+            const sb = Number(b.strike_price || 0);
+            if (sa !== sb) return sa - sb;
+            return String(a.strike_type || "").localeCompare(String(b.strike_type || ""));
+        });
+    }
+
+    return { indices, options };
+}
+
+async function loadInstruments() {
+    try {
+        const instruments = await fetchInstruments();
+        state.instruments = instruments;
+
+        const { indices, options } = groupInstruments(instruments);
+        state.indicesByUnderlying = indices;
+        state.optionsByUnderlying = options;
+
+        // Remove stale ticks for keys no longer present
+        const validKeys = new Set(instruments.map(i => i.instrument_key));
+        for (const k of Object.keys(state.ticks)) {
+            if (!validKeys.has(k)) delete state.ticks[k];
+        }
+
+        renderIndexTabs();
+        updateInstrumentsBadge();
+
+        // Auto-select: prefer NIFTY, else first index that has options, else first index
+        const preferred =
+            (indices["NIFTY"] && "NIFTY") ||
+            Object.keys(indices).find(u => (options[u] || []).length > 0) ||
+            Object.keys(indices)[0] ||
+            null;
+
+        if (preferred && preferred !== state.selectedUnderlying) {
+            selectUnderlying(preferred);
+        } else if (preferred) {
+            selectUnderlying(preferred);
+        } else {
+            renderActiveIndexCard();
+            renderOptionColumns();
+        }
+    } catch (err) {
+        console.error("Failed to load instruments:", err);
+        document.getElementById("index-tabs").innerHTML = `
+            <div class="opt-feed-index-tabs-empty text-danger">
+                <i class="bi bi-exclamation-triangle me-2"></i>
+                Failed to load instruments: ${escapeHtml(err.message)}
+            </div>`;
+    }
+}
+
+async function reloadInstruments() {
+    document.getElementById("index-tabs").innerHTML = `
+        <div class="opt-feed-index-tabs-empty">
+            <span class="spinner-border spinner-border-sm me-2"></span>
+            Reloading instruments…
+        </div>`;
+    await loadInstruments();
+}
+
+/* ============================================================
+   Index tabs
+   ============================================================ */
+function renderIndexTabs() {
+    const container = document.getElementById("index-tabs");
+    const counter = document.getElementById("index-tabs-count");
+
+    const underlyings = Object.keys(state.indicesByUnderlying).sort();
+    counter.textContent = String(underlyings.length);
+
+    if (!underlyings.length) {
+        container.innerHTML = `
+            <div class="opt-feed-index-tabs-empty">
+                <i class="bi bi-inbox me-2"></i>
+                No indices available in the backup yet.
+            </div>`;
+        return;
+    }
+
+    container.innerHTML = underlyings.map(u => {
+        const idx = state.indicesByUnderlying[u];
+        const opts = state.optionsByUnderlying[u] || [];
+        const active = state.selectedUnderlying === u ? "active" : "";
+        const label = escapeHtml(idx?.trading_symbol || prettyUnderlying(u));
+        return `
+            <button type="button"
+                    class="opt-feed-index-tab ${active}"
+                    data-underlying="${escapeHtml(u)}">
+                <i class="bi bi-bar-chart-line"></i>
+                <span>${label}</span>
+                <span class="tab-count">${opts.length}</span>
+            </button>
+        `;
+    }).join("");
+
+    container.querySelectorAll(".opt-feed-index-tab").forEach(btn => {
+        btn.addEventListener("click", () => selectUnderlying(btn.dataset.underlying));
+    });
+}
+
+function selectUnderlying(underlying) {
+    if (!underlying) return;
+    state.selectedUnderlying = underlying;
+
+    // Update tab active state
+    document.querySelectorAll(".opt-feed-index-tab").forEach(btn => {
+        btn.classList.toggle("active", btn.dataset.underlying === underlying);
+    });
+
+    // Update labels
+    const label = prettyUnderlying(underlying);
+    document.getElementById("active-index-label").textContent = label;
+    document.getElementById("options-underlying-label").textContent = label;
+    document.getElementById("options-underlying-subtitle").textContent = label;
+
+    renderActiveIndexCard();
+    renderOptionColumns();
+}
+
+/* ============================================================
+   Active index card
+   ============================================================ */
+function getActiveIndexEntry() {
+    const u = state.selectedUnderlying;
+    if (!u) return null;
+    return state.indicesByUnderlying[u] || null;
+}
+
+function getActiveIndexTick() {
+    const entry = getActiveIndexEntry();
+    if (!entry) return null;
+    return state.ticks[entry.instrument_key] || null;
+}
+
+function renderActiveIndexCard() {
+    const entry = getActiveIndexEntry();
+    const ltpEl      = document.getElementById("active-index-ltp");
+    const changeEl   = document.getElementById("active-index-change");
+    const ohlcEl     = document.getElementById("active-index-ohlc");
+    const updatedEl  = document.getElementById("active-index-updated");
+    const atmEl      = document.getElementById("atm-reference");
+
+    if (!entry) {
+        ltpEl.textContent = "--";
+        ltpEl.className = "opt-feed-index-price";
+        changeEl.textContent = "Change: --";
+        ohlcEl.textContent = "O: -- | H: -- | L: --";
+        updatedEl.textContent = "Updated: --";
+        atmEl.textContent = "--";
+        return;
+    }
+
+    const tick = state.ticks[entry.instrument_key];
+    if (!tick || tick.ltp === null || tick.ltp === undefined) {
+        ltpEl.textContent = `${escapeHtml(entry.trading_symbol || entry.underlying)}  --`;
+        ltpEl.className = "opt-feed-index-price";
+        changeEl.textContent = "Change: --";
+        ohlcEl.textContent = "O: -- | H: -- | L: --";
+        updatedEl.textContent = "Updated: waiting…";
+        atmEl.textContent = "--";
+        return;
+    }
+
+    const ltp = Number(tick.ltp || 0);
+    const change = Number(tick.change || 0);
+    const changePct = Number(tick.change_pct || 0);
+    const cls = getChangeClass(change);
+
+    ltpEl.className = `opt-feed-index-price ${cls}`;
+    ltpEl.textContent = `${escapeHtml(entry.trading_symbol || entry.underlying)}  ₹${formatNumber(ltp)}`;
+
+    changeEl.innerHTML = `Change: <span class="${cls} fw-bold">${change >= 0 ? "+" : ""}${formatNumber(change)} (${formatNumber(changePct)}%)</span>`;
+    ohlcEl.textContent = `O: ${formatNumber(tick.open)} | H: ${formatNumber(tick.high)} | L: ${formatNumber(tick.low)}`;
+    updatedEl.textContent = `Updated: ${new Date().toLocaleTimeString()}`;
+    atmEl.textContent = `₹${formatNumber(ltp)}`;
+}
+
+/* ============================================================
+   Option columns
+   ============================================================ */
+function getNearestOptions(optionType) {
+    const underlying = state.selectedUnderlying;
+    if (!underlying) return [];
+
+    const indexTick = getActiveIndexTick();
+    if (!indexTick || !Number(indexTick.ltp || 0)) return [];
+
+    const underlyingLtp = Number(indexTick.ltp || 0);
+    const all = state.optionsByUnderlying[underlying] || [];
+
+    return all
+        .filter(o => String(o.strike_type || "").toUpperCase() === optionType)
+        .filter(o => o.strike_price !== null && o.strike_price !== undefined)
+        .map(o => ({
+            entry: o,
+            tick: state.ticks[o.instrument_key] || null,
+            distance: Math.abs(Number(o.strike_price) - underlyingLtp),
+        }))
+        .sort((a, b) => {
+            if (a.distance !== b.distance) return a.distance - b.distance;
+            return Number(a.entry.strike_price) - Number(b.entry.strike_price);
+        })
+        .slice(0, NEAREST_CARDS_PER_SIDE);
+}
+
+function renderOptionColumns() {
+    const ceContainer = document.getElementById("ce-container");
+    const peContainer = document.getElementById("pe-container");
+    if (!ceContainer || !peContainer) return;
+
+    const nearestCE = getNearestOptions("CE");
+    const nearestPE = getNearestOptions("PE");
+
+    document.getElementById("ce-count").textContent = `${nearestCE.length} active`;
+    document.getElementById("pe-count").textContent = `${nearestPE.length} active`;
+
+    renderOptionCards(ceContainer, nearestCE, "CE");
+    renderOptionCards(peContainer, nearestPE, "PE");
+}
+
+function renderOptionCards(container, items, optionType) {
+    container.innerHTML = "";
+
+    const indexTick = getActiveIndexTick();
+    if (!state.selectedUnderlying) {
+        container.innerHTML = `
+            <div class="opt-feed-empty-box">
+                <i class="bi bi-collection fs-4 d-block mb-2"></i>
+                Select an index above to see its nearest ${optionType} options.
+            </div>`;
+        return;
+    }
+    if (!indexTick) {
+        container.innerHTML = `
+            <div class="opt-feed-empty-box">
+                <i class="bi bi-hourglass-split fs-4 d-block mb-2"></i>
+                Waiting for a live ${escapeHtml(prettyUnderlying(state.selectedUnderlying))} tick to compute nearest strikes.
+            </div>`;
+        return;
+    }
+    if (!items.length) {
+        container.innerHTML = `
+            <div class="opt-feed-empty-box">
+                <i class="bi bi-broadcast fs-4 d-block mb-2"></i>
+                No ${optionType} contracts for ${escapeHtml(prettyUnderlying(state.selectedUnderlying))} in the current backup.
+            </div>`;
+        return;
+    }
+
+    const underlyingLtp = Number(indexTick.ltp || 0);
+
+    items.forEach((item, index) => {
+        const entry = item.entry;
+        const tick = item.tick || {};
+        const strike = Number(entry.strike_price || 0);
+        const symbol = entry.trading_symbol || entry.instrument_key;
+        const expiry = entry.expiry || "—";
+        const distance = item.distance;
+
+        const ltp = toFiniteNumber(tick.ltp);
+        const change = toFiniteNumber(tick.change);
+        const changePct = toFiniteNumber(tick.change_pct);
+        const changeCls = getChangeClass(change || 0);
+
+        const card = document.createElement("div");
+        card.className = index === 0
+            ? "opt-feed-option-card is-atm-card"
+            : "opt-feed-option-card";
+
+        const distanceLabel = distance === 0 ? "ATM" : formatNumber(distance, 0);
+
+        card.innerHTML = `
+            ${index === 0 ? `<div class="opt-feed-atm-tag">NEAREST</div>` : ""}
+
+            <div class="opt-feed-symbol-text">${escapeHtml(symbol)}</div>
+
+            <div class="opt-feed-strike-text">
+                Strike: <strong>${formatNumber(strike, 0)}</strong>
+                <span class="mx-1">•</span>
+                Distance: ${distanceLabel}
+                <span class="mx-1">•</span>
+                Exp: ${escapeHtml(expiry)}
+            </div>
+
+            <div class="opt-feed-ltp-value ${ltp !== null ? changeCls : ""}">
+                ${ltp !== null ? `₹${formatNumber(ltp)}` : "--"}
+            </div>
+
+            <div class="opt-feed-data-row">
+                <span class="opt-feed-data-label">Change</span>
+                <span class="${changeCls} fw-bold">
+                    ${change !== null ? (change >= 0 ? "+" : "") + formatNumber(change) : "--"}
+                    ${changePct !== null ? `(${formatNumber(changePct)}%)` : ""}
+                </span>
+            </div>
+
+            <div class="opt-feed-data-row">
+                <span class="opt-feed-data-label">Volume</span>
+                <span>${formatInteger(tick.volume)}</span>
+            </div>
+
+            <div class="opt-feed-data-row">
+                <span class="opt-feed-data-label">Instrument Key</span>
+                <span class="text-muted small text-truncate" style="max-width:140px;" title="${escapeHtml(entry.instrument_key)}">
+                    ${escapeHtml(entry.instrument_key)}
+                </span>
+            </div>
+        `;
+
+        card.title = `${symbol} · ${optionType} · strike ${strike} · underlying LTP ${formatNumber(underlyingLtp)}`;
+        container.appendChild(card);
+    });
+}
+
+/* ============================================================
+   WebSocket — one socket, all instruments
+   ============================================================ */
+function connectWebSocket() {
+    if (state.ws && (state.ws.readyState === WebSocket.OPEN || state.ws.readyState === WebSocket.CONNECTING)) {
+        return;
+    }
+    updateFeedBadge("connecting");
+    try {
+        state.ws = new WebSocket(BACKEND_FEED_WS_URL);
+    } catch (err) {
+        console.error("WebSocket creation failed:", err);
+        state.ws = null;
+        scheduleWsReconnect();
+        return;
+    }
+
+    state.ws.addEventListener("open", () => {
+        state.wsConnected = true;
+        state.wsReconnectAttempts = 0;
+        updateFeedBadge("connected");
+    });
+
+    state.ws.addEventListener("message", (event) => {
+        try {
+            const payload = JSON.parse(event.data);
+            handleFeedMessage(payload);
+        } catch (err) {
+            // Silent — non-JSON control frames are expected occasionally.
+        }
+    });
+
+    state.ws.addEventListener("error", () => {
+        /* The close handler will run after this. */
+    });
+
+    state.ws.addEventListener("close", () => {
+        state.wsConnected = false;
+        state.ws = null;
+        updateFeedBadge("disconnected");
+        scheduleWsReconnect();
+    });
+}
+
+function scheduleWsReconnect() {
+    if (state.wsReconnectTimer) return;
+    state.wsReconnectAttempts += 1;
+    const delay = Math.min(
+        1000 * Math.pow(2, state.wsReconnectAttempts - 1),
+        MAX_RECONNECT_DELAY_MS
+    );
+    state.wsReconnectTimer = setTimeout(() => {
+        state.wsReconnectTimer = null;
+        connectWebSocket();
+    }, delay);
+}
+
+/* ============================================================
+   Feed message handling — tolerant of both payload shapes
+   ============================================================ */
+function handleFeedMessage(raw) {
+    if (!raw || typeof raw !== "object") return;
+
+    const type = raw.type || raw.event;
+    if (type === "connected" || type === "subscribed" ||
+        type === "ping" || type === "pong" || type === "heartbeat") {
+        return;
+    }
+
+    // Unwrap the possible `{ data: {...} }` envelope
+    const payload = (raw.data && typeof raw.data === "object" &&
+                     (raw.data.instrument_key || raw.data.feed))
+        ? raw.data
+        : raw;
+
+    const instrumentKey =
+        payload.instrument_key ||
+        payload.instrumentKey ||
+        payload.key;
+    if (!instrumentKey) return;
+
+    // Only handle instruments we know about
+    const known = state.instruments.some(i => i.instrument_key === instrumentKey);
+    if (!known) return;
+
+    const tick = normalizeTickPayload(instrumentKey, payload);
+    state.ticks[instrumentKey] = { ...(state.ticks[instrumentKey] || {}), ...tick };
+
+    // If this tick belongs to the active index, refresh the header + option columns
+    const activeEntry = getActiveIndexEntry();
+    if (activeEntry && activeEntry.instrument_key === instrumentKey) {
+        renderActiveIndexCard();
+        renderOptionColumns();
+        return;
+    }
+
+    // If it's an option for the active underlying, refresh option columns
+    if (state.selectedUnderlying) {
+        const isActiveOption = (state.optionsByUnderlying[state.selectedUnderlying] || [])
+            .some(o => o.instrument_key === instrumentKey);
+        if (isActiveOption) {
+            renderOptionColumns();
+        }
+    }
+}
+
+function normalizeTickPayload(instrumentKey, p) {
+    const feed    = p.feed || {};
+    const ltpc    = feed.ltpc || {};
+    const ff      = feed.ff || {};
+    const indexFF = ff.indexFF || feed.indexFF || {};
+    const oc      = feed.oc || {};
+    const marketFF = feed.marketFF || feed.market_ff || oc || {};
+    const efd     = marketFF.eFeedDetails || oc.eFeedDetails || {};
+
+    // The /ws/live feed also puts ltp / volume at the top level.
+    const ltp = firstFiniteNumber(
+        p.ltp,
+        ltpc.ltp,
+        indexFF.ltpc?.ltp,
+        marketFF.ltp,
+        ff.ltp
+    );
+    const prevClose = firstFiniteNumber(
+        ltpc.cp,
+        indexFF.ltpc?.cp,
+        marketFF.cp,
+        p.prev_close
+    );
+
+    let change    = firstFiniteNumber(p.change, marketFF.change, indexFF.change);
+    let changePct = firstFiniteNumber(p.change_pct, marketFF.changePct, indexFF.changePct);
+    if (change === null && ltp !== null && prevClose !== null) change = ltp - prevClose;
+    if (changePct === null && change !== null && prevClose) changePct = (change / prevClose) * 100;
+
+    // OHLC from candle_1m (top-level from /ws/live) or the ohlc block
+    let open = null, high = null, low = null;
+    const c1m = p.candle_1m;
+    if (c1m && typeof c1m === "object") {
+        open = toFiniteNumber(c1m.open);
+        high = toFiniteNumber(c1m.high);
+        low  = toFiniteNumber(c1m.low);
+    }
+    const ohlc = marketFF.ohlc || indexFF.marketOHLC?.ohlc?.[0] || null;
+    if (ohlc && typeof ohlc === "object" && !Array.isArray(ohlc)) {
+        open = open ?? toFiniteNumber(ohlc.open);
+        high = high ?? toFiniteNumber(ohlc.high);
+        low  = low  ?? toFiniteNumber(ohlc.low);
+    }
+
+    const volume = firstFiniteNumber(p.volume, efd.vtt, marketFF.volume, feed.volume);
+    const oi     = firstFiniteNumber(efd.oi, marketFF.oi, feed.oi, p.oi);
+
+    return {
+        ltp,
+        prev_close: prevClose,
+        change,
+        change_pct: changePct,
+        open, high, low,
+        volume,
+        oi,
+        ts: Date.now(),
+    };
+}
+
+/* ============================================================
+   Badges
+   ============================================================ */
+function updateInstrumentsBadge() {
+    const badge = document.getElementById("status-instruments");
+    const count = state.instruments.length;
+    const idxCount = Object.keys(state.indicesByUnderlying).length;
+    const optCount = count - idxCount;
+    if (count === 0) {
+        badge.className = "opt-feed-status-pill opt-feed-pill-disconnected";
+        badge.textContent = "0 instruments";
+        return;
+    }
+    badge.className = "opt-feed-status-pill opt-feed-pill-success";
+    badge.textContent = `${idxCount} indices · ${optCount} options`;
+}
+
+function updateFeedBadge(state_str) {
+    const badge = document.getElementById("status-feed");
+    if (!badge) return;
+    if (state_str === "connected") {
+        badge.className = "opt-feed-status-pill opt-feed-pill-connected";
+        badge.textContent = "Feed: Live";
+    } else if (state_str === "connecting") {
+        badge.className = "opt-feed-status-pill opt-feed-pill-refreshing";
+        badge.textContent = "Feed: Connecting";
+    } else {
+        badge.className = "opt-feed-status-pill opt-feed-pill-disconnected";
+        badge.textContent = "Feed: Off";
+    }
+}
+
+/* ============================================================
+   Feed + backup status
+   ============================================================ */
+async function loadFeedStatus() {
+    try {
+        const res = await fetch(LIVE_STATUS_URL, { headers: { Accept: "application/json" } });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data?.feed?.running) {
+            // Only update if WS hasn't taken over
+            if (!state.wsConnected) updateFeedBadge("connecting");
+        }
+    } catch (err) {
+        /* silent */
+    }
+}
+
+async function loadBackupStatus() {
+    try {
+        const res = await fetch(BACKUP_STATUS_URL, { headers: { Accept: "application/json" } });
+        if (!res.ok) return;
+        state.backupInfo = await res.json();
+    } catch (err) {
+        /* silent */
+    }
+}
+
+/* ============================================================
+   Hard refresh
+   ============================================================ */
+function setRefreshUi(state_str, message) {
+    const statusBadge    = document.getElementById("refresh-status");
+    const refreshPanel   = document.getElementById("refresh-panel");
+    const refreshMessage = document.getElementById("refresh-message");
+    const refreshButton  = document.getElementById("manual-refresh-btn");
+
+    if (refreshPanel) refreshPanel.classList.add("is-visible");
+    if (refreshMessage) refreshMessage.textContent = message || "";
+
+    if (state_str === "running") {
+        statusBadge.className = "opt-feed-status-pill opt-feed-pill-refreshing";
+        statusBadge.textContent = "Refresh: Running";
+        refreshButton.disabled = true;
+        refreshButton.innerHTML = `<span class="spinner-border spinner-border-sm me-1"></span>Refreshing...`;
+    } else if (state_str === "success") {
+        statusBadge.className = "opt-feed-status-pill opt-feed-pill-success";
+        statusBadge.textContent = "Refresh: Success";
+        refreshButton.disabled = false;
+        refreshButton.innerHTML = `<i class="bi bi-arrow-clockwise me-1"></i> Hard Refresh`;
+    } else if (state_str === "failed") {
+        statusBadge.className = "opt-feed-status-pill opt-feed-pill-error";
+        statusBadge.textContent = "Refresh: Failed";
+        refreshButton.disabled = false;
+        refreshButton.innerHTML = `<i class="bi bi-arrow-clockwise me-1"></i> Hard Refresh`;
+    } else {
+        statusBadge.className = "opt-feed-status-pill opt-feed-pill-disconnected";
+        statusBadge.textContent = "Refresh: Idle";
+        refreshButton.disabled = false;
+        refreshButton.innerHTML = `<i class="bi bi-arrow-clockwise me-1"></i> Hard Refresh`;
+    }
+}
+
+async function triggerHardRefresh() {
+    const ok = window.confirm(
+        "This will re-download the latest backup from MongoDB, reload all instruments, and restart the live feed. Continue?"
+    );
+    if (!ok) return;
+
+    setRefreshUi("running", "Hard refresh started.\nDownloading latest backup and reloading instruments…");
+
+    try {
+        const res = await fetch(HARD_REFRESH_URL, {
+            method: "POST",
+            headers: { Accept: "application/json" },
+        });
+        const data = await res.json();
+
+        if (!res.ok) {
+            const detail = data?.detail || data?.message || `HTTP ${res.status}`;
+            setRefreshUi("failed", `Hard refresh failed.\n\n${detail}`);
+            return;
+        }
+
+        const backup = data.backup || {};
+        const registry = data.registry || {};
+
+        const lines = [
+            "Hard refresh completed successfully.",
+            "",
+            `Backup status   : ${backup.status || "unknown"}`,
+            `Files extracted : ${backup.file_count ?? "—"}`,
+            `Archive size    : ${backup.archive_size_bytes ? (backup.archive_size_bytes / 1024 / 1024).toFixed(2) + " MB" : "—"}`,
+            `Instruments     : ${registry.count ?? "—"}`,
+            `Feed restarted  : ${data.feed_restarted ? "yes" : "no"}`,
+        ];
+        if (backup.error) lines.push("", `Backup error   : ${backup.error}`);
+
+        setRefreshUi("success", lines.join("\n"));
+
+        // Re-fetch instruments against the newly extracted backup.
+        await loadInstruments();
+        await loadBackupStatus();
+    } catch (err) {
+        console.error("Hard refresh failed:", err);
+        setRefreshUi("failed", `Hard refresh request failed.\n\n${err.message}`);
+    }
+}
+
+/* ============================================================
+   Bootstrap
+   ============================================================ */
+async function bootstrap() {
+    await loadInstruments();
+    await loadFeedStatus();
+    await loadBackupStatus();
+    connectWebSocket();
+}
+
+document.addEventListener("DOMContentLoaded", bootstrap);
+
+window.addEventListener("beforeunload", () => {
+    if (state.ws) {
+        try { state.ws.close(1000, "Page closed"); } catch (e) {}
+    }
+});
+
+// Expose to inline onclick handlers
+window.openIsolatedDashboard = openIsolatedDashboard;
+window.triggerHardRefresh = triggerHardRefresh;
+window.reloadInstruments = reloadInstruments;
+</script>
+{% endblock %}
