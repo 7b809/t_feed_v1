@@ -1,0 +1,57 @@
+2026-10-07 10:21:46,201 | INFO | ================================================================================
+2026-10-07 10:21:46,201 | INFO | NIFTY 50 SOCKET LOGGER STARTED
+2026-10-07 10:21:46,203 | INFO | ================================================================================
+2026-10-07 10:21:46,203 | INFO | Starting WebSocket feed
+2026-10-07 10:21:46,203 | INFO | Instrument: NSE_INDEX|Nifty 50
+2026-10-07 10:21:46,204 | INFO | WebSocket URL: wss://feed.novag7.in/ws/market?instrument_key=NSE_INDEX%7CNifty%2050
+2026-10-07 10:21:46,204 | INFO | Connecting to WebSocket...
+2026-10-07 10:21:47,122 | INFO | WebSocket connected
+2026-10-07 10:21:47,491 | INFO | Receiving feed...
+2026-10-07 10:21:47,492 | INFO | FEED | {"received_at":"2026-10-07T10:21:47.492625+05:30","instrument_key":"NSE_INDEX|Nifty 50","data":{"instrument_key":"NSE_INDEX|Nifty 50","feed":{"ltpc":{"ltp":22680.95,"ltt":"1791348706000","cp":22776.1}}}}
+2026-10-07 10:21:47,605 | INFO | FEED | {"received_at":"2026-10-07T10:21:47.605032+05:30","instrument_key":"NSE_INDEX|Nifty 50","data":{"instrument_key":"NSE_INDEX|Nifty 50","feed":{"ltpc":{"ltp":22680.5,"ltt":"1791348706000","cp":22776.1}}}}
+2026-10-07 10:21:47,606 | INFO | FEED | {"received_at":"2026-10-07T10:21:47.606053+05:30","instrument_key":"NSE_INDEX|Nifty 50","data":{"instrument_key":"NSE_INDEX|Nifty 50","feed":{"ltpc":{"ltp":22680.1,"ltt":"1791348706000","cp":22776.1}}}}
+2026-10-07 10:21:47,794 | INFO | FEED | {"received_at":"2026-10-07T10:21:47.794492+05:30","instrument_key":"NSE_INDEX|Nifty 50","data":{"instrument_key":"NSE_INDEX|Nifty 50","feed":{"ltpc":{"ltp":22680.15,"ltt":"1791348706000","cp":22776.1}}}}
+2026-10-07 10:21:47,796 | INFO | FEED | {"received_at":"2026-10-07T10:21:47.796508+05:30","instrument_key":"NSE_INDEX|Nifty 50","data":{"instrument_key":"NSE_INDEX|Nifty 50","feed":{"ltpc":{"ltp":22680.35,"ltt":"1791348706000","cp":22776.1}}}}
+2026-10-07 10:21:47,941 | INFO | FEED | {"received_at":"2026-10-07T10:21:47.935204+05:30","instrument_key":"NSE_INDEX|Nifty 50","data":{"instrument_key":"NSE_INDEX|Nifty 50","feed":{"ltpc":{"ltp":22680.35,"ltt":"1791348706000","cp":22776.1}}}}
+2026-10-07 10:21:48,102 | INFO | FEED | {"received_at":"2026-10-07T10:21:48.102809+05:30","instrument_key":"NSE_INDEX|Nifty 50","data":{"instrument_key":"NSE_INDEX|Nifty 50","feed":{"ltpc":{"ltp":22680.75,"ltt":"1791348707000","cp":22776.1}}}}
+2026-10-07 10:21:48,370 | INFO | FEED | {"received_at":"2026-10-07T10:21:48.370512+05:30","instrument_key":"NSE_INDEX|Nifty 50","data":{"instrument_key":"NSE_INDEX|Nifty 50","feed":{"ltpc":{"ltp":22681.2,"ltt":"1791348707000","cp":22776.1}}}}
+2026-10-07 10:21:48,372 | INFO | FEED | {"received_at":"2026-10-07T10:21:48.370512+05:30","instrument_key":"NSE_INDEX|Nifty 50","data":{"instrument_key":"NSE_INDEX|Nifty 50","feed":{"ltpc":{"ltp":22681.65,"ltt":"1791348707000","cp":22776.1}}}}
+2026-10-07 10:21:48,715 | INFO | FEED | {"received_at":"2026-10-07T10:21:48.715768+05:30","instrument_key":"NSE_INDEX|Nifty 50","data":{"instrument_key":"NSE_INDEX|Nifty 50","feed":{"ltpc":{"ltp":22681.6,"ltt":"1791348707000","cp":22776.1}}}}
+2026-10-07 10:21:48,715 | INFO | FEED | {"received_at":"2026-10-07T10:21:48.715768+05:30","instrument_key":"NSE_INDEX|Nifty 50","data":{"instrument_key":"NSE_INDEX|Nifty 50","feed":{"ltpc":{"ltp":22681.7,"ltt":"1791348707000","cp":22776.1}}}}
+2026-10-07 10:21:48,987 | INFO | FEED | {"received_at":"2026-10-07T10:21:48.982400+05:30","instrument_key":"NSE_INDEX|Nifty 50","data":{"instrument_key":"NSE_INDEX|Nifty 50","feed":{"ltpc":{"ltp":22680.95,"ltt":"1791348707000","cp":22776.1}}}}
+2026-10-07 10:21:48,987 | INFO | FEED | {"received_at":"2026-10-07T10:21:48.987942+05:30","instrument_key":"NSE_INDEX|Nifty 50","data":{"instrument_key":"NSE_INDEX|Nifty 50","feed":{"ltpc":{"ltp":22680.95,"ltt":"1791348707000","cp":22776.1}}}}
+2026-10-07 10:21:49,329 | INFO | FEED | {"received_at":"2026-10-07T10:21:49.329663+05:30","instrument_key":"NSE_INDEX|Nifty 50","data":{"instrument_key":"NSE_INDEX|Nifty 50","feed":{"ltpc":{"ltp":22681.0,"ltt":"1791348708000","cp":22776.1}}}}
+2026-10-07 10:21:49,329 | INFO | FEED | {"received_at":"2026-10-07T10:21:49.329663+05:30","instrument_key":"NSE_INDEX|Nifty 50","data":{"instrument_key":"NSE_INDEX|Nifty 50","feed":{"ltpc":{"ltp":22681.05,"ltt":"1791348708000","cp":22776.1}}}}
+2026-10-07 10:21:49,628 | INFO | FEED | {"received_at":"2026-10-07T10:21:49.628788+05:30","instrument_key":"NSE_INDEX|Nifty 50","data":{"instrument_key":"NSE_INDEX|Nifty 50","feed":{"ltpc":{"ltp":22682.4,"ltt":"1791348708000","cp":22776.1}}}}
+2026-10-07 10:21:49,628 | INFO | FEED | {"received_at":"2026-10-07T10:21:49.628788+05:30","instrument_key":"NSE_INDEX|Nifty 50","data":{"instrument_key":"NSE_INDEX|Nifty 50","feed":{"ltpc":{"ltp":22682.1,"ltt":"1791348708000","cp":22776.1}}}}
+2026-10-07 10:21:49,905 | INFO | FEED | {"received_at":"2026-10-07T10:21:49.905862+05:30","instrument_key":"NSE_INDEX|Nifty 50","data":{"instrument_key":"NSE_INDEX|Nifty 50","feed":{"ltpc":{"ltp":22682.1,"ltt":"1791348708000","cp":22776.1}}}}
+2026-10-07 10:21:49,905 | INFO | FEED | {"received_at":"2026-10-07T10:21:49.905862+05:30","instrument_key":"NSE_INDEX|Nifty 50","data":{"instrument_key":"NSE_INDEX|Nifty 50","feed":{"ltpc":{"ltp":22682.15,"ltt":"1791348708000","cp":22776.1}}}}
+2026-10-07 10:21:50,249 | INFO | FEED | {"received_at":"2026-10-07T10:21:50.249896+05:30","instrument_key":"NSE_INDEX|Nifty 50","data":{"instrument_key":"NSE_INDEX|Nifty 50","feed":{"ltpc":{"ltp":22681.9,"ltt":"1791348709000","cp":22776.1}}}}
+2026-10-07 10:21:50,249 | INFO | FEED | {"received_at":"2026-10-07T10:21:50.249896+05:30","instrument_key":"NSE_INDEX|Nifty 50","data":{"instrument_key":"NSE_INDEX|Nifty 50","feed":{"ltpc":{"ltp":22682.1,"ltt":"1791348709000","cp":22776.1}}}}
+2026-10-07 10:21:50,549 | INFO | FEED | {"received_at":"2026-10-07T10:21:50.549966+05:30","instrument_key":"NSE_INDEX|Nifty 50","data":{"instrument_key":"NSE_INDEX|Nifty 50","feed":{"ltpc":{"ltp":22682.3,"ltt":"1791348709000","cp":22776.1}}}}
+2026-10-07 10:21:50,555 | INFO | FEED | {"received_at":"2026-10-07T10:21:50.549966+05:30","instrument_key":"NSE_INDEX|Nifty 50","data":{"instrument_key":"NSE_INDEX|Nifty 50","feed":{"ltpc":{"ltp":22682.7,"ltt":"1791348709000","cp":22776.1}}}}
+2026-10-07 10:21:51,002 | INFO | FEED | {"received_at":"2026-10-07T10:21:51.002329+05:30","instrument_key":"NSE_INDEX|Nifty 50","data":{"instrument_key":"NSE_INDEX|Nifty 50","feed":{"ltpc":{"ltp":22682.45,"ltt":"1791348709000","cp":22776.1}}}}
+2026-10-07 10:21:51,004 | INFO | FEED | {"received_at":"2026-10-07T10:21:51.002329+05:30","instrument_key":"NSE_INDEX|Nifty 50","data":{"instrument_key":"NSE_INDEX|Nifty 50","feed":{"ltpc":{"ltp":22682.4,"ltt":"1791348709000","cp":22776.1}}}}
+2026-10-07 10:21:51,082 | INFO | WebSocket task cancelled
+2026-10-07 10:21:51,086 | INFO | NIFTY 50 SOCKET LOGGER STOPPED
+2026-10-07 10:29:09,463 | INFO | ================================================================================
+2026-10-07 10:29:09,478 | INFO | NIFTY 50 SOCKET LOGGER STARTED
+2026-10-07 10:29:09,478 | INFO | ================================================================================
+2026-10-07 10:29:09,479 | INFO | Starting WebSocket feed
+2026-10-07 10:29:09,479 | INFO | Instrument: NSE_FO|44612
+2026-10-07 10:29:09,479 | INFO | WebSocket URL: wss://feed.novag7.in/ws/market?instrument_key=NSE_FO%7C44612
+2026-10-07 10:29:09,480 | INFO | Connecting to WebSocket...
+2026-10-07 10:29:09,909 | INFO | WebSocket connected
+2026-10-07 10:29:09,910 | INFO | Receiving feed...
+2026-10-07 10:29:10,416 | INFO | FEED | {"received_at":"2026-10-07T10:29:10.415993+05:30","instrument_key":"NSE_FO|44612","data":{"instrument_key":"NSE_FO|44612","feed":{"ltpc":{"ltp":268.4,"ltt":"1791349149264","ltq":"65","cp":312.3}}}}
+2026-10-07 10:29:10,716 | INFO | FEED | {"received_at":"2026-10-07T10:29:10.716317+05:30","instrument_key":"NSE_FO|44612","data":{"instrument_key":"NSE_FO|44612","feed":{"ltpc":{"ltp":267.9,"ltt":"1791349149707","ltq":"65","cp":312.3}}}}
+2026-10-07 10:29:11,790 | INFO | FEED | {"received_at":"2026-10-07T10:29:11.789763+05:30","instrument_key":"NSE_FO|44612","data":{"instrument_key":"NSE_FO|44612","feed":{"ltpc":{"ltp":269.45,"ltt":"1791349150714","ltq":"65","cp":312.3}}}}
+2026-10-07 10:29:11,916 | INFO | FEED | {"received_at":"2026-10-07T10:29:11.916952+05:30","instrument_key":"NSE_FO|44612","data":{"instrument_key":"NSE_FO|44612","feed":{"ltpc":{"ltp":268.65,"ltt":"1791349150806","ltq":"65","cp":312.3}}}}
+2026-10-07 10:29:12,816 | INFO | FEED | {"received_at":"2026-10-07T10:29:12.816636+05:30","instrument_key":"NSE_FO|44612","data":{"instrument_key":"NSE_FO|44612","feed":{"ltpc":{"ltp":269.55,"ltt":"1791349151732","ltq":"65","cp":312.3}}}}
+2026-10-07 10:29:13,572 | INFO | FEED | {"received_at":"2026-10-07T10:29:13.572941+05:30","instrument_key":"NSE_FO|44612","data":{"instrument_key":"NSE_FO|44612","feed":{"ltpc":{"ltp":270.0,"ltt":"1791349152548","ltq":"65","cp":312.3}}}}
+2026-10-07 10:29:13,716 | INFO | FEED | {"received_at":"2026-10-07T10:29:13.716291+05:30","instrument_key":"NSE_FO|44612","data":{"instrument_key":"NSE_FO|44612","feed":{"ltpc":{"ltp":270.0,"ltt":"1791349152548","ltq":"65","cp":312.3}}}}
+2026-10-07 10:29:14,763 | INFO | FEED | {"received_at":"2026-10-07T10:29:14.763630+05:30","instrument_key":"NSE_FO|44612","data":{"instrument_key":"NSE_FO|44612","feed":{"ltpc":{"ltp":269.8,"ltt":"1791349153674","ltq":"65","cp":312.3}}}}
+2026-10-07 10:29:15,366 | INFO | FEED | {"received_at":"2026-10-07T10:29:15.366065+05:30","instrument_key":"NSE_FO|44612","data":{"instrument_key":"NSE_FO|44612","feed":{"ltpc":{"ltp":269.4,"ltt":"1791349154286","ltq":"65","cp":312.3}}}}
+2026-10-07 10:29:15,676 | INFO | FEED | {"received_at":"2026-10-07T10:29:15.676593+05:30","instrument_key":"NSE_FO|44612","data":{"instrument_key":"NSE_FO|44612","feed":{"ltpc":{"ltp":268.85,"ltt":"1791349154688","ltq":"65","cp":312.3}}}}
+2026-10-07 10:29:15,915 | INFO | WebSocket task cancelled
+2026-10-07 10:29:15,915 | INFO | NIFTY 50 SOCKET LOGGER STOPPED

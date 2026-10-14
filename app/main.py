@@ -24,6 +24,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.templating import Jinja2Templates
 
+from app.candles import CandleAggregator, VALID_INTERVALS
 from app.config import settings
 from app.database import Database
 from app.logger import get_logger
@@ -35,7 +36,8 @@ logger = get_logger(__file__)
 
 database = Database()
 hub = WebSocketHub()
-market = UpstoxMarketService(database, hub)
+candle_aggregator = CandleAggregator()
+market = UpstoxMarketService(database, hub, candle_aggregator)
 
 scheduler = AsyncIOScheduler(timezone=settings.token_refresh_timezone)
 
@@ -347,6 +349,7 @@ def health() -> dict[str, Any]:
             "upstox_connected": market.connected,
             "active_subscriptions": len(active_subscriptions),
             "websocket_clients": hub.client_counts(),
+            "valid_candle_intervals": sorted(VALID_INTERVALS),
         }
 
         logger.debug(
@@ -425,6 +428,155 @@ async def search_instruments(
             status_code=502,
             detail="Instrument search service failed",
         ) from exc
+
+
+# ============================================================
+# Intraday candles
+# ------------------------------------------------------------
+# Two ways to call this endpoint:
+#
+#   1. Direct instrument key:
+#      /api/candles/intraday?instrument_key=NSE_FO%7C47142&interval=5
+#
+#   2. Resolved option contract:
+#      /api/candles/intraday
+#          ?underlying=NSE_INDEX%7CNifty%2050
+#          &strike=22000
+#          &strike_type=CE
+#          &expiry=2026-10-30
+#          &interval=5
+#
+# Response body:
+#
+#   {
+#     "instrument_key": "NSE_FO|47142",
+#     "interval": 5,
+#     "candles": [
+#       ["2026-10-14T14:35:00+05:30", o, h, l, c, v, oi],
+#       ...
+#     ]
+#   }
+#
+# The `candles` rows are returned in DESCENDING order (newest first),
+# exactly as delivered by the Upstox V3 intraday endpoint.
+# ============================================================
+@app.get("/api/candles/intraday")
+async def get_intraday_candles(
+    instrument_key: str | None = Query(
+        None,
+        description=(
+            "Direct instrument key, e.g. NSE_FO|47142. "
+            "If provided, the option-resolution params are ignored."
+        ),
+    ),
+    underlying: str | None = Query(
+        None,
+        description=(
+            "Underlying instrument key for option lookup, "
+            "e.g. NSE_INDEX|Nifty 50 or BSE_INDEX|SENSEX."
+        ),
+    ),
+    strike: float | None = Query(
+        None,
+        description="Option strike price. Required when resolving by option.",
+    ),
+    strike_type: str | None = Query(
+        None,
+        description="Option type: CE or PE.",
+    ),
+    expiry: str | None = Query(
+        None,
+        description=(
+            "Option expiry date (YYYY-MM-DD). Optional for option "
+            "resolution; when omitted the API returns the first match."
+        ),
+    ),
+    interval: int = Query(
+        1,
+        description=(
+            f"Candle interval in minutes. Allowed: {sorted(VALID_INTERVALS)}"
+        ),
+    ),
+) -> dict[str, Any]:
+    if interval not in VALID_INTERVALS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Unsupported interval {interval}; "
+                f"allowed: {sorted(VALID_INTERVALS)}"
+            ),
+        )
+
+    resolved_key = (instrument_key or "").strip()
+
+    if not resolved_key:
+        # Resolve via underlying + strike + strike_type (+ optional expiry)
+        if not underlying or strike is None or not strike_type:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Provide either 'instrument_key' directly, or "
+                    "'underlying' + 'strike' + 'strike_type' "
+                    "(+ optional 'expiry') to resolve an option contract."
+                ),
+            )
+
+        try:
+            resolved_key = await asyncio.to_thread(
+                market.resolve_option_instrument,
+                underlying.strip(),
+                float(strike),
+                strike_type.strip(),
+                expiry.strip() if expiry else None,
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=404,
+                detail=str(exc),
+            ) from exc
+        except Exception as exc:
+            logger.exception(
+                "Option resolution failed | underlying=%s | strike=%s | "
+                "strike_type=%s | expiry=%s",
+                underlying,
+                strike,
+                strike_type,
+                expiry,
+            )
+            raise HTTPException(
+                status_code=502,
+                detail="Option resolution service failed",
+            ) from exc
+
+    logger.info(
+        "Intraday candles requested | instrument_key=%s | interval=%s",
+        resolved_key,
+        interval,
+    )
+
+    try:
+        candles = await asyncio.to_thread(
+            market.fetch_intraday_candles,
+            resolved_key,
+            interval,
+        )
+    except Exception as exc:
+        logger.exception(
+            "Failed to fetch intraday candles | instrument_key=%s | "
+            "interval=%s",
+            resolved_key,
+            interval,
+        )
+        raise HTTPException(
+            status_code=502,
+            detail="Failed to fetch intraday candles",
+        ) from exc
+
+    return {
+        "instrument_key": resolved_key,
+        "interval": interval,
+        "candles": candles,
+    }
 
 
 @app.post("/api/subscriptions")
@@ -547,6 +699,11 @@ def list_subscriptions(request: Request) -> dict[str, Any]:
                     ws_base_url,
                     subscription["instrument_key"],
                 ),
+                "candle_intervals": sorted(
+                    candle_aggregator.active_intervals(
+                        subscription["instrument_key"]
+                    )
+                ),
             }
             for subscription in active_subscriptions
         ]
@@ -559,6 +716,7 @@ def list_subscriptions(request: Request) -> dict[str, Any]:
 
         return {
             "ws_base_url": ws_base_url,
+            "valid_candle_intervals": sorted(VALID_INTERVALS),
             "active": enriched_active,
             "last_7_days": recent_events,
         }
@@ -596,27 +754,125 @@ def hard_refresh() -> Any:
 async def instrument_feed(
     websocket: WebSocket,
     instrument_key: str = Query(...),
+    interval: str | None = Query(None),
 ) -> None:
+    """
+    Per-instrument WebSocket endpoint.
+
+    Query params:
+        instrument_key  (required)  e.g. NSE_FO|47142
+        interval        (optional)  one of 1, 3, 5, 15, 30, 60
+
+    Behaviour:
+        * interval absent → the client receives the raw full-feed ticks
+          (identical to the previous behaviour of this endpoint).
+        * interval present → the client receives candle payloads in
+          the form:
+              [timestamp_ist, open, high, low, close, volume, oi]
+
+    Multiple clients may connect to the same instrument with different
+    intervals simultaneously; each (instrument_key, interval) pair is
+    tracked independently by the CandleAggregator.
+    """
     client_host = websocket.client.host if websocket.client else "unknown"
 
+    # -------- Parse & validate the optional interval -----------------
+    parsed_interval: int | None = None
+
+    if interval is not None and interval.strip():
+        try:
+            parsed_interval = int(interval.strip())
+        except ValueError:
+            logger.warning(
+                "WebSocket connection rejected — non-integer interval | "
+                "instrument_key=%s | interval=%r | client=%s",
+                instrument_key,
+                interval,
+                client_host,
+            )
+            try:
+                await websocket.close(
+                    code=1008,
+                    reason="interval must be an integer",
+                )
+            except Exception:
+                pass
+            return
+
+        if parsed_interval not in VALID_INTERVALS:
+            logger.warning(
+                "WebSocket connection rejected — unsupported interval | "
+                "instrument_key=%s | interval=%s | allowed=%s | client=%s",
+                instrument_key,
+                parsed_interval,
+                sorted(VALID_INTERVALS),
+                client_host,
+            )
+            try:
+                await websocket.close(
+                    code=1008,
+                    reason=(
+                        f"unsupported interval {parsed_interval}; "
+                        f"allowed: {sorted(VALID_INTERVALS)}"
+                    ),
+                )
+            except Exception:
+                pass
+            return
+
+    is_candle = parsed_interval is not None
+    channel = (
+        instrument_key
+        if not is_candle
+        else f"{instrument_key}|interval={parsed_interval}"
+    )
+
     logger.info(
-        "WebSocket connection requested | " "instrument_key=%s | client=%s",
+        "WebSocket connection requested | instrument_key=%s | "
+        "interval=%s | channel=%s | client=%s",
         instrument_key,
+        parsed_interval if is_candle else "raw",
+        channel,
         client_host,
     )
 
+    # -------- Candle-specific setup ----------------------------------
+    candle_registered = False
+
+    if is_candle:
+        try:
+            market.ensure_full_subscription(instrument_key)
+        except Exception:
+            logger.exception(
+                "Failed to ensure upstream subscription for candle feed | "
+                "instrument_key=%s",
+                instrument_key,
+            )
+
+        try:
+            candle_aggregator.register(instrument_key, parsed_interval)
+            candle_registered = True
+        except Exception:
+            logger.exception(
+                "Failed to register candle subscription | "
+                "instrument_key=%s | interval=%s",
+                instrument_key,
+                parsed_interval,
+            )
+
+    # -------- Connect ------------------------------------------------
     connected = False
 
     try:
-        await hub.connect(
-            instrument_key,
-            websocket,
-        )
+        await hub.connect(channel, websocket)
         connected = True
 
         logger.info(
-            "WebSocket connected | " "instrument_key=%s | client=%s",
+            "WebSocket connected | instrument_key=%s | interval=%s | "
+            "channel=%s | client=%s",
             instrument_key,
+            parsed_interval if is_candle else "raw",
+            channel,
             client_host,
         )
 
@@ -625,23 +881,29 @@ async def instrument_feed(
 
     except WebSocketDisconnect:
         logger.info(
-            "WebSocket disconnected | " "instrument_key=%s | client=%s",
+            "WebSocket disconnected | instrument_key=%s | interval=%s | "
+            "client=%s",
             instrument_key,
+            parsed_interval if is_candle else "raw",
             client_host,
         )
 
     except asyncio.CancelledError:
         logger.warning(
-            "WebSocket task cancelled | " "instrument_key=%s | client=%s",
+            "WebSocket task cancelled | instrument_key=%s | interval=%s | "
+            "client=%s",
             instrument_key,
+            parsed_interval if is_candle else "raw",
             client_host,
         )
         raise
 
     except Exception:
         logger.exception(
-            "Unexpected WebSocket failure | " "instrument_key=%s | client=%s",
+            "Unexpected WebSocket failure | instrument_key=%s | "
+            "interval=%s | client=%s",
             instrument_key,
+            parsed_interval if is_candle else "raw",
             client_host,
         )
 
@@ -652,7 +914,7 @@ async def instrument_feed(
             )
         except Exception:
             logger.debug(
-                "WebSocket was already closed | " "instrument_key=%s",
+                "WebSocket was already closed | instrument_key=%s",
                 instrument_key,
                 exc_info=True,
             )
@@ -660,28 +922,42 @@ async def instrument_feed(
     finally:
         if connected:
             try:
-                await hub.disconnect(
-                    instrument_key,
-                    websocket,
-                )
+                await hub.disconnect(channel, websocket)
 
                 logger.info(
-                    "WebSocket cleanup completed | " "instrument_key=%s | client=%s",
+                    "WebSocket cleanup completed | instrument_key=%s | "
+                    "interval=%s | client=%s",
                     instrument_key,
+                    parsed_interval if is_candle else "raw",
                     client_host,
                 )
 
             except asyncio.CancelledError:
                 logger.warning(
-                    "WebSocket cleanup cancelled | " "instrument_key=%s | client=%s",
+                    "WebSocket cleanup cancelled | instrument_key=%s | "
+                    "interval=%s | client=%s",
                     instrument_key,
+                    parsed_interval if is_candle else "raw",
                     client_host,
                 )
                 raise
 
             except Exception:
                 logger.exception(
-                    "WebSocket cleanup failed | " "instrument_key=%s | client=%s",
+                    "WebSocket cleanup failed | instrument_key=%s | "
+                    "interval=%s | client=%s",
                     instrument_key,
+                    parsed_interval if is_candle else "raw",
                     client_host,
+                )
+
+        if candle_registered:
+            try:
+                candle_aggregator.unregister(instrument_key, parsed_interval)
+            except Exception:
+                logger.exception(
+                    "Failed to unregister candle subscription | "
+                    "instrument_key=%s | interval=%s",
+                    instrument_key,
+                    parsed_interval,
                 )

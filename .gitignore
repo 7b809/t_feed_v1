@@ -13,6 +13,8 @@ file.txt
 *.ini
 # C extensions
 *.so
+feeds
+upstox_intraday_candles/
 myenv/
 tests
 test

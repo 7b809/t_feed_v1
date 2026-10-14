@@ -12,6 +12,7 @@ A FastAPI service that keeps one Upstox MarketDataStreamerV3 connection, persist
 - Proxies the Upstox Instrument Search API.
 - Browser UI in `app/templates/index.html`.
 - One client WebSocket route per selected instrument via query parameter.
+- **Interval-based OHLCVOI candle stream** on the same WebSocket route (see below).
 
 ## MongoDB token document
 
@@ -71,6 +72,56 @@ The scheduler's own timezone is taken from TOKEN_REFRESH_TIMEZONE, so the job fi
 
 The manual refresh endpoint POST /api/token/hard-refresh is always available, even when the scheduled job is disabled.
 
+Candle / interval feed
+The `/ws/market` endpoint accepts an optional `interval` query parameter. When it is present, the server streams OHLCVOI candles on that interval to the client.
+
+Allowed intervals (minutes): **1, 3, 5, 15, 30, 60**.
+
+Example:
+text
+# Raw full-feed ticks (default, backwards-compatible)
+ws://localhost:8001/ws/market?instrument_key=NSE_FO%7C47142
+
+# 5-minute candles for the same instrument
+ws://localhost:8001/ws/market?instrument_key=NSE_FO%7C47142&interval=5
+Each message on an interval connection is a JSON array:
+
+json
+[
+  "2026-08-12T15:39:00+05:30",
+  61.0,
+  61.1,
+  60.3,
+  60.3,
+  157040,
+  7173530
+]
+Fields: `[timestamp_ist_iso8601, open, high, low, close, volume, oi]`.
+
+### How candles are built
+
+The server does **not** reconstruct candles by accumulating individual LTP / VTT / OI values from the tick stream. Instead it uses the **official 1-minute candle** that Upstox itself embeds in every `full`-mode tick, inside `marketOHLC.ohlc`, tagged with `"interval": "I1"`. That entry is the exchange-derived 1-minute OHLC for the instrument — the same numbers you see on the Upstox terminal, with the same volume and (for tradable instruments) the same open interest.
+
+Aggregation rules:
+
+- On every tick the server inspects the `I1` entry's `ts` field (epoch milliseconds).
+- When `I1.ts` changes, the previous minute is considered **fully closed**, and that closed `I1` is merged into the running state for every interval a client is subscribed to:
+  - `interval=1` → the closed `I1` **is** the candle; it is emitted immediately, verbatim.
+  - `interval=3/5/15/30/60` → the closed `I1` is merged into the current interval bucket: `open` from the first I1 in the bucket, `high` = max, `low` = min, `close` from the last I1, `volume` = sum of the 1-minute volumes, `oi` from the last I1. The bucket is emitted only when a later I1 crosses the interval boundary.
+- A gap of more than 5 minutes between two consecutive `I1` timestamps is treated as a session break or outage: the stale minute is dropped silently and a fresh state is started from the new `I1`.
+
+Because candles are derived from Upstox's own `I1` feed, their OHLCVOI values match the exchange's official candles exactly — including volume on instruments where `vtt` was previously unavailable.
+
+Notes:
+
+- Timestamps are always IST (`Asia/Kolkata`) and aligned to the start of the interval bucket. For `interval=60`, buckets start on hour boundaries.
+- **Completed candles only.** The in-progress interval candle is held server-side and emitted exactly once, at the moment the next interval bucket begins. Clients therefore receive one message per interval per instrument (one per minute on `interval=1`, one every three minutes on `interval=3`, one every five minutes on `interval=5`, etc.). The current, partially formed candle is never pushed.
+- Index instruments (`NSE_INDEX|Nifty 50`, `BSE_INDEX|SENSEX`) have no open interest; the `oi` field is emitted as `0`. Volume is still reported correctly via the `I1` entry.
+- Multiple clients may connect to the same instrument with **different intervals** at the same time — each `(instrument_key, interval)` pair is tracked independently.
+- When a client connects with an interval, the server **auto-subscribes** the instrument upstream in `full` mode if it is not already subscribed. `I1` candles are only available in `full` / `full_d30` mode; if the instrument is currently subscribed in `ltpc` or `option_greeks`, the server will not receive `marketOHLC` and no candle will be emitted until the subscription mode is upgraded.
+- Because a candle is only emitted when the next bucket starts, the very last candle of a trading session is not flushed when the market closes. It will be emitted as soon as the first `I1` of the next session arrives, provided the gap is under 5 minutes — which it will not be across an overnight break, so the final minute of the day is intentionally dropped.
+- Invalid intervals (non-integer, or not in {1,3,5,15,30,60}) cause the WebSocket to be closed immediately with code `1008`.
+
 API
 All management endpoints require X-API-Key.
 
@@ -96,6 +147,7 @@ Client WebSocket:
 
 text
 ws://localhost:8000/ws/market?instrument_key=NSE_INDEX%7CNifty%2050
+ws://localhost:8000/ws/market?instrument_key=NSE_INDEX%7CNifty%2050&interval=5
 Important deployment notes
 Run one Uvicorn worker. The Upstox streamer and WebSocket client registry are in process memory. Multiple workers would create duplicate upstream connections and separate client registries.
 
@@ -108,11 +160,3 @@ A TTL index expires event records after seven days. MongoDB TTL deletion is asyn
 Subscribe operations are idempotent: an already-subscribed key with the same mode is returned in already_subscribed; a different mode is changed instead of duplicated.
 
 If an Upstox subscribe call succeeds but MongoDB fails immediately afterward, upstream state and persisted state may briefly differ. A reconnect restores MongoDB as the source of truth. Production systems can add a reconciliation job and operation IDs.
-
-text
-
-Key changes vs. the original:
-
-- **Features** section: replaced the hardcoded "09:00 … Monday–Friday" line with a description of the environment-driven schedule and its default of 08:00 IST, Mon–Fri.
-- **New "Configuration — token refresh schedule" section**: documents all five `TOKEN_REFRESH_*` variables, their defaults, and gives ready-to-paste examples (every day, weekdays at a custom time, disabled).
-- Everything else (MongoDB doc, run instructions, API examples, deployment notes) is unchanged.

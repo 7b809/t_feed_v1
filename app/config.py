@@ -57,6 +57,15 @@ class Settings:
         "change-me",
     )
 
+    # Optional: override the base URL that /api/subscriptions uses when
+    # building the connect_url for each active subscription. Useful
+    # behind a reverse proxy where X-Forwarded-* headers are not set.
+    #
+    # Example: PUBLIC_WS_BASE_URL=wss://feed.novag7.in
+    public_ws_base_url: str | None = (
+        os.getenv("PUBLIC_WS_BASE_URL", "").strip() or None
+    )
+
     # ----------------------------------------------------------
     # Token refresh schedule
     # ----------------------------------------------------------
@@ -109,12 +118,10 @@ class Settings:
     # ----------------------------------------------------------
     startup_index_subscription_mode: str = os.getenv(
         "STARTUP_INDEX_SUBSCRIPTION_MODE",
-        "ltpc",
     )
 
     startup_option_subscription_mode: str = os.getenv(
         "STARTUP_OPTION_SUBSCRIPTION_MODE",
-        "ltpc",
     )
 
     # Either an explicit date (YYYY-MM-DD) or a keyword:
@@ -134,15 +141,15 @@ class Settings:
     startup_subscribe_list: list[dict] = [
         {
             "instrument_name": "NSE_INDEX|Nifty 50",
-            "index_mode": "ltpc",
-            "option_mode": "ltpc",
+            "index_mode": startup_index_subscription_mode,
+            "option_mode": startup_option_subscription_mode,
             "start_range": 22000,
             "end_range": 24500,
         },
         {
             "instrument_name": "BSE_INDEX|SENSEX",
-            "index_mode": "ltpc",
-            "option_mode": "ltpc",
+            "index_mode": startup_index_subscription_mode,
+            "option_mode": startup_option_subscription_mode,
             "start_range": 70000,
             "end_range": 72500,
         },

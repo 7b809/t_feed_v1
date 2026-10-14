@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 import httpx
 import upstox_client
 
+from app.candles import CandleAggregator
 from app.config import settings
 from app.database import Database
 from app.logger import get_logger
@@ -21,6 +22,14 @@ class UpstoxMarketService:
     OPTION_CONTRACT_URL = "https://api.upstox.com/v2/option/contract"
 
     INSTRUMENT_SEARCH_URL = "https://api.upstox.com/v2/instruments/search"
+
+    # V3 intraday candle endpoint. Full path:
+    #   {INTRADAY_CANDLE_URL}/{instrument_key}/minutes/{interval}
+    # Supported units on the V3 API are minutes / hours / days / weeks /
+    # months. For this gateway we only use the `minutes` unit.
+    INTRADAY_CANDLE_URL = (
+        "https://api.upstox.com/v3/historical-candle/intraday"
+    )
 
     VALID_OPTION_TYPES = {
         "CE",
@@ -49,9 +58,11 @@ class UpstoxMarketService:
         self,
         database: Database,
         hub: WebSocketHub,
+        candle_aggregator: CandleAggregator,
     ) -> None:
         self.database = database
         self.hub = hub
+        self.candle_aggregator = candle_aggregator
         self.streamer: Any | None = None
         self.access_token = ""
         self.connected = False
@@ -404,6 +415,203 @@ class UpstoxMarketService:
         )
 
         return selected_contracts
+
+    # ------------------------------------------------------------------
+    # Option strike -> instrument_key resolver (used by /api/candles/intraday)
+    # ------------------------------------------------------------------
+    def resolve_option_instrument(
+        self,
+        underlying: str,
+        strike: float,
+        strike_type: str,
+        expiry: str | None = None,
+    ) -> str:
+        """
+        Resolve a (underlying, strike, strike_type, expiry) tuple to the
+        concrete NSE_FO|... / BSE_FO|... instrument key.
+
+        Raises ValueError if no matching contract is found.
+        """
+        strike_type_normalized = str(strike_type or "").strip().upper()
+
+        if strike_type_normalized not in self.VALID_OPTION_TYPES:
+            raise ValueError(
+                "strike_type must be one of "
+                f"{sorted(self.VALID_OPTION_TYPES)}"
+            )
+
+        try:
+            numeric_strike = float(strike)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("strike must be a number") from exc
+
+        contracts = self.fetch_option_contracts(
+            instrument_key=underlying,
+            expiry_date=expiry,
+        )
+
+        for contract in contracts:
+            instrument_type = str(
+                contract.get("instrument_type", "")
+            ).strip().upper()
+
+            if instrument_type != strike_type_normalized:
+                continue
+
+            try:
+                contract_strike = float(contract.get("strike_price"))
+            except (TypeError, ValueError):
+                continue
+
+            # Strike prices come back as floats; compare with a small
+            # epsilon so 22000.0 matches 22000.
+            if abs(contract_strike - numeric_strike) > 0.001:
+                continue
+
+            key = contract.get("instrument_key")
+            if key:
+                logger.info(
+                    "Resolved option contract | underlying=%s | "
+                    "strike=%s | type=%s | expiry=%s | key=%s",
+                    underlying,
+                    numeric_strike,
+                    strike_type_normalized,
+                    contract.get("expiry"),
+                    key,
+                )
+                return str(key)
+
+        raise ValueError(
+            "No option contract found for "
+            f"underlying={underlying} strike={numeric_strike} "
+            f"strike_type={strike_type_normalized} expiry={expiry}"
+        )
+
+    # ------------------------------------------------------------------
+    # Intraday candle fetch (V3 REST) — used by /api/candles/intraday
+    # ------------------------------------------------------------------
+    def fetch_intraday_candles(
+        self,
+        instrument_key: str,
+        interval_minutes: int,
+    ) -> list[list[Any]]:
+        """
+        Fetch today's intraday 1-minute-or-larger candles for a single
+        instrument from the Upstox V3 historical-candle API.
+
+        Returns a list of rows in the shape:
+
+            [ts_iso, open, high, low, close, volume, oi]
+
+        Rows are returned in DESCENDING order (newest first), matching
+        the raw Upstox response.
+        """
+        if not self.access_token:
+            raise RuntimeError(
+                "Cannot fetch intraday candles because the access token is empty"
+            )
+
+        try:
+            interval_value = int(interval_minutes)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"interval_minutes must be an integer, got {interval_minutes!r}"
+            ) from exc
+
+        if interval_value <= 0:
+            raise ValueError("interval_minutes must be positive")
+
+        url = (
+            f"{self.INTRADAY_CANDLE_URL}/"
+            f"{instrument_key}/minutes/{interval_value}"
+        )
+
+        logger.info(
+            "Fetching intraday candles | instrument_key=%s | interval=%s",
+            instrument_key,
+            interval_value,
+        )
+
+        headers = {
+            "Accept": "application/json",
+            "Authorization": f"Bearer {self.access_token}",
+        }
+
+        try:
+            with httpx.Client(timeout=30.0) as client:
+                response = client.get(url, headers=headers)
+
+            response.raise_for_status()
+
+            try:
+                payload = response.json()
+            except ValueError as exc:
+                raise RuntimeError(
+                    "Upstox intraday candle API returned invalid JSON"
+                ) from exc
+
+            if payload.get("status") != "success":
+                raise RuntimeError(
+                    "Upstox intraday candle API returned failure: "
+                    f"{payload}"
+                )
+
+            data = payload.get("data") or {}
+            candles = data.get("candles", [])
+
+            if not isinstance(candles, list):
+                raise RuntimeError(
+                    "Intraday candle response 'candles' is not a list"
+                )
+
+            logger.info(
+                "Intraday candles fetched | instrument_key=%s | "
+                "interval=%s | count=%s",
+                instrument_key,
+                interval_value,
+                len(candles),
+            )
+
+            return candles
+
+        except httpx.TimeoutException:
+            logger.exception(
+                "Intraday candle request timed out | instrument_key=%s | "
+                "interval=%s",
+                instrument_key,
+                interval_value,
+            )
+            raise
+
+        except httpx.HTTPStatusError as exc:
+            logger.error(
+                "Intraday candle HTTP error | instrument_key=%s | "
+                "interval=%s | status_code=%s | response=%s",
+                instrument_key,
+                interval_value,
+                exc.response.status_code,
+                exc.response.text[:1000],
+                exc_info=True,
+            )
+            raise
+
+        except httpx.RequestError:
+            logger.exception(
+                "Intraday candle request failed | instrument_key=%s | "
+                "interval=%s",
+                instrument_key,
+                interval_value,
+            )
+            raise
+
+        except Exception:
+            logger.exception(
+                "Unexpected intraday candle failure | instrument_key=%s | "
+                "interval=%s",
+                instrument_key,
+                interval_value,
+            )
+            raise
 
     def prepare_startup_subscriptions(
         self,
@@ -879,6 +1087,7 @@ class UpstoxMarketService:
             )
 
             for instrument_key, feed in feeds.items():
+                # ---------- Raw full-feed broadcast -------------------
                 event = {
                     "instrument_key": instrument_key,
                     "feed": feed,
@@ -903,6 +1112,44 @@ class UpstoxMarketService:
                         "instrument_key=%s",
                         instrument_key,
                     )
+
+                # ---------- Candle aggregation & broadcast -----------
+                try:
+                    candle_updates = self.candle_aggregator.update(
+                        instrument_key, feed
+                    )
+                except Exception:
+                    logger.exception(
+                        "Candle aggregation failed | instrument_key=%s",
+                        instrument_key,
+                    )
+                    candle_updates = []
+
+                for candle_interval, candle_payload in candle_updates:
+                    candle_channel = (
+                        f"{instrument_key}|interval={candle_interval}"
+                    )
+
+                    try:
+                        future = asyncio.run_coroutine_threadsafe(
+                            self.hub.broadcast(candle_channel, candle_payload),
+                            self.loop,
+                        )
+
+                        future.add_done_callback(
+                            lambda completed_future, key=candle_channel: self._on_broadcast_complete(
+                                key,
+                                completed_future,
+                            )
+                        )
+
+                    except Exception:
+                        logger.exception(
+                            "Failed to schedule candle broadcast | "
+                            "instrument_key=%s | interval=%s",
+                            instrument_key,
+                            candle_interval,
+                        )
 
         except Exception:
             logger.exception("Failed to process Upstox market feed message")
@@ -953,6 +1200,95 @@ class UpstoxMarketService:
             raise RuntimeError("Upstox streamer is not initialized")
 
         return self.streamer
+
+    # ------------------------------------------------------------------
+    # Candle-feed helper
+    # ------------------------------------------------------------------
+    def ensure_full_subscription(self, instrument_key: str) -> None:
+        """
+        Make sure the given instrument is subscribed upstream in `full`
+        mode so it produces tick data the CandleAggregator can consume.
+
+        Behaviour:
+            * Not subscribed          → subscribe in `full` mode and
+                                        persist to MongoDB as a manual
+                                        subscription (so it survives a
+                                        streamer reconnect / restart).
+            * Subscribed in full mode → no-op.
+            * Subscribed in another   → leave it alone and log a warning.
+              mode (ltpc,                Candle volume / OI will be zero
+              option_greeks,             in that case, but the feed will
+              full_d30)                  still produce usable OHLC.
+        """
+        instrument_key = (instrument_key or "").strip()
+        if not instrument_key:
+            return
+
+        with self._lock:
+            if self.streamer is None:
+                logger.warning(
+                    "Cannot ensure upstream subscription — streamer is "
+                    "not initialized | instrument_key=%s",
+                    instrument_key,
+                )
+                return
+
+            try:
+                active = {
+                    item["instrument_key"]: item
+                    for item in self.database.list_active()
+                }
+            except Exception:
+                logger.exception(
+                    "Failed to list active subscriptions while ensuring "
+                    "subscription | instrument_key=%s",
+                    instrument_key,
+                )
+                return
+
+            current = active.get(instrument_key)
+
+            if current is None:
+                try:
+                    self.streamer.subscribe([instrument_key], "full")
+                except Exception:
+                    logger.exception(
+                        "Failed to auto-subscribe instrument upstream | "
+                        "instrument_key=%s",
+                        instrument_key,
+                    )
+                    return
+
+                try:
+                    self.database.upsert_active(
+                        instrument_key=instrument_key,
+                        mode="full",
+                        source="manual",
+                    )
+                except Exception:
+                    logger.exception(
+                        "Auto-subscribed upstream but failed to persist | "
+                        "instrument_key=%s",
+                        instrument_key,
+                    )
+                    return
+
+                logger.info(
+                    "Auto-subscribed instrument in full mode for candle "
+                    "feed | instrument_key=%s",
+                    instrument_key,
+                )
+                return
+
+            current_mode = str(current.get("mode", "")).strip()
+
+            if current_mode != "full":
+                logger.warning(
+                    "Instrument is subscribed in non-full mode — candle "
+                    "volume/OI will be zero | instrument_key=%s | mode=%s",
+                    instrument_key,
+                    current_mode,
+                )
 
     def subscribe(
         self,

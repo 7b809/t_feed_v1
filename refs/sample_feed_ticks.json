@@ -1,0 +1,160 @@
+{
+  "full": {
+    "instrument_key": "NSE_FO|47142",
+    "feed": {
+      "fullFeed": {
+        "marketFF": {
+          "ltpc": {
+            "ltp": 123.6,
+            "ltt": "1791954189555",
+            "ltq": "130",
+            "cp": 89.1
+          },
+          "marketLevel": {
+            "bidAskQuote": [
+              {
+                "bidQ": "195",
+                "bidP": 123.65,
+                "askQ": "455",
+                "askP": 123.95
+              }
+            ]
+          },
+          "optionGreeks": {
+            "delta": -0.4247,
+            "theta": -14.9192,
+            "gamma": 0.001,
+            "vega": 10.6326,
+            "rho": -1.3942
+          },
+          "marketOHLC": {
+            "ohlc": [
+              {
+                "interval": "1d",
+                "open": 105.4,
+                "high": 142.7,
+                "low": 98.3,
+                "close": 123.6,
+                "vol": "54024295",
+                "ts": "1791916200000"
+              }
+            ]
+          },
+          "atp": 126.57,
+          "vtt": "54030015",
+          "oi": 4733235.0,
+          "iv": 0.1461029052734375,
+          "tbq": 3632655.0,
+          "tsq": 796380.0
+        }
+      },
+      "requestMode": "full_d5"
+    }
+  },
+  "full_d30": {
+    "instrument_key": "NSE_FO|47142",
+    "feed": {
+      "fullFeed": {
+        "marketFF": {
+          "ltpc": {
+            "ltp": 118.0,
+            "ltt": "1791954491767",
+            "ltq": "65",
+            "cp": 89.1
+          },
+          "marketLevel": {
+            "bidAskQuote": [
+              {
+                "bidQ": "715",
+                "bidP": 118.0,
+                "askQ": "455",
+                "askP": 118.15
+              }
+            ]
+          },
+          "optionGreeks": {
+            "delta": -0.4177,
+            "theta": -14.5795,
+            "gamma": 0.001,
+            "vega": 10.5936,
+            "rho": -1.37
+          },
+          "marketOHLC": {
+            "ohlc": [
+              {
+                "interval": "1d",
+                "open": 105.4,
+                "high": 142.7,
+                "low": 98.3,
+                "close": 118.0,
+                "vol": "55503565",
+                "ts": "1791916200000"
+              }
+            ]
+          },
+          "atp": 126.45,
+          "vtt": "55509480",
+          "oi": 4863170.0,
+          "iv": 0.1432037353515625,
+          "tbq": 3640585.0,
+          "tsq": 839410.0
+        }
+      },
+      "requestMode": "full_d30"
+    }
+  },
+  "ltpc": {
+    "instrument_key": "NSE_FO|47142",
+    "feed": {
+      "ltpc": {
+        "ltp": 126.45,
+        "ltt": "1791953888397",
+        "ltq": "65",
+        "cp": 89.1
+      }
+    }
+  },
+  "option_greeks": {
+    "instrument_key": "NSE_FO|47142",
+    "feed": {
+      "firstLevelWithGreeks": {
+        "ltpc": {
+          "ltp": 109.4,
+          "ltt": "1791954793711",
+          "ltq": "65",
+          "cp": 89.1
+        },
+        "firstDepth": {
+          "bidQ": "2275",
+          "bidP": 109.45,
+          "askQ": "455",
+          "askP": 109.75
+        },
+        "optionGreeks": {
+          "delta": -0.3942,
+          "theta": -14.3059,
+          "gamma": 0.001,
+          "vega": 10.4491,
+          "rho": -1.293
+        },
+        "vtt": "56776525",
+        "oi": 4841070.0,
+        "iv": 0.142364501953125
+      },
+      "requestMode": "option_greeks"
+    }
+  }
+}
+
+
+{
+  "sample_1min_candle":       [
+        "2026-08-12T15:39:00+05:30",
+        61.0,
+        61.1,
+        60.3,
+        60.3,
+        157040,
+        7173530
+      ],
+}
