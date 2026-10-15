@@ -1,7 +1,7 @@
 #!/bin/bash
 
 APP_NAME="market_data_foundation"
-PORT=8008
+PORT=8010
 
 PID_FILE="${APP_NAME}.pid"
 LOG_DIR="logs"
