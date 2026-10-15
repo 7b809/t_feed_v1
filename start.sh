@@ -1,7 +1,7 @@
 #!/bin/bash
 
 APP_NAME="upstox_order_receiver"
-PORT=8010
+PORT=8008
 
 PID_FILE="${APP_NAME}.pid"
 LOG_DIR="logs"
