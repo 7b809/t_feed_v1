@@ -300,3 +300,36 @@ STRATEGY_ISOLATION_LOOKBACK_MINUTES = max(
 STRATEGY_ISOLATION_SKIP_UNRESOLVED = _bool(
     "STRATEGY_ISOLATION_SKIP_UNRESOLVED", True
 )
+
+# ---------------------------------------------------------------------------
+# Strategy — stage 3 (R2 activation) + stage 4 (order placement)
+# ---------------------------------------------------------------------------
+STRATEGY_STAGE_3_NAME = _str("STRATEGY_STAGE_3_NAME", "stage_3_r2_activated")
+STRATEGY_STAGE_4_NAME = _str("STRATEGY_STAGE_4_NAME", "stage_4_order")
+
+# Live tracker: watches index LTP vs its R2 level during the opening
+# window and activates stage-2 strikes whose parent index crossed R2.
+STRATEGY_TRACKER_ENABLED = _bool("STRATEGY_TRACKER_ENABLED", True)
+STRATEGY_TRACKER_WINDOW_START = _str("STRATEGY_TRACKER_WINDOW_START", "09:15")
+STRATEGY_TRACKER_WINDOW_END = _str("STRATEGY_TRACKER_WINDOW_END", "09:20")
+STRATEGY_TRACKER_POLL_SECONDS = max(
+    1, _int("STRATEGY_TRACKER_POLL_SECONDS", 1)
+)
+
+# Order service: at 09:18 it reads stage-3 activations, keeps the N
+# strikes nearest to ATM per index, applies FIFO by R2-touch time, and
+# places a paper order for the final pick.
+STRATEGY_ORDER_ENABLED = _bool("STRATEGY_ORDER_ENABLED", True)
+STRATEGY_ORDER_NIFTY_PICKS = max(1, _int("STRATEGY_ORDER_NIFTY_PICKS", 3))
+STRATEGY_ORDER_SENSEX_PICKS = max(1, _int("STRATEGY_ORDER_SENSEX_PICKS", 5))
+STRATEGY_ORDER_FINAL_PICKS = max(1, _int("STRATEGY_ORDER_FINAL_PICKS", 1))
+STRATEGY_ORDER_HOUR = _int("STRATEGY_ORDER_HOUR", 9)
+STRATEGY_ORDER_MINUTE = _int("STRATEGY_ORDER_MINUTE", 18)
+STRATEGY_ORDER_QTY = max(1, _int("STRATEGY_ORDER_QTY", 1))
+
+# Which tickers belong to which index_key for the tracker / order picker.
+# Derived from STRATEGY_INDEXES automatically; override only if needed.
+STRATEGY_TRACKER_INDEX_KEYS = _csv(
+    "STRATEGY_TRACKER_INDEX_KEYS",
+    "NSE_INDEX|Nifty 50,BSE_INDEX|SENSEX",
+)

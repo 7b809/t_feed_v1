@@ -1,21 +1,37 @@
-"""Strategy API — stage 1 (selection) + stage 2 (isolation).
+"""Strategy API — stage 1 / 2 / 3 / 4.
 
-Reads from the on-disk strategy tree:
+Stage 1 (buffer filter)      data/strategy/stage_1_initial/
+Stage 2 (EMA isolation)      data/strategy/stage_2_isolation/
+Stage 3 (R2 activation)      data/strategy/stage_3_r2_activated/
+Stage 4 (order placement)    data/strategy/stage_4_order/
 
-    data/strategy/stage_1_initial/...     buffer-filtered strikes
-    data/strategy/stage_2_isolation/...   EMA-cross-isolated strikes
+Endpoints:
 
-    GET  /admin/strategy                        -> stage 1 summary
-    GET  /admin/strategy/indexes                -> all stage 1 index summaries
-    GET  /admin/strategy/{ticker}               -> stage 1 for one ticker
-    GET  /admin/strategy/{ticker}/strikes       -> flat stage 1 contracts
-    POST /admin/strategy/recalculate            -> rerun stage 1
+    # Stage 1
+    GET  /admin/strategy
+    GET  /admin/strategy/indexes
+    GET  /admin/strategy/{ticker}
+    GET  /admin/strategy/{ticker}/strikes
+    POST /admin/strategy/recalculate
 
-    GET  /admin/strategy/isolation              -> stage 2 summary
-    GET  /admin/strategy/isolation/indexes      -> all stage 2 index summaries
-    GET  /admin/strategy/isolation/{ticker}     -> stage 2 for one ticker
-    GET  /admin/strategy/isolation/{ticker}/strikes -> isolated contracts
-    POST /admin/strategy/isolation/recalculate  -> rerun stage 2
+    # Stage 2
+    GET  /admin/strategy/isolation
+    GET  /admin/strategy/isolation/indexes
+    GET  /admin/strategy/isolation/{ticker}
+    GET  /admin/strategy/isolation/{ticker}/strikes
+    POST /admin/strategy/isolation/recalculate
+
+    # Stage 3 (tracker)
+    GET  /admin/strategy/tracker/status
+    POST /admin/strategy/tracker/start
+    POST /admin/strategy/tracker/stop
+    GET  /admin/strategy/stage3
+    GET  /admin/strategy/stage3/{ticker}
+
+    # Stage 4 (orders)
+    GET  /admin/strategy/stage4
+    GET  /admin/strategy/stage4/{ticker}
+    POST /admin/strategy/order/run
 """
 
 from __future__ import annotations
@@ -31,6 +47,10 @@ from fastapi import APIRouter, HTTPException
 from core import config
 from services.normalization import normalize_underlying
 from services.strategy_isolation_service import strategy_isolation_service
+from services.strategy_live_tracker_service import (
+    strategy_live_tracker_service,
+)
+from services.strategy_order_service import strategy_order_service
 from services.strategy_selection_service import strategy_selection_service
 
 logger = logging.getLogger(__name__)
@@ -38,6 +58,9 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/admin/strategy", tags=["strategy"])
 
 
+# ---------------------------------------------------------------------------
+# Paths / helpers
+# ---------------------------------------------------------------------------
 def _base() -> Path:
     return Path(config.STRATEGY_BASE_DIR)
 
@@ -48,6 +71,14 @@ def _stage1_root() -> Path:
 
 def _stage2_root() -> Path:
     return _base() / config.STRATEGY_STAGE_2_NAME
+
+
+def _stage3_root() -> Path:
+    return _base() / config.STRATEGY_STAGE_3_NAME
+
+
+def _stage4_root() -> Path:
+    return _base() / config.STRATEGY_STAGE_4_NAME
 
 
 def _safe(name: str) -> str:
@@ -114,13 +145,12 @@ def _read_ticker(
 
 
 # ---------------------------------------------------------------------------
-# Stage 1 (selection) — summary + per-index + strikes
+# Stage 1
 # ---------------------------------------------------------------------------
 @router.get("")
 def read_summary() -> dict[str, Any]:
     data = _read(_stage1_root() / "stage_1_summary.json")
     if not data:
-        # Legacy path fallback.
         data = _read(_base() / "strategy_summary.json")
     if not data:
         return {"status": "not_generated", "base_dir": str(_base())}
@@ -150,9 +180,7 @@ def read_strikes(ticker: str) -> dict[str, Any]:
             for strike_dir in sorted(index_dir.iterdir()):
                 if not strike_dir.is_dir():
                     continue
-                meta = _read(strike_dir / "strategy_meta.json")
-                if not meta:
-                    continue
+                meta = _read(strike_dir / "strategy_meta.json") or {}
                 last = _read(strike_dir / "last_day_cross.json") or {}
                 contracts.append(
                     {
@@ -184,7 +212,7 @@ async def recalculate() -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Stage 2 (isolation)
+# Stage 2
 # ---------------------------------------------------------------------------
 @router.get("/isolation")
 def read_isolation_summary() -> dict[str, Any]:
@@ -229,6 +257,7 @@ def read_isolation_strikes(ticker: str) -> dict[str, Any]:
                         "last_day_type": meta.get("last_day_type"),
                         "today_type": meta.get("today_type"),
                         "decision": meta.get("decision"),
+                        "paired_trigger": meta.get("paired_trigger"),
                         "reason": meta.get("reason"),
                         "folder": str(strike_dir),
                     }
@@ -244,6 +273,93 @@ def read_isolation_strikes(ticker: str) -> dict[str, Any]:
 
 @router.post("/isolation/recalculate")
 async def recalculate_isolation() -> dict[str, Any]:
-    return await asyncio.to_thread(
-        strategy_isolation_service.run, "manual"
-    )
+    return await asyncio.to_thread(strategy_isolation_service.run, "manual")
+
+
+# ---------------------------------------------------------------------------
+# Stage 3 (tracker)
+# ---------------------------------------------------------------------------
+@router.get("/tracker/status")
+def tracker_status() -> dict[str, Any]:
+    return strategy_live_tracker_service.status()
+
+
+@router.post("/tracker/start")
+def tracker_start() -> dict[str, Any]:
+    ok = strategy_live_tracker_service.start()
+    return {"started": ok, "status": strategy_live_tracker_service.status()}
+
+
+@router.post("/tracker/stop")
+def tracker_stop() -> dict[str, Any]:
+    strategy_live_tracker_service.stop()
+    return {"stopped": True, "status": strategy_live_tracker_service.status()}
+
+
+@router.get("/stage3")
+def read_stage3_summary() -> dict[str, Any]:
+    data = _read(_stage3_root() / "stage_3_summary.json")
+    if not data:
+        return {"status": "not_generated", "base_dir": str(_stage3_root())}
+    return data
+
+
+@router.get("/stage3/{ticker}")
+def read_stage3_ticker(ticker: str) -> dict[str, Any]:
+    ticker_dir = _stage3_root() / _safe(normalize_underlying(ticker) or ticker)
+    if not ticker_dir.is_dir():
+        raise HTTPException(status_code=404, detail="Ticker not found")
+
+    items: list[dict[str, Any]] = []
+    for index_dir in sorted(ticker_dir.iterdir()):
+        if not index_dir.is_dir():
+            continue
+        for strike_dir in sorted(index_dir.iterdir()):
+            if not strike_dir.is_dir():
+                continue
+            activation = _read(strike_dir / "r2_activation.json")
+            if activation:
+                items.append(activation)
+
+    return {
+        "ticker": normalize_underlying(ticker) or ticker,
+        "activated_count": len(items),
+        "activated": items,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Stage 4 (orders)
+# ---------------------------------------------------------------------------
+@router.get("/stage4")
+def read_stage4_summary() -> dict[str, Any]:
+    data = _read(_stage4_root() / "stage_4_summary.json")
+    if not data:
+        return {"status": "not_generated", "base_dir": str(_stage4_root())}
+    return data
+
+
+@router.get("/stage4/{ticker}")
+def read_stage4_ticker(ticker: str) -> dict[str, Any]:
+    ticker_dir = _stage4_root() / _safe(normalize_underlying(ticker) or ticker)
+    if not ticker_dir.is_dir():
+        raise HTTPException(status_code=404, detail="Ticker not found")
+
+    items: list[dict[str, Any]] = []
+    for index_dir in sorted(ticker_dir.iterdir()):
+        if not index_dir.is_dir():
+            continue
+        orders = _read(index_dir / "orders.json")
+        if orders:
+            items.append(orders)
+
+    return {
+        "ticker": normalize_underlying(ticker) or ticker,
+        "index_count": len(items),
+        "orders_by_index": items,
+    }
+
+
+@router.post("/order/run")
+async def run_order() -> dict[str, Any]:
+    return await asyncio.to_thread(strategy_order_service.run, "manual")

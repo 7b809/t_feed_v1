@@ -1,0 +1,750 @@
+{% extends "base.html" %}
+
+{% block title %}Strategy Dashboard - {{ app_name }}{% endblock %}
+
+{% block head %}
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" />
+
+<style>
+  :root {
+    --dash-bg: #f4f7fe;
+    --card-bg: #ffffff;
+    --card-header: #f8fafc;
+    --border: #e2e8f0;
+    --text-dark: #0f172a;
+    --text-muted: #64748b;
+    --primary: #2563eb;
+    --success: #16a34a;
+    --warning: #d97706;
+    --danger: #dc2626;
+    --waiting: #94a3b8;
+    --shadow-sm: 0 1px 3px rgba(15, 23, 42, 0.06);
+    --shadow-md: 0 8px 24px rgba(15, 23, 42, 0.08);
+  }
+
+  body {
+    background-color: var(--dash-bg) !important;
+    color: var(--text-dark) !important;
+  }
+
+  .dash-container {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 24px;
+  }
+
+  /* Hero */
+  .dash-hero {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 16px;
+    background: #ffffff;
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 20px 28px;
+    margin-bottom: 24px;
+    box-shadow: var(--shadow-sm);
+  }
+  .dash-hero h1 {
+    font-size: 1.4rem;
+    font-weight: 800;
+    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .dash-hero .subtitle {
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    margin-top: 2px;
+  }
+
+  .live-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.78rem;
+    font-weight: 700;
+    padding: 6px 14px;
+    border-radius: 30px;
+    background: #e0e7ff;
+    color: #3730a3;
+  }
+  .live-pill::before {
+    content: "";
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #4338ca;
+    animation: pulse 1.6s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.35; }
+  }
+
+  /* Card */
+  .dash-card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    box-shadow: var(--shadow-sm);
+    margin-bottom: 24px;
+    overflow: hidden;
+  }
+  .dash-card-header {
+    background: var(--card-header);
+    border-bottom: 1px solid var(--border);
+    padding: 14px 20px;
+    font-size: 0.9rem;
+    font-weight: 700;
+    color: var(--text-dark);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .dash-card-header i {
+    color: var(--primary);
+  }
+  .dash-card-body {
+    padding: 20px;
+  }
+
+  /* Current pick card */
+  .pick-card {
+    border-top: 4px solid var(--primary);
+  }
+  .pick-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+    gap: 14px 22px;
+  }
+  .pick-cell .lbl {
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    color: var(--text-muted);
+    font-weight: 700;
+    display: block;
+    margin-bottom: 4px;
+  }
+  .pick-cell .val {
+    font-size: 1rem;
+    font-weight: 700;
+    color: var(--text-dark);
+    word-break: break-word;
+  }
+  .pick-cell .val.mono {
+    font-family: 'JetBrains Mono', 'Courier New', monospace;
+    font-size: 0.88rem;
+  }
+  .pick-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-bottom: 18px;
+  }
+  .pick-title {
+    font-size: 1.35rem;
+    font-weight: 800;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .pill {
+    display: inline-block;
+    padding: 3px 12px;
+    border-radius: 20px;
+    font-size: 0.72rem;
+    font-weight: 800;
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+  }
+  .pill.ce { background: #dcfce7; color: #15803d; }
+  .pill.pe { background: #fee2e2; color: #b91c1c; }
+  .pill.ticker { background: #e0e7ff; color: #3730a3; }
+  .pill.side { background: #dbeafe; color: #1d4ed8; }
+
+  .btn-open-chart {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 20px;
+    border-radius: 10px;
+    background: var(--primary);
+    color: #ffffff;
+    font-weight: 700;
+    font-size: 0.9rem;
+    text-decoration: none;
+    border: none;
+    transition: all 0.2s ease;
+    box-shadow: 0 4px 12px rgba(37, 99, 235, 0.25);
+  }
+  .btn-open-chart:hover {
+    background: #1d4ed8;
+    color: #ffffff;
+    transform: translateY(-1px);
+    box-shadow: 0 6px 16px rgba(37, 99, 235, 0.35);
+  }
+
+  /* Empty state for pick card */
+  .pick-empty {
+    text-align: center;
+    padding: 30px 20px;
+    color: var(--text-muted);
+  }
+  .pick-empty i {
+    font-size: 2.6rem;
+    display: block;
+    margin-bottom: 10px;
+    opacity: 0.4;
+  }
+
+  /* Timeline */
+  .timeline {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 12px;
+    position: relative;
+  }
+  .timeline-step {
+    background: #f8fafc;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 14px 16px;
+    position: relative;
+  }
+  .timeline-step.ok { border-left: 4px solid var(--success); }
+  .timeline-step.waiting { border-left: 4px solid var(--waiting); opacity: 0.7; }
+  .timeline-step.error { border-left: 4px solid var(--danger); }
+  .timeline-step .step-name {
+    font-size: 0.78rem;
+    font-weight: 800;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    letter-spacing: 0.4px;
+    margin-bottom: 6px;
+  }
+  .timeline-step .step-time {
+    font-family: 'JetBrains Mono', 'Courier New', monospace;
+    font-size: 0.82rem;
+    font-weight: 700;
+    color: var(--text-dark);
+  }
+  .timeline-step .step-status {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    font-size: 0.7rem;
+    font-weight: 800;
+    padding: 2px 8px;
+    border-radius: 20px;
+  }
+  .timeline-step.ok .step-status { background: #dcfce7; color: #15803d; }
+  .timeline-step.waiting .step-status { background: #f1f5f9; color: #64748b; }
+  .timeline-step.error .step-status { background: #fee2e2; color: #b91c1c; }
+
+  /* Stage summary tiles */
+  .stage-tiles {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 14px;
+  }
+  .stage-tile {
+    background: #ffffff;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px 18px;
+    box-shadow: var(--shadow-sm);
+  }
+  .stage-tile .tile-title {
+    font-size: 0.72rem;
+    font-weight: 800;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    letter-spacing: 0.5px;
+    margin-bottom: 8px;
+  }
+  .stage-tile .tile-numbers {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 18px;
+  }
+  .stage-tile .tile-num {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .stage-tile .tile-num .num {
+    font-size: 1.4rem;
+    font-weight: 800;
+    color: var(--text-dark);
+    line-height: 1;
+  }
+  .stage-tile .tile-num .num.primary { color: var(--primary); }
+  .stage-tile .tile-num .num.success { color: var(--success); }
+  .stage-tile .tile-num .num.warning { color: var(--warning); }
+  .stage-tile .tile-num .num.danger { color: var(--danger); }
+  .stage-tile .tile-num .lbl {
+    font-size: 0.68rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    letter-spacing: 0.3px;
+  }
+
+  /* Orders table */
+  .orders-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85rem;
+  }
+  .orders-table th {
+    text-align: left;
+    padding: 10px 14px;
+    background: #f8fafc;
+    font-size: 0.72rem;
+    font-weight: 800;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    border-bottom: 1px solid var(--border);
+    letter-spacing: 0.4px;
+  }
+  .orders-table td {
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--border);
+    color: var(--text-dark);
+  }
+  .orders-table tbody tr:last-child td { border-bottom: none; }
+  .orders-table tbody tr:hover { background: #f8fafc; }
+
+  .mono-sm {
+    font-family: 'JetBrains Mono', 'Courier New', monospace;
+    font-size: 0.78rem;
+    color: var(--text-dark);
+  }
+
+  .empty-msg {
+    text-align: center;
+    padding: 40px 20px;
+    color: var(--text-muted);
+    font-size: 0.9rem;
+  }
+  .empty-msg i {
+    font-size: 2rem;
+    display: block;
+    margin-bottom: 10px;
+    opacity: 0.35;
+  }
+
+  @media (max-width: 640px) {
+    .dash-container { padding: 16px; }
+    .pick-title { font-size: 1.1rem; }
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="dash-container">
+
+  <!-- Hero -->
+  <div class="dash-hero">
+    <div>
+      <h1>
+        <i class="bi bi-diagram-3-fill text-primary"></i>
+        <span>Strategy Dashboard</span>
+      </h1>
+      <div class="subtitle">
+        Current selection, pipeline timeline, and per-stage summary
+      </div>
+    </div>
+    <div class="d-flex align-items-center gap-3">
+      <span class="live-pill" id="live-pill">Auto-refreshing</span>
+      <button class="btn btn-outline-secondary btn-sm rounded-3 fw-bold"
+              onclick="refreshDashboard()">
+        <i class="bi bi-arrow-clockwise me-1"></i>Refresh
+      </button>
+    </div>
+  </div>
+
+  <!-- Current pick -->
+  <div class="dash-card pick-card">
+    <div class="dash-card-header">
+      <i class="bi bi-award-fill"></i>
+      Current Stage-4 Selection
+    </div>
+    <div class="dash-card-body" id="pick-body">
+      <div class="pick-empty">
+        <i class="bi bi-hourglass-split"></i>
+        <span>Waiting for stage-4 to place an order…</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Timeline -->
+  <div class="dash-card">
+    <div class="dash-card-header">
+      <i class="bi bi-signpost-split-fill"></i>
+      Pipeline Timeline
+    </div>
+    <div class="dash-card-body">
+      <div class="timeline" id="timeline-body">
+        <!-- filled by JS -->
+      </div>
+    </div>
+  </div>
+
+  <!-- Stage summaries -->
+  <div class="dash-card">
+    <div class="dash-card-header">
+      <i class="bi bi-bar-chart-line-fill"></i>
+      Stage Summaries
+    </div>
+    <div class="dash-card-body">
+      <div class="stage-tiles" id="stage-tiles">
+        <!-- filled by JS -->
+      </div>
+    </div>
+  </div>
+
+  <!-- Recent orders -->
+  <div class="dash-card">
+    <div class="dash-card-header">
+      <i class="bi bi-journal-text"></i>
+      Recent Orders
+    </div>
+    <div class="dash-card-body p-0">
+      <div id="orders-body">
+        <div class="empty-msg">
+          <i class="bi bi-inbox"></i>
+          No orders placed yet today.
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const DASHBOARD_URL = "/ui/dashboard/strategy";
+const REFRESH_INTERVAL_MS = 5000;
+
+let refreshTimer = null;
+
+function escapeHtml(s) {
+  return String(s ?? "").replace(/[&<>"']/g, c => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+  }[c]));
+}
+
+function fmtTime(iso) {
+  if (!iso) return "—";
+  try {
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return String(iso);
+    const date = d.toLocaleDateString("en-IN", {
+      day: "2-digit", month: "short", year: "2-digit",
+    });
+    const time = d.toLocaleTimeString("en-IN", {
+      hour: "2-digit", minute: "2-digit", second: "2-digit",
+      hour12: false,
+    });
+    return `${date} ${time}`;
+  } catch {
+    return String(iso);
+  }
+}
+
+function fmtNum(val, dec = 2) {
+  const n = Number(val);
+  if (!Number.isFinite(n)) return "—";
+  return n.toFixed(dec);
+}
+
+function renderPick(pick) {
+  const body = document.getElementById("pick-body");
+  if (!pick) {
+    body.innerHTML = `
+      <div class="pick-empty">
+        <i class="bi bi-hourglass-split"></i>
+        <span>Waiting for stage-4 to place an order…</span>
+      </div>`;
+    return;
+  }
+
+  const ticker = pick.ticker || "—";
+  const indexName = pick.index_name || "";
+  const strike = pick.strike_price ?? "—";
+  const type = (pick.strike_type || "").toUpperCase();
+  const expiry = pick.expiry || "—";
+  const key = pick.upstox_instrument_key || pick.instrument_key || "";
+  const tradingSymbol = pick.trading_symbol || `${ticker} ${strike} ${type}`;
+  const side = pick.side || "BUY";
+  const qty = pick.quantity ?? 1;
+  const entryLtp = pick.entry_ltp;
+  const r2 = pick.r2_value;
+  const indexLtp = pick.index_ltp_at_touch;
+  const touchedAt = pick.index_touched_at;
+  const placedAt = pick.placed_at;
+  const status = pick.status || "paper_filled";
+
+  const chartUrl = key
+    ? `/chart/${encodeURIComponent(key)}`
+    : "#";
+
+  body.innerHTML = `
+    <div class="pick-header">
+      <div>
+        <div class="pick-title">
+          <span class="pill ticker">${escapeHtml(ticker)}</span>
+          <span>${escapeHtml(tradingSymbol)}</span>
+          <span class="pill ${type === "CE" ? "ce" : "pe"}">${escapeHtml(type)}</span>
+          <span class="pill side">${escapeHtml(side)} × ${escapeHtml(qty)}</span>
+        </div>
+        <div class="text-muted small mt-1">${escapeHtml(indexName)}</div>
+      </div>
+      <a href="${chartUrl}" target="_blank" class="btn-open-chart">
+        <i class="bi bi-graph-up-arrow"></i>
+        Open Chart
+      </a>
+    </div>
+
+    <div class="pick-grid">
+      <div class="pick-cell">
+        <span class="lbl">Instrument Key</span>
+        <span class="val mono">${escapeHtml(key || "—")}</span>
+      </div>
+      <div class="pick-cell">
+        <span class="lbl">Strike</span>
+        <span class="val">${escapeHtml(String(strike))}</span>
+      </div>
+      <div class="pick-cell">
+        <span class="lbl">Type</span>
+        <span class="val">${escapeHtml(type || "—")}</span>
+      </div>
+      <div class="pick-cell">
+        <span class="lbl">Expiry</span>
+        <span class="val">${escapeHtml(String(expiry))}</span>
+      </div>
+      <div class="pick-cell">
+        <span class="lbl">Entry LTP</span>
+        <span class="val">${entryLtp != null ? "₹" + fmtNum(entryLtp) : "—"}</span>
+      </div>
+      <div class="pick-cell">
+        <span class="lbl">Index R2</span>
+        <span class="val">${r2 != null ? fmtNum(r2) : "—"}</span>
+      </div>
+      <div class="pick-cell">
+        <span class="lbl">Index LTP @ touch</span>
+        <span class="val">${indexLtp != null ? fmtNum(indexLtp) : "—"}</span>
+      </div>
+      <div class="pick-cell">
+        <span class="lbl">R2 Touched At</span>
+        <span class="val">${escapeHtml(fmtTime(touchedAt))}</span>
+      </div>
+      <div class="pick-cell">
+        <span class="lbl">Order Placed At</span>
+        <span class="val">${escapeHtml(fmtTime(placedAt))}</span>
+      </div>
+      <div class="pick-cell">
+        <span class="lbl">Status</span>
+        <span class="val">${escapeHtml(status)}</span>
+      </div>
+    </div>
+  `;
+}
+
+function renderTimeline(steps) {
+  const el = document.getElementById("timeline-body");
+  if (!Array.isArray(steps) || !steps.length) {
+    el.innerHTML = `<div class="empty-msg"><i class="bi bi-signpost"></i>No stage data yet.</div>`;
+    return;
+  }
+  el.innerHTML = steps.map(s => {
+    const status = s.status || "waiting";
+    const label = status === "ok" ? "Done"
+                : status === "error" ? "Error"
+                : "Waiting";
+    return `
+      <div class="timeline-step ${status}">
+        <div class="step-name">${escapeHtml(s.name || s.stage || "")}</div>
+        <div class="step-time">${escapeHtml(fmtTime(s.at))}</div>
+        <span class="step-status">${label}</span>
+      </div>
+    `;
+  }).join("");
+}
+
+function renderStageTiles(summaries) {
+  const el = document.getElementById("stage-tiles");
+  if (!summaries) {
+    el.innerHTML = `<div class="empty-msg"><i class="bi bi-bar-chart"></i>No summaries yet.</div>`;
+    return;
+  }
+
+  const s1 = summaries.stage_1 || {};
+  const s2 = summaries.stage_2 || {};
+  const s3 = summaries.stage_3 || {};
+  const s4 = summaries.stage_4 || {};
+
+  el.innerHTML = `
+    <div class="stage-tile">
+      <div class="tile-title">Stage 1 · Selection</div>
+      <div class="tile-numbers">
+        <div class="tile-num">
+          <span class="num">${s1.indexes ?? 0}</span>
+          <span class="lbl">Indexes</span>
+        </div>
+        <div class="tile-num">
+          <span class="num primary">${s1.strikes ?? 0}</span>
+          <span class="lbl">Strikes</span>
+        </div>
+        <div class="tile-num">
+          <span class="num">${s1.contracts ?? 0}</span>
+          <span class="lbl">Contracts</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="stage-tile">
+      <div class="tile-title">Stage 2 · Isolation</div>
+      <div class="tile-numbers">
+        <div class="tile-num">
+          <span class="num">${s2.evaluated ?? 0}</span>
+          <span class="lbl">Evaluated</span>
+        </div>
+        <div class="tile-num">
+          <span class="num success">${s2.isolated ?? 0}</span>
+          <span class="lbl">Isolated</span>
+        </div>
+        <div class="tile-num">
+          <span class="num primary">${s2.pairs_isolated ?? 0}</span>
+          <span class="lbl">Pairs</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="stage-tile">
+      <div class="tile-title">Stage 3 · R2 Activation</div>
+      <div class="tile-numbers">
+        <div class="tile-num">
+          <span class="num warning">${s3.activated_count ?? 0}</span>
+          <span class="lbl">Activated</span>
+        </div>
+        <div class="tile-num">
+          <span class="num" style="font-size:0.85rem;">
+            ${escapeHtml(s3.window_start || "—")}–${escapeHtml(s3.window_end || "—")}
+          </span>
+          <span class="lbl">Window</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="stage-tile">
+      <div class="tile-title">Stage 4 · Order</div>
+      <div class="tile-numbers">
+        <div class="tile-num">
+          <span class="num">${s4.candidates ?? 0}</span>
+          <span class="lbl">Candidates</span>
+        </div>
+        <div class="tile-num">
+          <span class="num">${s4.picks ?? 0}</span>
+          <span class="lbl">Picks</span>
+        </div>
+        <div class="tile-num">
+          <span class="num success">${s4.placed ?? 0}</span>
+          <span class="lbl">Placed</span>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderOrders(orders) {
+  const el = document.getElementById("orders-body");
+  if (!Array.isArray(orders) || !orders.length) {
+    el.innerHTML = `
+      <div class="empty-msg">
+        <i class="bi bi-inbox"></i>
+        No orders placed yet today.
+      </div>`;
+    return;
+  }
+
+  const rows = orders.map(o => {
+    const key = o.upstox_instrument_key || o.instrument_key || "";
+    const chartUrl = key ? `/chart/${encodeURIComponent(key)}` : "#";
+    return `
+      <tr>
+        <td><span class="pill ticker">${escapeHtml(o.ticker || "—")}</span></td>
+        <td>${escapeHtml(String(o.strike_price ?? "—"))}</td>
+        <td><span class="pill ${String(o.strike_type).toUpperCase() === "CE" ? "ce" : "pe"}">${escapeHtml(o.strike_type || "—")}</span></td>
+        <td class="mono-sm">${escapeHtml(key || "—")}</td>
+        <td>${o.entry_ltp != null ? "₹" + fmtNum(o.entry_ltp) : "—"}</td>
+        <td class="mono-sm">${escapeHtml(fmtTime(o.placed_at))}</td>
+        <td>
+          <a href="${chartUrl}" target="_blank" class="btn btn-sm btn-outline-primary rounded-3">
+            <i class="bi bi-graph-up-arrow"></i>
+          </a>
+        </td>
+      </tr>
+    `;
+  }).join("");
+
+  el.innerHTML = `
+    <table class="orders-table">
+      <thead>
+        <tr>
+          <th>Ticker</th>
+          <th>Strike</th>
+          <th>Type</th>
+          <th>Instrument Key</th>
+          <th>Entry LTP</th>
+          <th>Placed At</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+}
+
+async function refreshDashboard() {
+  try {
+    const resp = await fetch(DASHBOARD_URL, {
+      headers: { Accept: "application/json" },
+    });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
+
+    renderPick(data.current_pick);
+    renderTimeline(data.timeline);
+    renderStageTiles(data.stage_summaries);
+    renderOrders(data.latest_orders);
+  } catch (err) {
+    console.warn("Dashboard refresh failed:", err);
+  }
+}
+
+function scheduleRefresh() {
+  if (refreshTimer) clearInterval(refreshTimer);
+  refreshTimer = setInterval(refreshDashboard, REFRESH_INTERVAL_MS);
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  refreshDashboard();
+  scheduleRefresh();
+});
+
+window.addEventListener("beforeunload", () => {
+  if (refreshTimer) clearInterval(refreshTimer);
+});
+</script>
+{% endblock %}

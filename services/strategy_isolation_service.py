@@ -1,4 +1,4 @@
-"""Stage 2 — EMA-cross isolation.
+"""Stage 2 — EMA-cross isolation with strike-level pairing.
 
 Reads the stage-1 tree at ``data/strategy/stage_1_initial`` and, for
 each strike folder that was resolved to a real Upstox key, checks:
@@ -10,9 +10,9 @@ each strike folder that was resolved to a real Upstox key, checks:
 
 It then applies the bullish-priority selection rules:
 
-    Case 1  last day bearish  + today bullish   -> isolate (bullish priority)
-    Case 2  last day bullish  + today none      -> isolate (bullish carries)
-    Case 3  last day none     + today any       -> isolate (fresh signal)
+    Case 1  last day bearish  + today bullish   -> isolate
+    Case 2  last day bullish  + today none      -> isolate
+    Case 3  last day none     + today any       -> isolate
     Case 4  last day none     + today none      -> NOT isolated
 
 Additional combinations handled by the same priority rule:
@@ -22,12 +22,27 @@ Additional combinations handled by the same priority rule:
     last day bearish + today none    -> NOT isolated (bearish alone)
     last day bearish + today bearish -> NOT isolated
 
-Isolated strikes are copied to::
+Strike-level pairing
+--------------------
+
+The rule is decided per contract (CE / PE), but the OUTPUT is paired:
+if either the CE or the PE folder of a given strike isolates, **both
+sides** are copied to ``stage_2_isolation``. This keeps a selected
+strike group (call + put) together so downstream consumers always see
+a complete strike.
+
+The side that triggered the isolation keeps its normal
+``isolation_meta.json`` (``decision: "isolate"``). The paired sibling
+is copied with ``decision: "isolate_paired"`` and
+``paired_trigger: "CE"`` (or ``"PE"``) so you can tell from disk which
+side decided.
+
+Output layout::
 
     data/strategy/stage_2_isolation/<TICKER>/<INDEX_NAME>/<strike>_<TYPE>/
 
-Each isolated strike folder keeps all stage-1 files and adds an
-``isolation_meta.json`` describing the exact decision.
+Each isolated folder contains every stage-1 file plus an
+``isolation_meta.json`` describing the decision.
 """
 
 from __future__ import annotations
@@ -143,6 +158,7 @@ class StrategyIsolationService:
                 "reason": reason,
                 "generated_at": _now_iso(),
                 "isolated": 0,
+                "pairs_isolated": 0,
                 "evaluated": 0,
                 "skipped": 0,
                 "errors": 0,
@@ -160,6 +176,7 @@ class StrategyIsolationService:
                 "reason": reason,
                 "generated_at": _now_iso(),
                 "isolated": 0,
+                "pairs_isolated": 0,
                 "evaluated": 0,
                 "skipped": 0,
                 "errors": 0,
@@ -169,13 +186,14 @@ class StrategyIsolationService:
         today_iso = date.today().isoformat()
 
         logger.info(
-            "[strategy:%s] stage_2 START — today=%s lookback=%dm",
+            "[strategy:%s] stage_2 START — today=%s lookback=%dm pairing=on",
             reason, today_iso, config.STRATEGY_ISOLATION_LOOKBACK_MINUTES,
         )
 
         per_index: list[dict[str, Any]] = []
         total_evaluated = 0
         total_isolated = 0
+        total_pairs = 0
         total_skipped = 0
         total_errors = 0
 
@@ -204,12 +222,15 @@ class StrategyIsolationService:
                         "error": f"{type(exc).__name__}: {exc}",
                         "evaluated": 0,
                         "isolated": 0,
+                        "pairs_isolated": 0,
                         "skipped": 0,
                         "errors": 1,
+                        "contracts": [],
                     }
                 per_index.append(idx_result)
                 total_evaluated += idx_result.get("evaluated", 0)
                 total_isolated += idx_result.get("isolated", 0)
+                total_pairs += idx_result.get("pairs_isolated", 0)
                 total_skipped += idx_result.get("skipped", 0)
                 total_errors += idx_result.get("errors", 0)
 
@@ -220,8 +241,10 @@ class StrategyIsolationService:
             "generated_at": _now_iso(),
             "today": today_iso,
             "lookback_minutes": config.STRATEGY_ISOLATION_LOOKBACK_MINUTES,
+            "pairing": "strike_ce_pe",
             "evaluated": total_evaluated,
             "isolated": total_isolated,
+            "pairs_isolated": total_pairs,
             "skipped": total_skipped,
             "errors": total_errors,
             "indexes": per_index,
@@ -235,8 +258,9 @@ class StrategyIsolationService:
 
         logger.info(
             "[strategy:%s] stage_2 COMPLETE — evaluated=%d isolated=%d "
-            "skipped=%d errors=%d",
-            reason, total_evaluated, total_isolated, total_skipped, total_errors,
+            "pairs=%d skipped=%d errors=%d",
+            reason, total_evaluated, total_isolated,
+            total_pairs, total_skipped, total_errors,
         )
         return summary
 
@@ -255,16 +279,10 @@ class StrategyIsolationService:
         index_name = index_dir.name
 
         strike_dirs = [p for p in sorted(index_dir.iterdir()) if p.is_dir()]
-
         token = token_service.get_access_token()
 
-        evaluated = 0
-        isolated = 0
-        skipped = 0
-        errors = 0
-        contracts: list[dict[str, Any]] = []
-
-        # Limited parallelism; Upstox fetches are the slow part.
+        # ---- 1. Evaluate each contract independently --------------------
+        evaluations: list[dict[str, Any]] = []
         workers = min(config.STRATEGY_MAX_WORKERS, max(1, len(strike_dirs)))
 
         def _task(strike_dir: Path) -> dict[str, Any]:
@@ -281,42 +299,100 @@ class StrategyIsolationService:
             for fut in as_completed(futures):
                 strike_dir = futures[fut]
                 try:
-                    result = fut.result()
+                    evaluations.append(fut.result())
                 except Exception as exc:
                     logger.exception(
                         "[strategy] stage_2 %s failed", strike_dir.name,
                     )
-                    result = {
+                    evaluations.append({
                         "status": "error",
-                        "folder": str(strike_dir),
+                        "stage_1_folder": str(strike_dir),
                         "error": f"{type(exc).__name__}: {exc}",
-                    }
-                evaluated += 1
-                status = result.get("status")
-                if status == "isolated":
-                    isolated += 1
-                    # Copy the folder into stage_2_isolation.
-                    out_dir = (
-                        stage2_base / ticker / index_name / strike_dir.name
-                    )
-                    try:
-                        if out_dir.exists():
-                            shutil.rmtree(out_dir)
-                        shutil.copytree(strike_dir, out_dir)
-                        _write_json(
-                            out_dir / "isolation_meta.json", result,
-                        )
-                        result["stage_2_folder"] = str(out_dir)
-                    except Exception:
-                        logger.exception(
-                            "[strategy] stage_2 copy failed for %s", strike_dir,
-                        )
+                        "strike_price": None,
+                        "strike_type": None,
+                    })
+
+        # ---- 2. Group by strike price to apply pairing ------------------
+        # A strike is "selected" if at least one of its two contracts
+        # (CE, PE) has isolated == True. Both sides of a selected strike
+        # are then copied to stage_2_isolation.
+        by_strike: dict[Any, dict[str, dict[str, Any]]] = {}
+        for ev in evaluations:
+            sp = ev.get("strike_price")
+            st = str(ev.get("strike_type") or "").upper()
+            if sp is None or not st:
+                continue
+            by_strike.setdefault(sp, {})[st] = ev
+
+        isolated_contracts: list[dict[str, Any]] = []   # to copy
+        skipped_contracts: list[dict[str, Any]] = []    # to report
+        errors = 0
+        pairs_isolated = 0
+
+        for sp, sides in by_strike.items():
+            trigger_side = None
+            for side in ("CE", "PE"):
+                ev = sides.get(side)
+                if ev and ev.get("isolated"):
+                    trigger_side = side
+                    break
+
+            if trigger_side is None:
+                # No side triggered — the whole strike stays in stage 1.
+                for side, ev in sides.items():
+                    if ev.get("status") == "error":
                         errors += 1
-                elif status == "skipped":
-                    skipped += 1
-                elif status == "error":
+                    skipped_contracts.append(ev)
+                continue
+
+            # At least one side triggered: BOTH go to stage 2.
+            pairs_isolated += 1
+            for side, ev in sides.items():
+                if ev.get("status") == "error":
                     errors += 1
-                contracts.append(result)
+                    skipped_contracts.append(ev)
+                    continue
+                if side == trigger_side:
+                    # Keep as-is; decision already "isolate".
+                    isolated_contracts.append(ev)
+                else:
+                    # Pair the sibling in.
+                    paired = dict(ev)
+                    paired["status"] = "isolated"
+                    paired["isolated"] = True
+                    paired["decision"] = "isolate_paired"
+                    paired["paired_trigger"] = trigger_side
+                    paired["pair_reason"] = (
+                        f"sibling_{trigger_side.lower()}_triggered"
+                    )
+                    isolated_contracts.append(paired)
+
+        # ---- 3. Copy isolated contracts into stage_2 --------------------
+        isolated = 0
+        for ev in isolated_contracts:
+            src_folder = ev.get("stage_1_folder")
+            if not src_folder:
+                errors += 1
+                continue
+            strike_dir = Path(src_folder)
+            out_dir = stage2_base / ticker / index_name / strike_dir.name
+            try:
+                if out_dir.exists():
+                    shutil.rmtree(out_dir)
+                shutil.copytree(strike_dir, out_dir)
+                _write_json(out_dir / "isolation_meta.json", ev)
+                ev["stage_2_folder"] = str(out_dir)
+                isolated += 1
+            except Exception:
+                logger.exception(
+                    "[strategy] stage_2 copy failed for %s", strike_dir,
+                )
+                errors += 1
+
+        # ---- 4. Per-index summary ---------------------------------------
+        all_contracts = isolated_contracts + skipped_contracts
+        evaluated = len(all_contracts)
+        skipped = len(skipped_contracts)
 
         idx_summary = {
             "status": "ok",
@@ -324,15 +400,16 @@ class StrategyIsolationService:
             "ticker": ticker,
             "index_name": index_name,
             "today": today_iso,
+            "pairing": "strike_ce_pe",
             "evaluated": evaluated,
             "isolated": isolated,
+            "pairs_isolated": pairs_isolated,
             "skipped": skipped,
             "errors": errors,
-            "contracts": contracts,
+            "contracts": all_contracts,
             "generated_at": _now_iso(),
         }
 
-        # Write per-index summary under stage_2 (even if nothing isolated).
         try:
             idx_out = stage2_base / ticker / index_name
             idx_out.mkdir(parents=True, exist_ok=True)
@@ -346,7 +423,7 @@ class StrategyIsolationService:
         return idx_summary
 
     # ------------------------------------------------------------------ #
-    # Per-strike evaluation                                              #
+    # Per-strike evaluation (unchanged logic, per-contract verdict)      #
     # ------------------------------------------------------------------ #
     def _evaluate_strike(
         self,
@@ -424,9 +501,7 @@ class StrategyIsolationService:
             "today_type": today_type,
             "today_first_cross": today_cross,
             "isolated": should,
-            "decision": (
-                "isolate" if should else "not_isolated"
-            ),
+            "decision": ("isolate" if should else "not_isolated"),
         }
 
     # ------------------------------------------------------------------ #
@@ -440,13 +515,7 @@ class StrategyIsolationService:
         today_iso: str,
         token: str,
     ) -> dict[str, Any] | None:
-        """Return the cross record if the 09:15 candle produced one.
-
-        Uses the stage-1 ``candles.json`` (history up to yesterday) plus
-        a fresh Upstox intraday fetch for today. Only the very first
-        candle (09:15 – 09:16 IST) is inspected.
-        """
-        # ---- 1. History (up to yesterday) ------------------------------
+        """Return the cross record if the 09:15 candle produced one."""
         hist_payload = _read_json(strike_dir / "candles.json") or {}
         history = hist_payload.get("candles") or []
         history = [
@@ -454,7 +523,6 @@ class StrategyIsolationService:
             if str(c.get("timestamp", ""))[:10] < today_iso
         ]
 
-        # ---- 2. Today's intraday --------------------------------------
         try:
             resp = requests.get(
                 f"{_UPSTOX_BASE}/v3/historical-candle/intraday/"
@@ -497,8 +565,6 @@ class StrategyIsolationService:
             except (TypeError, ValueError):
                 continue
 
-        # Upstox returns most-recent-first sometimes; sort ascending and
-        # find the 09:15 candle.
         today_candles.sort(key=lambda c: c["timestamp"])
         first_today = next(
             (
@@ -508,10 +574,8 @@ class StrategyIsolationService:
             None,
         )
         if first_today is None:
-            # First candle hasn't completed yet (before 09:16 IST).
             return None
 
-        # ---- 3. Compute EMA over history + first candle ---------------
         merged = list(history) + [first_today]
         if len(merged) < max(config.EMA_SLOW_PERIOD + 2, 3):
             return None
@@ -520,7 +584,7 @@ class StrategyIsolationService:
         fast = _ema(closes, config.EMA_FAST_PERIOD)
         slow = _ema(closes, config.EMA_SLOW_PERIOD)
 
-        i = len(closes) - 1  # index of first_today
+        i = len(closes) - 1
         if i < 1:
             return None
         f0, s0 = fast[i - 1], slow[i - 1]

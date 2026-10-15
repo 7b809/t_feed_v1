@@ -3,6 +3,21 @@
 Subscribes to every instrument in the registry and, for each incoming
 feed, extracts the best available 1-min candle and tick snapshot, then
 hands it to the EMA engine and broadcasts to connected UI clients.
+
+LTP cache
+---------
+``_latest_ltp`` keeps the most recently seen LTP per instrument key.
+This is what the stage-3 R2 tracker polls via ``get_latest_ltp()`` to
+decide when to activate a stage-2 strike. The cache is updated on
+every accepted tick, so the tracker sees fresh prices within one
+WebSocket frame.
+
+The cache lives in the feed worker thread and is read by the tracker
+thread. Python dict assignment for a single string key is atomic under
+the GIL, and both writers and readers operate on the same singleton
+instance, so no lock is needed. The cache grows with the number of
+distinct subscribed keys (a few hundred at most) — it is never purged
+during a session.
 """
 
 from __future__ import annotations
@@ -27,12 +42,14 @@ DEFAULT_CORE_INSTRUMENTS = [
     ("BSE_INDEX|SENSEX", "SENSEX"),
 ]
 
+
 def _load_sdk():
     try:
         import upstox_client  # type: ignore
         return upstox_client
     except ImportError:
         return None
+
 
 class LiveFeedService:
     def __init__(self) -> None:
@@ -44,12 +61,14 @@ class LiveFeedService:
         self._subscribed: list[str] = []
         self._loop = None
         self._last_health_log_time: float = 0.0
+        # Latest LTP cache — see module docstring for concurrency notes.
+        self._latest_ltp: dict[str, float] = {}
 
     def set_loop(self, loop) -> None:
         self._loop = loop
 
     def _ensure_core_subscriptions(self) -> None:
-        """Ensure critical index feeds (Nifty, Sensex, and health feed) are present."""
+        """Ensure critical index feeds (Nifty, Sensex, health feed) are present."""
         targets = [k for k, _ in DEFAULT_CORE_INSTRUMENTS]
         if config.HEALTH_FEED_INSTRUMENT:
             targets.append(config.HEALTH_FEED_INSTRUMENT.strip())
@@ -59,10 +78,15 @@ class LiveFeedService:
                 continue
             if not instrument_registry.get(target):
                 symbol = target.split("|", 1)[-1]
-                instrument_registry.register_adhoc(target, trading_symbol=symbol)
+                instrument_registry.register_adhoc(
+                    target, trading_symbol=symbol,
+                )
             if target not in self._subscribed:
                 self._subscribed.append(target)
-                logger.info("Core index feed [%s] ensured in subscription list.", target)
+                logger.info(
+                    "Core index feed [%s] ensured in subscription list.",
+                    target,
+                )
 
     def start(self) -> bool:
         if self._thread and self._thread.is_alive():
@@ -78,11 +102,13 @@ class LiveFeedService:
         self._ensure_core_subscriptions()
 
         self._thread = threading.Thread(
-            target=self._run, name="upstox-live-feed", daemon=True
+            target=self._run, name="upstox-live-feed", daemon=True,
         )
         self._thread.start()
         self._started_at = datetime.now(timezone.utc)
-        logger.info("Live feed starting with %d instruments", len(self._subscribed))
+        logger.info(
+            "Live feed starting with %d instruments", len(self._subscribed),
+        )
         return True
 
     def stop(self) -> None:
@@ -104,6 +130,31 @@ class LiveFeedService:
     def is_subscribed(self, instrument_key: str) -> bool:
         key = str(instrument_key or "").strip()
         return key in self._subscribed
+
+    # ------------------------------------------------------------------ #
+    # LTP cache accessor (used by the stage-3 R2 tracker)                #
+    # ------------------------------------------------------------------ #
+    def get_latest_ltp(self, instrument_key: str) -> float | None:
+        """Return the most recently seen LTP for a key, or None.
+
+        Called from the tracker thread once per poll tick. Safe to call
+        before the feed has produced its first tick — the cache simply
+        returns None until then.
+        """
+        return self._latest_ltp.get(str(instrument_key or "").strip())
+
+    def get_latest_ltp_snapshot(self, limit: int = 50) -> dict[str, float]:
+        """Return a shallow copy of the LTP cache (for diagnostics).
+
+        ``limit`` caps how many entries are returned; set to 0 for the
+        full cache. Order is not guaranteed.
+        """
+        if not self._latest_ltp:
+            return {}
+        if limit and limit > 0:
+            items = list(self._latest_ltp.items())[:limit]
+            return dict(items)
+        return dict(self._latest_ltp)
 
     def subscribe_instrument(self, instrument_key: str) -> bool:
         key = str(instrument_key or "").strip()
@@ -142,7 +193,8 @@ class LiveFeedService:
             if self._stop.is_set():
                 break
             logger.info(
-                "Reconnecting live feed in %ds", config.UPSTOX_WS_RECONNECT_INTERVAL
+                "Reconnecting live feed in %ds",
+                config.UPSTOX_WS_RECONNECT_INTERVAL,
             )
             self._stop.wait(config.UPSTOX_WS_RECONNECT_INTERVAL)
 
@@ -158,7 +210,7 @@ class LiveFeedService:
         client = sdk.ApiClient(configuration)
 
         streamer = sdk.MarketDataStreamerV3(
-            client, list(self._subscribed), config.UPSTOX_WS_MODE
+            client, list(self._subscribed), config.UPSTOX_WS_MODE,
         )
         self._streamer = streamer
 
@@ -172,7 +224,9 @@ class LiveFeedService:
             logger.warning("Upstox feed error: %s", message)
 
         def on_close(*args, **kwargs) -> None:
-            logger.info("Upstox feed closed: args=%s kwargs=%s", args, kwargs)
+            logger.info(
+                "Upstox feed closed: args=%s kwargs=%s", args, kwargs,
+            )
 
         streamer.on("message", on_message)
         streamer.on("error", on_error)
@@ -224,6 +278,18 @@ class LiveFeedService:
 
             self._last_tick_at[instrument_key] = datetime.now(timezone.utc)
 
+            # ---- Cache the latest LTP -------------------------------
+            # The stage-3 tracker polls this cache each second to
+            # decide when an index's LTP reaches its R2 level. Cache
+            # update happens before the rest of the per-tick work so
+            # the tracker sees the freshest value as early as possible.
+            ltp = tick.get("ltp")
+            if ltp is not None:
+                try:
+                    self._latest_ltp[instrument_key] = float(ltp)
+                except (TypeError, ValueError):
+                    pass
+
             # Health feed log (e.g., every 5 minutes)
             if (
                 config.HEALTH_FEED_LOG
@@ -235,7 +301,9 @@ class LiveFeedService:
                     self._last_health_log_time = now
                     candle_1m = tick.get("candle_1m") or {}
                     logger.info(
-                        "[HEALTH FEED] instrument=%s | ltp=%s | prev_close=%s | 1m_ohlc=(O:%s H:%s L:%s C:%s) | vol=%s (interval=%dm)",
+                        "[HEALTH FEED] instrument=%s | ltp=%s | "
+                        "prev_close=%s | 1m_ohlc=(O:%s H:%s L:%s C:%s) | "
+                        "vol=%s (interval=%dm)",
                         instrument_key,
                         tick.get("ltp"),
                         tick.get("prev_close"),
@@ -257,7 +325,8 @@ class LiveFeedService:
             self._publish_feed_snapshot(entry, tick)
 
     def _extract_tick(self, feed: dict[str, Any]) -> dict[str, Any] | None:
-        """Comprehensive extractor supporting Index FullFeed, Option Chain, and MarketFF."""
+        """Comprehensive extractor supporting Index FullFeed, Option Chain,
+        and MarketFF."""
         if not isinstance(feed, dict):
             return None
 
@@ -277,8 +346,12 @@ class LiveFeedService:
             or oc.get("ltpc")
             or {}
         )
-        ltp = self._flt(ltpc.get("ltp") or feed.get("ltp") or market_ff.get("ltp"))
-        prev_close = self._flt(ltpc.get("cp") or feed.get("cp") or feed.get("prev_close"))
+        ltp = self._flt(
+            ltpc.get("ltp") or feed.get("ltp") or market_ff.get("ltp")
+        )
+        prev_close = self._flt(
+            ltpc.get("cp") or feed.get("cp") or feed.get("prev_close")
+        )
 
         # 2. 1-minute candle (I1) and Day OHLC
         candle_1m = None
@@ -297,9 +370,11 @@ class LiveFeedService:
                     if str(item.get("interval")) == "I1":
                         candle_1m = item
                     elif str(item.get("interval")).lower() in ("1d", "d"):
-                        ohlc_vol = self._flt(item.get("volume") or item.get("vol"))
+                        ohlc_vol = self._flt(
+                            item.get("volume") or item.get("vol")
+                        )
 
-        # 3. Volume extraction (checking vtt, vol, volume across eFeedDetails and market structures)
+        # 3. Volume extraction (vtt/vol/volume across eFeedDetails)
         efd = (
             feed.get("eFeedDetails")
             or ff.get("eFeedDetails")
@@ -335,7 +410,7 @@ class LiveFeedService:
             return None
 
     def _publish_feed_snapshot(
-        self, entry: dict[str, Any], tick: dict[str, Any]
+        self, entry: dict[str, Any], tick: dict[str, Any],
     ) -> None:
         payload = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -357,10 +432,15 @@ class LiveFeedService:
             "running": bool(self._thread and self._thread.is_alive()),
             "mode": config.UPSTOX_WS_MODE,
             "instrument_count": len(self._subscribed),
-            "started_at": (self._started_at.isoformat() if self._started_at else None),
+            "ltp_cached": len(self._latest_ltp),
+            "started_at": (
+                self._started_at.isoformat() if self._started_at else None
+            ),
             "last_tick_at": {
-                k: v.isoformat() for k, v in list(self._last_tick_at.items())[:50]
+                k: v.isoformat()
+                for k, v in list(self._last_tick_at.items())[:50]
             },
         }
+
 
 live_feed_service = LiveFeedService()

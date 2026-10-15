@@ -24,6 +24,7 @@ Task list (all three states):
     10. Opening Range (OR) level calculation
     10b. Strategy stage 1 (buffer filter + history + last-day-cross)
     10c. Strategy stage 2 (EMA-cross isolation)
+    10d. Strategy stage 3 tracker start (R2 activation watcher)
     11. Start / restart live feed
     12. Start scheduler (idempotent)
     13. Start Telegram bot (idempotent)
@@ -56,6 +57,9 @@ from services.normalization import normalize_underlying
 from services.opening_range_service import opening_range_service
 from services.scheduler_service import scheduler_service
 from services.strategy_isolation_service import strategy_isolation_service
+from services.strategy_live_tracker_service import (
+    strategy_live_tracker_service,
+)
 from services.strategy_selection_service import strategy_selection_service
 from services.telegram_service import telegram_service
 from services.token_service import token_service
@@ -194,7 +198,8 @@ def _run_full_refresh_sync(
         (
             "Running unified refresh: cleanup → token → backup → "
             "registry → index registration → wiring → OR levels → "
-            "stage_1 → stage_2 → backfill → feed → scheduler → telegram."
+            "stage_1 → stage_2 → stage_3 tracker → backfill → feed → "
+            "scheduler → telegram."
         ),
         level="STARTUP",
     )
@@ -318,6 +323,7 @@ def _run_full_refresh_sync(
         "stage": "stage_2",
         "evaluated": 0,
         "isolated": 0,
+        "pairs_isolated": 0,
         "skipped": 0,
         "errors": 0,
         "indexes": [],
@@ -326,6 +332,23 @@ def _run_full_refresh_sync(
         isolation_summary = strategy_isolation_service.run(reason=reason)
     except Exception:
         logger.exception("[%s] strategy stage 2 failed", reason)
+
+    # ---- 8d. Strategy stage 3 tracker (R2 activation watcher) ------------
+    # Long-lived daemon thread. It reads stage-2 folders once per day
+    # and activates stage-3 folders when a tracked index LTP reaches
+    # that index's R2 level inside the configured 09:15–09:20 window.
+    # Starting it here (before the live feed) means the tracker is
+    # already listening by the time the first 09:15 tick arrives.
+    tracker_started = False
+    try:
+        tracker_started = bool(strategy_live_tracker_service.start())
+        logger.info(
+            "[%s] stage_3 tracker started=%s status=%s",
+            reason, tracker_started,
+            strategy_live_tracker_service.status(),
+        )
+    except Exception:
+        logger.exception("[%s] stage_3 tracker start failed", reason)
 
     # ---- 9. Start / restart live feed ------------------------------------
     feed_ok = False
@@ -366,6 +389,7 @@ def _run_full_refresh_sync(
         "opening_range": or_summary,
         "strategy": strategy_summary,
         "isolation": isolation_summary,
+        "tracker_started": tracker_started,
         "feed_restarted": feed_ok,
         "scheduler_started": scheduler_ok,
         "telegram_started": telegram_ok,
@@ -400,8 +424,10 @@ def _run_full_refresh_sync(
         f"avg_buffer: {strategy_summary.get('avg_buffer_points')}\n"
         f"Stage 2 isolated: {isolation_summary.get('isolated')}/"
         f"{isolation_summary.get('evaluated')}  "
+        f"pairs: {isolation_summary.get('pairs_isolated')}  "
         f"skipped: {isolation_summary.get('skipped')}  "
         f"errors: {isolation_summary.get('errors')}\n"
+        f"Stage 3 tracker: {tracker_started}\n"
         f"Live feed running: {feed_ok}\n"
         f"Scheduler: {scheduler_ok}  Telegram bot: {telegram_ok}"
     )
