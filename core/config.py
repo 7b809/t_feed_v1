@@ -145,3 +145,20 @@ CLEANUP_RESERVED_FOLDERS = _csv(
     "meta_data,logs,logs_text,.git,.venv,venv,myenv,templates,routes,"
     "services,core,token_tasks,static,tests",
 )
+
+# ---------------------------------------------------------------------------
+# Opening Range (OR) levels
+# ---------------------------------------------------------------------------
+# File written into each instrument's folder for the current day's OR levels.
+OPENING_RANGE_FILENAME = _str("OPENING_RANGE_FILENAME", "opening_range.json")
+
+# The first 1-minute candle of the day starts at this time (HH:MM in the
+# market timezone). The candle finalizes one minute later.
+OPENING_RANGE_FIRST_MINUTE = _str("OPENING_RANGE_FIRST_MINUTE", "09:15")
+
+# Trigger time for the scheduled OR calculation (HH:MM:SS in the market
+# timezone). Defaults to 09:16:10 — a 10-second buffer past the close of
+# the first 1-minute candle.
+OPENING_RANGE_HOUR = _int("OPENING_RANGE_HOUR", 9)
+OPENING_RANGE_MINUTE = _int("OPENING_RANGE_MINUTE", 16)
+OPENING_RANGE_SECOND = _int("OPENING_RANGE_SECOND", 10)

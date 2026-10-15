@@ -1,8 +1,8 @@
 """Daily refresh job — runs Mon–Fri at the configured IST time.
 
-Does exactly the same work as the /admin/hard-refresh endpoint:
-download latest backup, reload the registry, reset live_crosses
-state, and restart the live feed.
+Delegates to the unified refresh routine in ``routes.admin_routes``
+so the daily refresh executes exactly the same task list as project
+startup and manual hard refresh.
 """
 
 from __future__ import annotations
@@ -16,18 +16,25 @@ logger = logging.getLogger(__name__)
 
 
 def run_daily_refresh() -> None:
-    # Imported here so the module can be imported before the app is
-    # fully wired (e.g. in tests) without triggering live services.
-    from routes.admin_routes import _run_hard_refresh_sync
+    # Imported here to avoid any import cycle at module load time.
+    from routes.admin_routes import _run_full_refresh_sync
 
-    logger.info("Daily refresh starting (scheduled %02d:%02d %s)", config.DAILY_REFRESH_HOUR, config.DAILY_REFRESH_MINUTE, config.MARKET_TIMEZONE)
+    logger.info(
+        "Daily refresh starting (scheduled %02d:%02d %s)",
+        config.DAILY_REFRESH_HOUR,
+        config.DAILY_REFRESH_MINUTE,
+        config.MARKET_TIMEZONE,
+    )
     telegram_service.send_message(
-        "Daily Refresh Started",
-        f"Scheduled refresh at {config.DAILY_REFRESH_HOUR:02d}:{config.DAILY_REFRESH_MINUTE:02d} {config.MARKET_TIMEZONE}.",
+        "Daily Refresh Triggered",
+        (
+            f"Scheduled refresh at {config.DAILY_REFRESH_HOUR:02d}:"
+            f"{config.DAILY_REFRESH_MINUTE:02d} {config.MARKET_TIMEZONE}."
+        ),
         level="STARTUP",
     )
     try:
-        result = _run_hard_refresh_sync()
+        result = _run_full_refresh_sync("daily")
         logger.info("Daily refresh completed: %s", result)
     except Exception as exc:
         logger.exception("Daily refresh failed")

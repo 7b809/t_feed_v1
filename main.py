@@ -1,184 +1,91 @@
 """Foundational FastAPI app for home, charts, market history, token
-lifecycle, backup extraction, and the live feed / EMA-cross engine."""
+lifecycle, backup extraction, and the live feed / EMA-cross engine.
+
+Project startup delegates to the shared ``_run_full_refresh_sync``
+routine so that project startup, the scheduled daily refresh, and the
+manual hard-refresh endpoint all execute the exact same task list in
+the same order:
+
+    1.  Telegram start notification
+    2.  Cleanup transient folders
+    3.  Refresh token cache from MongoDB
+    4.  Validate Upstox token
+    5.  Backup extract from MongoDB
+    6.  Reload instrument registry
+    7.  Wire broadcast loop + cross handler
+    8.  Reset today's live-cross state
+    9.  EMA backfill seed (backup + intraday)
+    10. Opening Range (OR) level calculation
+    11. Start / restart live feed
+    12. Start scheduler (idempotent)
+    13. Start Telegram bot (idempotent)
+    14. Telegram completion notification
+    15. Return structured result
+
+Shutdown handling (task 16) is owned by the lifespan only.
+
+Admin surfaces mounted by this module:
+
+    Folder API            routes/folder_routes.py
+    Opening Range API     routes/opening_range_routes.py
+"""
 
 import asyncio
 from contextlib import asynccontextmanager
 
-from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from core import config
 from core.logger import get_logger
+from routes.admin_routes import _run_full_refresh_sync
 from routes.admin_routes import router as admin_router
+from routes.folder_routes import router as folder_router
 from routes.live_routes import router as live_router
 from routes.log_routes import router as log_router
+from routes.opening_range_routes import router as opening_range_router
 from routes.page_routes import router as page_router
 from routes.upstox_routes import router as upstox_router
-from services.backup_data_service import backup_data_service
-from services.cleanup_service import cleanup_service
-from services.instrument_registry import instrument_registry
-from services.live_backfill_service import live_backfill_service
-from services.live_broadcast import live_broadcast
-from services.live_cross_store import live_cross_store
-from services.live_ema_engine import live_ema_engine
 from services.live_feed_service import live_feed_service
+from services.scheduler_service import scheduler_service
 from services.telegram_service import telegram_service
-from services.token_service import token_service
-from token_tasks.daily_refresh import run_daily_refresh
 from token_tasks.telegram_token_bot import telegram_token_bot
-from token_tasks.token_monitor import check_upstox_token_validity
 
 logger = get_logger(__file__)
 
-def build_token_monitor_scheduler(scheduler_class=BackgroundScheduler):
-    scheduler = scheduler_class(timezone=config.MARKET_TIMEZONE)
-    scheduler.add_job(
-        check_upstox_token_validity,
-        "interval",
-        minutes=config.UPSTOX_TOKEN_CHECK_INTERVAL_MINUTES,
-        id="token_lifecycle_check",
-        replace_existing=True,
-        kwargs={"send_success_message": False},
-    )
-    if config.DAILY_REFRESH_ENABLED:
-        scheduler.add_job(
-            run_daily_refresh,
-            "cron",
-            day_of_week=config.DAILY_REFRESH_DAYS,
-            hour=config.DAILY_REFRESH_HOUR,
-            minute=config.DAILY_REFRESH_MINUTE,
-            id="daily_refresh",
-            replace_existing=True,
-            misfire_grace_time=300,
-        )
-    scheduler.start()
-    return scheduler
-
-def _wire_cross_handler(loop) -> None:
-    def on_cross(entry, cross):
-        try:
-            live_cross_store.save(entry, cross)
-        except Exception:
-            logger.exception(
-                "Failed persisting live cross for %s", entry["instrument_key"]
-            )
-        try:
-            live_broadcast.publish_sync("crosses", entry, {"cross": cross})
-        except Exception:
-            logger.exception("Failed broadcasting live cross")
-
-    live_ema_engine.set_cross_handler(on_cross)
 
 @asynccontextmanager
 async def app_lifespan(app: FastAPI):
-    scheduler = None
-    telegram_started = False
     loop = asyncio.get_running_loop()
-    live_broadcast.set_loop(loop)
 
     try:
-        telegram_service.send_message(
-            "Application Starting",
-            "Market engine starting: cleaning transient folders, refreshing token, fetching backup, starting live feed.",
-            level="STARTUP",
+        # ---- Unified refresh (tasks 1..15) --------------------------------
+        # Startup, daily refresh, and hard refresh all run the same
+        # routine. Passing the loop here lets the routine wire the
+        # asyncio loop into the broadcast + feed services before
+        # anything tries to publish.
+        result = await asyncio.to_thread(
+            _run_full_refresh_sync, "startup", loop
         )
-
-        # ---- 1. Cleanup transient folders ---------------------------------
-        # Runs before token refresh and before the backup is extracted so
-        # `data/`, `temp/`, `downloads/`, `output/` are empty for a clean
-        # re-extract. Reserved folders (meta_data/, logs/, .git/, ...)
-        # are always preserved.
-        try:
-            cleanup_status = await asyncio.to_thread(
-                cleanup_service.run, "startup"
-            )
-            logger.info("Startup cleanup: %s", cleanup_status)
-            telegram_service.send_message(
-                "Startup Cleanup",
-                (
-                    f"Removed: {len(cleanup_status.get('removed') or [])}\n"
-                    f"Preserved / missing: {len(cleanup_status.get('skipped') or [])}\n"
-                    f"Errors: {len(cleanup_status.get('errors') or [])}"
-                ),
-                level="INFO" if not cleanup_status.get("errors") else "WARNING",
-            )
-        except Exception:
-            logger.exception("Startup cleanup failed; continuing anyway")
-        # -------------------------------------------------------------------
-
-        # ---- 2. Token refresh + validity check -----------------------------
-        await asyncio.to_thread(token_service.refresh_tokens)
-        try:
-            await asyncio.to_thread(check_upstox_token_validity, False)
-        except Exception as exc:
-            logger.warning("Startup token check failed (%s).", type(exc).__name__)
-
-        # ---- 3. Backup extract + registry load -----------------------------
-        try:
-            backup = await asyncio.to_thread(backup_data_service.refresh)
-            logger.info("Startup backup: %s", backup)
-            await asyncio.to_thread(instrument_registry.load)
-        except Exception as exc:
-            logger.exception("Startup backup/registry load failed")
-            telegram_service.send_message(
-                "Backup Load Failed",
-                f"{type(exc).__name__}: {exc}",
-                level="ERROR",
-            )
-
-        # ---- 4. Wire cross handler + reset today's cross state -------------
-        live_feed_service.set_loop(loop)
-        _wire_cross_handler(loop)
-        live_cross_store.reset_all()
-
-        # ---- 5. Seed the EMA engine from backup + intraday candles ---------
-        # Runs before live_feed_service.start() so the seeded series is
-        # contiguous with the first live tick. Any failure here must not
-        # block startup — a cold engine is still functional, just slow to
-        # warm up.
-        try:
-            backfill_summary = await asyncio.to_thread(
-                live_backfill_service.seed_all
-            )
-            telegram_service.send_message(
-                "Live Backfill",
-                (
-                    f"Seeded: {backfill_summary['seeded']}/{backfill_summary['total']}\n"
-                    f"Crosses recovered for today: {backfill_summary['crosses']}\n"
-                    f"Skipped: {backfill_summary['skipped']}  "
-                    f"Errors: {backfill_summary['errors']}"
-                ),
-                level="INFO",
-            )
-        except Exception:
-            logger.exception("Live backfill failed; live feed will start cold")
-
-        # ---- 6. Start live feed --------------------------------------------
-        try:
-            await asyncio.to_thread(live_feed_service.start)
-        except Exception:
-            logger.exception("Live feed start failed")
-
-        # ---- 7. Schedulers + Telegram bot ----------------------------------
-        scheduler = build_token_monitor_scheduler()
-        telegram_started = telegram_token_bot.start()
 
         logger.info(
             "Application startup complete. feed_instruments=%d telegram_polling=%s",
-            len(instrument_registry.all()),
-            telegram_started,
+            (result.get("registry") or {}).get("count", 0),
+            result.get("telegram_started"),
         )
         telegram_service.send_message(
             "Application Started",
             (
-                f"Instruments loaded: {len(instrument_registry.all())}\n"
-                f"Live feed running: {live_feed_service.status().get('running')}"
+                f"Instruments loaded: {(result.get('registry') or {}).get('count', 0)}\n"
+                f"OR levels: {(result.get('opening_range') or {}).get('calculated')}"
+                f"/{(result.get('opening_range') or {}).get('total')}\n"
+                f"Live feed running: {result.get('feed_restarted')}"
             ),
             level="SUCCESS",
         )
         yield
+
     finally:
+        # ---- Task 16: shutdown handling -----------------------------------
         telegram_service.send_message(
             "Application Stopping",
             "Market engine shutting down.",
@@ -188,16 +95,21 @@ async def app_lifespan(app: FastAPI):
             live_feed_service.stop()
         except Exception:
             logger.exception("Live feed stop failed")
-        if telegram_started:
+        try:
             telegram_token_bot.stop()
-        if scheduler is not None and scheduler.running:
-            scheduler.shutdown(wait=False)
+        except Exception:
+            logger.exception("Telegram token bot stop failed")
+        try:
+            scheduler_service.shutdown()
+        except Exception:
+            logger.exception("Scheduler shutdown failed")
         telegram_service.send_message(
             "Application Stopped",
             "Market engine shutdown complete.",
             level="INFO",
         )
         logger.info("Application shutdown complete.")
+
 
 app = FastAPI(title="Market Data Foundation", lifespan=app_lifespan)
 
@@ -212,5 +124,7 @@ app.add_middleware(
 app.include_router(page_router)
 app.include_router(live_router)
 app.include_router(admin_router)
+app.include_router(folder_router)
+app.include_router(opening_range_router)
 app.include_router(upstox_router)
 app.include_router(log_router)
