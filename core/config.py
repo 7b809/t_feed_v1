@@ -162,3 +162,141 @@ OPENING_RANGE_FIRST_MINUTE = _str("OPENING_RANGE_FIRST_MINUTE", "09:15")
 OPENING_RANGE_HOUR = _int("OPENING_RANGE_HOUR", 9)
 OPENING_RANGE_MINUTE = _int("OPENING_RANGE_MINUTE", 16)
 OPENING_RANGE_SECOND = _int("OPENING_RANGE_SECOND", 10)
+
+# ---------------------------------------------------------------------------
+# Strategy selection (OR-based strike selection per index)
+# ---------------------------------------------------------------------------
+# When enabled, the unified refresh (startup / daily / hard) and the
+# scheduled task at 09:16:10 IST build a per-index strike list from the
+# Opening Range midpoint and materialise it under:
+#
+#   data/strategy/<ticker>/<index_name>/<strike>_<CE|PE>/
+#       strategy_meta.json
+#       opening_range.json
+#       candles.json
+#       ema_crosses.json
+#       live_crosses.json
+#
+STRATEGY_ENABLED = _bool("STRATEGY_ENABLED", True)
+
+# Root directory for generated strategy folders (relative to project root).
+STRATEGY_BASE_DIR = PROJECT_ROOT / _str("STRATEGY_BASE_DIR", "data/strategy")
+
+# Buffer mode controls how far the strike window extends around the
+# Opening Range midpoint (the ATM reference).
+#
+#   "typical"                -> ATM ± typical_buffer_points
+#   "typical_plus_minus_avg" -> ATM ± (typical_buffer_points ± avg_buffer)
+#                               where avg_buffer is the mean of all
+#                               typical_buffer_points values.
+#
+# "typical" is the safe default and matches the example descriptions.
+STRATEGY_BUFFER_MODE = _str("STRATEGY_BUFFER_MODE", "typical")
+
+# Default index list. Override via STRATEGY_INDEXES_JSON (a JSON array).
+# Each entry must have at least:
+#     index_name, ticker, instrument_key, strike_step, typical_buffer_points
+# Optional:
+#     denominator_points, description
+_DEFAULT_STRATEGY_INDEXES: list[dict] = [
+    {
+        "index_name": "NIFTY 50",
+        "ticker": "NIFTY",
+        "instrument_key": "NSE_INDEX|Nifty 50",
+        "strike_step": 50,
+        "typical_buffer_points": 300,
+        "denominator_points": 300,
+        "description": (
+            "Standard range buffer (~300 to 500 points based on normal "
+            "daily volatility)"
+        ),
+    },
+    {
+        "index_name": "BSE SENSEX",
+        "ticker": "SENSEX",
+        "instrument_key": "BSE_INDEX|SENSEX",
+        "strike_step": 100,
+        "typical_buffer_points": 900,
+        "denominator_points": 1000,
+        "description": (
+            "Higher absolute index scale compared to Nifty 50, requiring "
+            "a proportional 800-1200 point buffer"
+        ),
+    },
+]
+
+def _load_strategy_indexes() -> list[dict]:
+    raw = _str("STRATEGY_INDEXES_JSON")
+    if raw:
+        try:
+            import json as _json
+            data = _json.loads(raw)
+            if isinstance(data, list) and data:
+                return data
+        except Exception:
+            pass
+    return list(_DEFAULT_STRATEGY_INDEXES)
+
+STRATEGY_INDEXES: list[dict] = _load_strategy_indexes()
+
+# Best-effort: try to resolve each selected strike to a real Upstox
+# instrument key via the Upstox search API, and fetch historical
+# candles for it. Set to False to skip network calls entirely and
+# only materialise the folder structure.
+STRATEGY_FETCH_HISTORY = _bool("STRATEGY_FETCH_HISTORY", True)
+
+# How many days of historical 1-min candles to fetch per resolved strike.
+STRATEGY_HISTORY_DAYS = max(1, _int("STRATEGY_HISTORY_DAYS", 30))
+
+# Max parallel workers used while resolving / fetching candles.
+
+STRATEGY_MAX_WORKERS = max(1, min(16, _int("STRATEGY_MAX_WORKERS", 6)))
+
+# Allow /live/* routes to make a best-effort Upstox search when a
+# triple lookup misses the registry. Set to false to force strict
+# registry-only lookups.
+LIVE_RESOLVE_ON_MISS = _bool("LIVE_RESOLVE_ON_MISS", True)
+
+# ---------------------------------------------------------------------------
+# Strategy — stage 1 (buffer filter) + stage 2 (EMA isolation)
+# ---------------------------------------------------------------------------
+STRATEGY_ENABLED = _bool("STRATEGY_ENABLED", True)
+
+# Root for the full strategy tree. Two subfolders are created:
+#   <STRATEGY_BASE_DIR>/stage_1_initial    buffer-filtered strikes
+#   <STRATEGY_BASE_DIR>/stage_2_isolation  EMA-cross-isolated strikes
+STRATEGY_BASE_DIR = PROJECT_ROOT / _str("STRATEGY_BASE_DIR", "data/strategy")
+STRATEGY_STAGE_1_NAME = _str("STRATEGY_STAGE_1_NAME", "stage_1_initial")
+STRATEGY_STAGE_2_NAME = _str("STRATEGY_STAGE_2_NAME", "stage_2_isolation")
+
+# Buffer mode for the strike window (unchanged).
+STRATEGY_BUFFER_MODE = _str("STRATEGY_BUFFER_MODE", "typical")
+
+# Default index list — same shape as before.
+STRATEGY_INDEXES: list[dict] = _load_strategy_indexes()   # keep the loader from before
+
+# Best-effort Upstox enrichment (history fetch).
+STRATEGY_FETCH_HISTORY = _bool("STRATEGY_FETCH_HISTORY", True)
+STRATEGY_HISTORY_DAYS = max(1, _int("STRATEGY_HISTORY_DAYS", 30))
+STRATEGY_MAX_WORKERS = max(1, min(16, _int("STRATEGY_MAX_WORKERS", 6)))
+
+# --- Stage 2 isolation knobs ---------------------------------------------
+# When enabled, the isolation service reads each stage-1 strike folder,
+# computes last-day-last-cross and today's-first-candle cross, applies
+# the bullish-priority rules, and copies the selected strikes into
+# stage_2_isolation.
+STRATEGY_ISOLATION_ENABLED = _bool("STRATEGY_ISOLATION_ENABLED", True)
+
+# Lookback window (in minutes) at the tail of the last trading day.
+# Crosses that occurred inside this window are candidates for "last
+# day's last cross". Outside the window is ignored.
+STRATEGY_ISOLATION_LOOKBACK_MINUTES = max(
+    1, _int("STRATEGY_ISOLATION_LOOKBACK_MINUTES", 30)
+)
+
+# If a strike's Upstox key could not be resolved in stage 1, stage 2
+# cannot fetch today's intraday. When True, those strikes are skipped
+# with a clear status instead of being treated as a failure.
+STRATEGY_ISOLATION_SKIP_UNRESOLVED = _bool(
+    "STRATEGY_ISOLATION_SKIP_UNRESOLVED", True
+)

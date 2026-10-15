@@ -1,9 +1,18 @@
 """Live data REST and WebSocket routes.
 
-Every endpoint that reads a *single* instrument now accepts either an
+Every endpoint that reads a *single* instrument accepts either an
 explicit ``instrument_key`` **or** the three-part selector
-``underlying`` + ``strike`` + ``type``. The latter is resolved through
-``instrument_registry.resolve(...)``.
+``underlying`` + ``strike`` + ``type``.
+
+All selector values are normalized through ``services.normalization``
+before lookup, so "nifty", "NiFty", "NIFTY 50", "nifty50" all map to
+the same registry triple, and "ce", "Ce", "call", "C" all map to
+"CE".
+
+On a triple miss the route makes one best-effort Upstox search (when
+``config.LIVE_RESOLVE_ON_MISS`` is True and a token is available),
+registers the result ad-hoc, and only then returns 404 — so any real
+strike resolves once.
 
     GET  /live/status
     GET  /live/instruments
@@ -37,6 +46,7 @@ import json
 import logging
 from typing import Any
 
+import requests
 from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
 
 from core import config
@@ -45,15 +55,130 @@ from services.live_broadcast import live_broadcast
 from services.live_cross_store import live_cross_store
 from services.live_ema_engine import live_ema_engine
 from services.live_feed_service import live_feed_service
+from services.normalization import (
+    normalize_strike,
+    normalize_strike_type,
+    normalize_underlying,
+)
+from services.token_service import token_service
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+_UPSTOX_SEARCH_URL = "https://api.upstox.com/v2/instruments/search"
+_UPSTOX_RESOLVE_TIMEOUT = 10
+
+
+# ---------------------------------------------------------------------------
+# On-miss Upstox resolution
+# ---------------------------------------------------------------------------
+def _resolve_via_upstox(
+    underlying: str,
+    strike: str,
+    strike_type: str,
+) -> dict[str, Any] | None:
+    """Best-effort Upstox search for a triple not in the registry.
+
+    Returns the newly registered entry on success, or None when the
+    token is missing, the search fails, or no matching contract is
+    found. Never raises.
+    """
+    if not getattr(config, "LIVE_RESOLVE_ON_MISS", True):
+        return None
+
+    # Safe conversion — a non-numeric strike must yield a clean miss,
+    # not a 500 further down the comparison.
+    try:
+        target_strike = float(strike)
+    except (TypeError, ValueError):
+        return None
+
+    try:
+        token = token_service.get_access_token()
+    except Exception:
+        token = None
+    if not token:
+        return None
+
+    query = f"{underlying} {strike} {strike_type}"
+    try:
+        resp = requests.get(
+            _UPSTOX_SEARCH_URL,
+            headers={
+                "Accept": "application/json",
+                "Authorization": f"Bearer {token}",
+            },
+            params={
+                "query": query,
+                "exchanges": "NSE,BSE",
+                "segments": "FO",
+                "instrument_types": strike_type,
+                "records": 5,
+                "page_number": 1,
+            },
+            timeout=_UPSTOX_RESOLVE_TIMEOUT,
+        )
+    except requests.RequestException:
+        logger.info(
+            "Upstox on-miss resolution network error for %s", query,
+        )
+        return None
+
+    if resp.status_code >= 400:
+        logger.info(
+            "Upstox on-miss resolution HTTP %s for %s",
+            resp.status_code, query,
+        )
+        return None
+
+    try:
+        items = resp.json().get("data") or []
+    except ValueError:
+        return None
+
+    match_key: str | None = None
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        try:
+            sp = float(item.get("strike_price"))
+        except (TypeError, ValueError):
+            continue
+        it = str(item.get("instrument_type") or "").upper()
+        if int(sp) == int(target_strike) and it == strike_type:
+            key = item.get("instrument_key")
+            if key:
+                match_key = str(key)
+                break
+
+    if not match_key:
+        return None
+
+    try:
+        entry = instrument_registry.register_adhoc(
+            match_key,
+            trading_symbol=f"{underlying} {strike} {strike_type}",
+            underlying=underlying,
+            strike_price=int(target_strike),
+            strike_type=strike_type,
+        )
+    except Exception:
+        logger.exception(
+            "register_adhoc failed after Upstox resolution: %s", match_key
+        )
+        return None
+
+    logger.info(
+        "On-miss Upstox resolution: %s %s %s -> %s",
+        underlying, strike, strike_type, match_key,
+    )
+    return entry
+
+
 # ---------------------------------------------------------------------------
 # Instrument resolution helper
 # ---------------------------------------------------------------------------
-
 def _resolve_entry(
     *,
     instrument_key: str | None = None,
@@ -65,38 +190,75 @@ def _resolve_entry(
     """Resolve a single registry entry from either selector form.
 
     Priority:
-        1. Explicit ``instrument_key`` — looked up directly, then
-           falls back to ad-hoc registration if unknown (so chart-style
-           direct access keeps working).
-        2. ``underlying`` + ``strike`` + ``strike_type`` triple lookup.
+        1. Explicit ``instrument_key`` — direct registry lookup,
+           falling back to ad-hoc registration.
+        2. ``underlying`` + ``strike`` + ``strike_type`` triple lookup
+           on normalized values.
+        3. Alias-aware second pass (e.g. "NIFTY" tries "NIFTY 50" and
+           "NIFTY50" too).
+        4. Best-effort Upstox on-miss resolution.
 
-    When ``require`` is True, raises HTTP 404 if nothing matches.
+    When ``require`` is True, raises HTTP 404 with a detailed body
+    if nothing matches.
     """
-    if instrument_key:
-        key = str(instrument_key).strip()
-        if key:
-            entry = instrument_registry.get(key)
-            if entry is None:
-                # Chart URLs and browser-driven flows pass raw keys
-                # that aren't in the backup tree. Register ad-hoc so
-                # the rest of the pipeline can operate on them.
-                entry = instrument_registry.register_adhoc(key)
+    key_raw = str(instrument_key).strip() if instrument_key else None
+    u = normalize_underlying(underlying)
+    s = normalize_strike(strike)
+    t = normalize_strike_type(strike_type)
+
+    # 1. explicit instrument_key
+    if key_raw:
+        entry = instrument_registry.get(key_raw)
+        if entry is None:
+            entry = instrument_registry.register_adhoc(key_raw)
+        return entry
+
+    # 2. triple lookup
+    if u and s and t:
+        entry = instrument_registry.resolve(u, s, t)
+        if entry is not None:
             return entry
 
-    if underlying and strike is not None and strike_type:
-        entry = instrument_registry.resolve(underlying, strike, strike_type)
+        # 2b. alias-aware second pass. If the user typed "NIFTY" but
+        #     the index is registered under "NIFTY 50" (or vice versa),
+        #     try the alternate forms before giving up.
+        for alt in (f"{u} 50", f"{u}50", u.split(" ", 1)[0]):
+            alt_norm = normalize_underlying(alt)
+            if not alt_norm or alt_norm == u:
+                continue
+            entry = instrument_registry.resolve(alt_norm, s, t)
+            if entry is not None:
+                return entry
+
+        # 3. best-effort on-miss Upstox resolution
+        entry = _resolve_via_upstox(u, s, t)
         if entry is not None:
             return entry
 
     if require:
         raise HTTPException(
             status_code=404,
-            detail=(
-                "Instrument not found. Provide either `instrument_key` "
-                "or all of `underlying`, `strike`, and `type`."
-            ),
+            detail={
+                "error": "instrument_not_found",
+                "message": (
+                    "Instrument not found. Provide either "
+                    "`instrument_key` or all of `underlying`, "
+                    "`strike`, and `type`."
+                ),
+                "selector": {
+                    "instrument_key": key_raw,
+                    "underlying": u or None,
+                    "strike": s or None,
+                    "type": t or None,
+                },
+                "hint": (
+                    "Check /admin/strategy for today's selected strikes, "
+                    "or pass the exact `instrument_key`."
+                ),
+            },
         )
     return None
+
 
 def _selector_query(
     instrument_key: str | None,
@@ -104,13 +266,16 @@ def _selector_query(
     strike: str | None,
     strike_type: str | None,
 ) -> dict[str, Any]:
-    """Build the echo object returned alongside single-instrument payloads."""
+    """Build the echo object returned alongside single-instrument
+    payloads. Echoes the *normalized* values so the caller can see
+    what was actually used."""
     return {
         "instrument_key": instrument_key,
-        "underlying": underlying,
-        "strike": strike,
-        "type": strike_type,
+        "underlying": normalize_underlying(underlying) or None,
+        "strike": normalize_strike(strike) or None,
+        "type": normalize_strike_type(strike_type) or None,
     }
+
 
 def _feed_snapshot(entry: dict[str, Any]) -> dict[str, Any]:
     """Return the current last-tick snapshot for one instrument, if any."""
@@ -122,16 +287,17 @@ def _feed_snapshot(entry: dict[str, Any]) -> dict[str, Any]:
         "last_tick_at": last_tick,
     }
 
+
 # ---------------------------------------------------------------------------
 # REST — status / registry
 # ---------------------------------------------------------------------------
-
 @router.get("/live/status")
 def live_status() -> dict[str, Any]:
     return {
         "feed": live_feed_service.status(),
         "instruments": len(instrument_registry.all()),
     }
+
 
 @router.get("/live/instruments")
 def list_live_instruments(
@@ -140,11 +306,12 @@ def list_live_instruments(
     is_index: bool | None = Query(default=None),
 ) -> dict[str, Any]:
     items = instrument_registry.query(
-        underlying=underlying,
-        strike_type=type,
+        underlying=normalize_underlying(underlying) or underlying,
+        strike_type=normalize_strike_type(type) or type,
         is_index=is_index,
     )
     return {"count": len(items), "instruments": items}
+
 
 @router.get("/live/instruments/resolve")
 def resolve_instrument(
@@ -161,16 +328,17 @@ def resolve_instrument(
     )
     return entry  # type: ignore[return-value]
 
+
 # ---------------------------------------------------------------------------
 # REST — single-instrument reads
 # ---------------------------------------------------------------------------
-
 @router.get("/live/crosses/{instrument_key:path}")
 def crosses_for_instrument(instrument_key: str) -> dict[str, Any]:
     """Today's crosses for one instrument (path form, kept for compat)."""
     entry = _resolve_entry(instrument_key=instrument_key)
     assert entry is not None
     return live_cross_store.read_today(entry)
+
 
 @router.get("/live/crosses")
 def crosses_query(
@@ -179,12 +347,7 @@ def crosses_query(
     strike: str | None = Query(default=None),
     type: str | None = Query(default=None, alias="type"),
 ) -> dict[str, Any]:
-    """Single-instrument crosses (query form) OR all crosses when empty.
-
-    * ``?instrument_key=...`` → crosses for that key
-    * ``?underlying=NIFTY&strike=23400&type=CE`` → crosses for the resolved key
-    * no params → crosses for every non-empty instrument
-    """
+    """Single-instrument crosses (query form) OR all crosses when empty."""
     if instrument_key or (underlying and strike is not None and type):
         entry = _resolve_entry(
             instrument_key=instrument_key,
@@ -206,6 +369,7 @@ def crosses_query(
             out.append(payload)
     return {"instrument_count": len(out), "payloads": out}
 
+
 @router.get("/live/ema/{instrument_key:path}")
 def ema_for_instrument(instrument_key: str) -> dict[str, Any]:
     """Current EMA snapshot for one instrument (path form)."""
@@ -214,6 +378,7 @@ def ema_for_instrument(instrument_key: str) -> dict[str, Any]:
     snapshot = live_ema_engine.get_ema_snapshot(entry["instrument_key"])
     snapshot["selector"] = {"instrument_key": instrument_key}
     return snapshot
+
 
 @router.get("/live/ema")
 def ema_query(
@@ -235,6 +400,7 @@ def ema_query(
         instrument_key, underlying, strike, type
     )
     return snapshot
+
 
 @router.get("/live/ema-series")
 def ema_series_query(
@@ -258,6 +424,7 @@ def ema_series_query(
     )
     return payload
 
+
 @router.get("/live/candles")
 def candles_query(
     instrument_key: str | None = Query(default=None),
@@ -280,6 +447,7 @@ def candles_query(
     )
     return payload
 
+
 @router.get("/live/snapshot/{instrument_key:path}")
 def snapshot_for_instrument(instrument_key: str) -> dict[str, Any]:
     """Combined feed status + EMA snapshot for one instrument (path form)."""
@@ -290,6 +458,7 @@ def snapshot_for_instrument(instrument_key: str) -> dict[str, Any]:
         "feed": _feed_snapshot(entry),
         "ema": live_ema_engine.get_ema_snapshot(entry["instrument_key"]),
     }
+
 
 @router.get("/live/snapshot")
 def snapshot_query(
@@ -313,10 +482,10 @@ def snapshot_query(
         "ema": live_ema_engine.get_ema_snapshot(entry["instrument_key"]),
     }
 
-# ---------------------------------------------------------------------------
-# WebSocket Helpers
-# ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# WebSocket helpers
+# ---------------------------------------------------------------------------
 def _parse_filters(ws: WebSocket):
     q = ws.query_params
     instrument_key = q.get("instrument_key") or q.get("key")
@@ -325,6 +494,7 @@ def _parse_filters(ws: WebSocket):
     type_ = q.get("type")
     all_ = (q.get("all", "false").lower() in {"1", "true", "yes"})
     return instrument_key, underlying, strike, type_, all_
+
 
 def _ensure_subscription(instrument_key: str | None) -> None:
     if not instrument_key:
@@ -335,12 +505,13 @@ def _ensure_subscription(instrument_key: str | None) -> None:
     if not live_feed_service.is_subscribed(key):
         live_feed_service.subscribe_instrument(key)
 
+
 async def _pump_with_client_listener(ws: WebSocket, sub) -> None:
-    """Pump broadcast messages to client while concurrently listening for incoming subscriptions."""
+    """Pump broadcast messages to client while concurrently listening
+    for incoming subscriptions."""
     async def _send_loop():
         while True:
             message = await sub.queue.get()
-            # Send message in standard payload structure compatible with both UI versions
             await ws.send_text(json.dumps(message, default=str))
 
     async def _recv_loop():
@@ -355,7 +526,8 @@ async def _pump_with_client_listener(ws: WebSocket, sub) -> None:
                         _ensure_subscription(key)
                         sub.instrument_keys.add(key)
                         await ws.send_text(
-                            json.dumps({"type": "subscribed", "instrument_key": key})
+                            json.dumps({"type": "subscribed",
+                                        "instrument_key": key})
                         )
             except Exception:
                 pass
@@ -382,10 +554,10 @@ async def _pump_with_client_listener(ws: WebSocket, sub) -> None:
         except Exception:
             pass
 
-# ---------------------------------------------------------------------------
-# WebSocket Routes
-# ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# WebSocket routes
+# ---------------------------------------------------------------------------
 @router.websocket("/ws/live")
 async def ws_live(ws: WebSocket) -> None:
     await ws.accept()
@@ -416,6 +588,7 @@ async def ws_live(ws: WebSocket) -> None:
     )
     await _pump_with_client_listener(ws, sub)
 
+
 @router.websocket("/ws/chart")
 async def ws_chart(ws: WebSocket) -> None:
     await ws.accept()
@@ -444,23 +617,18 @@ async def ws_chart(ws: WebSocket) -> None:
     )
     await _pump_with_client_listener(ws, sub)
 
+
 @router.websocket("/all-feeds")
 @router.websocket("/ws/all-feeds")
 async def ws_all_feeds(ws: WebSocket) -> None:
-    """Direct route for client charts pointing to /all-feeds.
-
-    Subscribes dynamically to the requested instrument if provided, or enables
-    full feed if requested.
-    """
+    """Direct route for client charts pointing to /all-feeds."""
     await ws.accept()
     instrument_key, underlying, strike, type_, all_ = _parse_filters(ws)
 
-    # If instrument_key is provided or all is set
     if instrument_key:
         _ensure_subscription(instrument_key)
         all_ = False
     else:
-        # Default /all-feeds without params subscribes to all available
         all_ = True
 
     keys, triples, _ = live_broadcast.resolve_subscription_params(
@@ -485,6 +653,7 @@ async def ws_all_feeds(ws: WebSocket) -> None:
         )
     )
     await _pump_with_client_listener(ws, sub)
+
 
 @router.websocket("/ws/ema-crosses")
 async def ws_ema_crosses(ws: WebSocket) -> None:
@@ -513,18 +682,10 @@ async def ws_ema_crosses(ws: WebSocket) -> None:
     )
     await _pump_with_client_listener(ws, sub)
 
+
 @router.websocket("/ws/ema")
 async def ws_ema(ws: WebSocket) -> None:
-    """Stream the current EMA snapshot for a single instrument.
-
-    Query params (either form accepted):
-        * ``?instrument_key=NSE_FO|47162``
-        * ``?underlying=NIFTY&strike=23400&type=CE``
-
-    The snapshot is pushed every ``CHART_LIVE_POLL_SECONDS`` seconds
-    (minimum 2s). Each message is the same shape returned by
-    ``GET /live/ema``.
-    """
+    """Stream the current EMA snapshot for a single instrument."""
     await ws.accept()
     instrument_key, underlying, strike, type_, _ = _parse_filters(ws)
 
@@ -536,7 +697,8 @@ async def ws_ema(ws: WebSocket) -> None:
             strike_type=type,
         )
     except HTTPException as exc:
-        await ws.send_text(json.dumps({"type": "error", "detail": exc.detail}))
+        await ws.send_text(json.dumps({"type": "error",
+                                       "detail": exc.detail}))
         await ws.close()
         return
 
@@ -569,13 +731,13 @@ async def ws_ema(ws: WebSocket) -> None:
         except asyncio.CancelledError:
             return
         except Exception:
-            logger.exception("EMA WS poll loop failed for %s", resolved_key)
+            logger.exception(
+                "EMA WS poll loop failed for %s", resolved_key,
+            )
 
     async def _recv_loop() -> None:
         try:
             while True:
-                # We don't need input, but we must keep reading so the
-                # socket close event is detected promptly.
                 await ws.receive_text()
         except WebSocketDisconnect:
             return

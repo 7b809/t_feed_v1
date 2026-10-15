@@ -40,6 +40,13 @@ Per-instrument JSON file ``opening_range.json`` written next to
 ``ema_crosses.json`` in the same folder. For ad-hoc instruments
 (indices without a data folder), the file is written under
 ``data/_adhoc/<safe_key>/opening_range.json``.
+
+Self-healing lookup
+-------------------
+``get_opening_range`` will ad-hoc register an unknown key on demand,
+so a legitimate index key (e.g. ``NSE_INDEX|Nifty 50``) is never
+reported as ``not_registered`` when it arrives before the
+registration step in the unified refresh has run.
 """
 
 from __future__ import annotations
@@ -55,7 +62,6 @@ from services.instrument_registry import instrument_registry
 from services.live_ema_engine import live_ema_engine
 
 logger = logging.getLogger(__name__)
-
 
 # --------------------------------------------------------------------------- #
 # Level math                                                                   #
@@ -97,7 +103,6 @@ def compute_levels(high: float, low: float) -> dict[str, float]:
         "S3_Threshold": s3_threshold,
     }
 
-
 # --------------------------------------------------------------------------- #
 # Path helpers                                                                 #
 # --------------------------------------------------------------------------- #
@@ -111,7 +116,6 @@ def _safe_folder_name(key: str) -> str:
         .strip()
         or "unknown"
     )
-
 
 def _path_for(entry: dict[str, Any]) -> Path:
     """Return the ``opening_range.json`` path for one instrument.
@@ -130,18 +134,15 @@ def _path_for(entry: dict[str, Any]) -> Path:
     )
     return fallback_dir / config.OPENING_RANGE_FILENAME
 
-
 def _today_ist_prefix() -> str:
     """Return today's date prefix in the market timezone as
     ``YYYY-MM-DD``."""
     return datetime.now().astimezone().date().isoformat()
 
-
 def _first_candle_minute() -> str:
     """Full ISO minute key for today's first candle, e.g.
     ``2026-10-15T09:15``."""
     return f"{_today_ist_prefix()}T{config.OPENING_RANGE_FIRST_MINUTE}"
-
 
 def _trigger_time_reached() -> bool:
     """Return True once the configured trigger time has passed today."""
@@ -153,7 +154,6 @@ def _trigger_time_reached() -> bool:
         microsecond=0,
     )
     return now >= trigger
-
 
 # --------------------------------------------------------------------------- #
 # Service                                                                      #
@@ -234,18 +234,33 @@ class OpeningRangeService:
         """Compute OR levels for a single instrument (public helper)."""
         entry = instrument_registry.get(instrument_key)
         if entry is None:
-            return {
-                "status": "not_registered",
-                "instrument_key": instrument_key,
-            }
+            entry = instrument_registry.register_adhoc(instrument_key)
         return self._calculate_one(entry, _first_candle_minute())
 
     def get_opening_range(self, instrument_key: str) -> dict[str, Any]:
-        """Read the on-disk OR payload for one instrument."""
-        entry = instrument_registry.get(instrument_key)
+        """Read the on-disk OR payload for one instrument.
+
+        Self-healing: if the key is a legitimate index key that was
+        not yet registered (e.g. very early in startup), we register
+        it ad-hoc so this lookup never fails with ``not_registered``
+        for valid inputs.
+        """
+        key = str(instrument_key or "").strip()
+        entry = instrument_registry.get(key)
+
+        if entry is None and key:
+            try:
+                entry = instrument_registry.register_adhoc(key)
+                logger.info("[or] ad-hoc registered on lookup: %s", key)
+            except Exception:
+                logger.exception(
+                    "[or] failed ad-hoc registering on lookup: %s", key
+                )
+                entry = None
+
         if entry is None:
             return {
-                "instrument_key": instrument_key,
+                "instrument_key": key,
                 "available": False,
                 "reason": "not_registered",
             }
@@ -253,7 +268,7 @@ class OpeningRangeService:
         path = _path_for(entry)
         if not path.exists():
             return {
-                "instrument_key": instrument_key,
+                "instrument_key": key,
                 "available": False,
                 "reason": "not_calculated",
                 "path": str(path),
@@ -264,7 +279,7 @@ class OpeningRangeService:
         except Exception:
             logger.exception("[or] unreadable %s", path)
             return {
-                "instrument_key": instrument_key,
+                "instrument_key": key,
                 "available": False,
                 "reason": "unreadable",
                 "path": str(path),

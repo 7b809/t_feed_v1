@@ -1,0 +1,35 @@
+{
+  "indices_daily_ranges": [
+    {
+      "index_name": "NIFTY 50",
+      "ticker": "NIFTY",
+      "typical_buffer_points": 300,
+      "description": "Standard range buffer (~300 to 500 points based on normal daily volatility)"
+    },
+    {
+      "index_name": "BANK NIFTY",
+      "ticker": "BANKNIFTY",
+      "typical_buffer_points": 700,
+      "description": "Higher volatility index; typically moves 600 to 1,000 points in a standard session"
+    },
+    {
+      "index_name": "FIN SERVICE",
+      "ticker": "FINNIFTY",
+      "typical_buffer_points": 350,
+      "description": "Financial sector index with movement patterns similar to Bank Nifty on a smaller scale"
+    },
+    {
+      "index_name": "MIDCAP NIFTY",
+      "ticker": "MIDCPNIFTY",
+      "typical_buffer_points": 250,
+      "description": "Midcap segment index, typically stays within a tighter point range daily"
+    },
+    {
+      "index_name": "BSE SENSEX",
+      "ticker": "SENSEX",
+      "denominator_points": 1000,
+      "typical_buffer_points": 900,
+      "description": "Higher absolute index scale compared to Nifty 50, requiring a proportional 800-1200 point buffer"
+    }
+  ]
+}

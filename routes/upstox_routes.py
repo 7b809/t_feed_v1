@@ -1,16 +1,19 @@
 """Proxy routes for Upstox API.
 
-These endpoints do NOT process candles — they simply forward the request
-to Upstox with the stored access token and return the JSON body. This
-avoids exposing the token to the browser and sidesteps CORS issues.
+These endpoints forward the request to Upstox with the stored access
+token and return the JSON body — no candle processing, no token
+exposure.
 
-    GET  /api/upstox/token                       -> masked token info (never raw)
+Selector values are normalized on the way in so callers can use any
+case / spacing / alias form.
+
+    GET  /api/upstox/token                       -> masked token info
     GET  /api/upstox/search                      -> instrument search
-    GET  /api/upstox/instrument                  -> single instrument lookup by key
-    GET  /api/upstox/intraday                    -> intraday 1-min candles
-    GET  /api/upstox/historical                  -> historical 1-min candles
-    GET  /api/upstox/subscription-status         -> is the key in the live registry?
-    POST /api/upstox/subscribe                   -> subscribe on-demand
+    GET  /api/upstox/instrument                  -> lookup by key
+    GET  /api/upstox/intraday                    -> intraday 1-min
+    GET  /api/upstox/historical                  -> historical 1-min
+    GET  /api/upstox/subscription-status         -> registry check
+    POST /api/upstox/subscribe                   -> on-demand subscribe
 """
 
 from __future__ import annotations
@@ -22,9 +25,13 @@ from typing import Any
 import requests
 from fastapi import APIRouter, HTTPException, Query
 
-from core import config
 from services.instrument_registry import instrument_registry
 from services.live_feed_service import live_feed_service
+from services.normalization import (
+    normalize_strike,
+    normalize_strike_type,
+    normalize_underlying,
+)
 from services.token_service import token_service
 
 logger = logging.getLogger(__name__)
@@ -38,11 +45,13 @@ _TIMEOUT = 30
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
 def _auth_headers() -> dict[str, str]:
     token = token_service.get_access_token()
     if not token:
-        raise HTTPException(status_code=503, detail="Upstox access token not available")
+        raise HTTPException(
+            status_code=503,
+            detail="Upstox access token not available",
+        )
     return {
         "Accept": "application/json",
         "Content-Type": "application/json",
@@ -53,28 +62,41 @@ def _auth_headers() -> dict[str, str]:
 def _upstox_get(path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
     url = f"{_UPSTOX_BASE}{path}"
     try:
-        resp = requests.get(url, headers=_auth_headers(), params=params or {}, timeout=_TIMEOUT)
+        resp = requests.get(
+            url,
+            headers=_auth_headers(),
+            params=params or {},
+            timeout=_TIMEOUT,
+        )
     except requests.RequestException as exc:
         logger.exception("Upstox proxy request failed: %s", url)
-        raise HTTPException(status_code=502, detail=f"Upstox request failed: {exc}")
+        raise HTTPException(
+            status_code=502, detail=f"Upstox request failed: {exc}"
+        )
 
     if resp.status_code >= 400:
-        logger.warning("Upstox returned %s for %s: %s", resp.status_code, url, resp.text[:300])
-        raise HTTPException(status_code=resp.status_code, detail=resp.text[:500])
+        logger.warning(
+            "Upstox returned %s for %s: %s",
+            resp.status_code, url, resp.text[:300],
+        )
+        raise HTTPException(
+            status_code=resp.status_code, detail=resp.text[:500]
+        )
 
     try:
         return resp.json()
     except ValueError:
-        raise HTTPException(status_code=502, detail="Upstox returned non-JSON response")
+        raise HTTPException(
+            status_code=502,
+            detail="Upstox returned non-JSON response",
+        )
 
 
 # ---------------------------------------------------------------------------
 # Token info (never raw)
 # ---------------------------------------------------------------------------
-
 @router.get("/token")
 def token_info() -> dict[str, Any]:
-    """Return a masked token indicator — the raw token is never exposed."""
     token = token_service.get_access_token()
     return {
         "available": bool(token),
@@ -85,7 +107,6 @@ def token_info() -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Instrument search
 # ---------------------------------------------------------------------------
-
 @router.get("/search")
 def search_instruments(
     query: str = Query(..., min_length=1, max_length=50),
@@ -102,11 +123,19 @@ def search_instruments(
         "page_number": page_number,
         "records": records,
     }
-    if exchanges:         params["exchanges"] = exchanges
-    if segments:          params["segments"] = segments
-    if instrument_types:  params["instrument_types"] = instrument_types
-    if expiry:            params["expiry"] = expiry
-    if atm_offset is not None: params["atm_offset"] = atm_offset
+    if exchanges:
+        params["exchanges"] = exchanges
+    if segments:
+        params["segments"] = segments
+    if instrument_types:
+        # Normalize so "ce", "call" both land as "CE" upstream.
+        params["instrument_types"] = (
+            normalize_strike_type(instrument_types) or instrument_types
+        )
+    if expiry:
+        params["expiry"] = expiry
+    if atm_offset is not None:
+        params["atm_offset"] = atm_offset
 
     return _upstox_get("/v2/instruments/search", params=params)
 
@@ -115,12 +144,7 @@ def search_instruments(
 def lookup_instrument(
     instrument_key: str = Query(..., min_length=3),
 ) -> dict[str, Any]:
-    """Return metadata for one instrument by exact key.
-
-    Reuses the search endpoint with a targeted filter — the response is
-    cached by the browser for a short period.
-    """
-    # Try the registry first — it's the fastest source for known keys.
+    """Return metadata for one instrument by exact key."""
     entry = instrument_registry.get(instrument_key)
     if entry:
         return {
@@ -129,16 +153,22 @@ def lookup_instrument(
             "data": {
                 "instrument_key": entry["instrument_key"],
                 "trading_symbol": entry.get("trading_symbol"),
-                "underlying_symbol": entry.get("underlying"),
-                "strike_price": entry.get("strike_price"),
-                "instrument_type": entry.get("strike_type"),
+                "underlying_symbol":
+                    normalize_underlying(entry.get("underlying")) or
+                    entry.get("underlying"),
+                "strike_price": normalize_strike(entry.get("strike_price")) or
+                    entry.get("strike_price"),
+                "instrument_type":
+                    normalize_strike_type(entry.get("strike_type")) or
+                    entry.get("strike_type"),
                 "expiry": entry.get("expiry"),
-                "segment": "NSE_FO" if not entry.get("is_index") else "NSE_INDEX",
+                "segment": (
+                    "NSE_FO" if not entry.get("is_index") else "NSE_INDEX"
+                ),
                 "exchange": "NSE",
             },
         }
 
-    # Fall back to the search endpoint using the local part of the key.
     local = instrument_key.split("|", 1)[-1]
     data = _upstox_get(
         "/v2/instruments/search",
@@ -153,7 +183,6 @@ def lookup_instrument(
 # ---------------------------------------------------------------------------
 # Candles (proxy only — no processing)
 # ---------------------------------------------------------------------------
-
 @router.get("/intraday")
 def intraday_candles(
     instrument_key: str = Query(..., min_length=3),
@@ -186,7 +215,6 @@ def historical_candles(
 # ---------------------------------------------------------------------------
 # Live feed subscription
 # ---------------------------------------------------------------------------
-
 @router.get("/subscription-status")
 def subscription_status(
     instrument_key: str = Query(..., min_length=3),
@@ -197,9 +225,11 @@ def subscription_status(
     return {
         "subscribed": True,
         "in_registry": True,
-        "underlying": entry.get("underlying"),
+        "underlying": normalize_underlying(entry.get("underlying"))
+            or entry.get("underlying"),
         "strike_price": entry.get("strike_price"),
-        "strike_type": entry.get("strike_type"),
+        "strike_type": normalize_strike_type(entry.get("strike_type"))
+            or entry.get("strike_type"),
         "trading_symbol": entry.get("trading_symbol"),
     }
 
@@ -209,12 +239,16 @@ def subscribe_instrument(payload: dict[str, Any]) -> dict[str, Any]:
     """Request on-demand subscription to the live feed."""
     instrument_key = str(payload.get("instrument_key") or "").strip()
     if not instrument_key:
-        raise HTTPException(status_code=400, detail="instrument_key is required")
+        raise HTTPException(
+            status_code=400, detail="instrument_key is required"
+        )
 
     ok = False
     try:
         ok = live_feed_service.subscribe_instrument(instrument_key)
     except Exception:
-        logger.exception("Dynamic subscribe failed for %s", instrument_key)
+        logger.exception(
+            "Dynamic subscribe failed for %s", instrument_key,
+        )
 
     return {"subscribed": ok, "instrument_key": instrument_key}
