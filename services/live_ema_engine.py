@@ -11,6 +11,9 @@ Responsibilities
 * Support **seeding** from a historical candle series (backup +
   intraday) so a mid-day restart does not lose prior crosses and does
   not need 20+ minutes to warm the EMA again.
+* Expose the *current* EMA state (fast/slow EMA, diff, ATR, volume
+  baseline) per instrument through ``get_ema_snapshot`` /
+  ``get_ema_series`` so routes can serve it on demand.
 
 The engine is deliberately independent of the transport layer — it
 takes normalised candle dicts and returns cross dicts. This makes it
@@ -252,6 +255,204 @@ class LiveEmaEngine:
                 except Exception:
                     logger.exception("Cross handler failed for %s during scan", key)
         return emitted
+
+    # ------------------------------------------------------------------ #
+    # Read-only accessors (used by routes)                               #
+    # ------------------------------------------------------------------ #
+    def get_candles(
+        self,
+        instrument_key: str,
+        limit: int = 200,
+    ) -> dict[str, Any]:
+        """Return the rolling 1-min candle buffer for an instrument.
+
+        ``limit`` trims to the most recent N candles (0 / None = all).
+        """
+        key = str(instrument_key or "").strip()
+        entry = instrument_registry.get(key)
+        if entry is None:
+            return {
+                "instrument_key": key,
+                "ready": False,
+                "reason": "not_registered",
+                "count": 0,
+                "candles": [],
+            }
+
+        with self._lock:
+            candles = list(self._candles.get(key) or [])
+            forming = self._forming.get(key)
+
+        if limit and limit > 0 and len(candles) > limit:
+            candles = candles[-limit:]
+
+        payload = {
+            "instrument_key": key,
+            "underlying": entry.get("underlying"),
+            "strike_price": entry.get("strike_price"),
+            "strike_type": entry.get("strike_type"),
+            "trading_symbol": entry.get("trading_symbol"),
+            "ready": bool(candles),
+            "count": len(candles),
+            "candles": candles,
+        }
+        if forming:
+            payload["forming"] = forming
+        return payload
+
+    def get_ema_snapshot(self, instrument_key: str) -> dict[str, Any]:
+        """Return the *current* EMA state for an instrument.
+
+        Safe to call from any thread. Returns a small status dict with
+        ``ready=False`` when the engine does not yet have enough
+        candles to produce an EMA (e.g. just after startup).
+        """
+        key = str(instrument_key or "").strip()
+        entry = instrument_registry.get(key)
+        if entry is None:
+            return {
+                "instrument_key": key,
+                "ready": False,
+                "reason": "not_registered",
+            }
+
+        with self._lock:
+            candles = list(self._candles.get(key) or [])
+            forming = self._forming.get(key)
+
+        required = config.EMA_SLOW_PERIOD + 2
+        base = {
+            "instrument_key": key,
+            "underlying": entry.get("underlying"),
+            "strike_price": entry.get("strike_price"),
+            "strike_type": entry.get("strike_type"),
+            "trading_symbol": entry.get("trading_symbol"),
+            "candle_count": len(candles),
+            "required_candles": required,
+        }
+
+        if len(candles) < required:
+            return {
+                **base,
+                "ready": False,
+                "reason": "insufficient_candles",
+            }
+
+        valid = [c for c in candles if c.get("close") is not None]
+        if len(valid) < required:
+            return {
+                **base,
+                "ready": False,
+                "reason": "insufficient_valid_candles",
+                "candle_count": len(valid),
+            }
+
+        closes = [float(c["close"]) for c in valid]
+        fast = _ema_series(closes, config.EMA_FAST_PERIOD)
+        slow = _ema_series(closes, config.EMA_SLOW_PERIOD)
+        atr_arr = _atr(valid, config.EMA_ATR_PERIOD)
+        volumes = [float(c.get("volume") or 0.0) for c in valid]
+        avg_vol_arr = _sma(volumes, config.EMA_VOLUME_LOOKBACK)
+
+        i = len(closes) - 1
+        f_now = fast[i]
+        s_now = slow[i]
+        ema_diff = (
+            (f_now - s_now)
+            if (f_now is not None and s_now is not None)
+            else None
+        )
+
+        last = valid[i]
+        trend = None
+        if ema_diff is not None:
+            trend = "bullish" if ema_diff > 0 else "bearish"
+
+        return {
+            **base,
+            "ready": True,
+            "minute": last.get("minute"),
+            "timestamp": last.get("timestamp"),
+            "close": last.get("close"),
+            "volume": last.get("volume"),
+            "fast_period": config.EMA_FAST_PERIOD,
+            "slow_period": config.EMA_SLOW_PERIOD,
+            "atr_period": config.EMA_ATR_PERIOD,
+            "fast_ema": f_now,
+            "slow_ema": s_now,
+            "ema_diff": ema_diff,
+            "trend": trend,
+            "atr": atr_arr[i] if i < len(atr_arr) else None,
+            "avg_volume": avg_vol_arr[i] if i < len(avg_vol_arr) else None,
+            "forming": forming,
+        }
+
+    def get_ema_series(
+        self,
+        instrument_key: str,
+        limit: int = 200,
+    ) -> dict[str, Any]:
+        """Return the EMA series (close, fast EMA, slow EMA) per minute.
+
+        ``limit`` trims to the most recent N rows. Set 0 for all.
+        """
+        key = str(instrument_key or "").strip()
+        entry = instrument_registry.get(key)
+        if entry is None:
+            return {
+                "instrument_key": key,
+                "ready": False,
+                "reason": "not_registered",
+                "count": 0,
+                "series": [],
+            }
+
+        with self._lock:
+            candles = list(self._candles.get(key) or [])
+
+        valid = [c for c in candles if c.get("close") is not None]
+        if not valid:
+            return {
+                "instrument_key": key,
+                "underlying": entry.get("underlying"),
+                "strike_price": entry.get("strike_price"),
+                "strike_type": entry.get("strike_type"),
+                "trading_symbol": entry.get("trading_symbol"),
+                "ready": False,
+                "reason": "no_candles",
+                "count": 0,
+                "series": [],
+            }
+
+        closes = [float(c["close"]) for c in valid]
+        fast = _ema_series(closes, config.EMA_FAST_PERIOD)
+        slow = _ema_series(closes, config.EMA_SLOW_PERIOD)
+
+        series: list[dict[str, Any]] = []
+        for idx, c in enumerate(valid):
+            series.append({
+                "minute": c.get("minute"),
+                "timestamp": c.get("timestamp"),
+                "close": closes[idx],
+                "fast_ema": fast[idx],
+                "slow_ema": slow[idx],
+            })
+
+        if limit and limit > 0 and len(series) > limit:
+            series = series[-limit:]
+
+        return {
+            "instrument_key": key,
+            "underlying": entry.get("underlying"),
+            "strike_price": entry.get("strike_price"),
+            "strike_type": entry.get("strike_type"),
+            "trading_symbol": entry.get("trading_symbol"),
+            "ready": True,
+            "fast_period": config.EMA_FAST_PERIOD,
+            "slow_period": config.EMA_SLOW_PERIOD,
+            "count": len(series),
+            "series": series,
+        }
 
     # ------------------------------------------------------------------ #
     # Candle ingestion + finalisation                                    #

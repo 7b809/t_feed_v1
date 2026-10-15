@@ -29,6 +29,10 @@ def _bool(name: str, default: bool = False) -> bool:
         return default
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
+def _csv(name: str, default: str = "") -> list[str]:
+    raw = _str(name, default)
+    return [part.strip() for part in raw.split(",") if part.strip()]
+
 # ---------------------------------------------------------------------------
 # Token storage / lifecycle
 # ---------------------------------------------------------------------------
@@ -112,3 +116,32 @@ DAILY_REFRESH_HOUR = _int("DAILY_REFRESH_HOUR", 9)
 DAILY_REFRESH_MINUTE = _int("DAILY_REFRESH_MINUTE", 0)
 # Mon..Fri by default (APScheduler day_of_week uses mon,tue,...)
 DAILY_REFRESH_DAYS = _str("DAILY_REFRESH_DAYS", "mon,tue,wed,thu,fri")
+
+# ---------------------------------------------------------------------------
+# Transient folder cleanup (project start / daily refresh / hard refresh)
+# ---------------------------------------------------------------------------
+# Comma-separated list of folders (relative to the project root) that
+# the cleanup service will remove. Reserved folders take priority — if
+# a name appears in both lists, the reserved list wins and the folder
+# is preserved.
+#
+# Default remove list is the transient state only. `logs` and
+# `logs_text` are deliberately NOT in it: the logger holds open file
+# handles into those directories at import time, and removing them
+# mid-process breaks log rotation on Linux (file unlinked but still
+# written) and fails outright on Windows. Add them to the remove list
+# (via env) only if you understand that trade-off.
+#
+# The reserved list protects directories that would corrupt the app
+# if removed: the meta backups, the code tree, the virtualenv, and
+# the git metadata.
+CLEANUP_REMOVE_FOLDERS = _csv(
+    "CLEANUP_REMOVE_FOLDERS",
+    "data,temp,downloads,output,__pycache__,.pytest_cache,htmlcov,test_logs",
+)
+
+CLEANUP_RESERVED_FOLDERS = _csv(
+    "CLEANUP_RESERVED_FOLDERS",
+    "meta_data,logs,logs_text,.git,.venv,venv,myenv,templates,routes,"
+    "services,core,token_tasks,static,tests",
+)

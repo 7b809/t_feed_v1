@@ -16,8 +16,9 @@ from routes.log_routes import router as log_router
 from routes.page_routes import router as page_router
 from routes.upstox_routes import router as upstox_router
 from services.backup_data_service import backup_data_service
+from services.cleanup_service import cleanup_service
 from services.instrument_registry import instrument_registry
-from services.live_backfill_service import live_backfill_service   # <-- NEW
+from services.live_backfill_service import live_backfill_service
 from services.live_broadcast import live_broadcast
 from services.live_cross_store import live_cross_store
 from services.live_ema_engine import live_ema_engine
@@ -79,15 +80,41 @@ async def app_lifespan(app: FastAPI):
     try:
         telegram_service.send_message(
             "Application Starting",
-            "Market engine starting: refreshing token, fetching backup, starting live feed.",
+            "Market engine starting: cleaning transient folders, refreshing token, fetching backup, starting live feed.",
             level="STARTUP",
         )
+
+        # ---- 1. Cleanup transient folders ---------------------------------
+        # Runs before token refresh and before the backup is extracted so
+        # `data/`, `temp/`, `downloads/`, `output/` are empty for a clean
+        # re-extract. Reserved folders (meta_data/, logs/, .git/, ...)
+        # are always preserved.
+        try:
+            cleanup_status = await asyncio.to_thread(
+                cleanup_service.run, "startup"
+            )
+            logger.info("Startup cleanup: %s", cleanup_status)
+            telegram_service.send_message(
+                "Startup Cleanup",
+                (
+                    f"Removed: {len(cleanup_status.get('removed') or [])}\n"
+                    f"Preserved / missing: {len(cleanup_status.get('skipped') or [])}\n"
+                    f"Errors: {len(cleanup_status.get('errors') or [])}"
+                ),
+                level="INFO" if not cleanup_status.get("errors") else "WARNING",
+            )
+        except Exception:
+            logger.exception("Startup cleanup failed; continuing anyway")
+        # -------------------------------------------------------------------
+
+        # ---- 2. Token refresh + validity check -----------------------------
         await asyncio.to_thread(token_service.refresh_tokens)
         try:
             await asyncio.to_thread(check_upstox_token_validity, False)
         except Exception as exc:
             logger.warning("Startup token check failed (%s).", type(exc).__name__)
 
+        # ---- 3. Backup extract + registry load -----------------------------
         try:
             backup = await asyncio.to_thread(backup_data_service.refresh)
             logger.info("Startup backup: %s", backup)
@@ -100,11 +127,12 @@ async def app_lifespan(app: FastAPI):
                 level="ERROR",
             )
 
+        # ---- 4. Wire cross handler + reset today's cross state -------------
         live_feed_service.set_loop(loop)
         _wire_cross_handler(loop)
         live_cross_store.reset_all()
 
-        # ---- NEW: seed the EMA engine from backup + intraday candles ----
+        # ---- 5. Seed the EMA engine from backup + intraday candles ---------
         # Runs before live_feed_service.start() so the seeded series is
         # contiguous with the first live tick. Any failure here must not
         # block startup — a cold engine is still functional, just slow to
@@ -125,13 +153,14 @@ async def app_lifespan(app: FastAPI):
             )
         except Exception:
             logger.exception("Live backfill failed; live feed will start cold")
-        # ----------------------------------------------------------------
 
+        # ---- 6. Start live feed --------------------------------------------
         try:
             await asyncio.to_thread(live_feed_service.start)
         except Exception:
             logger.exception("Live feed start failed")
 
+        # ---- 7. Schedulers + Telegram bot ----------------------------------
         scheduler = build_token_monitor_scheduler()
         telegram_started = telegram_token_bot.start()
 
