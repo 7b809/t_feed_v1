@@ -72,4 +72,4 @@ def run_strategy_order() -> None:
             "Strategy Stage 4 Failed",
             f"{type(exc).__name__}: {exc}",
             level="ERROR",
-        )
+        ) 
