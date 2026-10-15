@@ -1,24 +1,4 @@
-"""Registry of live instruments loaded from the extracted backup tree.
-
-The backup tree layout is::
-
-    data/index/<underlying>/candles.json
-    data/index/<underlying>/ema_crosses.json
-    data/<underlying>/<strike>_<TYPE>/candles.json
-    data/<underlying>/<strike>_<TYPE>/ema_crosses.json
-
-Each `ema_crosses.json` payload carries `instrument_key`, `underlying`,
-`strike_price`, `strike_type`, `expiry` and `trading_symbol`. We use
-that as the source of truth so no extra map file is required.
-
-Public lookups:
-
-    get(instrument_key)                -> dict | None
-    resolve(underlying, strike, type)  -> dict | None
-    all()                              -> list[dict]
-    subscribe_keys()                   -> list[str]
-    query(underlying=None, ...)        -> list[dict]
-"""
+"""Registry of live instruments loaded from the extracted backup tree or registered dynamically."""
 
 from __future__ import annotations
 
@@ -33,14 +13,11 @@ logger = logging.getLogger(__name__)
 
 _INDEX_PREFIXES = ("NSE_INDEX|", "BSE_INDEX|")
 
-
 def _norm_type(value: Any) -> str:
     return str(value or "").strip().upper()
 
-
 def _norm_underlying(value: Any) -> str:
     return str(value or "").strip().upper().replace(" ", "")
-
 
 class InstrumentRegistry:
     def __init__(self) -> None:
@@ -103,6 +80,33 @@ class InstrumentRegistry:
         return {"count": len(self._ordered), "data_dir": str(root)}
 
     # ------------------------------------------------------------------ #
+    # Dynamic / Ad-hoc Registration                                      #
+    # ------------------------------------------------------------------ #
+    def register_adhoc(self, instrument_key: str, trading_symbol: str | None = None) -> dict[str, Any]:
+        key = str(instrument_key or "").strip()
+        if key in self._by_key:
+            return self._by_key[key]
+
+        is_idx = key.startswith(_INDEX_PREFIXES)
+        symbol = trading_symbol or key.split("|", 1)[-1]
+        underlying = symbol.split()[0] if not is_idx else symbol
+
+        entry = {
+            "instrument_key": key,
+            "underlying": underlying,
+            "strike_price": None,
+            "strike_type": "",
+            "expiry": None,
+            "trading_symbol": symbol,
+            "candles_path": "",
+            "ema_path": "",
+            "is_index": is_idx,
+        }
+        self._by_key[key] = entry
+        self._ordered.append(entry)
+        return entry
+
+    # ------------------------------------------------------------------ #
     # Lookups                                                            #
     # ------------------------------------------------------------------ #
     def get(self, instrument_key: str) -> dict[str, Any] | None:
@@ -152,6 +156,5 @@ class InstrumentRegistry:
                 continue
             out.append(e)
         return out
-
 
 instrument_registry = InstrumentRegistry()

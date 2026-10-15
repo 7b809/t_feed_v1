@@ -8,10 +8,8 @@ from dotenv import load_dotenv
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(PROJECT_ROOT / ".env")
 
-
 def _str(name: str, default: str = "") -> str:
     return os.getenv(name, default).strip()
-
 
 def _int(name: str, default: int) -> int:
     try:
@@ -19,20 +17,17 @@ def _int(name: str, default: int) -> int:
     except (TypeError, ValueError):
         return default
 
-
 def _float(name: str, default: float) -> float:
     try:
         return float(os.getenv(name, str(default)))
     except (TypeError, ValueError):
         return default
 
-
 def _bool(name: str, default: bool = False) -> bool:
     value = os.getenv(name)
     if value is None:
         return default
     return value.strip().lower() in {"1", "true", "yes", "on"}
-
 
 # ---------------------------------------------------------------------------
 # Token storage / lifecycle
@@ -85,6 +80,12 @@ UPSTOX_WS_MODE = _str("UPSTOX_WS_MODE", "full")           # full | ltpc | full_d
 UPSTOX_WS_AUTO_START = _bool("UPSTOX_WS_AUTO_START", True)
 UPSTOX_WS_RECONNECT_INTERVAL = max(1, _int("UPSTOX_WS_RECONNECT_INTERVAL", 10))
 UPSTOX_WS_MAX_RETRIES = max(0, _int("UPSTOX_WS_MAX_RETRIES", 0))  # 0 = infinite
+
+# Health feed logging
+HEALTH_FEED_LOG = _bool("HEALTH_FEED_LOG", True)
+HEALTH_FEED_INSTRUMENT = _str("HEALTH_FEED_INSTRUMENT", "NSE_INDEX|Nifty 50")
+# Interval in minutes (e.g. 5 = log every 5 minutes)
+HEALTH_FEED_INSTRUMENT_INTERVAL = max(1, _int("HEALTH_FEED_INSTRUMENT_INTERVAL", 5))
 
 # ---------------------------------------------------------------------------
 # Live EMA cross engine

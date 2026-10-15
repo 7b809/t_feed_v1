@@ -1,12 +1,8 @@
 """Upstox full-mode WebSocket manager.
 
 Subscribes to every instrument in the registry and, for each incoming
-feed, extracts the best available 1-min candle (index feeds carry
-`marketOHLC.ohlc[I1]`; option feeds don't, so we synthesise one from
-`ltpc` + `eFeedDetails.vtt`) and hands it to the EMA engine.
-
-Also publishes an ephemeral "last tick" snapshot on the feed topic so
-UI clients can show live LTP / OHLC without touching the raw feed.
+feed, extracts the best available 1-min candle and tick snapshot, then
+hands it to the EMA engine and broadcasts to connected UI clients.
 """
 
 from __future__ import annotations
@@ -26,15 +22,17 @@ from services.token_service import token_service
 
 logger = get_logger(__file__)
 
+DEFAULT_CORE_INSTRUMENTS = [
+    ("NSE_INDEX|Nifty 50", "NIFTY 50"),
+    ("BSE_INDEX|SENSEX", "SENSEX"),
+]
 
 def _load_sdk():
     try:
         import upstox_client  # type: ignore
-
         return upstox_client
     except ImportError:
         return None
-
 
 class LiveFeedService:
     def __init__(self) -> None:
@@ -44,14 +42,27 @@ class LiveFeedService:
         self._started_at: datetime | None = None
         self._last_tick_at: dict[str, datetime] = {}
         self._subscribed: list[str] = []
-        self._loop = None  # asyncio loop for broadcast
+        self._loop = None
+        self._last_health_log_time: float = 0.0
 
-    # ------------------------------------------------------------------ #
-    # Lifecycle                                                          #
-    # ------------------------------------------------------------------ #
     def set_loop(self, loop) -> None:
-        """Give the service a handle to the running asyncio loop."""
         self._loop = loop
+
+    def _ensure_core_subscriptions(self) -> None:
+        """Ensure critical index feeds (Nifty, Sensex, and health feed) are present."""
+        targets = [k for k, _ in DEFAULT_CORE_INSTRUMENTS]
+        if config.HEALTH_FEED_INSTRUMENT:
+            targets.append(config.HEALTH_FEED_INSTRUMENT.strip())
+
+        for target in targets:
+            if not target:
+                continue
+            if not instrument_registry.get(target):
+                symbol = target.split("|", 1)[-1]
+                instrument_registry.register_adhoc(target, trading_symbol=symbol)
+            if target not in self._subscribed:
+                self._subscribed.append(target)
+                logger.info("Core index feed [%s] ensured in subscription list.", target)
 
     def start(self) -> bool:
         if self._thread and self._thread.is_alive():
@@ -61,18 +72,17 @@ class LiveFeedService:
             return False
 
         keys = instrument_registry.subscribe_keys()
-        if not keys:
-            logger.warning("Live feed: no instruments in registry; not starting")
-            return False
-
         self._stop.clear()
         self._subscribed = list(keys)
+
+        self._ensure_core_subscriptions()
+
         self._thread = threading.Thread(
             target=self._run, name="upstox-live-feed", daemon=True
         )
         self._thread.start()
         self._started_at = datetime.now(timezone.utc)
-        logger.info("Live feed starting with %d instruments", len(keys))
+        logger.info("Live feed starting with %d instruments", len(self._subscribed))
         return True
 
     def stop(self) -> None:
@@ -91,13 +101,11 @@ class LiveFeedService:
         time.sleep(1)
         return self.start()
 
-    def subscribe_instrument(self, instrument_key: str) -> bool:
-        """Subscribe a single instrument on demand without a full restart.
+    def is_subscribed(self, instrument_key: str) -> bool:
+        key = str(instrument_key or "").strip()
+        return key in self._subscribed
 
-        Adds the key to the local subscription list and asks the
-        underlying streamer to subscribe. Returns False if the streamer
-        is not running or the SDK call fails.
-        """
+    def subscribe_instrument(self, instrument_key: str) -> bool:
         key = str(instrument_key or "").strip()
         if not key:
             return False
@@ -107,11 +115,8 @@ class LiveFeedService:
         self._subscribed.append(key)
 
         streamer = self._streamer
-        if streamer is None:
-            # Feed not running — start it in the background so the new
-            # key gets picked up on the next connection.
-            if not (self._thread and self._thread.is_alive()):
-                self.start()
+        if streamer is None or not (self._thread and self._thread.is_alive()):
+            self.start()
             return True
 
         try:
@@ -122,9 +127,6 @@ class LiveFeedService:
             logger.exception("Streamer.subscribe failed for %s", key)
             return False
 
-    # ------------------------------------------------------------------ #
-    # Internal run                                                       #
-    # ------------------------------------------------------------------ #
     def _run(self) -> None:
         sdk = _load_sdk()
         if sdk is None:
@@ -149,6 +151,8 @@ class LiveFeedService:
         if not token:
             raise RuntimeError("No Upstox access token available for live feed")
 
+        self._ensure_core_subscriptions()
+
         configuration = sdk.Configuration()
         configuration.access_token = token
         client = sdk.ApiClient(configuration)
@@ -167,8 +171,8 @@ class LiveFeedService:
         def on_error(message: Any) -> None:
             logger.warning("Upstox feed error: %s", message)
 
-        def on_close() -> None:
-            logger.info("Upstox feed closed")
+        def on_close(*args, **kwargs) -> None:
+            logger.info("Upstox feed closed: args=%s kwargs=%s", args, kwargs)
 
         streamer.on("message", on_message)
         streamer.on("error", on_error)
@@ -190,7 +194,6 @@ class LiveFeedService:
         )
         streamer.connect()
 
-        # Block until stop is requested or the streamer dies.
         while not self._stop.is_set():
             time.sleep(0.5)
 
@@ -199,9 +202,6 @@ class LiveFeedService:
         except Exception:
             logger.exception("Error disconnecting live feed")
 
-    # ------------------------------------------------------------------ #
-    # Feed parsing                                                       #
-    # ------------------------------------------------------------------ #
     def _handle_feed(self, message: Any) -> None:
         payload = (
             message if isinstance(message, dict) else getattr(message, "data", None)
@@ -216,7 +216,7 @@ class LiveFeedService:
         for instrument_key, feed in feeds.items():
             entry = instrument_registry.get(instrument_key)
             if entry is None:
-                continue
+                entry = instrument_registry.register_adhoc(instrument_key)
 
             tick = self._extract_tick(feed)
             if tick is None:
@@ -224,8 +224,29 @@ class LiveFeedService:
 
             self._last_tick_at[instrument_key] = datetime.now(timezone.utc)
 
-            # Feed the EMA engine first so crosses are computed before
-            # the ephemeral snapshot goes out.
+            # Health feed log (e.g., every 5 minutes)
+            if (
+                config.HEALTH_FEED_LOG
+                and instrument_key == config.HEALTH_FEED_INSTRUMENT
+            ):
+                now = time.monotonic()
+                interval_seconds = config.HEALTH_FEED_INSTRUMENT_INTERVAL * 60
+                if (now - self._last_health_log_time) >= interval_seconds:
+                    self._last_health_log_time = now
+                    candle_1m = tick.get("candle_1m") or {}
+                    logger.info(
+                        "[HEALTH FEED] instrument=%s | ltp=%s | prev_close=%s | 1m_ohlc=(O:%s H:%s L:%s C:%s) | vol=%s (interval=%dm)",
+                        instrument_key,
+                        tick.get("ltp"),
+                        tick.get("prev_close"),
+                        candle_1m.get("open"),
+                        candle_1m.get("high"),
+                        candle_1m.get("low"),
+                        candle_1m.get("close"),
+                        tick.get("volume"),
+                        config.HEALTH_FEED_INSTRUMENT_INTERVAL,
+                    )
+
             live_ema_engine.on_tick(
                 instrument_key,
                 candle_1m=tick.get("candle_1m"),
@@ -233,41 +254,78 @@ class LiveFeedService:
                 volume=tick.get("volume"),
             )
 
-            # Ephemeral feed snapshot for UI clients.
             self._publish_feed_snapshot(entry, tick)
 
     def _extract_tick(self, feed: dict[str, Any]) -> dict[str, Any] | None:
-        """Best-effort extraction of (ltp, volume, candle_1m) from a feed."""
+        """Comprehensive extractor supporting Index FullFeed, Option Chain, and MarketFF."""
         if not isinstance(feed, dict):
             return None
 
-        # Index feeds carry the FF block. Option feeds carry OC.
-        ff = feed.get("ff") or {}
+        # Look in fullFeed, ff, oc, or directly in root
+        ff = feed.get("fullFeed") or feed.get("ff") or {}
         oc = feed.get("oc") or {}
-        block = ff or oc
-        if not isinstance(block, dict):
+        market_ff = feed.get("marketFF") or ff.get("marketFF") or {}
+        index_ff = feed.get("indexFF") or ff.get("indexFF") or {}
+        market_level = feed.get("marketLevel") or ff.get("marketLevel") or {}
+
+        # 1. LTP & Prev Close
+        ltpc = (
+            feed.get("ltpc")
+            or ff.get("ltpc")
+            or index_ff.get("ltpc")
+            or market_ff.get("ltpc")
+            or oc.get("ltpc")
+            or {}
+        )
+        ltp = self._flt(ltpc.get("ltp") or feed.get("ltp") or market_ff.get("ltp"))
+        prev_close = self._flt(ltpc.get("cp") or feed.get("cp") or feed.get("prev_close"))
+
+        # 2. 1-minute candle (I1) and Day OHLC
+        candle_1m = None
+        market_ohlc = (
+            index_ff.get("marketOHLC")
+            or market_ff.get("marketOHLC")
+            or ff.get("marketOHLC")
+            or feed.get("marketOHLC")
+            or {}
+        )
+        ohlc_list = market_ohlc.get("ohlc")
+        ohlc_vol = None
+        if isinstance(ohlc_list, list):
+            for item in ohlc_list:
+                if isinstance(item, dict):
+                    if str(item.get("interval")) == "I1":
+                        candle_1m = item
+                    elif str(item.get("interval")).lower() in ("1d", "d"):
+                        ohlc_vol = self._flt(item.get("volume") or item.get("vol"))
+
+        # 3. Volume extraction (checking vtt, vol, volume across eFeedDetails and market structures)
+        efd = (
+            feed.get("eFeedDetails")
+            or ff.get("eFeedDetails")
+            or market_ff.get("eFeedDetails")
+            or oc.get("eFeedDetails")
+            or {}
+        )
+        volume = self._flt(
+            efd.get("vtt")
+            or market_level.get("vtt")
+            or feed.get("vtt")
+            or feed.get("volume")
+            or market_ff.get("volume")
+            or ohlc_vol
+            or (candle_1m.get("volume") if isinstance(candle_1m, dict) else None)
+        )
+
+        if ltp is None and candle_1m is None:
             return None
 
-        index_ff = block.get("indexFF") or {}
-        ltpc = block.get("ltpc") or index_ff.get("ltpc") or {}
-        ltp = self._flt(ltpc.get("ltp"))
-
-        candle_1m = None
-        m_ohlc = (index_ff.get("marketOHLC") or {}).get("ohlc") if index_ff else None
-        if isinstance(m_ohlc, list):
-            # Last I1 entry wins; feed may include several.
-            for item in m_ohlc:
-                if not isinstance(item, dict):
-                    continue
-                if str(item.get("interval")) == "I1":
-                    candle_1m = item
-
-        volume = None
-        efd = block.get("eFeedDetails") or {}
-        if isinstance(efd, dict):
-            volume = self._flt(efd.get("vtt"))
-
-        return {"ltp": ltp, "volume": volume, "candle_1m": candle_1m}
+        return {
+            "ltp": ltp,
+            "volume": volume,
+            "candle_1m": candle_1m,
+            "prev_close": prev_close,
+        }
 
     @staticmethod
     def _flt(value: Any) -> float | None:
@@ -282,6 +340,7 @@ class LiveFeedService:
         payload = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "ltp": tick.get("ltp"),
+            "prev_close": tick.get("prev_close"),
             "volume": tick.get("volume"),
             "candle_1m": tick.get("candle_1m"),
             "underlying": entry.get("underlying"),
@@ -293,9 +352,6 @@ class LiveFeedService:
         except Exception:
             logger.exception("Failed to publish feed snapshot")
 
-    # ------------------------------------------------------------------ #
-    # Introspection                                                      #
-    # ------------------------------------------------------------------ #
     def status(self) -> dict[str, Any]:
         return {
             "running": bool(self._thread and self._thread.is_alive()),
@@ -306,6 +362,5 @@ class LiveFeedService:
                 k: v.isoformat() for k, v in list(self._last_tick_at.items())[:50]
             },
         }
-
 
 live_feed_service = LiveFeedService()

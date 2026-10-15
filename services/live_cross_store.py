@@ -27,6 +27,13 @@ Cross record shape (matches the candle-backup ema_crosses.json):
       "valid": true,
       "filters": {...}
     }
+
+Mid-day restart behaviour
+-------------------------
+On the first ``save()`` after a process start, the store hydrates its
+in-memory record map from the on-disk file when that file's ``day``
+matches the incoming cross's day. This prevents a mid-day restart from
+silently wiping crosses already persisted earlier in the session.
 """
 
 from __future__ import annotations
@@ -41,7 +48,6 @@ from typing import Any
 from core import config
 
 logger = logging.getLogger(__name__)
-
 
 class LiveCrossStore:
     def __init__(self) -> None:
@@ -83,6 +89,52 @@ class LiveCrossStore:
             return "unknown"
         return dt.strftime("%Y-%m-%d")
 
+    def _try_hydrate(
+        self,
+        key: str,
+        path: Path,
+        day: str,
+    ) -> dict[str, Any] | None:
+        """Return a state dict hydrated from disk if the on-disk file is
+        for the same ``day``. Returns None when there's nothing to
+        hydrate (missing file, unreadable, or wrong day)."""
+        if not path.exists():
+            return None
+        try:
+            existing = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            logger.exception("Unreadable live_crosses.json: %s", path)
+            return None
+
+        if str(existing.get("day")) != str(day):
+            return None
+
+        records: dict[str, Any] = {}
+        for c in existing.get("crosses") or []:
+            try:
+                mk = self._minute_key(c.get("timestamp", ""))
+            except Exception:
+                continue
+            records[mk] = c
+
+        return {"day": day, "path": path, "records": records}
+
+    def _reset_day(
+        self,
+        key: str,
+        path: Path,
+        day: str,
+    ) -> dict[str, Any]:
+        """Start a fresh day, clearing any stale on-disk file."""
+        state = {"day": day, "path": path, "records": {}}
+        self._state[key] = state
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.unlink(missing_ok=True)
+        except Exception:
+            logger.exception("Failed clearing live_crosses for %s", key)
+        return state
+
     # ------------------------------------------------------------------ #
     # Public API                                                         #
     # ------------------------------------------------------------------ #
@@ -98,20 +150,21 @@ class LiveCrossStore:
 
         with self._lock_for(key):
             state = self._state.get(key)
-            if state is None or state["day"] != day:
-                # New day (or first write) — reset state and file.
-                state = {
-                    "day": day,
-                    "path": path,
-                    "records": {},
-                }
-                self._state[key] = state
-                # Wipe the file for the new day so stale data is gone.
-                try:
-                    path.parent.mkdir(parents=True, exist_ok=True)
-                    path.unlink(missing_ok=True)
-                except Exception:
-                    logger.exception("Failed clearing live_crosses for %s", key)
+
+            if state is None:
+                # First write in this process for this key. Try to
+                # hydrate from disk if today's file already exists —
+                # this is the mid-day restart path.
+                hydrated = self._try_hydrate(key, path, day)
+                if hydrated is not None:
+                    state = hydrated
+                    self._state[key] = state
+                else:
+                    state = self._reset_day(key, path, day)
+
+            elif state["day"] != day:
+                # Genuine day rollover within a single process run.
+                state = self._reset_day(key, path, day)
 
             state["records"][minute] = cross
             payload = {
@@ -158,9 +211,13 @@ class LiveCrossStore:
         }
 
     def reset_all(self) -> None:
-        """Called by daily refresh — drop all in-memory state."""
+        """Called by daily refresh — drop all in-memory state.
+
+        Note: this intentionally does **not** touch disk. The next
+        ``save()`` will hydrate from whatever file is present if its
+        day matches the incoming cross's day.
+        """
         with self._guard:
             self._state.clear()
-
 
 live_cross_store = LiveCrossStore()

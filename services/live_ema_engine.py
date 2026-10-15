@@ -8,6 +8,9 @@ Responsibilities
   "on 1-min close") and feed it to the EMA detector.
 * When a cross is detected, build the slim cross record and hand it
   to the cross store, then broadcast it on the internal hub.
+* Support **seeding** from a historical candle series (backup +
+  intraday) so a mid-day restart does not lose prior crosses and does
+  not need 20+ minutes to warm the EMA again.
 
 The engine is deliberately independent of the transport layer — it
 takes normalised candle dicts and returns cross dicts. This makes it
@@ -17,17 +20,16 @@ drive it without a real WebSocket.
 
 from __future__ import annotations
 
-import logging
 import threading
 from datetime import datetime, timezone
 from typing import Any
 
 from core import config
+from core.logger import get_logger
 from services.instrument_registry import instrument_registry
 from services.live_cross_store import live_cross_store
 
-logger = logging.getLogger(__name__)
-
+logger = get_logger(__file__)
 
 # ---------------------------------------------------------------------------
 # Minimal indicator math (kept in-file to avoid a hard import from candle-backup)
@@ -46,7 +48,6 @@ def _ema_series(values: list[float], period: int) -> list[float | None]:
         prev = values[i] * k + prev * (1.0 - k)
         out[i] = prev
     return out
-
 
 def _atr(candles: list[dict[str, Any]], period: int) -> list[float | None]:
     n = len(candles)
@@ -87,7 +88,6 @@ def _atr(candles: list[dict[str, Any]], period: int) -> list[float | None]:
         out[i] = prev_atr
     return out
 
-
 def _sma(values: list[float], period: int) -> list[float | None]:
     n = len(values)
     out: list[float | None] = [None] * n
@@ -101,7 +101,6 @@ def _sma(values: list[float], period: int) -> list[float | None]:
         if len(window) == period:
             out[i] = sum(window) / period
     return out
-
 
 # ---------------------------------------------------------------------------
 # Engine
@@ -153,6 +152,106 @@ class LiveEmaEngine:
 
         with self._lock:
             self._ingest(entry, candle_1m, ltp, volume)
+
+    # ------------------------------------------------------------------ #
+    # Seeding (mid-day restart support)                                  #
+    # ------------------------------------------------------------------ #
+    def seed(
+        self,
+        instrument_key: str,
+        candles: list[dict[str, Any]],
+    ) -> None:
+        """Replace the rolling candle buffer for ``instrument_key``.
+
+        ``candles`` must be ascending by minute. Each entry must contain
+        at least ``minute`` and ``timestamp``; ``open``, ``high``,
+        ``low``, ``close`` are read if present, ``volume`` defaults to
+        ``0.0``.
+
+        Also clears any forming candle for this key so the live feed
+        starts a fresh bar on its next tick.
+        """
+        key = str(instrument_key or "").strip()
+        if not key:
+            return
+
+        normalised: list[dict[str, Any]] = []
+        for c in candles or []:
+            if not isinstance(c, dict):
+                continue
+            minute = c.get("minute")
+            if not minute:
+                continue
+            normalised.append({
+                "minute": str(minute),
+                "timestamp": c.get("timestamp") or str(minute),
+                "open": c.get("open"),
+                "high": c.get("high"),
+                "low": c.get("low"),
+                "close": c.get("close"),
+                "volume": float(c.get("volume") or 0.0),
+            })
+
+        with self._lock:
+            self._candles[key] = normalised[-self._max_candles:]
+            self._forming.pop(key, None)
+            if normalised:
+                self._last_minute[key] = normalised[-1]["minute"]
+
+    def scan_crosses(
+        self,
+        instrument_key: str,
+        since_minute_prefix: str | None = None,
+    ) -> int:
+        """Scan the seeded candle series for EMA crosses.
+
+        Emits via the configured cross handler. Only crosses whose
+        candle minute is >= ``since_minute_prefix`` (lexicographic
+        compare, valid because minutes are zero-padded ISO) are
+        emitted, so we don't re-emit crosses already recorded in the
+        backup.
+
+        Returns the number of crosses emitted.
+        """
+        key = str(instrument_key or "").strip()
+        entry = instrument_registry.get(key)
+        if entry is None:
+            return 0
+
+        with self._lock:
+            candles = list(self._candles.get(key) or [])
+
+        if len(candles) < config.EMA_SLOW_PERIOD + 2:
+            return 0
+
+        valid = [c for c in candles if c.get("close") is not None]
+        if len(valid) < config.EMA_SLOW_PERIOD + 2:
+            return 0
+
+        closes = [float(c["close"]) for c in valid]
+        fast = _ema_series(closes, config.EMA_FAST_PERIOD)
+        slow = _ema_series(closes, config.EMA_SLOW_PERIOD)
+        atr_arr = _atr(valid, config.EMA_ATR_PERIOD)
+        volumes = [float(c.get("volume") or 0.0) for c in valid]
+        avg_vol_arr = _sma(volumes, config.EMA_VOLUME_LOOKBACK)
+
+        emitted = 0
+        for i in range(1, len(closes)):
+            minute = str(valid[i].get("minute") or "")
+            if since_minute_prefix and minute < since_minute_prefix:
+                continue
+            cross = self._compute_cross(
+                entry, valid, i, fast, slow, atr_arr, avg_vol_arr, volumes
+            )
+            if cross is None:
+                continue
+            emitted += 1
+            if self._cross_handler is not None:
+                try:
+                    self._cross_handler(entry, cross)
+                except Exception:
+                    logger.exception("Cross handler failed for %s during scan", key)
+        return emitted
 
     # ------------------------------------------------------------------ #
     # Candle ingestion + finalisation                                    #
@@ -268,16 +367,42 @@ class LiveEmaEngine:
         if len(candles) < config.EMA_SLOW_PERIOD + 2:
             return None
 
-        closes = [c["close"] for c in candles if c.get("close") is not None]
-        if len(closes) < config.EMA_SLOW_PERIOD + 2:
+        valid = [c for c in candles if c.get("close") is not None]
+        if len(valid) < config.EMA_SLOW_PERIOD + 2:
             return None
+
+        closes = [float(c["close"]) for c in valid]
+        i = len(closes) - 1
 
         fast = _ema_series(closes, config.EMA_FAST_PERIOD)
         slow = _ema_series(closes, config.EMA_SLOW_PERIOD)
+        atr_arr = _atr(valid, config.EMA_ATR_PERIOD)
+        volumes = [float(c.get("volume") or 0.0) for c in valid]
+        avg_vol_arr = _sma(volumes, config.EMA_VOLUME_LOOKBACK)
 
-        i = len(closes) - 1  # index of the just-closed candle
-        if i < 1:
+        return self._compute_cross(
+            entry, valid, i, fast, slow, atr_arr, avg_vol_arr, volumes
+        )
+
+    def _compute_cross(
+        self,
+        entry: dict[str, Any],
+        candles: list[dict[str, Any]],
+        i: int,
+        fast: list[float | None],
+        slow: list[float | None],
+        atr_arr: list[float | None],
+        avg_vol_arr: list[float | None],
+        volumes: list[float],
+    ) -> dict[str, Any] | None:
+        """Return a cross record if a cross exists at index ``i``, else None.
+
+        All indicator arrays must be aligned with ``candles`` (same length
+        and same positional indices).
+        """
+        if i < 1 or i >= len(candles):
             return None
+
         f_now, s_now = fast[i], slow[i]
         f_prev, s_prev = fast[i - 1], slow[i - 1]
         if None in (f_now, s_now, f_prev, s_prev):
@@ -294,15 +419,10 @@ class LiveEmaEngine:
             return None
 
         # ---- metrics ---------------------------------------------------
-        atr_arr = _atr(candles, config.EMA_ATR_PERIOD)
         atr_val = atr_arr[i] if i < len(atr_arr) else None
-
-        volumes = [float(c.get("volume") or 0.0) for c in candles]
-        avg_vol_arr = _sma(volumes, config.EMA_VOLUME_LOOKBACK)
         avg_vol = avg_vol_arr[i] if i < len(avg_vol_arr) else None
         cur_vol = volumes[i]
         volume_diff = (cur_vol - avg_vol) if avg_vol is not None else 0.0
-
         ema_diff = f_now - s_now
 
         # ---- six filters (mirrors candle-backup) ------------------------
@@ -381,6 +501,5 @@ class LiveEmaEngine:
             "valid": valid,
             "filters": filters,
         }
-
 
 live_ema_engine = LiveEmaEngine()

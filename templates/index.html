@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}Multi-Index Feed Dashboard | Live Options{% endblock %}
+{% block title %}Market Indices & Option Chains{% endblock %}
 
 {% block head %}
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
@@ -8,1372 +8,968 @@
 
 <style>
     :root {
-        --opt-feed-bg-main: #f5f7fb;
-        --opt-feed-card-border: #e5e7eb;
-        --opt-feed-text-dark: #212529;
-        --opt-feed-muted: #6c757d;
-        --opt-feed-primary: #0d6efd;
-        --opt-feed-success: #198754;
-        --opt-feed-danger: #dc3545;
+        --dash-bg: #f8fafc;
+        --card-bg: #ffffff;
+        --card-header-bg: #f8fafc;
+        --border-color: #e2e8f0;
+        --text-dark: #0f172a;
+        --text-muted: #64748b;
+        --primary-blue: #2563eb;
+        --call-green: #16a34a;
+        --call-green-bg: #f0fdf4;
+        --put-red: #dc2626;
+        --put-red-bg: #fef2f2;
+        --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.05);
+        --shadow-md: 0 4px 12px rgba(15, 23, 42, 0.06);
     }
 
     body {
-        background-color: var(--opt-feed-bg-main) !important;
-        color: var(--opt-feed-text-dark) !important;
+        background-color: var(--dash-bg) !important;
+        color: var(--text-dark) !important;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
     }
 
-    .opt-feed-main-wrapper {
-        min-height: calc(100vh - 64px);
+    .dash-container {
+        max-width: 1560px;
+        margin: 0 auto;
         padding: 24px;
+        min-height: calc(100vh - 68px);
     }
 
-    /* ============================================================
-       HEADER BANNER
-       ============================================================ */
-    .opt-feed-header-banner {
-        background: linear-gradient(135deg, #0d6efd, #4f8dfd);
-        color: #ffffff;
-        border-radius: 18px;
-        padding: 24px;
-        margin-bottom: 20px;
-        box-shadow: 0 8px 25px rgba(13, 110, 253, 0.15);
-    }
-
-    .opt-feed-header-title {
-        font-size: 1.75rem;
-        font-weight: 700;
-        margin-bottom: 5px;
-    }
-
-    .opt-feed-header-subtitle {
-        opacity: 0.9;
-        font-size: 0.9rem;
-    }
-
-    /* Index Card */
-    .opt-feed-index-card {
+    /* Top Hero Banner */
+    .top-hero-banner {
         background: #ffffff;
-        color: var(--opt-feed-text-dark);
-        border: 0;
-        border-radius: 15px;
-        padding: 18px 20px;
-        min-width: 280px;
-        box-shadow: 0 5px 18px rgba(0, 0, 0, 0.08);
-    }
-
-    .opt-feed-index-label {
-        font-size: 0.8rem;
-        font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-        color: var(--opt-feed-muted);
-        margin-bottom: 3px;
-    }
-
-    .opt-feed-index-price {
-        font-size: 1.75rem;
-        font-weight: 800;
-        margin-bottom: 6px;
-        transition: color 0.2s;
-    }
-
-    .opt-feed-index-meta {
+        border: 1px solid var(--border-color);
+        border-radius: 16px;
+        padding: 20px 28px;
+        margin-bottom: 24px;
+        box-shadow: var(--shadow-sm);
         display: flex;
         flex-wrap: wrap;
-        gap: 10px 16px;
-        font-size: 0.75rem;
-        color: var(--opt-feed-muted);
-    }
-
-    /* ============================================================
-       INDEX TABS CARD
-       ============================================================ */
-    .opt-feed-index-tabs-card {
-        background: #ffffff;
-        border: 1px solid var(--opt-feed-card-border);
-        border-radius: 16px;
-        padding: 14px 18px;
-        margin-bottom: 20px;
-        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.04);
-    }
-
-    .opt-feed-index-tabs-header {
-        display: flex;
         align-items: center;
         justify-content: space-between;
-        gap: 12px;
-        margin-bottom: 12px;
+        gap: 16px;
     }
 
-    .opt-feed-index-tabs-title {
-        font-size: 0.78rem;
+    .top-hero-title {
+        font-size: 1.45rem;
         font-weight: 800;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-        color: var(--opt-feed-muted);
-    }
-
-    .opt-feed-index-tabs-count {
-        font-size: 0.72rem;
-        font-weight: 700;
-        color: var(--opt-feed-muted);
-        background: #f8f9fa;
-        padding: 4px 10px;
-        border-radius: 20px;
-        border: 1px solid var(--opt-feed-card-border);
-    }
-
-    .opt-feed-index-tabs {
+        color: var(--text-dark);
+        margin-bottom: 2px;
         display: flex;
-        flex-wrap: wrap;
-        gap: 8px;
-    }
-
-    .opt-feed-index-tab {
-        border: 1px solid var(--opt-feed-card-border);
-        background: #f8f9fa;
-        color: var(--opt-feed-text-dark);
-        border-radius: 12px;
-        padding: 9px 16px;
-        font-size: 0.82rem;
-        font-weight: 700;
-        cursor: pointer;
-        transition: all 0.15s ease;
-        display: inline-flex;
         align-items: center;
-        gap: 8px;
-        white-space: nowrap;
+        gap: 10px;
     }
 
-    .opt-feed-index-tab:hover {
-        border-color: var(--opt-feed-primary);
-        color: var(--opt-feed-primary);
-        background: #eff5ff;
-    }
-
-    .opt-feed-index-tab.active {
-        background: linear-gradient(135deg, #0d6efd, #4f8dfd);
-        color: #ffffff;
-        border-color: transparent;
-        box-shadow: 0 6px 16px rgba(13, 110, 253, 0.28);
-    }
-
-    .opt-feed-index-tab .tab-count {
-        font-size: 0.7rem;
-        font-weight: 800;
-        opacity: 0.75;
-        background: rgba(0, 0, 0, 0.08);
-        border-radius: 10px;
-        padding: 1px 7px;
-    }
-
-    .opt-feed-index-tab.active .tab-count {
-        background: rgba(255, 255, 255, 0.22);
-    }
-
-    .opt-feed-index-tabs-empty {
-        font-size: 0.85rem;
-        color: var(--opt-feed-muted);
-        padding: 12px 0;
-    }
-
-    /* ============================================================
-       STATUS PILLS + ACTIONS
-       ============================================================ */
-    .opt-feed-status-pill {
+    .status-badge {
         display: inline-flex;
         align-items: center;
         gap: 6px;
-        padding: 7px 12px;
-        border-radius: 50px;
-        font-size: 0.75rem;
+        padding: 6px 14px;
+        border-radius: 30px;
+        font-size: 0.78rem;
         font-weight: 700;
-        white-space: nowrap;
+        border: 1px solid transparent;
     }
-
-    .opt-feed-status-pill::before {
+    .status-badge::before {
         content: "";
-        width: 7px;
-        height: 7px;
+        width: 8px;
+        height: 8px;
         border-radius: 50%;
         background-color: currentColor;
     }
+    .badge-live { background: #dcfce7; color: #15803d; border-color: #bbf7d0; }
+    .badge-connecting { background: #fef3c7; color: #b45309; border-color: #fde68a; }
+    .badge-off { background: #fee2e2; color: #b91c1c; border-color: #fecaca; }
 
-    .opt-feed-pill-connected { background: #d1e7dd; color: #146c43; }
-    .opt-feed-pill-disconnected { background: #f8d7da; color: #b02a37; }
-    .opt-feed-pill-refreshing { background: #fff3cd; color: #997404; }
-    .opt-feed-pill-success { background: #d1e7dd; color: #146c43; }
-    .opt-feed-pill-error { background: #f8d7da; color: #b02a37; }
-
-    .opt-feed-btn-action {
-        border-radius: 10px;
-        padding: 9px 15px;
-        font-size: 0.8rem;
-        font-weight: 600;
-    }
-
-    /* ============================================================
-       PANEL CARDS
-       ============================================================ */
-    .opt-feed-panel-card {
-        background: #ffffff;
-        border: 1px solid var(--opt-feed-card-border);
+    /* Index Block Card */
+    .index-block-card {
+        background: var(--card-bg);
+        border: 1px solid var(--border-color);
         border-radius: 16px;
-        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.04);
-        margin-bottom: 24px;
+        margin-bottom: 22px;
+        box-shadow: var(--shadow-sm);
+        overflow: hidden;
+        transition: border-color 0.2s ease, box-shadow 0.2s ease;
+    }
+    .index-block-card:hover {
+        border-color: #cbd5e1;
+        box-shadow: var(--shadow-md);
     }
 
-    .opt-feed-panel-header {
-        padding: 18px 20px;
-        border-bottom: 1px solid var(--opt-feed-card-border);
-    }
-
-    .opt-feed-panel-title {
-        font-size: 1.1rem;
-        font-weight: 700;
-        margin: 0;
-    }
-
-    .opt-feed-panel-subtitle {
-        color: var(--opt-feed-muted);
-        font-size: 0.78rem;
-        margin-top: 3px;
-    }
-
-    .opt-feed-panel-body {
-        padding: 20px;
-    }
-
-    .opt-feed-refresh-drawer { display: none; }
-    .opt-feed-refresh-drawer.is-visible { display: block; }
-
-    .opt-feed-refresh-console {
-        white-space: pre-wrap;
-        font-size: 0.85rem;
-        color: var(--opt-feed-muted);
-        line-height: 1.7;
-        background: #f8f9fa;
-        padding: 14px;
-        border-radius: 10px;
-        font-family: 'JetBrains Mono', 'Courier New', monospace;
-    }
-
-    /* ============================================================
-       OPTION COLUMNS
-       ============================================================ */
-    .opt-feed-column-box {
-        height: 100%;
-        background: #f8f9fa;
-        border: 1px solid var(--opt-feed-card-border);
-        border-radius: 14px;
-        padding: 16px;
-    }
-
-    .opt-feed-column-box.is-ce-column { border-top: 4px solid var(--opt-feed-success); }
-    .opt-feed-column-box.is-pe-column { border-top: 4px solid var(--opt-feed-danger); }
-
-    .opt-feed-column-header {
+    .index-block-header {
+        background: #ffffff;
+        padding: 18px 24px;
         display: flex;
+        align-items: center;
         justify-content: space-between;
+        gap: 16px;
+        cursor: pointer;
+        user-select: none;
+        border-bottom: 1px solid transparent;
+        transition: background 0.15s ease;
+    }
+    .index-block-header:hover {
+        background: #f8fafc;
+    }
+    .index-block-card.is-expanded .index-block-header {
+        border-bottom-color: var(--border-color);
+        background: #f8fafc;
+    }
+
+    .index-symbol-tag {
+        font-size: 1.3rem;
+        font-weight: 800;
+        color: var(--text-dark);
+        display: flex;
         align-items: center;
         gap: 10px;
-        margin-bottom: 15px;
     }
 
-    .opt-feed-column-title {
+    .index-price-large {
+        font-size: 1.55rem;
+        font-weight: 800;
+        min-width: 130px;
+        letter-spacing: -0.01em;
+    }
+    .trend-up { color: var(--call-green) !important; }
+    .trend-down { color: var(--put-red) !important; }
+
+    .index-stats-strip {
         display: flex;
-        align-items: center;
-        gap: 9px;
-        font-size: 1rem;
+        gap: 16px 22px;
+        flex-wrap: wrap;
+        font-size: 0.82rem;
+        color: var(--text-muted);
+    }
+    .index-stats-strip strong {
+        color: var(--text-dark);
         font-weight: 700;
-        margin: 0;
     }
 
-    .opt-feed-badge-icon {
-        width: 32px;
-        height: 32px;
-        border-radius: 9px;
+    .toggle-chain-btn {
+        background: #f1f5f9;
+        border: 1px solid var(--border-color);
+        color: var(--text-dark);
+        font-size: 0.8rem;
+        font-weight: 700;
+        border-radius: 10px;
+        padding: 7px 15px;
         display: inline-flex;
-        justify-content: center;
         align-items: center;
-        font-weight: 800;
-        font-size: 0.75rem;
+        gap: 8px;
+        transition: all 0.2s ease;
     }
-
-    .opt-feed-ce-badge { background: #d1e7dd; color: #146c43; }
-    .opt-feed-pe-badge { background: #f8d7da; color: #b02a37; }
-
-    .opt-feed-count-pill {
-        font-size: 0.72rem;
-        color: var(--opt-feed-muted);
-        background: #ffffff;
-        border: 1px solid var(--opt-feed-card-border);
-        padding: 5px 9px;
-        border-radius: 20px;
-    }
-
-    /* ============================================================
-       OPTION CARDS
-       ============================================================ */
-    .opt-feed-cards-grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fill, minmax(235px, 1fr));
-        gap: 14px;
-    }
-
-    .opt-feed-option-card {
-        background: #ffffff;
-        border: 1px solid var(--opt-feed-card-border);
-        border-radius: 13px;
-        padding: 15px;
-        position: relative;
-        overflow: hidden;
-        transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
-    }
-
-    .opt-feed-option-card:hover {
-        transform: translateY(-3px);
-        box-shadow: 0 8px 22px rgba(0, 0, 0, 0.08);
-        border-color: #b8c4d1;
-    }
-
-    .opt-feed-option-card.is-atm-card {
-        border: 2px solid var(--opt-feed-primary);
-        box-shadow: 0 5px 18px rgba(13, 110, 253, 0.12);
-    }
-
-    .opt-feed-atm-tag {
-        position: absolute;
-        top: 10px;
-        right: -28px;
-        background: var(--opt-feed-primary);
+    .toggle-chain-btn:hover {
+        background: var(--primary-blue);
         color: #ffffff;
-        font-size: 0.6rem;
-        font-weight: 700;
-        padding: 4px 30px;
-        transform: rotate(45deg);
+        border-color: var(--primary-blue);
     }
 
-    .opt-feed-symbol-text {
-        font-weight: 800;
-        font-size: 0.95rem;
-        padding-right: 45px;
-        word-break: break-word;
+    .chevron-icon {
+        transition: transform 0.25s ease;
+    }
+    .is-expanded .chevron-icon {
+        transform: rotate(180deg);
     }
 
-    .opt-feed-strike-text {
-        color: var(--opt-feed-muted);
-        font-size: 0.72rem;
-        margin-top: 4px;
+    /* Option Chain Section */
+    .option-chain-body {
+        display: none;
+        padding: 22px;
+        background: #f8fafc;
+        border-top: 1px solid var(--border-color);
+    }
+    .is-expanded .option-chain-body {
+        display: block;
     }
 
-    .opt-feed-ltp-value {
-        font-size: 1.45rem;
-        font-weight: 800;
-        margin: 12px 0;
+    .chain-column-box {
+        background: #ffffff;
+        border: 1px solid var(--border-color);
+        border-radius: 14px;
+        padding: 18px;
+        height: 100%;
+        box-shadow: var(--shadow-sm);
     }
+    .chain-column-box.ce-border { border-top: 4px solid var(--call-green); }
+    .chain-column-box.pe-border { border-top: 4px solid var(--put-red); }
 
-    .opt-feed-trend-up { color: var(--opt-feed-success) !important; }
-    .opt-feed-trend-down { color: var(--opt-feed-danger) !important; }
-
-    .opt-feed-data-row {
+    .chain-column-title {
         display: flex;
         justify-content: space-between;
         align-items: center;
-        gap: 8px;
-        padding: 5px 0;
-        font-size: 0.75rem;
+        margin-bottom: 14px;
+        font-weight: 800;
+        font-size: 0.95rem;
     }
 
-    .opt-feed-data-label { color: var(--opt-feed-muted); }
+    .pill-badge {
+        font-size: 0.72rem;
+        font-weight: 800;
+        padding: 3px 9px;
+        border-radius: 6px;
+    }
+    .pill-badge.ce { background: var(--call-green-bg); color: var(--call-green); border: 1px solid #bbf7d0; }
+    .pill-badge.pe { background: var(--put-red-bg); color: var(--put-red); border: 1px solid #fecaca; }
 
-    .opt-feed-empty-box {
-        padding: 25px 15px;
-        text-align: center;
-        color: var(--opt-feed-muted);
+    /* Strike Cards - Stable Position */
+    .strike-cards-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+        gap: 12px;
+    }
+
+    .strike-card {
         background: #ffffff;
-        border: 1px dashed #ced4da;
+        border: 1px solid var(--border-color);
+        border-radius: 12px;
+        padding: 14px;
+        position: relative;
+        text-decoration: none;
+        color: inherit;
+        transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+        display: block;
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+        cursor: pointer;
+    }
+    .strike-card:hover {
+        transform: translateY(-2px);
+        border-color: var(--primary-blue);
+        box-shadow: var(--shadow-md);
+        color: inherit;
+    }
+
+    .strike-card.is-atm {
+        border: 2px solid var(--primary-blue);
+        background: #f0f7ff;
+    }
+    .strike-card .atm-tag {
+        position: absolute;
+        top: 0;
+        right: 0;
+        background: var(--primary-blue);
+        color: #ffffff;
+        font-size: 0.65rem;
+        font-weight: 800;
+        padding: 2px 8px;
+        border-bottom-left-radius: 8px;
+    }
+
+    .strike-header-row {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 8px;
+        padding-right: 32px;
+    }
+    .strike-title {
+        font-weight: 800;
+        font-size: 0.92rem;
+        color: var(--text-dark);
+        line-height: 1.3;
+    }
+
+    .btn-strike-chart {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 32px;
+        height: 32px;
+        border-radius: 8px;
+        background: #f1f5f9;
+        color: var(--primary-blue);
+        border: 1px solid var(--border-color);
+        transition: all 0.15s ease;
+        flex-shrink: 0;
+        font-size: 0.9rem;
+    }
+    .strike-card:hover .btn-strike-chart {
+        background: var(--primary-blue);
+        color: #ffffff;
+        border-color: var(--primary-blue);
+    }
+
+    .strike-meta {
+        font-size: 0.72rem;
+        color: var(--text-muted);
+        margin-top: 4px;
+    }
+    .strike-ltp {
+        font-size: 1.35rem;
+        font-weight: 800;
+        margin: 8px 0 4px 0;
+        color: var(--text-dark);
+    }
+
+    .data-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        font-size: 0.75rem;
+        padding: 2px 0;
+    }
+    .data-row .lbl { color: var(--text-muted); }
+
+    .empty-info-msg {
+        text-align: center;
+        color: var(--text-muted);
+        font-size: 0.85rem;
+        padding: 30px 10px;
+        border: 1px dashed var(--border-color);
         border-radius: 10px;
-        font-size: 0.8rem;
-    }
-
-    @media (max-width: 992px) {
-        .opt-feed-main-wrapper { padding: 16px; }
-        .opt-feed-header-banner { padding: 20px; }
-    }
-
-    @media (max-width: 576px) {
-        .opt-feed-main-wrapper { padding: 10px; }
-        .opt-feed-header-title { font-size: 1.35rem; }
-        .opt-feed-index-card { min-width: 100%; }
-        .opt-feed-cards-grid { grid-template-columns: 1fr; }
-        .opt-feed-panel-body { padding: 12px; }
-        .opt-feed-column-box { padding: 12px; }
+        background: #ffffff;
     }
 </style>
 {% endblock %}
 
 {% block content %}
-<div class="opt-feed-main-wrapper">
-
-    <!-- ============================================================
-         HEADER BANNER — active index card
-         ============================================================ -->
-    <div class="opt-feed-header-banner">
-        <div class="row align-items-center g-4">
-            <div class="col-lg-5">
-                <div class="opt-feed-header-title">
-                    <i class="bi bi-graph-up-arrow me-2"></i> Multi-Index Feed Dashboard
-                </div>
-                <div class="opt-feed-header-subtitle">
-                    Live monitoring for every subscribed index and its nearest options
-                </div>
+<div class="dash-container">
+    <!-- Top Hero Banner -->
+    <div class="top-hero-banner">
+        <div>
+            <div class="top-hero-title">
+                <i class="bi bi-graph-up-arrow text-primary"></i>
+                <span>Market Indices & Option Chains</span>
             </div>
-
-            <div class="col-lg-7">
-                <div class="d-flex justify-content-lg-end">
-                    <div class="opt-feed-index-card">
-                        <div class="opt-feed-index-label">
-                            <i class="bi bi-bar-chart-fill me-1"></i>
-                            <span id="active-index-label">Loading instruments…</span>
-                        </div>
-                        <div id="active-index-ltp" class="opt-feed-index-price">--</div>
-                        <div class="opt-feed-index-meta">
-                            <span id="active-index-change">Change: --</span>
-                            <span id="active-index-ohlc">O: -- | H: -- | L: --</span>
-                            <span id="active-index-updated">Updated: --</span>
-                        </div>
-                    </div>
-                </div>
+            <div class="text-muted small">
+                Live monitoring for primary indices (NIFTY 50, SENSEX) and nearby option strikes
             </div>
+        </div>
+
+        <div class="d-flex align-items-center gap-2">
+            <span id="feed-status-pill" class="status-badge badge-connecting">
+                Live Feed: Connecting
+            </span>
+            <span id="instruments-count-pill" class="status-badge badge-live">
+                0 instruments
+            </span>
+            <button type="button" class="btn btn-sm btn-outline-secondary rounded-3 px-3 fw-bold" onclick="reloadRegistry()">
+                <i class="bi bi-arrow-clockwise me-1"></i>Refresh
+            </button>
         </div>
     </div>
 
-    <!-- ============================================================
-         INDEX SELECTOR TABS
-         ============================================================ -->
-    <div class="opt-feed-index-tabs-card">
-        <div class="opt-feed-index-tabs-header">
-            <div class="opt-feed-index-tabs-title">
-                <i class="bi bi-collection me-1"></i> Available Indices
-            </div>
-            <span class="opt-feed-index-tabs-count" id="index-tabs-count">0</span>
-        </div>
-        <div class="opt-feed-index-tabs" id="index-tabs">
-            <div class="opt-feed-index-tabs-empty">
-                <span class="spinner-border spinner-border-sm me-2"></span>
-                Loading instruments from backup…
-            </div>
+    <!-- Index Blocks Container -->
+    <div id="indices-container">
+        <div class="text-center py-5 text-muted">
+            <span class="spinner-border spinner-border-sm me-2 text-primary"></span>Loading index and option contracts...
         </div>
     </div>
-
-    <!-- ============================================================
-         ACTION & STATUS BAR
-         ============================================================ -->
-    <div class="opt-feed-panel-card">
-        <div class="opt-feed-panel-body">
-            <div class="row align-items-center g-3">
-                <div class="col-lg-6">
-                    <div class="d-flex flex-wrap gap-2">
-                        <button
-                            id="isolated-dashboard-btn"
-                            type="button"
-                            class="btn btn-primary opt-feed-btn-action"
-                            onclick="openIsolatedDashboard()"
-                        >
-                            <i class="bi bi-grid-3x3-gap-fill me-1"></i> Isolated EMA Dashboard
-                        </button>
-
-                        <button
-                            id="manual-refresh-btn"
-                            type="button"
-                            class="btn btn-outline-primary opt-feed-btn-action"
-                            onclick="triggerHardRefresh()"
-                        >
-                            <i class="bi bi-arrow-clockwise me-1"></i> Hard Refresh
-                        </button>
-
-                        <button
-                            id="reload-instruments-btn"
-                            type="button"
-                            class="btn btn-outline-secondary opt-feed-btn-action"
-                            onclick="reloadInstruments()"
-                        >
-                            <i class="bi bi-arrow-repeat me-1"></i> Reload Indices
-                        </button>
-                    </div>
-                </div>
-
-                <div class="col-lg-6">
-                    <div class="d-flex flex-wrap justify-content-lg-end gap-2">
-                        <span id="refresh-status" class="opt-feed-status-pill opt-feed-pill-disconnected">
-                            Refresh: Idle
-                        </span>
-
-                        <span id="status-feed" class="opt-feed-status-pill opt-feed-pill-disconnected">
-                            Feed: Off
-                        </span>
-
-                        <span id="status-instruments" class="opt-feed-status-pill opt-feed-pill-disconnected">
-                            0 instruments
-                        </span>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- ============================================================
-         REFRESH CONSOLE DRAWER
-         ============================================================ -->
-    <div id="refresh-panel" class="opt-feed-panel-card opt-feed-refresh-drawer">
-        <div class="opt-feed-panel-header">
-            <div class="d-flex align-items-center gap-2">
-                <i class="bi bi-arrow-repeat text-primary fs-5"></i>
-                <div>
-                    <h2 class="opt-feed-panel-title">Hard Refresh Status</h2>
-                    <div class="opt-feed-panel-subtitle">Latest backup extraction and feed restart information</div>
-                </div>
-            </div>
-        </div>
-        <div class="opt-feed-panel-body">
-            <div id="refresh-message" class="opt-feed-refresh-console">
-                No refresh triggered yet.
-            </div>
-        </div>
-    </div>
-
-    <!-- ============================================================
-         OPTIONS PANEL — filtered by active underlying
-         ============================================================ -->
-    <div class="opt-feed-panel-card">
-        <div class="opt-feed-panel-header">
-            <div class="row align-items-center g-3">
-                <div class="col-md-7">
-                    <div class="d-flex align-items-center gap-2">
-                        <div class="rounded-3 bg-primary-subtle text-primary d-flex align-items-center justify-content-center" style="width:40px;height:40px;">
-                            <i class="bi bi-lightning-charge-fill"></i>
-                        </div>
-                        <div>
-                            <h2 class="opt-feed-panel-title">
-                                Nearest CE / PE Options
-                                <span id="options-underlying-label" class="text-muted small fw-normal ms-2"></span>
-                            </h2>
-                            <div class="opt-feed-panel-subtitle">
-                                Live options closest to the current <span id="options-underlying-subtitle">index</span> price
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="col-md-5">
-                    <div class="text-md-end">
-                        <span class="text-muted small">ATM Reference</span>
-                        <div id="atm-reference" class="fw-bold text-primary">--</div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <div class="opt-feed-panel-body">
-            <div class="row g-4">
-                <!-- CALLS -->
-                <div class="col-xl-6">
-                    <div class="opt-feed-column-box is-ce-column">
-                        <div class="opt-feed-column-header">
-                            <h3 class="opt-feed-column-title">
-                                <span class="opt-feed-badge-icon opt-feed-ce-badge">CE</span>
-                                Nearest Call Options
-                            </h3>
-                            <span id="ce-count" class="opt-feed-count-pill">0 active</span>
-                        </div>
-                        <div id="ce-container" class="opt-feed-cards-grid"></div>
-                    </div>
-                </div>
-
-                <!-- PUTS -->
-                <div class="col-xl-6">
-                    <div class="opt-feed-column-box is-pe-column">
-                        <div class="opt-feed-column-header">
-                            <h3 class="opt-feed-column-title">
-                                <span class="opt-feed-badge-icon opt-feed-pe-badge">PE</span>
-                                Nearest Put Options
-                            </h3>
-                            <span id="pe-count" class="opt-feed-count-pill">0 active</span>
-                        </div>
-                        <div id="pe-container" class="opt-feed-cards-grid"></div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-
 </div>
 {% endblock %}
 
 {% block scripts %}
-<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
-
 <script>
-/* ============================================================
-   Endpoints
-   ============================================================ */
-const BACKEND_FEED_WS_URL  = `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/ws/live?all=true`;
-const LIVE_INSTRUMENTS_URL = `/live/instruments`;
-const LIVE_STATUS_URL      = `/live/status`;
-const HARD_REFRESH_URL     = `/admin/hard-refresh`;
-const BACKUP_STATUS_URL    = `/admin/backup-status`;
-const ISOLATED_DASHBOARD   = `/isolated-dashboard`;
+const FEED_WS_URL = `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/ws/live?all=true`;
+const INSTRUMENTS_URL = `/live/instruments`;
 
-const MAX_RECONNECT_DELAY_MS = 15000;
-const NEAREST_CARDS_PER_SIDE = 8;
+const DEFAULT_INDICES = [
+    { key: "NSE_INDEX|Nifty 50", canonical: "NIFTY", name: "NIFTY 50", strikeStep: 50 },
+    { key: "BSE_INDEX|SENSEX", canonical: "SENSEX", name: "SENSEX", strikeStep: 100 }
+];
 
-/* ============================================================
-   State
-   ============================================================ */
 const state = {
-    instruments: [],                     // flat list from /live/instruments
-    indicesByUnderlying: {},             // "NIFTY" -> index instrument entry
-    optionsByUnderlying: {},             // "NIFTY" -> [option entries]
-    selectedUnderlying: null,
-    ticks: {},                           // instrument_key -> { ltp, change, change_pct, open, high, low, ts }
     ws: null,
-    wsReconnectAttempts: 0,
-    wsReconnectTimer: null,
-    wsConnected: false,
-    backupInfo: null,
+    connected: false,
+    reconnectTimer: null,
+    registry: [],
+    indices: {},         // "NIFTY" -> entry
+    options: {},         // "NIFTY" -> [option entries]
+    ticks: {},           // instrument_key -> tick object
+    expandedState: {
+        NIFTY: false,
+        SENSEX: false
+    },
+    renderedChainATM: {} // underlying -> ATM price used for stable grid layout
 };
 
-/* ============================================================
-   Small helpers
-   ============================================================ */
-function toFiniteNumber(v) {
-    if (v === null || v === undefined || v === "") return null;
-    const n = Number(v);
+function canonicalUnderlying(raw) {
+    const s = String(raw || "").trim().toUpperCase().replace(/\s+/g, "");
+    if (s.includes("NIFTY50") || s === "NIFTY" || s.startsWith("NIFTY")) {
+        if (!s.includes("BANK") && !s.includes("FIN") && !s.includes("MIDCP")) return "NIFTY";
+    }
+    if (s.includes("SENSEX") || s.startsWith("SENSEX")) return "SENSEX";
+    if (s.includes("BANKNIFTY")) return "BANKNIFTY";
+    if (s.includes("FINNIFTY")) return "FINNIFTY";
+    return s;
+}
+
+function parseNumber(val) {
+    if (val === null || val === undefined || val === "") return null;
+    const n = Number(val);
     return Number.isFinite(n) ? n : null;
 }
-function firstFiniteNumber(...vals) {
-    for (const v of vals) {
-        const n = toFiniteNumber(v);
-        if (n !== null) return n;
+
+function formatDec(val, dec = 2) {
+    const n = parseNumber(val);
+    return n === null ? "--" : n.toFixed(dec);
+}
+
+function formatInt(val) {
+    const n = parseNumber(val);
+    return (n === null || n === 0) ? "0" : Math.round(n).toLocaleString();
+}
+
+function formatExpiry(val) {
+    if (!val) return "—";
+    const num = Number(val);
+    if (Number.isFinite(num) && num > 1e11) {
+        const d = new Date(num > 1e12 ? num : num * 1000);
+        return d.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "2-digit" }).toUpperCase();
     }
-    return null;
+    return String(val);
 }
-function formatNumber(v, decimals = 2) {
-    const n = toFiniteNumber(v);
-    return n === null ? "--" : n.toFixed(decimals);
+
+function getTrendClass(change) {
+    const n = parseNumber(change);
+    if (n === null) return "";
+    return n >= 0 ? "trend-up" : "trend-down";
 }
-function formatInteger(v) {
-    const n = toFiniteNumber(v);
-    return n === null ? "--" : Math.round(n).toLocaleString();
-}
-function getChangeClass(v) {
-    return Number(v || 0) >= 0 ? "opt-feed-trend-up" : "opt-feed-trend-down";
-}
+
 function escapeHtml(s) {
     return String(s ?? "").replace(/[&<>"']/g, c => ({
         "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
     }[c]));
 }
-function normalizeUnderlying(v) {
-    return String(v || "").trim().toUpperCase().replace(/\s+/g, "");
-}
-function prettyUnderlying(name) {
-    const n = String(name || "").toUpperCase();
-    if (n === "NIFTY")       return "NIFTY 50";
-    if (n === "BANKNIFTY")   return "BANK NIFTY";
-    if (n === "FINNIFTY")    return "FIN NIFTY";
-    if (n === "MIDCPNIFTY")  return "MIDCAP NIFTY";
-    if (n === "SENSEX")      return "SENSEX";
-    return name || "—";
-}
 
 /* ============================================================
-   Local actions
+   Instruments Organization & De-duplication
    ============================================================ */
-function openIsolatedDashboard() {
-    window.location.href = ISOLATED_DASHBOARD;
-}
+async function loadRegistry() {
+    try {
+        const res = await fetch(INSTRUMENTS_URL, { headers: { Accept: "application/json" } });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        state.registry = Array.isArray(data?.instruments) ? data.instruments : [];
 
-/* ============================================================
-   Instruments loading
-   ============================================================ */
-async function fetchInstruments() {
-    const res = await fetch(LIVE_INSTRUMENTS_URL, { headers: { Accept: "application/json" } });
-    if (!res.ok) throw new Error(`Instruments request failed: ${res.status}`);
-    const data = await res.json();
-    return Array.isArray(data?.instruments) ? data.instruments : [];
-}
-
-function groupInstruments(instruments) {
-    const indices = {};
-    const options = {};
-
-    for (const item of instruments) {
-        if (!item || !item.instrument_key) continue;
-
-        const underlying = normalizeUnderlying(item.underlying);
-        if (!underlying) continue;
-
-        const isIndex =
-            item.is_index === true ||
-            String(item.instrument_key).startsWith("NSE_INDEX|") ||
-            String(item.instrument_key).startsWith("BSE_INDEX|");
-
-        if (isIndex) {
-            if (!indices[underlying]) indices[underlying] = item;
-            continue;
-        }
-
-        if (!options[underlying]) options[underlying] = [];
-        options[underlying].push(item);
+        organizeInstruments();
+        renderAllIndexCards();
+        updateCountBadge();
+    } catch (e) {
+        console.error("Registry load failed:", e);
     }
+}
 
-    // Sort options per underlying by strike, then type
-    for (const u of Object.keys(options)) {
-        options[u].sort((a, b) => {
+function organizeInstruments() {
+    state.indices = {};
+    state.options = {};
+
+    DEFAULT_INDICES.forEach(def => {
+        state.indices[def.canonical] = {
+            instrument_key: def.key,
+            trading_symbol: def.name,
+            underlying: def.canonical,
+            is_index: true,
+            strikeStep: def.strikeStep
+        };
+        state.options[def.canonical] = [];
+    });
+
+    state.registry.forEach(item => {
+        if (!item || !item.instrument_key) return;
+        const norm = canonicalUnderlying(item.underlying || item.trading_symbol);
+        if (!norm) return;
+
+        const isIdx = item.is_index === true ||
+                      item.instrument_key.startsWith("NSE_INDEX|") ||
+                      item.instrument_key.startsWith("BSE_INDEX|");
+
+        if (isIdx) {
+            state.indices[norm] = { ...(state.indices[norm] || {}), ...item };
+            if (!state.options[norm]) state.options[norm] = [];
+        } else {
+            if (!state.options[norm]) state.options[norm] = [];
+            state.options[norm].push(item);
+        }
+    });
+
+    // Ensure options are strictly ordered by ascending strike price for stable viewing
+    Object.keys(state.options).forEach(u => {
+        state.options[u].sort((a, b) => {
             const sa = Number(a.strike_price || 0);
             const sb = Number(b.strike_price || 0);
             if (sa !== sb) return sa - sb;
             return String(a.strike_type || "").localeCompare(String(b.strike_type || ""));
         });
-    }
-
-    return { indices, options };
+    });
 }
 
-async function loadInstruments() {
-    try {
-        const instruments = await fetchInstruments();
-        state.instruments = instruments;
-
-        const { indices, options } = groupInstruments(instruments);
-        state.indicesByUnderlying = indices;
-        state.optionsByUnderlying = options;
-
-        // Remove stale ticks for keys no longer present
-        const validKeys = new Set(instruments.map(i => i.instrument_key));
-        for (const k of Object.keys(state.ticks)) {
-            if (!validKeys.has(k)) delete state.ticks[k];
-        }
-
-        renderIndexTabs();
-        updateInstrumentsBadge();
-
-        // Auto-select: prefer NIFTY, else first index that has options, else first index
-        const preferred =
-            (indices["NIFTY"] && "NIFTY") ||
-            Object.keys(indices).find(u => (options[u] || []).length > 0) ||
-            Object.keys(indices)[0] ||
-            null;
-
-        if (preferred && preferred !== state.selectedUnderlying) {
-            selectUnderlying(preferred);
-        } else if (preferred) {
-            selectUnderlying(preferred);
-        } else {
-            renderActiveIndexCard();
-            renderOptionColumns();
-        }
-    } catch (err) {
-        console.error("Failed to load instruments:", err);
-        document.getElementById("index-tabs").innerHTML = `
-            <div class="opt-feed-index-tabs-empty text-danger">
-                <i class="bi bi-exclamation-triangle me-2"></i>
-                Failed to load instruments: ${escapeHtml(err.message)}
-            </div>`;
-    }
-}
-
-async function reloadInstruments() {
-    document.getElementById("index-tabs").innerHTML = `
-        <div class="opt-feed-index-tabs-empty">
-            <span class="spinner-border spinner-border-sm me-2"></span>
-            Reloading instruments…
-        </div>`;
-    await loadInstruments();
+function updateCountBadge() {
+    const el = document.getElementById("instruments-count-pill");
+    if (!el) return;
+    const total = state.registry.length;
+    const idxCount = Object.keys(state.indices).length;
+    el.textContent = `${idxCount} indices · ${Math.max(0, total - idxCount)} options`;
 }
 
 /* ============================================================
-   Index tabs
+   Card Rendering
    ============================================================ */
-function renderIndexTabs() {
-    const container = document.getElementById("index-tabs");
-    const counter = document.getElementById("index-tabs-count");
+function renderAllIndexCards() {
+    const container = document.getElementById("indices-container");
+    if (!container) return;
 
-    const underlyings = Object.keys(state.indicesByUnderlying).sort();
-    counter.textContent = String(underlyings.length);
+    const underlyings = Object.keys(state.indices).sort((a, b) => {
+        if (a === "NIFTY") return -1;
+        if (b === "NIFTY") return 1;
+        if (a === "SENSEX") return -1;
+        if (b === "SENSEX") return 1;
+        return a.localeCompare(b);
+    });
 
-    if (!underlyings.length) {
-        container.innerHTML = `
-            <div class="opt-feed-index-tabs-empty">
-                <i class="bi bi-inbox me-2"></i>
-                No indices available in the backup yet.
-            </div>`;
+    container.innerHTML = underlyings.map(u => buildIndexCardHTML(u)).join("");
+    underlyings.forEach(u => updateIndexCardDisplay(u));
+}
+
+function buildIndexCardHTML(underlying) {
+    const indexEntry = state.indices[underlying] || {};
+    const sym = indexEntry.trading_symbol || underlying;
+    const key = indexEntry.instrument_key;
+    const isExpanded = !!state.expandedState[underlying];
+
+    return `
+    <div class="index-block-card ${isExpanded ? 'is-expanded' : ''}" id="card-block-${underlying}">
+        <!-- HEADER -->
+        <div class="index-block-header" onclick="toggleIndexCard('${underlying}')">
+            <div class="d-flex align-items-center gap-3 flex-wrap">
+                <div class="index-symbol-tag">
+                    <i class="bi bi-bar-chart-fill text-primary"></i>
+                    <span>${escapeHtml(sym)}</span>
+                </div>
+                <div class="index-price-large" id="ltp-${underlying}">
+                    --
+                </div>
+                <div id="change-${underlying}" class="fw-bold fs-6">
+                    --
+                </div>
+            </div>
+
+            <div class="index-stats-strip d-none d-lg-flex">
+                <span>Open: <strong id="open-${underlying}">--</strong></span>
+                <span>High: <strong id="high-${underlying}">--</strong></span>
+                <span>Low: <strong id="low-${underlying}">--</strong></span>
+                <span>Prev: <strong id="prev-${underlying}">--</strong></span>
+                <span>ATM: <strong id="atm-${underlying}">--</strong></span>
+            </div>
+
+            <div class="d-flex align-items-center gap-2">
+                <a href="/chart/${encodeURIComponent(key)}" class="btn btn-sm btn-outline-primary rounded-3 fw-bold d-inline-flex align-items-center gap-1" onclick="event.stopPropagation();" title="Open Candlestick Chart">
+                    <i class="bi bi-graph-up-arrow"></i>
+                    <span>Chart</span>
+                </a>
+                <button type="button" class="toggle-chain-btn">
+                    <span id="btn-text-${underlying}">${isExpanded ? 'Fold Chain' : 'Option Chain'}</span>
+                    <i class="bi bi-chevron-down chevron-icon"></i>
+                </button>
+            </div>
+        </div>
+
+        <!-- FOLDABLE CHAIN -->
+        <div class="option-chain-body" id="chain-body-${underlying}">
+            <div class="row g-3">
+                <!-- CALLS -->
+                <div class="col-xl-6">
+                    <div class="chain-column-box ce-border">
+                        <div class="chain-column-title">
+                            <span><span class="pill-badge ce me-2">CE</span>Call Options</span>
+                            <span class="text-muted small" id="ce-count-${underlying}">0 contracts</span>
+                        </div>
+                        <div class="strike-cards-grid" id="ce-grid-${underlying}">
+                            <div class="empty-info-msg">Waiting for live tick to position strikes...</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- PUTS -->
+                <div class="col-xl-6">
+                    <div class="chain-column-box pe-border">
+                        <div class="chain-column-title">
+                            <span><span class="pill-badge pe me-2">PE</span>Put Options</span>
+                            <span class="text-muted small" id="pe-count-${underlying}">0 contracts</span>
+                        </div>
+                        <div class="strike-cards-grid" id="pe-grid-${underlying}">
+                            <div class="empty-info-msg">Waiting for live tick to position strikes...</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    `;
+}
+
+function toggleIndexCard(underlying) {
+    state.expandedState[underlying] = !state.expandedState[underlying];
+    const block = document.getElementById(`card-block-${underlying}`);
+    const btnText = document.getElementById(`btn-text-${underlying}`);
+
+    if (block) block.classList.toggle("is-expanded", state.expandedState[underlying]);
+    if (btnText) btnText.textContent = state.expandedState[underlying] ? 'Fold Chain' : 'Option Chain';
+
+    if (state.expandedState[underlying]) {
+        renderOptionChainsFor(underlying, true);
+    }
+}
+
+function updateIndexCardDisplay(underlying) {
+    const indexEntry = state.indices[underlying];
+    if (!indexEntry) return;
+
+    const tick = state.ticks[indexEntry.instrument_key];
+    const ltpEl = document.getElementById(`ltp-${underlying}`);
+    const changeEl = document.getElementById(`change-${underlying}`);
+    const openEl = document.getElementById(`open-${underlying}`);
+    const highEl = document.getElementById(`high-${underlying}`);
+    const lowEl = document.getElementById(`low-${underlying}`);
+    const prevEl = document.getElementById(`prev-${underlying}`);
+    const atmEl = document.getElementById(`atm-${underlying}`);
+
+    if (!tick || tick.ltp === null || tick.ltp === undefined) return;
+
+    const ltp = Number(tick.ltp);
+    const cls = getTrendClass(tick.change);
+
+    if (ltpEl) {
+        ltpEl.className = `index-price-large ${cls}`;
+        ltpEl.textContent = `₹${formatDec(ltp)}`;
+    }
+    if (changeEl) {
+        changeEl.className = `fw-bold fs-6 ${cls}`;
+        const prefix = Number(tick.change || 0) >= 0 ? "+" : "";
+        changeEl.textContent = `${prefix}${formatDec(tick.change)} (${formatDec(tick.change_pct)}%)`;
+    }
+    if (openEl) openEl.textContent = formatDec(tick.open);
+    if (highEl) highEl.textContent = formatDec(tick.high);
+    if (lowEl) lowEl.textContent = formatDec(tick.low);
+    if (prevEl) prevEl.textContent = formatDec(tick.prev_close);
+    if (atmEl) atmEl.textContent = `₹${formatDec(ltp, 0)}`;
+
+    // Rebuild grid only if price crossed a major strike boundary (e.g. > 150 points)
+    if (state.expandedState[underlying]) {
+        const lastBase = state.renderedChainATM[underlying];
+        const step = indexEntry.strikeStep || 50;
+        if (!lastBase || Math.abs(ltp - lastBase) >= (step * 3)) {
+            renderOptionChainsFor(underlying, false);
+        } else {
+            updateAtmBadgePositions(underlying, ltp);
+        }
+    }
+}
+
+function updateAtmBadgePositions(underlying, currentLtp) {
+    const step = state.indices[underlying]?.strikeStep || 50;
+    const atmStrike = Math.round(currentLtp / step) * step;
+
+    ["ce", "pe"].forEach(side => {
+        const grid = document.getElementById(`${side}-grid-${underlying}`);
+        if (!grid) return;
+        grid.querySelectorAll(".strike-card").forEach(card => {
+            const strike = Number(card.dataset.strike);
+            const isATM = strike === atmStrike;
+            card.classList.toggle("is-atm", isATM);
+            let tag = card.querySelector(".atm-tag");
+            if (isATM && !tag) {
+                tag = document.createElement("div");
+                tag.className = "atm-tag";
+                tag.textContent = "ATM";
+                card.appendChild(tag);
+            } else if (!isATM && tag) {
+                tag.remove();
+            }
+            const distEl = card.querySelector(".card-dist");
+            if (distEl && Number.isFinite(strike)) {
+                distEl.textContent = Math.abs(strike - currentLtp).toFixed(0);
+            }
+        });
+    });
+}
+
+function renderOptionChainsFor(underlying, forceRebuild = false) {
+    const indexEntry = state.indices[underlying];
+    const indexTick = indexEntry ? state.ticks[indexEntry.instrument_key] : null;
+    const baseLtp = indexTick && indexTick.ltp ? Number(indexTick.ltp) : null;
+
+    let allOpts = state.options[underlying] || [];
+    const ceGrid = document.getElementById(`ce-grid-${underlying}`);
+    const peGrid = document.getElementById(`pe-grid-${underlying}`);
+    const ceCount = document.getElementById(`ce-count-${underlying}`);
+    const peCount = document.getElementById(`pe-count-${underlying}`);
+
+    if (!baseLtp) {
+        if (ceGrid) ceGrid.innerHTML = `<div class="empty-info-msg"><i class="bi bi-hourglass-split me-1"></i>Waiting for live ${underlying} price...</div>`;
+        if (peGrid) peGrid.innerHTML = `<div class="empty-info-msg"><i class="bi bi-hourglass-split me-1"></i>Waiting for live ${underlying} price...</div>`;
         return;
     }
 
-    container.innerHTML = underlyings.map(u => {
-        const idx = state.indicesByUnderlying[u];
-        const opts = state.optionsByUnderlying[u] || [];
-        const active = state.selectedUnderlying === u ? "active" : "";
-        const label = escapeHtml(idx?.trading_symbol || prettyUnderlying(u));
+    // Dynamic Strike Synthesis if no options exist in registry for this index
+    if (allOpts.length === 0) {
+        const step = indexEntry.strikeStep || (underlying === "SENSEX" ? 100 : 50);
+        const atm = Math.round(baseLtp / step) * step;
+        allOpts = [];
+        for (let offset = -4; offset <= 4; offset++) {
+            const strike = atm + offset * step;
+            ["CE", "PE"].forEach(t => {
+                const prefix = underlying === 'SENSEX' ? 'BSE_FO' : 'NSE_FO';
+                allOpts.push({
+                    instrument_key: `${prefix}|${underlying}_${strike}_${t}`,
+                    strike_price: strike,
+                    strike_type: t,
+                    trading_symbol: `${underlying} ${strike} ${t}`,
+                    expiry: "CURRENT"
+                });
+            });
+        }
+    }
+
+    state.renderedChainATM[underlying] = baseLtp;
+
+    // Stable selection: filter to 8 strikes around baseLtp, sorted by STRIKE PRICE (ascending)
+    const step = indexEntry.strikeStep || 50;
+    const atmStrike = Math.round(baseLtp / step) * step;
+
+    function getStableStrikes(type) {
+        const matching = allOpts.filter(o => (o.strike_type || "").toUpperCase() === type && o.strike_price != null);
+        // Find 8 strikes closest to ATM
+        const closest = matching
+            .map(o => ({ entry: o, dist: Math.abs(Number(o.strike_price) - baseLtp) }))
+            .sort((a, b) => a.dist - b.dist)
+            .slice(0, 8);
+
+        // Sort them by natural strike price so card positions never shift during ticks
+        return closest.sort((a, b) => Number(a.entry.strike_price) - Number(b.entry.strike_price));
+    }
+
+    const stableCE = getStableStrikes("CE");
+    const stablePE = getStableStrikes("PE");
+
+    if (ceCount) ceCount.textContent = `${stableCE.length} contracts`;
+    if (peCount) peCount.textContent = `${stablePE.length} contracts`;
+
+    if (ceGrid) ceGrid.innerHTML = buildStrikeCardsListHTML(stableCE, "CE", atmStrike, baseLtp);
+    if (peGrid) peGrid.innerHTML = buildStrikeCardsListHTML(stablePE, "PE", atmStrike, baseLtp);
+}
+
+function buildStrikeCardsListHTML(items, type, atmStrike, baseLtp) {
+    if (!items.length) {
+        return `<div class="empty-info-msg">No ${type} contracts available.</div>`;
+    }
+
+    return items.map(item => {
+        const o = item.entry;
+        const tick = state.ticks[o.instrument_key] || {};
+        const strike = Number(o.strike_price);
+        const ltp = parseNumber(tick.ltp);
+        const change = parseNumber(tick.change);
+        const changePct = parseNumber(tick.change_pct);
+        const changeCls = getTrendClass(change || 0);
+        const sym = o.trading_symbol || o.instrument_key;
+        const isATM = strike === atmStrike;
+        const chartUrl = `/chart/${encodeURIComponent(o.instrument_key)}`;
+        const dist = Math.abs(strike - baseLtp).toFixed(0);
+
         return `
-            <button type="button"
-                    class="opt-feed-index-tab ${active}"
-                    data-underlying="${escapeHtml(u)}">
-                <i class="bi bi-bar-chart-line"></i>
-                <span>${label}</span>
-                <span class="tab-count">${opts.length}</span>
-            </button>
+        <a href="${chartUrl}" class="strike-card ${isATM ? 'is-atm' : ''}" id="card-${escapeHtml(o.instrument_key)}" data-strike="${strike}" title="Open chart for ${escapeHtml(sym)}">
+            ${isATM ? `<div class="atm-tag">ATM</div>` : ''}
+            
+            <div class="strike-header-row">
+                <div class="strike-title">${escapeHtml(sym)}</div>
+                <div class="btn-strike-chart" title="Open chart">
+                    <i class="bi bi-graph-up-arrow"></i>
+                </div>
+            </div>
+
+            <div class="strike-meta">
+                Strike: <strong>${formatDec(strike, 0)}</strong> · Dist: <span class="card-dist">${dist}</span> · Exp: ${formatExpiry(o.expiry)}
+            </div>
+
+            <div class="strike-ltp ${changeCls}" id="ltp-card-${escapeHtml(o.instrument_key)}">
+                ${ltp !== null ? `₹${formatDec(ltp)}` : '--'}
+            </div>
+
+            <div class="data-row">
+                <span class="lbl">Change:</span>
+                <span class="${changeCls} fw-bold" id="change-card-${escapeHtml(o.instrument_key)}">
+                    ${change !== null ? (change >= 0 ? "+" : "") + formatDec(change) : "--"}
+                    ${changePct !== null ? `(${formatDec(changePct)}%)` : ""}
+                </span>
+            </div>
+
+            <div class="data-row">
+                <span class="lbl">Volume:</span>
+                <span class="fw-medium" id="vol-card-${escapeHtml(o.instrument_key)}">${formatInt(tick.volume)}</span>
+            </div>
+        </a>
         `;
     }).join("");
-
-    container.querySelectorAll(".opt-feed-index-tab").forEach(btn => {
-        btn.addEventListener("click", () => selectUnderlying(btn.dataset.underlying));
-    });
-}
-
-function selectUnderlying(underlying) {
-    if (!underlying) return;
-    state.selectedUnderlying = underlying;
-
-    // Update tab active state
-    document.querySelectorAll(".opt-feed-index-tab").forEach(btn => {
-        btn.classList.toggle("active", btn.dataset.underlying === underlying);
-    });
-
-    // Update labels
-    const label = prettyUnderlying(underlying);
-    document.getElementById("active-index-label").textContent = label;
-    document.getElementById("options-underlying-label").textContent = label;
-    document.getElementById("options-underlying-subtitle").textContent = label;
-
-    renderActiveIndexCard();
-    renderOptionColumns();
 }
 
 /* ============================================================
-   Active index card
-   ============================================================ */
-function getActiveIndexEntry() {
-    const u = state.selectedUnderlying;
-    if (!u) return null;
-    return state.indicesByUnderlying[u] || null;
-}
-
-function getActiveIndexTick() {
-    const entry = getActiveIndexEntry();
-    if (!entry) return null;
-    return state.ticks[entry.instrument_key] || null;
-}
-
-function renderActiveIndexCard() {
-    const entry = getActiveIndexEntry();
-    const ltpEl      = document.getElementById("active-index-ltp");
-    const changeEl   = document.getElementById("active-index-change");
-    const ohlcEl     = document.getElementById("active-index-ohlc");
-    const updatedEl  = document.getElementById("active-index-updated");
-    const atmEl      = document.getElementById("atm-reference");
-
-    if (!entry) {
-        ltpEl.textContent = "--";
-        ltpEl.className = "opt-feed-index-price";
-        changeEl.textContent = "Change: --";
-        ohlcEl.textContent = "O: -- | H: -- | L: --";
-        updatedEl.textContent = "Updated: --";
-        atmEl.textContent = "--";
-        return;
-    }
-
-    const tick = state.ticks[entry.instrument_key];
-    if (!tick || tick.ltp === null || tick.ltp === undefined) {
-        ltpEl.textContent = `${escapeHtml(entry.trading_symbol || entry.underlying)}  --`;
-        ltpEl.className = "opt-feed-index-price";
-        changeEl.textContent = "Change: --";
-        ohlcEl.textContent = "O: -- | H: -- | L: --";
-        updatedEl.textContent = "Updated: waiting…";
-        atmEl.textContent = "--";
-        return;
-    }
-
-    const ltp = Number(tick.ltp || 0);
-    const change = Number(tick.change || 0);
-    const changePct = Number(tick.change_pct || 0);
-    const cls = getChangeClass(change);
-
-    ltpEl.className = `opt-feed-index-price ${cls}`;
-    ltpEl.textContent = `${escapeHtml(entry.trading_symbol || entry.underlying)}  ₹${formatNumber(ltp)}`;
-
-    changeEl.innerHTML = `Change: <span class="${cls} fw-bold">${change >= 0 ? "+" : ""}${formatNumber(change)} (${formatNumber(changePct)}%)</span>`;
-    ohlcEl.textContent = `O: ${formatNumber(tick.open)} | H: ${formatNumber(tick.high)} | L: ${formatNumber(tick.low)}`;
-    updatedEl.textContent = `Updated: ${new Date().toLocaleTimeString()}`;
-    atmEl.textContent = `₹${formatNumber(ltp)}`;
-}
-
-/* ============================================================
-   Option columns
-   ============================================================ */
-function getNearestOptions(optionType) {
-    const underlying = state.selectedUnderlying;
-    if (!underlying) return [];
-
-    const indexTick = getActiveIndexTick();
-    if (!indexTick || !Number(indexTick.ltp || 0)) return [];
-
-    const underlyingLtp = Number(indexTick.ltp || 0);
-    const all = state.optionsByUnderlying[underlying] || [];
-
-    return all
-        .filter(o => String(o.strike_type || "").toUpperCase() === optionType)
-        .filter(o => o.strike_price !== null && o.strike_price !== undefined)
-        .map(o => ({
-            entry: o,
-            tick: state.ticks[o.instrument_key] || null,
-            distance: Math.abs(Number(o.strike_price) - underlyingLtp),
-        }))
-        .sort((a, b) => {
-            if (a.distance !== b.distance) return a.distance - b.distance;
-            return Number(a.entry.strike_price) - Number(b.entry.strike_price);
-        })
-        .slice(0, NEAREST_CARDS_PER_SIDE);
-}
-
-function renderOptionColumns() {
-    const ceContainer = document.getElementById("ce-container");
-    const peContainer = document.getElementById("pe-container");
-    if (!ceContainer || !peContainer) return;
-
-    const nearestCE = getNearestOptions("CE");
-    const nearestPE = getNearestOptions("PE");
-
-    document.getElementById("ce-count").textContent = `${nearestCE.length} active`;
-    document.getElementById("pe-count").textContent = `${nearestPE.length} active`;
-
-    renderOptionCards(ceContainer, nearestCE, "CE");
-    renderOptionCards(peContainer, nearestPE, "PE");
-}
-
-function renderOptionCards(container, items, optionType) {
-    container.innerHTML = "";
-
-    const indexTick = getActiveIndexTick();
-    if (!state.selectedUnderlying) {
-        container.innerHTML = `
-            <div class="opt-feed-empty-box">
-                <i class="bi bi-collection fs-4 d-block mb-2"></i>
-                Select an index above to see its nearest ${optionType} options.
-            </div>`;
-        return;
-    }
-    if (!indexTick) {
-        container.innerHTML = `
-            <div class="opt-feed-empty-box">
-                <i class="bi bi-hourglass-split fs-4 d-block mb-2"></i>
-                Waiting for a live ${escapeHtml(prettyUnderlying(state.selectedUnderlying))} tick to compute nearest strikes.
-            </div>`;
-        return;
-    }
-    if (!items.length) {
-        container.innerHTML = `
-            <div class="opt-feed-empty-box">
-                <i class="bi bi-broadcast fs-4 d-block mb-2"></i>
-                No ${optionType} contracts for ${escapeHtml(prettyUnderlying(state.selectedUnderlying))} in the current backup.
-            </div>`;
-        return;
-    }
-
-    const underlyingLtp = Number(indexTick.ltp || 0);
-
-    items.forEach((item, index) => {
-        const entry = item.entry;
-        const tick = item.tick || {};
-        const strike = Number(entry.strike_price || 0);
-        const symbol = entry.trading_symbol || entry.instrument_key;
-        const expiry = entry.expiry || "—";
-        const distance = item.distance;
-
-        const ltp = toFiniteNumber(tick.ltp);
-        const change = toFiniteNumber(tick.change);
-        const changePct = toFiniteNumber(tick.change_pct);
-        const changeCls = getChangeClass(change || 0);
-
-        const card = document.createElement("div");
-        card.className = index === 0
-            ? "opt-feed-option-card is-atm-card"
-            : "opt-feed-option-card";
-
-        const distanceLabel = distance === 0 ? "ATM" : formatNumber(distance, 0);
-
-        card.innerHTML = `
-            ${index === 0 ? `<div class="opt-feed-atm-tag">NEAREST</div>` : ""}
-
-            <div class="opt-feed-symbol-text">${escapeHtml(symbol)}</div>
-
-            <div class="opt-feed-strike-text">
-                Strike: <strong>${formatNumber(strike, 0)}</strong>
-                <span class="mx-1">•</span>
-                Distance: ${distanceLabel}
-                <span class="mx-1">•</span>
-                Exp: ${escapeHtml(expiry)}
-            </div>
-
-            <div class="opt-feed-ltp-value ${ltp !== null ? changeCls : ""}">
-                ${ltp !== null ? `₹${formatNumber(ltp)}` : "--"}
-            </div>
-
-            <div class="opt-feed-data-row">
-                <span class="opt-feed-data-label">Change</span>
-                <span class="${changeCls} fw-bold">
-                    ${change !== null ? (change >= 0 ? "+" : "") + formatNumber(change) : "--"}
-                    ${changePct !== null ? `(${formatNumber(changePct)}%)` : ""}
-                </span>
-            </div>
-
-            <div class="opt-feed-data-row">
-                <span class="opt-feed-data-label">Volume</span>
-                <span>${formatInteger(tick.volume)}</span>
-            </div>
-
-            <div class="opt-feed-data-row">
-                <span class="opt-feed-data-label">Instrument Key</span>
-                <span class="text-muted small text-truncate" style="max-width:140px;" title="${escapeHtml(entry.instrument_key)}">
-                    ${escapeHtml(entry.instrument_key)}
-                </span>
-            </div>
-        `;
-
-        card.title = `${symbol} · ${optionType} · strike ${strike} · underlying LTP ${formatNumber(underlyingLtp)}`;
-        container.appendChild(card);
-    });
-}
-
-/* ============================================================
-   WebSocket — one socket, all instruments
+   WebSocket Consumer
    ============================================================ */
 function connectWebSocket() {
     if (state.ws && (state.ws.readyState === WebSocket.OPEN || state.ws.readyState === WebSocket.CONNECTING)) {
         return;
     }
-    updateFeedBadge("connecting");
+    setFeedStatus("connecting");
+
     try {
-        state.ws = new WebSocket(BACKEND_FEED_WS_URL);
-    } catch (err) {
-        console.error("WebSocket creation failed:", err);
-        state.ws = null;
+        state.ws = new WebSocket(FEED_WS_URL);
+    } catch (e) {
         scheduleWsReconnect();
         return;
     }
 
-    state.ws.addEventListener("open", () => {
-        state.wsConnected = true;
-        state.wsReconnectAttempts = 0;
-        updateFeedBadge("connected");
-    });
+    state.ws.onopen = () => {
+        state.connected = true;
+        setFeedStatus("connected");
+    };
 
-    state.ws.addEventListener("message", (event) => {
+    state.ws.onmessage = (event) => {
         try {
-            const payload = JSON.parse(event.data);
-            handleFeedMessage(payload);
-        } catch (err) {
-            // Silent — non-JSON control frames are expected occasionally.
-        }
-    });
+            const data = JSON.parse(event.data);
+            handleIncomingFeed(data);
+        } catch (e) {}
+    };
 
-    state.ws.addEventListener("error", () => {
-        /* The close handler will run after this. */
-    });
-
-    state.ws.addEventListener("close", () => {
-        state.wsConnected = false;
+    state.ws.onclose = () => {
+        state.connected = false;
         state.ws = null;
-        updateFeedBadge("disconnected");
+        setFeedStatus("disconnected");
         scheduleWsReconnect();
-    });
+    };
+
+    state.ws.onerror = () => {};
 }
 
 function scheduleWsReconnect() {
-    if (state.wsReconnectTimer) return;
-    state.wsReconnectAttempts += 1;
-    const delay = Math.min(
-        1000 * Math.pow(2, state.wsReconnectAttempts - 1),
-        MAX_RECONNECT_DELAY_MS
-    );
-    state.wsReconnectTimer = setTimeout(() => {
-        state.wsReconnectTimer = null;
+    if (state.reconnectTimer) return;
+    state.reconnectTimer = setTimeout(() => {
+        state.reconnectTimer = null;
         connectWebSocket();
-    }, delay);
+    }, 4000);
 }
 
-/* ============================================================
-   Feed message handling — tolerant of both payload shapes
-   ============================================================ */
-function handleFeedMessage(raw) {
+function setFeedStatus(st) {
+    const pill = document.getElementById("feed-status-pill");
+    if (!pill) return;
+    if (st === "connected") {
+        pill.className = "status-badge badge-live";
+        pill.textContent = "Live Feed: Active";
+    } else if (st === "connecting") {
+        pill.className = "status-badge badge-connecting";
+        pill.textContent = "Live Feed: Connecting";
+    } else {
+        pill.className = "status-badge badge-off";
+        pill.textContent = "Live Feed: Disconnected";
+    }
+}
+
+function handleIncomingFeed(raw) {
     if (!raw || typeof raw !== "object") return;
+    if (raw.type === "connected" || raw.type === "subscribed" || raw.type === "ping") return;
 
-    const type = raw.type || raw.event;
-    if (type === "connected" || type === "subscribed" ||
-        type === "ping" || type === "pong" || type === "heartbeat") {
+    if (raw.feeds && typeof raw.feeds === "object") {
+        Object.entries(raw.feeds).forEach(([k, feed]) => {
+            extractAndApplyTick(k, feed);
+        });
         return;
     }
 
-    // Unwrap the possible `{ data: {...} }` envelope
-    const payload = (raw.data && typeof raw.data === "object" &&
-                     (raw.data.instrument_key || raw.data.feed))
-        ? raw.data
-        : raw;
-
-    const instrumentKey =
-        payload.instrument_key ||
-        payload.instrumentKey ||
-        payload.key;
-    if (!instrumentKey) return;
-
-    // Only handle instruments we know about
-    const known = state.instruments.some(i => i.instrument_key === instrumentKey);
-    if (!known) return;
-
-    const tick = normalizeTickPayload(instrumentKey, payload);
-    state.ticks[instrumentKey] = { ...(state.ticks[instrumentKey] || {}), ...tick };
-
-    // If this tick belongs to the active index, refresh the header + option columns
-    const activeEntry = getActiveIndexEntry();
-    if (activeEntry && activeEntry.instrument_key === instrumentKey) {
-        renderActiveIndexCard();
-        renderOptionColumns();
-        return;
-    }
-
-    // If it's an option for the active underlying, refresh option columns
-    if (state.selectedUnderlying) {
-        const isActiveOption = (state.optionsByUnderlying[state.selectedUnderlying] || [])
-            .some(o => o.instrument_key === instrumentKey);
-        if (isActiveOption) {
-            renderOptionColumns();
-        }
+    const payload = raw.data || raw;
+    const key = payload.instrument_key || payload.instrumentKey || payload.key;
+    if (key) {
+        extractAndApplyTick(key, payload);
     }
 }
 
-function normalizeTickPayload(instrumentKey, p) {
-    const feed    = p.feed || {};
-    const ltpc    = feed.ltpc || {};
-    const ff      = feed.ff || {};
-    const indexFF = ff.indexFF || feed.indexFF || {};
-    const oc      = feed.oc || {};
-    const marketFF = feed.marketFF || feed.market_ff || oc || {};
-    const efd     = marketFF.eFeedDetails || oc.eFeedDetails || {};
+function extractAndApplyTick(instrumentKey, block) {
+    const ff = block.fullFeed || block.ff || {};
+    const indexFF = ff.indexFF || block.indexFF || {};
+    const marketFF = ff.marketFF || block.marketFF || {};
+    const oc = block.oc || {};
+    const ltpc = block.ltpc || ff.ltpc || indexFF.ltpc || marketFF.ltpc || oc.ltpc || {};
 
-    // The /ws/live feed also puts ltp / volume at the top level.
-    const ltp = firstFiniteNumber(
-        p.ltp,
-        ltpc.ltp,
-        indexFF.ltpc?.ltp,
-        marketFF.ltp,
-        ff.ltp
-    );
-    const prevClose = firstFiniteNumber(
-        ltpc.cp,
-        indexFF.ltpc?.cp,
-        marketFF.cp,
-        p.prev_close
-    );
+    let ltp = parseNumber(block.ltp ?? ltpc.ltp ?? ff.ltp ?? indexFF.ltp ?? marketFF.ltp);
+    let prev = parseNumber(block.prev_close ?? ltpc.cp ?? indexFF.cp ?? marketFF.cp);
+    let change = parseNumber(block.change);
+    let changePct = parseNumber(block.change_pct);
 
-    let change    = firstFiniteNumber(p.change, marketFF.change, indexFF.change);
-    let changePct = firstFiniteNumber(p.change_pct, marketFF.changePct, indexFF.changePct);
-    if (change === null && ltp !== null && prevClose !== null) change = ltp - prevClose;
-    if (changePct === null && change !== null && prevClose) changePct = (change / prevClose) * 100;
+    if (change === null && ltp !== null && prev !== null) {
+        change = ltp - prev;
+    }
+    if (changePct === null && change !== null && prev) {
+        changePct = (change / prev) * 100;
+    }
 
-    // OHLC from candle_1m (top-level from /ws/live) or the ohlc block
     let open = null, high = null, low = null;
-    const c1m = p.candle_1m;
-    if (c1m && typeof c1m === "object") {
-        open = toFiniteNumber(c1m.open);
-        high = toFiniteNumber(c1m.high);
-        low  = toFiniteNumber(c1m.low);
+    const ohlcArr = indexFF.marketOHLC?.ohlc || marketFF.marketOHLC?.ohlc || ff.marketOHLC?.ohlc || block.ohlc;
+    if (Array.isArray(ohlcArr) && ohlcArr.length > 0) {
+        open = parseNumber(ohlcArr[0].open);
+        high = parseNumber(ohlcArr[0].high);
+        low  = parseNumber(ohlcArr[0].low);
     }
-    const ohlc = marketFF.ohlc || indexFF.marketOHLC?.ohlc?.[0] || null;
-    if (ohlc && typeof ohlc === "object" && !Array.isArray(ohlc)) {
-        open = open ?? toFiniteNumber(ohlc.open);
-        high = high ?? toFiniteNumber(ohlc.high);
-        low  = low  ?? toFiniteNumber(ohlc.low);
+    if (block.candle_1m) {
+        open = parseNumber(block.candle_1m.open) ?? open;
+        high = parseNumber(block.candle_1m.high) ?? high;
+        low  = parseNumber(block.candle_1m.low)  ?? low;
     }
 
-    const volume = firstFiniteNumber(p.volume, efd.vtt, marketFF.volume, feed.volume);
-    const oi     = firstFiniteNumber(efd.oi, marketFF.oi, feed.oi, p.oi);
+    const volume = parseNumber(
+        block.volume ??
+        block.vtt ??
+        block.eFeedDetails?.vtt ??
+        ff.eFeedDetails?.vtt ??
+        marketFF.eFeedDetails?.vtt ??
+        oc.eFeedDetails?.vtt
+    );
 
-    return {
+    state.ticks[instrumentKey] = {
         ltp,
-        prev_close: prevClose,
+        prev_close: prev,
         change,
         change_pct: changePct,
         open, high, low,
-        volume,
-        oi,
-        ts: Date.now(),
+        volume
     };
-}
 
-/* ============================================================
-   Badges
-   ============================================================ */
-function updateInstrumentsBadge() {
-    const badge = document.getElementById("status-instruments");
-    const count = state.instruments.length;
-    const idxCount = Object.keys(state.indicesByUnderlying).length;
-    const optCount = count - idxCount;
-    if (count === 0) {
-        badge.className = "opt-feed-status-pill opt-feed-pill-disconnected";
-        badge.textContent = "0 instruments";
-        return;
-    }
-    badge.className = "opt-feed-status-pill opt-feed-pill-success";
-    badge.textContent = `${idxCount} indices · ${optCount} options`;
-}
-
-function updateFeedBadge(state_str) {
-    const badge = document.getElementById("status-feed");
-    if (!badge) return;
-    if (state_str === "connected") {
-        badge.className = "opt-feed-status-pill opt-feed-pill-connected";
-        badge.textContent = "Feed: Live";
-    } else if (state_str === "connecting") {
-        badge.className = "opt-feed-status-pill opt-feed-pill-refreshing";
-        badge.textContent = "Feed: Connecting";
-    } else {
-        badge.className = "opt-feed-status-pill opt-feed-pill-disconnected";
-        badge.textContent = "Feed: Off";
-    }
-}
-
-/* ============================================================
-   Feed + backup status
-   ============================================================ */
-async function loadFeedStatus() {
-    try {
-        const res = await fetch(LIVE_STATUS_URL, { headers: { Accept: "application/json" } });
-        if (!res.ok) return;
-        const data = await res.json();
-        if (data?.feed?.running) {
-            // Only update if WS hasn't taken over
-            if (!state.wsConnected) updateFeedBadge("connecting");
+    // Update individual strike elements in-place without replacing the card DOM
+    const cardLtp = document.getElementById(`ltp-card-${instrumentKey}`);
+    if (cardLtp && ltp !== null) {
+        const cls = getTrendClass(change);
+        cardLtp.className = `strike-ltp ${cls}`;
+        cardLtp.textContent = `₹${formatDec(ltp)}`;
+        const cardChange = document.getElementById(`change-card-${instrumentKey}`);
+        if (cardChange) {
+            cardChange.className = `${cls} fw-bold`;
+            const prefix = Number(change || 0) >= 0 ? "+" : "";
+            cardChange.textContent = `${prefix}${formatDec(change)} (${formatDec(changePct)}%)`;
         }
-    } catch (err) {
-        /* silent */
+        const cardVol = document.getElementById(`vol-card-${instrumentKey}`);
+        if (cardVol) cardVol.textContent = formatInt(volume);
     }
-}
 
-async function loadBackupStatus() {
-    try {
-        const res = await fetch(BACKUP_STATUS_URL, { headers: { Accept: "application/json" } });
-        if (!res.ok) return;
-        state.backupInfo = await res.json();
-    } catch (err) {
-        /* silent */
-    }
-}
-
-/* ============================================================
-   Hard refresh
-   ============================================================ */
-function setRefreshUi(state_str, message) {
-    const statusBadge    = document.getElementById("refresh-status");
-    const refreshPanel   = document.getElementById("refresh-panel");
-    const refreshMessage = document.getElementById("refresh-message");
-    const refreshButton  = document.getElementById("manual-refresh-btn");
-
-    if (refreshPanel) refreshPanel.classList.add("is-visible");
-    if (refreshMessage) refreshMessage.textContent = message || "";
-
-    if (state_str === "running") {
-        statusBadge.className = "opt-feed-status-pill opt-feed-pill-refreshing";
-        statusBadge.textContent = "Refresh: Running";
-        refreshButton.disabled = true;
-        refreshButton.innerHTML = `<span class="spinner-border spinner-border-sm me-1"></span>Refreshing...`;
-    } else if (state_str === "success") {
-        statusBadge.className = "opt-feed-status-pill opt-feed-pill-success";
-        statusBadge.textContent = "Refresh: Success";
-        refreshButton.disabled = false;
-        refreshButton.innerHTML = `<i class="bi bi-arrow-clockwise me-1"></i> Hard Refresh`;
-    } else if (state_str === "failed") {
-        statusBadge.className = "opt-feed-status-pill opt-feed-pill-error";
-        statusBadge.textContent = "Refresh: Failed";
-        refreshButton.disabled = false;
-        refreshButton.innerHTML = `<i class="bi bi-arrow-clockwise me-1"></i> Hard Refresh`;
-    } else {
-        statusBadge.className = "opt-feed-status-pill opt-feed-pill-disconnected";
-        statusBadge.textContent = "Refresh: Idle";
-        refreshButton.disabled = false;
-        refreshButton.innerHTML = `<i class="bi bi-arrow-clockwise me-1"></i> Hard Refresh`;
-    }
-}
-
-async function triggerHardRefresh() {
-    const ok = window.confirm(
-        "This will re-download the latest backup from MongoDB, reload all instruments, and restart the live feed. Continue?"
-    );
-    if (!ok) return;
-
-    setRefreshUi("running", "Hard refresh started.\nDownloading latest backup and reloading instruments…");
-
-    try {
-        const res = await fetch(HARD_REFRESH_URL, {
-            method: "POST",
-            headers: { Accept: "application/json" },
-        });
-        const data = await res.json();
-
-        if (!res.ok) {
-            const detail = data?.detail || data?.message || `HTTP ${res.status}`;
-            setRefreshUi("failed", `Hard refresh failed.\n\n${detail}`);
-            return;
+    // Refresh index summary card
+    Object.keys(state.indices).forEach(u => {
+        if (state.indices[u].instrument_key === instrumentKey) {
+            updateIndexCardDisplay(u);
         }
-
-        const backup = data.backup || {};
-        const registry = data.registry || {};
-
-        const lines = [
-            "Hard refresh completed successfully.",
-            "",
-            `Backup status   : ${backup.status || "unknown"}`,
-            `Files extracted : ${backup.file_count ?? "—"}`,
-            `Archive size    : ${backup.archive_size_bytes ? (backup.archive_size_bytes / 1024 / 1024).toFixed(2) + " MB" : "—"}`,
-            `Instruments     : ${registry.count ?? "—"}`,
-            `Feed restarted  : ${data.feed_restarted ? "yes" : "no"}`,
-        ];
-        if (backup.error) lines.push("", `Backup error   : ${backup.error}`);
-
-        setRefreshUi("success", lines.join("\n"));
-
-        // Re-fetch instruments against the newly extracted backup.
-        await loadInstruments();
-        await loadBackupStatus();
-    } catch (err) {
-        console.error("Hard refresh failed:", err);
-        setRefreshUi("failed", `Hard refresh request failed.\n\n${err.message}`);
-    }
+    });
 }
 
-/* ============================================================
-   Bootstrap
-   ============================================================ */
-async function bootstrap() {
-    await loadInstruments();
-    await loadFeedStatus();
-    await loadBackupStatus();
+function reloadRegistry() {
+    loadRegistry();
+}
+
+document.addEventListener("DOMContentLoaded", async () => {
+    await loadRegistry();
     connectWebSocket();
-}
-
-document.addEventListener("DOMContentLoaded", bootstrap);
+});
 
 window.addEventListener("beforeunload", () => {
     if (state.ws) {
-        try { state.ws.close(1000, "Page closed"); } catch (e) {}
+        try { state.ws.close(); } catch (e) {}
     }
 });
-
-// Expose to inline onclick handlers
-window.openIsolatedDashboard = openIsolatedDashboard;
-window.triggerHardRefresh = triggerHardRefresh;
-window.reloadInstruments = reloadInstruments;
 </script>
 {% endblock %}

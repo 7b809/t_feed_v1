@@ -13,10 +13,11 @@ from core.logger import get_logger
 from routes.admin_routes import router as admin_router
 from routes.live_routes import router as live_router
 from routes.log_routes import router as log_router
-from routes.page_routes import router as page_router            # <-- NEW
+from routes.page_routes import router as page_router
 from routes.upstox_routes import router as upstox_router
 from services.backup_data_service import backup_data_service
 from services.instrument_registry import instrument_registry
+from services.live_backfill_service import live_backfill_service   # <-- NEW
 from services.live_broadcast import live_broadcast
 from services.live_cross_store import live_cross_store
 from services.live_ema_engine import live_ema_engine
@@ -28,7 +29,6 @@ from token_tasks.telegram_token_bot import telegram_token_bot
 from token_tasks.token_monitor import check_upstox_token_validity
 
 logger = get_logger(__file__)
-
 
 def build_token_monitor_scheduler(scheduler_class=BackgroundScheduler):
     scheduler = scheduler_class(timezone=config.MARKET_TIMEZONE)
@@ -54,7 +54,6 @@ def build_token_monitor_scheduler(scheduler_class=BackgroundScheduler):
     scheduler.start()
     return scheduler
 
-
 def _wire_cross_handler(loop) -> None:
     def on_cross(entry, cross):
         try:
@@ -69,7 +68,6 @@ def _wire_cross_handler(loop) -> None:
             logger.exception("Failed broadcasting live cross")
 
     live_ema_engine.set_cross_handler(on_cross)
-
 
 @asynccontextmanager
 async def app_lifespan(app: FastAPI):
@@ -105,6 +103,30 @@ async def app_lifespan(app: FastAPI):
         live_feed_service.set_loop(loop)
         _wire_cross_handler(loop)
         live_cross_store.reset_all()
+
+        # ---- NEW: seed the EMA engine from backup + intraday candles ----
+        # Runs before live_feed_service.start() so the seeded series is
+        # contiguous with the first live tick. Any failure here must not
+        # block startup — a cold engine is still functional, just slow to
+        # warm up.
+        try:
+            backfill_summary = await asyncio.to_thread(
+                live_backfill_service.seed_all
+            )
+            telegram_service.send_message(
+                "Live Backfill",
+                (
+                    f"Seeded: {backfill_summary['seeded']}/{backfill_summary['total']}\n"
+                    f"Crosses recovered for today: {backfill_summary['crosses']}\n"
+                    f"Skipped: {backfill_summary['skipped']}  "
+                    f"Errors: {backfill_summary['errors']}"
+                ),
+                level="INFO",
+            )
+        except Exception:
+            logger.exception("Live backfill failed; live feed will start cold")
+        # ----------------------------------------------------------------
+
         try:
             await asyncio.to_thread(live_feed_service.start)
         except Exception:
@@ -141,13 +163,15 @@ async def app_lifespan(app: FastAPI):
             telegram_token_bot.stop()
         if scheduler is not None and scheduler.running:
             scheduler.shutdown(wait=False)
-        telegram_service.send_shutdown_message(
-            details="Application shutdown completed."
+        telegram_service.send_message(
+            "Application Stopped",
+            "Market engine shutdown complete.",
+            level="INFO",
         )
         logger.info("Application shutdown complete.")
 
-
 app = FastAPI(title="Market Data Foundation", lifespan=app_lifespan)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -156,7 +180,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(page_router)             # <-- NEW
+app.include_router(page_router)
 app.include_router(live_router)
 app.include_router(admin_router)
 app.include_router(upstox_router)

@@ -7,17 +7,9 @@
     GET  /live/crosses                         -> today's crosses across all
 
     WS   /ws/live                              -> live feed snapshots (per filter)
+    WS   /ws/chart                             -> chart live feed
+    WS   /all-feeds (and /ws/all-feeds)        -> full/dynamic feeds compatibility endpoint
     WS   /ws/ema-crosses                       -> live EMA crosses (per filter)
-
-Query parameters for both WebSockets (mix and match):
-
-    instrument_key=NSE_FO|50201
-    underlying=NIFTY&strike=23500&type=PE
-    all=true                                   -> receive everything
-
-Query parameters for REST lookups:
-
-    underlying, strike, type (for /live/instruments/resolve)
 """
 
 from __future__ import annotations
@@ -38,7 +30,6 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-
 # ---------------------------------------------------------------------------
 # REST
 # ---------------------------------------------------------------------------
@@ -49,7 +40,6 @@ def live_status() -> dict[str, Any]:
         "feed": live_feed_service.status(),
         "instruments": len(instrument_registry.all()),
     }
-
 
 @router.get("/live/instruments")
 def list_live_instruments(
@@ -64,7 +54,6 @@ def list_live_instruments(
     )
     return {"count": len(items), "instruments": items}
 
-
 @router.get("/live/instruments/resolve")
 def resolve_instrument(
     underlying: str = Query(...),
@@ -76,14 +65,12 @@ def resolve_instrument(
         raise HTTPException(status_code=404, detail="Instrument not found")
     return entry
 
-
 @router.get("/live/crosses/{instrument_key:path}")
 def crosses_for_instrument(instrument_key: str) -> dict[str, Any]:
     entry = instrument_registry.get(instrument_key)
     if entry is None:
         raise HTTPException(status_code=404, detail="Instrument not registered")
     return live_cross_store.read_today(entry)
-
 
 @router.get("/live/crosses")
 def crosses_all() -> dict[str, Any]:
@@ -94,42 +81,86 @@ def crosses_all() -> dict[str, Any]:
             out.append(payload)
     return {"instrument_count": len(out), "payloads": out}
 
-
 # ---------------------------------------------------------------------------
-# WebSocket
+# WebSocket Helpers
 # ---------------------------------------------------------------------------
 
 def _parse_filters(ws: WebSocket):
     q = ws.query_params
-    instrument_key = q.get("instrument_key")
+    instrument_key = q.get("instrument_key") or q.get("key")
     underlying = q.get("underlying")
     strike = q.get("strike")
     type_ = q.get("type")
     all_ = (q.get("all", "false").lower() in {"1", "true", "yes"})
     return instrument_key, underlying, strike, type_, all_
 
+def _ensure_subscription(instrument_key: str | None) -> None:
+    if not instrument_key:
+        return
+    key = instrument_key.strip()
+    if not instrument_registry.get(key):
+        instrument_registry.register_adhoc(key)
+    if not live_feed_service.is_subscribed(key):
+        live_feed_service.subscribe_instrument(key)
 
-async def _pump(ws: WebSocket, sub) -> None:
-    try:
+async def _pump_with_client_listener(ws: WebSocket, sub) -> None:
+    """Pump broadcast messages to client while concurrently listening for incoming subscriptions."""
+    async def _send_loop():
         while True:
             message = await sub.queue.get()
+            # Send message in standard payload structure compatible with both UI versions
             await ws.send_text(json.dumps(message, default=str))
+
+    async def _recv_loop():
+        while True:
+            text = await ws.receive_text()
+            try:
+                data = json.loads(text)
+                if isinstance(data, dict):
+                    action = data.get("action") or data.get("type")
+                    key = data.get("instrument_key") or data.get("key")
+                    if action in {"subscribe", "sub"} and key:
+                        _ensure_subscription(key)
+                        sub.instrument_keys.add(key)
+                        await ws.send_text(
+                            json.dumps({"type": "subscribed", "instrument_key": key})
+                        )
+            except Exception:
+                pass
+
+    send_task = asyncio.create_task(_send_loop())
+    recv_task = asyncio.create_task(_recv_loop())
+
+    try:
+        done, pending = await asyncio.wait(
+            [send_task, recv_task], return_when=asyncio.FIRST_COMPLETED
+        )
+        for t in pending:
+            t.cancel()
     except WebSocketDisconnect:
         pass
     except Exception:
-        logger.exception("WebSocket pump crashed")
+        logger.exception("WebSocket pump error")
     finally:
+        send_task.cancel()
+        recv_task.cancel()
         await live_broadcast.unsubscribe(sub.id)
         try:
             await ws.close()
         except Exception:
             pass
 
+# ---------------------------------------------------------------------------
+# WebSocket Routes
+# ---------------------------------------------------------------------------
 
 @router.websocket("/ws/live")
 async def ws_live(ws: WebSocket) -> None:
     await ws.accept()
     instrument_key, underlying, strike, type_, all_ = _parse_filters(ws)
+
+    if instrument_key:
+        _ensure_subscription(instrument_key)
 
     keys, triples, _ = live_broadcast.resolve_subscription_params(
         instrument_key, underlying, strike, type_
@@ -151,8 +182,77 @@ async def ws_live(ws: WebSocket) -> None:
             }
         )
     )
-    await _pump(ws, sub)
+    await _pump_with_client_listener(ws, sub)
 
+@router.websocket("/ws/chart")
+async def ws_chart(ws: WebSocket) -> None:
+    await ws.accept()
+    instrument_key, underlying, strike, type_, all_ = _parse_filters(ws)
+    if instrument_key:
+        _ensure_subscription(instrument_key)
+
+    keys, triples, _ = live_broadcast.resolve_subscription_params(
+        instrument_key, underlying, strike, type_
+    )
+    sub = await live_broadcast.subscribe(
+        "feed",
+        instrument_keys=keys,
+        triples=triples,
+        all_instruments=all_ if not keys else False,
+    )
+    await ws.send_text(
+        json.dumps(
+            {
+                "type": "subscribed",
+                "topic": "feed",
+                "instrument_keys": list(sub.instrument_keys),
+                "all": sub.all_instruments,
+            }
+        )
+    )
+    await _pump_with_client_listener(ws, sub)
+
+@router.websocket("/all-feeds")
+@router.websocket("/ws/all-feeds")
+async def ws_all_feeds(ws: WebSocket) -> None:
+    """Direct route for client charts pointing to /all-feeds.
+    
+    Subscribes dynamically to the requested instrument if provided, or enables
+    full feed if requested.
+    """
+    await ws.accept()
+    instrument_key, underlying, strike, type_, all_ = _parse_filters(ws)
+
+    # If instrument_key is provided or all is set
+    if instrument_key:
+        _ensure_subscription(instrument_key)
+        all_ = False
+    else:
+        # Default /all-feeds without params subscribes to all available
+        all_ = True
+
+    keys, triples, _ = live_broadcast.resolve_subscription_params(
+        instrument_key, underlying, strike, type_
+    )
+    sub = await live_broadcast.subscribe(
+        "feed",
+        instrument_keys=keys,
+        triples=triples,
+        all_instruments=all_,
+    )
+
+    await ws.send_text(
+        json.dumps(
+            {
+                "type": "subscribed",
+                "topic": "feed",
+                "status": "connected",
+                "instrument_keys": list(sub.instrument_keys),
+                "all": sub.all_instruments,
+            }
+        )
+    )
+    await _pump_with_client_listener(ws, sub)
 
 @router.websocket("/ws/ema-crosses")
 async def ws_ema_crosses(ws: WebSocket) -> None:
@@ -179,4 +279,4 @@ async def ws_ema_crosses(ws: WebSocket) -> None:
             }
         )
     )
-    await _pump(ws, sub)
+    await _pump_with_client_listener(ws, sub)

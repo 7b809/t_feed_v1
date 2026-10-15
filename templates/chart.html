@@ -10,7 +10,7 @@
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css"/>
 
 <link rel="preload" href="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js" as="script" crossorigin="anonymous"/>
-<script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
+<script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js" crossorigin="anonymous"></script>
 
 <style>
 :root {
@@ -121,8 +121,8 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
 .scroll-nav-btn:active { transform: scale(0.95); }
 
 .instrument-panel { position: absolute; z-index: 100; width: min(400px, calc(100% - 24px)); max-height: calc(100% - 24px); overflow: hidden; background: rgba(30,34,45,0.95); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); backdrop-filter: blur(12px); transition: transform 0.2s ease, opacity 0.2s ease, top 0.2s ease, left 0.2s ease, right 0.2s ease, bottom 0.2s ease; }
-.panel-pos-top-left     { top: 12px; left: 12px; right: auto; bottom: auto; transform: none; }
-.panel-pos-top-right    { top: 12px; right: 12px; left: auto; bottom: auto; transform: none; }
+.panel-pos-top-left      { top: 12px; left: 12px; right: auto; bottom: auto; transform: none; }
+.panel-pos-top-right     { top: 12px; right: 12px; left: auto; bottom: auto; transform: none; }
 .panel-pos-bottom-left  { bottom: 12px; left: 12px; right: auto; top: auto; transform: none; }
 .panel-pos-bottom-right { bottom: 12px; right: 12px; left: auto; top: auto; transform: none; }
 .panel-pos-top-center   { top: 12px; left: 50%; right: auto; bottom: auto; transform: translateX(-50%); }
@@ -218,8 +218,8 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
   .label-toggle-btn { padding: 3px 9px; font-size: 9.5px; }
   .chart-toggles-title { font-size: 9.5px; }
   .instrument-panel { width: calc(100% - 20px); max-width: calc(100% - 20px); max-height: calc(100% - 20px); }
-  .panel-pos-top-left     { top: 10px; left: 10px; }
-  .panel-pos-top-right    { top: 10px; right: 10px; }
+  .panel-pos-top-left      { top: 10px; left: 10px; }
+  .panel-pos-top-right     { top: 10px; right: 10px; }
   .panel-pos-bottom-left  { bottom: 10px; left: 10px; }
   .panel-pos-bottom-right { bottom: 10px; right: 10px; }
   .panel-body { max-height: calc(100dvh - 260px); }
@@ -555,7 +555,11 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
 // ============================================================
 // Backend live feed configuration
 // ============================================================
-const BACKEND_FEED_WS_URL = `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}/all-feeds`;
+function getWebSocketUrl() {
+  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  const instrumentKeyEncoded = encodeURIComponent(currentInstrumentKey);
+  return `${protocol}//${window.location.host}/all-feeds?instrument_key=${instrumentKeyEncoded}`;
+}
 
 const UPSTOX_INTRADAY_URL = (key) => `/api/upstox/intraday?instrument_key=${encodeURIComponent(key)}`;
 const UPSTOX_HISTORICAL_URL = (key, from, to) =>
@@ -962,7 +966,7 @@ function getPricePrecision(step) {
   if (!Number.isFinite(step) || step <= 0) return 2;
   if (step >= 1) return 0;
   const decimals = Math.ceil(-Math.log10(step));
-  if (!Number.isFinite(decimals) || decimals < 0) return 2;
+  if (!Number.isFinite(decimals) || Math.abs(decimals) === Infinity || decimals < 0) return 2;
   return Math.min(decimals, 8);
 }
 
@@ -1676,8 +1680,8 @@ function updateCandleFromLtp(ltp, timestamp) {
 async function fetchCandlesFromUpstox(instrumentKey) {
   const today = new Date();
   const from = new Date(today.getTime() - 10 * 86400 * 1000);
-  const toISO   = today.toISOString().slice(0, 10);
-  const fromISO = from.toISOString().slice(0, 10);
+  const toISO    = today.toISOString().slice(0, 10);
+  const fromISO  = from.toISOString().slice(0, 10);
 
   const [intraRes, histRes] = await Promise.all([
     fetch(UPSTOX_INTRADAY_URL(instrumentKey)).then(r => r.json()).catch(() => ({})),
@@ -1825,8 +1829,6 @@ function processWebSocketMessage(event) {
   updateCandleFromLtp(ltp, getPayloadTimestamp(payload));
 }
 
-function getWebSocketUrl() { return BACKEND_FEED_WS_URL; }
-
 function scheduleReconnect() {
   if (pageClosing || reconnectTimer) return;
   // Do NOT keep retrying while the market is closed.
@@ -1839,6 +1841,7 @@ function scheduleReconnect() {
   setConnectionStatus("disconnected", "Retry " + Math.ceil(reconnectDelay / 1000) + "s");
   reconnectTimer = window.setTimeout(() => { reconnectTimer = null; connectWebSocket(); }, reconnectDelay);
 }
+
 function connectWebSocket() {
   if (!currentInstrumentKey || pageClosing) return;
   // Hard guard: don't connect outside of market hours.
@@ -1858,7 +1861,19 @@ function connectWebSocket() {
     scheduleReconnect();
     return;
   }
-  chartSocket.addEventListener("open", () => { reconnectAttempts = 0; setConnectionStatus("connected", "Live"); });
+  chartSocket.addEventListener("open", () => { 
+    reconnectAttempts = 0; 
+    setConnectionStatus("connected", "Live");
+    // Also send explicit subscribe event for dynamic subscription API update
+    try {
+        chartSocket.send(JSON.stringify({
+            action: "subscribe",
+            instrument_key: currentInstrumentKey
+        }));
+    } catch (e) {
+        console.warn("Failed to send subscribe message", e);
+    }
+  });
   chartSocket.addEventListener("message", processWebSocketMessage);
   chartSocket.addEventListener("error", error => console.error("Chart WebSocket error:", error));
   chartSocket.addEventListener("close", () => { chartSocket = null; if (!pageClosing) scheduleReconnect(); });

@@ -9,3 +9,4 @@ websockets
 jinja2
 dnspython
 tzdata
+pyperclip
