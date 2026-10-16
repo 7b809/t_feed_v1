@@ -11,7 +11,9 @@ Output layout::
         stage_1_summary.json
         <strike>_<TYPE>/
             strategy_meta.json
-            opening_range.json
+            index_opening_range.json   <- INDEX OR levels (audit copy)
+            opening_range.json         <- STRIKE's own OR levels
+                                          (written by opening_range_service)
             candles.json
             ema_crosses.json
             last_day_cross.json
@@ -23,6 +25,20 @@ into data/strategy/stage_2_isolation/.
 
 This service is idempotent. Failures per index/strike are logged and
 reported in the summary; the service never raises.
+
+Catch-up semantics
+------------------
+The unified refresh calls this with ``mode=reason`` and
+``catchup=True`` when the project starts (or daily / hard refresh
+fires) after the scheduled 09:16:30 IST time and still inside the
+catch-up window (09:15 – 23:59 IST). The summary and the log lines
+record:
+
+    mode              : startup | daily | manual | scheduled
+    catchup           : bool
+    post_market       : bool (true when the run happens after 15:30 IST)
+    scheduled_time_ist: "09:16:30"
+    actual_time_ist   : "HH:MM:SS"
 """
 
 from __future__ import annotations
@@ -31,9 +47,10 @@ import json
 import logging
 import math
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time as dtime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import requests
 
@@ -47,6 +64,9 @@ logger = logging.getLogger(__name__)
 _UPSTOX_BASE = "https://api.upstox.com"
 _HTTP_TIMEOUT = 20
 
+# Cash-market close in the market timezone. Anything after this is
+# recorded as post-market in the summary.
+_MARKET_CLOSE_TIME = dtime(15, 30)
 
 # ---------------------------------------------------------------------------
 # Small helpers
@@ -74,6 +94,37 @@ def _read_json(path: Path) -> Any:
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _market_tz() -> ZoneInfo:
+    try:
+        return ZoneInfo(config.MARKET_TIMEZONE)
+    except Exception:
+        return ZoneInfo("Asia/Kolkata")
+
+
+def _market_now() -> datetime:
+    return datetime.now(_market_tz())
+
+
+def _market_hhmmss() -> str:
+    return _market_now().strftime("%H:%M:%S")
+
+
+def _post_market() -> bool:
+    """True after the Indian cash-market close (15:30 IST)."""
+    return _market_now().time() > _MARKET_CLOSE_TIME
+
+
+def _scheduled_stage_1_hhmm() -> str:
+    """09:16:30 IST by default (OR + 20 s)."""
+    base = (
+        config.OPENING_RANGE_HOUR * 3600
+        + config.OPENING_RANGE_MINUTE * 60
+        + config.OPENING_RANGE_SECOND
+    )
+    total = (base + 20) % 86400
+    return f"{total // 3600:02d}:{(total % 3600) // 60:02d}:{total % 60:02d}"
 
 
 def _round_levels(levels: dict[str, Any] | None) -> dict[str, Any]:
@@ -191,9 +242,7 @@ def _last_day_last_cross(
     tail_start_iso = day_candles[-lookback_minutes]["timestamp"]
 
     crosses = _compute_crosses(prev)
-    tail_crosses = [
-        c for c in crosses if str(c["timestamp"]) >= str(tail_start_iso)
-    ]
+    tail_crosses = [c for c in crosses if str(c["timestamp"]) >= str(tail_start_iso)]
     if not tail_crosses:
         return None
 
@@ -221,11 +270,47 @@ class StrategySelectionService:
     # ------------------------------------------------------------------ #
     # Public entry point                                                 #
     # ------------------------------------------------------------------ #
-    def run(self, reason: str = "manual") -> dict[str, Any]:
+    def run(
+        self,
+        reason: str = "manual",
+        *,
+        mode: str | None = None,
+        catchup: bool = False,
+    ) -> dict[str, Any]:
+        """Stage 1 entry point.
+
+        Parameters
+        ----------
+        reason  : trigger label ("startup" / "daily" / "manual" / "scheduled")
+        mode    : alias for reason; separate so a caller can pass a distinct
+                  scheduled mode.
+        catchup : True when the run is a late catch-up.
+        """
+        effective_mode = str(mode or reason or "manual")
+        post_market = _post_market()
+        scheduled_hhmm = _scheduled_stage_1_hhmm()
+        actual_hhmmss = _market_hhmmss()
+
+        logger.info(
+            "[strategy:%s] stage_1 run (mode=%s catchup=%s post_market=%s "
+            "scheduled=%s actual=%s)",
+            reason,
+            effective_mode,
+            catchup,
+            post_market,
+            scheduled_hhmm,
+            actual_hhmmss,
+        )
+
         if not config.STRATEGY_ENABLED:
             return {
                 "status": "disabled",
                 "reason": reason,
+                "mode": effective_mode,
+                "catchup": bool(catchup),
+                "post_market": post_market,
+                "scheduled_time_ist": scheduled_hhmm,
+                "actual_time_ist": actual_hhmmss,
                 "indexes": [],
                 "stage": "stage_1",
                 "generated_at": _now_iso(),
@@ -236,6 +321,11 @@ class StrategySelectionService:
             return {
                 "status": "no_indexes",
                 "reason": reason,
+                "mode": effective_mode,
+                "catchup": bool(catchup),
+                "post_market": post_market,
+                "scheduled_time_ist": scheduled_hhmm,
+                "actual_time_ist": actual_hhmmss,
                 "indexes": [],
                 "stage": "stage_1",
                 "generated_at": _now_iso(),
@@ -245,8 +335,14 @@ class StrategySelectionService:
         avg_buffer = sum(buffers) / len(buffers) if buffers else 0.0
 
         logger.info(
-            "[strategy:%s] stage_1 START — indexes=%d avg_buffer=%.2f mode=%s",
-            reason, len(indexes), avg_buffer, config.STRATEGY_BUFFER_MODE,
+            "[strategy:%s] stage_1 START — indexes=%d avg_buffer=%.2f "
+            "mode=%s catchup=%s post_market=%s",
+            reason,
+            len(indexes),
+            avg_buffer,
+            config.STRATEGY_BUFFER_MODE,
+            catchup,
+            post_market,
         )
 
         per_index: list[dict[str, Any]] = []
@@ -267,6 +363,11 @@ class StrategySelectionService:
             "status": "ok",
             "stage": "stage_1",
             "reason": reason,
+            "mode": effective_mode,
+            "catchup": bool(catchup),
+            "post_market": post_market,
+            "scheduled_time_ist": scheduled_hhmm,
+            "actual_time_ist": _market_hhmmss(),
             "generated_at": _now_iso(),
             "avg_buffer_points": avg_buffer,
             "buffer_mode": config.STRATEGY_BUFFER_MODE,
@@ -289,8 +390,16 @@ class StrategySelectionService:
         skipped = sum(1 for p in per_index if p.get("status") == "skipped")
         errored = sum(1 for p in per_index if p.get("status") == "error")
         logger.info(
-            "[strategy:%s] stage_1 COMPLETE — ok=%d skipped=%d errors=%d total=%d",
-            reason, ok, skipped, errored, len(indexes),
+            "[strategy:%s] stage_1 COMPLETE — ok=%d skipped=%d errors=%d "
+            "total=%d (mode=%s catchup=%s post_market=%s)",
+            reason,
+            ok,
+            skipped,
+            errored,
+            len(indexes),
+            effective_mode,
+            catchup,
+            post_market,
         )
         return summary
 
@@ -298,7 +407,9 @@ class StrategySelectionService:
     # Per-index processing                                               #
     # ------------------------------------------------------------------ #
     def _process_index(
-        self, idx: dict[str, Any], avg_buffer: float,
+        self,
+        idx: dict[str, Any],
+        avg_buffer: float,
     ) -> dict[str, Any]:
         ticker = str(idx.get("ticker") or "").strip() or "UNKNOWN"
         index_name = str(idx.get("index_name") or ticker).strip()
@@ -308,14 +419,18 @@ class StrategySelectionService:
         denominator = idx.get("denominator_points")
 
         if not index_key:
-            return {"status": "skipped", "ticker": ticker,
-                    "reason": "missing_instrument_key"}
+            return {
+                "status": "skipped",
+                "ticker": ticker,
+                "reason": "missing_instrument_key",
+            }
 
-        # ---- 0. Ensure the index key is registered -----------------------
+        # ---- 0. Ensure the index key is registered ----------------------- #
         if instrument_registry.get(index_key) is None:
             try:
                 entry = instrument_registry.register_adhoc(
-                    index_key, trading_symbol=index_name,
+                    index_key,
+                    trading_symbol=index_name,
                 )
                 if entry and not entry.get("ema_path"):
                     canonical_dir = (
@@ -326,15 +441,21 @@ class StrategySelectionService:
             except Exception:
                 logger.exception("[strategy] failed ad-hoc registering %s", index_key)
 
-        # ---- 1. Opening Range payload ------------------------------------
+        # ---- 1. Opening Range payload (INDEX's own OR) ------------------- #
         or_payload = opening_range_service.get_opening_range(index_key)
         if not or_payload.get("available"):
-            return {"status": "skipped", "ticker": ticker,
-                    "reason": f"or_unavailable:{or_payload.get('reason')}"}
+            return {
+                "status": "skipped",
+                "ticker": ticker,
+                "reason": f"or_unavailable:{or_payload.get('reason')}",
+            }
         if not or_payload.get("is_today"):
-            return {"status": "skipped", "ticker": ticker,
-                    "reason": "or_stale_not_today",
-                    "or_day": or_payload.get("day")}
+            return {
+                "status": "skipped",
+                "ticker": ticker,
+                "reason": "or_stale_not_today",
+                "or_day": or_payload.get("day"),
+            }
 
         levels = _round_levels(or_payload.get("levels") or {})
         first_candle = or_payload.get("first_candle") or {}
@@ -342,29 +463,32 @@ class StrategySelectionService:
 
         atm_ref = levels.get("A") or first_candle.get("close")
         if atm_ref is None:
-            return {"status": "skipped", "ticker": ticker,
-                    "reason": "no_atm_reference"}
+            return {"status": "skipped", "ticker": ticker, "reason": "no_atm_reference"}
         try:
             atm_ref = float(atm_ref)
         except (TypeError, ValueError):
-            return {"status": "skipped", "ticker": ticker,
-                    "reason": "invalid_atm_reference"}
+            return {
+                "status": "skipped",
+                "ticker": ticker,
+                "reason": "invalid_atm_reference",
+            }
 
-        # ---- 2. Strike window --------------------------------------------
+        # ---- 2. Strike window -------------------------------------------- #
         lower_off, upper_off = _resolve_buffer(
-            typical=typical, avg=avg_buffer, mode=config.STRATEGY_BUFFER_MODE,
+            typical=typical,
+            avg=avg_buffer,
+            mode=config.STRATEGY_BUFFER_MODE,
         )
         lower_bound = atm_ref + lower_off
         upper_bound = atm_ref + upper_off
         lower_strike = int(math.floor(lower_bound / strike_step) * strike_step)
         upper_strike = int(math.ceil(upper_bound / strike_step) * strike_step)
         if upper_strike < lower_strike:
-            return {"status": "skipped", "ticker": ticker,
-                    "reason": "empty_window"}
+            return {"status": "skipped", "ticker": ticker, "reason": "empty_window"}
         strikes = list(range(lower_strike, upper_strike + strike_step, strike_step))
         atm_strike = int(round(atm_ref / strike_step) * strike_step)
 
-        # ---- 3. Target folder (stage 1) ---------------------------------
+        # ---- 3. Target folder (stage 1) --------------------------------- #
         base_dir = (
             Path(config.STRATEGY_BASE_DIR)
             / config.STRATEGY_STAGE_1_NAME
@@ -373,7 +497,7 @@ class StrategySelectionService:
         )
         base_dir.mkdir(parents=True, exist_ok=True)
 
-        # ---- 4. Materialise per-strike folders --------------------------
+        # ---- 4. Materialise per-strike folders -------------------------- #
         today_iso = or_day or date.today().isoformat()
         records: list[dict[str, Any]] = []
 
@@ -405,8 +529,18 @@ class StrategySelectionService:
                     "generated_at": _now_iso(),
                 }
                 _write_json(strike_dir / "strategy_meta.json", meta)
+
+                # ------------------------------------------------------------------
+                # IMPORTANT: DO NOT clobber the strike's own opening_range.json.
+                # ------------------------------------------------------------------
+                # `opening_range.json` inside each strike folder is owned by
+                # `opening_range_service` and must contain THAT strike's own
+                # OR levels (computed from the strike's own 09:15 1-minute
+                # candle). The index's OR levels used for strike-window
+                # selection are recorded under a separate filename so a reader
+                # can always tell the two apart.
                 _write_json(
-                    strike_dir / "opening_range.json",
+                    strike_dir / "index_opening_range.json",
                     {
                         "instrument_key": index_key,
                         "day": or_day,
@@ -421,11 +555,16 @@ class StrategySelectionService:
                 # work as soon as stage 1 completes.
                 self._register_strike(
                     key=placeholder_key,
-                    ticker=ticker, strike=strike, strike_type=s_type,
-                    trading_symbol=trading_symbol, expiry=or_day,
+                    ticker=ticker,
+                    strike=strike,
+                    strike_type=s_type,
+                    trading_symbol=trading_symbol,
+                    expiry=or_day,
                 )
 
-                # Placeholder files.
+                # Placeholder files (only created if missing; the strike's
+                # own candles / crosses / last-day-cross are written later by
+                # _enrich_with_upstox).
                 if not (strike_dir / "candles.json").exists():
                     _write_json(
                         strike_dir / "candles.json",
@@ -479,11 +618,13 @@ class StrategySelectionService:
                     }
                 )
 
-        # ---- 5. Upstox enrichment (history + last-day-cross) ------------
+        # ---- 5. Upstox enrichment (history + last-day-cross) ------------ #
         resolved = 0
         if config.STRATEGY_FETCH_HISTORY:
             resolved = self._enrich_with_upstox(
-                ticker=ticker, base_dir=base_dir, strikes=strikes,
+                ticker=ticker,
+                base_dir=base_dir,
+                strikes=strikes,
                 today_iso=today_iso,
             )
 
@@ -541,32 +682,47 @@ class StrategySelectionService:
     # ------------------------------------------------------------------ #
     @staticmethod
     def _register_strike(
-        *, key: str, ticker: str, strike: int, strike_type: str,
-        trading_symbol: str, expiry: Any = None,
+        *,
+        key: str,
+        ticker: str,
+        strike: int,
+        strike_type: str,
+        trading_symbol: str,
+        expiry: Any = None,
     ) -> None:
         try:
             instrument_registry.register_adhoc(
-                key, trading_symbol=trading_symbol,
-                underlying=ticker, strike_price=strike,
-                strike_type=strike_type, expiry=expiry,
+                key,
+                trading_symbol=trading_symbol,
+                underlying=ticker,
+                strike_price=strike,
+                strike_type=strike_type,
+                expiry=expiry,
             )
         except Exception:
             logger.exception(
                 "[strategy] register_adhoc failed for %s %s %s",
-                ticker, strike, strike_type,
+                ticker,
+                strike,
+                strike_type,
             )
 
     # ------------------------------------------------------------------ #
     # Upstox enrichment                                                  #
     # ------------------------------------------------------------------ #
     def _enrich_with_upstox(
-        self, *, ticker: str, base_dir: Path,
-        strikes: list[int], today_iso: str,
+        self,
+        *,
+        ticker: str,
+        base_dir: Path,
+        strikes: list[int],
+        today_iso: str,
     ) -> int:
         token = token_service.get_access_token()
         if not token:
             logger.info(
-                "[strategy] %s: no Upstox token; skipping history fetch", ticker,
+                "[strategy] %s: no Upstox token; skipping history fetch",
+                ticker,
             )
             return 0
 
@@ -581,16 +737,21 @@ class StrategySelectionService:
         def _task(strike: int, s_type: str, folder: Path) -> bool:
             try:
                 key = self._resolve_upstox_key(
-                    token=token, ticker=ticker,
-                    strike=strike, strike_type=s_type,
+                    token=token,
+                    ticker=ticker,
+                    strike=strike,
+                    strike_type=s_type,
                 )
                 if not key:
                     return False
 
                 trading_symbol = f"{ticker} {strike} {s_type}"
                 self._register_strike(
-                    key=key, ticker=ticker, strike=strike,
-                    strike_type=s_type, trading_symbol=trading_symbol,
+                    key=key,
+                    ticker=ticker,
+                    strike=strike,
+                    strike_type=s_type,
+                    trading_symbol=trading_symbol,
                     expiry=today_iso,
                 )
 
@@ -636,26 +797,32 @@ class StrategySelectionService:
 
                 # Last day's last cross inside the tail window.
                 last = _last_day_last_cross(
-                    candles, today_iso,
+                    candles,
+                    today_iso,
                     config.STRATEGY_ISOLATION_LOOKBACK_MINUTES,
                 )
                 _write_json(
                     folder / "last_day_cross.json",
-                    last if last is not None else {
-                        "type": None,
-                        "timestamp": None,
-                        "day": None,
-                        "window_minutes":
-                            config.STRATEGY_ISOLATION_LOOKBACK_MINUTES,
-                        "crosses_in_window": 0,
-                        "generated_at": _now_iso(),
-                    },
+                    (
+                        last
+                        if last is not None
+                        else {
+                            "type": None,
+                            "timestamp": None,
+                            "day": None,
+                            "window_minutes": config.STRATEGY_ISOLATION_LOOKBACK_MINUTES,
+                            "crosses_in_window": 0,
+                            "generated_at": _now_iso(),
+                        }
+                    ),
                 )
                 return True
             except Exception:
                 logger.exception(
                     "[strategy] %s %d %s enrichment failed",
-                    ticker, strike, s_type,
+                    ticker,
+                    strike,
+                    s_type,
                 )
                 return False
 
@@ -669,12 +836,20 @@ class StrategySelectionService:
                     continue
 
         logger.info(
-            "[strategy] %s: resolved %d/%d contracts", ticker, resolved, len(work),
+            "[strategy] %s: resolved %d/%d contracts",
+            ticker,
+            resolved,
+            len(work),
         )
         return resolved
 
     def _resolve_upstox_key(
-        self, *, token: str, ticker: str, strike: int, strike_type: str,
+        self,
+        *,
+        token: str,
+        ticker: str,
+        strike: int,
+        strike_type: str,
     ) -> str | None:
         query = f"{ticker} {strike} {strike_type}"
         try:
@@ -722,7 +897,10 @@ class StrategySelectionService:
         return None
 
     def _fetch_history(
-        self, *, token: str, instrument_key: str,
+        self,
+        *,
+        token: str,
+        instrument_key: str,
     ) -> list[dict[str, Any]]:
         to_date = date.today()
         from_date = to_date - timedelta(days=config.STRATEGY_HISTORY_DAYS)

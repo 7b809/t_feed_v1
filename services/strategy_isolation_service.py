@@ -43,6 +43,19 @@ Output layout::
 
 Each isolated folder contains every stage-1 file plus an
 ``isolation_meta.json`` describing the decision.
+
+Catch-up semantics
+------------------
+The unified refresh calls this with ``mode=reason`` and
+``catchup=True`` when the project starts (or daily / hard refresh
+fires) after the scheduled 09:17:00 IST time and still inside the
+catch-up window (09:15 – 23:59 IST). The summary records:
+
+    mode              : startup | daily | manual | scheduled
+    catchup           : bool
+    post_market       : bool (true when the run happens after 15:30 IST)
+    scheduled_time_ist: "09:17:00"
+    actual_time_ist   : "HH:MM:SS"
 """
 
 from __future__ import annotations
@@ -51,9 +64,10 @@ import json
 import logging
 import shutil
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import date, datetime, timezone
+from datetime import date, datetime, time as dtime, timezone
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import requests
 
@@ -64,6 +78,10 @@ logger = logging.getLogger(__name__)
 
 _UPSTOX_BASE = "https://api.upstox.com"
 _HTTP_TIMEOUT = 20
+
+# Cash-market close in the market timezone. Anything after this is
+# recorded as post-market in the summary.
+_MARKET_CLOSE_TIME = dtime(15, 30)
 
 
 # ---------------------------------------------------------------------------
@@ -85,6 +103,37 @@ def _read_json(path: Path) -> Any:
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _market_tz() -> ZoneInfo:
+    try:
+        return ZoneInfo(config.MARKET_TIMEZONE)
+    except Exception:
+        return ZoneInfo("Asia/Kolkata")
+
+
+def _market_now() -> datetime:
+    return datetime.now(_market_tz())
+
+
+def _market_hhmmss() -> str:
+    return _market_now().strftime("%H:%M:%S")
+
+
+def _post_market() -> bool:
+    """True after the Indian cash-market close (15:30 IST)."""
+    return _market_now().time() > _MARKET_CLOSE_TIME
+
+
+def _scheduled_stage_2_hhmm() -> str:
+    """09:17:00 IST by default (OR + 50 s)."""
+    base = (
+        config.OPENING_RANGE_HOUR * 3600
+        + config.OPENING_RANGE_MINUTE * 60
+        + config.OPENING_RANGE_SECOND
+    )
+    total = (base + 50) % 86400
+    return f"{total // 3600:02d}:{(total % 3600) // 60:02d}:{total % 60:02d}"
 
 
 def _ema(values: list[float], period: int) -> list[float | None]:
@@ -150,12 +199,48 @@ class StrategyIsolationService:
     # ------------------------------------------------------------------ #
     # Public entry point                                                 #
     # ------------------------------------------------------------------ #
-    def run(self, reason: str = "manual") -> dict[str, Any]:
+    def run(
+        self,
+        reason: str = "manual",
+        *,
+        mode: str | None = None,
+        catchup: bool = False,
+    ) -> dict[str, Any]:
+        """Stage 2 entry point.
+
+        Parameters
+        ----------
+        reason  : trigger label ("startup" / "daily" / "manual" / "scheduled")
+        mode    : alias for reason; separate so a caller can pass a distinct
+                  scheduled mode.
+        catchup : True when the run is a late catch-up.
+        """
+        effective_mode = str(mode or reason or "manual")
+        post_market = _post_market()
+        scheduled_hhmm = _scheduled_stage_2_hhmm()
+        actual_hhmmss = _market_hhmmss()
+
+        logger.info(
+            "[strategy:%s] stage_2 run (mode=%s catchup=%s post_market=%s "
+            "scheduled=%s actual=%s)",
+            reason,
+            effective_mode,
+            catchup,
+            post_market,
+            scheduled_hhmm,
+            actual_hhmmss,
+        )
+
         if not config.STRATEGY_ENABLED or not config.STRATEGY_ISOLATION_ENABLED:
             return {
                 "status": "disabled",
                 "stage": "stage_2",
                 "reason": reason,
+                "mode": effective_mode,
+                "catchup": bool(catchup),
+                "post_market": post_market,
+                "scheduled_time_ist": scheduled_hhmm,
+                "actual_time_ist": actual_hhmmss,
                 "generated_at": _now_iso(),
                 "isolated": 0,
                 "pairs_isolated": 0,
@@ -174,6 +259,11 @@ class StrategyIsolationService:
                 "status": "no_stage_1",
                 "stage": "stage_2",
                 "reason": reason,
+                "mode": effective_mode,
+                "catchup": bool(catchup),
+                "post_market": post_market,
+                "scheduled_time_ist": scheduled_hhmm,
+                "actual_time_ist": actual_hhmmss,
                 "generated_at": _now_iso(),
                 "isolated": 0,
                 "pairs_isolated": 0,
@@ -186,8 +276,14 @@ class StrategyIsolationService:
         today_iso = date.today().isoformat()
 
         logger.info(
-            "[strategy:%s] stage_2 START — today=%s lookback=%dm pairing=on",
-            reason, today_iso, config.STRATEGY_ISOLATION_LOOKBACK_MINUTES,
+            "[strategy:%s] stage_2 START — today=%s lookback=%dm pairing=on "
+            "(mode=%s catchup=%s post_market=%s)",
+            reason,
+            today_iso,
+            config.STRATEGY_ISOLATION_LOOKBACK_MINUTES,
+            effective_mode,
+            catchup,
+            post_market,
         )
 
         per_index: list[dict[str, Any]] = []
@@ -213,7 +309,9 @@ class StrategyIsolationService:
                 except Exception as exc:
                     logger.exception(
                         "[strategy:%s] stage_2 %s/%s failed",
-                        reason, ticker_dir.name, index_dir.name,
+                        reason,
+                        ticker_dir.name,
+                        index_dir.name,
                     )
                     idx_result = {
                         "status": "error",
@@ -238,6 +336,11 @@ class StrategyIsolationService:
             "status": "ok",
             "stage": "stage_2",
             "reason": reason,
+            "mode": effective_mode,
+            "catchup": bool(catchup),
+            "post_market": post_market,
+            "scheduled_time_ist": scheduled_hhmm,
+            "actual_time_ist": _market_hhmmss(),
             "generated_at": _now_iso(),
             "today": today_iso,
             "lookback_minutes": config.STRATEGY_ISOLATION_LOOKBACK_MINUTES,
@@ -258,9 +361,16 @@ class StrategyIsolationService:
 
         logger.info(
             "[strategy:%s] stage_2 COMPLETE — evaluated=%d isolated=%d "
-            "pairs=%d skipped=%d errors=%d",
-            reason, total_evaluated, total_isolated,
-            total_pairs, total_skipped, total_errors,
+            "pairs=%d skipped=%d errors=%d (mode=%s catchup=%s post_market=%s)",
+            reason,
+            total_evaluated,
+            total_isolated,
+            total_pairs,
+            total_skipped,
+            total_errors,
+            effective_mode,
+            catchup,
+            post_market,
         )
         return summary
 
@@ -281,7 +391,7 @@ class StrategyIsolationService:
         strike_dirs = [p for p in sorted(index_dir.iterdir()) if p.is_dir()]
         token = token_service.get_access_token()
 
-        # ---- 1. Evaluate each contract independently --------------------
+        # ---- 1. Evaluate each contract independently -------------------- #
         evaluations: list[dict[str, Any]] = []
         workers = min(config.STRATEGY_MAX_WORKERS, max(1, len(strike_dirs)))
 
@@ -302,17 +412,20 @@ class StrategyIsolationService:
                     evaluations.append(fut.result())
                 except Exception as exc:
                     logger.exception(
-                        "[strategy] stage_2 %s failed", strike_dir.name,
+                        "[strategy] stage_2 %s failed",
+                        strike_dir.name,
                     )
-                    evaluations.append({
-                        "status": "error",
-                        "stage_1_folder": str(strike_dir),
-                        "error": f"{type(exc).__name__}: {exc}",
-                        "strike_price": None,
-                        "strike_type": None,
-                    })
+                    evaluations.append(
+                        {
+                            "status": "error",
+                            "stage_1_folder": str(strike_dir),
+                            "error": f"{type(exc).__name__}: {exc}",
+                            "strike_price": None,
+                            "strike_type": None,
+                        }
+                    )
 
-        # ---- 2. Group by strike price to apply pairing ------------------
+        # ---- 2. Group by strike price to apply pairing ------------------ #
         # A strike is "selected" if at least one of its two contracts
         # (CE, PE) has isolated == True. Both sides of a selected strike
         # are then copied to stage_2_isolation.
@@ -324,8 +437,8 @@ class StrategyIsolationService:
                 continue
             by_strike.setdefault(sp, {})[st] = ev
 
-        isolated_contracts: list[dict[str, Any]] = []   # to copy
-        skipped_contracts: list[dict[str, Any]] = []    # to report
+        isolated_contracts: list[dict[str, Any]] = []  # to copy
+        skipped_contracts: list[dict[str, Any]] = []  # to report
         errors = 0
         pairs_isolated = 0
 
@@ -362,12 +475,10 @@ class StrategyIsolationService:
                     paired["isolated"] = True
                     paired["decision"] = "isolate_paired"
                     paired["paired_trigger"] = trigger_side
-                    paired["pair_reason"] = (
-                        f"sibling_{trigger_side.lower()}_triggered"
-                    )
+                    paired["pair_reason"] = f"sibling_{trigger_side.lower()}_triggered"
                     isolated_contracts.append(paired)
 
-        # ---- 3. Copy isolated contracts into stage_2 --------------------
+        # ---- 3. Copy isolated contracts into stage_2 -------------------- #
         isolated = 0
         for ev in isolated_contracts:
             src_folder = ev.get("stage_1_folder")
@@ -385,11 +496,12 @@ class StrategyIsolationService:
                 isolated += 1
             except Exception:
                 logger.exception(
-                    "[strategy] stage_2 copy failed for %s", strike_dir,
+                    "[strategy] stage_2 copy failed for %s",
+                    strike_dir,
                 )
                 errors += 1
 
-        # ---- 4. Per-index summary ---------------------------------------
+        # ---- 4. Per-index summary --------------------------------------- #
         all_contracts = isolated_contracts + skipped_contracts
         evaluated = len(all_contracts)
         skipped = len(skipped_contracts)
@@ -417,7 +529,8 @@ class StrategyIsolationService:
         except Exception:
             logger.exception(
                 "[strategy] stage_2 per-index summary write failed for %s/%s",
-                ticker, index_name,
+                ticker,
+                index_name,
             )
 
         return idx_summary
@@ -453,7 +566,7 @@ class StrategyIsolationService:
             "evaluated_at": _now_iso(),
         }
 
-        # ---- 0. Need a real Upstox key to fetch today's intraday -------
+        # ---- 0. Need a real Upstox key to fetch today's intraday ------- #
         if not upstox_key:
             if config.STRATEGY_ISOLATION_SKIP_UNRESOLVED:
                 return {
@@ -481,7 +594,7 @@ class StrategyIsolationService:
                 "decision": "skipped_no_token",
             }
 
-        # ---- 1. Compute today's first-candle cross ---------------------
+        # ---- 1. Compute today's first-candle cross --------------------- #
         today_cross = self._compute_first_candle_cross(
             strike_dir=strike_dir,
             upstox_key=upstox_key,
@@ -490,7 +603,7 @@ class StrategyIsolationService:
         )
         today_type = today_cross.get("type") if today_cross else None
 
-        # ---- 2. Apply rules --------------------------------------------
+        # ---- 2. Apply rules -------------------------------------------- #
         should, reason_code = _should_isolate(last_day_type, today_type)
 
         return {
@@ -518,10 +631,7 @@ class StrategyIsolationService:
         """Return the cross record if the 09:15 candle produced one."""
         hist_payload = _read_json(strike_dir / "candles.json") or {}
         history = hist_payload.get("candles") or []
-        history = [
-            c for c in history
-            if str(c.get("timestamp", ""))[:10] < today_iso
-        ]
+        history = [c for c in history if str(c.get("timestamp", ""))[:10] < today_iso]
 
         try:
             resp = requests.get(
@@ -568,7 +678,8 @@ class StrategyIsolationService:
         today_candles.sort(key=lambda c: c["timestamp"])
         first_today = next(
             (
-                c for c in today_candles
+                c
+                for c in today_candles
                 if str(c["timestamp"]).startswith(f"{today_iso}T09:15")
             ),
             None,

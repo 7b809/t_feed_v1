@@ -118,6 +118,21 @@ DAILY_REFRESH_MINUTE = _int("DAILY_REFRESH_MINUTE", 0)
 DAILY_REFRESH_DAYS = _str("DAILY_REFRESH_DAYS", "mon,tue,wed,thu,fri")
 
 # ---------------------------------------------------------------------------
+# Strategy pipeline logging verbosity
+# ---------------------------------------------------------------------------
+# When False (default), the strategy pipeline logs ONLY lifecycle
+# lines (START / COMPLETED / FAILED, per-index one-liners) and never
+# dumps the full per-contract summary dicts. Set to True when
+# debugging to see every per-instrument decision, candle count, and
+# window extreme.
+#
+# Consumer: routes/admin_routes.py, services/strategy_live_tracker_service.py,
+# and the token_tasks/strategy_*_task.py scheduled wrappers. All of
+# them read this flag at runtime; toggling it in .env and restarting
+# is enough — no code change is required.
+STRATEGY_VERBOSE_LOG = _bool("STRATEGY_VERBOSE_LOG", False)
+
+# ---------------------------------------------------------------------------
 # Transient folder cleanup (project start / daily refresh / hard refresh)
 # ---------------------------------------------------------------------------
 # Comma-separated list of folders (relative to the project root) that
@@ -249,7 +264,6 @@ STRATEGY_FETCH_HISTORY = _bool("STRATEGY_FETCH_HISTORY", True)
 STRATEGY_HISTORY_DAYS = max(1, _int("STRATEGY_HISTORY_DAYS", 30))
 
 # Max parallel workers used while resolving / fetching candles.
-
 STRATEGY_MAX_WORKERS = max(1, min(16, _int("STRATEGY_MAX_WORKERS", 6)))
 
 # Allow /live/* routes to make a best-effort Upstox search when a
@@ -311,7 +325,7 @@ STRATEGY_STAGE_4_NAME = _str("STRATEGY_STAGE_4_NAME", "stage_4_order")
 # window and activates stage-2 strikes whose parent index crossed R2.
 STRATEGY_TRACKER_ENABLED = _bool("STRATEGY_TRACKER_ENABLED", True)
 STRATEGY_TRACKER_WINDOW_START = _str("STRATEGY_TRACKER_WINDOW_START", "09:15")
-STRATEGY_TRACKER_WINDOW_END = _str("STRATEGY_TRACKER_WINDOW_END", "09:20")
+STRATEGY_TRACKER_WINDOW_END = _str("STRATEGY_TRACKER_WINDOW_END", "09:17")
 STRATEGY_TRACKER_POLL_SECONDS = max(
     1, _int("STRATEGY_TRACKER_POLL_SECONDS", 1)
 )
