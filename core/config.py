@@ -347,3 +347,128 @@ STRATEGY_TRACKER_INDEX_KEYS = _csv(
     "STRATEGY_TRACKER_INDEX_KEYS",
     "NSE_INDEX|Nifty 50,BSE_INDEX|SENSEX",
 )
+
+# ===========================================================================
+# STRATEGY 2 — isolation-level touch + next-cross order (fallback strategy)
+# ===========================================================================
+# Strategy 2 reuses Stage 1 and Stage 2 of Strategy 1. Only Stage 3 and
+# Stage 4 are replaced:
+#
+#   Stage 3 : watch all Stage-2 isolated contracts, record the first
+#             touch of each contract's own isolation level (S3 by
+#             default), then filter down to ONE isolated contract:
+#               1) ticker priority (default NIFTY > SENSEX)
+#               2) strike nearest to that index's ATM
+#
+#   Stage 4 : on the chosen contract, wait for the NEXT EMA cross whose
+#             timestamp is AFTER its S3-touch time, then place a paper
+#             order:
+#               bullish cross -> BUY same type (CE stays CE)
+#               bearish cross -> BUY opposite type (CE -> PE @ same strike)
+#
+# Output root:
+#   data/strategy2/<stage_3_name>/
+#   data/strategy2/<stage_4_name>/
+# ===========================================================================
+STRATEGY_2_ENABLED = _bool("STRATEGY_2_ENABLED", True)
+
+# Root dir for Strategy 2 outputs (separate from Strategy 1).
+STRATEGY_2_BASE_DIR = PROJECT_ROOT / _str(
+    "STRATEGY_2_BASE_DIR", "data/strategy2"
+)
+
+# Isolation level watched on each Stage-2 isolated contract.
+# Allowed: S1, S2, S3, R1, R2, R3 (case-insensitive).
+# Default = S3 as per spec. Change to any OR level via .env.
+STRATEGY_2_ISOLATION_LEVEL = _str("STRATEGY_2_ISOLATION_LEVEL", "S3").upper()
+
+# Ticker priority when multiple contracts touch the isolation level.
+# First match wins. Default: NIFTY beats SENSEX.
+STRATEGY_2_TICKER_PRIORITY = _csv(
+    "STRATEGY_2_TICKER_PRIORITY", "NIFTY,SENSEX"
+)
+
+# Stage 3 watcher window (all day by default: 09:15 – 15:30 IST).
+STRATEGY_2_TRACKER_ENABLED = _bool("STRATEGY_2_TRACKER_ENABLED", True)
+STRATEGY_2_TRACKER_WINDOW_START = _str(
+    "STRATEGY_2_TRACKER_WINDOW_START", "09:15"
+)
+STRATEGY_2_TRACKER_WINDOW_END = _str(
+    "STRATEGY_2_TRACKER_WINDOW_END", "15:30"
+)
+STRATEGY_2_TRACKER_POLL_SECONDS = max(
+    1, _int("STRATEGY_2_TRACKER_POLL_SECONDS", 1)
+)
+
+# Stage 4 paper order placement (single-shot per isolated contract).
+STRATEGY_2_ORDER_ENABLED = _bool("STRATEGY_2_ORDER_ENABLED", True)
+STRATEGY_2_ORDER_QTY = max(1, _int("STRATEGY_2_ORDER_QTY", 1))
+
+# Subfolder names under STRATEGY_2_BASE_DIR.
+STRATEGY_2_STAGE_3_NAME = _str(
+    "STRATEGY_2_STAGE_3_NAME", "stage_3_isolation_level"
+)
+STRATEGY_2_STAGE_4_NAME = _str(
+    "STRATEGY_2_STAGE_4_NAME", "stage_4_order"
+)
+
+# ===========================================================================
+# SIMULATION REPLAY — historical replay of S1 + conditional S2
+# ===========================================================================
+# On every unified refresh (startup / daily / hard), the pipeline runs a
+# simulation replay against the last target market day:
+#
+#   * Weekend / pre-open / post-close → full replay of the target day
+#   * Mid-session market day          → live outcome check only
+#
+# S2 is only replayed if S1 did not place any orders on the target day.
+# The live S2 pipeline is likewise skipped when today's S1 has placed
+# an order.
+SIMULATION_ENABLED = _bool("SIMULATION_ENABLED", True)
+
+# Where simulation outputs live (relative to project root parent).
+SIMULATION_BASE_DIR = PROJECT_ROOT / _str("SIMULATION_BASE_DIR", "data/simulation")
+
+# Minutes to wait after the isolation-level touch before looking for the
+# next cross in the Strategy 2 replay.
+SIMULATION_S2_CROSS_BUFFER_MINUTES = max(
+    1, _int("SIMULATION_S2_CROSS_BUFFER_MINUTES", 10)
+)
+
+# ===========================================================================
+# DAILY BACKUP — zip configured folders and save to MongoDB
+# ===========================================================================
+# Runs at DAILY_BACKUP_HOUR:DAILY_BACKUP_MINUTE every day via the shared
+# APScheduler. The zip is stored inline in MongoDB when it fits under
+# DAILY_BACKUP_MAX_BLOB_MB; otherwise only metadata is saved with a
+# clear reason.
+DAILY_BACKUP_ENABLED = _bool("DAILY_BACKUP_ENABLED", True)
+
+# Scheduler trigger time (market timezone).
+DAILY_BACKUP_HOUR = _int("DAILY_BACKUP_HOUR", 16)
+DAILY_BACKUP_MINUTE = _int("DAILY_BACKUP_MINUTE", 0)
+
+# All days by default. Set to "mon,tue,wed,thu,fri" to skip weekends.
+DAILY_BACKUP_DAYS = _str("DAILY_BACKUP_DAYS", "mon,tue,wed,thu,fri,sat,sun")
+
+# Folders (relative to the project root) to zip on each run.
+DAILY_BACKUP_FOLDERS = _csv("DAILY_BACKUP_FOLDERS", "data")
+
+# Destination database / collection / doc id.
+# NOTE: this is intentionally different from MONGO_DB / BACKUP_BLOB_*
+# so the daily backup does not collide with the candle-backup extraction.
+DAILY_BACKUP_MONGO_DB = _str("DAILY_BACKUP_MONGO_DB", "UPSTOX_APP_V2")
+DAILY_BACKUP_COLLECTION = _str("DAILY_BACKUP_COLLECTION", "backup_collection")
+DAILY_BACKUP_DOC_ID = _str(
+    "DAILY_BACKUP_DOC_ID", "market_engine_v1_daily_data_backup"
+)
+
+# Inline blob limit (MB). If the final zip exceeds this, only metadata
+# is saved and the run reports status = "skipped_size_limit".
+DAILY_BACKUP_MAX_BLOB_MB = max(1, _int("DAILY_BACKUP_MAX_BLOB_MB", 15))
+
+# Value written to the `folder` field in the document. Defaults to the
+# project directory name (e.g. "market-engine-v1").
+DAILY_BACKUP_SOURCE_LABEL = _str(
+    "DAILY_BACKUP_SOURCE_LABEL", PROJECT_ROOT.name
+)

@@ -1,8 +1,4 @@
-"""Scheduled wrapper for stage 4 (order placement).
-
-Sends start / complete / failure notifications. The completion message
-includes the selected strike details and a short candidate list.
-"""
+"""Scheduled wrapper for Strategy 1 — Stage 4 (order placement)."""
 
 from __future__ import annotations
 
@@ -10,49 +6,87 @@ import logging
 
 from services.strategy_order_service import strategy_order_service
 from services.telegram_service import telegram_service
+from services.telegram_format import build
 
 logger = logging.getLogger(__name__)
 
-
 def _build_completion_message(summary: dict) -> str:
     orders = summary.get("orders") or []
-    lines = [
+    bullets = [
         f"Candidates: {summary.get('candidates')}",
         f"Picks: {summary.get('picks')}",
         f"Placed: {summary.get('placed')}",
     ]
-
     if orders:
         o = orders[0]
-        lines.append("")
-        lines.append("Selected:")
-        lines.append(
-            f"  • {o.get('ticker')} {o.get('strike_price')} "
-            f"{o.get('strike_type')}  side={o.get('side')} "
-            f"qty={o.get('quantity')}"
-        )
-        lines.append(
-            f"    key={o.get('upstox_instrument_key') or o.get('instrument_key')}"
-        )
-        lines.append(
-            f"    entry_ltp={o.get('entry_ltp')}  "
-            f"r2={o.get('r2_value')}"
-        )
-        lines.append(
-            f"    index_touched_at={o.get('index_touched_at')}"
-        )
+        fields = [
+            ("Ticker", o.get("ticker")),
+            ("Strike", o.get("strike_price")),
+            ("Type", o.get("strike_type")),
+            ("Side", o.get("side")),
+            ("Qty", o.get("quantity")),
+            ("Entry LTP", o.get("entry_ltp")),
+            ("Entry source", o.get("entry_ltp_source")),
+            ("R2", o.get("r2_value")),
+            ("Touched at", o.get("index_touched_at")),
+            ("Key", o.get("upstox_instrument_key") or o.get("instrument_key")),
+        ]
     else:
-        lines.append("")
-        lines.append("No strike met the selection criteria.")
+        fields = [("Result", "no strike met selection criteria")]
 
-    return "\n".join(lines)
+    return build(
+        emoji="💰",
+        title="Strategy 1 · Stage 4 · Completed",
+        fields=[
+            ("Mode", summary.get("mode")),
+            ("Catch-up", "yes" if summary.get("catchup") else "no"),
+            ("Post-market", "yes" if summary.get("post_market") else "no"),
+            ("Scheduled", summary.get("scheduled_time_ist")),
+            ("Actual", summary.get("actual_time_ist")),
+        ],
+        sections=[
+            ("Counters", "🔢", bullets),
+            ("Order", "📄", []),
+        ] + ([("Selected", "🏆", [])] if orders else []),
+        status="success" if int(summary.get("placed") or 0) > 0 else "warning",
+        status_detail=f"placed={summary.get('placed')}",
+    ) if False else _merged_message(summary, orders, bullets, fields)
 
+def _merged_message(summary, orders, bullets, fields) -> str:
+    """Compose the completion message with all key fields in one block."""
+    return build(
+        emoji="💰",
+        title="Strategy 1 · Stage 4 · Completed",
+        fields=[
+            ("Mode", summary.get("mode")),
+            ("Catch-up", "yes" if summary.get("catchup") else "no"),
+            ("Post-market", "yes" if summary.get("post_market") else "no"),
+            ("Scheduled", summary.get("scheduled_time_ist")),
+            ("Actual", summary.get("actual_time_ist")),
+        ] + fields,
+        sections=[("Counters", "🔢", bullets)],
+        status="success" if int(summary.get("placed") or 0) > 0 else "warning",
+        status_detail=f"placed={summary.get('placed')}",
+    )
 
 def run_strategy_order() -> None:
-    logger.info("Strategy stage 4 starting")
+    logger.info("Strategy 1 stage 4 starting")
     telegram_service.send_message(
-        "Strategy Stage 4 Started",
-        "Selecting final strike and placing paper order.",
+        build(
+            emoji="💰",
+            title="Strategy 1 · Stage 4 · Started",
+            sections=[(
+                "Doing",
+                "🔍",
+                [
+                    "Read stage-3 activations",
+                    "Pick nearest-to-ATM per index",
+                    "Apply FIFO by R2 touch",
+                    "Place paper order",
+                ],
+            )],
+            status="started",
+        ),
         level="INFO",
     )
     try:
@@ -60,16 +94,17 @@ def run_strategy_order() -> None:
         placed = int(summary.get("placed") or 0)
         level = "SUCCESS" if placed > 0 else "WARNING"
         telegram_service.send_message(
-            "Strategy Stage 4 Completed"
-            if level == "SUCCESS" else "Strategy Stage 4 Finished",
-            _build_completion_message(summary),
-            level=level,
+            _build_completion_message(summary), level=level
         )
-        logger.info("Strategy stage 4 completed: %s", summary)
+        logger.info("Strategy 1 stage 4 completed: placed=%d", placed)
     except Exception as exc:
-        logger.exception("Strategy stage 4 failed")
+        logger.exception("Strategy 1 stage 4 failed")
         telegram_service.send_message(
-            "Strategy Stage 4 Failed",
-            f"{type(exc).__name__}: {exc}",
+            build(
+                emoji="❌",
+                title="Strategy 1 · Stage 4 · Failed",
+                fields=[("Error", f"{type(exc).__name__}: {exc}")],
+                status="failed",
+            ),
             level="ERROR",
-        ) 
+        )

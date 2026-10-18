@@ -17,6 +17,7 @@ myenv/
 build/
 dist/
 combined_output.txt
+files.txt
 # Runtime output and generated data
 logs*/
 test_logs/

@@ -1,0 +1,124 @@
+================================================================================
+STRATEGY 2 — NORMAL DAY / FALLBACK STRATEGY
+================================================================================
+
+PURPOSE
+-------
+Trade normal / range-bound days when Strategy 1's conditions are NOT met:
+no clear R2 breakout in the first 5 minutes, low opening momentum, range
+behaviour. Instead of forcing a trade off an R2 break that never happens,
+Strategy 2 looks at a deeper pullback on the option premium (isolation level
+touch) and waits for a fresh EMA cross on that same contract to confirm
+direction.
+
+KEY DESIGN: STRATEGY 2 REUSES STAGE 1 AND STAGE 2 OF STRATEGY 1
+----------------------------------------------------------------
+  * Stage 1 (buffer filter + history fetch + last-day cross) -> unchanged.
+  * Stage 2 (EMA isolation + CE/PE pairing)                   -> unchanged.
+  * Only Stage 3 and Stage 4 are replaced.
+
+PIPELINE (new Stage 3 and Stage 4)
+-----------------------------------
+Stage 3 — Isolation Level Touch Filter (S3 by default)
+  * Take all Stage 2 isolated contracts.
+  * For each contract, read its OWN opening-range S3 level
+    (computed from its own 09:15 1-min candle).
+  * Watch for any contract whose price touches/crosses its own S3
+    at any time during the day (09:15 - 15:30).
+  * Any contract that touches its own S3 becomes a Stage 3 candidate.
+  * Reduce candidates to ONE final isolated instrument:
+        if exactly one candidate -> that is the pick
+        if multiple candidates:
+            1) filter by ticker priority
+               (default: NIFTY preferred over SENSEX; configurable)
+            2) within chosen ticker: pick the strike nearest to
+               that index's ATM (|strike - index LTP| minimum)
+  * Isolation level is configurable (default = S3; can be S2/R2/R3).
+  * Output:
+      data/strategy2/stage_3_isolation_level/
+          stage_3_summary.json
+          <TICKER>/<INDEX>/<strike>_<TYPE>/s3_touch.json
+
+Stage 4 — Next-Cross Order Placement
+  * Wait for the NEXT EMA cross on the final isolated instrument
+    that occurs AFTER its S3 touch.
+  * Ignore earlier crosses.
+  * Trigger on that cross:
+        bullish -> BUY the same CE at that cross price
+        bearish -> BUY the opposite PE (same strike, opposite type)
+                   at the same timestamp
+  * Price for opposite-type order: sibling PE's own LTP at that same
+    timestamp (to be confirmed).
+  * Paper order only.
+  * Output:
+      data/strategy2/stage_4_order/
+          stage_4_summary.json
+          <TICKER>/<INDEX>/orders.json
+          order_meta_test.json
+
+WORKED EXAMPLE (from the 16-10-2026 data)
+------------------------------------------
+Instrument: NIFTY 22850 CE
+First 09:15 candle: H=253.9, L=205.05
+  A      = (H+L)/2      = 229.475
+  D_H    = |H-A|        = 24.425
+  D_L    = |A-L|        = 24.425
+  S3     = L - 2*D_L    = 156.20
+
+Event timeline:
+  09:15  first candle
+  09:27  low = 155.65 <= 156.20   -> S3 TOUCHED (candidate)
+  09:53  bullish cross (valid)    -> NEXT cross after S3 touch
+                                      -> BUY 22850 CE at 09:53 price
+
+Alternate scenario:
+  If the 09:53 cross were BEARISH
+    -> BUY 22850 PE at the 09:53 timestamp
+       (bearish on CE = underlying weakening = PE gains)
+
+WHY THIS WORKS ON NORMAL DAYS
+-----------------------------
+  * S3 sits well below the opening range — only tested on a real
+    intraday pullback, not on the standard R2 breakout.
+  * Waiting for the FIRST cross after S3 touch means the trade is
+    triggered by a fresh momentum shift, not by the touch itself.
+  * If momentum resumes up    -> buy the CE that got isolated.
+  * If momentum reverses down -> buy the opposite PE of the same strike,
+    i.e. express the bearish read on the same underlying level.
+  * Picking the ATM-nearest strike keeps the entry liquid and the
+    paper-fill realistic.
+
+KEY DIFFERENCES vs STRATEGY 1
+------------------------------
+  Aspect              | Strategy 1           | Strategy 2
+  --------------------|----------------------|----------------------
+  Trigger level       | own R2               | own S3 (default)
+  Time window         | 09:15 - 09:20        | 09:15 - 15:30
+  Order rule          | nearest ATM + FIFO   | next cross after S3
+  Direction rule      | BUY isolated type    | bullish -> same,
+                      |                      | bearish -> opposite
+  Best on             | high-momentum days   | normal/range days
+  Selection priority  | per-index N picks    | 1 ticker, 1 strike
+                      | then FIFO            | nearest to ATM
+
+CONFIG FLAGS (proposed)
+-----------------------
+  STRATEGY_2_ENABLED                 true
+  STRATEGY_2_ISOLATION_LEVEL         S3   (can be S2/R2/R3)
+  STRATEGY_2_TICKER_PRIORITY         NIFTY,SENSEX
+  STRATEGY_2_TRACKER_POLL_SECONDS    1
+  STRATEGY_2_ORDER_QTY               1
+
+OPEN ITEMS TO CONFIRM BEFORE CODING
+-----------------------------------
+  1. "Nearest to main index" = strike distance to ATM (default), not
+     option LTP vs index LTP.
+  2. Bearish cross -> buy opposite PE at sibling's LTP at same
+     timestamp.
+  3. Isolation level reference = contract's own S3, not the index's S3.
+  4. Stage 3 runs all day 09:15 - 15:30.
+  5. Only the first cross after S3 touch triggers the order.
+  6. Detection rule for "Strategy 1 conditions not met" -> to be defined.
+  7. PE isolated + bullish cross -> buy same PE (symmetric rule).
+  8. Ticker priority default NIFTY > SENSEX, configurable.
+================================================================================
