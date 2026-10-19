@@ -26,6 +26,18 @@ into data/strategy/stage_2_isolation/.
 This service is idempotent. Failures per index/strike are logged and
 reported in the summary; the service never raises.
 
+OR retry
+--------
+The live WebSocket feed can finalize the index 09:15 candle late, so
+a fresh `opening_range.json` may not exist yet at 09:16:30. When that
+happens, `_process_index` forces a per-instrument OR recalculation
+(`opening_range_service.calculate_one(index_key)`) up to
+`_OR_RETRY_ATTEMPTS` times, sleeping `_OR_RETRY_SLEEP_SECONDS`
+between attempts, and re-reads the OR payload each time. This removes
+the `or_unavailable:not_calculated` race that previously caused the
+whole strategy pipeline to produce zero contracts when the index
+candle arrived a minute or two late.
+
 Catch-up semantics
 ------------------
 The unified refresh calls this with ``mode=reason`` and
@@ -46,6 +58,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import time as _time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, time as dtime, timedelta, timezone
 from pathlib import Path
@@ -68,6 +81,15 @@ _HTTP_TIMEOUT = 20
 # recorded as post-market in the summary.
 _MARKET_CLOSE_TIME = dtime(15, 30)
 
+# ---- OR retry tuning ------------------------------------------------------- #
+# When the index OR file is missing at Stage-1 time (late 09:15 candle),
+# force a single-instrument OR recalculation this many times, sleeping
+# _OR_RETRY_SLEEP_SECONDS between attempts. A short retry loop is enough
+# because the REST fallback in opening_range_service usually succeeds on
+# the first attempt; the retries cover transient REST failures.
+_OR_RETRY_ATTEMPTS = 3
+_OR_RETRY_SLEEP_SECONDS = 2.0
+
 # ---------------------------------------------------------------------------
 # Small helpers
 # ---------------------------------------------------------------------------
@@ -77,13 +99,11 @@ def _safe_folder(name: Any) -> str:
         text = text.replace(ch, "_")
     return text.strip("._") or "unknown"
 
-
 def _write_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
     tmp.replace(path)
-
 
 def _read_json(path: Path) -> Any:
     try:
@@ -91,10 +111,8 @@ def _read_json(path: Path) -> Any:
     except Exception:
         return None
 
-
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
-
 
 def _market_tz() -> ZoneInfo:
     try:
@@ -102,19 +120,15 @@ def _market_tz() -> ZoneInfo:
     except Exception:
         return ZoneInfo("Asia/Kolkata")
 
-
 def _market_now() -> datetime:
     return datetime.now(_market_tz())
-
 
 def _market_hhmmss() -> str:
     return _market_now().strftime("%H:%M:%S")
 
-
 def _post_market() -> bool:
     """True after the Indian cash-market close (15:30 IST)."""
     return _market_now().time() > _MARKET_CLOSE_TIME
-
 
 def _scheduled_stage_1_hhmm() -> str:
     """09:16:30 IST by default (OR + 20 s)."""
@@ -125,7 +139,6 @@ def _scheduled_stage_1_hhmm() -> str:
     )
     total = (base + 20) % 86400
     return f"{total // 3600:02d}:{(total % 3600) // 60:02d}:{total % 60:02d}"
-
 
 def _round_levels(levels: dict[str, Any] | None) -> dict[str, Any]:
     if not isinstance(levels, dict):
@@ -138,16 +151,13 @@ def _round_levels(levels: dict[str, Any] | None) -> dict[str, Any]:
             out[k] = v
     return out
 
-
 def _resolve_buffer(typical: float, avg: float, mode: str) -> tuple[float, float]:
     if mode == "typical_plus_minus_avg":
         return -(typical + avg), (typical + avg)
     return -typical, typical
 
-
 def _placeholder_key(ticker: str, strike: int, strike_type: str) -> str:
     return f"STRATEGY|{_safe_folder(ticker)}_{strike}_{strike_type}"
-
 
 # ---------------------------------------------------------------------------
 # EMA math (self-contained — mirrors the live engine)
@@ -165,7 +175,6 @@ def _ema(values: list[float], period: int) -> list[float | None]:
         prev = values[i] * k + prev * (1.0 - k)
         out[i] = prev
     return out
-
 
 def _compute_crosses(candles: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Return every fast/slow EMA cross in the candle series.
@@ -206,7 +215,6 @@ def _compute_crosses(candles: list[dict[str, Any]]) -> list[dict[str, Any]]:
             }
         )
     return out
-
 
 def _last_day_last_cross(
     candles: list[dict[str, Any]],
@@ -259,7 +267,6 @@ def _last_day_last_cross(
         "day": last_day,
         "crosses_in_window": len(tail_crosses),
     }
-
 
 # ---------------------------------------------------------------------------
 # Service
@@ -442,12 +449,50 @@ class StrategySelectionService:
                 logger.exception("[strategy] failed ad-hoc registering %s", index_key)
 
         # ---- 1. Opening Range payload (INDEX's own OR) ------------------- #
+        # Read once. If the OR file is missing (late 09:15 index candle),
+        # force a single-instrument OR recalc and re-read — up to
+        # _OR_RETRY_ATTEMPTS times. This is the retry-once guard that
+        # closes the OR → Stage-1 race.
         or_payload = opening_range_service.get_opening_range(index_key)
+        or_retry_attempts = 0
+
+        if not or_payload.get("available") or not or_payload.get("is_today"):
+            for attempt in range(1, _OR_RETRY_ATTEMPTS + 1):
+                logger.info(
+                    "[strategy] %s: OR not ready (reason=%s is_today=%s); "
+                    "forcing recalc attempt %d/%d",
+                    ticker,
+                    or_payload.get("reason"),
+                    or_payload.get("is_today"),
+                    attempt,
+                    _OR_RETRY_ATTEMPTS,
+                )
+                try:
+                    opening_range_service.calculate_one(index_key)
+                except Exception:
+                    logger.exception(
+                        "[strategy] %s: OR recalc attempt %d failed",
+                        ticker,
+                        attempt,
+                    )
+                or_retry_attempts += 1
+                or_payload = opening_range_service.get_opening_range(index_key)
+                if or_payload.get("available") and or_payload.get("is_today"):
+                    logger.info(
+                        "[strategy] %s: OR recovered after %d recalc attempt(s)",
+                        ticker,
+                        attempt,
+                    )
+                    break
+                if attempt < _OR_RETRY_ATTEMPTS:
+                    _time.sleep(_OR_RETRY_SLEEP_SECONDS)
+
         if not or_payload.get("available"):
             return {
                 "status": "skipped",
                 "ticker": ticker,
                 "reason": f"or_unavailable:{or_payload.get('reason')}",
+                "or_retry_attempts": or_retry_attempts,
             }
         if not or_payload.get("is_today"):
             return {
@@ -455,11 +500,13 @@ class StrategySelectionService:
                 "ticker": ticker,
                 "reason": "or_stale_not_today",
                 "or_day": or_payload.get("day"),
+                "or_retry_attempts": or_retry_attempts,
             }
 
         levels = _round_levels(or_payload.get("levels") or {})
         first_candle = or_payload.get("first_candle") or {}
         or_day = or_payload.get("day")
+        or_candle_source = or_payload.get("candle_source")
 
         atm_ref = levels.get("A") or first_candle.get("close")
         if atm_ref is None:
@@ -525,6 +572,7 @@ class StrategySelectionService:
                     "buffer_mode": config.STRATEGY_BUFFER_MODE,
                     "denominator_points": denominator,
                     "or_levels": levels,
+                    "or_candle_source": or_candle_source,
                     "placeholder_instrument_key": placeholder_key,
                     "generated_at": _now_iso(),
                 }
@@ -546,6 +594,7 @@ class StrategySelectionService:
                         "day": or_day,
                         "levels": levels,
                         "first_candle": first_candle,
+                        "candle_source": or_candle_source,
                         "source": "strategy_selection",
                         "generated_at": _now_iso(),
                     },
@@ -636,6 +685,8 @@ class StrategySelectionService:
             "day": or_day,
             "or_levels": levels,
             "or_first_candle": first_candle,
+            "or_candle_source": or_candle_source,
+            "or_retry_attempts": or_retry_attempts,
             "atm_reference": round(atm_ref, 4),
             "atm_strike": atm_strike,
             "buffer_points": typical,
@@ -662,6 +713,8 @@ class StrategySelectionService:
             "day": or_day,
             "or_levels": levels,
             "or_first_candle": first_candle,
+            "or_candle_source": or_candle_source,
+            "or_retry_attempts": or_retry_attempts,
             "atm_reference": round(atm_ref, 4),
             "atm_strike": atm_strike,
             "buffer_points": typical,

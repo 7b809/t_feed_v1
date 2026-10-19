@@ -178,6 +178,40 @@ OPENING_RANGE_HOUR = _int("OPENING_RANGE_HOUR", 9)
 OPENING_RANGE_MINUTE = _int("OPENING_RANGE_MINUTE", 16)
 OPENING_RANGE_SECOND = _int("OPENING_RANGE_SECOND", 10)
 
+# REST fallback for the 09:15 index candle.
+# When the live WebSocket feed has not yet finalized the 09:15 candle
+# (e.g. it only appears at 09:18), opening_range_service fetches today's
+# intraday 1-minute candles from Upstox and uses the 09:15 candle from
+# the REST response. Disable to fall back to the old "skip if missing"
+# behaviour.
+OPENING_RANGE_REST_FALLBACK_ENABLED = _bool(
+    "OPENING_RANGE_REST_FALLBACK_ENABLED", True
+)
+OPENING_RANGE_REST_TIMEOUT_SECONDS = max(
+    1, _int("OPENING_RANGE_REST_TIMEOUT_SECONDS", 15)
+)
+
+# Per-instrument OR retry (used by strategy_selection_service._process_index).
+# When the OR file for an index is missing at Stage-1 time, force a
+# single-instrument OR recalculation this many times, sleeping
+# STRATEGY_STAGE1_OR_RETRY_SLEEP_SECONDS between attempts. The REST
+# fallback inside opening_range_service usually succeeds on the first
+# attempt; the retries cover transient REST failures.
+STRATEGY_STAGE1_OR_RETRY_ATTEMPTS = max(
+    1, _int("STRATEGY_STAGE1_OR_RETRY_ATTEMPTS", 3)
+)
+STRATEGY_STAGE1_OR_RETRY_SLEEP_SECONDS = max(
+    0.0, _float("STRATEGY_STAGE1_OR_RETRY_SLEEP_SECONDS", 2.0)
+)
+
+# Global OR retry (used by routes.admin_routes._run_stage1_with_or_retry).
+# If every index in Stage 1 still skipped with `or_unavailable:*` after
+# the per-instrument retries, force a full OR recalculation and re-run
+# Stage 1 once. Disable to keep the old "skip and continue" behaviour.
+STRATEGY_STAGE1_GLOBAL_OR_RETRY = _bool(
+    "STRATEGY_STAGE1_GLOBAL_OR_RETRY", True
+)
+
 # ---------------------------------------------------------------------------
 # Strategy selection (OR-based strike selection per index)
 # ---------------------------------------------------------------------------
@@ -410,6 +444,18 @@ STRATEGY_2_STAGE_3_NAME = _str(
 )
 STRATEGY_2_STAGE_4_NAME = _str(
     "STRATEGY_2_STAGE_4_NAME", "stage_4_order"
+)
+
+# Telegram noise gate for Strategy 2 Stage 3.
+# When True (default), the 5-minute recheck and the scheduled wrapper
+# suppress Telegram output when:
+#   * Stage 2 has zero isolated contracts (nothing to watch), OR
+#   * the state has not changed since the previous run
+#     (same isolated pick, no new touches).
+# Set to False only when you explicitly want a Telegram message on
+# every 5-minute recheck regardless of state.
+STRATEGY_2_TELEGRAM_QUIET_WHEN_EMPTY = _bool(
+    "STRATEGY_2_TELEGRAM_QUIET_WHEN_EMPTY", True
 )
 
 # ===========================================================================

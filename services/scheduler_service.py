@@ -11,7 +11,15 @@ Jobs (Strategy 1):
 Jobs (Strategy 2):
     * strategy_2_stage3_isolation   — cron, 09:18:00 IST (initial pass)
     * strategy_2_stage4_order       — cron, 15:25:00 IST (final catch-up)
-    * strategy_2_stage3_recheck     — interval, every 5 min (09:15–15:30)
+    * strategy_2_stage3_recheck     — cron, every 5 min between
+                                      STRATEGY_2_TRACKER_WINDOW_START and
+                                      STRATEGY_2_TRACKER_WINDOW_END
+                                      (self-gating: only fires when
+                                       Stage 2 has produced at least
+                                       one isolated contract, so the
+                                       "no isolation yet" zero-data
+                                       Telegram messages stop at the
+                                       source)
 
 Jobs (Daily backup):
     * daily_backup                  — cron, 16:00 IST every day (default)
@@ -19,17 +27,87 @@ Jobs (Daily backup):
         archive inline to MongoDB when it fits under
         DAILY_BACKUP_MAX_BLOB_MB, otherwise saves metadata-only with a
         clear "skipped_size_limit" reason. Gated by DAILY_BACKUP_ENABLED.
+
+Strategy 2 recheck self-gating
+------------------------------
+The 5-minute recheck (`strategy_2_stage3_recheck`) is wrapped in
+`_strategy2_recheck()`, which:
+
+  1. Short-circuits when the local stage-2 tree
+     (`<STRATEGY_BASE_DIR>/<STRATEGY_STAGE_2_NAME>`) does not exist or
+     contains no strike folders — i.e. Stage 1/2 produced nothing.
+  2. Otherwise delegates to `run_strategy_2_isolation`, which itself
+     suppresses Telegram output when nothing changed (see
+     `token_tasks/strategy_2_isolation_task.py`).
+
+Result: no more "Stage 2 contracts: 0 / Touched: 0 / No contracts
+touched the isolation level yet" messages every 5 minutes.
 """
 
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 from apscheduler.schedulers.background import BackgroundScheduler
 
 from core import config
 
 logger = logging.getLogger(__name__)
+
+
+def _stage2_tree_has_contracts() -> bool:
+    """Return True when the stage-2 isolation tree has any strike folders.
+
+    This is the gate for the Strategy 2 Stage 3 5-minute recheck: if
+    Stage 1/2 produced nothing, there is nothing to watch and running
+    the isolation service on every tick would only generate zero-data
+    "no isolation yet" log lines and (previously) Telegram messages.
+
+    The check is intentionally cheap — it walks the top three levels
+    of the tree and returns as soon as it finds one strike folder. It
+    never raises; any I/O error is treated as "no contracts" so the
+    scheduler keeps running.
+    """
+    try:
+        root = Path(config.STRATEGY_BASE_DIR) / config.STRATEGY_STAGE_2_NAME
+        if not root.exists() or not root.is_dir():
+            return False
+        for ticker_dir in root.iterdir():
+            if not ticker_dir.is_dir():
+                continue
+            for index_dir in ticker_dir.iterdir():
+                if not index_dir.is_dir():
+                    continue
+                for strike_dir in index_dir.iterdir():
+                    if strike_dir.is_dir():
+                        return True
+        return False
+    except Exception:
+        logger.exception(
+            "Strategy 2 recheck: stage-2 tree scan failed; treating as empty"
+        )
+        return False
+
+
+def _strategy2_recheck() -> None:
+    """Self-gating wrapper for the 5-minute Strategy 2 Stage 3 recheck.
+
+    Skips the isolation run entirely when Stage 2 has no isolated
+    contracts, so the scheduler stops producing zero-data rechecks
+    (and their Telegram messages) on quiet days and on days where
+    Stage 1 was skipped due to a late OR candle.
+    """
+    if not _stage2_tree_has_contracts():
+        logger.info(
+            "Strategy 2 recheck: stage-2 tree is empty — skipping "
+            "(no contracts to watch)"
+        )
+        return
+
+    from token_tasks.strategy_2_isolation_task import run_strategy_2_isolation
+
+    run_strategy_2_isolation()
 
 
 class SchedulerService:
@@ -86,7 +164,7 @@ class SchedulerService:
             replace_existing=True, misfire_grace_time=300,
         )
 
-        # -- Strategy 1 --------------------------------------------------
+        # -- Strategy 1 -------------------------------------------------- #
         base_sec = (
             config.OPENING_RANGE_HOUR * 3600
             + config.OPENING_RANGE_MINUTE * 60
@@ -124,7 +202,7 @@ class SchedulerService:
             replace_existing=True, misfire_grace_time=300,
         )
 
-        # -- Strategy 2 --------------------------------------------------
+        # -- Strategy 2 -------------------------------------------------- #
         if config.STRATEGY_2_ENABLED:
             # Initial Stage 3 pass right after Strategy 1 Stage 4 (09:18).
             scheduler.add_job(
@@ -137,9 +215,14 @@ class SchedulerService:
                 replace_existing=True, misfire_grace_time=300,
             )
 
-            # Periodic Stage 3 re-check every 5 min during the trading day.
+            # Periodic Stage 3 re-check every 5 minutes, but self-gated:
+            # `_strategy2_recheck` short-circuits when the stage-2 tree
+            # has no isolated contracts, so the "no isolation yet"
+            # zero-data messages stop at the source. When the tree does
+            # have contracts, `run_strategy_2_isolation` still applies
+            # its own Telegram gate (state-change only).
             scheduler.add_job(
-                run_strategy_2_isolation, "cron",
+                _strategy2_recheck, "cron",
                 day_of_week=config.DAILY_REFRESH_DAYS,
                 hour="9-15",
                 minute="*/5",

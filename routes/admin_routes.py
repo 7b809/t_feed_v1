@@ -23,12 +23,18 @@ Task list (all three states):
     9.  EMA backfill seed (backup + intraday)
     10. Opening Range (OR) level calculation
     10b. Strategy 1 · Stage 1 (buffer filter + last-day-cross)
+         + OR-retry guard: if every index skipped with
+           ``or_unavailable:*``, force a full OR recalculation and
+           re-run Stage 1 once.
     10c. Strategy 1 · Stage 2 (EMA-cross isolation)
+         + skipped when Stage 1 produced zero contracts across all
+           indexes (avoids zero-data "0 isolated" noise).
     10d. Strategy 1 · Stage 3 tracker start (R2 activation watcher)
     10e. Strategy 1 · Stage 3 catch-up scan (if past window, in catch-up window)
     10f. Strategy 1 · Stage 4 catch-up order (if past 09:18, in catch-up window)
     10g. Strategy 2 · Stage 3 tracker start (S3 touch watcher)
     10h. Strategy 2 · Stage 3 snapshot (isolation-level touch filter)
+         + Telegram suppressed when Stage 2 has 0 contracts.
     10i. Strategy 2 · Stage 4 order (next-cross order, if isolated exists)
     11. Start / restart live feed
     12. Start scheduler (idempotent)
@@ -66,6 +72,25 @@ Strategy 2 reuses Stage 1 + Stage 2 of Strategy 1. Its own Stage 3
 (S3-touch watcher) runs as a background thread all day, and its Stage 4
 (next-cross order) fires when an isolated contract produces a fresh EMA
 cross. Both are gated by ``STRATEGY_2_ENABLED``.
+
+Strategy 2 Telegram suppression
+-------------------------------
+When Stage 2 has produced **zero** isolated contracts, the live
+Strategy 2 Stage 3 snapshot in this refresh does not emit a Telegram
+"Completed" message, because the only thing it could say is
+"no contracts touched the isolation level yet" — that is the
+zero-data message that used to fire every startup and every 5-minute
+recheck. The scheduled wrapper
+``token_tasks/strategy_2_isolation_task.py`` applies the same gate.
+
+Strategy 1/Stage 2 zero-data gate
+---------------------------------
+When Stage 1 reports ``skipped`` for every index with a reason of
+``or_unavailable:*``, Stage 2 is skipped with reason
+``skipped_stage_1_empty`` and no Telegram completion is sent for
+Stage 2 from this routine. This prevents the cascade
+``Stage 1 skipped → Stage 2 0 isolated → Strategy 2 0 touched``
+from producing three "empty" Telegram messages per refresh.
 """
 
 from __future__ import annotations
@@ -335,6 +360,137 @@ def _summarise_strategy2_isolated(summary: dict[str, Any]) -> str:
     )
 
 
+def _stage1_all_skipped_or(summary: dict[str, Any]) -> bool:
+    """Return True when every index in a Stage-1 summary was skipped
+    because its Opening Range was unavailable.
+
+    Matches the exact shape seen in the logs:
+
+        NIFTY:  skipped (or_unavailable:not_calculated)
+        SENSEX: skipped (or_unavailable:not_calculated)
+    """
+    if not isinstance(summary, dict):
+        return False
+    indexes = summary.get("indexes") or []
+    if not indexes:
+        return False
+    for idx in indexes:
+        if not isinstance(idx, dict):
+            return False
+        if idx.get("status") != "skipped":
+            return False
+        reason = str(idx.get("reason") or "")
+        if not reason.startswith("or_unavailable:"):
+            return False
+    return True
+
+
+def _count_stage1_contracts(summary: dict[str, Any]) -> int:
+    """Sum contract_count across all indexes of a Stage-1 summary."""
+    if not isinstance(summary, dict):
+        return 0
+    total = 0
+    for idx in summary.get("indexes") or []:
+        if not isinstance(idx, dict):
+            continue
+        try:
+            total += int(idx.get("contract_count") or 0)
+        except (TypeError, ValueError):
+            continue
+    return total
+
+
+def _run_stage1_with_or_retry(
+    *,
+    reason: str,
+    catchup_meta: dict[str, Any],
+    verbose: bool,
+) -> tuple[dict[str, Any], int, bool]:
+    """Run Stage 1 and, on the OR-unavailable cascade, retry once.
+
+    The per-instrument retry in
+    ``strategy_selection_service._process_index`` normally recovers the
+    index OR by forcing a single-instrument recalculation. This
+    function is a second line of defence for the case where **every**
+    index still skipped with ``or_unavailable:*`` — for example, if
+    the REST fallback in ``opening_range_service`` also failed, or if
+    the first pass raced the very first live tick. On that signal:
+
+        1. Run ``opening_range_service.calculate_all()`` once more.
+        2. Re-run Stage 1 once.
+
+    Returns ``(summary, or_retry_attempted, or_retry_used)``:
+        summary              : the final Stage-1 summary
+        or_retry_attempted   : 1 if a retry was attempted, else 0
+        or_retry_used        : True if the retried Stage 1 succeeded
+    """
+    strategy_summary = strategy_selection_service.run(
+        reason=reason,
+        mode=reason,
+        catchup=bool(
+            catchup_meta["past"]["stage_1"] and catchup_meta["in_market_hours"]
+        ),
+    )
+
+    or_retry_attempted = 0
+    or_retry_used = False
+
+    if not _stage1_all_skipped_or(strategy_summary):
+        return strategy_summary, or_retry_attempted, or_retry_used
+
+    logger.warning(
+        "[%s] strategy 1 stage 1: every index skipped with "
+        "or_unavailable — forcing full OR recalc and re-running stage 1 once",
+        reason,
+    )
+    or_retry_attempted = 1
+
+    try:
+        recalc = opening_range_service.calculate_all()
+        if verbose:
+            logger.info(
+                "[%s] OR retry recalc summary: %s", reason, recalc
+            )
+        else:
+            logger.info(
+                "[%s] OR retry recalc — calculated=%s skipped=%s errors=%s",
+                reason,
+                recalc.get("calculated"),
+                recalc.get("skipped"),
+                recalc.get("errors"),
+            )
+    except Exception:
+        logger.exception("[%s] OR retry recalc failed", reason)
+
+    try:
+        retried = strategy_selection_service.run(
+            reason=reason,
+            mode=reason,
+            catchup=bool(
+                catchup_meta["past"]["stage_1"]
+                and catchup_meta["in_market_hours"]
+            ),
+        )
+        if _stage1_all_skipped_or(retried):
+            logger.warning(
+                "[%s] stage 1 retry still OR-unavailable — leaving summary as skipped",
+                reason,
+            )
+        else:
+            or_retry_used = True
+            strategy_summary = retried
+            logger.info(
+                "[%s] stage 1 retry succeeded after OR recalc — "
+                "contracts=%d",
+                reason,
+                _count_stage1_contracts(retried),
+            )
+    except Exception:
+        logger.exception("[%s] stage 1 retry failed", reason)
+
+    return strategy_summary, or_retry_attempted, or_retry_used
+
+
 # --------------------------------------------------------------------------- #
 # Telegram formatting helpers                                                  #
 # --------------------------------------------------------------------------- #
@@ -385,6 +541,9 @@ def _completion_message(
     scheduler_ok: bool,
     telegram_ok: bool,
     status: str,
+    stage1_or_retry_attempted: int = 0,
+    stage1_or_retry_used: bool = False,
+    stage2_skip_reason: str | None = None,
 ) -> str:
     s1_ok = sum(
         1
@@ -393,8 +552,43 @@ def _completion_message(
     )
     s1_total = len(strategy_summary.get("indexes", []))
 
-    s2_isolated = strategy2_summary.get("isolated")
     s2_isolated_line = _summarise_strategy2_isolated(strategy2_summary)
+
+    # ---- Stage 1 OR-retry line --------------------------------------- #
+    if stage1_or_retry_attempted:
+        retry_note = (
+            f"  (OR retry={'✓' if stage1_or_retry_used else '✗'})"
+        )
+    else:
+        retry_note = ""
+
+    # ---- Stage 2 status line ----------------------------------------- #
+    if stage2_skip_reason:
+        s2_line = (
+            f"   🔒 Stage 2:    skipped — {stage2_skip_reason}\n"
+        )
+    else:
+        s2_line = (
+            f"   🔒 Stage 2:    {isolation_summary.get('isolated')}/"
+            f"{isolation_summary.get('evaluated')} isolated  "
+            f"pairs={isolation_summary.get('pairs_isolated')}\n"
+        )
+
+    # ---- Strategy 2 line --------------------------------------------- #
+    if stage2_skip_reason:
+        s2_strat_line = (
+            f"   🎯 Stage 3:    tracker="
+            f"{'✓' if strategy2_tracker_started else '✗'}  "
+            f"skipped (no stage-2 contracts)\n"
+            f"   🔒 Isolated:   none (stage-2 empty)\n"
+        )
+    else:
+        s2_strat_line = (
+            f"   🎯 Stage 3:    tracker="
+            f"{'✓' if strategy2_tracker_started else '✗'}  "
+            f"touched={strategy2_summary.get('touched_contracts', 0)}\n"
+            f"   🔒 Isolated:   {s2_isolated_line}\n"
+        )
 
     return (
         f"{_DIV}\n"
@@ -422,10 +616,9 @@ def _completion_message(
         f"{_THIN}\n"
         f"📊 STRATEGY 1\n"
         f"   📊 Stage 1:    {s1_ok}/{s1_total} indexes  "
-        f"avg_buffer={strategy_summary.get('avg_buffer_points')}\n"
-        f"   🔒 Stage 2:    {isolation_summary.get('isolated')}/"
-        f"{isolation_summary.get('evaluated')} isolated  "
-        f"pairs={isolation_summary.get('pairs_isolated')}\n"
+        f"avg_buffer={strategy_summary.get('avg_buffer_points')}"
+        f"{retry_note}\n"
+        f"{s2_line}"
         f"   🎯 Stage 3:    tracker="
         f"{'✓' if tracker_started else '✗'}  "
         f"catch-up_activated={stage3_catchup.get('activated_total', 0)}\n"
@@ -434,10 +627,7 @@ def _completion_message(
         f"placed={order_summary.get('placed', 0)}\n"
         f"{_THIN}\n"
         f"🔒 STRATEGY 2\n"
-        f"   🎯 Stage 3:    tracker="
-        f"{'✓' if strategy2_tracker_started else '✗'}  "
-        f"touched={strategy2_summary.get('touched_contracts', 0)}\n"
-        f"   🔒 Isolated:   {s2_isolated_line}\n"
+        f"{s2_strat_line}"
         f"   💰 Stage 4:    placed="
         f"{strategy2_order_summary.get('placed', 0)}\n"
         f"{_THIN}\n"
@@ -575,26 +765,46 @@ def _run_full_refresh_sync(
         "calculated": 0,
         "skipped": 0,
         "errors": 0,
+        "core_indexes_missing": 0,
     }
     try:
         or_summary = opening_range_service.calculate_all()
+        # Diagnostic: how many of the strategy core indexes are missing?
+        try:
+            missing = 0
+            for spec in config.STRATEGY_INDEXES or []:
+                if not isinstance(spec, dict):
+                    continue
+                key = str(spec.get("instrument_key") or "").strip()
+                if not key:
+                    continue
+                payload = opening_range_service.get_opening_range(key)
+                if not payload.get("available") or not payload.get("is_today"):
+                    missing += 1
+            or_summary["core_indexes_missing"] = missing
+        except Exception:
+            logger.exception("[%s] OR core-index diagnostic failed", reason)
     except Exception:
         logger.exception("[%s] opening range calculation failed", reason)
 
-    # ---- 8b. Strategy 1 · Stage 1 ------------------------------------- #
+    # ---- 8b. Strategy 1 · Stage 1 (with OR retry guard) --------------- #
     strategy_summary: dict[str, Any] = {
         "status": "not_run",
         "stage": "stage_1",
         "indexes": [],
         "avg_buffer_points": 0,
     }
+    stage1_or_retry_attempted = 0
+    stage1_or_retry_used = False
     try:
-        strategy_summary = strategy_selection_service.run(
+        (
+            strategy_summary,
+            stage1_or_retry_attempted,
+            stage1_or_retry_used,
+        ) = _run_stage1_with_or_retry(
             reason=reason,
-            mode=reason,
-            catchup=bool(
-                catchup_meta["past"]["stage_1"] and catchup_meta["in_market_hours"]
-            ),
+            catchup_meta=catchup_meta,
+            verbose=verbose,
         )
     except Exception:
         logger.exception("[%s] strategy 1 stage 1 failed", reason)
@@ -610,16 +820,41 @@ def _run_full_refresh_sync(
         "errors": 0,
         "indexes": [],
     }
-    try:
-        isolation_summary = strategy_isolation_service.run(
-            reason=reason,
-            mode=reason,
-            catchup=bool(
-                catchup_meta["past"]["stage_2"] and catchup_meta["in_market_hours"]
-            ),
+    stage2_skip_reason: str | None = None
+    stage1_contracts = _count_stage1_contracts(strategy_summary)
+
+    if stage1_contracts == 0:
+        stage2_skip_reason = "stage_1_empty"
+        logger.warning(
+            "[%s] strategy 1 stage 2 skipped — stage 1 produced 0 contracts "
+            "(or_retry_attempted=%d or_retry_used=%s)",
+            reason,
+            stage1_or_retry_attempted,
+            stage1_or_retry_used,
         )
-    except Exception:
-        logger.exception("[%s] strategy 1 stage 2 failed", reason)
+        isolation_summary = {
+            "status": "skipped",
+            "stage": "stage_2",
+            "reason": stage2_skip_reason,
+            "evaluated": 0,
+            "isolated": 0,
+            "pairs_isolated": 0,
+            "skipped": 0,
+            "errors": 0,
+            "indexes": [],
+        }
+    else:
+        try:
+            isolation_summary = strategy_isolation_service.run(
+                reason=reason,
+                mode=reason,
+                catchup=bool(
+                    catchup_meta["past"]["stage_2"]
+                    and catchup_meta["in_market_hours"]
+                ),
+            )
+        except Exception:
+            logger.exception("[%s] strategy 1 stage 2 failed", reason)
 
     # ---- 8d. Strategy 1 · Stage 3 tracker ----------------------------- #
     tracker_started = False
@@ -854,7 +1089,12 @@ def _run_full_refresh_sync(
         "placed": 0,
         "order": None,
     }
-    if config.STRATEGY_2_ENABLED and strategy2_summary.get("isolated"):
+    s2_stage2_count = int(strategy2_summary.get("stage2_contracts") or 0)
+    if (
+        config.STRATEGY_2_ENABLED
+        and s2_stage2_count > 0
+        and strategy2_summary.get("isolated")
+    ):
         try:
             logger.info("[%s] strategy 2 stage 4 START", reason)
             strategy2_order_summary = strategy_2_order_service.run(
@@ -913,7 +1153,7 @@ def _run_full_refresh_sync(
     else:
         logger.info(
             "[%s] strategy 2 stage 4 skipped "
-            "(disabled or no isolated contract yet)",
+            "(disabled, no stage-2 contracts, or no isolated contract yet)",
             reason,
         )
 
@@ -963,7 +1203,13 @@ def _run_full_refresh_sync(
         "backfill": backfill_summary,
         "opening_range": or_summary,
         "strategy": strategy_summary,
+        "strategy_stage1_or_retry": {
+            "attempted": stage1_or_retry_attempted,
+            "used": stage1_or_retry_used,
+        },
+        "strategy_stage1_contracts": stage1_contracts,
         "isolation": isolation_summary,
+        "stage2_skip_reason": stage2_skip_reason,
         "tracker_started": tracker_started,
         "stage3_catchup": stage3_catchup,
         "orders": order_summary,
@@ -1001,6 +1247,9 @@ def _run_full_refresh_sync(
         scheduler_ok=scheduler_ok,
         telegram_ok=telegram_ok,
         status=status,
+        stage1_or_retry_attempted=stage1_or_retry_attempted,
+        stage1_or_retry_used=stage1_or_retry_used,
+        stage2_skip_reason=stage2_skip_reason,
     )
     telegram_service.send_message(
         (

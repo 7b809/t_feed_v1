@@ -34,6 +34,16 @@ manual hard refresh also call this service; if the 09:15 candle
 doesn't yet exist for today, that instrument is skipped with a
 clear status (no error).
 
+REST fallback
+-------------
+The live WebSocket feed can finalize the 09:15 candle late (the
+first populated Nifty 1m OHLC sometimes only appears at 09:18).
+When the in-memory EMA engine does not yet have the 09:15 candle,
+this service now fetches today's intraday 1-minute candles from
+Upstox for that instrument and uses the 09:15 candle from the REST
+response. This removes the OR → Stage-1 race that previously left
+core indexes with `or_unavailable:not_calculated`.
+
 Persistence
 -----------
 Per-instrument JSON file ``opening_range.json`` written next to
@@ -57,11 +67,20 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import requests
+
 from core import config
 from services.instrument_registry import instrument_registry
 from services.live_ema_engine import live_ema_engine
+from services.token_service import token_service
 
 logger = logging.getLogger(__name__)
+
+# --------------------------------------------------------------------------- #
+# Upstox REST fallback (used only when the live 09:15 candle is missing)      #
+# --------------------------------------------------------------------------- #
+_UPSTOX_BASE = "https://api.upstox.com"
+_HTTP_TIMEOUT = 15
 
 # --------------------------------------------------------------------------- #
 # Level math                                                                   #
@@ -154,6 +173,97 @@ def _trigger_time_reached() -> bool:
         microsecond=0,
     )
     return now >= trigger
+
+# --------------------------------------------------------------------------- #
+# REST fallback                                                                #
+# --------------------------------------------------------------------------- #
+
+def _fetch_first_candle_via_rest(
+    instrument_key: str,
+    target_minute: str,
+) -> dict[str, Any] | None:
+    """Fetch today's intraday 1m candles and return the target-minute one.
+
+    Used only when the in-memory EMA engine does not yet hold the
+    09:15 candle for this instrument. Returns a normalised candle dict
+    (``minute``, ``timestamp``, ``open``, ``high``, ``low``, ``close``,
+    ``volume``) or None if the REST call fails or the 09:15 candle is
+    not present.
+    """
+    key = str(instrument_key or "").strip()
+    if not key:
+        return None
+
+    try:
+        token = token_service.get_access_token()
+    except Exception:
+        token = None
+    if not token:
+        logger.info(
+            "[or] REST fallback skipped for %s (no Upstox token)", key
+        )
+        return None
+
+    url = (
+        f"{_UPSTOX_BASE}/v3/historical-candle/intraday/"
+        f"{key}/minutes/1"
+    )
+    try:
+        resp = requests.get(
+            url,
+            headers={
+                "Accept": "application/json",
+                "Authorization": f"Bearer {token}",
+            },
+            timeout=_HTTP_TIMEOUT,
+        )
+    except requests.RequestException:
+        logger.warning("[or] REST fallback network error for %s", key)
+        return None
+
+    if resp.status_code >= 400:
+        logger.info(
+            "[or] REST fallback HTTP %s for %s: %s",
+            resp.status_code, key, resp.text[:160],
+        )
+        return None
+
+    try:
+        body = resp.json()
+    except ValueError:
+        return None
+
+    raw = (
+        (body.get("data") or {}).get("candles")
+        if isinstance(body.get("data"), dict)
+        else body.get("candles")
+    ) or []
+    if not isinstance(raw, list):
+        return None
+
+    for row in raw:
+        if not isinstance(row, (list, tuple)) or len(row) < 5:
+            continue
+        try:
+            minute = str(row[0])[:16]
+        except Exception:
+            continue
+        if minute != target_minute:
+            continue
+        try:
+            return {
+                "minute": minute,
+                "timestamp": str(row[0]),
+                "open": float(row[1]),
+                "high": float(row[2]),
+                "low": float(row[3]),
+                "close": float(row[4]),
+                "volume": float(row[5]) if len(row) >= 6 else 0.0,
+            }
+        except (TypeError, ValueError):
+            continue
+
+    return None
 
 # --------------------------------------------------------------------------- #
 # Service                                                                      #
@@ -330,12 +440,26 @@ class OpeningRangeService:
             None,
         )
 
+        candle_source = "live_engine"
+
+        # ---- REST fallback when the live 09:15 candle is missing ------ #
+        if first_candle is None:
+            rest_candle = _fetch_first_candle_via_rest(key, target_minute)
+            if rest_candle is not None:
+                first_candle = rest_candle
+                candle_source = "rest_intraday_fallback"
+                logger.info(
+                    "[or] %s: 09:15 candle recovered via REST fallback",
+                    key,
+                )
+
         if first_candle is None:
             return {
                 "status": "skipped",
                 "reason": "first_candle_not_available",
                 "instrument_key": key,
                 "target_minute": target_minute,
+                "candle_source": candle_source,
             }
 
         h = first_candle.get("high")
@@ -346,6 +470,7 @@ class OpeningRangeService:
                 "reason": "incomplete_candle",
                 "instrument_key": key,
                 "target_minute": target_minute,
+                "candle_source": candle_source,
             }
 
         try:
@@ -375,6 +500,7 @@ class OpeningRangeService:
                 "close": first_candle.get("close"),
                 "volume": first_candle.get("volume"),
             },
+            "candle_source": candle_source,
             "levels": levels,
             "calculated_at": datetime.now(timezone.utc).isoformat(),
         }
