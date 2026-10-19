@@ -1,0 +1,24 @@
+<div class="pane" data-pane-index="{{ pane_index }}" data-instrument-key="{{ pane.instrument_key }}">
+  <div class="pane-header">
+    <div class="pane-symbol">
+      <i class="bi bi-graph-up-arrow text-primary me-1"></i>
+      <span class="pane-symbol-text">{{ pane.instrument_key }}</span>
+    </div>
+    <div class="pane-actions">
+      <button class="pane-btn" data-pane-action="change" data-pane-index="{{ pane_index }}" title="Change instrument">
+        <i class="bi bi-arrow-left-right"></i>
+      </button>
+      <button class="pane-btn" data-pane-action="link" data-pane-index="{{ pane_index }}" title="Toggle link to other panes">
+        <i class="bi bi-link-45deg"></i>
+      </button>
+    </div>
+  </div>
+  <div class="pane-chart-wrap">
+    <div class="pane-body" id="pane-chart-{{ pane_index }}"></div>
+    <div class="pane-label-layer" id="pane-label-layer-{{ pane_index }}"></div>
+  </div>
+  <div class="pane-footer">
+    <span class="pane-key">{{ pane.instrument_key }}</span>
+    <span class="pane-ohlc">O <span class="pane-o">--</span> H <span class="pane-h">--</span> L <span class="pane-l">--</span> C <span class="pane-c">--</span></span>
+  </div>
+</div>

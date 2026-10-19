@@ -1,0 +1,1183 @@
+{% extends "base.html" %}
+{% block title %}Layout - Trading Dashboard{% endblock %}
+{% block head %}
+<link rel="preconnect" href="https://unpkg.com" crossorigin>
+<link rel="dns-prefetch" href="https://unpkg.com">
+<script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js" crossorigin="anonymous"></script>
+<style>
+  :root {
+    --bg: #131722; --surface: #1e222d; --surface-2: #2a2e39; --surface-3: #363c4e;
+    --border: #2a2e39; --text: #d1d4dc; --muted: #787b86;
+    --blue: #2962ff; --green: #089981; --red: #f23645; --yellow: #f5c451;
+    --shadow: 0 12px 30px rgba(0,0,0,0.5);
+    --toolbar-h: 56px;
+    --indicator-h: 36px;
+  }
+  html, body { height: 100%; margin: 0; }
+  body { background: var(--bg); color: var(--text); overflow: hidden; }
+
+  .layout-toolbar {
+    height: var(--toolbar-h); background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0 14px; gap: 12px; flex-wrap: nowrap; overflow: hidden;
+  }
+  .toolbar-left, .toolbar-right { display: flex; align-items: center; gap: 8px; }
+  .toolbar-title {
+    font-size: 13px; font-weight: 800; letter-spacing: .03em; color: #fff;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .toolbar-title i { color: var(--blue); font-size: 16px; }
+  .toolbar-divider { width: 1px; height: 22px; background: var(--border); }
+
+  .grid-picker { display: inline-flex; gap: 4px; padding: 3px; background: #0b0e14; border-radius: 10px; }
+  .grid-btn {
+    width: 34px; height: 28px; border: 1px solid transparent; background: transparent;
+    color: var(--muted); font-size: 11px; font-weight: 800; border-radius: 6px;
+    cursor: pointer; transition: all .15s;
+  }
+  .grid-btn:hover { color: #fff; background: var(--surface-2); }
+  .grid-btn.active { background: var(--blue); color: #fff; border-color: var(--blue); }
+
+  .layout-name-input {
+    background: #0b0e14; border: 1px solid var(--border); color: var(--text);
+    border-radius: 8px; font-size: 12px; padding: 6px 10px; min-width: 160px;
+  }
+  .layout-name-input:focus { outline: none; border-color: var(--blue); }
+
+  .toolbar-btn {
+    border: 1px solid var(--border); background: var(--surface-2); color: var(--text);
+    border-radius: 8px; padding: 6px 12px; font-size: 12px; font-weight: 700;
+    cursor: pointer; transition: all .15s; display: inline-flex; align-items: center; gap: 6px;
+  }
+  .toolbar-btn:hover { border-color: var(--blue); color: #fff; }
+  .toolbar-btn.primary { background: var(--blue); border-color: var(--blue); color: #fff; }
+  .toolbar-btn.primary:hover { background: #1c4ce0; }
+  .toolbar-btn.danger { background: rgba(242,54,69,0.1); border-color: rgba(242,54,69,0.4); color: #ff8a95; }
+  .toolbar-btn.danger:hover { background: rgba(242,54,69,0.2); }
+
+  .layout-select {
+    background: #0b0e14; border: 1px solid var(--border); color: var(--text);
+    border-radius: 8px; font-size: 12px; padding: 6px 8px; min-width: 140px;
+  }
+  .layout-select:focus { outline: none; border-color: var(--blue); }
+
+  /* ---- Indicator toolbar ---- */
+  .indicator-toolbar {
+    height: var(--indicator-h); background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 10px;
+    padding: 0 14px; overflow-x: auto; white-space: nowrap;
+  }
+  .indicator-toolbar::-webkit-scrollbar { height: 4px; }
+  .indicator-toolbar::-webkit-scrollbar-thumb { background: var(--surface-3); border-radius: 2px; }
+  .indicator-group { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+  .indicator-label {
+    font-size: 10px; font-weight: 800; text-transform: uppercase;
+    color: var(--muted); letter-spacing: 0.06em; margin-right: 4px;
+  }
+  .ind-btn {
+    border: 1px solid var(--border); background: var(--surface-2); color: var(--muted);
+    border-radius: 12px; padding: 3px 10px; font-size: 10px; font-weight: 800;
+    cursor: pointer; transition: all .15s; letter-spacing: 0.03em; white-space: nowrap;
+  }
+  .ind-btn:hover { color: #fff; border-color: var(--blue); }
+  .ind-btn.active { background: var(--blue); color: #fff; border-color: var(--blue); }
+  .ind-btn[data-global-indicator="ema9"].active { background: #2962ff; border-color: #2962ff; }
+  .ind-btn[data-global-indicator="ema21"].active { background: #f5c451; border-color: #f5c451; color: #111; }
+  .ind-btn[data-global-indicator="emaCross"].active { background: linear-gradient(90deg, #089981 0%, #f23645 100%); border-color: transparent; }
+  .indicator-divider { width: 1px; height: 16px; background: var(--border); flex-shrink: 0; margin: 0 4px; }
+
+  .layout-grid-wrap {
+    height: calc(100vh - var(--toolbar-h) - var(--indicator-h));
+    height: calc(100dvh - var(--toolbar-h) - var(--indicator-h));
+    padding: 10px; overflow: hidden;
+    display: grid; gap: 8px;
+  }
+  .layout-grid-wrap[data-grid="1"] { grid-template-columns: 1fr; grid-template-rows: 1fr; }
+  .layout-grid-wrap[data-grid="2"] { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr; }
+  .layout-grid-wrap[data-grid="4"] { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
+  @media (max-width: 900px) {
+    :root { --indicator-h: 44px; }
+    .layout-grid-wrap[data-grid="2"],
+    .layout-grid-wrap[data-grid="4"] {
+      grid-template-columns: 1fr;
+      grid-template-rows: repeat(auto-fit, minmax(260px, 1fr));
+      overflow-y: auto;
+    }
+  }
+
+  .pane {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+    display: flex; flex-direction: column; overflow: hidden;
+    box-shadow: var(--shadow); min-height: 0;
+  }
+  .pane-header {
+    height: 34px; display: flex; align-items: center; justify-content: space-between;
+    padding: 0 10px; border-bottom: 1px solid var(--border); flex-shrink: 0;
+    background: var(--surface-2); gap: 8px;
+  }
+  .pane-symbol { display: flex; align-items: center; font-size: 11px; font-weight: 700; color: #fff;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 1; }
+  .pane-symbol-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .pane-actions { display: flex; gap: 4px; }
+  .pane-btn {
+    width: 24px; height: 22px; display: inline-flex; align-items: center; justify-content: center;
+    border: 1px solid var(--border); border-radius: 5px; background: var(--surface);
+    color: var(--muted); cursor: pointer; font-size: 11px; transition: all .15s;
+  }
+  .pane-btn:hover { color: #fff; border-color: var(--blue); background: var(--blue); }
+  .pane-btn.linked { background: var(--blue); color: #fff; border-color: var(--blue); }
+
+  /* chart-wrap = relative container so label-layer can overlap the chart */
+  .pane-chart-wrap { flex: 1; position: relative; min-height: 0; }
+  .pane-body { position: absolute; inset: 0; }
+  .pane-label-layer {
+    position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+    overflow: hidden; pointer-events: none; z-index: 5;
+  }
+  .pane-label {
+    position: absolute; display: none; transform: translateY(-50%);
+    padding: 1px 4px; font-size: 9px; font-weight: 700; line-height: 1.2;
+    font-family: inherit; letter-spacing: 0.02em; color: #fff;
+    border-radius: 2px; white-space: nowrap; pointer-events: none; z-index: 6;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.25);
+  }
+  .layout-grid-wrap[data-grid="1"] .pane-label { font-size: 11px; padding: 2px 5px; }
+  .layout-grid-wrap[data-grid="2"] .pane-label { font-size: 10px; padding: 1px 4px; }
+
+  .pane-footer {
+    height: 26px; flex-shrink: 0; padding: 0 10px;
+    display: flex; align-items: center; justify-content: space-between;
+    border-top: 1px solid var(--border); background: var(--surface-2);
+    font-size: 10px; color: var(--muted); gap: 8px;
+  }
+  .pane-ohlc { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .pane-ohlc span { color: #fff; font-weight: 700; }
+  .pane-key { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  .status-pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 4px 10px; border-radius: 20px; border: 1px solid var(--border);
+    background: var(--surface-2); color: var(--muted); font-size: 11px; font-weight: 600;
+  }
+  .status-pill .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
+  .status-pill.ok { color: var(--green); }
+  .status-pill.ok .dot { background: var(--green); box-shadow: 0 0 8px rgba(8,153,129,0.8); }
+  .status-pill.warn { color: var(--yellow); }
+  .status-pill.warn .dot { background: var(--yellow); }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="layout-toolbar">
+  <div class="toolbar-left">
+    <div class="toolbar-title"><i class="bi bi-grid-3x3-gap-fill"></i>Multi-Chart Layout</div>
+    <div class="toolbar-divider"></div>
+    <div class="grid-picker" role="group" aria-label="Grid size">
+      <button class="grid-btn" data-grid="1" title="1 chart">1</button>
+      <button class="grid-btn" data-grid="2" title="2 charts">2</button>
+      <button class="grid-btn" data-grid="4" title="4 charts">4</button>
+    </div>
+    <input id="layoutNameInput" class="layout-name-input" placeholder="Layout name" value="{{ layout.name or 'My Layout' }}">
+    <select id="layoutSelect" class="layout-select" title="Switch layout"></select>
+  </div>
+  <div class="toolbar-right">
+    <span id="linkStateBadge" class="status-pill" title="All panes follow the same symbol">🔗 Linked</span>
+    <button id="saveLayoutBtn" class="toolbar-btn primary" title="Save current layout">
+      <i class="bi bi-save"></i> Save
+    </button>
+    <button id="newLayoutBtn" class="toolbar-btn" title="Create a new layout">
+      <i class="bi bi-plus-lg"></i> New
+    </button>
+    <button id="deleteLayoutBtn" class="toolbar-btn danger" title="Delete this layout">
+      <i class="bi bi-trash"></i>
+    </button>
+  </div>
+</div>
+
+<div class="indicator-toolbar" id="indicatorToolbar">
+  <div class="indicator-group">
+    <span class="indicator-label">Labels:</span>
+    <button class="ind-btn"      data-global-toggle="r2s2"    title="Toggle R2 / S2 labels">R2 / S2</button>
+    <button class="ind-btn active" data-global-toggle="r3s3"  title="Toggle R3 / S3 labels">R3 / S3</button>
+    <button class="ind-btn active" data-global-toggle="highLow" title="Toggle HIGH / LOW labels">HIGH / LOW</button>
+  </div>
+  <div class="indicator-divider"></div>
+  <div class="indicator-group">
+    <span class="indicator-label">Indicators:</span>
+    <button class="ind-btn" data-global-indicator="ema9" title="EMA 9 line on every pane">EMA 9</button>
+    <button class="ind-btn" data-global-indicator="ema21" title="EMA 21 line on every pane">EMA 21</button>
+    <button class="ind-btn" data-global-indicator="emaCross" title="BUY / SELL markers on EMA 9/21 cross">EMA Cross</button>
+  </div>
+</div>
+
+<div id="layoutGrid" class="layout-grid-wrap" data-grid="{{ layout.grid or 1 }}">
+  {% for pane in panes %}
+    {% with pane_index=loop.index0 %}
+      {% include "partials/layout_pane.html" %}
+    {% endwith %}
+  {% endfor %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  "use strict";
+
+  const DEFAULT_KEY = {{ default_key | tojson }};
+  const LAYOUT_INDICATORS_KEY = "layout.indicators.prefs";
+
+  const layoutState = {
+    id: {{ layout.id | tojson }},
+    name: {{ layout.name | tojson }},
+    grid: {{ layout.grid or 1 }},
+    panes: {{ panes | tojson }},
+    linked: true,
+  };
+
+  // Global indicator state — applies to every pane uniformly.
+  const globalState = {
+    labelVisibility: { r2s2: false, r3s3: true, highLow: true },
+    ema9: false,
+    ema21: false,
+    emaCross: false,
+  };
+
+  const paneInstances = {};
+
+  const gridEl = document.getElementById("layoutGrid");
+  const layoutSelect = document.getElementById("layoutSelect");
+  const layoutNameInput = document.getElementById("layoutNameInput");
+  const saveBtn = document.getElementById("saveLayoutBtn");
+  const newBtn = document.getElementById("newLayoutBtn");
+  const deleteBtn = document.getElementById("deleteLayoutBtn");
+  const linkStateBadge = document.getElementById("linkStateBadge");
+
+  // ------------------------------------------------------------
+  // Persist / restore global indicator prefs
+  // ------------------------------------------------------------
+  function loadGlobalPrefs() {
+    try {
+      const saved = JSON.parse(localStorage.getItem(LAYOUT_INDICATORS_KEY) || "{}");
+      if (typeof saved.ema9 === "boolean") globalState.ema9 = saved.ema9;
+      if (typeof saved.ema21 === "boolean") globalState.ema21 = saved.ema21;
+      if (typeof saved.emaCross === "boolean") globalState.emaCross = saved.emaCross;
+      if (saved.labelVisibility && typeof saved.labelVisibility === "object") {
+        Object.assign(globalState.labelVisibility, saved.labelVisibility);
+      }
+    } catch (e) { /* ignore */ }
+  }
+
+  function saveGlobalPrefs() {
+    try { localStorage.setItem(LAYOUT_INDICATORS_KEY, JSON.stringify(globalState)); } catch (e) {}
+  }
+
+  function syncToolbarButtons() {
+    document.querySelectorAll(".ind-btn[data-global-toggle]").forEach(btn => {
+      const key = btn.dataset.globalToggle;
+      btn.classList.toggle("active", !!globalState.labelVisibility[key]);
+    });
+    document.querySelectorAll(".ind-btn[data-global-indicator]").forEach(btn => {
+      const key = btn.dataset.globalIndicator;
+      btn.classList.toggle("active", !!globalState[key]);
+    });
+  }
+
+  // ------------------------------------------------------------
+  // Pure indicator math (mirrors main chart)
+  // ------------------------------------------------------------
+  function getDateKeyIST(unixSeconds) {
+    if (!Number.isFinite(unixSeconds)) return null;
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit",
+    }).formatToParts(new Date(unixSeconds * 1000));
+    const map = {};
+    parts.forEach(p => { if (p.type !== "literal") map[p.type] = p.value; });
+    return `${map.year}-${map.month}-${map.day}`;
+  }
+
+  function calculateOpeningRangeForDay(dayCandles) {
+    if (!Array.isArray(dayCandles) || !dayCandles.length) return null;
+    const sorted = dayCandles.slice().sort((a, b) => a.time - b.time);
+    const first = sorted[0];
+    if (!first) return null;
+    const open  = Number(first.open);
+    const high  = Number(first.high);
+    const low   = Number(first.low);
+    const close = Number(first.close);
+    if (![open, high, low, close].every(Number.isFinite)) return null;
+    const r1 = high;
+    const s1 = low;
+    const average = (r1 + s1) / 2;
+    const r1Diff = r1 - average;
+    const s1Diff = average - s1;
+    const r2 = r1 + r1Diff;
+    const r3 = r2 + r1Diff;
+    const s2 = s1 - s1Diff;
+    const s3 = s2 - s1Diff;
+    return { open, high, low, close, average, levels: { r1, r2, r3, s1, s2, s3 } };
+  }
+
+  function buildOpeningRangesFromCandles(candles) {
+    const grouped = {};
+    (candles || []).forEach(c => {
+      const key = getDateKeyIST(c.time);
+      if (!key) return;
+      (grouped[key] = grouped[key] || []).push(c);
+    });
+    const result = {};
+    Object.keys(grouped).forEach(date => {
+      const r = calculateOpeningRangeForDay(grouped[date]);
+      if (r) result[date] = r;
+    });
+    return result;
+  }
+
+  function calculateEMA(candles, length) {
+    if (!Array.isArray(candles) || !candles.length || length <= 0) return [];
+    const k = 2 / (length + 1);
+    const out = [];
+    let prev = null;
+    for (let i = 0; i < candles.length; i++) {
+      const close = Number(candles[i].close);
+      if (!Number.isFinite(close)) continue;
+      prev = (prev === null) ? close : (close * k + prev * (1 - k));
+      out.push({ time: candles[i].time, value: prev });
+    }
+    return out;
+  }
+
+  function getEMACrosses(candles) {
+    if (!Array.isArray(candles) || candles.length < 3) return [];
+    const fast = calculateEMA(candles, 9);
+    const slow = calculateEMA(candles, 21);
+    const n = Math.min(fast.length, slow.length);
+    const crosses = [];
+    const candleByTime = new Map();
+    for (const c of candles) candleByTime.set(c.time, c);
+    for (let i = 1; i < n; i++) {
+      const prevDiff = fast[i - 1].value - slow[i - 1].value;
+      const currDiff = fast[i].value - slow[i].value;
+      if (prevDiff <= 0 && currDiff > 0) {
+        const c = candleByTime.get(fast[i].time);
+        crosses.push({ time: fast[i].time, type: "bull", price: c ? c.low : fast[i].value });
+      } else if (prevDiff >= 0 && currDiff < 0) {
+        const c = candleByTime.get(fast[i].time);
+        crosses.push({ time: fast[i].time, type: "bear", price: c ? c.high : fast[i].value });
+      }
+    }
+    return crosses;
+  }
+
+  // ------------------------------------------------------------
+  // Label visibility helpers
+  // ------------------------------------------------------------
+  function isLabelVisible(levelName) {
+    const n = String(levelName || "").toLowerCase();
+    if (n === "avg") return true;
+    if (n === "r2" || n === "s2") return globalState.labelVisibility.r2s2;
+    if (n === "r3" || n === "s3") return globalState.labelVisibility.r3s3;
+    if (n === "high" || n === "low") return globalState.labelVisibility.highLow;
+    return true;
+  }
+
+  function getLevelColor(levelName) { return levelName.startsWith("r") ? "#f23645" : "#089981"; }
+  function getRangeLevelColor(k) {
+    if (k === "high") return "#fd7e14";
+    if (k === "low")  return "#20c997";
+    return "#2962ff";
+  }
+
+  // ------------------------------------------------------------
+  // Pane-instance indicator helpers
+  // ------------------------------------------------------------
+  function addLineSeriesToPane(paneInst, options) {
+    if (!paneInst || !paneInst.chart) return null;
+    try {
+      if (typeof paneInst.chart.addSeries === "function" && LightweightCharts.LineSeries) {
+        return paneInst.chart.addSeries(LightweightCharts.LineSeries, options);
+      }
+      if (typeof paneInst.chart.addLineSeries === "function") {
+        return paneInst.chart.addLineSeries(options);
+      }
+    } catch (e) { console.warn("[pane-lines] addLineSeries failed:", e); }
+    return null;
+  }
+
+  function createPaneLabel(paneInst, levelName, startTime, value, color) {
+    if (!paneInst || !paneInst.labelLayerEl) return;
+    const el = document.createElement("div");
+    el.className = "pane-label";
+    el.textContent = String(levelName).toUpperCase() + " (" + Number(value).toFixed(2) + ")";
+    el.style.backgroundColor = color;
+    paneInst.labelLayerEl.appendChild(el);
+    paneInst.levelLabels.push({ element: el, startTime, value, color, levelName });
+  }
+
+  function drawPaneLevelLine(paneInst, levelName, rawValue, startTime, endTime, color, lineStyle) {
+    if (rawValue === null || rawValue === undefined || rawValue === "") return;
+    const value = Number(rawValue);
+    if (!Number.isFinite(value)) return;
+    const series = addLineSeriesToPane(paneInst, {
+      color, lineWidth: 1, lineStyle,
+      priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+      autoscaleInfoProvider: () => null,
+    });
+    if (!series) return;
+    const data = [{ time: startTime, value }];
+    if (endTime !== startTime) data.push({ time: endTime, value });
+    try { series.setData(data); } catch (e) { console.warn("[pane-lines] setData failed:", e); return; }
+    paneInst.levelLines.push(series);
+    createPaneLabel(paneInst, levelName, startTime, value, color);
+  }
+
+  function removePaneIndicatorSeries(paneInst) {
+    if (!paneInst) return;
+    (paneInst.levelLines || []).forEach(line => {
+      try { if (paneInst.chart) paneInst.chart.removeSeries(line); } catch (e) {}
+    });
+    paneInst.levelLines = [];
+    (paneInst.levelLabels || []).forEach(lbl => {
+      try { if (lbl.element && lbl.element.parentNode) lbl.element.parentNode.removeChild(lbl.element); } catch (e) {}
+    });
+    paneInst.levelLabels = [];
+    if (paneInst.ema9Series) {
+      try { paneInst.chart.removeSeries(paneInst.ema9Series); } catch (e) {}
+      paneInst.ema9Series = null;
+    }
+    if (paneInst.ema21Series) {
+      try { paneInst.chart.removeSeries(paneInst.ema21Series); } catch (e) {}
+      paneInst.ema21Series = null;
+    }
+    paneInst.markersPrimitive = null;
+    try {
+      if (paneInst.candleSeries && typeof paneInst.candleSeries.setMarkers === "function") {
+        paneInst.candleSeries.setMarkers([]);
+      }
+    } catch (e) {}
+  }
+
+  function renderOpeningRangeLinesForPane(paneInst) {
+    if (!paneInst || !paneInst.chart || !paneInst.candleSeries) return;
+    // Remove only OR lines + labels, leave EMA series alone
+    (paneInst.levelLines || []).forEach(line => {
+      try { paneInst.chart.removeSeries(line); } catch (e) {}
+    });
+    paneInst.levelLines = [];
+    (paneInst.levelLabels || []).forEach(lbl => {
+      try { if (lbl.element && lbl.element.parentNode) lbl.element.parentNode.removeChild(lbl.element); } catch (e) {}
+    });
+    paneInst.levelLabels = [];
+
+    paneInst.calculatedOpeningRanges = buildOpeningRangesFromCandles(paneInst.candles || []);
+    const dates = Object.keys(paneInst.calculatedOpeningRanges).sort();
+    if (!dates.length) return;
+    const allData = paneInst.candles || [];
+    dates.forEach(date => {
+      const or = paneInst.calculatedOpeningRanges[date];
+      if (!or) return;
+      const dayCandles = allData.filter(c => getDateKeyIST(c.time) === date);
+      if (!dayCandles.length) return;
+      const startTime = dayCandles[0].time;
+      const endTime   = dayCandles[dayCandles.length - 1].time;
+      const levels = or.levels || {};
+
+      ["r2", "r3"].forEach(name => drawPaneLevelLine(
+        paneInst, name, levels[name], startTime, endTime,
+        getLevelColor(name), LightweightCharts.LineStyle.Dashed,
+      ));
+      drawPaneLevelLine(paneInst, "high", or.high,    startTime, endTime, getRangeLevelColor("high"), LightweightCharts.LineStyle.Solid);
+      drawPaneLevelLine(paneInst, "avg",  or.average, startTime, endTime, getRangeLevelColor("avg"),  LightweightCharts.LineStyle.Solid);
+      drawPaneLevelLine(paneInst, "low",  or.low,     startTime, endTime, getRangeLevelColor("low"),  LightweightCharts.LineStyle.Solid);
+      ["s2", "s3"].forEach(name => drawPaneLevelLine(
+        paneInst, name, levels[name], startTime, endTime,
+        getLevelColor(name), LightweightCharts.LineStyle.Dashed,
+      ));
+    });
+
+    schedulePaneLabelUpdate(paneInst);
+  }
+
+  function renderEMALinesForPane(paneInst) {
+    if (!paneInst || !paneInst.chart || !paneInst.candleSeries) return;
+    const candles = paneInst.candles || [];
+
+    // EMA 9
+    if (globalState.ema9) {
+      if (!paneInst.ema9Series) {
+        paneInst.ema9Series = addLineSeriesToPane(paneInst, {
+          color: "#2962ff", lineWidth: 2,
+          priceLineVisible: false, lastValueVisible: true, crosshairMarkerVisible: false,
+          title: "EMA 9", autoscaleInfoProvider: () => null,
+        });
+      }
+      if (paneInst.ema9Series) {
+        paneInst.ema9Series.setData(calculateEMA(candles, 9));
+      }
+    } else if (paneInst.ema9Series) {
+      try { paneInst.chart.removeSeries(paneInst.ema9Series); } catch (e) {}
+      paneInst.ema9Series = null;
+    }
+
+    // EMA 21
+    if (globalState.ema21) {
+      if (!paneInst.ema21Series) {
+        paneInst.ema21Series = addLineSeriesToPane(paneInst, {
+          color: "#f5c451", lineWidth: 2,
+          priceLineVisible: false, lastValueVisible: true, crosshairMarkerVisible: false,
+          title: "EMA 21", autoscaleInfoProvider: () => null,
+        });
+      }
+      if (paneInst.ema21Series) {
+        paneInst.ema21Series.setData(calculateEMA(candles, 21));
+      }
+    } else if (paneInst.ema21Series) {
+      try { paneInst.chart.removeSeries(paneInst.ema21Series); } catch (e) {}
+      paneInst.ema21Series = null;
+    }
+  }
+
+  function renderEMACrossMarkersForPane(paneInst) {
+    if (!paneInst || !paneInst.candleSeries) return;
+    const candles = paneInst.candles || [];
+
+    if (!globalState.emaCross) {
+      paneInst.markersPrimitive = null;
+      try {
+        if (typeof paneInst.candleSeries.setMarkers === "function") paneInst.candleSeries.setMarkers([]);
+      } catch (e) {}
+      return;
+    }
+
+    const crosses = getEMACrosses(candles);
+    const seen = new Set();
+    const markers = [];
+    for (const c of crosses) {
+      if (seen.has(c.time)) continue;
+      seen.add(c.time);
+      const isBull = c.type === "bull";
+      markers.push({
+        time: c.time,
+        position: isBull ? "belowBar" : "aboveBar",
+        color: isBull ? "#089981" : "#f23645",
+        shape: isBull ? "arrowUp" : "arrowDown",
+        text: isBull ? "BUY" : "SELL",
+        size: 2,
+      });
+    }
+    markers.sort((a, b) => a.time - b.time);
+
+    if (typeof LightweightCharts.createSeriesMarkers === "function") {
+      try {
+        paneInst.markersPrimitive = LightweightCharts.createSeriesMarkers(paneInst.candleSeries, markers);
+        return;
+      } catch (e) { console.warn("[markers] createSeriesMarkers failed:", e); }
+    }
+    if (typeof paneInst.candleSeries.setMarkers === "function") {
+      try { paneInst.candleSeries.setMarkers(markers); } catch (e) {}
+    }
+  }
+
+  function renderAllIndicatorsForPane(paneInst) {
+    renderOpeningRangeLinesForPane(paneInst);
+    renderEMALinesForPane(paneInst);
+    renderEMACrossMarkersForPane(paneInst);
+  }
+
+  // ------------------------------------------------------------
+  // Label positioning
+  // ------------------------------------------------------------
+  function schedulePaneLabelUpdate(paneInst) {
+    if (!paneInst || paneInst.labelUpdateScheduled) return;
+    paneInst.labelUpdateScheduled = true;
+    requestAnimationFrame(() => {
+      paneInst.labelUpdateScheduled = false;
+      updatePaneLabelPositions(paneInst);
+    });
+  }
+
+  function updatePaneLabelPositions(paneInst) {
+    if (!paneInst || !paneInst.chart || !paneInst.candleSeries) return;
+    if (!paneInst.levelLabels || !paneInst.levelLabels.length) return;
+    const timeScale = paneInst.chart.timeScale();
+    const wrap = paneInst.chartWrapEl;
+    const width = wrap ? wrap.clientWidth : 0;
+    const height = wrap ? wrap.clientHeight : 0;
+
+    paneInst.levelLabels.forEach(label => {
+      if (!isLabelVisible(label.levelName)) { label.element.style.display = "none"; return; }
+      const x = timeScale.timeToCoordinate(label.startTime);
+      const y = paneInst.candleSeries.priceToCoordinate(label.value);
+      if (x === null || y === null || !Number.isFinite(x) || !Number.isFinite(y)) {
+        label.element.style.display = "none"; return;
+      }
+      if (y < -8 || y > height + 8) { label.element.style.display = "none"; return; }
+      if (x < -120 || x > width + 120) { label.element.style.display = "none"; return; }
+      label.element.style.display = "block";
+      label.element.style.left = Math.round(x + 4) + "px";
+      label.element.style.top  = Math.round(y) + "px";
+    });
+  }
+
+  function updateAllPaneLabelPositions() {
+    Object.values(paneInstances).forEach(updatePaneLabelPositions);
+  }
+
+  // ------------------------------------------------------------
+  // Toolbar toggle handlers
+  // ------------------------------------------------------------
+  function bindToolbarHandlers() {
+    document.querySelectorAll(".ind-btn[data-global-toggle]").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const key = btn.dataset.globalToggle;
+        if (!(key in globalState.labelVisibility)) return;
+        globalState.labelVisibility[key] = !globalState.labelVisibility[key];
+        btn.classList.toggle("active", globalState.labelVisibility[key]);
+        saveGlobalPrefs();
+        updateAllPaneLabelPositions();
+      });
+    });
+
+    document.querySelectorAll(".ind-btn[data-global-indicator]").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const key = btn.dataset.globalIndicator;
+        if (!(key in globalState)) return;
+        globalState[key] = !globalState[key];
+        btn.classList.toggle("active", globalState[key]);
+
+        // Auto-enable EMA9 + EMA21 when EMA Cross is turned on
+        if (key === "emaCross" && globalState.emaCross) {
+          if (!globalState.ema9) {
+            globalState.ema9 = true;
+            document.querySelector('[data-global-indicator="ema9"]')?.classList.add("active");
+          }
+          if (!globalState.ema21) {
+            globalState.ema21 = true;
+            document.querySelector('[data-global-indicator="ema21"]')?.classList.add("active");
+          }
+        }
+
+        saveGlobalPrefs();
+        Object.values(paneInstances).forEach(renderAllIndicatorsForPane);
+      });
+    });
+  }
+
+  // ------------------------------------------------------------
+  // HTTP helpers
+  // ------------------------------------------------------------
+  async function apiJson(url, opts) {
+    const res = await fetch(url, Object.assign({
+      headers: { "Content-Type": "application/json", "Accept": "application/json" },
+    }, opts || {}));
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`HTTP ${res.status}: ${text.slice(0, 200)}`);
+    }
+    return res.json();
+  }
+
+  // ------------------------------------------------------------
+  // Per-pane create / destroy
+  // ------------------------------------------------------------
+  function createPaneInstance(paneIndex, instrumentKey) {
+    const chartEl = document.getElementById(`pane-chart-${paneIndex}`);
+    const labelLayerEl = document.getElementById(`pane-label-layer-${paneIndex}`);
+    const wrapEl = chartEl ? chartEl.parentElement : null;
+    if (!chartEl || !window.LightweightCharts) return null;
+
+    const chart = LightweightCharts.createChart(chartEl, {
+      width: chartEl.clientWidth,
+      height: chartEl.clientHeight,
+      layout: { background: { color: "#131722" }, textColor: "#d1d4dc" },
+      grid: { vertLines: { color: "#2a2e39" }, horzLines: { color: "#2a2e39" } },
+      crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+      rightPriceScale: { borderColor: "#2a2e39", scaleMargins: { top: 0.12, bottom: 0.12 }, autoScale: true },
+      timeScale: {
+        borderColor: "#2a2e39", timeVisible: true, secondsVisible: false,
+        rightOffset: 6, barSpacing: 7, minBarSpacing: 3,
+      },
+      localization: { locale: "en-IN" },
+    });
+
+    const candleOptions = {
+      upColor: "#089981", downColor: "#f23645",
+      borderUpColor: "#089981", borderDownColor: "#f23645",
+      wickUpColor: "#089981", wickDownColor: "#f23645",
+      priceFormat: { type: "price", precision: 2, minMove: 0.05 },
+    };
+
+    let candleSeries = null;
+    if (typeof chart.addSeries === "function" && LightweightCharts.CandlestickSeries) {
+      candleSeries = chart.addSeries(LightweightCharts.CandlestickSeries, candleOptions);
+    } else if (typeof chart.addCandlestickSeries === "function") {
+      candleSeries = chart.addCandlestickSeries(candleOptions);
+    }
+    if (!candleSeries) return null;
+
+    const inst = {
+      index: paneIndex,
+      chart, candleSeries,
+      containerEl: chartEl,
+      chartWrapEl: wrapEl,
+      labelLayerEl,
+      instrumentKey,
+      candles: [],
+      lastCandle: null,
+      ws: null, reconnectTimer: null,
+      destroyed: false,
+      resizeObserver: null,
+      // Indicator state
+      levelLines: [],
+      levelLabels: [],
+      calculatedOpeningRanges: {},
+      labelUpdateScheduled: false,
+      ema9Series: null, ema21Series: null, markersPrimitive: null,
+    };
+
+    // Resize
+    const resize = () => {
+      if (inst.destroyed) return;
+      chart.applyOptions({ width: chartEl.clientWidth, height: chartEl.clientHeight });
+      schedulePaneLabelUpdate(inst);
+    };
+    window.addEventListener("resize", resize);
+    if (typeof ResizeObserver !== "undefined") {
+      const ro = new ResizeObserver(resize);
+      ro.observe(wrapEl || chartEl);
+      inst.resizeObserver = ro;
+    }
+
+    // Crosshair -> OHLC footer
+    chart.subscribeCrosshairMove((param) => {
+      if (!param || !param.seriesData || !param.seriesData.get) return;
+      const d = param.seriesData.get(candleSeries);
+      if (!d) return;
+      const paneEl = document.querySelector(`.pane[data-pane-index="${paneIndex}"]`);
+      if (!paneEl) return;
+      paneEl.querySelector(".pane-o").textContent = Number(d.open).toFixed(2);
+      paneEl.querySelector(".pane-h").textContent = Number(d.high).toFixed(2);
+      paneEl.querySelector(".pane-l").textContent = Number(d.low).toFixed(2);
+      paneEl.querySelector(".pane-c").textContent = Number(d.close).toFixed(2);
+    });
+
+    // Pan / zoom -> label reposition
+    chart.timeScale().subscribeVisibleTimeRangeChange(() => schedulePaneLabelUpdate(inst));
+    chart.timeScale().subscribeVisibleLogicalRangeChange(() => schedulePaneLabelUpdate(inst));
+
+    paneInstances[paneIndex] = inst;
+    return inst;
+  }
+
+  function destroyPaneInstance(paneIndex) {
+    const inst = paneInstances[paneIndex];
+    if (!inst) return;
+    inst.destroyed = true;
+    try { if (inst.ws) inst.ws.close(1000, "Pane destroyed"); } catch (e) {}
+    if (inst.reconnectTimer) clearTimeout(inst.reconnectTimer);
+    try { if (inst.resizeObserver) inst.resizeObserver.disconnect(); } catch (e) {}
+    try { inst.chart.remove(); } catch (e) {}
+    delete paneInstances[paneIndex];
+  }
+
+  // ------------------------------------------------------------
+  // Fetch + WebSocket
+  // ------------------------------------------------------------
+  async function fetchCandles(instrumentKey) {
+    const today = new Date();
+    const from = new Date(today.getTime() - 10 * 86400000);
+    const toISO = today.toISOString().slice(0, 10);
+    const fromISO = from.toISOString().slice(0, 10);
+
+    const [intra, hist] = await Promise.all([
+      fetch(`/api/upstox/intraday?instrument_key=${encodeURIComponent(instrumentKey)}`).then(r => r.json()).catch(() => ({})),
+      fetch(`/api/upstox/historical?instrument_key=${encodeURIComponent(instrumentKey)}&from_date=${fromISO}&to_date=${toISO}`).then(r => r.json()).catch(() => ({})),
+    ]);
+
+    const intraCandles = (intra && intra.data && intra.data.candles) || [];
+    const histCandles = (hist && hist.data && hist.data.candles) || [];
+
+    const merged = new Map();
+    const addRaw = (raw) => {
+      if (!Array.isArray(raw) || raw.length < 5) return;
+      const t = Math.floor(Date.parse(raw[0]) / 1000);
+      const o = Number(raw[1]), h = Number(raw[2]), l = Number(raw[3]), c = Number(raw[4]);
+      if (![t, o, h, l, c].every(Number.isFinite)) return;
+      merged.set(t, { time: t, open: o, high: h, low: l, close: c });
+    };
+    histCandles.forEach(addRaw);
+    intraCandles.forEach(addRaw);
+    return Array.from(merged.values()).sort((a, b) => a.time - b.time);
+  }
+
+  function normalizeCandle(raw) {
+    if (!raw) return null;
+    if (Array.isArray(raw)) {
+      const t = Math.floor(Date.parse(raw[0]) / 1000);
+      const o = Number(raw[1]), h = Number(raw[2]), l = Number(raw[3]), c = Number(raw[4]);
+      if (![t, o, h, l, c].every(Number.isFinite)) return null;
+      return { time: t, open: o, high: h, low: l, close: c };
+    }
+    const t = Math.floor(Date.parse(raw.timestamp || raw.time || raw.ts) / 1000);
+    const o = Number(raw.open ?? raw.o), h = Number(raw.high ?? raw.h);
+    const l = Number(raw.low ?? raw.l), c = Number(raw.close ?? raw.c);
+    if (![t, o, h, l, c].every(Number.isFinite)) return null;
+    return { time: t, open: o, high: h, low: l, close: c };
+  }
+
+  function updateCandle(paneInst, candle) {
+    if (!paneInst || !paneInst.candleSeries || !candle) return;
+    if (paneInst.lastCandle && candle.time < paneInst.lastCandle.time) return;
+    paneInst.candleSeries.update(candle);
+    paneInst.lastCandle = candle;
+
+    // Update OHLC footer
+    const paneEl = document.querySelector(`.pane[data-pane-index="${paneInst.index}"]`);
+    if (paneEl) {
+      paneEl.querySelector(".pane-o").textContent = candle.open.toFixed(2);
+      paneEl.querySelector(".pane-h").textContent = candle.high.toFixed(2);
+      paneEl.querySelector(".pane-l").textContent = candle.low.toFixed(2);
+      paneEl.querySelector(".pane-c").textContent = candle.close.toFixed(2);
+    }
+
+    // Update candles array (replace or append)
+    const candles = paneInst.candles;
+    if (!candles.length || candles[candles.length - 1].time < candle.time) {
+      candles.push(candle);
+    } else if (candles[candles.length - 1].time === candle.time) {
+      candles[candles.length - 1] = candle;
+    }
+
+    // Re-render indicators with updated data
+    if (globalState.ema9 || globalState.ema21 || globalState.emaCross) {
+      renderEMALinesForPane(paneInst);
+      renderEMACrossMarkersForPane(paneInst);
+    }
+    schedulePaneLabelUpdate(paneInst);
+  }
+
+  function connectWs(paneInst) {
+    if (!paneInst || paneInst.destroyed) return;
+    if (paneInst.ws && (paneInst.ws.readyState === WebSocket.OPEN || paneInst.ws.readyState === WebSocket.CONNECTING)) return;
+
+    const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const url = `${proto}//${window.location.host}/all-feeds?instrument_key=${encodeURIComponent(paneInst.instrumentKey)}`;
+    let ws;
+    try { ws = new WebSocket(url); } catch (e) { return; }
+    paneInst.ws = ws;
+
+    ws.addEventListener("open", () => {
+      try { ws.send(JSON.stringify({ action: "subscribe", instrument_key: paneInst.instrumentKey })); } catch (e) {}
+    });
+    ws.addEventListener("message", (evt) => {
+      let payload;
+      try { payload = JSON.parse(evt.data); } catch (e) { return; }
+      if (!payload || typeof payload !== "object") return;
+      if (payload.type === "connected" || payload.type === "subscribed" || payload.type === "ping" || payload.event === "ping") return;
+
+      const key = payload.instrument_key || payload.instrumentKey || payload.key;
+      if (!key || key !== paneInst.instrumentKey) return;
+
+      const candleRaw =
+        payload.candle || payload.latest_candle || payload.completed_candle ||
+        payload.data?.candle || payload.data?.latest_candle;
+      if (candleRaw) {
+        const c = normalizeCandle(candleRaw);
+        if (c) { updateCandle(paneInst, c); return; }
+      }
+
+      const ltp = Number(
+        payload.ltp ?? payload.feed?.ltpc?.ltp ??
+        payload.data?.ltp ?? payload.data?.feed?.ltpc?.ltp
+      );
+      if (!Number.isFinite(ltp)) return;
+      const ts = Math.floor(Date.now() / 1000);
+      const minute = Math.floor(ts / 60) * 60;
+      if (!paneInst.lastCandle || minute > paneInst.lastCandle.time) {
+        updateCandle(paneInst, { time: minute, open: ltp, high: ltp, low: ltp, close: ltp });
+      } else if (minute === paneInst.lastCandle.time) {
+        updateCandle(paneInst, {
+          time: minute,
+          open: paneInst.lastCandle.open,
+          high: Math.max(paneInst.lastCandle.high, ltp),
+          low: Math.min(paneInst.lastCandle.low, ltp),
+          close: ltp,
+        });
+      }
+    });
+    ws.addEventListener("close", () => {
+      paneInst.ws = null;
+      if (paneInst.destroyed) return;
+      paneInst.reconnectTimer = setTimeout(() => connectWs(paneInst), 4000);
+    });
+    ws.addEventListener("error", () => {});
+  }
+
+  async function loadPane(paneIndex, instrumentKey) {
+    destroyPaneInstance(paneIndex);
+    const paneEl = document.querySelector(`.pane[data-pane-index="${paneIndex}"]`);
+    if (paneEl) {
+      paneEl.dataset.instrumentKey = instrumentKey;
+      const symEl = paneEl.querySelector(".pane-symbol-text");
+      if (symEl) symEl.textContent = instrumentKey;
+      const keyEl = paneEl.querySelector(".pane-key");
+      if (keyEl) keyEl.textContent = instrumentKey;
+    }
+
+    const inst = createPaneInstance(paneIndex, instrumentKey);
+    if (!inst) return;
+
+    try {
+      const candles = await fetchCandles(instrumentKey);
+      if (inst.destroyed) return;
+      if (candles && candles.length) {
+        inst.candles = candles;
+        inst.candleSeries.setData(candles);
+        inst.lastCandle = candles[candles.length - 1];
+        inst.chart.timeScale().fitContent();
+
+        // Initial OHLC footer
+        if (paneEl) {
+          paneEl.querySelector(".pane-o").textContent = inst.lastCandle.open.toFixed(2);
+          paneEl.querySelector(".pane-h").textContent = inst.lastCandle.high.toFixed(2);
+          paneEl.querySelector(".pane-l").textContent = inst.lastCandle.low.toFixed(2);
+          paneEl.querySelector(".pane-c").textContent = inst.lastCandle.close.toFixed(2);
+        }
+
+        // Render indicators immediately after setData
+        renderAllIndicatorsForPane(inst);
+      }
+    } catch (e) {
+      console.warn("[pane]", paneIndex, "fetch failed:", e);
+    }
+
+    connectWs(inst);
+  }
+
+  // ------------------------------------------------------------
+  // Layout rendering
+  // ------------------------------------------------------------
+  function renderLayout(layout) {
+    Object.assign(layoutState, {
+      id: layout.id,
+      name: layout.name || "My Layout",
+      grid: layout.grid || 1,
+      panes: (layout.panes || []).slice(),
+    });
+
+    layoutNameInput.value = layoutState.name;
+    gridEl.dataset.grid = String(layoutState.grid);
+    document.querySelectorAll(".grid-btn").forEach(btn => {
+      btn.classList.toggle("active", Number(btn.dataset.grid) === layoutState.grid);
+    });
+
+    // Destroy all existing panes
+    Object.keys(paneInstances).forEach(i => destroyPaneInstance(Number(i)));
+
+    // Fill panes up to grid count
+    const firstKey = (layoutState.panes[0]?.instrument_key) || DEFAULT_KEY;
+    const panes = [];
+    for (let i = 0; i < layoutState.grid; i++) {
+      panes.push(layoutState.panes[i] || { instrument_key: firstKey, interval: "5m" });
+    }
+    layoutState.panes = panes;
+
+    gridEl.innerHTML = panes.map((p, i) => buildPaneHtml(i, p.instrument_key)).join("");
+
+    panes.forEach((p, i) => loadPane(i, p.instrument_key));
+    bindPaneActions();
+  }
+
+  function buildPaneHtml(index, instrumentKey) {
+    return `
+      <div class="pane" data-pane-index="${index}" data-instrument-key="${escapeHtml(instrumentKey)}">
+        <div class="pane-header">
+          <div class="pane-symbol">
+            <i class="bi bi-graph-up-arrow text-primary me-1"></i>
+            <span class="pane-symbol-text">${escapeHtml(instrumentKey)}</span>
+          </div>
+          <div class="pane-actions">
+            <button class="pane-btn" data-pane-action="change" data-pane-index="${index}" title="Change instrument"><i class="bi bi-arrow-left-right"></i></button>
+            <button class="pane-btn" data-pane-action="link" data-pane-index="${index}" title="Toggle link"><i class="bi bi-link-45deg"></i></button>
+          </div>
+        </div>
+        <div class="pane-chart-wrap">
+          <div class="pane-body" id="pane-chart-${index}"></div>
+          <div class="pane-label-layer" id="pane-label-layer-${index}"></div>
+        </div>
+        <div class="pane-footer">
+          <span class="pane-key">${escapeHtml(instrumentKey)}</span>
+          <span class="pane-ohlc">O <span class="pane-o">--</span> H <span class="pane-h">--</span> L <span class="pane-l">--</span> C <span class="pane-c">--</span></span>
+        </div>
+      </div>
+    `;
+  }
+
+  function bindPaneActions() {
+    document.querySelectorAll('.pane-btn[data-pane-action="change"]').forEach(btn => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const i = Number(btn.dataset.paneIndex);
+        const paneEl = document.querySelector(`.pane[data-pane-index="${i}"]`);
+        if (!paneEl) return;
+        const current = paneEl.dataset.instrumentKey || DEFAULT_KEY;
+        const next = prompt("Instrument key (e.g. NSE_FO|47162 or NSE_INDEX|Nifty 50):", current);
+        if (!next || !next.trim() || next === current) return;
+        const trimmed = next.trim();
+        layoutState.panes[i] = { instrument_key: trimmed, interval: "5m" };
+        if (layoutState.linked) {
+          for (let k = 0; k < layoutState.panes.length; k++) {
+            layoutState.panes[k] = { instrument_key: trimmed, interval: "5m" };
+          }
+          renderLayout(layoutState);
+        } else {
+          loadPane(i, trimmed);
+        }
+      });
+    });
+
+    document.querySelectorAll('.pane-btn[data-pane-action="link"]').forEach(btn => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        layoutState.linked = !layoutState.linked;
+        updateLinkedPill();
+        document.querySelectorAll('.pane-btn[data-pane-action="link"]').forEach(b => {
+          b.classList.toggle("linked", layoutState.linked);
+        });
+      });
+    });
+  }
+
+  function updateLinkedPill() {
+    if (!linkStateBadge) return;
+    if (layoutState.linked) {
+      linkStateBadge.className = "status-pill ok";
+      linkStateBadge.textContent = "🔗 Linked";
+    } else {
+      linkStateBadge.className = "status-pill warn";
+      linkStateBadge.textContent = "🔗 Unlinked";
+    }
+  }
+
+  function escapeHtml(s) {
+    return String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  }
+
+  // ------------------------------------------------------------
+  // Grid + toolbar handlers
+  // ------------------------------------------------------------
+  document.querySelectorAll(".grid-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const grid = Number(btn.dataset.grid);
+      if (![1, 2, 4].includes(grid)) return;
+      const firstKey = layoutState.panes[0]?.instrument_key || DEFAULT_KEY;
+      const nextPanes = [];
+      for (let i = 0; i < grid; i++) {
+        nextPanes.push(layoutState.panes[i] || { instrument_key: firstKey, interval: "5m" });
+      }
+      layoutState.grid = grid;
+      layoutState.panes = nextPanes;
+      renderLayout(layoutState);
+    });
+  });
+
+  async function refreshLayoutList() {
+    try {
+      const data = await apiJson("/admin/layouts");
+      const layouts = data.layouts || [];
+      layoutSelect.innerHTML = layouts.map(l =>
+        `<option value="${escapeHtml(l.id)}">${escapeHtml(l.name)} (${l.grid})</option>`
+      ).join("");
+      if (layoutState.id) layoutSelect.value = layoutState.id;
+    } catch (e) { console.warn("layout list failed:", e); }
+  }
+
+  layoutSelect.addEventListener("change", async () => {
+    try {
+      const id = layoutSelect.value;
+      const layout = await apiJson(`/admin/layouts/${encodeURIComponent(id)}`);
+      renderLayout(layout);
+    } catch (e) { console.warn("layout load failed:", e); }
+  });
+
+  saveBtn.addEventListener("click", async () => {
+    if (!layoutState.id) return;
+    try {
+      const updated = await apiJson(`/admin/layouts/${encodeURIComponent(layoutState.id)}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          name: layoutNameInput.value || layoutState.name,
+          grid: layoutState.grid,
+          panes: layoutState.panes,
+        }),
+      });
+      layoutState.name = updated.name;
+      await refreshLayoutList();
+    } catch (e) { alert("Save failed: " + e.message); }
+  });
+
+  newBtn.addEventListener("click", async () => {
+    try {
+      const grid = layoutState.grid;
+      const firstKey = layoutState.panes[0]?.instrument_key || DEFAULT_KEY;
+      const panes = [];
+      for (let i = 0; i < grid; i++) panes.push({ instrument_key: firstKey, interval: "5m" });
+      const created = await apiJson("/admin/layouts", {
+        method: "POST",
+        body: JSON.stringify({ name: layoutNameInput.value || "New Layout", grid, panes }),
+      });
+      await refreshLayoutList();
+      layoutSelect.value = created.id;
+      renderLayout(created);
+    } catch (e) { alert("Create failed: " + e.message); }
+  });
+
+  deleteBtn.addEventListener("click", async () => {
+    if (!layoutState.id) return;
+    if (!confirm(`Delete layout ${layoutState.name || layoutState.id}?`)) return;
+    try {
+      await apiJson(`/admin/layouts/${encodeURIComponent(layoutState.id)}`, { method: "DELETE" });
+      const data = await apiJson("/admin/layouts");
+      const layouts = data.layouts || [];
+      if (!layouts.length) {
+        const firstKey = layoutState.panes[0]?.instrument_key || DEFAULT_KEY;
+        const created = await apiJson("/admin/layouts", {
+          method: "POST",
+          body: JSON.stringify({ name: "Default", grid: 1, panes: [{ instrument_key: firstKey, interval: "5m" }], is_default: true }),
+        });
+        renderLayout(created);
+        await refreshLayoutList();
+      } else {
+        const next = layouts[0];
+        await refreshLayoutList();
+        layoutSelect.value = next.id;
+        renderLayout(next);
+      }
+    } catch (e) { alert("Delete failed: " + e.message); }
+  });
+
+  // ------------------------------------------------------------
+  // Boot
+  // ------------------------------------------------------------
+  async function boot() {
+    loadGlobalPrefs();
+    syncToolbarButtons();
+    bindToolbarHandlers();
+    await refreshLayoutList();
+    // Re-render everything through the JS path so the structure is
+    // exactly what createPaneInstance() expects (label layer present).
+    renderLayout(layoutState);
+    bindPaneActions();
+    updateLinkedPill();
+  }
+
+  if (document.readyState === "loading") {
+    window.addEventListener("DOMContentLoaded", boot);
+  } else {
+    boot();
+  }
+})();
+</script>
+{% endblock %}
