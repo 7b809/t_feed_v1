@@ -97,6 +97,9 @@ from services.strategy_2_live_tracker_service import (
 )
 from services.telegram_service import telegram_service
 from token_tasks.telegram_token_bot import telegram_token_bot
+from routes.order_routes import router as order_router
+from routes.margin_routes import router as margin_router
+from routes.margin_routes import router as margin_router
 
 
 logger = get_logger(__file__)
@@ -392,3 +395,6 @@ app.include_router(dashboard_router)
 app.include_router(upstox_router)
 app.include_router(log_router)
 app.include_router(market_holiday_router)
+app.include_router(order_router)
+app.include_router(margin_router)
+app.include_router(margin_router)

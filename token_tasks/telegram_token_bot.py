@@ -1,4 +1,24 @@
-"""Telegram long-polling bot for Upstox token management."""
+"""Telegram long-polling bot for Upstox token management.
+
+Commands
+--------
+Token management:
+    /save_token       save a new Upstox access token
+    /token_status     show masked token status
+    /token_check      validate the stored token
+    /cancel           cancel pending token entry
+    /help, /start     show available commands
+
+Order runtime toggle:
+    /orders_status    show current order enable/disable state
+    /orders_enable    enable live order placement
+    /orders_disable   disable live order placement
+
+The order toggle commands are handled by
+``token_tasks.order_toggle_commands.handle_order_toggle_command`` so
+the actual state lives in ``services.order_runtime_service`` and is
+shared with the admin API.
+"""
 
 import json
 import time
@@ -8,6 +28,7 @@ import requests
 
 from core import config
 from core.logger import get_logger
+from token_tasks.order_toggle_commands import handle_order_toggle_command
 from token_tasks.token_monitor import check_upstox_token_validity
 from token_tasks.token_store import token_store
 from token_tasks.upstox_token_client import upstox_token_client
@@ -77,6 +98,9 @@ class TelegramTokenBot:
                     {"command": "save_token", "description": "Save a new Upstox access token"},
                     {"command": "token_status", "description": "Show masked token status"},
                     {"command": "token_check", "description": "Validate the stored token"},
+                    {"command": "orders_status", "description": "Show order runtime toggle state"},
+                    {"command": "orders_enable", "description": "Enable live order placement"},
+                    {"command": "orders_disable", "description": "Disable live order placement"},
                     {"command": "cancel", "description": "Cancel token entry"},
                     {"command": "help", "description": "Show available commands"},
                 ]},
@@ -145,6 +169,16 @@ class TelegramTokenBot:
             return
         text = str(message.get("text") or "").strip()
         command = self._command(text)
+
+        # ---- Order runtime toggle commands ---------------------------- #
+        if command.startswith("/orders"):
+            handle_order_toggle_command(
+                bot=self,
+                chat_id=chat_id,
+                command=command,
+            )
+            return
+
         with self._lock:
             pending = str(chat_id) in self._pending_save_token_chats
 
@@ -163,7 +197,17 @@ class TelegramTokenBot:
         elif command in {"/token_check", "/token-check"}:
             self._check(chat_id)
         elif command in {"/help", "/start"}:
-            self._send("Available commands:\n/save_token — save a token\n/token_status — show masked token status\n/token_check — validate the stored token\n/cancel — cancel token entry", chat_id=chat_id)
+            self._send(
+                "Available commands:\n"
+                "/save_token — save a token\n"
+                "/token_status — show masked token status\n"
+                "/token_check — validate the stored token\n"
+                "/orders_status — show order runtime toggle state\n"
+                "/orders_enable — enable live order placement\n"
+                "/orders_disable — disable live order placement\n"
+                "/cancel — cancel token entry",
+                chat_id=chat_id,
+            )
 
     def run_loop(self):
         logger.info("Telegram token management polling started.")
