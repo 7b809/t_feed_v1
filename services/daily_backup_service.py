@@ -126,7 +126,8 @@ class DailyBackupService:
         if not folders:
             return "backup.zip"
         if len(folders) == 1:
-            return f"{folders[0].rstrip('/\\')}.zip"
+            base = folders[0].rstrip("/\\")
+            return f"{base}.zip"
         if len(folders) == 2:
             a = folders[0].rstrip("/\\")
             b = folders[1].rstrip("/\\")
