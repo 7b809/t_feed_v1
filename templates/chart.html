@@ -27,6 +27,74 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
 .sub-header { min-height: var(--sub-header-h); height: var(--sub-header-h); background: var(--surface); border-bottom: 1px solid var(--border); }
 .index-live-pill { padding: 2px 6px; border-radius: 4px; background: rgba(8,153,129,0.15); color: var(--green); font-size: 10px; font-weight: 700; flex-shrink: 0; }
 .index-live-pill.closed { background: rgba(120,123,134,0.15); color: var(--muted); }
+
+/* ---------- Global search (top bar) ---------- */
+.global-search { position: relative; flex: 1 1 320px; max-width: 460px; min-width: 180px; }
+.global-search .bi-search { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: var(--muted); pointer-events: none; font-size: 13px; }
+.global-search input { width: 100%; background: var(--bg); border: 1px solid var(--border); color: var(--text); border-radius: 8px; padding: 6px 10px 6px 30px; font-size: 12px; font-weight: 600; }
+.global-search input:focus { outline: none; border-color: var(--blue); box-shadow: 0 0 0 3px rgba(41,98,255,0.12); }
+.global-search input::placeholder { color: var(--muted); font-weight: 500; }
+
+.search-results {
+  position: absolute; top: calc(100% + 6px); left: 0; right: 0;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+  max-height: 340px; overflow-y: auto; z-index: 400; box-shadow: var(--shadow);
+  display: none;
+}
+.search-results.visible { display: block; }
+.search-result-item {
+  padding: 8px 12px; cursor: pointer; border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  font-size: 12px;
+}
+.search-result-item:last-child { border-bottom: 0; }
+.search-result-item:hover { background: var(--surface-2); }
+.search-result-item .sym { color: #fff; font-weight: 700; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.search-result-item .meta { color: var(--muted); font-size: 11px; white-space: nowrap; }
+.search-result-empty { padding: 14px; color: var(--muted); font-size: 12px; text-align: center; }
+
+.pill { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 10px; font-weight: 800; letter-spacing: 0.03em; }
+.pill.ce { background: rgba(8,153,129,0.18); color: #6ee7c2; }
+.pill.pe { background: rgba(242,54,69,0.18); color: #ff8a95; }
+.pill.idx { background: rgba(41,98,255,0.18); color: #7ea6ff; }
+.pill.other { background: rgba(120,123,134,0.2); color: #b0b8c4; }
+
+/* ---------- Symbol + Price block ---------- */
+.symbol-price-block {
+  display: flex; align-items: stretch; gap: 10px;
+  padding: 3px 10px;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+  min-width: 0;
+}
+.symbol-block {
+  display: flex; flex-direction: column; justify-content: center; gap: 0;
+  padding-right: 10px; border-right: 1px solid var(--border);
+  min-width: 0; max-width: 200px;
+}
+.symbol-name {
+  font-size: 12px; font-weight: 800; color: #fff; line-height: 1.2;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.symbol-key {
+  font-size: 8.5px; color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  letter-spacing: 0.02em; line-height: 1.2;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.price-block {
+  display: flex; flex-direction: column; justify-content: center; align-items: flex-end;
+  gap: 0; min-width: 80px;
+}
+.price-label {
+  font-size: 8px; text-transform: uppercase; letter-spacing: 0.5px;
+  color: var(--muted); font-weight: 700; line-height: 1.2;
+}
+.price-value {
+  font-size: 13px; font-weight: 800; color: #fff; line-height: 1.2;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  letter-spacing: 0.01em;
+}
+
 .connection-status { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border: 1px solid var(--border); border-radius: 20px; background: var(--surface-2); color: var(--muted); font-size: 11px; font-weight: 600; flex-shrink: 0; }
 .status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
 .connection-status.connecting { color: var(--yellow); }
@@ -38,20 +106,13 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
 .connection-status.closed { color: var(--yellow); }
 .connection-status.closed .status-dot { background: var(--yellow); }
 
-/* Market status pill (outside market hours) */
+/* ---------- Market status pill ---------- */
 .market-status-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
-  border: 1px solid rgba(245,196,81,0.40);
-  border-radius: 20px;
-  background: rgba(245,196,81,0.10);
-  color: #ffd778;
-  font-size: 11px;
-  font-weight: 700;
-  flex-shrink: 0;
-  white-space: nowrap;
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 10px; border: 1px solid rgba(245,196,81,0.40);
+  border-radius: 20px; background: rgba(245,196,81,0.10);
+  color: #ffd778; font-size: 11px; font-weight: 700;
+  flex-shrink: 0; white-space: nowrap;
   animation: marketPillPulse 2.4s ease-in-out infinite;
 }
 @keyframes marketPillPulse {
@@ -61,15 +122,12 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
 .market-status-pill i { font-size: 12px; }
 .market-status-pill .market-countdown {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
-  font-size: 11.5px;
-  font-weight: 800;
-  color: #ffffff;
-  background: rgba(245,196,81,0.20);
-  padding: 1px 6px;
-  border-radius: 4px;
+  font-size: 11.5px; font-weight: 800; color: #ffffff;
+  background: rgba(245,196,81,0.20); padding: 1px 6px; border-radius: 4px;
   letter-spacing: 0.03em;
 }
 
+/* ---------- Content scroll ---------- */
 .content-scroll { position: relative; width: 100%; height: calc(100vh - var(--sub-header-h)); height: calc(100dvh - var(--sub-header-h)); overflow-y: auto; overflow-x: hidden; padding: 16px 16px 96px 16px; scroll-behavior: smooth; -webkit-overflow-scrolling: touch; }
 .content-scroll::-webkit-scrollbar { width: 8px; }
 .content-scroll::-webkit-scrollbar-thumb { background: var(--surface-3); border-radius: 8px; }
@@ -120,51 +178,12 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
 .scroll-nav-btn:hover { background: var(--blue); color: #fff; border-color: var(--blue); }
 .scroll-nav-btn:active { transform: scale(0.95); }
 
-.instrument-panel { position: absolute; z-index: 100; width: min(400px, calc(100% - 24px)); max-height: calc(100% - 24px); overflow: hidden; background: rgba(30,34,45,0.95); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); backdrop-filter: blur(12px); transition: transform 0.2s ease, opacity 0.2s ease, top 0.2s ease, left 0.2s ease, right 0.2s ease, bottom 0.2s ease; }
-.panel-pos-top-left      { top: 12px; left: 12px; right: auto; bottom: auto; transform: none; }
-.panel-pos-top-right     { top: 12px; right: 12px; left: auto; bottom: auto; transform: none; }
-.panel-pos-bottom-left  { bottom: 12px; left: 12px; right: auto; top: auto; transform: none; }
-.panel-pos-bottom-right { bottom: 12px; right: 12px; left: auto; top: auto; transform: none; }
-.panel-pos-top-center   { top: 12px; left: 50%; right: auto; bottom: auto; transform: translateX(-50%); }
-.panel-pos-bottom-center{ bottom: 12px; left: 50%; right: auto; top: auto; transform: translateX(-50%); }
-.panel-pos-left-middle  { top: 50%; left: 12px; right: auto; bottom: auto; transform: translateY(-50%); }
-.panel-pos-right-middle { top: 50%; right: 12px; left: auto; bottom: auto; transform: translateY(-50%); }
-.panel-pos-center       { top: 50%; left: 50%; right: auto; bottom: auto; transform: translate(-50%,-50%); }
-.instrument-panel.dark-theme, .instrument-panel.dark-theme * { color: #ffffff !important; }
-.instrument-panel.dark-theme .text-muted { color: #b0b8c4 !important; }
-.instrument-panel.collapsed { width: 0; opacity: 0; pointer-events: none; border: 0; }
-.panel-header { padding: 12px; border-bottom: 1px solid var(--border); }
-.panel-header-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
-.panel-fold-btn { width: 26px; height: 26px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-2); color: var(--text); cursor: pointer; transition: all 0.15s ease; padding: 0; font-size: 12px; }
-.panel-fold-btn:hover { background: var(--blue); color: #fff; border-color: var(--blue); }
-.view-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 3px; border-radius: 8px; background: #131722; }
-.view-tab { height: 32px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font-size: 12px; font-weight: 700; transition: all 0.15s ease; }
-.view-tab:hover { color: #fff; background: var(--surface-2); }
-.view-tab.active { background: var(--blue); color: #fff !important; }
-.panel-body { max-height: calc(100vh - 240px); max-height: calc(100dvh - 240px); padding: 10px; overflow-y: auto; }
-.panel-body::-webkit-scrollbar { width: 4px; }
-.panel-body::-webkit-scrollbar-thumb { background: var(--surface-3); border-radius: 4px; }
-.index-card { display: flex; align-items: center; justify-content: space-between; padding: 12px; border: 1px solid rgba(41,98,255,0.3); border-radius: 8px; background: linear-gradient(135deg, rgba(41,98,255,0.15), rgba(41,98,255,0.03)); text-decoration: none; transition: all 0.15s ease; }
-.index-card:hover { border-color: var(--blue); }
-.options-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-.column-heading { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; justify-content: center; height: 28px; margin-bottom: 6px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); font-size: 10px; font-weight: 800; }
-.call-heading { color: var(--green); }
-.put-heading { color: var(--red); }
-.option-card { position: relative; display: flex; align-items: center; justify-content: space-between; padding: 8px 10px; margin-bottom: 6px; border: 1px solid transparent; border-radius: 8px; background: var(--surface-2); text-decoration: none; transition: all 0.15s ease; }
-.option-card:hover { background: var(--surface-3); }
-.option-card.nearest-option { border-color: rgba(245,196,81,0.6); background: linear-gradient(135deg, rgba(245,196,81,0.12), var(--surface-2)); }
-.option-badge { padding: 2px 5px; border-radius: 4px; font-size: 9px; font-weight: 800; }
-.call-badge { background: rgba(8,153,129,0.15); color: var(--green); }
-.put-badge { background: rgba(242,54,69,0.15); color: var(--red); }
-.nearest-badge { position: absolute; top: -4px; right: 6px; padding: 1px 4px; border-radius: 3px; background: var(--yellow); color: #111 !important; font-size: 7px; font-weight: 900; }
-
 .history-load-banner { position: absolute; top: 16px; left: 50%; transform: translateX(-50%); z-index: 90; display: none; align-items: center; gap: 8px; padding: 6px 14px; border-radius: 20px; background: var(--surface-2); border: 1px solid var(--blue); color: #ffffff; font-size: 12px; font-weight: 600; box-shadow: var(--shadow); cursor: pointer; max-width: calc(100% - 32px); }
 .history-load-banner:hover { background: var(--blue); }
 .chart-controls { position: absolute; right: 16px; bottom: 16px; z-index: 150; display: flex; gap: 8px; }
 .chart-control-btn { width: 38px; height: 38px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); box-shadow: var(--shadow); cursor: pointer; transition: all 0.15s ease; }
 .chart-control-btn:hover { background: var(--surface-2); color: #fff; border-color: var(--blue); }
 .chart-control-btn.active { background: var(--blue); color: #fff; border-color: var(--blue); }
-.settings-offcanvas { background: var(--surface) !important; color: var(--text); }
 
 .level-label-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; overflow: hidden; pointer-events: none; z-index: 5; }
 .level-line-label { position: absolute; display: none; transform: translateY(-50%); padding: 1px 5px; font-size: 10px; font-weight: 700; line-height: 1.2; font-family: inherit; letter-spacing: 0.02em; color: #ffffff; border-radius: 3px; white-space: nowrap; pointer-events: none; z-index: 6; box-shadow: 0 1px 2px rgba(0,0,0,0.25); }
@@ -200,14 +219,24 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
 @media (max-width: 1024px) { .instrument-info-body { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 @media (max-width: 720px) {
   :root { --sub-header-h: 52px; }
-  .sub-header { padding-left: 10px !important; padding-right: 10px !important; }
-  .sub-header h6 { font-size: 13px; }
-  .index-live-pill { font-size: 9px; padding: 1px 5px; }
-  .connection-status { padding: 3px 8px; font-size: 10px; }
+  .sub-header { padding-left: 10px !important; padding-right: 10px !important; gap: 6px !important; }
+  .global-search { flex: 1 1 140px; min-width: 100px; max-width: 200px; }
+  .global-search input { padding: 5px 8px 5px 26px; font-size: 11px; }
+  .global-search .bi-search { left: 8px; font-size: 12px; }
+  .index-live-pill { font-size: 8.5px; padding: 1px 5px; }
+  .symbol-block { max-width: 110px; padding-right: 8px; }
+  .symbol-name { font-size: 10px; }
+  .symbol-key { font-size: 7.5px; }
+  .price-block { min-width: 65px; }
+  .price-label { font-size: 7px; }
+  .price-value { font-size: 11px; }
+  .market-status-pill { padding: 3px 6px; font-size: 9px; gap: 4px; }
+  .market-status-pill .market-status-label { display: none; }
+  .market-status-pill i { font-size: 10px; }
+  .market-status-pill .market-countdown { font-size: 9.5px; padding: 1px 4px; }
+  .connection-status { padding: 3px 6px; font-size: 10px; }
+  .connection-status #connectionStatusText { display: none; }
   .status-dot { width: 6px; height: 6px; }
-  .market-status-pill { padding: 3px 8px; font-size: 10px; gap: 4px; }
-  .market-status-pill i { font-size: 11px; }
-  .market-status-pill .market-countdown { font-size: 10.5px; padding: 1px 4px; }
   .content-scroll { padding: 10px 10px 92px 10px; }
   .chart-card { height: clamp(300px, calc(100dvh - 130px), 640px); min-height: 300px; border-radius: 10px; }
   .loader-ring-wrap, .loader-ring { width: 90px; height: 90px; }
@@ -217,13 +246,6 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
   .chart-toggles-card { padding: 7px 10px; gap: 6px; margin-top: 10px; }
   .label-toggle-btn { padding: 3px 9px; font-size: 9.5px; }
   .chart-toggles-title { font-size: 9.5px; }
-  .instrument-panel { width: calc(100% - 20px); max-width: calc(100% - 20px); max-height: calc(100% - 20px); }
-  .panel-pos-top-left      { top: 10px; left: 10px; }
-  .panel-pos-top-right     { top: 10px; right: 10px; }
-  .panel-pos-bottom-left  { bottom: 10px; left: 10px; }
-  .panel-pos-bottom-right { bottom: 10px; right: 10px; }
-  .panel-body { max-height: calc(100dvh - 260px); }
-  .option-card { padding: 10px 10px; }
   .level-status-bar { top: 8px; right: 8px; left: 8px; max-width: none; padding: 5px 8px; justify-content: center; border-radius: 14px; }
   .level-status-bar .badge { font-size: 9px; padding: 2px 6px; }
   .chart-controls { right: 10px; bottom: 10px; gap: 6px; }
@@ -242,11 +264,8 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
   .subscribe-banner { flex-direction: column; align-items: flex-start; }
 }
 @media (max-width: 420px) {
-  .sub-header h6 { font-size: 12px; }
-  .connection-status #connectionStatusText { display: none; }
-  .connection-status { padding: 3px 6px; gap: 4px; }
-  .market-status-pill .market-status-label { display: none; }
-  .market-status-pill { padding: 3px 6px; }
+  .global-search { min-width: 80px; }
+  .symbol-block { max-width: 80px; }
   .chart-card { height: clamp(280px, calc(100dvh - 120px), 560px); }
   .loader-ring-wrap, .loader-ring { width: 78px; height: 78px; }
   .loader-spinner::before { width: 28px; height: 28px; }
@@ -264,17 +283,27 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
 {% endblock %}
 {% block content %}
 
-<div class="sub-header px-3 d-flex align-items-center justify-content-between">
-  <div class="d-flex align-items-center gap-2 text-truncate">
-    <h6 class="m-0 fw-bold text-white text-truncate">{{ instrument_name or instrument_key }}</h6>
-    <span class="index-live-pill" id="indexLivePill"><i class="bi bi-broadcast"></i>LIVE</span>
-    <small class="text-muted d-none d-md-inline text-truncate ms-2">{{ instrument_key }}</small>
+<div class="sub-header px-3 d-flex align-items-center gap-2">
+  <div class="global-search">
+    <i class="bi bi-search"></i>
+    <input type="search" id="globalSearchInput" placeholder="Search instrument (e.g. NIFTY 23500 CE)…" autocomplete="off"/>
+    <div class="search-results" id="searchResults"></div>
   </div>
-  <div class="d-flex align-items-center gap-3 flex-shrink-0">
-    <div class="text-end">
-      <div class="text-uppercase text-muted small" style="font-size:9px;letter-spacing:.5px;" id="livePriceLabel">Live Price</div>
-      <div class="fw-bold text-white fs-6" id="livePrice">--</div>
+
+  <span class="index-live-pill" id="indexLivePill"><i class="bi bi-broadcast"></i>LIVE</span>
+
+  <div class="ms-auto d-flex align-items-center gap-3 flex-shrink-0">
+    <div class="symbol-price-block">
+      <div class="symbol-block">
+        <div class="symbol-name" id="topSymbolName">{{ instrument.get('trading_symbol') or instrument_name or instrument_key }}</div>
+        <div class="symbol-key" id="topSymbolKey">{{ instrument_key }}</div>
+      </div>
+      <div class="price-block">
+        <div class="price-label" id="livePriceLabel">Live Price</div>
+        <div class="price-value" id="livePrice">--</div>
+      </div>
     </div>
+
     <div class="market-status-pill" id="marketStatusPill" hidden>
       <i class="bi bi-moon-stars"></i>
       <span class="market-status-label" id="marketStatusText">Market Closed</span>
@@ -339,102 +368,9 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
       <button class="btn btn-sm btn-primary py-0 px-2 rounded-pill ms-2" id="triggerLoadHistoryBtn">Load</button>
     </div>
 
-    <aside class="instrument-panel panel-pos-top-left dark-theme" id="instrumentPanel">
-      <div class="panel-header">
-        <div class="panel-header-top">
-          <div class="fw-bold text-white small d-flex align-items-center gap-2">
-            <i class="bi bi-grid-3x3-gap-fill text-primary"></i>
-            <span>Instruments</span>
-          </div>
-          <div class="d-flex align-items-center gap-2">
-            <a href="/charts" class="badge bg-primary text-white border-0 text-decoration-none" title="Search all instruments"><i class="bi bi-search me-1"></i>Search</a>
-            <span class="badge bg-dark text-muted border border-secondary">{{ instruments | length }}</span>
-            <button type="button" class="panel-fold-btn" id="panelFoldBtn" title="Fold / unfold instruments panel">
-              <i class="bi bi-chevron-up" id="panelFoldIcon"></i>
-            </button>
-          </div>
-        </div>
-        <div class="view-tabs mb-2">
-          <button type="button" class="view-tab active" id="indexBtn"><i class="bi bi-bar-chart-line me-1"></i>Index</button>
-          <button type="button" class="view-tab" id="optionsBtn"><i class="bi bi-diagram-3 me-1"></i>Options</button>
-        </div>
-        <div class="input-group input-group-sm">
-          <span class="input-group-text bg-dark border-secondary text-muted"><i class="bi bi-search"></i></span>
-          <input type="search" id="instrumentSearch" class="form-control bg-dark border-secondary text-white shadow-none" placeholder="Search strike, expiry, CE / PE..." autocomplete="off"/>
-        </div>
-      </div>
-
-      <div class="panel-body">
-        <div id="indexView">
-          <a href="/chart/{{ 'NSE_INDEX|Nifty 50' | urlencode }}" class="index-card searchable-card" data-search="nifty 50 main index">
-            <div>
-              <div class="fw-bold text-white">NIFTY 50</div>
-              <div class="text-muted small">Main Index</div>
-            </div>
-            <div class="text-success small fw-bold d-flex align-items-center gap-1">
-              <i class="bi bi-circle-fill" style="font-size:8px;"></i>LIVE
-            </div>
-          </a>
-          <div class="text-center text-muted small py-3" id="indexNoResults" hidden>No matching index found</div>
-        </div>
-
-        <div id="optionsView" hidden>
-          <div class="d-flex justify-content-between align-items-center mb-2 px-1">
-            <span class="small fw-bold text-white">Nearest to NIFTY 50</span>
-            <span class="small fw-bold text-warning" id="optionsReferencePrice">LTP --</span>
-          </div>
-          <div class="options-grid">
-            <div>
-              <div class="column-heading call-heading"><i class="bi bi-arrow-up-right me-1"></i>CALL</div>
-              {% set call_options = instruments | selectattr('option_type', 'equalto', 'CE') | list %}
-              <div id="callOptions">
-                {% for item in call_options | sort(attribute='strike_price') %}
-                  <a href="/chart/{{ item.instrument_key | urlencode }}" class="option-card searchable-card" data-strike="{{ item.strike_price }}" data-option-type="CE" data-search="{{ item.strike_price | int }} {{ item.expiry }} ce call">
-                    <div>
-                      <div class="fw-bold text-white small">{{ item.strike_price | int }}</div>
-                      <div class="text-muted" style="font-size:9px;">{{ item.expiry }}</div>
-                    </div>
-                    <div class="d-flex align-items-center gap-1">
-                      <span class="option-distance text-muted" style="font-size:8px;"></span>
-                      <span class="option-badge call-badge">CE</span>
-                    </div>
-                  </a>
-                {% else %}
-                  <div class="text-center text-muted small py-2">No call options</div>
-                {% endfor %}
-              </div>
-            </div>
-            <div>
-              <div class="column-heading put-heading"><i class="bi bi-arrow-down-right me-1"></i>PUT</div>
-              {% set put_options = instruments | selectattr('option_type', 'equalto', 'PE') | list %}
-              <div id="putOptions">
-                {% for item in put_options | sort(attribute='strike_price') %}
-                  <a href="/chart/{{ item.instrument_key | urlencode }}" class="option-card searchable-card" data-strike="{{ item.strike_price }}" data-option-type="PE" data-search="{{ item.strike_price | int }} {{ item.expiry }} pe put">
-                    <div>
-                      <div class="fw-bold text-white small">{{ item.strike_price | int }}</div>
-                      <div class="text-muted" style="font-size:9px;">{{ item.expiry }}</div>
-                    </div>
-                    <div class="d-flex align-items-center gap-1">
-                      <span class="option-distance text-muted" style="font-size:8px;"></span>
-                      <span class="option-badge put-badge">PE</span>
-                    </div>
-                  </a>
-                {% else %}
-                  <div class="text-center text-muted small py-2">No put options</div>
-                {% endfor %}
-              </div>
-            </div>
-          </div>
-          <div class="text-center text-muted small py-3" id="optionsNoResults" hidden>No matching options found</div>
-        </div>
-      </div>
-    </aside>
-
     <div class="chart-controls">
       <button type="button" class="chart-control-btn" id="resetPriceScaleBtn" title="Fit price scale to candles"><i class="bi bi-arrows-collapse"></i></button>
       <button type="button" class="chart-control-btn" id="freezePriceScaleBtn" title="Free / lock the price scale (scroll & zoom freely)"><i class="bi bi-arrows-move"></i></button>
-      <button type="button" class="chart-control-btn" data-bs-toggle="offcanvas" data-bs-target="#settingsPanel" title="Chart settings"><i class="bi bi-gear"></i></button>
-      <button type="button" class="chart-control-btn" id="collapseBtn" title="Collapse instrument selector"><i class="bi bi-layout-sidebar-inset"></i></button>
       <button type="button" class="chart-control-btn" id="toggleInfoCardBtn" title="Toggle instrument info card"><i class="bi bi-info-circle"></i></button>
     </div>
   </div>
@@ -451,7 +387,7 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
     <div class="chart-toggles-title"><i class="bi bi-graph-up-arrow me-1"></i>Indicators</div>
     <button type="button" class="label-toggle-btn" data-indicator="ema9" title="Show / hide EMA 9 line">EMA 9</button>
     <button type="button" class="label-toggle-btn" data-indicator="ema21" title="Show / hide EMA 21 line">EMA 21</button>
-    <button type="button" class="label-toggle-btn" data-indicator="emaCross" title="Show / hide EMA 9/21 crossover BUY / SELL signals"><i class="bi bi-arrow-left-right me-1"></i>EMA Cross</button>
+    <button type="button" class="label-toggle-btn active" data-indicator="emaCross" title="Show / hide EMA 9/21 crossover BUY / SELL signals"><i class="bi bi-arrow-left-right me-1"></i>EMA Cross</button>
   </div>
 
   {% set _type = (instrument.get('option_type') or instrument.get('instrument_type') or '') | upper %}
@@ -502,49 +438,6 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
   <button type="button" class="scroll-nav-btn" id="scrollDownBtn" title="Scroll down"><i class="bi bi-chevron-down"></i></button>
 </div>
 
-<div class="offcanvas offcanvas-end settings-offcanvas" tabindex="-1" id="settingsPanel" aria-labelledby="settingsPanelLabel">
-  <div class="offcanvas-header border-bottom border-secondary">
-    <h5 class="offcanvas-title fs-6 fw-bold text-white" id="settingsPanelLabel"><i class="bi bi-gear me-2"></i>Customization &amp; Settings</h5>
-    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="offcanvas" aria-label="Close"></button>
-  </div>
-  <div class="offcanvas-body">
-    <div class="p-3 border border-secondary rounded bg-dark mb-3">
-      <div class="fw-bold text-white small mb-2"><i class="bi bi-arrows-move me-1 text-primary"></i>Panel Positioning</div>
-      <select id="panelPosSelect" class="form-select form-select-sm bg-secondary text-white border-0">
-        <option value="panel-pos-top-left" selected>Top-Left (Default)</option>
-        <option value="panel-pos-top-right">Top-Right</option>
-        <option value="panel-pos-bottom-left">Bottom-Left</option>
-        <option value="panel-pos-bottom-right">Bottom-Right</option>
-        <option value="panel-pos-top-center">Top-Center</option>
-        <option value="panel-pos-bottom-center">Bottom-Center</option>
-        <option value="panel-pos-left-middle">Left-Middle</option>
-        <option value="panel-pos-right-middle">Right-Middle</option>
-        <option value="panel-pos-center">Center</option>
-      </select>
-    </div>
-    <div class="p-3 border border-secondary rounded bg-dark mb-3">
-      <div class="fw-bold text-white small mb-2"><i class="bi bi-palette me-1 text-primary"></i>Panel Background Color</div>
-      <div class="d-flex align-items-center gap-2">
-        <input type="color" id="panelBgColorPicker" class="form-control form-control-color bg-transparent border-0" value="#1e222d" title="Choose background color"/>
-        <span class="small text-muted" id="panelBgHex">#1e222d</span>
-      </div>
-      <small class="text-muted mt-2 d-block" style="font-size:11px;">Dark or medium-dark backgrounds automatically enforce high-contrast white text for best readability.</small>
-    </div>
-    <div class="p-3 border border-secondary rounded bg-dark mb-3">
-      <div class="fw-bold text-white small mb-1">On-Demand Historical Data</div>
-      <div class="text-muted small">When scrolling left past the oldest candle, past data is loaded from Upstox when you click the popup prompt.</div>
-    </div>
-    <div class="p-3 border border-secondary rounded bg-dark mb-3">
-      <div class="fw-bold text-white small mb-2"><i class="bi bi-sliders2 me-1 text-primary"></i>Price Scale</div>
-      <div class="text-muted small">
-        Drag the price axis to pan up / down. Scroll-wheel over the price axis to zoom the price range.
-        The <i class="bi bi-arrows-collapse"></i> button re-fits the view to the candles.
-        The <i class="bi bi-arrows-move"></i> button toggles between auto-fit and free panning.
-      </div>
-    </div>
-  </div>
-</div>
-
 <script id="instrument-key-data" type="application/json">{{ instrument_key | tojson }}</script>
 <script id="instrument-tick-size-data" type="application/json">{{ instrument.get('tick_size') | tojson }}</script>
 
@@ -564,24 +457,23 @@ function getWebSocketUrl() {
 const UPSTOX_INTRADAY_URL = (key) => `/api/upstox/intraday?instrument_key=${encodeURIComponent(key)}`;
 const UPSTOX_HISTORICAL_URL = (key, from, to) =>
   `/api/upstox/historical?instrument_key=${encodeURIComponent(key)}&from_date=${from}&to_date=${to}`;
+const UPSTOX_SEARCH_URL = (q) => {
+  const p = new URLSearchParams({ query: q, records: "20", page_number: "1" });
+  return `/api/upstox/search?${p.toString()}`;
+};
 const SUBSCRIPTION_STATUS_URL = (key) => `/api/upstox/subscription-status?instrument_key=${encodeURIComponent(key)}`;
 const SUBSCRIBE_URL = `/api/upstox/subscribe`;
 
 // ============================================================
-// MARKET HOURS (NSE / BSE - India) — 09:15 to 15:30 IST, Mon–Fri
+// MARKET HOURS (NSE / BSE - India) — 09:00 to 15:30 IST, Mon–Fri
 // ============================================================
 const MARKET_OPEN_HOUR_IST   = 9;
-const MARKET_OPEN_MIN_IST    = 15;
+const MARKET_OPEN_MIN_IST    = 0;
 const MARKET_CLOSE_HOUR_IST  = 15;
 const MARKET_CLOSE_MIN_IST   = 30;
 const MARKET_TZ              = "Asia/Kolkata";
-// IST offset from UTC is fixed at +5:30 (no DST in India).
 const IST_UTC_OFFSET_MIN = 330;
 
-/**
- * Return IST calendar/time components for a given Date (default: now).
- * Uses Intl so it is reliable in every browser.
- */
 function getISTParts(date = new Date()) {
   try {
     const fmt = new Intl.DateTimeFormat("en-US", {
@@ -592,11 +484,9 @@ function getISTParts(date = new Date()) {
     });
     const parts = {};
     fmt.formatToParts(date).forEach(p => { if (p.type !== "literal") parts[p.type] = p.value; });
-    // hour can come back as "24" in some engines for midnight; normalise
     if (parts.hour === "24") parts.hour = "00";
     return parts;
   } catch (err) {
-    console.warn("getISTParts failed, falling back to UTC-based calc:", err);
     const t = date.getTime() + IST_UTC_OFFSET_MIN * 60 * 1000;
     const d = new Date(t);
     const weekday = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][d.getUTCDay()];
@@ -612,24 +502,16 @@ function getISTParts(date = new Date()) {
   }
 }
 
-/** True if right now is within NSE/BSE regular market hours (IST). */
 function isMarketOpenNow() {
   const p = getISTParts();
   const wd = p.weekday;
   if (wd === "Sat" || wd === "Sun") return false;
-  const h = Number(p.hour);
-  const m = Number(p.minute);
-  const nowMin = h * 60 + m;
+  const nowMin = Number(p.hour) * 60 + Number(p.minute);
   const openMin  = MARKET_OPEN_HOUR_IST  * 60 + MARKET_OPEN_MIN_IST;
   const closeMin = MARKET_CLOSE_HOUR_IST * 60 + MARKET_CLOSE_MIN_IST;
   return nowMin >= openMin && nowMin < closeMin;
 }
 
-/**
- * Return a Date (UTC instant) for the next 09:15 IST market open on a
- * weekday. Skips Saturday/Sunday. Doesn't handle NSE holidays — those
- * would have to be supplied by the backend.
- */
 function getNextMarketOpenDate() {
   const now = new Date();
   for (let i = 0; i < 10; i++) {
@@ -640,14 +522,13 @@ function getNextMarketOpenDate() {
     const y = Number(p.year);
     const mo = Number(p.month);
     const d = Number(p.day);
-    // 09:15 IST == 03:45 UTC (same calendar day)
-    const candidate = new Date(Date.UTC(y, mo - 1, d, 3, 45, 0, 0));
+    const openUtcMinutes = (MARKET_OPEN_HOUR_IST * 60 + MARKET_OPEN_MIN_IST) - IST_UTC_OFFSET_MIN;
+    const candidate = new Date(Date.UTC(y, mo - 1, d, Math.floor(openUtcMinutes / 60), openUtcMinutes % 60, 0, 0));
     if (candidate.getTime() > now.getTime()) return candidate;
   }
   return null;
 }
 
-/** Human-readable countdown: "2d 05:34:12" or "05:34:12". */
 function formatCountdown(ms) {
   const totalSec = Math.max(0, Math.floor(ms / 1000));
   const days = Math.floor(totalSec / 86400);
@@ -661,7 +542,6 @@ function formatCountdown(ms) {
   return `${hh}:${mm}:${ss}`;
 }
 
-/** Short label like "Opens Mon 09:15 IST". */
 function formatNextOpenLabel(date) {
   if (!(date instanceof Date)) return "";
   try {
@@ -746,12 +626,6 @@ const LoadingOverlay = (function () {
 // ============================================================
 // DOM ELEMENTS
 // ============================================================
-const indexBtn = document.getElementById("indexBtn");
-const optionsBtn = document.getElementById("optionsBtn");
-const indexView = document.getElementById("indexView");
-const optionsView = document.getElementById("optionsView");
-const instrumentPanel = document.getElementById("instrumentPanel");
-const collapseBtn = document.getElementById("collapseBtn");
 const chartContainer = document.getElementById("chart");
 const chartCard = document.getElementById("chartCard");
 const contentScroll = document.getElementById("contentScroll");
@@ -763,25 +637,12 @@ const indexLivePill = document.getElementById("indexLivePill");
 const marketStatusPill = document.getElementById("marketStatusPill");
 const marketStatusText = document.getElementById("marketStatusText");
 const marketCountdown = document.getElementById("marketCountdown");
-const instrumentSearch = document.getElementById("instrumentSearch");
-const optionsReferencePrice = document.getElementById("optionsReferencePrice");
-const callOptions = document.getElementById("callOptions");
-const putOptions = document.getElementById("putOptions");
-const indexNoResults = document.getElementById("indexNoResults");
-const optionsNoResults = document.getElementById("optionsNoResults");
-const panelPosSelect = document.getElementById("panelPosSelect");
-const panelBgColorPicker = document.getElementById("panelBgColorPicker");
-const panelBgHex = document.getElementById("panelBgHex");
 const historyLoadBanner = document.getElementById("historyLoadBanner");
 const triggerLoadHistoryBtn = document.getElementById("triggerLoadHistoryBtn");
 const levelStatusBar = document.getElementById("level-status");
-const panelFoldBtn = document.getElementById("panelFoldBtn");
-const panelFoldIcon = document.getElementById("panelFoldIcon");
-
 const subscribeBanner = document.getElementById("subscribeBanner");
 const subscribeBannerText = document.getElementById("subscribeBannerText");
 const subscribeBtn = document.getElementById("subscribeBtn");
-
 const instrumentInfoCard = document.getElementById("instrumentInfoCard");
 const instrumentInfoHeader = document.getElementById("instrumentInfoHeader");
 const instrumentInfoToggle = document.getElementById("instrumentInfoToggle");
@@ -789,13 +650,12 @@ const instrumentInfoChevron = document.getElementById("instrumentInfoChevron");
 const instrumentInfoToggleText = document.getElementById("instrumentInfoToggleText");
 const toggleInfoCardBtn = document.getElementById("toggleInfoCardBtn");
 const totalCandlesValue = document.getElementById("totalCandlesValue");
-
 const scrollUpBtn = document.getElementById("scrollUpBtn");
 const scrollDownBtn = document.getElementById("scrollDownBtn");
-
-// Price-scale controls
 const resetPriceScaleBtn = document.getElementById("resetPriceScaleBtn");
 const freezePriceScaleBtn = document.getElementById("freezePriceScaleBtn");
+const globalSearchInput = document.getElementById("globalSearchInput");
+const searchResults = document.getElementById("searchResults");
 
 // ============================================================
 // STATE
@@ -809,23 +669,18 @@ let chartSocket = null;
 let reconnectTimer = null;
 let reconnectAttempts = 0;
 let pageClosing = false;
-let currentIndexLtp = null;
 let isLoadingHistory = false;
 let hasMoreHistory = true;
 const reconnectMaximumDelay = 15000;
-const PANEL_COLLAPSE_KEY = "chart.instrumentPanel.collapsed";
 const INDICATOR_PREFS_KEY = "chart.indicators.prefs";
 
-// Market-hours state
 let marketStatusIntervalId = null;
-let lastMarketOpenState = null;   // null = not yet evaluated
+let lastMarketOpenState = null;
 
-// Price-scale mode: true = autoscale, false = user is free to pan/zoom
 let priceScaleAuto = true;
 const PRICE_HEADROOM_PCT = 0.20;
 const PRICE_FLOOR = 0;
 
-// Label visibility
 const labelVisibility = { r2s2: false, r3s3: true, highLow: true };
 function isLabelGroupVisible(levelName) {
   const n = String(levelName || "").toLowerCase();
@@ -836,7 +691,6 @@ function isLabelGroupVisible(levelName) {
   return true;
 }
 
-// Level state
 let calculatedOpeningRanges = {};
 let levelLines = [];
 let levelLabels = [];
@@ -845,17 +699,16 @@ let levelLabelUpdateScheduled = false;
 let chartTooltip = null;
 let currentRenderedDate = null;
 
-// EMA state
+// EMA cross on by default; EMA 9 / EMA 21 plots OFF by default
 const indicatorState = {
   ema9:     { enabled: false, series: null, length: 9,  color: "#2962ff" },
   ema21:    { enabled: false, series: null, length: 21, color: "#f5c451" },
-  emaCross: { enabled: false, markers: [] },
+  emaCross: { enabled: true,  markers: [] },
 };
 const emaCache = new Map();
 let emaCrossCache = { crosses: null, lastTime: null };
 let emaIncrementalRaf = null;
 
-// Price-scale watcher state
 const dynamicPriceScale = {
   currentUnit: null, currentPrecision: null, currentMinMove: null,
   tickSize: null, lastTopPrice: null, lastBottomPrice: null,
@@ -907,24 +760,6 @@ function getVisiblePriceRange() {
   const range = maxPrice - minPrice;
   if (!Number.isFinite(range) || range <= 0) return null;
   return { minPrice, maxPrice, range };
-}
-
-function computeCandlePriceRange(candles) {
-  if (!Array.isArray(candles) || !candles.length) return null;
-  let minP = Infinity, maxP = -Infinity;
-  for (const c of candles) {
-    if (!c) continue;
-    const lo = Number(c.low), hi = Number(c.high);
-    if (Number.isFinite(lo) && lo < minP) minP = lo;
-    if (Number.isFinite(hi) && hi > maxP) maxP = hi;
-  }
-  if (!Number.isFinite(minP) || !Number.isFinite(maxP) || maxP <= minP) return null;
-  const range = maxP - minP;
-  const pad = range * PRICE_HEADROOM_PCT;
-  return {
-    minValue: Math.max(PRICE_FLOOR, minP - pad),
-    maxValue: maxP + pad,
-  };
 }
 
 function snapToNiceUnit(rawUnit) {
@@ -1018,9 +853,6 @@ function stopPriceScaleWatcher() {
   }
 }
 
-// ------------------------------------------------------------
-// PRICE-SCALE MODE CONTROLS
-// ------------------------------------------------------------
 function applyAutoFitPriceScale() {
   if (!chart) return;
   priceScaleAuto = true;
@@ -1086,10 +918,7 @@ function updateMarketStatusUI() {
   updateLivePriceLabel(open);
 
   if (open) {
-    // Hide closed pill
     setMarketStatusPillVisible(false);
-
-    // If we just transitioned from closed → open, kick off live feed
     if (changed && previousOpen === false && !pageClosing && currentInstrumentKey) {
       console.log("[market] Market opened — connecting live feed");
       try {
@@ -1099,7 +928,6 @@ function updateMarketStatusUI() {
       } catch (err) { console.warn("Market-open reconnect failed:", err); }
     }
   } else {
-    // Market is closed — show pill, update countdown
     setMarketStatusPillVisible(true);
     const next = getNextMarketOpenDate();
     if (next) {
@@ -1113,18 +941,12 @@ function updateMarketStatusUI() {
       if (marketCountdown) marketCountdown.textContent = "--:--:--";
       if (marketStatusText) marketStatusText.textContent = "Market Closed";
     }
-
-    // Show closed-style connection status and suppress reconnect
     if (connectionStatus) {
       connectionStatus.classList.remove("connecting", "connected", "disconnected");
       connectionStatus.classList.add("closed");
     }
     if (connectionStatusText) connectionStatusText.textContent = "Market Closed";
-
-    // Hide subscribe banner (irrelevant when market is closed)
     if (subscribeBanner) subscribeBanner.classList.remove("visible");
-
-    // Tear down any active WS if market just closed
     if (changed && previousOpen === true) {
       console.log("[market] Market closed — disconnecting live feed");
       if (chartSocket) {
@@ -1138,9 +960,7 @@ function updateMarketStatusUI() {
 }
 
 function startMarketStatusWatcher() {
-  // Immediate sync
   try { updateMarketStatusUI(); } catch (err) { console.warn("Market status init failed:", err); }
-  // Then tick every second
   if (marketStatusIntervalId) clearInterval(marketStatusIntervalId);
   marketStatusIntervalId = window.setInterval(() => {
     try { updateMarketStatusUI(); } catch (err) { console.warn("Market status tick failed:", err); }
@@ -1221,10 +1041,8 @@ function getOrComputeEMACrosses(candles) {
   const lastTime = source[source.length - 1].time;
   const lastLen = source.length;
   if (emaCrossCache.crosses && emaCrossCache.lastTime === lastTime && emaCrossCache.length === lastLen) return emaCrossCache.crosses;
-  const fastLen = indicatorState.ema9.length;
-  const slowLen = indicatorState.ema21.length;
-  const fast = getOrComputeEMA(fastLen, source);
-  const slow = getOrComputeEMA(slowLen, source);
+  const fast = getOrComputeEMA(indicatorState.ema9.length, source);
+  const slow = getOrComputeEMA(indicatorState.ema21.length, source);
   const n = Math.min(fast.length, slow.length);
   const crosses = [];
   const candleByTime = new Map();
@@ -1366,15 +1184,13 @@ document.querySelectorAll("#indicatorToggleBar .label-toggle-btn[data-indicator]
   if (!(key in indicatorState)) return;
   try {
     const saved = JSON.parse(localStorage.getItem(INDICATOR_PREFS_KEY) || "{}");
-    if (saved[key]) { indicatorState[key].enabled = true; btn.classList.add("active"); }
+    if (saved[key] === true) { indicatorState[key].enabled = true; }
   } catch (e) {}
+  btn.classList.toggle("active", !!indicatorState[key].enabled);
   btn.addEventListener("click", () => {
     indicatorState[key].enabled = !indicatorState[key].enabled;
     btn.classList.toggle("active", indicatorState[key].enabled);
-    if (key === "emaCross" && indicatorState[key].enabled) {
-      if (!indicatorState.ema9.enabled) { indicatorState.ema9.enabled = true; document.querySelector('[data-indicator="ema9"]')?.classList.add("active"); }
-      if (!indicatorState.ema21.enabled) { indicatorState.ema21.enabled = true; document.querySelector('[data-indicator="ema21"]')?.classList.add("active"); }
-    }
+    // NOTE: do NOT auto-enable EMA 9 / EMA 21 when EMA Cross is turned on.
     try {
       const prefs = {};
       Object.keys(indicatorState).forEach(k => { if (typeof indicatorState[k].enabled === "boolean") prefs[k] = indicatorState[k].enabled; });
@@ -1383,73 +1199,6 @@ document.querySelectorAll("#indicatorToggleBar .label-toggle-btn[data-indicator]
     refreshIndicators();
   });
 });
-
-// ============================================================
-// PANEL POSITION / COLOR
-// ============================================================
-panelPosSelect.addEventListener("change", function () {
-  const selectedClass = this.value;
-  instrumentPanel.className = instrumentPanel.className.replace(/\bpanel-pos-\S+/g, "");
-  instrumentPanel.classList.add(selectedClass);
-});
-
-function getLuminance(hexColor) {
-  const rgb = parseInt(hexColor.slice(1), 16);
-  const r = (rgb >> 16) & 255, g = (rgb >> 8) & 255, b = rgb & 255;
-  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
-}
-panelBgColorPicker.addEventListener("input", function () {
-  const colorHex = this.value;
-  panelBgHex.textContent = colorHex;
-  instrumentPanel.style.backgroundColor = colorHex;
-  if (getLuminance(colorHex) < 140) instrumentPanel.classList.add("dark-theme");
-  else instrumentPanel.classList.remove("dark-theme");
-});
-
-// ============================================================
-// VIEW SWITCHING
-// ============================================================
-function activateView(activeButton, activeView) {
-  indexBtn.classList.remove("active");
-  optionsBtn.classList.remove("active");
-  indexView.hidden = true;
-  optionsView.hidden = true;
-  activeButton.classList.add("active");
-  activeView.hidden = false;
-  if (activeView === optionsView) updateOptionsFromLtp(currentIndexLtp);
-}
-indexBtn.addEventListener("click", () => activateView(indexBtn, indexView));
-optionsBtn.addEventListener("click", () => activateView(optionsBtn, optionsView));
-
-// ============================================================
-// INSTRUMENT PANEL FOLD
-// ============================================================
-function applyPanelCollapsed(collapsed) {
-  instrumentPanel.classList.toggle("collapsed", collapsed);
-  if (panelFoldIcon) panelFoldIcon.className = collapsed ? "bi bi-chevron-down" : "bi bi-chevron-up";
-  if (collapseBtn) {
-    const icon = collapseBtn.querySelector("i");
-    if (icon) icon.className = collapsed ? "bi bi-layout-sidebar-inset-reverse" : "bi bi-layout-sidebar-inset";
-    collapseBtn.setAttribute("title", collapsed ? "Expand instrument selector" : "Collapse instrument selector");
-  }
-  try { sessionStorage.setItem(PANEL_COLLAPSE_KEY, collapsed ? "1" : "0"); } catch (e) {}
-}
-function setPanelCollapsed(collapsed) {
-  applyPanelCollapsed(collapsed);
-  window.setTimeout(() => {
-    if (chart) {
-      chart.applyOptions({ width: chartContainer.clientWidth, height: chartContainer.clientHeight });
-      scheduleLevelLabelUpdate();
-    }
-  }, 230);
-}
-function togglePanelCollapsed() { setPanelCollapsed(!instrumentPanel.classList.contains("collapsed")); }
-try { if (sessionStorage.getItem(PANEL_COLLAPSE_KEY) === "1") applyPanelCollapsed(true); } catch (e) {}
-document.querySelectorAll(".option-card, .index-card").forEach(function (link) {
-  link.addEventListener("click", function () { applyPanelCollapsed(true); });
-});
-if (collapseBtn) collapseBtn.addEventListener("click", togglePanelCollapsed);
-if (panelFoldBtn) panelFoldBtn.addEventListener("click", function (e) { e.stopPropagation(); togglePanelCollapsed(); });
 
 // ============================================================
 // INSTRUMENT INFO CARD FOLD
@@ -1598,51 +1347,11 @@ function getPayloadCandle(payload) {
 }
 
 // ============================================================
-// LIVE PRICE + OPTION SORTING
+// LIVE PRICE
 // ============================================================
 function updateLivePrice(ltp) {
   if (!Number.isFinite(ltp)) return;
-  currentIndexLtp = ltp;
   livePrice.textContent = ltp.toFixed(2);
-  if (optionsReferencePrice) optionsReferencePrice.textContent = "LTP " + ltp.toFixed(2);
-  updateOptionsFromLtp(ltp);
-}
-function updateOptionsFromLtp(ltp) {
-  if (!Number.isFinite(ltp)) return;
-  const allOptionCards = document.querySelectorAll(".option-card");
-  if (!allOptionCards.length) return;
-  allOptionCards.forEach(card => {
-    const strike = Number(card.dataset.strike);
-    if (!Number.isFinite(strike)) return;
-    const distance = Math.abs(strike - ltp);
-    card.dataset.distance = distance;
-    const distanceElement = card.querySelector(".option-distance");
-    if (distanceElement) distanceElement.textContent = distance === 0 ? "ATM" : distance.toFixed(0);
-    card.classList.remove("nearest-option");
-    const existingBadge = card.querySelector(".nearest-badge");
-    if (existingBadge) existingBadge.remove();
-  });
-  sortOptionColumn(callOptions, ltp);
-  sortOptionColumn(putOptions, ltp);
-}
-function sortOptionColumn(container, ltp) {
-  if (!container) return;
-  const cards = Array.from(container.querySelectorAll(".option-card"));
-  cards.sort((a, b) => {
-    const da = Math.abs(Number(a.dataset.strike) - ltp);
-    const db = Math.abs(Number(b.dataset.strike) - ltp);
-    if (da !== db) return da - db;
-    return Number(a.dataset.strike) - Number(b.dataset.strike);
-  });
-  cards.forEach(card => container.appendChild(card));
-  if (cards.length > 0) {
-    const nearest = cards[0];
-    nearest.classList.add("nearest-option");
-    const badge = document.createElement("span");
-    badge.className = "nearest-badge";
-    badge.textContent = "NEAREST";
-    nearest.appendChild(badge);
-  }
 }
 
 // ============================================================
@@ -1758,8 +1467,6 @@ triggerLoadHistoryBtn.addEventListener("click", loadOlderHistoricalData);
 // SUBSCRIPTION STATUS + ON-DEMAND SUBSCRIBE
 // ============================================================
 async function checkSubscriptionStatus() {
-  // When the market is closed we don't show the subscribe banner — no point
-  // pushing users to subscribe if nothing will arrive.
   if (!isMarketOpenNow()) {
     subscribeBanner.classList.remove("visible");
     return;
@@ -1831,7 +1538,6 @@ function processWebSocketMessage(event) {
 
 function scheduleReconnect() {
   if (pageClosing || reconnectTimer) return;
-  // Do NOT keep retrying while the market is closed.
   if (!isMarketOpenNow()) {
     setConnectionStatus("closed", "Market Closed");
     return;
@@ -1844,7 +1550,6 @@ function scheduleReconnect() {
 
 function connectWebSocket() {
   if (!currentInstrumentKey || pageClosing) return;
-  // Hard guard: don't connect outside of market hours.
   if (!isMarketOpenNow()) {
     setConnectionStatus("closed", "Market Closed");
     return;
@@ -1861,17 +1566,16 @@ function connectWebSocket() {
     scheduleReconnect();
     return;
   }
-  chartSocket.addEventListener("open", () => { 
-    reconnectAttempts = 0; 
+  chartSocket.addEventListener("open", () => {
+    reconnectAttempts = 0;
     setConnectionStatus("connected", "Live");
-    // Also send explicit subscribe event for dynamic subscription API update
     try {
-        chartSocket.send(JSON.stringify({
-            action: "subscribe",
-            instrument_key: currentInstrumentKey
-        }));
+      chartSocket.send(JSON.stringify({
+        action: "subscribe",
+        instrument_key: currentInstrumentKey
+      }));
     } catch (e) {
-        console.warn("Failed to send subscribe message", e);
+      console.warn("Failed to send subscribe message", e);
     }
   });
   chartSocket.addEventListener("message", processWebSocketMessage);
@@ -1880,21 +1584,79 @@ function connectWebSocket() {
 }
 
 // ============================================================
-// INSTRUMENT SEARCH (in the panel)
+// GLOBAL SEARCH BAR
 // ============================================================
-instrumentSearch.addEventListener("input", function () {
-  const search = this.value.trim().toLowerCase();
-  const activeView = !indexView.hidden ? indexView : optionsView;
-  const cards = activeView.querySelectorAll(".searchable-card");
-  let visibleCount = 0;
-  cards.forEach(card => {
-    const text = (card.dataset.search || "").toLowerCase();
-    const matches = !search || text.includes(search);
-    card.hidden = !matches;
-    if (matches) visibleCount++;
-  });
-  if (activeView === indexView) indexNoResults.hidden = visibleCount !== 0;
-  else optionsNoResults.hidden = visibleCount !== 0;
+let searchDebounce = null;
+let searchAbort = null;
+
+function pillClassFor(item) {
+  const t = String(item.instrument_type || "").toUpperCase();
+  if (t === "CE") return "ce";
+  if (t === "PE") return "pe";
+  if (t === "INDEX" || String(item.segment || "").includes("INDEX")) return "idx";
+  return "other";
+}
+
+function renderSearchResults(items) {
+  if (!items || !items.length) {
+    searchResults.innerHTML = `<div class="search-result-empty">No instruments found</div>`;
+    searchResults.classList.add("visible");
+    return;
+  }
+  searchResults.innerHTML = items.map(it => {
+    const key = it.instrument_key || "";
+    const sym = it.trading_symbol || it.name || key;
+    const pill = pillClassFor(it);
+    const type = String(it.instrument_type || "—").toUpperCase();
+    const metaBits = [];
+    if (it.strike_price != null) metaBits.push("₹" + Number(it.strike_price).toFixed(0));
+    if (it.expiry) metaBits.push(it.expiry);
+    return `<div class="search-result-item" data-key="${encodeURIComponent(key)}">
+      <span class="sym">${sym}</span>
+      <span class="meta">${metaBits.join(" · ")}</span>
+      <span class="pill ${pill}">${type}</span>
+    </div>`;
+  }).join("");
+  searchResults.classList.add("visible");
+}
+
+async function runGlobalSearch(q) {
+  if (!q || q.length < 2) { searchResults.classList.remove("visible"); return; }
+  if (searchAbort) searchAbort.abort();
+  searchAbort = new AbortController();
+  try {
+    const resp = await fetch(UPSTOX_SEARCH_URL(q), { signal: searchAbort.signal });
+    if (!resp.ok) {
+      searchResults.innerHTML = `<div class="search-result-empty">Search failed</div>`;
+      searchResults.classList.add("visible");
+      return;
+    }
+    const data = await resp.json();
+    renderSearchResults(data.data || []);
+  } catch (e) {
+    if (e.name !== "AbortError") console.warn("search error:", e);
+  }
+}
+
+globalSearchInput.addEventListener("input", function () {
+  const q = this.value.trim();
+  if (searchDebounce) clearTimeout(searchDebounce);
+  searchDebounce = setTimeout(() => runGlobalSearch(q), 320);
+});
+globalSearchInput.addEventListener("keydown", function (e) {
+  if (e.key === "Escape") { searchResults.classList.remove("visible"); this.blur(); }
+});
+document.addEventListener("click", function (e) {
+  if (!e.target.closest(".global-search")) searchResults.classList.remove("visible");
+});
+searchResults.addEventListener("click", function (e) {
+  const item = e.target.closest(".search-result-item");
+  if (!item) return;
+  const key = decodeURIComponent(item.dataset.key);
+  if (!key) return;
+  searchResults.classList.remove("visible");
+  globalSearchInput.value = "";
+  window.location.href = "/chart/" + encodeURIComponent(key);
 });
 
 // ============================================================
@@ -1904,14 +1666,8 @@ try { currentInstrumentKey = JSON.parse(document.getElementById("instrument-key-
 
 // ============================================================
 // START MARKET STATUS WATCHER IMMEDIATELY
-// (so the header pill is correct before the chart finishes loading)
 // ============================================================
 startMarketStatusWatcher();
-
-// ============================================================
-// AUTO SELECT OPTIONS VIEW
-// ============================================================
-if (typeof currentInstrumentKey === "string" && currentInstrumentKey.startsWith("NSE_FO|")) { activateView(optionsBtn, optionsView); }
 
 /* ============================================================
    OPENING RANGE / LEVEL CALCULATIONS
@@ -2313,8 +2069,6 @@ async function bootstrapChart() {
 
     await checkSubscriptionStatus();
 
-    // Only connect to the live feed if the market is currently open.
-    // Outside market hours we show "Market Closed" + countdown instead.
     if (isMarketOpenNow()) {
       try { connectWebSocket(); } catch (err) { console.error("WebSocket init failed:", err); }
     } else {
@@ -2346,4 +2100,4 @@ window.addEventListener("beforeunload", () => {
   if (chartSocket) chartSocket.close(1000, "Chart page closed");
 });
 </script>
-{% endblock %} 
+{% endblock %}

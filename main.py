@@ -101,7 +101,8 @@ from routes.order_routes import router as order_router
 from routes.margin_routes import router as margin_router
 from routes.margin_routes import router as margin_router
 from routes.layout_routes import router as layout_router
-
+from routes.daily_backup_routes import router as daily_backup_router
+from routes.prochart_routes import router as prochart_router
 
 logger = get_logger(__file__)
 
@@ -399,6 +400,8 @@ app.include_router(market_holiday_router)
 app.include_router(order_router)
 app.include_router(margin_router)
 app.include_router(margin_router)
+app.include_router(daily_backup_router)
 
 # near the other app.include_router(...) calls
 app.include_router(layout_router)
+app.include_router(prochart_router)

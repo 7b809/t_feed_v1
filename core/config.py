@@ -482,12 +482,22 @@ SIMULATION_S2_CROSS_BUFFER_MINUTES = max(
 )
 
 # ===========================================================================
-# DAILY BACKUP — zip configured folders and save to MongoDB
+# DAILY BACKUP — zip configured folders, upload to MEGA, track state in Mongo
 # ===========================================================================
 # Runs at DAILY_BACKUP_HOUR:DAILY_BACKUP_MINUTE every day via the shared
-# APScheduler. The zip is stored inline in MongoDB when it fits under
-# DAILY_BACKUP_MAX_BLOB_MB; otherwise only metadata is saved with a
-# clear reason.
+# APScheduler. For each folder in DAILY_BACKUP_FOLDERS, a zip is built,
+# uploaded to MEGA under:
+#
+#     <MEGA_BACKUP_ROOT>/<folder>/<folder>_<YYYY-MM-DD>.zip
+#
+# and a progress-state document is upserted into
+# <DAILY_BACKUP_MONGO_DB>.<DAILY_BACKUP_STATE_COLLECTION> keyed by the
+# date, so the last N days can be reviewed from
+# GET /admin/daily-backup-status.
+#
+# NOTE: the archive is no longer stored in MongoDB. The collection
+#       BACKUP_BLOB_COLLECTION remains reserved for the candle-backup
+#       extract that is re-consumed on every refresh.
 DAILY_BACKUP_ENABLED = _bool("DAILY_BACKUP_ENABLED", True)
 
 # Scheduler trigger time (market timezone).
@@ -497,24 +507,46 @@ DAILY_BACKUP_MINUTE = _int("DAILY_BACKUP_MINUTE", 0)
 # All days by default. Set to "mon,tue,wed,thu,fri" to skip weekends.
 DAILY_BACKUP_DAYS = _str("DAILY_BACKUP_DAYS", "mon,tue,wed,thu,fri,sat,sun")
 
-# Folders (relative to the project root) to zip on each run.
+# Folders (relative to the project root) to zip on each run. Each
+# folder becomes its own zip; they are uploaded to separate MEGA
+# subfolders under MEGA_BACKUP_ROOT.
 DAILY_BACKUP_FOLDERS = _csv("DAILY_BACKUP_FOLDERS", "data")
 
-# Destination database / collection / doc id.
-# NOTE: this is intentionally different from MONGO_DB / BACKUP_BLOB_*
-# so the daily backup does not collide with the candle-backup extraction.
-DAILY_BACKUP_MONGO_DB = _str("DAILY_BACKUP_MONGO_DB", "UPSTOX_APP_V2")
-DAILY_BACKUP_COLLECTION = _str("DAILY_BACKUP_COLLECTION", "backup_collection")
-DAILY_BACKUP_DOC_ID = _str(
-    "DAILY_BACKUP_DOC_ID", "market_engine_v1_daily_data_backup"
-)
-
-# Inline blob limit (MB). If the final zip exceeds this, only metadata
-# is saved and the run reports status = "skipped_size_limit".
-DAILY_BACKUP_MAX_BLOB_MB = max(1, _int("DAILY_BACKUP_MAX_BLOB_MB", 15))
-
-# Value written to the `folder` field in the document. Defaults to the
-# project directory name (e.g. "market-engine-v1").
+# Value written to the `folder` field in the state document. Defaults
+# to the project directory name (e.g. "market-engine-v1").
 DAILY_BACKUP_SOURCE_LABEL = _str(
     "DAILY_BACKUP_SOURCE_LABEL", PROJECT_ROOT.name
 )
+
+# ===========================================================================
+# MEGA cloud upload (destination for daily zips)
+# ===========================================================================
+# Credentials for the MEGA account that receives the daily zips.
+# ⚠️  SECRETS — keep out of Git.
+MEGA_ENABLED = _bool("MEGA_ENABLED", True)
+MEGA_EMAIL = _str("MEGA_EMAIL")
+MEGA_PASSWORD = _str("MEGA_PASSWORD")
+
+# Remote folder layout under the MEGA root:
+#     <MEGA_BACKUP_ROOT>/<folder>/<folder>_<YYYY-MM-DD>.zip
+# e.g. market_engine_backup/data/data_2026-10-20.zip
+MEGA_BACKUP_ROOT = _str("MEGA_BACKUP_ROOT", "market_engine_backup")
+
+# ===========================================================================
+# MongoDB progress-state tracking for the daily backup
+# ===========================================================================
+# NOT the archive — the archive lives on MEGA. This collection holds
+# ONE document per date, keyed by _id = "YYYY-MM-DD", tracking whether
+# each folder's zip was uploaded, its size, MEGA link, and error (if
+# any). /admin/daily-backup-status returns the last
+# DAILY_BACKUP_STATE_DAYS date documents, newest first.
+DAILY_BACKUP_MONGO_DB = _str("DAILY_BACKUP_MONGO_DB", "UPSTOX_APP_V2")
+DAILY_BACKUP_STATE_COLLECTION = _str(
+    "DAILY_BACKUP_STATE_COLLECTION", "daily_backup_state"
+)
+DAILY_BACKUP_STATE_DAYS = max(1, _int("DAILY_BACKUP_STATE_DAYS", 7))
+
+# DEPRECATED — kept only so an existing .env that still sets
+# DAILY_BACKUP_MAX_BLOB_MB does not crash the loader. Ignored by the
+# MEGA-based implementation, which has no inline size cap.
+DAILY_BACKUP_MAX_BLOB_MB = max(1, _int("DAILY_BACKUP_MAX_BLOB_MB", 15))

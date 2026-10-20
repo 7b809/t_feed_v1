@@ -1,14 +1,13 @@
-"""Scheduled wrapper for the daily MongoDB data backup.
+"""Scheduled wrapper for the daily MEGA backup.
 
 Runs at ``DAILY_BACKUP_HOUR:DAILY_BACKUP_MINUTE`` (default 16:00 IST)
 via the shared APScheduler in ``services/scheduler_service.py``.
 
 Sends:
-    - Started (INFO) before zipping
-    - Completed (SUCCESS) when the archive was saved inline
-    - Finished (WARNING) when the archive exceeded the size limit and
-      only metadata was saved
-    - Failed (ERROR) on an unexpected exception
+    - Started (INFO)      before zipping
+    - Completed (SUCCESS) when every folder uploaded to MEGA
+    - Finished (WARNING)  on partial success / no data / disabled
+    - Failed (ERROR)      on unexpected exceptions
 """
 
 from __future__ import annotations
@@ -22,64 +21,92 @@ from services.telegram_service import telegram_service
 
 logger = logging.getLogger(__name__)
 
-
 def _completion_message(summary: dict[str, Any]) -> str:
     status = str(summary.get("status") or "unknown")
+    date_str = summary.get("date") or "—"
+    root = summary.get("root_folder") or "—"
+    files = summary.get("files") or []
 
-    if status == "saved":
-        fields = [
-            ("Status", "saved"),
-            ("Archive", summary.get("archive_name")),
-            ("Size", summary.get("archive_size_human")),
-            ("Files", summary.get("file_count")),
-            ("Doc ID", summary.get("doc_id")),
-            ("DB", summary.get("database")),
-            ("Collection", summary.get("collection")),
-        ]
-        section_title = "Result"
-        section_emoji = "✅"
-        bullets = [
-            f"Archive {summary.get('archive_size_human')} stored inline.",
-            f"Under the {summary.get('limit_human')} limit.",
-        ]
+    if status == "uploaded":
+        bullets: list[str] = []
+        for f in files:
+            if not f.get("uploaded"):
+                continue
+            bullets.append(
+                f"✅ {f.get('remote_path')}  ·  {f.get('size_human')}"
+            )
+            if f.get("mega_link"):
+                bullets.append(f"   🔗 {f.get('mega_link')}")
         return build(
             emoji="📦",
-            title="Daily Backup · Completed",
-            fields=fields,
-            sections=[(section_title, section_emoji, bullets)],
+            title="Daily Backup · Uploaded",
+            fields=[
+                ("Date", date_str),
+                ("Root", root),
+                ("Total size", summary.get("total_size_human")),
+                ("Uploaded", summary.get("uploaded_count")),
+            ],
+            sections=[("MEGA", "☁️", bullets or ["—"])],
             status="success",
-            status_detail=f"files={summary.get('file_count')}",
+            status_detail=(
+                f"{summary.get('uploaded_count')} file(s) uploaded"
+            ),
         )
 
-    if status == "skipped_size_limit":
-        fields = [
-            ("Status", "skipped (size)"),
-            ("Archive", summary.get("archive_name")),
-            ("Size", summary.get("archive_size_human")),
-            ("Limit", summary.get("limit_human")),
-            ("Files", summary.get("file_count")),
-            ("Doc ID", summary.get("doc_id")),
-        ]
-        bullets = [
-            f"Archive exceeds the {summary.get('limit_human')} inline limit.",
-            "Only metadata was saved to MongoDB.",
-            "Raise DAILY_BACKUP_MAX_BLOB_MB, trim DAILY_BACKUP_FOLDERS, "
-            "or archive the folder manually before the next refresh.",
-        ]
+    if status == "partial":
+        bullets: list[str] = []
+        for f in files:
+            if f.get("uploaded"):
+                bullets.append(
+                    f"✅ {f.get('folder')}: "
+                    f"{f.get('size_human')} (uploaded)"
+                )
+            else:
+                bullets.append(
+                    f"❌ {f.get('folder')}: {f.get('error')}"
+                )
         return build(
             emoji="⚠️",
-            title="Daily Backup · Finished",
-            fields=fields,
-            sections=[("Reason", "⚠️", bullets)],
+            title="Daily Backup · Partial",
+            fields=[
+                ("Date", date_str),
+                ("Root", root),
+                ("Uploaded", summary.get("uploaded_count")),
+                ("Failed", summary.get("failed_count")),
+            ],
+            sections=[("Per folder", "📁", bullets)],
             status="warning",
-            status_detail="metadata only — size limit hit",
+            status_detail="some folders failed — see per-folder status",
+        )
+
+    if status == "failed":
+        return build(
+            emoji="❌",
+            title="Daily Backup · Failed",
+            fields=[
+                ("Date", date_str),
+                ("Root", root),
+                ("Error", summary.get("error") or "unknown error"),
+            ],
+            status="failed",
+        )
+
+    if status == "no_data":
+        return build(
+            emoji="📭",
+            title="Daily Backup · No Data",
+            fields=[
+                ("Date", date_str),
+                ("Note", "No source folders produced a zip."),
+            ],
+            status="warning",
         )
 
     if status == "disabled":
         return build(
             emoji="🚫",
             title="Daily Backup · Disabled",
-            fields=[("Reason", summary.get("message") or "config")],
+            fields=[("Reason", summary.get("message") or summary.get("reason"))],
             status="info",
         )
 
@@ -102,13 +129,9 @@ def _completion_message(summary: dict[str, Any]) -> str:
     return build(
         emoji="❌",
         title="Daily Backup · Failed",
-        fields=[
-            ("Status", status),
-            ("Error", summary.get("error") or summary.get("reason")),
-        ],
+        fields=[("Error", summary.get("error") or "unknown")],
         status="failed",
     )
-
 
 def run_daily_backup() -> None:
     logger.info("Daily backup job starting")
@@ -117,17 +140,15 @@ def run_daily_backup() -> None:
         build(
             emoji="📦",
             title="Daily Backup · Started",
-            sections=[
-                (
-                    "Doing",
-                    "🔍",
-                    [
-                        "Zip configured folders",
-                        "Measure final archive size",
-                        "Save inline if within limit, else metadata only",
-                    ],
-                )
-            ],
+            sections=[(
+                "Doing",
+                "🔍",
+                [
+                    "Zip configured folders",
+                    "Upload to MEGA cloud",
+                    "Record progress state in MongoDB",
+                ],
+            )],
             status="started",
         ),
         level="INFO",
@@ -137,9 +158,9 @@ def run_daily_backup() -> None:
         summary = daily_backup_service.run(reason="scheduled")
         status = str(summary.get("status") or "unknown")
 
-        if status == "saved":
+        if status == "uploaded":
             level = "SUCCESS"
-        elif status in {"skipped_size_limit", "no_folders"}:
+        elif status in {"partial", "no_data"}:
             level = "WARNING"
         elif status == "already_running":
             level = "INFO"
@@ -151,10 +172,11 @@ def run_daily_backup() -> None:
         )
 
         logger.info(
-            "Daily backup completed: status=%s size=%s files=%s",
+            "Daily backup completed: status=%s uploaded=%s size=%s date=%s",
             status,
-            summary.get("archive_size_human"),
-            summary.get("file_count"),
+            summary.get("uploaded_count"),
+            summary.get("total_size_human"),
+            summary.get("date"),
         )
     except Exception as exc:
         logger.exception("Daily backup failed")
