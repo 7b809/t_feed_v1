@@ -33,6 +33,28 @@ the same order:
     14. Telegram completion notification
     15. Return structured result
 
+Startup configuration validation
+--------------------------------
+Before anything else runs, the lifespan calls
+``services.config_validation.validate_config()`` which catches the
+class of misconfiguration that does not raise an error but silently
+breaks a pipeline stage (e.g. ``STRATEGY_USEFUL_WINDOW_START_HOUR``
+greater than ``..._END_HOUR``, an invalid day-of-week token in
+``DAILY_REFRESH_DAYS``, ``OPENING_RANGE_HOUR=25``, or
+``STRATEGY_ORDER`` time earlier than ``OPENING_RANGE`` time).
+
+Errors are:
+
+  * logged at ERROR level,
+  * surfaced on Telegram as a single "Config Validation Failed"
+    message (one alert per process start, not per-check),
+  * recorded for the readiness endpoint by the surrounding systems.
+
+The process deliberately **continues** — a single subsystem being
+misconfigured does not justify taking the whole engine offline
+mid-session. The 08:45 readiness digest will show RED for the
+affected checks, and the operator can act on ``/admin/ops/runbook``.
+
 Market holiday gate
 -------------------
 Before running the unified refresh, startup asks the new
@@ -64,6 +86,7 @@ Admin surfaces mounted by this module:
     Strategy 2 API        routes/strategy_2_routes.py
     Strategy Dashboard    routes/dashboard_routes.py
     Market Holiday API    routes/market_holiday_routes.py
+    Readiness API         routes/readiness_routes.py
 """
 
 import asyncio
@@ -76,16 +99,24 @@ from fastapi.middleware.cors import CORSMiddleware
 from core.logger import get_logger
 from routes.admin_routes import _run_full_refresh_sync
 from routes.admin_routes import router as admin_router
+from routes.daily_backup_routes import router as daily_backup_router
 from routes.dashboard_routes import router as dashboard_router
 from routes.folder_routes import router as folder_router
+from routes.layout_routes import router as layout_router
 from routes.live_routes import router as live_router
 from routes.log_routes import router as log_router
+from routes.margin_routes import router as margin_router
 from routes.market_holiday_routes import router as market_holiday_router
 from routes.opening_range_routes import router as opening_range_router
+from routes.order_routes import router as order_router
 from routes.page_routes import router as page_router
+from routes.prochart_routes import router as prochart_router
+from routes.readiness_routes import router as readiness_router
 from routes.strategy_2_routes import router as strategy_2_router
 from routes.strategy_routes import router as strategy_router
 from routes.upstox_routes import router as upstox_router
+
+from services.config_validation import validate_config
 from services.live_feed_service import live_feed_service
 from services.market_holiday_service import market_holiday_service
 from services.scheduler_service import scheduler_service
@@ -97,12 +128,6 @@ from services.strategy_2_live_tracker_service import (
 )
 from services.telegram_service import telegram_service
 from token_tasks.telegram_token_bot import telegram_token_bot
-from routes.order_routes import router as order_router
-from routes.margin_routes import router as margin_router
-from routes.margin_routes import router as margin_router
-from routes.layout_routes import router as layout_router
-from routes.daily_backup_routes import router as daily_backup_router
-from routes.prochart_routes import router as prochart_router
 
 logger = get_logger(__file__)
 
@@ -121,6 +146,71 @@ def _is_strategy2_enabled() -> bool:
         return bool(getattr(config, "STRATEGY_2_ENABLED", False))
     except Exception:
         return False
+
+
+# --------------------------------------------------------------------------- #
+# Startup configuration validation                                            #
+# --------------------------------------------------------------------------- #
+def _run_config_validation() -> tuple[list[str], list[str]]:
+    """Validate config and surface the result on Telegram + logs.
+
+    Returns ``(errors, warnings)``. Never raises — a validation crash
+    (e.g. an unexpected import failure inside ``validate_config``) is
+    itself converted to a single error line so the operator still
+    sees something on Telegram.
+
+    Behaviour on errors:
+        * log at ERROR level,
+        * send ONE Telegram alert listing every error,
+        * return (does NOT raise, does NOT abort startup).
+
+    On a clean config, both lists are empty and only one INFO line is
+    logged.
+    """
+    try:
+        errors, warnings = validate_config()
+    except Exception as exc:
+        logger.exception("Config validation raised")
+        errors = [
+            f"validate_config() raised {type(exc).__name__}: {exc}"
+        ]
+        warnings = []
+
+    if warnings:
+        logger.warning(
+            "Config validation produced %d warning(s):\n%s",
+            len(warnings),
+            "\n".join(f"  • {w}" for w in warnings),
+        )
+
+    if errors:
+        logger.error(
+            "Config validation FAILED with %d error(s):\n%s",
+            len(errors),
+            "\n".join(f"  • {e}" for e in errors),
+        )
+        try:
+            telegram_service.send_message(
+                "❌ Config Validation Failed",
+                (
+                    "The following configuration errors were detected "
+                    "at startup. The process is running, but one or "
+                    "more subsystems are likely disabled until this "
+                    "is fixed.\n\n"
+                    + "\n".join(f"• {e}" for e in errors)
+                ),
+                level="ERROR",
+            )
+        except Exception:
+            logger.exception(
+                "Failed to send config validation Telegram alert"
+            )
+    else:
+        logger.info(
+            "Config validation OK (%d warning(s))", len(warnings)
+        )
+
+    return errors, warnings
 
 
 # --------------------------------------------------------------------------- #
@@ -202,6 +292,13 @@ def _holiday_gate_for_startup() -> dict[str, Any]:
 @asynccontextmanager
 async def app_lifespan(app: FastAPI):
     loop = asyncio.get_running_loop()
+
+    # ---- Startup config validation (fail loud, not fast) ----------- #
+    # Runs BEFORE the holiday gate so a broken config is visible even
+    # on a holiday (when the strategy pipeline is skipped and most
+    # subsystems are idle — the operator still needs to know their
+    # config is broken before the next trading day).
+    _run_config_validation()
 
     try:
         # ---- Holiday gate --------------------------------------------- #
@@ -399,9 +496,7 @@ app.include_router(log_router)
 app.include_router(market_holiday_router)
 app.include_router(order_router)
 app.include_router(margin_router)
-app.include_router(margin_router)
 app.include_router(daily_backup_router)
-
-# near the other app.include_router(...) calls
 app.include_router(layout_router)
 app.include_router(prochart_router)
+app.include_router(readiness_router)

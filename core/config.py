@@ -34,6 +34,23 @@ def _csv(name: str, default: str = "") -> list[str]:
     return [part.strip() for part in raw.split(",") if part.strip()]
 
 # ---------------------------------------------------------------------------
+# Application port
+# ---------------------------------------------------------------------------
+# Used by services/readiness_service.py's smoke-test probes
+# (http://127.0.0.1:<PORT>/...). MUST match the port the app is actually
+# listening on.
+#
+#   run.bat / start.sh      -> 8010  (default)
+#   Procfile                -> 8000  (override PORT=8000)
+#   manual uvicorn          -> whatever --port is passed
+#
+# If this value is wrong the smoke test will fail with a
+# ConnectionRefused and the readiness digest will report YELLOW. That
+# is intentional: a health probe that cannot reach the app is itself
+# a real (if minor) degradation.
+PORT = _int("PORT", 8010)
+
+# ---------------------------------------------------------------------------
 # Token storage / lifecycle
 # ---------------------------------------------------------------------------
 MONGO_URI = _str("MONGO_URL") or _str("MONGO_URI")
@@ -111,11 +128,63 @@ LIVE_CROSSES_FILENAME = _str("LIVE_CROSSES_FILENAME", "live_crosses.json")
 # ---------------------------------------------------------------------------
 # Daily refresh scheduler
 # ---------------------------------------------------------------------------
+# 08:30 IST — the industry-standard "pre-open warm-up window". Chosen
+# deliberately: 30 minutes before the 09:00 premarket and 45 minutes
+# before the 09:15 cash open, which is enough time to catch an error,
+# fix it, and still be ready for the open.
+#
+# The readiness pipeline is built around this timing:
+#     08:30  daily refresh runs
+#     08:45  readiness digest (GREEN/YELLOW/RED + per-check)
+#     09:05  pre-flight recheck (alert on any regression)
+#     09:15  cash open
+#     09:16  OR cron
+#     09:17  OR + Stage-1 watchdog
 DAILY_REFRESH_ENABLED = _bool("DAILY_REFRESH_ENABLED", True)
-DAILY_REFRESH_HOUR = _int("DAILY_REFRESH_HOUR", 9)
-DAILY_REFRESH_MINUTE = _int("DAILY_REFRESH_MINUTE", 0)
+DAILY_REFRESH_HOUR = _int("DAILY_REFRESH_HOUR", 8)
+DAILY_REFRESH_MINUTE = _int("DAILY_REFRESH_MINUTE", 30)
 # Mon..Fri by default (APScheduler day_of_week uses mon,tue,...)
 DAILY_REFRESH_DAYS = _str("DAILY_REFRESH_DAYS", "mon,tue,wed,thu,fri")
+
+# ---------------------------------------------------------------------------
+# Readiness / pre-flight / watchdog
+# ---------------------------------------------------------------------------
+# The readiness pipeline produces ONE aggregate GREEN/YELLOW/RED status
+# from ~10 independent subsystem checks (token, registry, Mongo, live
+# feed, scheduler, clock drift, disk, order toggle, ...) and surfaces
+# it on Telegram at 08:45 and re-verifies at 09:05.
+#
+#   READINESS_DIGEST_*    08:45 Telegram digest (short, glanceable)
+#   READINESS_PREFLIGHT_* 09:05 re-check + intervention alert
+#   READINESS_WATCHDOG_*  09:17 OR + Stage-1 cron watchdogs
+#
+# The config validator (services/config_validation.py) enforces that
+# digest < preflight < OR, so a misconfiguration here fails loudly at
+# startup rather than silently producing no alerts.
+READINESS_DIGEST_ENABLED = _bool("READINESS_DIGEST_ENABLED", True)
+READINESS_DIGEST_HOUR = _int("READINESS_DIGEST_HOUR", 8)
+READINESS_DIGEST_MINUTE = _int("READINESS_DIGEST_MINUTE", 45)
+
+READINESS_PREFLIGHT_ENABLED = _bool("READINESS_PREFLIGHT_ENABLED", True)
+READINESS_PREFLIGHT_HOUR = _int("READINESS_PREFLIGHT_HOUR", 9)
+READINESS_PREFLIGHT_MINUTE = _int("READINESS_PREFLIGHT_MINUTE", 5)
+
+READINESS_WATCHDOG_ENABLED = _bool("READINESS_WATCHDOG_ENABLED", True)
+
+# Thresholds for the individual checks. Any check that returns "fail"
+# turns the aggregate status RED; any "warn" turns it YELLOW; all-ok
+# is GREEN. These are tuned for a single-VPS deployment — bump the
+# disk threshold on a large-data host.
+READINESS_CLOCK_DRIFT_MAX_SECONDS = _float("READINESS_CLOCK_DRIFT_MAX_SECONDS", 30.0)
+READINESS_DISK_FREE_MIN_GB = _float("READINESS_DISK_FREE_MIN_GB", 1.0)
+READINESS_REGISTRY_MIN_COUNT = _int("READINESS_REGISTRY_MIN_COUNT", 100)
+READINESS_TOKEN_MAX_AGE_MINUTES = _float("READINESS_TOKEN_MAX_AGE_MINUTES", 120.0)
+# When False, the readiness digest skips the active HTTP probes
+# (GET /live/snapshot, GET /live/instruments, GET /api/upstox/token).
+# Set to False only if the app is intentionally not listening on
+# 127.0.0.1:<PORT> (e.g. a container where the probe would need a
+# service-name hostname instead of loopback).
+READINESS_SMOKE_TEST_ENABLED = _bool("READINESS_SMOKE_TEST_ENABLED", True)
 
 # ---------------------------------------------------------------------------
 # Strategy pipeline logging verbosity
@@ -550,3 +619,60 @@ DAILY_BACKUP_STATE_DAYS = max(1, _int("DAILY_BACKUP_STATE_DAYS", 7))
 # DAILY_BACKUP_MAX_BLOB_MB does not crash the loader. Ignored by the
 # MEGA-based implementation, which has no inline size cap.
 DAILY_BACKUP_MAX_BLOB_MB = max(1, _int("DAILY_BACKUP_MAX_BLOB_MB", 15))
+
+
+# ===========================================================================
+# STRATEGY PIPELINE — MARKET-HOURS GATE
+# ===========================================================================
+# When STRATEGY_RUN_OUTSIDE_MARKET_HOURS is False (default), the unified
+# refresh SKIPS the heavy strategy pipeline when the project starts
+# OUTSIDE the useful window defined below:
+#
+#     Skipped stages:
+#         • Opening Range (OR) level calculation
+#         • Strategy 1 · Stage 1, 2, 3 (tracker + catch-up), 4 (catch-up)
+#         • Strategy 2 · Stage 3 (tracker + snapshot), 4 (order)
+#
+#     Infrastructure still runs (NOT gated):
+#         • Cleanup, token refresh + validation
+#         • Backup extraction, instrument registry reload
+#         • EMA backfill (needed for chart EMA / /live/* endpoints)
+#         • Live WebSocket feed start (health-feed logging continues)
+#         • Scheduler start (still fires OR at 09:16, Stage 1 at 09:16:30,
+#                             etc. when the clock hits those times)
+#         • Telegram bot start
+#         • Frontend Strategy 1 fallback launch
+#
+# Skipped when ANY of the following is true:
+#     • Saturday or Sunday
+#     • Trading holiday (via market_holiday_service; provider errors
+#       fall through to "not a holiday" — same as the startup gate)
+#     • Weekday time outside STRATEGY_USEFUL_WINDOW_START_HOUR:MINUTE
+#       .. STRATEGY_USEFUL_WINDOW_END_HOUR:MINUTE (default 09:00 – 16:30)
+#
+# Set to True to ALWAYS run the strategy pipeline regardless of the
+# current time / day / holiday state. Useful for testing or for a
+# deployment where the operator wants to review strategy output at
+# any hour. Default: false.
+STRATEGY_RUN_OUTSIDE_MARKET_HOURS = _bool(
+    "STRATEGY_RUN_OUTSIDE_MARKET_HOURS", False
+)
+
+# Useful window bounds (market timezone). Default 09:00 – 16:30 IST:
+#     • 09:00 covers the 08:30 daily refresh + 08:45 readiness digest
+#       + 09:05 pre-flight recheck
+#     • 09:15 – 15:30 is the cash session
+#     • 16:00 – 16:30 covers the daily-backup window and post-close
+#       strategy catch-ups
+STRATEGY_USEFUL_WINDOW_START_HOUR = _int(
+    "STRATEGY_USEFUL_WINDOW_START_HOUR", 9
+)
+STRATEGY_USEFUL_WINDOW_START_MINUTE = _int(
+    "STRATEGY_USEFUL_WINDOW_START_MINUTE", 0
+)
+STRATEGY_USEFUL_WINDOW_END_HOUR = _int(
+    "STRATEGY_USEFUL_WINDOW_END_HOUR", 16
+)
+STRATEGY_USEFUL_WINDOW_END_MINUTE = _int(
+    "STRATEGY_USEFUL_WINDOW_END_MINUTE", 30
+)

@@ -18,9 +18,45 @@ The order toggle commands are handled by
 ``token_tasks.order_toggle_commands.handle_order_toggle_command`` so
 the actual state lives in ``services.order_runtime_service`` and is
 shared with the admin API.
+
+Windows start confirmation
+--------------------------
+When running on Windows (``os.name == "nt"``) with an interactive
+console, and the bot is enabled, ``start()`` asks the operator to
+confirm before beginning Telegram polling::
+
+    Start Telegram bot polling on Windows? [y/N] (5s timeout):
+
+Behaviour:
+
+  * press ``y``  -> start polling.
+  * press ``n``  -> do not start.
+  * press any other key, press Enter, or let the 5-second timeout
+    expire -> do not start (matching the ``[y/N]`` convention).
+
+Headless Windows (no console / no TTY — e.g. a Windows Service or a
+scheduled task):
+
+  * the prompt would be invisible, so the bot is NOT started, and a
+    WARNING is logged;
+  * set ``TELEGRAM_BOT_SKIP_WINDOWS_PROMPT=true`` (in ``.env``, after
+    adding the option to ``core/config.py``) to bypass the prompt and
+    start immediately — useful for headless deployments that still
+    want the bot working.
+
+Non-Windows (Linux / macOS):
+
+  * no prompt; the bot starts as before.
+
+The prompt is a pure ``start()`` gate. ``run_loop()`` is unchanged, so
+a bot that has already been started by any means (interactive prompt,
+skip-prompt override, or non-Windows) keeps exactly the same
+runtime behaviour it had before this change.
 """
 
 import json
+import os
+import sys
 import time
 from threading import Event, Lock, Thread
 
@@ -36,6 +72,88 @@ from token_tasks.upstox_token_client import upstox_token_client
 logger = get_logger(__file__)
 
 
+# --------------------------------------------------------------------------- #
+# Windows start-confirmation helpers                                          #
+# --------------------------------------------------------------------------- #
+def _console_is_interactive() -> bool:
+    """Return True when both stdin and stdout are attached to a TTY.
+
+    Runs inside a try/except because ``sys.stdin`` / ``sys.stdout`` can
+    be ``None`` in some embedded interpreters, and ``isatty()`` can
+    raise on unusual file objects.
+    """
+    try:
+        return bool(
+            sys.stdin is not None
+            and sys.stdin.isatty()
+            and sys.stdout is not None
+            and sys.stdout.isatty()
+        )
+    except Exception:
+        return False
+
+
+def _prompt_yes_no_windows(question: str, timeout_seconds: float) -> bool:
+    """Prompt the operator for a Y/N answer on Windows.
+
+    Returns True **only** when the operator presses ``y`` before the
+    timeout. Any other key, Enter (empty input), or the timeout all
+    return False, matching the ``[y/N]`` default-No convention.
+
+    Uses ``msvcrt.kbhit()`` + ``msvcrt.getwch()`` so the operator does
+    not need to press Enter — a single ``y`` starts the bot, a single
+    ``n`` (or any other key) skips it. Arrow keys and other
+    special-function keys are consumed and ignored so an accidental
+    arrow press does not count as an answer.
+
+    Safe to call from any thread, though it is intended to be called
+    from the startup thread only.
+    """
+    try:
+        import msvcrt  # type: ignore  # Windows-only stdlib module
+    except ImportError:
+        # Should not happen on Windows, but fall back to "No" so a
+        # broken environment cannot silently start the bot.
+        return False
+
+    sys.stdout.write(question)
+    sys.stdout.flush()
+
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        if msvcrt.kbhit():
+            ch = msvcrt.getwch()
+
+            # Special keys (arrows, F1-F12, Home/End, ...) arrive as a
+            # two-byte sequence whose first byte is \x00 or \xe0.
+            # Consume the second byte and keep waiting.
+            if ch in ("\x00", "\xe0"):
+                try:
+                    msvcrt.getwch()
+                except Exception:
+                    pass
+                continue
+
+            # Enter without any character typed — respect the default.
+            if ch in ("\r", "\n"):
+                sys.stdout.write("\n")
+                sys.stdout.flush()
+                return False
+
+            sys.stdout.write(ch + "\n")
+            sys.stdout.flush()
+            return ch.lower() == "y"
+
+        time.sleep(0.05)
+
+    sys.stdout.write(" (timeout — default No)\n")
+    sys.stdout.flush()
+    return False
+
+
+# --------------------------------------------------------------------------- #
+# Bot                                                                         #
+# --------------------------------------------------------------------------- #
 class TelegramTokenBot:
     def __init__(self):
         self.bot_token = config.TELEGRAM_BOT_TOKEN
@@ -55,6 +173,81 @@ class TelegramTokenBot:
         self._offset = None
         self._lock = Lock()
         self._pending_save_token_chats = set()
+
+    # ------------------------------------------------------------------ #
+    # Windows start confirmation (NEW)                                    #
+    # ------------------------------------------------------------------ #
+    def _confirm_start_on_windows(self) -> bool:
+        """Ask the operator to confirm bot start on Windows.
+
+        Fires only when:
+
+          * the process is running on Windows (``os.name == "nt"``), AND
+          * ``TELEGRAM_BOT_SKIP_WINDOWS_PROMPT`` is not True, AND
+          * both stdin and stdout are attached to a console.
+
+        Every other case is a no-op:
+
+          * Linux / macOS                    -> return True (start).
+          * Windows + skip-prompt override   -> return True (start).
+          * Windows + no console             -> return False (skip;
+                                                warning logged).
+          * Windows + interactive console    -> prompt (y / 5 s /
+                                                default No).
+
+        Returns True to proceed with polling, False to skip.
+        """
+        # Not Windows — the operator's concern does not apply here.
+        if os.name != "nt":
+            return True
+
+        # Operator has opted out of the prompt (headless deployments,
+        # services, scheduled tasks that still want the bot running).
+        if getattr(config, "TELEGRAM_BOT_SKIP_WINDOWS_PROMPT", False):
+            logger.info(
+                "TELEGRAM_BOT_SKIP_WINDOWS_PROMPT=true — starting "
+                "Telegram bot on Windows without confirmation prompt."
+            )
+            return True
+
+        # Windows headless: we cannot prompt, so do not start (the
+        # [y/N] default is No).
+        if not _console_is_interactive():
+            logger.warning(
+                "Windows: no interactive console detected — skipping "
+                "Telegram bot start. Set "
+                "TELEGRAM_BOT_SKIP_WINDOWS_PROMPT=true in .env to start "
+                "without confirmation."
+            )
+            return False
+
+        # Interactive Windows: prompt for 5 s, default No.
+        timeout_seconds = float(
+            getattr(config, "TELEGRAM_BOT_WINDOWS_PROMPT_TIMEOUT_SECONDS", 5.0)
+        )
+        try:
+            started = _prompt_yes_no_windows(
+                "Start Telegram bot polling on Windows? "
+                f"[y/N] ({int(timeout_seconds)}s timeout): ",
+                timeout_seconds=timeout_seconds,
+            )
+        except Exception:
+            logger.exception(
+                "Windows start-confirmation prompt failed; "
+                "skipping bot start."
+            )
+            return False
+
+        if started:
+            logger.info("Operator confirmed — starting Telegram bot polling.")
+        else:
+            logger.info(
+                "Operator declined or timed out — Telegram bot polling "
+                "will not start. Re-launch and press 'y' at the prompt "
+                "to enable the bot, or set "
+                "TELEGRAM_BOT_SKIP_WINDOWS_PROMPT=true in .env."
+            )
+        return started
 
     @staticmethod
     def _command(text: str) -> str:
@@ -226,11 +419,27 @@ class TelegramTokenBot:
         logger.info("Telegram token management polling stopped.")
 
     def start(self) -> bool:
+        """Start polling, subject to the Windows confirmation gate.
+
+        Order of checks:
+
+          1. ``self.enabled`` — if False, return early (no prompt).
+          2. Thread already alive — return True (idempotent).
+          3. Windows confirmation — see ``_confirm_start_on_windows``.
+             Skipped entirely on Linux / macOS.
+          4. Spawn the polling thread.
+
+        The Windows confirmation step is deliberately AFTER the
+        "already running" check, so a re-entrant ``start()`` call
+        (from the admin refresh or a hot reload) never re-prompts.
+        """
         if not self.enabled:
             logger.info("Telegram token bot is disabled or not configured.")
             return False
         if self._thread and self._thread.is_alive():
             return True
+        if not self._confirm_start_on_windows():
+            return False
         self._stop_event.clear()
         self._thread = Thread(target=self.run_loop, name="telegram-token-bot", daemon=True)
         self._thread.start()
