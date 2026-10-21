@@ -1,3 +1,5 @@
+{# File: templates/layout.html #}
+{# ProChart multi-chart layout page with a global instrument search bar #}
 {% extends "base.html" %}
 {% block title %}Layout - Trading Dashboard{% endblock %}
 {% block head %}
@@ -16,21 +18,29 @@
   html, body { height: 100%; margin: 0; }
   body { background: var(--bg); color: var(--text); overflow: hidden; }
 
+  /* ---------- Toolbar ---------- */
   .layout-toolbar {
+    position: relative;
+    z-index: 100;
     height: var(--toolbar-h); background: var(--surface);
     border-bottom: 1px solid var(--border);
     display: flex; align-items: center; justify-content: space-between;
-    padding: 0 14px; gap: 12px; flex-wrap: nowrap; overflow: hidden;
+    padding: 0 14px; gap: 12px;
+    overflow: visible;
   }
-  .toolbar-left, .toolbar-right { display: flex; align-items: center; gap: 8px; }
+  .toolbar-left, .toolbar-right {
+    display: flex; align-items: center; gap: 8px; min-width: 0;
+  }
+  .toolbar-left { flex: 1 1 auto; }
+  .toolbar-right { flex: 0 0 auto; }
   .toolbar-title {
     font-size: 13px; font-weight: 800; letter-spacing: .03em; color: #fff;
-    display: flex; align-items: center; gap: 8px;
+    display: flex; align-items: center; gap: 8px; flex-shrink: 0;
   }
   .toolbar-title i { color: var(--blue); font-size: 16px; }
-  .toolbar-divider { width: 1px; height: 22px; background: var(--border); }
+  .toolbar-divider { width: 1px; height: 22px; background: var(--border); flex-shrink: 0; }
 
-  .grid-picker { display: inline-flex; gap: 4px; padding: 3px; background: #0b0e14; border-radius: 10px; }
+  .grid-picker { display: inline-flex; gap: 4px; padding: 3px; background: #0b0e14; border-radius: 10px; flex-shrink: 0; }
   .grid-btn {
     width: 34px; height: 28px; border: 1px solid transparent; background: transparent;
     color: var(--muted); font-size: 11px; font-weight: 800; border-radius: 6px;
@@ -39,12 +49,95 @@
   .grid-btn:hover { color: #fff; background: var(--surface-2); }
   .grid-btn.active { background: var(--blue); color: #fff; border-color: var(--blue); }
 
+  /* ---------- Global search in the toolbar ---------- */
+  .toolbar-search {
+    position: relative;
+    flex: 1 1 220px;
+    min-width: 160px;
+    max-width: 380px;
+  }
+  .toolbar-search .search-icon {
+    position: absolute; left: 10px; top: 50%;
+    transform: translateY(-50%);
+    color: var(--muted); font-size: 12px; pointer-events: none;
+  }
+  .toolbar-search .search-kbd {
+    position: absolute; right: 8px; top: 50%;
+    transform: translateY(-50%);
+    background: #0b0e14; color: var(--muted);
+    border: 1px solid var(--border); border-radius: 4px;
+    font-size: 9px; font-weight: 700; padding: 1px 5px;
+    pointer-events: none; letter-spacing: 0.05em;
+  }
+  .toolbar-search input {
+    width: 100%;
+    background: #0b0e14; border: 1px solid var(--border); color: var(--text);
+    border-radius: 8px;
+    padding: 6px 42px 6px 30px;
+    font-size: 12px;
+    font-weight: 500;
+  }
+  .toolbar-search input:focus { outline: none; border-color: var(--blue); }
+  .toolbar-search input::placeholder { color: var(--muted); font-weight: 500; }
+
+  .search-dropdown {
+    position: absolute; top: calc(100% + 6px); left: 0; right: 0;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    max-height: 380px; overflow-y: auto;
+    z-index: 1000; box-shadow: var(--shadow);
+    display: none;
+  }
+  .search-dropdown.visible { display: block; }
+  .search-dropdown::-webkit-scrollbar { width: 6px; }
+  .search-dropdown::-webkit-scrollbar-thumb { background: var(--surface-3); border-radius: 6px; }
+
+  .search-item {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border);
+    cursor: pointer; font-size: 12px;
+  }
+  .search-item:last-child { border-bottom: none; }
+  .search-item:hover, .search-item.active { background: var(--surface-2); }
+  .search-item .pill {
+    flex-shrink: 0;
+    display: inline-block;
+    padding: 2px 8px; border-radius: 10px;
+    font-size: 9px; font-weight: 800; letter-spacing: 0.03em;
+  }
+  .search-item .pill.ce  { background: rgba(8,153,129,0.18); color: #6ee7c2; }
+  .search-item .pill.pe  { background: rgba(242,54,69,0.18); color: #ff8a95; }
+  .search-item .pill.idx { background: rgba(41,98,255,0.18); color: #7ea6ff; }
+  .search-item .pill.other { background: rgba(120,123,134,0.2); color: #b0b8c4; }
+  .search-item-symbol {
+    flex: 1; color: #fff; font-weight: 600;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    min-width: 0;
+  }
+  .search-item-meta {
+    color: var(--muted); font-size: 11px;
+    white-space: nowrap; flex-shrink: 0;
+  }
+  .search-empty {
+    padding: 14px 12px; text-align: center; color: var(--muted); font-size: 12px;
+  }
+
+  /* ---------- Name input + layout select ---------- */
   .layout-name-input {
     background: #0b0e14; border: 1px solid var(--border); color: var(--text);
-    border-radius: 8px; font-size: 12px; padding: 6px 10px; min-width: 160px;
+    border-radius: 8px; font-size: 12px; padding: 6px 10px; min-width: 140px;
+    flex-shrink: 0;
   }
   .layout-name-input:focus { outline: none; border-color: var(--blue); }
 
+  .layout-select {
+    background: #0b0e14; border: 1px solid var(--border); color: var(--text);
+    border-radius: 8px; font-size: 12px; padding: 6px 8px; min-width: 130px;
+    flex-shrink: 0;
+  }
+  .layout-select:focus { outline: none; border-color: var(--blue); }
+
+  /* ---------- Right-side action buttons ---------- */
   .toolbar-btn {
     border: 1px solid var(--border); background: var(--surface-2); color: var(--text);
     border-radius: 8px; padding: 6px 12px; font-size: 12px; font-weight: 700;
@@ -56,18 +149,13 @@
   .toolbar-btn.danger { background: rgba(242,54,69,0.1); border-color: rgba(242,54,69,0.4); color: #ff8a95; }
   .toolbar-btn.danger:hover { background: rgba(242,54,69,0.2); }
 
-  .layout-select {
-    background: #0b0e14; border: 1px solid var(--border); color: var(--text);
-    border-radius: 8px; font-size: 12px; padding: 6px 8px; min-width: 140px;
-  }
-  .layout-select:focus { outline: none; border-color: var(--blue); }
-
-  /* ---- Indicator toolbar ---- */
+  /* ---------- Indicator toolbar ---------- */
   .indicator-toolbar {
     height: var(--indicator-h); background: var(--surface);
     border-bottom: 1px solid var(--border);
     display: flex; align-items: center; gap: 10px;
     padding: 0 14px; overflow-x: auto; white-space: nowrap;
+    position: relative; z-index: 1;
   }
   .indicator-toolbar::-webkit-scrollbar { height: 4px; }
   .indicator-toolbar::-webkit-scrollbar-thumb { background: var(--surface-3); border-radius: 2px; }
@@ -88,6 +176,7 @@
   .ind-btn[data-global-indicator="emaCross"].active { background: linear-gradient(90deg, #089981 0%, #f23645 100%); border-color: transparent; }
   .indicator-divider { width: 1px; height: 16px; background: var(--border); flex-shrink: 0; margin: 0 4px; }
 
+  /* ---------- Grid ---------- */
   .layout-grid-wrap {
     height: calc(100vh - var(--toolbar-h) - var(--indicator-h));
     height: calc(100dvh - var(--toolbar-h) - var(--indicator-h));
@@ -105,17 +194,27 @@
       grid-template-rows: repeat(auto-fit, minmax(260px, 1fr));
       overflow-y: auto;
     }
+    .layout-name-input { display: none; }
   }
 
+  /* ---------- Pane ---------- */
   .pane {
     background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
     display: flex; flex-direction: column; overflow: hidden;
     box-shadow: var(--shadow); min-height: 0;
+    transition: border-color .15s ease, box-shadow .15s ease;
   }
+  .pane[data-active="true"] {
+    border-color: var(--blue);
+    box-shadow: 0 0 0 2px rgba(41,98,255,0.35), var(--shadow);
+  }
+  .pane[data-active="true"] .pane-header { background: rgba(41,98,255,0.18); }
+
   .pane-header {
     height: 34px; display: flex; align-items: center; justify-content: space-between;
     padding: 0 10px; border-bottom: 1px solid var(--border); flex-shrink: 0;
     background: var(--surface-2); gap: 8px;
+    transition: background .15s ease;
   }
   .pane-symbol { display: flex; align-items: center; font-size: 11px; font-weight: 700; color: #fff;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 1; }
@@ -156,16 +255,119 @@
   .pane-ohlc span { color: #fff; font-weight: 700; }
   .pane-key { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
+  /* ---------- Status pill ---------- */
   .status-pill {
     display: inline-flex; align-items: center; gap: 6px;
     padding: 4px 10px; border-radius: 20px; border: 1px solid var(--border);
     background: var(--surface-2); color: var(--muted); font-size: 11px; font-weight: 600;
+    cursor: pointer;
   }
   .status-pill .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
   .status-pill.ok { color: var(--green); }
   .status-pill.ok .dot { background: var(--green); box-shadow: 0 0 8px rgba(8,153,129,0.8); }
   .status-pill.warn { color: var(--yellow); }
   .status-pill.warn .dot { background: var(--yellow); }
+
+  /* ---------- Search modal ---------- */
+  .search-modal-overlay {
+    position: fixed; inset: 0; z-index: 9999;
+    background: rgba(0, 0, 0, 0.65);
+    backdrop-filter: blur(4px);
+    display: none;
+    align-items: center; justify-content: center;
+    padding: 24px;
+  }
+  .search-modal-overlay.visible { display: flex; }
+  .search-modal {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 16px;
+    width: 100%; max-width: 640px;
+    max-height: 86vh;
+    display: flex; flex-direction: column;
+    box-shadow: var(--shadow);
+    overflow: hidden;
+  }
+  .search-modal-header {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface-2);
+  }
+  .search-modal-title {
+    font-size: 13px; font-weight: 800; color: #fff; letter-spacing: 0.02em;
+    display: inline-flex; align-items: center; gap: 8px;
+  }
+  .search-modal-title i { color: var(--blue); }
+  .search-modal-close {
+    border: 1px solid var(--border); background: var(--surface);
+    color: var(--muted); border-radius: 8px; padding: 4px 10px;
+    font-size: 12px; cursor: pointer;
+  }
+  .search-modal-close:hover { color: #fff; border-color: var(--red); }
+
+  .search-modal-body {
+    padding: 14px 18px;
+    display: flex; flex-direction: column; gap: 10px;
+    overflow: hidden;
+    flex: 1; min-height: 0;
+  }
+
+  .search-modal-current {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 10px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-size: 11px;
+    color: var(--muted);
+  }
+  .search-modal-current code {
+    color: #fff; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 11px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+
+  .search-modal-input-wrap {
+    position: relative;
+  }
+  .search-modal-input-wrap .search-icon {
+    position: absolute; left: 12px; top: 50%;
+    transform: translateY(-50%);
+    color: var(--muted); font-size: 14px; pointer-events: none;
+  }
+  .search-modal-input-wrap input {
+    width: 100%;
+    background: #0b0e14; border: 1px solid var(--border); color: var(--text);
+    border-radius: 10px;
+    padding: 10px 14px 10px 38px;
+    font-size: 13px;
+  }
+  .search-modal-input-wrap input:focus { outline: none; border-color: var(--blue); }
+
+  .search-modal-results {
+    flex: 1; min-height: 0;
+    overflow-y: auto;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: #0b0e14;
+  }
+  .search-modal-results::-webkit-scrollbar { width: 6px; }
+  .search-modal-results::-webkit-scrollbar-thumb { background: var(--surface-3); border-radius: 6px; }
+  .search-modal-results .search-item { font-size: 13px; padding: 10px 14px; }
+
+  .search-modal-hint {
+    padding: 8px 2px 0 2px;
+    font-size: 10px;
+    color: var(--muted);
+    text-align: center;
+    letter-spacing: 0.03em;
+  }
+  .search-modal-hint kbd {
+    background: var(--surface-2); color: var(--text);
+    padding: 1px 5px; border-radius: 3px;
+    border: 1px solid var(--border);
+    font-size: 10px;
+    font-family: inherit;
+  }
 </style>
 {% endblock %}
 
@@ -179,11 +381,22 @@
       <button class="grid-btn" data-grid="2" title="2 charts">2</button>
       <button class="grid-btn" data-grid="4" title="4 charts">4</button>
     </div>
-    <input id="layoutNameInput" class="layout-name-input" placeholder="Layout name" value="{{ layout.name or 'My Layout' }}">
+    <div class="toolbar-search">
+      <i class="bi bi-search search-icon"></i>
+      <input type="search" id="toolbarSearchInput"
+             placeholder="Search instrument (applies to active pane)"
+             autocomplete="off" spellcheck="false"/>
+      <span class="search-kbd">⌘K</span>
+      <div class="search-dropdown" id="toolbarSearchDropdown"></div>
+    </div>
+    <input id="layoutNameInput" class="layout-name-input" placeholder="Layout name"
+           value="{{ layout.name or 'My Layout' }}">
     <select id="layoutSelect" class="layout-select" title="Switch layout"></select>
   </div>
   <div class="toolbar-right">
-    <span id="linkStateBadge" class="status-pill" title="All panes follow the same symbol">🔗 Linked</span>
+    <span id="linkStateBadge" class="status-pill" title="When linked, changing one pane changes all">
+      🔗 Linked
+    </span>
     <button id="saveLayoutBtn" class="toolbar-btn primary" title="Save current layout">
       <i class="bi bi-save"></i> Save
     </button>
@@ -219,6 +432,41 @@
     {% endwith %}
   {% endfor %}
 </div>
+
+{# ============================================================ #}
+{# Search modal: opened from a pane's "change" button          #}
+{# ============================================================ #}
+<div class="search-modal-overlay" id="instrumentSearchModal" role="dialog" aria-modal="true">
+  <div class="search-modal">
+    <div class="search-modal-header">
+      <div class="search-modal-title">
+        <i class="bi bi-search"></i>
+        Change instrument — pane <span id="searchModalPaneLabel">0</span>
+      </div>
+      <button type="button" class="search-modal-close" id="searchModalCloseBtn">
+        <i class="bi bi-x-lg"></i>
+      </button>
+    </div>
+    <div class="search-modal-body">
+      <div class="search-modal-current">
+        <span>Current:</span>
+        <code id="searchModalCurrentKey">—</code>
+      </div>
+      <div class="search-modal-input-wrap">
+        <i class="bi bi-search search-icon"></i>
+        <input type="search" id="modalSearchInput"
+               placeholder="Search symbol, strike, ISIN… (e.g. NIFTY 23500 CE)"
+               autocomplete="off" spellcheck="false"/>
+      </div>
+      <div class="search-modal-results" id="modalSearchResults">
+        <div class="search-empty">Start typing to search…</div>
+      </div>
+      <div class="search-modal-hint">
+        <kbd>↑</kbd> <kbd>↓</kbd> navigate · <kbd>Enter</kbd> select · <kbd>Esc</kbd> close
+      </div>
+    </div>
+  </div>
+</div>
 {% endblock %}
 
 {% block scripts %}
@@ -247,6 +495,9 @@
 
   const paneInstances = {};
 
+  // Which pane a global search / "change" operation should target.
+  let activePaneIndex = 0;
+
   const gridEl = document.getElementById("layoutGrid");
   const layoutSelect = document.getElementById("layoutSelect");
   const layoutNameInput = document.getElementById("layoutNameInput");
@@ -255,9 +506,45 @@
   const deleteBtn = document.getElementById("deleteLayoutBtn");
   const linkStateBadge = document.getElementById("linkStateBadge");
 
-  // ------------------------------------------------------------
-  // Persist / restore global indicator prefs
-  // ------------------------------------------------------------
+  // Toolbar search elements
+  const toolbarSearchInput = document.getElementById("toolbarSearchInput");
+  const toolbarSearchDropdown = document.getElementById("toolbarSearchDropdown");
+
+  // Modal elements
+  const searchModalOverlay = document.getElementById("instrumentSearchModal");
+  const searchModalCloseBtn = document.getElementById("searchModalCloseBtn");
+  const searchModalPaneLabel = document.getElementById("searchModalPaneLabel");
+  const searchModalCurrentKey = document.getElementById("searchModalCurrentKey");
+  const modalSearchInput = document.getElementById("modalSearchInput");
+  const modalSearchResults = document.getElementById("modalSearchResults");
+
+  // ============================================================
+  // ACTIVE PANE MANAGEMENT
+  // ============================================================
+  function setActivePaneIndex(idx) {
+    if (!Number.isFinite(idx)) return;
+    activePaneIndex = idx;
+    document.querySelectorAll(".pane").forEach(p => {
+      const pi = Number(p.dataset.paneIndex);
+      p.dataset.active = (pi === idx) ? "true" : "false";
+    });
+  }
+
+  // Delegated click: clicking anywhere on a pane (except its action
+  // buttons) makes it the active pane. Chart clicks count — a user
+  // clicking a chart expects that pane to be the "target" for the next
+  // global search.
+  gridEl.addEventListener("click", (e) => {
+    if (e.target.closest(".pane-btn")) return;
+    const paneEl = e.target.closest(".pane");
+    if (!paneEl) return;
+    const idx = Number(paneEl.dataset.paneIndex);
+    if (Number.isFinite(idx)) setActivePaneIndex(idx);
+  });
+
+  // ============================================================
+  // PERSIST / RESTORE GLOBAL INDICATOR PREFS
+  // ============================================================
   function loadGlobalPrefs() {
     try {
       const saved = JSON.parse(localStorage.getItem(LAYOUT_INDICATORS_KEY) || "{}");
@@ -285,9 +572,9 @@
     });
   }
 
-  // ------------------------------------------------------------
-  // Pure indicator math (mirrors main chart)
-  // ------------------------------------------------------------
+  // ============================================================
+  // PURE INDICATOR MATH (mirrors main chart)
+  // ============================================================
   function getDateKeyIST(unixSeconds) {
     if (!Number.isFinite(unixSeconds)) return null;
     const parts = new Intl.DateTimeFormat("en-CA", {
@@ -371,9 +658,9 @@
     return crosses;
   }
 
-  // ------------------------------------------------------------
-  // Label visibility helpers
-  // ------------------------------------------------------------
+  // ============================================================
+  // LABEL VISIBILITY HELPERS
+  // ============================================================
   function isLabelVisible(levelName) {
     const n = String(levelName || "").toLowerCase();
     if (n === "avg") return true;
@@ -390,9 +677,9 @@
     return "#2962ff";
   }
 
-  // ------------------------------------------------------------
-  // Pane-instance indicator helpers
-  // ------------------------------------------------------------
+  // ============================================================
+  // PANE INSTANCE INDICATOR HELPERS
+  // ============================================================
   function addLineSeriesToPane(paneInst, options) {
     if (!paneInst || !paneInst.chart) return null;
     try {
@@ -461,7 +748,6 @@
 
   function renderOpeningRangeLinesForPane(paneInst) {
     if (!paneInst || !paneInst.chart || !paneInst.candleSeries) return;
-    // Remove only OR lines + labels, leave EMA series alone
     (paneInst.levelLines || []).forEach(line => {
       try { paneInst.chart.removeSeries(line); } catch (e) {}
     });
@@ -504,7 +790,6 @@
     if (!paneInst || !paneInst.chart || !paneInst.candleSeries) return;
     const candles = paneInst.candles || [];
 
-    // EMA 9
     if (globalState.ema9) {
       if (!paneInst.ema9Series) {
         paneInst.ema9Series = addLineSeriesToPane(paneInst, {
@@ -521,7 +806,6 @@
       paneInst.ema9Series = null;
     }
 
-    // EMA 21
     if (globalState.ema21) {
       if (!paneInst.ema21Series) {
         paneInst.ema21Series = addLineSeriesToPane(paneInst, {
@@ -586,9 +870,9 @@
     renderEMACrossMarkersForPane(paneInst);
   }
 
-  // ------------------------------------------------------------
-  // Label positioning
-  // ------------------------------------------------------------
+  // ============================================================
+  // LABEL POSITIONING
+  // ============================================================
   function schedulePaneLabelUpdate(paneInst) {
     if (!paneInst || paneInst.labelUpdateScheduled) return;
     paneInst.labelUpdateScheduled = true;
@@ -625,9 +909,9 @@
     Object.values(paneInstances).forEach(updatePaneLabelPositions);
   }
 
-  // ------------------------------------------------------------
-  // Toolbar toggle handlers
-  // ------------------------------------------------------------
+  // ============================================================
+  // TOOLBAR TOGGLE HANDLERS
+  // ============================================================
   function bindToolbarHandlers() {
     document.querySelectorAll(".ind-btn[data-global-toggle]").forEach(btn => {
       btn.addEventListener("click", () => {
@@ -665,9 +949,9 @@
     });
   }
 
-  // ------------------------------------------------------------
-  // HTTP helpers
-  // ------------------------------------------------------------
+  // ============================================================
+  // HTTP HELPERS
+  // ============================================================
   async function apiJson(url, opts) {
     const res = await fetch(url, Object.assign({
       headers: { "Content-Type": "application/json", "Accept": "application/json" },
@@ -679,9 +963,320 @@
     return res.json();
   }
 
-  // ------------------------------------------------------------
-  // Per-pane create / destroy
-  // ------------------------------------------------------------
+  // ============================================================
+  // INSTRUMENT SEARCH (shared by toolbar + modal)
+  // ============================================================
+  async function searchInstruments(query, opts = {}) {
+    const params = new URLSearchParams({
+      query,
+      page_number: "1",
+      records: String(opts.records || 20),
+    });
+    if (opts.exchanges) params.set("exchanges", opts.exchanges);
+    if (opts.segments) params.set("segments", opts.segments);
+    if (opts.instrumentTypes) params.set("instrument_types", opts.instrumentTypes);
+    const resp = await fetch(`/api/upstox/search?${params.toString()}`, {
+      signal: opts.signal,
+      headers: { Accept: "application/json" },
+    });
+    if (!resp.ok) throw new Error(`Search failed (${resp.status})`);
+    return resp.json();
+  }
+
+  function pillClassForType(type, segment) {
+    const t = String(type || "").toUpperCase();
+    if (t === "CE") return "ce";
+    if (t === "PE") return "pe";
+    if (t === "INDEX" || String(segment || "").toUpperCase().includes("INDEX")) return "idx";
+    return "other";
+  }
+
+  function renderSearchItem(item, isActive) {
+    const type = String(item.instrument_type || "").toUpperCase();
+    const pill = pillClassForType(type, item.segment);
+    const metaParts = [];
+    if (item.strike_price != null) metaParts.push(Number(item.strike_price).toFixed(0));
+    if (item.expiry) metaParts.push(item.expiry);
+    const key = item.instrument_key || "";
+    const symbol = item.trading_symbol || item.name || key;
+    return `
+      <div class="search-item ${isActive ? "active" : ""}" data-key="${escapeHtml(key)}">
+        <span class="pill ${pill}">${escapeHtml(type || "—")}</span>
+        <span class="search-item-symbol">${escapeHtml(symbol)}</span>
+        <span class="search-item-meta">${escapeHtml(metaParts.join(" · "))}</span>
+      </div>
+    `;
+  }
+
+  // ============================================================
+  // APPLY AN INSTRUMENT TO A PANE (respects linked state)
+  // ============================================================
+  function applyInstrumentToPane(paneIndex, instrumentKey) {
+    if (!instrumentKey) return;
+    if (paneIndex < 0 || paneIndex >= layoutState.panes.length) return;
+
+    layoutState.panes[paneIndex] = { instrument_key: instrumentKey, interval: "5m" };
+    activePaneIndex = paneIndex;
+
+    if (layoutState.linked) {
+      // Linked: change every pane to the same instrument.
+      for (let k = 0; k < layoutState.panes.length; k++) {
+        layoutState.panes[k] = { instrument_key: instrumentKey, interval: "5m" };
+      }
+      renderLayout(layoutState);
+      setActivePaneIndex(paneIndex);
+    } else {
+      // Unlinked: change only the target pane.
+      loadPane(paneIndex, instrumentKey);
+      setActivePaneIndex(paneIndex);
+    }
+  }
+
+  // ============================================================
+  // TOOLBAR SEARCH BEHAVIOUR
+  // ============================================================
+  let toolbarSearchDebounce = null;
+  let toolbarSearchAbort = null;
+  let toolbarSearchResults = [];
+  let toolbarSearchSelected = -1;
+
+  function hideToolbarSearch() {
+    toolbarSearchDropdown.classList.remove("visible");
+    toolbarSearchResults = [];
+    toolbarSearchSelected = -1;
+  }
+
+  function renderToolbarResults(items) {
+    toolbarSearchResults = items;
+    toolbarSearchSelected = items.length ? 0 : -1;
+    if (!items.length) {
+      toolbarSearchDropdown.innerHTML = `<div class="search-empty">No instruments found</div>`;
+      toolbarSearchDropdown.classList.add("visible");
+      return;
+    }
+    toolbarSearchDropdown.innerHTML = items.map((it, i) => renderSearchItem(it, i === toolbarSearchSelected)).join("");
+    toolbarSearchDropdown.classList.add("visible");
+  }
+
+  async function runToolbarSearch(q) {
+    const raw = String(q || "").trim();
+    if (!raw) { hideToolbarSearch(); return; }
+
+    if (toolbarSearchAbort) toolbarSearchAbort.abort();
+    toolbarSearchAbort = new AbortController();
+
+    try {
+      const data = await searchInstruments(raw, { signal: toolbarSearchAbort.signal, records: 15 });
+      renderToolbarResults(data.data || []);
+    } catch (e) {
+      if (e.name === "AbortError") return;
+      console.warn("toolbar search error:", e);
+      toolbarSearchDropdown.innerHTML = `<div class="search-empty">Search failed</div>`;
+      toolbarSearchDropdown.classList.add("visible");
+    }
+  }
+
+  toolbarSearchInput.addEventListener("input", () => {
+    if (toolbarSearchDebounce) clearTimeout(toolbarSearchDebounce);
+    toolbarSearchDebounce = setTimeout(() => runToolbarSearch(toolbarSearchInput.value), 300);
+  });
+
+  toolbarSearchInput.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") { hideToolbarSearch(); toolbarSearchInput.blur(); return; }
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      if (toolbarSearchResults.length) {
+        toolbarSearchSelected = Math.min(toolbarSearchSelected + 1, toolbarSearchResults.length - 1);
+        renderToolbarResults(toolbarSearchResults);
+      }
+      return;
+    }
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      if (toolbarSearchResults.length) {
+        toolbarSearchSelected = Math.max(toolbarSearchSelected - 1, 0);
+        renderToolbarResults(toolbarSearchResults);
+      }
+      return;
+    }
+    if (e.key === "Enter") {
+      e.preventDefault();
+      const raw = toolbarSearchInput.value.trim();
+
+      // Quick-load: if it looks like a full instrument key, use as-is.
+      if (raw.includes("|") && !toolbarSearchResults.length) {
+        applyInstrumentToPane(activePaneIndex, raw);
+        toolbarSearchInput.value = "";
+        hideToolbarSearch();
+        return;
+      }
+      if (toolbarSearchResults.length && toolbarSearchSelected >= 0) {
+        const item = toolbarSearchResults[toolbarSearchSelected];
+        if (item && item.instrument_key) {
+          applyInstrumentToPane(activePaneIndex, item.instrument_key);
+          toolbarSearchInput.value = "";
+          hideToolbarSearch();
+          toolbarSearchInput.blur();
+        }
+      }
+    }
+  });
+
+  toolbarSearchDropdown.addEventListener("click", (e) => {
+    const itemEl = e.target.closest(".search-item");
+    if (!itemEl) return;
+    const key = itemEl.dataset.key;
+    if (!key) return;
+    applyInstrumentToPane(activePaneIndex, key);
+    toolbarSearchInput.value = "";
+    hideToolbarSearch();
+  });
+
+  document.addEventListener("click", (e) => {
+    if (!e.target.closest(".toolbar-search")) hideToolbarSearch();
+  });
+
+  // Ctrl+K / Cmd+K focuses the toolbar search
+  document.addEventListener("keydown", (e) => {
+    if ((e.ctrlKey || e.metaKey) && (e.key === "k" || e.key === "K")) {
+      e.preventDefault();
+      toolbarSearchInput.focus();
+      toolbarSearchInput.select();
+    }
+  });
+
+  // ============================================================
+  // SEARCH MODAL BEHAVIOUR
+  // ============================================================
+  let modalSearchTargetPane = -1;
+  let modalSearchDebounce = null;
+  let modalSearchAbort = null;
+  let modalSearchResultsList = [];
+  let modalSearchSelected = -1;
+
+  function openSearchModal(paneIndex) {
+    modalSearchTargetPane = paneIndex;
+    searchModalPaneLabel.textContent = String(paneIndex);
+    const current = layoutState.panes[paneIndex]?.instrument_key || "—";
+    searchModalCurrentKey.textContent = current;
+    searchModalOverlay.classList.add("visible");
+    modalSearchInput.value = "";
+    modalSearchResults.innerHTML = `<div class="search-empty">Start typing to search…</div>`;
+    modalSearchResultsList = [];
+    modalSearchSelected = -1;
+    setTimeout(() => modalSearchInput.focus(), 50);
+  }
+
+  function closeSearchModal() {
+    searchModalOverlay.classList.remove("visible");
+    modalSearchTargetPane = -1;
+    modalSearchResultsList = [];
+    modalSearchSelected = -1;
+  }
+
+  function renderModalResults(items) {
+    modalSearchResultsList = items;
+    modalSearchSelected = items.length ? 0 : -1;
+    if (!items.length) {
+      modalSearchResults.innerHTML = `<div class="search-empty">No instruments match.</div>`;
+      return;
+    }
+    modalSearchResults.innerHTML = items.map((it, i) => renderSearchItem(it, i === modalSearchSelected)).join("");
+  }
+
+  async function runModalSearch(q) {
+    const raw = String(q || "").trim();
+    if (!raw) {
+      modalSearchResults.innerHTML = `<div class="search-empty">Start typing to search…</div>`;
+      modalSearchResultsList = [];
+      modalSearchSelected = -1;
+      return;
+    }
+    if (raw.length < 2) {
+      modalSearchResults.innerHTML = `<div class="search-empty">Type at least 2 characters.</div>`;
+      return;
+    }
+
+    if (modalSearchAbort) modalSearchAbort.abort();
+    modalSearchAbort = new AbortController();
+
+    modalSearchResults.innerHTML = `<div class="search-empty">Searching…</div>`;
+    try {
+      const data = await searchInstruments(raw, { signal: modalSearchAbort.signal, records: 25 });
+      renderModalResults(data.data || []);
+    } catch (e) {
+      if (e.name === "AbortError") return;
+      modalSearchResults.innerHTML = `<div class="search-empty">Search failed.</div>`;
+    }
+  }
+
+  modalSearchInput.addEventListener("input", () => {
+    if (modalSearchDebounce) clearTimeout(modalSearchDebounce);
+    modalSearchDebounce = setTimeout(() => runModalSearch(modalSearchInput.value), 300);
+  });
+
+  modalSearchInput.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") { e.preventDefault(); closeSearchModal(); return; }
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      if (modalSearchResultsList.length) {
+        modalSearchSelected = Math.min(modalSearchSelected + 1, modalSearchResultsList.length - 1);
+        renderModalResults(modalSearchResultsList);
+      }
+      return;
+    }
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      if (modalSearchResultsList.length) {
+        modalSearchSelected = Math.max(modalSearchSelected - 1, 0);
+        renderModalResults(modalSearchResultsList);
+      }
+      return;
+    }
+    if (e.key === "Enter") {
+      e.preventDefault();
+      const raw = modalSearchInput.value.trim();
+      const target = modalSearchTargetPane;
+
+      // Direct key paste
+      if (raw.includes("|") && !modalSearchResultsList.length) {
+        closeSearchModal();
+        if (target >= 0) applyInstrumentToPane(target, raw);
+        return;
+      }
+      // Selected item
+      if (modalSearchResultsList.length && modalSearchSelected >= 0) {
+        const item = modalSearchResultsList[modalSearchSelected];
+        if (item && item.instrument_key) {
+          closeSearchModal();
+          if (target >= 0) applyInstrumentToPane(target, item.instrument_key);
+        }
+      }
+    }
+  });
+
+  modalSearchResults.addEventListener("click", (e) => {
+    const itemEl = e.target.closest(".search-item");
+    if (!itemEl) return;
+    const key = itemEl.dataset.key;
+    if (!key) return;
+    const target = modalSearchTargetPane;
+    closeSearchModal();
+    if (target >= 0) applyInstrumentToPane(target, key);
+  });
+
+  searchModalOverlay.addEventListener("click", (e) => {
+    if (e.target === searchModalOverlay) closeSearchModal();
+  });
+
+  searchModalCloseBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    closeSearchModal();
+  });
+
+  // ============================================================
+  // PER-PANE CREATE / DESTROY
+  // ============================================================
   function createPaneInstance(paneIndex, instrumentKey) {
     const chartEl = document.getElementById(`pane-chart-${paneIndex}`);
     const labelLayerEl = document.getElementById(`pane-label-layer-${paneIndex}`);
@@ -729,7 +1324,6 @@
       ws: null, reconnectTimer: null,
       destroyed: false,
       resizeObserver: null,
-      // Indicator state
       levelLines: [],
       levelLabels: [],
       calculatedOpeningRanges: {},
@@ -737,7 +1331,6 @@
       ema9Series: null, ema21Series: null, markersPrimitive: null,
     };
 
-    // Resize
     const resize = () => {
       if (inst.destroyed) return;
       chart.applyOptions({ width: chartEl.clientWidth, height: chartEl.clientHeight });
@@ -750,7 +1343,6 @@
       inst.resizeObserver = ro;
     }
 
-    // Crosshair -> OHLC footer
     chart.subscribeCrosshairMove((param) => {
       if (!param || !param.seriesData || !param.seriesData.get) return;
       const d = param.seriesData.get(candleSeries);
@@ -763,7 +1355,6 @@
       paneEl.querySelector(".pane-c").textContent = Number(d.close).toFixed(2);
     });
 
-    // Pan / zoom -> label reposition
     chart.timeScale().subscribeVisibleTimeRangeChange(() => schedulePaneLabelUpdate(inst));
     chart.timeScale().subscribeVisibleLogicalRangeChange(() => schedulePaneLabelUpdate(inst));
 
@@ -782,9 +1373,9 @@
     delete paneInstances[paneIndex];
   }
 
-  // ------------------------------------------------------------
-  // Fetch + WebSocket
-  // ------------------------------------------------------------
+  // ============================================================
+  // FETCH + WEBSOCKET
+  // ============================================================
   async function fetchCandles(instrumentKey) {
     const today = new Date();
     const from = new Date(today.getTime() - 10 * 86400000);
@@ -833,7 +1424,6 @@
     paneInst.candleSeries.update(candle);
     paneInst.lastCandle = candle;
 
-    // Update OHLC footer
     const paneEl = document.querySelector(`.pane[data-pane-index="${paneInst.index}"]`);
     if (paneEl) {
       paneEl.querySelector(".pane-o").textContent = candle.open.toFixed(2);
@@ -842,7 +1432,6 @@
       paneEl.querySelector(".pane-c").textContent = candle.close.toFixed(2);
     }
 
-    // Update candles array (replace or append)
     const candles = paneInst.candles;
     if (!candles.length || candles[candles.length - 1].time < candle.time) {
       candles.push(candle);
@@ -850,7 +1439,6 @@
       candles[candles.length - 1] = candle;
     }
 
-    // Re-render indicators with updated data
     if (globalState.ema9 || globalState.ema21 || globalState.emaCross) {
       renderEMALinesForPane(paneInst);
       renderEMACrossMarkersForPane(paneInst);
@@ -938,7 +1526,6 @@
         inst.lastCandle = candles[candles.length - 1];
         inst.chart.timeScale().fitContent();
 
-        // Initial OHLC footer
         if (paneEl) {
           paneEl.querySelector(".pane-o").textContent = inst.lastCandle.open.toFixed(2);
           paneEl.querySelector(".pane-h").textContent = inst.lastCandle.high.toFixed(2);
@@ -946,7 +1533,6 @@
           paneEl.querySelector(".pane-c").textContent = inst.lastCandle.close.toFixed(2);
         }
 
-        // Render indicators immediately after setData
         renderAllIndicatorsForPane(inst);
       }
     } catch (e) {
@@ -956,9 +1542,9 @@
     connectWs(inst);
   }
 
-  // ------------------------------------------------------------
-  // Layout rendering
-  // ------------------------------------------------------------
+  // ============================================================
+  // LAYOUT RENDERING
+  // ============================================================
   function renderLayout(layout) {
     Object.assign(layoutState, {
       id: layout.id,
@@ -973,10 +1559,8 @@
       btn.classList.toggle("active", Number(btn.dataset.grid) === layoutState.grid);
     });
 
-    // Destroy all existing panes
     Object.keys(paneInstances).forEach(i => destroyPaneInstance(Number(i)));
 
-    // Fill panes up to grid count
     const firstKey = (layoutState.panes[0]?.instrument_key) || DEFAULT_KEY;
     const panes = [];
     for (let i = 0; i < layoutState.grid; i++) {
@@ -988,19 +1572,25 @@
 
     panes.forEach((p, i) => loadPane(i, p.instrument_key));
     bindPaneActions();
+    setActivePaneIndex(Math.min(activePaneIndex, panes.length - 1));
   }
 
   function buildPaneHtml(index, instrumentKey) {
+    const isActive = index === activePaneIndex;
     return `
-      <div class="pane" data-pane-index="${index}" data-instrument-key="${escapeHtml(instrumentKey)}">
+      <div class="pane" data-pane-index="${index}" data-instrument-key="${escapeHtml(instrumentKey)}" data-active="${isActive ? 'true' : 'false'}">
         <div class="pane-header">
           <div class="pane-symbol">
             <i class="bi bi-graph-up-arrow text-primary me-1"></i>
             <span class="pane-symbol-text">${escapeHtml(instrumentKey)}</span>
           </div>
           <div class="pane-actions">
-            <button class="pane-btn" data-pane-action="change" data-pane-index="${index}" title="Change instrument"><i class="bi bi-arrow-left-right"></i></button>
-            <button class="pane-btn" data-pane-action="link" data-pane-index="${index}" title="Toggle link"><i class="bi bi-link-45deg"></i></button>
+            <button class="pane-btn" data-pane-action="change" data-pane-index="${index}" title="Change instrument (opens search)">
+              <i class="bi bi-arrow-left-right"></i>
+            </button>
+            <button class="pane-btn" data-pane-action="link" data-pane-index="${index}" title="Toggle link">
+              <i class="bi bi-link-45deg"></i>
+            </button>
           </div>
         </div>
         <div class="pane-chart-wrap">
@@ -1016,31 +1606,22 @@
   }
 
   function bindPaneActions() {
+    // Change → open the search modal for that pane
     document.querySelectorAll('.pane-btn[data-pane-action="change"]').forEach(btn => {
       btn.addEventListener("click", (e) => {
         e.stopPropagation();
         const i = Number(btn.dataset.paneIndex);
-        const paneEl = document.querySelector(`.pane[data-pane-index="${i}"]`);
-        if (!paneEl) return;
-        const current = paneEl.dataset.instrumentKey || DEFAULT_KEY;
-        const next = prompt("Instrument key (e.g. NSE_FO|47162 or NSE_INDEX|Nifty 50):", current);
-        if (!next || !next.trim() || next === current) return;
-        const trimmed = next.trim();
-        layoutState.panes[i] = { instrument_key: trimmed, interval: "5m" };
-        if (layoutState.linked) {
-          for (let k = 0; k < layoutState.panes.length; k++) {
-            layoutState.panes[k] = { instrument_key: trimmed, interval: "5m" };
-          }
-          renderLayout(layoutState);
-        } else {
-          loadPane(i, trimmed);
-        }
+        setActivePaneIndex(i);
+        openSearchModal(i);
       });
     });
 
+    // Link toggle (also makes the pane active so the toolbar search
+    // targets it)
     document.querySelectorAll('.pane-btn[data-pane-action="link"]').forEach(btn => {
       btn.addEventListener("click", (e) => {
         e.stopPropagation();
+        setActivePaneIndex(Number(btn.dataset.paneIndex));
         layoutState.linked = !layoutState.linked;
         updateLinkedPill();
         document.querySelectorAll('.pane-btn[data-pane-action="link"]').forEach(b => {
@@ -1065,9 +1646,9 @@
     return String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   }
 
-  // ------------------------------------------------------------
-  // Grid + toolbar handlers
-  // ------------------------------------------------------------
+  // ============================================================
+  // GRID + LAYOUT TOOLBAR HANDLERS
+  // ============================================================
   document.querySelectorAll(".grid-btn").forEach(btn => {
     btn.addEventListener("click", () => {
       const grid = Number(btn.dataset.grid);
@@ -1158,19 +1739,18 @@
     } catch (e) { alert("Delete failed: " + e.message); }
   });
 
-  // ------------------------------------------------------------
-  // Boot
-  // ------------------------------------------------------------
+  // ============================================================
+  // BOOT
+  // ============================================================
   async function boot() {
     loadGlobalPrefs();
     syncToolbarButtons();
     bindToolbarHandlers();
     await refreshLayoutList();
-    // Re-render everything through the JS path so the structure is
-    // exactly what createPaneInstance() expects (label layer present).
     renderLayout(layoutState);
     bindPaneActions();
     updateLinkedPill();
+    setActivePaneIndex(0);
   }
 
   if (document.readyState === "loading") {

@@ -1,11 +1,13 @@
-<div class="pane" data-pane-index="{{ pane_index }}" data-instrument-key="{{ pane.instrument_key }}">
+{# File: templates/partials/layout_pane.html #}
+{# One pane of the multi-chart layout. Matches the JS buildPaneHtml() shape. #}
+<div class="pane" data-pane-index="{{ pane_index }}" data-instrument-key="{{ pane.instrument_key }}" data-active="{{ 'true' if pane_index == 0 else 'false' }}">
   <div class="pane-header">
     <div class="pane-symbol">
       <i class="bi bi-graph-up-arrow text-primary me-1"></i>
       <span class="pane-symbol-text">{{ pane.instrument_key }}</span>
     </div>
     <div class="pane-actions">
-      <button class="pane-btn" data-pane-action="change" data-pane-index="{{ pane_index }}" title="Change instrument">
+      <button class="pane-btn" data-pane-action="change" data-pane-index="{{ pane_index }}" title="Change instrument (opens search)">
         <i class="bi bi-arrow-left-right"></i>
       </button>
       <button class="pane-btn" data-pane-action="link" data-pane-index="{{ pane_index }}" title="Toggle link to other panes">
