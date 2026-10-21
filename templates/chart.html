@@ -1,3 +1,4 @@
+{# templates/chart.html — single-instrument candle chart with optional CE↔PE swap FAB #}
 {% extends "base.html" %}
 {% block title %}{{ instrument_name or instrument_key }} - Trading Dashboard{% endblock %}
 {% block head %}
@@ -279,6 +280,62 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
   .instrument-info-body { grid-template-columns: repeat(6, minmax(0, 1fr)); }
   .info-tile.wide { grid-column: span 2; }
 }
+
+/* ============================================================
+   SWAP OPTION FAB (CE <-> PE)
+   Floating action button at bottom-left of the viewport.
+   Hidden by default; JS unhides it when the current instrument
+   is a CE/PE option (never for indexes, futures, equities).
+   ============================================================ */
+.swap-option-fab {
+  position: fixed;
+  left: 20px;
+  bottom: 24px;
+  z-index: 350;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border: 1px solid var(--border);
+  border-radius: 30px;
+  background: var(--surface-2);
+  color: var(--text);
+  box-shadow: var(--shadow);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  transition: transform 0.15s ease, background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+  font-family: inherit;
+}
+.swap-option-fab[hidden] { display: none !important; }
+.swap-option-fab:hover {
+  background: var(--blue);
+  color: #ffffff;
+  border-color: var(--blue);
+  transform: translateY(-2px);
+}
+.swap-option-fab:active { transform: translateY(0) scale(0.98); }
+.swap-option-fab.loading,
+.swap-option-fab:disabled {
+  opacity: 0.65;
+  cursor: wait;
+  transform: none;
+}
+.swap-option-fab i { font-size: 15px; }
+.swap-option-fab .swap-option-label { white-space: nowrap; }
+
+@media (max-width: 720px) {
+  .swap-option-fab {
+    left: 10px;
+    bottom: 14px;
+    padding: 8px 12px;
+    font-size: 11px;
+    gap: 6px;
+  }
+  .swap-option-fab .swap-option-label { display: none; }
+  .swap-option-fab i { font-size: 17px; }
+}
 </style>
 {% endblock %}
 {% block content %}
@@ -437,6 +494,17 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
   <button type="button" class="scroll-nav-btn" id="scrollUpBtn" title="Scroll up"><i class="bi bi-chevron-up"></i></button>
   <button type="button" class="scroll-nav-btn" id="scrollDownBtn" title="Scroll down"><i class="bi bi-chevron-down"></i></button>
 </div>
+
+{# ============================================================ #}
+{# Swap Option FAB — CE <-> PE for the same strike             #}
+{# Hidden by default; unhidden by JS when the current           #}
+{# instrument is a CE/PE option (never for indexes / equities)  #}
+{# ============================================================ #}
+<button type="button" id="swapOptionBtn" class="swap-option-fab" hidden
+        title="Open the opposite option type for the same strike (CE ↔ PE)">
+  <i class="bi bi-arrow-left-right"></i>
+  <span class="swap-option-label" id="swapOptionLabel">Swap</span>
+</button>
 
 <script id="instrument-key-data" type="application/json">{{ instrument_key | tojson }}</script>
 <script id="instrument-tick-size-data" type="application/json">{{ instrument.get('tick_size') | tojson }}</script>
@@ -656,6 +724,10 @@ const resetPriceScaleBtn = document.getElementById("resetPriceScaleBtn");
 const freezePriceScaleBtn = document.getElementById("freezePriceScaleBtn");
 const globalSearchInput = document.getElementById("globalSearchInput");
 const searchResults = document.getElementById("searchResults");
+
+/* Swap Option FAB DOM refs — hidden until init confirms an option */
+const swapOptionBtn = document.getElementById("swapOptionBtn");
+const swapOptionLabel = document.getElementById("swapOptionLabel");
 
 // ============================================================
 // STATE
@@ -1665,9 +1737,193 @@ searchResults.addEventListener("click", function (e) {
 try { currentInstrumentKey = JSON.parse(document.getElementById("instrument-key-data").textContent); } catch (error) { console.error("Unable to parse instrument key:", error); }
 
 // ============================================================
+// SWAP OPTION (CE <-> PE) — FLOATING FAB
+// ============================================================
+// The swap FAB is only shown when the current instrument is an
+// option (CE or PE) — never for indexes, futures, or equities.
+//
+// Detecting "is option" relies on the backend `/api/upstox/instrument`
+// endpoint returning a `data` object with:
+//     instrument_type:  "CE" | "PE"
+//     strike_price:     numeric (or numeric string)
+//     underlying_symbol:"NIFTY" | "SENSEX" | ... | null
+//     expiry:           "YYYY-MM-DD" | null
+//
+// Clicking the FAB searches Upstox for the opposite-type instrument
+// at the same strike (and prefers the same expiry) and navigates to
+// its /chart/<key> page.
+
+let swapResolvedMeta = null;
+let swapCurrentTypeLabel = "";   // "CE" | "PE" | ""
+let swapInFlight = false;
+
+function normalizeTypeLabel(t) {
+  const s = String(t || "").toUpperCase().trim();
+  if (s === "CE" || s === "CALL" || s === "C") return "CE";
+  if (s === "PE" || s === "PUT"  || s === "P") return "PE";
+  return "";
+}
+
+function oppositeTypeLabel(t) {
+  if (t === "CE") return "PE";
+  if (t === "PE") return "CE";
+  return "";
+}
+
+function isOptionInstrument(meta, key) {
+  if (!meta) return false;
+  const k = String(key || "");
+  if (!k) return false;
+  // Only FO option segments can be swapped (index keys end in _INDEX).
+  if (k.startsWith("NSE_INDEX|") || k.startsWith("BSE_INDEX|")) return false;
+  const t = normalizeTypeLabel(meta.instrument_type || meta.option_type);
+  if (!t) return false;
+  const strike = Number(meta.strike_price);
+  if (!Number.isFinite(strike) || strike <= 0) return false;
+  return true;
+}
+
+async function fetchInstrumentMeta(instrumentKey) {
+  try {
+    const resp = await fetch(`/api/upstox/instrument?instrument_key=${encodeURIComponent(instrumentKey)}`);
+    if (!resp.ok) return null;
+    const body = await resp.json();
+    return (body && body.data) ? body.data : null;
+  } catch (err) {
+    console.warn("[swap] meta fetch failed:", err);
+    return null;
+  }
+}
+
+async function findOppositeInstrumentKey(meta, oppositeType) {
+  const underlying = String(meta.underlying_symbol || meta.underlying || "").trim();
+  const strike = Number(meta.strike_price);
+  const expiry = String(meta.expiry || "").trim();
+  if (!underlying || !Number.isFinite(strike) || strike <= 0 || !oppositeType) return null;
+
+  const params = new URLSearchParams({
+    query: `${underlying} ${strike} ${oppositeType}`,
+    records: "30",
+    page_number: "1",
+    exchanges: "NSE,BSE",
+    segments: "FO",
+    instrument_types: oppositeType,
+  });
+
+  try {
+    const resp = await fetch(`/api/upstox/search?${params.toString()}`);
+    if (!resp.ok) return null;
+    const body = await resp.json();
+    const items = (body && body.data) || [];
+
+    // Filter to items matching the exact strike + opposite type.
+    const candidates = items.filter(it => {
+      if (!it || typeof it !== "object") return false;
+      if (normalizeTypeLabel(it.instrument_type) !== oppositeType) return false;
+      const itStrike = Number(it.strike_price);
+      if (!Number.isFinite(itStrike) || itStrike !== strike) return false;
+      return !!it.instrument_key;
+    });
+    if (!candidates.length) return null;
+
+    // Prefer the same expiry as the current instrument, if known.
+    if (expiry) {
+      const expiryMatch = candidates.find(it => String(it.expiry || "").trim() === expiry);
+      if (expiryMatch) return expiryMatch.instrument_key;
+    }
+    return candidates[0].instrument_key;
+  } catch (err) {
+    console.warn("[swap] search failed:", err);
+    return null;
+  }
+}
+
+async function initSwapOptionButton() {
+  if (!swapOptionBtn) return;
+  try {
+    const meta = await fetchInstrumentMeta(currentInstrumentKey);
+    swapResolvedMeta = meta || {};
+    if (!isOptionInstrument(swapResolvedMeta, currentInstrumentKey)) {
+      swapOptionBtn.hidden = true;
+      return;
+    }
+    swapCurrentTypeLabel = normalizeTypeLabel(swapResolvedMeta.instrument_type || swapResolvedMeta.option_type);
+    const opp = oppositeTypeLabel(swapCurrentTypeLabel);
+    if (!opp) {
+      swapOptionBtn.hidden = true;
+      return;
+    }
+    if (swapOptionLabel) swapOptionLabel.textContent = `Swap to ${opp}`;
+    swapOptionBtn.title = `Open opposite ${opp} for the same strike` +
+      (swapResolvedMeta.underlying_symbol ? ` (${swapResolvedMeta.underlying_symbol} ${swapResolvedMeta.strike_price})` : "");
+    swapOptionBtn.hidden = false;
+  } catch (err) {
+    console.warn("[swap] init failed:", err);
+    if (swapOptionBtn) swapOptionBtn.hidden = true;
+  }
+}
+
+async function doSwapOption() {
+  if (swapInFlight) return;
+  if (!swapResolvedMeta || !swapCurrentTypeLabel) return;
+  const opp = oppositeTypeLabel(swapCurrentTypeLabel);
+  if (!opp) return;
+
+  swapInFlight = true;
+  swapOptionBtn.classList.add("loading");
+  swapOptionBtn.disabled = true;
+  const origLabel = swapOptionLabel ? swapOptionLabel.textContent : "";
+  if (swapOptionLabel) swapOptionLabel.textContent = "Searching…";
+
+  try {
+    const oppKey = await findOppositeInstrumentKey(swapResolvedMeta, opp);
+    if (oppKey && oppKey !== currentInstrumentKey) {
+      window.location.href = "/chart/" + encodeURIComponent(oppKey);
+      return;
+    }
+    // No match found — surface feedback then revert.
+    if (swapOptionLabel) swapOptionLabel.textContent = "Not found";
+    setTimeout(() => {
+      if (swapOptionLabel) swapOptionLabel.textContent = origLabel;
+      swapOptionBtn.classList.remove("loading");
+      swapOptionBtn.disabled = false;
+      swapInFlight = false;
+    }, 1800);
+  } catch (err) {
+    console.error("[swap] error:", err);
+    if (swapOptionLabel) swapOptionLabel.textContent = "Error";
+    setTimeout(() => {
+      if (swapOptionLabel) swapOptionLabel.textContent = origLabel;
+      swapOptionBtn.classList.remove("loading");
+      swapOptionBtn.disabled = false;
+      swapInFlight = false;
+    }, 1800);
+  }
+}
+
+if (swapOptionBtn) {
+  swapOptionBtn.addEventListener("click", doSwapOption);
+  // Keyboard shortcut: Alt+S or Ctrl+Shift+S triggers the swap (only
+  // when the FAB is visible, i.e. for CE/PE option instruments).
+  document.addEventListener("keydown", (e) => {
+    if (!swapOptionBtn || swapOptionBtn.hidden) return;
+    if (e.altKey && !e.ctrlKey && !e.metaKey && e.key.toLowerCase() === "s") {
+      e.preventDefault();
+      doSwapOption();
+    } else if (e.ctrlKey && e.shiftKey && !e.altKey && e.key.toLowerCase() === "s") {
+      e.preventDefault();
+      doSwapOption();
+    }
+  });
+}
+
+// ============================================================
 // START MARKET STATUS WATCHER IMMEDIATELY
 // ============================================================
 startMarketStatusWatcher();
+
+// Kick off the swap FAB init in the background — non-blocking.
+initSwapOptionButton().catch((err) => console.warn("[swap] init promise rejected:", err));
 
 /* ============================================================
    OPENING RANGE / LEVEL CALCULATIONS

@@ -1,9 +1,34 @@
+# services/strategy_live_tracker_service.py
 """Stage 3 — R2 activation tracker.
 
 Runs as a background daemon thread. Inside the configured window
 (default 09:15–09:20 IST) it polls each tracked index's live LTP and,
 the first time that index reaches its R2 level, activates every
 stage-2 contract belonging to that index.
+
+Reload behaviour (this revision — cron-flow fix)
+------------------------------------------------
+Historically the tracker cached the Stage-2 contract list **once** at
+``start()`` and never reloaded. On the normal cron-only flow
+(engine launched before 09:00, ``strategy_isolation_calc`` writes the
+stage-2 tree at 09:17:00, ``strategy_order_calc`` reads the stage-3
+summary at 09:18:00), the cache was still empty at Stage-4 time, so
+the tracker never activated anything and Stage 4 reported
+``no_activations``.
+
+This revision mirrors the Strategy-2 tracker's design:
+
+    * ``_run()`` reloads the Stage-2 tree from disk **every 30 s**
+      (and immediately whenever the in-memory cache is empty) so a
+      Stage-2 write that happens after ``start()`` is picked up long
+      before Stage-4 fires.
+    * ``run_catchup()`` **unconditionally reloads** the Stage-2 tree
+      from disk at the top of the call, so a caller that invokes it
+      right after Stage 2 (e.g. ``token_tasks/strategy_isolation_task``)
+      is guaranteed to see the freshly-written contracts.
+
+Existing activations are preserved across reloads: ``_load_stage2``
+only resets ``self._contracts_by_index``, never ``self._activated``.
 
 Simulation mode (catch-up) — PER-CONTRACT EVALUATION, WINDOW-BOUNDED
 -------------------------------------------------------------------
@@ -108,6 +133,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, time as dtime, timezone
 from pathlib import Path
@@ -552,12 +578,37 @@ class StrategyLiveTrackerService:
     # Main loop (live path — index LTP vs index R2, window-gated)        #
     # ------------------------------------------------------------------ #
     def _run(self) -> None:
+        # Mirror the S2 tracker's ``reload_interval`` pattern so a
+        # Stage-2 write that happens *after* ``start()`` is picked up
+        # within ~30 s — before the 09:18 Stage-4 order cron fires.
+        #
+        # Without this, the tracker keeps the empty Stage-2 cache it
+        # captured at ``start()`` (e.g. 07:00 launch), Stage 4 at
+        # 09:18:00 reads an empty stage_3_summary.json, and no trades
+        # are placed.
+        reload_interval = 30.0
+        last_reload = 0.0
+
         while not self._stop.is_set():
             try:
                 today = _market_now().date().isoformat()
+
                 if self._loaded_day != today:
+                    # Day rollover: reset flags + full reload.
                     self._reset_daily_flags()
                     self._load_stage2(today)
+                    last_reload = time.monotonic()
+                else:
+                    # Same day: reload on schedule (30 s) or immediately
+                    # when the in-memory cache is empty (Stage 2 not
+                    # yet written, or last run produced 0 contracts).
+                    now_mono = time.monotonic()
+                    if (
+                        (now_mono - last_reload) > reload_interval
+                        or not self._contracts_by_index
+                    ):
+                        self._load_stage2(today)
+                        last_reload = now_mono
 
                 in_window = self._in_window()
                 if in_window:
@@ -770,8 +821,13 @@ class StrategyLiveTrackerService:
             }
 
         today = _market_now().date().isoformat()
-        if self._loaded_day != today:
-            self._load_stage2(today)
+
+        # Always reload from disk so a Stage-2 completion that happened
+        # AFTER ``start()`` — or after the previous tracker tick — is
+        # picked up before we evaluate the contracts. Without this, a
+        # caller that invokes ``run_catchup()`` right after Stage 2
+        # would still be looking at the empty cache captured at start().
+        self._load_stage2(today)
 
         post_market = _post_market()
         window_start_minute, window_end_minute = _window_minute_bounds(today)

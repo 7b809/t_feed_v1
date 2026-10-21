@@ -1,3 +1,4 @@
+# services/scheduler_service.py
 """Singleton APScheduler wrapper.
 
 Jobs:
@@ -6,6 +7,7 @@ Jobs:
     * opening_range_calc            — cron, 09:16:10 IST
     * strategy_selection_calc       — cron, 09:16:30 IST (Stage 1)
     * strategy_isolation_calc       — cron, 09:17:00 IST (Stage 2)
+    * strategy_tracker_catchup      — cron, 09:17:30 IST (Stage-3 catch-up)
     * strategy_order_calc           — cron, 09:18:00 IST (Stage 3+4)
 
 Readiness / watchdog jobs (NEW):
@@ -18,6 +20,27 @@ Strategy 2 jobs:
     * strategy_2_stage3_isolation   — cron, 09:18:00 IST
     * strategy_2_stage4_order       — cron, 15:25:00 IST
     * strategy_2_stage3_recheck     — cron, every 5 min 09-15
+
+Note on ``strategy_tracker_catchup``
+-----------------------------------
+This job runs 30 seconds before the Stage-4 order cron (default
+09:17:30) and calls ``strategy_live_tracker_service.run_catchup()`` so
+the S1 tracker:
+
+    1. reloads the Stage-2 contracts that the isolation cron just wrote
+       to disk, and
+    2. re-scans the 09:15–09:20 window for per-contract R2 touches.
+
+It is a belt-and-braces guard on top of the post-Stage-2 hook inside
+``token_tasks/strategy_isolation_task.py``. It protects against:
+
+    * an unusually slow Stage 2 that finishes past its scheduled cron
+      time, or
+    * any future refactor that breaks the post-Stage-2 hook.
+
+The job is harmless when the post-Stage-2 hook already ran: the
+tracker reloads from disk and the per-contract scan is idempotent
+(already-activated contracts keep their existing record).
 """
 
 from __future__ import annotations
@@ -84,6 +107,9 @@ class SchedulerService:
         from token_tasks.strategy_order_task import run_strategy_order
         from token_tasks.strategy_selection_task import run_strategy_selection
         from token_tasks.strategy_isolation_task import run_strategy_isolation
+        from token_tasks.strategy_tracker_catchup_task import (
+            run_strategy_tracker_catchup,
+        )
         from token_tasks.strategy_2_isolation_task import run_strategy_2_isolation
         from token_tasks.strategy_2_order_task import run_strategy_2_order
         from token_tasks.token_monitor import check_upstox_token_validity
@@ -204,6 +230,38 @@ class SchedulerService:
             id="strategy_isolation_calc",
             replace_existing=True, misfire_grace_time=300,
         )
+
+        # -- Strategy 1 · Stage-3 tracker catch-up (safety net) --------- #
+        #
+        # Runs 30 s before the Stage-4 order cron. Purpose: give the
+        # tracker one more chance to reload the freshly-written Stage-2
+        # tree and re-scan the 09:15–09:20 window before Stage 4 reads
+        # ``stage_3_summary.json``.
+        #
+        # Belt-and-braces on top of the post-Stage-2 hook in
+        # ``token_tasks/strategy_isolation_task.py`` — protects against
+        # an unusually slow Stage 2 or a future refactor that breaks the
+        # post-Stage-2 hook.
+        catchup_h = catchup_m = catchup_s = 0
+        if config.STRATEGY_TRACKER_ENABLED:
+            catchup_sec = (
+                config.STRATEGY_ORDER_HOUR * 3600
+                + config.STRATEGY_ORDER_MINUTE * 60
+                - 30
+            ) % 86400
+            catchup_h = catchup_sec // 3600
+            catchup_m = (catchup_sec % 3600) // 60
+            catchup_s = catchup_sec % 60
+            scheduler.add_job(
+                run_strategy_tracker_catchup, "cron",
+                day_of_week=config.DAILY_REFRESH_DAYS,
+                hour=catchup_h,
+                minute=catchup_m,
+                second=catchup_s,
+                id="strategy_tracker_catchup",
+                replace_existing=True, misfire_grace_time=60,
+            )
+
         scheduler.add_job(
             run_strategy_order, "cron",
             day_of_week=config.DAILY_REFRESH_DAYS,
@@ -258,14 +316,15 @@ class SchedulerService:
         logger.info(
             "Scheduler started — daily=%02d:%02d, digest=%02d:%02d, "
             "preflight=%02d:%02d, OR=%02d:%02d:%02d, S1.stage1=%02d:%02d:%02d, "
-            "S1.stage2=%02d:%02d:%02d, S1.stage4=%02d:%02d:00, "
-            "S2.enabled=%s, DailyBackup=%02d:%02d",
+            "S1.stage2=%02d:%02d:%02d, S1.stage3_catchup=%02d:%02d:%02d, "
+            "S1.stage4=%02d:%02d:00, S2.enabled=%s, DailyBackup=%02d:%02d",
             config.DAILY_REFRESH_HOUR, config.DAILY_REFRESH_MINUTE,
             config.READINESS_DIGEST_HOUR, config.READINESS_DIGEST_MINUTE,
             config.READINESS_PREFLIGHT_HOUR, config.READINESS_PREFLIGHT_MINUTE,
             config.OPENING_RANGE_HOUR, config.OPENING_RANGE_MINUTE,
             config.OPENING_RANGE_SECOND,
             s1_h, s1_m, s1_s, s2_h, s2_m, s2_s,
+            catchup_h, catchup_m, catchup_s,
             config.STRATEGY_ORDER_HOUR, config.STRATEGY_ORDER_MINUTE,
             config.STRATEGY_2_ENABLED,
             config.DAILY_BACKUP_HOUR, config.DAILY_BACKUP_MINUTE,

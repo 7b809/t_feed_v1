@@ -1,3 +1,4 @@
+{# templates/prochart.html — ProChart page with live EMA plots + alerts #}
 {% extends "base.html" %}
 {% block title %}ProChart - {{ instrument_name or instrument_key }}{% endblock %}
 {% block head %}
@@ -757,7 +758,15 @@ const indicatorState = {
   emaCross: { enabled: true,  markers: [] },
 };
 const emaCache = new Map();
-let emaCrossCache = { crosses: null, lastTime: null };
+/* Cross cache key: (lastTime, length, lastClose). lastClose is included
+   so that an in-place update of the last candle (same minute, new close)
+   forces a recompute — without it, mid-minute EMA crosses are invisible
+   to the alert logic. */
+let emaCrossCache = { crosses: null, lastTime: null, length: null, lastClose: null };
+/* Tracks the last cross array we handed to the chart's markers API so we
+   can skip redundant re-attachments on ticks that did not change the
+   crosses at all. */
+let renderedCrossesRef = null;
 let emaIncrementalRaf = null;
 
 /* ============================================================
@@ -870,16 +879,40 @@ function calculateEMA(candles, length) {
   }
   return out;
 }
+/*
+ * FIXED getOrComputeEMA
+ * ---------------------
+ * The previous version had a first `if` that returned the cached EMA
+ * whenever (lastTime, length) matched the source — but for a live tick
+ * inside the current minute, ONLY the close/high/low change, not
+ * lastTime or length. That stale-cache return shadowed the incremental
+ * recompute branch, which is exactly the branch that uses the new close
+ * to compute a new EMA value. Result: the plotted EMA line never moved
+ * intra-minute and mid-minute EMA crosses were invisible to the alert
+ * pipeline.
+ *
+ * The fix removes the shadowing `if`. The remaining incremental branch
+ * already handles "same length, same lastTime, new close" correctly:
+ *   EMA[last] = newClose * k + EMA[last-1] * (1 - k)
+ * with EMA[last-1] read from cached.data[last-1] (which is unchanged by
+ * an in-place update of the last candle).
+ */
 function getOrComputeEMA(length, candles) {
   const source = candles || (candleSeries ? candleSeries.data() : []);
   if (!source || source.length === 0) return [];
   const cached = emaCache.get(length);
   const lastSourceTime = source[source.length - 1].time;
   const lastSourceLen = source.length;
-  if (cached && cached.lastTime === lastSourceTime && cached.length === lastSourceLen) return cached.data;
+
+  // Incremental path: same candle count, same last-candle minute.
+  // Fires on every live tick inside the current minute (close changed,
+  // time/length unchanged) — that is the case the old first `if` used
+  // to swallow by returning the stale cache.
   if (cached && cached.length === lastSourceLen && source[lastSourceLen - 1].time === cached.lastTime) {
     const k = 2 / (length + 1);
-    const prevValue = cached.data.length >= 2 ? cached.data[cached.data.length - 2].value : Number(source[0].close);
+    const prevValue = cached.data.length >= 2
+      ? cached.data[cached.data.length - 2].value
+      : Number(source[0].close);
     const newClose = Number(source[lastSourceLen - 1].close);
     if (Number.isFinite(prevValue) && Number.isFinite(newClose)) {
       const newValue = newClose * k + prevValue * (1 - k);
@@ -889,20 +922,42 @@ function getOrComputeEMA(length, candles) {
       return newData;
     }
   }
+
+  // Full recompute: new candle added, first call, or inconsistent cache.
   const fresh = calculateEMA(source, length);
   emaCache.set(length, { data: fresh, lastTime: fresh.length ? fresh[fresh.length - 1].time : null, length: fresh.length });
   return fresh;
 }
 function invalidateEMACache() {
   emaCache.clear();
-  emaCrossCache = { crosses: null, lastTime: null };
+  emaCrossCache = { crosses: null, lastTime: null, length: null, lastClose: null };
+  renderedCrossesRef = null;
 }
+/*
+ * FIXED getOrComputeEMACrosses
+ * ----------------------------
+ * The previous cache key was (lastTime, length) — identical to the bug
+ * in getOrComputeEMA. A live tick that updated the last candle in place
+ * (same lastTime, same length) but changed the close would hit the
+ * cache and return the stale crosses array, even after getOrComputeEMA
+ * was fixed.
+ *
+ * Adding lastClose to the cache key makes the cross cache invalidate on
+ * every close change, so mid-minute crosses are recomputed and become
+ * visible to evaluateAndDispatchAlert().
+ */
 function getOrComputeEMACrosses(candles) {
   const source = candles || (candleSeries ? candleSeries.data() : []);
   if (!source || source.length === 0) return [];
   const lastTime = source[source.length - 1].time;
   const lastLen = source.length;
-  if (emaCrossCache.crosses && emaCrossCache.lastTime === lastTime && emaCrossCache.length === lastLen) return emaCrossCache.crosses;
+  const lastClose = Number(source[source.length - 1].close);
+  if (
+    emaCrossCache.crosses &&
+    emaCrossCache.lastTime === lastTime &&
+    emaCrossCache.length === lastLen &&
+    emaCrossCache.lastClose === lastClose
+  ) return emaCrossCache.crosses;
   const fast = getOrComputeEMA(indicatorState.ema9.length, source);
   const slow = getOrComputeEMA(indicatorState.ema21.length, source);
   const n = Math.min(fast.length, slow.length);
@@ -920,7 +975,7 @@ function getOrComputeEMACrosses(candles) {
       crosses.push({ time: fast[i].time, type: "bear", price: c ? c.high : fast[i].value, value: fast[i].value });
     }
   }
-  emaCrossCache = { crosses, lastTime, length: lastLen };
+  emaCrossCache = { crosses, lastTime, length: lastLen, lastClose };
   return crosses;
 }
 
@@ -968,10 +1023,24 @@ function renderEMALines(candles) {
     indicatorState.ema21.series = null;
   }
 }
+/*
+ * FIXED renderEMACrossMarkers
+ * ---------------------------
+ * Added a `renderedCrossesRef` short-circuit so that intra-minute ticks
+ * which do not change the crosses array (cache hit) skip the marker
+ * rebuild + chart re-attachment. Without it, after we made
+ * scheduleIncrementalEMARefresh call this on every tick, we would
+ * re-attach all markers on each tick even when nothing changed.
+ */
 function renderEMACrossMarkers(candles) {
   if (!candleSeries) return;
-  if (!indicatorState.emaCross.enabled) { applyMarkersToCandleSeries([]); return; }
+  if (!indicatorState.emaCross.enabled) {
+    applyMarkersToCandleSeries([]);
+    renderedCrossesRef = null;
+    return;
+  }
   const crosses = getOrComputeEMACrosses(candles);
+  if (renderedCrossesRef === crosses) return;
   const seen = new Set();
   const markers = [];
   for (const c of crosses) {
@@ -982,6 +1051,7 @@ function renderEMACrossMarkers(candles) {
   }
   markers.sort((a, b) => a.time - b.time);
   applyMarkersToCandleSeries(markers);
+  renderedCrossesRef = crosses;
 }
 function refreshIndicators(candles) {
   try {
@@ -991,6 +1061,16 @@ function refreshIndicators(candles) {
     renderEMACrossMarkers(data);
   } catch (err) { console.warn("refreshIndicators error:", err); }
 }
+/*
+ * FIXED scheduleIncrementalEMARefresh
+ * -----------------------------------
+ * The marker-refresh guard previously only checked `lastTime !== lastTime`,
+ * which never fires for an in-place update of the current candle — so
+ * markers stayed visually stale after a mid-minute cross change. That
+ * guard has been removed; renderEMACrossMarkers is now always called,
+ * and its internal renderedCrossesRef short-circuit handles the
+ * "nothing changed" case cheaply.
+ */
 function scheduleIncrementalEMARefresh() {
   if (emaIncrementalRaf !== null) return;
   emaIncrementalRaf = requestAnimationFrame(() => {
@@ -1010,8 +1090,9 @@ function scheduleIncrementalEMARefresh() {
         else indicatorState.ema21.series.setData(getOrComputeEMA(indicatorState.ema21.length, data));
       }
       if (indicatorState.emaCross.enabled) {
-        const lastTime = data[data.length - 1].time;
-        if (emaCrossCache.lastTime !== lastTime) renderEMACrossMarkers(data);
+        // Always call — internal cache + renderedCrossesRef short-circuit
+        // handles the no-change case cheaply.
+        renderEMACrossMarkers(data);
       }
     } catch (err) { console.warn("incremental EMA refresh error:", err); }
   });
@@ -2082,6 +2163,9 @@ function rebuildChart(candles) {
   levelLines = []; levelLabels = []; levelLabelLayer = null;
   calculatedOpeningRanges = {};
   lastCandle = null;
+  // Reset the cross-render ref so the first render of the new chart
+  // always attaches markers.
+  renderedCrossesRef = null;
 
   chart = LightweightCharts.createChart(chartContainer, {
     width: chartContainer.clientWidth, height: chartContainer.clientHeight,
