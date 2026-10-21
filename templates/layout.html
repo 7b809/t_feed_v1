@@ -1,5 +1,7 @@
 {# File: templates/layout.html #}
-{# ProChart multi-chart layout page with a global instrument search bar #}
+{# ProChart multi-chart layout — per-pane metadata, floating scroll nav,
+   unlinked-by-default panes (searching the toolbar affects only the
+   active pane), rich modal search. #}
 {% extends "base.html" %}
 {% block title %}Layout - Trading Dashboard{% endblock %}
 {% block head %}
@@ -14,6 +16,7 @@
     --shadow: 0 12px 30px rgba(0,0,0,0.5);
     --toolbar-h: 56px;
     --indicator-h: 36px;
+    --pane-min-h: 380px;
   }
   html, body { height: 100%; margin: 0; }
   body { background: var(--bg); color: var(--text); overflow: hidden; }
@@ -180,19 +183,26 @@
   .layout-grid-wrap {
     height: calc(100vh - var(--toolbar-h) - var(--indicator-h));
     height: calc(100dvh - var(--toolbar-h) - var(--indicator-h));
-    padding: 10px; overflow: hidden;
+    padding: 10px;
+    /* was overflow:hidden; now scrolls when panes (with meta) don't fit */
+    overflow-y: auto;
+    overflow-x: hidden;
     display: grid; gap: 8px;
+    scroll-behavior: smooth;
   }
+  .layout-grid-wrap::-webkit-scrollbar { width: 8px; }
+  .layout-grid-wrap::-webkit-scrollbar-thumb { background: var(--surface-3); border-radius: 8px; }
   .layout-grid-wrap[data-grid="1"] { grid-template-columns: 1fr; grid-template-rows: 1fr; }
   .layout-grid-wrap[data-grid="2"] { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr; }
   .layout-grid-wrap[data-grid="4"] { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
+
   @media (max-width: 900px) {
     :root { --indicator-h: 44px; }
     .layout-grid-wrap[data-grid="2"],
     .layout-grid-wrap[data-grid="4"] {
       grid-template-columns: 1fr;
-      grid-template-rows: repeat(auto-fit, minmax(260px, 1fr));
-      overflow-y: auto;
+      grid-template-rows: none;
+      grid-auto-rows: minmax(var(--pane-min-h), auto);
     }
     .layout-name-input { display: none; }
   }
@@ -201,7 +211,7 @@
   .pane {
     background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
     display: flex; flex-direction: column; overflow: hidden;
-    box-shadow: var(--shadow); min-height: 0;
+    box-shadow: var(--shadow); min-height: var(--pane-min-h);
     transition: border-color .15s ease, box-shadow .15s ease;
   }
   .pane[data-active="true"] {
@@ -245,15 +255,71 @@
   .layout-grid-wrap[data-grid="1"] .pane-label { font-size: 11px; padding: 2px 5px; }
   .layout-grid-wrap[data-grid="2"] .pane-label { font-size: 10px; padding: 1px 4px; }
 
-  .pane-footer {
-    height: 26px; flex-shrink: 0; padding: 0 10px;
-    display: flex; align-items: center; justify-content: space-between;
-    border-top: 1px solid var(--border); background: var(--surface-2);
-    font-size: 10px; color: var(--muted); gap: 8px;
+  /* ---------- Pane metadata section (below the chart) ---------- */
+  .pane-meta {
+    flex-shrink: 0;
+    background: var(--surface-2);
+    border-top: 1px solid var(--border);
+    padding: 6px 10px 8px;
   }
-  .pane-ohlc { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .pane-ohlc span { color: #fff; font-weight: 700; }
-  .pane-key { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .pane-meta-header {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 11px; margin-bottom: 6px;
+    overflow: hidden;
+  }
+  .pane-meta-symbol {
+    color: #fff; font-weight: 800;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    min-width: 0;
+  }
+  .pane-meta-type-pill {
+    flex-shrink: 0;
+    display: inline-block;
+    padding: 1px 7px;
+    border-radius: 10px;
+    font-size: 9px; font-weight: 800; letter-spacing: 0.03em;
+  }
+  .pane-meta-type-pill.ce  { background: rgba(8,153,129,0.18); color: #6ee7c2; }
+  .pane-meta-type-pill.pe  { background: rgba(242,54,69,0.18); color: #ff8a95; }
+  .pane-meta-type-pill.idx { background: rgba(41,98,255,0.18); color: #7ea6ff; }
+  .pane-meta-type-pill.other { background: rgba(120,123,134,0.2); color: #b0b8c4; }
+  .pane-meta-segment {
+    color: var(--muted); font-size: 9px;
+    font-family: ui-monospace, monospace;
+    margin-left: auto;
+    white-space: nowrap;
+    letter-spacing: 0.03em;
+  }
+  .pane-meta-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 4px 8px;
+  }
+  .pane-meta-cell {
+    display: flex; flex-direction: column; gap: 1px;
+    min-width: 0;
+  }
+  .pane-meta-cell .label {
+    font-size: 8px; font-weight: 800;
+    color: var(--muted);
+    text-transform: uppercase; letter-spacing: 0.05em;
+  }
+  .pane-meta-cell .value {
+    font-size: 11px; font-weight: 700; color: #fff;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .pane-meta-cell .value.up { color: var(--green); }
+  .pane-meta-cell .value.down { color: var(--red); }
+
+  @media (max-width: 720px) {
+    .pane-meta-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 4px 10px;
+    }
+    .pane-meta-cell .label { font-size: 7px; }
+    .pane-meta-cell .value { font-size: 10px; }
+  }
 
   /* ---------- Status pill ---------- */
   .status-pill {
@@ -267,6 +333,56 @@
   .status-pill.ok .dot { background: var(--green); box-shadow: 0 0 8px rgba(8,153,129,0.8); }
   .status-pill.warn { color: var(--yellow); }
   .status-pill.warn .dot { background: var(--yellow); }
+
+  /* ---------- Floating scroll navigation ---------- */
+  .floating-scroll-nav {
+    position: fixed;
+    right: 20px;
+    bottom: 24px;
+    z-index: 200;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    transition: opacity .2s ease, visibility .2s ease, transform .2s ease;
+  }
+  .floating-scroll-nav.hidden {
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transform: translateY(8px);
+  }
+  .floating-scroll-btn {
+    width: 42px;
+    height: 42px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--border);
+    border-radius: 50%;
+    background: var(--surface-2);
+    color: var(--text);
+    box-shadow: var(--shadow);
+    cursor: pointer;
+    font-size: 16px;
+    transition: all .15s ease;
+  }
+  .floating-scroll-btn:hover {
+    background: var(--blue);
+    color: #fff;
+    border-color: var(--blue);
+  }
+  .floating-scroll-btn:disabled {
+    opacity: 0.4;
+    cursor: default;
+    background: var(--surface-2);
+    color: var(--muted);
+    border-color: var(--border);
+  }
+
+  @media (max-width: 720px) {
+    .floating-scroll-nav { right: 12px; bottom: 14px; gap: 6px; }
+    .floating-scroll-btn { width: 36px; height: 36px; font-size: 14px; }
+  }
 
   /* ---------- Search modal ---------- */
   .search-modal-overlay {
@@ -395,7 +511,7 @@
   </div>
   <div class="toolbar-right">
     <span id="linkStateBadge" class="status-pill" title="When linked, changing one pane changes all">
-      🔗 Linked
+      🔗 Unlinked
     </span>
     <button id="saveLayoutBtn" class="toolbar-btn primary" title="Save current layout">
       <i class="bi bi-save"></i> Save
@@ -431,6 +547,19 @@
       {% include "partials/layout_pane.html" %}
     {% endwith %}
   {% endfor %}
+</div>
+
+{# ============================================================ #}
+{# Floating scroll navigation — auto-shown only when the grid  #}
+{# overflows (grid=4 + metadata on a small screen).             #}
+{# ============================================================ #}
+<div class="floating-scroll-nav hidden" id="floatingScrollNav">
+  <button type="button" class="floating-scroll-btn" id="scrollToTopBtn" title="Scroll to top">
+    <i class="bi bi-chevron-up"></i>
+  </button>
+  <button type="button" class="floating-scroll-btn" id="scrollToBottomBtn" title="Scroll to bottom">
+    <i class="bi bi-chevron-down"></i>
+  </button>
 </div>
 
 {# ============================================================ #}
@@ -482,7 +611,11 @@
     name: {{ layout.name | tojson }},
     grid: {{ layout.grid or 1 }},
     panes: {{ panes | tojson }},
-    linked: true,
+    // Bug fix: default to UNLINKED so a search from the toolbar
+    // (or a "change" from one pane's ↔ button) only affects the
+    // targeted pane. The link button on each pane still lets users
+    // opt into the sync-all-panes behaviour explicitly.
+    linked: false,
   };
 
   // Global indicator state — applies to every pane uniformly.
@@ -517,6 +650,11 @@
   const searchModalCurrentKey = document.getElementById("searchModalCurrentKey");
   const modalSearchInput = document.getElementById("modalSearchInput");
   const modalSearchResults = document.getElementById("modalSearchResults");
+
+  // Floating scroll-nav elements
+  const floatingScrollNav = document.getElementById("floatingScrollNav");
+  const scrollToTopBtn = document.getElementById("scrollToTopBtn");
+  const scrollToBottomBtn = document.getElementById("scrollToBottomBtn");
 
   // ============================================================
   // ACTIVE PANE MANAGEMENT
@@ -931,7 +1069,6 @@
         globalState[key] = !globalState[key];
         btn.classList.toggle("active", globalState[key]);
 
-        // Auto-enable EMA9 + EMA21 when EMA Cross is turned on
         if (key === "emaCross" && globalState.emaCross) {
           if (!globalState.ema9) {
             globalState.ema9 = true;
@@ -1009,6 +1146,105 @@
   }
 
   // ============================================================
+  // META PANEL HELPERS
+  // ============================================================
+  function formatVolume(v) {
+    const n = Number(v);
+    if (!Number.isFinite(n) || n <= 0) return "—";
+    if (n >= 1e9) return (n / 1e9).toFixed(2) + "B";
+    if (n >= 1e6) return (n / 1e6).toFixed(2) + "M";
+    if (n >= 1e3) return (n / 1e3).toFixed(2) + "K";
+    return String(Math.round(n));
+  }
+
+  function formatExpiryShort(v) {
+    if (!v) return "—";
+    const s = String(v);
+    // 2026-10-30 -> 30 Oct
+    const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (m) {
+      const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
+      try {
+        return new Intl.DateTimeFormat("en-IN", { day: "2-digit", month: "short", timeZone: "UTC" }).format(d);
+      } catch (_e) { /* fall through */ }
+    }
+    return s;
+  }
+
+  function setPaneMeta(paneIndex, field, text, trend) {
+    const paneEl = document.querySelector(`.pane[data-pane-index="${paneIndex}"]`);
+    if (!paneEl) return;
+    const el = paneEl.querySelector(`[data-meta="${field}"]`);
+    if (!el) return;
+    el.textContent = (text === null || text === undefined || text === "") ? "—" : String(text);
+    if (trend === "up") { el.classList.add("up"); el.classList.remove("down"); }
+    else if (trend === "down") { el.classList.add("down"); el.classList.remove("up"); }
+    else { el.classList.remove("up"); el.classList.remove("down"); }
+  }
+
+  // Populate the static fields from /api/upstox/instrument response.
+  function applyInstrumentMeta(paneIndex, meta) {
+    if (!meta) return;
+    const paneEl = document.querySelector(`.pane[data-pane-index="${paneIndex}"]`);
+    if (!paneEl) return;
+
+    const symbol = meta.trading_symbol || meta.name || meta.instrument_key || "—";
+    const type = String(meta.instrument_type || "").toUpperCase();
+    const segment = String(meta.segment || "").toUpperCase();
+    const pill = pillClassForType(type, segment);
+    const pillLabel = type === "CE" || type === "PE" ? type
+                    : (segment.includes("INDEX") || meta.instrument_key && String(meta.instrument_key).startsWith("NSE_INDEX") ? "INDEX" : (type || "—"));
+
+    const symbolEl = paneEl.querySelector(".pane-meta-symbol");
+    if (symbolEl) symbolEl.textContent = symbol;
+
+    const pillEl = paneEl.querySelector(".pane-meta-type-pill");
+    if (pillEl) {
+      pillEl.className = "pane-meta-type-pill " + pill;
+      pillEl.textContent = pillLabel || "—";
+    }
+
+    const segEl = paneEl.querySelector(".pane-meta-segment");
+    if (segEl) segEl.textContent = segment || "—";
+
+    // Expiry
+    if (meta.expiry) {
+      setPaneMeta(paneIndex, "expiry", formatExpiryShort(meta.expiry));
+    } else if (meta.strike_price != null) {
+      setPaneMeta(paneIndex, "expiry", "Strike " + Number(meta.strike_price).toFixed(0));
+    } else {
+      setPaneMeta(paneIndex, "expiry", "—");
+    }
+
+    // Header symbol text
+    const headEl = paneEl.querySelector(".pane-symbol-text");
+    if (headEl) headEl.textContent = meta.trading_symbol || meta.instrument_key || symbol;
+    paneEl.dataset.instrumentKey = meta.instrument_key || paneEl.dataset.instrumentKey;
+  }
+
+  // Update LTP/Change/Volume from the WS payload fields.
+  // prevClose comes from `feed.ltpc.cp` (day previous close).
+  function applyLiveMeta(paneIndex, { ltp, prevClose, volume }) {
+    if (Number.isFinite(ltp)) {
+      setPaneMeta(paneIndex, "ltp", ltp.toFixed(2));
+      if (Number.isFinite(prevClose) && prevClose > 0) {
+        const change = ltp - prevClose;
+        const changePct = (change / prevClose) * 100;
+        const sign = change >= 0 ? "+" : "";
+        setPaneMeta(
+          paneIndex,
+          "change",
+          `${sign}${change.toFixed(2)} (${changePct.toFixed(2)}%)`,
+          change >= 0 ? "up" : "down"
+        );
+      }
+    }
+    if (Number.isFinite(volume)) {
+      setPaneMeta(paneIndex, "volume", formatVolume(volume));
+    }
+  }
+
+  // ============================================================
   // APPLY AN INSTRUMENT TO A PANE (respects linked state)
   // ============================================================
   function applyInstrumentToPane(paneIndex, instrumentKey) {
@@ -1026,7 +1262,7 @@
       renderLayout(layoutState);
       setActivePaneIndex(paneIndex);
     } else {
-      // Unlinked: change only the target pane.
+      // Unlinked (default): change only the target pane.
       loadPane(paneIndex, instrumentKey);
       setActivePaneIndex(paneIndex);
     }
@@ -1238,13 +1474,11 @@
       const raw = modalSearchInput.value.trim();
       const target = modalSearchTargetPane;
 
-      // Direct key paste
       if (raw.includes("|") && !modalSearchResultsList.length) {
         closeSearchModal();
         if (target >= 0) applyInstrumentToPane(target, raw);
         return;
       }
-      // Selected item
       if (modalSearchResultsList.length && modalSearchSelected >= 0) {
         const item = modalSearchResultsList[modalSearchSelected];
         if (item && item.instrument_key) {
@@ -1273,6 +1507,41 @@
     e.stopPropagation();
     closeSearchModal();
   });
+
+  // ============================================================
+  // FLOATING SCROLL NAVIGATION
+  // ============================================================
+  function setupFloatingScrollButtons() {
+    if (!floatingScrollNav || !gridEl) return;
+
+    function updateVisibility() {
+      const canScroll = gridEl.scrollHeight > gridEl.clientHeight + 8;
+      floatingScrollNav.classList.toggle("hidden", !canScroll);
+      if (!canScroll) return;
+      // Disable top when already at the top; disable bottom when at the end.
+      const atTop = gridEl.scrollTop <= 2;
+      const atBottom = gridEl.scrollTop + gridEl.clientHeight >= gridEl.scrollHeight - 2;
+      if (scrollToTopBtn) scrollToTopBtn.disabled = atTop;
+      if (scrollToBottomBtn) scrollToBottomBtn.disabled = atBottom;
+    }
+
+    scrollToTopBtn.addEventListener("click", () => {
+      gridEl.scrollTo({ top: 0, behavior: "smooth" });
+    });
+    scrollToBottomBtn.addEventListener("click", () => {
+      gridEl.scrollTo({ top: gridEl.scrollHeight, behavior: "smooth" });
+    });
+
+    gridEl.addEventListener("scroll", updateVisibility);
+    window.addEventListener("resize", updateVisibility);
+
+    // Re-check after every renderLayout / pane load, since content height
+    // changes when the meta panel is populated.
+    const ro = new ResizeObserver(updateVisibility);
+    ro.observe(gridEl);
+
+    updateVisibility();
+  }
 
   // ============================================================
   // PER-PANE CREATE / DESTROY
@@ -1321,6 +1590,7 @@
       instrumentKey,
       candles: [],
       lastCandle: null,
+      prevClose: null,
       ws: null, reconnectTimer: null,
       destroyed: false,
       resizeObserver: null,
@@ -1343,16 +1613,15 @@
       inst.resizeObserver = ro;
     }
 
+    // Crosshair → OHLC in the meta panel (replaces the old footer).
     chart.subscribeCrosshairMove((param) => {
       if (!param || !param.seriesData || !param.seriesData.get) return;
       const d = param.seriesData.get(candleSeries);
       if (!d) return;
-      const paneEl = document.querySelector(`.pane[data-pane-index="${paneIndex}"]`);
-      if (!paneEl) return;
-      paneEl.querySelector(".pane-o").textContent = Number(d.open).toFixed(2);
-      paneEl.querySelector(".pane-h").textContent = Number(d.high).toFixed(2);
-      paneEl.querySelector(".pane-l").textContent = Number(d.low).toFixed(2);
-      paneEl.querySelector(".pane-c").textContent = Number(d.close).toFixed(2);
+      setPaneMeta(paneIndex, "open", Number(d.open).toFixed(2));
+      setPaneMeta(paneIndex, "high", Number(d.high).toFixed(2));
+      setPaneMeta(paneIndex, "low",  Number(d.low).toFixed(2));
+      setPaneMeta(paneIndex, "close", Number(d.close).toFixed(2));
     });
 
     chart.timeScale().subscribeVisibleTimeRangeChange(() => schedulePaneLabelUpdate(inst));
@@ -1424,13 +1693,13 @@
     paneInst.candleSeries.update(candle);
     paneInst.lastCandle = candle;
 
-    const paneEl = document.querySelector(`.pane[data-pane-index="${paneInst.index}"]`);
-    if (paneEl) {
-      paneEl.querySelector(".pane-o").textContent = candle.open.toFixed(2);
-      paneEl.querySelector(".pane-h").textContent = candle.high.toFixed(2);
-      paneEl.querySelector(".pane-l").textContent = candle.low.toFixed(2);
-      paneEl.querySelector(".pane-c").textContent = candle.close.toFixed(2);
-    }
+    // Meta panel: latest candle drives LTP + OHLC display until the user
+    // hovers (crosshair then takes precedence until they move away).
+    setPaneMeta(paneInst.index, "ltp", candle.close.toFixed(2));
+    setPaneMeta(paneInst.index, "open", candle.open.toFixed(2));
+    setPaneMeta(paneInst.index, "high", candle.high.toFixed(2));
+    setPaneMeta(paneInst.index, "low",  candle.low.toFixed(2));
+    setPaneMeta(paneInst.index, "close", candle.close.toFixed(2));
 
     const candles = paneInst.candles;
     if (!candles.length || candles[candles.length - 1].time < candle.time) {
@@ -1459,6 +1728,7 @@
     ws.addEventListener("open", () => {
       try { ws.send(JSON.stringify({ action: "subscribe", instrument_key: paneInst.instrumentKey })); } catch (e) {}
     });
+
     ws.addEventListener("message", (evt) => {
       let payload;
       try { payload = JSON.parse(evt.data); } catch (e) { return; }
@@ -1468,6 +1738,21 @@
       const key = payload.instrument_key || payload.instrumentKey || payload.key;
       if (!key || key !== paneInst.instrumentKey) return;
 
+      // Extract the live meta fields the feed publishes (see
+      // live_feed_service._publish_feed_snapshot). These exist
+      // alongside any candle payload, so extract them first.
+      const ltpVal = Number(payload.ltp);
+      const prevCloseVal = Number(payload.prev_close);
+      const volumeVal = Number(payload.volume);
+      if (Number.isFinite(ltpVal) || Number.isFinite(volumeVal)) {
+        if (Number.isFinite(prevCloseVal)) paneInst.prevClose = prevCloseVal;
+        applyLiveMeta(paneInst.index, {
+          ltp: Number.isFinite(ltpVal) ? ltpVal : undefined,
+          prevClose: Number.isFinite(prevCloseVal) ? prevCloseVal : paneInst.prevClose,
+          volume: Number.isFinite(volumeVal) ? volumeVal : undefined,
+        });
+      }
+
       const candleRaw =
         payload.candle || payload.latest_candle || payload.completed_candle ||
         payload.data?.candle || payload.data?.latest_candle;
@@ -1476,25 +1761,22 @@
         if (c) { updateCandle(paneInst, c); return; }
       }
 
-      const ltp = Number(
-        payload.ltp ?? payload.feed?.ltpc?.ltp ??
-        payload.data?.ltp ?? payload.data?.feed?.ltpc?.ltp
-      );
-      if (!Number.isFinite(ltp)) return;
+      if (!Number.isFinite(ltpVal)) return;
       const ts = Math.floor(Date.now() / 1000);
       const minute = Math.floor(ts / 60) * 60;
       if (!paneInst.lastCandle || minute > paneInst.lastCandle.time) {
-        updateCandle(paneInst, { time: minute, open: ltp, high: ltp, low: ltp, close: ltp });
+        updateCandle(paneInst, { time: minute, open: ltpVal, high: ltpVal, low: ltpVal, close: ltpVal });
       } else if (minute === paneInst.lastCandle.time) {
         updateCandle(paneInst, {
           time: minute,
           open: paneInst.lastCandle.open,
-          high: Math.max(paneInst.lastCandle.high, ltp),
-          low: Math.min(paneInst.lastCandle.low, ltp),
-          close: ltp,
+          high: Math.max(paneInst.lastCandle.high, ltpVal),
+          low: Math.min(paneInst.lastCandle.low, ltpVal),
+          close: ltpVal,
         });
       }
     });
+
     ws.addEventListener("close", () => {
       paneInst.ws = null;
       if (paneInst.destroyed) return;
@@ -1510,12 +1792,23 @@
       paneEl.dataset.instrumentKey = instrumentKey;
       const symEl = paneEl.querySelector(".pane-symbol-text");
       if (symEl) symEl.textContent = instrumentKey;
-      const keyEl = paneEl.querySelector(".pane-key");
-      if (keyEl) keyEl.textContent = instrumentKey;
+      const metaSymEl = paneEl.querySelector(".pane-meta-symbol");
+      if (metaSymEl) metaSymEl.textContent = instrumentKey;
     }
 
     const inst = createPaneInstance(paneIndex, instrumentKey);
     if (!inst) return;
+
+    // Fetch instrument metadata (trading_symbol, exchange, segment,
+    // expiry) for the meta panel. Fire-and-forget — never blocks the chart.
+    fetch(`/api/upstox/instrument?instrument_key=${encodeURIComponent(instrumentKey)}`)
+      .then(r => r.json())
+      .then(data => {
+        if (!inst.destroyed && data && data.data) {
+          applyInstrumentMeta(paneIndex, data.data);
+        }
+      })
+      .catch((e) => console.warn("[pane]", paneIndex, "meta fetch failed:", e));
 
     try {
       const candles = await fetchCandles(instrumentKey);
@@ -1526,11 +1819,24 @@
         inst.lastCandle = candles[candles.length - 1];
         inst.chart.timeScale().fitContent();
 
-        if (paneEl) {
-          paneEl.querySelector(".pane-o").textContent = inst.lastCandle.open.toFixed(2);
-          paneEl.querySelector(".pane-h").textContent = inst.lastCandle.high.toFixed(2);
-          paneEl.querySelector(".pane-l").textContent = inst.lastCandle.low.toFixed(2);
-          paneEl.querySelector(".pane-c").textContent = inst.lastCandle.close.toFixed(2);
+        // Seed the meta panel from the last candle until live ticks arrive.
+        setPaneMeta(paneIndex, "ltp",   inst.lastCandle.close.toFixed(2));
+        setPaneMeta(paneIndex, "open",  inst.lastCandle.open.toFixed(2));
+        setPaneMeta(paneIndex, "high",  inst.lastCandle.high.toFixed(2));
+        setPaneMeta(paneIndex, "low",   inst.lastCandle.low.toFixed(2));
+        setPaneMeta(paneIndex, "close", inst.lastCandle.close.toFixed(2));
+
+        // Day open = first candle of the most recent trading date. Use
+        // it as a rough baseline for change until the WS provides cp.
+        const lastDateKey = getDateKeyIST(inst.lastCandle.time);
+        const firstToday = candles.find(c => getDateKeyIST(c.time) === lastDateKey);
+        if (firstToday && Number.isFinite(firstToday.open)) {
+          inst.prevClose = firstToday.open;
+          applyLiveMeta(paneIndex, {
+            ltp: inst.lastCandle.close,
+            prevClose: inst.prevClose,
+            volume: undefined,
+          });
         }
 
         renderAllIndicatorsForPane(inst);
@@ -1540,6 +1846,14 @@
     }
 
     connectWs(inst);
+
+    // Content height changed; re-evaluate scroll nav availability.
+    requestAnimationFrame(() => {
+      if (floatingScrollNav) {
+        const canScroll = gridEl.scrollHeight > gridEl.clientHeight + 8;
+        floatingScrollNav.classList.toggle("hidden", !canScroll);
+      }
+    });
   }
 
   // ============================================================
@@ -1551,6 +1865,8 @@
       name: layout.name || "My Layout",
       grid: layout.grid || 1,
       panes: (layout.panes || []).slice(),
+      // preserve the current linked toggle across re-renders
+      linked: layoutState.linked,
     });
 
     layoutNameInput.value = layoutState.name;
@@ -1573,6 +1889,7 @@
     panes.forEach((p, i) => loadPane(i, p.instrument_key));
     bindPaneActions();
     setActivePaneIndex(Math.min(activePaneIndex, panes.length - 1));
+    updateLinkedPill();
   }
 
   function buildPaneHtml(index, instrumentKey) {
@@ -1588,7 +1905,7 @@
             <button class="pane-btn" data-pane-action="change" data-pane-index="${index}" title="Change instrument (opens search)">
               <i class="bi bi-arrow-left-right"></i>
             </button>
-            <button class="pane-btn" data-pane-action="link" data-pane-index="${index}" title="Toggle link">
+            <button class="pane-btn ${layoutState.linked ? 'linked' : ''}" data-pane-action="link" data-pane-index="${index}" title="Toggle link">
               <i class="bi bi-link-45deg"></i>
             </button>
           </div>
@@ -1597,9 +1914,22 @@
           <div class="pane-body" id="pane-chart-${index}"></div>
           <div class="pane-label-layer" id="pane-label-layer-${index}"></div>
         </div>
-        <div class="pane-footer">
-          <span class="pane-key">${escapeHtml(instrumentKey)}</span>
-          <span class="pane-ohlc">O <span class="pane-o">--</span> H <span class="pane-h">--</span> L <span class="pane-l">--</span> C <span class="pane-c">--</span></span>
+        <div class="pane-meta" id="pane-meta-${index}">
+          <div class="pane-meta-header">
+            <span class="pane-meta-symbol">${escapeHtml(instrumentKey)}</span>
+            <span class="pane-meta-type-pill other">—</span>
+            <span class="pane-meta-segment">—</span>
+          </div>
+          <div class="pane-meta-grid">
+            <div class="pane-meta-cell"><div class="label">LTP</div><div class="value" data-meta="ltp">--</div></div>
+            <div class="pane-meta-cell"><div class="label">Change</div><div class="value" data-meta="change">--</div></div>
+            <div class="pane-meta-cell"><div class="label">Volume</div><div class="value" data-meta="volume">--</div></div>
+            <div class="pane-meta-cell"><div class="label">Expiry</div><div class="value" data-meta="expiry">--</div></div>
+            <div class="pane-meta-cell"><div class="label">Open</div><div class="value" data-meta="open">--</div></div>
+            <div class="pane-meta-cell"><div class="label">High</div><div class="value" data-meta="high">--</div></div>
+            <div class="pane-meta-cell"><div class="label">Low</div><div class="value" data-meta="low">--</div></div>
+            <div class="pane-meta-cell"><div class="label">Close</div><div class="value" data-meta="close">--</div></div>
+          </div>
         </div>
       </div>
     `;
@@ -1617,7 +1947,7 @@
     });
 
     // Link toggle (also makes the pane active so the toolbar search
-    // targets it)
+    // targets it). Reflects the toggle in the pill + button state.
     document.querySelectorAll('.pane-btn[data-pane-action="link"]').forEach(btn => {
       btn.addEventListener("click", (e) => {
         e.stopPropagation();
@@ -1746,10 +2076,11 @@
     loadGlobalPrefs();
     syncToolbarButtons();
     bindToolbarHandlers();
+    setupFloatingScrollButtons();
     await refreshLayoutList();
     renderLayout(layoutState);
     bindPaneActions();
-    updateLinkedPill();
+    updateLinkedPill();   // starts as "Unlinked" because layoutState.linked=false
     setActivePaneIndex(0);
   }
 

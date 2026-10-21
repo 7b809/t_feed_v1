@@ -1,5 +1,6 @@
 {# File: templates/partials/layout_pane.html #}
-{# One pane of the multi-chart layout. Matches the JS buildPaneHtml() shape. #}
+{# One pane of the multi-chart layout. Matches the JS buildPaneHtml() shape,
+   including the metadata panel below the chart. #}
 <div class="pane" data-pane-index="{{ pane_index }}" data-instrument-key="{{ pane.instrument_key }}" data-active="{{ 'true' if pane_index == 0 else 'false' }}">
   <div class="pane-header">
     <div class="pane-symbol">
@@ -19,8 +20,21 @@
     <div class="pane-body" id="pane-chart-{{ pane_index }}"></div>
     <div class="pane-label-layer" id="pane-label-layer-{{ pane_index }}"></div>
   </div>
-  <div class="pane-footer">
-    <span class="pane-key">{{ pane.instrument_key }}</span>
-    <span class="pane-ohlc">O <span class="pane-o">--</span> H <span class="pane-h">--</span> L <span class="pane-l">--</span> C <span class="pane-c">--</span></span>
+  <div class="pane-meta" id="pane-meta-{{ pane_index }}">
+    <div class="pane-meta-header">
+      <span class="pane-meta-symbol">{{ pane.instrument_key }}</span>
+      <span class="pane-meta-type-pill other">—</span>
+      <span class="pane-meta-segment">—</span>
+    </div>
+    <div class="pane-meta-grid">
+      <div class="pane-meta-cell"><div class="label">LTP</div><div class="value" data-meta="ltp">--</div></div>
+      <div class="pane-meta-cell"><div class="label">Change</div><div class="value" data-meta="change">--</div></div>
+      <div class="pane-meta-cell"><div class="label">Volume</div><div class="value" data-meta="volume">--</div></div>
+      <div class="pane-meta-cell"><div class="label">Expiry</div><div class="value" data-meta="expiry">--</div></div>
+      <div class="pane-meta-cell"><div class="label">Open</div><div class="value" data-meta="open">--</div></div>
+      <div class="pane-meta-cell"><div class="label">High</div><div class="value" data-meta="high">--</div></div>
+      <div class="pane-meta-cell"><div class="label">Low</div><div class="value" data-meta="low">--</div></div>
+      <div class="pane-meta-cell"><div class="label">Close</div><div class="value" data-meta="close">--</div></div>
+    </div>
   </div>
 </div>
