@@ -1,3 +1,4 @@
+# File: services/live_cross_store.py
 """Persist live EMA crosses for the current day per instrument.
 
 Path per instrument:
@@ -34,6 +35,44 @@ On the first ``save()`` after a process start, the store hydrates its
 in-memory record map from the on-disk file when that file's ``day``
 matches the incoming cross's day. This prevents a mid-day restart from
 silently wiping crosses already persisted earlier in the session.
+
+Path resolution hardening
+-------------------------
+``_path_for`` used to do::
+
+    return Path(entry["ema_path"]).with_name(config.LIVE_CROSSES_FILENAME)
+
+and ``Path.with_name()`` raises ``ValueError: PosixPath('.') has an
+empty name`` when the base path has no ``.name`` — i.e. when
+``entry["ema_path"]`` is missing, ``""``, ``"."``, ``".."``, or a
+root like ``"/"``.
+
+That happened in production for **ad-hoc** options / futures entries
+(e.g. ``BSE_FO|1124739``): they are not pre-registered by
+``routes/admin_routes._ensure_core_and_strategy_indexes_registered``,
+so they carry no usable ``ema_path`` from the backup / registry load.
+The cross handler then called ``save()`` → ``_path_for()`` and the
+whole ``save()`` blew up before it could write anything, dropping
+every live cross for those instruments.
+
+``_path_for`` now resolves any of the following to a valid file path
+without raising:
+
+    ema_path = "<dir>/ema_crosses.json"   -> "<dir>/live_crosses.json"
+    ema_path = "<dir>" (directory-like)   -> "<dir>/live_crosses.json"
+    ema_path = "" / "." / "/" / None      -> canonical fallback:
+        <LIVE_DATA_DIR>/index/<safe_instrument_key>/live_crosses.json
+
+The canonical fallback is the same layout used by
+``routes/admin_routes._ensure_core_and_strategy_indexes_registered``,
+so cross files written via the fallback are still discoverable by the
+existing readers / backfill code.
+
+``save()`` and ``read_today()`` also now tolerate a missing
+``instrument_key`` in ``entry`` (falls back to ``"unknown"``) instead
+of raising ``KeyError`` — defence-in-depth: ``_path_for`` already
+guards the only place that previously blew up in the wild, but no
+caller should ever get a hard crash from a malformed registry entry.
 """
 
 from __future__ import annotations
@@ -48,6 +87,7 @@ from typing import Any
 from core import config
 
 logger = logging.getLogger(__name__)
+
 
 class LiveCrossStore:
     def __init__(self) -> None:
@@ -68,9 +108,64 @@ class LiveCrossStore:
             return lock
 
     @staticmethod
-    def _path_for(entry: dict[str, Any]) -> Path:
-        ema_path = Path(entry["ema_path"])
-        return ema_path.with_name(config.LIVE_CROSSES_FILENAME)
+    def _safe_key(instrument_key: str) -> str:
+        """Filesystem-safe slug for use as a folder name.
+
+        Mirrors ``routes.admin_routes._safe_folder`` so the fallback
+        path produced here lines up with the path produced by the
+        pre-registration helper in the admin routes.
+        """
+        text = str(instrument_key or "unknown").strip()
+        for ch in ("|", "/", "\\", ":", "*", "?", '"', "<", ">", " "):
+            text = text.replace(ch, "_")
+        return text.strip("._") or "unknown"
+
+    @classmethod
+    def _path_for(cls, entry: dict[str, Any]) -> Path:
+        """Return the ``live_crosses.json`` path for this entry.
+
+        Never raises. Resolution order:
+
+        1. ``entry["ema_path"]`` looks like a file path → swap the
+           filename for ``LIVE_CROSSES_FILENAME``.
+        2. ``entry["ema_path"]`` looks like a directory (no ``.name``,
+           or absolute path ending in ``/``) → append the filename.
+        3. Missing / unusable ``ema_path`` → canonical fallback under
+           ``LIVE_DATA_DIR/index/<safe_key>/``.
+        """
+        raw = str(entry.get("ema_path") or "").strip()
+        if raw:
+            try:
+                p = Path(raw)
+            except Exception:
+                p = None
+            if p is not None:
+                # Case 1: already a file-like path — replace its name.
+                if p.name:
+                    try:
+                        return p.with_name(config.LIVE_CROSSES_FILENAME)
+                    except (ValueError, OSError):
+                        # Defensive: should not happen when ``p.name`` is
+                        # truthy, but fall through rather than crash.
+                        pass
+                else:
+                    # Case 2: directory-like path (``.``, ``..``, ``/``).
+                    # Only use it when the result is unambiguous.
+                    try:
+                        candidate = p / config.LIVE_CROSSES_FILENAME
+                        if candidate.is_absolute():
+                            return candidate
+                    except Exception:
+                        pass
+
+        # Case 3: canonical fallback keyed on the instrument_key.
+        safe = cls._safe_key(str(entry.get("instrument_key") or "unknown"))
+        return (
+            Path(config.LIVE_DATA_DIR)
+            / "index"
+            / safe
+            / config.LIVE_CROSSES_FILENAME
+        )
 
     @staticmethod
     def _minute_key(ts: str) -> str:
@@ -143,7 +238,7 @@ class LiveCrossStore:
 
         Returns the current day's file payload after the write.
         """
-        key = entry["instrument_key"]
+        key = str(entry.get("instrument_key") or "unknown")
         path = self._path_for(entry)
         minute = self._minute_key(cross.get("timestamp", ""))
         day = self._day_key(cross.get("timestamp", ""))
@@ -197,7 +292,7 @@ class LiveCrossStore:
 
     def read_today(self, entry: dict[str, Any]) -> dict[str, Any]:
         """Return the on-disk payload for the given instrument (may be empty)."""
-        key = entry["instrument_key"]
+        key = str(entry.get("instrument_key") or "unknown")
         path = self._path_for(entry)
         if path.exists():
             try:
@@ -219,5 +314,6 @@ class LiveCrossStore:
         """
         with self._guard:
             self._state.clear()
+
 
 live_cross_store = LiveCrossStore()

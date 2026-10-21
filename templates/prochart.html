@@ -1,4 +1,3 @@
-{# templates/prochart.html — ProChart page with live EMA plots + alerts #}
 {% extends "base.html" %}
 {% block title %}ProChart - {{ instrument_name or instrument_key }}{% endblock %}
 {% block head %}
@@ -221,6 +220,133 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
 }
 .btn-test-alert:hover { color: #fff; border-color: var(--blue); }
 
+/* ---------- Sent Alerts history card ---------- */
+.alerts-history-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  margin-bottom: 12px;
+  overflow: hidden;
+}
+.alerts-history-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  user-select: none;
+}
+.alerts-history-header:hover { background: var(--surface-3); }
+.alerts-history-title {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.alerts-history-title i { color: var(--pink); }
+.alerts-history-title .alerts-history-count {
+  background: var(--surface-3);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 800;
+  padding: 1px 8px;
+  border-radius: 10px;
+  margin-left: 4px;
+}
+.alerts-history-body {
+  max-height: 320px;
+  overflow-y: auto;
+  background: var(--bg);
+}
+.alerts-history-body::-webkit-scrollbar { width: 8px; }
+.alerts-history-body::-webkit-scrollbar-thumb { background: var(--surface-3); border-radius: 8px; }
+.alerts-history-card.collapsed .alerts-history-body { display: none; }
+.alerts-history-card.collapsed .alerts-history-chevron { transform: rotate(180deg); }
+.alerts-history-chevron { transition: transform 0.2s ease; }
+
+.alerts-history-empty {
+  padding: 20px 14px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 12px;
+}
+.alerts-history-empty i {
+  font-size: 1.6rem;
+  display: block;
+  margin-bottom: 6px;
+  opacity: 0.5;
+}
+
+.alerts-history-body .table {
+  color: var(--text);
+  font-size: 11px;
+  margin: 0;
+}
+.alerts-history-body .table thead th {
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-bottom: 1px solid var(--border);
+  padding: 6px 8px;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  white-space: nowrap;
+}
+.alerts-history-body .table tbody td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+  white-space: nowrap;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.alerts-history-body .table tbody td.td-path {
+  max-width: 220px;
+  color: var(--muted);
+  font-family: ui-monospace, monospace;
+  font-size: 10px;
+}
+.alerts-history-body .table tbody tr:hover { background: var(--surface-2); }
+.alerts-history-body .table tbody tr.bullish { border-left: 3px solid var(--green); }
+.alerts-history-body .table tbody tr.bearish { border-left: 3px solid var(--red); }
+
+.alerts-history-body .badge {
+  font-size: 9px;
+  font-weight: 800;
+  padding: 2px 7px;
+  border-radius: 10px;
+}
+.alerts-history-body .badge-saved   { background: rgba(8,153,129,0.18); color: #6ee7c2; }
+.alerts-history-body .badge-partial { background: rgba(245,196,81,0.18); color: #ffd778; }
+.alerts-history-body .badge-failed  { background: rgba(242,54,69,0.18); color: #ff8a95; }
+.alerts-history-body .badge-pending { background: rgba(120,123,134,0.18); color: #b0b8c4; }
+
+@keyframes alertFlash {
+  0%   { background: rgba(8,153,129,0.28); }
+  100% { background: transparent; }
+}
+.alerts-history-body .table tbody tr.new-alert {
+  animation: alertFlash 1.6s ease-out;
+}
+@keyframes alertFlashBear {
+  0%   { background: rgba(242,54,69,0.28); }
+  100% { background: transparent; }
+}
+.alerts-history-body .table tbody tr.new-alert.bearish {
+  animation: alertFlashBear 1.6s ease-out;
+}
+
 /* ---------- Scrollable content ---------- */
 .content-scroll { position: relative; width: 100%; height: calc(100vh - var(--sub-header-h) - 28px); height: calc(100dvh - var(--sub-header-h) - 28px); overflow-y: auto; overflow-x: hidden; padding: 12px 16px 96px 16px; scroll-behavior: smooth; -webkit-overflow-scrolling: touch; }
 .content-scroll::-webkit-scrollbar { width: 8px; }
@@ -402,6 +528,52 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
     </div>
   </div>
 
+  {# ============================================================ #}
+  {# Sent Alerts history card                                     #}
+  {# ============================================================ #}
+  <div class="alerts-history-card" id="alertsHistoryCard">
+    <div class="alerts-history-header" id="alertsHistoryHeader">
+      <span class="alerts-history-title">
+        <i class="bi bi-list-check"></i>
+        Sent Alerts
+        <span class="alerts-history-count" id="alertsHistoryCount">0</span>
+      </span>
+      <div class="d-flex align-items-center gap-2">
+        <button type="button" class="btn btn-sm btn-outline-secondary py-0 px-2" id="refreshAlertsBtn" title="Reload alerts from server">
+          <i class="bi bi-arrow-clockwise"></i>
+        </button>
+        <button type="button" class="btn btn-sm btn-outline-secondary py-0 px-2" id="toggleAlertsHistoryBtn" title="Collapse / expand">
+          <i class="bi bi-chevron-up alerts-history-chevron" id="alertsHistoryChevron"></i>
+        </button>
+      </div>
+    </div>
+    <div class="alerts-history-body" id="alertsHistoryBody">
+      <div class="alerts-history-empty" id="alertsHistoryEmpty">
+        <i class="bi bi-inbox"></i>
+        No alerts sent yet for this instrument. Alerts appear here as soon as
+        a fully-formed candle produces an EMA cross that meets the trigger.
+      </div>
+      <div class="table-responsive" id="alertsHistoryTableWrap" style="display:none;">
+        <table class="table table-sm align-middle mb-0" id="alertsHistoryTable">
+          <thead>
+            <tr>
+              <th title="Save status returned by the alert API">Saved</th>
+              <th>Cross time</th>
+              <th>Type</th>
+              <th>Price</th>
+              <th>Trigger</th>
+              <th>Context</th>
+              <th>Day</th>
+              <th>#</th>
+              <th>Data path</th>
+            </tr>
+          </thead>
+          <tbody id="alertsHistoryTbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
   <div class="subscribe-banner" id="subscribeBanner">
     <div>
       <i class="bi bi-info-circle me-1"></i>
@@ -558,18 +730,32 @@ function getSavedConfigForInstrument(key) {
    ============================================================ */
 const alertState = {
   // Individual levels
-  s3Touched: false, s3TouchTime: null, s3AlertSent: false,
-  r3Touched: false, r3TouchTime: null, r3AlertSent: false,
+  s3Touched: false, s3TouchTime: null,
+  r3Touched: false, r3TouchTime: null,
 
   // Combined trigger: whichever of R3/S3 touches FIRST today
   firstTouchLevel: null,      // "S3" | "R3" | null
   firstTouchTime: null,       // unix seconds
-  firstTouchAlertSent: false,
 
   lastProcessedCrossTime: null,
 };
 let alertBootstrapTime = null;
 let alertStateDay = null;
+
+/* ============================================================
+   SENT ALERTS HISTORY STATE
+   In-memory list of alerts we have sent (successfully OR failed).
+   Each entry is either:
+     - a live save (has .saved in {pending|ok|partial|failed})
+     - a server-hydrated entry (saved = "ok" by definition)
+   Newest first in the UI.
+   ============================================================ */
+const sentAlerts = {
+  list: [],           // ordered oldest → newest (append order)
+  elements: {},       // _id -> <tr> element
+  serverLoadedKey: null,
+  nextLocalId: 1,
+};
 
 /* ============================================================
    WEBSOCKET / REST URLs
@@ -589,6 +775,7 @@ const UPSTOX_SEARCH_URL = (q, params) => {
 const SUBSCRIPTION_STATUS_URL = (key) => `/api/upstox/subscription-status?instrument_key=${encodeURIComponent(key)}`;
 const SUBSCRIBE_URL = `/api/upstox/subscribe`;
 const ALERT_API_URL = `/api/prochart/alert`;
+const ALERTS_LIST_URL = (key) => `/api/prochart/alerts/${encodeURIComponent(key)}`;
 
 /* ============================================================
    MARKET HOURS
@@ -709,6 +896,18 @@ const directKeyInput = document.getElementById("directKeyInput");
 const quickLoadBtn = document.getElementById("quickLoadBtn");
 const saveConfigBtn = document.getElementById("saveConfigBtn");
 const quickLoadError = document.getElementById("quickLoadError");
+
+// Sent alerts history UI
+const alertsHistoryCard = document.getElementById("alertsHistoryCard");
+const alertsHistoryHeader = document.getElementById("alertsHistoryHeader");
+const alertsHistoryBody = document.getElementById("alertsHistoryBody");
+const alertsHistoryEmpty = document.getElementById("alertsHistoryEmpty");
+const alertsHistoryTableWrap = document.getElementById("alertsHistoryTableWrap");
+const alertsHistoryTbody = document.getElementById("alertsHistoryTbody");
+const alertsHistoryCount = document.getElementById("alertsHistoryCount");
+const alertsHistoryChevron = document.getElementById("alertsHistoryChevron");
+const refreshAlertsBtn = document.getElementById("refreshAlertsBtn");
+const toggleAlertsHistoryBtn = document.getElementById("toggleAlertsHistoryBtn");
 
 /* ============================================================
    STATE
@@ -880,22 +1079,12 @@ function calculateEMA(candles, length) {
   return out;
 }
 /*
- * FIXED getOrComputeEMA
- * ---------------------
- * The previous version had a first `if` that returned the cached EMA
- * whenever (lastTime, length) matched the source — but for a live tick
- * inside the current minute, ONLY the close/high/low change, not
- * lastTime or length. That stale-cache return shadowed the incremental
- * recompute branch, which is exactly the branch that uses the new close
- * to compute a new EMA value. Result: the plotted EMA line never moved
- * intra-minute and mid-minute EMA crosses were invisible to the alert
- * pipeline.
- *
- * The fix removes the shadowing `if`. The remaining incremental branch
- * already handles "same length, same lastTime, new close" correctly:
- *   EMA[last] = newClose * k + EMA[last-1] * (1 - k)
- * with EMA[last-1] read from cached.data[last-1] (which is unchanged by
- * an in-place update of the last candle).
+ * getOrComputeEMA
+ * ---------------
+ * The cache key is (length, lastSourceTime, source length). The incremental
+ * branch recomputes the LAST EMA value from the current close, which makes
+ * an in-place update of the current minute visible without a full O(n)
+ * recompute. Full recompute happens on new candle add or inconsistent cache.
  */
 function getOrComputeEMA(length, candles) {
   const source = candles || (candleSeries ? candleSeries.data() : []);
@@ -904,10 +1093,6 @@ function getOrComputeEMA(length, candles) {
   const lastSourceTime = source[source.length - 1].time;
   const lastSourceLen = source.length;
 
-  // Incremental path: same candle count, same last-candle minute.
-  // Fires on every live tick inside the current minute (close changed,
-  // time/length unchanged) — that is the case the old first `if` used
-  // to swallow by returning the stale cache.
   if (cached && cached.length === lastSourceLen && source[lastSourceLen - 1].time === cached.lastTime) {
     const k = 2 / (length + 1);
     const prevValue = cached.data.length >= 2
@@ -923,7 +1108,6 @@ function getOrComputeEMA(length, candles) {
     }
   }
 
-  // Full recompute: new candle added, first call, or inconsistent cache.
   const fresh = calculateEMA(source, length);
   emaCache.set(length, { data: fresh, lastTime: fresh.length ? fresh[fresh.length - 1].time : null, length: fresh.length });
   return fresh;
@@ -934,17 +1118,11 @@ function invalidateEMACache() {
   renderedCrossesRef = null;
 }
 /*
- * FIXED getOrComputeEMACrosses
- * ----------------------------
- * The previous cache key was (lastTime, length) — identical to the bug
- * in getOrComputeEMA. A live tick that updated the last candle in place
- * (same lastTime, same length) but changed the close would hit the
- * cache and return the stale crosses array, even after getOrComputeEMA
- * was fixed.
- *
- * Adding lastClose to the cache key makes the cross cache invalidate on
- * every close change, so mid-minute crosses are recomputed and become
- * visible to evaluateAndDispatchAlert().
+ * getOrComputeEMACrosses
+ * ----------------------
+ * Cache key includes lastClose so an in-place update of the current
+ * candle invalidates the cross array. That is what makes intra-minute
+ * crosses recompute — but we still only fire alerts on candle close.
  */
 function getOrComputeEMACrosses(candles) {
   const source = candles || (candleSeries ? candleSeries.data() : []);
@@ -1023,15 +1201,6 @@ function renderEMALines(candles) {
     indicatorState.ema21.series = null;
   }
 }
-/*
- * FIXED renderEMACrossMarkers
- * ---------------------------
- * Added a `renderedCrossesRef` short-circuit so that intra-minute ticks
- * which do not change the crosses array (cache hit) skip the marker
- * rebuild + chart re-attachment. Without it, after we made
- * scheduleIncrementalEMARefresh call this on every tick, we would
- * re-attach all markers on each tick even when nothing changed.
- */
 function renderEMACrossMarkers(candles) {
   if (!candleSeries) return;
   if (!indicatorState.emaCross.enabled) {
@@ -1061,16 +1230,6 @@ function refreshIndicators(candles) {
     renderEMACrossMarkers(data);
   } catch (err) { console.warn("refreshIndicators error:", err); }
 }
-/*
- * FIXED scheduleIncrementalEMARefresh
- * -----------------------------------
- * The marker-refresh guard previously only checked `lastTime !== lastTime`,
- * which never fires for an in-place update of the current candle — so
- * markers stayed visually stale after a mid-minute cross change. That
- * guard has been removed; renderEMACrossMarkers is now always called,
- * and its internal renderedCrossesRef short-circuit handles the
- * "nothing changed" case cheaply.
- */
 function scheduleIncrementalEMARefresh() {
   if (emaIncrementalRaf !== null) return;
   emaIncrementalRaf = requestAnimationFrame(() => {
@@ -1090,8 +1249,6 @@ function scheduleIncrementalEMARefresh() {
         else indicatorState.ema21.series.setData(getOrComputeEMA(indicatorState.ema21.length, data));
       }
       if (indicatorState.emaCross.enabled) {
-        // Always call — internal cache + renderedCrossesRef short-circuit
-        // handles the no-change case cheaply.
         renderEMACrossMarkers(data);
       }
     } catch (err) { console.warn("incremental EMA refresh error:", err); }
@@ -1289,7 +1446,6 @@ document.querySelectorAll(".label-toggle-btn[data-toggle]").forEach(btn => {
 
 /* ============================================================
    INDICATOR TOGGLES
-   (EMA 9 / EMA 21 plots do NOT auto-enable when EMA Cross is on.)
    ============================================================ */
 function syncIndicatorButtonStates() {
   document.querySelectorAll("#indicatorToggleBar .label-toggle-btn[data-indicator]").forEach(btn => {
@@ -1488,11 +1644,10 @@ function updateLivePrice(ltp) { if (!Number.isFinite(ltp)) return; livePrice.tex
 function currentDayKey() { return getDateKeyIST(Math.floor(Date.now() / 1000)); }
 
 function resetAlertStateForNewDay() {
-  alertState.s3Touched = false; alertState.s3TouchTime = null; alertState.s3AlertSent = false;
-  alertState.r3Touched = false; alertState.r3TouchTime = null; alertState.r3AlertSent = false;
+  alertState.s3Touched = false; alertState.s3TouchTime = null;
+  alertState.r3Touched = false; alertState.r3TouchTime = null;
   alertState.firstTouchLevel = null;
   alertState.firstTouchTime = null;
-  alertState.firstTouchAlertSent = false;
   alertState.lastProcessedCrossTime = null;
 }
 
@@ -1506,6 +1661,10 @@ function updateTouchStateFromCandle(candle) {
   if (!or) return;
   const L = or.levels || {};
 
+  // S3 touch detection runs on every tick (including mid-candle), so the
+  // "after S3 touch" trigger knows as early as possible that the level
+  // has been reached. Whether we FIRE an alert still depends on a
+  // fully-formed candle producing an EMA cross (see updateCandle).
   if (!alertState.s3Touched && Number.isFinite(L.s3) && Number(candle.low) <= L.s3) {
     alertState.s3Touched = true;
     alertState.s3TouchTime = candle.time;
@@ -1560,6 +1719,188 @@ function bootstrapTouchStateFromToday() {
   }
 }
 
+/* -----------------------------------------------------------------
+   SENT-ALERTS HISTORY — rendering helpers
+   ----------------------------------------------------------------- */
+function escapeHtml(s) {
+  return String(s ?? "").replace(/[&<>"']/g, c => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+  }[c]));
+}
+
+function formatAlertTime(iso) {
+  if (!iso) return "—";
+  try {
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return String(iso);
+    return d.toLocaleTimeString("en-IN", {
+      hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
+    });
+  } catch (_e) { return String(iso); }
+}
+
+function formatTriggerLabel(trigger) {
+  return {
+    any_ema_cross: "Any EMA cross",
+    after_s3_touch: "After S3",
+    after_r3_touch: "After R3",
+    after_r3_or_s3_touch: "After R3/S3 first",
+    test_manual: "Manual test",
+  }[trigger] || trigger || "—";
+}
+
+function formatTriggerContext(ctx) {
+  if (!ctx || typeof ctx !== "object") return "—";
+  if (ctx.trigger === "test_manual") return "Manual test";
+  const parts = [];
+  if (ctx.level_touched) parts.push(String(ctx.level_touched));
+  if (ctx.level_value != null) parts.push(`@ ${Number(ctx.level_value).toFixed(2)}`);
+  if (ctx.also_touched) {
+    const t = [];
+    if (ctx.also_touched.s3) t.push("S3");
+    if (ctx.also_touched.r3) t.push("R3");
+    if (t.length) parts.push(`(${t.join("+")})`);
+  }
+  return parts.length ? parts.join(" ") : "—";
+}
+
+function buildAlertRowCells(entry) {
+  const isBull = (entry.cross_type || "").toLowerCase() === "bullish";
+  const typeLabel = isBull ? "BULL" : "BEAR";
+  const typePill = isBull ? "pill ce" : "pill pe";
+
+  const saved = entry.saved || "pending";
+  let savedBadge;
+  if (saved === "ok") {
+    savedBadge = `<span class="badge badge-saved"><i class="bi bi-check-circle-fill me-1"></i>ok</span>`;
+  } else if (saved === "pending") {
+    savedBadge = `<span class="badge badge-pending"><span class="spinner-border spinner-border-sm me-1" style="width:10px;height:10px;border-width:1px;"></span>saving</span>`;
+  } else if (saved === "failed") {
+    const errTitle = entry.error ? ` title="${escapeHtml(entry.error)}"` : "";
+    savedBadge = `<span class="badge badge-failed"${errTitle}><i class="bi bi-x-circle-fill me-1"></i>failed</span>`;
+  } else {
+    savedBadge = `<span class="badge badge-partial"><i class="bi bi-exclamation-circle-fill me-1"></i>${escapeHtml(saved)}</span>`;
+  }
+
+  const price = Number(entry.cross_price);
+  const priceTxt = Number.isFinite(price) ? price.toFixed(2) : "—";
+  const ctx = formatTriggerContext(entry.trigger_context);
+  const day = entry.day || "—";
+  const cnt = entry.count != null ? entry.count : "—";
+  const path = entry.data_path || "";
+  const pathTitle = path ? ` title="${escapeHtml(path)}"` : "";
+
+  return `
+    <td>${savedBadge}</td>
+    <td>${escapeHtml(formatAlertTime(entry.cross_time))}</td>
+    <td><span class="${typePill}">${typeLabel}</span></td>
+    <td>${priceTxt}</td>
+    <td>${escapeHtml(formatTriggerLabel(entry.trigger_config))}</td>
+    <td>${escapeHtml(ctx)}</td>
+    <td>${escapeHtml(day)}</td>
+    <td>${escapeHtml(String(cnt))}</td>
+    <td class="td-path"${pathTitle}>${escapeHtml(path || "—")}</td>
+  `;
+}
+
+function updateAlertsHistoryVisibility() {
+  const count = sentAlerts.list.length;
+  if (alertsHistoryCount) alertsHistoryCount.textContent = String(count);
+  if (count === 0) {
+    if (alertsHistoryEmpty) alertsHistoryEmpty.style.display = "";
+    if (alertsHistoryTableWrap) alertsHistoryTableWrap.style.display = "none";
+  } else {
+    if (alertsHistoryEmpty) alertsHistoryEmpty.style.display = "none";
+    if (alertsHistoryTableWrap) alertsHistoryTableWrap.style.display = "";
+  }
+}
+
+function appendSentAlertRow(entry) {
+  if (!alertsHistoryTbody) return;
+  if (!entry._id) {
+    entry._id = `alert-${Date.now()}-${sentAlerts.nextLocalId++}`;
+  }
+
+  const isBull = (entry.cross_type || "").toLowerCase() === "bullish";
+  const row = document.createElement("tr");
+  row.id = `sent-alert-row-${entry._id}`;
+  row.className = `new-alert ${isBull ? "bullish" : "bearish"}`;
+  row.dataset.alertId = entry._id;
+  row.innerHTML = buildAlertRowCells(entry);
+
+  // Newest first — insert at the top.
+  alertsHistoryTbody.insertBefore(row, alertsHistoryTbody.firstChild);
+
+  sentAlerts.list.push(entry);
+  sentAlerts.elements[entry._id] = row;
+  updateAlertsHistoryVisibility();
+}
+
+function updateSentAlertRow(entry) {
+  const row = sentAlerts.elements[entry._id];
+  if (!row) return;
+  row.innerHTML = buildAlertRowCells(entry);
+}
+
+function clearSentAlerts() {
+  sentAlerts.list = [];
+  sentAlerts.elements = {};
+  if (alertsHistoryTbody) alertsHistoryTbody.innerHTML = "";
+  updateAlertsHistoryVisibility();
+}
+
+/* Load already-persisted alerts from the API (e.g. after page refresh
+   or instrument switch). Each returned alert was successfully saved
+   earlier in the session, so we mark saved="ok". */
+async function loadSentAlertsFromServer(instrumentKey) {
+  if (!instrumentKey) return;
+  sentAlerts.serverLoadedKey = instrumentKey;
+
+  try {
+    const resp = await fetch(ALERTS_LIST_URL(instrumentKey), {
+      headers: { Accept: "application/json" },
+    });
+    if (!resp.ok) return;
+    const data = await resp.json();
+    if (!data || data.status !== "ok") return;
+    const alerts = Array.isArray(data.alerts) ? data.alerts.slice() : [];
+    if (!alerts.length) return;
+
+    // The API returns oldest-first (Mongo doc order). Show newest-first in
+    // the table, and assign "count" as the position in save order.
+    const total = alerts.length;
+    const renderedNewestFirst = alerts.slice().reverse();
+
+    renderedNewestFirst.forEach((a, i) => {
+      // Skip if already in-memory (e.g. we appended it live a second ago).
+      const exists = sentAlerts.list.some(x =>
+        x.cross_time === a.time_iso &&
+        (x.cross_type || "").toLowerCase() === (a.cross_type || "").toLowerCase()
+      );
+      if (exists) return;
+
+      appendSentAlertRow({
+        _id: `srv-${total - i}`,
+        sent_at: a.time_iso,
+        cross_time: a.time_iso,
+        cross_type: a.cross_type,
+        cross_price: a.cross_price,
+        trigger_config: a.trigger_config,
+        trigger_context: a.trigger_context,
+        saved: "ok",
+        day: data.day,
+        count: total - i,
+        data_path: null,   // server responses don't carry per-alert path
+        error: null,
+      });
+    });
+
+    updateAlertsHistoryVisibility();
+  } catch (e) {
+    console.warn("[prochart][alerts] failed to load sent alerts:", e);
+  }
+}
+
 async function sendAlertToApi(latestCross, context) {
   const payload = {
     instrument_key: currentInstrumentKey,
@@ -1575,22 +1916,93 @@ async function sendAlertToApi(latestCross, context) {
       alert_config: prochartSettings.alert_config,
     },
   };
+
+  // Append immediately with "saving" badge so the table reacts instantly.
+  const entry = {
+    _id: null,   // assigned inside appendSentAlertRow
+    sent_at: new Date().toISOString(),
+    cross_time: payload.cross_time,
+    cross_type: payload.cross_type,
+    cross_price: payload.cross_price,
+    trigger_config: payload.trigger_config,
+    trigger_context: payload.trigger_context,
+    saved: "pending",
+    day: null,
+    count: null,
+    data_path: null,
+    error: null,
+  };
+  appendSentAlertRow(entry);
+
   try {
     const resp = await fetch(ALERT_API_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify(payload),
     });
+
     if (!resp.ok) {
-      console.warn("[prochart][alerts] alert API responded", resp.status);
-      return;
+      entry.saved = "failed";
+      entry.error = `HTTP ${resp.status}`;
+      updateSentAlertRow(entry);
+      return entry;
     }
-    console.log("[prochart][alerts] alert sent:", payload.cross_type, payload.cross_time);
+
+    let body = null;
+    try { body = await resp.json(); } catch (_e) { body = null; }
+
+    const persisted = (body && body.persisted) || {};
+    const pStatus = String(persisted.status || "").toLowerCase();
+
+    if (pStatus === "ok") {
+      entry.saved = "ok";
+    } else if (pStatus) {
+      entry.saved = pStatus;    // e.g. "error", "instrument_key_required"
+      entry.error = pStatus;
+    } else {
+      entry.saved = "partial";
+      entry.error = "unexpected response body";
+    }
+
+    entry.day = persisted.day || null;
+    entry.count = persisted.count != null ? persisted.count : null;
+    entry.data_path = persisted.data_path || null;
+    entry.received_at = body ? body.received_at || null : null;
+
+    console.log(
+      "[prochart][alerts] alert sent:",
+      entry.cross_type,
+      entry.cross_time,
+      "persisted_status=" + entry.saved,
+    );
+    updateSentAlertRow(entry);
+    return entry;
   } catch (e) {
+    entry.saved = "failed";
+    entry.error = String(e);
+    updateSentAlertRow(entry);
     console.warn("[prochart][alerts] alert API error:", e);
+    return entry;
   }
 }
 
+/**
+ * Evaluate the currently open alerts trigger against the latest fully-formed
+ * EMA cross.
+ *
+ * Called ONLY when a new minute starts (i.e. the previous candle just became
+ * fully formed). At that moment candleSeries.data() still ends on the
+ * finalized candle — the new in-progress candle hasn't been applied yet — so
+ * every cross returned here reflects a complete close, never an intra-candle
+ * wiggle.
+ *
+ * The trigger semantics are "fire on every cross AFTER the condition is met":
+ *   - any_ema_cross        : fire on every EMA cross
+ *   - after_s3_touch       : fire on every cross strictly after S3 touched
+ *   - after_r3_touch       : fire on every cross strictly after R3 touched
+ *   - after_r3_or_s3_touch : fire on every cross strictly after whichever
+ *                            of R3 / S3 touched first today
+ */
 function evaluateAndDispatchAlert() {
   if (!prochartSettings.alerts_enabled) return;
   if (!candleSeries) return;
@@ -1622,7 +2034,8 @@ function evaluateAndDispatchAlert() {
     shouldSend = true;
     context = { trigger: "any_ema_cross" };
   } else if (trigger === "after_s3_touch") {
-    if (alertState.s3Touched && latest.time > (alertState.s3TouchTime || 0) && !alertState.s3AlertSent) {
+    // Every cross strictly after the S3 touch fires.
+    if (alertState.s3Touched && latest.time > (alertState.s3TouchTime || 0)) {
       shouldSend = true;
       const or = calculatedOpeningRanges[todayKey];
       context = {
@@ -1634,7 +2047,8 @@ function evaluateAndDispatchAlert() {
       };
     }
   } else if (trigger === "after_r3_touch") {
-    if (alertState.r3Touched && latest.time > (alertState.r3TouchTime || 0) && !alertState.r3AlertSent) {
+    // Every cross strictly after the R3 touch fires.
+    if (alertState.r3Touched && latest.time > (alertState.r3TouchTime || 0)) {
       shouldSend = true;
       const or = calculatedOpeningRanges[todayKey];
       context = {
@@ -1646,17 +2060,15 @@ function evaluateAndDispatchAlert() {
       };
     }
   } else if (trigger === "after_r3_or_s3_touch") {
-    // Whichever of R3/S3 touches FIRST today becomes the "gate".
-    // Fire on the first EMA cross after that first-touch time.
+    // Every cross strictly after whichever of R3/S3 touched FIRST fires.
     if (
       alertState.firstTouchLevel &&
       alertState.firstTouchTime !== null &&
-      latest.time > alertState.firstTouchTime &&
-      !alertState.firstTouchAlertSent
+      latest.time > alertState.firstTouchTime
     ) {
       shouldSend = true;
       const or = calculatedOpeningRanges[todayKey];
-      const levelKey = alertState.firstTouchLevel.toLowerCase(); // "r3" | "s3"
+      const levelKey = alertState.firstTouchLevel.toLowerCase();  // "r3" | "s3"
       context = {
         trigger: "after_r3_or_s3_touch",
         level_touched: alertState.firstTouchLevel,
@@ -1674,25 +2086,43 @@ function evaluateAndDispatchAlert() {
 
   if (!shouldSend) return;
 
-  // Mark the appropriate "sent" flag so we don't re-fire on every tick.
-  if (trigger === "after_s3_touch") alertState.s3AlertSent = true;
-  if (trigger === "after_r3_touch") alertState.r3AlertSent = true;
-  if (trigger === "after_r3_or_s3_touch") alertState.firstTouchAlertSent = true;
-
+  // Fire on EVERY cross that satisfies the trigger — no one-shot flag.
   sendAlertToApi(latest, context);
 }
 
 /* ============================================================
    CANDLE UPDATE
    ============================================================ */
+/**
+ * Apply a candle to the chart.
+ *
+ * When `candle.time > lastCandle.time`, the previous `lastCandle` has just
+ * become fully formed. We run the alert evaluator at that exact moment —
+ * *before* applying the new candle — so `candleSeries.data()` still ends on
+ * the finalized close when the EMA-cross computation runs.
+ *
+ * That is what guarantees alerts only fire once per fully-formed candle,
+ * never on a mid-minute wiggle.
+ */
 function updateCandle(candle) {
   if (!candleSeries || !candle) return;
   if (lastCandle && candle.time < lastCandle.time) return;
+
+  const wasNewMinute = !lastCandle || candle.time > lastCandle.time;
+  const previousLastCandle = lastCandle;
+
+  if (wasNewMinute && previousLastCandle) {
+    // Previous candle just closed — evaluate alerts on the finalized state.
+    evaluateAndDispatchAlert();
+  }
+
   candleSeries.update(candle);
   lastCandle = candle;
   updateLivePrice(candle.close);
 
-  if (indicatorState.ema9.enabled || indicatorState.ema21.enabled || indicatorState.emaCross.enabled) scheduleIncrementalEMARefresh();
+  if (indicatorState.ema9.enabled || indicatorState.ema21.enabled || indicatorState.emaCross.enabled) {
+    scheduleIncrementalEMARefresh();
+  }
 
   const newDate = getDateKeyIST(candle.time);
   if (newDate && newDate !== currentRenderedDate) {
@@ -1700,8 +2130,12 @@ function updateCandle(candle) {
     renderOpeningRangeLines();
   }
 
+  // Touch tracking runs on every tick (intra-minute) so the "after touch"
+  // window opens the instant the level is breached.
   updateTouchStateFromCandle(candle);
-  evaluateAndDispatchAlert();
+
+  // NOTE: no evaluateAndDispatchAlert() here. Firing only happens at the
+  // new-minute boundary (see the wasNewMinute block above).
 }
 function updateCandleFromLtp(ltp, timestamp) {
   if (!Number.isFinite(ltp) || !candleSeries) return;
@@ -1824,7 +2258,12 @@ function processWebSocketMessage(event) {
   const key = getPayloadInstrumentKey(payload);
   if (!key || key !== currentInstrumentKey) return;
   const candle = getPayloadCandle(payload);
-  if (candle) { updateCandle(candle); return; }
+  if (candle) {
+    // updateCandle() handles the "previous candle closed" alert fire
+    // internally when the incoming candle starts a new minute.
+    updateCandle(candle);
+    return;
+  }
   const ltp = getPayloadLtp(payload);
   if (ltp === null) return;
   updateCandleFromLtp(ltp, getPayloadTimestamp(payload));
@@ -2101,6 +2540,10 @@ async function loadInstrumentIntoChart(instrumentKey, options = {}) {
   alertStateDay = null;
   alertBootstrapTime = null;
 
+  // Clear and rehydrate the sent-alerts table for the new instrument
+  clearSentAlerts();
+  loadSentAlertsFromServer(instrumentKey);
+
   // Info card metadata
   const meta = await fetch(`/api/upstox/instrument?instrument_key=${encodeURIComponent(instrumentKey)}`).then(r => r.json()).catch(() => null);
   if (meta && meta.data) updateInfoCardFromMeta(meta.data, instrumentKey);
@@ -2249,9 +2692,9 @@ function syncAlertsUI() {
   const trig = prochartSettings.alert_config.trigger;
   const label =
     trig === "any_ema_cross"        ? "any EMA cross" :
-    trig === "after_s3_touch"       ? "EMA cross after S3 touch" :
-    trig === "after_r3_touch"       ? "EMA cross after R3 touch" :
-    trig === "after_r3_or_s3_touch" ? "EMA cross after R3/S3 first touch" :
+    trig === "after_s3_touch"       ? "every EMA cross after S3 touch" :
+    trig === "after_r3_touch"       ? "every EMA cross after R3 touch" :
+    trig === "after_r3_or_s3_touch" ? "every EMA cross after R3/S3 first touch" :
     trig;
 
   alertsInfoText.innerHTML = enabled
@@ -2296,41 +2739,74 @@ alertsTriggerSelect.addEventListener("change", async () => {
     alert_trigger: val,
   });
 
-  // Reset "already sent" state so the new config can fire fresh
-  alertState.s3AlertSent = false;
-  alertState.r3AlertSent = false;
-  alertState.firstTouchAlertSent = false;
+  // Reset the per-day "processed" tracker.  A trigger change applies from
+  // the NEXT fully-formed candle onward; the historical crosses that have
+  // already been handled stay in the Sent Alerts table.
+  if (candleSeries) {
+    const data = candleSeries.data();
+    alertBootstrapTime = data.length ? data[data.length - 1].time : null;
+  }
   alertState.lastProcessedCrossTime = null;
 });
 
+// Test alert button — routes through the same sendAlertToApi path so the
+// test also appears in the Sent Alerts table (trigger = "Manual test").
 btnTestAlert.addEventListener("click", async () => {
-  const sample = {
-    instrument_key: currentInstrumentKey,
-    alert_type: "ema_cross",
-    cross_type: "bullish",
-    cross_time: new Date().toISOString(),
-    cross_price: lastCandle ? lastCandle.close : 0,
-    trigger_config: prochartSettings.alert_config.trigger,
-    trigger_context: { trigger: "test_manual" },
-    settings_snapshot: {
-      chart_instrument_key: prochartSettings.chart_instrument_key,
-      alerts_enabled: prochartSettings.alerts_enabled,
-      alert_config: prochartSettings.alert_config,
-    },
+  const sampleCross = {
+    time: Math.floor(Date.now() / 1000),
+    type: "bull",
+    price: lastCandle ? lastCandle.close : 0,
   };
+  const context = { trigger: "test_manual" };
+
+  btnTestAlert.disabled = true;
+  const orig = btnTestAlert.innerHTML;
+  btnTestAlert.innerHTML = `<span class="spinner-border spinner-border-sm me-1" style="width:10px;height:10px;border-width:1px;"></span>Sending…`;
+
   try {
-    const resp = await fetch(ALERT_API_URL, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(sample),
-    });
-    if (resp.ok) {
-      alertsInfoText.innerHTML = `Test alert sent at <b>${new Date().toLocaleTimeString("en-IN")}</b>`;
-      setTimeout(syncAlertsUI, 2500);
-    } else {
-      alertsInfoText.innerHTML = `<span class="text-danger">Test alert failed (${resp.status})</span>`;
+    const entry = await sendAlertToApi(sampleCross, context);
+    if (entry && entry.saved === "ok") {
+      alertsInfoText.innerHTML = `Test alert saved at <b>${new Date().toLocaleTimeString("en-IN")}</b> · count=<b>${entry.count ?? "?"}</b>`;
+    } else if (entry) {
+      alertsInfoText.innerHTML = `<span class="text-danger">Test alert failed: ${escapeHtml(entry.error || entry.saved || "unknown")}</span>`;
     }
-  } catch (e) { alertsInfoText.innerHTML = `<span class="text-danger">Test alert error</span>`; }
+    setTimeout(syncAlertsUI, 2500);
+  } finally {
+    btnTestAlert.disabled = false;
+    btnTestAlert.innerHTML = orig;
+  }
 });
+
+/* Sent Alerts history card controls */
+if (alertsHistoryHeader) {
+  alertsHistoryHeader.addEventListener("click", (e) => {
+    // The two icon buttons carry their own click handlers — ignore
+    // those so the collapse toggle doesn't also fire.
+    if (e.target.closest("button")) return;
+    alertsHistoryCard.classList.toggle("collapsed");
+  });
+}
+if (toggleAlertsHistoryBtn) {
+  toggleAlertsHistoryBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    alertsHistoryCard.classList.toggle("collapsed");
+  });
+}
+if (refreshAlertsBtn) {
+  refreshAlertsBtn.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    refreshAlertsBtn.disabled = true;
+    const orig = refreshAlertsBtn.innerHTML;
+    refreshAlertsBtn.innerHTML = `<span class="spinner-border spinner-border-sm" style="width:10px;height:10px;border-width:1px;"></span>`;
+    try {
+      clearSentAlerts();
+      await loadSentAlertsFromServer(currentInstrumentKey);
+    } finally {
+      refreshAlertsBtn.disabled = false;
+      refreshAlertsBtn.innerHTML = orig;
+    }
+  });
+}
 
 /* ============================================================
    BOOT
@@ -2378,6 +2854,9 @@ async function bootProChart() {
     ).then(r => r.json()).catch(() => null);
     if (meta && meta.data) updateInfoCardFromMeta(meta.data, currentInstrumentKey);
   } catch (e) { /* symbol falls back to template-rendered value */ }
+
+  // 6. Hydrate the sent-alerts history table for this instrument
+  loadSentAlertsFromServer(currentInstrumentKey);
 
   await checkSubscriptionStatus();
   if (isMarketOpenNow()) connectWebSocket();

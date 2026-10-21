@@ -368,6 +368,43 @@ def _safe_folder(name: Any) -> str:
     return text.strip("._") or "unknown"
 
 
+def _ensure_ema_path(entry: dict) -> None:
+    """Guarantee ``entry['ema_path']`` resolves to a *file* path.
+
+    ``live_cross_store._path_for`` does::
+
+        return ema_path.with_name(config.LIVE_CROSSES_FILENAME)
+
+    which raises ``ValueError: PosixPath('.') has an empty name`` when
+    ``ema_path`` is empty / missing / a directory-like path (its
+    ``.name`` attribute is empty). This happens for ad-hoc
+    options/futures entries (e.g. ``BSE_FO|1124739``) that were never
+    pre-registered by
+    ``_ensure_core_and_strategy_indexes_registered`` — those entries
+    simply carry no ``ema_path`` from the backup/registry load.
+
+    We normalise the field here to the same canonical layout used by
+    the pre-registration helper::
+
+        <LIVE_DATA_DIR>/index/<safe_instrument_key>/ema_crosses.json
+
+    so ``live_cross_store`` always has a valid base to call
+    ``.with_name(...)`` on.
+    """
+    raw = str(entry.get("ema_path") or "").strip()
+    if raw:
+        p = Path(raw)
+        # Path(".") / Path("") / "/foo/" all have an empty ``.name``.
+        if p.name:
+            return  # already a usable file path — nothing to fix
+
+    key = str(entry.get("instrument_key") or "").strip() or "unknown"
+    canonical_dir = Path(config.LIVE_DATA_DIR) / "index" / _safe_folder(key)
+    entry["ema_path"] = str(canonical_dir / "ema_crosses.json")
+    if not entry.get("candles_path"):
+        entry["candles_path"] = str(canonical_dir / "candles.json")
+
+
 def _ensure_core_and_strategy_indexes_registered() -> int:
     seen: set[str] = set()
     created = 0
@@ -417,12 +454,18 @@ def _ensure_core_and_strategy_indexes_registered() -> int:
 
 def _wire_cross_handler() -> None:
     def on_cross(entry, cross):
+        key = str(entry.get("instrument_key") or "unknown")
         try:
+            # Defensive fix for BSE_FO|* (and any other ad-hoc) entries
+            # that arrive without a usable ``ema_path`` — without this,
+            # live_cross_store._path_for(entry) raises
+            # ``ValueError: PosixPath('.') has an empty name``.
+            _ensure_ema_path(entry)
             live_cross_store.save(entry, cross)
         except Exception:
             logger.exception(
                 "Failed persisting live cross for %s",
-                entry["instrument_key"],
+                key,
             )
         try:
             live_broadcast.publish_sync("crosses", entry, {"cross": cross})

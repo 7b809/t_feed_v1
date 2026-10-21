@@ -1,3 +1,4 @@
+# File: routes/prochart_routes.py
 """ProChart routes.
 
     GET  /prochart                       -> HTML page
@@ -30,6 +31,35 @@ parameters, the request becomes the new source of truth — omitted
 parameters take their DEFAULT value (not the previously-saved value),
 and the resulting configuration is persisted so the next visit
 without URL params gets the same config.
+
+Path redaction
+--------------
+Every JSON response from this module is passed through
+``_sanitize_payload`` immediately before being returned.
+
+That helper recursively walks dicts / lists and, for any key whose
+name ends in ``_path`` / ``_dir`` / ``_dirs`` / ``_paths`` (or equals
+one of ``data_dir``, ``root``, ``root_dir``, ``base_dir``,
+``base_path``), replaces the value with ``_public_path(value)``:
+
+  * paths under ``config.LIVE_DATA_DIR``  → relative to that dir
+    (e.g. ``prochart_alerts/NSE_FO_51356.json``)
+  * any other absolute path               → bare filename
+  * non-string / unparsable values        → ``None``
+
+Rationale: the persisted-alert summary returned by
+``prochart_alerts_service.save_alert`` used to leak the full
+filesystem layout (``/home/ubuntu/TheProjects/novag7/...``) to the
+browser via its ``data_path`` field. The frontend does not need it
+(``instrument_key`` / ``day`` / ``count`` / ``received_at`` are
+sufficient), and the same pattern applies to ``data_dir`` in the
+registry response. Sanitising here — not in the service — keeps
+the file paths available for server-side logs and Mongo records
+while guaranteeing they never reach the wire.
+
+The same helper lives in ``routes/admin_routes.py``; the two are
+intentionally kept as small, self-contained copies so neither module
+needs to import from the other.
 """
 
 from __future__ import annotations
@@ -44,6 +74,7 @@ from fastapi import APIRouter, Body, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
+from core import config
 from services.instrument_registry import instrument_registry
 from services.prochart_alerts_service import prochart_alerts_service
 from services.prochart_settings_service import (
@@ -66,6 +97,67 @@ templates = Jinja2Templates(directory=str(_PROJECT_ROOT / "templates"))
 _ALERT_BUFFER: "deque[dict[str, Any]]" = deque(maxlen=100)
 
 # --------------------------------------------------------------------------- #
+# Path redaction                                                              #
+# --------------------------------------------------------------------------- #
+_PATHY_KEY_SUFFIXES = ("_path", "_dir", "_dirs", "_paths")
+_PATHY_KEYS_EXACT = {"data_dir", "root", "root_dir", "base_dir", "base_path"}
+
+
+def _public_path(value: Any) -> str | None:
+    """Convert a filesystem path to something safe to return to the browser.
+
+    * Paths under ``config.LIVE_DATA_DIR``  → relative to that dir
+      (e.g. ``prochart_alerts/NSE_FO_51356.json``)
+    * Any other absolute path              → bare filename only
+    * Non-string / unparsable values       → ``None``
+    * Relative path already                → returned as-is (POSIX style)
+    """
+    if value is None:
+        return None
+    try:
+        p = Path(str(value))
+    except Exception:
+        return None
+
+    try:
+        if not p.is_absolute():
+            return p.as_posix()
+    except Exception:
+        return None
+
+    try:
+        return p.resolve().relative_to(Path(config.LIVE_DATA_DIR).resolve()).as_posix()
+    except (ValueError, OSError):
+        return p.name or None
+
+
+def _sanitize_payload(value: Any) -> Any:
+    """Recursively redact path-like values from an API-bound payload.
+
+    Rules:
+      • dict → recurse; if key looks like a path, replace value with
+        ``_public_path(value)``.
+      • list / tuple / set → recurse.
+      • Path → ``_public_path``.
+      • everything else → passthrough.
+    """
+    if isinstance(value, dict):
+        out: dict[str, Any] = {}
+        for k, v in value.items():
+            key = str(k)
+            if key in _PATHY_KEYS_EXACT or key.lower().endswith(_PATHY_KEY_SUFFIXES):
+                out[k] = _public_path(v)
+            else:
+                out[k] = _sanitize_payload(v)
+        return out
+    if isinstance(value, (list, tuple, set)):
+        return [_sanitize_payload(v) for v in value]
+    if isinstance(value, Path):
+        return _public_path(value)
+    return value
+
+
+# --------------------------------------------------------------------------- #
 # Helpers                                                                      #
 # --------------------------------------------------------------------------- #
 def _coerce_bool_param(value: str | None, default: bool = False) -> bool:
@@ -77,6 +169,7 @@ def _coerce_bool_param(value: str | None, default: bool = False) -> bool:
     if text in {"0", "false", "no", "off"}:
         return False
     return default
+
 
 def _resolve_instrument_context(instrument_key: str) -> dict[str, Any]:
     """Return the ``instrument`` dict the template expects."""
@@ -129,6 +222,7 @@ def _resolve_instrument_context(instrument_key: str) -> dict[str, Any]:
         "tick_size": None,
         "name": entry.get("trading_symbol"),
     }
+
 
 # --------------------------------------------------------------------------- #
 # Page                                                                        #
@@ -206,12 +300,14 @@ def prochart_page(
         },
     )
 
+
 # --------------------------------------------------------------------------- #
 # Settings API                                                                #
 # --------------------------------------------------------------------------- #
 @router.get("/api/prochart/settings")
 def get_prochart_settings() -> dict[str, Any]:
-    return prochart_settings_service.get_settings()
+    return _sanitize_payload(prochart_settings_service.get_settings())
+
 
 @router.post("/api/prochart/settings")
 def save_prochart_settings(
@@ -237,7 +333,8 @@ def save_prochart_settings(
                 detail={"error": "chart_instrument_key must not be empty"},
             )
 
-    return prochart_settings_service.save_settings(payload)
+    return _sanitize_payload(prochart_settings_service.save_settings(payload))
+
 
 # --------------------------------------------------------------------------- #
 # Alert ingestion                                                             #
@@ -249,6 +346,14 @@ def receive_prochart_alert(payload: dict[str, Any] = Body(...)) -> dict[str, Any
     Persists it to MongoDB + data folder (via
     ``prochart_alerts_service``), appends it to the in-memory ring
     buffer, and returns a small ack dict.
+
+    The ``persisted`` summary is passed through ``_sanitize_payload``
+    before being returned so the service's ``data_path`` (which used
+    to be an absolute path like
+    ``/home/ubuntu/TheProjects/novag7/.../prochart_alerts/NSE_FO_51356.json``)
+    is reduced to a project-relative string. The full path stays in
+    the server-side log line below and in the Mongo record; the
+    browser only needs ``status`` / ``day`` / ``count``.
     """
     received_at = datetime.now(timezone.utc).isoformat()
 
@@ -282,17 +387,25 @@ def receive_prochart_alert(payload: dict[str, Any] = Body(...)) -> dict[str, Any
     return {
         "status": "ok",
         "received_at": received_at,
-        "persisted": persisted,
+        # Redact ``data_path`` / ``*_dir`` / any other path-shaped key
+        # before it leaves the process.
+        "persisted": _sanitize_payload(persisted),
     }
+
 
 @router.get("/api/prochart/alerts")
 def list_prochart_alerts(limit: int = 50) -> dict[str, Any]:
     """Return the last ``limit`` alerts received by the test endpoint."""
     n = max(1, min(int(limit or 50), 100))
     items = list(_ALERT_BUFFER)[:n]
-    return {"count": len(items), "alerts": items}
+    return _sanitize_payload({"count": len(items), "alerts": items})
+
 
 @router.get("/api/prochart/alerts/{instrument_key:path}")
 def list_persisted_alerts(instrument_key: str) -> dict[str, Any]:
-    """Return persisted alerts for one instrument (from MongoDB)."""
-    return prochart_alerts_service.get_alerts(instrument_key)
+    """Return persisted alerts for one instrument (from MongoDB).
+
+    Sanitised like the rest — if the service ever adds a path-shaped
+    field (e.g. ``source_file``), it will not leak.
+    """
+    return _sanitize_payload(prochart_alerts_service.get_alerts(instrument_key))
