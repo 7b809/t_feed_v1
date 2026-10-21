@@ -1,3 +1,4 @@
+# File: services/strategy_order_service.py
 """Stage 4 — selection + order placement.
 
 At 09:18 IST (configurable), reads the stage-3 activations and:
@@ -228,6 +229,9 @@ class StrategyOrderService:
 
         if not config.STRATEGY_ENABLED or not config.STRATEGY_ORDER_ENABLED:
             logger.info("[stage_4:%s] disabled by config", reason)
+            # NOTE: scheduled_time_ist / actual_time_ist / day are
+            # populated here too so the Telegram completion wrapper
+            # does not print "Scheduled: None / Actual: None".
             return {
                 "status": "disabled",
                 "stage": "stage_4",
@@ -236,6 +240,9 @@ class StrategyOrderService:
                 "catchup": catchup,
                 "simulation": bool(catchup),
                 "post_market": _post_market(),
+                "scheduled_time_ist": _scheduled_stage_4_hhmm(),
+                "actual_time_ist": _market_hhmmss(),
+                "day": executed_at.date().isoformat(),
                 "generated_at": _now_iso(),
                 "placed": 0,
                 "candidates": 0,
@@ -253,6 +260,9 @@ class StrategyOrderService:
 
         if not activations:
             logger.info("[stage_4:%s] no stage-3 activations", reason)
+            # NOTE: same reasoning as the "disabled" branch above —
+            # populate scheduled_time_ist / actual_time_ist / day so
+            # the Telegram wrapper can display them.
             return {
                 "status": "no_activations",
                 "stage": "stage_4",
@@ -261,6 +271,9 @@ class StrategyOrderService:
                 "catchup": catchup,
                 "simulation": bool(catchup),
                 "post_market": _post_market(),
+                "scheduled_time_ist": _scheduled_stage_4_hhmm(),
+                "actual_time_ist": _market_hhmmss(),
+                "day": executed_at.date().isoformat(),
                 "generated_at": _now_iso(),
                 "placed": 0,
                 "candidates": 0,

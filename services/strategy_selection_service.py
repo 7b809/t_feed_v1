@@ -312,6 +312,7 @@ class StrategySelectionService:
         if not config.STRATEGY_ENABLED:
             return {
                 "status": "disabled",
+                "day": _market_now().date().isoformat(),
                 "reason": reason,
                 "mode": effective_mode,
                 "catchup": bool(catchup),
@@ -327,6 +328,7 @@ class StrategySelectionService:
         if not indexes:
             return {
                 "status": "no_indexes",
+                "day": _market_now().date().isoformat(),
                 "reason": reason,
                 "mode": effective_mode,
                 "catchup": bool(catchup),
@@ -366,9 +368,29 @@ class StrategySelectionService:
                 }
             per_index.append(result)
 
+        # -----------------------------------------------------------------
+        # Resolve the summary's top-level "day".
+        #
+        # The per-index summaries carry their own "day" (the OR day they
+        # were computed from), but the watchdog (_stage1_ran_today) and
+        # downstream consumers (dashboard, /admin/strategy) check the
+        # TOP-LEVEL summary's "day" against today's date. Surface it here
+        # so a successful Stage-1 run is correctly recognised.
+        #
+        # - If at least one index produced a real "day", use that value.
+        # - If every index was skipped (e.g. or_unavailable), fall back
+        #   to today's calendar date: the pipeline *did* run today, which
+        #   is the exact fact the watchdog needs to confirm.
+        # -----------------------------------------------------------------
+        day_for_summary = next(
+            (p.get("day") for p in per_index if p.get("day")),
+            _market_now().date().isoformat(),
+        )
+
         summary = {
             "status": "ok",
             "stage": "stage_1",
+            "day": day_for_summary,          # <-- top-level day (watchdog fix)
             "reason": reason,
             "mode": effective_mode,
             "catchup": bool(catchup),

@@ -1,3 +1,4 @@
+# File: routes/admin_routes.py
 """Admin endpoints + the unified refresh routine.
 
     POST /admin/hard-refresh          -> full refresh (unified routine)
@@ -21,16 +22,26 @@ Task list (all three states):
     7.  Wire broadcast loop + cross handler
     7b. Reset today's live-cross state
     7c. EMA backfill seed (backup + intraday)
-    7d. **Strategy pipeline gate** (NEW)
+    7d. Strategy pipeline gate (NEW)
          Runs ``_should_run_strategy_pipeline(reason)`` which returns
          ``should_run`` based on:
            * ``STRATEGY_RUN_OUTSIDE_MARKET_HOURS`` (force override)
            * weekend check (Sat / Sun)
            * trading-holiday check (market_holiday_service, cached)
            * useful window check (default 09:00 – 16:30 IST)
-         When ``should_run=False``, steps 8 – 8i are SKIPPED and every
-         strategy summary is initialised with ``status="skipped"``.
+         When ``should_run=False``, the OR / Stage-1 / Stage-2 /
+         Stage-3 catch-up / Stage-4 catch-up / Strategy-2 stages
+         are SKIPPED and every strategy summary is initialised with
+         ``status="skipped"``.
          Infrastructure (feed, scheduler, telegram) still runs.
+    7e. **Gated-only live tracker start** (NEW)
+         If (and only if) the gate says ``should_run=False``, both
+         Strategy-1 Stage-3 and Strategy-2 Stage-3 trackers are
+         started **here**, before any strategy stages run. The gated
+         path never reaches any catch-up code, so a stale tracker
+         cache is harmless — but having the trackers armed by 09:15
+         is exactly what the scheduled Stage-4 cron needs on a day
+         where the app was launched before the useful window opened.
     8.  Opening Range (OR) level calculation
     8b. Strategy 1 · Stage 1 (buffer filter + last-day-cross)
          + OR-retry guard: if every index skipped with
@@ -39,18 +50,75 @@ Task list (all three states):
     8c. Strategy 1 · Stage 2 (EMA-cross isolation)
          + skipped when Stage 1 produced zero contracts across all
            indexes (avoids zero-data "0 isolated" noise).
-    8d. Strategy 1 · Stage 3 tracker start (R2 activation watcher)
-    8e. Strategy 1 · Stage 3 catch-up scan (if past window, in catch-up window)
-    8f. Strategy 1 · Stage 4 catch-up order (if past 09:18, in catch-up window)
-    8g. Strategy 2 · Stage 3 tracker start (S3 touch watcher)
-    8h. Strategy 2 · Stage 3 snapshot (isolation-level touch filter)
-         + Telegram suppressed when Stage 2 has 0 contracts.
-    8i. Strategy 2 · Stage 4 order (next-cross order, if isolated exists)
+    8d. **Strategy 1 · Stage 3 tracker start** (post-Stage-2)
+         Started *after* Stage 2 has written its output so the
+         tracker thread's internal contract cache is fresh — this is
+         what makes ``run_catchup()`` see the contracts Stage 2 just
+         produced. (Starting it earlier, e.g. at step 7e, would give
+         it an empty cache and break the catch-up scan.)
+    8e. Strategy 1 · Stage 3 catch-up scan (if past window,
+         inside catch-up window)
+    8f. Strategy 1 · Stage 4 catch-up order (if past 09:18,
+         inside catch-up window)
+    8g. **Strategy 2 · Stage 3 tracker start** (post-Stage-2)
+         Same reasoning as step 8d — started *after* Stage 2 so the
+         tracker thread sees the fresh stage-2 output. Note that
+         Strategy 2's Stage-3 snapshot (step 8h) does its own fresh
+         disk scan and would work regardless, but starting the
+         tracker post-Stage-2 keeps both trackers on the same
+         footing.
+    8h. Strategy 2 · Stage 3 snapshot (isolation-level touch
+         filter)  + Telegram suppressed when Stage 2 has 0 contracts.
+    8i. Strategy 2 · Stage 4 order (next-cross order, if isolated
+         exists)
     9.  Start / restart live feed
     10. Start scheduler (idempotent)
     11. Start Telegram bot (idempotent)
     12. Telegram completion notification
     13. Return structured result (includes ``strategy_gate``)
+
+Live tracker start — the correct split
+--------------------------------------
+The two ``*.start()`` calls are placed **conditionally** based on
+the market-hours gate:
+
+    should_run = False (gated: weekend / holiday / outside window)
+        → trackers started at step 7e, BEFORE any strategy stage.
+          The gated path never runs the catch-up scan, so a stale
+          tracker cache is harmless — but having the trackers armed
+          by 09:15 means the scheduled 09:18 Stage-4 cron has fresh
+          activations to read.
+
+    should_run = True (in window)
+        → trackers started at steps 8d / 8g, AFTER Stage 2 has
+          written its output. This is critical: the S1 Stage-3
+          tracker caches its contract list on ``start()``, and the
+          catch-up scan uses that cache. Starting it before Stage 2
+          gives it an empty cache and produces
+          ``status=skipped reason=no_contracts activated=0/0`` even
+          though Stage 2 wrote 68 contracts.
+
+Prior to this revision, both ``start()`` calls lived inside the
+gated branch (steps 8d / 8g only), so on a day where the engine
+launched at 07:00 the trackers were never started at all — Stage 4
+read an empty ``stage_3_summary.json``. My previous fix moved them
+to an unconditional step 7e, which fixed that day but broke the
+in-window launch path (this run, 10:32 launch).
+
+The current placement — conditional start (7e only when gated,
+8d/8g when not gated) — fixes both.
+
+Pre-existing scheduled-only limitation
+--------------------------------------
+There is still a *separate* pre-existing bug for the specific flow
+"08:30 daily refresh (gated) → 09:16 Stage-1 cron → 09:17 Stage-2
+cron → 09:18 Stage-4 cron": on that flow the tracker started at
+08:30 with an empty cache, and the cron stages never restart it.
+Fixing that flow requires ``strategy_live_tracker_service`` to
+periodically reload its contract list (the way
+``strategy_2_live_tracker_service`` does every 30 s) — a change
+that must live in ``services/strategy_live_tracker_service.py``,
+not here.
 
 Logging verbosity
 -----------------
@@ -80,13 +148,14 @@ pipeline was skipped.
 
 Skipped stages when ``should_run=False``:
     • OR calculation
-    • Strategy 1 · Stage 1, 2, 3, 4
-    • Strategy 2 · Stage 3, 4
+    • Strategy 1 · Stage 1, 2, 3 (catch-up scan), 4 (catch-up order)
+    • Strategy 2 · Stage 3 (snapshot), 4 (order)
 
 NOT skipped (still run):
     • Cleanup, token refresh + validation
     • Backup extraction, instrument registry reload
     • EMA backfill (needed by /live/* + chart)
+    • **Live tracker starts** (S1 Stage 3 + S2 Stage 3, at step 7e)
     • Live WebSocket feed
     • Scheduler start (cron jobs like OR@09:16 still fire on time)
     • Telegram token bot
@@ -533,6 +602,106 @@ def _run_stage1_with_or_retry(
 
 
 # --------------------------------------------------------------------------- #
+# Live tracker start — MUST be called AFTER Stage 2 for the non-gated path   #
+# --------------------------------------------------------------------------- #
+def _start_live_trackers(
+    *,
+    reason: str,
+    verbose: bool,
+    context: str,
+) -> tuple[bool, bool]:
+    """Start the Strategy 1 and Strategy 2 Stage-3 trackers.
+
+    Call site determines cache freshness:
+
+    * ``context="gated"``   — called at step 7e, before any strategy
+      stage runs. The tracker caches an empty stage-2 tree (there is
+      nothing on disk yet). This is fine because the gated path never
+      calls ``run_catchup()`` — it just needs the trackers *armed*
+      so the scheduled 09:16/09:17/09:18 crons have a live thread
+      watching when their windows open.
+
+    * ``context="post_stage_2"`` — called at steps 8d / 8g, after
+      Stage 2 has written its output. The tracker caches the fresh
+      stage-2 contract list, so ``run_catchup()`` (called immediately
+      afterwards) sees exactly what Stage 2 produced.
+
+    Both ``start()`` methods are idempotent
+    (``if self._thread and self._thread.is_alive(): return True``), so
+    re-invoking this from a daily refresh or a hard refresh after a
+    successful startup call is safe.
+
+    Returns ``(s1_started, s2_started)``.
+    """
+    # ---- Strategy 1 · Stage 3 tracker -------------------------------- #
+    s1_started = False
+    try:
+        s1_started = bool(strategy_live_tracker_service.start())
+        if verbose:
+            logger.info(
+                "[%s] strategy 1 stage 3 tracker started=%s status=%s "
+                "(context=%s)",
+                reason,
+                s1_started,
+                strategy_live_tracker_service.status(),
+                context,
+            )
+        else:
+            logger.info(
+                "[%s] strategy 1 stage 3 tracker started=%s (context=%s)",
+                reason,
+                s1_started,
+                context,
+            )
+    except Exception:
+        logger.exception(
+            "[%s] strategy 1 stage 3 tracker start failed (context=%s)",
+            reason,
+            context,
+        )
+
+    # ---- Strategy 2 · Stage 3 tracker -------------------------------- #
+    s2_started = False
+    try:
+        if (
+            config.STRATEGY_2_ENABLED
+            and config.STRATEGY_2_TRACKER_ENABLED
+        ):
+            s2_started = bool(strategy_2_live_tracker_service.start())
+            if verbose:
+                logger.info(
+                    "[%s] strategy 2 stage 3 tracker started=%s "
+                    "status=%s (context=%s)",
+                    reason,
+                    s2_started,
+                    strategy_2_live_tracker_service.status(),
+                    context,
+                )
+            else:
+                logger.info(
+                    "[%s] strategy 2 stage 3 tracker started=%s (context=%s)",
+                    reason,
+                    s2_started,
+                    context,
+                )
+        else:
+            logger.info(
+                "[%s] strategy 2 stage 3 tracker disabled by config "
+                "(context=%s)",
+                reason,
+                context,
+            )
+    except Exception:
+        logger.exception(
+            "[%s] strategy 2 stage 3 tracker start failed (context=%s)",
+            reason,
+            context,
+        )
+
+    return s1_started, s2_started
+
+
+# --------------------------------------------------------------------------- #
 # Strategy pipeline gate                                                       #
 # --------------------------------------------------------------------------- #
 def _should_run_strategy_pipeline(reason: str) -> dict[str, Any]:
@@ -553,6 +722,9 @@ def _should_run_strategy_pipeline(reason: str) -> dict[str, Any]:
        .. END_HOUR:MINUTE`` (default 09:00 – 16:30 IST) → skip.
 
     Otherwise → run.
+
+    NOTE: The two live tracker starts are handled differently based on
+    this gate's result — see ``_start_live_trackers`` for the split.
     """
     now = _now_market()
     now_ist = now.strftime("%Y-%m-%d %H:%M:%S IST")
@@ -783,9 +955,21 @@ def _run_full_refresh_sync(
     holiday / outside the useful window and
     ``STRATEGY_RUN_OUTSIDE_MARKET_HOURS=false``), the strategy stages
     are skipped entirely and every summary dict is populated with
-    ``status="skipped"``. Infrastructure stages — cleanup, token,
-    backup, registry, wiring, backfill, live feed, scheduler,
-    Telegram bot — still run as normal.
+    ``status="skipped"``.
+
+    Live tracker start placements are conditional:
+
+    * Gated path (``should_run=False``): trackers started at step 7e
+      — no catch-up runs, so cache staleness is harmless, and having
+      them armed by 09:15 lets the scheduled crons work.
+    * Non-gated path (``should_run=True``): trackers started at steps
+      8d / 8g — *after* Stage 2 has written its output — so their
+      internal contract cache is fresh when ``run_catchup()`` reads
+      it a few lines later.
+
+    Infrastructure stages — cleanup, token, backup, registry,
+    wiring, backfill, live feed, scheduler, Telegram bot — always run
+    as normal.
     """
     label = reason.title()
     catchup_meta = _catchup_snapshot()
@@ -912,6 +1096,30 @@ def _run_full_refresh_sync(
         strategy_gate["now_ist"],
     )
 
+    # ================================================================ #
+    # 7c. GATED-PATH TRACKER START                                      #
+    # ================================================================ #
+    # Trackers are started here ONLY when the gate says the strategy
+    # pipeline will be skipped. The gated path never runs the catch-up
+    # scan, so the tracker's empty-at-start cache is harmless — it
+    # just needs to be armed so the scheduled 09:16/09:17/09:18 crons
+    # have a live thread to work with.
+    #
+    # When should_run=True, the trackers are started at steps 8d / 8g
+    # (AFTER Stage 2 has written its output) so their caches are fresh
+    # when ``run_catchup()`` reads them seconds later.
+    #
+    # Do NOT move these into the non-gated path — that caused the
+    # 2026-10-21 10:33 "activated=0/0 no_contracts" regression.
+    tracker_started = False
+    strategy2_tracker_started = False
+    if not strategy_gate["should_run"]:
+        tracker_started, strategy2_tracker_started = _start_live_trackers(
+            reason=reason,
+            verbose=verbose,
+            context="gated",
+        )
+
     # ---- Default summaries (used when gated) ------------------------- #
     or_summary: dict[str, Any] = {
         "status": "skipped",
@@ -946,7 +1154,6 @@ def _run_full_refresh_sync(
     }
     stage2_skip_reason: str | None = None
 
-    tracker_started = False
     stage3_catchup: dict[str, Any] = {
         "status": "skipped",
         "reason": strategy_gate["reason"],
@@ -959,7 +1166,6 @@ def _run_full_refresh_sync(
         "catchup": False,
     }
 
-    strategy2_tracker_started = False
     strategy2_summary: dict[str, Any] = {
         "status": "skipped",
         "stage": "stage_3",
@@ -1068,26 +1274,24 @@ def _run_full_refresh_sync(
                     "[%s] strategy 1 stage 2 failed", reason
                 )
 
-        # ---- 8d. Strategy 1 · Stage 3 tracker --------------------- #
-        try:
-            tracker_started = bool(strategy_live_tracker_service.start())
-            if verbose:
-                logger.info(
-                    "[%s] strategy 1 stage 3 tracker started=%s status=%s",
-                    reason,
-                    tracker_started,
-                    strategy_live_tracker_service.status(),
-                )
-            else:
-                logger.info(
-                    "[%s] strategy 1 stage 3 tracker started=%s",
-                    reason,
-                    tracker_started,
-                )
-        except Exception:
-            logger.exception(
-                "[%s] strategy 1 stage 3 tracker start failed", reason
-            )
+        # ---- 8d. Strategy 1 · Stage 3 tracker start --------------- #
+        # CRITICAL: must run AFTER Stage 2 so the tracker thread
+        # caches the fresh stage-2 output. Starting it earlier
+        # (e.g. at 7c) causes run_catchup() below to see an empty
+        # cache and report "no_contracts".
+        s1_started, s2_started = _start_live_trackers(
+            reason=reason,
+            verbose=verbose,
+            context="post_stage_2",
+        )
+        # Only overwrite if we actually started them here (they may
+        # already have been started on a gated-then-catch-up path,
+        # in which case start() was a no-op and s1_started is still
+        # the value from that earlier start).
+        tracker_started = tracker_started or s1_started
+        strategy2_tracker_started = (
+            strategy2_tracker_started or s2_started
+        )
 
         # ---- 8e. Strategy 1 · Stage 3 catch-up -------------------- #
         stage3_catchup = {
@@ -1242,41 +1446,13 @@ def _run_full_refresh_sync(
         # ============================================================ #
         # STRATEGY 2                                                    #
         # ============================================================ #
+        # S2 Stage-3 snapshot does its own fresh disk scan
+        # (``_collect_stage2_contracts``), so it would work even if the
+        # S2 tracker weren't started yet. But the tracker was already
+        # started at step 8d (same _start_live_trackers call), so no
+        # additional start is needed here.
 
-        # ---- 8g. Strategy 2 · Stage 3 tracker start --------------- #
-        try:
-            if (
-                config.STRATEGY_2_ENABLED
-                and config.STRATEGY_2_TRACKER_ENABLED
-            ):
-                strategy2_tracker_started = bool(
-                    strategy_2_live_tracker_service.start()
-                )
-                if verbose:
-                    logger.info(
-                        "[%s] strategy 2 stage 3 tracker started=%s "
-                        "status=%s",
-                        reason,
-                        strategy2_tracker_started,
-                        strategy_2_live_tracker_service.status(),
-                    )
-                else:
-                    logger.info(
-                        "[%s] strategy 2 stage 3 tracker started=%s",
-                        reason,
-                        strategy2_tracker_started,
-                    )
-            else:
-                logger.info(
-                    "[%s] strategy 2 stage 3 tracker disabled by config",
-                    reason,
-                )
-        except Exception:
-            logger.exception(
-                "[%s] strategy 2 stage 3 tracker start failed", reason
-            )
-
-        # ---- 8h. Strategy 2 · Stage 3 snapshot -------------------- #
+        # ---- 8g. Strategy 2 · Stage 3 snapshot -------------------- #
         if config.STRATEGY_2_ENABLED:
             try:
                 strategy2_summary = strategy_2_isolation_service.run(
@@ -1305,7 +1481,7 @@ def _run_full_refresh_sync(
                     "[%s] strategy 2 stage 3 failed", reason
                 )
 
-        # ---- 8i. Strategy 2 · Stage 4 (order) --------------------- #
+        # ---- 8h. Strategy 2 · Stage 4 (order) --------------------- #
         s2_stage2_count = int(
             strategy2_summary.get("stage2_contracts") or 0
         )
@@ -1394,7 +1570,9 @@ def _run_full_refresh_sync(
         )
         logger.info(
             "[%s] strategy pipeline skipped — reason=%s "
-            "(STRATEGY_RUN_OUTSIDE_MARKET_HOURS=%s)",
+            "(STRATEGY_RUN_OUTSIDE_MARKET_HOURS=%s). Live trackers were "
+            "started at 7c (gated path) so the scheduled 09:16/09:17/09:18 "
+            "crons have a live thread.",
             reason,
             strategy_gate["reason"],
             getattr(config, "STRATEGY_RUN_OUTSIDE_MARKET_HOURS", False),
