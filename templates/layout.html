@@ -1,7 +1,8 @@
 {# File: templates/layout.html #}
 {# ProChart multi-chart layout — per-pane metadata, floating scroll nav,
-   unlinked-by-default panes (searching the toolbar affects only the
-   active pane), rich modal search. #}
+   per-pane indicator configs (each chart remembers its own EMA / label
+   toggles independently), toolbar toggles target the ACTIVE pane only,
+   unlinked-by-default panes, rich modal search. #}
 {% extends "base.html" %}
 {% block title %}Layout - Trading Dashboard{% endblock %}
 {% block head %}
@@ -167,6 +168,15 @@
     font-size: 10px; font-weight: 800; text-transform: uppercase;
     color: var(--muted); letter-spacing: 0.06em; margin-right: 4px;
   }
+  .indicator-scope-hint {
+    font-size: 9px; font-weight: 800; text-transform: uppercase;
+    color: var(--blue); letter-spacing: 0.06em;
+    padding: 2px 8px;
+    border-radius: 10px;
+    background: rgba(41,98,255,0.12);
+    border: 1px solid rgba(41,98,255,0.3);
+    flex-shrink: 0;
+  }
   .ind-btn {
     border: 1px solid var(--border); background: var(--surface-2); color: var(--muted);
     border-radius: 12px; padding: 3px 10px; font-size: 10px; font-weight: 800;
@@ -184,7 +194,6 @@
     height: calc(100vh - var(--toolbar-h) - var(--indicator-h));
     height: calc(100dvh - var(--toolbar-h) - var(--indicator-h));
     padding: 10px;
-    /* was overflow:hidden; now scrolls when panes (with meta) don't fit */
     overflow-y: auto;
     overflow-x: hidden;
     display: grid; gap: 8px;
@@ -526,18 +535,22 @@
 </div>
 
 <div class="indicator-toolbar" id="indicatorToolbar">
+  <span class="indicator-scope-hint" id="indicatorScopeHint" title="Toggle buttons affect only the currently active (blue-bordered) pane">
+    Active pane: #0
+  </span>
+  <div class="indicator-divider"></div>
   <div class="indicator-group">
-    <span class="indicator-label">Labels:</span>
-    <button class="ind-btn"      data-global-toggle="r2s2"    title="Toggle R2 / S2 labels">R2 / S2</button>
-    <button class="ind-btn active" data-global-toggle="r3s3"  title="Toggle R3 / S3 labels">R3 / S3</button>
-    <button class="ind-btn active" data-global-toggle="highLow" title="Toggle HIGH / LOW labels">HIGH / LOW</button>
+    <span class="indicator-label" title="Applies to the active pane only">Labels:</span>
+    <button class="ind-btn"        data-global-toggle="r2s2"    title="Toggle R2 / S2 labels (active pane only)">R2 / S2</button>
+    <button class="ind-btn active" data-global-toggle="r3s3"    title="Toggle R3 / S3 labels (active pane only)">R3 / S3</button>
+    <button class="ind-btn active" data-global-toggle="highLow" title="Toggle HIGH / LOW labels (active pane only)">HIGH / LOW</button>
   </div>
   <div class="indicator-divider"></div>
   <div class="indicator-group">
-    <span class="indicator-label">Indicators:</span>
-    <button class="ind-btn" data-global-indicator="ema9" title="EMA 9 line on every pane">EMA 9</button>
-    <button class="ind-btn" data-global-indicator="ema21" title="EMA 21 line on every pane">EMA 21</button>
-    <button class="ind-btn" data-global-indicator="emaCross" title="BUY / SELL markers on EMA 9/21 cross">EMA Cross</button>
+    <span class="indicator-label" title="Applies to the active pane only">Indicators:</span>
+    <button class="ind-btn"        data-global-indicator="ema9"     title="EMA 9 line (active pane only)">EMA 9</button>
+    <button class="ind-btn"        data-global-indicator="ema21"    title="EMA 21 line (active pane only)">EMA 21</button>
+    <button class="ind-btn active" data-global-indicator="emaCross" title="BUY / SELL markers on EMA 9/21 cross (active pane only)">EMA Cross</button>
   </div>
 </div>
 
@@ -604,31 +617,97 @@
   "use strict";
 
   const DEFAULT_KEY = {{ default_key | tojson }};
-  const LAYOUT_INDICATORS_KEY = "layout.indicators.prefs";
+
+  // Persistence keys
+  const PANE_CONFIGS_KEY_PREFIX = "layout.paneConfigs.";     // per-layout blob
+  const LEGACY_GLOBAL_PREFS_KEY = "layout.indicators.prefs"; // old shared blob
 
   const layoutState = {
     id: {{ layout.id | tojson }},
     name: {{ layout.name | tojson }},
     grid: {{ layout.grid or 1 }},
     panes: {{ panes | tojson }},
-    // Bug fix: default to UNLINKED so a search from the toolbar
-    // (or a "change" from one pane's ↔ button) only affects the
-    // targeted pane. The link button on each pane still lets users
-    // opt into the sync-all-panes behaviour explicitly.
+    // Default to UNLINKED so a search from the toolbar (or a "change"
+    // from one pane's ↔ button) only affects the targeted pane.
     linked: false,
   };
 
-  // Global indicator state — applies to every pane uniformly.
-  const globalState = {
-    labelVisibility: { r2s2: false, r3s3: true, highLow: true },
-    ema9: false,
-    ema21: false,
-    emaCross: false,
-  };
+  // ============================================================
+  // PER-PANE INDICATOR STATE
+  // ============================================================
+  // Each pane keeps its own label/indicator config. The toolbar toggle
+  // buttons target activePaneIndex only. Every read of an indicator
+  // option goes through getPaneState(paneIndex).
+  //
+  // Defaults:
+  //   * emaCross ON (labels/markers only — no EMA 9/21 line plots)
+  //   * ema9 / ema21 OFF
+  //   * r3s3 + highLow labels ON; r2s2 OFF
+  function defaultPaneState() {
+    return {
+      labelVisibility: { r2s2: false, r3s3: true, highLow: true },
+      ema9: false,
+      ema21: false,
+      emaCross: true,
+    };
+  }
 
+  // paneIndex (string key) -> PaneState
+  let paneStates = {};
+
+  function getPaneState(idx) {
+    const key = String(idx);
+    if (!paneStates[key]) {
+      paneStates[key] = defaultPaneState();
+    }
+    return paneStates[key];
+  }
+
+  function loadPaneStates(layoutId) {
+    paneStates = {};
+    try {
+      const key = PANE_CONFIGS_KEY_PREFIX + String(layoutId || "default");
+      const raw = localStorage.getItem(key);
+      if (!raw) return;
+      const saved = JSON.parse(raw);
+      if (!saved || typeof saved !== "object") return;
+      const defaults = defaultPaneState().labelVisibility;
+      for (const k of Object.keys(saved)) {
+        const entry = saved[k];
+        if (!entry || typeof entry !== "object") continue;
+        const lv = entry.labelVisibility || {};
+        paneStates[k] = {
+          labelVisibility: {
+            r2s2: typeof lv.r2s2 === "boolean" ? lv.r2s2 : defaults.r2s2,
+            r3s3: typeof lv.r3s3 === "boolean" ? lv.r3s3 : defaults.r3s3,
+            highLow: typeof lv.highLow === "boolean" ? lv.highLow : defaults.highLow,
+          },
+          ema9: typeof entry.ema9 === "boolean" ? entry.ema9 : false,
+          ema21: typeof entry.ema21 === "boolean" ? entry.ema21 : false,
+          emaCross: typeof entry.emaCross === "boolean" ? entry.emaCross : true,
+        };
+      }
+    } catch (e) {
+      console.warn("[pane-configs] failed to load:", e);
+      paneStates = {};
+    }
+  }
+
+  function savePaneStates() {
+    try {
+      const key = PANE_CONFIGS_KEY_PREFIX + String(layoutState.id || "default");
+      localStorage.setItem(key, JSON.stringify(paneStates));
+    } catch (e) {
+      console.warn("[pane-configs] failed to save:", e);
+    }
+  }
+
+  // ============================================================
+  // DOM REFS + GLOBAL RUNTIME STATE
+  // ============================================================
   const paneInstances = {};
 
-  // Which pane a global search / "change" operation should target.
+  // Which pane a global search / toolbar toggle should target.
   let activePaneIndex = 0;
 
   const gridEl = document.getElementById("layoutGrid");
@@ -638,6 +717,7 @@
   const newBtn = document.getElementById("newLayoutBtn");
   const deleteBtn = document.getElementById("deleteLayoutBtn");
   const linkStateBadge = document.getElementById("linkStateBadge");
+  const indicatorScopeHint = document.getElementById("indicatorScopeHint");
 
   // Toolbar search elements
   const toolbarSearchInput = document.getElementById("toolbarSearchInput");
@@ -666,12 +746,30 @@
       const pi = Number(p.dataset.paneIndex);
       p.dataset.active = (pi === idx) ? "true" : "false";
     });
+    // Sync toolbar buttons so they reflect THIS pane's config.
+    syncToolbarButtonsForPane(idx);
+    updateScopeHint(idx);
+  }
+
+  function updateScopeHint(idx) {
+    if (!indicatorScopeHint) return;
+    indicatorScopeHint.textContent = `Active pane: #${idx}`;
+  }
+
+  function syncToolbarButtonsForPane(idx) {
+    const st = getPaneState(idx);
+    document.querySelectorAll(".ind-btn[data-global-toggle]").forEach(btn => {
+      const key = btn.dataset.globalToggle;
+      btn.classList.toggle("active", !!st.labelVisibility[key]);
+    });
+    document.querySelectorAll(".ind-btn[data-global-indicator]").forEach(btn => {
+      const key = btn.dataset.globalIndicator;
+      btn.classList.toggle("active", !!st[key]);
+    });
   }
 
   // Delegated click: clicking anywhere on a pane (except its action
-  // buttons) makes it the active pane. Chart clicks count — a user
-  // clicking a chart expects that pane to be the "target" for the next
-  // global search.
+  // buttons) makes it the active pane.
   gridEl.addEventListener("click", (e) => {
     if (e.target.closest(".pane-btn")) return;
     const paneEl = e.target.closest(".pane");
@@ -679,36 +777,6 @@
     const idx = Number(paneEl.dataset.paneIndex);
     if (Number.isFinite(idx)) setActivePaneIndex(idx);
   });
-
-  // ============================================================
-  // PERSIST / RESTORE GLOBAL INDICATOR PREFS
-  // ============================================================
-  function loadGlobalPrefs() {
-    try {
-      const saved = JSON.parse(localStorage.getItem(LAYOUT_INDICATORS_KEY) || "{}");
-      if (typeof saved.ema9 === "boolean") globalState.ema9 = saved.ema9;
-      if (typeof saved.ema21 === "boolean") globalState.ema21 = saved.ema21;
-      if (typeof saved.emaCross === "boolean") globalState.emaCross = saved.emaCross;
-      if (saved.labelVisibility && typeof saved.labelVisibility === "object") {
-        Object.assign(globalState.labelVisibility, saved.labelVisibility);
-      }
-    } catch (e) { /* ignore */ }
-  }
-
-  function saveGlobalPrefs() {
-    try { localStorage.setItem(LAYOUT_INDICATORS_KEY, JSON.stringify(globalState)); } catch (e) {}
-  }
-
-  function syncToolbarButtons() {
-    document.querySelectorAll(".ind-btn[data-global-toggle]").forEach(btn => {
-      const key = btn.dataset.globalToggle;
-      btn.classList.toggle("active", !!globalState.labelVisibility[key]);
-    });
-    document.querySelectorAll(".ind-btn[data-global-indicator]").forEach(btn => {
-      const key = btn.dataset.globalIndicator;
-      btn.classList.toggle("active", !!globalState[key]);
-    });
-  }
 
   // ============================================================
   // PURE INDICATOR MATH (mirrors main chart)
@@ -797,14 +865,15 @@
   }
 
   // ============================================================
-  // LABEL VISIBILITY HELPERS
+  // LABEL VISIBILITY HELPERS (per-pane)
   // ============================================================
-  function isLabelVisible(levelName) {
+  function isLabelVisible(levelName, paneIndex) {
     const n = String(levelName || "").toLowerCase();
     if (n === "avg") return true;
-    if (n === "r2" || n === "s2") return globalState.labelVisibility.r2s2;
-    if (n === "r3" || n === "s3") return globalState.labelVisibility.r3s3;
-    if (n === "high" || n === "low") return globalState.labelVisibility.highLow;
+    const st = getPaneState(paneIndex);
+    if (n === "r2" || n === "s2") return st.labelVisibility.r2s2;
+    if (n === "r3" || n === "s3") return st.labelVisibility.r3s3;
+    if (n === "high" || n === "low") return st.labelVisibility.highLow;
     return true;
   }
 
@@ -858,32 +927,6 @@
     createPaneLabel(paneInst, levelName, startTime, value, color);
   }
 
-  function removePaneIndicatorSeries(paneInst) {
-    if (!paneInst) return;
-    (paneInst.levelLines || []).forEach(line => {
-      try { if (paneInst.chart) paneInst.chart.removeSeries(line); } catch (e) {}
-    });
-    paneInst.levelLines = [];
-    (paneInst.levelLabels || []).forEach(lbl => {
-      try { if (lbl.element && lbl.element.parentNode) lbl.element.parentNode.removeChild(lbl.element); } catch (e) {}
-    });
-    paneInst.levelLabels = [];
-    if (paneInst.ema9Series) {
-      try { paneInst.chart.removeSeries(paneInst.ema9Series); } catch (e) {}
-      paneInst.ema9Series = null;
-    }
-    if (paneInst.ema21Series) {
-      try { paneInst.chart.removeSeries(paneInst.ema21Series); } catch (e) {}
-      paneInst.ema21Series = null;
-    }
-    paneInst.markersPrimitive = null;
-    try {
-      if (paneInst.candleSeries && typeof paneInst.candleSeries.setMarkers === "function") {
-        paneInst.candleSeries.setMarkers([]);
-      }
-    } catch (e) {}
-  }
-
   function renderOpeningRangeLinesForPane(paneInst) {
     if (!paneInst || !paneInst.chart || !paneInst.candleSeries) return;
     (paneInst.levelLines || []).forEach(line => {
@@ -927,8 +970,9 @@
   function renderEMALinesForPane(paneInst) {
     if (!paneInst || !paneInst.chart || !paneInst.candleSeries) return;
     const candles = paneInst.candles || [];
+    const st = getPaneState(paneInst.index);   // ← per-pane
 
-    if (globalState.ema9) {
+    if (st.ema9) {
       if (!paneInst.ema9Series) {
         paneInst.ema9Series = addLineSeriesToPane(paneInst, {
           color: "#2962ff", lineWidth: 2,
@@ -944,7 +988,7 @@
       paneInst.ema9Series = null;
     }
 
-    if (globalState.ema21) {
+    if (st.ema21) {
       if (!paneInst.ema21Series) {
         paneInst.ema21Series = addLineSeriesToPane(paneInst, {
           color: "#f5c451", lineWidth: 2,
@@ -963,9 +1007,10 @@
 
   function renderEMACrossMarkersForPane(paneInst) {
     if (!paneInst || !paneInst.candleSeries) return;
+    const st = getPaneState(paneInst.index);   // ← per-pane
     const candles = paneInst.candles || [];
 
-    if (!globalState.emaCross) {
+    if (!st.emaCross) {
       paneInst.markersPrimitive = null;
       try {
         if (typeof paneInst.candleSeries.setMarkers === "function") paneInst.candleSeries.setMarkers([]);
@@ -1029,7 +1074,7 @@
     const height = wrap ? wrap.clientHeight : 0;
 
     paneInst.levelLabels.forEach(label => {
-      if (!isLabelVisible(label.levelName)) { label.element.style.display = "none"; return; }
+      if (!isLabelVisible(label.levelName, paneInst.index)) { label.element.style.display = "none"; return; }
       const x = timeScale.timeToCoordinate(label.startTime);
       const y = paneInst.candleSeries.priceToCoordinate(label.value);
       if (x === null || y === null || !Number.isFinite(x) || !Number.isFinite(y)) {
@@ -1043,45 +1088,35 @@
     });
   }
 
-  function updateAllPaneLabelPositions() {
-    Object.values(paneInstances).forEach(updatePaneLabelPositions);
-  }
-
   // ============================================================
-  // TOOLBAR TOGGLE HANDLERS
+  // TOOLBAR TOGGLE HANDLERS (per-pane, targets activePaneIndex only)
   // ============================================================
   function bindToolbarHandlers() {
     document.querySelectorAll(".ind-btn[data-global-toggle]").forEach(btn => {
       btn.addEventListener("click", () => {
         const key = btn.dataset.globalToggle;
-        if (!(key in globalState.labelVisibility)) return;
-        globalState.labelVisibility[key] = !globalState.labelVisibility[key];
-        btn.classList.toggle("active", globalState.labelVisibility[key]);
-        saveGlobalPrefs();
-        updateAllPaneLabelPositions();
+        const st = getPaneState(activePaneIndex);
+        if (!(key in st.labelVisibility)) return;
+        st.labelVisibility[key] = !st.labelVisibility[key];
+        btn.classList.toggle("active", st.labelVisibility[key]);
+        savePaneStates();
+        const inst = paneInstances[activePaneIndex];
+        if (inst) schedulePaneLabelUpdate(inst);
       });
     });
 
     document.querySelectorAll(".ind-btn[data-global-indicator]").forEach(btn => {
       btn.addEventListener("click", () => {
         const key = btn.dataset.globalIndicator;
-        if (!(key in globalState)) return;
-        globalState[key] = !globalState[key];
-        btn.classList.toggle("active", globalState[key]);
-
-        if (key === "emaCross" && globalState.emaCross) {
-          if (!globalState.ema9) {
-            globalState.ema9 = true;
-            document.querySelector('[data-global-indicator="ema9"]')?.classList.add("active");
-          }
-          if (!globalState.ema21) {
-            globalState.ema21 = true;
-            document.querySelector('[data-global-indicator="ema21"]')?.classList.add("active");
-          }
-        }
-
-        saveGlobalPrefs();
-        Object.values(paneInstances).forEach(renderAllIndicatorsForPane);
+        const st = getPaneState(activePaneIndex);
+        if (!(key in st)) return;
+        st[key] = !st[key];
+        btn.classList.toggle("active", st[key]);
+        // Deliberately NO auto-enable of ema9/ema21 — the default
+        // per-pane config is "emaCross only, no EMA plots".
+        savePaneStates();
+        const inst = paneInstances[activePaneIndex];
+        if (inst) renderAllIndicatorsForPane(inst);
       });
     });
   }
@@ -1160,7 +1195,6 @@
   function formatExpiryShort(v) {
     if (!v) return "—";
     const s = String(v);
-    // 2026-10-30 -> 30 Oct
     const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
     if (m) {
       const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
@@ -1182,7 +1216,6 @@
     else { el.classList.remove("up"); el.classList.remove("down"); }
   }
 
-  // Populate the static fields from /api/upstox/instrument response.
   function applyInstrumentMeta(paneIndex, meta) {
     if (!meta) return;
     const paneEl = document.querySelector(`.pane[data-pane-index="${paneIndex}"]`);
@@ -1207,7 +1240,6 @@
     const segEl = paneEl.querySelector(".pane-meta-segment");
     if (segEl) segEl.textContent = segment || "—";
 
-    // Expiry
     if (meta.expiry) {
       setPaneMeta(paneIndex, "expiry", formatExpiryShort(meta.expiry));
     } else if (meta.strike_price != null) {
@@ -1216,14 +1248,11 @@
       setPaneMeta(paneIndex, "expiry", "—");
     }
 
-    // Header symbol text
     const headEl = paneEl.querySelector(".pane-symbol-text");
     if (headEl) headEl.textContent = meta.trading_symbol || meta.instrument_key || symbol;
     paneEl.dataset.instrumentKey = meta.instrument_key || paneEl.dataset.instrumentKey;
   }
 
-  // Update LTP/Change/Volume from the WS payload fields.
-  // prevClose comes from `feed.ltpc.cp` (day previous close).
   function applyLiveMeta(paneIndex, { ltp, prevClose, volume }) {
     if (Number.isFinite(ltp)) {
       setPaneMeta(paneIndex, "ltp", ltp.toFixed(2));
@@ -1255,14 +1284,12 @@
     activePaneIndex = paneIndex;
 
     if (layoutState.linked) {
-      // Linked: change every pane to the same instrument.
       for (let k = 0; k < layoutState.panes.length; k++) {
         layoutState.panes[k] = { instrument_key: instrumentKey, interval: "5m" };
       }
       renderLayout(layoutState);
       setActivePaneIndex(paneIndex);
     } else {
-      // Unlinked (default): change only the target pane.
       loadPane(paneIndex, instrumentKey);
       setActivePaneIndex(paneIndex);
     }
@@ -1339,7 +1366,6 @@
       e.preventDefault();
       const raw = toolbarSearchInput.value.trim();
 
-      // Quick-load: if it looks like a full instrument key, use as-is.
       if (raw.includes("|") && !toolbarSearchResults.length) {
         applyInstrumentToPane(activePaneIndex, raw);
         toolbarSearchInput.value = "";
@@ -1518,7 +1544,6 @@
       const canScroll = gridEl.scrollHeight > gridEl.clientHeight + 8;
       floatingScrollNav.classList.toggle("hidden", !canScroll);
       if (!canScroll) return;
-      // Disable top when already at the top; disable bottom when at the end.
       const atTop = gridEl.scrollTop <= 2;
       const atBottom = gridEl.scrollTop + gridEl.clientHeight >= gridEl.scrollHeight - 2;
       if (scrollToTopBtn) scrollToTopBtn.disabled = atTop;
@@ -1535,8 +1560,6 @@
     gridEl.addEventListener("scroll", updateVisibility);
     window.addEventListener("resize", updateVisibility);
 
-    // Re-check after every renderLayout / pane load, since content height
-    // changes when the meta panel is populated.
     const ro = new ResizeObserver(updateVisibility);
     ro.observe(gridEl);
 
@@ -1613,7 +1636,6 @@
       inst.resizeObserver = ro;
     }
 
-    // Crosshair → OHLC in the meta panel (replaces the old footer).
     chart.subscribeCrosshairMove((param) => {
       if (!param || !param.seriesData || !param.seriesData.get) return;
       const d = param.seriesData.get(candleSeries);
@@ -1693,8 +1715,6 @@
     paneInst.candleSeries.update(candle);
     paneInst.lastCandle = candle;
 
-    // Meta panel: latest candle drives LTP + OHLC display until the user
-    // hovers (crosshair then takes precedence until they move away).
     setPaneMeta(paneInst.index, "ltp", candle.close.toFixed(2));
     setPaneMeta(paneInst.index, "open", candle.open.toFixed(2));
     setPaneMeta(paneInst.index, "high", candle.high.toFixed(2));
@@ -1708,7 +1728,8 @@
       candles[candles.length - 1] = candle;
     }
 
-    if (globalState.ema9 || globalState.ema21 || globalState.emaCross) {
+    const st = getPaneState(paneInst.index);
+    if (st.ema9 || st.ema21 || st.emaCross) {
       renderEMALinesForPane(paneInst);
       renderEMACrossMarkersForPane(paneInst);
     }
@@ -1738,9 +1759,6 @@
       const key = payload.instrument_key || payload.instrumentKey || payload.key;
       if (!key || key !== paneInst.instrumentKey) return;
 
-      // Extract the live meta fields the feed publishes (see
-      // live_feed_service._publish_feed_snapshot). These exist
-      // alongside any candle payload, so extract them first.
       const ltpVal = Number(payload.ltp);
       const prevCloseVal = Number(payload.prev_close);
       const volumeVal = Number(payload.volume);
@@ -1799,8 +1817,6 @@
     const inst = createPaneInstance(paneIndex, instrumentKey);
     if (!inst) return;
 
-    // Fetch instrument metadata (trading_symbol, exchange, segment,
-    // expiry) for the meta panel. Fire-and-forget — never blocks the chart.
     fetch(`/api/upstox/instrument?instrument_key=${encodeURIComponent(instrumentKey)}`)
       .then(r => r.json())
       .then(data => {
@@ -1819,15 +1835,12 @@
         inst.lastCandle = candles[candles.length - 1];
         inst.chart.timeScale().fitContent();
 
-        // Seed the meta panel from the last candle until live ticks arrive.
         setPaneMeta(paneIndex, "ltp",   inst.lastCandle.close.toFixed(2));
         setPaneMeta(paneIndex, "open",  inst.lastCandle.open.toFixed(2));
         setPaneMeta(paneIndex, "high",  inst.lastCandle.high.toFixed(2));
         setPaneMeta(paneIndex, "low",   inst.lastCandle.low.toFixed(2));
         setPaneMeta(paneIndex, "close", inst.lastCandle.close.toFixed(2));
 
-        // Day open = first candle of the most recent trading date. Use
-        // it as a rough baseline for change until the WS provides cp.
         const lastDateKey = getDateKeyIST(inst.lastCandle.time);
         const firstToday = candles.find(c => getDateKeyIST(c.time) === lastDateKey);
         if (firstToday && Number.isFinite(firstToday.open)) {
@@ -1839,6 +1852,7 @@
           });
         }
 
+        // Renders per-pane indicators using getPaneState(paneIndex).
         renderAllIndicatorsForPane(inst);
       }
     } catch (e) {
@@ -1847,7 +1861,6 @@
 
     connectWs(inst);
 
-    // Content height changed; re-evaluate scroll nav availability.
     requestAnimationFrame(() => {
       if (floatingScrollNav) {
         const canScroll = gridEl.scrollHeight > gridEl.clientHeight + 8;
@@ -1865,8 +1878,6 @@
       name: layout.name || "My Layout",
       grid: layout.grid || 1,
       panes: (layout.panes || []).slice(),
-      // preserve the current linked toggle across re-renders
-      linked: layoutState.linked,
     });
 
     layoutNameInput.value = layoutState.name;
@@ -1936,7 +1947,6 @@
   }
 
   function bindPaneActions() {
-    // Change → open the search modal for that pane
     document.querySelectorAll('.pane-btn[data-pane-action="change"]').forEach(btn => {
       btn.addEventListener("click", (e) => {
         e.stopPropagation();
@@ -1946,8 +1956,6 @@
       });
     });
 
-    // Link toggle (also makes the pane active so the toolbar search
-    // targets it). Reflects the toggle in the pill + button state.
     document.querySelectorAll('.pane-btn[data-pane-action="link"]').forEach(btn => {
       btn.addEventListener("click", (e) => {
         e.stopPropagation();
@@ -2009,6 +2017,9 @@
     try {
       const id = layoutSelect.value;
       const layout = await apiJson(`/admin/layouts/${encodeURIComponent(id)}`);
+      // Load this layout's per-pane configs from localStorage BEFORE
+      // rendering, so each pane's indicators come up correctly.
+      loadPaneStates(layout.id);
       renderLayout(layout);
     } catch (e) { console.warn("layout load failed:", e); }
   });
@@ -2022,6 +2033,10 @@
           name: layoutNameInput.value || layoutState.name,
           grid: layoutState.grid,
           panes: layoutState.panes,
+          // NOTE: pane_configs is intentionally NOT sent to the backend
+          // because layout_service._normalise_layout strips unknown
+          // fields. Per-pane indicator configs are persisted via
+          // localStorage (see savePaneStates()).
         }),
       });
       layoutState.name = updated.name;
@@ -2041,6 +2056,8 @@
       });
       await refreshLayoutList();
       layoutSelect.value = created.id;
+      // Fresh layout → empty config storage → all panes start on defaults.
+      loadPaneStates(created.id);
       renderLayout(created);
     } catch (e) { alert("Create failed: " + e.message); }
   });
@@ -2058,12 +2075,14 @@
           method: "POST",
           body: JSON.stringify({ name: "Default", grid: 1, panes: [{ instrument_key: firstKey, interval: "5m" }], is_default: true }),
         });
+        loadPaneStates(created.id);
         renderLayout(created);
         await refreshLayoutList();
       } else {
         const next = layouts[0];
         await refreshLayoutList();
         layoutSelect.value = next.id;
+        loadPaneStates(next.id);
         renderLayout(next);
       }
     } catch (e) { alert("Delete failed: " + e.message); }
@@ -2073,11 +2092,14 @@
   // BOOT
   // ============================================================
   async function boot() {
-    loadGlobalPrefs();
-    syncToolbarButtons();
+    // Clean up the old global prefs key (deprecated — replaced by
+    // per-pane configs stored under PANE_CONFIGS_KEY_PREFIX).
+    try { localStorage.removeItem(LEGACY_GLOBAL_PREFS_KEY); } catch (_e) {}
+
     bindToolbarHandlers();
     setupFloatingScrollButtons();
     await refreshLayoutList();
+    loadPaneStates(layoutState.id);
     renderLayout(layoutState);
     bindPaneActions();
     updateLinkedPill();   // starts as "Unlinked" because layoutState.linked=false

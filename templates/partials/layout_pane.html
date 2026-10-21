@@ -1,6 +1,5 @@
 {# File: templates/partials/layout_pane.html #}
-{# One pane of the multi-chart layout. Matches the JS buildPaneHtml() shape,
-   including the metadata panel below the chart. #}
+{# One pane of the multi-chart layout. Matches buildPaneHtml() shape. #}
 <div class="pane" data-pane-index="{{ pane_index }}" data-instrument-key="{{ pane.instrument_key }}" data-active="{{ 'true' if pane_index == 0 else 'false' }}">
   <div class="pane-header">
     <div class="pane-symbol">
