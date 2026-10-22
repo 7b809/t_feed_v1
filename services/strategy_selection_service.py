@@ -1,3 +1,4 @@
+# File: services/strategy_selection_service.py
 """Stage 1 — index strategy selection.
 
 Filters the strike window around the Opening Range midpoint, fetches
@@ -13,7 +14,8 @@ Output layout::
             strategy_meta.json
             index_opening_range.json   <- INDEX OR levels (audit copy)
             opening_range.json         <- STRIKE's own OR levels
-                                          (written by opening_range_service)
+                                          (written by opening_range_service
+                                           and mirrored here by this service)
             candles.json
             ema_crosses.json
             last_day_cross.json
@@ -37,6 +39,25 @@ between attempts, and re-reads the OR payload each time. This removes
 the `or_unavailable:not_calculated` race that previously caused the
 whole strategy pipeline to produce zero contracts when the index
 candle arrived a minute or two late.
+
+Live-feed subscription + per-strike OR
+--------------------------------------
+When a stage-1 strike is resolved to a real Upstox instrument_key
+(inside `_enrich_with_upstox`), this service now:
+
+    * subscribes that key to the live WebSocket feed so the S1/S2
+      R2/S3 trackers can read its LTP as soon as the market opens, and
+    * calculates the strike's OWN opening range (from its own 09:15
+      1-minute candle, via the existing REST fallback) and writes the
+      result to `<strike folder>/opening_range.json`.
+
+Both were missing previously: the trackers read
+`<strike folder>/opening_range.json` to learn each contract's R2/S3
+level, and they read `live_feed_service.get_latest_ltp()` to detect
+touches. Without (1) every `get_latest_ltp()` returned None, and
+without (2) every `isolation_level` came back None — so both
+trackers skipped every contract and Stage 4 reported
+`no_activations` even though Stage 1/2 had produced 68 contracts.
 
 Catch-up semantics
 ------------------
@@ -68,11 +89,12 @@ from zoneinfo import ZoneInfo
 import requests
 
 from core import config
+from core.logger import get_logger
 from services.instrument_registry import instrument_registry
 from services.opening_range_service import opening_range_service
 from services.token_service import token_service
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__file__)
 
 _UPSTOX_BASE = "https://api.upstox.com"
 _HTTP_TIMEOUT = 20
@@ -689,10 +711,15 @@ class StrategySelectionService:
                     }
                 )
 
-        # ---- 5. Upstox enrichment (history + last-day-cross) ------------ #
-        resolved = 0
+        # ---- 5. Upstox enrichment (history + last-day-cross + feed + OR) - #
+        enrichment = {
+            "resolved": 0,
+            "subscribed": 0,
+            "or_written": 0,
+            "total": 0,
+        }
         if config.STRATEGY_FETCH_HISTORY:
-            resolved = self._enrich_with_upstox(
+            enrichment = self._enrich_with_upstox(
                 ticker=ticker,
                 base_dir=base_dir,
                 strikes=strikes,
@@ -721,7 +748,9 @@ class StrategySelectionService:
             "contract_count": len(strikes) * 2,
             "strikes": strikes,
             "records": records,
-            "resolved_count": resolved,
+            "resolved_count": enrichment.get("resolved", 0),
+            "subscribed_count": enrichment.get("subscribed", 0),
+            "or_written_count": enrichment.get("or_written", 0),
             "generated_at": _now_iso(),
         }
         _write_json(base_dir / "stage_1_summary.json", index_summary)
@@ -748,7 +777,9 @@ class StrategySelectionService:
             "strike_count": len(strikes),
             "contract_count": len(strikes) * 2,
             "strikes": strikes,
-            "resolved_count": resolved,
+            "resolved_count": enrichment.get("resolved", 0),
+            "subscribed_count": enrichment.get("subscribed", 0),
+            "or_written_count": enrichment.get("or_written", 0),
             "base_dir": str(base_dir),
         }
 
@@ -783,7 +814,7 @@ class StrategySelectionService:
             )
 
     # ------------------------------------------------------------------ #
-    # Upstox enrichment                                                  #
+    # Upstox enrichment (history + last-day-cross + feed subscribe + OR) #
     # ------------------------------------------------------------------ #
     def _enrich_with_upstox(
         self,
@@ -792,14 +823,46 @@ class StrategySelectionService:
         base_dir: Path,
         strikes: list[int],
         today_iso: str,
-    ) -> int:
+    ) -> dict[str, int]:
+        """Enrich every strike folder with Upstox data.
+
+        For each strike, this:
+          1. resolves the real Upstox instrument_key,
+          2. registers it (and its trading symbol / triple) in the registry,
+          3. subscribes it to the live WebSocket feed (so the S1/S2
+             trackers can read its LTP once the market opens),
+          4. calculates the strike's OWN opening range from its own
+             09:15 1-minute candle (via the existing REST fallback) and
+             writes the result to `<strike folder>/opening_range.json`,
+          5. fetches 30 days of history, computes the crosses, and writes
+             `candles.json` / `ema_crosses.json` / `last_day_cross.json`.
+
+        Steps (3) and (4) are the fix for the Oct 22 `no_activations`
+        bug: without them the trackers saw None LTP and None level for
+        every contract and Stage 4 reported zero placements.
+
+        Returns a summary dict::
+
+            {
+              "resolved":   int,   # strikes whose real key was resolved
+              "subscribed": int,   # strikes now subscribed to the live feed
+              "or_written": int,   # strikes whose own OR was written
+              "total":      int,   # total strikes considered
+            }
+        """
         token = token_service.get_access_token()
         if not token:
             logger.info(
-                "[strategy] %s: no Upstox token; skipping history fetch",
+                "[strategy] %s: no Upstox token; skipping history fetch "
+                "(live-feed subscription + per-strike OR are also skipped)",
                 ticker,
             )
-            return 0
+            return {
+                "resolved": 0,
+                "subscribed": 0,
+                "or_written": 0,
+                "total": len(strikes) * 2,
+            }
 
         work: list[tuple[int, str, Path]] = []
         for strike in strikes:
@@ -807,9 +870,29 @@ class StrategySelectionService:
                 work.append((strike, s_type, base_dir / f"{strike}_{s_type}"))
 
         resolved = 0
+        subscribed = 0
+        or_written = 0
         workers = min(config.STRATEGY_MAX_WORKERS, max(1, len(work)))
 
-        def _task(strike: int, s_type: str, folder: Path) -> bool:
+        # Lazy import so this module stays importable even if the feed
+        # service is being refactored — the try/except around the call
+        # will log the failure rather than break Stage 1.
+        try:
+            from services.live_feed_service import live_feed_service
+        except Exception:  # pragma: no cover
+            live_feed_service = None
+            logger.exception(
+                "[strategy] %s: live_feed_service import failed — "
+                "strikes will not be subscribed to the live feed",
+                ticker,
+            )
+
+        def _task(
+            strike: int,
+            s_type: str,
+            folder: Path,
+        ) -> tuple[bool, bool, bool]:
+            """Return (resolved, subscribed, or_written) for one strike."""
             try:
                 key = self._resolve_upstox_key(
                     token=token,
@@ -818,7 +901,12 @@ class StrategySelectionService:
                     strike_type=s_type,
                 )
                 if not key:
-                    return False
+                    logger.info(
+                        "[strategy] %s: could not resolve Upstox key "
+                        "for strike=%s type=%s",
+                        ticker, strike, s_type,
+                    )
+                    return False, False, False
 
                 trading_symbol = f"{ticker} {strike} {s_type}"
                 self._register_strike(
@@ -836,9 +924,85 @@ class StrategySelectionService:
                 meta["resolved_at"] = _now_iso()
                 _write_json(meta_path, meta)
 
+                # ---- (3) Subscribe to the live feed ------------------ #
+                sub_ok = False
+                if live_feed_service is not None:
+                    try:
+                        if live_feed_service.is_subscribed(key):
+                            sub_ok = True
+                        else:
+                            sub_ok = bool(
+                                live_feed_service.subscribe_instrument(key)
+                            )
+                            if sub_ok:
+                                logger.info(
+                                    "[strategy] %s: subscribed to live feed "
+                                    "(strike=%s type=%s key=%s)",
+                                    ticker, strike, s_type, key,
+                                )
+                            else:
+                                logger.warning(
+                                    "[strategy] %s: live feed subscribe "
+                                    "returned False (strike=%s type=%s key=%s)",
+                                    ticker, strike, s_type, key,
+                                )
+                    except Exception:
+                        logger.exception(
+                            "[strategy] %s: live feed subscribe raised "
+                            "(strike=%s type=%s key=%s)",
+                            ticker, strike, s_type, key,
+                        )
+
+                # ---- (4) Calculate the strike's OWN OR and write it - #
+                or_ok = False
+                try:
+                    or_result = opening_range_service.calculate_one(key)
+                    if or_result.get("status") == "ok":
+                        payload_for_strike = {
+                            "instrument_key": key,
+                            "underlying": ticker,
+                            "strike_price": strike,
+                            "strike_type": s_type,
+                            "trading_symbol": trading_symbol,
+                            "day": or_result.get("day"),
+                            "first_candle": or_result.get("first_candle") or {},
+                            "candle_source": or_result.get("candle_source"),
+                            "levels": or_result.get("levels") or {},
+                            "calculated_at": or_result.get("calculated_at"),
+                            "source": "strategy_selection",
+                            "generated_at": _now_iso(),
+                        }
+                        _write_json(
+                            folder / "opening_range.json",
+                            payload_for_strike,
+                        )
+                        or_ok = True
+                        _levels = or_result.get("levels") or {}
+                        logger.info(
+                            "[strategy] %s: strike OR written "
+                            "(strike=%s type=%s R2=%s S3=%s source=%s)",
+                            ticker, strike, s_type,
+                            _levels.get("R2"),
+                            _levels.get("S3"),
+                            or_result.get("candle_source"),
+                        )
+                    else:
+                        logger.info(
+                            "[strategy] %s: strike OR not available "
+                            "(strike=%s type=%s reason=%s)",
+                            ticker, strike, s_type,
+                            or_result.get("reason"),
+                        )
+                except Exception:
+                    logger.exception(
+                        "[strategy] %s: strike OR calc failed "
+                        "(strike=%s type=%s key=%s)",
+                        ticker, strike, s_type, key,
+                    )
+
+                # ---- (5) History fetch + cross computation -------- #
                 candles = self._fetch_history(token=token, instrument_key=key)
 
-                # Persist history + full crosses.
                 _write_json(
                     folder / "candles.json",
                     {
@@ -870,7 +1034,6 @@ class StrategySelectionService:
                     },
                 )
 
-                # Last day's last cross inside the tail window.
                 last = _last_day_last_cross(
                     candles,
                     today_iso,
@@ -891,7 +1054,7 @@ class StrategySelectionService:
                         }
                     ),
                 )
-                return True
+                return True, sub_ok, or_ok
             except Exception:
                 logger.exception(
                     "[strategy] %s %d %s enrichment failed",
@@ -899,24 +1062,37 @@ class StrategySelectionService:
                     strike,
                     s_type,
                 )
-                return False
+                return False, False, False
 
         with ThreadPoolExecutor(max_workers=workers) as pool:
             futures = [pool.submit(_task, s, t, f) for (s, t, f) in work]
             for fut in as_completed(futures):
                 try:
-                    if fut.result():
-                        resolved += 1
+                    r, s, o = fut.result()
                 except Exception:
                     continue
+                if r:
+                    resolved += 1
+                if s:
+                    subscribed += 1
+                if o:
+                    or_written += 1
 
         logger.info(
-            "[strategy] %s: resolved %d/%d contracts",
+            "[strategy] %s: enrichment complete — "
+            "resolved=%d/%d subscribed=%d or_written=%d",
             ticker,
             resolved,
             len(work),
+            subscribed,
+            or_written,
         )
-        return resolved
+        return {
+            "resolved": resolved,
+            "subscribed": subscribed,
+            "or_written": or_written,
+            "total": len(work),
+        }
 
     def _resolve_upstox_key(
         self,

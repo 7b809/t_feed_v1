@@ -1,3 +1,4 @@
+# File: services/opening_range_service.py
 """Opening Range (OR) levels service.
 
 Calculates OR support/resistance levels from the first 1-minute
@@ -47,9 +48,35 @@ core indexes with `or_unavailable:not_calculated`.
 Persistence
 -----------
 Per-instrument JSON file ``opening_range.json`` written next to
-``ema_crosses.json`` in the same folder. For ad-hoc instruments
-(indices without a data folder), the file is written under
-``data/_adhoc/<safe_key>/opening_range.json``.
+``ema_crosses.json`` in the same folder. For an instrument whose
+``ema_path`` resolves to ``<LIVE_DATA_DIR>/index/<safe_key>/...``
+(e.g. an ad-hoc index registered by ``instrument_registry`` or by
+``routes/admin_routes._ensure_core_and_strategy_indexes_registered``),
+the file lands at ``<LIVE_DATA_DIR>/index/<safe_key>/opening_range.json``.
+For an instrument with no ``ema_path`` at all, the fallback is
+``<LIVE_DATA_DIR>/_adhoc/<safe_key>/opening_range.json``.
+
+Target-folder copy (Stage-1 strike folders)
+-------------------------------------------
+``calculate_one()`` accepts an optional ``target_folder`` argument.
+When provided, a copy of the resulting ``opening_range.json`` is
+written into that folder **as well as** the canonical location.
+
+This is what lets Stage 1 write each strike's own OR into its
+Stage-1 strike folder::
+
+    data/strategy/stage_1_initial/<TICKER>/<INDEX>/<strike>_<TYPE>/
+        opening_range.json     <- written by this service via target_folder
+
+That is the exact path ``strategy_live_tracker_service`` and
+``strategy_2_isolation_service._read_contract_isolation_level()``
+read to learn each contract's R2 / S3 level. Before this parameter
+existed, the OR was only ever written to the canonical
+``data/index/<safe_key>/opening_range.json`` path, so every strike
+the tracker examined had ``isolation_level = None`` and was skipped
+— which is the root of the 2026-10-22 ``no_activations`` /
+``placed=0`` failure even though Stage 1 + Stage 2 had produced 68
+contracts.
 
 Self-healing lookup
 -------------------
@@ -62,7 +89,6 @@ registration step in the unified refresh has run.
 from __future__ import annotations
 
 import json
-import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -70,11 +96,12 @@ from typing import Any
 import requests
 
 from core import config
+from core.logger import get_logger
 from services.instrument_registry import instrument_registry
 from services.live_ema_engine import live_ema_engine
 from services.token_service import token_service
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__file__)
 
 # --------------------------------------------------------------------------- #
 # Upstox REST fallback (used only when the live 09:15 candle is missing)      #
@@ -173,6 +200,24 @@ def _trigger_time_reached() -> bool:
         microsecond=0,
     )
     return now >= trigger
+
+def _write_json_atomic(path: Path, payload: Any) -> None:
+    """Write ``payload`` to ``path`` atomically (tmp file + replace).
+
+    Creates parent directories as needed. Raises on failure — the
+    caller is expected to catch and report.
+
+    This helper is the single writer for every ``opening_range.json``
+    this module produces, so the canonical write and the
+    ``target_folder`` copy always use identical atomic-write semantics.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(
+        json.dumps(payload, indent=2, default=str),
+        encoding="utf-8",
+    )
+    tmp.replace(path)
 
 # --------------------------------------------------------------------------- #
 # REST fallback                                                                #
@@ -340,12 +385,58 @@ class OpeningRangeService:
         )
         return summary
 
-    def calculate_one(self, instrument_key: str) -> dict[str, Any]:
-        """Compute OR levels for a single instrument (public helper)."""
+    def calculate_one(
+        self,
+        instrument_key: str,
+        target_folder: Path | str | None = None,
+    ) -> dict[str, Any]:
+        """Compute OR levels for a single instrument.
+
+        Parameters
+        ----------
+        instrument_key :
+            The registry key, e.g. ``"NSE_FO|43919"``. If the key is
+            not yet in the registry it is ad-hoc registered first.
+        target_folder :
+            Optional folder into which a **copy** of the resulting
+            ``opening_range.json`` is also written. This is how Stage 1
+            puts each strike's own OR into its Stage-1 strike folder
+            (``data/strategy/stage_1_initial/.../<strike>_<TYPE>/``),
+            which is where the S1/S2 R2/S3 trackers look for it.
+
+            The canonical copy is still written to ``_path_for(entry)``
+            (``data/index/<safe_key>/opening_range.json`` for ad-hoc
+            instruments) regardless of this argument.
+
+            Passing ``None`` (the default) preserves the pre-fix
+            behaviour exactly: only the canonical copy is written.
+
+        Returns
+        -------
+        dict
+            The same dict ``_calculate_one()`` produces, with
+            ``status="ok"`` on success. On ``skipped`` (no 09:15
+            candle) or ``error`` no file is written to either
+            location, and ``target_folder`` is echoed back in the
+            result for the caller to log.
+        """
         entry = instrument_registry.get(instrument_key)
         if entry is None:
             entry = instrument_registry.register_adhoc(instrument_key)
-        return self._calculate_one(entry, _first_candle_minute())
+
+        # Normalise the optional target folder once, so the internal
+        # writer never has to re-handle str vs Path.
+        target = (
+            Path(target_folder)
+            if target_folder is not None
+            else None
+        )
+
+        return self._calculate_one(
+            entry,
+            _first_candle_minute(),
+            target_folder=target,
+        )
 
     def get_opening_range(self, instrument_key: str) -> dict[str, Any]:
         """Read the on-disk OR payload for one instrument.
@@ -426,7 +517,15 @@ class OpeningRangeService:
         self,
         entry: dict[str, Any],
         target_minute: str,
+        target_folder: Path | None = None,
     ) -> dict[str, Any]:
+        """Compute OR levels for one instrument and persist them.
+
+        Writes the canonical ``opening_range.json`` to
+        ``_path_for(entry)``. When ``target_folder`` is supplied and
+        the calculation succeeds, an identical copy is also written
+        to ``<target_folder>/opening_range.json``.
+        """
         key = str(entry.get("instrument_key") or "")
         if not key:
             return {"status": "skipped", "reason": "no_key"}
@@ -460,6 +559,9 @@ class OpeningRangeService:
                 "instrument_key": key,
                 "target_minute": target_minute,
                 "candle_source": candle_source,
+                "target_folder": (
+                    str(target_folder) if target_folder is not None else None
+                ),
             }
 
         h = first_candle.get("high")
@@ -471,6 +573,9 @@ class OpeningRangeService:
                 "instrument_key": key,
                 "target_minute": target_minute,
                 "candle_source": candle_source,
+                "target_folder": (
+                    str(target_folder) if target_folder is not None else None
+                ),
             }
 
         try:
@@ -505,25 +610,49 @@ class OpeningRangeService:
             "calculated_at": datetime.now(timezone.utc).isoformat(),
         }
 
-        path = _path_for(entry)
+        # ---- 1. Canonical write (unchanged behaviour) ----------------- #
+        canonical_path = _path_for(entry)
         try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = path.with_suffix(path.suffix + ".tmp")
-            tmp.write_text(
-                json.dumps(result, indent=2, default=str),
-                encoding="utf-8",
-            )
-            tmp.replace(path)
+            _write_json_atomic(canonical_path, result)
         except Exception:
-            logger.exception("[or] failed writing %s", path)
+            logger.exception("[or] failed writing %s", canonical_path)
             return {
                 "status": "error",
                 "reason": "write_failed",
                 "instrument_key": key,
-                "path": str(path),
+                "path": str(canonical_path),
             }
 
+        # ---- 2. Optional target-folder copy --------------------------- #
+        # This is how Stage 1 puts the strike's OR into its Stage-1
+        # strike folder, which is where the S1/S2 trackers read it.
+        # Only write if the calculation actually produced levels — the
+        # copy is skipped on the early returns above.
+        target_written: str | None = None
+        if target_folder is not None:
+            try:
+                target_path = (
+                    target_folder / config.OPENING_RANGE_FILENAME
+                )
+                _write_json_atomic(target_path, result)
+                target_written = str(target_path)
+                logger.info(
+                    "[or] %s: strike OR copied to %s",
+                    key, target_path,
+                )
+            except Exception:
+                # A failed copy must not fail the whole call — the
+                # canonical write already succeeded, and the caller
+                # (Stage 1) will fall back to its own copy logic if
+                # this returns None for target_written.
+                logger.exception(
+                    "[or] %s: failed copying OR to %s",
+                    key, target_folder,
+                )
+
         result["status"] = "ok"
+        result["canonical_path"] = str(canonical_path)
+        result["target_path"] = target_written
         return result
 
 

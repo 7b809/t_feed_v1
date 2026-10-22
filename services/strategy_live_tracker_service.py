@@ -1,4 +1,4 @@
-# services/strategy_live_tracker_service.py
+# File: services/strategy_live_tracker_service.py
 """Stage 3 — R2 activation tracker.
 
 Runs as a background daemon thread. Inside the configured window
@@ -6,8 +6,8 @@ Runs as a background daemon thread. Inside the configured window
 the first time that index reaches its R2 level, activates every
 stage-2 contract belonging to that index.
 
-Reload behaviour (this revision — cron-flow fix)
-------------------------------------------------
+Reload behaviour (cron-flow fix)
+--------------------------------
 Historically the tracker cached the Stage-2 contract list **once** at
 ``start()`` and never reloaded. On the normal cron-only flow
 (engine launched before 09:00, ``strategy_isolation_calc`` writes the
@@ -19,9 +19,10 @@ the tracker never activated anything and Stage 4 reported
 This revision mirrors the Strategy-2 tracker's design:
 
     * ``_run()`` reloads the Stage-2 tree from disk **every 30 s**
-      (and immediately whenever the in-memory cache is empty) so a
-      Stage-2 write that happens after ``start()`` is picked up long
-      before Stage-4 fires.
+      once populated, and **every 5 s** while the tree is empty — so
+      a Stage-2 write that happens after ``start()`` is picked up
+      within seconds without hammering the disk once per poll on
+      quiet days.
     * ``run_catchup()`` **unconditionally reloads** the Stage-2 tree
       from disk at the top of the call, so a caller that invokes it
       right after Stage 2 (e.g. ``token_tasks/strategy_isolation_task``)
@@ -29,6 +30,35 @@ This revision mirrors the Strategy-2 tracker's design:
 
 Existing activations are preserved across reloads: ``_load_stage2``
 only resets ``self._contracts_by_index``, never ``self._activated``.
+
+Diagnostics (added for the 2026-10-22 ``no_activations`` bug)
+-------------------------------------------------------------
+The tracker used to run silently whether or not it had usable data.
+On 2026-10-22 it was started at 07:00 with an empty Stage-2 tree,
+Stage 2 populated the tree at 09:17:00, but the log stream contained
+no line saying whether the tracker had picked it up, whether the
+index R2 had been crossed, or whether Stage 2 was even the problem.
+Stage 4 reported ``no_activations`` with no explanation.
+
+This module now:
+
+    * loads Stage-2 contracts on ``start()`` so the startup Telegram
+      message reports the real count (or says explicitly that the
+      tree is empty and why);
+    * logs ``loaded contracts=N indexes=M`` on every reload;
+    * logs a WARNING when the tracker enters the window with 0
+      contracts (Stage 2 has not written yet);
+    * logs a WARNING when an index crosses its R2 but the tracker has
+      no contracts to activate — the exact Oct 22 failure mode;
+    * emits a heartbeat every 5 min with ``contracts /
+      indexes_crossed / activated``;
+    * surfaces ``loaded_contracts`` / ``loaded_indexes`` /
+      ``last_reload_at`` through ``status()`` so
+      ``/admin/strategy/tracker/status`` shows the tracker's data
+      health, not just that its thread is alive;
+    * logs a WARNING from ``run_catchup()`` when the Upstox token is
+      missing, because that failure mode used to look identical to a
+      quiet trading day (0 activations, no log).
 
 Simulation mode (catch-up) — PER-CONTRACT EVALUATION, WINDOW-BOUNDED
 -------------------------------------------------------------------
@@ -131,7 +161,6 @@ Telegram notifications:
 from __future__ import annotations
 
 import json
-import logging
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -143,6 +172,7 @@ from zoneinfo import ZoneInfo
 import requests
 
 from core import config
+from core.logger import get_logger
 from services.live_ema_engine import live_ema_engine
 from services.live_feed_service import live_feed_service
 from services.opening_range_service import opening_range_service
@@ -150,7 +180,7 @@ from services.strategy_meta import write_meta
 from services.telegram_service import telegram_service
 from services.token_service import token_service
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__file__)
 
 # Cash-market close in the market timezone. Anything after this is
 # recorded as post-market in the activation record / meta test file.
@@ -159,6 +189,18 @@ _MARKET_CLOSE_TIME = dtime(15, 30)
 # Upstox REST endpoint used to fetch today's intraday tape.
 _UPSTOX_BASE = "https://api.upstox.com"
 _HTTP_TIMEOUT = 20
+
+# Reload cadence. Mirrors the S2 tracker's behaviour:
+#   * 5 s while the stage-2 tree is empty — Stage 2's first write is
+#     picked up within a few seconds, without scanning the disk on
+#     every 1-second poll during the pre-Stage-2 window.
+#   * 30 s once populated — enough to catch late Stage-2 writes.
+_RELOAD_INTERVAL_EMPTY = 5.0
+_RELOAD_INTERVAL_POPULATED = 30.0
+
+# One heartbeat line every 5 minutes so an operator can confirm the
+# tracker is alive with real data by grepping a single string.
+_HEARTBEAT_SECONDS = 300.0
 
 
 # --------------------------------------------------------------------------- #
@@ -523,6 +565,20 @@ class StrategyLiveTrackerService:
         self._notified_window_close: str | None = None
         self._notified_index_crossed: set[str] = set()
 
+        # Diagnostic state — surfaced via status() and the heartbeat.
+        self._last_load: dict[str, Any] = {
+            "contracts": 0,
+            "indexes": 0,
+            "loaded_at": None,
+        }
+        self._last_reload_at: str | None = None
+        self._last_heartbeat: float = 0.0
+        # Fired once per index per day: an index reached R2 but there
+        # were no contracts in cache to activate. This is the exact
+        # 2026-10-22 failure signature, and it must be visible in the
+        # log, not silent.
+        self._notified_r2_cross_no_contracts: set[str] = set()
+
     # ------------------------------------------------------------------ #
     # Lifecycle                                                          #
     # ------------------------------------------------------------------ #
@@ -533,24 +589,63 @@ class StrategyLiveTrackerService:
         if self._thread and self._thread.is_alive():
             return True
 
+        # ---- Load contracts BEFORE sending the startup message ---- #
+        # On 2026-10-22 the tracker was started at 07:00 with an empty
+        # Stage-2 tree. Loading here lets the startup Telegram message
+        # report the real count (or an explicit "waiting for Stage 2"
+        # line) instead of the misleading "Watching: <index list>".
+        initial_loaded = 0
+        initial_indexes = 0
+        try:
+            today = _market_now().date().isoformat()
+            self._load_stage2(today)
+            initial_loaded = sum(
+                len(v) for v in self._contracts_by_index.values()
+            )
+            initial_indexes = len(self._contracts_by_index)
+        except Exception:
+            logger.exception("[stage_3] initial contract load failed")
+
         self._stop.clear()
         self._thread = threading.Thread(
             target=self._run, name="strategy-r2-tracker", daemon=True,
         )
         self._thread.start()
+        self._last_heartbeat = time.monotonic()
         logger.info(
-            "[stage_3] tracker started (window %s-%s IST, poll %ds)",
+            "[stage_3] tracker started (window %s-%s IST, poll %ds, "
+            "initial contracts=%d across %d index(es))",
             config.STRATEGY_TRACKER_WINDOW_START,
             config.STRATEGY_TRACKER_WINDOW_END,
             config.STRATEGY_TRACKER_POLL_SECONDS,
+            initial_loaded,
+            initial_indexes,
         )
+
+        if initial_loaded > 0:
+            watching_line = (
+                f"Watching {initial_indexes} index(es) / "
+                f"{initial_loaded} contract(s) already loaded."
+            )
+        else:
+            watching_line = (
+                "Stage 2 tree is empty — waiting for Stage 2 to write "
+                "contracts (09:17 IST on a normal trading day)."
+            )
+            logger.warning(
+                "[stage_3] started with 0 contracts in cache. The "
+                "tracker will reload every %.0fs until Stage 2 "
+                "populates the tree.",
+                _RELOAD_INTERVAL_EMPTY,
+            )
+
         telegram_service.send_message(
             "Strategy Stage 3 Started",
             (
                 f"R2 activation tracker running.\n"
                 f"Window: {config.STRATEGY_TRACKER_WINDOW_START}–"
                 f"{config.STRATEGY_TRACKER_WINDOW_END}\n"
-                f"Watching: {', '.join(config.STRATEGY_TRACKER_INDEX_KEYS or [])}"
+                f"{watching_line}"
             ),
             level="INFO",
         )
@@ -572,21 +667,28 @@ class StrategyLiveTrackerService:
             "loaded_day": self._loaded_day,
             "tracked_indexes": list(self._contracts_by_index.keys()),
             "activated_count": len(self._activated),
+            # ---- new diagnostic fields ----------------------------- #
+            "loaded_contracts": sum(
+                len(v) for v in self._contracts_by_index.values()
+            ),
+            "loaded_indexes": len(self._contracts_by_index),
+            "last_reload_at": self._last_reload_at,
         }
 
     # ------------------------------------------------------------------ #
     # Main loop (live path — index LTP vs index R2, window-gated)        #
     # ------------------------------------------------------------------ #
     def _run(self) -> None:
-        # Mirror the S2 tracker's ``reload_interval`` pattern so a
-        # Stage-2 write that happens *after* ``start()`` is picked up
-        # within ~30 s — before the 09:18 Stage-4 order cron fires.
+        # Mirrors the S2 tracker's reload cadence:
+        #   * 5 s while the stage-2 tree is empty — Stage 2's first
+        #     write is picked up in seconds without scanning the disk
+        #     on every 1-second poll during the pre-Stage-2 window.
+        #   * 30 s once populated — enough to catch late Stage-2 writes.
         #
-        # Without this, the tracker keeps the empty Stage-2 cache it
-        # captured at ``start()`` (e.g. 07:00 launch), Stage 4 at
-        # 09:18:00 reads an empty stage_3_summary.json, and no trades
-        # are placed.
-        reload_interval = 30.0
+        # Without this reload, the tracker would keep the empty
+        # Stage-2 cache it captured at start() (e.g. 07:00 launch),
+        # Stage 4 at 09:18:00 would read an empty stage_3_summary.json,
+        # and no trades would be placed.
         last_reload = 0.0
 
         while not self._stop.is_set():
@@ -599,14 +701,13 @@ class StrategyLiveTrackerService:
                     self._load_stage2(today)
                     last_reload = time.monotonic()
                 else:
-                    # Same day: reload on schedule (30 s) or immediately
-                    # when the in-memory cache is empty (Stage 2 not
-                    # yet written, or last run produced 0 contracts).
                     now_mono = time.monotonic()
-                    if (
-                        (now_mono - last_reload) > reload_interval
-                        or not self._contracts_by_index
-                    ):
+                    empty = not self._contracts_by_index
+                    interval = (
+                        _RELOAD_INTERVAL_EMPTY if empty
+                        else _RELOAD_INTERVAL_POPULATED
+                    )
+                    if (now_mono - last_reload) > interval:
                         self._load_stage2(today)
                         last_reload = now_mono
 
@@ -616,6 +717,13 @@ class StrategyLiveTrackerService:
                     self._tick(today)
                 else:
                     self._maybe_notify_window_close(today)
+
+                # Heartbeat — cheap, and the one line an operator can
+                # grep for to confirm the tracker is alive with data.
+                now_mono = time.monotonic()
+                if now_mono - self._last_heartbeat > _HEARTBEAT_SECONDS:
+                    self._last_heartbeat = now_mono
+                    self._heartbeat()
 
                 self._stop.wait(config.STRATEGY_TRACKER_POLL_SECONDS)
             except Exception as exc:
@@ -634,12 +742,28 @@ class StrategyLiveTrackerService:
         self._notified_window_open = None
         self._notified_window_close = None
         self._notified_index_crossed = set()
+        # Day-rollover reset for the "R2 crossed but no contracts"
+        # warning, so it can fire once per index per day.
+        self._notified_r2_cross_no_contracts = set()
 
     def _in_window(self) -> bool:
         now = _market_now().time()
         start = _parse_hhmm(config.STRATEGY_TRACKER_WINDOW_START)
         end = _parse_hhmm(config.STRATEGY_TRACKER_WINDOW_END)
         return start <= now <= end
+
+    def _heartbeat(self) -> None:
+        """Emit one INFO line every 5 min with the tracker's view."""
+        contracts = sum(len(v) for v in self._contracts_by_index.values())
+        logger.info(
+            "[stage_3] heartbeat — contracts=%d indexes=%d "
+            "activated=%d indexes_crossed=%d in_window=%s",
+            contracts,
+            len(self._contracts_by_index),
+            len(self._activated),
+            len(self._notified_index_crossed),
+            self._in_window(),
+        )
 
     # ------------------------------------------------------------------ #
     # Notifications                                                      #
@@ -649,6 +773,37 @@ class StrategyLiveTrackerService:
             return
         self._notified_window_open = today
         total = sum(len(v) for v in self._contracts_by_index.values())
+
+        # The 2026-10-22 failure mode: the tracker entered the window
+        # with 0 contracts because Stage 2 had not run yet. That must
+        # be visible in the log, not silent.
+        if total == 0:
+            logger.warning(
+                "[stage_3] window open (%s) with 0 contracts in cache — "
+                "Stage 2 has not written yet. The tracker will pick up "
+                "contracts on the next reload (every %.0fs while empty).",
+                config.STRATEGY_TRACKER_WINDOW_START,
+                _RELOAD_INTERVAL_EMPTY,
+            )
+            telegram_service.send_message(
+                "Strategy Stage 3 Window Open",
+                (
+                    f"R2 tracking window started.\n"
+                    f"⚠️ 0 contracts in cache — Stage 2 has not run yet.\n"
+                    f"Waiting for Stage 2 output (reload every "
+                    f"{int(_RELOAD_INTERVAL_EMPTY)}s)."
+                ),
+                level="WARNING",
+            )
+            return
+
+        logger.info(
+            "[stage_3] window open (%s) with %d contracts across "
+            "%d index(es)",
+            config.STRATEGY_TRACKER_WINDOW_START,
+            total,
+            len(self._contracts_by_index),
+        )
         telegram_service.send_message(
             "Strategy Stage 3 Window Open",
             (
@@ -710,6 +865,16 @@ class StrategyLiveTrackerService:
         self._contracts_by_index = {}
         if not stage2_base.exists():
             self._loaded_day = today
+            self._last_reload_at = _market_now().isoformat()
+            self._last_load = {
+                "contracts": 0,
+                "indexes": 0,
+                "loaded_at": self._last_reload_at,
+            }
+            logger.info(
+                "[stage_3] stage-2 tree does not exist yet "
+                "(%s) — waiting", stage2_base,
+            )
             return
 
         for ticker_dir in sorted(stage2_base.iterdir()):
@@ -747,11 +912,38 @@ class StrategyLiveTrackerService:
                     )
 
         self._loaded_day = today
-        logger.info(
-            "[stage_3] loaded stage-2 contracts — indexes=%d total=%d",
-            len(self._contracts_by_index),
-            sum(len(v) for v in self._contracts_by_index.values()),
-        )
+        self._last_reload_at = _market_now().isoformat()
+        total = sum(len(v) for v in self._contracts_by_index.values())
+        self._last_load = {
+            "contracts": total,
+            "indexes": len(self._contracts_by_index),
+            "loaded_at": self._last_reload_at,
+        }
+
+        # Log level hint:
+        #   * 0 contracts in-window on a trading day is the exact
+        #     2026-10-22 signature — WARNING, not INFO.
+        #   * otherwise INFO.
+        if total == 0:
+            if self._in_window():
+                logger.warning(
+                    "[stage_3] reload — contracts=0 indexes=0 "
+                    "(inside window; Stage 2 has not written yet)",
+                )
+            else:
+                logger.info(
+                    "[stage_3] reload — contracts=0 indexes=0",
+                )
+        else:
+            logger.info(
+                "[stage_3] reload — contracts=%d across %d index(es): %s",
+                total,
+                len(self._contracts_by_index),
+                ", ".join(
+                    f"{k}={len(v)}"
+                    for k, v in sorted(self._contracts_by_index.items())
+                ),
+            )
 
     @staticmethod
     def _index_key_for_ticker(ticker: str) -> str | None:
@@ -788,6 +980,26 @@ class StrategyLiveTrackerService:
                 continue
 
             contracts = self._contracts_by_index.get(index_key) or []
+
+            # ---- Diagnose the "R2 crossed but nothing to activate" # 
+            # case (the exact 2026-10-22 failure mode). Fire once per
+            # index per day so a quiet stage-3 log isn't flooded when
+            # Stage 2 is genuinely empty.
+            if not contracts:
+                if index_key not in self._notified_r2_cross_no_contracts:
+                    self._notified_r2_cross_no_contracts.add(index_key)
+                    logger.warning(
+                        "[stage_3] %s crossed R2 (ltp=%.2f r2=%.2f) "
+                        "but the tracker has NO contracts in cache for "
+                        "this index. Stage 2 has either not run yet, "
+                        "produced zero isolated contracts for this "
+                        "index, or the reload has not picked them up. "
+                        "Stage 4 will report no_activations for this "
+                        "index.",
+                        index_key, float(ltp), float(r2),
+                    )
+                continue
+
             activated_now = 0
             for c in contracts:
                 if self._activate(
@@ -833,13 +1045,18 @@ class StrategyLiveTrackerService:
         window_start_minute, window_end_minute = _window_minute_bounds(today)
         opening_minute = _opening_minute_key(today)
 
+        # ---- Log the state BEFORE doing any work ------------------ #
+        total_contracts = sum(
+            len(v) for v in self._contracts_by_index.values()
+        )
         logger.info(
-            "[stage_3] catch-up (per-contract, window-bounded) starting — "
-            "mode=%s day=%s window=[%s .. %s] opening_candle=%s "
-            "post_market=%s",
+            "[stage_3] catch-up starting — mode=%s day=%s "
+            "window=[%s .. %s] opening_candle=%s post_market=%s "
+            "contracts=%d across %d index(es)",
             mode, today,
             window_start_minute, window_end_minute,
             opening_minute, post_market,
+            total_contracts, len(self._contracts_by_index),
         )
         logger.info(
             "[stage_3] candle isolation rule: intraday fetch is sliced "
@@ -848,11 +1065,27 @@ class StrategyLiveTrackerService:
             window_start_minute, window_end_minute,
         )
 
-        # Resolve the token once — every REST fetch in this pass reuses it.
+        # ---- Resolve the token once -------------------------------- #
+        # A missing token used to look identical to a quiet trading
+        # day (0 activations, no log). Warn loudly here.
         try:
             token = token_service.get_access_token()
-        except Exception:
+        except Exception as exc:
             token = None
+            logger.exception(
+                "[stage_3] catch-up: token lookup raised (%s); "
+                "cannot fetch intraday candles — all contracts will "
+                "be reported as no_candles_in_window",
+                type(exc).__name__,
+            )
+        if not token:
+            logger.warning(
+                "[stage_3] catch-up: no Upstox token available. "
+                "Contract intraday fetches will fail, and every "
+                "contract will be reported as 'no_candles_in_window'. "
+                "This is NOT a normal 'no activations' day — check "
+                "token_service / MongoDB token doc.",
+            )
 
         per_index_decisions: list[dict[str, Any]] = []
         activated_total = 0
@@ -927,6 +1160,22 @@ class StrategyLiveTrackerService:
                 token,
                 window_start_minute=window_start_minute,
                 window_end_minute=window_end_minute,
+            )
+
+            # One-line diagnostic per index so the log shows how many
+            # contracts actually returned intraday data — the other
+            # half of the Oct 22 diagnostic story.
+            contracts_with_data = sum(
+                1 for c in contracts
+                if (contract_candles_map.get(
+                    str(c.get("upstox_instrument_key")
+                        or c.get("instrument_key")
+                        or "")
+                ) or [])
+            )
+            logger.info(
+                "[stage_3] catch-up %s: contracts=%d with_intraday_data=%d",
+                index_key, len(contracts), contracts_with_data,
             )
 
             contract_decisions: list[dict[str, Any]] = []
@@ -1044,6 +1293,7 @@ class StrategyLiveTrackerService:
                 "window_start": window_start_minute,
                 "window_end": window_end_minute,
                 "contracts_total": len(contracts),
+                "contracts_with_intraday_data": contracts_with_data,
                 "contracts_activated": activated_now,
                 "contracts_skipped": contracts_skipped,
                 "contracts": contract_decisions,
@@ -1122,6 +1372,12 @@ class StrategyLiveTrackerService:
             window_start_minute=window_start_minute,
             window_end_minute=window_end_minute,
             opening_minute=opening_minute,
+        )
+
+        logger.info(
+            "[stage_3] catch-up COMPLETE — mode=%s day=%s "
+            "activated_total=%d across %d index(es)",
+            mode, today, activated_total, len(per_index_decisions),
         )
 
         return {

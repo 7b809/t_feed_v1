@@ -1,3 +1,4 @@
+# File: services/strategy_isolation_service.py
 """Stage 2 — EMA-cross isolation with strike-level pairing.
 
 Reads the stage-1 tree at ``data/strategy/stage_1_initial`` and, for
@@ -44,6 +45,40 @@ Output layout::
 Each isolated folder contains every stage-1 file plus an
 ``isolation_meta.json`` describing the decision.
 
+Diagnostics (added for the 2026-10-22 ``no_activations`` bug)
+-------------------------------------------------------------
+The module used to write nothing to ``logs/strategy_isolation_service.log``
+— its logger was never attached to the file handlers. On 2026-10-22
+Stage 2 succeeded (Telegram showed ``isolated=68 pairs=34``) but the
+log stream contained no line saying so, and no line warning that the
+68 isolated strike folders were missing their own ``opening_range.json``
+(the file the S1/S2 trackers read to learn each contract's R2/S3
+level). Stage 4 then reported ``no_activations`` with no explanation.
+
+This module now:
+
+    * uses ``get_logger(__file__)`` so every line reaches the file
+      handlers and can be grepped afterwards;
+    * counts ``contracts_missing_or`` per index — the number of
+      isolated contracts whose source strike folder has no
+      ``opening_range.json`` with a real ``levels.R2``. These are
+      exactly the contracts the S1/S2 trackers will skip
+      (``isolation_level = None``), and Stage 4 will report as
+      ``no_activations`` for them;
+    * counts ``contracts_missing_key`` per index — isolated contracts
+      with no ``upstox_instrument_key`` (unresolved, cannot be
+      subscribed or traded);
+    * emits one WARNING per index when either counter is non-zero,
+      naming the count, up to five example folder names, and pointing
+      at ``strategy_selection_service._enrich_with_upstox`` and
+      ``opening_range_service.calculate_one(target_folder=...)``;
+    * emits one WARNING per index when ``isolated == 0`` (Stage 2
+      produced nothing → Stage 4 will be empty);
+    * emits one INFO per index otherwise (the normal case);
+    * carries the time remaining until Stage 4 (``stage_4 in Ns``) on
+      the top-level COMPLETE line, so the timing budget between the
+      09:17:00 Stage-2 cron and the 09:18:00 Stage-4 cron is visible.
+
 Catch-up semantics
 ------------------
 The unified refresh calls this with ``mode=reason`` and
@@ -61,7 +96,6 @@ catch-up window (09:15 – 23:59 IST). The summary records:
 from __future__ import annotations
 
 import json
-import logging
 import shutil
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, time as dtime, timezone
@@ -72,9 +106,10 @@ from zoneinfo import ZoneInfo
 import requests
 
 from core import config
+from core.logger import get_logger
 from services.token_service import token_service
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__file__)
 
 _UPSTOX_BASE = "https://api.upstox.com"
 _HTTP_TIMEOUT = 20
@@ -125,6 +160,26 @@ def _post_market() -> bool:
     return _market_now().time() > _MARKET_CLOSE_TIME
 
 
+def _seconds_to_stage_4() -> int | None:
+    """Return whole seconds remaining until the scheduled Stage-4 time.
+
+    ``None`` on any calculation failure. Used purely for diagnostic
+    log lines — Stage-4 fires independently of this value.
+    """
+    try:
+        now = _market_now()
+        target = now.replace(
+            hour=config.STRATEGY_ORDER_HOUR,
+            minute=config.STRATEGY_ORDER_MINUTE,
+            second=0,
+            microsecond=0,
+        )
+        delta = (target - now).total_seconds()
+        return int(delta)
+    except Exception:
+        return None
+
+
 def _scheduled_stage_2_hhmm() -> str:
     """09:17:00 IST by default (OR + 50 s)."""
     base = (
@@ -134,6 +189,31 @@ def _scheduled_stage_2_hhmm() -> str:
     )
     total = (base + 50) % 86400
     return f"{total // 3600:02d}:{(total % 3600) // 60:02d}:{total % 60:02d}"
+
+
+def _strike_folder_has_or_levels(
+    strike_dir: Path | None,
+    level_key: str = "R2",
+) -> bool:
+    """Return True when ``strike_dir/opening_range.json`` carries a real level.
+
+    The S1/S2 trackers read this file to learn each contract's own
+    R2 / S3 level. A folder without it produces ``isolation_level =
+    None`` downstream, and the contract is silently skipped by both
+    trackers. This helper lets Stage 2 warn about that state *before*
+    Stage 4 discovers it via ``no_activations``.
+    """
+    if strike_dir is None:
+        return False
+    try:
+        or_path = Path(strike_dir) / "opening_range.json"
+        if not or_path.exists():
+            return False
+        payload = _read_json(or_path) or {}
+        levels = payload.get("levels") or {}
+        return levels.get(level_key) is not None
+    except Exception:
+        return False
 
 
 def _ema(values: list[float], period: int) -> list[float | None]:
@@ -247,6 +327,8 @@ class StrategyIsolationService:
                 "evaluated": 0,
                 "skipped": 0,
                 "errors": 0,
+                "contracts_missing_or": 0,
+                "contracts_missing_key": 0,
                 "indexes": [],
             }
 
@@ -270,6 +352,8 @@ class StrategyIsolationService:
                 "evaluated": 0,
                 "skipped": 0,
                 "errors": 0,
+                "contracts_missing_or": 0,
+                "contracts_missing_key": 0,
                 "indexes": [],
             }
 
@@ -292,6 +376,8 @@ class StrategyIsolationService:
         total_pairs = 0
         total_skipped = 0
         total_errors = 0
+        total_missing_or = 0
+        total_missing_key = 0
 
         for ticker_dir in sorted(stage1_base.iterdir()):
             if not ticker_dir.is_dir():
@@ -305,6 +391,7 @@ class StrategyIsolationService:
                         index_dir=index_dir,
                         stage2_base=stage2_base,
                         today_iso=today_iso,
+                        reason=reason,
                     )
                 except Exception as exc:
                     logger.exception(
@@ -323,6 +410,8 @@ class StrategyIsolationService:
                         "pairs_isolated": 0,
                         "skipped": 0,
                         "errors": 1,
+                        "contracts_missing_or": 0,
+                        "contracts_missing_key": 0,
                         "contracts": [],
                     }
                 per_index.append(idx_result)
@@ -331,6 +420,8 @@ class StrategyIsolationService:
                 total_pairs += idx_result.get("pairs_isolated", 0)
                 total_skipped += idx_result.get("skipped", 0)
                 total_errors += idx_result.get("errors", 0)
+                total_missing_or += idx_result.get("contracts_missing_or", 0)
+                total_missing_key += idx_result.get("contracts_missing_key", 0)
 
         summary = {
             "status": "ok",
@@ -350,6 +441,9 @@ class StrategyIsolationService:
             "pairs_isolated": total_pairs,
             "skipped": total_skipped,
             "errors": total_errors,
+            # ---- new diagnostic counters ------------------------------ #
+            "contracts_missing_or": total_missing_or,
+            "contracts_missing_key": total_missing_key,
             "indexes": per_index,
         }
 
@@ -359,19 +453,44 @@ class StrategyIsolationService:
         except Exception:
             logger.exception("[strategy:%s] stage_2 summary write failed", reason)
 
+        seconds_to_stage4 = _seconds_to_stage_4()
         logger.info(
             "[strategy:%s] stage_2 COMPLETE — evaluated=%d isolated=%d "
-            "pairs=%d skipped=%d errors=%d (mode=%s catchup=%s post_market=%s)",
+            "pairs=%d skipped=%d errors=%d missing_or=%d missing_key=%d "
+            "(mode=%s catchup=%s post_market=%s, stage_4 in %ss)",
             reason,
             total_evaluated,
             total_isolated,
             total_pairs,
             total_skipped,
             total_errors,
+            total_missing_or,
+            total_missing_key,
             effective_mode,
             catchup,
             post_market,
+            str(seconds_to_stage4) if seconds_to_stage4 is not None else "?",
         )
+
+        # ---- Aggregate WARNING when the outcome is the Oct 22 failure # #
+        # The per-index log lines already flag this, but a single
+        # aggregate line makes the state impossible to miss in a grep.
+        if total_missing_or > 0:
+            logger.warning(
+                "[strategy:%s] stage_2 isolated %d contracts but %d of "
+                "them have NO opening_range.json with levels.R2 in their "
+                "strike folder. The S1/S2 trackers will report "
+                "isolation_level=None for these contracts and Stage 4 "
+                "will report no_activations for them. Fix: verify "
+                "services/strategy_selection_service.py's "
+                "_enrich_with_upstox writes the strike OR via "
+                "opening_range_service.calculate_one(key, "
+                "target_folder=<strike folder>).",
+                reason,
+                total_isolated,
+                total_missing_or,
+            )
+
         return summary
 
     # ------------------------------------------------------------------ #
@@ -384,6 +503,7 @@ class StrategyIsolationService:
         index_dir: Path,
         stage2_base: Path,
         today_iso: str,
+        reason: str = "manual",
     ) -> dict[str, Any]:
         ticker = ticker_dir.name
         index_name = index_dir.name
@@ -501,7 +621,25 @@ class StrategyIsolationService:
                 )
                 errors += 1
 
-        # ---- 4. Per-index summary --------------------------------------- #
+        # ---- 4. Diagnostics: strike folder completeness ---------------- #
+        # This is where Stage 2 warns about the Oct 22 state: isolated
+        # contracts whose strike folder carries no opening_range.json
+        # with levels.R2. The S1/S2 trackers read that file to learn
+        # each contract's own R2/S3 level; without it, every contract
+        # is silently skipped and Stage 4 reports no_activations.
+        missing_or_contracts: list[str] = []
+        missing_key_contracts: list[str] = []
+        for ev in isolated_contracts:
+            src = ev.get("stage_1_folder")
+            src_name = Path(src).name if src else "?"
+            if not _strike_folder_has_or_levels(
+                Path(src) if src else None, level_key="R2"
+            ):
+                missing_or_contracts.append(src_name)
+            if not ev.get("upstox_instrument_key"):
+                missing_key_contracts.append(src_name)
+
+        # ---- 5. Per-index summary --------------------------------------- #
         all_contracts = isolated_contracts + skipped_contracts
         evaluated = len(all_contracts)
         skipped = len(skipped_contracts)
@@ -518,6 +656,11 @@ class StrategyIsolationService:
             "pairs_isolated": pairs_isolated,
             "skipped": skipped,
             "errors": errors,
+            # ---- new diagnostic counters ------------------------------- #
+            "contracts_missing_or": len(missing_or_contracts),
+            "contracts_missing_key": len(missing_key_contracts),
+            "missing_or_examples": missing_or_contracts[:5],
+            "missing_key_examples": missing_key_contracts[:5],
             "contracts": all_contracts,
             "generated_at": _now_iso(),
         }
@@ -531,6 +674,70 @@ class StrategyIsolationService:
                 "[strategy] stage_2 per-index summary write failed for %s/%s",
                 ticker,
                 index_name,
+            )
+
+        # ---- 6. Per-index log line -------------------------------------- #
+        # Level choice:
+        #   * WARNING when missing_or > 0   (exact Oct 22 signature)
+        #   * WARNING when isolated == 0    (Stage 4 will be empty)
+        #   * INFO    otherwise
+        log_level = 20  # logging.INFO, spelled numerically to avoid
+                        # a top-level `import logging` just for this
+        if missing_or_contracts:
+            log_level = 30  # logging.WARNING
+        elif isolated == 0:
+            log_level = 30  # logging.WARNING
+
+        logger.log(
+            log_level,
+            "[strategy:%s] stage_2 %s/%s: evaluated=%d isolated=%d "
+            "pairs=%d skipped=%d errors=%d missing_or=%d missing_key=%d",
+            reason,
+            ticker,
+            index_name,
+            evaluated,
+            isolated,
+            pairs_isolated,
+            skipped,
+            errors,
+            len(missing_or_contracts),
+            len(missing_key_contracts),
+        )
+
+        # ---- 7. Detailed WARNING for missing OR ------------------------ #
+        if missing_or_contracts:
+            logger.warning(
+                "[strategy:%s] stage_2 %s/%s: %d/%d isolated strike "
+                "folder(s) have NO opening_range.json with levels.R2 — "
+                "the S1/S2 trackers will skip these contracts and "
+                "Stage 4 will report no_activations for them. "
+                "Examples: %s. "
+                "Fix: check services/strategy_selection_service.py's "
+                "_enrich_with_upstox wrote each strike's OR via "
+                "opening_range_service.calculate_one(key, "
+                "target_folder=<strike folder>).",
+                reason,
+                ticker,
+                index_name,
+                len(missing_or_contracts),
+                isolated,
+                ", ".join(missing_or_contracts[:5]),
+            )
+
+        # ---- 8. Detailed WARNING for missing key ---------------------- #
+        if missing_key_contracts:
+            logger.warning(
+                "[strategy:%s] stage_2 %s/%s: %d/%d isolated contract(s) "
+                "have NO upstox_instrument_key — they cannot be "
+                "subscribed to the live feed or traded. Examples: %s. "
+                "Fix: check that Stage-1 resolved Upstox keys for these "
+                "strikes (Upstox search returned no match).",
+                reason,
+                ticker,
+                index_name,
+                len(missing_key_contracts),
+                isolated,
+                ", ".join(missing_key_contracts[:5]),
             )
 
         return idx_summary

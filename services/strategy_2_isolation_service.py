@@ -1,3 +1,4 @@
+# File: services/strategy_2_isolation_service.py
 """STRATEGY 2 — Stage 3: isolation-level touch + single-instrument filter.
 
 Reads Stage 2 output (shared with Strategy 1) and, for each isolated
@@ -24,20 +25,54 @@ The filter reduces all touched contracts to ONE final isolated contract:
 
 The chosen contract is written into stage_3_summary.json under
 "isolated" so Stage 4 can pick it up.
+
+Isolation-level lookup — fallback chain
+---------------------------------------
+``_read_contract_isolation_level()`` reads each contract's own OR
+levels from one of two locations, in order:
+
+    1. ``<STRATEGY_BASE_DIR>/<STRATEGY_STAGE_1_NAME>/<TICKER>/<INDEX>/
+       <strike>_<TYPE>/opening_range.json``
+       Written by ``strategy_selection_service._enrich_with_upstox``
+       (post-fix) via ``opening_range_service.calculate_one(key,
+       target_folder=<strike folder>)``. This is the primary path and
+       the one every tracker reads.
+
+    2. ``<LIVE_DATA_DIR>/index/<safe_key>/opening_range.json``
+       Written by ``opening_range_service.calculate_one(key)`` on its
+       own. Used as a fallback for the case where the Stage-1 copy
+       failed (e.g. permissions on the strategy folder) but the OR
+       itself was computed successfully.
+
+Before this fallback existed, only path (2) was ever written by
+``opening_range_service`` (Stage 1 deliberately did not write to the
+strike folder), so every contract this service examined had
+``isolation_level = None`` and was silently skipped. That is the root
+of the 2026-10-22 ``no_activations`` / ``placed=0`` failure even
+though Stage 1 + Stage 2 had produced 68 contracts.
+
+Diagnostic counter
+------------------
+``run()`` now tracks ``contracts_missing_level`` — the number of
+isolated contracts whose own OR could not be read from either path.
+When this is non-zero the service logs a WARNING naming the count and
+the ticker/index/strike triple of the first offending contract, so a
+future recurrence is visible in ``logs/strategy_2_isolation_service.log``
+at 09:17:00 IST instead of only as a missing Stage-4 order.
 """
 
 from __future__ import annotations
 
 import json
-import logging
 from datetime import datetime, time as dtime, timezone
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
 from core import config
+from core.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__file__)
 
 _MARKET_CLOSE_TIME = dtime(15, 30)
 
@@ -97,26 +132,117 @@ def _stage1_root() -> Path:
 # Isolation-level lookup
 # ---------------------------------------------------------------------------
 def _read_contract_isolation_level(
-    *, ticker: str, index_name: str, strike_dir_name: str
+    *,
+    ticker: str,
+    index_name: str,
+    strike_dir_name: str,
+    instrument_key: str | None = None,
 ) -> tuple[float | None, dict[str, Any]]:
-    """Return (level_value, levels_dict) for the contract's own OR file."""
-    or_path = (
+    """Return (level_value, levels_dict) for the contract's own OR file.
+
+    Tries two locations in order:
+
+      1. The Stage-1 strike folder copy written by Stage 1 (post-fix):
+         ``<stage_1_root>/<TICKER>/<INDEX>/<strike>_<TYPE>/opening_range.json``
+
+      2. The canonical ``<LIVE_DATA_DIR>/index/<safe_key>/opening_range.json``
+         produced by ``opening_range_service.calculate_one()``.
+
+    ``instrument_key`` is required for the canonical fallback: without
+    it the fallback cannot derive the folder name. Callers that already
+    have the key should always pass it — the live tracker and this
+    service both do.
+
+    Returns ``(None, {})`` when neither path yields a level. In that
+    case the caller is expected to skip the contract (and log it — the
+    ``run()`` path does this via ``contracts_missing_level``).
+    """
+    key = _isolation_level_key()
+    tried_paths: list[str] = []
+
+    # ---- 1. Stage-1 strike folder (primary) --------------------------- #
+    primary_path = (
         _stage1_root()
         / _safe(ticker)
         / _safe(index_name)
         / strike_dir_name
         / "opening_range.json"
     )
-    payload = _read_json(or_path) or {}
+    tried_paths.append(str(primary_path))
+
+    payload = _read_json(primary_path) or {}
     levels = payload.get("levels") or {}
-    key = _isolation_level_key()
+
     try:
         value = levels.get(key)
-        if value is None:
-            return None, levels
-        return float(value), levels
+        if value is not None:
+            return float(value), levels
     except (TypeError, ValueError):
-        return None, levels
+        # Corrupt value — treat as missing and try the fallback.
+        pass
+
+    # ---- 2. Canonical path via the registry entry (fallback) ---------- #
+    # This covers the case where the Stage-1 strike folder copy is
+    # missing (older runs, permission issues on data/strategy, etc.)
+    # but opening_range_service successfully calculated and persisted
+    # the OR under data/index/<safe_key>/.
+    if instrument_key:
+        try:
+            # Lazy imports to avoid pulling the registry + OR service
+            # into module load order. Both modules are already imported
+            # by the time this function runs in practice.
+            from services.instrument_registry import instrument_registry
+            from services.opening_range_service import (
+                _path_for as _or_path_for,
+            )
+
+            entry = instrument_registry.get(instrument_key)
+            if entry is None:
+                entry = instrument_registry.register_adhoc(instrument_key)
+            if entry:
+                canonical_path = _or_path_for(entry)
+                tried_paths.append(str(canonical_path))
+                canonical_payload = _read_json(canonical_path) or {}
+                canonical_levels = canonical_payload.get("levels") or {}
+                if canonical_levels:
+                    # Use canonical levels as the "levels" returned to the
+                    # caller even if the requested key still isn't present
+                    # — the caller renders the full OR dict.
+                    levels = canonical_levels
+                try:
+                    canonical_value = canonical_levels.get(key)
+                    if canonical_value is not None:
+                        logger.info(
+                            "[strategy2] OR level %s=%s for %s read from "
+                            "canonical fallback (%s); primary missing (%s)",
+                            key,
+                            canonical_value,
+                            instrument_key,
+                            canonical_path,
+                            primary_path,
+                        )
+                        return float(canonical_value), canonical_levels
+                except (TypeError, ValueError):
+                    pass
+        except Exception:
+            logger.exception(
+                "[strategy2] canonical OR fallback failed for %s",
+                instrument_key,
+            )
+
+    # ---- Nothing found ------------------------------------------------ #
+    # Log once at INFO (not WARNING) per contract so the ``run()``
+    # aggregate WARNING is the one that stands out in the log stream.
+    logger.info(
+        "[strategy2] OR levels not found for %s/%s/%s "
+        "(level_key=%s, tried=%s)",
+        ticker,
+        index_name,
+        strike_dir_name,
+        key,
+        tried_paths,
+    )
+    return None, levels
 
 # ---------------------------------------------------------------------------
 # Filter logic
@@ -291,6 +417,9 @@ class Strategy2IsolationService:
                 ticker=c["ticker"],
                 index_name=c["index_name"],
                 strike_dir_name=c["strike_dir_name"],
+                # Passing instrument_key enables the canonical-path
+                # fallback when the Stage-1 strike folder copy is missing.
+                instrument_key=c.get("instrument_key"),
             )
             c["isolation_level_name"] = isolation_key
             c["isolation_level"] = level
@@ -302,6 +431,32 @@ class Strategy2IsolationService:
 
         touched_list = [c for c in enriched if c["touched"]]
         isolated = _pick_isolated(touched_list, index_ltp_by_key)
+
+        # ---- Diagnostic: how many contracts had no readable level? ---- #
+        # This is the smoking-gun counter for the 2026-10-22 bug. It
+        # fires at 09:17:00 IST before Stage 4 runs, so a future
+        # recurrence is visible in the log instead of only as a missing
+        # Stage-4 order.
+        missing_level = [c for c in enriched if c.get("isolation_level") is None]
+        if missing_level:
+            first = missing_level[0]
+            logger.warning(
+                "[strategy2:%s] %d/%d contract(s) have NO isolation level — "
+                "they will be skipped by the tracker. First offender: "
+                "ticker=%s index=%s strike=%s_%s key=%s. "
+                "Check that the Stage-1 strike folder or the canonical "
+                "data/index/<safe_key> folder actually contains "
+                "opening_range.json with levels.%s.",
+                reason,
+                len(missing_level),
+                len(enriched),
+                first.get("ticker"),
+                first.get("index_name"),
+                first.get("strike_price"),
+                first.get("strike_type"),
+                first.get("instrument_key"),
+                isolation_key,
+            )
 
         # Persist per-contract touch files + summary.
         base = _stage3_root()
@@ -336,6 +491,9 @@ class Strategy2IsolationService:
             "actual_time_ist": _market_hhmmss(),
             "stage2_contracts": len(enriched),
             "touched_contracts": len(touched_list),
+            # New diagnostic field — surfaces in stage_3_summary.json
+            # and in /admin/strategy2.
+            "contracts_missing_level": len(missing_level),
             "isolated": isolated,
             "contracts": [
                 {
@@ -361,11 +519,12 @@ class Strategy2IsolationService:
 
         logger.info(
             "[strategy2:%s] stage_3 COMPLETE — level=%s stage2=%d touched=%d "
-            "isolated=%s",
+            "missing_level=%d isolated=%s",
             reason,
             isolation_key,
             len(enriched),
             len(touched_list),
+            len(missing_level),
             (
                 f"{isolated['ticker']} {isolated['strike_price']} "
                 f"{isolated['strike_type']}"
@@ -433,6 +592,7 @@ class Strategy2IsolationService:
             "generated_at": _now_iso(),
             "stage2_contracts": 0,
             "touched_contracts": 0,
+            "contracts_missing_level": 0,
             "isolated": None,
             "contracts": [],
         }
@@ -452,8 +612,10 @@ class Strategy2IsolationService:
             "generated_at": _now_iso(),
             "stage2_contracts": 0,
             "touched_contracts": 0,
+            "contracts_missing_level": 0,
             "isolated": None,
             "contracts": [],
         }
+
 
 strategy_2_isolation_service = Strategy2IsolationService()

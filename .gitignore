@@ -18,6 +18,7 @@ build/
 dist/
 combined_output.txt
 files.txt
+project_structure.txt
 # Runtime output and generated data
 logs*/
 test_logs/

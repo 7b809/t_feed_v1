@@ -56,6 +56,45 @@ Every order record carries:
                          schedule, this instrument would have been
                          selected because …"
 
+Diagnostics (added for the 2026-10-22 ``no_activations`` bug)
+-------------------------------------------------------------
+Stage 4 used to read ``stage_3_summary.json``, see an empty
+``activated`` list, and report ``no_activations`` — with no log line
+to say *why* the list was empty. On 2026-10-22 that message was the
+only symptom the operator got, and it could mean four very different
+things:
+
+    * stage_3_summary.json was never written (Stage 3 never ran),
+    * stage_3_summary.json was written by a previous day (stale file),
+    * stage_3_summary.json was written today but with 0 activations
+      (Stage 3 ran, no contract reached its own R2 — a quiet day),
+    * stage_3_summary.json was written today, has activations, but
+      every pick has entry_ltp = None because the picked contracts
+      were never subscribed to the live feed.
+
+This module now:
+
+    * classifies the Stage-3 summary into one of four explicit states
+      via ``_classify_stage3_summary()``: ``ok`` /
+      ``empty_activations`` / ``stale_day`` / ``missing``;
+    * logs the classified state (with ``day``, ``generated_at``,
+      ``activated`` count, and any ``contracts_missing_level`` value
+      propagated from Stage 3) at INFO before doing any work;
+    * emits a tailored WARNING / INFO message in the
+      ``no_activations`` branch per state, naming the next diagnostic
+      endpoint (``/admin/strategy/tracker/status``,
+      ``/admin/strategy/stage3``) or confirming a quiet day;
+    * logs one INFO line per pick (``ticker strike type key
+      entry_ltp source``) so the selected contract is visible without
+      reading orders.json;
+    * emits an aggregate WARNING in live mode when any placed order
+      has ``entry_ltp = None`` — the second half of the 2026-10-22
+      failure signature — with the checklist (``GET /live/status``)
+      and a fix pointer to ``strategy_selection_service._register_strike``;
+    * adds ``stage_3_summary_state`` / ``stage_3_summary_day`` /
+      ``orders_with_ltp`` / ``orders_without_ltp`` to the
+      ``stage_4_summary.json`` payload and to the returned dict.
+
 Catch-up semantics
 ------------------
 The unified refresh routine calls this service with ``catchup=True``
@@ -80,7 +119,6 @@ The service never raises; failures are reported in the summary.
 from __future__ import annotations
 
 import json
-import logging
 import shutil
 from datetime import datetime, time as dtime, timezone
 from pathlib import Path
@@ -90,15 +128,15 @@ from zoneinfo import ZoneInfo
 import requests
 
 from core import config
+from core.logger import get_logger
 from services.live_feed_service import live_feed_service
 from services.strategy_meta import (
-    market_hhmmss as _meta_now_hhmmss,
     market_now,
     write_meta,
 )
 from services.token_service import token_service
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__file__)
 
 # Upstox REST endpoint used for the catch-up entry price.
 _UPSTOX_BASE = "https://api.upstox.com"
@@ -191,6 +229,38 @@ def _scheduled_stage_4_minute_key(today: str) -> str:
     return f"{today}T{_scheduled_stage_4_hhmm()}"
 
 
+def _classify_stage3_summary(
+    *,
+    exists: bool,
+    day: str,
+    today: str,
+    activated_count: int,
+) -> str:
+    """Return a short state string for the Stage-3 summary file.
+
+    Values:
+
+        "missing"            — the file does not exist. Stage 3 has not
+                               run for today, or its write failed.
+        "stale_day"          — the file exists but its ``day`` field
+                               does not match today's date. Usually a
+                               manual re-run against a previous day's
+                               tree.
+        "empty_activations"  — the file exists, day matches today, but
+                               no contract reached its own R2. This is
+                               a *normal* quiet-day state.
+        "ok"                 — the file exists, day matches today, and
+                               there is at least one activation.
+    """
+    if not exists:
+        return "missing"
+    if day and day != today:
+        return "stale_day"
+    if activated_count == 0:
+        return "empty_activations"
+    return "ok"
+
+
 class StrategyOrderService:
 
     # ------------------------------------------------------------------ #
@@ -255,14 +325,81 @@ class StrategyOrderService:
         stage4_base = (
             Path(config.STRATEGY_BASE_DIR) / config.STRATEGY_STAGE_4_NAME
         )
-        stage3_summary = _read_json(stage3_base / "stage_3_summary.json") or {}
+
+        # ---- Pre-flight: classify the Stage-3 summary ---------------- #
+        # Four states, each needing a different operator action:
+        #   missing           → Stage 3 never ran; check tracker status
+        #   stale_day         → summary is from a previous day
+        #   empty_activations → normal quiet day (no action needed)
+        #   ok                → proceed to pick
+        stage3_summary_path = stage3_base / "stage_3_summary.json"
+        stage3_summary_exists = stage3_summary_path.exists()
+        stage3_summary = _read_json(stage3_summary_path) or {}
+        stage3_day = str(stage3_summary.get("day") or "").strip()
+        stage3_generated_at = str(
+            stage3_summary.get("generated_at") or ""
+        ).strip()
+        today_iso = executed_at.date().isoformat()
         activations = stage3_summary.get("activated") or []
 
+        stage3_state = _classify_stage3_summary(
+            exists=stage3_summary_exists,
+            day=stage3_day,
+            today=today_iso,
+            activated_count=len(activations),
+        )
+
+        logger.info(
+            "[stage_4:%s] stage_3 summary: state=%s exists=%s day=%s "
+            "generated_at=%s activated=%d contracts_missing_level=%s",
+            reason,
+            stage3_state,
+            stage3_summary_exists,
+            stage3_day or "?",
+            stage3_generated_at or "?",
+            len(activations),
+            stage3_summary.get("contracts_missing_level", "?"),
+        )
+
+        # ---- No activations branch (diagnostics-aware) -------------- #
         if not activations:
-            logger.info("[stage_4:%s] no stage-3 activations", reason)
-            # NOTE: same reasoning as the "disabled" branch above —
-            # populate scheduled_time_ist / actual_time_ist / day so
-            # the Telegram wrapper can display them.
+            if stage3_state == "missing":
+                logger.warning(
+                    "[stage_4:%s] no stage-3 activations because "
+                    "stage_3_summary.json does NOT exist at %s. "
+                    "Stage 3 may not have run for today, or its write "
+                    "failed. Check: GET /admin/strategy/tracker/status "
+                    "and GET /admin/strategy/stage3.",
+                    reason,
+                    stage3_summary_path,
+                )
+            elif stage3_state == "stale_day":
+                logger.warning(
+                    "[stage_4:%s] no stage-3 activations today because "
+                    "stage_3_summary.json is from %s (today is %s). "
+                    "The file is stale — likely a manual re-run against "
+                    "a previous day's tree, or a cron misfire. Check: "
+                    "GET /admin/strategy/stage3.",
+                    reason,
+                    stage3_day or "?",
+                    today_iso,
+                )
+            else:
+                # stage3_state == "empty_activations"
+                logger.info(
+                    "[stage_4:%s] stage_3_summary.json exists for today "
+                    "(%s, generated %s) but has 0 activations. This is "
+                    "the normal quiet-day state — no contract's own "
+                    "09:15–09:20 window high reached its own R2. "
+                    "Per-contract reasons are in "
+                    "data/strategy/stage_3_r2_activated/"
+                    "stage_3_decisions.json.",
+                    reason,
+                    today_iso,
+                    stage3_generated_at or "?",
+                )
+            # NOTE: scheduled_time_ist / actual_time_ist / day are
+            # populated so the Telegram wrapper can display them.
             return {
                 "status": "no_activations",
                 "stage": "stage_4",
@@ -273,14 +410,33 @@ class StrategyOrderService:
                 "post_market": _post_market(),
                 "scheduled_time_ist": _scheduled_stage_4_hhmm(),
                 "actual_time_ist": _market_hhmmss(),
-                "day": executed_at.date().isoformat(),
+                "day": today_iso,
                 "generated_at": _now_iso(),
                 "placed": 0,
                 "candidates": 0,
                 "orders": [],
+                # ---- new diagnostic fields -------------------------- #
+                "stage_3_summary_state": stage3_state,
+                "stage_3_summary_day": stage3_day or None,
             }
 
-        today = executed_at.date().isoformat()
+        # Extra warning when the summary is stale but still has
+        # activations — this is a real risk of placing yesterday's
+        # picks as today's orders. Not an error the code currently
+        # guards against, but must be visible.
+        if stage3_state == "stale_day":
+            logger.warning(
+                "[stage_4:%s] stage_3_summary.json is from %s (today is "
+                "%s) but contains %d activation(s). These activations "
+                "will be processed as today's picks — verify this is "
+                "intended before wiring real order placement.",
+                reason,
+                stage3_day or "?",
+                today_iso,
+                len(activations),
+            )
+
+        today = today_iso
 
         # Resolve the token once for the whole stage-4 run so every
         # entry-price fetch reuses the same credential.
@@ -302,7 +458,7 @@ class StrategyOrderService:
             if t:
                 by_ticker.setdefault(t, []).append(a)
 
-        # ---- 2. Nearest-to-ATM per index --------------------------------
+        # ---- 2. Nearest-to-ATM per index -------------------------------- #
         picks: list[dict[str, Any]] = []
         picks.extend(
             self._pick_nearest(
@@ -317,7 +473,7 @@ class StrategyOrderService:
             )
         )
 
-        # ---- 3. FIFO by touched_at --------------------------------------
+        # ---- 3. FIFO by touched_at -------------------------------------- #
         picks.sort(key=lambda p: str(p.get("touched_at") or ""))
         final = picks[: config.STRATEGY_ORDER_FINAL_PICKS]
 
@@ -333,7 +489,24 @@ class StrategyOrderService:
             _post_market(),
         )
 
-        # ---- 4. Place paper order for each final pick -------------------
+        # ---- 3b. Per-pick diagnostic line ------------------------------ #
+        # One line per pick so the selection is visible without reading
+        # orders.json. The entry LTP is filled in after _place_order,
+        # so log the selection first, then the LTP health after the loop.
+        for p in final:
+            logger.info(
+                "[stage_4:%s] pick: %s %s %s key=%s "
+                "r2=%s touched_at=%s",
+                reason,
+                p.get("ticker"),
+                p.get("strike_price"),
+                p.get("strike_type"),
+                p.get("upstox_instrument_key") or p.get("instrument_key"),
+                p.get("r2_value"),
+                p.get("touched_at"),
+            )
+
+        # ---- 4. Place paper order for each final pick ------------------- #
         orders: list[dict[str, Any]] = []
         for p in final:
             order = self._place_order(
@@ -354,7 +527,60 @@ class StrategyOrderService:
                 catchup=catchup,
             )
 
-        # ---- 5. Write summary -------------------------------------------
+        # ---- 4b. Entry-LTP health --------------------------------------- #
+        orders_with_ltp = sum(
+            1 for o in orders if o.get("entry_ltp") is not None
+        )
+        orders_without_ltp = len(orders) - orders_with_ltp
+
+        for o in orders:
+            logger.info(
+                "[stage_4:%s] placed: %s %s %s entry_ltp=%s "
+                "source=%s minute=%s",
+                reason,
+                o.get("ticker"),
+                o.get("strike_price"),
+                o.get("strike_type"),
+                o.get("entry_ltp"),
+                o.get("entry_ltp_source"),
+                o.get("entry_ltp_minute"),
+            )
+
+        # Live mode: entry_ltp is sourced from live_feed_service.
+        # A None here means the picked contract has no tick — either
+        # not subscribed, or subscribed but not yet pushed. This is
+        # the second half of the 2026-10-22 failure signature, and
+        # must be visible in the log.
+        if orders_without_ltp > 0 and not catchup:
+            logger.warning(
+                "[stage_4:%s] %d/%d placed order(s) have entry_ltp=None "
+                "in live mode. The live feed has no tick for those "
+                "contracts. Check GET /live/status (feed.instrument_count "
+                "vs /live/instruments count). If the picked contracts "
+                "are missing from the feed, they were never subscribed "
+                "— see strategy_selection_service._register_strike.",
+                reason,
+                orders_without_ltp,
+                len(orders),
+            )
+        # Catch-up mode: entry_ltp=None means the intraday fetch
+        # returned no in-window candle for the contract. That is
+        # expected behaviour (the service deliberately does not fall
+        # back to a live price in catch-up mode). Just an INFO.
+        elif orders_without_ltp > 0 and catchup:
+            logger.info(
+                "[stage_4:%s] %d/%d placed order(s) have entry_ltp=None "
+                "in catch-up mode — no in-window intraday candle existed "
+                "at or before %s IST for those contracts. This is the "
+                "documented behaviour (no fallback to live LTP in "
+                "catch-up mode).",
+                reason,
+                orders_without_ltp,
+                len(orders),
+                _scheduled_stage_4_hhmm(),
+            )
+
+        # ---- 5. Write summary ------------------------------------------- #
         summary = {
             "status": "ok",
             "stage": "stage_4",
@@ -370,6 +596,11 @@ class StrategyOrderService:
             "candidates": len(activations),
             "picks": len(picks),
             "placed": len(orders),
+            # ---- new diagnostic fields -------------------------------- #
+            "stage_3_summary_state": stage3_state,
+            "stage_3_summary_day": stage3_day or None,
+            "orders_with_ltp": orders_with_ltp,
+            "orders_without_ltp": orders_without_ltp,
             "orders": orders,
         }
         try:
@@ -379,12 +610,16 @@ class StrategyOrderService:
             logger.exception("[stage_4:%s] summary write failed", reason)
 
         logger.info(
-            "[stage_4:%s] complete — placed=%d (mode=%s catchup=%s post_market=%s)",
+            "[stage_4:%s] complete — placed=%d with_ltp=%d without_ltp=%d "
+            "(mode=%s catchup=%s post_market=%s stage_3_state=%s)",
             reason,
             len(orders),
+            orders_with_ltp,
+            orders_without_ltp,
             effective_mode,
             catchup,
             _post_market(),
+            stage3_state,
         )
         return summary
 
@@ -542,7 +777,7 @@ class StrategyOrderService:
             live = self._live_ltp(pick)
             return live, ("live_ltp" if live is not None else None), None
 
-        # ---- Catch-up path: strictly time-bounded candle close -------
+        # ---- Catch-up path: strictly time-bounded candle close ------- #
         window_start_minute, window_end_minute = _strategy_window_bounds(today)
         target_minute = _scheduled_stage_4_minute_key(today)
 
