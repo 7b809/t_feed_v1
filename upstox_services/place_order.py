@@ -1,3 +1,4 @@
+# File: upstox_services/place_order.py
 """Place a single lot-based Upstox order (buy or sell).
 
 Function signature
@@ -26,7 +27,37 @@ Behaviour
 * Checks ``order_runtime_service.is_enabled()`` first and returns
   ``{"status": "disabled"}`` when orders are toggled off.
 * Never raises for expected failure modes — always returns a dict.
-* Masks the token in every log line.
+
+Security guarantees (2026-10-22 token-leak fix)
+-----------------------------------------------
+The project's security policy is absolute: **no access token — masked
+or otherwise — appears in any log line or returned dict.** The
+previous revision violated this in two places:
+
+  * the pre-call ``logger.info`` line included ``token=%s`` with the
+    masked token (``eyJ0eX…p9X0``), which is still sensitive because
+    it reveals the token prefix and suffix;
+  * the ``ok`` return dict carried a ``token_masked`` field which
+    could be persisted by callers (routes, audit trail, Mongo doc,
+    etc.).
+
+This revision removes both:
+
+  * the pre-call log line no longer accepts or emits a token; it
+    logs ``key / txn / lots / qty / lot_size / lot_source /
+    underlying`` only;
+  * the ``ok`` return dict no longer carries ``token_masked``;
+  * the token is read once from ``token_service``, held in a local
+    variable, and passed only to ``upstox_client.Configuration()``;
+  * Upstox ``ApiException`` bodies and verbose SDK responses are
+    passed through ``upstox_services._sanitise.sanitise_payload``
+    before being logged or returned, so a provider-side error body
+    cannot leak an ``Authorization`` header or a bearer token.
+
+The ``_mask_token`` helper is kept as a module-level function for
+backward compatibility with any external import, but it is no
+longer called from ``place_order`` — the function no longer has a
+token to mask.
 """
 
 from __future__ import annotations
@@ -42,6 +73,7 @@ from services.instrument_registry import instrument_registry
 from services.normalization import normalize_underlying
 from services.order_runtime_service import order_runtime_service
 from services.token_service import token_service
+from upstox_services._sanitise import sanitise_payload
 from upstox_services.lot_sizes import lots_to_quantity
 
 logger = get_logger(__file__)
@@ -52,6 +84,12 @@ def _now_iso() -> str:
 
 
 def _mask_token(token: str) -> str:
+    """Return a masked token for callers that explicitly want one.
+
+    NOTE: ``place_order`` does **not** use this helper and does not
+    emit a masked token anywhere. It is kept here only for backward
+    compatibility with external imports that may still call it.
+    """
     token = str(token or "").strip()
     if len(token) <= 20:
         return "***masked***"
@@ -71,24 +109,33 @@ def _resolve_underlying(instrument_key: str) -> str | None:
         if entry:
             return entry.get("underlying")
     except Exception:
-        logger.exception("[place-order] registry lookup failed for %s", instrument_key)
+        logger.exception(
+            "[place-order] registry lookup failed for %s", instrument_key
+        )
     return None
 
 
 def _summarise_api_response(raw: Any) -> dict[str, Any]:
+    """Return a sanitised, JSON-serialisable summary of the Upstox response.
+
+    Anything the SDK returns — dict, object with ``to_dict()``, or an
+    opaque string — is passed through ``sanitise_payload`` so a
+    provider body that happens to embed an ``Authorization`` header
+    or a bearer token cannot leak through the return dict.
+    """
     if raw is None:
         return {"raw": None}
     if isinstance(raw, dict):
-        return raw
+        return sanitise_payload(raw)
     if hasattr(raw, "to_dict"):
         try:
-            return raw.to_dict()
+            return sanitise_payload(raw.to_dict())
         except Exception:
             pass
     try:
-        return dict(raw)
+        return sanitise_payload(dict(raw))
     except Exception:
-        return {"raw": str(raw)}
+        return {"raw": sanitise_payload(str(raw))}
 
 
 def place_order(
@@ -109,6 +156,10 @@ def place_order(
 
     Returns a dict with ``status`` in
     ``{"ok", "disabled", "no_token", "invalid_input", "error"}``.
+
+    Security: the access token never appears in any log line or in
+    the returned dict. Provider error bodies are redacted by
+    ``sanitise_payload`` before they leave this function.
     """
     called_at = _now_iso()
     key = str(instrument_key or "").strip()
@@ -141,13 +192,16 @@ def place_order(
         }
 
     # ---- 1. Token -------------------------------------------------- #
+    # Read once. Held only in this local variable for the duration of
+    # the call. Never logged, never returned, never interpolated into
+    # an error string.
     try:
         access_token = token_service.get_access_token()
     except Exception as exc:
         logger.exception("[place-order] token lookup raised")
         return {
             "status": "error",
-            "error": f"token_lookup_failed: {type(exc).__name__}: {exc}",
+            "error": f"token_lookup_failed: {type(exc).__name__}",
             "instrument_key": key,
             "called_at": called_at,
         }
@@ -160,8 +214,6 @@ def place_order(
             "called_at": called_at,
         }
 
-    token_masked = _mask_token(access_token)
-
     # ---- 2. Lots -> quantity -------------------------------------- #
     underlying = _resolve_underlying(key)
     quantity, lot_size, lot_source = lots_to_quantity(
@@ -170,11 +222,13 @@ def place_order(
         instrument_key=key,
     )
 
+    # SECURITY: no token in this log line. The previous revision
+    # included ``token=<masked>``; that violated the project's
+    # "no token in any log line" policy even in masked form.
     logger.info(
         "[place-order] key=%s txn=%s lots=%s qty=%s lot_size=%s "
-        "lot_source=%s underlying=%s token=%s",
-        key, txn, lots, quantity, lot_size, lot_source,
-        underlying, token_masked,
+        "lot_source=%s underlying=%s",
+        key, txn, lots, quantity, lot_size, lot_source, underlying,
     )
 
     # ---- 3. Build the request ------------------------------------- #
@@ -209,14 +263,21 @@ def place_order(
         raw_response = order_api.place_order(body)
     except ApiException as exc:
         http_status = getattr(exc, "status", None)
-        body_preview = str(getattr(exc, "body", None) or exc)[:300]
+        # Redact any credential-like run in the provider body before
+        # it reaches a log line or the return dict.
+        body_preview = sanitise_payload(
+            str(getattr(exc, "body", None) or exc)
+        )[:300]
         logger.warning(
             "[place-order] ApiException (HTTP %s): %s",
             http_status, body_preview,
         )
         return {
             "status": "error",
-            "error": f"Upstox ApiException (HTTP {http_status}): {body_preview}",
+            "error": (
+                f"Upstox ApiException (HTTP {http_status}): "
+                f"{body_preview}"
+            ),
             "http_status": http_status,
             "instrument_key": key,
             "transaction_type": txn,
@@ -238,6 +299,9 @@ def place_order(
         "[place-order] OK — key=%s txn=%s qty=%s lot_size=%s",
         key, txn, quantity, lot_size,
     )
+    # SECURITY: no ``token_masked`` field in the returned dict. The
+    # previous revision included one; callers could persist it in a
+    # Mongo doc, an audit trail, or an API response.
     return {
         "status": "ok",
         "instrument_key": key,
@@ -251,6 +315,5 @@ def place_order(
         "product": str(product or "D"),
         "response": _summarise_api_response(raw_response),
         "error": None,
-        "token_masked": token_masked,
         "called_at": called_at,
     }

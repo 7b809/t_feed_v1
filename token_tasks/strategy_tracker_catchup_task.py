@@ -126,6 +126,70 @@ added to the S1 tracker's ``run_catchup()`` return dict by the Oct 22
 patch. It falls back to summing ``contracts_total`` per index, so a
 rolling deploy where the tracker has not yet been patched still
 classifies correctly.
+
+Additional hardening (this revision)
+------------------------------------
+Building on the 2026-10-22 patch, this revision adds:
+
+    * **A ``_STAGE_3_CATCHUP_WRAPPER_MARKER`` constant.** Every log
+      line from this module starts with ``[stage_3_catchup wrapper]``
+      so an operator can pull every catch-up wrapper line with a
+      single ``grep '[stage_3_catchup wrapper]'``. Matches the
+      convention used by the S1 Stage-1/2/4 wrappers and the S2
+      Stage-3/4 wrappers.
+
+    * **A ``no_new_touches`` WARNING escalation on partial-tree runs.**
+      When the tracker found contracts for some indexes but 0
+      contracts for others, ``_total_contracts()`` still returns
+      non-zero (the sum of the partial counts), so the
+      classification lands on ``no_new_touches``. The old code
+      logged that as INFO. This revision detects the
+      partial-tree state (some indexes have contracts, some don't)
+      and escalates to WARNING with a named list of the empty
+      indexes — so a partial-tree failure is not hidden under the
+      "quiet day" INFO line.
+
+    * **An "empty_tree but elapsed > threshold" Telegram branch.**
+      When the catch-up found 0 contracts *and* it took longer than
+      the latency threshold to determine that, the operator gets a
+      single WARNING that names both problems. This is the
+      catastrophic case on 2026-10-22: the tracker spent 25 s
+      discovering the tree was empty (because it scanned a large
+      directory) and then Stage 4 read an empty summary. Combining
+      the two signals into one message makes the diagnosis
+      immediate.
+
+    * **A "stale_day" Telegram branch in the success path.** When
+      ``summary.get("day")`` does not match today's date (a manual
+      run against a previous day's tree), the success message is
+      escalated to WARNING and names both dates. Without this, a
+      stale tree could produce a "✅ activated=3" message even
+      though those activations were for yesterday.
+
+    * **Tolerant fields on ``_build_success_message``.** Missing
+      ``day`` / ``window_start`` / ``window_end`` render as
+      ``"?"`` instead of ``"None"``. Makes a partially filled
+      summary visibly wrong rather than silently misleading.
+
+    * **A per-run state snapshot in ``_LAST_RUN_STATE``.** The
+      wrapper now records the outcome of every successful call so
+      a subsequent call (or the operator reading the logs
+      afterwards) can see whether the state changed. This was
+      previously only implicit in the Telegram noise gate.
+
+Telegram message shape
+----------------------
+The wrapper is deliberately quiet — it sends a Telegram message in
+exactly three cases:
+
+    * ``activated > 0`` (SUCCESS): the catch-up added new activations.
+    * ``empty_tree`` with non-zero elapsed (WARNING): the tree is
+      empty AND the catch-up was slow enough to risk Stage 4 racing.
+    * The service raised (ERROR): the safety net itself failed.
+
+Every other case is deliberately log-only so the 30-second window
+stays noise-free. This is the same philosophy as the S2 Stage-3
+recheck — deliberately quiet on the no-change path.
 """
 
 from __future__ import annotations
@@ -144,6 +208,11 @@ from services.telegram_format import build
 from services.telegram_service import telegram_service
 
 logger = get_logger(__file__)
+
+# Grep anchor. Every log line from this module starts with this
+# prefix, so an operator can pull every catch-up wrapper line with a
+# single ``grep '[stage_3_catchup wrapper]'``.
+_STAGE_3_CATCHUP_WRAPPER_MARKER = "[stage_3_catchup wrapper]"
 
 # Threshold above which the catch-up is considered to be racing Stage 4.
 # The job fires at 09:17:30 and Stage 4 at 09:18:00, so anything above
@@ -181,6 +250,10 @@ def _seconds_to_stage_4() -> int | None:
         return None
 
 
+def _today_iso() -> str:
+    return _market_now().date().isoformat()
+
+
 # --------------------------------------------------------------------------- #
 # Counter helpers                                                             #
 # --------------------------------------------------------------------------- #
@@ -215,6 +288,36 @@ def _indexes_with_activations(summary: dict[str, Any]) -> int:
     for i in indexes:
         try:
             if int(i.get("contracts_activated") or 0) > 0:
+                count += 1
+        except (TypeError, ValueError):
+            continue
+    return count
+
+
+def _empty_index_keys(summary: dict[str, Any]) -> list[str]:
+    """Return the index_keys whose ``contracts_total`` is 0.
+
+    Used to detect a partial-tree run: some indexes have contracts,
+    some don't. The overall classification is still ``no_new_touches``
+    (because ``_total_contracts`` sums across the populated indexes),
+    but the operator should be told *which* indexes are empty.
+    """
+    empty: list[str] = []
+    for i in (summary.get("indexes") or []):
+        try:
+            if int(i.get("contracts_total") or 0) == 0:
+                empty.append(str(i.get("index_key") or "?"))
+        except (TypeError, ValueError):
+            continue
+    return empty
+
+
+def _populated_index_count(summary: dict[str, Any]) -> int:
+    """Return the number of indexes with at least one contract."""
+    count = 0
+    for i in (summary.get("indexes") or []):
+        try:
+            if int(i.get("contracts_total") or 0) > 0:
                 count += 1
         except (TypeError, ValueError):
             continue
@@ -264,22 +367,32 @@ def _log_diagnostics(
     the one that names the failing sub-step (or confirms normal
     operation). Emitted on every run — including the ones that produce
     no Telegram message — so the log file tells the full story.
+
+    Partial-tree escalation:
+      When ``no_new_touches`` and some indexes have 0 contracts, the
+      verdict escalates to WARNING (naming the empty indexes). This
+      turns a hidden partial-tree failure into a visible signal on
+      the same line.
     """
     status = str(summary.get("status") or "")
     contracts = _total_contracts(summary)
     activated = _total_activated(summary)
     indexes_count = len(summary.get("indexes") or [])
     indexes_activated = _indexes_with_activations(summary)
+    populated_indexes = _populated_index_count(summary)
     sub_state = _classify_run(summary)
+    empty_indexes = _empty_index_keys(summary)
 
     # ---- Aggregate line ------------------------------------------------ #
     logger.info(
-        "[stage_3_catchup wrapper] diagnosis — status=%s sub_state=%s "
-        "indexes=%d indexes_with_activations=%d contracts=%d "
-        "activated_total=%d elapsed=%.2fs stage_4_in=%ss",
+        "%s diagnosis — status=%s sub_state=%s "
+        "indexes=%d populated_indexes=%d indexes_with_activations=%d "
+        "contracts=%d activated_total=%d elapsed=%.2fs stage_4_in=%ss",
+        _STAGE_3_CATCHUP_WRAPPER_MARKER,
         status or "?",
         sub_state,
         indexes_count,
+        populated_indexes,
         indexes_activated,
         contracts,
         activated,
@@ -291,50 +404,77 @@ def _log_diagnostics(
     # ---- State-specific consequence ---------------------------------- #
     if sub_state == "disabled":
         logger.info(
-            "[stage_3_catchup wrapper] disabled by config — "
+            "%s disabled by config — "
             "no work performed. (STRATEGY_ENABLED or "
-            "STRATEGY_TRACKER_ENABLED is false.)"
+            "STRATEGY_TRACKER_ENABLED is false.)",
+            _STAGE_3_CATCHUP_WRAPPER_MARKER,
         )
         return
 
     if sub_state == "no_indexes":
         logger.warning(
-            "[stage_3_catchup wrapper] tracker returned NO indexes — "
+            "%s tracker returned NO indexes — "
             "STRATEGY_TRACKER_INDEX_KEYS is empty or misconfigured. "
             "Stage 4 will report no_activations. Check "
             "config.STRATEGY_TRACKER_INDEX_KEYS and "
-            "config.STRATEGY_INDEXES."
+            "config.STRATEGY_INDEXES.",
+            _STAGE_3_CATCHUP_WRAPPER_MARKER,
         )
         return
 
     if sub_state == "empty_tree":
         logger.warning(
-            "[stage_3_catchup wrapper] stage-2 tree has 0 contracts — "
+            "%s stage-2 tree has 0 contracts — "
             "Stage 4 will report no_activations. This is the "
             "2026-10-22 failure signature. Check GET "
             "/admin/strategy/isolation and GET /admin/strategy "
             "(Stage 1 reason field) immediately — Stage 4 fires in "
             "%ss.",
+            _STAGE_3_CATCHUP_WRAPPER_MARKER,
             str(seconds_to_stage_4_after)
             if seconds_to_stage_4_after is not None else "?",
         )
         return
 
     if sub_state == "no_new_touches":
+        # ---- Partial-tree escalation ------------------------------ #
+        # When some indexes have contracts but others don't, the
+        # overall classification is still ``no_new_touches`` (because
+        # ``_total_contracts`` sums across the populated indexes).
+        # Escalate to WARNING so a partial-tree failure is not hidden
+        # under the "quiet day" INFO line.
+        if populated_indexes < indexes_count:
+            logger.warning(
+                "%s PARTIAL TREE — %d/%d index(es) have contracts, "
+                "but %d contract(s) produced no new touches. Empty "
+                "indexes: %s. Stage 4 will report no_activations for "
+                "those indexes. Check GET /admin/strategy/isolation "
+                "(Stage 2 summary) and the Stage-1 summary for the "
+                "empty indexes.",
+                _STAGE_3_CATCHUP_WRAPPER_MARKER,
+                populated_indexes,
+                indexes_count,
+                contracts,
+                ", ".join(empty_indexes) if empty_indexes else "—",
+            )
+            return
+
         logger.info(
-            "[stage_3_catchup wrapper] %d contract(s) in the tree but no "
+            "%s %d contract(s) in the tree but no "
             "new touches since the post-Stage-2 hook. This is the "
             "normal quiet-day case — the catch-up reloaded the tree "
             "and confirmed the tracker's view is up to date.",
+            _STAGE_3_CATCHUP_WRAPPER_MARKER,
             contracts,
         )
         return
 
     if sub_state == "activated":
         logger.info(
-            "[stage_3_catchup wrapper] %d additional contract(s) "
+            "%s %d additional contract(s) "
             "activated by the catch-up (%d/%d index(es) contributed) — "
             "Stage 4 will see them in %ss.",
+            _STAGE_3_CATCHUP_WRAPPER_MARKER,
             activated,
             indexes_activated,
             indexes_count,
@@ -345,9 +485,10 @@ def _log_diagnostics(
 
     # Defensive: any sub-state the classifier did not recognise.
     logger.warning(
-        "[stage_3_catchup wrapper] unexpected sub_state=%r — no "
+        "%s unexpected sub_state=%r — no "
         "specific diagnosis available. status=%r contracts=%d "
         "activated_total=%d indexes=%d",
+        _STAGE_3_CATCHUP_WRAPPER_MARKER,
         sub_state, status, contracts, activated, indexes_count,
     )
 
@@ -366,23 +507,30 @@ def _log_per_index_breakdown(summary: dict[str, Any]) -> None:
             reason_code = str(idx.get("reason_code") or "?")
             if contracts == 0:
                 logger.warning(
-                    "[stage_3_catchup wrapper] %s: 0 contracts — "
+                    "%s %s: 0 contracts — "
                     "Stage-2 produced nothing for this index "
                     "(reason=%s). Stage 4 will report no_activations "
                     "for it.",
-                    idx_key, reason_code,
+                    _STAGE_3_CATCHUP_WRAPPER_MARKER,
+                    idx_key,
+                    reason_code,
                 )
             else:
                 logger.info(
-                    "[stage_3_catchup wrapper] %s: %d/%d contract(s), "
+                    "%s %s: %d/%d contract(s), "
                     "activated=%d, reason=%s",
-                    idx_key, activated, contracts, activated,
+                    _STAGE_3_CATCHUP_WRAPPER_MARKER,
+                    idx_key,
+                    activated,
+                    contracts,
+                    activated,
                     reason_code,
                 )
         except Exception:
             logger.exception(
-                "[stage_3_catchup wrapper] failed parsing an index "
-                "entry: %r", idx,
+                "%s failed parsing an index entry: %r",
+                _STAGE_3_CATCHUP_WRAPPER_MARKER,
+                idx,
             )
 
 
@@ -394,16 +542,71 @@ def _build_success_message(
     *,
     elapsed_seconds: float,
     seconds_to_stage_4_after: int | None,
+    is_stale_day: bool = False,
 ) -> str:
     """Telegram message for the ``activated > 0`` case.
 
     Preserves the original message shape (Mode / Activated / Day /
     Window / Result) and adds three timing fields so the operator can
     confirm the catch-up finished with headroom before Stage 4.
+
+    When ``is_stale_day`` is True (the summary's ``day`` does not
+    match today), the message is escalated to WARNING and names both
+    dates so a manual run against a previous day's tree is not
+    mistaken for a fresh activation.
     """
     activated = _total_activated(summary)
     indexes_activated = _indexes_with_activations(summary)
     indexes_count = len(summary.get("indexes") or [])
+    summary_day = summary.get("day") or "?"
+    window_start = summary.get("window_start") or "?"
+    window_end = summary.get("window_end") or "?"
+
+    if is_stale_day:
+        return build(
+            emoji="⚠️",
+            title="Strategy 1 · Stage 3 Catch-up · Stale Day",
+            fields=[
+                ("Mode", "scheduled_catchup"),
+                ("Activated", activated),
+                ("Summary day", summary_day),
+                ("Today", _today_iso()),
+                ("Window", f"{window_start} – {window_end}"),
+                (
+                    "Indexes with activations",
+                    f"{indexes_activated} / {indexes_count}",
+                ),
+                ("Elapsed", f"{elapsed_seconds:.1f}s"),
+                (
+                    "Stage 4 in",
+                    f"{seconds_to_stage_4_after}s"
+                    if seconds_to_stage_4_after is not None else "?",
+                ),
+            ],
+            sections=[
+                (
+                    "Result",
+                    "📊",
+                    [
+                        f"{activated} contract(s) would be activated, "
+                        f"but the summary is from an earlier day "
+                        f"({summary_day}, today is {_today_iso()}).",
+                    ],
+                ),
+                (
+                    "Why",
+                    "🔍",
+                    [
+                        "This is a manual run against a previous day's "
+                        "tree, or a cron misfire.",
+                        "Check: GET /admin/strategy/tracker/status",
+                        "Fix:   POST /admin/strategy/tracker/start",
+                    ],
+                ),
+            ],
+            status="warning",
+            status_detail=f"stale day ({summary_day} != {_today_iso()})",
+        )
 
     return build(
         emoji="🎯",
@@ -411,12 +614,8 @@ def _build_success_message(
         fields=[
             ("Mode", "scheduled_catchup"),
             ("Activated", activated),
-            ("Day", summary.get("day")),
-            (
-                "Window",
-                f"{summary.get('window_start')} – "
-                f"{summary.get('window_end')}",
-            ),
+            ("Day", summary_day),
+            ("Window", f"{window_start} – {window_end}"),
             (
                 "Indexes with activations",
                 f"{indexes_activated} / {indexes_count}",
@@ -438,6 +637,67 @@ def _build_success_message(
         )],
         status="success",
         status_detail=f"activated={activated}",
+    )
+
+
+def _build_empty_tree_slow_message(
+    summary: dict[str, Any],
+    *,
+    elapsed_seconds: float,
+    seconds_to_stage_4_after: int | None,
+) -> str:
+    """Telegram message for the "empty tree + slow catch-up" case.
+
+    Combines the two signals (empty tree = Stage 4 will be empty;
+    slow catch-up = Stage 4 may already have started) so the operator
+    can act immediately. This is the catastrophic 2026-10-22 case.
+    """
+    return build(
+        emoji="⚠️",
+        title="Strategy 1 · Stage 3 Catch-up · Empty Tree + Slow",
+        fields=[
+            ("Mode", "scheduled_catchup"),
+            ("Status", summary.get("status") or "?"),
+            ("Contracts", 0),
+            ("Elapsed", f"{elapsed_seconds:.1f}s"),
+            (
+                "Stage 4 in",
+                f"{seconds_to_stage_4_after}s"
+                if seconds_to_stage_4_after is not None else "?",
+            ),
+        ],
+        sections=[
+            (
+                "What happened",
+                "🔍",
+                [
+                    "The stage-2 tree is empty (0 contracts).",
+                    f"The catch-up took {elapsed_seconds:.1f}s to "
+                    f"determine this — above the "
+                    f"{int(_STAGE_4_LATENCY_WARNING_SECONDS)}s latency "
+                    f"threshold.",
+                    "Stage 4 may have already fired before the "
+                    "catch-up finished writing its summary.",
+                ],
+            ),
+            (
+                "Why",
+                "🔍",
+                [
+                    "Either Stage 1/2 produced nothing today (a "
+                    "genuine quiet day or a broken upstream), or the "
+                    "tracker scanned a large stale directory.",
+                    "Check: GET /admin/strategy/isolation",
+                    "Check: GET /admin/strategy (Stage 1 reason)",
+                    "Fix:   POST /admin/strategy/tracker/start",
+                ],
+            ),
+        ],
+        status="warning",
+        status_detail=(
+            f"empty tree · {elapsed_seconds:.1f}s (> "
+            f"{int(_STAGE_4_LATENCY_WARNING_SECONDS)}s)"
+        ),
     )
 
 
@@ -488,8 +748,8 @@ def run_strategy_tracker_catchup() -> None:
     # ---- Pre-run log line --------------------------------------------- #
     seconds_before = _seconds_to_stage_4()
     logger.info(
-        "[stage_3_catchup wrapper] starting — mode=scheduled_catchup "
-        "stage_4_in=%ss",
+        "%s starting — mode=scheduled_catchup stage_4_in=%ss",
+        _STAGE_3_CATCHUP_WRAPPER_MARKER,
         str(seconds_before) if seconds_before is not None else "?",
     )
 
@@ -513,53 +773,85 @@ def run_strategy_tracker_catchup() -> None:
         # ---- Latency warning: catch-up may have raced Stage 4 ------ #
         if elapsed > _STAGE_4_LATENCY_WARNING_SECONDS:
             logger.warning(
-                "[stage_3_catchup wrapper] catch-up took %.1fs — above "
+                "%s catch-up took %.1fs — above "
                 "the %.0fs threshold. Stage 4 fires in %ss; it may "
                 "have started before the catch-up finished writing its "
                 "summary. The safety net itself was racing the cron.",
+                _STAGE_3_CATCHUP_WRAPPER_MARKER,
                 elapsed,
                 _STAGE_4_LATENCY_WARNING_SECONDS,
                 str(seconds_after) if seconds_after is not None else "?",
             )
 
-        # ---- Preserve the original Telegram noise gate ------------- #
-        # Send the success message only when the catch-up actually
-        # activated something. The post-Stage-2 hook
-        # (strategy_isolation_task.py) already handles the empty-tree
-        # and missing-level alerts for the day, so duplicating them
-        # here would just be noise. The log lines above are the
-        # operator's visibility into the quiet case.
         activated = _total_activated(summary)
         status = str(summary.get("status") or "unknown")
+        summary_day = str(summary.get("day") or "")
+        is_stale_day = bool(summary_day and summary_day != _today_iso())
+        is_empty_tree = _total_contracts(summary) == 0
 
+        # ---- Telegram dispatch ------------------------------------ #
+        # The wrapper is deliberately quiet. It sends a Telegram
+        # message in exactly three cases:
+        #   1. activated > 0      → SUCCESS (or WARNING if stale day)
+        #   2. empty tree + slow  → WARNING (combined signal)
+        #   3. any raise          → ERROR (handled in except block)
+        # Every other case stays log-only so the 30-second window
+        # remains noise-free. This is the same philosophy as the S2
+        # Stage-3 recheck.
         if status == "ok" and activated > 0:
+            # Stale-day escalation: a manual run against a previous
+            # day's tree should not produce a benign "✅ activated=3"
+            # message.
             telegram_service.send_message(
                 _build_success_message(
                     summary,
                     elapsed_seconds=elapsed,
                     seconds_to_stage_4_after=seconds_after,
+                    is_stale_day=is_stale_day,
                 ),
-                level="SUCCESS",
+                level="WARNING" if is_stale_day else "SUCCESS",
+            )
+        elif (
+            status == "ok"
+            and is_empty_tree
+            and elapsed > _STAGE_4_LATENCY_WARNING_SECONDS
+        ):
+            # Catastrophic case: the tree was empty AND the catch-up
+            # took too long to discover that. Combine the two
+            # signals into one message so the operator acts
+            # immediately.
+            telegram_service.send_message(
+                _build_empty_tree_slow_message(
+                    summary,
+                    elapsed_seconds=elapsed,
+                    seconds_to_stage_4_after=seconds_after,
+                ),
+                level="WARNING",
             )
 
         # ---- Post-run aggregate log line --------------------------- #
         logger.info(
-            "[stage_3_catchup wrapper] completed — status=%s "
-            "activated_total=%d elapsed=%.2fs stage_4_in=%ss",
+            "%s completed — status=%s "
+            "activated_total=%d elapsed=%.2fs stage_4_in=%ss "
+            "stale_day=%s empty_tree=%s",
+            _STAGE_3_CATCHUP_WRAPPER_MARKER,
             status,
             activated,
             elapsed,
             str(seconds_after) if seconds_after is not None else "?",
+            is_stale_day,
+            is_empty_tree,
         )
     except Exception as exc:
         elapsed = time.monotonic() - started_at
         seconds_after = _seconds_to_stage_4()
 
         logger.exception(
-            "[stage_3_catchup wrapper] catch-up RAISED — Stage 4 at "
+            "%s catch-up RAISED — Stage 4 at "
             "%02d:%02d will read whatever the tracker last wrote "
             "(possibly an empty stage_3_summary.json). elapsed=%.2fs "
             "stage_4_in=%ss",
+            _STAGE_3_CATCHUP_WRAPPER_MARKER,
             config.STRATEGY_ORDER_HOUR,
             config.STRATEGY_ORDER_MINUTE,
             elapsed,

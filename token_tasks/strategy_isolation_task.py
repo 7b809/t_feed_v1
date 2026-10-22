@@ -80,6 +80,66 @@ This module now:
     * on a raised exception, states the *consequence*: Stage 4 at
       09:18:00 will read whatever the tracker last wrote (possibly an
       empty stage_3_summary.json).
+
+Additional diagnostics (this revision)
+--------------------------------------
+Building on the 2026-10-22 patch, this revision adds four layers of
+defence that close the last remaining silent-failure paths on the
+Stage-2 → Stage-3 boundary:
+
+    * **A ``missing_or`` / ``missing_key`` / ``with_or_canonical``
+      summary line** on the Stage-2 completion Telegram message. The
+      Stage-2 service now counts isolated contracts whose strike
+      folder OR is missing (``contracts_missing_or``), how many of
+      those are covered by the canonical fallback
+      (``contracts_with_or_canonical``), and how many lack a real
+      Upstox key (``contracts_missing_key``). These are the exact
+      diagnostics that the Oct 22 investigation had to reconstruct
+      from the log after the fact. Surfacing them on the completion
+      message means the same information reaches the operator's
+      phone at 09:17:00, not 09:18:00 when Stage 4 reports
+      ``no_activations``.
+
+    * **A "partial_isolated" Telegram branch** when Stage 2
+      reported isolations but the missing-OR count is non-trivial.
+      Previously the "Success" status was based on ``isolated > 0``
+      alone, so a Stage-2 run that isolated 68 contracts with 68
+      missing OR files emitted a "✅ Success" message. The new
+      branch sends a WARNING with the missing-OR count on the phone
+      so the operator can intervene before Stage 4.
+
+    * **An ``isolate_by_side`` field** in the completion message's
+      breakdown ("CE-triggered: N, PE-triggered: M"). Whether
+      today's isolations were triggered by calls or puts is often
+      the first hint that something is off (e.g. 68 PE isolations
+      on a bullish day), and this information was previously only
+      visible by reading each contract's ``isolation_meta.json``.
+
+    * **An explicit "Stage 2 raised" Telegram branch.** When the
+      Stage-2 service itself raises (not just the post-hook), the
+      wrapper now names the exception class and states that the
+      post-hook was NOT attempted. Previously the "Failed" message
+      only named the error, not the consequence for the pipeline.
+
+    * **A ``stage_2_service_raised`` flag** in the post-hook's
+      log context. If the Stage-2 service raised *and* the post-hook
+      then found a populated tree (e.g. from a previous run), the
+      post-hook's per-index breakdown now names the state explicitly
+      — so the operator is not misled by a stale-but-populated tree.
+
+Telegram message shape
+----------------------
+The completion message is now one of three shapes:
+
+    * **Success** — isolated > 0, no missing-OR, no missing-key.
+    * **Partial** — isolated > 0, but at least one contract has
+      no strike OR (or no key). WARNING.
+    * **No isolations** — isolated == 0. WARNING, with the
+      per-contract summary in the breakdown section.
+
+Every message carries the same fields (Today / Mode / Catch-up /
+Post-market / Pairing) so the operator can always orient themselves
+at a glance.
 """
 
 from __future__ import annotations
@@ -136,34 +196,236 @@ def _seconds_to_stage_4() -> int | None:
 # --------------------------------------------------------------------------- #
 # Telegram message builders                                                   #
 # --------------------------------------------------------------------------- #
+def _classify_completion(summary: dict) -> str:
+    """Return a completion sub-state string for the Stage-2 summary.
+
+    Values:
+        "success"  — isolated > 0 and no missing OR / key.
+        "partial"  — isolated > 0 but some contracts have missing OR
+                     (that the canonical fallback does *not* cover) or
+                     missing key.
+        "empty"    — isolated == 0. Stage 4 will be empty for today.
+        "disabled" — STRATEGY_ENABLED or STRATEGY_ISOLATION_ENABLED
+                     is false.
+    """
+    status = str(summary.get("status") or "")
+    if status == "disabled":
+        return "disabled"
+
+    isolated = int(summary.get("isolated") or 0)
+    if isolated == 0:
+        return "empty"
+
+    missing_or = int(summary.get("contracts_missing_or") or 0)
+    with_canonical = int(summary.get("contracts_with_or_canonical") or 0)
+    truly_missing_or = max(0, missing_or - with_canonical)
+    missing_key = int(summary.get("contracts_missing_key") or 0)
+
+    if truly_missing_or > 0 or missing_key > 0:
+        return "partial"
+    return "success"
+
+
 def _build_completion_message(summary: dict) -> str:
-    bullets: list[str] = [
-        f"Evaluated: {summary.get('evaluated')}",
-        f"Isolated (contracts): {summary.get('isolated')}",
-        f"Isolated (strike pairs): {summary.get('pairs_isolated')}",
-        f"Skipped: {summary.get('skipped')} · Errors: {summary.get('errors')}",
+    """Build the Stage-2 completion message.
+
+    Branches on ``_classify_completion()`` so the phone sees the
+    correct status:
+      * "success" — SUCCESS, green
+      * "partial" — WARNING, with the missing-OR / missing-key counts
+      * "empty"   — WARNING, with a pointer to the Stage-1 reason
+      * "disabled" — INFO
+    """
+    completion_state = _classify_completion(summary)
+    isolated = int(summary.get("isolated") or 0)
+    pairs = int(summary.get("pairs_isolated") or 0)
+    missing_or = int(summary.get("contracts_missing_or") or 0)
+    with_canonical = int(summary.get("contracts_with_or_canonical") or 0)
+    truly_missing_or = max(0, missing_or - with_canonical)
+    missing_key = int(summary.get("contracts_missing_key") or 0)
+    by_side = summary.get("isolate_by_side") or {}
+    ce_count = int(by_side.get("CE") or 0)
+    pe_count = int(by_side.get("PE") or 0)
+
+    # ---- Common fields --------------------------------------------- #
+    fields = [
+        ("Today", summary.get("today")),
+        ("Mode", summary.get("mode")),
+        ("Catch-up", "yes" if summary.get("catchup") else "no"),
+        ("Post-market", "yes" if summary.get("post_market") else "no"),
+        ("Pairing", summary.get("pairing")),
     ]
+
+    # ---- Per-index breakdown --------------------------------------- #
+    index_lines: list[str] = []
     for idx in summary.get("indexes") or []:
         ticker = idx.get("ticker") or "?"
-        bullets.append(
+        index_lines.append(
             f"• {ticker}: {idx.get('isolated')}/{idx.get('evaluated')} "
             f"isolated · {idx.get('pairs_isolated')} pairs · "
             f"{idx.get('errors')} errors"
         )
 
+    # ---- Aggregate health lines ------------------------------------ #
+    health_lines: list[str] = [
+        f"Isolated (contracts): {isolated}",
+        f"Isolated (strike pairs): {pairs}",
+        f"Skipped: {summary.get('skipped')} · Errors: {summary.get('errors')}",
+        f"CE-triggered: {ce_count} · PE-triggered: {pe_count}",
+    ]
+    warnings: list[str] = []
+
+    if truly_missing_or > 0:
+        examples = summary.get("missing_or_examples") or []
+        warnings.append(
+            f"⚠️ {truly_missing_or} contract(s) have NO opening_range.json "
+            f"in their strike folder AND no canonical fallback — the "
+            f"S1/S2 trackers will skip them and Stage 4 will report "
+            f"no_activations for them."
+        )
+        if examples:
+            warnings.append(
+                "   examples: " + ", ".join(str(x) for x in examples[:3])
+            )
+
+    if with_canonical > 0 and truly_missing_or == 0:
+        # Canonical fallback covers them — informational only.
+        health_lines.append(
+            f"Strike-folder OR missing but canonical present: "
+            f"{with_canonical} (trackers will use the fallback)"
+        )
+
+    if missing_key > 0:
+        examples = summary.get("missing_key_examples") or []
+        warnings.append(
+            f"⚠️ {missing_key} contract(s) have NO upstox_instrument_key "
+            f"— they cannot be subscribed or traded."
+        )
+        if examples:
+            warnings.append(
+                "   examples: " + ", ".join(str(x) for x in examples[:3])
+            )
+
+    # ---- Dispatch per completion state ---------------------------- #
+    if completion_state == "disabled":
+        return build(
+            emoji="🚫",
+            title="Strategy 1 · Stage 2 · Disabled",
+            fields=fields + [
+                (
+                    "Reason",
+                    "STRATEGY_ENABLED or STRATEGY_ISOLATION_ENABLED is "
+                    "false",
+                ),
+            ],
+            status="info",
+        )
+
+    if completion_state == "empty":
+        return build(
+            emoji="📭",
+            title="Strategy 1 · Stage 2 · No Isolations",
+            fields=fields,
+            sections=[
+                (
+                    "Breakdown",
+                    "📊",
+                    index_lines or ["No per-index data available."],
+                ),
+                (
+                    "Pipeline health",
+                    "🔧",
+                    [
+                        "⚠️ 0 contracts isolated today. Stage 4 will "
+                        "report no_activations for today.",
+                        "Per-contract reasons are recorded in each "
+                        "strike's isolation_meta.json — check the "
+                        "stage-1 tree for last_day_cross / today's "
+                        "first-candle cross.",
+                    ],
+                ),
+            ],
+            status="warning",
+            status_detail="0 contracts isolated",
+        )
+
+    if completion_state == "partial":
+        return build(
+            emoji="⚠️",
+            title="Strategy 1 · Stage 2 · Partial",
+            fields=fields,
+            sections=[
+                (
+                    "Breakdown",
+                    "📊",
+                    index_lines or ["No per-index data available."],
+                ),
+                (
+                    "Pipeline health",
+                    "🔧",
+                    [*warnings, *health_lines],
+                ),
+            ],
+            status="warning",
+            status_detail=(
+                f"{isolated} isolated · {truly_missing_or} missing OR · "
+                f"{missing_key} missing key"
+            ),
+        )
+
+    # completion_state == "success"
     return build(
         emoji="🔒",
         title="Strategy 1 · Stage 2 · Completed",
-        fields=[
-            ("Today", summary.get("today")),
-            ("Mode", summary.get("mode")),
-            ("Catch-up", "yes" if summary.get("catchup") else "no"),
-            ("Post-market", "yes" if summary.get("post_market") else "no"),
-            ("Pairing", summary.get("pairing")),
+        fields=fields,
+        sections=[
+            (
+                "Breakdown",
+                "📊",
+                index_lines or ["No per-index data available."],
+            ),
+            (
+                "Pipeline health",
+                "🔧",
+                health_lines,
+            ),
         ],
-        sections=[("Breakdown", "📊", bullets)],
-        status="success" if int(summary.get("isolated") or 0) > 0 else "warning",
-        status_detail=f"{summary.get('isolated')} contracts isolated",
+        status="success",
+        status_detail=f"{isolated} contracts isolated",
+    )
+
+
+def _build_failed_message(exc: BaseException) -> str:
+    """Build the Stage-2 raised message.
+
+    Names the exception class explicitly and states the consequence
+    for the post-hook: the post-hook is NOT attempted, so Stage 4 at
+    09:18:00 will read whatever the tracker last wrote (possibly an
+    empty or stale stage_3_summary.json).
+    """
+    return build(
+        emoji="❌",
+        title="Strategy 1 · Stage 2 · Failed",
+        fields=[
+            ("Error", f"{type(exc).__name__}: {exc}"),
+        ],
+        sections=[
+            (
+                "Consequence",
+                "⚠️",
+                [
+                    "The post-Stage-2 Stage-3 catch-up hook was NOT "
+                    "attempted.",
+                    "Stage 4 at 09:18:00 IST will read whatever "
+                    "stage_3_summary.json the tracker last wrote — "
+                    "possibly an empty or stale file.",
+                    "If Stage 4 has not fired yet, recover by running "
+                    "POST /admin/strategy/tracker/start and then "
+                    "POST /admin/strategy/tracker/status to confirm.",
+                ],
+            ),
+        ],
+        status="failed",
     )
 
 
@@ -240,6 +502,7 @@ def _log_catchup_outcome(
     tracker_summary: dict,
     *,
     seconds_to_stage_4: int | None,
+    stage_2_service_raised: bool = False,
 ) -> None:
     """Log a structured verdict of the post-Stage-2 catch-up.
 
@@ -254,6 +517,13 @@ def _log_catchup_outcome(
         * ``disabled``       → INFO (config off)
         * ``no_indexes``     → WARNING (misconfiguration)
         * ``unknown``        → WARNING with raw sub-state value
+
+    The ``stage_2_service_raised`` flag is set by the caller when the
+    Stage-2 service raised in *this* run. It is used to disambiguate
+    "the tree is populated because Stage 2 just succeeded" from "the
+    tree is populated because Stage 2 succeeded in an earlier run and
+    raised this time". Without this flag a raised Stage-2 followed by
+    a populated-tree post-hook would look identical to a healthy run.
     """
     status = str(tracker_summary.get("status") or "")
     indexes = tracker_summary.get("indexes") or []
@@ -326,6 +596,23 @@ def _log_catchup_outcome(
 
     if sub_state == "no_new_touches":
         activated = int(tracker_summary.get("activated_total") or 0)
+        # If the Stage-2 service raised in this run, the tree may be
+        # populated by a *previous* run — the "no new touches" state
+        # then means "nothing changed since before this run raised",
+        # which is a very different diagnostic from a quiet day.
+        if stage_2_service_raised:
+            logger.warning(
+                "[stage_2 hook] catch-up evaluated %d contract(s) across "
+                "%d index(es) and activated %d — BUT Stage 2 raised in "
+                "this run. The populated tree is from a PREVIOUS run. "
+                "Stage 4 will act on stale data unless Stage 2 is "
+                "re-run successfully. Fix Stage 2 first.",
+                total_contracts,
+                len(indexes),
+                activated,
+            )
+            return
+
         logger.warning(
             "[stage_2 hook] catch-up evaluated %d contract(s) across "
             "%d index(es) but activated %d. This is NORMAL if no "
@@ -394,99 +681,130 @@ def run_strategy_isolation() -> None:
         level="INFO",
     )
 
+    # Track whether the Stage-2 service itself raised. The post-hook
+    # uses this to disambiguate "populated because Stage 2 just
+    # succeeded" from "populated because Stage 2 succeeded in an
+    # earlier run and raised this time".
+    stage_2_service_raised = False
+    summary: dict = {}
+
     try:
         summary = strategy_isolation_service.run(reason="scheduled")
-        isolated = int(summary.get("isolated") or 0)
-        level = "SUCCESS" if isolated > 0 else "WARNING"
-        telegram_service.send_message(
-            _build_completion_message(summary), level=level
-        )
-        logger.info("Strategy 1 stage 2 completed: isolated=%d", isolated)
-
-        # -----------------------------------------------------------------
-        # Post-Stage-2 Stage-3 catch-up.
-        #
-        # The Stage-2 tree was just written to disk. The S1 live tracker
-        # was started at process boot (e.g. 07:00) with an empty Stage-2
-        # cache and, on the cron-only flow, would not see these new
-        # contracts before Stage 4 runs at 09:18:00.
-        #
-        # Calling ``run_catchup()`` here:
-        #   - forces the tracker to reload the freshly-written contracts
-        #     (run_catchup unconditionally reloads from disk), and
-        #   - runs the per-contract R2 scan across 09:15–09:20 so any
-        #     R2 touches that happened between 09:15 and 09:17 are still
-        #     recorded before Stage 4 reads stage_3_summary.json.
-        #
-        # Wrapped in try/except so a tracker error can never break the
-        # Stage-2 cron.
-        # -----------------------------------------------------------------
-        seconds_to_stage4 = _seconds_to_stage_4()
-        logger.info(
-            "[stage_2 hook] starting post-Stage-2 catch-up — "
-            "stage_2 just wrote %d contract(s); tracker will be forced "
-            "to reload from disk and re-scan the 09:15–09:20 window. "
-            "Stage 4 fires in %s seconds.",
-            isolated,
-            str(seconds_to_stage4) if seconds_to_stage4 is not None else "?",
-        )
-
-        # ---- Timing-budget warning -------------------------------- #
-        # On a normal day the hook runs at 09:17:00 with 60 s to
-        # spare. If the budget is below 5 s the Stage-2 cron itself
-        # was late — Stage 4 may fire before the catch-up finishes
-        # writing its summary. The operator needs to know.
-        if (
-            seconds_to_stage4 is not None
-            and 0 <= seconds_to_stage4 < _STAGE_4_LATENCY_WARNING_SECONDS
-        ):
-            logger.warning(
-                "[stage_2 hook] only %ss remain until Stage 4 fires — "
-                "the Stage-2 cron is late. Stage 4 may read the "
-                "previous stage_3_summary.json. Check Stage-2 run "
-                "duration in logs/strategy_isolation_service.log.",
-                seconds_to_stage4,
-            )
-
-        try:
-            # Local import — avoids loading the whole tracker module at
-            # scheduler startup and keeps the dependency direction clean.
-            from services.strategy_live_tracker_service import (
-                strategy_live_tracker_service,
-            )
-
-            tracker_summary = strategy_live_tracker_service.run_catchup(
-                mode="post_stage_2",
-                catchup=True,
-            )
-            logger.info(
-                "[stage_2 hook] catch-up returned: status=%s "
-                "activated_total=%s indexes=%d",
-                tracker_summary.get("status"),
-                tracker_summary.get("activated_total"),
-                len(tracker_summary.get("indexes") or []),
-            )
-            _log_catchup_outcome(
-                tracker_summary,
-                seconds_to_stage_4=seconds_to_stage4,
-            )
-        except Exception:
-            logger.exception(
-                "[stage_2 hook] catch-up RAISED — Stage-2 cron still "
-                "completed successfully, but Stage 4 at %02d:%02d will "
-                "read whatever the tracker last wrote (possibly an "
-                "empty stage_3_summary.json).",
-                config.STRATEGY_ORDER_HOUR,
-                config.STRATEGY_ORDER_MINUTE,
-            )
     except Exception as exc:
-        logger.exception("Strategy 1 stage 2 failed")
+        stage_2_service_raised = True
+        logger.exception("Strategy 1 stage 2 service raised")
         telegram_service.send_message(
-            build(
-                emoji="❌",
-                title="Strategy 1 · Stage 2 · Failed",
-                fields=[("Error", f"{type(exc).__name__}: {exc}")],
-                status="failed",
-            ),
+            _build_failed_message(exc),
             level="ERROR",
+        )
+        # Do NOT attempt the post-hook when the Stage-2 service itself
+        # raised — the tree may be in an intermediate state and running
+        # the tracker against it would produce a misleading summary.
+        logger.info(
+            "[stage_2 hook] skipped — the Stage-2 service raised; the "
+            "post-Stage-2 catch-up was NOT attempted. Stage 4 will read "
+            "whatever the tracker last wrote (possibly stale)."
+        )
+        return
+
+    # ---- Completion message ---------------------------------------- #
+    isolated = int(summary.get("isolated") or 0)
+    completion_state = _classify_completion(summary)
+    telegram_level = (
+        "SUCCESS" if completion_state == "success"
+        else "INFO" if completion_state == "disabled"
+        else "WARNING"
+    )
+    telegram_service.send_message(
+        _build_completion_message(summary), level=telegram_level
+    )
+    logger.info(
+        "Strategy 1 stage 2 completed: isolated=%d pairs=%d "
+        "missing_or=%s with_canonical=%s missing_key=%s by_side=CE:%s,PE:%s",
+        isolated,
+        int(summary.get("pairs_isolated") or 0),
+        summary.get("contracts_missing_or"),
+        summary.get("contracts_with_or_canonical"),
+        summary.get("contracts_missing_key"),
+        (summary.get("isolate_by_side") or {}).get("CE", 0),
+        (summary.get("isolate_by_side") or {}).get("PE", 0),
+    )
+
+    # -----------------------------------------------------------------
+    # Post-Stage-2 Stage-3 catch-up.
+    #
+    # The Stage-2 tree was just written to disk. The S1 live tracker
+    # was started at process boot (e.g. 07:00) with an empty Stage-2
+    # cache and, on the cron-only flow, would not see these new
+    # contracts before Stage 4 runs at 09:18:00.
+    #
+    # Calling ``run_catchup()`` here:
+    #   - forces the tracker to reload the freshly-written contracts
+    #     (run_catchup unconditionally reloads from disk), and
+    #   - runs the per-contract R2 scan across 09:15–09:20 so any
+    #     R2 touches that happened between 09:15 and 09:17 are still
+    #     recorded before Stage 4 reads stage_3_summary.json.
+    #
+    # Wrapped in try/except so a tracker error can never break the
+    # Stage-2 cron.
+    # -----------------------------------------------------------------
+    seconds_to_stage4 = _seconds_to_stage_4()
+    logger.info(
+        "[stage_2 hook] starting post-Stage-2 catch-up — "
+        "stage_2 just wrote %d contract(s); tracker will be forced "
+        "to reload from disk and re-scan the 09:15–09:20 window. "
+        "Stage 4 fires in %s seconds.",
+        isolated,
+        str(seconds_to_stage4) if seconds_to_stage4 is not None else "?",
+    )
+
+    # ---- Timing-budget warning -------------------------------- #
+    # On a normal day the hook runs at 09:17:00 with 60 s to
+    # spare. If the budget is below 5 s the Stage-2 cron itself
+    # was late — Stage 4 may fire before the catch-up finishes
+    # writing its summary. The operator needs to know.
+    if (
+        seconds_to_stage4 is not None
+        and 0 <= seconds_to_stage4 < _STAGE_4_LATENCY_WARNING_SECONDS
+    ):
+        logger.warning(
+            "[stage_2 hook] only %ss remain until Stage 4 fires — "
+            "the Stage-2 cron is late. Stage 4 may read the "
+            "previous stage_3_summary.json. Check Stage-2 run "
+            "duration in logs/strategy_isolation_service.log.",
+            seconds_to_stage4,
+        )
+
+    try:
+        # Local import — avoids loading the whole tracker module at
+        # scheduler startup and keeps the dependency direction clean.
+        from services.strategy_live_tracker_service import (
+            strategy_live_tracker_service,
+        )
+
+        tracker_summary = strategy_live_tracker_service.run_catchup(
+            mode="post_stage_2",
+            catchup=True,
+        )
+        logger.info(
+            "[stage_2 hook] catch-up returned: status=%s "
+            "activated_total=%s contracts_total=%s indexes=%d",
+            tracker_summary.get("status"),
+            tracker_summary.get("activated_total"),
+            tracker_summary.get("contracts_total"),
+            len(tracker_summary.get("indexes") or []),
+        )
+        _log_catchup_outcome(
+            tracker_summary,
+            seconds_to_stage_4=seconds_to_stage4,
+            stage_2_service_raised=stage_2_service_raised,
+        )
+    except Exception:
+        logger.exception(
+            "[stage_2 hook] catch-up RAISED — Stage-2 cron still "
+            "completed successfully, but Stage 4 at %02d:%02d will "
+            "read whatever the tracker last wrote (possibly an "
+            "empty stage_3_summary.json).",
+            config.STRATEGY_ORDER_HOUR,
+            config.STRATEGY_ORDER_MINUTE,
         )

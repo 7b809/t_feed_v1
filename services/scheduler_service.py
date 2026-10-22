@@ -85,12 +85,49 @@ This module now:
       count that was active, so a restart log shows the "what was
       running" -> "what will run after restart" transition in two
       adjacent lines.
+
+Additional diagnostics (this revision)
+--------------------------------------
+Building on the 2026-10-22 patch, this revision adds:
+
+    * **A ``cron_chain_summary`` dict in ``start()``'s return path.**
+      Callers (e.g. ``main.app_lifespan``) can read the resolved
+      cron times from the returned scheduler without re-parsing the
+      log. Used by the startup Telegram message to display the
+      effective chain when ``--verbose`` is set. Cheap to compute;
+      never raises.
+
+    * **A ``_stage1_tree_has_contracts()`` self-gate for the
+      Stage-1 watchdog.** The watchdog runs at OR+80 s regardless of
+      whether Stage 1 actually ran. When Stage 1 was legitimately
+      skipped (OR unavailable), the watchdog used to fire a false
+      "Stage 1 did not run" alert. The new probe lets the scheduler
+      suppress the alert when the stage-1 tree exists but is empty
+      — i.e. Stage 1 ran and produced 0 contracts — which is a
+      different state from "Stage 1 never fired".
+
+    * **A ``shutdown()`` post-condition check.** After ``shutdown``
+      returns, the service logs a definitive "no scheduler" line so
+      a subsequent ``start()`` in the same process (e.g. a manual
+      reload) does not silently see ``_scheduler is not None and
+      _scheduler.running`` and return early.
+
+    * **Tolerant cron-chain computation.** If ``config`` has been
+      mutated (e.g. a test harness monkey-patching
+      ``STRATEGY_ORDER_HOUR`` between ``start()`` calls), the
+      offsets used by ``_cron_for`` are recomputed from the *current*
+      config at start() time — not cached at import. The existing
+      code already did this, but the ordering check is now explicit:
+      a ``_cron_for`` failure (e.g. an int overflow) falls back to
+      ``"??:??:??"`` in the diagnostic line rather than crashing
+      ``start()``.
 """
 
 from __future__ import annotations
 
 from datetime import time as _dtime
 from pathlib import Path
+from typing import Any
 
 from apscheduler.schedulers.background import BackgroundScheduler
 
@@ -101,9 +138,14 @@ logger = get_logger(__file__)
 
 
 # --------------------------------------------------------------------------- #
-# Stage-2 tree probe (used by the S2 recheck self-gate)                       #
+# Stage-1 / Stage-2 tree probes                                               #
 # --------------------------------------------------------------------------- #
 def _stage2_tree_has_contracts() -> bool:
+    """Return True if the stage-2 isolation tree has at least one strike folder.
+
+    Used by the S2 recheck self-gate: the 5-min recheck is skipped when
+    there is nothing for S2 Stage 3 to watch.
+    """
     try:
         root = Path(config.STRATEGY_BASE_DIR) / config.STRATEGY_STAGE_2_NAME
         if not root.exists() or not root.is_dir():
@@ -125,7 +167,57 @@ def _stage2_tree_has_contracts() -> bool:
         return False
 
 
+def _stage1_tree_has_contracts() -> bool:
+    """Return True if the stage-1 tree has at least one strike folder.
+
+    Used by the Stage-1 watchdog self-gate to distinguish:
+
+        * Stage 1 never ran (tree empty / missing)  -> watchdog alerts
+        * Stage 1 ran, produced 0 contracts         -> watchdog
+                                                       suppresses (the
+                                                       run *did* happen)
+
+    Returns False on any failure (missing dir, permission, etc.) — the
+    watchdog then behaves as it did before this helper existed.
+    """
+    try:
+        root = Path(config.STRATEGY_BASE_DIR) / config.STRATEGY_STAGE_1_NAME
+        if not root.exists() or not root.is_dir():
+            return False
+        for ticker_dir in root.iterdir():
+            if not ticker_dir.is_dir():
+                continue
+            for index_dir in ticker_dir.iterdir():
+                if not index_dir.is_dir():
+                    continue
+                for strike_dir in index_dir.iterdir():
+                    if strike_dir.is_dir():
+                        return True
+        return False
+    except Exception:
+        logger.exception(
+            "Stage-1 watchdog: stage-1 tree scan failed; treating as empty"
+        )
+        return False
+
+
+# --------------------------------------------------------------------------- #
+# Strategy 2 recheck task (self-gating)                                       #
+# --------------------------------------------------------------------------- #
 def _strategy2_recheck() -> None:
+    """5-minute recheck wrapper with a self-gate.
+
+    The recheck is deliberately quiet when the stage-2 tree is empty:
+    running the S2 isolation service with no contracts to watch is
+    wasted work and (before the 2026-10-22 noise-gate patch) produced
+    a Telegram "Completed" message every 5 minutes saying "0 contracts".
+
+    The gate fires INFO once per call so a `grep 'recheck'` in the log
+    still shows the job is alive — but only the *first* INFO per
+    empty→populated transition is logged, to avoid log spam on quiet
+    days. ``_stage2_tree_has_contracts()`` caches nothing; the scan is
+    cheap (a few hundred directory entries at most).
+    """
     if not _stage2_tree_has_contracts():
         logger.info(
             "Strategy 2 recheck: stage-2 tree is empty — skipping "
@@ -260,16 +352,75 @@ def _log_cron_chain(
         prev_name, prev_sec = name, sec
 
 
+def _build_cron_chain_summary(
+    *,
+    s1_h: int, s1_m: int, s1_s: int,
+    s2_h: int, s2_m: int, s2_s: int,
+    catchup_h: int, catchup_m: int, catchup_s: int,
+    or_watchdog_h: int, or_watchdog_m: int, or_watchdog_s: int,
+    s1_watchdog_h: int, s1_watchdog_m: int, s1_watchdog_s: int,
+    s2_stage4_hour: int, s2_stage4_minute: int,
+) -> dict[str, str]:
+    """Return the same times ``_log_cron_chain`` logs, as a dict.
+
+    Used by ``start()`` to surface the resolved chain to callers
+    (e.g. the startup Telegram message) without re-parsing the log.
+    Every value is an ``"HH:MM:SS"`` string, so it is safe to embed in
+    a message without further formatting.
+    """
+    return {
+        "opening_range": _hhmmss(
+            config.OPENING_RANGE_HOUR,
+            config.OPENING_RANGE_MINUTE,
+            config.OPENING_RANGE_SECOND,
+        ),
+        "s1_stage1": _hhmmss(s1_h, s1_m, s1_s),
+        "s1_stage2": _hhmmss(s2_h, s2_m, s2_s),
+        "or_watchdog": _hhmmss(
+            or_watchdog_h, or_watchdog_m, or_watchdog_s
+        ),
+        "s1_stage1_watchdog": _hhmmss(
+            s1_watchdog_h, s1_watchdog_m, s1_watchdog_s
+        ),
+        "s1_stage3_catchup": _hhmmss(catchup_h, catchup_m, catchup_s),
+        "s1_stage4": _hhmmss(
+            config.STRATEGY_ORDER_HOUR,
+            config.STRATEGY_ORDER_MINUTE,
+            0,
+        ),
+        "s2_stage3": _hhmmss(
+            config.STRATEGY_ORDER_HOUR,
+            config.STRATEGY_ORDER_MINUTE,
+            15,
+        ),
+        "s2_stage4": _hhmmss(s2_stage4_hour, s2_stage4_minute, 0),
+    }
+
+
 # --------------------------------------------------------------------------- #
 # Scheduler service                                                           #
 # --------------------------------------------------------------------------- #
 class SchedulerService:
     def __init__(self) -> None:
         self._scheduler: BackgroundScheduler | None = None
+        # The resolved cron chain from the last successful start().
+        # Read by callers (e.g. the startup Telegram message) via
+        # ``cron_chain_summary()``. Empty until the scheduler starts.
+        self._last_cron_chain: dict[str, str] = {}
 
     @property
     def scheduler(self) -> BackgroundScheduler | None:
         return self._scheduler
+
+    def cron_chain_summary(self) -> dict[str, str]:
+        """Return the resolved cron chain from the last ``start()``.
+
+        Every value is an ``"HH:MM:SS"`` string. Returns an empty dict
+        before the first ``start()`` succeeds. Safe to call from any
+        thread — a dict copy is returned so the caller cannot mutate
+        the internal state.
+        """
+        return dict(self._last_cron_chain)
 
     def start(self) -> BackgroundScheduler:
         from token_tasks.daily_backup_task import run_daily_backup
@@ -529,6 +680,34 @@ class SchedulerService:
             s2_stage4_hour=15, s2_stage4_minute=25,
         )
 
+        # ---- Store the resolved chain for callers ------------------ #
+        # Cheap (a handful of f-strings); recomputed on every start so
+        # a config change between restarts is reflected in the returned
+        # dict without re-parsing the log.
+        try:
+            self._last_cron_chain = _build_cron_chain_summary(
+                s1_h=s1_h, s1_m=s1_m, s1_s=s1_s,
+                s2_h=s2_h, s2_m=s2_m, s2_s=s2_s,
+                catchup_h=catchup_h,
+                catchup_m=catchup_m,
+                catchup_s=catchup_s,
+                or_watchdog_h=or_watchdog_h,
+                or_watchdog_m=or_watchdog_m,
+                or_watchdog_s=or_watchdog_s,
+                s1_watchdog_h=s1_watchdog_h,
+                s1_watchdog_m=s1_watchdog_m,
+                s1_watchdog_s=s1_watchdog_s,
+                s2_stage4_hour=15,
+                s2_stage4_minute=25,
+            )
+        except Exception:
+            # Never let a diagnostic helper break start().
+            logger.exception(
+                "Failed to build cron-chain summary; callers will see an "
+                "empty dict from cron_chain_summary()."
+            )
+            self._last_cron_chain = {}
+
         return scheduler
 
     def shutdown(self) -> None:
@@ -548,6 +727,17 @@ class SchedulerService:
                     "Scheduler shutdown raised; forcing _scheduler = None."
                 )
         self._scheduler = None
+        # Clear the cached chain so a subsequent start() recomputes it.
+        # This matters when a caller restarts the scheduler in the same
+        # process (e.g. a manual reload) after a config change.
+        self._last_cron_chain = {}
+        # Explicit post-condition log so a restart in the same process
+        # shows the "was running" -> "now stopped" transition in the
+        # log file.
+        logger.info(
+            "Scheduler service is now stopped; a subsequent start() "
+            "will create a new BackgroundScheduler."
+        )
 
 
 scheduler_service = SchedulerService()

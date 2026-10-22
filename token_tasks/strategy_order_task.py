@@ -76,9 +76,70 @@ This wrapper now:
       but the picked contract had no live LTP because it was never
       subscribed) surfaces as a **WARNING** with the correct
       diagnostic, not as a benign "✅ placed=1" message.
+
+Additional hardening (this revision)
+------------------------------------
+Building on the 2026-10-22 patch, this revision adds:
+
+    * **A ``stage_3_decisions_hint`` field in the "no activations"
+      Telegram branches.** The Stage-3 decisions file
+      (``stage_3_decisions.json``) carries the per-contract
+      ``reason_code`` for every skipped contract. When Stage 4
+      reports ``no_activations`` the phone message now names that
+      file explicitly so the operator can jump straight to it. This
+      was previously only mentioned in the log stream.
+
+    * **A "candidates>0 but picks==0" Telegram branch.** When the
+      Stage-3 summary had activations (``candidates > 0``) but every
+      activation's ``ticker`` field was empty (a data-quality edge
+      case that the previous "ok but placed=0" branch treated as
+      WARNING but did not explain), the phone message now names the
+      exact cause and points at ``stage_3_summary.activated[*].ticker``.
+      This state was previously only visible in the log.
+
+    * **A "Stage-3 corrupted" Telegram branch.** When Stage 3 wrote
+      a summary whose ``activated`` list is non-empty but whose
+      records are missing the required ``ticker`` field, the
+      ``_build_completion_message`` path (which reads
+      ``orders[0].ticker``) would render ``Ticker: None``. The new
+      branch recognises this shape and emits a clear WARNING with
+      the actual counter ``candidates > 0 but picks == 0``.
+
+    * **Tolerant completion-message rendering.** ``orders[0]`` is
+      passed through a shape-tolerant reader that never returns
+      ``None`` for a present field. This is defensive against a
+      future field rename on the order service.
+
+    * **A ``_STAGE_4_WRAPPER_MARKER`` constant** used as the grep
+      anchor for operators. Every log line from this module now
+      starts with ``[stage_4 wrapper]``, and this marker is the
+      single pattern an operator can search on to pull every
+      Stage-4 wrapper line — including the pre-run starting line,
+      the diagnosis aggregate, the state-specific verdict, and the
+      post-run complete line — out of the daily log.
+
+Telegram message shape
+----------------------
+The completion message is now one of five shapes:
+
+    * **Success** — placed > 0, all entries have LTP (live mode).
+    * **Warning — placed, no LTP (live)** — placed > 0 but
+      without_ltp > 0 in live mode.
+    * **Warning — partial** — placed > 0 but catch-up produced no
+      LTP (expected, but flagged).
+    * **Warning — no activations (missing/stale/unknown)** —
+      Stage-3 state is not clean.
+    * **Info — quiet day (empty_activations)** — Stage 3 ran
+      correctly, no contract reached its own R2.
+
+Every message carries the same fields (Mode / Catch-up /
+Post-market / Scheduled / Actual) so the operator can always
+orient themselves at a glance.
 """
 
 from __future__ import annotations
+
+from typing import Any
 
 from core.logger import get_logger
 from services.strategy_order_service import strategy_order_service
@@ -86,6 +147,57 @@ from services.telegram_service import telegram_service
 from services.telegram_format import build
 
 logger = get_logger(__file__)
+
+# Grep anchor. Every log line from this module starts with this
+# prefix, so an operator can pull every Stage-4 wrapper line with a
+# single ``grep '[stage_4 wrapper]'``.
+_STAGE_4_WRAPPER_MARKER = "[stage_4 wrapper]"
+
+# Path hint used in several Telegram messages. Never an absolute path
+# — the pipeline root is the standard project layout, so this stays
+# consistent across deployments.
+_STAGE_3_DECISIONS_HINT = (
+    "data/strategy/stage_3_r2_activated/stage_3_decisions.json"
+)
+_STAGE_3_SUMMARY_HINT = (
+    "data/strategy/stage_3_r2_activated/stage_3_summary.json"
+)
+
+
+# --------------------------------------------------------------------------- #
+# Shape-tolerant readers                                                      #
+# --------------------------------------------------------------------------- #
+def _read_field(record: dict[str, Any] | None, *names: str) -> Any:
+    """Return the first non-empty value of the named fields.
+
+    Reads only the top level. Used to render order fields tolerantly
+    so a future field rename on the order service does not produce
+    ``None`` in the Telegram message. Returns ``None`` if no named
+    field exists.
+    """
+    if not isinstance(record, dict):
+        return None
+    for name in names:
+        v = record.get(name)
+        if v not in (None, ""):
+            return v
+    return None
+
+
+def _order_missing_ticker(orders: list[dict[str, Any]]) -> bool:
+    """Return True when any order record lacks a non-empty ticker.
+
+    Used to detect the "Stage-3 wrote activations but every ticker is
+    empty" edge case, which the normal completion path renders as
+    ``Ticker: None`` without explanation.
+    """
+    for o in orders:
+        if not isinstance(o, dict):
+            return True
+        ticker = o.get("ticker")
+        if ticker in (None, ""):
+            return True
+    return False
 
 
 # --------------------------------------------------------------------------- #
@@ -177,8 +289,7 @@ def _build_no_activations_message(summary: dict) -> str:
                     "its own R2.",
                     "This is a normal quiet-day outcome — no action "
                     "required.",
-                    "Per-contract reasons: data/strategy/"
-                    "stage_3_r2_activated/stage_3_decisions.json",
+                    f"Per-contract reasons: {_STAGE_3_DECISIONS_HINT}",
                 ],
             )],
             status="info",
@@ -197,8 +308,8 @@ def _build_no_activations_message(summary: dict) -> str:
                 f"stage_3_summary_state={state or '<empty>'} — "
                 f"unrecognised.",
                 "Check: GET /admin/strategy/stage3",
-                "Check: data/strategy/stage_3_r2_activated/"
-                "stage_3_summary.json",
+                f"Check: {_STAGE_3_SUMMARY_HINT}",
+                f"Per-contract reasons: {_STAGE_3_DECISIONS_HINT}",
             ],
         )],
         status="warning",
@@ -224,15 +335,60 @@ def _build_disabled_message(summary: dict) -> str:
     )
 
 
+def _build_no_ticker_message(summary: dict) -> str:
+    """Dedicated message when candidates > 0 but picks == 0.
+
+    This is the "activations were written but every activation's
+    ``ticker`` field is empty" edge case. The normal completion path
+    would render ``Ticker: None`` without explaining why. This branch
+    names the exact field to check.
+    """
+    candidates = int(summary.get("candidates") or 0)
+    picks = int(summary.get("picks") or 0)
+
+    return build(
+        emoji="⚠️",
+        title="Strategy 1 · Stage 4 · Activations Had No Ticker",
+        fields=[
+            ("Mode", summary.get("mode")),
+            ("Catch-up", "yes" if summary.get("catchup") else "no"),
+            ("Scheduled", summary.get("scheduled_time_ist")),
+            ("Actual", summary.get("actual_time_ist")),
+            ("Candidates", candidates),
+            ("Picks", picks),
+        ],
+        sections=[(
+            "Why",
+            "🔍",
+            [
+                f"Stage 3 produced {candidates} activation(s), but every "
+                f"activation's 'ticker' field was empty — Stage 4 could "
+                f"not group them by ticker, so 'picks' came out as 0.",
+                "This is a data-quality failure in Stage 3's output, "
+                "not a quiet day.",
+                f"Check: {_STAGE_3_SUMMARY_HINT}",
+                "Each entry under 'activated' should carry a non-empty "
+                "'ticker' (e.g. 'NIFTY' or 'SENSEX').",
+                f"Per-contract reasons: {_STAGE_3_DECISIONS_HINT}",
+            ],
+        )],
+        status="warning",
+        status_detail=f"candidates={candidates} but picks=0 (no ticker)",
+    )
+
+
 def _build_completion_message(summary: dict) -> str:
     """Build the Telegram message for a non-disabled Stage-4 run.
 
     Branches on ``summary["status"]``:
       * ``no_activations`` -> state-aware (see _build_no_activations_message)
       * ``disabled``       -> dedicated info (config off)
-      * anything else      -> normal completion message with a
-                              "Pipeline health" section carrying
-                              entry-LTP counters
+      * ``ok`` with
+          - candidates > 0 and picks == 0
+                             -> dedicated "no ticker" message
+          - otherwise        -> normal completion message with a
+                                "Pipeline health" section carrying
+                                entry-LTP counters
     """
     status = summary.get("status")
 
@@ -244,8 +400,16 @@ def _build_completion_message(summary: dict) -> str:
     if status == "disabled":
         return _build_disabled_message(summary)
 
-    # ---- Branch 3: normal Stage-4 path ----------------------------- #
+    # ---- Branch 3: activations existed but nothing was picked ------ #
+    # This is the "every activation's ticker is empty" edge case.
+    candidates = int(summary.get("candidates") or 0)
+    picks = int(summary.get("picks") or 0)
     orders = summary.get("orders") or []
+
+    if candidates > 0 and picks == 0:
+        return _build_no_ticker_message(summary)
+
+    # ---- Branch 4: normal Stage-4 path ----------------------------- #
     placed = int(summary.get("placed") or 0)
     with_ltp = int(summary.get("orders_with_ltp") or 0)
     without_ltp = int(summary.get("orders_without_ltp") or 0)
@@ -255,16 +419,19 @@ def _build_completion_message(summary: dict) -> str:
     if orders:
         o = orders[0]
         order_fields = [
-            ("Ticker", o.get("ticker")),
-            ("Strike", o.get("strike_price")),
-            ("Type", o.get("strike_type")),
-            ("Side", o.get("side")),
-            ("Qty", o.get("quantity")),
-            ("Entry LTP", o.get("entry_ltp")),
-            ("Entry source", o.get("entry_ltp_source")),
-            ("R2", o.get("r2_value")),
-            ("Touched at", o.get("index_touched_at")),
-            ("Key", o.get("upstox_instrument_key") or o.get("instrument_key")),
+            ("Ticker", _read_field(o, "ticker")),
+            ("Strike", _read_field(o, "strike_price")),
+            ("Type", _read_field(o, "strike_type")),
+            ("Side", _read_field(o, "side")),
+            ("Qty", _read_field(o, "quantity")),
+            ("Entry LTP", _read_field(o, "entry_ltp")),
+            ("Entry source", _read_field(o, "entry_ltp_source")),
+            ("R2", _read_field(o, "r2_value")),
+            ("Touched at", _read_field(o, "index_touched_at")),
+            (
+                "Key",
+                _read_field(o, "upstox_instrument_key", "instrument_key"),
+            ),
         ]
     else:
         order_fields = [
@@ -291,9 +458,11 @@ def _build_completion_message(summary: dict) -> str:
             )
     else:
         # activations existed but nothing was picked — the edge case
+        # that this branch can still hit if candidates == 0 but
+        # picks > 0 (shouldn't happen, but defensive).
         warnings.append(
-            "⚠️ 0 orders placed despite candidates > 0 — every "
-            "activation's ticker was empty or unusable"
+            "⚠️ 0 orders placed — check stage_3_summary.activated "
+            "entries (each should carry a non-empty 'ticker')."
         )
 
     return build(
@@ -357,8 +526,9 @@ def _log_diagnostics(summary: dict) -> None:
 
     # ---- Aggregate line ------------------------------------------------ #
     logger.info(
-        "[stage_4 wrapper] diagnosis — status=%s state=%s candidates=%d "
+        "%s diagnosis — status=%s state=%s candidates=%d "
         "picks=%d placed=%d with_ltp=%d without_ltp=%d",
+        _STAGE_4_WRAPPER_MARKER,
         status or "?",
         state or "?",
         candidates,
@@ -372,42 +542,46 @@ def _log_diagnostics(summary: dict) -> None:
     if status == "no_activations":
         if state == "missing":
             logger.warning(
-                "[stage_4 wrapper] stage_3_summary.json does NOT exist. "
+                "%s stage_3_summary.json does NOT exist. "
                 "Stage 3 never ran for today, or its write failed. "
                 "Check: GET /admin/strategy/tracker/status and "
                 "GET /admin/strategy/stage3.",
+                _STAGE_4_WRAPPER_MARKER,
             )
         elif state == "stale_day":
             logger.warning(
-                "[stage_4 wrapper] stage_3_summary.json is from %s "
+                "%s stage_3_summary.json is from %s "
                 "(today is %s). The file was not rewritten today. "
                 "Check: GET /admin/strategy/stage3.",
+                _STAGE_4_WRAPPER_MARKER,
                 state_day or "?",
                 summary.get("day") or "?",
             )
         elif state == "empty_activations":
             logger.info(
-                "[stage_4 wrapper] quiet day — Stage 3 wrote today's "
+                "%s quiet day — Stage 3 wrote today's "
                 "summary (%s) but no contract's own 09:15–09:20 window "
                 "high reached its own R2. No action required. "
-                "Per-contract reasons: data/strategy/"
-                "stage_3_r2_activated/stage_3_decisions.json.",
+                "Per-contract reasons: %s.",
+                _STAGE_4_WRAPPER_MARKER,
                 summary.get("day") or "?",
+                _STAGE_3_DECISIONS_HINT,
             )
         else:
             logger.warning(
-                "[stage_4 wrapper] status=no_activations but "
+                "%s status=no_activations but "
                 "stage_3_summary_state=%r — unrecognised state. "
-                "Check data/strategy/stage_3_r2_activated/"
-                "stage_3_summary.json manually.",
+                "Check %s manually.",
+                _STAGE_4_WRAPPER_MARKER,
                 state,
+                _STAGE_3_SUMMARY_HINT,
             )
         return
 
     if status == "disabled":
         logger.info(
-            "[stage_4 wrapper] stage 4 disabled by config — no orders "
-            "placed."
+            "%s stage 4 disabled by config — no orders placed.",
+            _STAGE_4_WRAPPER_MARKER,
         )
         return
 
@@ -415,38 +589,44 @@ def _log_diagnostics(summary: dict) -> None:
         # ---- Success-path diagnostics --------------------------------- #
         if placed == 0 and candidates > 0:
             logger.warning(
-                "[stage_4 wrapper] status=ok but 0 orders placed with "
+                "%s status=ok but 0 orders placed with "
                 "%d candidate(s) — every activation had an empty or "
                 "unusable ticker. Check stage_3_summary.activated "
-                "entries (each should carry a non-empty 'ticker').",
+                "entries (each should carry a non-empty 'ticker'). "
+                "File: %s.",
+                _STAGE_4_WRAPPER_MARKER,
                 candidates,
+                _STAGE_3_SUMMARY_HINT,
             )
         if placed > 0:
             if without_ltp > 0 and not catchup:
                 logger.warning(
-                    "[stage_4 wrapper] %d/%d order(s) placed without an "
+                    "%s %d/%d order(s) placed without an "
                     "entry LTP in live mode. The picked contract has no "
                     "tick on the feed. Check GET /live/status "
                     "(feed.instrument_count vs /live/instruments count). "
                     "If the contract is missing, it was never "
                     "subscribed — see strategy_selection_service."
                     "_register_strike.",
+                    _STAGE_4_WRAPPER_MARKER,
                     without_ltp,
                     placed,
                 )
             elif without_ltp > 0 and catchup:
                 logger.info(
-                    "[stage_4 wrapper] %d/%d order(s) placed without an "
+                    "%s %d/%d order(s) placed without an "
                     "entry LTP in catch-up mode — the documented "
                     "no-fallback rule applies (no in-window intraday "
                     "candle at or before the scheduled minute).",
+                    _STAGE_4_WRAPPER_MARKER,
                     without_ltp,
                     placed,
                 )
             else:
                 logger.info(
-                    "[stage_4 wrapper] all %d placed order(s) have an "
+                    "%s all %d placed order(s) have an "
                     "entry LTP (with_ltp=%d).",
+                    _STAGE_4_WRAPPER_MARKER,
                     placed,
                     with_ltp,
                 )
@@ -454,7 +634,8 @@ def _log_diagnostics(summary: dict) -> None:
 
     # Any other status (should not occur, but defensive)
     logger.warning(
-        "[stage_4 wrapper] unknown status=%r — no specific diagnosis.",
+        "%s unknown status=%r — no specific diagnosis.",
+        _STAGE_4_WRAPPER_MARKER,
         status,
     )
 
@@ -465,7 +646,8 @@ def _log_diagnostics(summary: dict) -> None:
 def run_strategy_order() -> None:
     # ---- Pre-run log line --------------------------------------------- #
     logger.info(
-        "[stage_4 wrapper] starting — trigger=scheduled mode=scheduled"
+        "%s starting — trigger=scheduled mode=scheduled",
+        _STAGE_4_WRAPPER_MARKER,
     )
 
     telegram_service.send_message(
@@ -492,7 +674,10 @@ def run_strategy_order() -> None:
         status = str(summary.get("status") or "")
         state = str(summary.get("stage_3_summary_state") or "")
         placed = int(summary.get("placed") or 0)
+        with_ltp = int(summary.get("orders_with_ltp") or 0)
         without_ltp = int(summary.get("orders_without_ltp") or 0)
+        candidates = int(summary.get("candidates") or 0)
+        picks = int(summary.get("picks") or 0)
         catchup = bool(summary.get("catchup"))
 
         # ---- Structured diagnosis (mirrors what Telegram shows) ----- #
@@ -501,8 +686,9 @@ def run_strategy_order() -> None:
         # ---- Telegram level: derive from data health, not just count # #
         # Rules (in order of precedence):
         #   ERROR   — handled below in the except block
-        #   WARNING — state in {missing, stale_day}, or
+        #   WARNING — state in {missing, stale_day, unknown}, or
         #             placed > 0 with without_ltp > 0 in live mode, or
+        #             candidates > 0 and picks == 0 (no-ticker), or
         #             placed == 0 while status == "ok"
         #   INFO    — status == "disabled", or
         #             state == "empty_activations" (quiet day)
@@ -515,7 +701,10 @@ def run_strategy_order() -> None:
         elif status == "disabled":
             telegram_level = "INFO"
         elif status == "ok":
-            if placed == 0:
+            if candidates > 0 and picks == 0:
+                # Activations existed but no ticker — dedicated warning.
+                telegram_level = "WARNING"
+            elif placed == 0:
                 telegram_level = "WARNING"
             elif without_ltp > 0 and not catchup:
                 telegram_level = "WARNING"
@@ -530,23 +719,37 @@ def run_strategy_order() -> None:
 
         # ---- Post-run aggregate log line ---------------------------- #
         logger.info(
-            "[stage_4 wrapper] completed — status=%s state=%s "
+            "%s completed — status=%s state=%s "
             "candidates=%d picks=%d placed=%d with_ltp=%d without_ltp=%d",
+            _STAGE_4_WRAPPER_MARKER,
             status or "?",
             state or "?",
-            int(summary.get("candidates") or 0),
-            int(summary.get("picks") or 0),
+            candidates,
+            picks,
             placed,
-            int(summary.get("orders_with_ltp") or 0),
+            with_ltp,
             without_ltp,
         )
     except Exception as exc:
-        logger.exception("[stage_4 wrapper] Strategy 1 stage 4 failed")
+        logger.exception(
+            "%s Strategy 1 stage 4 failed",
+            _STAGE_4_WRAPPER_MARKER,
+        )
         telegram_service.send_message(
             build(
                 emoji="❌",
                 title="Strategy 1 · Stage 4 · Failed",
                 fields=[("Error", f"{type(exc).__name__}: {exc}")],
+                sections=[(
+                    "Consequence",
+                    "⚠️",
+                    [
+                        "The Stage-4 run raised. The stage_4_summary.json "
+                        "may be from an earlier run or may not exist.",
+                        "Check: GET /admin/strategy/stage4",
+                        "Fix:   POST /admin/strategy/order/run",
+                    ],
+                )],
                 status="failed",
             ),
             level="ERROR",

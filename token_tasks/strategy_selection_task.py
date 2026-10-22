@@ -58,6 +58,46 @@ This wrapper now:
       REST fallback (``or_candle_source``) and the per-index OR retry
       count (``or_retry_attempts``), which are the two data-path
       signals that would have closed the Oct 22 investigation early.
+
+Additional hardening (this revision)
+------------------------------------
+Building on the 2026-10-22 patch, this revision adds:
+
+    * **Aggregate per-strike failure lists in the diagnosis block.**
+      The Stage-1 service now returns a ``per_strike_failures`` dict
+      with three categories — ``unresolved``, ``not_subscribed``,
+      ``or_not_written`` — each carrying a count and up to five
+      example instrument labels. The wrapper reads that dict and
+      emits one WARNING per non-empty category, naming the count and
+      the examples. Before this revision, the aggregate WARNING only
+      said *how many* contracts failed; now the operator sees *which*
+      ones without opening ``stage_1_summary.json``.
+
+    * **A ``_STAGE_1_WRAPPER_MARKER`` constant.** Every log line from
+      this module starts with ``[stage_1 wrapper]`` so an operator can
+      pull every Stage-1 wrapper line with a single grep, matching the
+      convention already used by the Stage-2 and Stage-4 wrappers.
+
+    * **Tolerant counter reads.** ``_totals()`` and
+      ``_count_or_sources()`` already coerced values to int; this
+      revision additionally handles the case where a per-index
+      summary is missing entirely (a rolling deploy where Stage 1
+      crashed mid-flight before writing its per-index summary) — the
+      missing entry contributes 0 to the totals rather than raising.
+
+    * **A "no indexes" Telegram branch.** When ``STRATEGY_INDEXES``
+      is empty (misconfiguration), the service returns
+      ``status="no_indexes"``. The previous wrapper treated that
+      identically to a normal ``status="ok"`` run with 0 indexes and
+      sent a misleading "0/0 indexes ok" message. The new branch
+      emits a dedicated WARNING naming the config key to check.
+
+    * **An explicit "stage-1 service raised" Telegram branch** that
+      names the exception class and points at
+      ``data/strategy/stage_1_initial/stage_1_summary.json`` for
+      the last successful run. Without this, an uncaught exception
+      in Stage 1 produced a generic "Failed" message with no pointer
+      to the recovery surface.
 """
 
 from __future__ import annotations
@@ -70,23 +110,59 @@ from services.telegram_format import build
 
 logger = get_logger(__file__)
 
+# Grep anchor. Every log line from this module starts with this
+# prefix, so an operator can pull every Stage-1 wrapper line with a
+# single ``grep '[stage_1 wrapper]'``.
+_STAGE_1_WRAPPER_MARKER = "[stage_1 wrapper]"
+
+# Path hints used in Telegram messages. Never absolute paths — the
+# pipeline root is the standard project layout.
+_STAGE_1_SUMMARY_HINT = (
+    "data/strategy/stage_1_initial/stage_1_summary.json"
+)
+
 
 # --------------------------------------------------------------------------- #
 # Counter helpers                                                             #
 # --------------------------------------------------------------------------- #
 def _totals(indexes: list[dict]) -> dict[str, int]:
-    """Return aggregate counters across per-index Stage-1 summaries."""
-    return {
-        "strikes": sum(int(i.get("strike_count") or 0) for i in indexes),
-        "contracts": sum(int(i.get("contract_count") or 0) for i in indexes),
-        "resolved": sum(int(i.get("resolved_count") or 0) for i in indexes),
-        "subscribed": sum(
-            int(i.get("subscribed_count") or 0) for i in indexes
-        ),
-        "or_written": sum(
-            int(i.get("or_written_count") or 0) for i in indexes
-        ),
+    """Return aggregate counters across per-index Stage-1 summaries.
+
+    Tolerant of missing per-index summaries (e.g. a rolling deploy
+    where Stage 1 crashed before writing one). A missing entry
+    contributes 0 to every counter rather than raising.
+    """
+    totals = {
+        "strikes": 0,
+        "contracts": 0,
+        "resolved": 0,
+        "subscribed": 0,
+        "or_written": 0,
     }
+    for i in indexes:
+        if not isinstance(i, dict):
+            continue
+        try:
+            totals["strikes"] += int(i.get("strike_count") or 0)
+        except (TypeError, ValueError):
+            pass
+        try:
+            totals["contracts"] += int(i.get("contract_count") or 0)
+        except (TypeError, ValueError):
+            pass
+        try:
+            totals["resolved"] += int(i.get("resolved_count") or 0)
+        except (TypeError, ValueError):
+            pass
+        try:
+            totals["subscribed"] += int(i.get("subscribed_count") or 0)
+        except (TypeError, ValueError):
+            pass
+        try:
+            totals["or_written"] += int(i.get("or_written_count") or 0)
+        except (TypeError, ValueError):
+            pass
+    return totals
 
 
 def _count_or_sources(indexes: list[dict]) -> dict[str, int]:
@@ -101,9 +177,51 @@ def _count_or_sources(indexes: list[dict]) -> dict[str, int]:
     """
     srcs: dict[str, int] = {}
     for i in indexes:
+        if not isinstance(i, dict):
+            continue
         src = str(i.get("or_candle_source") or "unknown")
         srcs[src] = srcs.get(src, 0) + 1
     return srcs
+
+
+def _aggregate_per_strike_failures(indexes: list[dict]) -> dict[str, dict]:
+    """Aggregate per-strike failure lists across indexes.
+
+    The Stage-1 service returns a ``per_strike_failures`` dict per
+    index, each with ``{"count": int, "examples": [label, ...]}``
+    for three categories. This helper merges them across indexes so
+    the diagnosis block can emit one WARNING per category with a
+    representative sample of labels.
+
+    Returns a dict shaped exactly like the per-index one, with the
+    examples list capped at five entries per category (so the log
+    line stays readable even on a catastrophic day).
+    """
+    merged: dict[str, dict] = {
+        "unresolved": {"count": 0, "examples": []},
+        "not_subscribed": {"count": 0, "examples": []},
+        "or_not_written": {"count": 0, "examples": []},
+    }
+    for i in indexes:
+        if not isinstance(i, dict):
+            continue
+        fails = i.get("per_strike_failures") or {}
+        if not isinstance(fails, dict):
+            continue
+        for category in merged:
+            entry = fails.get(category) or {}
+            if not isinstance(entry, dict):
+                continue
+            try:
+                merged[category]["count"] += int(entry.get("count") or 0)
+            except (TypeError, ValueError):
+                pass
+            for ex in (entry.get("examples") or []):
+                if len(merged[category]["examples"]) >= 5:
+                    break
+                if ex not in merged[category]["examples"]:
+                    merged[category]["examples"].append(ex)
+    return merged
 
 
 # --------------------------------------------------------------------------- #
@@ -121,6 +239,10 @@ def _log_diagnostics(summary: dict, totals: dict[str, int]) -> None:
         2. feed subscribe   (→ subscribed_count)
         3. per-strike OR    (→ or_written_count)
         4. buffer window    (→ contracts == 0)
+
+    The per-strike failure categories (unresolved / not_subscribed /
+    or_not_written) each get their own WARNING naming the count and
+    up to five example labels.
     """
     indexes = summary.get("indexes") or []
     total_contracts = totals["contracts"]
@@ -130,8 +252,9 @@ def _log_diagnostics(summary: dict, totals: dict[str, int]) -> None:
 
     # ---- Aggregate line ------------------------------------------------ #
     logger.info(
-        "[stage_1 wrapper] diagnosis — indexes=%d strikes=%d "
+        "%s diagnosis — indexes=%d strikes=%d "
         "contracts=%d resolved=%d subscribed=%d or_written=%d",
+        _STAGE_1_WRAPPER_MARKER,
         len(indexes),
         totals["strikes"],
         total_contracts,
@@ -143,63 +266,117 @@ def _log_diagnostics(summary: dict, totals: dict[str, int]) -> None:
     # ---- Four aggregate failure signals -------------------------------- #
     if total_contracts == 0:
         logger.warning(
-            "[stage_1 wrapper] Stage 1 produced 0 contracts across all "
+            "%s Stage 1 produced 0 contracts across all "
             "%d index(es). The pipeline cannot proceed — Stage 2 will "
             "skip with reason=stage_1_empty and Stage 4 will report "
-            "no_activations. Check the per-index reasons in "
-            "data/strategy/stage_1_initial/stage_1_summary.json. "
+            "no_activations. Check the per-index reasons in %s. "
             "Common causes: Opening Range unavailable (late 09:15 "
             "candle), buffer window empty, or STRATEGY_ENABLED=false.",
+            _STAGE_1_WRAPPER_MARKER,
             len(indexes),
+            _STAGE_1_SUMMARY_HINT,
         )
     else:
         if total_resolved < total_contracts:
             logger.warning(
-                "[stage_1 wrapper] %d/%d contracts resolved to a real "
+                "%s %d/%d contracts resolved to a real "
                 "Upstox key — %d did not. Unresolved contracts cannot "
-                "be subscribed to the live feed or traded. Check the "
-                "Upstox search results for the unresolved strikes in "
-                "each strike's strategy_meta.json "
-                "(upstox_instrument_key should be non-empty).",
+                "be subscribed to the live feed or traded. See the "
+                "per-strike 'unresolved' list below for examples.",
+                _STAGE_1_WRAPPER_MARKER,
                 total_resolved,
                 total_contracts,
                 total_contracts - total_resolved,
             )
         if total_subscribed < total_resolved:
             logger.warning(
-                "[stage_1 wrapper] %d/%d resolved contracts were "
+                "%s %d/%d resolved contracts were "
                 "subscribed to the live feed — %d did not. The R2/S3 "
                 "trackers read live_feed_service.get_latest_ltp() and "
                 "will get None for these contracts. Check "
                 "GET /live/status (feed.instrument_count vs "
-                "/live/instruments count).",
+                "/live/instruments count). See the per-strike "
+                "'not_subscribed' list below for examples.",
+                _STAGE_1_WRAPPER_MARKER,
                 total_subscribed,
                 total_resolved,
                 total_resolved - total_subscribed,
             )
         if total_or_written < total_resolved:
             logger.warning(
-                "[stage_1 wrapper] %d/%d resolved contracts have their "
+                "%s %d/%d resolved contracts have their "
                 "own opening_range.json in the strike folder — %d do "
                 "not. The S1/S2 trackers will read isolation_level=None "
                 "for these contracts and Stage 4 will report "
                 "no_activations. This is the 2026-10-22 failure "
                 "signature. Verify opening_range_service.calculate_one("
                 "key, target_folder=<strike folder>) is actually "
-                "writing the file.",
+                "writing the file. See the per-strike 'or_not_written' "
+                "list below for examples.",
+                _STAGE_1_WRAPPER_MARKER,
                 total_or_written,
                 total_resolved,
                 total_resolved - total_or_written,
             )
 
+    # ---- Aggregate per-strike failure lists ---------------------------- #
+    # These are the "which strikes" companion to the "how many"
+    # aggregate WARNINGs above. Each category gets its own line with a
+    # representative sample so the operator can jump straight to the
+    # failing strike folders without opening stage_1_summary.json.
+    agg_fails = _aggregate_per_strike_failures(indexes)
+    for category, label, hint in (
+        (
+            "unresolved",
+            "unresolved",
+            "Upstox search returned no match — check the query in each "
+            "strike's strategy_meta.json (upstox_instrument_key should "
+            "be non-empty after Stage 1).",
+        ),
+        (
+            "not_subscribed",
+            "not subscribed to feed",
+            "live_feed_service.subscribe_instrument() returned False or "
+            "raised — check GET /live/status (feed.instrument_count vs "
+            "/live/instruments count).",
+        ),
+        (
+            "or_not_written",
+            "strike OR missing",
+            "opening_range_service.calculate_one(key, target_folder="
+            "<strike folder>) did not write the file — check the strike "
+            "folder for opening_range.json.",
+        ),
+    ):
+        entry = agg_fails.get(category) or {}
+        count = int(entry.get("count") or 0)
+        if count <= 0:
+            continue
+        examples = entry.get("examples") or []
+        examples_str = (
+            ", ".join(str(e) for e in examples[:3])
+            if examples else "—"
+        )
+        logger.warning(
+            "%s %d contract(s) %s — examples: %s. %s",
+            _STAGE_1_WRAPPER_MARKER,
+            count,
+            label,
+            examples_str,
+            hint,
+        )
+
     # ---- Per-index breakdown ------------------------------------------- #
     for i in indexes:
+        if not isinstance(i, dict):
+            continue
         ticker = i.get("ticker") or "?"
         status = i.get("status") or "?"
         if status != "ok":
             reason = i.get("reason") or i.get("error") or "—"
             logger.warning(
-                "[stage_1 wrapper] %s: status=%s reason=%s",
+                "%s %s: status=%s reason=%s",
+                _STAGE_1_WRAPPER_MARKER,
                 ticker,
                 status,
                 reason,
@@ -214,8 +391,9 @@ def _log_diagnostics(summary: dict, totals: dict[str, int]) -> None:
         retries = int(i.get("or_retry_attempts") or 0)
 
         logger.info(
-            "[stage_1 wrapper] %s: strikes=%d contracts=%d resolved=%d "
+            "%s %s: strikes=%d contracts=%d resolved=%d "
             "subscribed=%d or_written=%d src=%s retries=%d",
+            _STAGE_1_WRAPPER_MARKER,
             ticker,
             int(i.get("strike_count") or 0),
             contracts,
@@ -228,19 +406,92 @@ def _log_diagnostics(summary: dict, totals: dict[str, int]) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# Telegram completion message                                                 #
+# Telegram message builders                                                   #
 # --------------------------------------------------------------------------- #
+def _build_no_indexes_message(summary: dict) -> str:
+    """Dedicated message when STRATEGY_INDEXES is empty.
+
+    The service returns ``status="no_indexes"`` in that case. The
+    previous wrapper treated that identically to a normal "ok" run
+    with 0 indexes and sent a misleading "0/0 indexes ok" message.
+    """
+    return build(
+        emoji="⚠️",
+        title="Strategy 1 · Stage 1 · No Indexes Configured",
+        fields=[
+            ("Mode", summary.get("mode")),
+            ("Scheduled", summary.get("scheduled_time_ist")),
+            ("Actual", summary.get("actual_time_ist")),
+        ],
+        sections=[(
+            "Why",
+            "🔍",
+            [
+                "STRATEGY_INDEXES is empty — no indexes to process.",
+                "The pipeline cannot proceed; Stage 2 and Stage 4 "
+                "will report no_activations for today.",
+                "Check: .env STRATEGY_INDEXES_JSON",
+                "Check: core/config.py's _DEFAULT_STRATEGY_INDEXES",
+                "Fix:   populate STRATEGY_INDEXES_JSON or remove the "
+                "override so the defaults apply.",
+            ],
+        )],
+        status="warning",
+        status_detail="no indexes configured",
+    )
+
+
+def _build_failed_message(exc: BaseException) -> str:
+    """Dedicated message when the Stage-1 service raised.
+
+    Names the exception class explicitly and points at the summary
+    file for the last successful run, so the operator can compare
+    today's state against a known-good baseline.
+    """
+    return build(
+        emoji="❌",
+        title="Strategy 1 · Stage 1 · Failed",
+        fields=[
+            ("Error", f"{type(exc).__name__}: {exc}"),
+        ],
+        sections=[(
+            "Consequence",
+            "⚠️",
+            [
+                "Stage 2 will report no_stage_1 (or or_unavailable) "
+                "for today.",
+                "Stage 4 will report no_activations for today.",
+                "Check the last successful Stage-1 summary:",
+                f"  {_STAGE_1_SUMMARY_HINT}",
+                "Fix: POST /admin/strategy/recalculate",
+            ],
+        )],
+        status="failed",
+    )
+
+
 def _build_completion_message(summary: dict) -> str:
     indexes = summary.get("indexes") or []
-    ok = sum(1 for i in indexes if i.get("status") == "ok")
-    skipped = sum(1 for i in indexes if i.get("status") == "skipped")
-    errors = sum(1 for i in indexes if i.get("status") == "error")
+    ok = sum(
+        1 for i in indexes
+        if isinstance(i, dict) and i.get("status") == "ok"
+    )
+    skipped = sum(
+        1 for i in indexes
+        if isinstance(i, dict) and i.get("status") == "skipped"
+    )
+    errors = sum(
+        1 for i in indexes
+        if isinstance(i, dict) and i.get("status") == "error"
+    )
     totals = _totals(indexes)
     srcs = _count_or_sources(indexes)
 
     # ---- Per-index bullets -------------------------------------------- #
     index_bullets: list[str] = []
     for i in indexes:
+        if not isinstance(i, dict):
+            continue
         ticker = i.get("ticker") or "?"
         status = i.get("status") or "?"
         if status == "ok":
@@ -343,7 +594,7 @@ def _build_completion_message(summary: dict) -> str:
         status=(
             "success"
             if (ok > 0 and not warnings)
-            else ("warning" if ok > 0 else "warning")
+            else "warning"
         ),
         status_detail=(
             f"{ok}/{len(indexes)} indexes ok"
@@ -367,8 +618,9 @@ def run_strategy_selection() -> None:
     ) or "?"
 
     logger.info(
-        "[stage_1 wrapper] starting — trigger=scheduled mode=scheduled "
+        "%s starting — trigger=scheduled mode=scheduled "
         "buffer_mode=%s indexes=%s",
+        _STAGE_1_WRAPPER_MARKER,
         getattr(config, "STRATEGY_BUFFER_MODE", "?"),
         ticker_list,
     )
@@ -398,17 +650,62 @@ def run_strategy_selection() -> None:
 
     try:
         summary = strategy_selection_service.run(reason="scheduled")
+        status = str(summary.get("status") or "")
         indexes = summary.get("indexes") or []
-        ok = sum(1 for i in indexes if i.get("status") == "ok")
+        ok = sum(
+            1 for i in indexes
+            if isinstance(i, dict) and i.get("status") == "ok"
+        )
         totals = _totals(indexes)
 
         # ---- Post-run structured diagnosis --------------------------- #
         _log_diagnostics(summary, totals)
 
-        # Telegram level: WARNING whenever any counter diverges, even
-        # if every index reports status=ok. A "successful" run with
-        # 68 contracts and 0 subscribed is not a success — it is the
-        # 2026-10-22 shape and must reach the phone as a warning.
+        # ---- Dispatch on service status ------------------------------ #
+        # The service returns "no_indexes" when STRATEGY_INDEXES is
+        # empty. Treat that as a dedicated WARNING, not a benign
+        # 0/0 success.
+        if status == "no_indexes":
+            telegram_service.send_message(
+                _build_no_indexes_message(summary),
+                level="WARNING",
+            )
+            logger.warning(
+                "%s service returned no_indexes — STRATEGY_INDEXES "
+                "is empty or misconfigured.",
+                _STAGE_1_WRAPPER_MARKER,
+            )
+            return
+
+        if status == "disabled":
+            telegram_service.send_message(
+                build(
+                    emoji="🚫",
+                    title="Strategy 1 · Stage 1 · Disabled",
+                    fields=[
+                        ("Mode", summary.get("mode")),
+                        ("Scheduled", summary.get("scheduled_time_ist")),
+                        ("Actual", summary.get("actual_time_ist")),
+                        (
+                            "Reason",
+                            "STRATEGY_ENABLED is false",
+                        ),
+                    ],
+                    status="info",
+                ),
+                level="INFO",
+            )
+            logger.info(
+                "%s service returned disabled — STRATEGY_ENABLED is "
+                "false.",
+                _STAGE_1_WRAPPER_MARKER,
+            )
+            return
+
+        # ---- Telegram level: derive from data health, not just count # #
+        # A "successful" run with 68 contracts and 0 subscribed is not
+        # a success — it is the 2026-10-22 shape and must reach the
+        # phone as a warning.
         has_warnings = (
             totals["contracts"] == 0
             or totals["resolved"] < totals["contracts"]
@@ -425,8 +722,9 @@ def run_strategy_selection() -> None:
         )
 
         logger.info(
-            "[stage_1 wrapper] completed — ok=%d/%d strikes=%d "
+            "%s completed — ok=%d/%d strikes=%d "
             "contracts=%d resolved=%d subscribed=%d or_written=%d",
+            _STAGE_1_WRAPPER_MARKER,
             ok,
             len(indexes),
             totals["strikes"],
@@ -436,13 +734,11 @@ def run_strategy_selection() -> None:
             totals["or_written"],
         )
     except Exception as exc:
-        logger.exception("[stage_1 wrapper] Strategy 1 stage 1 failed")
+        logger.exception(
+            "%s Strategy 1 stage 1 failed",
+            _STAGE_1_WRAPPER_MARKER,
+        )
         telegram_service.send_message(
-            build(
-                emoji="❌",
-                title="Strategy 1 · Stage 1 · Failed",
-                fields=[("Error", f"{type(exc).__name__}: {exc}")],
-                status="failed",
-            ),
+            _build_failed_message(exc),
             level="ERROR",
         )

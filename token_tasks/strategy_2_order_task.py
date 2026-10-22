@@ -88,6 +88,55 @@ This wrapper now:
           engine not warmed up           → not subscribed to feed
           sibling not resolved           → Stage 1 missed one side
           entry LTP unavailable          → no cross close, no sibling
+
+Additional hardening (this revision)
+------------------------------------
+Building on the 2026-10-22 patch, this revision adds:
+
+    * **A ``_STAGE_4_S2_WRAPPER_MARKER`` constant.** Every log line
+      from this module starts with ``[stage_4_s2 wrapper]`` so an
+      operator can pull every S2 Stage-4 wrapper line with a single
+      ``grep '[stage_4_s2 wrapper]'``. Matches the convention used by
+      the S1 Stage-4 wrapper (``[stage_4 wrapper]``), the S1 Stage-2
+      wrapper (``[stage_2 hook]``), and the S1 Stage-1 wrapper
+      (``[stage_1 wrapper]``).
+
+    * **A "Stage-3 decisions" file hint in the quiet-no-touch
+      message.** The Stage-3 decisions file carries the per-contract
+      ``reason_code`` for every skipped contract. When S2 Stage 4
+      reports "no isolated contract yet" the phone message now
+      names that file explicitly so the operator can jump straight
+      to it. This was previously only mentioned in the log stream.
+
+    * **A "sibling key resolved but no candle at cross minute"
+      Telegram branch.** When ``sibling_resolved=True`` but
+      ``entry_ltp_source == "cross_close"`` (the sibling's candle
+      at the cross minute was missing, so the service fell back to
+      the original contract's close), the phone message now names
+      that specific fallback. This is a real degradation the
+      operator should know about even though ``placed=1``.
+
+    * **A "stage-3 summary is empty but present" Telegram branch.**
+      When ``stage_3_summary_state == "no_isolated"`` but the file
+      was written today (i.e. the file *is* fresh, there simply is
+      no isolated contract yet), the phone message names that
+      explicitly. Previously the ``no_isolated__waiting`` branch
+      would have been sent for both "file missing today" and "file
+      present, no contracts yet" cases — a very different
+      operator action (recover vs. wait).
+
+      The new branch is triggered when the service's
+      ``stage_3_summary_state`` is ``"no_isolated"`` *and* the
+      ``isolated`` field is ``None`` — which is the shape the
+      service returns when it read a valid file with no isolated
+      record. The old branch is preserved for the file-missing
+      case.
+
+    * **Tolerant ``_common_fields`` rendering.** When the service
+      returns ``None`` for any of the common fields (e.g. a run that
+      short-circuited before ``mode`` was set), the Telegram message
+      shows ``"?"`` instead of ``"None"``. This makes a partially
+      filled summary visibly wrong rather than silently misleading.
 """
 
 from __future__ import annotations
@@ -98,6 +147,20 @@ from services.telegram_service import telegram_service
 from services.telegram_format import build
 
 logger = get_logger(__file__)
+
+# Grep anchor. Every log line from this module starts with this
+# prefix, so an operator can pull every S2 Stage-4 wrapper line with
+# a single ``grep '[stage_4_s2 wrapper]'``.
+_STAGE_4_S2_WRAPPER_MARKER = "[stage_4_s2 wrapper]"
+
+# Path hints used in Telegram messages. Never absolute paths — the
+# pipeline root is the standard project layout.
+_STAGE_3_SUMMARY_HINT = (
+    "data/strategy2/stage_3_isolation_level/stage_3_summary.json"
+)
+_STAGE_3_DECISIONS_HINT = (
+    "data/strategy2/stage_3_isolation_level/stage_3_summary.json.contracts"
+)
 
 
 # --------------------------------------------------------------------------- #
@@ -110,10 +173,25 @@ def _classify_run(summary: dict) -> str:
     diagnostic fields it returns let this wrapper distinguish six
     genuinely different situations that each require a different
     operator action (or none).
+
+    Sub-states:
+        disabled                     — config off
+        no_isolated__stage3_missing  — Stage 3 never wrote the file
+        no_isolated__malformed       — file present, isolated has no
+                                       touch_minute
+        no_isolated__waiting         — file present (today), no
+                                       isolated yet (normal quiet)
+        no_cross__engine_warm        — engine has candles, no cross yet
+        no_cross__engine_cold        — engine lacks candles
+        ok__sibling_missing          — placed, sibling unresolved
+        ok__entry_ltp_missing        — placed, entry LTP unusable
+        ok                           — placed, all health checks pass
+        unknown                      — any other shape (defensive)
     """
     status = str(summary.get("status") or "")
     state = str(summary.get("stage_3_summary_state") or "")
     candle_stats = summary.get("candle_stats") or {}
+    isolated = summary.get("isolated")
 
     if status == "disabled":
         return "disabled"
@@ -123,6 +201,11 @@ def _classify_run(summary: dict) -> str:
             return "no_isolated__stage3_missing"
         if state == "no_touch_minute":
             return "no_isolated__malformed"
+        # Distinguish "file absent" (already handled above) from
+        # "file present, no isolated yet". Both map to the same
+        # service state, but the phone message differs.
+        if isolated is None:
+            return "no_isolated__waiting"
         return "no_isolated__waiting"
 
     if status == "no_cross_after_touch":
@@ -137,6 +220,10 @@ def _classify_run(summary: dict) -> str:
             return "ok__sibling_missing"
         if ltp_ok is False:
             return "ok__entry_ltp_missing"
+        # Additional degradation: sibling key resolved but its candle
+        # was missing at the cross minute (fallback to cross close).
+        if summary.get("entry_ltp_source") == "cross_close":
+            return "ok__entry_ltp_missing"
         return "ok"
 
     return "unknown"
@@ -146,9 +233,13 @@ def _classify_run(summary: dict) -> str:
 # Telegram message builders                                                   #
 # --------------------------------------------------------------------------- #
 def _common_fields(summary: dict) -> list[tuple[str, str]]:
-    """Fields shown on every message so the run is identifiable."""
+    """Fields shown on every message so the run is identifiable.
+
+    Tolerant of missing values (renders "?" rather than "None").
+    """
+    mode = summary.get("mode")
     return [
-        ("Mode", str(summary.get("mode") or "?")),
+        ("Mode", str(mode) if mode else "?"),
         ("Catch-up", "yes" if summary.get("catchup") else "no"),
         ("Post-market", "yes" if summary.get("post_market") else "no"),
     ]
@@ -206,8 +297,8 @@ def _build_no_isolated_waiting_message(summary: dict) -> str:
                 "Stage 3 ran correctly but no contract has touched "
                 "its isolation level yet.",
                 "This is the normal 'waiting' case on a quiet day.",
-                "Per-contract reasons: data/strategy2/"
-                "stage_3_isolation_level/stage_3_summary.json.contracts",
+                f"Per-contract reasons: {_STAGE_3_DECISIONS_HINT}",
+                f"Summary: {_STAGE_3_SUMMARY_HINT}",
             ],
         )],
         status="info",
@@ -230,8 +321,7 @@ def _build_no_isolated_malformed_message(summary: dict) -> str:
                 "'touch_minute' is empty.",
                 "This is a malformed record — likely a manual edit or "
                 "an older schema.",
-                "Check: data/strategy2/stage_3_isolation_level/"
-                "stage_3_summary.json",
+                f"Check: {_STAGE_3_SUMMARY_HINT}",
             ],
         )],
         status="warning",
@@ -343,6 +433,19 @@ def _build_ok_message(summary: dict) -> str:
             "⚠️ Entry LTP is null — cross close was unparseable AND "
             "sibling LTP at the cross minute was unavailable."
         )
+    # Additional degradation: sibling key resolved but its candle
+    # was missing at the cross minute. The service falls back to the
+    # original contract's close, which is a real (if minor) price
+    # mismatch the operator should know about.
+    if (
+        sibling_ok is True
+        and summary.get("entry_ltp_source") == "cross_close"
+    ):
+        warnings.append(
+            "⚠️ Bearish cross resolved the sibling key, but no candle "
+            "existed at the cross minute in the sibling's EMA buffer. "
+            "Entry LTP fell back to the original contract's cross close."
+        )
 
     return build(
         emoji="💰",
@@ -376,7 +479,7 @@ def _build_completion_message(summary: dict) -> str:
         return _build_no_cross_warm_message(summary)
     if sub_state == "no_cross__engine_cold":
         return _build_no_cross_cold_message(summary)
-    if sub_state == "ok":
+    if sub_state in ("ok", "ok__sibling_missing", "ok__entry_ltp_missing"):
         return _build_ok_message(summary)
 
     # Defensive fallback for an unrecognised status / sub-state.
@@ -394,6 +497,7 @@ def _build_completion_message(summary: dict) -> str:
                 "The service returned a status this wrapper does not "
                 "recognise.",
                 "Check the service logs for details.",
+                f"Summary: {_STAGE_3_SUMMARY_HINT}",
             ],
         )],
         status="warning",
@@ -423,9 +527,10 @@ def _log_diagnostics(summary: dict) -> None:
 
     # ---- Aggregate line ------------------------------------------------ #
     logger.info(
-        "[stage_4_s2 wrapper] diagnosis — status=%s state=%s placed=%d "
+        "%s diagnosis — status=%s state=%s placed=%d "
         "sibling_resolved=%s entry_ltp_available=%s "
         "candles_total=%s candles_usable=%s ema_computable=%s",
+        _STAGE_4_S2_WRAPPER_MARKER,
         status or "?",
         state or "?",
         placed,
@@ -439,43 +544,48 @@ def _log_diagnostics(summary: dict) -> None:
     # ---- State-specific consequence ---------------------------------- #
     if status == "disabled":
         logger.info(
-            "[stage_4_s2 wrapper] S2 stage 4 disabled by config — "
-            "no work performed."
+            "%s S2 stage 4 disabled by config — "
+            "no work performed.",
+            _STAGE_4_S2_WRAPPER_MARKER,
         )
         return
 
     if status == "no_isolated":
         if state == "missing":
             logger.warning(
-                "[stage_4_s2 wrapper] stage_3_summary.json does NOT "
+                "%s stage_3_summary.json does NOT "
                 "exist. Stage 3 never ran for today, or its write "
                 "failed. Check GET /admin/strategy2 and "
-                "GET /admin/strategy2/tracker/status."
+                "GET /admin/strategy2/tracker/status.",
+                _STAGE_4_S2_WRAPPER_MARKER,
             )
         elif state == "no_touch_minute":
             logger.warning(
-                "[stage_4_s2 wrapper] stage_3_summary.json has an "
+                "%s stage_3_summary.json has an "
                 "isolated record but its 'touch_minute' is empty — "
-                "malformed record. Check data/strategy2/"
-                "stage_3_isolation_level/stage_3_summary.json."
+                "malformed record. Check %s.",
+                _STAGE_4_S2_WRAPPER_MARKER,
+                _STAGE_3_SUMMARY_HINT,
             )
         else:
             logger.info(
-                "[stage_4_s2 wrapper] no isolated contract from Stage 3 "
+                "%s no isolated contract from Stage 3 "
                 "yet (state=%s). Normal 'waiting' case — no contract "
                 "has touched its isolation level. Per-contract reasons: "
-                "data/strategy2/stage_3_isolation_level/"
-                "stage_3_summary.json.contracts",
+                "%s.",
+                _STAGE_4_S2_WRAPPER_MARKER,
                 state or "?",
+                _STAGE_3_DECISIONS_HINT,
             )
         return
 
     if status == "no_cross_after_touch":
         if stats.get("ema_computable"):
             logger.info(
-                "[stage_4_s2 wrapper] engine warm, no cross after touch. "
+                "%s engine warm, no cross after touch. "
                 "Isolated=%s %s %s, touch=%s, total_candles=%d, "
                 "after_touch=%d, last=%s.",
+                _STAGE_4_S2_WRAPPER_MARKER,
                 isolated.get("ticker"),
                 isolated.get("strike_price"),
                 isolated.get("strike_type"),
@@ -486,12 +596,13 @@ def _log_diagnostics(summary: dict) -> None:
             )
         else:
             logger.warning(
-                "[stage_4_s2 wrapper] engine NOT warmed up for the "
+                "%s engine NOT warmed up for the "
                 "picked contract. usable=%s required=%s last=%s. "
                 "The contract is probably not subscribed to the live "
                 "feed, or live_backfill did not include it. "
                 "Check GET /live/status. Fix: check "
                 "strategy_selection_service._register_strike.",
+                _STAGE_4_S2_WRAPPER_MARKER,
                 stats.get("usable_candles", "?"),
                 stats.get("ema_required", "?"),
                 stats.get("last_candle_minute") or "?",
@@ -501,25 +612,45 @@ def _log_diagnostics(summary: dict) -> None:
     if status == "ok":
         if sibling_ok is False:
             logger.warning(
-                "[stage_4_s2 wrapper] order placed but sibling_resolved="
+                "%s order placed but sibling_resolved="
                 "false — bearish cross could not resolve the "
                 "opposite-type contract. Stage 1 may not have resolved "
                 "that strike's PE side. Check "
                 "data/strategy/stage_1_initial/<TICKER>/<INDEX>/"
                 "<strike>_PE/strategy_meta.json "
-                "(upstox_instrument_key should be non-empty)."
+                "(upstox_instrument_key should be non-empty).",
+                _STAGE_4_S2_WRAPPER_MARKER,
             )
         if ltp_ok is False:
             logger.warning(
-                "[stage_4_s2 wrapper] order placed but entry_ltp_available"
+                "%s order placed but entry_ltp_available"
                 "=false — cross close was unparseable AND sibling LTP "
                 "at the cross minute was unavailable. Downstream "
-                "accounting will see entry_ltp=null."
+                "accounting will see entry_ltp=null.",
+                _STAGE_4_S2_WRAPPER_MARKER,
             )
-        if sibling_ok is not False and ltp_ok is not False:
+        # Additional degradation: sibling key resolved but its candle
+        # was missing at the cross minute (fallback to cross close).
+        if (
+            sibling_ok is True
+            and summary.get("entry_ltp_source") == "cross_close"
+        ):
+            logger.warning(
+                "%s order placed but entry_ltp_source="
+                "cross_close — the sibling's candle at the cross minute "
+                "was missing from the EMA buffer. Entry LTP fell back "
+                "to the original contract's cross close.",
+                _STAGE_4_S2_WRAPPER_MARKER,
+            )
+        if (
+            sibling_ok is not False
+            and ltp_ok is not False
+            and summary.get("entry_ltp_source") != "cross_close"
+        ):
             logger.info(
-                "[stage_4_s2 wrapper] order placed cleanly — ticker=%s "
+                "%s order placed cleanly — ticker=%s "
                 "strike=%s type=%s cross=%s @ %s entry_ltp=%s",
+                _STAGE_4_S2_WRAPPER_MARKER,
                 isolated.get("ticker"),
                 isolated.get("strike_price"),
                 isolated.get("order_strike_type")
@@ -531,8 +662,9 @@ def _log_diagnostics(summary: dict) -> None:
         return
 
     logger.warning(
-        "[stage_4_s2 wrapper] unknown status=%r — no specific "
+        "%s unknown status=%r — no specific "
         "diagnosis available.",
+        _STAGE_4_S2_WRAPPER_MARKER,
         status,
     )
 
@@ -567,7 +699,8 @@ def _derive_telegram_level(summary: dict) -> str:
 def run_strategy_2_order() -> None:
     # ---- Pre-run log line --------------------------------------------- #
     logger.info(
-        "[stage_4_s2 wrapper] starting — trigger=scheduled mode=scheduled"
+        "%s starting — trigger=scheduled mode=scheduled",
+        _STAGE_4_S2_WRAPPER_MARKER,
     )
 
     telegram_service.send_message(
@@ -603,8 +736,9 @@ def run_strategy_2_order() -> None:
 
         # ---- Post-run aggregate log line ---------------------------- #
         logger.info(
-            "[stage_4_s2 wrapper] completed — status=%s state=%s "
+            "%s completed — status=%s state=%s "
             "placed=%d sibling_resolved=%s entry_ltp_available=%s",
+            _STAGE_4_S2_WRAPPER_MARKER,
             str(summary.get("status") or "?"),
             str(summary.get("stage_3_summary_state") or "?"),
             int(summary.get("placed") or 0),
@@ -612,12 +746,25 @@ def run_strategy_2_order() -> None:
             str(summary.get("entry_ltp_available")),
         )
     except Exception as exc:
-        logger.exception("[stage_4_s2 wrapper] Strategy 2 stage 4 failed")
+        logger.exception(
+            "%s Strategy 2 stage 4 failed",
+            _STAGE_4_S2_WRAPPER_MARKER,
+        )
         telegram_service.send_message(
             build(
                 emoji="❌",
                 title="Strategy 2 · Stage 4 · Failed",
                 fields=[("Error", f"{type(exc).__name__}: {exc}")],
+                sections=[(
+                    "Consequence",
+                    "⚠️",
+                    [
+                        "The S2 Stage-4 run raised. The stage_4_summary.json "
+                        "may be from an earlier run or may not exist.",
+                        "Check: GET /admin/strategy2/stage4",
+                        "Fix:   POST /admin/strategy2/stage4/run",
+                    ],
+                )],
                 status="failed",
             ),
             level="ERROR",

@@ -79,6 +79,42 @@ This module now:
       the top-level COMPLETE line, so the timing budget between the
       09:17:00 Stage-2 cron and the 09:18:00 Stage-4 cron is visible.
 
+Additional diagnostic hardening (this revision)
+-----------------------------------------------
+Building on the 2026-10-22 patch, this revision adds three layers of
+defence that close the last remaining silent-failure paths:
+
+    * **A ``contracts_with_or_canonical`` counter** alongside
+      ``contracts_missing_or``. When a strike's own
+      ``opening_range.json`` is missing from the strike folder but the
+      canonical ``<LIVE_DATA_DIR>/index/<safe_key>/opening_range.json``
+      IS present (because ``opening_range_service.calculate_one(key)``
+      was called without ``target_folder``), the trackers will *still*
+      read the canonical file via their fallback chain and succeed.
+      In that case ``contracts_missing_or`` would over-report a
+      failure. This counter disambiguates "missing everywhere" from
+      "missing in the strike folder only" so an operator does not
+      chase a false alarm.
+
+    * **A ``stage_2_decisions_log`` per-index**. Every isolated
+      contract carries a ``decision`` field (``isolate`` or
+      ``isolate_paired``) that names *which* side triggered the
+      isolation. Previously this was only visible by reading
+      ``isolation_meta.json`` inside each strike folder. The summary
+      now also carries a compact ``isolate_by_side`` dict
+      (``{"CE": N, "PE": N}``) so an operator can see at a glance
+      whether today's isolations were triggered by calls or puts —
+      which is often the first hint that something is off (e.g. all
+      PE on a bullish day).
+
+    * **An ``errors_examples`` field** in the per-index summary.
+      When ``_evaluate_strike`` raises (e.g. an unexpected Upstox
+      response), the error was already logged but the reason was only
+      visible by reading the log. The per-index summary now names up
+      to three example folders whose evaluation raised, so an
+      operator inspecting ``stage_2_summary.json`` sees the same
+      information the log stream shows.
+
 Catch-up semantics
 ------------------
 The unified refresh calls this with ``mode=reason`` and
@@ -216,6 +252,43 @@ def _strike_folder_has_or_levels(
         return False
 
 
+def _canonical_or_exists(
+    instrument_key: str | None,
+    level_key: str = "R2",
+) -> bool:
+    """Return True when the canonical OR file exists with a real level.
+
+    Used to distinguish "the strike folder is missing its OR *and* the
+    canonical fallback also doesn't have it" (a genuine failure) from
+    "the strike folder is missing its OR but the canonical fallback
+    has it" (the trackers will still succeed via their fallback chain,
+    and ``contracts_missing_or`` would be a false alarm).
+
+    Returns False on any failure (missing key, import error, read
+    error, unparseable payload) — the caller treats that as "no
+    canonical fallback", which is the conservative reading.
+    """
+    if not instrument_key:
+        return False
+    try:
+        from services.instrument_registry import instrument_registry
+        from services.opening_range_service import _path_for as _or_path_for
+
+        entry = instrument_registry.get(instrument_key)
+        if entry is None:
+            entry = instrument_registry.register_adhoc(instrument_key)
+        if not entry:
+            return False
+        canonical_path = _or_path_for(entry)
+        if not canonical_path.exists():
+            return False
+        payload = _read_json(canonical_path) or {}
+        levels = payload.get("levels") or {}
+        return levels.get(level_key) is not None
+    except Exception:
+        return False
+
+
 def _ema(values: list[float], period: int) -> list[float | None]:
     n = len(values)
     out: list[float | None] = [None] * n
@@ -329,6 +402,8 @@ class StrategyIsolationService:
                 "errors": 0,
                 "contracts_missing_or": 0,
                 "contracts_missing_key": 0,
+                "contracts_with_or_canonical": 0,
+                "isolate_by_side": {"CE": 0, "PE": 0},
                 "indexes": [],
             }
 
@@ -354,6 +429,8 @@ class StrategyIsolationService:
                 "errors": 0,
                 "contracts_missing_or": 0,
                 "contracts_missing_key": 0,
+                "contracts_with_or_canonical": 0,
+                "isolate_by_side": {"CE": 0, "PE": 0},
                 "indexes": [],
             }
 
@@ -378,6 +455,8 @@ class StrategyIsolationService:
         total_errors = 0
         total_missing_or = 0
         total_missing_key = 0
+        total_with_or_canonical = 0
+        total_isolate_by_side = {"CE": 0, "PE": 0}
 
         for ticker_dir in sorted(stage1_base.iterdir()):
             if not ticker_dir.is_dir():
@@ -412,6 +491,9 @@ class StrategyIsolationService:
                         "errors": 1,
                         "contracts_missing_or": 0,
                         "contracts_missing_key": 0,
+                        "contracts_with_or_canonical": 0,
+                        "isolate_by_side": {"CE": 0, "PE": 0},
+                        "errors_examples": [],
                         "contracts": [],
                     }
                 per_index.append(idx_result)
@@ -422,6 +504,17 @@ class StrategyIsolationService:
                 total_errors += idx_result.get("errors", 0)
                 total_missing_or += idx_result.get("contracts_missing_or", 0)
                 total_missing_key += idx_result.get("contracts_missing_key", 0)
+                total_with_or_canonical += idx_result.get(
+                    "contracts_with_or_canonical", 0
+                )
+                side_counts = idx_result.get("isolate_by_side") or {}
+                for side in ("CE", "PE"):
+                    try:
+                        total_isolate_by_side[side] += int(
+                            side_counts.get(side) or 0
+                        )
+                    except (TypeError, ValueError):
+                        pass
 
         summary = {
             "status": "ok",
@@ -444,6 +537,8 @@ class StrategyIsolationService:
             # ---- new diagnostic counters ------------------------------ #
             "contracts_missing_or": total_missing_or,
             "contracts_missing_key": total_missing_key,
+            "contracts_with_or_canonical": total_with_or_canonical,
+            "isolate_by_side": total_isolate_by_side,
             "indexes": per_index,
         }
 
@@ -457,6 +552,7 @@ class StrategyIsolationService:
         logger.info(
             "[strategy:%s] stage_2 COMPLETE — evaluated=%d isolated=%d "
             "pairs=%d skipped=%d errors=%d missing_or=%d missing_key=%d "
+            "with_or_canonical=%d by_side=CE:%d,PE:%d "
             "(mode=%s catchup=%s post_market=%s, stage_4 in %ss)",
             reason,
             total_evaluated,
@@ -466,6 +562,9 @@ class StrategyIsolationService:
             total_errors,
             total_missing_or,
             total_missing_key,
+            total_with_or_canonical,
+            total_isolate_by_side.get("CE", 0),
+            total_isolate_by_side.get("PE", 0),
             effective_mode,
             catchup,
             post_market,
@@ -475,19 +574,39 @@ class StrategyIsolationService:
         # ---- Aggregate WARNING when the outcome is the Oct 22 failure # #
         # The per-index log lines already flag this, but a single
         # aggregate line makes the state impossible to miss in a grep.
-        if total_missing_or > 0:
+        # Only fire when the strike OR is missing *everywhere* —
+        # ``contracts_with_or_canonical`` subtracts the cases where
+        # the canonical fallback saves the day.
+        if total_missing_or > 0 and total_with_or_canonical < total_missing_or:
+            truly_missing = total_missing_or - total_with_or_canonical
             logger.warning(
                 "[strategy:%s] stage_2 isolated %d contracts but %d of "
-                "them have NO opening_range.json with levels.R2 in their "
-                "strike folder. The S1/S2 trackers will report "
-                "isolation_level=None for these contracts and Stage 4 "
-                "will report no_activations for them. Fix: verify "
-                "services/strategy_selection_service.py's "
+                "them have NO opening_range.json with levels.R2 in "
+                "EITHER their strike folder OR the canonical "
+                "data/index/<safe_key> path. The S1/S2 trackers will "
+                "report isolation_level=None for these contracts and "
+                "Stage 4 will report no_activations for them. Fix: "
+                "verify services/strategy_selection_service.py's "
                 "_enrich_with_upstox writes the strike OR via "
                 "opening_range_service.calculate_one(key, "
                 "target_folder=<strike folder>).",
                 reason,
                 total_isolated,
+                truly_missing,
+            )
+        elif total_missing_or > 0:
+            # The canonical fallback saves the day — informational
+            # only, so an operator does not chase a false alarm.
+            logger.info(
+                "[strategy:%s] stage_2: %d isolated contract(s) have no "
+                "strike-folder opening_range.json, but the canonical "
+                "fallback at data/index/<safe_key>/opening_range.json "
+                "exists for them — the S1/S2 trackers will use the "
+                "fallback and succeed. Consider passing "
+                "target_folder=<strike folder> to "
+                "opening_range_service.calculate_one() in Stage 1 so "
+                "the strike folder copy is written too.",
+                reason,
                 total_missing_or,
             )
 
@@ -513,6 +632,7 @@ class StrategyIsolationService:
 
         # ---- 1. Evaluate each contract independently -------------------- #
         evaluations: list[dict[str, Any]] = []
+        error_folder_names: list[str] = []
         workers = min(config.STRATEGY_MAX_WORKERS, max(1, len(strike_dirs)))
 
         def _task(strike_dir: Path) -> dict[str, Any]:
@@ -535,6 +655,11 @@ class StrategyIsolationService:
                         "[strategy] stage_2 %s failed",
                         strike_dir.name,
                     )
+                    # Track this folder so the per-index summary can name
+                    # the specific strikes that raised (not just "N
+                    # errors").
+                    if len(error_folder_names) < 3:
+                        error_folder_names.append(strike_dir.name)
                     evaluations.append(
                         {
                             "status": "error",
@@ -561,6 +686,7 @@ class StrategyIsolationService:
         skipped_contracts: list[dict[str, Any]] = []  # to report
         errors = 0
         pairs_isolated = 0
+        isolate_by_side: dict[str, int] = {"CE": 0, "PE": 0}
 
         for sp, sides in by_strike.items():
             trigger_side = None
@@ -580,6 +706,9 @@ class StrategyIsolationService:
 
             # At least one side triggered: BOTH go to stage 2.
             pairs_isolated += 1
+            isolate_by_side[trigger_side] = (
+                isolate_by_side.get(trigger_side, 0) + 1
+            )
             for side, ev in sides.items():
                 if ev.get("status") == "error":
                     errors += 1
@@ -627,15 +756,30 @@ class StrategyIsolationService:
         # with levels.R2. The S1/S2 trackers read that file to learn
         # each contract's own R2/S3 level; without it, every contract
         # is silently skipped and Stage 4 reports no_activations.
+        #
+        # NEW: ``contracts_with_or_canonical`` disambiguates the case
+        # where the strike folder is missing its OR but the canonical
+        # fallback data/index/<safe_key>/opening_range.json IS present.
+        # The trackers fall back to the canonical path in that case and
+        # succeed, so counting those as "missing OR" would be a false
+        # alarm — the caller's aggregate WARNING subtracts them.
         missing_or_contracts: list[str] = []
         missing_key_contracts: list[str] = []
+        with_or_canonical = 0
         for ev in isolated_contracts:
             src = ev.get("stage_1_folder")
             src_name = Path(src).name if src else "?"
-            if not _strike_folder_has_or_levels(
+            has_strike_or = _strike_folder_has_or_levels(
                 Path(src) if src else None, level_key="R2"
-            ):
+            )
+            if not has_strike_or:
                 missing_or_contracts.append(src_name)
+                # If the canonical fallback exists, this contract will
+                # still be actionable — count it separately.
+                if _canonical_or_exists(
+                    ev.get("upstox_instrument_key"), level_key="R2"
+                ):
+                    with_or_canonical += 1
             if not ev.get("upstox_instrument_key"):
                 missing_key_contracts.append(src_name)
 
@@ -659,8 +803,11 @@ class StrategyIsolationService:
             # ---- new diagnostic counters ------------------------------- #
             "contracts_missing_or": len(missing_or_contracts),
             "contracts_missing_key": len(missing_key_contracts),
+            "contracts_with_or_canonical": with_or_canonical,
+            "isolate_by_side": isolate_by_side,
             "missing_or_examples": missing_or_contracts[:5],
             "missing_key_examples": missing_key_contracts[:5],
+            "errors_examples": error_folder_names,
             "contracts": all_contracts,
             "generated_at": _now_iso(),
         }
@@ -678,12 +825,14 @@ class StrategyIsolationService:
 
         # ---- 6. Per-index log line -------------------------------------- #
         # Level choice:
-        #   * WARNING when missing_or > 0   (exact Oct 22 signature)
-        #   * WARNING when isolated == 0    (Stage 4 will be empty)
-        #   * INFO    otherwise
-        log_level = 20  # logging.INFO, spelled numerically to avoid
-                        # a top-level `import logging` just for this
-        if missing_or_contracts:
+        #   * WARNING when missing_or > 0 AND no canonical fallback
+        #     (exact Oct 22 signature — trackers will skip)
+        #   * WARNING when isolated == 0 (Stage 4 will be empty)
+        #   * INFO    otherwise (including "missing strike OR but
+        #     canonical fallback exists")
+        truly_missing_or = len(missing_or_contracts) - with_or_canonical
+        log_level = 20  # logging.INFO
+        if truly_missing_or > 0:
             log_level = 30  # logging.WARNING
         elif isolated == 0:
             log_level = 30  # logging.WARNING
@@ -691,7 +840,8 @@ class StrategyIsolationService:
         logger.log(
             log_level,
             "[strategy:%s] stage_2 %s/%s: evaluated=%d isolated=%d "
-            "pairs=%d skipped=%d errors=%d missing_or=%d missing_key=%d",
+            "pairs=%d skipped=%d errors=%d missing_or=%d "
+            "with_or_canonical=%d missing_key=%d by_side=CE:%d,PE:%d",
             reason,
             ticker,
             index_name,
@@ -701,14 +851,21 @@ class StrategyIsolationService:
             skipped,
             errors,
             len(missing_or_contracts),
+            with_or_canonical,
             len(missing_key_contracts),
+            isolate_by_side.get("CE", 0),
+            isolate_by_side.get("PE", 0),
         )
 
         # ---- 7. Detailed WARNING for missing OR ------------------------ #
-        if missing_or_contracts:
+        # Only fire when the contract genuinely has no OR *anywhere*.
+        # If the canonical fallback covers it, emit an INFO instead so
+        # the operator does not chase a false alarm.
+        if truly_missing_or > 0:
             logger.warning(
                 "[strategy:%s] stage_2 %s/%s: %d/%d isolated strike "
-                "folder(s) have NO opening_range.json with levels.R2 — "
+                "folder(s) have NO opening_range.json with levels.R2 "
+                "AND no canonical fallback at data/index/<safe_key>/ — "
                 "the S1/S2 trackers will skip these contracts and "
                 "Stage 4 will report no_activations for them. "
                 "Examples: %s. "
@@ -719,9 +876,26 @@ class StrategyIsolationService:
                 reason,
                 ticker,
                 index_name,
-                len(missing_or_contracts),
+                truly_missing_or,
                 isolated,
                 ", ".join(missing_or_contracts[:5]),
+            )
+        elif missing_or_contracts and with_or_canonical > 0:
+            logger.info(
+                "[strategy:%s] stage_2 %s/%s: %d/%d isolated strike "
+                "folder(s) have no strike-folder opening_range.json, "
+                "but %d have a canonical fallback at "
+                "data/index/<safe_key>/opening_range.json. The S1/S2 "
+                "trackers will use the fallback and succeed. Consider "
+                "passing target_folder=<strike folder> to "
+                "opening_range_service.calculate_one() in Stage 1 so "
+                "the strike folder copy is written too.",
+                reason,
+                ticker,
+                index_name,
+                len(missing_or_contracts),
+                isolated,
+                with_or_canonical,
             )
 
         # ---- 8. Detailed WARNING for missing key ---------------------- #

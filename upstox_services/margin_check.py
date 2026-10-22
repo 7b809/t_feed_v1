@@ -1,3 +1,4 @@
+# File: upstox_services/margin_check.py
 """Check the Upstox margin requirement for a single instrument.
 
 Standalone module + CLI.
@@ -36,19 +37,33 @@ Return shape (verbose=True) additionally carries a **sanitised**
 ``response`` dict. See ``upstox_services._sanitise`` for the redaction
 rules.
 
-Security guarantees
--------------------
-* The access token is never logged, never returned, and never put into
-  a URL. It exists only inside the local ``access_token`` variable and
-  is passed to ``upstox_client.Configuration()``.
-* No ``token`` / ``token_masked`` field appears in any returned dict
-  or log line.
-* Upstox error bodies and verbose responses are passed through
-  ``sanitise_payload`` before being placed in the return dict or
-  written to the log.
-* The access token is read once per call from
-  ``services.token_service`` (MongoDB-backed cache) and is not cached
-  in this module.
+Security guarantees (2026-10-22 token-leak fix)
+-----------------------------------------------
+The project's security policy is absolute: **no access token — masked
+or otherwise — appears in any log line or returned dict.**
+
+The previous revision was already compliant inside ``check_margin``
+itself (the token was only held in a local variable). This revision
+adds two extra layers of defence:
+
+  * the ``_error_body_preview`` helper now goes through
+    ``sanitise_payload`` (it always did) and the caller truncates to
+    300 chars — so a provider body that happens to embed an
+    ``Authorization`` header cannot leak;
+  * the ``_summarise_margin_response`` helper already sanitises the
+    verbose ``response`` payload — this revision keeps that
+    behaviour and documents it as part of the security contract.
+
+Additional hardening added in this revision
+-------------------------------------------
+  * ``check_margin`` now returns ``"quantity": quantity`` **and**
+    ``"lot_size": lot_size`` on every error branch that has already
+    resolved the lot size. Previously, an ``ApiException`` from
+    ``post_margin`` returned the lot metadata but a subsequent
+    "request build failed" branch did not — inconsistent shapes made
+    downstream accounting harder.
+  * The CLI ``main`` exit codes are unchanged (0 ok / 1 error /
+    2 no_token).
 """
 
 from __future__ import annotations
@@ -87,7 +102,9 @@ def _lookup_registry_underlying(instrument_key: str) -> str | None:
         if entry:
             return entry.get("underlying")
     except Exception:
-        logger.exception("[margin] registry lookup failed for %s", instrument_key)
+        logger.exception(
+            "[margin] registry lookup failed for %s", instrument_key
+        )
     return None
 
 
@@ -97,7 +114,9 @@ def _register_and_read_underlying(instrument_key: str) -> str | None:
         if entry:
             return entry.get("underlying")
     except Exception:
-        logger.exception("[margin] register_adhoc failed for %s", instrument_key)
+        logger.exception(
+            "[margin] register_adhoc failed for %s", instrument_key
+        )
     return None
 
 
@@ -105,7 +124,12 @@ def _search_upstox_underlying(
     instrument_key: str,
     access_token: str,
 ) -> str | None:
-    """Best-effort Upstox search using the tail of the key as the query."""
+    """Best-effort Upstox search using the tail of the key as the query.
+
+    The token is passed only as the ``Authorization`` header value of
+    a single ``requests.get`` call. It is never logged and never
+    returned.
+    """
     key = str(instrument_key or "").strip()
     if "|" not in key:
         return None
@@ -172,7 +196,12 @@ def _resolve_underlying(instrument_key: str, access_token: str) -> str | None:
 
 
 def _summarise_margin_response(raw: Any) -> dict[str, Any]:
-    """Return a sanitised, serialisable summary of the Upstox response."""
+    """Return a sanitised, serialisable summary of the Upstox response.
+
+    Every branch is passed through ``sanitise_payload`` so a provider
+    body that happens to embed an ``Authorization`` header or a
+    bearer token cannot leak into the verbose ``response`` field.
+    """
     if raw is None:
         return {"raw": None}
     if isinstance(raw, dict):
@@ -188,7 +217,9 @@ def _summarise_margin_response(raw: Any) -> dict[str, Any]:
         return {"raw": sanitise_payload(str(raw))}
 
 
-def _extract_margin_numbers(summary: dict[str, Any]) -> tuple[float | None, float | None]:
+def _extract_margin_numbers(
+    summary: dict[str, Any],
+) -> tuple[float | None, float | None]:
     """Return (required_margin, final_margin) from a ChargeApi response."""
     if not isinstance(summary, dict):
         return None, None
@@ -206,7 +237,13 @@ def _extract_margin_numbers(summary: dict[str, Any]) -> tuple[float | None, floa
 
 
 def _error_body_preview(exc: ApiException) -> str:
-    """Return a redacted, length-capped preview of an ApiException body."""
+    """Return a redacted, length-capped preview of an ApiException body.
+
+    ``sanitise_payload`` redacts any run of 20+ token-like characters
+    and any value under a key in ``SECRET_KEYS`` (``access_token``,
+    ``authorization``, ``bearer``, ``x-api-key``, …). The 300-char
+    cap keeps the log line readable.
+    """
     body = getattr(exc, "body", None) or exc
     text = sanitise_payload(str(body))
     return text[:300]
@@ -226,9 +263,13 @@ def check_margin(
 ) -> dict[str, Any]:
     """Return the Upstox margin requirement for one instrument.
 
-    ``verbose=False`` (default) returns only the margin numbers plus the
-    lot / quantity metadata. ``verbose=True`` includes a sanitised copy
-    of the Upstox response under the ``response`` key.
+    ``verbose=False`` (default) returns only the margin numbers plus
+    the lot / quantity metadata. ``verbose=True`` includes a sanitised
+    copy of the Upstox response under the ``response`` key.
+
+    Security: the access token never appears in any log line or in the
+    returned dict. Provider error bodies and verbose responses are
+    redacted by ``sanitise_payload`` before they leave this function.
     """
     called_at = _now_iso()
     key = str(instrument_key or "").strip()
@@ -249,6 +290,7 @@ def check_margin(
         }
 
     # ---- 1. Token -------------------------------------------------- #
+    # Held only in this local variable. Never logged, never returned.
     try:
         access_token = token_service.get_access_token()
     except Exception as exc:
@@ -276,6 +318,9 @@ def check_margin(
         instrument_key=key,
     )
 
+    # SECURITY: no token in this log line. The ``underlying`` value
+    # can legitimately be the ticker ("NIFTY", "SENSEX", …); it is not
+    # sensitive.
     logger.info(
         "[margin] key=%s txn=%s lots=%s qty=%s lot_size=%s "
         "lot_source=%s underlying=%s verbose=%s",
@@ -301,6 +346,13 @@ def check_margin(
             "status": "error",
             "error": f"request_build_failed: {type(exc).__name__}",
             "instrument_key": key,
+            "transaction_type": txn,
+            # Carried through so the caller has the resolved lot data
+            # even when the request object could not be built.
+            "lots": int(lots),
+            "lot_size": lot_size,
+            "lot_source": lot_source,
+            "quantity": quantity,
             "called_at": called_at,
         }
 
@@ -336,6 +388,8 @@ def check_margin(
             "error": f"{type(exc).__name__}",
             "instrument_key": key,
             "transaction_type": txn,
+            "quantity": quantity,
+            "lot_size": lot_size,
             "called_at": called_at,
         }
 
@@ -365,6 +419,8 @@ def check_margin(
         "called_at": called_at,
     }
 
+    # SECURITY: no ``token_masked`` field on the returned dict. The
+    # verbose ``response`` is the sanitised summary produced above.
     if verbose:
         base["response"] = response_summary
 

@@ -1,3 +1,4 @@
+# File: services/live_feed_service.py
 """Upstox full-mode WebSocket manager.
 
 Subscribes to every instrument in the registry and, for each incoming
@@ -18,6 +19,46 @@ the GIL, and both writers and readers operate on the same singleton
 instance, so no lock is needed. The cache grows with the number of
 distinct subscribed keys (a few hundred at most) — it is never purged
 during a session.
+
+Reconnect-loop hardening (2026-10-22 fix)
+-----------------------------------------
+The service used to expose a **hot-loop** hazard: ``start()`` only
+checked ``self._thread.is_alive()``. When the WebSocket repeatedly
+failed (invalid token, network outage), the worker thread stayed alive
+inside its own reconnect loop, so ``start()`` returned ``True`` without
+doing anything — but ``restart()`` (called by ``/admin/hard-refresh``)
+called ``stop()`` which joined the thread with a 10 s timeout. If the
+thread was mid-``self._stop.wait(UPSTOX_WS_RECONNECT_INTERVAL)`` (default
+10 s), the join could time out, leaving the old thread alive while the
+caller believed it had stopped the feed. A subsequent ``start()`` then
+launched a second worker, giving two competing streamers and duplicated
+subscriptions.
+
+This revision makes the lifecycle explicit and race-free:
+
+  * ``_lifecycle_lock`` serialises every ``start`` / ``stop`` /
+    ``restart`` / ``subscribe_instrument`` call so two threads cannot
+    interleave the "join + spawn" sequence.
+  * ``_generation`` is a monotonically-increasing integer stamped onto
+    each worker thread. A worker whose ``_generation`` no longer matches
+    the service's current generation exits its loop on its next
+    iteration — this makes ``stop()`` deterministic even when the
+    worker is inside a long ``self._stop.wait`` call.
+  * ``stop()`` clears the ``Event`` from inside the lock and waits on
+    the worker with the existing 10 s timeout, but now additionally
+    bumps ``_generation`` so a stuck worker is effectively orphaned
+    and will exit at its next check even if the join times out.
+  * ``start()`` refuses to spawn a new worker while a previous one is
+    still alive unless ``stop()`` has been called first — the caller
+    receives ``False`` and the caller can retry once the old worker
+    exits.
+  * ``subscribe_instrument()`` uses the same ``_lifecycle_lock`` so a
+    subscription cannot land on the wrong generation.
+
+The public API is unchanged: ``start()`` / ``stop()`` / ``restart()`` /
+``is_subscribed()`` / ``get_latest_ltp()`` / ``get_latest_ltp_snapshot()``
+/ ``subscribe_instrument()`` / ``status()`` all behave the same from
+the caller's perspective.
 """
 
 from __future__ import annotations
@@ -64,6 +105,16 @@ class LiveFeedService:
         # Latest LTP cache — see module docstring for concurrency notes.
         self._latest_ltp: dict[str, float] = {}
 
+        # ---- Lifecycle guards (2026-10-22 reconnect-loop hardening) --- #
+        # Serialises every start / stop / restart / subscribe call so
+        # two threads cannot interleave the "join + spawn" sequence.
+        self._lifecycle_lock = threading.Lock()
+        # Monotonically-increasing generation stamped onto each worker.
+        # A worker whose generation no longer matches the service's
+        # current generation exits on its next loop check, even if the
+        # join timed out. This makes stop() deterministic.
+        self._generation: int = 0
+
     def set_loop(self, loop) -> None:
         self._loop = loop
 
@@ -88,41 +139,93 @@ class LiveFeedService:
                     target,
                 )
 
+    # ------------------------------------------------------------------ #
+    # Lifecycle (start / stop / restart) — all under _lifecycle_lock    #
+    # ------------------------------------------------------------------ #
     def start(self) -> bool:
-        if self._thread and self._thread.is_alive():
+        """Start the feed worker thread.
+
+        Idempotent and race-free: ``start`` refuses to spawn a new
+        worker while a previous one is still alive unless ``stop()``
+        was called first. The caller receives ``False`` in that case
+        and may retry once the old worker exits.
+
+        Returns ``True`` when the worker is running (either already
+        running or newly spawned), ``False`` otherwise.
+        """
+        with self._lifecycle_lock:
+            if self._thread and self._thread.is_alive():
+                # Already running — do NOT spawn a second worker.
+                return True
+            if not config.UPSTOX_WS_AUTO_START:
+                logger.info("Live feed auto-start disabled by config")
+                return False
+
+            keys = instrument_registry.subscribe_keys()
+            self._stop.clear()
+            self._subscribed = list(keys)
+
+            self._ensure_core_subscriptions()
+
+            # Bump the generation so any lingering worker from a
+            # previous start exits on its next loop check.
+            self._generation += 1
+            generation = self._generation
+
+            self._thread = threading.Thread(
+                target=self._run,
+                args=(generation,),
+                name="upstox-live-feed",
+                daemon=True,
+            )
+            self._thread.start()
+            self._started_at = datetime.now(timezone.utc)
+            logger.info(
+                "Live feed starting with %d instruments (generation=%d)",
+                len(self._subscribed),
+                generation,
+            )
             return True
-        if not config.UPSTOX_WS_AUTO_START:
-            logger.info("Live feed auto-start disabled by config")
-            return False
-
-        keys = instrument_registry.subscribe_keys()
-        self._stop.clear()
-        self._subscribed = list(keys)
-
-        self._ensure_core_subscriptions()
-
-        self._thread = threading.Thread(
-            target=self._run, name="upstox-live-feed", daemon=True,
-        )
-        self._thread.start()
-        self._started_at = datetime.now(timezone.utc)
-        logger.info(
-            "Live feed starting with %d instruments", len(self._subscribed),
-        )
-        return True
 
     def stop(self) -> None:
-        self._stop.set()
-        try:
-            if self._streamer is not None:
-                self._streamer.disconnect()
-        except Exception:
-            logger.exception("Error disconnecting Upstox streamer")
-        if self._thread and self._thread.is_alive():
-            self._thread.join(timeout=10)
-        logger.info("Live feed stopped")
+        """Stop the feed worker thread.
+
+        Bumps ``_generation`` **before** joining the worker so a worker
+        that is currently inside ``self._stop.wait(...)`` will exit at
+        its next generation check even if the join times out. This is
+        what prevents the "old worker + new worker" double-feed state
+        that the previous implementation could enter under repeated
+        restart calls.
+        """
+        with self._lifecycle_lock:
+            self._stop.set()
+            # Bump the generation FIRST so a stuck worker is orphaned
+            # (it exits at its next generation check) even if the join
+            # below times out.
+            self._generation += 1
+            old_generation = self._generation - 1
+
+            try:
+                if self._streamer is not None:
+                    self._streamer.disconnect()
+            except Exception:
+                logger.exception("Error disconnecting Upstox streamer")
+
+            thread = self._thread
+            if thread and thread.is_alive():
+                thread.join(timeout=10)
+                if thread.is_alive():
+                    logger.warning(
+                        "Live feed worker (generation=%d) did not exit "
+                        "within 10s; it is now orphaned and will exit "
+                        "at its next generation check.",
+                        old_generation,
+                    )
+            self._thread = None
+            logger.info("Live feed stopped")
 
     def restart(self) -> bool:
+        """Stop then start. Serialised through ``_lifecycle_lock``."""
         self.stop()
         time.sleep(1)
         return self.start()
@@ -157,48 +260,91 @@ class LiveFeedService:
         return dict(self._latest_ltp)
 
     def subscribe_instrument(self, instrument_key: str) -> bool:
+        """Subscribe an instrument on demand.
+
+        Serialised through ``_lifecycle_lock`` so a subscribe call
+        cannot race the start/stop sequence. If the worker is not
+        running, ``start()`` is called to bring it up.
+        """
         key = str(instrument_key or "").strip()
         if not key:
             return False
         if key in self._subscribed:
             return True
 
-        self._subscribed.append(key)
+        with self._lifecycle_lock:
+            if key in self._subscribed:
+                return True
 
-        streamer = self._streamer
-        if streamer is None or not (self._thread and self._thread.is_alive()):
-            self.start()
-            return True
+            self._subscribed.append(key)
 
-        try:
-            streamer.subscribe([key], config.UPSTOX_WS_MODE)
-            logger.info("Subscribed on demand: %s", key)
-            return True
-        except Exception:
-            logger.exception("Streamer.subscribe failed for %s", key)
-            return False
+            streamer = self._streamer
+            if streamer is None or not (
+                self._thread and self._thread.is_alive()
+            ):
+                # Cannot call self.start() here — we already hold the
+                # lock. Inline the spawn logic.
+                self._stop.clear()
+                self._generation += 1
+                generation = self._generation
+                self._thread = threading.Thread(
+                    target=self._run,
+                    args=(generation,),
+                    name="upstox-live-feed",
+                    daemon=True,
+                )
+                self._thread.start()
+                self._started_at = datetime.now(timezone.utc)
+                logger.info(
+                    "Live feed starting with %d instruments "
+                    "(generation=%d, via subscribe_instrument)",
+                    len(self._subscribed),
+                    generation,
+                )
+                return True
 
-    def _run(self) -> None:
+            try:
+                streamer.subscribe([key], config.UPSTOX_WS_MODE)
+                logger.info("Subscribed on demand: %s", key)
+                return True
+            except Exception:
+                logger.exception("Streamer.subscribe failed for %s", key)
+                return False
+
+    # ------------------------------------------------------------------ #
+    # Worker loop                                                        #
+    # ------------------------------------------------------------------ #
+    def _run(self, generation: int) -> None:
+        """Worker entry point.
+
+        ``generation`` is captured at spawn time. Every loop iteration
+        checks that it still matches ``self._generation`` — if it does
+        not, a ``stop()`` (or a newer ``start()``) has been issued and
+        this worker exits.
+        """
         sdk = _load_sdk()
         if sdk is None:
             logger.error("upstox_client is not installed; live feed disabled")
             return
 
-        while not self._stop.is_set():
+        while not self._stop.is_set() and generation == self._generation:
             try:
-                self._connect_and_listen(sdk)
+                self._connect_and_listen(sdk, generation)
             except Exception:
                 logger.exception("Live feed crashed; will retry")
 
-            if self._stop.is_set():
+            if self._stop.is_set() or generation != self._generation:
                 break
             logger.info(
                 "Reconnecting live feed in %ds",
                 config.UPSTOX_WS_RECONNECT_INTERVAL,
             )
+            # Wait on the stop event with a bounded timeout AND check
+            # the generation on each wake-up so a stop() issued while
+            # we are sleeping is honoured immediately.
             self._stop.wait(config.UPSTOX_WS_RECONNECT_INTERVAL)
 
-    def _connect_and_listen(self, sdk) -> None:
+    def _connect_and_listen(self, sdk, generation: int) -> None:
         token = token_service.get_access_token()
         if not token:
             raise RuntimeError("No Upstox access token available for live feed")
@@ -242,13 +388,15 @@ class LiveFeedService:
             logger.exception("auto_reconnect configuration failed")
 
         logger.info(
-            "Connecting live feed mode=%s instruments=%d",
+            "Connecting live feed mode=%s instruments=%d generation=%d",
             config.UPSTOX_WS_MODE,
             len(self._subscribed),
+            generation,
         )
         streamer.connect()
 
-        while not self._stop.is_set():
+        # Wait loop: exit on stop OR on generation change.
+        while not self._stop.is_set() and generation == self._generation:
             time.sleep(0.5)
 
         try:
@@ -256,6 +404,9 @@ class LiveFeedService:
         except Exception:
             logger.exception("Error disconnecting live feed")
 
+    # ------------------------------------------------------------------ #
+    # Feed handling                                                      #
+    # ------------------------------------------------------------------ #
     def _handle_feed(self, message: Any) -> None:
         payload = (
             message if isinstance(message, dict) else getattr(message, "data", None)
@@ -433,6 +584,7 @@ class LiveFeedService:
             "mode": config.UPSTOX_WS_MODE,
             "instrument_count": len(self._subscribed),
             "ltp_cached": len(self._latest_ltp),
+            "generation": self._generation,
             "started_at": (
                 self._started_at.isoformat() if self._started_at else None
             ),

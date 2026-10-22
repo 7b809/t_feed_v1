@@ -59,6 +59,49 @@ without (2) every `isolation_level` came back None — so both
 trackers skipped every contract and Stage 4 reported
 `no_activations` even though Stage 1/2 had produced 68 contracts.
 
+Per-strike OR write path (fix — target_folder argument)
+-------------------------------------------------------
+``opening_range_service.calculate_one()`` accepts an optional
+``target_folder`` parameter. When provided, it writes a **copy** of
+the resulting ``opening_range.json`` into that folder **in addition to**
+the canonical location, using the same atomic-write helper.
+
+Before this parameter existed, ``opening_range_service`` only ever
+wrote to the canonical ``<LIVE_DATA_DIR>/index/<safe_key>/
+opening_range.json`` path, so every strike the S1/S2 trackers examined
+had ``isolation_level = None`` and was skipped — the root of the
+2026-10-22 ``no_activations`` / ``placed=0`` failure even though
+Stage 1 + Stage 2 had produced 68 contracts.
+
+This service now passes ``target_folder=<strike folder>`` to
+``opening_range_service.calculate_one()`` so the strike's own OR is
+written **both** to the canonical path and to its own stage-1 folder
+where the trackers read it.
+
+Diagnostics (added for the 2026-10-22 ``no_activations`` bug)
+-------------------------------------------------------------
+The service used to log only the aggregate ``enrichment complete —
+resolved=N subscribed=M or_written=K`` line. That line alone did not
+tell an operator **which** strikes failed to resolve, **which** failed
+to subscribe, or **which** failed to write their OR — the three
+failure modes that produce ``isolation_level = None`` downstream.
+
+This revision adds:
+
+    * **Per-strike failure logs.** Each unresolved strike logs an INFO
+      naming the ticker / strike / type / query. Each failed
+      subscription logs a WARNING with the instrument_key. Each failed
+      OR write logs a WARNING with the strike folder.
+    * **A ``per_strike_failure_summary`` field in the returned dict**
+      carrying the count and up to five examples for each of the three
+      failure categories. Consumed by
+      ``token_tasks/strategy_selection_task._log_diagnostics``.
+    * **A ``candle_source`` field on every per-strike OR result** so a
+      caller can see whether the 09:15 candle came from the live engine
+      or the REST fallback. A wave of REST fallbacks is the early
+      signal that the live feed was not delivering for the new
+      contracts.
+
 Catch-up semantics
 ------------------
 The unified refresh calls this with ``mode=reason`` and
@@ -112,6 +155,7 @@ _MARKET_CLOSE_TIME = dtime(15, 30)
 _OR_RETRY_ATTEMPTS = 3
 _OR_RETRY_SLEEP_SECONDS = 2.0
 
+
 # ---------------------------------------------------------------------------
 # Small helpers
 # ---------------------------------------------------------------------------
@@ -121,11 +165,13 @@ def _safe_folder(name: Any) -> str:
         text = text.replace(ch, "_")
     return text.strip("._") or "unknown"
 
+
 def _write_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
     tmp.replace(path)
+
 
 def _read_json(path: Path) -> Any:
     try:
@@ -133,8 +179,10 @@ def _read_json(path: Path) -> Any:
     except Exception:
         return None
 
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
 
 def _market_tz() -> ZoneInfo:
     try:
@@ -142,15 +190,19 @@ def _market_tz() -> ZoneInfo:
     except Exception:
         return ZoneInfo("Asia/Kolkata")
 
+
 def _market_now() -> datetime:
     return datetime.now(_market_tz())
+
 
 def _market_hhmmss() -> str:
     return _market_now().strftime("%H:%M:%S")
 
+
 def _post_market() -> bool:
     """True after the Indian cash-market close (15:30 IST)."""
     return _market_now().time() > _MARKET_CLOSE_TIME
+
 
 def _scheduled_stage_1_hhmm() -> str:
     """09:16:30 IST by default (OR + 20 s)."""
@@ -161,6 +213,7 @@ def _scheduled_stage_1_hhmm() -> str:
     )
     total = (base + 20) % 86400
     return f"{total // 3600:02d}:{(total % 3600) // 60:02d}:{total % 60:02d}"
+
 
 def _round_levels(levels: dict[str, Any] | None) -> dict[str, Any]:
     if not isinstance(levels, dict):
@@ -173,13 +226,16 @@ def _round_levels(levels: dict[str, Any] | None) -> dict[str, Any]:
             out[k] = v
     return out
 
+
 def _resolve_buffer(typical: float, avg: float, mode: str) -> tuple[float, float]:
     if mode == "typical_plus_minus_avg":
         return -(typical + avg), (typical + avg)
     return -typical, typical
 
+
 def _placeholder_key(ticker: str, strike: int, strike_type: str) -> str:
     return f"STRATEGY|{_safe_folder(ticker)}_{strike}_{strike_type}"
+
 
 # ---------------------------------------------------------------------------
 # EMA math (self-contained — mirrors the live engine)
@@ -197,6 +253,7 @@ def _ema(values: list[float], period: int) -> list[float | None]:
         prev = values[i] * k + prev * (1.0 - k)
         out[i] = prev
     return out
+
 
 def _compute_crosses(candles: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Return every fast/slow EMA cross in the candle series.
@@ -237,6 +294,7 @@ def _compute_crosses(candles: list[dict[str, Any]]) -> list[dict[str, Any]]:
             }
         )
     return out
+
 
 def _last_day_last_cross(
     candles: list[dict[str, Any]],
@@ -289,6 +347,7 @@ def _last_day_last_cross(
         "day": last_day,
         "crosses_in_window": len(tail_crosses),
     }
+
 
 # ---------------------------------------------------------------------------
 # Service
@@ -409,6 +468,32 @@ class StrategySelectionService:
             _market_now().date().isoformat(),
         )
 
+        # ---- Aggregate per-strike failure counters across all indexes # #
+        # Extracted from each per-index result's ``enrichment`` dict so
+        # the wrapper (strategy_selection_task._log_diagnostics) can emit
+        # a single aggregate WARNING without re-walking the index list.
+        aggregate_failures: dict[str, Any] = {
+            "unresolved": {"count": 0, "examples": []},
+            "not_subscribed": {"count": 0, "examples": []},
+            "or_not_written": {"count": 0, "examples": []},
+        }
+        for p in per_index:
+            fails = p.get("per_strike_failures") or {}
+            for category in ("unresolved", "not_subscribed", "or_not_written"):
+                entry = fails.get(category) or {}
+                try:
+                    aggregate_failures[category]["count"] += int(
+                        entry.get("count") or 0
+                    )
+                except (TypeError, ValueError):
+                    pass
+                for ex in (entry.get("examples") or []):
+                    if (
+                        len(aggregate_failures[category]["examples"]) < 5
+                        and ex not in aggregate_failures[category]["examples"]
+                    ):
+                        aggregate_failures[category]["examples"].append(ex)
+
         summary = {
             "status": "ok",
             "stage": "stage_1",
@@ -423,6 +508,8 @@ class StrategySelectionService:
             "avg_buffer_points": avg_buffer,
             "buffer_mode": config.STRATEGY_BUFFER_MODE,
             "indexes": per_index,
+            # ---- aggregate per-strike failure counters ---------------- #
+            "per_strike_failures": aggregate_failures,
         }
 
         # Write to <stage_1>/stage_1_summary.json (canonical) and also to
@@ -717,6 +804,11 @@ class StrategySelectionService:
             "subscribed": 0,
             "or_written": 0,
             "total": 0,
+            "per_strike_failures": {
+                "unresolved": {"count": 0, "examples": []},
+                "not_subscribed": {"count": 0, "examples": []},
+                "or_not_written": {"count": 0, "examples": []},
+            },
         }
         if config.STRATEGY_FETCH_HISTORY:
             enrichment = self._enrich_with_upstox(
@@ -751,6 +843,7 @@ class StrategySelectionService:
             "resolved_count": enrichment.get("resolved", 0),
             "subscribed_count": enrichment.get("subscribed", 0),
             "or_written_count": enrichment.get("or_written", 0),
+            "per_strike_failures": enrichment.get("per_strike_failures"),
             "generated_at": _now_iso(),
         }
         _write_json(base_dir / "stage_1_summary.json", index_summary)
@@ -780,6 +873,7 @@ class StrategySelectionService:
             "resolved_count": enrichment.get("resolved", 0),
             "subscribed_count": enrichment.get("subscribed", 0),
             "or_written_count": enrichment.get("or_written", 0),
+            "per_strike_failures": enrichment.get("per_strike_failures"),
             "base_dir": str(base_dir),
         }
 
@@ -823,17 +917,22 @@ class StrategySelectionService:
         base_dir: Path,
         strikes: list[int],
         today_iso: str,
-    ) -> dict[str, int]:
+    ) -> dict[str, Any]:
         """Enrich every strike folder with Upstox data.
 
         For each strike, this:
           1. resolves the real Upstox instrument_key,
           2. registers it (and its trading symbol / triple) in the registry,
           3. subscribes it to the live WebSocket feed (so the S1/S2
-             trackers can read its LTP once the market opens),
+             R2/S3 trackers can read its LTP once the market opens),
           4. calculates the strike's OWN opening range from its own
              09:15 1-minute candle (via the existing REST fallback) and
-             writes the result to `<strike folder>/opening_range.json`,
+             writes the result to **both** the canonical location
+             (``data/index/<safe_key>/opening_range.json``) and the
+             strike's own stage-1 folder
+             (``<strike folder>/opening_range.json``) via the
+             ``target_folder`` argument to
+             ``opening_range_service.calculate_one()``,
           5. fetches 30 days of history, computes the crosses, and writes
              `candles.json` / `ema_crosses.json` / `last_day_cross.json`.
 
@@ -848,6 +947,11 @@ class StrategySelectionService:
               "subscribed": int,   # strikes now subscribed to the live feed
               "or_written": int,   # strikes whose own OR was written
               "total":      int,   # total strikes considered
+              "per_strike_failures": {
+                "unresolved":     {"count": int, "examples": [str, ...]},
+                "not_subscribed": {"count": int, "examples": [str, ...]},
+                "or_not_written": {"count": int, "examples": [str, ...]},
+              },
             }
         """
         token = token_service.get_access_token()
@@ -862,6 +966,23 @@ class StrategySelectionService:
                 "subscribed": 0,
                 "or_written": 0,
                 "total": len(strikes) * 2,
+                "per_strike_failures": {
+                    "unresolved": {
+                        "count": 0,
+                        "examples": [],
+                        "reason": "no_token",
+                    },
+                    "not_subscribed": {
+                        "count": 0,
+                        "examples": [],
+                        "reason": "no_token",
+                    },
+                    "or_not_written": {
+                        "count": 0,
+                        "examples": [],
+                        "reason": "no_token",
+                    },
+                },
             }
 
         work: list[tuple[int, str, Path]] = []
@@ -873,6 +994,12 @@ class StrategySelectionService:
         subscribed = 0
         or_written = 0
         workers = min(config.STRATEGY_MAX_WORKERS, max(1, len(work)))
+
+        # Per-strike failure collection (thread-safe via the lock-free
+        # list-append pattern: each worker appends its own entry).
+        unresolved_examples: list[str] = []
+        not_subscribed_examples: list[str] = []
+        or_not_written_examples: list[str] = []
 
         # Lazy import so this module stays importable even if the feed
         # service is being refactored — the try/except around the call
@@ -901,11 +1028,13 @@ class StrategySelectionService:
                     strike_type=s_type,
                 )
                 if not key:
+                    label = f"{ticker} {strike} {s_type}"
                     logger.info(
                         "[strategy] %s: could not resolve Upstox key "
-                        "for strike=%s type=%s",
-                        ticker, strike, s_type,
+                        "for strike=%s type=%s (query=%r)",
+                        ticker, strike, s_type, label,
                     )
+                    unresolved_examples.append(label)
                     return False, False, False
 
                 trading_symbol = f"{ticker} {strike} {s_type}"
@@ -943,61 +1072,88 @@ class StrategySelectionService:
                             else:
                                 logger.warning(
                                     "[strategy] %s: live feed subscribe "
-                                    "returned False (strike=%s type=%s key=%s)",
+                                    "returned False (strike=%s type=%s key=%s). "
+                                    "The S1/S2 trackers will not receive LTP "
+                                    "for this contract.",
                                     ticker, strike, s_type, key,
                                 )
+                                not_subscribed_examples.append(key)
                     except Exception:
                         logger.exception(
                             "[strategy] %s: live feed subscribe raised "
                             "(strike=%s type=%s key=%s)",
                             ticker, strike, s_type, key,
                         )
+                        not_subscribed_examples.append(key)
 
                 # ---- (4) Calculate the strike's OWN OR and write it - #
+                # CRITICAL FIX: pass ``target_folder=folder`` so the OR
+                # is written to BOTH the canonical location
+                # (data/index/<safe_key>/opening_range.json) AND this
+                # strike's stage-1 folder. The S1/S2 trackers read the
+                # strike folder, so without this argument they always
+                # saw ``isolation_level = None`` and skipped the contract.
                 or_ok = False
                 try:
-                    or_result = opening_range_service.calculate_one(key)
+                    or_result = opening_range_service.calculate_one(
+                        key, target_folder=folder,
+                    )
                     if or_result.get("status") == "ok":
-                        payload_for_strike = {
-                            "instrument_key": key,
-                            "underlying": ticker,
-                            "strike_price": strike,
-                            "strike_type": s_type,
-                            "trading_symbol": trading_symbol,
-                            "day": or_result.get("day"),
-                            "first_candle": or_result.get("first_candle") or {},
-                            "candle_source": or_result.get("candle_source"),
-                            "levels": or_result.get("levels") or {},
-                            "calculated_at": or_result.get("calculated_at"),
-                            "source": "strategy_selection",
-                            "generated_at": _now_iso(),
-                        }
-                        _write_json(
-                            folder / "opening_range.json",
-                            payload_for_strike,
-                        )
-                        or_ok = True
-                        _levels = or_result.get("levels") or {}
-                        logger.info(
-                            "[strategy] %s: strike OR written "
-                            "(strike=%s type=%s R2=%s S3=%s source=%s)",
-                            ticker, strike, s_type,
-                            _levels.get("R2"),
-                            _levels.get("S3"),
-                            or_result.get("candle_source"),
-                        )
+                        # No need to re-write here — calculate_one already
+                        # wrote both copies via _write_json_atomic. But
+                        # verify the file exists in the strike folder so
+                        # the ``or_written`` counter is honest.
+                        strike_or_path = folder / config.OPENING_RANGE_FILENAME
+                        if strike_or_path.exists():
+                            or_ok = True
+                            _levels = or_result.get("levels") or {}
+                            logger.info(
+                                "[strategy] %s: strike OR written "
+                                "(strike=%s type=%s R2=%s S3=%s source=%s "
+                                "canonical=%s strike_folder=%s)",
+                                ticker, strike, s_type,
+                                _levels.get("R2"),
+                                _levels.get("S3"),
+                                or_result.get("candle_source"),
+                                or_result.get("canonical_path"),
+                                or_result.get("target_path"),
+                            )
+                        else:
+                            # ``calculate_one`` returned ok but the file
+                            # is not where the trackers read it. Log
+                            # loudly — this is the 2026-10-22 failure
+                            # shape.
+                            logger.warning(
+                                "[strategy] %s: strike OR reported ok but "
+                                "the file is not present at %s. The S1/S2 "
+                                "trackers will skip this contract. "
+                                "canonical=%s target=%s",
+                                ticker, strike_or_path,
+                                or_result.get("canonical_path"),
+                                or_result.get("target_path"),
+                            )
+                            or_not_written_examples.append(
+                                f"{key} ({ticker} {strike} {s_type})"
+                            )
                     else:
-                        logger.info(
+                        logger.warning(
                             "[strategy] %s: strike OR not available "
-                            "(strike=%s type=%s reason=%s)",
-                            ticker, strike, s_type,
+                            "(strike=%s type=%s key=%s reason=%s). "
+                            "The S1/S2 trackers will skip this contract.",
+                            ticker, strike, s_type, key,
                             or_result.get("reason"),
+                        )
+                        or_not_written_examples.append(
+                            f"{key} ({ticker} {strike} {s_type})"
                         )
                 except Exception:
                     logger.exception(
                         "[strategy] %s: strike OR calc failed "
                         "(strike=%s type=%s key=%s)",
                         ticker, strike, s_type, key,
+                    )
+                    or_not_written_examples.append(
+                        f"{key} ({ticker} {strike} {s_type})"
                     )
 
                 # ---- (5) History fetch + cross computation -------- #
@@ -1078,20 +1234,48 @@ class StrategySelectionService:
                 if o:
                     or_written += 1
 
+        total = len(work)
+        # Failure counts: derived from the totals and the example lists.
+        # ``unresolved_examples`` collects one entry per unresolved
+        # strike (each strike contributes exactly one entry), so its
+        # length is exactly the unresolved count.
+        unresolved_count = len(unresolved_examples)
+        not_subscribed_count = len(not_subscribed_examples)
+        or_not_written_count = len(or_not_written_examples)
+
         logger.info(
             "[strategy] %s: enrichment complete — "
-            "resolved=%d/%d subscribed=%d or_written=%d",
+            "resolved=%d/%d subscribed=%d or_written=%d "
+            "unresolved=%d not_subscribed=%d or_not_written=%d",
             ticker,
             resolved,
-            len(work),
+            total,
             subscribed,
             or_written,
+            unresolved_count,
+            not_subscribed_count,
+            or_not_written_count,
         )
+
         return {
             "resolved": resolved,
             "subscribed": subscribed,
             "or_written": or_written,
-            "total": len(work),
+            "total": total,
+            "per_strike_failures": {
+                "unresolved": {
+                    "count": unresolved_count,
+                    "examples": unresolved_examples[:5],
+                },
+                "not_subscribed": {
+                    "count": not_subscribed_count,
+                    "examples": not_subscribed_examples[:5],
+                },
+                "or_not_written": {
+                    "count": or_not_written_count,
+                    "examples": or_not_written_examples[:5],
+                },
+            },
         }
 
     def _resolve_upstox_key(
