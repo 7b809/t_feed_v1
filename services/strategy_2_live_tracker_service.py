@@ -40,11 +40,64 @@ This module now:
     * logs ``loaded / missing_level / ltp_available`` on every reload;
     * fires a WARNING naming the first offender when any contract has
       ``isolation_level is None``;
-    * emits a heartbeat every 5 min with the live LTP coverage;
+    * emits a heartbeat every 5 min with the live LTP coverage and
+      the missing-level count;
     * surfaces ``contracts_missing_level`` / ``contracts_with_ltp`` /
       ``last_load_at`` through ``status()`` so
       ``/admin/strategy2/tracker/status`` shows the tracker's data
       health, not just that its thread is alive.
+
+Shape tolerance and notification suppression (10:40 fix)
+--------------------------------------------------------
+The ``isolated`` record in ``stage_3_summary.json`` used to carry its
+touch metadata only under a nested ``touch`` sub-dict::
+
+    {
+      "isolated": {
+        "instrument_key": "BSE_FO|1125354",
+        "ticker": "SENSEX",
+        "touch": {                            <-- nested
+          "touch_minute": "2026-10-22T10:40",
+          "touch_ltp": 402.95,
+          ...
+        }
+      }
+    }
+
+``strategy_2_isolation_service._pick_isolated()`` was patched on
+2026-10-22 to also promote those fields to the top level (making the
+shape flat), but two things can still leave a nested-only record in
+play:
+
+    * a rolling deploy (the on-disk summary is written by pre-patch
+      code while the tracker is already running the post-patch code),
+    * a stale summary from an earlier run that survives a process
+      restart because the tracker's in-memory touches were cleared.
+
+The 10:40 restart logs showed exactly this: two "Contract Isolated"
+Telegram messages with ``Touch LTP: None`` / ``Touch At: None``,
+immediately after "Application Started". The notifier was reading
+``isolated["touch_ltp"]`` at the top level and getting ``None`` for
+a record that did have ``touch_ltp`` nested under ``isolated["touch"]``.
+
+This module now:
+
+    * reads every touch-related field via ``_get_isolated_field()``,
+      which checks the top level first and falls back to the nested
+      ``touch`` sub-dict. Both the flat (post-fix) and nested (legacy)
+      shapes yield the same values;
+    * **suppresses the Telegram notification** and logs a WARNING
+      when both ``touch_ltp`` and ``touch_minute`` are empty after
+      tolerant reads — a malformed isolated record can no longer
+      produce a misleading "Contract Isolated" message;
+    * applies the same guard inside ``_refresh_summary()`` — the
+      ``_last_isolated_key`` tracking uses the tolerant read so a
+      malformed record does not trigger a spurious notification.
+
+The rule is: **no data → no notification**. The log line always
+fires (so the failure is visible), but the phone only sees a
+"Contract Isolated" message when the record actually carries the
+touch metadata required to act on it.
 """
 
 from __future__ import annotations
@@ -79,14 +132,17 @@ _HEARTBEAT_SECONDS = 300.0
 _RELOAD_INTERVAL_POPULATED = 30.0
 _RELOAD_INTERVAL_EMPTY = 5.0
 
+
 def _market_tz() -> ZoneInfo:
     try:
         return ZoneInfo(config.MARKET_TIMEZONE)
     except Exception:
         return ZoneInfo("Asia/Kolkata")
 
+
 def _market_now() -> datetime:
     return datetime.now(_market_tz())
+
 
 def _parse_hhmm(text: str, default: dtime) -> dtime:
     raw = str(text or "").strip()
@@ -98,14 +154,50 @@ def _parse_hhmm(text: str, default: dtime) -> dtime:
     except (ValueError, IndexError):
         return default
 
+
 def _in_window() -> bool:
     start = _parse_hhmm(config.STRATEGY_2_TRACKER_WINDOW_START, dtime(9, 15))
     end = _parse_hhmm(config.STRATEGY_2_TRACKER_WINDOW_END, dtime(15, 30))
     now = _market_now().time()
     return start <= now <= end
 
+
 def _snapshot_touched() -> set[str]:
     return {c["instrument_key"] for c in strategy_2_isolation_service.touches()}
+
+
+# ---------------------------------------------------------------------------
+# Tolerant reader for the isolated record (10:40 fix)
+# ---------------------------------------------------------------------------
+def _get_isolated_field(isolated: dict[str, Any] | None, *names: str) -> Any:
+    """Return the first non-empty value of the named fields from the
+    isolated record.
+
+    Reads the top level first, then the nested ``touch`` sub-dict.
+    Handles both the post-fix flat shape (top-level fields populated)
+    and the legacy nested shape (fields only under ``isolated["touch"]``).
+
+    Args:
+        isolated: the ``isolated`` record from ``stage_3_summary.json``.
+        *names:   one or more field names, tried in order. The first
+                  that yields a non-empty value at either level wins.
+
+    Returns ``None`` if no named field exists in either location.
+    """
+    if not isinstance(isolated, dict):
+        return None
+    touch = isolated.get("touch")
+    if not isinstance(touch, dict):
+        touch = {}
+    for name in names:
+        v = isolated.get(name)
+        if v not in (None, ""):
+            return v
+        v = touch.get(name)
+        if v not in (None, ""):
+            return v
+    return None
+
 
 class Strategy2LiveTrackerService:
     def __init__(self) -> None:
@@ -441,7 +533,10 @@ class Strategy2LiveTrackerService:
         the tracker is alive and what its view of the world is."""
         touched = _snapshot_touched()
         ltp_available = 0
+        missing_level = 0
         for c in contracts:
+            if c.get("isolation_level") is None:
+                missing_level += 1
             try:
                 if live_feed_service.get_latest_ltp(c["instrument_key"]) is not None:
                     ltp_available += 1
@@ -449,9 +544,10 @@ class Strategy2LiveTrackerService:
                 continue
         logger.info(
             "[strategy2-tracker] heartbeat — contracts=%d touched=%d "
-            "ltp_available=%d isolated=%s",
+            "missing_level=%d ltp_available=%d isolated=%s",
             len(contracts),
             len(touched & {c["instrument_key"] for c in contracts}),
+            missing_level,
             ltp_available,
             (self._last_scan.get("isolated") or {}).get("instrument_key")
             if isinstance(self._last_scan.get("isolated"), dict)
@@ -470,7 +566,7 @@ class Strategy2LiveTrackerService:
                 "stage2_contracts", self._last_scan.get("stage2_contracts", 0)
             )
             self._last_scan["touched_contracts"] = summary.get(
-                "touched_contracts", 0
+                "touched_contracts", self._last_scan.get("touched_contracts", 0)
             )
             self._last_scan["isolated"] = summary.get("isolated")
             self._last_scan["updated_at"] = summary.get("generated_at")
@@ -485,7 +581,23 @@ class Strategy2LiveTrackerService:
 
             isolated = summary.get("isolated")
             if isolated:
-                key = f"{isolated['instrument_key']}"
+                # ---- Shape-aware isolated key ---------------------- #
+                # ``_get_isolated_field`` reads both the flat (post-fix)
+                # and nested (legacy) shapes. A malformed record that
+                # has no readable key must not be treated as a new
+                # isolated pick.
+                key = str(
+                    _get_isolated_field(isolated, "instrument_key") or ""
+                ).strip()
+                if not key:
+                    logger.warning(
+                        "[strategy2-tracker] isolated record has no "
+                        "readable instrument_key at the top level or "
+                        "under isolated['touch']. Record shape may be "
+                        "malformed. Skipping notification. record=%r",
+                        isolated,
+                    )
+                    return
                 if key != self._last_isolated_key:
                     self._last_isolated_key = key
                     self._notify_new_isolation(isolated)
@@ -493,20 +605,66 @@ class Strategy2LiveTrackerService:
             logger.exception("[strategy2-tracker] summary refresh failed")
 
     def _notify_new_isolation(self, isolated: dict[str, Any]) -> None:
+        """Send the "Contract Isolated" Telegram notification.
+
+        Reads every touch-related field through ``_get_isolated_field``
+        so both the flat (post-fix) and nested (legacy) shapes work.
+        **Suppresses the notification** and logs a WARNING when both
+        ``touch_ltp`` and ``touch_minute`` are empty after tolerant
+        reads — the 10:40 symptom was a "Contract Isolated" message
+        with ``Touch LTP: None`` for a record that had ``touch_ltp``
+        nested under ``isolated["touch"]``. That notification was
+        useless to act on; the log line is enough.
+        """
         try:
+            touch_ltp = _get_isolated_field(isolated, "touch_ltp")
+            touch_minute = _get_isolated_field(isolated, "touch_minute")
+
+            # ---- Suppress when touch metadata is missing --------- #
+            if touch_ltp is None and not touch_minute:
+                logger.warning(
+                    "[strategy2-tracker] suppressing isolated "
+                    "notification for %s — touch_ltp=%r touch_minute=%r. "
+                    "The record is missing touch metadata; this is a "
+                    "stale/persisted summary, not a live touch. Run "
+                    "POST /admin/strategy2/stage3/run to rebuild the "
+                    "summary from the current tracker state.",
+                    _get_isolated_field(isolated, "instrument_key"),
+                    touch_ltp,
+                    touch_minute,
+                )
+                return
+
             telegram_service.send_message(
                 build(
                     emoji="🔒",
                     title="Strategy 2 · Contract Isolated",
                     fields=[
-                        ("Ticker", isolated.get("ticker")),
-                        ("Strike", isolated.get("strike_price")),
-                        ("Type", isolated.get("strike_type")),
-                        ("Index", isolated.get("index_name")),
-                        ("Level", isolated.get("isolation_level_name")),
-                        ("Touch LTP", f"{isolated.get('touch_ltp')}"),
-                        ("Touch At", isolated.get("touch_minute")),
-                        ("Key", isolated.get("instrument_key")),
+                        ("Ticker", _get_isolated_field(isolated, "ticker")),
+                        (
+                            "Strike",
+                            _get_isolated_field(isolated, "strike_price"),
+                        ),
+                        (
+                            "Type",
+                            _get_isolated_field(isolated, "strike_type"),
+                        ),
+                        (
+                            "Index",
+                            _get_isolated_field(isolated, "index_name"),
+                        ),
+                        (
+                            "Level",
+                            _get_isolated_field(
+                                isolated, "isolation_level_name"
+                            ),
+                        ),
+                        ("Touch LTP", f"{touch_ltp}"),
+                        ("Touch At", touch_minute),
+                        (
+                            "Key",
+                            _get_isolated_field(isolated, "instrument_key"),
+                        ),
                     ],
                     sections=[(
                         "Next Step",
@@ -528,5 +686,6 @@ class Strategy2LiveTrackerService:
             return json.loads(path.read_text(encoding="utf-8"))
         except Exception:
             return None
+
 
 strategy_2_live_tracker_service = Strategy2LiveTrackerService()

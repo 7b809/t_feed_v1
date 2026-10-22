@@ -41,9 +41,11 @@ This module now:
           "missing"         — stage_3_summary.json does not exist
           "no_isolated"     — exists, but ``isolated`` is null
           "no_touch_minute" — exists, ``isolated`` is present, but
-                              it has no ``touch_minute`` field
+                              it carries no readable ``touch_minute``
+                              at either the top level or in the nested
+                              ``touch`` sub-dict
           "ok"              — exists, ``isolated`` is present with a
-                              touch minute
+                              readable touch minute
 
       and emits a tailored message per state (INFO for the normal
       "waiting for a touch" case, WARNING for the two failure states);
@@ -69,6 +71,36 @@ This module now:
     * adds ``stage_3_summary_state`` / ``sibling_resolved`` /
       ``entry_ltp_available`` / ``candle_stats`` to the returned dict
       and to ``stage_4_summary.json`` for every status.
+
+Isolated record shape tolerance
+-------------------------------
+``stage_3_summary.json`` has carried the isolated contract's touch
+metadata under a nested ``touch`` sub-dict since the module was first
+written::
+
+    {
+      "isolated": {
+        "instrument_key": "BSE_FO|1125354",
+        "ticker": "SENSEX",
+        "touch": {                            <-- nested
+          "touch_minute": "2026-10-22T10:40",
+          "touch_ltp": 402.95,
+          ...
+        }
+      }
+    }
+
+``strategy_2_isolation_service._pick_isolated()`` was patched on
+2026-10-22 to also promote those fields to the top level (so the
+shape becomes flat), but a rolling deploy means an on-disk summary
+written by the pre-patch code still has the nested-only shape.
+
+``_get_isolated_field()`` reads a field from the top level first and
+falls back to the nested ``touch`` sub-dict, so both shapes classify
+correctly. This eliminates the 10:40 symptom where a valid isolated
+record was mis-classified as ``state="no_touch_minute"`` (which made
+Stage 4 return ``status="no_isolated"`` and ``placed=0``) simply
+because the reader only looked at the top level.
 
 Signature note
 --------------
@@ -160,7 +192,43 @@ def _flip_type(strike_type: str) -> str:
     return st
 
 
-def _classify_stage3_summary(stage3: dict[str, Any], exists: bool) -> str:
+# ---------------------------------------------------------------------------
+# Tolerant reader for the isolated record (fixes the 10:40 symptom)
+# ---------------------------------------------------------------------------
+def _get_isolated_field(isolated: dict[str, Any] | None, *names: str) -> Any:
+    """Return the first non-empty value of the named fields from the
+    isolated record.
+
+    Reads the top level first, then the nested ``touch`` sub-dict.
+    Handles both the post-fix flat shape (top-level fields populated)
+    and the legacy nested shape (fields only under ``isolated["touch"]``).
+
+    Args:
+        isolated: the ``isolated`` record from ``stage_3_summary.json``.
+        *names:   one or more field names, tried in order. The first
+                  that yields a non-empty value at either level wins.
+
+    Returns ``None`` if no named field exists in either location.
+    """
+    if not isinstance(isolated, dict):
+        return None
+    touch = isolated.get("touch")
+    if not isinstance(touch, dict):
+        touch = {}
+    for name in names:
+        v = isolated.get(name)
+        if v not in (None, ""):
+            return v
+        v = touch.get(name)
+        if v not in (None, ""):
+            return v
+    return None
+
+
+def _classify_stage3_summary(
+    stage3: dict[str, Any],
+    exists: bool,
+) -> str:
     """Return a short state string for the Stage-3 summary payload.
 
     Values:
@@ -170,8 +238,9 @@ def _classify_stage3_summary(stage3: dict[str, Any], exists: bool) -> str:
                              is the normal "no contract has touched its
                              S3 level yet" state.
         "no_touch_minute"  — ``isolated`` exists but carries no
-                             ``touch_minute``. Malformed record —
-                             usually a manual edit or an older schema.
+                             readable ``touch_minute`` at either the top
+                             level or in the nested ``touch`` sub-dict.
+                             Malformed record.
         "ok"               — ``isolated`` is present with a touch
                              minute; proceed to cross detection.
     """
@@ -182,7 +251,9 @@ def _classify_stage3_summary(stage3: dict[str, Any], exists: bool) -> str:
     isolated = stage3.get("isolated")
     if not isolated:
         return "no_isolated"
-    if not str(isolated.get("touch_minute") or "").strip():
+    # Tolerant read: top-level first, then nested ``touch`` sub-dict.
+    touch_minute = _get_isolated_field(isolated, "touch_minute")
+    if not str(touch_minute or "").strip():
         return "no_touch_minute"
     return "ok"
 
@@ -307,19 +378,33 @@ class Strategy2OrderService:
         stage3 = _read_json(summary_path) or {}
         stage3_state = _classify_stage3_summary(stage3, stage3_exists)
         isolated = stage3.get("isolated") or None
-        isolated_key = (
-            str(isolated.get("instrument_key") or "?") if isolated else "?"
-        )
 
+        # Tolerant reads for the fields the pre-flight log reports.
+        # These work against both the flat (post-fix) and nested
+        # (legacy) isolated-record shapes.
+        isolated_key = (
+            str(_get_isolated_field(isolated, "instrument_key") or "?")
+            if isolated else "?"
+        )
+        isolated_touch_minute = _get_isolated_field(isolated, "touch_minute")
+        isolated_touch_ltp = _get_isolated_field(isolated, "touch_ltp")
+
+        # NOTE: ``day`` / ``generated_at`` / ``isolated_key`` are on
+        # the correct argument slots here. The previous revision had
+        # them shifted by one (the 10:40 log showed day=<timestamp>,
+        # generated_at=<key>, isolated_key=?).
         logger.info(
             "[strategy2:%s] stage_4 stage_3 summary: state=%s exists=%s "
-            "day=%s generated_at=%s isolated_key=%s",
+            "day=%s generated_at=%s isolated_key=%s "
+            "isolated_touch_minute=%s isolated_touch_ltp=%s",
             reason,
             stage3_state,
             stage3_exists,
+            stage3.get("day") or "?",
             stage3.get("generated_at") or "?",
             isolated_key,
-            stage3.get("day") or "?",
+            isolated_touch_minute or "?",
+            isolated_touch_ltp if isolated_touch_ltp is not None else "?",
         )
 
         # ---- 1. No isolated contract (three sub-states) -------------- #
@@ -353,8 +438,12 @@ class Strategy2OrderService:
         if stage3_state == "no_touch_minute":
             logger.warning(
                 "[strategy2:%s] stage_4: stage_3_summary.json has an "
-                "isolated record but its 'touch_minute' is empty. This "
-                "is a malformed record — check the file manually: %s.",
+                "isolated record but its 'touch_minute' is empty at "
+                "both the top level and the nested 'touch' sub-dict. "
+                "This is a malformed record — check the file manually: "
+                "%s. Expected shape: {'isolated': {'touch_minute': "
+                "'YYYY-MM-DDTHH:MM', ...}} OR {'isolated': {'touch': "
+                "{'touch_minute': '...'}, ...}}.",
                 reason, summary_path,
             )
             return self._summary_no_isolated(
@@ -362,11 +451,32 @@ class Strategy2OrderService:
                 stage3_state=stage3_state,
             )
 
-        # stage3_state == "ok" — proceed to cross detection
+        # stage3_state == "ok" — proceed to cross detection.
+        # Tolerant reads so we don't depend on the isolated record
+        # being flat: both shapes yield the same values here.
         assert isolated is not None  # guaranteed by the classification
 
-        instrument_key = str(isolated.get("instrument_key") or "").strip()
-        touch_minute = str(isolated.get("touch_minute") or "").strip()
+        instrument_key_raw = _get_isolated_field(isolated, "instrument_key")
+        touch_minute_raw = _get_isolated_field(isolated, "touch_minute")
+        instrument_key = str(instrument_key_raw or "").strip()
+        touch_minute = str(touch_minute_raw or "").strip()
+
+        # Defensive: classification said "ok", but the field reads
+        # came back empty. Treat as malformed rather than crash.
+        if not instrument_key or not touch_minute:
+            logger.warning(
+                "[strategy2:%s] stage_4: stage_3_summary.json classifies "
+                "as 'ok' but the tolerant reader could not extract "
+                "instrument_key=%r or touch_minute=%r. Check %s.",
+                reason,
+                instrument_key or None,
+                touch_minute or None,
+                summary_path,
+            )
+            return self._summary_no_isolated(
+                reason, effective_mode, catchup, post_market,
+                stage3_state="no_touch_minute",
+            )
 
         # Load candles from the live EMA engine.
         from services.live_ema_engine import live_ema_engine
@@ -431,7 +541,9 @@ class Strategy2OrderService:
 
         # ---- 3. Decide order direction + instrument ----------------- #
         cross_type = str(cross.get("type") or "").lower()
-        original_type = str(isolated.get("strike_type") or "").upper()
+        original_type = str(
+            _get_isolated_field(isolated, "strike_type") or ""
+        ).upper()
         entry_ltp = float(cross.get("close") or 0.0)
         entry_ltp_source = "cross_close"
         entry_ltp_minute = cross.get("minute")
@@ -461,12 +573,12 @@ class Strategy2OrderService:
                     "<strike>_%s/strategy_meta.json should contain a "
                     "non-empty upstox_instrument_key).",
                     reason,
-                    isolated.get("ticker"),
-                    isolated.get("strike_price"),
+                    _get_isolated_field(isolated, "ticker"),
+                    _get_isolated_field(isolated, "strike_price"),
                     original_type,
                     order_type,
-                    isolated.get("ticker"),
-                    isolated.get("strike_price"),
+                    _get_isolated_field(isolated, "ticker"),
+                    _get_isolated_field(isolated, "strike_price"),
                     order_type,
                     order_type,
                     order_type,
@@ -508,23 +620,29 @@ class Strategy2OrderService:
             )
 
         # ---- 4. Build the paper order -------------------------------- #
+        # All isolated-record reads go through _get_isolated_field()
+        # so this block works against both flat and nested shapes.
         order = {
-            "day": isolated.get("day"),
+            "day": _get_isolated_field(isolated, "day"),
             "strategy": "strategy_2",
-            "ticker": isolated.get("ticker"),
-            "index_name": isolated.get("index_name"),
-            "index_key": isolated.get("index_key"),
-            "isolation_level_name": isolated.get("isolation_level_name"),
-            "isolation_level": isolated.get("isolation_level"),
+            "ticker": _get_isolated_field(isolated, "ticker"),
+            "index_name": _get_isolated_field(isolated, "index_name"),
+            "index_key": _get_isolated_field(isolated, "index_key"),
+            "isolation_level_name": _get_isolated_field(
+                isolated, "isolation_level_name"
+            ),
+            "isolation_level": _get_isolated_field(
+                isolated, "isolation_level"
+            ),
             "s3_touch_minute": touch_minute,
-            "s3_touch_ltp": isolated.get("touch_ltp"),
+            "s3_touch_ltp": _get_isolated_field(isolated, "touch_ltp"),
             "cross_minute": cross.get("minute"),
             "cross_type": cross_type,
             "original_strike_type": original_type,
             "order_strike_type": order_type,
             "order_instrument_key": order_instrument_key,
             "sibling_resolved": sibling_resolved,
-            "strike_price": isolated.get("strike_price"),
+            "strike_price": _get_isolated_field(isolated, "strike_price"),
             "side": "BUY",
             "quantity": config.STRATEGY_2_ORDER_QTY,
             "entry_ltp": entry_ltp,
@@ -541,11 +659,14 @@ class Strategy2OrderService:
             "selected_at": _now_iso(),
             "placed_at": _now_iso(),
             "explanation": (
-                f"Stage 3 isolated {isolated.get('ticker')} "
-                f"{isolated.get('strike_price')} {original_type} after its "
-                f"own {isolated.get('isolation_level_name')} "
-                f"({isolated.get('isolation_level')}) was touched at "
-                f"{touch_minute} (ltp {isolated.get('touch_ltp')}). "
+                f"Stage 3 isolated "
+                f"{_get_isolated_field(isolated, 'ticker')} "
+                f"{_get_isolated_field(isolated, 'strike_price')} "
+                f"{original_type} after its own "
+                f"{_get_isolated_field(isolated, 'isolation_level_name')} "
+                f"({_get_isolated_field(isolated, 'isolation_level')}) "
+                f"was touched at {touch_minute} "
+                f"(ltp {_get_isolated_field(isolated, 'touch_ltp')}). "
                 f"Stage 4 then waited for the next EMA cross on the same "
                 f"contract. The first cross after the touch was "
                 f"{cross_type} at {cross.get('minute')} "
@@ -563,8 +684,8 @@ class Strategy2OrderService:
         base.mkdir(parents=True, exist_ok=True)
         out_dir = (
             base
-            / _safe(isolated.get("ticker"))
-            / _safe(isolated.get("index_name"))
+            / _safe(_get_isolated_field(isolated, "ticker"))
+            / _safe(_get_isolated_field(isolated, "index_name"))
         )
         out_dir.mkdir(parents=True, exist_ok=True)
         orders_path = out_dir / "orders.json"
@@ -588,7 +709,9 @@ class Strategy2OrderService:
             "day": order["day"],
             "order": order,
             "audit": {
-                "isolation_level": isolated.get("isolation_level_name"),
+                "isolation_level": _get_isolated_field(
+                    isolated, "isolation_level_name"
+                ),
                 "s3_touch_minute": touch_minute,
                 "cross_minute": cross.get("minute"),
                 "cross_type": cross_type,
@@ -642,8 +765,8 @@ class Strategy2OrderService:
         self, isolated: dict[str, Any], opposite_type: str
     ) -> str | None:
         """Lookup the sibling (opposite-type) contract from the registry."""
-        ticker = isolated.get("ticker")
-        strike = isolated.get("strike_price")
+        ticker = _get_isolated_field(isolated, "ticker")
+        strike = _get_isolated_field(isolated, "strike_price")
         if not ticker or strike is None:
             return None
         try:

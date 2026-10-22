@@ -51,7 +51,7 @@ This module now:
     * logs a WARNING when an index crosses its R2 but the tracker has
       no contracts to activate — the exact Oct 22 failure mode;
     * emits a heartbeat every 5 min with ``contracts /
-      indexes_crossed / activated``;
+      indexes_crossed / activated / crossed_r2_pending``;
     * surfaces ``loaded_contracts`` / ``loaded_indexes`` /
       ``last_reload_at`` through ``status()`` so
       ``/admin/strategy/tracker/status`` shows the tracker's data
@@ -59,6 +59,46 @@ This module now:
     * logs a WARNING from ``run_catchup()`` when the Upstox token is
       missing, because that failure mode used to look identical to a
       quiet trading day (0 activations, no log).
+
+Additional diagnostics (this revision)
+--------------------------------------
+Building on the 2026-10-22 patch, this revision adds:
+
+    * **Per-contract skip diagnostics in ``_tick()``.** When an index
+      crosses its R2 but fewer contracts activate than expected, the
+      log now names every skipped contract with its instrument_key
+      and isolation_level at INFO. Previously a partial activation
+      was silent — the "R2 Crossed" Telegram message only reported
+      the count, not why the other contracts were skipped.
+
+    * **A ``crossed_r2_pending`` counter in the heartbeat.** Number
+      of tracked indices whose current LTP ≥ R2 but whose activated
+      contract count is still 0. A non-zero value means the tracker
+      is running but the pipeline is producing nothing for those
+      indices. This is the exact "safety net is running but not
+      firing" signal that was missing on 2026-10-22.
+
+    * **A "partial tree" INFO on ``_load_stage2``.** During the first
+      second of Stage-2's copy, a reader can see ticker folders but
+      no strike folders. Previously that silently loaded 0 contracts
+      and the operator had no way to distinguish "Stage 2 has not
+      started" from "Stage 2 is mid-copy". Now the two states log
+      distinct lines.
+
+    * **A top-level ``contracts_total`` in ``run_catchup()``'s return
+      dict.** The wrapper (``token_tasks/strategy_tracker_catchup_task``)
+      currently sums ``contracts_total`` per index to compute the
+      aggregate, which forces it to reach into the nested list. A
+      top-level field removes that. Kept alongside ``activated_total``
+      so existing consumers (which only looked at ``activated_total``)
+      are unaffected.
+
+    * **Shape-tolerant isolated-record helpers.** ``_get_isolated_field``
+      and ``_promote_touch_fields`` mirror the S2-side helpers. S1's
+      activation records do not use the nested ``touch`` sub-dict
+      shape, but defining the helpers keeps the two trackers'
+      contracts aligned and future-proofs against another
+      S2-style nesting regression reaching into S1's summary.
 
 Simulation mode (catch-up) — PER-CONTRACT EVALUATION, WINDOW-BOUNDED
 -------------------------------------------------------------------
@@ -290,6 +330,56 @@ def _opening_minute_key(today: str) -> str:
 def _short_key(key: str) -> str:
     s = str(key or "")
     return s if len(s) <= 40 else s[:20] + "…" + s[-16:]
+
+
+# --------------------------------------------------------------------------- #
+# Shape-tolerant readers                                                       #
+# --------------------------------------------------------------------------- #
+# These mirror the helpers in ``strategy_2_isolation_service`` and
+# ``strategy_2_order_service``. S1's activation records carry their
+# touch metadata at the top level (no nested ``touch`` sub-dict), so
+# the readers here mostly exist to keep the two trackers' shape
+# contracts identical — and to future-proof against another S2-style
+# nesting regression reaching into S1's summary.
+_TOUCH_FIELDS_TO_PROMOTE = ("touch_minute", "touch_ltp", "touch_time", "day")
+
+
+def _get_isolated_field(isolated: dict[str, Any] | None, *names: str) -> Any:
+    """Return the first non-empty value of the named fields.
+
+    Reads the top level first, then the nested ``touch`` sub-dict.
+    Returns ``None`` if no named field exists in either location.
+    """
+    if not isinstance(isolated, dict):
+        return None
+    touch = isolated.get("touch")
+    if not isinstance(touch, dict):
+        touch = {}
+    for name in names:
+        v = isolated.get(name)
+        if v not in (None, ""):
+            return v
+        v = touch.get(name)
+        if v not in (None, ""):
+            return v
+    return None
+
+
+def _promote_touch_fields(record: dict[str, Any]) -> dict[str, Any]:
+    """Return a shallow copy of ``record`` with nested ``touch.*`` fields
+    promoted to the top level.
+
+    Idempotent, top-level-wins (only fills when the top level is empty).
+    """
+    out = dict(record)
+    touch = out.get("touch")
+    if isinstance(touch, dict):
+        for field in _TOUCH_FIELDS_TO_PROMOTE:
+            if out.get(field) in (None, ""):
+                nested = touch.get(field)
+                if nested not in (None, ""):
+                    out[field] = nested
+    return out
 
 
 # --------------------------------------------------------------------------- #
@@ -752,18 +842,70 @@ class StrategyLiveTrackerService:
         end = _parse_hhmm(config.STRATEGY_TRACKER_WINDOW_END)
         return start <= now <= end
 
+    def _crossed_r2_pending(self) -> int:
+        """Return the number of tracked indices whose current LTP is
+        at or above their R2 but which have 0 activated contracts.
+
+        A non-zero value on a live day means the tracker is running
+        and the index R2 is crossed — but the pipeline is producing
+        nothing for that index. That is the exact "safety net is
+        running but not firing" signal that was missing on 2026-10-22.
+        """
+        pending = 0
+        for index_key in (config.STRATEGY_TRACKER_INDEX_KEYS or []):
+            index_key = str(index_key or "").strip()
+            if not index_key:
+                continue
+            try:
+                ltp = live_feed_service.get_latest_ltp(index_key)
+                if ltp is None:
+                    continue
+                or_payload = opening_range_service.get_opening_range(index_key)
+                if not or_payload.get("available") or not or_payload.get("is_today"):
+                    continue
+                r2 = (or_payload.get("levels") or {}).get("R2")
+                if r2 is None or ltp < float(r2):
+                    continue
+                contracts = self._contracts_by_index.get(index_key) or []
+                activated_for_index = sum(
+                    1 for c in contracts
+                    if str(c.get("instrument_key")) in self._activated
+                )
+                if activated_for_index == 0:
+                    pending += 1
+            except Exception:
+                continue
+        return pending
+
     def _heartbeat(self) -> None:
         """Emit one INFO line every 5 min with the tracker's view."""
         contracts = sum(len(v) for v in self._contracts_by_index.values())
+        pending = self._crossed_r2_pending()
         logger.info(
             "[stage_3] heartbeat — contracts=%d indexes=%d "
-            "activated=%d indexes_crossed=%d in_window=%s",
+            "activated=%d indexes_crossed=%d crossed_r2_pending=%d "
+            "in_window=%s",
             contracts,
             len(self._contracts_by_index),
             len(self._activated),
             len(self._notified_index_crossed),
+            pending,
             self._in_window(),
         )
+        # A non-zero crossed_r2_pending on a live day is the "tracker
+        # is running but not firing" warning. Fire it once per
+        # heartbeat so an operator cannot miss it in the log.
+        if pending > 0 and self._in_window():
+            logger.warning(
+                "[stage_3] %d index(es) have crossed their own R2 but "
+                "the tracker has 0 activated contracts for them. This "
+                "is the 'safety net is running but not firing' state. "
+                "Check data/strategy/stage_3_r2_activated/"
+                "stage_3_summary.json and the per-contract decisions "
+                "in data/strategy/stage_3_r2_activated/"
+                "stage_3_decisions.json.",
+                pending,
+            )
 
     # ------------------------------------------------------------------ #
     # Notifications                                                      #
@@ -781,7 +923,9 @@ class StrategyLiveTrackerService:
             logger.warning(
                 "[stage_3] window open (%s) with 0 contracts in cache — "
                 "Stage 2 has not written yet. The tracker will pick up "
-                "contracts on the next reload (every %.0fs while empty).",
+                "contracts on the next reload (every %.0fs while empty). "
+                "Check GET /admin/strategy/isolation (Stage 2 summary) "
+                "and GET /admin/strategy (Stage 1 reason field).",
                 config.STRATEGY_TRACKER_WINDOW_START,
                 _RELOAD_INTERVAL_EMPTY,
             )
@@ -791,7 +935,8 @@ class StrategyLiveTrackerService:
                     f"R2 tracking window started.\n"
                     f"⚠️ 0 contracts in cache — Stage 2 has not run yet.\n"
                     f"Waiting for Stage 2 output (reload every "
-                    f"{int(_RELOAD_INTERVAL_EMPTY)}s)."
+                    f"{int(_RELOAD_INTERVAL_EMPTY)}s).\n"
+                    f"Check: GET /admin/strategy/isolation"
                 ),
                 level="WARNING",
             )
@@ -877,9 +1022,16 @@ class StrategyLiveTrackerService:
             )
             return
 
+        # --- Partial-write detection ---------------------------------- #
+        # During the first second of Stage-2's copy, ticker folders
+        # exist but no strike folders have been populated yet. Detecting
+        # that state lets the operator distinguish "Stage 2 has not
+        # started" from "Stage 2 is mid-copy".
+        ticker_dirs_seen = 0
         for ticker_dir in sorted(stage2_base.iterdir()):
             if not ticker_dir.is_dir() or ticker_dir.name.startswith("."):
                 continue
+            ticker_dirs_seen += 1
             for index_dir in sorted(ticker_dir.iterdir()):
                 if not index_dir.is_dir():
                     continue
@@ -923,12 +1075,22 @@ class StrategyLiveTrackerService:
         # Log level hint:
         #   * 0 contracts in-window on a trading day is the exact
         #     2026-10-22 signature — WARNING, not INFO.
+        #   * ticker dirs present but 0 contracts → probably mid-copy
+        #     of a fresh Stage-2 write — INFO, named as such.
         #   * otherwise INFO.
         if total == 0:
             if self._in_window():
                 logger.warning(
                     "[stage_3] reload — contracts=0 indexes=0 "
-                    "(inside window; Stage 2 has not written yet)",
+                    "(inside window; Stage 2 has not written yet). "
+                    "ticker_dirs_seen=%d",
+                    ticker_dirs_seen,
+                )
+            elif ticker_dirs_seen > 0:
+                logger.info(
+                    "[stage_3] reload — partial tree: ticker_dirs_seen=%d "
+                    "indexes=0 contracts=0 (Stage 2 may be mid-copy)",
+                    ticker_dirs_seen,
                 )
             else:
                 logger.info(
@@ -981,7 +1143,7 @@ class StrategyLiveTrackerService:
 
             contracts = self._contracts_by_index.get(index_key) or []
 
-            # ---- Diagnose the "R2 crossed but nothing to activate" # 
+            # ---- Diagnose the "R2 crossed but nothing to activate" #
             # case (the exact 2026-10-22 failure mode). Fire once per
             # index per day so a quiet stage-3 log isn't flooded when
             # Stage 2 is genuinely empty.
@@ -995,23 +1157,61 @@ class StrategyLiveTrackerService:
                         "produced zero isolated contracts for this "
                         "index, or the reload has not picked them up. "
                         "Stage 4 will report no_activations for this "
-                        "index.",
+                        "index. Check GET /admin/strategy/isolation.",
                         index_key, float(ltp), float(r2),
                     )
                 continue
 
             activated_now = 0
+            skipped_details: list[dict[str, Any]] = []
             for c in contracts:
-                if self._activate(
+                did_activate = self._activate(
                     c, index_key, float(r2), float(ltp), today,
                     mode="live", catchup=False, post_market=False,
                     activation_method="live",
-                ):
+                )
+                if did_activate:
                     activated_now += 1
+                else:
+                    # Already activated is not a "skip" for diagnostics
+                    # purposes; only record genuinely skipped contracts.
+                    key = str(c.get("instrument_key") or "")
+                    if key not in self._activated:
+                        skipped_details.append({
+                            "instrument_key": key,
+                            "strike_price": c.get("strike_price"),
+                            "strike_type": c.get("strike_type"),
+                            "reason": "activation_returned_false",
+                        })
 
             if activated_now:
                 self._notify_index_crossed(
                     index_key, float(r2), float(ltp), activated_now,
+                )
+
+            # ---- Per-contract skip diagnostics --------------------- #
+            # When R2 was crossed, contracts exist, but some were not
+            # activated, log the details. Previously a partial run was
+            # silent — the "R2 Crossed" message only reported the
+            # count, not why the other contracts were skipped.
+            if skipped_details:
+                logger.info(
+                    "[stage_3] %s: R2 crossed (ltp=%.2f r2=%.2f), "
+                    "activated=%d/%d, skipped=%d. Details: %s",
+                    index_key,
+                    float(ltp),
+                    float(r2),
+                    activated_now,
+                    len(contracts),
+                    len(skipped_details),
+                    ", ".join(
+                        f"{s['instrument_key']}({s['strike_price']}{s['strike_type']})"
+                        for s in skipped_details[:5]
+                    )
+                    + (
+                        f", … ({len(skipped_details) - 5} more)"
+                        if len(skipped_details) > 5 else ""
+                    ),
                 )
 
     # ------------------------------------------------------------------ #
@@ -1029,6 +1229,7 @@ class StrategyLiveTrackerService:
                 "catchup": False,
                 "post_market": _post_market(),
                 "activated_total": 0,
+                "contracts_total": 0,
                 "indexes": [],
             }
 
@@ -1376,8 +1577,9 @@ class StrategyLiveTrackerService:
 
         logger.info(
             "[stage_3] catch-up COMPLETE — mode=%s day=%s "
-            "activated_total=%d across %d index(es)",
-            mode, today, activated_total, len(per_index_decisions),
+            "activated_total=%d contracts_total=%d across %d index(es)",
+            mode, today, activated_total, total_contracts,
+            len(per_index_decisions),
         )
 
         return {
@@ -1392,6 +1594,9 @@ class StrategyLiveTrackerService:
             "mode": mode,
             "day": today,
             "activated_total": activated_total,
+            # New top-level field — the wrapper no longer has to sum
+            # ``contracts_total`` per index to compute the aggregate.
+            "contracts_total": total_contracts,
             "indexes": per_index_decisions,
         }
 
@@ -1890,6 +2095,18 @@ class StrategyLiveTrackerService:
             "window_start": config.STRATEGY_TRACKER_WINDOW_START,
             "window_end": config.STRATEGY_TRACKER_WINDOW_END,
             "activated_count": len(self._activated),
+            # Extra field so downstream classifiers (the Stage-4
+            # ``_classify_stage3_summary``) can read a distinct
+            # "activated_count" that is cheap to compare to zero
+            # without walking the ``activated`` list.
+            "contracts_activated": len(self._activated),
+            # Mirror S2's summary shape so S1 and S2 stage-3 files can
+            # be inspected with the same jq filter.
+            "stage_3_decisions_state": (
+                "empty_activations"
+                if not self._activated
+                else "ok"
+            ),
             "activated": list(self._activated.values()),
         }
         _write_json(base / "stage_3_summary.json", summary)

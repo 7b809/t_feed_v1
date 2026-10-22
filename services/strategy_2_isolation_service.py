@@ -51,14 +51,61 @@ strike folder), so every contract this service examined had
 of the 2026-10-22 ``no_activations`` / ``placed=0`` failure even
 though Stage 1 + Stage 2 had produced 68 contracts.
 
-Diagnostic counter
-------------------
-``run()`` now tracks ``contracts_missing_level`` — the number of
-isolated contracts whose own OR could not be read from either path.
-When this is non-zero the service logs a WARNING naming the count and
-the ticker/index/strike triple of the first offending contract, so a
-future recurrence is visible in ``logs/strategy_2_isolation_service.log``
-at 09:17:00 IST instead of only as a missing Stage-4 order.
+Isolated record shape (flat)
+----------------------------
+``isolated`` in ``stage_3_summary.json`` used to be the raw enriched
+per-contract dict from ``_pick_isolated()``. That dict carries the
+touch metadata under a nested ``touch`` sub-dict::
+
+    {
+      "instrument_key": "BSE_FO|1125354",
+      "ticker": "SENSEX",
+      "strike_price": 73900,
+      "strike_type": "PE",
+      "isolation_level_name": "S3",
+      "isolation_level": 428.0,
+      "touched": true,
+      "touch": {                          <-- nested
+        "touch_minute": "2026-10-22T10:40",
+        "touch_ltp": 402.95,
+        "touch_time": "...",
+        "day": "2026-10-22"
+      }
+    }
+
+But S2 Stage 4 (``strategy_2_order_service._classify_stage3_summary``)
+and the live tracker's Telegram notifier (``_notify_new_isolation``)
+both read ``isolated["touch_minute"]`` / ``isolated["touch_ltp"]`` at
+the **top level**. With the nested shape:
+
+    * ``_classify_stage3_summary()`` returned ``state="no_touch_minute"``
+      for every valid isolated record, causing Stage 4 to return
+      ``status="no_isolated"`` and ``placed=0`` even when the S3 touch
+      was recorded correctly.
+    * ``_notify_new_isolation()`` sent a "Contract Isolated" Telegram
+      message with ``Touch LTP: None`` and ``Touch At: None`` for the
+      same reason.
+
+That is the 2026-10-22 post-restart symptom (visible in the 10:40
+logs) and the reason Stage 4 S2 never placed an order even though
+the tracker had recorded 3+ touches.
+
+``_promote_touch_fields()`` fixes this by **flattening** the nested
+``touch.*`` fields to the top level of the isolated record whenever
+``_pick_isolated()`` returns a winner. The original ``touch`` sub-dict
+is preserved for backward compatibility with any external consumer.
+
+Diagnostic counters
+-------------------
+``run()`` tracks ``contracts_missing_level`` — the number of isolated
+contracts whose own OR could not be read from either path. When this
+is non-zero the service logs a WARNING naming the count and the
+ticker/index/strike triple of the first offending contract.
+
+The summary also carries a top-level ``day`` field (ISO date) so
+``strategy_2_order_service._classify_stage3_summary()`` can
+distinguish "empty activations" from "stale day" without having to
+reach into the nested ``isolated.touch.day``.
 """
 
 from __future__ import annotations
@@ -94,6 +141,9 @@ def _market_now() -> datetime:
 def _market_hhmmss() -> str:
     return _market_now().strftime("%H:%M:%S")
 
+def _today_iso() -> str:
+    return _market_now().date().isoformat()
+
 def _post_market() -> bool:
     return _market_now().time() > _MARKET_CLOSE_TIME
 
@@ -127,6 +177,47 @@ def _stage3_root() -> Path:
 
 def _stage1_root() -> Path:
     return Path(config.STRATEGY_BASE_DIR) / config.STRATEGY_STAGE_1_NAME
+
+# ---------------------------------------------------------------------------
+# Isolated record shape helper (root-cause fix for the 10:40 symptom)
+# ---------------------------------------------------------------------------
+_TOUCH_FIELDS_TO_PROMOTE = ("touch_minute", "touch_ltp", "touch_time", "day")
+
+def _promote_touch_fields(record: dict[str, Any]) -> dict[str, Any]:
+    """Return a shallow copy of ``record`` with nested ``touch.*``
+    fields promoted to the top level.
+
+    The S2 Stage-3 service has always carried the touch metadata under
+    ``record["touch"]`` (a nested dict). S2 Stage 4
+    (``strategy_2_order_service._classify_stage3_summary``) and the live
+    tracker's Telegram notifier both read ``record["touch_minute"]`` /
+    ``record["touch_ltp"]`` at the top level. Without this promotion
+    the classifier sees ``touch_minute=None`` for every isolated record
+    and returns ``state="no_touch_minute"``, silently marking every
+    order attempt as ``no_isolated`` — the exact 2026-10-22 symptom
+    visible in the 10:40 post-restart logs.
+
+    Top-level values always win over nested values: the promotion only
+    fills a field when the top-level field is missing/empty. The nested
+    ``touch`` sub-dict is preserved on the output so any caller that
+    reads it directly keeps working.
+
+    Idempotent: calling this twice produces the same result.
+    """
+    out = dict(record)
+    touch = out.get("touch")
+    if isinstance(touch, dict):
+        for field in _TOUCH_FIELDS_TO_PROMOTE:
+            current = out.get(field)
+            if current in (None, ""):
+                nested = touch.get(field)
+                if nested not in (None, ""):
+                    out[field] = nested
+    # Also fill ``day`` from the top-level record if still empty and
+    # the touch record has no day either. Safe default: today.
+    if out.get("day") in (None, ""):
+        out["day"] = _today_iso()
+    return out
 
 # ---------------------------------------------------------------------------
 # Isolation-level lookup
@@ -278,11 +369,18 @@ def _pick_isolated(
       1) If only one touched -> return it
       2) Filter by ticker priority (NIFTY > SENSEX by default)
       3) Within winning ticker: nearest strike to index LTP
+
+    The returned dict is passed through ``_promote_touch_fields()`` so
+    the top-level ``touch_minute`` / ``touch_ltp`` / ``touch_time`` /
+    ``day`` fields are populated even when the source enriched record
+    still carries them under the nested ``touch`` sub-dict. This is
+    what makes the record readable by the S2 Stage-4 classifier and
+    the live tracker's Telegram notifier.
     """
     if not touched:
         return None
     if len(touched) == 1:
-        return dict(touched[0])
+        return _promote_touch_fields(touched[0])
 
     # Sort by (priority, distance_to_index_ltp)
     def _key(c: dict[str, Any]) -> tuple[int, float]:
@@ -293,7 +391,7 @@ def _pick_isolated(
         return (prio, dist)
 
     ordered = sorted(touched, key=_key)
-    winner = dict(ordered[0])
+    winner = _promote_touch_fields(ordered[0])
     winner["filter_basis"] = (
         f"ticker_priority={winner.get('ticker')} "
         f"nearest_to_atm={_strike_distance_to_index_ltp(winner, index_ltp_by_key.get(winner.get('index_key') or '')):.2f}"
@@ -349,7 +447,7 @@ class Strategy2IsolationService:
             "touch_ltp": touch_ltp,
             "touch_minute": touch_minute,
             "touch_time": _now_iso(),
-            "day": _market_now().date().isoformat(),
+            "day": _today_iso(),
         }
         logger.info(
             "[strategy2] touch recorded: %s %s %s @ %s (level=%.2f, ltp=%.2f)",
@@ -482,6 +580,10 @@ class Strategy2IsolationService:
             "status": "ok",
             "stage": "stage_3",
             "strategy": "strategy_2",
+            # Top-level ``day`` so downstream classifiers can
+            # distinguish "empty activations" from "stale day" without
+            # reaching into the nested isolated.touch.day.
+            "day": _today_iso(),
             "reason": reason,
             "mode": effective_mode,
             "catchup": bool(catchup),
@@ -491,9 +593,13 @@ class Strategy2IsolationService:
             "actual_time_ist": _market_hhmmss(),
             "stage2_contracts": len(enriched),
             "touched_contracts": len(touched_list),
-            # New diagnostic field — surfaces in stage_3_summary.json
-            # and in /admin/strategy2.
+            # Diagnostic field — surfaces in stage_3_summary.json and
+            # in /admin/strategy2.
             "contracts_missing_level": len(missing_level),
+            # ``isolated`` is now a flat record (post-fix): top-level
+            # ``touch_minute`` / ``touch_ltp`` / ``touch_time`` / ``day``
+            # are populated, and the original nested ``touch`` sub-dict
+            # is preserved for backward compatibility.
             "isolated": isolated,
             "contracts": [
                 {
@@ -528,6 +634,7 @@ class Strategy2IsolationService:
             (
                 f"{isolated['ticker']} {isolated['strike_price']} "
                 f"{isolated['strike_type']}"
+                f" (touch_minute={isolated.get('touch_minute')})"
                 if isolated
                 else "none"
             ),
@@ -584,6 +691,10 @@ class Strategy2IsolationService:
             "status": "disabled",
             "stage": "stage_3",
             "strategy": "strategy_2",
+            # Consistent ``day`` field across every summary shape so
+            # downstream classifiers never have to special-case a
+            # disabled/no_stage_2 run.
+            "day": _today_iso(),
             "reason": reason,
             "mode": mode,
             "catchup": bool(catchup),
@@ -604,6 +715,8 @@ class Strategy2IsolationService:
             "status": "no_stage_2",
             "stage": "stage_3",
             "strategy": "strategy_2",
+            # Same reasoning as _summary_disabled.
+            "day": _today_iso(),
             "reason": reason,
             "mode": mode,
             "catchup": bool(catchup),
