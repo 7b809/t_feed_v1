@@ -1,4 +1,4 @@
-# services/scheduler_service.py
+# File: services/scheduler_service.py
 """Singleton APScheduler wrapper.
 
 Jobs:
@@ -10,14 +10,14 @@ Jobs:
     * strategy_tracker_catchup      — cron, 09:17:30 IST (Stage-3 catch-up)
     * strategy_order_calc           — cron, 09:18:00 IST (Stage 3+4)
 
-Readiness / watchdog jobs (NEW):
+Readiness / watchdog jobs:
     * readiness_digest              — cron, 08:45 IST
     * preflight_recheck             — cron, 09:05 IST
     * or_watchdog                   — cron, 09:17:10 IST
     * stage1_watchdog               — cron, 09:17:30 IST
 
 Strategy 2 jobs:
-    * strategy_2_stage3_isolation   — cron, 09:18:00 IST
+    * strategy_2_stage3_isolation   — cron, 09:18:15 IST
     * strategy_2_stage4_order       — cron, 15:25:00 IST
     * strategy_2_stage3_recheck     — cron, every 5 min 09-15
 
@@ -41,20 +41,68 @@ It is a belt-and-braces guard on top of the post-Stage-2 hook inside
 The job is harmless when the post-Stage-2 hook already ran: the
 tracker reloads from disk and the per-contract scan is idempotent
 (already-activated contracts keep their existing record).
+
+Diagnostics (added for the 2026-10-22 daily-flow patch set)
+-----------------------------------------------------------
+Before this revision the module used ``logging.getLogger(__name__)``
+and therefore wrote nothing to ``logs/scheduler_service.log`` or
+``logs_text/scheduler_service.txt``. Every log line from this module
+was console-only. That is why, on 2026-10-22, the operator had to
+reconstruct what the scheduler was supposed to do from the *effects*
+of the crons — the whole "which crons fired at what time" question
+could not be answered from the file logs.
+
+This module now:
+
+    * uses ``get_logger(__file__)`` so every line reaches the file
+      handlers;
+    * emits a **cron-chain verification block** at the end of
+      ``start()`` that shows every strategy cron's effective
+      wall-clock time in the market timezone, in firing order:
+
+          Strategy cron chain (all times market timezone):
+            OR              09:16:10  (opening_range_calc)
+            S1.stage1       09:16:30  (strategy_selection_calc)
+            S1.stage2       09:17:00  (strategy_isolation_calc)
+            OR.watchdog     09:17:10  (or_watchdog)
+            S1.stage3_catchup 09:17:30 (strategy_tracker_catchup)
+            S1.stage4       09:18:00  (strategy_order_calc)
+            S2.stage3       09:18:15  (strategy_2_stage3_isolation)
+            S2.stage3_recheck 09:15..15:30 every 5 min
+            S2.stage4       15:25:00  (strategy_2_stage4_order)
+
+      This makes the ordering claim checkable from a single
+      ``grep 'Strategy cron chain' logs/scheduler_service.log``.
+
+    * emits a **cron-ordering WARNING** if any of the strategy cron
+      times end up out of expected order (e.g. after a config change
+      that moves ``STRATEGY_ORDER_HOUR:MINUTE`` earlier than
+      ``OPENING_RANGE_HOUR:MINUTE``). This catches the "I changed a
+      config and the sort order broke" class of bug at process start,
+      before any cron fires.
+
+    * ``shutdown()`` logs a one-line summary of the strategy cron
+      count that was active, so a restart log shows the "what was
+      running" -> "what will run after restart" transition in two
+      adjacent lines.
 """
 
 from __future__ import annotations
 
-import logging
+from datetime import time as _dtime
 from pathlib import Path
 
 from apscheduler.schedulers.background import BackgroundScheduler
 
 from core import config
+from core.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__file__)
 
 
+# --------------------------------------------------------------------------- #
+# Stage-2 tree probe (used by the S2 recheck self-gate)                       #
+# --------------------------------------------------------------------------- #
 def _stage2_tree_has_contracts() -> bool:
     try:
         root = Path(config.STRATEGY_BASE_DIR) / config.STRATEGY_STAGE_2_NAME
@@ -88,6 +136,133 @@ def _strategy2_recheck() -> None:
     run_strategy_2_isolation()
 
 
+# --------------------------------------------------------------------------- #
+# Cron-chain verification helpers                                             #
+# --------------------------------------------------------------------------- #
+def _hhmmss(h: int, m: int, s: int = 0) -> str:
+    """Return ``HH:MM:SS`` with zero-padding. Safe for out-of-range inputs."""
+    try:
+        return f"{int(h) % 24:02d}:{int(m) % 60:02d}:{int(s) % 60:02d}"
+    except (TypeError, ValueError):
+        return "??:??:??"
+
+
+def _cron_seconds(h: int, m: int, s: int = 0) -> int:
+    """Return seconds-since-midnight for ``h:m:s`` (wrapping at 24h)."""
+    try:
+        return ((int(h) % 24) * 3600 + (int(m) % 60) * 60 + int(s)) % 86400
+    except (TypeError, ValueError):
+        return 0
+
+
+def _log_cron_chain(
+    *,
+    s1_h: int, s1_m: int, s1_s: int,
+    s2_h: int, s2_m: int, s2_s: int,
+    catchup_h: int, catchup_m: int, catchup_s: int,
+    or_watchdog_h: int, or_watchdog_m: int, or_watchdog_s: int,
+    s1_watchdog_h: int, s1_watchdog_m: int, s1_watchdog_s: int,
+    s2_stage4_hour: int, s2_stage4_minute: int,
+) -> None:
+    """Emit the ordered cron chain as a multi-line INFO block.
+
+    This is the single grep target that lets an operator confirm the
+    whole daily strategy timeline in one place: ``grep 'Strategy cron
+    chain' logs/scheduler_service.log``.
+    """
+    or_time = _hhmmss(
+        config.OPENING_RANGE_HOUR,
+        config.OPENING_RANGE_MINUTE,
+        config.OPENING_RANGE_SECOND,
+    )
+    s1_stage1_time = _hhmmss(s1_h, s1_m, s1_s)
+    s1_stage2_time = _hhmmss(s2_h, s2_m, s2_s)
+    or_watchdog_time = _hhmmss(
+        or_watchdog_h, or_watchdog_m, or_watchdog_s
+    )
+    s1_catchup_time = _hhmmss(catchup_h, catchup_m, catchup_s)
+    s1_stage4_time = _hhmmss(
+        config.STRATEGY_ORDER_HOUR, config.STRATEGY_ORDER_MINUTE, 0
+    )
+    s2_stage3_time = _hhmmss(
+        config.STRATEGY_ORDER_HOUR, config.STRATEGY_ORDER_MINUTE, 15
+    )
+    s2_stage4_time = _hhmmss(s2_stage4_hour, s2_stage4_minute, 0)
+
+    logger.info(
+        "Strategy cron chain (all times %s):\n"
+        "  OR                %s  (opening_range_calc)\n"
+        "  S1.stage1         %s  (strategy_selection_calc)\n"
+        "  S1.stage2         %s  (strategy_isolation_calc)\n"
+        "  OR.watchdog       %s  (or_watchdog)\n"
+        "  S1.stage1_watchdog %s (stage1_watchdog)\n"
+        "  S1.stage3_catchup %s  (strategy_tracker_catchup)\n"
+        "  S1.stage4         %s  (strategy_order_calc)\n"
+        "  S2.stage3         %s  (strategy_2_stage3_isolation)\n"
+        "  S2.stage3_recheck 09:15..15:30 every 5 min "
+        "(strategy_2_stage3_recheck)\n"
+        "  S2.stage4         %s  (strategy_2_stage4_order)",
+        config.MARKET_TIMEZONE,
+        or_time,
+        s1_stage1_time,
+        s1_stage2_time,
+        or_watchdog_time,
+        _hhmmss(s1_watchdog_h, s1_watchdog_m, s1_watchdog_s),
+        s1_catchup_time,
+        s1_stage4_time,
+        s2_stage3_time,
+        s2_stage4_time,
+    )
+
+    # ---- Ordering check --------------------------------------------- #
+    # The expected order is:
+    #   OR < S1.stage1 < S1.stage2 < S1.stage3_catchup < S1.stage4
+    #   < S2.stage3 < S2.stage4
+    # (S2.stage3_recheck is a repeating cron and is not part of the
+    # ordering check.)
+    ordered = [
+        ("OR", _cron_seconds(
+            config.OPENING_RANGE_HOUR,
+            config.OPENING_RANGE_MINUTE,
+            config.OPENING_RANGE_SECOND,
+        )),
+        ("S1.stage1", _cron_seconds(s1_h, s1_m, s1_s)),
+        ("S1.stage2", _cron_seconds(s2_h, s2_m, s2_s)),
+        ("S1.stage3_catchup", _cron_seconds(
+            catchup_h, catchup_m, catchup_s
+        )),
+        ("S1.stage4", _cron_seconds(
+            config.STRATEGY_ORDER_HOUR,
+            config.STRATEGY_ORDER_MINUTE,
+            0,
+        )),
+        ("S2.stage3", _cron_seconds(
+            config.STRATEGY_ORDER_HOUR,
+            config.STRATEGY_ORDER_MINUTE,
+            15,
+        )),
+        ("S2.stage4", _cron_seconds(s2_stage4_hour, s2_stage4_minute, 0)),
+    ]
+    prev_name, prev_sec = ordered[0]
+    for name, sec in ordered[1:]:
+        if sec <= prev_sec:
+            logger.warning(
+                "Strategy cron ordering issue: %s (%s) does not fire "
+                "AFTER %s (%s). The pipeline expects them strictly "
+                "increasing within the trading day. Check "
+                "STRATEGY_ORDER_HOUR/MINUTE, OPENING_RANGE_HOUR/MINUTE/"
+                "SECOND, and DAILY_REFRESH_HOUR/MINUTE.",
+                name,
+                _hhmmss(sec // 3600, (sec % 3600) // 60, sec % 60),
+                prev_name,
+                _hhmmss(prev_sec // 3600, (prev_sec % 3600) // 60, prev_sec % 60),
+            )
+        prev_name, prev_sec = name, sec
+
+
+# --------------------------------------------------------------------------- #
+# Scheduler service                                                           #
+# --------------------------------------------------------------------------- #
 class SchedulerService:
     def __init__(self) -> None:
         self._scheduler: BackgroundScheduler | None = None
@@ -153,7 +328,7 @@ class SchedulerService:
             replace_existing=True, misfire_grace_time=300,
         )
 
-        # -- Readiness digest + pre-flight (NEW) ------------------------ #
+        # -- Readiness digest + pre-flight ----------------------------- #
         if config.READINESS_DIGEST_ENABLED:
             scheduler.add_job(
                 run_readiness_digest, "cron",
@@ -174,17 +349,23 @@ class SchedulerService:
                 replace_existing=True, misfire_grace_time=120,
             )
 
-        # -- OR / Stage-1 watchdogs (NEW) ------------------------------- #
+        # -- OR / Stage-1 watchdogs ------------------------------------ #
+        or_watchdog_h = or_watchdog_m = or_watchdog_s = 0
+        s1_watchdog_h = s1_watchdog_m = s1_watchdog_s = 0
+
         if config.READINESS_WATCHDOG_ENABLED:
             or_sec = config.OPENING_RANGE_SECOND + 60
             or_min = config.OPENING_RANGE_MINUTE + (or_sec // 60)
             or_hr = config.OPENING_RANGE_HOUR + (or_min // 60)
+            or_watchdog_h = or_hr % 24
+            or_watchdog_m = or_min % 60
+            or_watchdog_s = or_sec % 60
             scheduler.add_job(
                 run_or_watchdog, "cron",
                 day_of_week=config.DAILY_REFRESH_DAYS,
-                hour=or_hr % 24,
-                minute=or_min % 60,
-                second=or_sec % 60,
+                hour=or_watchdog_h,
+                minute=or_watchdog_m,
+                second=or_watchdog_s,
                 id="or_watchdog",
                 replace_existing=True, misfire_grace_time=120,
             )
@@ -192,12 +373,15 @@ class SchedulerService:
             s1_sec = config.OPENING_RANGE_SECOND + 80
             s1_min = config.OPENING_RANGE_MINUTE + (s1_sec // 60)
             s1_hr = config.OPENING_RANGE_HOUR + (s1_min // 60)
+            s1_watchdog_h = s1_hr % 24
+            s1_watchdog_m = s1_min % 60
+            s1_watchdog_s = s1_sec % 60
             scheduler.add_job(
                 run_stage1_watchdog, "cron",
                 day_of_week=config.DAILY_REFRESH_DAYS,
-                hour=s1_hr % 24,
-                minute=s1_min % 60,
-                second=s1_sec % 60,
+                hour=s1_watchdog_h,
+                minute=s1_watchdog_m,
+                second=s1_watchdog_s,
                 id="stage1_watchdog",
                 replace_existing=True, misfire_grace_time=120,
             )
@@ -272,7 +456,7 @@ class SchedulerService:
             replace_existing=True, misfire_grace_time=300,
         )
 
-        # -- Strategy 2 -------------------------------------------------- #
+        # -- Strategy 2 ------------------------------------------------- #
         if config.STRATEGY_2_ENABLED:
             scheduler.add_job(
                 run_strategy_2_isolation, "cron",
@@ -299,7 +483,7 @@ class SchedulerService:
                 replace_existing=True, misfire_grace_time=600,
             )
 
-        # -- Daily backup ------------------------------------------------ #
+        # -- Daily backup ----------------------------------------------- #
         if config.DAILY_BACKUP_ENABLED:
             scheduler.add_job(
                 run_daily_backup, "cron",
@@ -313,6 +497,7 @@ class SchedulerService:
         scheduler.start()
         self._scheduler = scheduler
 
+        # ---- Compact summary line (kept from the original) --------- #
         logger.info(
             "Scheduler started — daily=%02d:%02d, digest=%02d:%02d, "
             "preflight=%02d:%02d, OR=%02d:%02d:%02d, S1.stage1=%02d:%02d:%02d, "
@@ -329,12 +514,39 @@ class SchedulerService:
             config.STRATEGY_2_ENABLED,
             config.DAILY_BACKUP_HOUR, config.DAILY_BACKUP_MINUTE,
         )
+
+        # ---- Cron-chain verification + ordering check --------------- #
+        _log_cron_chain(
+            s1_h=s1_h, s1_m=s1_m, s1_s=s1_s,
+            s2_h=s2_h, s2_m=s2_m, s2_s=s2_s,
+            catchup_h=catchup_h, catchup_m=catchup_m, catchup_s=catchup_s,
+            or_watchdog_h=or_watchdog_h,
+            or_watchdog_m=or_watchdog_m,
+            or_watchdog_s=or_watchdog_s,
+            s1_watchdog_h=s1_watchdog_h,
+            s1_watchdog_m=s1_watchdog_m,
+            s1_watchdog_s=s1_watchdog_s,
+            s2_stage4_hour=15, s2_stage4_minute=25,
+        )
+
         return scheduler
 
     def shutdown(self) -> None:
         if self._scheduler is not None and self._scheduler.running:
-            self._scheduler.shutdown(wait=False)
-            logger.info("Scheduler shutdown complete.")
+            try:
+                job_count = len(self._scheduler.get_jobs())
+            except Exception:
+                job_count = -1
+            try:
+                self._scheduler.shutdown(wait=False)
+                logger.info(
+                    "Scheduler shutdown complete — %d job(s) stopped.",
+                    job_count,
+                )
+            except Exception:
+                logger.exception(
+                    "Scheduler shutdown raised; forcing _scheduler = None."
+                )
         self._scheduler = None
 
 

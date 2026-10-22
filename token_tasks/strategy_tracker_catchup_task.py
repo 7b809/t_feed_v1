@@ -62,7 +62,7 @@ This wrapper now:
       INFO line per run with the summed counters
       (``contracts / activated / indexes``), the elapsed time, and
       the seconds remaining until Stage 4;
-    * emits a state-specific INFO or WARNING line for the three
+    * emits a state-specific INFO or WARNING line for the four
       sub-states (see "Sub-states" below);
     * emits one per-index breakdown line with
       ``contracts / activated / reason_code`` so a partially-broken
@@ -92,20 +92,25 @@ Sub-states
 ``_classify_run()`` returns one of:
 
     "disabled"        — STRATEGY_ENABLED or STRATEGY_TRACKER_ENABLED
-                        is false. The catch-up did nothing.
+                        is false. The catch-up did nothing. INFO
+                        (config is off — not an anomaly).
+    "no_indexes"      — the tracker returned no per-index entries.
+                        STRATEGY_TRACKER_INDEX_KEYS is empty or
+                        misconfigured. WARNING.
     "empty_tree"      — the Stage-2 tree has 0 contracts. **Stage 4
                         will report no_activations**; the operator
                         needs to check Stage 1/2 immediately (a
                         30-second window still remains before
-                        Stage 4).
+                        Stage 4). WARNING.
     "no_new_touches"  — the tree has contracts but no new touches
                         were recorded since the post-Stage-2 hook.
                         This is the *normal* quiet-day case; the
                         catch-up did its job (reload + re-scan) and
                         confirmed the tracker's view is up to date.
+                        INFO.
     "activated"       — one or more additional contracts were
                         activated by the catch-up. The success
-                        Telegram message is sent.
+                        Telegram message is sent. INFO.
 
 Timing budget
 -------------
@@ -113,6 +118,14 @@ The job fires at 09:17:30 and Stage 4 fires at 09:18:00, so the
 catch-up has 30 s to run before Stage 4 reads ``stage_3_summary.json``.
 The wrapper emits a WARNING if the elapsed time exceeds 25 s,
 leaving less than 5 s of headroom.
+
+Contracts-total source
+----------------------
+``_total_contracts()`` prefers the top-level ``contracts_total`` field
+added to the S1 tracker's ``run_catchup()`` return dict by the Oct 22
+patch. It falls back to summing ``contracts_total`` per index, so a
+rolling deploy where the tracker has not yet been patched still
+classifies correctly.
 """
 
 from __future__ import annotations
@@ -172,25 +185,40 @@ def _seconds_to_stage_4() -> int | None:
 # Counter helpers                                                             #
 # --------------------------------------------------------------------------- #
 def _total_contracts(summary: dict[str, Any]) -> int:
-    """Sum ``contracts_total`` across the per-index decisions.
+    """Return the total contract count from the tracker summary.
 
-    The S1 tracker's ``run_catchup()`` does not return a top-level
-    ``stage2_contracts`` field — the count is per index. This helper
-    exposes the aggregate for the diagnostic and the Telegram message.
+    Prefers the new top-level ``contracts_total`` field added by the
+    S1 tracker patch; falls back to summing ``contracts_total`` per
+    index so a rolling deploy (tracker not yet patched) never breaks
+    the classification.
     """
+    top = summary.get("contracts_total")
+    if top is not None:
+        try:
+            return int(top)
+        except (TypeError, ValueError):
+            pass
     indexes = summary.get("indexes") or []
     return sum(int(i.get("contracts_total") or 0) for i in indexes)
 
 
 def _total_activated(summary: dict[str, Any]) -> int:
-    return int(summary.get("activated_total") or 0)
+    try:
+        return int(summary.get("activated_total") or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 def _indexes_with_activations(summary: dict[str, Any]) -> int:
     indexes = summary.get("indexes") or []
-    return sum(
-        1 for i in indexes if int(i.get("contracts_activated") or 0) > 0
-    )
+    count = 0
+    for i in indexes:
+        try:
+            if int(i.get("contracts_activated") or 0) > 0:
+                count += 1
+        except (TypeError, ValueError):
+            continue
+    return count
 
 
 # --------------------------------------------------------------------------- #
@@ -203,8 +231,13 @@ def _classify_run(summary: dict[str, Any]) -> str:
     interpretation of each value.
     """
     status = str(summary.get("status") or "")
+
     if status == "disabled":
         return "disabled"
+
+    indexes = summary.get("indexes") or []
+    if not indexes:
+        return "no_indexes"
 
     contracts = _total_contracts(summary)
     if contracts == 0:
@@ -259,7 +292,18 @@ def _log_diagnostics(
     if sub_state == "disabled":
         logger.info(
             "[stage_3_catchup wrapper] disabled by config — "
-            "no work performed."
+            "no work performed. (STRATEGY_ENABLED or "
+            "STRATEGY_TRACKER_ENABLED is false.)"
+        )
+        return
+
+    if sub_state == "no_indexes":
+        logger.warning(
+            "[stage_3_catchup wrapper] tracker returned NO indexes — "
+            "STRATEGY_TRACKER_INDEX_KEYS is empty or misconfigured. "
+            "Stage 4 will report no_activations. Check "
+            "config.STRATEGY_TRACKER_INDEX_KEYS and "
+            "config.STRATEGY_INDEXES."
         )
         return
 
@@ -299,10 +343,12 @@ def _log_diagnostics(
         )
         return
 
+    # Defensive: any sub-state the classifier did not recognise.
     logger.warning(
         "[stage_3_catchup wrapper] unexpected sub_state=%r — no "
-        "specific diagnosis available.",
-        sub_state,
+        "specific diagnosis available. status=%r contracts=%d "
+        "activated_total=%d indexes=%d",
+        sub_state, status, contracts, activated, indexes_count,
     )
 
 
