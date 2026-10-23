@@ -52,7 +52,6 @@ UPGRADE_PIP = True
 # ---------------------------------------------------------------------------
 PRESERVE_PATHS = [
     "meta_data",        # log backups created by this script
-    "data",             # runtime state: options, candles, crossovers, isolation
     "logs",             # protect the live log file while the app runs
     ".env",             # secrets — must never be deleted
     ".env.local",       # optional local overrides
@@ -68,6 +67,7 @@ REMOVE_PATHS = [
     ".pytest_cache",
     ".mypy_cache",
     ".ruff_cache",
+    "storage"
 ]
 
 TIMEZONE = "Asia/Kolkata"

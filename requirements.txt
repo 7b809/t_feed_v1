@@ -1,10 +1,12 @@
+# requirements.txt
+
 fastapi
 uvicorn
-httpx
-python-dotenv
-pydantic
-upstox-python-sdk
-tzdata
-requests
-websockets
 pymongo
+python-dotenv
+mega-sdk
+APScheduler
+upstox-python-sdk
+websockets
+pytest
+httpx

@@ -1,6 +1,6 @@
 #!/bin/bash
 
-APP_NAME="upstox_market_stream"
+APP_NAME="ema_v2"
 PORT=8002
 
 PID_FILE="${APP_NAME}.pid"

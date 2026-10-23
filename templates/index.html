@@ -1,0 +1,806 @@
+<!-- templates/index.html -->
+<!DOCTYPE html>
+<html lang="en" data-bs-theme="dark">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>EMA Live Dashboard · mega_archive_service</title>
+<link
+  href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
+  rel="stylesheet"
+/>
+<link
+  href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css"
+  rel="stylesheet"
+/>
+<style>
+  :root {
+    --bg: #0b1020;
+    --card-bg: #131a2b;
+    --card-bg-alt: #0f1526;
+    --border: #1f2a44;
+    --text: #e2e8f0;
+    --muted: #7c8aa5;
+    --green: #22c55e;
+    --red: #ef4444;
+    --amber: #f59e0b;
+    --blue: #3b82f6;
+    --purple: #a855f7;
+  }
+  html, body { min-height: 100%; }
+  body {
+    background: radial-gradient(circle at top left, #0f172a, #0b1020 60%) !important;
+    color: var(--text);
+    min-height: 100vh;
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    margin: 0;
+  }
+
+  .navbar {
+    background: rgba(19, 26, 43, 0.85) !important;
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--border);
+  }
+  .navbar-brand { font-weight: 700; letter-spacing: 0.5px; }
+  .live-dot {
+    display: inline-block;
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    background: var(--green);
+    box-shadow: 0 0 0 0 rgba(34,197,94,0.7);
+    animation: pulse 1.6s infinite;
+    margin-right: 6px;
+    vertical-align: middle;
+  }
+  @keyframes pulse {
+    0%   { box-shadow: 0 0 0 0 rgba(34,197,94,0.7); }
+    70%  { box-shadow: 0 0 0 10px rgba(34,197,94,0); }
+    100% { box-shadow: 0 0 0 0 rgba(34,197,94,0); }
+  }
+
+  .summary-card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px 18px;
+    transition: transform 0.15s ease, border-color 0.15s ease;
+  }
+  .summary-card:hover { border-color: var(--blue); transform: translateY(-2px); }
+  .summary-label {
+    color: var(--muted);
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    margin-bottom: 4px;
+  }
+  .summary-value { font-size: 1.7rem; font-weight: 700; line-height: 1; }
+  .summary-sub { font-size: 0.7rem; color: var(--muted); margin-top: 5px; }
+
+  .section-head {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 12px;
+    margin: 28px 0 10px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--border);
+  }
+  .section-head h3 {
+    font-size: 0.88rem;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    color: var(--text);
+    margin: 0;
+    display: flex; align-items: center; gap: 10px;
+  }
+  .section-head h3 .count {
+    font-size: 0.7rem;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: rgba(59,130,246,0.15);
+    border: 1px solid rgba(59,130,246,0.35);
+    color: #93c5fd;
+    letter-spacing: 1px;
+  }
+  .scroll-controls { display: flex; gap: 6px; }
+  .scroll-btn {
+    background: var(--card-bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    width: 34px; height: 34px;
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+  .scroll-btn:hover { border-color: var(--blue); color: var(--blue); }
+  .scroll-btn:active { transform: scale(0.95); }
+
+  .instrument-row {
+    display: flex;
+    gap: 14px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 4px 2px 16px;
+    scroll-behavior: smooth;
+    scrollbar-width: thin;
+    scrollbar-color: #2a3a5a transparent;
+  }
+  .instrument-row::-webkit-scrollbar { height: 8px; }
+  .instrument-row::-webkit-scrollbar-track { background: transparent; }
+  .instrument-row::-webkit-scrollbar-thumb {
+    background: #2a3a5a; border-radius: 4px;
+  }
+  .instrument-row::-webkit-scrollbar-thumb:hover { background: #3b4a72; }
+
+  .instrument-card {
+    flex: 0 0 320px;
+    width: 320px;
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    overflow: hidden;
+    transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+    display: flex; flex-direction: column;
+  }
+  .instrument-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 10px 30px -10px rgba(59,130,246,0.35);
+    border-color: var(--blue);
+  }
+
+  .card-head {
+    background: linear-gradient(135deg, rgba(59,130,246,0.15), rgba(19,26,43,0));
+    border-bottom: 1px solid var(--border);
+    padding: 12px 14px;
+    display: flex; justify-content: space-between; align-items: flex-start;
+    gap: 8px;
+  }
+  .symbol {
+    font-weight: 700;
+    font-size: 0.95rem;
+    line-height: 1.15;
+    word-break: break-word;
+  }
+  .symbol-key {
+    font-size: 0.7rem;
+    color: var(--muted);
+    word-break: break-all;
+    margin-top: 2px;
+  }
+  .kind-badge {
+    background: rgba(59,130,246,0.18);
+    color: #93c5fd;
+    border: 1px solid rgba(59,130,246,0.35);
+    font-size: 0.66rem;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    padding: 3px 8px;
+    border-radius: 999px;
+    white-space: nowrap;
+    flex-shrink: 0;
+    font-weight: 600;
+  }
+  .kind-badge.kind-ce {
+    background: rgba(34,197,94,0.15);
+    color: #86efac;
+    border-color: rgba(34,197,94,0.35);
+  }
+  .kind-badge.kind-pe {
+    background: rgba(239,68,68,0.15);
+    color: #fca5a5;
+    border-color: rgba(239,68,68,0.35);
+  }
+
+  .price-block { padding: 12px 14px 8px; }
+  .price-main { display: flex; align-items: baseline; gap: 8px; }
+  .price { font-size: 1.7rem; font-weight: 700; color: #fff; line-height: 1; }
+  .price-trend-up   { color: var(--green); }
+  .price-trend-down { color: var(--red); }
+  .price-trend-flat { color: var(--muted); }
+  .price-sub { font-size: 0.72rem; color: var(--muted); margin-top: 4px; }
+
+  .ema-block {
+    padding: 8px 14px;
+    border-top: 1px solid rgba(31,42,68,0.6);
+  }
+  .ema-title {
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: var(--muted);
+    margin-bottom: 6px;
+    display: flex; justify-content: space-between;
+  }
+  .ema-title .ema-name { font-weight: 600; }
+  .ema-title .ema-diff { font-weight: 600; }
+  .ema-diff.up   { color: var(--green); }
+  .ema-diff.down { color: var(--red); }
+  .ema-diff.flat { color: var(--muted); }
+
+  .ema-pair {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    align-items: center;
+    gap: 8px;
+  }
+  .ema-col { min-width: 0; }
+  .ema-tag {
+    font-size: 0.62rem;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--muted);
+  }
+  .ema-value { font-size: 1.05rem; font-weight: 700; line-height: 1.15; }
+  .ema-value.ema-new { color: #fff; }
+  .ema-value.ema-prev { color: #94a3b8; font-weight: 600; font-size: 0.95rem; }
+  .ema-time {
+    font-size: 0.66rem;
+    color: var(--muted);
+    margin-top: 1px;
+    font-variant-numeric: tabular-nums;
+  }
+  .ema-arrow {
+    color: var(--muted);
+    font-size: 1rem;
+    user-select: none;
+  }
+
+  .cross-row {
+    padding: 10px 14px;
+    border-top: 1px solid rgba(31,42,68,0.6);
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  }
+  .cross-pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 0.75rem;
+    padding: 3px 10px;
+    border-radius: 999px;
+    font-weight: 600;
+  }
+  .cross-bullish { background: rgba(34,197,94,0.15);  color: var(--green); border: 1px solid rgba(34,197,94,0.35); }
+  .cross-bearish { background: rgba(239,68,68,0.15);  color: var(--red);   border: 1px solid rgba(239,68,68,0.35); }
+  .cross-none    { background: rgba(124,138,165,0.15);color: var(--muted); border: 1px solid rgba(124,138,165,0.35); }
+  .cross-time {
+    font-size: 0.7rem;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+    max-width: 55%;
+  }
+
+  .stats-strip {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1px;
+    background: var(--border);
+    border-top: 1px solid var(--border);
+  }
+  .stat-cell {
+    background: var(--card-bg-alt);
+    padding: 9px 12px;
+  }
+  .stat-label {
+    font-size: 0.62rem;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+  .stat-value {
+    font-size: 0.95rem;
+    font-weight: 700;
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
+    margin-top: 1px;
+  }
+  .stat-value.ema { color: var(--purple); }
+  .stat-value .stat-total {
+    color: var(--muted);
+    font-size: 0.72em;
+    font-weight: 500;
+    margin-left: 2px;
+  }
+
+  .empty-state {
+    padding: 60px 20px;
+    text-align: center;
+    color: var(--muted);
+    border: 2px dashed var(--border);
+    border-radius: 14px;
+  }
+
+  @media (max-width: 576px) {
+    .instrument-card { flex: 0 0 290px; width: 290px; }
+    .price { font-size: 1.5rem; }
+  }
+</style>
+</head>
+<body>
+
+<nav class="navbar navbar-expand-lg">
+  <div class="container-fluid px-4">
+    <span class="navbar-brand">
+      <i class="bi bi-graph-up-arrow text-primary me-2"></i>
+      EMA Live Dashboard
+    </span>
+    <div class="d-flex align-items-center gap-3">
+      <span class="text-muted small"><span class="live-dot"></span>Live</span>
+      <span class="text-muted small d-none d-md-inline" id="last-update">—</span>
+      <button class="btn btn-sm btn-outline-primary" id="refresh-btn" title="Refresh now">
+        <i class="bi bi-arrow-clockwise"></i>
+      </button>
+    </div>
+  </div>
+</nav>
+
+<div class="container-fluid px-4 py-4">
+  <!-- Summary tiles -->
+  <div class="row g-3">
+    <div class="col-6 col-md-3 col-xl-2">
+      <div class="summary-card">
+        <div class="summary-label">Instruments</div>
+        <div class="summary-value text-info" id="sum-count">0</div>
+      </div>
+    </div>
+    <div class="col-6 col-md-3 col-xl-2">
+      <div class="summary-card">
+        <div class="summary-label">WS Channels</div>
+        <div class="summary-value text-success" id="sum-channels">0</div>
+      </div>
+    </div>
+    <div class="col-6 col-md-3 col-xl-2">
+      <div class="summary-card">
+        <div class="summary-label">Total Candles</div>
+        <div class="summary-value" id="sum-candles">0</div>
+      </div>
+    </div>
+    <div class="col-6 col-md-3 col-xl-2">
+      <div class="summary-card">
+        <div class="summary-label">Crosses Today</div>
+        <div class="summary-value" style="color: var(--purple);" id="sum-crosses">0</div>
+        <div class="summary-sub" id="sum-crosses-total">Total: 0</div>
+      </div>
+    </div>
+    <div class="col-6 col-md-3 col-xl-2">
+      <div class="summary-card">
+        <div class="summary-label">Last Cycle</div>
+        <div class="summary-value" id="sum-cycle">0</div>
+      </div>
+    </div>
+    <div class="col-6 col-md-3 col-xl-2">
+      <div class="summary-card">
+        <div class="summary-label">Cycle Time (IST)</div>
+        <div class="summary-value" style="font-size: 1rem; color: var(--amber);" id="sum-cycle-time">—</div>
+      </div>
+    </div>
+  </div>
+
+  <div id="sections"></div>
+
+  <div class="empty-state mt-4 d-none" id="empty-state">
+    <i class="bi bi-inbox fs-1 d-block mb-2"></i>
+    No subscribed instruments yet — the feed will appear here as soon as
+    <code>/api/v1/ema/status</code> reports subscriptions.
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+(function () {
+  'use strict';
+
+  const REFRESH_MS = 5000;
+
+  const sectionsEl        = document.getElementById('sections');
+  const emptyEl           = document.getElementById('empty-state');
+  const lastUpdateEl      = document.getElementById('last-update');
+  const sumCountEl        = document.getElementById('sum-count');
+  const sumChannelsEl     = document.getElementById('sum-channels');
+  const sumCandlesEl      = document.getElementById('sum-candles');
+  const sumCrossesEl      = document.getElementById('sum-crosses');
+  const sumCrossesTotalEl = document.getElementById('sum-crosses-total');
+  const sumCycleEl        = document.getElementById('sum-cycle');
+  const sumCycleTimeEl    = document.getElementById('sum-cycle-time');
+  const refreshBtn        = document.getElementById('refresh-btn');
+
+  // ---------------------------------------------------------------
+  // Formatters
+  // ---------------------------------------------------------------
+  function esc(v) {
+    if (v === null || v === undefined) return '';
+    return String(v).replace(/[&<>"']/g, function (c) {
+      return ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' })[c];
+    });
+  }
+
+  function fmtNum(n, digits) {
+    if (n === null || n === undefined) return '—';
+    const num = Number(n);
+    if (isNaN(num)) return '—';
+    return num.toLocaleString('en-IN', {
+      maximumFractionDigits: digits === undefined ? 2 : digits,
+    });
+  }
+
+  // HH:MM AM/PM — used for candle timestamps in the EMA rows.
+  // No seconds; candle closes are always at :00 of the printed minute.
+  function fmtCandleTime(v) {
+    if (!v) return '—';
+    try {
+      const d = new Date(v);
+      if (isNaN(d.getTime())) return String(v);
+      return d.toLocaleString('en-IN', {
+        timeZone: 'Asia/Kolkata',
+        hour12: true,
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+    } catch (_e) { return String(v); }
+  }
+
+  // "DD Mon YYYY, HH:MM AM/PM IST" — price-updated timestamp.
+  function fmtCandleDate(v) {
+    if (!v) return '—';
+    try {
+      const d = new Date(v);
+      if (isNaN(d.getTime())) return String(v);
+      return d.toLocaleString('en-IN', {
+        timeZone: 'Asia/Kolkata',
+        hour12: true,
+        day: '2-digit',
+        month: 'short',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+      }) + ' IST';
+    } catch (_e) { return String(v); }
+  }
+
+  // Cross time — HH:MM AM/PM if today, else "DD Mon, HH:MM AM/PM".
+  function fmtCrossTime(v) {
+    if (!v) return '—';
+    try {
+      const d = new Date(v);
+      if (isNaN(d.getTime())) return String(v);
+      const tz = { timeZone: 'Asia/Kolkata' };
+      const sameDay =
+        d.toLocaleDateString('en-IN', tz) ===
+        new Date().toLocaleDateString('en-IN', tz);
+      if (sameDay) {
+        return d.toLocaleString('en-IN', {
+          ...tz, hour12: true, hour: '2-digit', minute: '2-digit',
+        });
+      }
+      return d.toLocaleString('en-IN', {
+        ...tz, hour12: true,
+        day: '2-digit', month: 'short',
+        hour: '2-digit', minute: '2-digit',
+      });
+    } catch (_e) { return String(v); }
+  }
+
+  // HH:MM:SS AM/PM — cycle times (always :10 aligned now).
+  function fmtCycleTime(v) {
+    if (!v) return '—';
+    try {
+      const d = new Date(v);
+      if (isNaN(d.getTime())) return String(v);
+      return d.toLocaleString('en-IN', {
+        timeZone: 'Asia/Kolkata',
+        hour12: true,
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+      });
+    } catch (_e) { return String(v); }
+  }
+
+  // ---------------------------------------------------------------
+  // Classification / ordering
+  // ---------------------------------------------------------------
+  function classify(payload) {
+    const meta = (payload && payload.meta) || {};
+    const underlying = (meta.underlying || 'OTHER').toUpperCase();
+    const strikeType = (meta.strike_type || '').toUpperCase();
+    const isIndex = strikeType === 'INDEX' || !strikeType;
+    return { underlying, strikeType, isIndex };
+  }
+
+  function rowIdFor(underlying) {
+    return 'row-' + String(underlying).toLowerCase().replace(/[^a-z0-9]+/g, '-');
+  }
+
+  function compareItems(a, b) {
+    const A = classify(a.payload);
+    const B = classify(b.payload);
+    if (A.isIndex !== B.isIndex) return A.isIndex ? -1 : 1;
+    const sa = Number((a.payload.meta || {}).strike_price || 0);
+    const sb = Number((b.payload.meta || {}).strike_price || 0);
+    if (sa !== sb) return sa - sb;
+    return (A.strikeType || 'ZZZ').localeCompare(B.strikeType || 'ZZZ');
+  }
+
+  // ---------------------------------------------------------------
+  // Card helpers
+  // ---------------------------------------------------------------
+  function badgeText(meta) {
+    const st = (meta.strike_type || '').toUpperCase();
+    if (st === 'INDEX' || !st) return 'INDEX';
+    const strike = meta.strike_price;
+    let strikeStr = '';
+    if (strike !== null && strike !== undefined) {
+      const n = Number(strike);
+      if (!isNaN(n)) {
+        strikeStr = (n % 1 === 0)
+          ? String(n)
+          : n.toFixed(2).replace(/\.?0+$/, '');
+      }
+    }
+    return (strikeStr ? strikeStr + ' ' : '') + st;
+  }
+
+  function badgeClass(meta) {
+    const st = (meta.strike_type || '').toUpperCase();
+    if (st === 'INDEX' || !st) return 'kind-badge';
+    if (st === 'CE') return 'kind-badge kind-ce';
+    if (st === 'PE') return 'kind-badge kind-pe';
+    return 'kind-badge';
+  }
+
+  function trendClass(prev, curr) {
+    if (prev === null || prev === undefined || curr === null || curr === undefined) return 'flat';
+    const p = Number(prev), c = Number(curr);
+    if (isNaN(p) || isNaN(c)) return 'flat';
+    if (c > p) return 'up';
+    if (c < p) return 'down';
+    return 'flat';
+  }
+
+  function trendArrow(prev, curr) {
+    const t = trendClass(prev, curr);
+    if (t === 'up')   return '<i class="bi bi-arrow-up-short"></i>';
+    if (t === 'down') return '<i class="bi bi-arrow-down-short"></i>';
+    return '<i class="bi bi-dash"></i>';
+  }
+
+  function diffLabel(prev, curr) {
+    if (prev === null || prev === undefined || curr === null || curr === undefined) return '';
+    const p = Number(prev), c = Number(curr);
+    if (isNaN(p) || isNaN(c)) return '';
+    const d = c - p;
+    if (Math.abs(d) < 0.00005) return '';
+    return (d > 0 ? '+' : '') + d.toFixed(2);
+  }
+
+  function crossPill(lastCross) {
+    if (!lastCross || !lastCross.type) {
+      return '<span class="cross-pill cross-none"><i class="bi bi-dash-circle"></i> none</span>';
+    }
+    const t = String(lastCross.type).toLowerCase();
+    if (t === 'bullish') {
+      return '<span class="cross-pill cross-bullish"><i class="bi bi-arrow-up-circle-fill"></i> bullish</span>';
+    }
+    return '<span class="cross-pill cross-bearish"><i class="bi bi-arrow-down-circle-fill"></i> bearish</span>';
+  }
+
+  // Last / New pair — both use CANDLE timestamps (last_ts_prev / last_ts),
+  // never cycle timestamps.
+  function emaRow(label, prevVal, newVal, prevCandleTs, newCandleTs) {
+    const t = trendClass(prevVal, newVal);
+    const arrow = trendArrow(prevVal, newVal);
+    const diff = diffLabel(prevVal, newVal);
+    const diffCls = (t === 'up') ? 'up' : (t === 'down') ? 'down' : 'flat';
+    return `
+      <div class="ema-block">
+        <div class="ema-title">
+          <span class="ema-name">${esc(label)}</span>
+          <span class="ema-diff ${diffCls}">${arrow} ${diff ? esc(diff) : '—'}</span>
+        </div>
+        <div class="ema-pair">
+          <div class="ema-col">
+            <div class="ema-tag">Last</div>
+            <div class="ema-value ema-prev">${fmtNum(prevVal)}</div>
+            <div class="ema-time">${esc(fmtCandleTime(prevCandleTs))}</div>
+          </div>
+          <div class="ema-arrow"><i class="bi bi-arrow-right"></i></div>
+          <div class="ema-col" style="text-align:right;">
+            <div class="ema-tag">New</div>
+            <div class="ema-value ema-new">${fmtNum(newVal)}</div>
+            <div class="ema-time">${esc(fmtCandleTime(newCandleTs))}</div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  function buildCard(key, payload) {
+    const meta = (payload && payload.meta) || {};
+    const symbol = meta.trading_symbol || key;
+    const fast = payload.ema_fast;
+    const slow = payload.ema_slow;
+    let priceCls = 'price-trend-flat';
+    if (fast !== null && fast !== undefined && slow !== null && slow !== undefined) {
+      const f = Number(fast), s = Number(slow);
+      if (!isNaN(f) && !isNaN(s)) {
+        priceCls = (f > s) ? 'price-trend-up' : (f < s) ? 'price-trend-down' : 'price-trend-flat';
+      }
+    }
+
+    const crossToday = Number(payload.cross_count_today || 0);
+    const crossTotal = Number(payload.cross_count || 0);
+
+    return `
+      <div class="instrument-card">
+        <div class="card-head">
+          <div style="min-width:0;">
+            <div class="symbol" title="${esc(symbol)}">${esc(symbol)}</div>
+            <div class="symbol-key" title="${esc(key)}">${esc(key)}</div>
+          </div>
+          <span class="${badgeClass(meta)}">${esc(badgeText(meta))}</span>
+        </div>
+
+        <div class="price-block">
+          <div class="price-main">
+            <div class="price ${priceCls}">${fmtNum(payload.last_close)}</div>
+          </div>
+          <div class="price-sub">Updated ${esc(fmtCandleDate(payload.last_ts))}</div>
+        </div>
+
+        ${emaRow('EMA 9',  payload.ema_fast_prev, payload.ema_fast, payload.last_ts_prev, payload.last_ts)}
+        ${emaRow('EMA 21', payload.ema_slow_prev, payload.ema_slow, payload.last_ts_prev, payload.last_ts)}
+
+        <div class="cross-row">
+          ${crossPill(payload.last_cross)}
+          <span class="cross-time">${esc(fmtCrossTime(payload.last_cross_time))}</span>
+        </div>
+
+        <div class="stats-strip">
+          <div class="stat-cell">
+            <div class="stat-label">Candles</div>
+            <div class="stat-value">${fmtNum(payload.candle_count, 0)}</div>
+          </div>
+          <div class="stat-cell">
+            <div class="stat-label">Crosses Today</div>
+            <div class="stat-value ema">
+              ${fmtNum(crossToday, 0)}<span class="stat-total">/ ${fmtNum(crossTotal, 0)}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  function buildRow(group) {
+    const rowId = rowIdFor(group.underlying);
+    const count = group.items.length;
+    const hasIndex = group.items.some(function (i) {
+      return classify(i.payload).isIndex;
+    });
+    const icon = hasIndex ? 'bi-fire' : 'bi-collection';
+
+    const cardsHtml = group.items
+      .sort(compareItems)
+      .map(function (item) { return buildCard(item.key, item.payload); })
+      .join('');
+
+    return `
+      <div class="section-head">
+        <h3>
+          <i class="bi ${icon} text-primary"></i>
+          ${esc(group.underlying)}
+          <span class="count">${count}</span>
+        </h3>
+        <div class="scroll-controls">
+          <button class="scroll-btn" data-target="${rowId}" data-dir="left" title="Scroll left">
+            <i class="bi bi-chevron-left"></i>
+          </button>
+          <button class="scroll-btn" data-target="${rowId}" data-dir="right" title="Scroll right">
+            <i class="bi bi-chevron-right"></i>
+          </button>
+        </div>
+      </div>
+      <div class="instrument-row" id="${rowId}">
+        ${cardsHtml}
+      </div>
+    `;
+  }
+
+  function render(instruments, channels) {
+    if (!instruments || instruments.length === 0) {
+      sectionsEl.innerHTML = '';
+      emptyEl.classList.remove('d-none');
+      sumCountEl.textContent    = '0';
+      sumChannelsEl.textContent = String(Object.keys(channels || {}).length);
+      sumCandlesEl.textContent  = '0';
+      sumCrossesEl.textContent  = '0';
+      sumCrossesTotalEl.textContent = 'Total: 0';
+      sumCycleEl.textContent    = '0';
+      sumCycleTimeEl.textContent= '—';
+      return;
+    }
+    emptyEl.classList.add('d-none');
+
+    const groups = {};
+    let totalCandles = 0;
+    let totalCrosses = 0;
+    let totalCrossesToday = 0;
+    let maxCycle = 0;
+    let latestCycleTime = null;
+
+    for (const item of instruments) {
+      const payload = item.snapshot || {};
+      const cls = classify(payload);
+      const gkey = cls.underlying;
+      if (!groups[gkey]) {
+        groups[gkey] = { underlying: cls.underlying, items: [] };
+      }
+      groups[gkey].items.push({ key: item.instrument_key, payload });
+
+      totalCandles      += Number(payload.candle_count || 0);
+      totalCrosses      += Number(payload.cross_count || 0);
+      totalCrossesToday += Number(payload.cross_count_today || 0);
+      const c = Number(payload.cycle_number || 0);
+      if (c > maxCycle) maxCycle = c;
+      if (payload.cycle_time) {
+        if (!latestCycleTime || payload.cycle_time > latestCycleTime) {
+          latestCycleTime = payload.cycle_time;
+        }
+      }
+    }
+
+    const orderedKeys = Object.keys(groups).sort();
+    sectionsEl.innerHTML = orderedKeys
+      .map(function (k) { return buildRow(groups[k]); })
+      .join('');
+
+    document.querySelectorAll('.scroll-btn').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        const row = document.getElementById(btn.dataset.target);
+        if (!row) return;
+        const dir = btn.dataset.dir === 'left' ? -1 : 1;
+        row.scrollBy({ left: dir * 380, behavior: 'smooth' });
+      });
+    });
+
+    sumCountEl.textContent    = String(instruments.length);
+    sumChannelsEl.textContent = String(Object.keys(channels || {}).length);
+    sumCandlesEl.textContent  = fmtNum(totalCandles, 0);
+    sumCrossesEl.textContent  = fmtNum(totalCrossesToday, 0);
+    sumCrossesTotalEl.textContent = 'Total: ' + fmtNum(totalCrosses, 0);
+    sumCycleEl.textContent    = fmtNum(maxCycle, 0);
+    sumCycleTimeEl.textContent= latestCycleTime ? fmtCycleTime(latestCycleTime) : '—';
+  }
+
+  async function load() {
+    try {
+      const results = await Promise.all([
+        fetch('/api/v1/ema/instruments', { cache: 'no-store' }),
+        fetch('/api/v1/ema/channels',    { cache: 'no-store' }).catch(function () { return null; }),
+      ]);
+      const instRes = results[0];
+      const chRes   = results[1];
+      if (!instRes.ok) throw new Error('instruments http ' + instRes.status);
+
+      const inst = await instRes.json();
+      let ch = { channels: {} };
+      if (chRes && chRes.ok) {
+        try { ch = await chRes.json(); } catch (_e) { /* ignore */ }
+      }
+
+      render(inst.instruments || [], ch.channels || {});
+      lastUpdateEl.textContent = 'Updated ' + fmtCycleTime(new Date().toISOString());
+    } catch (err) {
+      lastUpdateEl.textContent = 'Update failed';
+      if (!window.__lastDashErr || Date.now() - window.__lastDashErr > 30000) {
+        console.warn('Dashboard refresh failed:', err);
+        window.__lastDashErr = Date.now();
+      }
+    }
+  }
+
+  refreshBtn.addEventListener('click', load);
+  load();
+  setInterval(load, REFRESH_MS);
+})();
+</script>
+</body>
+</html>

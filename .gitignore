@@ -1,34 +1,122 @@
-# Local environment and credentials
+# .gitignore
+#
+# Ignore rules for mega_archive_service.
+#
+# Sections:
+#   1. Local environment and credentials
+#   2. Python build artefacts
+#   3. Storage — Job 1 archive and Job 2 runtime state
+#   4. Logs and runtime output
+#   5. Test artefacts
+#   6. Editor / OS noise
+#   7. Project-specific dev scratch files
+#
+# Design note on storage/
+# -----------------------
+# ``storage/`` is NOT blanket-ignored at the top level. Only its two
+# managed subtrees are ignored:
+#
+#   storage/downloads/   Job 1 download target (the ZIP)
+#   storage/mega/        Job 1 extraction target + Job 2 runtime state
+#
+# The .gitkeep exceptions keep the empty parent directories in the repo
+# so a fresh clone has the same skeleton. Everything the running service
+# produces stays out of git.
+#
+# Transient swap directories created by archive_service.py during a
+# refresh — ``storage/.mega.backup`` and ``storage/.mega-stage-*`` — live
+# directly under ``storage/``, not under either managed subtree, so they
+# need their own rule (``storage/.mega*``).
+
+# ---------- 1. Local environment and credentials ----------
 .env
 .env.*
 !.env.example
+.envrc
 *.pem
 *.key
+*.crt
 credentials.json
-ws_records/
-# Python
+secrets.json
+secrets.yaml
+
+# ---------- 2. Python ----------
 __pycache__/
 *.py[codz]
 *$py.class
 .venv/
 venv/
 myenv/
+env/
+ENV/
 *.egg-info/
 build/
 dist/
-combined_output.txt
-# Runtime output and generated data
-logs*/
+pip-wheel-metadata/
+.eggs/
+
+# ---------- 3. Storage — Job 1 archive and Job 2 runtime state ----------
+#
+# Job 1 writes to storage/downloads/ (the ZIP) and storage/mega/ (the
+# extracted tree). Job 2 persists state to storage/mega/_ema_state/ and
+# storage/mega/{index,<underlying>}/ema_crosses.json. None of these are
+# source — the .gitkeep exceptions keep the empty parent directories in
+# the repo.
+storage/downloads/*
+!storage/downloads/.gitkeep
+storage/mega/*
+!storage/mega/.gitkeep
+
+# Explicit subtrees documented here for clarity — covered by the
+# wildcards above, listed so intent is obvious at a glance.
+storage/mega/_ema_state/
+storage/mega/index/
+storage/mega/nifty/
+storage/mega/sensex/
+storage/mega/all_instruments.json
+
+# Transient swap directories during a MEGA refresh. archive_service.py
+# creates .mega.backup and .mega-stage-* directly under storage/ (same
+# filesystem as storage/mega/ so the rename is atomic).
+storage/.mega*
+
+# ---------- 4. Logs and runtime output ----------
+logs/
+logs_*/
 test_logs/
+temp/
 data/
 meta_data/
 downloads/
 output/
-temp/
 *.pid
 *.log
+*.log.*
 *.jsonl
 *.sqlite3
+*.sqlite3-*
+
+# ---------- 5. Test artefacts ----------
 .pytest_cache/
-.coverage*
+.coverage
+.coverage.*
 htmlcov/
+.tox/
+.nox/
+*.cover
+
+# ---------- 6. Editor / OS noise ----------
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---------- 7. Project-specific dev scratch files ----------
+combined_output.txt
+files.txt
+project_structure.txt
+storage

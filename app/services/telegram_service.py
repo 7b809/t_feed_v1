@@ -1,278 +1,299 @@
-"""Telegram notification service.
+# app/services/telegram_service.py
+"""
+Telegram notifier for the mega_archive_service.
 
-Sends formatted messages to a Telegram chat using the Telegram Bot HTTP
-API directly. No third-party Telegram packages are used — only
-``requests``, which is already a project dependency.
+Sends rich HTML messages to a Telegram chat for:
+  * project startup / shutdown
+  * startup / scheduled / manual refresh lifecycle
+  * EMA feed bootstrap and live-loop lifecycle
+  * unhandled exceptions
 
-Design notes
-------------
-* Best-effort: every public method catches its own errors and logs a
-  warning. A Telegram failure never breaks application startup, a
-  refresh job, or shutdown.
-* Non-blocking: HTTP calls run in a worker thread via
-  ``asyncio.to_thread`` so the FastAPI event loop is never stalled.
-* Fire-and-forget helpers (``notify_*``) schedule the send and return
-  immediately. Awaitable helpers (``send_*``) return the delivery result.
-* HTML parse mode: user-supplied values are escaped; bold labels and
-  emoji are added by the formatter so the resulting message renders
-  cleanly in every Telegram client.
+All sends are best-effort — a Telegram outage never aborts the caller.
+
+Config (see .env.example):
+    TELEGRAM_ENABLED=true
+    TELEGRAM_BOT_TOKEN=123456:ABC-DEF...
+    TELEGRAM_CHAT_ID=123456789
+
+Every ``notify_*`` method is synchronous so it can be called from worker
+threads (APScheduler, asyncio.to_thread, FastAPI's lifespan). For async
+call sites use ``asyncio.to_thread(notifier.notify_*, ...)``.
 """
 
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
-from html import escape
-from typing import Any, Iterable
+import html
+import logging
+import threading
+from datetime import datetime, timedelta, timezone
+from typing import Any
 
-import requests
+import httpx
 
-from app.core.config import settings
-from app.core.logger import get_logger
+from app.config import Settings
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
-_TELEGRAM_API_BASE = "https://api.telegram.org"
-
-# Level -> leading emoji. Unknown levels fall back to a neutral bullet.
-_LEVEL_EMOJI: dict[str, str] = {
-    "STARTUP": "🟢",
-    "SHUTDOWN": "🔴",
-    "SUCCESS": "✅",
-    "INFO": "ℹ️",
-    "WARNING": "⚠️",
-    "ERROR": "❌",
-    "CRASH": "🔥",
-}
+IST = timezone(timedelta(hours=5, minutes=30))
 
 
+def _ist_now() -> str:
+    return datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S IST")
+
+
+def _esc(value: Any) -> str:
+    return html.escape(str(value)) if value is not None else "—"
+
+
+# ---------------------------------------------------------------------------
+# Low-level Telegram client
+# ---------------------------------------------------------------------------
 class TelegramService:
-    """Thin wrapper around the Bot API ``sendMessage`` endpoint."""
+    """Minimal Telegram Bot API client (sync + async wrapper)."""
 
-    def __init__(self) -> None:
-        token = (settings.telegram_bot_token or "").strip()
-        # Accept the value with or without surrounding quotes.
-        chat_id = (
-            (settings.telegram_chat_id or "")
-            .strip()
-            .strip('"')
-            .strip("'")
+    def __init__(self, config: Settings) -> None:
+        self.config = config
+        self.enabled = bool(
+            config.telegram_enabled
+            and config.telegram_bot_token
+            and config.telegram_chat_id
         )
+        self._client: httpx.Client | None = None
+        self._lock = threading.Lock()
 
-        self._token = token
-        self._chat_id = chat_id
-        self._timeout = max(1, int(settings.telegram_timeout_seconds))
-        self._enabled = bool(
-            settings.telegram_enabled and token and chat_id
-        )
-        self._api_url = (
-            f"{_TELEGRAM_API_BASE}/bot{token}/sendMessage"
-            if token
-            else ""
-        )
+    def _client_or_create(self) -> httpx.Client:
+        if self._client is None:
+            with self._lock:
+                if self._client is None:
+                    self._client = httpx.Client(timeout=10.0)
+        return self._client
 
-        if self._enabled:
-            logger.info(
-                "Telegram notifications enabled; chat_id=%s",
-                _mask(self._chat_id),
-            )
-        elif settings.telegram_enabled:
-            logger.warning(
-                "TELEGRAM_ENABLED=true but token and/or chat id missing; "
-                "notifications will be skipped."
-            )
+    def close(self) -> None:
+        if self._client is not None:
+            try:
+                self._client.close()
+            except Exception:  # noqa: BLE001
+                pass
+            self._client = None
 
-    # ------------------------------------------------------------------ #
-    # Introspection                                                      #
-    # ------------------------------------------------------------------ #
-    @property
-    def enabled(self) -> bool:
-        return self._enabled
-
-    # ------------------------------------------------------------------ #
-    # Public async API                                                   #
-    # ------------------------------------------------------------------ #
-    async def send_message(
-        self,
-        text: str,
-        *,
-        silent: bool = False,
-        disable_preview: bool = True,
-        timeout: int | None = None,
-    ) -> bool:
-        """Send a raw, already-HTML-formatted message."""
-        if not self._enabled or not text:
+    def send(self, text: str, *, silent: bool = False) -> bool:
+        if not self.enabled:
+            logger.debug("Telegram disabled — message skipped")
             return False
-        try:
-            return await asyncio.to_thread(
-                self._send_sync,
-                text,
-                silent,
-                disable_preview,
-                timeout or self._timeout,
-            )
-        except Exception:
-            logger.exception("Telegram send_message failed")
-            return False
-
-    async def send_event(
-        self,
-        title: str,
-        lines: Iterable[str] | None = None,
-        *,
-        level: str = "INFO",
-        silent: bool = False,
-        timeout: int | None = None,
-    ) -> bool:
-        """Send a structured multi-line notification."""
-        text = self._format_event(title, list(lines or []), level)
-        return await self.send_message(
-            text,
-            silent=silent,
-            timeout=timeout,
+        url = (
+            f"https://api.telegram.org/bot{self.config.telegram_bot_token}"
+            f"/sendMessage"
         )
-
-    async def send_startup(
-        self, details: dict[str, Any] | None = None
-    ) -> bool:
-        return await self.send_event(
-            "Application Started",
-            self._kv_lines(details or {}),
-            level="STARTUP",
-        )
-
-    async def send_shutdown(
-        self,
-        details: dict[str, Any] | None = None,
-        *,
-        reason: str = "normal shutdown",
-        timeout: int = 3,
-    ) -> bool:
-        lines = self._kv_lines(details or {})
-        lines.append(f"<b>Reason:</b> {escape(reason)}")
-        return await self.send_event(
-            "Application Stopped",
-            lines,
-            level="SHUTDOWN",
-            timeout=timeout,
-        )
-
-    # ------------------------------------------------------------------ #
-    # Public fire-and-forget API                                         #
-    # ------------------------------------------------------------------ #
-    def notify_event(
-        self,
-        title: str,
-        lines: Iterable[str] | None = None,
-        *,
-        level: str = "INFO",
-        silent: bool = False,
-    ) -> None:
-        """Schedule a send and return immediately.
-
-        Never raises. Safe to call from anywhere the event loop is running.
-        """
-        if not self._enabled:
-            return
-        try:
-            asyncio.create_task(
-                self.send_event(title, lines, level=level, silent=silent)
-            )
-        except RuntimeError:
-            # No running loop (e.g. imported from a sync context).
-            logger.debug("Telegram notify_event skipped: no event loop")
-
-    def notify_startup(self, details: dict[str, Any] | None = None) -> None:
-        self.notify_event(
-            "Application Started",
-            self._kv_lines(details or {}),
-            level="STARTUP",
-        )
-
-    def notify_shutdown(
-        self,
-        details: dict[str, Any] | None = None,
-        *,
-        reason: str = "normal shutdown",
-    ) -> None:
-        lines = self._kv_lines(details or {})
-        lines.append(f"<b>Reason:</b> {escape(reason)}")
-        self.notify_event("Application Stopped", lines, level="SHUTDOWN")
-
-    # ------------------------------------------------------------------ #
-    # Internals                                                          #
-    # ------------------------------------------------------------------ #
-    def _send_sync(
-        self,
-        text: str,
-        silent: bool,
-        disable_preview: bool,
-        timeout: int,
-    ) -> bool:
         payload = {
-            "chat_id": self._chat_id,
+            "chat_id": self.config.telegram_chat_id,
             "text": text,
             "parse_mode": "HTML",
-            "disable_web_page_preview": disable_preview,
+            "disable_web_page_preview": True,
             "disable_notification": silent,
         }
-
         try:
-            response = requests.post(
-                self._api_url,
-                json=payload,
-                timeout=timeout,
-            )
-        except requests.RequestException as exc:
-            logger.warning("Telegram request failed: %s", exc)
-            return False
-
-        if response.status_code != 200:
-            logger.warning(
-                "Telegram API non-200; status=%s body=%s",
-                response.status_code,
-                response.text[:300],
-            )
-            return False
-
-        try:
-            body = response.json()
-        except ValueError:
-            # Telegram always returns JSON, but never crash if not.
+            response = self._client_or_create().post(url, json=payload)
+            if response.status_code >= 400:
+                logger.warning(
+                    "Telegram send failed: %s %s",
+                    response.status_code,
+                    response.text[:200],
+                )
+                return False
             return True
-
-        if not body.get("ok"):
-            logger.warning("Telegram API returned ok=false: %s", body)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Telegram send error: %s", exc)
             return False
 
-        return True
-
-    @staticmethod
-    def _format_event(
-        title: str, lines: list[str], level: str
-    ) -> str:
-        emoji = _LEVEL_EMOJI.get(level.upper(), "•")
-        header = f"{emoji} <b>{escape(title)}</b>"
-        if not lines:
-            return header
-        return header + "\n\n" + "\n".join(lines)
-
-    @staticmethod
-    def _kv_lines(data: dict[str, Any]) -> list[str]:
-        lines: list[str] = []
-        for key, value in data.items():
-            if value is None:
-                continue
-            label = escape(str(key).replace("_", " ").title())
-            lines.append(f"<b>{label}:</b> {escape(str(value))}")
-        return lines
+    async def send_async(self, text: str, *, silent: bool = False) -> bool:
+        return await asyncio.to_thread(self.send, text, silent=silent)
 
 
-def _mask(value: str) -> str:
-    """Return a redacted form of a chat id for logs."""
-    if len(value) <= 4:
-        return "*" * len(value)
-    return value[:2] + "*" * (len(value) - 4) + value[-2:]
+# ---------------------------------------------------------------------------
+# High-level notifier
+# ---------------------------------------------------------------------------
+class ProjectNotifier:
+    """High-level notification facade used by the app services."""
 
+    def __init__(self, config: Settings) -> None:
+        self.config = config
+        self.telegram = TelegramService(config)
+        self.app_name = config.app_name
+        self.app_env = config.app_env
 
-telegram_service = TelegramService()
+    @property
+    def enabled(self) -> bool:
+        return self.telegram.enabled
+
+    def close(self) -> None:
+        self.telegram.close()
+
+    # ------------------------------------------------------------------
+    # Project lifecycle
+    # ------------------------------------------------------------------
+    def notify_startup(
+        self,
+        *,
+        host: str,
+        port: int,
+        scheduler_enabled: bool,
+        refresh_on_startup: bool,
+        ema_instruments: list[str],
+        pid: int | None = None,
+    ) -> None:
+        scheduler = "✅ enabled" if scheduler_enabled else "⛔ disabled"
+        refresh = "✅ enabled" if refresh_on_startup else "⛔ disabled"
+        instruments = ", ".join(ema_instruments) or "—"
+        text = (
+            f"🚀 <b>Project Startup</b>\n"
+            f"<b>{_esc(self.app_name)}</b>\n"
+            f"\n"
+            f"🌍 <b>Environment:</b> <code>{_esc(self.app_env)}</code>\n"
+            f"🖥 <b>Host:</b> <code>{_esc(host)}:{_esc(port)}</code>\n"
+            f"🧩 <b>PID:</b> <code>{_esc(pid)}</code>\n"
+            f"⏰ <b>Scheduler:</b> {scheduler}\n"
+            f"🔄 <b>Startup refresh:</b> {refresh}\n"
+            f"📊 <b>EMA instruments:</b>\n"
+            f"<code>{_esc(instruments)}</code>\n"
+            f"🕒 <b>Started:</b> <code>{_ist_now()}</code>"
+        )
+        self.telegram.send(text)
+
+    def notify_shutdown(self, *, reason: str = "lifespan exit") -> None:
+        text = (
+            f"🛑 <b>Project Shutdown</b>\n"
+            f"<b>{_esc(self.app_name)}</b>\n"
+            f"\n"
+            f"📝 <b>Reason:</b> <code>{_esc(reason)}</code>\n"
+            f"🕒 <b>Time:</b> <code>{_ist_now()}</code>"
+        )
+        self.telegram.send(text)
+
+    def notify_exception(
+        self,
+        *,
+        where: str,
+        exc: BaseException,
+        context: str | None = None,
+    ) -> None:
+        details = html.escape(str(exc))[:800] or "—"
+        parts = [
+            "🚨 <b>Exception Report</b>",
+            f"<b>{_esc(self.app_name)}</b>",
+            "",
+            f"📍 <b>Where:</b> <code>{_esc(where)}</code>",
+            f"🧨 <b>Type:</b> <code>{_esc(type(exc).__name__)}</code>",
+        ]
+        if context:
+            parts.append(f"🏷 <b>Context:</b> <code>{_esc(context)}</code>")
+        parts.append("💬 <b>Message:</b>")
+        parts.append(f"<pre>{details}</pre>")
+        parts.append(f"🕒 <b>Time:</b> <code>{_ist_now()}</code>")
+        self.telegram.send("\n".join(parts))
+
+    # ------------------------------------------------------------------
+    # Job 1 — archive refresh
+    # ------------------------------------------------------------------
+    def notify_refresh_started(self, *, trigger: str, job_id: str) -> None:
+        text = (
+            f"🔄 <b>Archive Refresh — STARTED</b>\n"
+            f"<b>{_esc(self.app_name)}</b>\n"
+            f"\n"
+            f"🎯 <b>Trigger:</b> <code>{_esc(trigger)}</code>\n"
+            f"🆔 <b>Job ID:</b> <code>{_esc(job_id)}</code>\n"
+            f"🕒 <b>Started:</b> <code>{_ist_now()}</code>"
+        )
+        self.telegram.send(text, silent=(trigger != "manual"))
+
+    def notify_refresh_success(
+        self,
+        *,
+        trigger: str,
+        job_id: str,
+        archive_filename: str,
+        archive_size_bytes: int,
+        extracted_file_count: int,
+        sha256: str,
+        duration_seconds: float,
+        destination: str,
+    ) -> None:
+        size_mb = archive_size_bytes / (1024 * 1024)
+        text = (
+            f"✅ <b>Archive Refresh — SUCCESS</b>\n"
+            f"<b>{_esc(self.app_name)}</b>\n"
+            f"\n"
+            f"🎯 <b>Trigger:</b> <code>{_esc(trigger)}</code>\n"
+            f"🆔 <b>Job ID:</b> <code>{_esc(job_id)}</code>\n"
+            f"📦 <b>Archive:</b> <code>{_esc(archive_filename)}</code>\n"
+            f"📏 <b>Size:</b> <code>{size_mb:.2f} MB</code>\n"
+            f"📂 <b>Extracted files:</b> <code>{extracted_file_count:,}</code>\n"
+            f"🔐 <b>SHA256:</b> <code>{_esc(sha256[:16])}…</code>\n"
+            f"⏱ <b>Duration:</b> <code>{duration_seconds:.2f}s</code>\n"
+            f"📁 <b>Destination:</b> <code>{_esc(destination)}</code>\n"
+            f"🕒 <b>Completed:</b> <code>{_ist_now()}</code>"
+        )
+        self.telegram.send(text)
+
+    def notify_refresh_failed(
+        self,
+        *,
+        trigger: str,
+        job_id: str,
+        duration_seconds: float,
+        error: str,
+    ) -> None:
+        text = (
+            f"❌ <b>Archive Refresh — FAILED</b>\n"
+            f"<b>{_esc(self.app_name)}</b>\n"
+            f"\n"
+            f"🎯 <b>Trigger:</b> <code>{_esc(trigger)}</code>\n"
+            f"🆔 <b>Job ID:</b> <code>{_esc(job_id)}</code>\n"
+            f"⏱ <b>Duration:</b> <code>{duration_seconds:.2f}s</code>\n"
+            f"💬 <b>Error:</b>\n"
+            f"<pre>{html.escape(error)[:800]}</pre>\n"
+            f"🕒 <b>Time:</b> <code>{_ist_now()}</code>"
+        )
+        self.telegram.send(text)
+
+    # ------------------------------------------------------------------
+    # Job 2 — EMA feed
+    # ------------------------------------------------------------------
+    def notify_ema_bootstrap(
+        self,
+        *,
+        subscribed_keys: list[str],
+        post_market_open: bool,
+    ) -> None:
+        shown = subscribed_keys[:15]
+        extra = max(0, len(subscribed_keys) - len(shown))
+        keys_text = (
+            "\n".join(f"• <code>{_esc(k)}</code>" for k in shown) or "• —"
+        )
+        if extra > 0:
+            keys_text += f"\n<i>… and {extra} more</i>"
+        mode = (
+            "🌞 post-09:15 warm-up"
+            if post_market_open
+            else "🌙 pre-market (cached state)"
+        )
+        text = (
+            f"📡 <b>EMA Feed Bootstrap — COMPLETE</b>\n"
+            f"<b>{_esc(self.app_name)}</b>\n"
+            f"\n"
+            f"📊 <b>Subscribed:</b> <code>{len(subscribed_keys)}</code> instrument(s)\n"
+            f"{keys_text}\n"
+            f"🧠 <b>Mode:</b> {mode}\n"
+            f"🕒 <b>Time:</b> <code>{_ist_now()}</code>"
+        )
+        self.telegram.send(text)
+
+    def notify_ema_live_started(self, *, poll_seconds: int) -> None:
+        text = (
+            f"🟢 <b>EMA Live Loop — STARTED</b>\n"
+            f"<b>{_esc(self.app_name)}</b>\n"
+            f"\n"
+            f"⏱ <b>Poll interval:</b> <code>{poll_seconds}s</code>\n"
+            f"🕒 <b>Time:</b> <code>{_ist_now()}</code>"
+        )
+        self.telegram.send(text)
