@@ -74,6 +74,17 @@ dict. Route handlers that expose that dict to the browser are
 expected to pass it through the redaction helper (see
 ``routes.admin_routes._sanitize_payload``) before returning — the
 registry itself keeps the real path so internal callers can use it.
+
+Strategy helpers
+----------------
+``find_opposite(entry)`` returns the same-strike opposite CE/PE
+instrument for a given entry. Used by Strategy 1 (S2 -> buy opposite)
+and Strategy 2 (R3 -> pair with S3 on the same-strike opposite type).
+
+``find_nearest_strike(underlying, strike_type, target_price)`` returns
+the option whose strike is closest to ``target_price``. Used by
+Strategy 1's SENSEX -> NIFTY fallback to pick the NIFTY CE/PE nearest
+to the NIFTY average.
 """
 
 from __future__ import annotations
@@ -436,6 +447,91 @@ class InstrumentRegistry:
                 return entry
         return None
 
+    # ------------------------------------------------------------------ #
+    # Strategy helpers                                                   #
+    # ------------------------------------------------------------------ #
+    def find_opposite(
+        self, entry: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """Return the same-strike opposite-type instrument (CE <-> PE).
+
+        Used by:
+          * Strategy 1 — when an instrument hits S2, we buy its
+            opposite (the falling side implies the rising side is the
+            traded one).
+          * Strategy 2 — R3 / S3 pair detection (same strike, opposite
+            type).
+
+        Returns ``None`` when:
+          * the entry is an index,
+          * the strike or underlying is missing,
+          * the strike type is not CE or PE,
+          * the opposite instrument is not registered.
+        """
+        if not isinstance(entry, dict):
+            return None
+        if entry.get("is_index"):
+            return None
+        strike_type = str(entry.get("strike_type") or "").upper()
+        if strike_type not in ("CE", "PE"):
+            return None
+        opposite_type = "PE" if strike_type == "CE" else "CE"
+        underlying = entry.get("underlying")
+        strike = entry.get("strike_price")
+        if not underlying or strike is None:
+            return None
+        return self.resolve(underlying, strike, opposite_type)
+
+    def find_nearest_strike(
+        self,
+        underlying: str,
+        strike_type: str,
+        target_price: float,
+    ) -> dict[str, Any] | None:
+        """Return the option whose strike is nearest to ``target_price``.
+
+        Used by Strategy 1's SENSEX -> NIFTY fallback to pick the
+        NIFTY CE / PE closest to the NIFTY average when a SENSEX
+        candidate fires and no NIFTY candidate has fired yet.
+
+        Arguments:
+            underlying:   e.g. ``"NIFTY"`` or ``"SENSEX"``.
+            strike_type:  ``"CE"`` or ``"PE"`` (case-insensitive,
+                          normalized via ``normalize_strike_type``).
+            target_price: reference price; the closest strike wins.
+
+        Returns ``None`` when there are no matching instruments or the
+        target price is not a finite number.
+        """
+        try:
+            target = float(target_price)
+        except (TypeError, ValueError):
+            return None
+
+        normalized_type = normalize_strike_type(strike_type)
+        if normalized_type not in ("CE", "PE"):
+            return None
+
+        candidates = self.query(
+            underlying=underlying,
+            strike_type=normalized_type,
+            is_index=False,
+        )
+        if not candidates:
+            return None
+
+        def _distance(e: dict[str, Any]) -> float:
+            try:
+                strike = float(e.get("strike_price") or 0)
+            except (TypeError, ValueError):
+                return float("inf")
+            return abs(strike - target)
+
+        return min(candidates, key=_distance)
+
+    # ------------------------------------------------------------------ #
+    # Bulk accessors                                                     #
+    # ------------------------------------------------------------------ #
     def all(self) -> list[dict[str, Any]]:
         return list(self._ordered)
 

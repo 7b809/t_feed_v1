@@ -11,7 +11,24 @@ The EMA-cross engine is no longer invoked from the live feed. The
 former ``live_ema_engine.on_tick(...)`` call fed the strategy layer
 (cross detection / Opening Range strike activation), which has been
 removed from this codebase. The feed now handles **transport only**:
-parse → publish → done.
+parse → notify-strategy → publish → done.
+
+Strategy level-touch hook
+-------------------------
+After extracting the tick, ``level_touch_tracker_service.on_tick`` is
+called with the instrument's live LTP. The tracker holds each
+instrument's OR levels (seeded by ``first_candle_service``) and fires
+R1/R2/R3/S1/S2/S3 events into:
+
+  * ``strategy1_service`` — R2/S2 candidates, SENSEX->NIFTY fallback,
+    single order per day, 09:16–11:00 window.
+  * ``strategy2_service`` — R3/S3 pairing + Telegram "ISOLATION
+    SELECTED" alert, active when Strategy 1 is off / inactive.
+
+Both strategy services gate themselves via
+``strategy_state_service.is_strategy*_window_open()``, so the feed can
+call the tracker unconditionally without needing to know which
+strategy is active.
 
 LTP cache
 ---------
@@ -432,15 +449,39 @@ class LiveFeedService:
 
             self._last_tick_at[instrument_key] = datetime.now(timezone.utc)
 
-            # ---- Cache the latest LTP -------------------------------
+            # ---- Cache the latest LTP ------------------------------- #
             # Kept as a cheap diagnostic read-accessor for tooling /
-            # monitoring. Nothing strategy-related consumes it anymore.
+            # monitoring. Also re-used below to feed the strategy
+            # level-touch tracker.
             ltp = tick.get("ltp")
             if ltp is not None:
                 try:
                     self._latest_ltp[instrument_key] = float(ltp)
                 except (TypeError, ValueError):
                     pass
+
+            # ---- Strategy level-touch tracker ----------------------- #
+            # Feeds the live LTP into the tracker so it can raise
+            # R1/R2/R3/S1/S2/S3 events for strategy1_service /
+            # strategy2_service. Both strategies gate themselves via
+            # strategy_state_service.is_strategy*_window_open(), so
+            # this call is safe to make for every tick.
+            #
+            # Guarded by try/except: an exception here must not stop
+            # the feed or affect broadcast.
+            if ltp is not None:
+                try:
+                    from services.level_touch_tracker_service import (
+                        level_touch_tracker_service,
+                    )
+                    level_touch_tracker_service.on_tick(
+                        instrument_key, float(ltp),
+                    )
+                except Exception:
+                    logger.exception(
+                        "level_touch_tracker.on_tick failed for %s",
+                        instrument_key,
+                    )
 
             # Health feed log (e.g., every 5 minutes)
             if (
@@ -467,11 +508,10 @@ class LiveFeedService:
                         config.HEALTH_FEED_INSTRUMENT_INTERVAL,
                     )
 
-            # ---- Broadcast to UI clients ----------------------------
+            # ---- Broadcast to UI clients ---------------------------- #
             # NOTE: live_ema_engine.on_tick(...) was removed here. The
-            # strategy layer (EMA crosses, Opening Range) has been
-            # stripped from this codebase; the feed is now transport
-            # only.
+            # legacy EMA engine has been stripped from this codebase;
+            # the feed is now transport + strategy-hook only.
             self._publish_feed_snapshot(entry, tick)
 
     def _extract_tick(self, feed: dict[str, Any]) -> dict[str, Any] | None:

@@ -5,6 +5,7 @@ Jobs:
     * token_lifecycle_check         — interval
     * daily_refresh                 — cron, 08:30 IST Mon-Fri
     * first_candle_calc             — cron, 09:16:10 IST Mon-Fri
+    * strategy1_cutoff              — cron, 11:00 IST Mon-Fri (Strategy 1 window close)
 
 Readiness / preflight jobs:
     * readiness_digest              — cron, 08:45 IST
@@ -45,6 +46,7 @@ class SchedulerService:
             run_preflight_recheck,
             run_readiness_digest,
         )
+        from token_tasks.strategy1_cutoff_task import run_strategy1_cutoff
         from token_tasks.token_monitor import check_upstox_token_validity
 
         if self._scheduler is not None and self._scheduler.running:
@@ -85,6 +87,21 @@ class SchedulerService:
                 replace_existing=True, misfire_grace_time=60,
             )
 
+        # -- Strategy 1 cutoff (11:00 IST) ------------------------------ #
+        # If Strategy 1 has not fired an order by 11:00, this task
+        # activates Strategy 2 for the rest of the day and, if Strategy 2
+        # is enabled, replays any R3/S3 touches seen earlier in the
+        # session so late pairs are not missed.
+        if getattr(config, "STRATEGY1_ENABLED", True):
+            scheduler.add_job(
+                run_strategy1_cutoff, "cron",
+                day_of_week=config.DAILY_REFRESH_DAYS,
+                hour=getattr(config, "STRATEGY1_CUTOFF_HOUR", 11),
+                minute=getattr(config, "STRATEGY1_CUTOFF_MINUTE", 0),
+                id="strategy1_cutoff",
+                replace_existing=True, misfire_grace_time=120,
+            )
+
         # -- Readiness digest + pre-flight ------------------------------ #
         if config.READINESS_DIGEST_ENABLED:
             scheduler.add_job(
@@ -122,11 +139,14 @@ class SchedulerService:
 
         logger.info(
             "Scheduler started — daily=%02d:%02d, first_candle=%02d:%02d:%02d, "
-            "digest=%02d:%02d, preflight=%02d:%02d, DailyBackup=%02d:%02d",
+            "s1_cutoff=%02d:%02d, digest=%02d:%02d, preflight=%02d:%02d, "
+            "DailyBackup=%02d:%02d",
             config.DAILY_REFRESH_HOUR, config.DAILY_REFRESH_MINUTE,
             getattr(config, "FIRST_CANDLE_HOUR", 9),
             getattr(config, "FIRST_CANDLE_MINUTE", 16),
             getattr(config, "FIRST_CANDLE_SECOND", 10),
+            getattr(config, "STRATEGY1_CUTOFF_HOUR", 11),
+            getattr(config, "STRATEGY1_CUTOFF_MINUTE", 0),
             config.READINESS_DIGEST_HOUR, config.READINESS_DIGEST_MINUTE,
             config.READINESS_PREFLIGHT_HOUR, config.READINESS_PREFLIGHT_MINUTE,
             config.DAILY_BACKUP_HOUR, config.DAILY_BACKUP_MINUTE,

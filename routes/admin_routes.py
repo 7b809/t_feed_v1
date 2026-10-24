@@ -31,8 +31,15 @@ The pipeline order becomes:
     7.  Live feed
     8.  Scheduler
     9.  Telegram bot
-    10. Telegram completion notification
-    11. Return structured result
+    10. Strategy state sanity check
+    11. Telegram completion notification
+    12. Return structured result
+
+Strategy state sanity check
+---------------------------
+Before the completion message, ``_run_full_refresh_sync`` reads
+``strategy_state_service.get_state()`` and logs the day's gate for
+diagnostics. This is a read-only probe; it never mutates the state.
 """
 
 from __future__ import annotations
@@ -514,6 +521,29 @@ def _run_full_refresh_sync(
             reason,
         )
 
+    # ---- 9. Strategy state sanity (read-only) ----------------------- #
+    # Log the day's strategy gate so a refresh (startup / daily /
+    # manual) leaves a trace of which strategy is active, whether
+    # Strategy 1 has fired, and what the NIFTY / SENSEX averages
+    # were for the day. Read-only — never mutates the state.
+    try:
+        from services.strategy_state_service import strategy_state_service
+        state = strategy_state_service.get_state()
+        logger.info(
+            "[%s] strategy_state — day=%s s1_eligible=%s s1_active=%s "
+            "s1_fired=%s s2_active=%s nifty_avg=%s sensex_avg=%s",
+            reason,
+            state.get("day"),
+            state.get("strategy1_eligible"),
+            state.get("strategy1_active"),
+            state.get("strategy1_fired"),
+            state.get("strategy2_active"),
+            state.get("nifty_avg"),
+            state.get("sensex_avg"),
+        )
+    except Exception:
+        logger.exception("[%s] strategy_state check failed", reason)
+
     result: dict[str, Any] = {
         "reason": reason,
         "mode": reason,
@@ -531,7 +561,7 @@ def _run_full_refresh_sync(
         "telegram_started": telegram_ok,
     }
 
-    # ---- 9. Telegram completion ------------------------------------- #
+    # ---- 10. Telegram completion ------------------------------------ #
     status = "SUCCESS" if backup.get("status") == "ok" else "WARNING"
 
     message = _completion_message(

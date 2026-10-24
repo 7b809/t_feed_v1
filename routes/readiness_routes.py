@@ -9,16 +9,25 @@
     POST /admin/ops/smoke-test          -> 5-probe smoke test (no side effects)
     POST /admin/ops/resubscribe-feed    -> force live-feed reconnect
     POST /admin/ops/revalidate-token    -> force token re-check
+    POST /admin/ops/first-candle        -> manual first-candle trigger
+    GET  /admin/ops/first-candle-status -> last first-candle run summary
 
-Strategy-free
--------------
-EMA backfill, Opening Range, and ProChart are no longer part of the
-system. ``/admin/ops/warmup`` therefore performs **backup + registry
-load only** — the backfill seed call was removed.
+Strategy visibility (read-only)
+-------------------------------
+    GET  /admin/ops/strategy-state          -> today's strategy gate
+    GET  /admin/ops/level-touches           -> today's OR-level touches
+    GET  /admin/ops/strategy1-selection     -> today's S1 selection record
+    GET  /admin/ops/strategy2-isolation     -> today's S2 isolation records
+    POST /admin/ops/strategy2-rescan        -> re-run R3/S3 pairing on
+                                               existing touches
+
+These endpoints are read-only (except rescan) and expose only the
+metadata that strategy_state_service / level_touch_tracker_service /
+strategy1_service / strategy2_service already persist under
+``meta_data/``. No credentials or tokens appear in any response body.
 
 All routes return HTTP 200 with a JSON body carrying ``status`` so
-callers can drive automation off the response. No credentials or
-tokens appear in any response body.
+callers can drive automation off the response.
 """
 
 from __future__ import annotations
@@ -203,7 +212,6 @@ async def revalidate_token() -> dict[str, Any]:
     return await asyncio.to_thread(_run)
 
 
-# (Append to existing routes/readiness_routes.py)
 @router.post("/ops/first-candle")
 async def trigger_first_candle() -> dict[str, Any]:
     """Manually trigger the first-candle OR + EMA-cross calculation."""
@@ -218,3 +226,133 @@ def first_candle_status() -> dict[str, Any]:
     """Return the last first-candle run summary."""
     from services.first_candle_service import first_candle_service
     return first_candle_service.last_status()
+
+
+# --------------------------------------------------------------------------- #
+# Strategy visibility (read-only, plus a manual rescan)                       #
+# --------------------------------------------------------------------------- #
+def _market_day_iso() -> str:
+    """Return today's date string in the market timezone."""
+    from zoneinfo import ZoneInfo
+    try:
+        tz = ZoneInfo(config.MARKET_TIMEZONE)
+    except Exception:
+        tz = ZoneInfo("Asia/Kolkata")
+    return datetime.now(tz).date().isoformat()
+
+
+@router.get("/ops/strategy-state")
+def get_strategy_state() -> dict[str, Any]:
+    """Return the day's strategy gate state.
+
+    Fields include:
+        day, strategy1_eligible, strategy1_active, strategy1_fired,
+        strategy1_fired_at, strategy1_target_key, strategy1_source,
+        strategy2_active, strategy2_activated_at,
+        nifty_avg, sensex_avg, cross_true_count, computed_at
+    """
+    from services.strategy_state_service import strategy_state_service
+    return strategy_state_service.get_state()
+
+
+@router.get("/ops/level-touches")
+def get_level_touches() -> dict[str, Any]:
+    """Return today's recorded OR-level touches per instrument.
+
+    Shape:
+        {
+          "day": "YYYY-MM-DD",
+          "instrument_count": int,        # instruments with cached OR levels
+          "touched_instrument_count": int,
+          "touches": {
+             "<instrument_key>": {
+                "R1": {"ltp": float, "ts": "...", "level_value": float},
+                "R2": {...}, "S2": {...}, "R3": {...}, "S3": {...}, ...
+             },
+             ...
+          }
+        }
+    """
+    from services.level_touch_tracker_service import (
+        level_touch_tracker_service,
+    )
+    return level_touch_tracker_service.get_day_snapshot()
+
+
+@router.get("/ops/strategy1-selection")
+def get_strategy1_selection() -> dict[str, Any]:
+    """Return today's Strategy 1 selection record, if any.
+
+    The record is written by ``services.strategy1_service._persist``
+    after an order attempt (success or failure). A missing file means
+    Strategy 1 has not fired today.
+    """
+    import json
+    from pathlib import Path
+
+    day = _market_day_iso()
+    path = Path(config.PROJECT_ROOT) / "meta_data" / f"strategy1_selection_{day}.json"
+    if not path.exists():
+        return {"day": day, "selection": None, "found": False}
+    try:
+        return {
+            "day": day,
+            "selection": json.loads(path.read_text(encoding="utf-8")),
+            "found": True,
+        }
+    except Exception:
+        logger.exception("[readiness] strategy1 selection read failed")
+        return {
+            "day": day, "selection": None, "found": False,
+            "error": "unreadable",
+        }
+
+
+@router.get("/ops/strategy2-isolation")
+def get_strategy2_isolation() -> dict[str, Any]:
+    """Return today's Strategy 2 isolation records, if any.
+
+    Each record captures the paired R3 and S3 hits (instrument keys,
+    strike, type, timestamps, LTPs) that triggered an
+    "ISOLATION SELECTED" Telegram message.
+    """
+    import json
+    from pathlib import Path
+
+    day = _market_day_iso()
+    path = Path(config.PROJECT_ROOT) / "meta_data" / f"strategy2_isolation_{day}.json"
+    if not path.exists():
+        return {"day": day, "records": [], "found": False}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        records = payload.get("records") if isinstance(payload, dict) else []
+        return {
+            "day": day,
+            "records": records or [],
+            "found": True,
+        }
+    except Exception:
+        logger.exception("[readiness] strategy2 isolation read failed")
+        return {
+            "day": day, "records": [], "found": False,
+            "error": "unreadable",
+        }
+
+
+@router.post("/ops/strategy2-rescan")
+async def post_strategy2_rescan() -> dict[str, Any]:
+    """Manually re-scan existing touches for Strategy 2 pairing.
+
+    Useful when Strategy 2 activated later in the day (e.g. after the
+    Strategy 1 11:00 cutoff) and the operator wants to force a scan
+    of the touches that were recorded earlier in the session without
+    waiting for the next live tick.
+    """
+    def _run() -> dict[str, Any]:
+        from services.strategy2_service import strategy2_service
+        strategy2_service.rescan_existing_touches()
+        return {
+            "status": "ok",
+            "ran_at": datetime.now(timezone.utc).isoformat(),
+        }
+    return await asyncio.to_thread(_run)

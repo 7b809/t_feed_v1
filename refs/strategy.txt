@@ -1,0 +1,24 @@
+09:16:10
+  └─ for each instrument: write first_candle.json (OR + cross flag)
+  └─ read cross flags → set daily strategy_state.active = 1 | 2
+  └─ start level_touch_tracker (watch R2/S2 AND R3/S3 on all instruments)
+
+Strategy 1 (active = 1)
+  └─ 09:16–11:00 window
+  └─ watch R2 up-cross / S2 down-cross on NIFTY + SENSEX
+  └─ at 11:00 OR earlier if candidate fires:
+       ├─ NIFTY candidates exist  → select NIFTY nearest to NIFTY avg
+       ├─ SENSEX only             → fallback: NIFTY nearest to NIFTY avg
+       │                            (type per Q1; timing per Q2)
+       └─ none                    → Strategy 1 "did not happen"
+                                     → enable Strategy 2 from 11:00
+  └─ once order placed → mark strategy_state.strategy_1_fired = true
+                          → Strategy 2 stays off for the day
+
+Strategy 2 (active = 2, OR active = 1 but Strategy 1 did not happen by 11:00)
+  └─ full day (or from 11:00 per Q2/G2)
+  └─ watch R3 up-cross / S3 down-cross on ALL NIFTY + SENSEX instruments
+  └─ on R3 hit of instrument X:
+       → wait for / detect opposite-side S3
+       → send Telegram "isolation selected" with metadata
+       → no order placed (current spec)

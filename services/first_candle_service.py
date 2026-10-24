@@ -19,19 +19,63 @@ Skip reasons:
     * ``post_close``      — weekday, after 15:30 IST
 
 For each instrument (when not skipped):
-    1. Fetch the 09:15–09:16 1-min candle via Upstox HistoryV3
+    1. Fetch today's intraday 1-min candles via Upstox HistoryV3
        (``get_intra_day_candle_data(key, "minutes", "1")``).
        The intraday + historical endpoints do NOT require an explicit
        Authorization header — verified manually.
-    2. Read the last known EMA cross from ``ema_crosses.json``
+    2. Pick the 09:15 candle out of the returned list.
+    3. Read the last known EMA cross from ``ema_crosses.json``
        (fast_period=9, slow_period=21). Historical crosses are
        ground truth.
-    3. Compute Opening Range levels (D_H / D_L formula below).
-    4. Detect whether the 09:15 candle produced a new EMA cross
+    4. Compute Opening Range levels (D_H / D_L formula below).
+    5. Detect whether the 09:15 candle produced a new EMA cross
        relative to the last historical candle (reverse-cross check
        against the recorded slow EMA).
-    5. Persist ``first_candle.json`` next to the existing
+    6. Persist ``first_candle.json`` next to the existing
        ``candles.json`` / ``ema_crosses.json``.
+    7. Seed ``level_touch_tracker_service`` with the OR levels so the
+       live feed can detect R1/R2/R3/S1/S2/S3 touches in real time.
+    8. Replay today's intraday candles through ``level_touch_tracker``
+       so touches that occurred before this run started (e.g. during a
+       mid-session startup_backfill) are captured with their true
+       candle timestamps.
+
+Strategy integration (post-completion hooks)
+--------------------------------------------
+At the START of ``run()`` (before the per-instrument loop):
+  * ``strategy_state_service.apply_startup_gate()`` is called so the
+    late-start skip rule is applied **before** the replay in ``_one()``
+    fires strategy hooks. Without this ordering, a mid-session startup
+    would re-fire S1 on replayed touches before we decided S1 should
+    be skipped.
+
+At the END of ``run()``:
+  * ``strategy_state_service.on_first_candle_complete(summary)`` is
+    called so the day's strategy gate (S1 active vs S2 active vs
+    neither) is set based on this run's cross detection.
+  * The gate method itself runs a re-fire pass over existing touches
+    so historic R2/S2/R3/S3 touches are re-evaluated against the
+    now-active strategy.
+
+Both hooks are guarded by try/except; a failure in either is logged
+but never affects the first-candle result.
+
+Replay (Gap #4 fix)
+-------------------
+Between 09:16:10 and the current time, if the process started mid-session
+(or was restarted), the live feed has not been running long enough to
+capture every R2/S2/R3/S3 touch. After seeding each instrument's OR
+levels, we replay that instrument's today's intraday candles through
+``level_touch_tracker_service.on_tick`` in chronological order, feeding
+the candle's high first then its low (both tagged with the candle's
+timestamp). This produces accurate first-touch records even for
+instruments whose live ticks only started arriving after the touch
+window.
+
+The replay is idempotent — ``on_tick`` skips levels already recorded —
+so it is safe to run on the scheduled 09:16:10 pass, a manual retry,
+and a startup backfill alike. Cost is bounded (~2–3 s for a mid-session
+replay of 245 instruments up to 12:00).
 
 OR formula (per spec)
 ---------------------
@@ -257,7 +301,7 @@ def _folder_for_entry(entry: dict[str, Any]) -> Path:
 
 
 # --------------------------------------------------------------------------- #
-# Upstox intraday fetch — no explicit token required                          #
+# Upstox intraday fetch                                                       #
 # --------------------------------------------------------------------------- #
 def _load_sdk():
     try:
@@ -286,7 +330,16 @@ def _coerce_dict(raw: Any) -> dict[str, Any] | None:
     return None
 
 
-def _fetch_first_candle_upstox(instrument_key: str) -> dict[str, Any] | None:
+def _fetch_intraday_data(instrument_key: str) -> dict[str, Any] | None:
+    """Fetch today's intraday 1-min candles for one instrument.
+
+    Returns a dict with two fields, or None on failure:
+
+        {
+            "first_candle": {"time_iso", "open", "high", "low", "close"} | None,
+            "candles": [ (ts, o, h, l, c), ... ]  # chronological
+        }
+    """
     sdk = _load_sdk()
     if sdk is None:
         logger.error("upstox_client not installed")
@@ -309,28 +362,44 @@ def _fetch_first_candle_upstox(instrument_key: str) -> dict[str, Any] | None:
     if body is None:
         return None
 
-    candles = (body.get("data") or {}).get("candles") or []
-    if not isinstance(candles, list) or not candles:
+    raw_candles = (body.get("data") or {}).get("candles") or []
+    if not isinstance(raw_candles, list) or not raw_candles:
         return None
 
-    for raw in candles:
+    candles: list[tuple[str, float, float, float, float]] = []
+    for raw in raw_candles:
         if not isinstance(raw, list) or len(raw) < 5:
             continue
         try:
-            ts_str = str(raw[0])
-            dt = datetime.fromisoformat(ts_str)
-            if dt.hour != 9 or dt.minute != 15:
-                continue
-            return {
-                "time_iso": ts_str,
-                "open": float(raw[1]),
-                "high": float(raw[2]),
-                "low":  float(raw[3]),
-                "close": float(raw[4]),
-            }
+            candles.append((
+                str(raw[0]),
+                float(raw[1]),
+                float(raw[2]),
+                float(raw[3]),
+                float(raw[4]),
+            ))
+        except (TypeError, ValueError):
+            continue
+
+    if not candles:
+        return None
+
+    candles.sort(key=lambda x: x[0])
+
+    first_candle: dict[str, Any] | None = None
+    for ts, o, h, l, c in candles:
+        try:
+            dt = datetime.fromisoformat(ts)
         except Exception:
             continue
-    return None
+        if dt.hour == 9 and dt.minute == 15:
+            first_candle = {
+                "time_iso": ts,
+                "open": o, "high": h, "low": l, "close": c,
+            }
+            break
+
+    return {"first_candle": first_candle, "candles": candles}
 
 
 # --------------------------------------------------------------------------- #
@@ -445,6 +514,35 @@ def _detect_new_ema_cross(
 
 
 # --------------------------------------------------------------------------- #
+# Replay helper                                                               #
+# --------------------------------------------------------------------------- #
+def _replay_through_tracker(
+    instrument_key: str,
+    candles: list[tuple[str, float, float, float, float]],
+) -> int:
+    """Feed intraday OHLC through the level touch tracker.
+
+    Each candle is fed twice: once for its high (tests all R-levels),
+    once for its low (tests all S-levels). Both calls carry the
+    candle's own timestamp so the tracker records accurate first-touch
+    times in ``level_touches_<day>.json``.
+
+    Idempotent — ``on_tick`` skips levels already recorded for the day.
+
+    Returns the number of ``on_tick`` calls made (2 × len(candles)).
+    """
+    from services.level_touch_tracker_service import (
+        level_touch_tracker_service,
+    )
+    calls = 0
+    for ts, _o, h, l, _c in candles:
+        level_touch_tracker_service.on_tick(instrument_key, h, timestamp=ts)
+        level_touch_tracker_service.on_tick(instrument_key, l, timestamp=ts)
+        calls += 2
+    return calls
+
+
+# --------------------------------------------------------------------------- #
 # Public service                                                              #
 # --------------------------------------------------------------------------- #
 class FirstCandleService:
@@ -453,6 +551,26 @@ class FirstCandleService:
     Skips automatically on weekends, holidays, and outside the
     09:15–15:30 IST session, returning a ``skipped=True`` summary with
     a countdown to the next open.
+
+    Per-instrument ``_one`` does three strategy-facing things after
+    writing ``first_candle.json``:
+
+      1. ``level_touch_tracker_service.set_or_levels`` — seed the OR
+         levels so the live feed can raise R1/R2/R3/S1/S2/S3 touch
+         events in real time.
+      2. ``_replay_through_tracker`` — replay today's intraday candles
+         through ``on_tick`` so any touch that happened before this
+         run started (mid-session startup_backfill, manual retry after
+         a crash, or simply the 09:16 second) is captured with the
+         correct candle timestamp.
+      3. ``strategy_state_service.on_first_candle_complete`` (called
+         once at end of ``run``) — set the day's strategy gate,
+         including the ``computed == 0`` failure state and the
+         late-start skip rule.
+
+    At the START of ``run``, ``strategy_state_service.apply_startup_gate``
+    is called so the late-start skip flag is set **before** the replay
+    in ``_one`` fires strategy hooks. Ordering matters here.
     """
 
     def __init__(self) -> None:
@@ -464,9 +582,12 @@ class FirstCandleService:
         if not key:
             return ("", None, "missing_instrument_key")
         try:
-            fc = _fetch_first_candle_upstox(key)
-            if fc is None:
+            data = _fetch_intraday_data(key)
+            if data is None or data.get("first_candle") is None:
                 return (key, None, "no_first_candle")
+            fc = data["first_candle"]
+            candles = data.get("candles") or []
+
             levels = _compute_or_levels(fc)
             historical = _read_historical_crosses(entry)
             ema = _detect_new_ema_cross(entry, historical, fc)
@@ -488,6 +609,30 @@ class FirstCandleService:
                 json.dumps(payload, indent=2, default=str),
                 encoding="utf-8",
             )
+
+            # Seed tracker BEFORE replay so replay compares against
+            # today's levels, not yesterday's leftovers.
+            try:
+                from services.level_touch_tracker_service import (
+                    level_touch_tracker_service,
+                )
+                level_touch_tracker_service.set_or_levels(key, levels)
+            except Exception:
+                logger.exception(
+                    "[first-candle] set_or_levels failed for %s", key,
+                )
+
+            # Replay today's candles through the tracker.
+            # Idempotent; safe on scheduled 09:16:10 run, startup
+            # backfill, and manual retry alike.
+            if candles:
+                try:
+                    _replay_through_tracker(key, candles)
+                except Exception:
+                    logger.exception(
+                        "[first-candle] replay failed for %s", key,
+                    )
+
             return (key, payload, None)
         except Exception as exc:
             return (key, None, f"{type(exc).__name__}: {exc}")
@@ -521,6 +666,20 @@ class FirstCandleService:
                 gate["countdown_label"],
             )
             return summary
+
+        # ---- Late-start gate ----------------------------------------- #
+        # Runs BEFORE the per-instrument loop so the skip flag is set
+        # before any replay fires strategy hooks. Idempotent across
+        # scheduled / startup_backfill / manual invocations.
+        try:
+            from services.strategy_state_service import (
+                strategy_state_service,
+            )
+            strategy_state_service.apply_startup_gate()
+        except Exception:
+            logger.exception(
+                "[first-candle] strategy_state.apply_startup_gate failed"
+            )
 
         # ---- Normal calculation -------------------------------------- #
         entries = list(instrument_registry.all())
@@ -584,6 +743,16 @@ class FirstCandleService:
             total, len(results), len(skipped),
             len(errors), len(crosses_detected), elapsed,
         )
+
+        # ---- Strategy gate (incl. late-start skip + refire) ---------- #
+        try:
+            from services.strategy_state_service import (
+                strategy_state_service,
+            )
+            strategy_state_service.on_first_candle_complete(summary)
+        except Exception:
+            logger.exception("[first-candle] strategy_state hook failed")
+
         return summary
 
     def last_status(self) -> dict[str, Any]:

@@ -81,6 +81,15 @@ TELEGRAM_TOKEN_BOT_POLL_SECONDS = max(1, _int("TELEGRAM_TOKEN_BOT_POLL_SECONDS",
 TELEGRAM_TOKEN_BOT_LONG_POLL_TIMEOUT = max(1, _int("TELEGRAM_TOKEN_BOT_LONG_POLL_TIMEOUT", 20))
 TELEGRAM_TOKEN_BOT_RESTRICT_TO_CHAT = _bool("TELEGRAM_TOKEN_BOT_RESTRICT_TO_CHAT", True)
 
+# Windows-only startup confirmation for the Telegram bot.
+# When True, telegram_token_bot.start() skips the [y/N] prompt and
+# starts polling immediately (useful for headless / service runs).
+# The timeout controls how long the prompt waits before defaulting to No.
+TELEGRAM_BOT_SKIP_WINDOWS_PROMPT = _bool("TELEGRAM_BOT_SKIP_WINDOWS_PROMPT", False)
+TELEGRAM_BOT_WINDOWS_PROMPT_TIMEOUT_SECONDS = _float(
+    "TELEGRAM_BOT_WINDOWS_PROMPT_TIMEOUT_SECONDS", 5.0
+)
+
 # ---------------------------------------------------------------------------
 # Chart history
 # ---------------------------------------------------------------------------
@@ -116,16 +125,12 @@ HEALTH_FEED_INSTRUMENT = _str("HEALTH_FEED_INSTRUMENT", "NSE_INDEX|Nifty 50")
 HEALTH_FEED_INSTRUMENT_INTERVAL = max(1, _int("HEALTH_FEED_INSTRUMENT_INTERVAL", 5))
 
 # ---------------------------------------------------------------------------
-# Live EMA cross engine (retained for compatibility until
-# live_ema_engine.py / live_cross_store.py are fully removed)
+# Live EMA cross engine (retained for compatibility)
 # ---------------------------------------------------------------------------
-# These keys are no longer consumed by the live feed (the on_tick call
-# was removed) and the strategy cross handler is being stripped from
-# admin_routes / live_routes. They remain here so any lingering import
-# of the EMA engine / cross store does not raise AttributeError.
-#
-# Delete this whole block once services/live_ema_engine.py and
-# services/live_cross_store.py are deleted.
+# These keys are no longer consumed by the live feed. They remain here
+# so any lingering import of the legacy EMA engine does not raise
+# AttributeError. Delete this whole block once services/live_ema_engine.py
+# and services/live_cross_store.py are fully removed.
 EMA_FAST_PERIOD = max(1, _int("EMA_FAST_PERIOD", 9))
 EMA_SLOW_PERIOD = max(2, _int("EMA_SLOW_PERIOD", 21))
 EMA_ATR_PERIOD = max(1, _int("EMA_ATR_PERIOD", 14))
@@ -209,6 +214,9 @@ READINESS_SMOKE_TEST_ENABLED = _bool("READINESS_SMOKE_TEST_ENABLED", True)
 # flag at runtime; toggling it in .env and restarting is enough — no
 # code change is required.
 VERBOSE_LOG = _bool("VERBOSE_LOG", False)
+# Backward-compat alias — routes/admin_routes.py historically read
+# STRATEGY_VERBOSE_LOG. Kept so existing callers do not need to change.
+STRATEGY_VERBOSE_LOG = VERBOSE_LOG
 
 # ---------------------------------------------------------------------------
 # Transient folder cleanup (project start / daily refresh / hard refresh)
@@ -322,12 +330,101 @@ DAILY_BACKUP_MAX_BLOB_MB = max(1, _int("DAILY_BACKUP_MAX_BLOB_MB", 15))
 # First-candle OR + EMA-cross detection (09:16:10 Mon-Fri)
 # ===========================================================================
 # Runs after the first 1-min candle of the day closes (09:15-09:16).
-# Fetches the first candle for every registered instrument in parallel,
-# computes Opening Range levels using the D_H/D_L formula, checks the
-# last recorded EMA cross against the new close, and writes
-# first_candle.json next to candles.json in each instrument folder.
+# Fetches first candle for every registered instrument, computes OR
+# levels, detects any new EMA cross, and writes first_candle.json per
+# instrument folder. Also seeds the level touch tracker and replays
+# today's intraday candles so historic touches are captured correctly.
 FIRST_CANDLE_ENABLED = _bool("FIRST_CANDLE_ENABLED", True)
 FIRST_CANDLE_HOUR = _int("FIRST_CANDLE_HOUR", 9)
 FIRST_CANDLE_MINUTE = _int("FIRST_CANDLE_MINUTE", 16)
 FIRST_CANDLE_SECOND = _int("FIRST_CANDLE_SECOND", 10)
 FIRST_CANDLE_WORKERS = max(1, min(32, _int("FIRST_CANDLE_WORKERS", 8)))
+
+
+# ===========================================================================
+# STRATEGY 1 — R2/S2 detection on first-candle EMA cross instruments
+# ===========================================================================
+# Active window: 09:16 -> STRATEGY1_CUTOFF_HOUR:STRATEGY1_CUTOFF_MINUTE
+# (default 11:00 IST).
+#
+# Behaviour:
+#   * Watches every instrument that has ema_cross_at_first_candle.detected.
+#   * If an instrument's live LTP touches R2 (up-cross) or S2 (down-cross):
+#       - NIFTY candidate -> fire immediately (same instrument for R2,
+#         same-strike opposite CE/PE for S2).
+#       - SENSEX candidate -> SENSEX->NIFTY fallback: place on the NIFTY
+#         strike nearest to the NIFTY average, using the same up-mover
+#         logic (R2 -> same type, S2 -> opposite type).
+#   * Range filter:
+#       NIFTY option strike must be within
+#         NIFTY_avg +/- STRATEGY1_NIFTY_RANGE_POINTS
+#       SENSEX option strike must be within
+#         SENSEX_avg +/- STRATEGY1_SENSEX_RANGE_POINTS
+#   * Exactly one order per day, first-wins.
+#   * Once an order is placed, Strategy 2 stays dormant for the day.
+#
+# If no candidate fires before the cutoff, Strategy 2 becomes active
+# for the remainder of the day via token_tasks/strategy1_cutoff_task.
+#
+# Late-start rule (NEW)
+# ---------------------
+# If the PROCESS STARTS on a trading day inside the configured
+# STRATEGY1_STARTUP_SKIP_FROM_* / _TO_* window (default 09:30 – 15:00
+# IST), Strategy 1 is skipped entirely for that day and Strategy 2 is
+# activated immediately. Rationale: by 09:30 we have missed enough of
+# the S1 setup window that firing a late, unverified order is riskier
+# than falling back to the S2 R3/S3 pair detector.
+#
+# The check is based on when this Python process was first imported,
+# not on the current wall-clock time. Starting the process at 08:00
+# and running all day does NOT trigger the skip on future days — only
+# a process that started today inside the skip window does.
+STRATEGY1_ENABLED = _bool("STRATEGY1_ENABLED", True)
+STRATEGY1_CUTOFF_HOUR = _int("STRATEGY1_CUTOFF_HOUR", 11)
+STRATEGY1_CUTOFF_MINUTE = _int("STRATEGY1_CUTOFF_MINUTE", 0)
+STRATEGY1_NIFTY_RANGE_POINTS = _float("STRATEGY1_NIFTY_RANGE_POINTS", 300.0)
+STRATEGY1_SENSEX_RANGE_POINTS = _float("STRATEGY1_SENSEX_RANGE_POINTS", 700.0)
+STRATEGY1_LOTS = max(1, _int("STRATEGY1_LOTS", 1))
+STRATEGY1_TRANSACTION_TYPE = _str("STRATEGY1_TRANSACTION_TYPE", "BUY")
+
+# Late-start skip window (IST). If this process first imported inside
+# [FROM, TO) on a trading day, S1 is disabled for that day and S2 is
+# activated immediately.
+#
+# Defaults to [09:30, 15:00). Must satisfy FROM < TO. Set FROM == TO
+# (e.g. both 00:00) to disable the skip rule entirely.
+STRATEGY1_STARTUP_SKIP_FROM_HOUR = _int("STRATEGY1_STARTUP_SKIP_FROM_HOUR", 9)
+STRATEGY1_STARTUP_SKIP_FROM_MINUTE = _int("STRATEGY1_STARTUP_SKIP_FROM_MINUTE", 30)
+STRATEGY1_STARTUP_SKIP_TO_HOUR = _int("STRATEGY1_STARTUP_SKIP_TO_HOUR", 15)
+STRATEGY1_STARTUP_SKIP_TO_MINUTE = _int("STRATEGY1_STARTUP_SKIP_TO_MINUTE", 0)
+
+
+# ===========================================================================
+# STRATEGY 2 — R3/S3 isolation on all NIFTY + SENSEX instruments
+# ===========================================================================
+# Active window: 09:16 -> STRATEGY2_END_HOUR:STRATEGY2_END_MINUTE
+# (default 15:25 IST). Activated by:
+#   * first_candle_service when NO instrument had a first-candle EMA
+#     cross (starts immediately), OR
+#   * the late-start rule (process started inside the S1 skip window),
+#     OR
+#   * token_tasks/strategy1_cutoff_task at the S1 cutoff when Strategy 1
+#     did not place an order (starts at cutoff).
+# Suppressed when Strategy 1 has fired an order.
+#
+# Behaviour:
+#   * Watches R3 up-cross and S3 down-cross on every option instrument.
+#   * When an R3 fires, wait for (or detect an existing) S3 on the
+#     same-strike opposite type. When the pair is confirmed, emit a
+#     Telegram "ISOLATION SELECTED" message with full metadata.
+#   * Does NOT place an order — Telegram alert only.
+#   * Range filter (same shape as Strategy 1):
+#       NIFTY option strike within
+#         NIFTY_avg +/- STRATEGY2_NIFTY_RANGE_POINTS
+#       SENSEX option strike within
+#         SENSEX_avg +/- STRATEGY2_SENSEX_RANGE_POINTS
+STRATEGY2_ENABLED = _bool("STRATEGY2_ENABLED", True)
+STRATEGY2_END_HOUR = _int("STRATEGY2_END_HOUR", 15)
+STRATEGY2_END_MINUTE = _int("STRATEGY2_END_MINUTE", 25)
+STRATEGY2_NIFTY_RANGE_POINTS = _float("STRATEGY2_NIFTY_RANGE_POINTS", 300.0)
+STRATEGY2_SENSEX_RANGE_POINTS = _float("STRATEGY2_SENSEX_RANGE_POINTS", 700.0)
