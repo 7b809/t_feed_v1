@@ -6,7 +6,7 @@ Serves the Jinja2-rendered pages that make up the UI:
     GET /                     -> index.html (multi-index dashboard)
     GET /charts               -> instrument_list.html (Upstox search)
     GET /chart/{instrument_key}
-                              -> chart.html (candles + EMA + OR levels)
+                              -> chart.html (candles + live feed)
     GET /favicon.ico          -> 204 No Content
 
 The templates live at <project_root>/templates/. If your project uses a
@@ -15,6 +15,10 @@ different location, change the single ``_TEMPLATES_DIR`` line below.
 Chart data is fetched directly from Upstox by the browser (via the
 ``/api/upstox/*`` proxy), so the chart route only needs to pass the
 instrument metadata + the side-panel instrument list to the template.
+
+ProChart / Opening Range have been removed from this codebase. The
+chart page is now candles + live feed only — the previous OR-level
+overlay has been dropped along with the strategy layer.
 """
 
 from __future__ import annotations
