@@ -1,6 +1,6 @@
 <!-- templates/index.html -->
 <!DOCTYPE html>
-<html lang="en" data-bs-theme="dark">
+<html lang="en" data-bs-theme="light">
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -14,59 +14,110 @@
   rel="stylesheet"
 />
 <style>
+  /* -------------------------------------------------------------
+     Clean Corporate Light Mode
+       Background Primary   : #F8F9FA / #F1F3F6
+       Background Secondary : #FFFFFF
+       Text Primary         : #1A1D20
+       Text Secondary       : #5A626A
+       Bullish Accent       : #0F9D58
+       Bearish Accent       : #C5221F
+       Primary Brand CTA    : #1A73E8
+     Navbar stays dark (Deep Charcoal) for the half-dark header
+     feel; everything below is light with white cards.
+     ------------------------------------------------------------- */
   :root {
-    --bg: #0b1020;
-    --card-bg: #131a2b;
-    --card-bg-alt: #0f1526;
-    --border: #1f2a44;
-    --text: #e2e8f0;
-    --muted: #7c8aa5;
-    --green: #22c55e;
-    --red: #ef4444;
-    --amber: #f59e0b;
-    --blue: #3b82f6;
-    --purple: #a855f7;
+    --bg: #F8F9FA;
+    --bg-alt: #F1F3F6;
+    --card-bg: #FFFFFF;
+    --card-bg-alt: #F8F9FA;
+    --border: #E1E4E8;
+    --border-strong: #D1D5DB;
+    --text: #1A1D20;
+    --muted: #5A626A;
+    --green: #0F9D58;
+    --red: #C5221F;
+    --amber: #B45309;
+    --blue: #1A73E8;
+    --purple: #7C3AED;
+    --header-bg: #1A1D20;
   }
+
   html, body { min-height: 100%; }
   body {
-    background: radial-gradient(circle at top left, #0f172a, #0b1020 60%) !important;
+    background: radial-gradient(circle at top left, #FFFFFF, #F1F3F6 60%) !important;
     color: var(--text);
     min-height: 100vh;
     font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
     margin: 0;
   }
 
+  /* ---------------- Navbar (dark strip) ---------------- */
   .navbar {
-    background: rgba(19, 26, 43, 0.85) !important;
+    background: var(--header-bg) !important;
     backdrop-filter: blur(12px);
     -webkit-backdrop-filter: blur(12px);
-    border-bottom: 1px solid var(--border);
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+    box-shadow: 0 1px 3px rgba(16,24,40,0.08);
   }
-  .navbar-brand { font-weight: 700; letter-spacing: 0.5px; }
+  .navbar-brand { color: #FFFFFF !important; font-weight: 700; letter-spacing: 0.5px; }
+  .navbar .text-primary { color: #93C5FD !important; }
+  .navbar .text-muted   { color: rgba(255,255,255,0.7) !important; }
+
   .live-dot {
     display: inline-block;
     width: 10px; height: 10px;
     border-radius: 50%;
     background: var(--green);
-    box-shadow: 0 0 0 0 rgba(34,197,94,0.7);
+    box-shadow: 0 0 0 0 rgba(15,157,88,0.7);
     animation: pulse 1.6s infinite;
     margin-right: 6px;
     vertical-align: middle;
   }
   @keyframes pulse {
-    0%   { box-shadow: 0 0 0 0 rgba(34,197,94,0.7); }
-    70%  { box-shadow: 0 0 0 10px rgba(34,197,94,0); }
-    100% { box-shadow: 0 0 0 0 rgba(34,197,94,0); }
+    0%   { box-shadow: 0 0 0 0 rgba(15,157,88,0.7); }
+    70%  { box-shadow: 0 0 0 10px rgba(15,157,88,0); }
+    100% { box-shadow: 0 0 0 0 rgba(15,157,88,0); }
   }
 
+  /* ---------------- Buttons ---------------- */
+  .btn-primary {
+    --bs-btn-color: #FFFFFF;
+    --bs-btn-bg: #1A73E8;
+    --bs-btn-border-color: #1A73E8;
+    --bs-btn-hover-color: #FFFFFF;
+    --bs-btn-hover-bg: #1765C9;
+    --bs-btn-hover-border-color: #1765C9;
+    --bs-btn-active-color: #FFFFFF;
+    --bs-btn-active-bg: #145BB0;
+    --bs-btn-active-border-color: #145BB0;
+    --bs-btn-disabled-bg: #8AB4F0;
+    --bs-btn-disabled-border-color: #8AB4F0;
+  }
+  .btn-outline-primary {
+    --bs-btn-color: #1A73E8;
+    --bs-btn-border-color: #1A73E8;
+    --bs-btn-hover-color: #FFFFFF;
+    --bs-btn-hover-bg: #1A73E8;
+    --bs-btn-hover-border-color: #1A73E8;
+    --bs-btn-active-bg: #145BB0;
+    --bs-btn-active-border-color: #145BB0;
+  }
+
+  /* ---------------- Summary tiles ---------------- */
   .summary-card {
     background: var(--card-bg);
     border: 1px solid var(--border);
     border-radius: 12px;
     padding: 16px 18px;
-    transition: transform 0.15s ease, border-color 0.15s ease;
+    box-shadow: 0 1px 2px rgba(16,24,40,0.04);
+    transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
   }
-  .summary-card:hover { border-color: var(--blue); transform: translateY(-2px); }
+  .summary-card:hover {
+    border-color: var(--blue);
+    transform: translateY(-2px);
+    box-shadow: 0 6px 16px rgba(26,115,232,0.08);
+  }
   .summary-label {
     color: var(--muted);
     font-size: 0.72rem;
@@ -74,9 +125,12 @@
     letter-spacing: 1.5px;
     margin-bottom: 4px;
   }
-  .summary-value { font-size: 1.7rem; font-weight: 700; line-height: 1; }
+  .summary-value { font-size: 1.7rem; font-weight: 700; line-height: 1; color: var(--text); }
   .summary-sub { font-size: 0.7rem; color: var(--muted); margin-top: 5px; }
+  .summary-value.text-info    { color: var(--blue) !important; }
+  .summary-value.text-success { color: var(--green) !important; }
 
+  /* ---------------- Section headers ---------------- */
   .section-head {
     display: flex; align-items: center; justify-content: space-between;
     gap: 12px;
@@ -96,14 +150,34 @@
     font-size: 0.7rem;
     padding: 2px 8px;
     border-radius: 999px;
-    background: rgba(59,130,246,0.15);
-    border: 1px solid rgba(59,130,246,0.35);
-    color: #93c5fd;
+    background: rgba(26,115,232,0.08);
+    border: 1px solid rgba(26,115,232,0.25);
+    color: var(--blue);
     letter-spacing: 1px;
+    font-weight: 700;
   }
+  .section-head h3 .tag-sub {
+    font-size: 0.6rem;
+    letter-spacing: 1.5px;
+    color: var(--muted);
+    background: #FFFFFF;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 1px 8px;
+    text-transform: uppercase;
+    font-weight: 600;
+  }
+  .section-head.index-head h3 .count {
+    background: rgba(180,83,9,0.08);
+    border-color: rgba(180,83,9,0.25);
+    color: var(--amber);
+  }
+  .section-head h3 .bi-fire { color: var(--amber) !important; }
+  .section-head h3 .bi-collection { color: var(--blue) !important; }
+
   .scroll-controls { display: flex; gap: 6px; }
   .scroll-btn {
-    background: var(--card-bg);
+    background: #FFFFFF;
     color: var(--text);
     border: 1px solid var(--border);
     border-radius: 8px;
@@ -115,6 +189,7 @@
   .scroll-btn:hover { border-color: var(--blue); color: var(--blue); }
   .scroll-btn:active { transform: scale(0.95); }
 
+  /* ---------------- Instrument rows / cards ---------------- */
   .instrument-row {
     display: flex;
     gap: 14px;
@@ -123,14 +198,14 @@
     padding: 4px 2px 16px;
     scroll-behavior: smooth;
     scrollbar-width: thin;
-    scrollbar-color: #2a3a5a transparent;
+    scrollbar-color: var(--border-strong) transparent;
   }
   .instrument-row::-webkit-scrollbar { height: 8px; }
   .instrument-row::-webkit-scrollbar-track { background: transparent; }
   .instrument-row::-webkit-scrollbar-thumb {
-    background: #2a3a5a; border-radius: 4px;
+    background: var(--border-strong); border-radius: 4px;
   }
-  .instrument-row::-webkit-scrollbar-thumb:hover { background: #3b4a72; }
+  .instrument-row::-webkit-scrollbar-thumb:hover { background: #B8BDC4; }
 
   .instrument-card {
     flex: 0 0 320px;
@@ -139,17 +214,18 @@
     border: 1px solid var(--border);
     border-radius: 14px;
     overflow: hidden;
+    box-shadow: 0 1px 2px rgba(16,24,40,0.04);
     transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
     display: flex; flex-direction: column;
   }
   .instrument-card:hover {
     transform: translateY(-2px);
-    box-shadow: 0 10px 30px -10px rgba(59,130,246,0.35);
+    box-shadow: 0 10px 30px -10px rgba(26,115,232,0.22);
     border-color: var(--blue);
   }
 
   .card-head {
-    background: linear-gradient(135deg, rgba(59,130,246,0.15), rgba(19,26,43,0));
+    background: linear-gradient(135deg, rgba(26,115,232,0.05), rgba(255,255,255,0));
     border-bottom: 1px solid var(--border);
     padding: 12px 14px;
     display: flex; justify-content: space-between; align-items: flex-start;
@@ -160,6 +236,7 @@
     font-size: 0.95rem;
     line-height: 1.15;
     word-break: break-word;
+    color: var(--text);
   }
   .symbol-key {
     font-size: 0.7rem;
@@ -167,10 +244,11 @@
     word-break: break-all;
     margin-top: 2px;
   }
+
   .kind-badge {
-    background: rgba(59,130,246,0.18);
-    color: #93c5fd;
-    border: 1px solid rgba(59,130,246,0.35);
+    background: rgba(26,115,232,0.08);
+    color: var(--blue);
+    border: 1px solid rgba(26,115,232,0.25);
     font-size: 0.66rem;
     letter-spacing: 1px;
     text-transform: uppercase;
@@ -178,22 +256,27 @@
     border-radius: 999px;
     white-space: nowrap;
     flex-shrink: 0;
-    font-weight: 600;
+    font-weight: 700;
   }
   .kind-badge.kind-ce {
-    background: rgba(34,197,94,0.15);
-    color: #86efac;
-    border-color: rgba(34,197,94,0.35);
+    background: rgba(15,157,88,0.08);
+    color: var(--green);
+    border-color: rgba(15,157,88,0.25);
   }
   .kind-badge.kind-pe {
-    background: rgba(239,68,68,0.15);
-    color: #fca5a5;
-    border-color: rgba(239,68,68,0.35);
+    background: rgba(197,34,31,0.08);
+    color: var(--red);
+    border-color: rgba(197,34,31,0.25);
+  }
+  .kind-badge.kind-index {
+    background: rgba(180,83,9,0.08);
+    color: var(--amber);
+    border-color: rgba(180,83,9,0.25);
   }
 
   .price-block { padding: 12px 14px 8px; }
   .price-main { display: flex; align-items: baseline; gap: 8px; }
-  .price { font-size: 1.7rem; font-weight: 700; color: #fff; line-height: 1; }
+  .price { font-size: 1.7rem; font-weight: 700; color: var(--text); line-height: 1; }
   .price-trend-up   { color: var(--green); }
   .price-trend-down { color: var(--red); }
   .price-trend-flat { color: var(--muted); }
@@ -201,7 +284,7 @@
 
   .ema-block {
     padding: 8px 14px;
-    border-top: 1px solid rgba(31,42,68,0.6);
+    border-top: 1px solid var(--border);
   }
   .ema-title {
     font-size: 0.7rem;
@@ -211,8 +294,8 @@
     margin-bottom: 6px;
     display: flex; justify-content: space-between;
   }
-  .ema-title .ema-name { font-weight: 600; }
-  .ema-title .ema-diff { font-weight: 600; }
+  .ema-title .ema-name { font-weight: 600; color: var(--text); }
+  .ema-title .ema-diff { font-weight: 700; }
   .ema-diff.up   { color: var(--green); }
   .ema-diff.down { color: var(--red); }
   .ema-diff.flat { color: var(--muted); }
@@ -231,8 +314,8 @@
     color: var(--muted);
   }
   .ema-value { font-size: 1.05rem; font-weight: 700; line-height: 1.15; }
-  .ema-value.ema-new { color: #fff; }
-  .ema-value.ema-prev { color: #94a3b8; font-weight: 600; font-size: 0.95rem; }
+  .ema-value.ema-new  { color: var(--text); }
+  .ema-value.ema-prev { color: var(--muted); font-weight: 600; font-size: 0.95rem; }
   .ema-time {
     font-size: 0.66rem;
     color: var(--muted);
@@ -240,14 +323,14 @@
     font-variant-numeric: tabular-nums;
   }
   .ema-arrow {
-    color: var(--muted);
+    color: var(--border-strong);
     font-size: 1rem;
     user-select: none;
   }
 
   .cross-row {
     padding: 10px 14px;
-    border-top: 1px solid rgba(31,42,68,0.6);
+    border-top: 1px solid var(--border);
     display: flex; align-items: center; justify-content: space-between; gap: 8px;
   }
   .cross-pill {
@@ -255,11 +338,23 @@
     font-size: 0.75rem;
     padding: 3px 10px;
     border-radius: 999px;
-    font-weight: 600;
+    font-weight: 700;
   }
-  .cross-bullish { background: rgba(34,197,94,0.15);  color: var(--green); border: 1px solid rgba(34,197,94,0.35); }
-  .cross-bearish { background: rgba(239,68,68,0.15);  color: var(--red);   border: 1px solid rgba(239,68,68,0.35); }
-  .cross-none    { background: rgba(124,138,165,0.15);color: var(--muted); border: 1px solid rgba(124,138,165,0.35); }
+  .cross-bullish {
+    background: rgba(15,157,88,0.08);
+    color: var(--green);
+    border: 1px solid rgba(15,157,88,0.25);
+  }
+  .cross-bearish {
+    background: rgba(197,34,31,0.08);
+    color: var(--red);
+    border: 1px solid rgba(197,34,31,0.25);
+  }
+  .cross-none {
+    background: rgba(90,98,106,0.08);
+    color: var(--muted);
+    border: 1px solid rgba(90,98,106,0.2);
+  }
   .cross-time {
     font-size: 0.7rem;
     color: var(--muted);
@@ -304,8 +399,113 @@
     padding: 60px 20px;
     text-align: center;
     color: var(--muted);
-    border: 2px dashed var(--border);
+    background: #FFFFFF;
+    border: 2px dashed var(--border-strong);
     border-radius: 14px;
+  }
+
+  /* ---------------- Add Instrument modal ---------------- */
+  .modal-content {
+    background: #FFFFFF;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    box-shadow: 0 20px 60px -20px rgba(16,24,40,0.25);
+  }
+  .modal-header, .modal-footer { border-color: var(--border); }
+  .modal-title { font-weight: 700; letter-spacing: 0.4px; color: var(--text); }
+
+  .nav-tabs { border-bottom: 1px solid var(--border); }
+  .nav-tabs .nav-link {
+    color: var(--muted);
+    border: none;
+    border-bottom: 2px solid transparent;
+    font-size: 0.85rem;
+    letter-spacing: 0.5px;
+    font-weight: 600;
+  }
+  .nav-tabs .nav-link:hover { color: var(--text); }
+  .nav-tabs .nav-link.active {
+    color: var(--blue);
+    background: transparent;
+    border-bottom-color: var(--blue);
+  }
+
+  .instrument-chip {
+    background: #FFFFFF;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 10px 14px;
+    display: inline-flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    min-width: 180px;
+    color: var(--text);
+    text-align: left;
+  }
+  .instrument-chip:hover:not(.chip-disabled) {
+    border-color: var(--blue);
+    transform: translateY(-1px);
+    color: var(--text);
+    box-shadow: 0 2px 8px rgba(26,115,232,0.1);
+  }
+  .instrument-chip.chip-disabled {
+    cursor: default;
+    opacity: 0.75;
+    background: rgba(15,157,88,0.03);
+    border-color: rgba(15,157,88,0.3);
+  }
+  .instrument-chip .chip-symbol { font-weight: 700; font-size: 0.88rem; color: var(--text); }
+  .instrument-chip .chip-key    { font-size: 0.66rem; color: var(--muted); word-break: break-all; }
+
+  .options-table { color: var(--text); }
+  .options-table thead th {
+    color: var(--muted);
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    border-bottom: 1px solid var(--border);
+    font-weight: 700;
+  }
+  .options-table tbody td {
+    border-color: var(--border);
+    vertical-align: middle;
+  }
+  .options-table tbody tr:hover { background: rgba(26,115,232,0.04); }
+
+  .btn-xs {
+    --bs-btn-padding-y: 0.15rem;
+    --bs-btn-padding-x: 0.5rem;
+    --bs-btn-font-size: 0.72rem;
+    --bs-btn-border-radius: 0.35rem;
+  }
+
+  /* ---------------- Toasts ---------------- */
+  #toast-host {
+    position: fixed;
+    top: 70px; right: 20px;
+    z-index: 2000;
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .mini-toast {
+    background: #FFFFFF;
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--blue);
+    color: var(--text);
+    padding: 10px 14px;
+    border-radius: 8px;
+    font-size: 0.85rem;
+    box-shadow: 0 10px 25px -10px rgba(16,24,40,0.2);
+    animation: toast-in 0.2s ease;
+    max-width: 340px;
+  }
+  .mini-toast.toast-success { border-left-color: var(--green); }
+  .mini-toast.toast-error   { border-left-color: var(--red); }
+  @keyframes toast-in {
+    from { opacity: 0; transform: translateY(-6px); }
+    to   { opacity: 1; transform: translateY(0); }
   }
 
   @media (max-width: 576px) {
@@ -325,7 +525,10 @@
     <div class="d-flex align-items-center gap-3">
       <span class="text-muted small"><span class="live-dot"></span>Live</span>
       <span class="text-muted small d-none d-md-inline" id="last-update">—</span>
-      <button class="btn btn-sm btn-outline-primary" id="refresh-btn" title="Refresh now">
+      <button class="btn btn-sm btn-primary" id="add-btn" title="Add instrument">
+        <i class="bi bi-plus-lg"></i> <span class="d-none d-sm-inline">Add</span>
+      </button>
+      <button class="btn btn-sm btn-outline-light" id="refresh-btn" title="Refresh now">
         <i class="bi bi-arrow-clockwise"></i>
       </button>
     </div>
@@ -378,10 +581,119 @@
 
   <div class="empty-state mt-4 d-none" id="empty-state">
     <i class="bi bi-inbox fs-1 d-block mb-2"></i>
-    No subscribed instruments yet — the feed will appear here as soon as
-    <code>/api/v1/ema/status</code> reports subscriptions.
+    No subscribed instruments yet — click <strong>Add</strong> above to subscribe to an index or an option.
   </div>
 </div>
+
+<!-- ============================================================= -->
+<!-- Add Instrument modal                                          -->
+<!-- ============================================================= -->
+<div class="modal fade" id="addModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-xl modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">
+          <i class="bi bi-plus-circle text-primary me-2"></i>Add Instrument
+        </h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <ul class="nav nav-tabs" role="tablist">
+          <li class="nav-item" role="presentation">
+            <button class="nav-link active" id="tab-index-btn" data-bs-toggle="tab"
+                    data-bs-target="#tab-index" type="button" role="tab">
+              <i class="bi bi-fire me-1"></i>Index
+            </button>
+          </li>
+          <li class="nav-item" role="presentation">
+            <button class="nav-link" id="tab-options-btn" data-bs-toggle="tab"
+                    data-bs-target="#tab-options" type="button" role="tab">
+              <i class="bi bi-collection me-1"></i>Options
+            </button>
+          </li>
+          <li class="nav-item" role="presentation">
+            <button class="nav-link" id="tab-raw-btn" data-bs-toggle="tab"
+                    data-bs-target="#tab-raw" type="button" role="tab">
+              <i class="bi bi-keyboard me-1"></i>Raw Key
+            </button>
+          </li>
+        </ul>
+
+        <div class="tab-content pt-3">
+          <!-- ---------- Index tab ---------- -->
+          <div class="tab-pane fade show active" id="tab-index" role="tabpanel">
+            <p class="text-muted small mb-3">
+              Indexes currently in <code>all_instruments.json</code> and not yet subscribed.
+              Click one to subscribe immediately.
+            </p>
+            <div id="index-list" class="d-flex flex-wrap gap-2">
+              <div class="text-muted small">Loading…</div>
+            </div>
+          </div>
+
+          <!-- ---------- Options tab ---------- -->
+          <div class="tab-pane fade" id="tab-options" role="tabpanel">
+            <div class="row g-2 align-items-end mb-3">
+              <div class="col-6 col-md-3">
+                <label class="form-label small mb-1">Underlying</label>
+                <input type="text" class="form-control form-control-sm"
+                       id="filter-underlying" value="NIFTY" placeholder="e.g. NIFTY">
+              </div>
+              <div class="col-6 col-md-2">
+                <label class="form-label small mb-1">Strike Type</label>
+                <select class="form-select form-select-sm" id="filter-type">
+                  <option value="">All</option>
+                  <option value="CE">CE</option>
+                  <option value="PE">PE</option>
+                </select>
+              </div>
+              <div class="col-6 col-md-2">
+                <button class="btn btn-sm btn-primary w-100" id="search-btn">
+                  <i class="bi bi-search me-1"></i>Search
+                </button>
+              </div>
+              <div class="col-6 col-md-5 text-md-end">
+                <span class="text-muted small" id="options-summary">—</span>
+              </div>
+            </div>
+
+            <div id="options-list">
+              <div class="text-muted small">Pick an underlying and hit Search.</div>
+            </div>
+
+            <div class="text-center mt-3">
+              <button class="btn btn-sm btn-outline-secondary d-none" id="load-more-btn">
+                <i class="bi bi-arrow-down-circle me-1"></i>Load More
+              </button>
+            </div>
+          </div>
+
+          <!-- ---------- Raw key tab ---------- -->
+          <div class="tab-pane fade" id="tab-raw" role="tabpanel">
+            <p class="text-muted small mb-3">
+              Paste an exact <code>instrument_key</code> from the archive. The instrument must
+              exist in <code>all_instruments.json</code>.
+            </p>
+            <label class="form-label small mb-1">Instrument Key</label>
+            <div class="input-group">
+              <input type="text" class="form-control" id="raw-key"
+                     placeholder="e.g. NSE_FO|51330  or  NSE_INDEX|Nifty 50">
+              <button class="btn btn-primary" id="raw-subscribe-btn">
+                <i class="bi bi-plus-lg me-1"></i>Subscribe
+              </button>
+            </div>
+            <div class="form-text mt-2">
+              URL-encoding is handled automatically. Use this when you already know
+              the key and don't want to browse the catalog.
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="toast-host"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 <script>
@@ -389,6 +701,7 @@
   'use strict';
 
   const REFRESH_MS = 5000;
+  const OPTIONS_PAGE_SIZE = 50;
 
   const sectionsEl        = document.getElementById('sections');
   const emptyEl           = document.getElementById('empty-state');
@@ -401,10 +714,12 @@
   const sumCycleEl        = document.getElementById('sum-cycle');
   const sumCycleTimeEl    = document.getElementById('sum-cycle-time');
   const refreshBtn        = document.getElementById('refresh-btn');
+  const addBtn            = document.getElementById('add-btn');
+  const toastHost         = document.getElementById('toast-host');
 
-  // ---------------------------------------------------------------
+  // ===============================================================
   // Formatters
-  // ---------------------------------------------------------------
+  // ===============================================================
   function esc(v) {
     if (v === null || v === undefined) return '';
     return String(v).replace(/[&<>"']/g, function (c) {
@@ -421,41 +736,30 @@
     });
   }
 
-  // HH:MM AM/PM — used for candle timestamps in the EMA rows.
-  // No seconds; candle closes are always at :00 of the printed minute.
   function fmtCandleTime(v) {
     if (!v) return '—';
     try {
       const d = new Date(v);
       if (isNaN(d.getTime())) return String(v);
       return d.toLocaleString('en-IN', {
-        timeZone: 'Asia/Kolkata',
-        hour12: true,
-        hour: '2-digit',
-        minute: '2-digit',
+        timeZone: 'Asia/Kolkata', hour12: true, hour: '2-digit', minute: '2-digit',
       });
     } catch (_e) { return String(v); }
   }
 
-  // "DD Mon YYYY, HH:MM AM/PM IST" — price-updated timestamp.
   function fmtCandleDate(v) {
     if (!v) return '—';
     try {
       const d = new Date(v);
       if (isNaN(d.getTime())) return String(v);
       return d.toLocaleString('en-IN', {
-        timeZone: 'Asia/Kolkata',
-        hour12: true,
-        day: '2-digit',
-        month: 'short',
-        year: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
+        timeZone: 'Asia/Kolkata', hour12: true,
+        day: '2-digit', month: 'short', year: 'numeric',
+        hour: '2-digit', minute: '2-digit',
       }) + ' IST';
     } catch (_e) { return String(v); }
   }
 
-  // Cross time — HH:MM AM/PM if today, else "DD Mon, HH:MM AM/PM".
   function fmtCrossTime(v) {
     if (!v) return '—';
     try {
@@ -471,32 +775,44 @@
         });
       }
       return d.toLocaleString('en-IN', {
-        ...tz, hour12: true,
-        day: '2-digit', month: 'short',
+        ...tz, hour12: true, day: '2-digit', month: 'short',
         hour: '2-digit', minute: '2-digit',
       });
     } catch (_e) { return String(v); }
   }
 
-  // HH:MM:SS AM/PM — cycle times (always :10 aligned now).
   function fmtCycleTime(v) {
     if (!v) return '—';
     try {
       const d = new Date(v);
       if (isNaN(d.getTime())) return String(v);
       return d.toLocaleString('en-IN', {
-        timeZone: 'Asia/Kolkata',
-        hour12: true,
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
+        timeZone: 'Asia/Kolkata', hour12: true,
+        hour: '2-digit', minute: '2-digit', second: '2-digit',
       });
     } catch (_e) { return String(v); }
   }
 
-  // ---------------------------------------------------------------
-  // Classification / ordering
-  // ---------------------------------------------------------------
+  // ===============================================================
+  // Toasts
+  // ===============================================================
+  function toast(msg, kind) {
+    const el = document.createElement('div');
+    el.className = 'mini-toast' + (kind ? ' toast-' + kind : '');
+    el.innerHTML = msg;
+    toastHost.appendChild(el);
+    setTimeout(function () {
+      el.style.transition = 'opacity 0.3s ease';
+      el.style.opacity = '0';
+      setTimeout(function () { el.remove(); }, 350);
+    }, 3200);
+  }
+
+  // ===============================================================
+  // Classification / grouping / ordering
+  // ===============================================================
+  const INDEX_GROUP_KEY = '__INDEX__';
+
   function classify(payload) {
     const meta = (payload && payload.meta) || {};
     const underlying = (meta.underlying || 'OTHER').toUpperCase();
@@ -505,34 +821,46 @@
     return { underlying, strikeType, isIndex };
   }
 
-  function rowIdFor(underlying) {
-    return 'row-' + String(underlying).toLowerCase().replace(/[^a-z0-9]+/g, '-');
+  function groupOf(payload) {
+    const cls = classify(payload);
+    if (cls.isIndex) {
+      return { key: INDEX_GROUP_KEY, title: 'Index', sub: '', icon: 'bi-fire', isIndex: true };
+    }
+    return { key: cls.underlying, title: cls.underlying, sub: 'Options', icon: 'bi-collection', isIndex: false };
   }
 
-  function compareItems(a, b) {
+  function rowIdFor(groupKey) {
+    if (groupKey === INDEX_GROUP_KEY) return 'row-index';
+    return 'row-' + String(groupKey).toLowerCase().replace(/[^a-z0-9]+/g, '-');
+  }
+
+  function strikeOf(item) {
+    return Number((item.payload.meta || {}).strike_price || 0);
+  }
+
+  function compareItems(a, b, isIndexGroup) {
     const A = classify(a.payload);
     const B = classify(b.payload);
-    if (A.isIndex !== B.isIndex) return A.isIndex ? -1 : 1;
-    const sa = Number((a.payload.meta || {}).strike_price || 0);
-    const sb = Number((b.payload.meta || {}).strike_price || 0);
+    if (isIndexGroup && A.underlying !== B.underlying) {
+      return A.underlying.localeCompare(B.underlying);
+    }
+    const sa = strikeOf(a), sb = strikeOf(b);
     if (sa !== sb) return sa - sb;
     return (A.strikeType || 'ZZZ').localeCompare(B.strikeType || 'ZZZ');
   }
 
-  // ---------------------------------------------------------------
+  // ===============================================================
   // Card helpers
-  // ---------------------------------------------------------------
+  // ===============================================================
   function badgeText(meta) {
     const st = (meta.strike_type || '').toUpperCase();
-    if (st === 'INDEX' || !st) return 'INDEX';
+    if (st === 'INDEX' || !st) return (meta.underlying || 'INDEX').toUpperCase();
     const strike = meta.strike_price;
     let strikeStr = '';
     if (strike !== null && strike !== undefined) {
       const n = Number(strike);
       if (!isNaN(n)) {
-        strikeStr = (n % 1 === 0)
-          ? String(n)
-          : n.toFixed(2).replace(/\.?0+$/, '');
+        strikeStr = (n % 1 === 0) ? String(n) : n.toFixed(2).replace(/\.?0+$/, '');
       }
     }
     return (strikeStr ? strikeStr + ' ' : '') + st;
@@ -540,7 +868,7 @@
 
   function badgeClass(meta) {
     const st = (meta.strike_type || '').toUpperCase();
-    if (st === 'INDEX' || !st) return 'kind-badge';
+    if (st === 'INDEX' || !st) return 'kind-badge kind-index';
     if (st === 'CE') return 'kind-badge kind-ce';
     if (st === 'PE') return 'kind-badge kind-pe';
     return 'kind-badge';
@@ -582,8 +910,6 @@
     return '<span class="cross-pill cross-bearish"><i class="bi bi-arrow-down-circle-fill"></i> bearish</span>';
   }
 
-  // Last / New pair — both use CANDLE timestamps (last_ts_prev / last_ts),
-  // never cycle timestamps.
   function emaRow(label, prevVal, newVal, prevCandleTs, newCandleTs) {
     const t = trendClass(prevVal, newVal);
     const arrow = trendArrow(prevVal, newVal);
@@ -670,23 +996,23 @@
   }
 
   function buildRow(group) {
-    const rowId = rowIdFor(group.underlying);
+    const rowId = rowIdFor(group.key);
     const count = group.items.length;
-    const hasIndex = group.items.some(function (i) {
-      return classify(i.payload).isIndex;
-    });
-    const icon = hasIndex ? 'bi-fire' : 'bi-collection';
 
     const cardsHtml = group.items
-      .sort(compareItems)
+      .slice()
+      .sort(function (a, b) { return compareItems(a, b, group.isIndex); })
       .map(function (item) { return buildCard(item.key, item.payload); })
       .join('');
 
+    const subTag = group.sub ? `<span class="tag-sub">${esc(group.sub)}</span>` : '';
+
     return `
-      <div class="section-head">
+      <div class="section-head ${group.isIndex ? 'index-head' : ''}">
         <h3>
-          <i class="bi ${icon} text-primary"></i>
-          ${esc(group.underlying)}
+          <i class="bi ${group.icon}"></i>
+          ${esc(group.title)}
+          ${subTag}
           <span class="count">${count}</span>
         </h3>
         <div class="scroll-controls">
@@ -720,20 +1046,19 @@
     emptyEl.classList.add('d-none');
 
     const groups = {};
-    let totalCandles = 0;
-    let totalCrosses = 0;
-    let totalCrossesToday = 0;
-    let maxCycle = 0;
-    let latestCycleTime = null;
+    let totalCandles = 0, totalCrosses = 0, totalCrossesToday = 0;
+    let maxCycle = 0, latestCycleTime = null;
 
     for (const item of instruments) {
       const payload = item.snapshot || {};
-      const cls = classify(payload);
-      const gkey = cls.underlying;
-      if (!groups[gkey]) {
-        groups[gkey] = { underlying: cls.underlying, items: [] };
+      const g = groupOf(payload);
+      if (!groups[g.key]) {
+        groups[g.key] = {
+          key: g.key, title: g.title, sub: g.sub,
+          icon: g.icon, isIndex: g.isIndex, items: [],
+        };
       }
-      groups[gkey].items.push({ key: item.instrument_key, payload });
+      groups[g.key].items.push({ key: item.instrument_key, payload });
 
       totalCandles      += Number(payload.candle_count || 0);
       totalCrosses      += Number(payload.cross_count || 0);
@@ -747,7 +1072,12 @@
       }
     }
 
-    const orderedKeys = Object.keys(groups).sort();
+    const orderedKeys = Object.keys(groups).sort(function (a, b) {
+      if (a === INDEX_GROUP_KEY) return -1;
+      if (b === INDEX_GROUP_KEY) return 1;
+      return a.localeCompare(b);
+    });
+
     sectionsEl.innerHTML = orderedKeys
       .map(function (k) { return buildRow(groups[k]); })
       .join('');
@@ -770,6 +1100,9 @@
     sumCycleTimeEl.textContent= latestCycleTime ? fmtCycleTime(latestCycleTime) : '—';
   }
 
+  // ===============================================================
+  // Main dashboard loader
+  // ===============================================================
   async function load() {
     try {
       const results = await Promise.all([
@@ -797,6 +1130,306 @@
     }
   }
 
+  // ===============================================================
+  // Add-Instrument modal state & logic
+  // ===============================================================
+  const addModalEl = document.getElementById('addModal');
+  const addModal   = new bootstrap.Modal(addModalEl);
+
+  let subscribedKeysCache = new Set();
+  let optionsOffset       = 0;
+  let optionsHasMore      = false;
+  let optionsLoading      = false;
+  let optionsCache        = [];
+
+  const indexListEl       = document.getElementById('index-list');
+  const optionsListEl     = document.getElementById('options-list');
+  const loadMoreBtn       = document.getElementById('load-more-btn');
+  const searchBtn         = document.getElementById('search-btn');
+  const optionsSummaryEl  = document.getElementById('options-summary');
+  const filterUnderlying  = document.getElementById('filter-underlying');
+  const filterType        = document.getElementById('filter-type');
+  const rawKeyInput       = document.getElementById('raw-key');
+  const rawSubscribeBtn   = document.getElementById('raw-subscribe-btn');
+
+  async function refreshSubscribedCache() {
+    try {
+      const res  = await fetch('/api/v1/ema/status', { cache: 'no-store' });
+      const data = await res.json();
+      subscribedKeysCache = new Set(data.subscribed || []);
+    } catch (_e) {
+      subscribedKeysCache = new Set();
+    }
+  }
+
+  // ---------- Index tab ----------
+  async function loadIndexTab() {
+    indexListEl.innerHTML = '<div class="text-muted small">Loading…</div>';
+    try {
+      const res = await fetch(
+        '/api/v1/ws/catalog?strike_type=INDEX&available_limit=100',
+        { cache: 'no-store' }
+      );
+      const data = await res.json();
+      const available  = (data.available_instruments && data.available_instruments.items) || [];
+      const subscribed = (data.subscribed_instruments || []).filter(function (i) {
+        return (i.strike_type || '').toUpperCase() === 'INDEX';
+      });
+
+      if (available.length === 0 && subscribed.length === 0) {
+        indexListEl.innerHTML =
+          '<div class="text-muted small">No index instruments found in the catalog. ' +
+          'Try a hard-refresh first.</div>';
+        return;
+      }
+
+      let html = '';
+
+      // Already subscribed — show as disabled chips
+      for (const s of subscribed) {
+        html += `
+          <button class="instrument-chip chip-disabled" type="button" disabled
+                  title="${esc(s.instrument_key)}">
+            <span class="chip-symbol">
+              <i class="bi bi-check2-circle text-success me-1"></i>
+              ${esc(s.trading_symbol || s.instrument_key)}
+            </span>
+            <span class="chip-key">${esc(s.instrument_key)}</span>
+          </button>
+        `;
+      }
+
+      // Available — clickable
+      for (const it of available) {
+        html += `
+          <button class="instrument-chip add-instrument-btn" type="button"
+                  data-key="${esc(it.instrument_key)}"
+                  title="${esc(it.instrument_key)}">
+            <span class="chip-symbol">
+              <i class="bi bi-plus-circle text-primary me-1"></i>
+              ${esc(it.trading_symbol || it.instrument_key)}
+            </span>
+            <span class="chip-key">${esc(it.instrument_key)}</span>
+          </button>
+        `;
+      }
+
+      indexListEl.innerHTML = html;
+    } catch (e) {
+      indexListEl.innerHTML =
+        '<div class="text-danger small">Failed to load: ' + esc(e.message) + '</div>';
+    }
+  }
+
+  // ---------- Options tab ----------
+  async function loadOptionsPage(reset) {
+    if (optionsLoading) return;
+    optionsLoading = true;
+    loadMoreBtn.disabled = true;
+
+    if (reset) {
+      optionsOffset = 0;
+      optionsCache  = [];
+      optionsListEl.innerHTML = '<div class="text-muted small">Loading…</div>';
+      optionsSummaryEl.textContent = '—';
+    }
+
+    const underlying = filterUnderlying.value.trim();
+    const type       = filterType.value.trim();
+
+    if (!underlying) {
+      optionsListEl.innerHTML =
+        '<div class="text-muted small">Enter an underlying (e.g. NIFTY) and press Search.</div>';
+      optionsLoading = false;
+      return;
+    }
+
+    const params = new URLSearchParams({
+      available_limit:  String(OPTIONS_PAGE_SIZE),
+      available_offset: String(optionsOffset),
+      underlying:       underlying,
+    });
+    if (type) params.set('strike_type', type);
+
+    try {
+      const res  = await fetch('/api/v1/ws/catalog?' + params.toString(), { cache: 'no-store' });
+      const data = await res.json();
+      const av   = data.available_instruments || {};
+      const items = av.items || [];
+
+      optionsCache = optionsCache.concat(items);
+      optionsHasMore = !!av.has_more;
+      optionsOffset  = av.next_offset || (optionsOffset + items.length);
+
+      const totalMatched = av.total_matched;
+      optionsSummaryEl.textContent =
+        'Showing ' + optionsCache.length +
+        (totalMatched != null ? ' of ' + totalMatched : '') + ' matches';
+
+      renderOptionsList();
+      loadMoreBtn.classList.toggle('d-none', !optionsHasMore);
+    } catch (e) {
+      optionsListEl.innerHTML =
+        '<div class="text-danger small">Failed to load: ' + esc(e.message) + '</div>';
+    } finally {
+      optionsLoading = false;
+      loadMoreBtn.disabled = false;
+    }
+  }
+
+  function renderOptionsList() {
+    if (optionsCache.length === 0) {
+      optionsListEl.innerHTML =
+        '<div class="text-muted small">No matching options. Try a different underlying or type.</div>';
+      return;
+    }
+
+    let html = `
+      <div class="table-responsive">
+        <table class="table table-sm options-table align-middle mb-0">
+          <thead>
+            <tr>
+              <th>Symbol</th>
+              <th>Underlying</th>
+              <th class="text-end">Strike</th>
+              <th>Type</th>
+              <th>Expiry</th>
+              <th class="text-end">Action</th>
+            </tr>
+          </thead>
+          <tbody>
+    `;
+
+    for (const it of optionsCache) {
+      const isSub = subscribedKeysCache.has(it.instrument_key);
+      const actionBtn = isSub
+        ? `<button class="btn btn-xs btn-outline-success" type="button" disabled>
+             <i class="bi bi-check2"></i> Added
+           </button>`
+        : `<button class="btn btn-xs btn-primary add-instrument-btn" type="button"
+                   data-key="${esc(it.instrument_key)}">
+             <i class="bi bi-plus-lg"></i> Add
+           </button>`;
+
+      const strikeStr =
+        it.strike_price === null || it.strike_price === undefined
+          ? '—'
+          : fmtNum(it.strike_price, 2);
+
+      const typeBadge =
+        (it.strike_type || '').toUpperCase() === 'CE'
+          ? '<span class="kind-badge kind-ce">CE</span>'
+          : (it.strike_type || '').toUpperCase() === 'PE'
+            ? '<span class="kind-badge kind-pe">PE</span>'
+            : esc(it.strike_type || '—');
+
+      html += `
+        <tr>
+          <td class="small">${esc(it.trading_symbol || it.instrument_key)}</td>
+          <td class="small text-muted">${esc(it.underlying || '')}</td>
+          <td class="small text-end">${esc(strikeStr)}</td>
+          <td>${typeBadge}</td>
+          <td class="small text-muted">${esc(it.expiry || '—')}</td>
+          <td class="text-end">${actionBtn}</td>
+        </tr>
+      `;
+    }
+
+    html += '</tbody></table></div>';
+    optionsListEl.innerHTML = html;
+  }
+
+  // ---------- Subscribe ----------
+  async function subscribeInstrument(key) {
+    if (!key) return false;
+    try {
+      const encoded = encodeURIComponent(key);
+      const res = await fetch('/api/v1/ema/subscribe/' + encoded, { method: 'POST' });
+      if (!res.ok) {
+        let detail = 'HTTP ' + res.status;
+        try {
+          const err = await res.json();
+          if (err && err.detail) detail = err.detail;
+        } catch (_e) { /* ignore */ }
+        throw new Error(detail);
+      }
+      await refreshSubscribedCache();
+      load(); // refresh dashboard immediately
+      toast(
+        '<i class="bi bi-check2-circle text-success me-1"></i> Subscribed <code>' +
+          esc(key) + '</code>',
+        'success'
+      );
+      return true;
+    } catch (e) {
+      toast(
+        '<i class="bi bi-x-circle text-danger me-1"></i> Subscribe failed: ' +
+          esc(e.message || 'unknown error'),
+        'error'
+      );
+      return false;
+    }
+  }
+
+  // Event delegation — Add buttons in Index tab and Options table
+  document.addEventListener('click', async function (e) {
+    const btn = e.target.closest('.add-instrument-btn');
+    if (!btn) return;
+    const key = btn.dataset.key;
+    if (!key) return;
+
+    const originalHtml = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<i class="bi bi-hourglass-split"></i> …';
+
+    const ok = await subscribeInstrument(key);
+
+    if (ok) {
+      btn.classList.remove('btn-primary', 'btn-outline-primary');
+      btn.classList.add('btn-outline-success');
+      btn.innerHTML = '<i class="bi bi-check2"></i> Added';
+    } else {
+      btn.disabled = false;
+      btn.innerHTML = originalHtml;
+    }
+  });
+
+  // ---------- Search / Load More / Raw key ----------
+  searchBtn.addEventListener('click', function () { loadOptionsPage(true); });
+  filterUnderlying.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') loadOptionsPage(true);
+  });
+
+  loadMoreBtn.addEventListener('click', function () { loadOptionsPage(false); });
+
+  rawSubscribeBtn.addEventListener('click', async function () {
+    const key = rawKeyInput.value.trim();
+    if (!key) {
+      toast('<i class="bi bi-exclamation-circle text-warning me-1"></i> Enter an instrument key first', 'error');
+      return;
+    }
+    rawSubscribeBtn.disabled = true;
+    const ok = await subscribeInstrument(key);
+    rawSubscribeBtn.disabled = false;
+    if (ok) rawKeyInput.value = '';
+  });
+  rawKeyInput.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') rawSubscribeBtn.click();
+  });
+
+  // ---------- Modal lifecycle ----------
+  addBtn.addEventListener('click', function () { addModal.show(); });
+
+  addModalEl.addEventListener('shown.bs.modal', async function () {
+    await refreshSubscribedCache();
+    loadIndexTab();
+    // Auto-load first options page for the prefilled underlying
+    loadOptionsPage(true);
+  });
+
+  // ===============================================================
+  // Boot
+  // ===============================================================
   refreshBtn.addEventListener('click', load);
   load();
   setInterval(load, REFRESH_MS);
