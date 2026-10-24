@@ -1,4 +1,4 @@
-# File: routes/admin_routes.py
+# routes/admin_routes.py
 """Admin endpoints + the unified refresh routine.
 
     POST /admin/hard-refresh          -> full refresh (unified routine)
@@ -10,7 +10,7 @@ The unified refresh routine ``_run_full_refresh_sync`` is the
 **single source of truth** for every task that runs in all three
 states (startup, daily refresh, hard refresh).
 
-Task list (all three states):
+Task list (all three states) — INFRASTRUCTURE ONLY:
 
     1.  Telegram start notification
     2.  Cleanup transient folders
@@ -18,189 +18,19 @@ Task list (all three states):
     4.  Validate Upstox token
     5.  Backup extract from MongoDB
     6.  Reload instrument registry
-    6b. Pre-register core + strategy indexes
-    7.  Wire broadcast loop + cross handler
-    7b. Reset today's live-cross state
-    7c. EMA backfill seed (backup + intraday)
-    7d. Strategy pipeline gate (NEW)
-         Runs ``_should_run_strategy_pipeline(reason)`` which returns
-         ``should_run`` based on:
-           * ``STRATEGY_RUN_OUTSIDE_MARKET_HOURS`` (force override)
-           * weekend check (Sat / Sun)
-           * trading-holiday check (market_holiday_service, cached)
-           * useful window check (default 09:00 – 16:30 IST)
-         When ``should_run=False``, the OR / Stage-1 / Stage-2 /
-         Stage-3 catch-up / Stage-4 catch-up / Strategy-2 stages
-         are SKIPPED and every strategy summary is initialised with
-         ``status="skipped"``.
-         Infrastructure (feed, scheduler, telegram) still runs.
-    7e. **Gated-only live tracker start** (NEW)
-         If (and only if) the gate says ``should_run=False``, both
-         Strategy-1 Stage-3 and Strategy-2 Stage-3 trackers are
-         started **here**, before any strategy stages run. The gated
-         path never reaches any catch-up code, so a stale tracker
-         cache is harmless — but having the trackers armed by 09:15
-         is exactly what the scheduled Stage-4 cron needs on a day
-         where the app was launched before the useful window opened.
-    8.  Opening Range (OR) level calculation
-    8b. Strategy 1 · Stage 1 (buffer filter + last-day-cross)
-         + OR-retry guard: if every index skipped with
-           ``or_unavailable:*``, force a full OR recalculation and
-           re-run Stage 1 once.
-    8c. Strategy 1 · Stage 2 (EMA-cross isolation)
-         + skipped when Stage 1 produced zero contracts across all
-           indexes (avoids zero-data "0 isolated" noise).
-    8d. **Strategy 1 · Stage 3 tracker start** (post-Stage-2)
-         Started *after* Stage 2 has written its output so the
-         tracker thread's internal contract cache is fresh — this is
-         what makes ``run_catchup()`` see the contracts Stage 2 just
-         produced. (Starting it earlier, e.g. at step 7e, would give
-         it an empty cache and break the catch-up scan.)
-    8e. Strategy 1 · Stage 3 catch-up scan (if past window,
-         inside catch-up window)
-    8f. Strategy 1 · Stage 4 catch-up order (if past 09:18,
-         inside catch-up window)
-    8g. **Strategy 2 · Stage 3 tracker start** (post-Stage-2)
-         Same reasoning as step 8d — started *after* Stage 2 so the
-         tracker thread sees the fresh stage-2 output. Note that
-         Strategy 2's Stage-3 snapshot (step 8h) does its own fresh
-         disk scan and would work regardless, but starting the
-         tracker post-Stage-2 keeps both trackers on the same
-         footing.
-    8h. Strategy 2 · Stage 3 snapshot (isolation-level touch
-         filter)  + Telegram suppressed when Stage 2 has 0 contracts.
-    8i. Strategy 2 · Stage 4 order (next-cross order, if isolated
-         exists)
-    9.  Start / restart live feed
-    10. Start scheduler (idempotent)
-    11. Start Telegram bot (idempotent)
-    12. Telegram completion notification
-    13. Return structured result (includes ``strategy_gate``)
+    6b. Pre-register core indexes (Nifty 50, SENSEX)
+    7.  Wire broadcast loop
+    8.  Start / restart live feed
+    9.  Start scheduler (idempotent)
+    10. Start Telegram bot (idempotent)
+    11. Telegram completion notification
+    12. Return structured result
 
-Live tracker start — the correct split
---------------------------------------
-The two ``*.start()`` calls are placed **conditionally** based on
-the market-hours gate:
-
-    should_run = False (gated: weekend / holiday / outside window)
-        → trackers started at step 7e, BEFORE any strategy stage.
-          The gated path never runs the catch-up scan, so a stale
-          tracker cache is harmless — but having the trackers armed
-          by 09:15 means the scheduled 09:18 Stage-4 cron has fresh
-          activations to read.
-
-    should_run = True (in window)
-        → trackers started at steps 8d / 8g, AFTER Stage 2 has
-          written its output. This is critical: the S1 Stage-3
-          tracker caches its contract list on ``start()``, and the
-          catch-up scan uses that cache. Starting it before Stage 2
-          gives it an empty cache and produces
-          ``status=skipped reason=no_contracts activated=0/0`` even
-          though Stage 2 wrote 68 contracts.
-
-Prior to this revision, both ``start()`` calls lived inside the
-gated branch (steps 8d / 8g only), so on a day where the engine
-launched at 07:00 the trackers were never started at all — Stage 4
-read an empty ``stage_3_summary.json``. My previous fix moved them
-to an unconditional step 7e, which fixed that day but broke the
-in-window launch path (this run, 10:32 launch).
-
-The current placement — conditional start (7e only when gated,
-8d/8g when not gated) — fixes both.
-
-Pre-existing scheduled-only limitation
---------------------------------------
-There is still a *separate* pre-existing bug for the specific flow
-"08:30 daily refresh (gated) → 09:16 Stage-1 cron → 09:17 Stage-2
-cron → 09:18 Stage-4 cron": on that flow the tracker started at
-08:30 with an empty cache, and the cron stages never restart it.
-Fixing that flow requires ``strategy_live_tracker_service`` to
-periodically reload its contract list (the way
-``strategy_2_live_tracker_service`` does every 30 s) — a change
-that must live in ``services/strategy_live_tracker_service.py``,
-not here.
-
-Logging verbosity
------------------
-All bulk / per-instrument log lines are gated by
-``config.STRATEGY_VERBOSE_LOG`` (env var ``STRATEGY_VERBOSE_LOG``,
-default ``false``). When off, the pipeline logs only lifecycle
-lines (START / COMPLETED / FAILED, per-index one-liners). Set it to
-``true`` when debugging to see every per-instrument decision and
-the full summary dicts.
-
-Market-hours gate
------------------
-``_should_run_strategy_pipeline(reason)`` decides whether the heavy
-strategy pipeline runs. It returns a dict with:
-
-    {
-      "should_run": bool,
-      "reason":     str,   # force_flag_true | weekend_saturday |
-                           # market_holiday | before_window_09:00 |
-                           # after_window_16:30 | inside_window_10:00
-      "now_ist":    str,   # ISO-ish stamp of the current market time
-    }
-
-The result is surfaced in the returned ``result`` dict under the
-``strategy_gate`` key so callers can report exactly why the strategy
-pipeline was skipped.
-
-Skipped stages when ``should_run=False``:
-    • OR calculation
-    • Strategy 1 · Stage 1, 2, 3 (catch-up scan), 4 (catch-up order)
-    • Strategy 2 · Stage 3 (snapshot), 4 (order)
-
-NOT skipped (still run):
-    • Cleanup, token refresh + validation
-    • Backup extraction, instrument registry reload
-    • EMA backfill (needed by /live/* + chart)
-    • **Live tracker starts** (S1 Stage 3 + S2 Stage 3, at step 7e)
-    • Live WebSocket feed
-    • Scheduler start (cron jobs like OR@09:16 still fire on time)
-    • Telegram token bot
-    • Frontend Strategy 1 fallback launch (main.py handles this)
-
-Catch-up semantics
-------------------
-If the project starts (or daily/hard refresh fires) after a strategy
-stage's scheduled time has already passed, and we are still inside the
-catch-up window (09:15 – 23:59 IST), the stage is executed now and every
-output is tagged with:
-
-    execution_mode : startup | daily | manual | scheduled
-    catchup        : true
-    scheduled_time_ist / actual_time_ist
-
-The cash-market close (15:30 IST) is reported separately as
-``post_market=True`` — it does not block the catch-up, but it does
-change the explanation recorded in the meta test files.
-
-Strategy 2 notes
-----------------
-Strategy 2 reuses Stage 1 + Stage 2 of Strategy 1. Its own Stage 3
-(S3-touch watcher) runs as a background thread all day, and its Stage 4
-(next-cross order) fires when an isolated contract produces a fresh EMA
-cross. Both are gated by ``STRATEGY_2_ENABLED``.
-
-Strategy 2 Telegram suppression
--------------------------------
-When Stage 2 has produced **zero** isolated contracts, the live
-Strategy 2 Stage 3 snapshot in this refresh does not emit a Telegram
-"Completed" message, because the only thing it could say is
-"no contracts touched the isolation level yet" — that is the
-zero-data message that used to fire every startup and every 5-minute
-recheck. The scheduled wrapper
-``token_tasks/strategy_2_isolation_task.py`` applies the same gate.
-
-Strategy 1/Stage 2 zero-data gate
----------------------------------
-When Stage 1 reports ``skipped`` for every index with a reason of
-``or_unavailable:*``, Stage 2 is skipped with reason
-``skipped_stage_1_empty`` and no Telegram completion is sent for
-Stage 2 from this routine. This prevents the cascade
-``Stage 1 skipped → Stage 2 0 isolated → Strategy 2 0 touched``
-from producing three "empty" Telegram messages per refresh.
+Strategy stages (EMA backfill seed, Opening Range calculation,
+live-cross handler wiring) and ProChart have been removed from this
+codebase entirely. The pipeline does not call them, and no admin
+endpoint exposes them — the refresh is purely infrastructure /
+token / feed / scheduler.
 """
 
 from __future__ import annotations
@@ -218,30 +48,13 @@ from core.logger import get_logger
 from services.backup_data_service import backup_data_service
 from services.cleanup_service import cleanup_service
 from services.instrument_registry import instrument_registry
-from services.live_backfill_service import live_backfill_service
 from services.live_broadcast import live_broadcast
-from services.live_cross_store import live_cross_store
-from services.live_ema_engine import live_ema_engine
 from services.live_feed_service import (
     DEFAULT_CORE_INSTRUMENTS,
     live_feed_service,
 )
 from services.normalization import normalize_underlying
-from services.opening_range_service import opening_range_service
 from services.scheduler_service import scheduler_service
-from services.strategy_isolation_service import strategy_isolation_service
-from services.strategy_live_tracker_service import (
-    strategy_live_tracker_service,
-)
-from services.strategy_order_service import strategy_order_service
-from services.strategy_selection_service import strategy_selection_service
-from services.strategy_2_isolation_service import strategy_2_isolation_service
-from services.strategy_2_live_tracker_service import (
-    strategy_2_live_tracker_service,
-)
-from services.daily_backup_service import daily_backup_service
-
-from services.strategy_2_order_service import strategy_2_order_service
 from services.telegram_service import telegram_service
 from services.token_service import token_service
 from token_tasks.telegram_token_bot import telegram_token_bot
@@ -282,34 +95,6 @@ _CATCHUP_WINDOW_OPEN = dtime(9, 15)
 _CATCHUP_WINDOW_CLOSE = dtime(23, 59)
 
 
-def _scheduled_stage_1_time() -> dtime:
-    base = (
-        config.OPENING_RANGE_HOUR * 3600
-        + config.OPENING_RANGE_MINUTE * 60
-        + config.OPENING_RANGE_SECOND
-    )
-    total = (base + 20) % 86400
-    return dtime(total // 3600, (total % 3600) // 60, total % 60)
-
-
-def _scheduled_stage_2_time() -> dtime:
-    base = (
-        config.OPENING_RANGE_HOUR * 3600
-        + config.OPENING_RANGE_MINUTE * 60
-        + config.OPENING_RANGE_SECOND
-    )
-    total = (base + 50) % 86400
-    return dtime(total // 3600, (total % 3600) // 60, total % 60)
-
-
-def _scheduled_stage_4_time() -> dtime:
-    return dtime(
-        config.STRATEGY_ORDER_HOUR,
-        config.STRATEGY_ORDER_MINUTE,
-        0,
-    )
-
-
 def _in_market_hours() -> bool:
     return _CATCHUP_WINDOW_OPEN <= _now_market_time() <= _CATCHUP_WINDOW_CLOSE
 
@@ -320,9 +105,6 @@ def _post_market() -> bool:
 
 def _catchup_snapshot() -> dict[str, Any]:
     now = _now_market_time()
-    s1 = _scheduled_stage_1_time()
-    s2 = _scheduled_stage_2_time()
-    s4 = _scheduled_stage_4_time()
     return {
         "current_time_ist": now.isoformat(),
         "in_market_hours": _in_market_hours(),
@@ -331,81 +113,31 @@ def _catchup_snapshot() -> dict[str, Any]:
             "open": _CATCHUP_WINDOW_OPEN.isoformat(),
             "close": _CATCHUP_WINDOW_CLOSE.isoformat(),
         },
-        "scheduled": {
-            "stage_1": s1.isoformat(),
-            "stage_2": s2.isoformat(),
-            "stage_4": s4.isoformat(),
-        },
-        "past": {
-            "stage_1": now >= s1,
-            "stage_2": now >= s2,
-            "stage_4": now >= s4,
-        },
     }
 
 
-def _should_run_stage_4_catchup() -> bool:
-    return _in_market_hours() and _now_market_time() >= _scheduled_stage_4_time()
-
-
-def _should_run_stage_3_catchup() -> bool:
-    try:
-        window_end = dtime(
-            *[int(p) for p in str(config.STRATEGY_TRACKER_WINDOW_END).split(":")[:2]]
-        )
-    except Exception:
-        window_end = dtime(9, 20)
-    return _in_market_hours() and _now_market_time() > window_end
-
-
 # --------------------------------------------------------------------------- #
-# Helpers                                                                      #
+# Telegram bot state helper                                                    #
 # --------------------------------------------------------------------------- #
-def _safe_folder(name: Any) -> str:
-    text = str(name or "unknown").strip()
-    for ch in ("|", "/", "\\", ":", "*", "?", '"', "<", ">", " "):
-        text = text.replace(ch, "_")
-    return text.strip("._") or "unknown"
+def _telegram_bot_active(fallback: bool = False) -> bool:
+    """Return the bot's **actual** running/polling state.
 
-
-def _ensure_ema_path(entry: dict) -> None:
-    """Guarantee ``entry['ema_path']`` resolves to a *file* path.
-
-    ``live_cross_store._path_for`` does::
-
-        return ema_path.with_name(config.LIVE_CROSSES_FILENAME)
-
-    which raises ``ValueError: PosixPath('.') has an empty name`` when
-    ``ema_path`` is empty / missing / a directory-like path (its
-    ``.name`` attribute is empty). This happens for ad-hoc
-    options/futures entries (e.g. ``BSE_FO|1124739``) that were never
-    pre-registered by
-    ``_ensure_core_and_strategy_indexes_registered`` — those entries
-    simply carry no ``ema_path`` from the backup/registry load.
-
-    We normalise the field here to the same canonical layout used by
-    the pre-registration helper::
-
-        <LIVE_DATA_DIR>/index/<safe_instrument_key>/ema_crosses.json
-
-    so ``live_cross_store`` always has a valid base to call
-    ``.with_name(...)`` on.
+    Reads ``telegram_token_bot.is_running`` (a truthful flag set only
+    once polling begins), falling back to ``polling`` / ``enabled`` on
+    older builds.
     """
-    raw = str(entry.get("ema_path") or "").strip()
-    if raw:
-        p = Path(raw)
-        # Path(".") / Path("") / "/foo/" all have an empty ``.name``.
-        if p.name:
-            return  # already a usable file path — nothing to fix
-
-    key = str(entry.get("instrument_key") or "").strip() or "unknown"
-    canonical_dir = Path(config.LIVE_DATA_DIR) / "index" / _safe_folder(key)
-    entry["ema_path"] = str(canonical_dir / "ema_crosses.json")
-    if not entry.get("candles_path"):
-        entry["candles_path"] = str(canonical_dir / "candles.json")
+    for attr in ("is_running", "polling", "enabled"):
+        value = getattr(telegram_token_bot, attr, None)
+        if isinstance(value, bool):
+            return value
+    return fallback
 
 
-def _ensure_core_and_strategy_indexes_registered() -> int:
+# --------------------------------------------------------------------------- #
+# Core-index pre-registration                                                  #
+# --------------------------------------------------------------------------- #
+def _ensure_core_indexes_registered() -> int:
+    """Pre-register NIFTY 50 and SENSEX so ``/live/*`` works out of the box."""
     seen: set[str] = set()
     created = 0
 
@@ -434,405 +166,35 @@ def _ensure_core_and_strategy_indexes_registered() -> int:
             )
 
         if entry and not entry.get("ema_path"):
-            canonical_dir = Path(config.LIVE_DATA_DIR) / "index" / _safe_folder(k)
+            # NOTE: ema_path / candles_path fields are still populated so
+            # any downstream /live/* route that expects a valid path keeps
+            # working. No engine consumes the file contents anymore, but
+            # the registry field is harmless to keep and makes /live/snapshot
+            # consistently return a path even for newly registered indexes.
+            canonical_dir = (
+                Path(config.LIVE_DATA_DIR) / "index" / _safe_folder_for(k)
+            )
             entry["ema_path"] = str(canonical_dir / "ema_crosses.json")
             entry["candles_path"] = str(canonical_dir / "candles.json")
 
     for key, symbol in DEFAULT_CORE_INSTRUMENTS:
         _register(key, symbol)
 
-    for spec in config.STRATEGY_INDEXES or []:
-        if not isinstance(spec, dict):
-            continue
-        _register(
-            str(spec.get("instrument_key") or ""),
-            str(spec.get("trading_symbol") or spec.get("index_name") or "") or None,
-        )
-
     return created
 
 
-def _wire_cross_handler() -> None:
-    def on_cross(entry, cross):
-        key = str(entry.get("instrument_key") or "unknown")
-        try:
-            # Defensive fix for BSE_FO|* (and any other ad-hoc) entries
-            # that arrive without a usable ``ema_path`` — without this,
-            # live_cross_store._path_for(entry) raises
-            # ``ValueError: PosixPath('.') has an empty name``.
-            _ensure_ema_path(entry)
-            live_cross_store.save(entry, cross)
-        except Exception:
-            logger.exception(
-                "Failed persisting live cross for %s",
-                key,
-            )
-        try:
-            live_broadcast.publish_sync("crosses", entry, {"cross": cross})
-        except Exception:
-            logger.exception("Failed broadcasting live cross")
+def _safe_folder_for(name: Any) -> str:
+    """Filesystem-safe representation of an instrument key.
 
-    live_ema_engine.set_cross_handler(on_cross)
-
-
-# --------------------------------------------------------------------------- #
-# Compact summary helpers (used when STRATEGY_VERBOSE_LOG is False)           #
-# --------------------------------------------------------------------------- #
-def _summarise_stage3_catchup(summary: dict[str, Any]) -> str:
-    """One-line summary of a stage-3 catch-up result."""
-    if not isinstance(summary, dict):
-        return "no summary"
-    indexes = summary.get("indexes") or []
-    parts: list[str] = []
-    for idx in indexes:
-        if not isinstance(idx, dict):
-            continue
-        parts.append(
-            f"{idx.get('index_key') or idx.get('ticker') or '?'}: "
-            f"status={idx.get('status')} "
-            f"reason={idx.get('reason_code')} "
-            f"activated={idx.get('contracts_activated', 0)}/"
-            f"{idx.get('contracts_total', 0)}"
-        )
-    return (
-        f"status={summary.get('status')} "
-        f"activated_total={summary.get('activated_total', 0)} "
-        f"indexes=[{' | '.join(parts)}]"
-    )
-
-
-def _summarise_strategy2_isolated(summary: dict[str, Any]) -> str:
-    """Compact description of the Strategy 2 isolated pick (or 'none')."""
-    isolated = (summary or {}).get("isolated") if isinstance(summary, dict) else None
-    if not isolated:
-        return "none"
-    return (
-        f"{isolated.get('ticker')} {isolated.get('strike_price')} "
-        f"{isolated.get('strike_type')} @ "
-        f"{isolated.get('isolation_level_name')}={isolated.get('isolation_level')}"
-    )
-
-
-def _stage1_all_skipped_or(summary: dict[str, Any]) -> bool:
-    """Return True when every index in a Stage-1 summary was skipped
-    because its Opening Range was unavailable.
-
-    Matches the exact shape seen in the logs:
-
-        NIFTY:  skipped (or_unavailable:not_calculated)
-        SENSEX: skipped (or_unavailable:not_calculated)
+    Kept local to ``_ensure_core_indexes_registered`` because the only
+    remaining consumer of ``ema_path`` / ``candles_path`` is the
+    registry itself (the strategy code that used ``_safe_folder`` was
+    deleted).
     """
-    if not isinstance(summary, dict):
-        return False
-    indexes = summary.get("indexes") or []
-    if not indexes:
-        return False
-    for idx in indexes:
-        if not isinstance(idx, dict):
-            return False
-        if idx.get("status") != "skipped":
-            return False
-        reason = str(idx.get("reason") or "")
-        if not reason.startswith("or_unavailable:"):
-            return False
-    return True
-
-
-def _count_stage1_contracts(summary: dict[str, Any]) -> int:
-    """Sum contract_count across all indexes of a Stage-1 summary."""
-    if not isinstance(summary, dict):
-        return 0
-    total = 0
-    for idx in summary.get("indexes") or []:
-        if not isinstance(idx, dict):
-            continue
-        try:
-            total += int(idx.get("contract_count") or 0)
-        except (TypeError, ValueError):
-            continue
-    return total
-
-
-def _run_stage1_with_or_retry(
-    *,
-    reason: str,
-    catchup_meta: dict[str, Any],
-    verbose: bool,
-) -> tuple[dict[str, Any], int, bool]:
-    """Run Stage 1 and, on the OR-unavailable cascade, retry once.
-
-    The per-instrument retry in
-    ``strategy_selection_service._process_index`` normally recovers the
-    index OR by forcing a single-instrument recalculation. This
-    function is a second line of defence for the case where **every**
-    index still skipped with ``or_unavailable:*`` — for example, if
-    the REST fallback in ``opening_range_service`` also failed, or if
-    the first pass raced the very first live tick. On that signal:
-
-        1. Run ``opening_range_service.calculate_all()`` once more.
-        2. Re-run Stage 1 once.
-
-    Returns ``(summary, or_retry_attempted, or_retry_used)``:
-        summary              : the final Stage-1 summary
-        or_retry_attempted   : 1 if a retry was attempted, else 0
-        or_retry_used        : True if the retried Stage 1 succeeded
-    """
-    strategy_summary = strategy_selection_service.run(
-        reason=reason,
-        mode=reason,
-        catchup=bool(
-            catchup_meta["past"]["stage_1"] and catchup_meta["in_market_hours"]
-        ),
-    )
-
-    or_retry_attempted = 0
-    or_retry_used = False
-
-    if not _stage1_all_skipped_or(strategy_summary):
-        return strategy_summary, or_retry_attempted, or_retry_used
-
-    logger.warning(
-        "[%s] strategy 1 stage 1: every index skipped with "
-        "or_unavailable — forcing full OR recalc and re-running stage 1 once",
-        reason,
-    )
-    or_retry_attempted = 1
-
-    try:
-        recalc = opening_range_service.calculate_all()
-        if verbose:
-            logger.info(
-                "[%s] OR retry recalc summary: %s", reason, recalc
-            )
-        else:
-            logger.info(
-                "[%s] OR retry recalc — calculated=%s skipped=%s errors=%s",
-                reason,
-                recalc.get("calculated"),
-                recalc.get("skipped"),
-                recalc.get("errors"),
-            )
-    except Exception:
-        logger.exception("[%s] OR retry recalc failed", reason)
-
-    try:
-        retried = strategy_selection_service.run(
-            reason=reason,
-            mode=reason,
-            catchup=bool(
-                catchup_meta["past"]["stage_1"]
-                and catchup_meta["in_market_hours"]
-            ),
-        )
-        if _stage1_all_skipped_or(retried):
-            logger.warning(
-                "[%s] stage 1 retry still OR-unavailable — leaving summary as skipped",
-                reason,
-            )
-        else:
-            or_retry_used = True
-            strategy_summary = retried
-            logger.info(
-                "[%s] stage 1 retry succeeded after OR recalc — "
-                "contracts=%d",
-                reason,
-                _count_stage1_contracts(retried),
-            )
-    except Exception:
-        logger.exception("[%s] stage 1 retry failed", reason)
-
-    return strategy_summary, or_retry_attempted, or_retry_used
-
-
-# --------------------------------------------------------------------------- #
-# Live tracker start — MUST be called AFTER Stage 2 for the non-gated path   #
-# --------------------------------------------------------------------------- #
-def _start_live_trackers(
-    *,
-    reason: str,
-    verbose: bool,
-    context: str,
-) -> tuple[bool, bool]:
-    """Start the Strategy 1 and Strategy 2 Stage-3 trackers.
-
-    Call site determines cache freshness:
-
-    * ``context="gated"``   — called at step 7e, before any strategy
-      stage runs. The tracker caches an empty stage-2 tree (there is
-      nothing on disk yet). This is fine because the gated path never
-      calls ``run_catchup()`` — it just needs the trackers *armed*
-      so the scheduled 09:16/09:17/09:18 crons have a live thread
-      watching when their windows open.
-
-    * ``context="post_stage_2"`` — called at steps 8d / 8g, after
-      Stage 2 has written its output. The tracker caches the fresh
-      stage-2 contract list, so ``run_catchup()`` (called immediately
-      afterwards) sees exactly what Stage 2 produced.
-
-    Both ``start()`` methods are idempotent
-    (``if self._thread and self._thread.is_alive(): return True``), so
-    re-invoking this from a daily refresh or a hard refresh after a
-    successful startup call is safe.
-
-    Returns ``(s1_started, s2_started)``.
-    """
-    # ---- Strategy 1 · Stage 3 tracker -------------------------------- #
-    s1_started = False
-    try:
-        s1_started = bool(strategy_live_tracker_service.start())
-        if verbose:
-            logger.info(
-                "[%s] strategy 1 stage 3 tracker started=%s status=%s "
-                "(context=%s)",
-                reason,
-                s1_started,
-                strategy_live_tracker_service.status(),
-                context,
-            )
-        else:
-            logger.info(
-                "[%s] strategy 1 stage 3 tracker started=%s (context=%s)",
-                reason,
-                s1_started,
-                context,
-            )
-    except Exception:
-        logger.exception(
-            "[%s] strategy 1 stage 3 tracker start failed (context=%s)",
-            reason,
-            context,
-        )
-
-    # ---- Strategy 2 · Stage 3 tracker -------------------------------- #
-    s2_started = False
-    try:
-        if (
-            config.STRATEGY_2_ENABLED
-            and config.STRATEGY_2_TRACKER_ENABLED
-        ):
-            s2_started = bool(strategy_2_live_tracker_service.start())
-            if verbose:
-                logger.info(
-                    "[%s] strategy 2 stage 3 tracker started=%s "
-                    "status=%s (context=%s)",
-                    reason,
-                    s2_started,
-                    strategy_2_live_tracker_service.status(),
-                    context,
-                )
-            else:
-                logger.info(
-                    "[%s] strategy 2 stage 3 tracker started=%s (context=%s)",
-                    reason,
-                    s2_started,
-                    context,
-                )
-        else:
-            logger.info(
-                "[%s] strategy 2 stage 3 tracker disabled by config "
-                "(context=%s)",
-                reason,
-                context,
-            )
-    except Exception:
-        logger.exception(
-            "[%s] strategy 2 stage 3 tracker start failed (context=%s)",
-            reason,
-            context,
-        )
-
-    return s1_started, s2_started
-
-
-# --------------------------------------------------------------------------- #
-# Strategy pipeline gate                                                       #
-# --------------------------------------------------------------------------- #
-def _should_run_strategy_pipeline(reason: str) -> dict[str, Any]:
-    """Decide whether the heavy strategy pipeline should run.
-
-    Returns ``{"should_run": bool, "reason": str, "now_ist": str}``.
-
-    Rules (in order):
-
-    1. ``STRATEGY_RUN_OUTSIDE_MARKET_HOURS=true`` in config → always run.
-       Force override for testing / ad-hoc reviews.
-    2. Weekend (Sat / Sun) → skip.
-    3. Trading holiday (``market_holiday_service.is_trading_holiday()``)
-       → skip. Cached (1h TTL); already warmed by the startup gate.
-       Provider errors fall through to "not a holiday" — matching the
-       startup gate's policy.
-    4. Weekday time outside ``STRATEGY_USEFUL_WINDOW_START_HOUR:MINUTE
-       .. END_HOUR:MINUTE`` (default 09:00 – 16:30 IST) → skip.
-
-    Otherwise → run.
-
-    NOTE: The two live tracker starts are handled differently based on
-    this gate's result — see ``_start_live_trackers`` for the split.
-    """
-    now = _now_market()
-    now_ist = now.strftime("%Y-%m-%d %H:%M:%S IST")
-
-    # ---- 1. Force override ------------------------------------------- #
-    if getattr(config, "STRATEGY_RUN_OUTSIDE_MARKET_HOURS", False):
-        return {
-            "should_run": True,
-            "reason": "force_flag_true",
-            "now_ist": now_ist,
-        }
-
-    # ---- 2. Weekend -------------------------------------------------- #
-    if now.weekday() >= 5:
-        return {
-            "should_run": False,
-            "reason": f"weekend_{now.strftime('%A').lower()}",
-            "now_ist": now_ist,
-        }
-
-    # ---- 3. Trading holiday (cached; errors → not a holiday) --------- #
-    try:
-        from services.market_holiday_service import market_holiday_service
-        if market_holiday_service.is_trading_holiday():
-            return {
-                "should_run": False,
-                "reason": "market_holiday",
-                "now_ist": now_ist,
-            }
-    except Exception:
-        logger.exception(
-            "[%s] strategy gate: holiday check raised; treating as "
-            "not-a-holiday",
-            reason,
-        )
-
-    # ---- 4. Time window ---------------------------------------------- #
-    t = now.time()
-    start = dtime(
-        getattr(config, "STRATEGY_USEFUL_WINDOW_START_HOUR", 9),
-        getattr(config, "STRATEGY_USEFUL_WINDOW_START_MINUTE", 0),
-    )
-    end = dtime(
-        getattr(config, "STRATEGY_USEFUL_WINDOW_END_HOUR", 16),
-        getattr(config, "STRATEGY_USEFUL_WINDOW_END_MINUTE", 30),
-    )
-
-    if t < start:
-        return {
-            "should_run": False,
-            "reason": f"before_window_{start.strftime('%H:%M')}",
-            "now_ist": now_ist,
-        }
-    if t >= end:
-        return {
-            "should_run": False,
-            "reason": f"after_window_{end.strftime('%H:%M')}",
-            "now_ist": now_ist,
-        }
-
-    return {
-        "should_run": True,
-        "reason": f"inside_window_{t.strftime('%H:%M')}",
-        "now_ist": now_ist,
-    }
+    text = str(name or "unknown").strip()
+    for ch in ("|", "/", "\\", ":", "*", "?", '"', "<", ">", " "):
+        text = text.replace(ch, "_")
+    return text.strip("._") or "unknown"
 
 
 # --------------------------------------------------------------------------- #
@@ -849,15 +211,10 @@ def _start_message(reason: str, catchup_meta: dict[str, Any]) -> str:
         f"{'yes' if catchup_meta['in_market_hours'] else 'no'}\n"
         f"🌙 Post-market:   "
         f"{'yes' if catchup_meta['post_market'] else 'no'}\n"
-        f"⏭️ Past S1.S4:    "
-        f"{catchup_meta['past']['stage_4']}\n"
         f"{_THIN}\n"
         f"Pipeline order:\n"
         f"  🧹 cleanup → 🔑 token → 📦 backup → 📊 registry\n"
-        f"  → 🔧 wiring → 🎯 OR → 📊 S1.stage1 → 🔒 S1.stage2\n"
-        f"  → 🎯 S1.stage3 → 💰 S1.stage4\n"
-        f"  → 🎯 S2.stage3 → 💰 S2.stage4\n"
-        f"  → 📡 feed → ⏰ scheduler → 🤖 telegram"
+        f"  → 🔧 wiring → 📡 feed → ⏰ scheduler → 🤖 telegram"
     )
 
 
@@ -871,69 +228,11 @@ def _completion_message(
     token_status: str,
     backup: dict[str, Any],
     registry: dict[str, Any],
-    backfill_summary: dict[str, Any],
-    or_summary: dict[str, Any],
-    strategy_summary: dict[str, Any],
-    isolation_summary: dict[str, Any],
-    tracker_started: bool,
-    stage3_catchup: dict[str, Any],
-    order_summary: dict[str, Any],
-    strategy2_tracker_started: bool,
-    strategy2_summary: dict[str, Any],
-    strategy2_order_summary: dict[str, Any],
     feed_ok: bool,
     scheduler_ok: bool,
     telegram_ok: bool,
     status: str,
-    stage1_or_retry_attempted: int = 0,
-    stage1_or_retry_used: bool = False,
-    stage2_skip_reason: str | None = None,
 ) -> str:
-    s1_ok = sum(
-        1
-        for i in strategy_summary.get("indexes", [])
-        if i.get("status") == "ok"
-    )
-    s1_total = len(strategy_summary.get("indexes", []))
-
-    s2_isolated_line = _summarise_strategy2_isolated(strategy2_summary)
-
-    # ---- Stage 1 OR-retry line --------------------------------------- #
-    if stage1_or_retry_attempted:
-        retry_note = (
-            f"  (OR retry={'✓' if stage1_or_retry_used else '✗'})"
-        )
-    else:
-        retry_note = ""
-
-    # ---- Stage 2 status line ----------------------------------------- #
-    if stage2_skip_reason:
-        s2_line = (
-            f"   🔒 Stage 2:    skipped — {stage2_skip_reason}\n"
-        )
-    else:
-        s2_line = (
-            f"   🔒 Stage 2:    {isolation_summary.get('isolated')}/"
-            f"{isolation_summary.get('evaluated')} isolated  "
-            f"pairs={isolation_summary.get('pairs_isolated')}\n"
-        )
-
-    # ---- Strategy 2 line --------------------------------------------- #
-    if stage2_skip_reason:
-        s2_strat_line = (
-            f"   🎯 Stage 3:    tracker="
-            f"{'✓' if strategy2_tracker_started else '✗'}  "
-            f"skipped (no stage-2 contracts)\n"
-            f"   🔒 Isolated:   none (stage-2 empty)\n"
-        )
-    else:
-        s2_strat_line = (
-            f"   🎯 Stage 3:    tracker="
-            f"{'✓' if strategy2_tracker_started else '✗'}  "
-            f"touched={strategy2_summary.get('touched_contracts', 0)}\n"
-            f"   🔒 Isolated:   {s2_isolated_line}\n"
-        )
-
     return (
         f"{_DIV}\n"
         f"🏁 {reason.upper()} REFRESH COMPLETED\n"
@@ -950,30 +249,6 @@ def _completion_message(
         f"📦 Backup:        status={backup.get('status')}  "
         f"files={backup.get('file_count')}\n"
         f"📊 Registry:      {registry.get('count')} instruments\n"
-        f"📈 EMA seed:      {backfill_summary.get('seeded')}/"
-        f"{backfill_summary.get('total')}  "
-        f"crosses={backfill_summary.get('crosses')}\n"
-        f"🎯 OR levels:     {or_summary.get('calculated')}/"
-        f"{or_summary.get('total')}  "
-        f"skipped={or_summary.get('skipped')}  "
-        f"errors={or_summary.get('errors')}\n"
-        f"{_THIN}\n"
-        f"📊 STRATEGY 1\n"
-        f"   📊 Stage 1:    {s1_ok}/{s1_total} indexes  "
-        f"avg_buffer={strategy_summary.get('avg_buffer_points')}"
-        f"{retry_note}\n"
-        f"{s2_line}"
-        f"   🎯 Stage 3:    tracker="
-        f"{'✓' if tracker_started else '✗'}  "
-        f"catch-up_activated={stage3_catchup.get('activated_total', 0)}\n"
-        f"   💰 Stage 4:    catch-up="
-        f"{order_summary.get('catchup')}  "
-        f"placed={order_summary.get('placed', 0)}\n"
-        f"{_THIN}\n"
-        f"🔒 STRATEGY 2\n"
-        f"{s2_strat_line}"
-        f"   💰 Stage 4:    placed="
-        f"{strategy2_order_summary.get('placed', 0)}\n"
         f"{_THIN}\n"
         f"📡 Live feed:     {'✓' if feed_ok else '✗'}\n"
         f"⏰ Scheduler:     {'✓' if scheduler_ok else '✗'}\n"
@@ -984,35 +259,17 @@ def _completion_message(
 
 
 # --------------------------------------------------------------------------- #
-# Unified refresh                                                              #
+# Unified refresh (infrastructure only)                                       #
 # --------------------------------------------------------------------------- #
 def _run_full_refresh_sync(
     reason: str = "manual",
     loop: "asyncio.AbstractEventLoop | None" = None,
 ) -> dict[str, Any]:
-    """Execute every refresh task in the canonical order.
+    """Execute every infrastructure refresh task in canonical order.
 
-    The strategy pipeline (OR + Strategy 1 Stage 1-4 + Strategy 2
-    Stage 3-4) is gated by ``_should_run_strategy_pipeline(reason)``.
-    When the gate returns ``should_run=False`` (weekend / trading
-    holiday / outside the useful window and
-    ``STRATEGY_RUN_OUTSIDE_MARKET_HOURS=false``), the strategy stages
-    are skipped entirely and every summary dict is populated with
-    ``status="skipped"``.
-
-    Live tracker start placements are conditional:
-
-    * Gated path (``should_run=False``): trackers started at step 7e
-      — no catch-up runs, so cache staleness is harmless, and having
-      them armed by 09:15 lets the scheduled crons work.
-    * Non-gated path (``should_run=True``): trackers started at steps
-      8d / 8g — *after* Stage 2 has written its output — so their
-      internal contract cache is fresh when ``run_catchup()`` reads
-      it a few lines later.
-
-    Infrastructure stages — cleanup, token, backup, registry,
-    wiring, backfill, live feed, scheduler, Telegram bot — always run
-    as normal.
+    Strategy stages (EMA backfill seed, Opening Range calculation,
+    live-cross handler wiring) and ProChart have been removed — this
+    pipeline is infrastructure-only.
     """
     label = reason.title()
     catchup_meta = _catchup_snapshot()
@@ -1025,11 +282,10 @@ def _run_full_refresh_sync(
     )
     logger.info(
         "[%s] refresh start — in_market_hours=%s post_market=%s "
-        "past_stage_4=%s current_time_ist=%s",
+        "current_time_ist=%s",
         reason,
         catchup_meta["in_market_hours"],
         catchup_meta["post_market"],
-        catchup_meta["past"]["stage_4"],
         catchup_meta["current_time_ist"],
     )
 
@@ -1079,7 +335,7 @@ def _run_full_refresh_sync(
     registry = instrument_registry.load()
 
     try:
-        added = _ensure_core_and_strategy_indexes_registered()
+        added = _ensure_core_indexes_registered()
         registry = {
             "count": len(instrument_registry.all()),
             "data_dir": (registry or {}).get("data_dir"),
@@ -1094,536 +350,17 @@ def _run_full_refresh_sync(
     except Exception:
         logger.exception("[%s] index pre-registration failed", reason)
 
-    # ---- 5. Wiring ---------------------------------------------------- #
+    # ---- 5. Loop wiring ---------------------------------------------- #
+    # The live-cross handler was removed with the strategy layer, so
+    # only the broadcast loop wiring remains here.
     if loop is not None:
         try:
             live_broadcast.set_loop(loop)
             live_feed_service.set_loop(loop)
         except Exception:
             logger.exception("[%s] loop wiring failed", reason)
-    try:
-        _wire_cross_handler()
-    except Exception:
-        logger.exception("[%s] cross handler wiring failed", reason)
 
-    # ---- 6. Reset cross state ----------------------------------------- #
-    try:
-        live_cross_store.reset_all()
-    except Exception:
-        logger.exception("[%s] live-cross reset failed", reason)
-
-    # ---- 7. EMA backfill ---------------------------------------------- #
-    # NOTE: backfill always runs, even when the strategy pipeline is
-    # gated — it feeds the EMA engine used by /live/* and the chart.
-    backfill_summary: dict[str, Any] = {
-        "seeded": 0,
-        "crosses": 0,
-        "skipped": 0,
-        "errors": 0,
-        "total": 0,
-    }
-    try:
-        backfill_summary = live_backfill_service.seed_all()
-    except Exception:
-        logger.exception("[%s] EMA backfill failed", reason)
-
-    # ================================================================ #
-    # 7b. STRATEGY PIPELINE GATE                                        #
-    # ================================================================ #
-    strategy_gate = _should_run_strategy_pipeline(reason)
-    logger.info(
-        "[%s] strategy pipeline gate: should_run=%s reason=%s now=%s",
-        reason,
-        strategy_gate["should_run"],
-        strategy_gate["reason"],
-        strategy_gate["now_ist"],
-    )
-
-    # ================================================================ #
-    # 7c. GATED-PATH TRACKER START                                      #
-    # ================================================================ #
-    # Trackers are started here ONLY when the gate says the strategy
-    # pipeline will be skipped. The gated path never runs the catch-up
-    # scan, so the tracker's empty-at-start cache is harmless — it
-    # just needs to be armed so the scheduled 09:16/09:17/09:18 crons
-    # have a live thread to work with.
-    #
-    # When should_run=True, the trackers are started at steps 8d / 8g
-    # (AFTER Stage 2 has written its output) so their caches are fresh
-    # when ``run_catchup()`` reads them seconds later.
-    #
-    # Do NOT move these into the non-gated path — that caused the
-    # 2026-10-21 10:33 "activated=0/0 no_contracts" regression.
-    tracker_started = False
-    strategy2_tracker_started = False
-    if not strategy_gate["should_run"]:
-        tracker_started, strategy2_tracker_started = _start_live_trackers(
-            reason=reason,
-            verbose=verbose,
-            context="gated",
-        )
-
-    # ---- Default summaries (used when gated) ------------------------- #
-    or_summary: dict[str, Any] = {
-        "status": "skipped",
-        "reason": strategy_gate["reason"],
-        "total": 0,
-        "calculated": 0,
-        "skipped": 0,
-        "errors": 0,
-        "core_indexes_missing": 0,
-    }
-    strategy_summary: dict[str, Any] = {
-        "status": "skipped",
-        "stage": "stage_1",
-        "reason": strategy_gate["reason"],
-        "indexes": [],
-        "avg_buffer_points": 0,
-    }
-    stage1_or_retry_attempted = 0
-    stage1_or_retry_used = False
-    stage1_contracts = 0
-
-    isolation_summary: dict[str, Any] = {
-        "status": "skipped",
-        "stage": "stage_2",
-        "reason": strategy_gate["reason"],
-        "evaluated": 0,
-        "isolated": 0,
-        "pairs_isolated": 0,
-        "skipped": 0,
-        "errors": 0,
-        "indexes": [],
-    }
-    stage2_skip_reason: str | None = None
-
-    stage3_catchup: dict[str, Any] = {
-        "status": "skipped",
-        "reason": strategy_gate["reason"],
-        "catchup": False,
-    }
-    order_summary: dict[str, Any] = {
-        "status": "skipped",
-        "stage": "stage_4",
-        "reason": strategy_gate["reason"],
-        "catchup": False,
-    }
-
-    strategy2_summary: dict[str, Any] = {
-        "status": "skipped",
-        "stage": "stage_3",
-        "strategy": "strategy_2",
-        "reason": strategy_gate["reason"],
-        "stage2_contracts": 0,
-        "touched_contracts": 0,
-        "isolated": None,
-    }
-    strategy2_order_summary: dict[str, Any] = {
-        "status": "skipped",
-        "stage": "stage_4",
-        "strategy": "strategy_2",
-        "reason": strategy_gate["reason"],
-        "placed": 0,
-        "order": None,
-    }
-
-    if strategy_gate["should_run"]:
-        # ============================================================ #
-        # 8. Opening Range                                             #
-        # ============================================================ #
-        or_summary = {
-            "status": "not_run",
-            "total": 0,
-            "calculated": 0,
-            "skipped": 0,
-            "errors": 0,
-            "core_indexes_missing": 0,
-        }
-        try:
-            or_summary = opening_range_service.calculate_all()
-            try:
-                missing = 0
-                for spec in config.STRATEGY_INDEXES or []:
-                    if not isinstance(spec, dict):
-                        continue
-                    key = str(spec.get("instrument_key") or "").strip()
-                    if not key:
-                        continue
-                    payload = opening_range_service.get_opening_range(key)
-                    if (
-                        not payload.get("available")
-                        or not payload.get("is_today")
-                    ):
-                        missing += 1
-                or_summary["core_indexes_missing"] = missing
-            except Exception:
-                logger.exception(
-                    "[%s] OR core-index diagnostic failed", reason
-                )
-        except Exception:
-            logger.exception(
-                "[%s] opening range calculation failed", reason
-            )
-
-        # ---- 8b. Strategy 1 · Stage 1 (with OR retry) ------------- #
-        try:
-            (
-                strategy_summary,
-                stage1_or_retry_attempted,
-                stage1_or_retry_used,
-            ) = _run_stage1_with_or_retry(
-                reason=reason,
-                catchup_meta=catchup_meta,
-                verbose=verbose,
-            )
-        except Exception:
-            logger.exception("[%s] strategy 1 stage 1 failed", reason)
-
-        # ---- 8c. Strategy 1 · Stage 2 ------------------------------ #
-        stage1_contracts = _count_stage1_contracts(strategy_summary)
-
-        if stage1_contracts == 0:
-            stage2_skip_reason = "stage_1_empty"
-            logger.warning(
-                "[%s] strategy 1 stage 2 skipped — stage 1 produced 0 "
-                "contracts (or_retry_attempted=%d or_retry_used=%s)",
-                reason,
-                stage1_or_retry_attempted,
-                stage1_or_retry_used,
-            )
-            isolation_summary = {
-                "status": "skipped",
-                "stage": "stage_2",
-                "reason": stage2_skip_reason,
-                "evaluated": 0,
-                "isolated": 0,
-                "pairs_isolated": 0,
-                "skipped": 0,
-                "errors": 0,
-                "indexes": [],
-            }
-        else:
-            try:
-                isolation_summary = strategy_isolation_service.run(
-                    reason=reason,
-                    mode=reason,
-                    catchup=bool(
-                        catchup_meta["past"]["stage_2"]
-                        and catchup_meta["in_market_hours"]
-                    ),
-                )
-            except Exception:
-                logger.exception(
-                    "[%s] strategy 1 stage 2 failed", reason
-                )
-
-        # ---- 8d. Strategy 1 · Stage 3 tracker start --------------- #
-        # CRITICAL: must run AFTER Stage 2 so the tracker thread
-        # caches the fresh stage-2 output. Starting it earlier
-        # (e.g. at 7c) causes run_catchup() below to see an empty
-        # cache and report "no_contracts".
-        s1_started, s2_started = _start_live_trackers(
-            reason=reason,
-            verbose=verbose,
-            context="post_stage_2",
-        )
-        # Only overwrite if we actually started them here (they may
-        # already have been started on a gated-then-catch-up path,
-        # in which case start() was a no-op and s1_started is still
-        # the value from that earlier start).
-        tracker_started = tracker_started or s1_started
-        strategy2_tracker_started = (
-            strategy2_tracker_started or s2_started
-        )
-
-        # ---- 8e. Strategy 1 · Stage 3 catch-up -------------------- #
-        stage3_catchup = {
-            "status": "not_run",
-            "reason": "before_window_or_outside_catchup_window",
-            "catchup": False,
-        }
-        if _should_run_stage_3_catchup():
-            try:
-                logger.info(
-                    "[%s] strategy 1 stage 3 catch-up START", reason
-                )
-                stage3_catchup = strategy_live_tracker_service.run_catchup(
-                    mode=reason,
-                    catchup=True,
-                )
-
-                if verbose:
-                    logger.info(
-                        "[%s] strategy 1 stage 3 catch-up result: %s",
-                        reason,
-                        stage3_catchup,
-                    )
-                else:
-                    logger.info(
-                        "[%s] strategy 1 stage 3 catch-up COMPLETED — %s",
-                        reason,
-                        _summarise_stage3_catchup(stage3_catchup),
-                    )
-
-                activated = int(
-                    stage3_catchup.get("activated_total") or 0
-                )
-                telegram_service.send_message(
-                    "Strategy 1 Stage 3 Catch-up Executed",
-                    (
-                        f"{_THIN}\n"
-                        f"🎯 STRATEGY 1 · STAGE 3 CATCH-UP\n"
-                        f"{_THIN}\n"
-                        f"🎯 Mode:          {reason}\n"
-                        f"🪟 Catch-up:      yes\n"
-                        f"🌙 Post-market:   {_post_market()}\n"
-                        f"⏰ Window closed: "
-                        f"{config.STRATEGY_TRACKER_WINDOW_END} IST\n"
-                        f"📈 Activated:     {activated} contracts\n"
-                        f"📊 Indexes:       "
-                        f"{len(stage3_catchup.get('indexes') or [])}"
-                    ),
-                    level="SUCCESS" if activated else "INFO",
-                )
-            except Exception:
-                logger.exception(
-                    "[%s] strategy 1 stage 3 catch-up FAILED", reason
-                )
-                stage3_catchup = {
-                    "status": "error",
-                    "reason": "exception",
-                    "catchup": True,
-                }
-        else:
-            logger.info(
-                "[%s] strategy 1 stage 3 catch-up skipped "
-                "(before window / outside catch-up)",
-                reason,
-            )
-
-        # ---- 8f. Strategy 1 · Stage 4 catch-up (order) ------------ #
-        order_summary = {
-            "status": "not_run",
-            "stage": "stage_4",
-            "reason": "before_scheduled_time_or_outside_catchup_window",
-            "catchup": False,
-        }
-        if _should_run_stage_4_catchup():
-            try:
-                post_market = _post_market()
-                logger.info(
-                    "[%s] strategy 1 stage 4 catch-up START "
-                    "(post_market=%s, scheduled=%s IST)",
-                    reason,
-                    post_market,
-                    _scheduled_stage_4_time().strftime("%H:%M"),
-                )
-                order_summary = strategy_order_service.run(
-                    reason=reason,
-                    mode=reason,
-                    catchup=True,
-                )
-                placed = int(order_summary.get("placed") or 0)
-                if verbose:
-                    logger.info(
-                        "[%s] strategy 1 stage 4 catch-up result: %s",
-                        reason,
-                        order_summary,
-                    )
-                else:
-                    logger.info(
-                        "[%s] strategy 1 stage 4 catch-up COMPLETED — "
-                        "status=%s candidates=%s picks=%s placed=%s",
-                        reason,
-                        order_summary.get("status"),
-                        order_summary.get("candidates"),
-                        order_summary.get("picks"),
-                        placed,
-                    )
-
-                post_market_line = (
-                    "\n🌙 Note: paper order built from cached LTP "
-                    "(no fresh ticks post-market)."
-                    if post_market
-                    else ""
-                )
-                telegram_service.send_message(
-                    "Strategy 1 Stage 4 Catch-up Executed",
-                    (
-                        f"{_THIN}\n"
-                        f"💰 STRATEGY 1 · STAGE 4 CATCH-UP\n"
-                        f"{_THIN}\n"
-                        f"🎯 Mode:          {reason}\n"
-                        f"🪟 Catch-up:      yes\n"
-                        f"🌙 Post-market:   {post_market}\n"
-                        f"⏰ Scheduled:     "
-                        f"{_scheduled_stage_4_time().strftime('%H:%M')} IST\n"
-                        f"🕒 Actual:        "
-                        f"{_now_market().strftime('%H:%M:%S')} IST\n"
-                        f"📊 Candidates:    "
-                        f"{order_summary.get('candidates')}\n"
-                        f"🎯 Picks:         "
-                        f"{order_summary.get('picks')}\n"
-                        f"💰 Placed:        {placed}"
-                        f"{post_market_line}"
-                    ),
-                    level="SUCCESS" if placed else "INFO",
-                )
-            except Exception:
-                logger.exception(
-                    "[%s] strategy 1 stage 4 catch-up FAILED", reason
-                )
-                order_summary = {
-                    "status": "error",
-                    "stage": "stage_4",
-                    "catchup": True,
-                    "reason": reason,
-                }
-        else:
-            logger.info(
-                "[%s] strategy 1 stage 4 catch-up skipped "
-                "(before scheduled time / outside catch-up)",
-                reason,
-            )
-
-        # ============================================================ #
-        # STRATEGY 2                                                    #
-        # ============================================================ #
-        # S2 Stage-3 snapshot does its own fresh disk scan
-        # (``_collect_stage2_contracts``), so it would work even if the
-        # S2 tracker weren't started yet. But the tracker was already
-        # started at step 8d (same _start_live_trackers call), so no
-        # additional start is needed here.
-
-        # ---- 8g. Strategy 2 · Stage 3 snapshot -------------------- #
-        if config.STRATEGY_2_ENABLED:
-            try:
-                strategy2_summary = strategy_2_isolation_service.run(
-                    reason=reason,
-                    mode=reason,
-                    catchup=bool(catchup_meta["in_market_hours"]),
-                )
-                if verbose:
-                    logger.info(
-                        "[%s] strategy 2 stage 3 result: %s",
-                        reason,
-                        strategy2_summary,
-                    )
-                else:
-                    logger.info(
-                        "[%s] strategy 2 stage 3 COMPLETE — level=%s "
-                        "stage2=%d touched=%d isolated=%s",
-                        reason,
-                        strategy2_summary.get("isolation_level_name"),
-                        strategy2_summary.get("stage2_contracts", 0),
-                        strategy2_summary.get("touched_contracts", 0),
-                        _summarise_strategy2_isolated(strategy2_summary),
-                    )
-            except Exception:
-                logger.exception(
-                    "[%s] strategy 2 stage 3 failed", reason
-                )
-
-        # ---- 8h. Strategy 2 · Stage 4 (order) --------------------- #
-        s2_stage2_count = int(
-            strategy2_summary.get("stage2_contracts") or 0
-        )
-        if (
-            config.STRATEGY_2_ENABLED
-            and s2_stage2_count > 0
-            and strategy2_summary.get("isolated")
-        ):
-            try:
-                logger.info("[%s] strategy 2 stage 4 START", reason)
-                strategy2_order_summary = strategy_2_order_service.run(
-                    reason=reason,
-                    mode=reason,
-                    catchup=bool(catchup_meta["in_market_hours"]),
-                )
-                placed_s2 = int(
-                    strategy2_order_summary.get("placed") or 0
-                )
-                if verbose:
-                    logger.info(
-                        "[%s] strategy 2 stage 4 result: %s",
-                        reason,
-                        strategy2_order_summary,
-                    )
-                else:
-                    logger.info(
-                        "[%s] strategy 2 stage 4 COMPLETE — status=%s "
-                        "placed=%d",
-                        reason,
-                        strategy2_order_summary.get("status"),
-                        placed_s2,
-                    )
-
-                if placed_s2:
-                    order = strategy2_order_summary.get("order") or {}
-                    telegram_service.send_message(
-                        "Strategy 2 Order Placed",
-                        (
-                            f"{_THIN}\n"
-                            f"💰 STRATEGY 2 · ORDER PLACED\n"
-                            f"{_THIN}\n"
-                            f"🎯 Mode:          {reason}\n"
-                            f"🌙 Post-market:   {_post_market()}\n"
-                            f"📊 Ticker:        {order.get('ticker')}\n"
-                            f"📈 Strike:        "
-                            f"{order.get('strike_price')}\n"
-                            f"🏷️ Type:          "
-                            f"{order.get('order_strike_type')}\n"
-                            f"🎯 Direction:     "
-                            f"{order.get('cross_type')} cross → "
-                            f"{order.get('order_strike_type')}\n"
-                            f"💵 Entry LTP:     "
-                            f"{order.get('entry_ltp')} "
-                            f"({order.get('entry_ltp_source')})\n"
-                            f"🕒 Cross at:      "
-                            f"{order.get('cross_minute')}\n"
-                            f"🕒 S3 touch:      "
-                            f"{order.get('s3_touch_minute')}\n"
-                            f"🔑 Key:           "
-                            f"{order.get('order_instrument_key')}"
-                        ),
-                        level="SUCCESS",
-                    )
-            except Exception:
-                logger.exception(
-                    "[%s] strategy 2 stage 4 failed", reason
-                )
-                strategy2_order_summary = {
-                    "status": "error",
-                    "stage": "stage_4",
-                    "strategy": "strategy_2",
-                    "placed": 0,
-                    "order": None,
-                }
-        else:
-            logger.info(
-                "[%s] strategy 2 stage 4 skipped "
-                "(disabled, no stage-2 contracts, or no isolated contract "
-                "yet)",
-                reason,
-            )
-    else:
-        # ---- Gated: skip the strategy pipeline -------------------- #
-        stage2_skip_reason = (
-            f"strategy_pipeline_gated:{strategy_gate['reason']}"
-        )
-        logger.info(
-            "[%s] strategy pipeline skipped — reason=%s "
-            "(STRATEGY_RUN_OUTSIDE_MARKET_HOURS=%s). Live trackers were "
-            "started at 7c (gated path) so the scheduled 09:16/09:17/09:18 "
-            "crons have a live thread.",
-            reason,
-            strategy_gate["reason"],
-            getattr(config, "STRATEGY_RUN_OUTSIDE_MARKET_HOURS", False),
-        )
-
-    # ---- 9. Live feed ------------------------------------------------- #
-    # Always runs — needed for the health feed and for charting even
-    # when the strategy pipeline is gated.
+    # ---- 6. Live feed ------------------------------------------------- #
     feed_ok = False
     try:
         feed_running = bool(live_feed_service.status().get("running"))
@@ -1634,7 +371,7 @@ def _run_full_refresh_sync(
     except Exception:
         logger.exception("[%s] live feed start/restart failed", reason)
 
-    # ---- 10. Scheduler ------------------------------------------------ #
+    # ---- 7. Scheduler ------------------------------------------------ #
     scheduler_ok = True
     try:
         scheduler_service.start()
@@ -1642,24 +379,26 @@ def _run_full_refresh_sync(
         logger.exception("[%s] scheduler start failed", reason)
         scheduler_ok = False
 
-    # ---- 11. Telegram bot --------------------------------------------- #
-    telegram_ok = True
+    # ---- 8. Telegram bot --------------------------------------------- #
+    telegram_ok = False
     try:
         telegram_token_bot.start()
+        telegram_ok = _telegram_bot_active(fallback=True)
     except Exception:
         logger.exception("[%s] telegram bot start failed", reason)
         telegram_ok = False
 
+    if not telegram_ok:
+        logger.warning(
+            "[%s] telegram bot is NOT polling — start() returned but "
+            "bot state is inactive (Windows prompt declined/timed out, "
+            "or TELEGRAM_BOT_DISABLED set).",
+            reason,
+        )
+
     result: dict[str, Any] = {
         "reason": reason,
         "mode": reason,
-        "strategy_gate": strategy_gate,
-        "catchup": {
-            "stage_1": bool(strategy_summary.get("catchup")),
-            "stage_2": bool(isolation_summary.get("catchup")),
-            "stage_3": bool(stage3_catchup.get("catchup")),
-            "stage_4": bool(order_summary.get("catchup")),
-        },
         "market_snapshot": catchup_meta,
         "cleanup": cleanup,
         "token_refresh_ok": token_refresh_ok,
@@ -1667,28 +406,12 @@ def _run_full_refresh_sync(
         "token_status": token_status,
         "backup": backup,
         "registry": registry,
-        "backfill": backfill_summary,
-        "opening_range": or_summary,
-        "strategy": strategy_summary,
-        "strategy_stage1_or_retry": {
-            "attempted": stage1_or_retry_attempted,
-            "used": stage1_or_retry_used,
-        },
-        "strategy_stage1_contracts": stage1_contracts,
-        "isolation": isolation_summary,
-        "stage2_skip_reason": stage2_skip_reason,
-        "tracker_started": tracker_started,
-        "stage3_catchup": stage3_catchup,
-        "orders": order_summary,
-        "strategy2_tracker_started": strategy2_tracker_started,
-        "strategy2_stage3": strategy2_summary,
-        "strategy2_stage4": strategy2_order_summary,
         "feed_restarted": feed_ok,
         "scheduler_started": scheduler_ok,
         "telegram_started": telegram_ok,
     }
 
-    # ---- 12. Telegram completion ------------------------------------- #
+    # ---- 9. Telegram completion ------------------------------------- #
     status = "SUCCESS" if backup.get("status") == "ok" else "WARNING"
 
     message = _completion_message(
@@ -1700,23 +423,10 @@ def _run_full_refresh_sync(
         token_status=token_status,
         backup=backup,
         registry=registry,
-        backfill_summary=backfill_summary,
-        or_summary=or_summary,
-        strategy_summary=strategy_summary,
-        isolation_summary=isolation_summary,
-        tracker_started=tracker_started,
-        stage3_catchup=stage3_catchup,
-        order_summary=order_summary,
-        strategy2_tracker_started=strategy2_tracker_started,
-        strategy2_summary=strategy2_summary,
-        strategy2_order_summary=strategy2_order_summary,
         feed_ok=feed_ok,
         scheduler_ok=scheduler_ok,
         telegram_ok=telegram_ok,
         status=status,
-        stage1_or_retry_attempted=stage1_or_retry_attempted,
-        stage1_or_retry_used=stage1_or_retry_used,
-        stage2_skip_reason=stage2_skip_reason,
     )
     telegram_service.send_message(
         (

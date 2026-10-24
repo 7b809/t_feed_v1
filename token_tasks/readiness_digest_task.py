@@ -1,3 +1,4 @@
+# File: token_tasks/readiness_digest_task.py
 """Scheduled readiness digest (08:45) and pre-flight recheck (09:05).
 
 08:45 digest

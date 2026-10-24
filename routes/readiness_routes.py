@@ -1,13 +1,20 @@
+# File: routes/readiness_routes.py
 """Readiness + operator-runbook routes.
 
     GET  /admin/readiness               -> last readiness snapshot (or fresh)
     POST /admin/readiness               -> force a fresh readiness check
     GET  /admin/readiness/history       -> 7-day health-log history
     GET  /admin/ops/runbook             -> operator cheat sheet as JSON
-    POST /admin/ops/warmup              -> backfill + registry only
+    POST /admin/ops/warmup              -> backup + registry only
     POST /admin/ops/smoke-test          -> 5-probe smoke test (no side effects)
     POST /admin/ops/resubscribe-feed    -> force live-feed reconnect
     POST /admin/ops/revalidate-token    -> force token re-check
+
+Strategy-free
+-------------
+EMA backfill, Opening Range, and ProChart are no longer part of the
+system. ``/admin/ops/warmup`` therefore performs **backup + registry
+load only** — the backfill seed call was removed.
 
 All routes return HTTP 200 with a JSON body carrying ``status`` so
 callers can drive automation off the response. No credentials or
@@ -54,11 +61,17 @@ async def post_readiness() -> dict[str, Any]:
 
 @router.get("/readiness/history")
 def get_readiness_history(limit: int = 50) -> dict[str, Any]:
-    """Return the tail of the 7-day health log (per-day JSON files)."""
+    """Return the tail of the 7-day health log (per-day JSON files).
+
+    The health log lives under ``meta_data/health/`` — written by
+    ``services.readiness_service._append_health_log()``. This route
+    previously read from ``data/health/`` (a stale path) and always
+    returned an empty list; fixed to match the writer.
+    """
     try:
         from pathlib import Path
         import json
-        health_dir = Path(config.PROJECT_ROOT) / "data" / "health"
+        health_dir = Path(config.PROJECT_ROOT) / "meta_data" / "health"
         if not health_dir.exists():
             return {"count": 0, "entries": []}
         files = sorted(health_dir.glob("readiness_*.json"), reverse=True)
@@ -93,8 +106,7 @@ def get_runbook() -> dict[str, Any]:
             {"time": "08:45", "action": "auto: readiness digest"},
             {"time": "09:05", "action": "auto: pre-flight recheck"},
             {"time": "09:10", "action": "manual: verify GREEN in Telegram"},
-            {"time": "09:16", "action": "auto: OR cron fires"},
-            {"time": "09:17", "action": "auto: OR + Stage 1 watchdog"},
+            {"time": "09:15", "action": "cash market opens"},
         ],
         "if_red": {
             "token_valid":         "send /save_token in Telegram",
@@ -131,21 +143,23 @@ def get_runbook() -> dict[str, Any]:
 # --------------------------------------------------------------------------- #
 @router.post("/ops/warmup")
 async def warmup() -> dict[str, Any]:
-    """Re-run the backfill + registry reload only (no cleanup, no strategy)."""
+    """Re-extract backup + reload registry (no cleanup, no strategy).
+
+    The EMA backfill seed call was removed when the strategy layer was
+    stripped from the codebase. The endpoint now only refreshes the
+    two infrastructure inputs that later stages depend on.
+    """
     def _run() -> dict[str, Any]:
         from services.backup_data_service import backup_data_service
         from services.instrument_registry import instrument_registry
-        from services.live_backfill_service import live_backfill_service
 
         backup = backup_data_service.refresh()
         registry = instrument_registry.load()
-        backfill = live_backfill_service.seed_all()
 
         return {
             "status": "ok",
             "backup": backup,
             "registry": registry,
-            "backfill": backfill,
             "ran_at": datetime.now(timezone.utc).isoformat(),
         }
 

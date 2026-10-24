@@ -1,3 +1,4 @@
+# File: routes/live_routes.py
 """Live data REST and WebSocket routes.
 
 Every endpoint that reads a *single* instrument accepts either an
@@ -14,29 +15,21 @@ On a triple miss the route makes one best-effort Upstox search (when
 registers the result ad-hoc, and only then returns 404 — so any real
 strike resolves once.
 
+Strategy-layer removal
+----------------------
+The EMA engine and live-cross store were deleted with the strategy
+layer. Their routes (/live/ema*, /live/candles, /live/crosses,
+/live/snapshot, /ws/ema-crosses, /ws/ema) have been removed. The
+remaining endpoints only touch the feed snapshot layer:
+
     GET  /live/status
     GET  /live/instruments
     GET  /live/instruments/resolve
-
-    # Single-instrument reads (key OR underlying+strike+type)
-    GET  /live/crosses                     ?instrument_key=... | underlying+strike+type
-    GET  /live/crosses/{instrument_key}    (path form, kept for compat)
-    GET  /live/ema                         ?instrument_key=... | underlying+strike+type
-    GET  /live/ema/{instrument_key}
-    GET  /live/ema-series                  ?instrument_key=... | underlying+strike+type
-    GET  /live/candles                     ?instrument_key=... | underlying+strike+type
-    GET  /live/snapshot                    feed + EMA in one call
-    GET  /live/snapshot/{instrument_key}
-
-    # All-instrument reads
-    GET  /live/crosses                     (no params -> all non-empty)
 
     # WebSockets
     WS   /ws/live
     WS   /ws/chart
     WS   /all-feeds  (and /ws/all-feeds)
-    WS   /ws/ema-crosses
-    WS   /ws/ema                           (streaming EMA snapshot per instrument)
 """
 
 from __future__ import annotations
@@ -52,8 +45,6 @@ from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconn
 from core import config
 from services.instrument_registry import instrument_registry
 from services.live_broadcast import live_broadcast
-from services.live_cross_store import live_cross_store
-from services.live_ema_engine import live_ema_engine
 from services.live_feed_service import live_feed_service
 from services.normalization import (
     normalize_strike,
@@ -252,29 +243,12 @@ def _resolve_entry(
                     "type": t or None,
                 },
                 "hint": (
-                    "Check /admin/strategy for today's selected strikes, "
-                    "or pass the exact `instrument_key`."
+                    "Pass the exact `instrument_key` or select the "
+                    "strike/type from /live/instruments."
                 ),
             },
         )
     return None
-
-
-def _selector_query(
-    instrument_key: str | None,
-    underlying: str | None,
-    strike: str | None,
-    strike_type: str | None,
-) -> dict[str, Any]:
-    """Build the echo object returned alongside single-instrument
-    payloads. Echoes the *normalized* values so the caller can see
-    what was actually used."""
-    return {
-        "instrument_key": instrument_key,
-        "underlying": normalize_underlying(underlying) or None,
-        "strike": normalize_strike(strike) or None,
-        "type": normalize_strike_type(strike_type) or None,
-    }
 
 
 def _feed_snapshot(entry: dict[str, Any]) -> dict[str, Any]:
@@ -327,160 +301,6 @@ def resolve_instrument(
         strike_type=type,
     )
     return entry  # type: ignore[return-value]
-
-
-# ---------------------------------------------------------------------------
-# REST — single-instrument reads
-# ---------------------------------------------------------------------------
-@router.get("/live/crosses/{instrument_key:path}")
-def crosses_for_instrument(instrument_key: str) -> dict[str, Any]:
-    """Today's crosses for one instrument (path form, kept for compat)."""
-    entry = _resolve_entry(instrument_key=instrument_key)
-    assert entry is not None
-    return live_cross_store.read_today(entry)
-
-
-@router.get("/live/crosses")
-def crosses_query(
-    instrument_key: str | None = Query(default=None),
-    underlying: str | None = Query(default=None),
-    strike: str | None = Query(default=None),
-    type: str | None = Query(default=None, alias="type"),
-) -> dict[str, Any]:
-    """Single-instrument crosses (query form) OR all crosses when empty."""
-    if instrument_key or (underlying and strike is not None and type):
-        entry = _resolve_entry(
-            instrument_key=instrument_key,
-            underlying=underlying,
-            strike=strike,
-            strike_type=type,
-        )
-        assert entry is not None
-        payload = live_cross_store.read_today(entry)
-        payload["selector"] = _selector_query(
-            instrument_key, underlying, strike, type
-        )
-        return payload
-
-    out: list[dict[str, Any]] = []
-    for entry in instrument_registry.all():
-        payload = live_cross_store.read_today(entry)
-        if payload.get("cross_count"):
-            out.append(payload)
-    return {"instrument_count": len(out), "payloads": out}
-
-
-@router.get("/live/ema/{instrument_key:path}")
-def ema_for_instrument(instrument_key: str) -> dict[str, Any]:
-    """Current EMA snapshot for one instrument (path form)."""
-    entry = _resolve_entry(instrument_key=instrument_key)
-    assert entry is not None
-    snapshot = live_ema_engine.get_ema_snapshot(entry["instrument_key"])
-    snapshot["selector"] = {"instrument_key": instrument_key}
-    return snapshot
-
-
-@router.get("/live/ema")
-def ema_query(
-    instrument_key: str | None = Query(default=None),
-    underlying: str | None = Query(default=None),
-    strike: str | None = Query(default=None),
-    type: str | None = Query(default=None, alias="type"),
-) -> dict[str, Any]:
-    """Current EMA snapshot for one instrument (key OR triple)."""
-    entry = _resolve_entry(
-        instrument_key=instrument_key,
-        underlying=underlying,
-        strike=strike,
-        strike_type=type,
-    )
-    assert entry is not None
-    snapshot = live_ema_engine.get_ema_snapshot(entry["instrument_key"])
-    snapshot["selector"] = _selector_query(
-        instrument_key, underlying, strike, type
-    )
-    return snapshot
-
-
-@router.get("/live/ema-series")
-def ema_series_query(
-    instrument_key: str | None = Query(default=None),
-    underlying: str | None = Query(default=None),
-    strike: str | None = Query(default=None),
-    type: str | None = Query(default=None, alias="type"),
-    limit: int = Query(default=200, ge=0, le=2000),
-) -> dict[str, Any]:
-    """EMA series (per-minute close, fast EMA, slow EMA)."""
-    entry = _resolve_entry(
-        instrument_key=instrument_key,
-        underlying=underlying,
-        strike=strike,
-        strike_type=type,
-    )
-    assert entry is not None
-    payload = live_ema_engine.get_ema_series(entry["instrument_key"], limit=limit)
-    payload["selector"] = _selector_query(
-        instrument_key, underlying, strike, type
-    )
-    return payload
-
-
-@router.get("/live/candles")
-def candles_query(
-    instrument_key: str | None = Query(default=None),
-    underlying: str | None = Query(default=None),
-    strike: str | None = Query(default=None),
-    type: str | None = Query(default=None, alias="type"),
-    limit: int = Query(default=200, ge=0, le=2000),
-) -> dict[str, Any]:
-    """Rolling 1-min candles the EMA engine currently holds for one key."""
-    entry = _resolve_entry(
-        instrument_key=instrument_key,
-        underlying=underlying,
-        strike=strike,
-        strike_type=type,
-    )
-    assert entry is not None
-    payload = live_ema_engine.get_candles(entry["instrument_key"], limit=limit)
-    payload["selector"] = _selector_query(
-        instrument_key, underlying, strike, type
-    )
-    return payload
-
-
-@router.get("/live/snapshot/{instrument_key:path}")
-def snapshot_for_instrument(instrument_key: str) -> dict[str, Any]:
-    """Combined feed status + EMA snapshot for one instrument (path form)."""
-    entry = _resolve_entry(instrument_key=instrument_key)
-    assert entry is not None
-    return {
-        "instrument": entry,
-        "feed": _feed_snapshot(entry),
-        "ema": live_ema_engine.get_ema_snapshot(entry["instrument_key"]),
-    }
-
-
-@router.get("/live/snapshot")
-def snapshot_query(
-    instrument_key: str | None = Query(default=None),
-    underlying: str | None = Query(default=None),
-    strike: str | None = Query(default=None),
-    type: str | None = Query(default=None, alias="type"),
-) -> dict[str, Any]:
-    """Combined feed status + EMA snapshot for one instrument (key OR triple)."""
-    entry = _resolve_entry(
-        instrument_key=instrument_key,
-        underlying=underlying,
-        strike=strike,
-        strike_type=type,
-    )
-    assert entry is not None
-    return {
-        "selector": _selector_query(instrument_key, underlying, strike, type),
-        "instrument": entry,
-        "feed": _feed_snapshot(entry),
-        "ema": live_ema_engine.get_ema_snapshot(entry["instrument_key"]),
-    }
 
 
 # ---------------------------------------------------------------------------
@@ -653,112 +473,3 @@ async def ws_all_feeds(ws: WebSocket) -> None:
         )
     )
     await _pump_with_client_listener(ws, sub)
-
-
-@router.websocket("/ws/ema-crosses")
-async def ws_ema_crosses(ws: WebSocket) -> None:
-    await ws.accept()
-    instrument_key, underlying, strike, type_, all_ = _parse_filters(ws)
-
-    keys, triples, _ = live_broadcast.resolve_subscription_params(
-        instrument_key, underlying, strike, type_
-    )
-    sub = await live_broadcast.subscribe(
-        "crosses",
-        instrument_keys=keys,
-        triples=triples,
-        all_instruments=all_,
-    )
-    await ws.send_text(
-        json.dumps(
-            {
-                "type": "subscribed",
-                "topic": "crosses",
-                "instrument_keys": list(sub.instrument_keys),
-                "triples": [list(t) for t in sub.triples],
-                "all": sub.all_instruments,
-            }
-        )
-    )
-    await _pump_with_client_listener(ws, sub)
-
-
-@router.websocket("/ws/ema")
-async def ws_ema(ws: WebSocket) -> None:
-    """Stream the current EMA snapshot for a single instrument."""
-    await ws.accept()
-    instrument_key, underlying, strike, type_, _ = _parse_filters(ws)
-
-    try:
-        entry = _resolve_entry(
-            instrument_key=instrument_key,
-            underlying=underlying,
-            strike=strike,
-            strike_type=type,
-        )
-    except HTTPException as exc:
-        await ws.send_text(json.dumps({"type": "error",
-                                       "detail": exc.detail}))
-        await ws.close()
-        return
-
-    assert entry is not None
-    resolved_key = entry["instrument_key"]
-    _ensure_subscription(resolved_key)
-
-    await ws.send_text(
-        json.dumps(
-            {
-                "type": "subscribed",
-                "topic": "ema",
-                "instrument_key": resolved_key,
-                "instrument": entry,
-            },
-            default=str,
-        )
-    )
-
-    interval = max(2, int(config.CHART_LIVE_POLL_SECONDS))
-
-    async def _poll_loop() -> None:
-        try:
-            while True:
-                snap = live_ema_engine.get_ema_snapshot(resolved_key)
-                await ws.send_text(json.dumps(snap, default=str))
-                await asyncio.sleep(interval)
-        except WebSocketDisconnect:
-            return
-        except asyncio.CancelledError:
-            return
-        except Exception:
-            logger.exception(
-                "EMA WS poll loop failed for %s", resolved_key,
-            )
-
-    async def _recv_loop() -> None:
-        try:
-            while True:
-                await ws.receive_text()
-        except WebSocketDisconnect:
-            return
-        except asyncio.CancelledError:
-            return
-        except Exception:
-            return
-
-    poll_task = asyncio.create_task(_poll_loop())
-    recv_task = asyncio.create_task(_recv_loop())
-
-    try:
-        done, pending = await asyncio.wait(
-            [poll_task, recv_task], return_when=asyncio.FIRST_COMPLETED
-        )
-        for t in pending:
-            t.cancel()
-    finally:
-        poll_task.cancel()
-        recv_task.cancel()
-        try:
-            await ws.close()
-        except Exception:
-            pass

@@ -1,3 +1,4 @@
+# token_tasks/telegram_token_bot.py
 """Telegram long-polling bot for Upstox token management.
 
 Commands
@@ -18,6 +19,15 @@ The order toggle commands are handled by
 ``token_tasks.order_toggle_commands.handle_order_toggle_command`` so
 the actual state lives in ``services.order_runtime_service`` and is
 shared with the admin API.
+
+Runtime state flag
+------------------
+``self.is_running`` reflects **whether polling is actually active**
+(set to True only once ``run_loop()`` has begun, cleared in ``stop()``
+and when ``start()`` declines / is disabled). This is the source of
+truth read by ``routes/admin_routes.py`` — the older behaviour of
+treating "start() did not raise" as success produced a false
+``telegram_polling=True`` when the Windows prompt was declined.
 
 Windows start confirmation
 --------------------------
@@ -174,8 +184,35 @@ class TelegramTokenBot:
         self._lock = Lock()
         self._pending_save_token_chats = set()
 
+        # ---- Runtime state (single source of truth) ------------------ #
+        # True only while the polling loop is actually running. Read by
+        # routes/admin_routes.py to report the correct telegram state
+        # (previously the refresh reported True just because start()
+        # did not raise, even when the operator declined the Windows
+        # prompt).
+        self._running = False
+        self._state_lock = Lock()
+
     # ------------------------------------------------------------------ #
-    # Windows start confirmation (NEW)                                    #
+    # Runtime state accessors                                            #
+    # ------------------------------------------------------------------ #
+    @property
+    def is_running(self) -> bool:
+        """True while the polling loop is actually running."""
+        with self._state_lock:
+            return bool(self._running)
+
+    @property
+    def polling(self) -> bool:
+        """Alias for ``is_running`` (compat with admin_routes probe)."""
+        return self.is_running
+
+    def _set_running(self, value: bool) -> None:
+        with self._state_lock:
+            self._running = bool(value)
+
+    # ------------------------------------------------------------------ #
+    # Windows start confirmation                                          #
     # ------------------------------------------------------------------ #
     def _confirm_start_on_windows(self) -> bool:
         """Ask the operator to confirm bot start on Windows.
@@ -403,20 +440,27 @@ class TelegramTokenBot:
             )
 
     def run_loop(self):
+        # Mark running only once the polling loop has truly begun, so
+        # that "start() returned True but the thread has not entered
+        # run_loop yet" is not reported as running by admin_routes.
+        self._set_running(True)
         logger.info("Telegram token management polling started.")
-        self.set_commands()
-        self._send("Token management bot started. Use /help to see commands.")
-        while not self._stop_event.is_set():
-            try:
-                for update in self.get_updates():
-                    self._offset = int(update.get("update_id", 0)) + 1
-                    message = update.get("message")
-                    if message:
-                        self.handle_message(message)
-            except Exception as exc:
-                logger.warning("Telegram polling failed (%s); retrying.", type(exc).__name__)
-                self._stop_event.wait(self.poll_seconds)
-        logger.info("Telegram token management polling stopped.")
+        try:
+            self.set_commands()
+            self._send("Token management bot started. Use /help to see commands.")
+            while not self._stop_event.is_set():
+                try:
+                    for update in self.get_updates():
+                        self._offset = int(update.get("update_id", 0)) + 1
+                        message = update.get("message")
+                        if message:
+                            self.handle_message(message)
+                except Exception as exc:
+                    logger.warning("Telegram polling failed (%s); retrying.", type(exc).__name__)
+                    self._stop_event.wait(self.poll_seconds)
+        finally:
+            self._set_running(False)
+            logger.info("Telegram token management polling stopped.")
 
     def start(self) -> bool:
         """Start polling, subject to the Windows confirmation gate.
@@ -432,13 +476,21 @@ class TelegramTokenBot:
         The Windows confirmation step is deliberately AFTER the
         "already running" check, so a re-entrant ``start()`` call
         (from the admin refresh or a hot reload) never re-prompts.
+
+        Returns True when polling was started (or was already running),
+        False otherwise. ``self.is_running`` is the authoritative
+        runtime state and may lag by a few milliseconds while the
+        spawned thread enters ``run_loop()``.
         """
         if not self.enabled:
             logger.info("Telegram token bot is disabled or not configured.")
+            self._set_running(False)
             return False
         if self._thread and self._thread.is_alive():
+            # Already running — refresh the state flag defensively.
             return True
         if not self._confirm_start_on_windows():
+            self._set_running(False)
             return False
         self._stop_event.clear()
         self._thread = Thread(target=self.run_loop, name="telegram-token-bot", daemon=True)
@@ -449,6 +501,7 @@ class TelegramTokenBot:
         self._stop_event.set()
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=self.long_poll_timeout + 5)
+        self._set_running(False)
 
 
 telegram_token_bot = TelegramTokenBot()

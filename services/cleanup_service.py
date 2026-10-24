@@ -1,3 +1,4 @@
+# File: services/cleanup_service.py
 """Project transient folder cleanup for startup, daily refresh, and hard refresh.
 
 Removes a configurable list of transient folders (``data``, ``temp``,

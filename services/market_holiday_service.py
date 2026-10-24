@@ -1,3 +1,4 @@
+# services/market_holiday_service.py
 """Market holiday service — Upstox Market Holidays & Timings API wrapper.
 
 Responsibilities
@@ -12,8 +13,12 @@ Design notes
 ------------
 * No DB writes, no strategy side effects — this service only reports.
 * Never raises for expected failure modes; the caller always receives
-  a summary dict with ``status`` in ``{"ok", "holiday", "not_holiday",
-  "error"}`` and a normalised ``holidays`` list.
+  a summary dict with ``status`` in ``{"holiday", "not_holiday", "error"}``
+  and a normalised ``holidays`` list.
+* The Upstox SDK does **not** reliably return a plain ``dict`` — it may
+  return an ``ApiResponse`` / model object, a JSON string, or a dict
+  depending on SDK version and endpoint. All of these are coerced to a
+  plain dict before normalisation (see ``_coerce_to_dict``).
 * The Upstox SDK response contains ``datetime`` objects (``_date``) and
   millisecond epoch timestamps (``start_time`` / ``end_time``). These
   are converted to plain ISO strings before leaving the service so the
@@ -23,7 +28,7 @@ Upstox API reference
 --------------------
     MarketHolidaysAndTimingsApi.get_holiday(date_str)
 
-    Returns (on success):
+    Returns (on success, after coercion):
         {
           "status": "success",
           "data": [
@@ -37,7 +42,7 @@ Upstox API reference
                 ...
               ],
             },
-            ...
+            ...,
           ],
         }
 
@@ -53,6 +58,7 @@ Public API
 
 from __future__ import annotations
 
+import json
 import threading
 from datetime import date, datetime, timezone
 from typing import Any
@@ -73,6 +79,7 @@ logger = get_logger(__file__)
 # holidays for the current/future date, so a short TTL is used.
 _CACHE_TTL_SECONDS = 3600  # 1 hour
 
+
 # --------------------------------------------------------------------------- #
 # Helpers                                                                     #
 # --------------------------------------------------------------------------- #
@@ -81,6 +88,7 @@ def _today_iso() -> str:
         return datetime.now().astimezone().date().isoformat()
     except Exception:
         return date.today().isoformat()
+
 
 def _normalise_date_str(value: Any) -> str:
     """Return a ``YYYY-MM-DD`` string or raise ValueError.
@@ -118,6 +126,7 @@ def _normalise_date_str(value: Any) -> str:
     except ValueError as exc:
         raise ValueError(f"invalid date: {value!r}") from exc
 
+
 def _ms_to_iso(value: Any) -> str | None:
     """Convert an epoch-millis or epoch-seconds value to an ISO string."""
     if value is None:
@@ -132,6 +141,67 @@ def _ms_to_iso(value: Any) -> str | None:
         return datetime.fromtimestamp(n, tz=timezone.utc).isoformat()
     except (OSError, OverflowError, ValueError):
         return str(value)
+
+
+def _coerce_to_dict(raw: Any) -> dict[str, Any] | None:
+    """Best-effort conversion of an Upstox SDK response to a plain dict.
+
+    The SDK has returned, across versions / endpoints:
+        * a plain ``dict``,
+        * an ``ApiResponse`` wrapper whose ``.data`` holds the dict,
+        * a model object exposing ``.to_dict()``,
+        * a model object whose ``__dict__`` holds the fields,
+        * a JSON string.
+
+    Returns ``None`` when none of these strategies yield a dict.
+    """
+    if raw is None:
+        return None
+
+    # 1. Already a dict.
+    if isinstance(raw, dict):
+        return raw
+
+    # 2. JSON string.
+    if isinstance(raw, (str, bytes, bytearray)):
+        try:
+            parsed = json.loads(raw)
+        except (TypeError, ValueError):
+            return None
+        return parsed if isinstance(parsed, dict) else None
+
+    # 3. SDK model object with .to_dict().
+    to_dict = getattr(raw, "to_dict", None)
+    if callable(to_dict):
+        try:
+            coerced = to_dict()
+        except Exception:
+            coerced = None
+        if isinstance(coerced, dict):
+            return coerced
+
+    # 4. ApiResponse-style wrapper exposing ``.data`` as a dict.
+    data_attr = getattr(raw, "data", None)
+    if isinstance(data_attr, dict):
+        return data_attr
+
+    # 5. Plain object — pull public fields from __dict__.
+    raw_dict = getattr(raw, "__dict__", None)
+    if isinstance(raw_dict, dict):
+        # Drop private/dunder noise the SDK model may include.
+        cleaned = {
+            k: v
+            for k, v in raw_dict.items()
+            if not str(k).startswith("_") or k == "_date"
+        }
+        # Only accept it if it looks like a holiday payload.
+        if cleaned and (
+            "data" in cleaned or "status" in cleaned
+        ):
+            return cleaned
+
+    return None
+
 
 def _normalise_holiday(raw: dict[str, Any]) -> dict[str, Any]:
     """Return a JSON-safe holiday record."""
@@ -168,6 +238,7 @@ def _normalise_holiday(raw: dict[str, Any]) -> dict[str, Any]:
         "open_exchanges": open_exchanges,
     }
 
+
 # --------------------------------------------------------------------------- #
 # Service                                                                     #
 # --------------------------------------------------------------------------- #
@@ -188,7 +259,7 @@ class MarketHolidayService:
         Never raises. The returned dict always has:
 
             {
-              "status":        "ok" | "holiday" | "not_holiday" | "error",
+              "status":        "holiday" | "not_holiday" | "error",
               "date":          "YYYY-MM-DD",
               "is_holiday":    bool,
               "holiday_count": int,
@@ -246,14 +317,25 @@ class MarketHolidayService:
                 error=f"{type(exc).__name__}: {exc}",
             )
 
-        # ---- normalise ---------------------------------------------- #
-        if not isinstance(raw, dict):
+        # ---- coerce SDK response to a plain dict -------------------- #
+        raw_dict = _coerce_to_dict(raw)
+        if raw_dict is None:
+            logger.warning(
+                "[market-holiday] uncoercible Upstox payload for %s "
+                "(type=%s)",
+                iso_date,
+                type(raw).__name__,
+            )
             return self._error_payload(
                 query_date=iso_date,
-                error="Upstox returned non-dict payload",
+                error=(
+                    "Upstox returned uncoercible payload "
+                    f"(type={type(raw).__name__})"
+                ),
             )
 
-        items = raw.get("data") or []
+        # ---- normalise ---------------------------------------------- #
+        items = raw_dict.get("data") or []
         if not isinstance(items, list):
             items = []
 

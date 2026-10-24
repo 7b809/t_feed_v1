@@ -1,3 +1,4 @@
+# File: routes/page_routes.py
 """HTML page routes.
 
 Serves the Jinja2-rendered pages that make up the UI:
@@ -6,7 +7,6 @@ Serves the Jinja2-rendered pages that make up the UI:
     GET /charts               -> instrument_list.html (Upstox search)
     GET /chart/{instrument_key}
                               -> chart.html (candles + EMA + OR levels)
-    GET /isolated-dashboard   -> redirects to / (kept for backward compat)
     GET /favicon.ico          -> 204 No Content
 
 The templates live at <project_root>/templates/. If your project uses a
@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, Response
 from fastapi.templating import Jinja2Templates
 
 from services.instrument_registry import instrument_registry
@@ -174,9 +174,3 @@ def chart_page(request: Request, instrument_key: str) -> HTMLResponse:
             "total_candles": 0,
         },
     )
-
-
-@router.get("/isolated-dashboard")
-def isolated_dashboard() -> RedirectResponse:
-    """Backwards-compatible redirect — the dashboard is now the home page."""
-    return RedirectResponse(url="/", status_code=307)

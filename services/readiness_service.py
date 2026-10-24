@@ -1,3 +1,4 @@
+# File: services/readiness_service.py
 """Aggregate readiness engine for the pre-open window.
 
 Produces ONE aggregate GREEN / YELLOW / RED status from ~10
@@ -26,6 +27,14 @@ Design notes
   without triggering the full readiness pass.
 * No credentials, tokens, or account identifiers are ever read or
   emitted by this module.
+
+Strategy-layer removal note
+---------------------------
+The EMA cross engine (``services/live_ema_engine.py``) has been removed
+from the codebase. The ``nifty_snapshot`` smoke-test probe therefore
+checks ``ltp > 0`` on the returned snapshot payload — the ``ema`` block
+that used to carry ``candle_count`` is no longer populated by any live
+producer.
 
 Status aggregation
 ------------------
@@ -59,9 +68,8 @@ _NTP_CACHE_SECONDS = 60.0
 _SMOKE_HTTP_TIMEOUT = 5.0
 
 # --------------------------------------------------------------------------- #
-# Optional health-log directory (7-day rolling JSON)                          #
+# Rolling 7-day health-log directory (JSON per day)                           #
 # --------------------------------------------------------------------------- #
-# services/readiness_service.py — the only line that changes
 _HEALTH_DIR = config.PROJECT_ROOT / "meta_data" / "health"
 
 
@@ -144,21 +152,28 @@ class ReadinessService:
 
         Runs in ~2 s when everything is healthy. Reused by the 08:45
         digest and by ``POST /admin/ops/smoke-test`` (no side effects).
+
+        Probe 1 (Nifty snapshot) checks ``ltp > 0`` — the ``ema`` block
+        is no longer populated after the strategy layer was removed.
         """
         base = f"http://127.0.0.1:{config.PORT}"
         probes: dict[str, Any] = {}
 
-        # 1) Nifty snapshot — assert ema.candle_count > 0
+        # 1) Nifty snapshot — assert ltp > 0
         try:
             r = requests.get(
                 f"{base}/live/snapshot/{quote('NSE_INDEX|Nifty 50')}",
                 timeout=_SMOKE_HTTP_TIMEOUT,
             )
             d = r.json()
-            count = int((d.get("ema") or {}).get("candle_count", 0))
+            ltp = d.get("ltp")
+            try:
+                ltp_ok = float(ltp) > 0
+            except (TypeError, ValueError):
+                ltp_ok = False
             probes["nifty_snapshot"] = (
-                "ok" if r.status_code == 200 and count > 0
-                else f"empty (status={r.status_code}, candles={count})"
+                "ok" if r.status_code == 200 and ltp_ok
+                else f"empty (status={r.status_code}, ltp={ltp})"
             )
         except Exception as exc:
             probes["nifty_snapshot"] = f"fail: {type(exc).__name__}"
@@ -406,7 +421,7 @@ class ReadinessService:
     # 7-day health log                                                   #
     # ------------------------------------------------------------------ #
     def _append_health_log(self, snapshot: dict[str, Any]) -> None:
-        """Append a compact record to ``data/health/readiness_<day>.json``.
+        """Append a compact record to ``meta_data/health/readiness_<day>.json``.
 
         Best-effort — any failure here must not affect the caller.
         """

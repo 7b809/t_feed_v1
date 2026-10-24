@@ -3,22 +3,28 @@
 
 Subscribes to every instrument in the registry and, for each incoming
 feed, extracts the best available 1-min candle and tick snapshot, then
-hands it to the EMA engine and broadcasts to connected UI clients.
+broadcasts to connected UI clients.
+
+Strategy coupling removed
+-------------------------
+The EMA-cross engine is no longer invoked from the live feed. The
+former ``live_ema_engine.on_tick(...)`` call fed the strategy layer
+(cross detection / Opening Range strike activation), which has been
+removed from this codebase. The feed now handles **transport only**:
+parse → publish → done.
 
 LTP cache
 ---------
-``_latest_ltp`` keeps the most recently seen LTP per instrument key.
-This is what the stage-3 R2 tracker polls via ``get_latest_ltp()`` to
-decide when to activate a stage-2 strike. The cache is updated on
-every accepted tick, so the tracker sees fresh prices within one
-WebSocket frame.
+``_latest_ltp`` keeps the most recently seen LTP per instrument key
+for cheap read access via ``get_latest_ltp()``. This is a lightweight
+diagnostic and remains available; it does not touch strategy code.
 
-The cache lives in the feed worker thread and is read by the tracker
-thread. Python dict assignment for a single string key is atomic under
-the GIL, and both writers and readers operate on the same singleton
-instance, so no lock is needed. The cache grows with the number of
-distinct subscribed keys (a few hundred at most) — it is never purged
-during a session.
+The cache lives in the feed worker thread and is read from other
+threads. Python dict assignment for a single string key is atomic
+under the GIL, and both writers and readers operate on the same
+singleton instance, so no lock is needed. The cache grows with the
+number of distinct subscribed keys (a few hundred at most) — it is
+never purged during a session.
 
 Reconnect-loop hardening (2026-10-22 fix)
 -----------------------------------------
@@ -63,7 +69,6 @@ the caller's perspective.
 
 from __future__ import annotations
 
-import logging
 import threading
 import time
 from datetime import datetime, timezone
@@ -73,7 +78,6 @@ from core import config
 from core.logger import get_logger
 from services.instrument_registry import instrument_registry
 from services.live_broadcast import live_broadcast
-from services.live_ema_engine import live_ema_engine
 from services.token_service import token_service
 
 logger = get_logger(__file__)
@@ -235,14 +239,13 @@ class LiveFeedService:
         return key in self._subscribed
 
     # ------------------------------------------------------------------ #
-    # LTP cache accessor (used by the stage-3 R2 tracker)                #
+    # LTP cache accessors (diagnostic only — no strategy coupling)       #
     # ------------------------------------------------------------------ #
     def get_latest_ltp(self, instrument_key: str) -> float | None:
         """Return the most recently seen LTP for a key, or None.
 
-        Called from the tracker thread once per poll tick. Safe to call
-        before the feed has produced its first tick — the cache simply
-        returns None until then.
+        Safe to call before the feed has produced its first tick — the
+        cache simply returns None until then.
         """
         return self._latest_ltp.get(str(instrument_key or "").strip())
 
@@ -264,7 +267,7 @@ class LiveFeedService:
 
         Serialised through ``_lifecycle_lock`` so a subscribe call
         cannot race the start/stop sequence. If the worker is not
-        running, ``start()`` is called to bring it up.
+        running, a new worker is spawned inline.
         """
         key = str(instrument_key or "").strip()
         if not key:
@@ -430,10 +433,8 @@ class LiveFeedService:
             self._last_tick_at[instrument_key] = datetime.now(timezone.utc)
 
             # ---- Cache the latest LTP -------------------------------
-            # The stage-3 tracker polls this cache each second to
-            # decide when an index's LTP reaches its R2 level. Cache
-            # update happens before the rest of the per-tick work so
-            # the tracker sees the freshest value as early as possible.
+            # Kept as a cheap diagnostic read-accessor for tooling /
+            # monitoring. Nothing strategy-related consumes it anymore.
             ltp = tick.get("ltp")
             if ltp is not None:
                 try:
@@ -466,13 +467,11 @@ class LiveFeedService:
                         config.HEALTH_FEED_INSTRUMENT_INTERVAL,
                     )
 
-            live_ema_engine.on_tick(
-                instrument_key,
-                candle_1m=tick.get("candle_1m"),
-                ltp=tick.get("ltp"),
-                volume=tick.get("volume"),
-            )
-
+            # ---- Broadcast to UI clients ----------------------------
+            # NOTE: live_ema_engine.on_tick(...) was removed here. The
+            # strategy layer (EMA crosses, Opening Range) has been
+            # stripped from this codebase; the feed is now transport
+            # only.
             self._publish_feed_snapshot(entry, tick)
 
     def _extract_tick(self, feed: dict[str, Any]) -> dict[str, Any] | None:

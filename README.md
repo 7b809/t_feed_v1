@@ -1,7 +1,7 @@
 # Market Data Foundation (`market-engine-v1`)
 
-A single-process FastAPI engine that runs the **complete market-data +
-trading pipeline** for Upstox:
+A single-process FastAPI engine that runs the **complete market-data pipeline**
+for Upstox:
 
 - **Token lifecycle** — MongoDB token store, Telegram token bot, scheduled validation
 - **Backup extraction** — pull the candle-backup archive from MongoDB → `data/`
@@ -9,9 +9,9 @@ trading pipeline** for Upstox:
 - **Live WebSocket feed** — Upstox `MarketDataStreamerV3` with 1-minute candle aggregation
 - **EMA cross engine** — 9/21 EMA + ATR + 6 filters, per-instrument cross detection + broadcast
 - **Opening Range (OR)** — R1/S1/R2/S2/R3/S3 + thresholds from the 09:15 candle
-- **Two trading strategies** — Strategy 1 (highly-active days) + Strategy 2 (fallback)
-- **Daily MongoDB backup** — zip `data/` (configurable folder list) at 16:00 IST and store it inline
-- **Live UI** — Index/option-chain dashboard, chart pages, strategy dashboard, log viewer
+- **Daily MEGA backup** — zip `data/` at 16:00 IST, upload to MEGA, track state in MongoDB
+- **Runtime order toggle** — process-local enable/disable, shared with Telegram bot
+- **Live UI** — Index/option-chain dashboard, chart pages, ProChart, multi-chart layout, log viewer
 
 All three refresh triggers — **project startup**, **scheduled daily refresh**,
 **manual hard-refresh** — run the exact same task list through the single
@@ -23,70 +23,56 @@ entry point `routes.admin_routes._run_full_refresh_sync`.
 
 1. [What's new since the last release](#1-whats-new-since-the-last-release)
 2. [Architecture overview](#2-architecture-overview)
-3. [Strategy 1 — Highly active day strategy](#3-strategy-1--highly-active-day-strategy)
-4. [Strategy 2 — Normal day fallback strategy](#4-strategy-2--normal-day-fallback-strategy)
-5. [Live data pipeline](#5-live-data-pipeline)
-6. [Daily MongoDB backup](#6-daily-mongodb-backup)
-7. [Scheduler jobs](#7-scheduler-jobs)
-8. [Configuration reference](#8-configuration-reference)
-9. [Routes & API reference](#9-routes--api-reference)
-10. [WebSocket reference](#10-websocket-reference)
-11. [Telegram commands & notifications](#11-telegram-commands--notifications)
-12. [Data layout](#12-data-layout)
-13. [Logging](#13-logging)
-14. [Install, run, verify](#14-install-run-verify)
-15. [Known limitations & gotchas](#15-known-limitations--gotchas)
-16. [File inventory](#16-file-inventory)
+3. [Live data pipeline](#3-live-data-pipeline)
+4. [Daily MEGA backup](#4-daily-mega-backup)
+5. [Scheduler jobs](#5-scheduler-jobs)
+6. [Configuration reference](#6-configuration-reference)
+7. [Routes & API reference](#7-routes--api-reference)
+8. [WebSocket reference](#8-websocket-reference)
+9. [Telegram commands & notifications](#9-telegram-commands--notifications)
+10. [Data layout](#10-data-layout)
+11. [Logging](#11-logging)
+12. [Install, run, verify](#12-install-run-verify)
+13. [Known limitations & gotchas](#13-known-limitations--gotchas)
+14. [File inventory](#14-file-inventory)
 
 ---
 
 ## 1. What's new since the last release
 
-The engine was initially a **Strategy-1-only** pipeline. It has since grown
-into a **dual-strategy** engine and gained a **daily backup** feature.
+The engine has been trimmed to the market-data foundation: token lifecycle,
+backup extraction, instrument registry, live WebSocket feed, EMA cross
+engine, Opening Range levels, order surface, and MEGA-based daily backup.
+All strategy pipelines have been removed.
 
-### 1.1 Strategy 2 — fallback pipeline (new)
+### 1.1 Strategy pipelines — removed
 
-A second strategy that runs on **normal / range-bound days**, i.e. when
-Strategy 1's R2 breakout does not happen. Strategy 2 **reuses Stage 1
-and Stage 2 of Strategy 1 unchanged** and only replaces Stage 3 + Stage 4:
+Strategy 1 (buffer filter → isolation → R2 activation → order) and Strategy 2
+(S3-touch watcher → next-cross order) have been removed from the codebase.
+This includes:
 
-| Stage 3 (S2) | Watch each Stage-2 isolated contract's **own** isolation level (**S3** by default), record the first touch, then filter to one contract by ticker priority + nearest ATM |
-| Stage 4 (S2) | On the **next EMA cross after the S3 touch**, place a paper order — bullish → same type; bearish → **opposite** type at the same strike |
+- All `services/strategy_*.py` and `services/strategy_2_*.py` modules
+- All `token_tasks/strategy_*.py` and `token_tasks/strategy_2_*.py` wrappers
+- All `routes/strategy_routes.py`, `routes/strategy_2_routes.py`,
+  `routes/dashboard_routes.py`
+- `templates/strategy_dashboard.html`
+- Every strategy-related job in `services/scheduler_service.py`
+- Strategy stages inside `routes/admin_routes._run_full_refresh_sync`
+- Every `STRATEGY_*` and `STRATEGY_2_*` constant in `core/config.py`
 
-Full details in [§4](#4-strategy-2--normal-day-fallback-strategy).
+The Opening Range service and `/admin/opening-range/*` API are still live —
+they are part of the market-data foundation and feed the chart UI.
 
-Files added for Strategy 2:
-services/strategy_2_isolation_service.py
-services/strategy_2_live_tracker_service.py
-services/strategy_2_order_service.py
-routes/strategy_2_routes.py
-token_tasks/strategy_2_isolation_task.py
-token_tasks/strategy_2_order_task.py
-services/telegram_format.py
-
-text
-
-### 1.2 Nicer Telegram messages (new)
-
-Every strategy stage and the startup/shutdown lifecycle now send **emoji-rich,
-divider-lined** Telegram messages (pure Unicode, no markdown). The shared
-helper lives in `services/telegram_format.py::build(...)`. Existing S1
-messages were rewritten to the same visual language.
-
-### 1.3 `TelegramService.send_message()` — signature fix (bug)
+### 1.2 `TelegramService.send_message()` — signature fix (bug)
 
 `services/telegram_service.py` originally required both `title` **and**
-`message`. That crashed every Strategy-2 call site (which pass a single
-pre-formatted `build(...)` string as the title). Fixed by making
-`message` optional with default `""`.
+`message`. That crashed every caller that passed a single pre-formatted
+`build(...)` string as the title. Fixed by making `message` optional with
+default `""`.
 
 ```python
 def send_message(self, title: str, message: str = "", level: str = "INFO") -> bool:
-Without this fix, the Strategy-2 tracker crashes on every refresh
-and S2 never records a touch.
-
-1.4 Simulation replay — attempted and removed
+1.3 Simulation replay — attempted and removed
 A "historical replay" feature was built and then removed on request.
 Any leftover files from that batch should be deleted:
 
@@ -99,23 +85,16 @@ token_tasks/simulation_task.py            (unused — delete)
 And remove the SIMULATION_* block from core/config.py and .env.example
 if it's still present.
 
-1.5 Daily MongoDB backup (new)
-Every day at 16:00 IST (configurable) the pipeline zips data/
-(configurable folder list) and stores the archive inline in MongoDB
-under UPSTOX_APP_V2.backup_collection:
+1.4 Daily MEGA backup (new)
+Every day at 16:00 IST (configurable) the pipeline zips each configured
+folder (default ["data"]) and uploads the resulting archive to MEGA.
+Progress-state documents are tracked in MongoDB — one per date, keyed by
+_id = "YYYY-MM-DD":
 
-Doc _id: market_engine_v1_daily_data_backup
-
-If zip ≤ 15 MB → status = "saved", data = BinData(...)
-
-If zip > 15 MB → status = "skipped_size_limit", data = null,
-reason = "Unable to save ... exceeds ... limit", note = "Backup archive NOT stored inline..."
-
-Full metadata: archive_name, archive_size_bytes, archive_size_human,
-file_count, updated_at, updated_at_utc, limit_bytes, limit_human,
-max_blob_mb, run_reason
-
-Full details in §6.
+text
+<MEGA_BACKUP_ROOT>/<folder>/<folder>_<YYYY-MM-DD>.zip
+e.g. market_engine_backup/data/data_2026-10-20.zip
+Full details in §4.
 
 Files added for the daily backup:
 
@@ -126,19 +105,19 @@ Endpoints added:
 
 text
 GET  /admin/daily-backup-status
+GET  /admin/daily-backup-history
 POST /admin/daily-backup-run
-1.6 Change summary table
+1.5 Change summary table
 Change	Type	Files touched
-Strategy 2 pipeline	New feature	7 files (services + routes + tasks)
-Telegram message re-design + format helper	New helper	services/telegram_format.py + all S1/S2 task files + admin_routes.py + main.py
-TelegramService.send_message() fix	Bug fix	services/telegram_service.py
+Strategy 1 and Strategy 2 removed	Removed	~25 files deleted, references stripped from main.py, admin_routes.py, scheduler_service.py, config.py, config_validation.py, watchdog_task.py, base.html, live_routes.py, page_routes.py, .env.example, docs
+Telegram send_message() fix	Bug fix	services/telegram_service.py
 Simulation replay (attempted, then removed)	Removed	5 files deleted, references reverted
-Daily MongoDB backup	New feature	services/daily_backup_service.py, token_tasks/daily_backup_task.py, services/scheduler_service.py, routes/admin_routes.py, core/config.py, .env.example
+Daily MEGA backup	New feature	services/daily_backup_service.py, token_tasks/daily_backup_task.py, services/scheduler_service.py, core/config.py, .env.example, routes/admin_routes.py
 2. Architecture overview
 text
 ┌───────────────────────────────────────────────────────────────────────────┐
 │                            Browser / UI                                   │
-│  index.html (option chains) · chart.html · strategy_dashboard.html       │
+│  index.html (option chains) · chart.html · prochart.html · layout.html    │
 │  show_logs.html (log viewer)                                             │
 └─────────────────────────────────────┬─────────────────────────────────────┘
                                       │ HTTP / WebSocket
@@ -153,11 +132,15 @@ text
 │                           /admin/backup-status, /admin/daily-backup-*     │
 │    folder_routes          /admin/folders, /admin/folders/{name}/download  │
 │    opening_range_routes   /admin/opening-range/*                          │
-│    strategy_routes        /admin/strategy/*   (Strategy 1)                │
-│    strategy_2_routes      /admin/strategy2/*  (Strategy 2)                │
-│    dashboard_routes       /dashboard, /ui/dashboard/strategy              │
 │    upstox_routes          /api/upstox/*                                   │
 │    log_routes             /logs, /ui/logs, /ui/logs/{filename}            │
+│    prochart_routes        /prochart, /api/prochart/*                      │
+│    layout_routes          /layout_1, /admin/layouts/*                     │
+│    daily_backup_routes    /admin/daily-backup-*                           │
+│    market_holiday_routes  /admin/market-holiday*                          │
+│    order_routes           /admin/orders/*   (buy/sell/exit)               │
+│    margin_routes          /admin/orders/margin*                           │
+│    readiness_routes       /admin/readiness, /admin/ops/*                  │
 └─────────────────────────────────────┬─────────────────────────────────────┘
                                       │
                                       ▼
@@ -172,11 +155,14 @@ text
 │    services/telegram_service.py        notifications                      │
 │    services/telegram_format.py         message formatter                  │
 │    token_tasks/telegram_token_bot.py   /save_token, /token_status, etc.   │
+│    token_tasks/order_toggle_commands.py /orders_enable/disable/status     │
 │                                                                           │
 │  Data / Registry                                                          │
 │    services/backup_data_service.py     Mongo blob → data/ extraction      │
 │    services/instrument_registry.py     scan data/ for ema_crosses.json    │
 │    services/cleanup_service.py         delete transient folders           │
+│    services/market_holiday_service.py  Upstox holiday check + cache       │
+│    services/order_runtime_service.py   runtime order toggle               │
 │                                                                           │
 │  Live pipeline                                                            │
 │    services/live_feed_service.py       Upstox WebSocket                   │
@@ -188,41 +174,43 @@ text
 │  Opening Range                                                            │
 │    services/opening_range_service.py   OR levels + opening_range.json     │
 │                                                                           │
-│  Strategy 1                                                               │
-│    services/strategy_selection_service.py   Stage 1                       │
-│    services/strategy_isolation_service.py   Stage 2                       │
-│    services/strategy_live_tracker_service.py Stage 3 (R2 watcher)         │
-│    services/strategy_order_service.py       Stage 4 (order)               │
-│    services/strategy_meta.py                meta-test file helper         │
-│                                                                           │
-│  Strategy 2                                                               │
-│    services/strategy_2_isolation_service.py    Stage 3 (S3 touch)         │
-│    services/strategy_2_live_tracker_service.py Stage 3 watcher thread     │
-│    services/strategy_2_order_service.py        Stage 4 (next-cross)       │
+│  Order surface (live Upstox orders)                                       │
+│    upstox_services/_sanitise.py        shared redaction                   │
+│    upstox_services/lot_sizes.py        NIFTY 65, SENSEX 20, …             │
+│    upstox_services/place_order.py      OrderApiV3 MARKET buy/sell         │
+│    upstox_services/exit_all_positions.py OrderApi.exit_positions()        │
+│    upstox_services/margin_check.py     ChargeApi.post_margin              │
 │                                                                           │
 │  Daily backup                                                             │
-│    services/daily_backup_service.py     zip folders → MongoDB             │
+│    services/daily_backup_service.py    zip folders → MEGA → track in Mongo│
 │                                                                           │
 │  Scheduling                                                               │
-│    services/scheduler_service.py        APScheduler singleton             │
+│    services/scheduler_service.py       APScheduler singleton              │
 └─────────────────────────────────────┬─────────────────────────────────────┘
                                       │
                                       ▼
 ┌───────────────────────────────────────────────────────────────────────────┐
 │                            External Systems                               │
 │                                                                           │
-│  MongoDB                                                                  │
-│    <MONGO_DB>.<TOKENS_COLLECTION>               Upstox token              │
-│    <MONGO_DB>.<BACKUP_METADATA_COLLECTION>      candle-backup metadata    │
-│    <MONGO_DB>.<BACKUP_BLOB_COLLECTION>          candle-backup archive     │
-│    UPSTOX_APP_V2.backup_collection              daily data backup         │
+│  MongoDB:                                                                 │
+│    MONGO_DB.TOKENS_COLLECTION          Upstox token document              │
+│    MONGO_DB.BACKUP_METADATA_COLLECTION candle-backup metadata             │
+│    MONGO_DB.BACKUP_BLOB_COLLECTION     candle-backup archive blob         │
+│    DAILY_BACKUP_MONGO_DB.<coll>        daily data backup progress state   │
+│    PROCHART_MONGO_DB.<coll>            ProChart settings + alerts         │
 │                                                                           │
-│  Upstox                                                                   │
+│  Upstox:                                                                  │
 │    REST: profile, search, historical, intraday                            │
+│    REST: MarketHolidaysAndTimingsApi.get_holiday                          │
+│    REST: OrderApiV3.place_order, OrderApi.exit_positions                  │
+│    REST: ChargeApi.post_margin                                            │
 │    WebSocket: MarketDataStreamerV3                                        │
 │                                                                           │
-│  Telegram                                                                 │
-│    notifications + token management bot                                   │
+│  Telegram:                                                                │
+│    notifications + token management bot + order toggle commands           │
+│                                                                           │
+│  MEGA:                                                                    │
+│    Daily data archive destination                                         │
 └───────────────────────────────────────────────────────────────────────────┘
 The single source of truth: _run_full_refresh_sync
 text
@@ -245,14 +233,6 @@ asyncio.to_thread(_run_full_refresh_sync, "startup", loop)
   ├─  8.  live_cross_store.reset_all()      → in-memory only
   ├─  9.  live_backfill_service.seed_all()  → backup + intraday → EMA engine
   ├─ 10.  opening_range_service.calculate_all()
-  ├─ 10b. S1 Stage 1                        → data/strategy/stage_1_initial/
-  ├─ 10c. S1 Stage 2                        → data/strategy/stage_2_isolation/
-  ├─ 10d. S1 Stage 3 tracker.start()        → background thread
-  ├─ 10e. S1 Stage 3 catch-up               → if past window
-  ├─ 10f. S1 Stage 4 catch-up               → if past 09:18
-  ├─ 10g. S2 Stage 3 tracker.start()        → background thread
-  ├─ 10h. S2 Stage 3 snapshot               → reads stage_2/, filters to one contract
-  ├─ 10i. S2 Stage 4                        → only if isolated exists
   ├─ 11.  live_feed_service.start/restart()
   ├─ 12.  scheduler_service.start()
   ├─ 13.  telegram_token_bot.start()
@@ -261,115 +241,7 @@ asyncio.to_thread(_run_full_refresh_sync, "startup", loop)
 main.py mounts every router and shuts down every background component
 in the lifespan finally block.
 
-3. Strategy 1 — Highly active day strategy
-Best on days that move fast: news, gap opens, wide opening range,
-sustained momentum. Four stages, all driven by the Opening Range and
-a 9/21 EMA cross on each candidate option contract.
-
-Stage	Trigger (IST)	Purpose	Output
-Stage 1	09:16:30	Buffer filter around OR midpoint + Upstox history (30 days) + last-day-last-cross tail analysis	data/strategy/stage_1_initial/<TICKER>/<INDEX>/<strike>_<TYPE>/
-Stage 2	09:17:00	Bullish-priority EMA-cross isolation, with CE/PE strike-level pairing	data/strategy/stage_2_isolation/<TICKER>/<INDEX>/<strike>_<TYPE>/
-Stage 3	09:15 – 09:20 (continuous)	Per-contract R2 activation watcher	stage_3_summary.json, stage_3_decisions.json
-Stage 4	09:18:00	Nearest-to-ATM per index → FIFO by R2 touch → paper order	stage_4_order/<TICKER>/<INDEX>/orders.json
-Key rules:
-
-Buffer — ATM ± typical_buffer_points (default NIFTY ±300, SENSEX ±900; configurable via STRATEGY_INDEXES_JSON).
-
-Isolation — bullish priority rules: last-day bearish + today bullish → isolate; last-day bullish + today none → isolate; last-day none + today any → isolate; both bullish → isolate; bullish + today bearish → isolate; bearish-alone / bearish-both / both-none → NOT isolated.
-
-Pairing — if either CE or PE isolates for a strike, both sides are copied to stage_2_isolation/. Trigger side gets decision="isolate", sibling gets decision="isolate_paired".
-
-Stage 3 basis — per contract. Each contract is judged against its own 09:15–09:20 window high vs its own R2. The index R2 is informational context only.
-
-Stage 4 entry LTP
-
-Live run: freshest live-feed LTP.
-
-Catch-up run: close of the option's own 1-min candle at or before 09:18, drawn from a tape sliced at the source to [09:15, 09:20]. No fallback to live LTP in catch-up.
-
-Paper only — real Upstox order API not wired.
-
-Endpoints — GET /admin/strategy, /admin/strategy/isolation, /admin/strategy/tracker/status, /admin/strategy/stage3, /admin/strategy/stage4 and per-ticker variants. POST /admin/strategy/recalculate, /admin/strategy/isolation/recalculate, /admin/strategy/order/run.
-
-4. Strategy 2 — Normal day fallback strategy
-Best on days when Strategy 1's conditions are not met: no clean R2
-breakout, range-bound behaviour, low opening momentum. Rather than
-forcing a trade off an R2 break that never happens, Strategy 2 looks
-for a deeper pullback on the option premium (isolation level touch)
-and waits for a fresh EMA cross on that same contract to confirm
-direction before placing the order.
-
-Strategy 2 reuses Stage 1 and Stage 2 of Strategy 1 unchanged.
-Only Stage 3 and Stage 4 are replaced.
-
-Stage	When	Purpose	Output
-Stage 3 (S2)	09:15 – 15:30 (continuous background watcher)	Watch all Stage-2 isolated contracts, record the first touch of each contract's own isolation level (S3 default), filter to one winning contract	data/strategy2/stage_3_isolation_level/stage_3_summary.json + per-contract s3_touch.json
-Stage 4 (S2)	On the next cross after the S3 touch	First EMA cross strictly after the S3 touch. Bullish → BUY same type. Bearish → BUY opposite type at the same timestamp. Paper order.	data/strategy2/stage_4_order/<TICKER>/<INDEX>/orders.json + order_meta_test.json
-Isolation-level touch (Stage 3)
-Isolation level is configurable — S1, S2, S3, R1, R2, R3 (default S3).
-
-Each contract's own level is read from its own opening_range.json.
-
-"Touch" = the contract's LTP reaches or crosses its own isolation level. Only the first touch per contract is kept.
-
-Filter to one winner
-
-If only one touched → that's the pick.
-Otherwise, filter by ticker priority (default NIFTY before SENSEX, configurable via STRATEGY_2_TICKER_PRIORITY).
-Within the winning ticker, pick the strike nearest to that index's ATM (|strike − index LTP| minimum).
-If a contract's isolation level cannot be determined → silently skipped.
-
-Next-cross order (Stage 4)
-Reads the isolated pick from stage_3_summary.json.
-
-Scans the contract's live 1-min EMA candles for the first cross whose minute is strictly greater than the S3-touch minute.
-
-Bullish cross on CE → BUY same CE.
-
-Bearish cross on CE → BUY opposite PE at the same strike.
-
-(Symmetric for PE.)
-
-Entry LTP — same-type order: cross candle close. Opposite-type order: sibling's own LTP at the same minute (best effort; falls back to cross close).
-
-Paper order only.
-
-Worked example (16 Oct 2026, NIFTY 22850 CE)
-text
-First 09:15 candle: H = 253.90   L = 205.05
-    A   = 229.475
-    D_H = D_L = 24.425
-    S3  = L − 2·D_L = 156.20
-
-Timeline:
-  09:15  first candle
-  09:27  low = 155.65 ≤ 156.20   → S3 TOUCHED
-  09:53  bullish cross (valid)   → NEXT cross after touch
-                                     → BUY 22850 CE at 09:53
-
-Alternate:
-  If 09:53 cross were BEARISH
-    → BUY 22850 PE at the 09:53 timestamp
-Known limitation
-The Stage 3 watcher only sees live LTPs from the moment it starts.
-If the process restarts mid-day after an S3 touch has already happened,
-that touch is not retroactively detected (the in-memory touches dict is
-cleared on restart). A historical back-scan is a future enhancement.
-
-Endpoints
-GET /admin/strategy2 — Stage 3 summary
-
-GET /admin/strategy2/tracker/status
-
-POST /admin/strategy2/tracker/start / stop
-
-POST /admin/strategy2/stage3/run
-
-GET /admin/strategy2/stage4
-
-POST /admin/strategy2/stage4/run
-
-5. Live data pipeline
+3. Live data pipeline
 text
 Upstox WebSocket (MarketDataStreamerV3)
   │
@@ -378,7 +250,7 @@ LiveFeedService._handle_feed(payload)
   │  for each instrument_key:
   ├─ _extract_tick(feed) → { ltp, prev_close, volume, candle_1m (interval "I1") }
   │
-  ├─► _latest_ltp[key] = ltp    ← S1 Stage 3 tracker + S2 Stage 3 tracker poll this
+  ├─► _latest_ltp[key] = ltp    ← tracker thread polls this
   │
   ├─► live_ema_engine.on_tick() ← candle aggregation + cross detect
   │       │
@@ -405,83 +277,69 @@ candles, merges by minute, seeds the EMA engine, and scans the seeded
 series for crosses that occurred after today 00:00 (so mid-day restarts
 do not lose earlier crosses and do not need 20+ minutes to warm up).
 
-6. Daily MongoDB backup
-A new service that runs every day at 16:00 IST (configurable) and
-zips a configurable list of folders (default ["data"]) into a single
-archive. The archive is stored inline in MongoDB if it fits under
-the configured limit, otherwise only metadata is saved.
+4. Daily MEGA backup
+A service that runs every day at 16:00 IST (configurable) and zips each
+configured folder (default ["data"]) into its own archive. The archive is
+uploaded to MEGA under:
 
+text
+<MEGA_BACKUP_ROOT>/<folder>/<folder>_<YYYY-MM-DD>.zip
+e.g. market_engine_backup/data/data_2026-10-20.zip
 Destination
 Database: UPSTOX_APP_V2 (via DAILY_BACKUP_MONGO_DB)
 
-Collection: backup_collection (via DAILY_BACKUP_COLLECTION)
+Collection: daily_backup_state (via DAILY_BACKUP_STATE_COLLECTION)
 
-Doc _id: market_engine_v1_daily_data_backup (via DAILY_BACKUP_DOC_ID)
-— deliberately different from backup_historical_candles so it does not
-collide with the candle-backup archive that is consumed on every refresh.
+Doc _id: "YYYY-MM-DD" — one document per date, upserted on every run
+
+NOT BACKUP_BLOB_COLLECTION — that collection remains reserved for the
+candle-backup extract that is re-consumed on every refresh
 
 Behaviour matrix
-Scenario	Archive size	DB doc status	DB doc contents
-Normal (data/ zips ≤15 MB)	e.g. 8.4 MB	saved	data = BinData, reason: null, note: "Backup archive stored inline..."
-Data grows large	e.g. 42 MB	skipped_size_limit	data: null, reason: "Unable to save the 'data.zip' archive to MongoDB inline because it exceeds the configured limit (42.0 MB > 15.0 MB)...", note: "Backup archive NOT stored inline..."
-Feature disabled	—	—	{"status":"disabled"} returned, no doc written
-Folders missing	0 B	—	{"status":"no_folders"} returned, no doc written
-Manual concurrent run	—	—	{"status":"already_running"} returned, no doc written
-MongoDB unreachable	—	—	{"status":"error", "error": "..."}, logged
-Document schema (saved case)
+Scenario	Outcome
+Normal — every folder zips and uploads	status = "uploaded"
+Some folders uploaded, others failed	status = "partial"
+All folders failed	status = "failed"
+No source folder produced a zip	status = "no_data"
+Feature disabled (DAILY_BACKUP_ENABLED=false)	{"status":"disabled"} returned, no doc written
+DAILY_BACKUP_FOLDERS empty	{"status":"no_folders"} returned, no doc written
+Manual run while scheduled run is active	{"status":"already_running"} returned, no doc written
+MEGA login fails	status = "failed", error captured
+MongoDB unreachable for state writes	run still completes; state write logged
+Document schema
 javascript
 {
-  _id: 'market_engine_v1_daily_data_backup',
-  archive_name: 'data.zip',
-  archive_size_bytes: 8806042,
-  archive_size_human: '8.4 MB',
-  data: BinData(0, '...'),                           // the zip bytes
-  folder: 'market-engine-v1',
-  folders: [ 'data' ],
-  skipped_folders: [],
-  file_count: 3412,
-  updated_at: '2026-10-18 16:00:14 IST',
-  updated_at_utc: ISODate('2026-10-18T10:30:14.933Z'),
-  limit_bytes: 15728640,
-  limit_human: '15.0 MB',
-  max_blob_mb: 15,
-  note: 'Backup archive stored inline (8.4 MB). Doc _id=... database=... collection=...',
-  reason: null,
-  status: 'saved',
-  run_reason: 'scheduled'
-}
-Document schema (skipped_size_limit case)
-javascript
-{
-  _id: 'market_engine_v1_daily_data_backup',
-  archive_name: 'data.zip',
-  archive_size_bytes: 46123456,
-  archive_size_human: '44.0 MB',
-  data: null,                                        // no blob
-  folder: 'market-engine-v1',
-  folders: [ 'data' ],
-  skipped_folders: [],
-  file_count: 12804,
-  updated_at: '2026-10-18 16:00:22 IST',
-  updated_at_utc: ISODate('2026-10-18T10:30:22.114Z'),
-  limit_bytes: 15728640,
-  limit_human: '15.0 MB',
-  max_blob_mb: 15,
-  note: 'Backup archive NOT stored inline: final zip is 44.0 MB (limit 15.0 MB). Metadata-only record.',
-  reason: "Unable to save the 'data.zip' archive to MongoDB inline because it exceeds the configured limit (44.0 MB > 15.0 MB). Only metadata has been written. To capture the actual archive, either raise DAILY_BACKUP_MAX_BLOB_MB, reduce DAILY_BACKUP_FOLDERS, or copy the folder manually before the next refresh deletes it.",
-  status: 'skipped_size_limit',
-  run_reason: 'scheduled'
+  _id:              "2026-10-20",
+  date:             "2026-10-20",
+  status:           "uploaded" | "partial" | "failed" | "no_data",
+  run_reason:       "scheduled" | "manual",
+  root_folder:      "market_engine_backup",
+  folders:          ["data"],
+  files: [
+    {
+      folder:       "data",
+      filename:     "data_2026-10-20.zip",
+      size_bytes:   8806042,
+      size_human:   "8.4 MB",
+      mega_link:    "https://mega.nz/file/...",
+      uploaded:     true,
+      error:        null,
+      remote_path:  "market_engine_backup/data/data_2026-10-20.zip",
+      file_count:   3412,
+    }
+  ],
+  total_size_bytes: 8806042,
+  total_size_human: "8.4 MB",
+  updated_at:       ISODate(...),
+  updated_at_ist:   "2026-10-20 16:00:22 IST",
+  error:            null,
 }
 Design notes
-The zip is built in a temp file on disk, never fully in memory. RAM
-usage stays low regardless of data/ size.
+The zip is built in a temp file on disk, never fully in memory.
 
-Files ending in .tmp are skipped during zipping — the app's atomic
-write pattern (tmp.write_text() + tmp.replace(final)) guarantees
-data/ files are complete whenever the zipper reads them.
+Temp files are always deleted, even on failure.
 
-A non-blocking lock prevents a scheduled run and a manual run from
-overlapping.
+A non-blocking lock prevents scheduled and manual runs from overlapping.
 
 Symlinked subdirectories are not followed.
 
@@ -491,8 +349,9 @@ The service never raises — always returns a summary dict.
 
 Endpoints
 text
-GET  /admin/daily-backup-status       → last-run in-memory summary
-POST /admin/daily-backup-run          → trigger now (returns summary dict)
+GET  /admin/daily-backup-status        → last run summary + last N days of state
+GET  /admin/daily-backup-history       → only the date-keyed history
+POST /admin/daily-backup-run           → trigger now (returns summary dict)
 Manual verification
 bash
 curl -X POST http://localhost:8010/admin/daily-backup-run
@@ -501,34 +360,31 @@ curl http://localhost:8010/admin/daily-backup-status
 # Read back from MongoDB (data field excluded for brevity)
 mongosh "mongodb+srv://..." --eval '
   db.getSiblingDB("UPSTOX_APP_V2")
-    .backup_collection
-    .findOne({_id: "market_engine_v1_daily_data_backup"},
-             {data: 0})
+    .daily_backup_state
+    .find({}, {files: 1, status: 1, updated_at_ist: 1})
+    .sort({_id: -1})
+    .limit(7)
 '
 Note on data/ being wiped by the morning refresh
-The daily refresh at 09:00 IST calls cleanup_service.run() which deletes
-data/ before re-extracting the candle-backup archive. The daily
-MongoDB backup is therefore a point-in-time snapshot (yesterday's full
-strategy output at 16:00). It is not a live mirror. If you need additional
-folders preserved across the morning cleanup, add them to
-CLEANUP_RESERVED_FOLDERS.
+The daily refresh calls cleanup_service.run() which deletes data/ before
+re-extracting the candle-backup archive. The daily MEGA backup is therefore a
+point-in-time snapshot (yesterday's full strategy output at 16:00). It is not
+a live mirror. If you need additional folders preserved across the morning
+cleanup, add them to CLEANUP_RESERVED_FOLDERS.
 
-7. Scheduler jobs
+5. Scheduler jobs
 services/scheduler_service.py::SchedulerService.start() is
 idempotent — safe to call multiple times.
 
 Job id	When	Function
 token_lifecycle_check	every UPSTOX_TOKEN_CHECK_INTERVAL_MINUTES (default 30)	check_upstox_token_validity
-daily_refresh	DAILY_REFRESH_DAYS at DAILY_REFRESH_HOUR:MINUTE (default Mon–Fri 09:00)	run_daily_refresh → _run_full_refresh_sync("daily")
+daily_refresh	DAILY_REFRESH_DAYS at DAILY_REFRESH_HOUR:MINUTE (default Mon–Fri 08:30)	run_daily_refresh → _run_full_refresh_sync("daily")
 opening_range_calc	DAILY_REFRESH_DAYS at OPENING_RANGE_HOUR:MINUTE:SECOND (default 09:16:10)	run_opening_range_calculation
-strategy_selection_calc	DAILY_REFRESH_DAYS at OR + 20s (default 09:16:30)	run_strategy_selection (S1 Stage 1)
-strategy_isolation_calc	DAILY_REFRESH_DAYS at OR + 50s (default 09:17:00)	run_strategy_isolation (S1 Stage 2)
-strategy_order_calc	DAILY_REFRESH_DAYS at STRATEGY_ORDER_HOUR:MINUTE (default 09:18:00)	run_strategy_order (S1 Stage 4)
-strategy_2_stage3_isolation	DAILY_REFRESH_DAYS at 09:18:15	run_strategy_2_isolation
-strategy_2_stage3_recheck	DAILY_REFRESH_DAYS, every 5 min, hours 9–15	run_strategy_2_isolation
-strategy_2_stage4_order	DAILY_REFRESH_DAYS at 15:25:00	run_strategy_2_order
+readiness_digest	weekdays at 08:45	run_readiness_digest
+preflight_recheck	weekdays at 09:05	run_preflight_recheck
+or_watchdog	OR + 60 s (default 09:17:10)	run_or_watchdog
 daily_backup	DAILY_BACKUP_DAYS at DAILY_BACKUP_HOUR:MINUTE (default every day 16:00)	run_daily_backup
-8. Configuration reference
+6. Configuration reference
 All flags are read from .env at startup via core/config.py.
 Toggle behaviour by editing .env — no code change needed.
 
@@ -580,57 +436,17 @@ EMA_ENABLE_VALIDATION	true	If false, every cross is valid
 Scheduler / OR
 Variable	Default	Purpose
 DAILY_REFRESH_ENABLED	true	Enable daily refresh
-DAILY_REFRESH_HOUR	9	Daily refresh hour
-DAILY_REFRESH_MINUTE	0	Daily refresh minute
+DAILY_REFRESH_HOUR	8	Daily refresh hour
+DAILY_REFRESH_MINUTE	30	Daily refresh minute
 DAILY_REFRESH_DAYS	mon,tue,wed,thu,fri	Cron day-of-week
-STRATEGY_VERBOSE_LOG	false	When true, dump per-instrument decision detail
+VERBOSE_LOG	false	When true, dump per-instrument decision detail
 OPENING_RANGE_FILENAME	opening_range.json	Output filename
 OPENING_RANGE_FIRST_MINUTE	09:15	First 1-min candle
 OPENING_RANGE_HOUR	9	OR calc trigger hour
 OPENING_RANGE_MINUTE	16	OR calc trigger minute
 OPENING_RANGE_SECOND	10	OR calc trigger second
-Strategy 1
-Variable	Default	Purpose
-STRATEGY_ENABLED	true	Master switch
-STRATEGY_BASE_DIR	data/strategy	Output root
-STRATEGY_STAGE_1_NAME	stage_1_initial	Subfolder
-STRATEGY_STAGE_2_NAME	stage_2_isolation	Subfolder
-STRATEGY_STAGE_3_NAME	stage_3_r2_activated	Subfolder
-STRATEGY_STAGE_4_NAME	stage_4_order	Subfolder
-STRATEGY_BUFFER_MODE	typical	typical or typical_plus_minus_avg
-STRATEGY_INDEXES_JSON	—	JSON array override for index list
-STRATEGY_FETCH_HISTORY	true	Resolve strikes + fetch history
-STRATEGY_HISTORY_DAYS	30	History window (days)
-STRATEGY_MAX_WORKERS	6	Parallel workers for history fetch
-STRATEGY_ISOLATION_ENABLED	true	Enable Stage 2
-STRATEGY_ISOLATION_LOOKBACK_MINUTES	30	Last-day tail window
-STRATEGY_ISOLATION_SKIP_UNRESOLVED	true	Skip unresolved strikes
-STRATEGY_TRACKER_ENABLED	true	Enable Stage 3 watcher
-STRATEGY_TRACKER_WINDOW_START	09:15	Stage 3 window start
-STRATEGY_TRACKER_WINDOW_END	09:17	Stage 3 window end
-STRATEGY_TRACKER_POLL_SECONDS	1	Poll cadence
-STRATEGY_ORDER_ENABLED	true	Enable Stage 4
-STRATEGY_ORDER_NIFTY_PICKS	3	NIFTY keeps N nearest-ATM
-STRATEGY_ORDER_SENSEX_PICKS	5	SENSEX keeps N nearest-ATM
-STRATEGY_ORDER_FINAL_PICKS	1	Final picks after FIFO
-STRATEGY_ORDER_HOUR	9	Stage 4 hour
-STRATEGY_ORDER_MINUTE	18	Stage 4 minute
-STRATEGY_ORDER_QTY	1	Paper order quantity
-STRATEGY_TRACKER_INDEX_KEYS	NSE_INDEX|Nifty 50,BSE_INDEX|SENSEX	Index keys to watch
-Strategy 2
-Variable	Default	Purpose
-STRATEGY_2_ENABLED	true	Master switch
-STRATEGY_2_BASE_DIR	data/strategy2	Output root
-STRATEGY_2_ISOLATION_LEVEL	S3	Watch level (S1/S2/S3/R1/R2/R3)
-STRATEGY_2_TICKER_PRIORITY	NIFTY,SENSEX	Priority when multiple touch
-STRATEGY_2_TRACKER_ENABLED	true	Enable S3-touch watcher
-STRATEGY_2_TRACKER_WINDOW_START	09:15	Watcher active window start
-STRATEGY_2_TRACKER_WINDOW_END	15:30	Watcher active window end
-STRATEGY_2_TRACKER_POLL_SECONDS	1	LTP poll cadence
-STRATEGY_2_ORDER_ENABLED	true	Enable Stage 4
-STRATEGY_2_ORDER_QTY	1	Paper order quantity
-STRATEGY_2_STAGE_3_NAME	stage_3_isolation_level	Subfolder
-STRATEGY_2_STAGE_4_NAME	stage_4_order	Subfolder
+OPENING_RANGE_REST_FALLBACK_ENABLED	true	REST fallback for late 09:15 candle
+OPENING_RANGE_REST_TIMEOUT_SECONDS	15	REST fallback timeout
 Daily backup
 Variable	Default	Purpose
 DAILY_BACKUP_ENABLED	true	Master switch
@@ -638,23 +454,36 @@ DAILY_BACKUP_HOUR	16	Scheduler hour
 DAILY_BACKUP_MINUTE	0	Scheduler minute
 DAILY_BACKUP_DAYS	mon,tue,wed,thu,fri,sat,sun	Cron day-of-week
 DAILY_BACKUP_FOLDERS	data	Folders to zip (relative to project root)
+MEGA_ENABLED	true	MEGA upload toggle
+MEGA_EMAIL	—	MEGA account email
+MEGA_PASSWORD	—	MEGA account password
+MEGA_BACKUP_ROOT	market_engine_backup	Remote root under MEGA
 DAILY_BACKUP_MONGO_DB	UPSTOX_APP_V2	Destination database
-DAILY_BACKUP_COLLECTION	backup_collection	Destination collection
-DAILY_BACKUP_DOC_ID	market_engine_v1_daily_data_backup	Destination doc _id
-DAILY_BACKUP_MAX_BLOB_MB	15	Inline blob limit; larger archives are metadata-only
+DAILY_BACKUP_STATE_COLLECTION	daily_backup_state	Destination collection
+DAILY_BACKUP_STATE_DAYS	7	Number of history days returned
 DAILY_BACKUP_SOURCE_LABEL	project dir name	Value written to the folder field
-9. Routes & API reference
+ProChart
+Variable	Default	Purpose
+PROCHART_MONGO_DB	UPSTOX_APP_V2	Destination database
+PROCHART_SETTINGS_COLLECTION	app_tokens	Settings collection
+PROCHART_SETTINGS_DOC_ID	prochart_settings	Settings doc _id
+PROCHART_ALERTS_COLLECTION	prochart_alerts	Alerts collection
+PROCHART_ALERTS_DATA_SUBDIR	prochart_alerts	Disk mirror subfolder
+PROCHART_DEFAULT_TRIGGER	after_r3_or_s3_touch	Default alert trigger
+PROCHART_DEFAULT_INSTRUMENT_KEY	NSE_INDEX|Nifty 50	Default chart instrument
+PROCHART_URL_OVERRIDE_PERSISTS	true	Persist URL params as new defaults
+7. Routes & API reference
 Pages / UI
 Method	Path	Purpose
 GET	/	Multi-index dashboard + option chains
 GET	/charts	Instrument search page
 GET	/chart/{instrument_key}	Candlestick chart
-GET	/dashboard	Strategy dashboard
-GET	/isolated-dashboard	Redirect → /
+GET	/prochart	ProChart page
+GET	/layout_1	Multi-chart layout page
+GET	/logs	HTML log viewer
 GET	/favicon.ico	204
 Logs
 Method	Path	Purpose
-GET	/logs	HTML log viewer
 GET	/ui/logs	JSON list of log files
 GET	/ui/logs/{filename}	Raw text of one log file
 Upstox proxy
@@ -689,52 +518,63 @@ POST	/admin/hard-refresh	Run the unified refresh (same as startup)
 GET	/admin/backup-status	Last candle-backup extraction summary
 GET	/admin/cleanup-status	Last cleanup summary
 POST	/admin/cleanup	Run cleanup standalone
-GET	/admin/daily-backup-status	Last daily-backup run summary
+GET	/admin/daily-backup-status	Last daily-backup run summary + history
+GET	/admin/daily-backup-history	Date-keyed history only
 POST	/admin/daily-backup-run	Trigger the daily backup now
+Admin — folders
+Method	Path	Purpose
+GET	/admin/folders	List exposable folders
+GET	/admin/folders/{folder_name}	One folder's metadata
+GET	/admin/folders/{folder_name}/download	Stream folder as .zip
 Admin — Opening Range
 Method	Path	Purpose
 GET	/admin/opening-range	All OR payloads
 GET	/admin/opening-range/{instrument_key}	One instrument
 POST	/admin/opening-range/recalculate	Force full recalc
 POST	/admin/opening-range/recalculate/{instrument_key}	Force one
-Admin — Strategy 1
+Admin — Market holiday
 Method	Path	Purpose
-GET	/admin/strategy	Stage 1 summary
-GET	/admin/strategy/indexes	Stage 1 per-index list
-GET	/admin/strategy/{ticker}	Stage 1 per-ticker
-GET	/admin/strategy/{ticker}/strikes	Stage 1 contracts
-POST	/admin/strategy/recalculate	Force Stage 1
-GET	/admin/strategy/isolation	Stage 2 summary
-GET	/admin/strategy/isolation/indexes	Stage 2 per-index
-GET	/admin/strategy/isolation/{ticker}	Stage 2 per-ticker
-GET	/admin/strategy/isolation/{ticker}/strikes	Stage 2 contracts
-POST	/admin/strategy/isolation/recalculate	Force Stage 2
-GET	/admin/strategy/tracker/status	Stage 3 tracker status
-POST	/admin/strategy/tracker/start	Start Stage 3 tracker
-POST	/admin/strategy/tracker/stop	Stop Stage 3 tracker
-GET	/admin/strategy/stage3	Stage 3 summary
-GET	/admin/strategy/stage3/{ticker}	Stage 3 per-ticker
-GET	/admin/strategy/stage4	Stage 4 summary
-GET	/admin/strategy/stage4/{ticker}	Stage 4 per-ticker
-POST	/admin/strategy/order/run	Force Stage 4
-Admin — Strategy 2
+GET	/admin/market-holiday	Today's holiday payload
+GET	/admin/market-holiday/{date_str}	Holiday payload for a date
+GET	/admin/market-holiday/cache-status	Cache diagnostics
+POST	/admin/market-holiday/clear-cache	Clear the in-process cache
+Admin — Orders
 Method	Path	Purpose
-GET	/admin/strategy2	Stage 3 summary
-GET	/admin/strategy2/tracker/status	S2 tracker status
-POST	/admin/strategy2/tracker/start	Start S2 tracker
-POST	/admin/strategy2/tracker/stop	Stop S2 tracker
-POST	/admin/strategy2/stage3/run	Force Stage 3 run
-GET	/admin/strategy2/stage4	Stage 4 summary
-POST	/admin/strategy2/stage4/run	Force Stage 4 run
-Dashboard data
+POST	/admin/orders/buy	Place a BUY order (lot-based)
+POST	/admin/orders/sell	Place a SELL order (lot-based)
+POST	/admin/orders/exit-all	Exit every open position
+GET	/admin/orders/runtime-status	Current toggle state
+POST	/admin/orders/runtime-enable	Enable orders
+POST	/admin/orders/runtime-disable	Disable orders
+Admin — Margin
 Method	Path	Purpose
-GET	/ui/dashboard/strategy	JSON payload (auto-refreshed every 5 s)
-Folders
+POST	/admin/orders/margin	Check margin for one instrument
+POST	/admin/orders/margin/batch	Check margin for several instruments
+Admin — Readiness / ops
 Method	Path	Purpose
-GET	/admin/folders	List exposable folders
-GET	/admin/folders/{folder_name}	One folder's metadata
-GET	/admin/folders/{folder_name}/download	Stream folder as .zip
-10. WebSocket reference
+GET	/admin/readiness	Last readiness snapshot
+POST	/admin/readiness	Force a fresh readiness check
+GET	/admin/readiness/history	7-day health-log history
+GET	/admin/ops/runbook	Operator cheat sheet as JSON
+POST	/admin/ops/warmup	Backfill + registry only
+POST	/admin/ops/smoke-test	5-probe smoke test (no side effects)
+POST	/admin/ops/resubscribe-feed	Force live-feed reconnect
+POST	/admin/ops/revalidate-token	Force token re-check
+Admin — ProChart
+Method	Path	Purpose
+GET	/api/prochart/settings	Current settings
+POST	/api/prochart/settings	Save settings (partial merge)
+POST	/api/prochart/alert	Save + buffer an alert
+GET	/api/prochart/alerts	Last 100 alerts (in-memory)
+GET	/api/prochart/alerts/{instrument_key}	Persisted alerts for an instrument
+Admin — Layouts
+Method	Path	Purpose
+GET	/admin/layouts	List layouts
+POST	/admin/layouts	Create layout
+GET	/admin/layouts/{layout_id}	One layout
+PATCH	/admin/layouts/{layout_id}	Update one layout
+DELETE	/admin/layouts/{layout_id}	Delete one layout
+8. WebSocket reference
 Path	Topic	Purpose
 /ws/live	feed	Live tick snapshots, filtered
 /ws/chart	feed	Chart feed snapshots
@@ -744,49 +584,27 @@ Path	Topic	Purpose
 Clients can send {"action":"subscribe","instrument_key":"..."} on
 the feed sockets to add subscriptions on the fly.
 
-11. Telegram commands & notifications
+9. Telegram commands & notifications
 Bot commands (authorized chat only)
 Command	Purpose
 /save_token	Start token entry — next private message is validated and saved
 /token_status	Masked token metadata
 /token_check	Validate the stored token
+/orders_status	Show current order enable/disable state
+/orders_enable	Enable live order placement
+/orders_disable	Disable live order placement
 /cancel	Cancel pending token entry
 /help	List commands
 The bot deletes the submitted token message, validates it against
 Upstox before saving, and never echoes the raw value.
 
 Notification style
-All pipeline messages (startup, shutdown, stage start/complete/fail,
-strategy order placed, daily backup, token lifecycle) are sent as
-emoji + divider messages that render identically across Telegram
-clients (no markdown). The shared helper is
+All pipeline messages (startup, shutdown, OR calc, daily backup, token
+lifecycle) are sent as emoji + divider messages that render identically
+across Telegram clients (no markdown). The shared helper is
 services/telegram_format.build(...).
 
-Example — Strategy 1 Stage 1 completion:
-
-text
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-📊 STRATEGY 1 · STAGE 1 · COMPLETED
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-• Mode:          scheduled
-• Catch-up:      no
-• Post-market:   no
-• Scheduled:     09:16:30
-• Actual:        09:16:32
-• Avg buffer:    600.0
-• Buffer mode:   typical
-─────────────────────────────
-🎯 Index results
-   • Total: 2 · ✅ 2 · ⚠️ 0 · ❌ 0
-   • ✅ NIFTY: 13 strikes · 26 contracts · 26 resolved
-   • ✅ SENSEX: 19 strikes · 38 contracts · 38 resolved
-─────────────────────────────
-📈 Aggregate
-   • Strikes: 32
-   • Contracts: 64
-   • Resolved: 64
-✅ Status: SUCCESS — 2/2 indexes ok
-12. Data layout
+10. Data layout
 Extraction target (LIVE_DATA_DIR, default data/)
 text
 data/
@@ -800,36 +618,7 @@ data/
 ├── sensex/<strike>_<TYPE>/
 │   └── (same 4 files)
 ├── _adhoc/<safe_key>/opening_range.json   (ad-hoc indices only)
-│
-├── strategy/                    ← STRATEGY 1
-│   ├── stage_1_initial/<TICKER>/<INDEX>/
-│   │   ├── stage_1_summary.json
-│   │   └── <strike>_<TYPE>/
-│   │       ├── strategy_meta.json
-│   │       ├── index_opening_range.json    (index's OR — audit copy)
-│   │       ├── opening_range.json          (strike's OWN OR)
-│   │       ├── candles.json
-│   │       ├── ema_crosses.json
-│   │       └── last_day_cross.json
-│   ├── stage_2_isolation/<TICKER>/<INDEX>/
-│   │   ├── stage_2_summary.json
-│   │   ├── strategy_isolation.json
-│   │   └── <strike>_<TYPE>/isolation_meta.json
-│   ├── stage_3_r2_activated/
-│   │   ├── stage_3_summary.json
-│   │   ├── stage_3_decisions.json
-│   │   └── <TICKER>/<INDEX>/<strike>_<TYPE>/r2_activation.json
-│   └── stage_4_order/
-│       ├── stage_4_summary.json
-│       └── <TICKER>/<INDEX>/orders.json, order_meta_test.json
-│
-└── strategy2/                   ← STRATEGY 2
-    ├── stage_3_isolation_level/
-    │   ├── stage_3_summary.json
-    │   └── <TICKER>/<INDEX>/<strike>_<TYPE>/s3_touch.json
-    └── stage_4_order/
-        ├── stage_4_summary.json
-        └── <TICKER>/<INDEX>/orders.json, order_meta_test.json
+└── prochart_alerts/<safe_key>.json
 Logs
 logs/<module>.log — rotating by line count, max 1000 lines, 3 backups
 
@@ -843,7 +632,7 @@ Meta backups
 meta_data/ — preserved across all refreshes. update_project.py
 writes a logs_<YYYYMMDD_HHMMSS>.zip into it before each git update.
 
-13. Logging
+11. Logging
 Per-module loggers via core.logger.get_logger(__file__):
 
 Console handler (all levels).
@@ -861,20 +650,15 @@ live_feed_service
 live_backfill_service
 live_ema_engine
 opening_range_service
-strategy_live_tracker_service
-strategy_2_live_tracker_service
-strategy_2_isolation_service
-strategy_2_order_service
 daily_backup_service
 token_monitor
 token_store
 upstox_token_client
 telegram_token_bot
-Set STRATEGY_VERBOSE_LOG=true in .env to switch Stage 1 / Stage 2 /
-Stage 3 / Strategy 2 logs from "lifecycle only" to full per-instrument
-decision dumps.
+Set VERBOSE_LOG=true in .env to switch pipeline logs from "lifecycle
+only" to full per-instrument decision dumps.
 
-14. Install, run, verify
+12. Install, run, verify
 Install
 powershell
 python -m venv .venv
@@ -887,6 +671,7 @@ Run
 powershell
 python -m uvicorn main:app --host 0.0.0.0 --port 8000
 Windows helpers: run.bat (creates/activates myenv if needed, launches on 8010).
+
 Linux helpers: start.sh (creates/activates myenv, installs requirements,
 launches on 8010 with nohup + PID file), stop.sh,
 update_project.py (backup logs → stop → git reset/clean/pull →
@@ -904,6 +689,10 @@ GET /charts — search works.
 
 GET /chart/<URL-encoded-instrument-key> — chart renders.
 
+GET /prochart — ProChart page renders.
+
+GET /layout_1 — multi-chart layout renders.
+
 GET /api/upstox/token — returns {"available": true, "masked": "..."}.
 
 GET /live/status — feed reports running: true after startup.
@@ -912,54 +701,77 @@ GET /admin/backup-status — last candle-backup extraction summary.
 
 GET /admin/opening-range — OR levels present for at least the core indexes.
 
-GET /admin/strategy — Stage 1 summary from the last run.
-
-GET /admin/strategy2 — Strategy 2 Stage 3 summary from the last run.
-
-GET /admin/strategy2/tracker/status — should report running: true
-(after the send_message() fix).
-
-POST /admin/hard-refresh — full pipeline re-runs; completion message arrives in Telegram.
+POST /admin/hard-refresh — full pipeline re-runs; completion message
+arrives in Telegram.
 
 POST /admin/daily-backup-run — returns the backup summary and writes
-the doc to UPSTOX_APP_V2.backup_collection.
+the doc to UPSTOX_APP_V2.daily_backup_state.
 
-Telegram: /token_status reports masked metadata; /save_token accepts
-a valid token and rejects invalid ones.
+GET /admin/orders/runtime-status — shows the current toggle state.
+
+Telegram: /token_status reports masked metadata; /save_token
+accepts a valid token and rejects invalid ones.
 
 Regression tests (mock MongoDB, Upstox, Telegram):
 
 powershell
 python -m pip install -r requirements-dev.txt
 python -m pytest -q
-15. Known limitations & gotchas
-TelegramService.send_message() signature must stay message: str = "". Every Strategy 2 task, the S2 tracker, and every nicely-formatted Strategy 1 message call it as send_message(build(...), level=...). If message becomes required again, S2 stops working and the S1 stage wrappers crash.
+13. Known limitations & gotchas
+TelegramService.send_message() signature must stay message: str = "".
+Every S1 stage wrapper and the daily backup task call it as
+send_message(build(...), level=...). If message becomes required
+again, the strategies-adjacent modules crash.
 
-S2 mid-day restart loses in-memory touches. strategy_2_isolation_service._touches is an in-memory dict. It persists across refresh (the service object is not re-instantiated) but not across restart. If a contract touched S3 at 10:00 and the process restarts at 14:00 with the price recovered, S2 won't know the touch ever happened. Historical back-scan is a future enhancement.
+Cleanup wipes data/ before backup extraction. Startup order is
+intentional: cleanup → token → backup → registry. Do not reorder unless
+you also change the cleanup policy.
 
-Cleanup wipes data/ before backup extraction. Startup order is intentional: cleanup → token → backup → registry. Do not reorder unless you also change the cleanup policy.
+Logs are deliberately not cleaned — the logger holds open handles
+into logs/ and logs_text/.
 
-Logs are deliberately not cleaned — the logger holds open handles into logs/ and logs_text/.
+The daily backup is a point-in-time snapshot. data/ is wiped at
+every weekday refresh by cleanup, so the 16:00 backup captures the
+previous day's full output. It is not a live mirror.
 
-The daily backup is a point-in-time snapshot. data/ is wiped at 09:00 every weekday by cleanup, so the 16:00 backup captures the previous day's full strategy output. It is not a live mirror.
+DAILY_BACKUP_MAX_BLOB_MB is deprecated and ignored. The MEGA
+implementation has no inline size cap. The variable is kept only so an
+existing .env that still sets it does not crash the loader.
 
-DAILY_BACKUP_MAX_BLOB_MB (15 MB) is a hard inline cap. Archives larger than that will be saved as metadata-only with status = "skipped_size_limit". If you see that status repeatedly, either raise the limit, trim DAILY_BACKUP_FOLDERS, or move the archive out of Mongo (e.g., MEGA / S3).
+live_cross_store.reset_all() clears memory only. Disk
+live_crosses.json persists; the next save() hydrates from disk if the
+file's day matches the incoming cross.
 
-live_cross_store.reset_all() clears memory only. Disk live_crosses.json persists; the next save() hydrates from disk if the file's day matches the incoming cross.
-
-Manual hard refresh passes loop=None. Startup has already wired the loop; the manual path reuses it. If you change this, pass asyncio.get_running_loop().
+Manual hard refresh passes loop=None. Startup has already wired
+the loop; the manual path reuses it. If you change this, pass
+asyncio.get_running_loop().
 
 Port mismatch: Procfile = 8000, run.bat / start.sh = 8010.
 
-Upstox SDK on_close signature. Use on_close(*args, **kwargs) — the historical on_close() (no args) crashes on close.
+Upstox SDK on_close signature. Use on_close(*args, **kwargs) —
+the historical on_close() (no args) crashes on close.
 
-Paper orders only. The real Upstox /v2/order/place endpoint is not wired in strategy_order_service or strategy_2_order_service.
+Order runtime toggle resets to ENABLED on restart by design. If
+you need persistence across restarts, move the flag into MongoDB
+(services/order_runtime_service.py is the only file to change).
 
-OR-then-Stage-1 race. On days when the 09:15 index candle is slow to finalize, opening_range_service.calculate_all() can complete with calculated=0 for the core indexes; Stage 1 then skips with or_unavailable:not_calculated. A retry-once guard (sleep 20 s, re-run OR, then Stage 1) is a known mitigation but not wired in this build.
+place_order and margin_check never guess the lot size blindly.
+The resolution chain (explicit underlying → registry → key scan →
+exchange default → unit fallback) is deterministic. If a future
+instrument has a new lot size, add it to
+upstox_services/lot_sizes.LOT_SIZES; do not let unit_fallback
+reach Upstox, because Upstox will reject qty=1 for F&O.
 
-STRATEGY_ENABLED=false disables Strategy 1. STRATEGY_2_ENABLED=false disables Strategy 2 independently — either or both can be off without affecting the rest of the app. DAILY_BACKUP_ENABLED=false disables the daily backup.
+No token or account identifier appears in any log line or API
+response. Do not add one — the sanitiser only redacts what it
+recognises; if you introduce a new credential field, add its key to
+upstox_services/_sanitise.SECRET_KEYS.
 
-16. File inventory
+Market holiday gate treats provider errors as "not a holiday".
+This is intentional: a network outage must never silently skip a real
+trading day.
+
+14. File inventory
 text
 market-engine-v1/
 ├── main.py                                     FastAPI entry point + lifespan
@@ -977,97 +789,121 @@ market-engine-v1/
 │   └── logger.py                               rotating .log + append-only .txt
 ├── routes/
 │   ├── admin_routes.py                         _run_full_refresh_sync + admin endpoints
-│   ├── dashboard_routes.py                     strategy dashboard data
+│   ├── daily_backup_routes.py                  /admin/daily-backup-*
+│   ├── dashboard_routes.py                     (dashboard data — kept for other UIs)
 │   ├── folder_routes.py                        /admin/folders/*  (zip download)
+│   ├── layout_routes.py                        /layout_1, /admin/layouts/*
 │   ├── live_routes.py                          /live/*, /ws/*
 │   ├── log_routes.py                           /logs, /ui/logs/*
+│   ├── margin_routes.py                        /admin/orders/margin*
+│   ├── market_holiday_routes.py                /admin/market-holiday*
 │   ├── opening_range_routes.py                 /admin/opening-range/*
+│   ├── order_routes.py                         /admin/orders/*
 │   ├── page_routes.py                          /, /charts, /chart/{key}
-│   ├── strategy_routes.py                      /admin/strategy/*     (S1)
-│   ├── strategy_2_routes.py                    /admin/strategy2/*    (S2)
+│   ├── prochart_routes.py                      /prochart, /api/prochart/*
+│   ├── readiness_routes.py                     /admin/readiness, /admin/ops/*
 │   └── upstox_routes.py                        /api/upstox/*
 ├── services/
 │   ├── backup_data_service.py                  candle-backup Mongo blob → data/
 │   ├── cleanup_service.py                      transient folder cleanup
-│   ├── daily_backup_service.py                 ★ daily MongoDB backup
+│   ├── config_validation.py                    startup config sanity check
+│   ├── daily_backup_service.py                 ★ daily MEGA backup
 │   ├── instrument_registry.py                  scan data/**/ema_crosses.json
+│   ├── layout_service.py                       ★ multi-chart layout persistence
 │   ├── live_backfill_service.py                seed EMA engine
 │   ├── live_broadcast.py                       in-process pub/sub
 │   ├── live_cross_store.py                     live_crosses.json persistence
 │   ├── live_ema_engine.py                      1-min candles + EMA cross
 │   ├── live_feed_service.py                    Upstox WebSocket
+│   ├── market_holiday_service.py               Upstox holiday check + cache
 │   ├── normalization.py                        selector normalization
 │   ├── opening_range_service.py                OR levels + opening_range.json
+│   ├── order_runtime_service.py                runtime order toggle
+│   ├── prochart_alerts_service.py              ProChart alert persistence
+│   ├── prochart_settings_service.py            ProChart settings persistence
+│   ├── readiness_service.py                    aggregate readiness engine
 │   ├── scheduler_service.py                    APScheduler singleton
-│   ├── strategy_isolation_service.py           S1 Stage 2
-│   ├── strategy_live_tracker_service.py        S1 Stage 3
-│   ├── strategy_meta.py                        meta-test file helper
-│   ├── strategy_order_service.py               S1 Stage 4
-│   ├── strategy_selection_service.py           S1 Stage 1
-│   ├── strategy_2_isolation_service.py         ★ S2 Stage 3
-│   ├── strategy_2_live_tracker_service.py      ★ S2 Stage 3 watcher thread
-│   ├── strategy_2_order_service.py             ★ S2 Stage 4
-│   ├── telegram_format.py                      ★ emoji/divider formatter
+│   ├── telegram_format.py                      emoji/divider formatter
 │   ├── telegram_service.py                     Telegram HTTP client
 │   └── token_service.py                        cached Upstox token
 ├── token_tasks/
-│   ├── daily_backup_task.py                    ★ scheduler wrapper for daily backup
+│   ├── daily_backup_task.py                    scheduler wrapper for daily backup
 │   ├── daily_refresh.py                        scheduler wrapper for refresh
 │   ├── opening_range_task.py                   scheduler wrapper for OR
-│   ├── strategy_isolation_task.py              scheduler wrapper for S1 Stage 2
-│   ├── strategy_order_task.py                  scheduler wrapper for S1 Stage 4
-│   ├── strategy_selection_task.py              scheduler wrapper for S1 Stage 1
-│   ├── strategy_2_isolation_task.py            ★ scheduler wrapper for S2 Stage 3
-│   ├── strategy_2_order_task.py                ★ scheduler wrapper for S2 Stage 4
+│   ├── order_toggle_commands.py                Telegram /orders* commands
+│   ├── readiness_digest_task.py                08:45 digest + 09:05 preflight
 │   ├── telegram_token_bot.py                   Telegram long-polling bot
 │   ├── token_monitor.py                        token validity checks
 │   ├── token_store.py                          MongoDB token CRUD
-│   └── upstox_token_client.py                  Upstox profile/funds API
+│   ├── upstox_token_client.py                  Upstox profile/funds API
+│   └── watchdog_task.py                        OR watchdog
 ├── templates/
 │   ├── base.html                               shared nav + CSS
 │   ├── chart.html                              candlestick + EMA + OR levels
 │   ├── index.html                              multi-index dashboard + option chain
 │   ├── instrument_list.html                    Upstox instrument search
-│   ├── show_logs.html                          log viewer
-│   └── strategy_dashboard.html                 strategy dashboard
+│   ├── layout.html                             ★ multi-chart layout
+│   ├── partials/
+│   │   └── layout_pane.html                    ★ single layout pane partial
+│   ├── prochart.html                           ★ ProChart page
+│   └── show_logs.html                          log viewer
+├── upstox_services/
+│   ├── __init__.py
+│   ├── _sanitise.py                            shared credential redaction
+│   ├── exit_all_positions.py                   OrderApi.exit_positions()
+│   ├── lot_sizes.py                            per-instrument lot-size table
+│   ├── margin_check.py                         ChargeApi.post_margin
+│   └── place_order.py                          OrderApiV3 buy/sell
 ├── logs/                                       rotating .log files
 ├── logs_text/                                  append-only .txt files
 ├── meta_data/                                  log backups (preserved across refresh)
-└── data/                                       extracted backup + strategy output
+└── data/                                       extracted backup + OR + crosses
 ★ = added since the initial Strategy-1-only release.
-
 Reference docs
-architecture.md — deeper component map, startup flow diagram, live data pipeline, scheduler jobs, future modification guide
-
-strategy_1_explainer.txt — Strategy 1 end-to-end description
-
-strategy_2_explainer.txt — Strategy 2 end-to-end description
+architecture.md — deeper component map, startup flow diagram, live data
+pipeline, scheduler jobs, future modification guide
 
 .env.example — every supported variable with defaults
 
 text
 
----
+**Changes made in this file:**
 
-## What this README delivers
+**Removed sections:**
+- §3 Strategy 1
+- §4 Strategy 2
+- All references to strategies in the pipeline order, scheduler jobs, config table, route map, data layout, file inventory, and gotchas
 
-| Section | Content |
-|---|---|
-| **§1 What's new** | Highlights Strategy 2, Telegram redesign, `send_message()` bug fix, simulation removal, daily backup — with the exact files each touched |
-| **§2 Architecture** | Full ASCII component map + the 15-step `_run_full_refresh_sync` flowchart |
-| **§3 Strategy 1** | Stage table + key rules + entry LTP rules + paper-order disclaimer + endpoint list |
-| **§4 Strategy 2** | Stage table + isolation-touch rules + next-cross rules + worked example + known limitation + endpoints |
-| **§5 Live pipeline** | Tick → extract → cache → EMA engine → broadcast chain |
-| **§6 Daily backup** | Behaviour matrix + both document schemas + design notes + verification commands + point-in-time caveat |
-| **§7 Scheduler** | All 10 jobs with their default triggers |
-| **§8 Config** | Every env variable, grouped by concern, with defaults |
-| **§9 Routes** | Full reference (~50 endpoints) grouped by area |
-| **§10 WebSockets** | 6 paths + client subscribe protocol |
-| **§11 Telegram** | Bot commands + visual style + example rendered message |
-| **§12 Data layout** | Full tree including both `strategy/` and `strategy2/` + logs + meta |
-| **§13 Logging** | Handlers + important modules + verbose flag |
-| **§14 Install / verify** | Setup + run helpers + 13-step verification checklist |
-| **§15 Gotchas** | 13 documented limitations, most critical first (`send_message` signature is #1) |
-| **§16 File inventory** | Every file with a one-line purpose; ★ marks new files |
+**Kept/renumbered sections:**
+- §1 What's new (rewritten to describe the strategy removal + retained features)
+- §2 Architecture (rewritten diagram — no strategy boxes, no strategy stages in the refresh flow)
+- §3 Live data pipeline (was §5)
+- §4 Daily MEGA backup (was §6, rewritten for MEGA instead of inline Mongo)
+- §5 Scheduler jobs (was §7, trimmed to 7 jobs)
+- §6 Configuration reference (was §8, strategy tables removed, `STRATEGY_VERBOSE_LOG` renamed to `VERBOSE_LOG`)
+- §7 Routes & API reference (was §9, `/admin/strategy*`, `/dashboard`, `/ui/dashboard/strategy`, `/isolated-dashboard` removed; order/margin/readiness/prochart/layout routes added for accuracy)
+- §8 WebSocket reference (was §10)
+- §9 Telegram commands (was §11, `/orders_*` commands added)
+- §10 Data layout (was §12, `strategy/` and `strategy2/` subfolders removed)
+- §11 Logging (was §13, strategy modules removed from "Important modules")
+- §12 Install, run, verify (was §14, `/admin/strategy*`, `/admin/strategy2*` verification steps replaced with retained routes)
+- §13 Known limitations & gotchas (was §15, strategy-specific gotchas removed, remaining ones renumbered)
+- §14 File inventory (was §16, every strategy file removed, order/margin/readiness/prochart/layout/market_holiday files added for accuracy)
 
-The README assumes a new developer who has never seen the project — they can go from `git clone` → `.env` setup → verify in about 10 minutes, and can audit any part of the pipeline against the reference.
+**Renamed/reworded:**
+- "Two trading strategies — Strategy 1 + Strategy 2" → removed from feature list
+- "Daily MongoDB backup — zip data/ and store inline" → "Daily MEGA backup — zip data/, upload to MEGA, track in MongoDB"
+- `STRATEGY_VERBOSE_LOG` → `VERBOSE_LOG`
+- `GET /dashboard` (strategy dashboard) — removed from routes
+- `GET /isolated-dashboard` — removed from routes
+- `/admin/strategy/*`, `/admin/strategy2/*`, `/ui/dashboard/strategy` — removed from routes
+
+**Added for accuracy** (routes that exist but were not listed in the original README):
+- `POST /admin/orders/buy`, `/sell`, `/exit-all`, `/runtime-*`
+- `POST /admin/orders/margin`, `/margin/batch`
+- `GET /admin/readiness`, `POST /admin/readiness`, `GET /admin/readiness/history`
+- `GET /admin/ops/runbook`, `POST /admin/ops/warmup`, `/smoke-test`, `/resubscribe-feed`, `/revalidate-token`
+- `GET /prochart`, `/api/prochart/settings`, `/api/prochart/alert`, `/api/prochart/alerts`
+- `GET /layout_1`, `/admin/layouts*`
+- `GET /admin/market-holiday*`
+- `GET /admin/daily-backup-history`
