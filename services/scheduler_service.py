@@ -4,6 +4,7 @@
 Jobs:
     * token_lifecycle_check         — interval
     * daily_refresh                 — cron, 08:30 IST Mon-Fri
+    * first_candle_calc             — cron, 09:16:10 IST Mon-Fri
 
 Readiness / preflight jobs:
     * readiness_digest              — cron, 08:45 IST
@@ -12,20 +13,10 @@ Readiness / preflight jobs:
 Daily backup:
     * daily_backup                  — cron, 16:00 IST
 
-Strategy jobs (Opening Range calculation and its watchdog) are
-deliberately **not** registered here. They were removed along with
-the strategy pipeline — the scheduler now only drives infrastructure,
-token lifecycle, readiness, and backup tasks.
-
 Diagnostics
 -----------
-This module uses ``get_logger(__file__)`` so every line reaches the
-file handlers in ``logs/`` and ``logs_text/``. The scheduler logs:
-
-    * a compact one-line summary of every cron it registered, and
-    * a post-``shutdown()`` confirmation so a restart in the same
-      process shows the "was running" -> "now stopped" transition
-      in two adjacent log lines.
+Uses ``get_logger(__file__)`` so every line reaches the file handlers
+in ``logs/`` and ``logs_text/``.
 """
 
 from __future__ import annotations
@@ -38,9 +29,6 @@ from core.logger import get_logger
 logger = get_logger(__file__)
 
 
-# --------------------------------------------------------------------------- #
-# Scheduler service                                                           #
-# --------------------------------------------------------------------------- #
 class SchedulerService:
     def __init__(self) -> None:
         self._scheduler: BackgroundScheduler | None = None
@@ -52,6 +40,7 @@ class SchedulerService:
     def start(self) -> BackgroundScheduler:
         from token_tasks.daily_backup_task import run_daily_backup
         from token_tasks.daily_refresh import run_daily_refresh
+        from token_tasks.first_candle_task import run_first_candle_calculation
         from token_tasks.readiness_digest_task import (
             run_preflight_recheck,
             run_readiness_digest,
@@ -82,6 +71,18 @@ class SchedulerService:
                 minute=config.DAILY_REFRESH_MINUTE,
                 id="daily_refresh",
                 replace_existing=True, misfire_grace_time=300,
+            )
+
+        # -- first candle (09:16:10) ----------------------------------- #
+        if getattr(config, "FIRST_CANDLE_ENABLED", True):
+            scheduler.add_job(
+                run_first_candle_calculation, "cron",
+                day_of_week=config.DAILY_REFRESH_DAYS,
+                hour=getattr(config, "FIRST_CANDLE_HOUR", 9),
+                minute=getattr(config, "FIRST_CANDLE_MINUTE", 16),
+                second=getattr(config, "FIRST_CANDLE_SECOND", 10),
+                id="first_candle_calc",
+                replace_existing=True, misfire_grace_time=60,
             )
 
         # -- Readiness digest + pre-flight ------------------------------ #
@@ -119,11 +120,13 @@ class SchedulerService:
         scheduler.start()
         self._scheduler = scheduler
 
-        # ---- Compact summary line ------------------------------------- #
         logger.info(
-            "Scheduler started — daily=%02d:%02d, digest=%02d:%02d, "
-            "preflight=%02d:%02d, DailyBackup=%02d:%02d",
+            "Scheduler started — daily=%02d:%02d, first_candle=%02d:%02d:%02d, "
+            "digest=%02d:%02d, preflight=%02d:%02d, DailyBackup=%02d:%02d",
             config.DAILY_REFRESH_HOUR, config.DAILY_REFRESH_MINUTE,
+            getattr(config, "FIRST_CANDLE_HOUR", 9),
+            getattr(config, "FIRST_CANDLE_MINUTE", 16),
+            getattr(config, "FIRST_CANDLE_SECOND", 10),
             config.READINESS_DIGEST_HOUR, config.READINESS_DIGEST_MINUTE,
             config.READINESS_PREFLIGHT_HOUR, config.READINESS_PREFLIGHT_MINUTE,
             config.DAILY_BACKUP_HOUR, config.DAILY_BACKUP_MINUTE,
@@ -148,9 +151,6 @@ class SchedulerService:
                     "Scheduler shutdown raised; forcing _scheduler = None."
                 )
         self._scheduler = None
-        # Explicit post-condition log so a restart in the same process
-        # shows the "was running" -> "now stopped" transition in the
-        # log file.
         logger.info(
             "Scheduler service is now stopped; a subsequent start() "
             "will create a new BackgroundScheduler."

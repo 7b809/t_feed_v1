@@ -316,3 +316,18 @@ DAILY_BACKUP_STATE_DAYS = max(1, _int("DAILY_BACKUP_STATE_DAYS", 7))
 # DAILY_BACKUP_MAX_BLOB_MB does not crash the loader. Ignored by the
 # MEGA-based implementation, which has no inline size cap.
 DAILY_BACKUP_MAX_BLOB_MB = max(1, _int("DAILY_BACKUP_MAX_BLOB_MB", 15))
+
+
+# ===========================================================================
+# First-candle OR + EMA-cross detection (09:16:10 Mon-Fri)
+# ===========================================================================
+# Runs after the first 1-min candle of the day closes (09:15-09:16).
+# Fetches the first candle for every registered instrument in parallel,
+# computes Opening Range levels using the D_H/D_L formula, checks the
+# last recorded EMA cross against the new close, and writes
+# first_candle.json next to candles.json in each instrument folder.
+FIRST_CANDLE_ENABLED = _bool("FIRST_CANDLE_ENABLED", True)
+FIRST_CANDLE_HOUR = _int("FIRST_CANDLE_HOUR", 9)
+FIRST_CANDLE_MINUTE = _int("FIRST_CANDLE_MINUTE", 16)
+FIRST_CANDLE_SECOND = _int("FIRST_CANDLE_SECOND", 10)
+FIRST_CANDLE_WORKERS = max(1, min(32, _int("FIRST_CANDLE_WORKERS", 8)))

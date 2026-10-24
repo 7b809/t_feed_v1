@@ -201,3 +201,20 @@ async def revalidate_token() -> dict[str, Any]:
         }
 
     return await asyncio.to_thread(_run)
+
+
+# (Append to existing routes/readiness_routes.py)
+@router.post("/ops/first-candle")
+async def trigger_first_candle() -> dict[str, Any]:
+    """Manually trigger the first-candle OR + EMA-cross calculation."""
+    def _run() -> dict[str, Any]:
+        from services.first_candle_service import first_candle_service
+        return first_candle_service.run(reason="manual")
+    return await asyncio.to_thread(_run)
+
+
+@router.get("/ops/first-candle-status")
+def first_candle_status() -> dict[str, Any]:
+    """Return the last first-candle run summary."""
+    from services.first_candle_service import first_candle_service
+    return first_candle_service.last_status()

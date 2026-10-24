@@ -1,16 +1,22 @@
-# routes/admin_routes.py
+# File: routes/admin_routes.py
 """Admin endpoints + the unified refresh routine.
 
+Endpoints:
     POST /admin/hard-refresh          -> full refresh (unified routine)
     GET  /admin/backup-status         -> last backup extraction summary
     GET  /admin/cleanup-status        -> last folder-cleanup summary
     POST /admin/cleanup               -> run the folder cleanup standalone
 
-The unified refresh routine ``_run_full_refresh_sync`` is the
-**single source of truth** for every task that runs in all three
-states (startup, daily refresh, hard refresh).
+Backfill on late startup
+------------------------
+If the app starts during market hours on a trading day and either of
+today's scheduled jobs was missed, they are backfilled sequentially as
+part of startup:
 
-Task list (all three states) — INFRASTRUCTURE ONLY:
+    * daily_refresh    — if no run recorded today (meta_data guard)
+    * first_candle     — if first_candle.json is missing / stale for today
+
+The pipeline order becomes:
 
     1.  Telegram start notification
     2.  Cleanup transient folders
@@ -19,18 +25,14 @@ Task list (all three states) — INFRASTRUCTURE ONLY:
     5.  Backup extract from MongoDB
     6.  Reload instrument registry
     6b. Pre-register core indexes (Nifty 50, SENSEX)
-    7.  Wire broadcast loop
-    8.  Start / restart live feed
-    9.  Start scheduler (idempotent)
-    10. Start Telegram bot (idempotent)
-    11. Telegram completion notification
-    12. Return structured result
-
-Strategy stages (EMA backfill seed, Opening Range calculation,
-live-cross handler wiring) and ProChart have been removed from this
-codebase entirely. The pipeline does not call them, and no admin
-endpoint exposes them — the refresh is purely infrastructure /
-token / feed / scheduler.
+    6c. BACKFILL: daily_refresh (if missed today)
+    6d. Loop wiring
+    6e. BACKFILL: first_candle (if missed today)
+    7.  Live feed
+    8.  Scheduler
+    9.  Telegram bot
+    10. Telegram completion notification
+    11. Return structured result
 """
 
 from __future__ import annotations
@@ -45,6 +47,7 @@ from fastapi import APIRouter
 
 from core import config
 from core.logger import get_logger
+from services.backfill_guard import ran_today
 from services.backup_data_service import backup_data_service
 from services.cleanup_service import cleanup_service
 from services.instrument_registry import instrument_registry
@@ -53,6 +56,7 @@ from services.live_feed_service import (
     DEFAULT_CORE_INSTRUMENTS,
     live_feed_service,
 )
+from services.market_holiday_service import market_holiday_service
 from services.normalization import normalize_underlying
 from services.scheduler_service import scheduler_service
 from services.telegram_service import telegram_service
@@ -67,14 +71,14 @@ router = APIRouter()
 
 
 # --------------------------------------------------------------------------- #
-# Decorative constants for Telegram messages                                  #
+# Decorative constants                                                        #
 # --------------------------------------------------------------------------- #
 _DIV = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 _THIN = "────────────────────────────────"
 
 
 # --------------------------------------------------------------------------- #
-# Time / market-hours helpers                                                  #
+# Time / market-hours helpers                                                 #
 # --------------------------------------------------------------------------- #
 def _market_tz() -> ZoneInfo:
     try:
@@ -93,6 +97,8 @@ def _now_market_time() -> dtime:
 
 _CATCHUP_WINDOW_OPEN = dtime(9, 15)
 _CATCHUP_WINDOW_CLOSE = dtime(23, 59)
+_SESSION_OPEN = dtime(9, 15)
+_SESSION_CLOSE = dtime(15, 30)
 
 
 def _in_market_hours() -> bool:
@@ -103,12 +109,31 @@ def _post_market() -> bool:
     return _now_market_time() > dtime(15, 30)
 
 
+def _in_active_session() -> bool:
+    """True when now is inside the live trading session Mon-Fri."""
+    now = _now_market()
+    if now.weekday() > 4:
+        return False
+    return _SESSION_OPEN <= now.time() <= _SESSION_CLOSE
+
+
+def _is_trading_holiday_today() -> bool:
+    """True when today is a market holiday (best-effort)."""
+    try:
+        payload = market_holiday_service.get_today()
+        return str(payload.get("status") or "").lower() == "holiday"
+    except Exception:
+        logger.exception("[refresh] holiday check failed — assuming trading day")
+        return False
+
+
 def _catchup_snapshot() -> dict[str, Any]:
     now = _now_market_time()
     return {
         "current_time_ist": now.isoformat(),
         "in_market_hours": _in_market_hours(),
         "post_market": _post_market(),
+        "in_active_session": _in_active_session(),
         "catchup_window": {
             "open": _CATCHUP_WINDOW_OPEN.isoformat(),
             "close": _CATCHUP_WINDOW_CLOSE.isoformat(),
@@ -117,15 +142,9 @@ def _catchup_snapshot() -> dict[str, Any]:
 
 
 # --------------------------------------------------------------------------- #
-# Telegram bot state helper                                                    #
+# Telegram bot state helper                                                   #
 # --------------------------------------------------------------------------- #
 def _telegram_bot_active(fallback: bool = False) -> bool:
-    """Return the bot's **actual** running/polling state.
-
-    Reads ``telegram_token_bot.is_running`` (a truthful flag set only
-    once polling begins), falling back to ``polling`` / ``enabled`` on
-    older builds.
-    """
     for attr in ("is_running", "polling", "enabled"):
         value = getattr(telegram_token_bot, attr, None)
         if isinstance(value, bool):
@@ -134,10 +153,16 @@ def _telegram_bot_active(fallback: bool = False) -> bool:
 
 
 # --------------------------------------------------------------------------- #
-# Core-index pre-registration                                                  #
+# Core-index pre-registration                                                 #
 # --------------------------------------------------------------------------- #
+def _safe_folder_for(name: Any) -> str:
+    text = str(name or "unknown").strip()
+    for ch in ("|", "/", "\\", ":", "*", "?", '"', "<", ">", " "):
+        text = text.replace(ch, "_")
+    return text.strip("._") or "unknown"
+
+
 def _ensure_core_indexes_registered() -> int:
-    """Pre-register NIFTY 50 and SENSEX so ``/live/*`` works out of the box."""
     seen: set[str] = set()
     created = 0
 
@@ -152,25 +177,16 @@ def _ensure_core_indexes_registered() -> int:
         underlying = normalize_underlying(symbol) or None
 
         entry = instrument_registry.register_adhoc(
-            k,
-            trading_symbol=symbol,
-            underlying=underlying,
+            k, trading_symbol=symbol, underlying=underlying,
         )
         if not existed_before:
             created += 1
             logger.info(
                 "[refresh] pre-registered index %s (symbol=%s, underlying=%s)",
-                k,
-                symbol,
-                underlying,
+                k, symbol, underlying,
             )
 
         if entry and not entry.get("ema_path"):
-            # NOTE: ema_path / candles_path fields are still populated so
-            # any downstream /live/* route that expects a valid path keeps
-            # working. No engine consumes the file contents anymore, but
-            # the registry field is harmless to keep and makes /live/snapshot
-            # consistently return a path even for newly registered indexes.
             canonical_dir = (
                 Path(config.LIVE_DATA_DIR) / "index" / _safe_folder_for(k)
             )
@@ -183,22 +199,58 @@ def _ensure_core_indexes_registered() -> int:
     return created
 
 
-def _safe_folder_for(name: Any) -> str:
-    """Filesystem-safe representation of an instrument key.
+# --------------------------------------------------------------------------- #
+# Backfill helpers                                                            #
+# --------------------------------------------------------------------------- #
+def _should_backfill_daily_refresh() -> tuple[bool, str]:
+    """Decide if we should re-run the daily refresh as a startup backfill."""
+    if not _in_active_session():
+        return False, "outside_active_session"
+    if _is_trading_holiday_today():
+        return False, "market_holiday"
+    if ran_today("daily_refresh"):
+        return False, "already_ran_today"
+    return True, "missed_today"
 
-    Kept local to ``_ensure_core_indexes_registered`` because the only
-    remaining consumer of ``ema_path`` / ``candles_path`` is the
-    registry itself (the strategy code that used ``_safe_folder`` was
-    deleted).
-    """
-    text = str(name or "unknown").strip()
-    for ch in ("|", "/", "\\", ":", "*", "?", '"', "<", ">", " "):
-        text = text.replace(ch, "_")
-    return text.strip("._") or "unknown"
+
+def _first_candle_file_for_first_instrument() -> Path | None:
+    entries = instrument_registry.all()
+    if not entries:
+        return None
+    from services.first_candle_service import _folder_for_entry
+    try:
+        return _folder_for_entry(entries[0]) / "first_candle.json"
+    except Exception:
+        return None
+
+
+def _should_backfill_first_candle() -> tuple[bool, str]:
+    """Decide if we should re-run first_candle as a startup backfill."""
+    if not _in_active_session():
+        return False, "outside_active_session"
+    if _is_trading_holiday_today():
+        return False, "market_holiday"
+    if _now_market_time() < dtime(9, 16):
+        return False, "before_first_candle_window"
+
+    today = _now_market().date().isoformat()
+    path = _first_candle_file_for_first_instrument()
+    if path is None or not path.exists():
+        return True, "missing_today"
+
+    try:
+        import json
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if str(payload.get("date") or "") != today:
+            return True, "stale_date"
+    except Exception:
+        return True, "unparseable"
+
+    return False, "already_computed_today"
 
 
 # --------------------------------------------------------------------------- #
-# Telegram formatting helpers                                                  #
+# Telegram formatting helpers                                                 #
 # --------------------------------------------------------------------------- #
 def _start_message(reason: str, catchup_meta: dict[str, Any]) -> str:
     return (
@@ -207,8 +259,8 @@ def _start_message(reason: str, catchup_meta: dict[str, Any]) -> str:
         f"{_DIV}\n"
         f"🕒 Market time:   {_now_market().strftime('%H:%M:%S')} IST\n"
         f"🎯 Mode:          {reason}\n"
-        f"🪟 Catch-up:      "
-        f"{'yes' if catchup_meta['in_market_hours'] else 'no'}\n"
+        f"🪟 In session:    "
+        f"{'yes' if catchup_meta['in_active_session'] else 'no'}\n"
         f"🌙 Post-market:   "
         f"{'yes' if catchup_meta['post_market'] else 'no'}\n"
         f"{_THIN}\n"
@@ -231,8 +283,21 @@ def _completion_message(
     feed_ok: bool,
     scheduler_ok: bool,
     telegram_ok: bool,
+    first_candle_summary: dict[str, Any] | None,
     status: str,
 ) -> str:
+    fc_line = ""
+    if first_candle_summary and not first_candle_summary.get("skipped"):
+        fc_line = (
+            f"🎯 OR levels:     {first_candle_summary.get('computed')}/"
+            f"{first_candle_summary.get('total')}  "
+            f"crosses={first_candle_summary.get('crosses_detected')}\n"
+        )
+    elif first_candle_summary and first_candle_summary.get("skipped"):
+        fc_line = (
+            f"⏸️ OR levels:     skipped ({first_candle_summary.get('skip_reason')})\n"
+        )
+
     return (
         f"{_DIV}\n"
         f"🏁 {reason.upper()} REFRESH COMPLETED\n"
@@ -249,6 +314,7 @@ def _completion_message(
         f"📦 Backup:        status={backup.get('status')}  "
         f"files={backup.get('file_count')}\n"
         f"📊 Registry:      {registry.get('count')} instruments\n"
+        f"{fc_line}"
         f"{_THIN}\n"
         f"📡 Live feed:     {'✓' if feed_ok else '✗'}\n"
         f"⏰ Scheduler:     {'✓' if scheduler_ok else '✗'}\n"
@@ -259,7 +325,7 @@ def _completion_message(
 
 
 # --------------------------------------------------------------------------- #
-# Unified refresh (infrastructure only)                                       #
+# Unified refresh                                                             #
 # --------------------------------------------------------------------------- #
 def _run_full_refresh_sync(
     reason: str = "manual",
@@ -267,9 +333,10 @@ def _run_full_refresh_sync(
 ) -> dict[str, Any]:
     """Execute every infrastructure refresh task in canonical order.
 
-    Strategy stages (EMA backfill seed, Opening Range calculation,
-    live-cross handler wiring) and ProChart have been removed — this
-    pipeline is infrastructure-only.
+    On startup, additional backfill stages run when today's scheduled
+    jobs were missed (late start during market hours):
+        * daily_refresh  (if not yet run today)
+        * first_candle   (if today's first_candle.json is missing)
     """
     label = reason.title()
     catchup_meta = _catchup_snapshot()
@@ -305,9 +372,7 @@ def _run_full_refresh_sync(
     except Exception as exc:
         logger.exception("[%s] cleanup failed", reason)
         cleanup = {
-            "reason": reason,
-            "removed": [],
-            "skipped": [],
+            "reason": reason, "removed": [], "skipped": [],
             "errors": [f"{type(exc).__name__}: {exc}"],
         }
 
@@ -343,16 +408,40 @@ def _run_full_refresh_sync(
         }
         logger.info(
             "[%s] index pre-registration: +%d new ad-hoc entries, registry=%d",
-            reason,
-            added,
-            registry["count"],
+            reason, added, registry["count"],
         )
     except Exception:
         logger.exception("[%s] index pre-registration failed", reason)
 
+    # ---- 4b. BACKFILL: daily_refresh (only on startup) ---------------- #
+    backfill_daily: dict[str, Any] | None = None
+    if reason == "startup":
+        should, why = _should_backfill_daily_refresh()
+        if should:
+            logger.warning(
+                "[startup] BACKFILL ACTIVATED — daily_refresh missed today (%s)",
+                why,
+            )
+            try:
+                from services.backfill_guard import mark_ran
+                # Already inside the refresh pipeline — the daily_refresh
+                # wrapper would recurse. So we just re-use the same result
+                # and mark it as ran.
+                mark_ran("daily_refresh", reason="startup_backfill", status="ok")
+                backfill_daily = {
+                    "activated": True,
+                    "reason": why,
+                    "note": "existing startup pipeline serves as the daily refresh for today",
+                }
+            except Exception:
+                logger.exception("[startup] daily_refresh backfill marker failed")
+        else:
+            logger.info(
+                "[startup] daily_refresh backfill skipped — %s", why,
+            )
+            backfill_daily = {"activated": False, "reason": why}
+
     # ---- 5. Loop wiring ---------------------------------------------- #
-    # The live-cross handler was removed with the strategy layer, so
-    # only the broadcast loop wiring remains here.
     if loop is not None:
         try:
             live_broadcast.set_loop(loop)
@@ -370,6 +459,35 @@ def _run_full_refresh_sync(
             feed_ok = live_feed_service.start()
     except Exception:
         logger.exception("[%s] live feed start/restart failed", reason)
+
+    # ---- 6b. BACKFILL: first_candle (only on startup) ---------------- #
+    first_candle_summary: dict[str, Any] | None = None
+    if reason == "startup":
+        should, why = _should_backfill_first_candle()
+        if should:
+            logger.warning(
+                "[startup] BACKFILL ACTIVATED — first_candle missed today (%s)",
+                why,
+            )
+            try:
+                from services.first_candle_service import first_candle_service
+                first_candle_summary = first_candle_service.run(reason="startup_backfill")
+                first_candle_summary["backfill_reason"] = why
+                logger.info(
+                    "[startup] first_candle backfill: computed=%d crosses=%d "
+                    "skipped=%d errors=%d elapsed=%ss",
+                    first_candle_summary.get("computed", 0),
+                    first_candle_summary.get("crosses_detected", 0),
+                    first_candle_summary.get("instrument_skipped", 0),
+                    first_candle_summary.get("errors", 0),
+                    first_candle_summary.get("elapsed_seconds", 0.0),
+                )
+            except Exception:
+                logger.exception("[startup] first_candle backfill failed")
+        else:
+            logger.info(
+                "[startup] first_candle backfill skipped — %s", why,
+            )
 
     # ---- 7. Scheduler ------------------------------------------------ #
     scheduler_ok = True
@@ -406,6 +524,8 @@ def _run_full_refresh_sync(
         "token_status": token_status,
         "backup": backup,
         "registry": registry,
+        "backfill_daily_refresh": backfill_daily,
+        "first_candle": first_candle_summary,
         "feed_restarted": feed_ok,
         "scheduler_started": scheduler_ok,
         "telegram_started": telegram_ok,
@@ -415,8 +535,7 @@ def _run_full_refresh_sync(
     status = "SUCCESS" if backup.get("status") == "ok" else "WARNING"
 
     message = _completion_message(
-        reason,
-        catchup_meta,
+        reason, catchup_meta,
         cleanup=cleanup,
         token_refresh_ok=token_refresh_ok,
         token_valid=token_valid,
@@ -426,6 +545,7 @@ def _run_full_refresh_sync(
         feed_ok=feed_ok,
         scheduler_ok=scheduler_ok,
         telegram_ok=telegram_ok,
+        first_candle_summary=first_candle_summary,
         status=status,
     )
     telegram_service.send_message(
@@ -442,11 +562,10 @@ def _run_full_refresh_sync(
 
 
 # --------------------------------------------------------------------------- #
-# HTTP routes                                                                  #
+# HTTP routes                                                                 #
 # --------------------------------------------------------------------------- #
 @router.post("/admin/hard-refresh")
 async def hard_refresh() -> dict[str, Any]:
-    """Unified refresh triggered from the API."""
     return await asyncio.to_thread(_run_full_refresh_sync, "manual", None)
 
 

@@ -1,8 +1,13 @@
+# File: token_tasks/daily_refresh.py
 """Daily refresh job — runs Mon–Fri at the configured IST time.
 
 Delegates to the unified refresh routine in ``routes.admin_routes``
 so the daily refresh executes exactly the same task list as project
 startup and manual hard refresh.
+
+After completion, the job marks ``meta_data/last_daily_refresh.json``
+so a later startup can detect "already ran today" and skip the
+backfill.
 """
 
 from __future__ import annotations
@@ -18,6 +23,7 @@ logger = logging.getLogger(__name__)
 def run_daily_refresh() -> None:
     # Imported here to avoid any import cycle at module load time.
     from routes.admin_routes import _run_full_refresh_sync
+    from services.backfill_guard import mark_ran
 
     logger.info(
         "Daily refresh starting (scheduled %02d:%02d %s)",
@@ -36,6 +42,8 @@ def run_daily_refresh() -> None:
     try:
         result = _run_full_refresh_sync("daily")
         logger.info("Daily refresh completed: %s", result)
+        # Record success so startup backfill won't re-run today.
+        mark_ran("daily_refresh", reason="scheduled", status="ok")
     except Exception as exc:
         logger.exception("Daily refresh failed")
         telegram_service.send_message(
