@@ -1,4 +1,5 @@
 #!/bin/bash
+# start.sh
 
 APP_NAME="ema_v2"
 PORT=8002
@@ -28,6 +29,19 @@ if [ -f "$PID_FILE" ]; then
     else
         echo "Removing stale PID file."
         rm -f "$PID_FILE"
+    fi
+fi
+
+# ------------------------------------------------------------------
+# Pre-startup safety check: ensure port 8002 is completely free
+# ------------------------------------------------------------------
+if command -v lsof >/dev/null 2>&1; then
+    PORT_PIDS=$(lsof -ti tcp:"$PORT" 2>/dev/null)
+    if [ -n "$PORT_PIDS" ]; then
+        echo "WARNING: Port $PORT is already held by PID(s): $PORT_PIDS"
+        echo "Cleaning up conflicting process before starting..."
+        kill -9 $PORT_PIDS 2>/dev/null
+        sleep 1
     fi
 fi
 
