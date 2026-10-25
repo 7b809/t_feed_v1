@@ -4,20 +4,21 @@
     GET  /live-sr/market-status                -> today's trading status + next open
     GET  /live-sr/index/{underlying}           -> filtered instruments + OR + SR
     GET  /live-sr/summary                      -> all configured indexes at once
-    POST /live-sr/backfill                     -> manual SR backfill (runs intraday seed)
+    POST /live-sr/backfill                     -> manual SR backfill (gated)
 
-These endpoints power the "Level-Filtered Instruments" section on the
-dashboard (``templates/index.html``) and the non-market-day banner.
+The manual backfill endpoint respects the same trading-day /
+time-window gate as the automatic backfill:
 
-Reads from disk (never re-computes):
-    data/index/<underlying_lower>/first_candle.json
-    data/index/<underlying_lower>/level_instruments.json
-    data/<underlying>/<strike>_<type>/live_sr_levels.json
-    data/index/<underlying_lower>/live_sr_levels.json
+    * SR_BACKFILL_ENABLED must be True
+    * LIVE_SR_ENABLED must be True
+    * current time must be in [09:15, 23:59] IST
+    * today must be Mon–Fri
+    * today must NOT be a trading holiday
 
-LTP is not included in the response — the frontend already has WS ticks
-in ``state.ticks``. A ``ltp_server_snapshot`` field is included as a
-fallback for first paint before the first WS tick arrives.
+Outside that window, ``sr_backfill_service.run()`` returns a summary
+with ``status="skipped"`` and ``skip_reason`` set. This endpoint
+surfaces the same summary, plus an ``allowed`` boolean so callers
+can distinguish "skipped" from "ran but produced no candles".
 """
 
 from __future__ import annotations
@@ -40,6 +41,9 @@ router = APIRouter(prefix="/live-sr", tags=["live-sr"])
 _MARKET_TZ = ZoneInfo("Asia/Kolkata")
 
 
+# --------------------------------------------------------------------------- #
+# Small helpers                                                               #
+# --------------------------------------------------------------------------- #
 def _now_market() -> datetime:
     return datetime.now(_MARKET_TZ)
 
@@ -141,6 +145,9 @@ def _trading_status() -> dict[str, Any]:
     }
 
 
+# --------------------------------------------------------------------------- #
+# Filesystem helpers                                                          #
+# --------------------------------------------------------------------------- #
 def _index_folder(underlying: str) -> Path:
     return Path(config.LIVE_DATA_DIR) / "index" / underlying.lower()
 
@@ -173,7 +180,6 @@ def _build_instrument_row(
     levels = list(inst.get("levels") or [])
     reasons = list(inst.get("reasons") or [])
 
-    # Raw level price: the first non-null OR value matched by this strike.
     level_price = None
     for name in levels:
         raw = or_levels.get(name)
@@ -184,7 +190,6 @@ def _build_instrument_row(
             except (TypeError, ValueError):
                 pass
 
-    # Live SR: read persisted file if it exists.
     sr_payload = _read_json(_option_sr_path(underlying, strike, strike_type))
     sr_levels = (sr_payload or {}).get("levels") or []
     sr_count = len(sr_levels)
@@ -195,7 +200,6 @@ def _build_instrument_row(
         except (TypeError, ValueError):
             sr_latest = None
 
-    # LTP fallback from feed cache (frontend overrides with WS tick).
     ltp_snapshot = None
     try:
         from services.live_feed_service import live_feed_service
@@ -256,7 +260,6 @@ def _build_index_payload(underlying: str) -> dict[str, Any]:
         for i in (level_instruments.get("pe_instruments") or [])
     ]
 
-    # Index SR (if tracked).
     index_key = level_instruments.get("index_instrument_key")
     index_sr = _read_json(_index_sr_path(u))
     index_sr_count = len((index_sr or {}).get("levels") or [])
@@ -336,7 +339,24 @@ def summary() -> dict[str, Any]:
 
 @router.post("/backfill")
 def trigger_backfill(send_telegram: bool = False) -> dict[str, Any]:
-    """Force a manual SR backfill (runs the intraday seed)."""
+    """Force a manual SR backfill (runs the intraday seed).
+
+    GATE
+    ----
+    This endpoint honours the same trading-day / time-window gate as
+    the automatic feed-start backfill:
+
+      * ``SR_BACKFILL_ENABLED`` must be True
+      * ``LIVE_SR_ENABLED`` must be True
+      * current time must be in ``[09:15, 23:59]`` IST
+      * today must be Mon–Fri
+      * today must NOT be a trading holiday
+
+    The response always includes ``allowed`` (the gate result) and
+    ``skip_reason`` (the human-readable reason when skipped) so a
+    caller can distinguish a "skipped" response from a run that
+    simply produced no candles.
+    """
     try:
         from services.sr_backfill_service import sr_backfill_service
     except Exception as exc:
@@ -344,6 +364,24 @@ def trigger_backfill(send_telegram: bool = False) -> dict[str, Any]:
             status_code=500,
             detail={"error": f"{type(exc).__name__}: {exc}"},
         )
-    return sr_backfill_service.run(
+
+    # Gate check (same logic the service uses internally).
+    allowed, skip_reason = sr_backfill_service.should_run()
+
+    result = sr_backfill_service.run(
         reason="manual", send_telegram=send_telegram,
     )
+
+    # Annotate the response so callers can tell the two cases apart.
+    result["allowed"] = bool(allowed)
+    result["skip_reason"] = (
+        skip_reason if not allowed else result.get("skip_reason")
+    )
+    result["window_ist"] = (
+        f"{int(config.SR_BACKFILL_START_HOUR):02d}:"
+        f"{int(config.SR_BACKFILL_START_MINUTE):02d}"
+        f"-"
+        f"{int(config.SR_BACKFILL_END_HOUR):02d}:"
+        f"{int(config.SR_BACKFILL_END_MINUTE):02d}"
+    )
+    return result

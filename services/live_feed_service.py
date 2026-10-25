@@ -10,8 +10,11 @@ SR integration
 * On start, every subscribed instrument is registered with
   ``live_sr_levels_service``.
 * A mid-session SR backfill runs BEFORE the streamer thread is spawned,
-  so the dashboard has OR/SR levels immediately (see
-  ``sr_backfill_service``).
+  so the dashboard has OR/SR levels immediately — BUT ONLY when the
+  current market-local time is inside [09:15, 23:59] IST on a
+  Mon–Fri, non-holiday trading day. Outside that window (e.g. a 00:33
+  startup) the backfill is skipped; live ticks will populate the SR
+  engine when the market opens.
 * Each tick is forwarded to ``live_sr_levels_service.on_tick`` so the
   SR engine builds 1-min candles and detects pivots.
 
@@ -66,6 +69,9 @@ class LiveFeedService:
     def set_loop(self, loop) -> None:
         self._loop = loop
 
+    # ------------------------------------------------------------------ #
+    # Subscription helpers                                               #
+    # ------------------------------------------------------------------ #
     def _ensure_core_subscriptions(self) -> None:
         targets = [k for k, _ in DEFAULT_CORE_INSTRUMENTS]
         if config.HEALTH_FEED_INSTRUMENT:
@@ -108,16 +114,52 @@ class LiveFeedService:
         except Exception:
             logger.exception("[live-feed] SR register_all failed")
 
+    # ------------------------------------------------------------------ #
+    # SR backfill (gated by trading-day / time-window)                   #
+    # ------------------------------------------------------------------ #
     def _run_sr_backfill(self, reason: str) -> None:
         """Run intraday backfill before the streamer thread spawns.
+
+        GATE
+        ----
+        The backfill only runs when ALL of the following hold:
+
+          * ``SR_BACKFILL_ENABLED`` is True
+          * ``LIVE_SR_ENABLED`` is True
+          * Current time is in ``[SR_BACKFILL_START_HOUR:MINUTE,
+            SR_BACKFILL_END_HOUR:MINUTE]`` IST (default 09:15 – 23:59)
+          * Today is Mon–Fri (not a weekend)
+          * Today is NOT a trading holiday (per Upstox holiday API)
+
+        This method mirrors the service-level check so the skip line is
+        emitted at the feed level as well. ``sr_backfill_service.run``
+        also re-checks the window, so a manual call cannot bypass the
+        gate.
 
         Wrapped so a failure here never blocks feed start.
         """
         if not config.SR_BACKFILL_ENABLED:
             logger.info("[live-feed] SR backfill disabled by config")
             return
+
         try:
             from services.sr_backfill_service import sr_backfill_service
+        except Exception:
+            logger.exception(
+                "[live-feed] sr_backfill_service import failed"
+            )
+            return
+
+        # ---- Defensive gate: mirror should_run() at the feed level ---- #
+        should_run, skip_reason = sr_backfill_service.should_run()
+        if not should_run:
+            logger.info(
+                "[live-feed] SR backfill skipped at feed-start — %s",
+                skip_reason,
+            )
+            return
+
+        try:
             entries: list[dict[str, Any]] = []
             for key in self._subscribed:
                 entry = instrument_registry.get(key)
@@ -191,8 +233,6 @@ class LiveFeedService:
         self.stop()
         time.sleep(1)
         if skip_sr_backfill:
-            # Temporary flag bypass for the /admin/ops/resubscribe-feed
-            # fast-reconnect path.
             original = config.SR_BACKFILL_ENABLED
             config.SR_BACKFILL_ENABLED = False
             try:

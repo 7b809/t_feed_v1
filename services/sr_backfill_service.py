@@ -1,27 +1,35 @@
 # services/sr_backfill_service.py
 """Intraday SR backfill — seeds the SR engine from today's 1-min candles.
 
-On startup mid-session (between SR_BACKFILL_START and SR_BACKFILL_END on
-a trading day), this service fetches today's intraday 1-min candles
-from Upstox for every tracked instrument via
+Runs ONLY when ALL of the following are true:
 
-    upstox_client.HistoryV3Api.get_intra_day_candle_data(
-        instrument_key, "minutes", "1"
-    )
+  * SR_BACKFILL_ENABLED is True
+  * LIVE_SR_ENABLED is True
+  * Current time is in [SR_BACKFILL_START_HOUR:MINUTE,
+                        SR_BACKFILL_END_HOUR:MINUTE] IST
+                        (default 09:15 — 23:59)
+  * Today is Mon–Fri (not a weekend)
+  * Today is NOT a trading holiday (per Upstox holiday API)
 
-and feeds them into the SR engine's ``seed_candles`` method. That makes
-OR + SR levels immediately available on the dashboard without waiting
-for the live feed to accumulate 31+ candles.
+This gate is enforced in ``should_run()`` which is consulted by:
+
+  * ``services/live_feed_service.LiveFeedService._run_sr_backfill``
+  * ``routes/live_sr_routes.trigger_backfill``
+  * ``SRBackfillService.run`` (defensive — callers may already have
+    checked, but ``run`` re-checks so a direct call cannot bypass
+    the window)
 
 Called from
 -----------
 * ``services.live_feed_service.LiveFeedService.start()`` — before
   spawning the WebSocket worker thread.
+* ``POST /live-sr/backfill`` — manual trigger.
 
 Telegram + log
 --------------
 A Telegram summary is sent on the ``startup`` / ``feed_start`` path
-only. A log line at INFO level is always written.
+only. A log line at INFO level is always written (including the
+``skipped`` case with the exact reason).
 
 Safety
 ------
@@ -49,6 +57,9 @@ logger = get_logger(__file__)
 _MARKET_TZ = ZoneInfo("Asia/Kolkata")
 
 
+# --------------------------------------------------------------------------- #
+# Small time helpers                                                          #
+# --------------------------------------------------------------------------- #
 def _now_market() -> datetime:
     return datetime.now(_MARKET_TZ)
 
@@ -133,11 +144,23 @@ def _fetch_intraday_candles(
     return out
 
 
+# --------------------------------------------------------------------------- #
+# Gate helpers                                                                #
+# --------------------------------------------------------------------------- #
 def _is_trading_day() -> tuple[bool, str]:
-    """Return (is_trading_day, reason). Weekend/holiday both -> False."""
+    """Return (is_trading_day, reason).
+
+    A weekend or a trading holiday both produce ``(False, reason)``.
+    Provider errors are treated as "not a holiday" — a network outage
+    must never silently skip a real trading day.
+    """
     now = _now_market()
+
+    # 1. Weekend check (Mon-Fri only)
     if now.weekday() > 4:
         return False, f"weekend ({now.strftime('%A')})"
+
+    # 2. Holiday check
     try:
         from services.market_holiday_service import market_holiday_service
         payload = market_holiday_service.get_today()
@@ -154,10 +177,17 @@ def _is_trading_day() -> tuple[bool, str]:
         logger.exception(
             "[sr-backfill] holiday check failed; assuming trading day"
         )
+
     return True, "trading_day"
 
 
 def _in_window() -> tuple[bool, str]:
+    """Return (in_window, reason).
+
+    ``in_window`` is True only when the current market-local time is
+    between ``SR_BACKFILL_START_HOUR:MINUTE`` (default 09:15) and
+    ``SR_BACKFILL_END_HOUR:MINUTE`` (default 23:59) inclusive.
+    """
     now = _now_market().time()
     start = dtime(
         int(config.SR_BACKFILL_START_HOUR),
@@ -167,37 +197,74 @@ def _in_window() -> tuple[bool, str]:
         int(config.SR_BACKFILL_END_HOUR),
         int(config.SR_BACKFILL_END_MINUTE),
     )
+
     if start <= now <= end:
         return True, "in_window"
+
     return False, (
         f"outside_window (now={now.isoformat()}, "
         f"window={start.isoformat()}-{end.isoformat()})"
     )
 
 
+# --------------------------------------------------------------------------- #
+# Service                                                                     #
+# --------------------------------------------------------------------------- #
 class SRBackfillService:
     def __init__(self) -> None:
         self._last_status: dict[str, Any] = {"status": "never"}
 
+    # ------------------------------------------------------------------ #
+    # Public gate — called by every entry point                          #
+    # ------------------------------------------------------------------ #
     def should_run(self) -> tuple[bool, str]:
+        """Return (should_run, reason).
+
+        Called by:
+          * ``services.live_feed_service._run_sr_backfill``
+          * ``routes/live_sr_routes.trigger_backfill``
+          * ``SRBackfillService.run`` (defensive)
+
+        Decision order (first failure wins):
+
+          1. ``SR_BACKFILL_ENABLED`` is False             -> "disabled"
+          2. ``LIVE_SR_ENABLED`` is False                 -> "sr_disabled"
+          3. Weekend / trading holiday                     -> "weekend (...)" / "holiday (...)"
+          4. Outside [09:15, 23:59] IST                    -> "outside_window (...)"
+
+        Provider errors during the holiday check are treated as
+        "not a holiday" so an Upstox outage does not silently skip a
+        real trading day.
+        """
+        # 1. Feature toggles
         if not config.SR_BACKFILL_ENABLED:
             return False, "disabled"
         if not config.LIVE_SR_ENABLED:
             return False, "sr_disabled"
+
+        # 2. Trading day (weekend / holiday)
         trading, reason = _is_trading_day()
         if not trading:
             return False, reason
+
+        # 3. Time window (09:15 - 23:59 IST)
         in_win, win_reason = _in_window()
         if not in_win:
             return False, win_reason
+
         return True, "ok"
 
+    # ------------------------------------------------------------------ #
+    # Public entry point                                                 #
+    # ------------------------------------------------------------------ #
     def run(
         self,
         reason: str = "feed_start",
         entries: list[dict[str, Any]] | None = None,
         send_telegram: bool = True,
     ) -> dict[str, Any]:
+        # Re-check the gate here so a direct call (bypassing
+        # should_run at the caller level) cannot bypass the window.
         should, why = self.should_run()
         if not should:
             summary = {

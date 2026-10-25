@@ -52,6 +52,28 @@ The file is written when:
 
 The ``_suppress_persist`` flag lets the seed path defer disk writes
 until the whole series is processed.
+
+Logging policy (VERBOSE_LOG)
+----------------------------
+The per-instrument log lines are **gated on ``config.VERBOSE_LOG``**:
+
+  * ``[live-sr] tracking <key> (<symbol>)``  — one line per
+    ``register_instrument`` call. Fires 167× on feed start when
+    ``LIVE_SR_TRACK_ALL_INSTRUMENTS=true``. INFO noise unless
+    debugging → gated on ``VERBOSE_LOG``.
+  * ``[live-sr] hydrated <key> from disk: N level(s)`` — one line per
+    instrument on mid-day restart. Gated on ``VERBOSE_LOG``.
+  * ``[live-sr] seeded <key>: candles=N pivots=M`` — one line per
+    instrument on backfill. Gated on ``VERBOSE_LOG``.
+
+The **summary** lines are always logged (single line, high value):
+
+  * ``[live-sr] register_all complete — N instrument(s) tracked``
+  * ``[live-sr] in-memory state cleared``
+  * every exception / persistence-failure line is always logged.
+
+To see per-instrument detail, set ``VERBOSE_LOG=true`` in ``.env``
+and restart. There is no code change required.
 """
 
 from __future__ import annotations
@@ -71,6 +93,21 @@ logger = get_logger(__file__)
 _MARKET_TZ = ZoneInfo("Asia/Kolkata")
 
 
+# --------------------------------------------------------------------------- #
+# Verbose-log helper                                                          #
+# --------------------------------------------------------------------------- #
+def _verbose() -> bool:
+    """Return the current ``VERBOSE_LOG`` flag.
+
+    Read fresh every call so a runtime toggle (in tests) is honoured.
+    Defaults to False when the attribute is missing (older builds).
+    """
+    return bool(getattr(config, "VERBOSE_LOG", False))
+
+
+# --------------------------------------------------------------------------- #
+# Path helpers                                                                #
+# --------------------------------------------------------------------------- #
 def _safe_folder(name: Any) -> str:
     text = str(name or "unknown").strip()
     for ch in ("|", "/", "\\", ":", "*", "?", '"', "<", ">", " "):
@@ -146,6 +183,9 @@ def _ms_to_iso(ms: int | None) -> str | None:
         return None
 
 
+# --------------------------------------------------------------------------- #
+# Service                                                                     #
+# --------------------------------------------------------------------------- #
 class LiveSRLevelsService:
     def __init__(self) -> None:
         self._guard = threading.Lock()
@@ -186,10 +226,16 @@ class LiveSRLevelsService:
                 logger.exception(
                     "[live-sr] initial persist failed for %s", key,
                 )
-            logger.info(
-                "[live-sr] tracking %s (%s)",
-                key, entry.get("trading_symbol"),
-            )
+            # Per-instrument log line — gated on VERBOSE_LOG because
+            # `register_all` calls this once per instrument (167× on
+            # feed start when LIVE_SR_TRACK_ALL_INSTRUMENTS=true).
+            # The `register_all complete` summary line below is the
+            # operator-facing signal; use that instead.
+            if _verbose():
+                logger.info(
+                    "[live-sr] tracking %s (%s)",
+                    key, entry.get("trading_symbol"),
+                )
         return True
 
     def register_all(self, entries: Iterable[dict[str, Any]]) -> int:
@@ -205,6 +251,7 @@ class LiveSRLevelsService:
                     "[live-sr] register_all failed for %s",
                     entry.get("instrument_key") if isinstance(entry, dict) else entry,
                 )
+        # Summary line — always logged (one line, high signal).
         logger.info(
             "[live-sr] register_all complete — %d instrument(s) tracked",
             len(self._registered),
@@ -326,10 +373,16 @@ class LiveSRLevelsService:
         result["candles_seeded"] = len(ordered)
         result["pivots_detected"] = len(state["levels"])
         result["total_levels"] = len(state["levels"])
-        logger.info(
-            "[live-sr] seeded %s: candles=%d pivots=%d",
-            key, len(ordered), len(state["levels"]),
-        )
+        # Per-instrument log line — gated on VERBOSE_LOG because
+        # `sr_backfill_service.run()` seeds every instrument in the
+        # registry (167× mid-session). The backfill service already
+        # emits a COMPLETE summary line; this per-instrument line is
+        # only useful when debugging a specific instrument.
+        if _verbose():
+            logger.info(
+                "[live-sr] seeded %s: candles=%d pivots=%d",
+                key, len(ordered), len(state["levels"]),
+            )
         return result
 
     def _scan_all_pivots(self, state: dict[str, Any]) -> bool:
@@ -733,11 +786,15 @@ class LiveSRLevelsService:
 
         state = self._init_state(entry, today)
         state["levels"] = list(payload.get("levels") or [])
-        logger.info(
-            "[live-sr] hydrated %s from disk: %d level(s)",
-            entry.get("instrument_key"),
-            len(state["levels"]),
-        )
+        # Per-instrument log line — gated on VERBOSE_LOG. Fires once
+        # per instrument on a mid-day restart. The summary line from
+        # `register_all complete` covers the operator-facing signal.
+        if _verbose():
+            logger.info(
+                "[live-sr] hydrated %s from disk: %d level(s)",
+                entry.get("instrument_key"),
+                len(state["levels"]),
+            )
         return state
 
     def _init_state(self, entry: dict[str, Any], date_str: str) -> dict[str, Any]:
@@ -775,6 +832,7 @@ class LiveSRLevelsService:
         with self._guard:
             self._states.clear()
             self._registered.clear()
+        # Always logged — rare event (daily refresh), single line.
         logger.info("[live-sr] in-memory state cleared")
 
     def status(self) -> dict[str, Any]:

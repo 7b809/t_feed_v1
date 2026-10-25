@@ -1,4 +1,4 @@
-{# templates/chart.html — single-instrument candle chart with optional CE↔PE swap FAB #}
+{# templates/chart.html — single-instrument candle chart with optional CE↔PE swap FAB + pivot-based SR levels #}
 {% extends "base.html" %}
 {% block title %}{{ instrument_name or instrument_key }} - Trading Dashboard{% endblock %}
 {% block head %}
@@ -173,6 +173,8 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
 .label-toggle-btn[data-indicator="ema9"].active { background: #2962ff; border-color: #2962ff; }
 .label-toggle-btn[data-indicator="ema21"].active { background: #f5c451; border-color: #f5c451; color: #111; }
 .label-toggle-btn[data-indicator="emaCross"].active { background: linear-gradient(90deg, #089981 0%, #f23645 100%); border-color: transparent; }
+/* SR Levels — active style uses red→blue to match the resistance/support color pair */
+.label-toggle-btn[data-indicator="srLevels"].active { background: linear-gradient(90deg, #FF0000 0%, #233dee 100%); border-color: transparent; }
 
 .scroll-nav { position: fixed; right: 20px; bottom: 24px; z-index: 300; display: flex; flex-direction: column; gap: 8px; }
 .scroll-nav-btn { width: 42px; height: 42px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--border); border-radius: 50%; background: var(--surface-2); color: var(--text); box-shadow: var(--shadow); cursor: pointer; transition: all 0.15s ease; font-size: 16px; }
@@ -445,6 +447,10 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
     <button type="button" class="label-toggle-btn" data-indicator="ema9" title="Show / hide EMA 9 line">EMA 9</button>
     <button type="button" class="label-toggle-btn" data-indicator="ema21" title="Show / hide EMA 21 line">EMA 21</button>
     <button type="button" class="label-toggle-btn active" data-indicator="emaCross" title="Show / hide EMA 9/21 crossover BUY / SELL signals"><i class="bi bi-arrow-left-right me-1"></i>EMA Cross</button>
+    <!-- SR Levels: pivot-based Support/Resistance lines + break markers (default OFF) -->
+    <button type="button" class="label-toggle-btn" data-indicator="srLevels" title="Show / hide pivot-based Support/Resistance levels (red=resistance, blue=support, B=break)">
+      <i class="bi bi-hr me-1"></i>SR Levels
+    </button>
   </div>
 
   {% set _type = (instrument.get('option_type') or instrument.get('instrument_type') or '') | upper %}
@@ -772,14 +778,33 @@ let chartTooltip = null;
 let currentRenderedDate = null;
 
 // EMA cross on by default; EMA 9 / EMA 21 plots OFF by default
+// SR Levels (pivot-based Support/Resistance) OFF by default — user
+// turns it on via the "SR Levels" toggle button.
 const indicatorState = {
   ema9:     { enabled: false, series: null, length: 9,  color: "#2962ff" },
   ema21:    { enabled: false, series: null, length: 21, color: "#f5c451" },
   emaCross: { enabled: true,  markers: [] },
+  srLevels: {
+    enabled: false,
+    // Pivot params — match the TradingView reference defaults
+    leftBars: 15,
+    rightBars: 15,
+    // Volume OSC threshold (percent). Only applied when the candle
+    // stream carries volume (see detectSRBreaks).
+    volumeThreshold: 20,
+    // Detected pivots: { type: "resistance"|"support", price,
+    //   pivotIndex, pivotTime, confirmIndex, confirmTime }
+    detectedPivots: [],
+    // Rendered line series (removed on toggle-off / re-render)
+    lines: [],
+  },
 };
 const emaCache = new Map();
 let emaCrossCache = { crosses: null, lastTime: null };
 let emaIncrementalRaf = null;
+// Marker rebuild tracker — avoids rebuilding on every intra-minute
+// tick; only rebuilds when a new candle arrives or on toggle changes.
+let lastMarkerRebuildTime = null;
 
 const dynamicPriceScale = {
   currentUnit: null, currentPrecision: null, currentMinMove: null,
@@ -1078,6 +1103,21 @@ function calculateEMA(candles, length) {
   return out;
 }
 
+/* EMA over a plain numeric array — used by the SR break volume OSC. */
+function calculateEMAFromValues(values, length) {
+  if (!Array.isArray(values) || values.length === 0 || length <= 0) return [];
+  const k = 2 / (length + 1);
+  const out = [];
+  let prev = null;
+  for (let i = 0; i < values.length; i++) {
+    const v = Number(values[i]);
+    const safe = Number.isFinite(v) ? v : 0;
+    prev = (prev === null) ? safe : (safe * k + prev * (1 - k));
+    out.push(prev);
+  }
+  return out;
+}
+
 function getOrComputeEMA(length, candles) {
   const source = candles || (candleSeries ? candleSeries.data() : []);
   if (!source || source.length === 0) return [];
@@ -1195,25 +1235,278 @@ function renderEMALines(candles) {
   }
 }
 
-function renderEMACrossMarkers(candles) {
+// ============================================================
+// SR LEVELS INDICATOR — pivot-based Support / Resistance
+// Mirrors the TradingView reference:
+//     Support_and_Resistance_Levels_with_Breaks_v6
+// - Strict pivot high / low with leftBars=rightBars=15
+// - Horizontal red (resistance) / blue (support) lines
+// - Break markers "B" gated by a volume-EMA-OSC threshold (>=20%)
+//   when volume data is available; falls back to no-threshold when the
+//   candle stream has no volume (index feeds, LTP-only option feeds).
+// ============================================================
+function ensureSRLevelsState() {
+  if (!indicatorState.srLevels) {
+    indicatorState.srLevels = {
+      enabled: false, leftBars: 15, rightBars: 15, volumeThreshold: 20,
+      detectedPivots: [], lines: [],
+    };
+  }
+}
+
+function removeSRLines() {
+  ensureSRLevelsState();
+  if (!chart) { indicatorState.srLevels.lines = []; return; }
+  indicatorState.srLevels.lines.forEach(series => {
+    try { chart.removeSeries(series); } catch (err) { console.warn("SR removeSeries failed:", err); }
+  });
+  indicatorState.srLevels.lines = [];
+}
+
+/**
+ * Full scan — recompute every pivot in the loaded candles.
+ * Called on toggle-on and on each new minute while SR is enabled.
+ *
+ * Algorithm (strict pivot rule, matching ta.pivothigh / ta.pivotlow):
+ *   resistance pivot at i  iff  candles[i].high > candles[j].high
+ *                               for every j in [i-left, i-1]
+ *                              and every j in [i+1, i+right]
+ *   support    pivot at i  iff  candles[i].low  < candles[j].low
+ *                               for every j in [i-left, i-1]
+ *                              and every j in [i+1, i+right]
+ *
+ * Pivots are only confirmed once `right` bars AFTER index i exist.
+ */
+function performFullSRScan(candles) {
+  ensureSRLevelsState();
+  const state = indicatorState.srLevels;
+  state.detectedPivots = [];
+
+  if (!Array.isArray(candles) || candles.length === 0) return;
+  const { leftBars, rightBars } = state;
+  const minNeeded = leftBars + rightBars + 1;
+  if (candles.length < minNeeded) return;
+
+  for (let i = leftBars; i < candles.length - rightBars; i++) {
+    const c = candles[i];
+    const cHigh = Number(c.high);
+    const cLow  = Number(c.low);
+    if (!Number.isFinite(cHigh) || !Number.isFinite(cLow)) continue;
+
+    let isHigh = true, isLow = true;
+    for (let j = i - leftBars; j < i; j++) {
+      const h = Number(candles[j].high);
+      const l = Number(candles[j].low);
+      if (!Number.isFinite(h) || cHigh <= h) isHigh = false;
+      if (!Number.isFinite(l) || cLow  >= l) isLow  = false;
+      if (!isHigh && !isLow) break;
+    }
+    if (isHigh || isLow) {
+      for (let j = i + 1; j <= i + rightBars; j++) {
+        const h = Number(candles[j].high);
+        const l = Number(candles[j].low);
+        if (!Number.isFinite(h) || cHigh <= h) isHigh = false;
+        if (!Number.isFinite(l) || cLow  >= l) isLow  = false;
+        if (!isHigh && !isLow) break;
+      }
+    }
+
+    const confirmCandle = candles[i + rightBars];
+    if (isHigh) {
+      state.detectedPivots.push({
+        type: "resistance", price: cHigh,
+        pivotIndex: i, pivotTime: c.time,
+        confirmIndex: i + rightBars, confirmTime: confirmCandle.time,
+      });
+    }
+    if (isLow) {
+      state.detectedPivots.push({
+        type: "support", price: cLow,
+        pivotIndex: i, pivotTime: c.time,
+        confirmIndex: i + rightBars, confirmTime: confirmCandle.time,
+      });
+    }
+  }
+}
+
+/**
+ * Render the horizontal SR lines.
+ * For each confirmed pivot, draw a flat line from pivotTime forward
+ * until the next same-type pivot (or the current end-of-data bar).
+ */
+function renderSRLines() {
+  ensureSRLevelsState();
+  removeSRLines();
+  if (!chart || !candleSeries) return;
+  if (!indicatorState.srLevels.enabled) return;
+
+  const candles = candleSeries.data();
+  if (!candles || candles.length === 0) return;
+  const pivots = indicatorState.srLevels.detectedPivots;
+  if (!pivots || pivots.length === 0) return;
+  const lastCandleTime = candles[candles.length - 1].time;
+
+  pivots.forEach((p, i) => {
+    let endTime = lastCandleTime;
+    for (let j = i + 1; j < pivots.length; j++) {
+      if (pivots[j].type === p.type) {
+        endTime = pivots[j].pivotTime;
+        break;
+      }
+    }
+    if (!Number.isFinite(endTime) || endTime <= p.pivotTime) return;
+
+    const isRes = p.type === "resistance";
+    const color = isRes ? "#FF0000" : "#233dee";
+    const series = addLineSeriesSafe({
+      color, lineWidth: 2,
+      lineStyle: LightweightCharts.LineStyle.Solid,
+      priceLineVisible: false, lastValueVisible: false,
+      crosshairMarkerVisible: false,
+      autoscaleInfoProvider: () => null,
+    });
+    if (!series) return;
+    try {
+      series.setData([
+        { time: p.pivotTime, value: p.price },
+        { time: endTime,     value: p.price },
+      ]);
+      indicatorState.srLevels.lines.push(series);
+    } catch (err) {
+      console.warn("[sr-levels] failed to set line data:", err);
+    }
+  });
+}
+
+/**
+ * Compute the volume EMA-OSC per candle.
+ *     short = EMA(volume, 5)
+ *     long  = EMA(volume, 10)
+ *     osc   = 100 * (short - long) / long
+ * Returns null when the candle set carries no volume at all
+ * (index feeds, LTP-only option feeds) — the break filter is then
+ * skipped and every close-crossing is shown.
+ */
+function computeVolumeOsc(candles) {
+  if (!Array.isArray(candles) || candles.length === 0) return null;
+  const volumes = candles.map(c => Number(c.volume) || 0);
+  if (volumes.every(v => v === 0)) return null;
+  const short = calculateEMAFromValues(volumes, 5);
+  const long  = calculateEMAFromValues(volumes, 10);
+  return candles.map((_, i) => (long[i] ? 100 * (short[i] - long[i]) / long[i] : 0));
+}
+
+/**
+ * Detect "break" events: close crosses above an active resistance or
+ * below an active support. Active level = the most-recently-confirmed
+ * pivot of that type. Volume gate is applied when volume is available.
+ *
+ * Returns [{ time, type: "break_resistance"|"break_support", price }]
+ */
+function detectSRBreaks(candles, pivots) {
+  ensureSRLevelsState();
+  const breaks = [];
+  if (!Array.isArray(candles) || candles.length < 2 || !pivots || pivots.length === 0) return breaks;
+
+  const volumeOsc = computeVolumeOsc(candles);
+  const hasVolume = volumeOsc !== null;
+  const threshold = Number(indicatorState.srLevels.volumeThreshold);
+
+  const sorted = pivots.slice().sort((a, b) => a.confirmIndex - b.confirmIndex);
+  let activeResistance = null;
+  let activeSupport = null;
+  let pqIdx = 0;
+
+  for (let i = 1; i < candles.length; i++) {
+    while (pqIdx < sorted.length && sorted[pqIdx].confirmIndex < i) {
+      const p = sorted[pqIdx];
+      if (p.type === "resistance") activeResistance = p;
+      else activeSupport = p;
+      pqIdx++;
+    }
+    const prevClose = Number(candles[i - 1].close);
+    const currClose = Number(candles[i].close);
+    if (!Number.isFinite(prevClose) || !Number.isFinite(currClose)) continue;
+
+    const volOk = !hasVolume || (Number.isFinite(volumeOsc[i]) && volumeOsc[i] > threshold);
+
+    if (activeResistance && volOk && prevClose <= activeResistance.price && currClose > activeResistance.price) {
+      breaks.push({ time: candles[i].time, type: "break_resistance", price: activeResistance.price });
+    }
+    if (activeSupport && volOk && prevClose >= activeSupport.price && currClose < activeSupport.price) {
+      breaks.push({ time: candles[i].time, type: "break_support", price: activeSupport.price });
+    }
+  }
+  return breaks;
+}
+
+/**
+ * Rebuild all series markers (EMA crosses + SR breaks in a single set).
+ * Called from refreshIndicators() on toggle changes and from
+ * scheduleIncrementalEMARefresh() when a new minute arrives.
+ */
+function rebuildAllMarkers() {
   if (!candleSeries) return;
-  if (!indicatorState.emaCross.enabled) {
-    applyMarkersToCandleSeries([]);
-    indicatorState.emaCross.markers = [];
+  const data = candleSeries.data();
+  if (!data || data.length === 0) { applyMarkersToCandleSeries([]); return; }
+
+  const allMarkers = [];
+
+  // ---- EMA cross markers ----------------------------------------- #
+  if (indicatorState.emaCross.enabled) {
+    const crosses = getOrComputeEMACrosses(data);
+    const seenTimes = new Set();
+    for (const c of crosses) {
+      if (seenTimes.has(c.time)) continue;
+      seenTimes.add(c.time);
+      const isBull = c.type === "bull";
+      allMarkers.push({
+        time: c.time,
+        position: isBull ? "belowBar" : "aboveBar",
+        color: isBull ? "#089981" : "#f23645",
+        shape: isBull ? "arrowUp" : "arrowDown",
+        text: isBull ? "BUY" : "SELL",
+        size: 2,
+      });
+    }
+  }
+
+  // ---- SR break markers ------------------------------------------ #
+  if (indicatorState.srLevels.enabled) {
+    const breaks = detectSRBreaks(data, indicatorState.srLevels.detectedPivots);
+    for (const b of breaks) {
+      const isBreakRes = b.type === "break_resistance";
+      allMarkers.push({
+        time: b.time,
+        position: isBreakRes ? "aboveBar" : "belowBar",
+        color: isBreakRes ? "#FF0000" : "#233dee",
+        shape: isBreakRes ? "arrowDown" : "arrowUp",
+        text: "B",
+        size: 1,
+      });
+    }
+  }
+
+  allMarkers.sort((a, b) => a.time - b.time);
+  applyMarkersToCandleSeries(allMarkers);
+  lastMarkerRebuildTime = data[data.length - 1].time;
+}
+
+/**
+ * Public entry — the toggle handler calls refreshIndicators() which
+ * reaches this function. Does a full pivot rescan on enable, then
+ * renders lines. Clears lines on disable.
+ */
+function refreshSRLevels(candles) {
+  ensureSRLevelsState();
+  const data = candles || (candleSeries ? candleSeries.data() : []);
+  if (!indicatorState.srLevels.enabled) {
+    removeSRLines();
     return;
   }
-  const crosses = getOrComputeEMACrosses(candles);
-  const seenTimes = new Set();
-  const markers = [];
-  for (const c of crosses) {
-    if (seenTimes.has(c.time)) continue;
-    seenTimes.add(c.time);
-    const isBull = c.type === "bull";
-    markers.push({ time: c.time, position: isBull ? "belowBar" : "aboveBar", color: isBull ? "#089981" : "#f23645", shape: isBull ? "arrowUp" : "arrowDown", text: isBull ? "BUY" : "SELL", size: 2 });
-  }
-  markers.sort((a, b) => a.time - b.time);
-  applyMarkersToCandleSeries(markers);
-  indicatorState.emaCross.markers = markers;
+  if (!data || data.length === 0) { removeSRLines(); return; }
+  performFullSRScan(data);
+  renderSRLines();
 }
 
 function refreshIndicators(candles) {
@@ -1221,7 +1514,8 @@ function refreshIndicators(candles) {
     const data = candles || (candleSeries ? candleSeries.data() : []);
     if (!data || data.length === 0) return;
     renderEMALines(data);
-    renderEMACrossMarkers(data);
+    refreshSRLevels(data);
+    rebuildAllMarkers();
   } catch (err) { console.warn("refreshIndicators error (swallowed):", err); }
 }
 
@@ -1243,14 +1537,20 @@ function scheduleIncrementalEMARefresh() {
         if (cached && cached.data.length > 0) indicatorState.ema21.series.update(cached.data[cached.data.length - 1]);
         else indicatorState.ema21.series.setData(getOrComputeEMA(indicatorState.ema21.length, data));
       }
-      if (indicatorState.emaCross.enabled) {
+      if (indicatorState.emaCross.enabled || indicatorState.srLevels.enabled) {
         const lastTime = data[data.length - 1].time;
-        if (emaCrossCache.lastTime !== lastTime) renderEMACrossMarkers(data);
+        if (lastMarkerRebuildTime !== lastTime) {
+          // New candle arrived — recompute SR pivots too (cheap, ~1–2 ms)
+          if (indicatorState.srLevels.enabled) refreshSRLevels(data);
+          rebuildAllMarkers();
+        }
       }
     } catch (err) { console.warn("incremental EMA refresh error (swallowed):", err); }
   });
 }
 
+// Indicator toggle buttons — persisted per-user in localStorage.
+// SR Levels is included — default OFF (initial state above).
 document.querySelectorAll("#indicatorToggleBar .label-toggle-btn[data-indicator]").forEach(btn => {
   const key = btn.dataset.indicator;
   if (!(key in indicatorState)) return;
@@ -1265,7 +1565,9 @@ document.querySelectorAll("#indicatorToggleBar .label-toggle-btn[data-indicator]
     // NOTE: do NOT auto-enable EMA 9 / EMA 21 when EMA Cross is turned on.
     try {
       const prefs = {};
-      Object.keys(indicatorState).forEach(k => { if (typeof indicatorState[k].enabled === "boolean") prefs[k] = indicatorState[k].enabled; });
+      Object.keys(indicatorState).forEach(k => {
+        if (typeof indicatorState[k].enabled === "boolean") prefs[k] = indicatorState[k].enabled;
+      });
       localStorage.setItem(INDICATOR_PREFS_KEY, JSON.stringify(prefs));
     } catch (e) {}
     refreshIndicators();
@@ -1372,6 +1674,8 @@ function formatFullDate(time) {
 // ============================================================
 // NORMALIZE CANDLE
 // ============================================================
+// Volume is preserved so the SR break marker threshold can apply when
+// the source provides it (historical Upstox candles, live feed ticks).
 function normalizeCandle(rawCandle) {
   if (!rawCandle) return null;
   if (Array.isArray(rawCandle)) {
@@ -1380,8 +1684,9 @@ function normalizeCandle(rawCandle) {
     const high = Number(rawCandle[2]);
     const low  = Number(rawCandle[3]);
     const close= Number(rawCandle[4]);
+    const volume = rawCandle.length > 5 ? Number(rawCandle[5]) : null;
     if (!Number.isFinite(time) || !Number.isFinite(open) || !Number.isFinite(high) || !Number.isFinite(low) || !Number.isFinite(close)) return null;
-    return { time, open, high, low, close };
+    return { time, open, high, low, close, volume: Number.isFinite(volume) ? volume : 0 };
   }
   if (typeof rawCandle !== "object") return null;
   const rawTime = rawCandle.time ?? rawCandle.timestamp ?? rawCandle.ts ?? rawCandle.start_time ?? rawCandle.candle_start_time;
@@ -1390,8 +1695,10 @@ function normalizeCandle(rawCandle) {
   const high = Number(rawCandle.high ?? rawCandle.h);
   const low  = Number(rawCandle.low  ?? rawCandle.l);
   const close= Number(rawCandle.close?? rawCandle.c);
+  const rawVol = rawCandle.volume ?? rawCandle.v;
+  const volume = Number(rawVol);
   if (!Number.isFinite(time) || !Number.isFinite(open) || !Number.isFinite(high) || !Number.isFinite(low) || !Number.isFinite(close)) return null;
-  return { time, open, high, low, close };
+  return { time, open, high, low, close, volume: Number.isFinite(volume) ? volume : 0 };
 }
 
 // ============================================================
@@ -1417,6 +1724,13 @@ function getPayloadCandle(payload) {
   for (const candidate of candidates) { const candle = normalizeCandle(candidate); if (candle) return candle; }
   return null;
 }
+/* Live-feed tick volume — forwarded by LiveFeedService in the feed payload. */
+function getPayloadVolume(payload) {
+  if (!payload || typeof payload !== "object") return null;
+  const raw = payload.volume ?? payload.vtt ?? payload.data?.volume ?? payload.feed?.volume ?? payload.candle_1m?.volume;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
 
 // ============================================================
 // LIVE PRICE
@@ -1432,10 +1746,19 @@ function updateLivePrice(ltp) {
 function updateCandle(candle) {
   if (!candleSeries || !candle) return;
   if (lastCandle && candle.time < lastCandle.time) return;
+  const isNewMinute = !lastCandle || candle.time > lastCandle.time;
+
   candleSeries.update(candle);
   lastCandle = candle;
   updateLivePrice(candle.close);
-  if (indicatorState.ema9.enabled || indicatorState.ema21.enabled || indicatorState.emaCross.enabled) scheduleIncrementalEMARefresh();
+  if (indicatorState.ema9.enabled || indicatorState.ema21.enabled || indicatorState.emaCross.enabled || indicatorState.srLevels.enabled) {
+    scheduleIncrementalEMARefresh();
+  }
+  // SR: full rescan on new-minute boundary (cheap, ~1–2 ms for ~500 candles)
+  // — no work on intra-minute updates since no new pivot can be confirmed.
+  if (indicatorState.srLevels.enabled && isNewMinute) {
+    try { refreshSRLevels(); } catch (err) { console.warn("SR live refresh failed:", err); }
+  }
   const prevDate = currentRenderedDate;
   const newDate = getDateKeyIST(candle.time);
   if (newDate && newDate !== prevDate) {
@@ -1443,16 +1766,21 @@ function updateCandle(candle) {
     renderOpeningRangeLines();
   }
 }
-function updateCandleFromLtp(ltp, timestamp) {
+function updateCandleFromLtp(ltp, timestamp, volume) {
   if (!Number.isFinite(ltp) || !candleSeries) return;
   updateLivePrice(ltp);
   const minuteTimestamp = Math.floor((timestamp || Math.floor(Date.now() / 1000)) / 60) * 60;
+  const vol = Number.isFinite(volume) ? Number(volume) : 0;
   if (!lastCandle || minuteTimestamp > lastCandle.time) {
-    updateCandle({ time: minuteTimestamp, open: ltp, high: ltp, low: ltp, close: ltp });
+    updateCandle({ time: minuteTimestamp, open: ltp, high: ltp, low: ltp, close: ltp, volume: vol });
     return;
   }
   if (minuteTimestamp < lastCandle.time) return;
-  updateCandle({ time: lastCandle.time, open: lastCandle.open, high: Math.max(lastCandle.high, ltp), low: Math.min(lastCandle.low, ltp), close: ltp });
+  updateCandle({
+    time: lastCandle.time, open: lastCandle.open,
+    high: Math.max(lastCandle.high, ltp), low: Math.min(lastCandle.low, ltp),
+    close: ltp, volume: Math.max(lastCandle.volume || 0, vol),
+  });
 }
 
 // ============================================================
@@ -1514,6 +1842,8 @@ async function loadOlderHistoricalData() {
       candleSeries.setData(combinedData);
       oldestCandleTime = combinedData[0].time;
       rebuildAndRenderOpeningRanges(combinedData);
+      // Full indicator refresh — pivots are recomputed from the
+      // extended candle set (SR lines correctly extended back).
       refreshIndicators(combinedData);
       if (totalCandlesValue) totalCandlesValue.textContent = String(combinedData.length);
 
@@ -1605,7 +1935,8 @@ function processWebSocketMessage(event) {
   if (candle) { updateCandle(candle); return; }
   const ltp = getPayloadLtp(payload);
   if (ltp === null) return;
-  updateCandleFromLtp(ltp, getPayloadTimestamp(payload));
+  const volume = getPayloadVolume(payload);
+  updateCandleFromLtp(ltp, getPayloadTimestamp(payload), volume);
 }
 
 function scheduleReconnect() {
@@ -1741,18 +2072,6 @@ try { currentInstrumentKey = JSON.parse(document.getElementById("instrument-key-
 // ============================================================
 // The swap FAB is only shown when the current instrument is an
 // option (CE or PE) — never for indexes, futures, or equities.
-//
-// Detecting "is option" relies on the backend `/api/upstox/instrument`
-// endpoint returning a `data` object with:
-//     instrument_type:  "CE" | "PE"
-//     strike_price:     numeric (or numeric string)
-//     underlying_symbol:"NIFTY" | "SENSEX" | ... | null
-//     expiry:           "YYYY-MM-DD" | null
-//
-// Clicking the FAB searches Upstox for the opposite-type instrument
-// at the same strike (and prefers the same expiry) and navigates to
-// its /chart/<key> page.
-
 let swapResolvedMeta = null;
 let swapCurrentTypeLabel = "";   // "CE" | "PE" | ""
 let swapInFlight = false;
@@ -1774,7 +2093,6 @@ function isOptionInstrument(meta, key) {
   if (!meta) return false;
   const k = String(key || "");
   if (!k) return false;
-  // Only FO option segments can be swapped (index keys end in _INDEX).
   if (k.startsWith("NSE_INDEX|") || k.startsWith("BSE_INDEX|")) return false;
   const t = normalizeTypeLabel(meta.instrument_type || meta.option_type);
   if (!t) return false;
@@ -1816,7 +2134,6 @@ async function findOppositeInstrumentKey(meta, oppositeType) {
     const body = await resp.json();
     const items = (body && body.data) || [];
 
-    // Filter to items matching the exact strike + opposite type.
     const candidates = items.filter(it => {
       if (!it || typeof it !== "object") return false;
       if (normalizeTypeLabel(it.instrument_type) !== oppositeType) return false;
@@ -1826,7 +2143,6 @@ async function findOppositeInstrumentKey(meta, oppositeType) {
     });
     if (!candidates.length) return null;
 
-    // Prefer the same expiry as the current instrument, if known.
     if (expiry) {
       const expiryMatch = candidates.find(it => String(it.expiry || "").trim() === expiry);
       if (expiryMatch) return expiryMatch.instrument_key;
@@ -1881,7 +2197,6 @@ async function doSwapOption() {
       window.location.href = "/chart/" + encodeURIComponent(oppKey);
       return;
     }
-    // No match found — surface feedback then revert.
     if (swapOptionLabel) swapOptionLabel.textContent = "Not found";
     setTimeout(() => {
       if (swapOptionLabel) swapOptionLabel.textContent = origLabel;
@@ -1903,8 +2218,6 @@ async function doSwapOption() {
 
 if (swapOptionBtn) {
   swapOptionBtn.addEventListener("click", doSwapOption);
-  // Keyboard shortcut: Alt+S or Ctrl+Shift+S triggers the swap (only
-  // when the FAB is visible, i.e. for CE/PE option instruments).
   document.addEventListener("keydown", (e) => {
     if (!swapOptionBtn || swapOptionBtn.hidden) return;
     if (e.altKey && !e.ctrlKey && !e.metaKey && e.key.toLowerCase() === "s") {
