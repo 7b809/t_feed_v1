@@ -1,4 +1,4 @@
-# File: routes/admin_routes.py
+# routes/admin_routes.py
 """Admin endpoints + the unified refresh routine.
 
 Endpoints:
@@ -13,18 +13,11 @@ If the app starts during market hours on a trading day and either of
 today's scheduled jobs was missed, they are backfilled sequentially as
 part of startup:
 
-    * daily_refresh    — if no run recorded today (meta_data guard)
-    * first_candle     — if first_candle.json is missing / stale for today
-
-Level-instrument filter
------------------------
-After the first-candle block, ``_run_full_refresh_sync`` calls
-``level_instrument_filter_service.run("startup")`` unconditionally.
-That service reads the on-disk ``first_candle.json`` for every
-configured index, writes ``level_instruments.json``, and registers the
-filtered CE/PE instruments (plus the index itself) with
-``live_sr_levels_service``. It is idempotent, so running it twice is
-safe.
+    * daily_refresh      — if no run recorded today (meta_data guard)
+    * first_candle       — if first_candle.json is missing / stale for today
+    * level filter       — always runs (reads first_candle from disk)
+    * level isolation    — replay intraday candles to reconstruct the day's
+                           isolated instrument (see level_isolated_instrument_service)
 """
 
 from __future__ import annotations
@@ -43,6 +36,9 @@ from services.backfill_guard import ran_today
 from services.backup_data_service import backup_data_service
 from services.cleanup_service import cleanup_service
 from services.instrument_registry import instrument_registry
+from services.level_isolated_instrument_service import (
+    level_isolated_instrument_service,
+)
 from services.live_broadcast import live_broadcast
 from services.live_feed_service import (
     DEFAULT_CORE_INSTRUMENTS,
@@ -63,34 +59,42 @@ router = APIRouter()
 _DIV = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 _THIN = "────────────────────────────────"
 
+
 def _market_tz() -> ZoneInfo:
     try:
         return ZoneInfo(config.MARKET_TIMEZONE)
     except Exception:
         return ZoneInfo("Asia/Kolkata")
 
+
 def _now_market() -> datetime:
     return datetime.now(_market_tz())
 
+
 def _now_market_time() -> dtime:
     return _now_market().time()
+
 
 _CATCHUP_WINDOW_OPEN = dtime(9, 15)
 _CATCHUP_WINDOW_CLOSE = dtime(23, 59)
 _SESSION_OPEN = dtime(9, 15)
 _SESSION_CLOSE = dtime(15, 30)
 
+
 def _in_market_hours() -> bool:
     return _CATCHUP_WINDOW_OPEN <= _now_market_time() <= _CATCHUP_WINDOW_CLOSE
 
+
 def _post_market() -> bool:
     return _now_market_time() > dtime(15, 30)
+
 
 def _in_active_session() -> bool:
     now = _now_market()
     if now.weekday() > 4:
         return False
     return _SESSION_OPEN <= now.time() <= _SESSION_CLOSE
+
 
 def _is_trading_holiday_today() -> bool:
     try:
@@ -99,6 +103,7 @@ def _is_trading_holiday_today() -> bool:
     except Exception:
         logger.exception("[refresh] holiday check failed — assuming trading day")
         return False
+
 
 def _catchup_snapshot() -> dict[str, Any]:
     now = _now_market_time()
@@ -113,6 +118,7 @@ def _catchup_snapshot() -> dict[str, Any]:
         },
     }
 
+
 def _telegram_bot_active(fallback: bool = False) -> bool:
     for attr in ("is_running", "polling", "enabled"):
         value = getattr(telegram_token_bot, attr, None)
@@ -120,11 +126,13 @@ def _telegram_bot_active(fallback: bool = False) -> bool:
             return value
     return fallback
 
+
 def _safe_folder_for(name: Any) -> str:
     text = str(name or "unknown").strip()
     for ch in ("|", "/", "\\", ":", "*", "?", '"', "<", ">", " "):
         text = text.replace(ch, "_")
     return text.strip("._") or "unknown"
+
 
 def _ensure_core_indexes_registered() -> int:
     seen: set[str] = set()
@@ -162,6 +170,7 @@ def _ensure_core_indexes_registered() -> int:
 
     return created
 
+
 def _should_backfill_daily_refresh() -> tuple[bool, str]:
     if not _in_active_session():
         return False, "outside_active_session"
@@ -170,6 +179,7 @@ def _should_backfill_daily_refresh() -> tuple[bool, str]:
     if ran_today("daily_refresh"):
         return False, "already_ran_today"
     return True, "missed_today"
+
 
 def _first_candle_file_for_first_instrument() -> Path | None:
     entries = instrument_registry.all()
@@ -180,6 +190,7 @@ def _first_candle_file_for_first_instrument() -> Path | None:
         return _folder_for_entry(entries[0]) / "first_candle.json"
     except Exception:
         return None
+
 
 def _should_backfill_first_candle() -> tuple[bool, str]:
     if not _in_active_session():
@@ -204,6 +215,7 @@ def _should_backfill_first_candle() -> tuple[bool, str]:
 
     return False, "already_computed_today"
 
+
 def _start_message(reason: str, catchup_meta: dict[str, Any]) -> str:
     return (
         f"{_DIV}\n"
@@ -218,8 +230,9 @@ def _start_message(reason: str, catchup_meta: dict[str, Any]) -> str:
         f"{_THIN}\n"
         f"Pipeline order:\n"
         f"  🧹 cleanup → 🔑 token → 📦 backup → 📊 registry\n"
-        f"  → 🔧 wiring → 📡 feed → ⏰ scheduler → 🤖 telegram"
+        f"  → 🔧 wiring → 📡 feed → 🎯 level-isolation → ⏰ scheduler → 🤖 telegram"
     )
+
 
 def _completion_message(
     reason: str,
@@ -236,6 +249,7 @@ def _completion_message(
     telegram_ok: bool,
     first_candle_summary: dict[str, Any] | None,
     level_filter_summary: dict[str, Any] | None,
+    level_isolation_summary: dict[str, Any] | None,
     status: str,
 ) -> str:
     fc_line = ""
@@ -265,6 +279,24 @@ def _completion_message(
                 f"🧭 Level filter:   {level_filter_summary.get('status')}\n"
             )
 
+    li_line = ""
+    if level_isolation_summary:
+        st = str(level_isolation_summary.get("status") or "unknown")
+        if st == "ok":
+            iso = level_isolation_summary.get("isolated") or {}
+            li_line = (
+                f"🎯 Isolation:     {iso.get('trading_symbol') or iso.get('instrument_key') or '—'}"
+                f"  (reason={iso.get('reason')})\n"
+            )
+        elif st == "already_isolated":
+            iso = level_isolation_summary.get("isolated") or {}
+            li_line = (
+                f"🎯 Isolation:     already — "
+                f"{iso.get('trading_symbol') or iso.get('instrument_key') or '—'}\n"
+            )
+        else:
+            li_line = f"🎯 Isolation:     {st}\n"
+
     return (
         f"{_DIV}\n"
         f"🏁 {reason.upper()} REFRESH COMPLETED\n"
@@ -283,6 +315,7 @@ def _completion_message(
         f"📊 Registry:      {registry.get('count')} instruments\n"
         f"{fc_line}"
         f"{lf_line}"
+        f"{li_line}"
         f"{_THIN}\n"
         f"📡 Live feed:     {'✓' if feed_ok else '✗'}\n"
         f"⏰ Scheduler:     {'✓' if scheduler_ok else '✗'}\n"
@@ -290,6 +323,7 @@ def _completion_message(
         f"{_DIV}\n"
         f"✅ Status: {status}"
     )
+
 
 def _run_full_refresh_sync(
     reason: str = "manual",
@@ -444,9 +478,6 @@ def _run_full_refresh_sync(
             )
 
     # ---- 6c. Level-instrument filter + SR registration ---------------- #
-    # Unconditional on startup: if first_candle was skipped because the
-    # file was already present, this reads it from disk and registers
-    # the filtered instruments with the SR engine. Idempotent.
     level_filter_summary: dict[str, Any] | None = None
     if reason == "startup":
         try:
@@ -467,6 +498,28 @@ def _run_full_refresh_sync(
         except Exception as exc:
             logger.exception("[startup] level filter failed")
             level_filter_summary = {
+                "status": "error",
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+
+    # ---- 6d. LEVEL ISOLATION backfill (only on startup) -------------- #
+    # Reads level_instruments.json produced by 6c + first_candle.json
+    # produced by 6b/6c and replays intraday candles from 09:15 → now
+    # to reconstruct the "would-have-isolated" instrument.
+    level_isolation_summary: dict[str, Any] | None = None
+    if reason == "startup":
+        try:
+            level_isolation_summary = level_isolated_instrument_service.run_backfill(
+                reason="startup"
+            )
+            logger.info(
+                "[startup] level isolation: status=%s isolated=%s",
+                level_isolation_summary.get("status"),
+                (level_isolation_summary.get("isolated") or {}).get("instrument_key"),
+            )
+        except Exception as exc:
+            logger.exception("[startup] level isolation backfill failed")
+            level_isolation_summary = {
                 "status": "error",
                 "error": f"{type(exc).__name__}: {exc}",
             }
@@ -509,6 +562,7 @@ def _run_full_refresh_sync(
         "backfill_daily_refresh": backfill_daily,
         "first_candle": first_candle_summary,
         "level_filter": level_filter_summary,
+        "level_isolation": level_isolation_summary,
         "feed_restarted": feed_ok,
         "scheduler_started": scheduler_ok,
         "telegram_started": telegram_ok,
@@ -530,6 +584,7 @@ def _run_full_refresh_sync(
         telegram_ok=telegram_ok,
         first_candle_summary=first_candle_summary,
         level_filter_summary=level_filter_summary,
+        level_isolation_summary=level_isolation_summary,
         status=status,
     )
     telegram_service.send_message(
@@ -544,17 +599,21 @@ def _run_full_refresh_sync(
     logger.info("[%s] refresh COMPLETED — status=%s", reason, status)
     return result
 
+
 @router.post("/admin/hard-refresh")
 async def hard_refresh() -> dict[str, Any]:
     return await asyncio.to_thread(_run_full_refresh_sync, "manual", None)
+
 
 @router.get("/admin/backup-status")
 def backup_status() -> dict[str, Any]:
     return backup_data_service.last_status()
 
+
 @router.get("/admin/cleanup-status")
 def cleanup_status() -> dict[str, Any]:
     return cleanup_service.last_status()
+
 
 @router.post("/admin/cleanup")
 async def run_cleanup() -> dict[str, Any]:

@@ -5,8 +5,8 @@ Subscribes to every instrument in the registry, and for each incoming
 feed extracts the 1-min candle and tick snapshot, then broadcasts to
 UI clients.
 
-SR integration
---------------
+SR integration + level isolation
+--------------------------------
 * On start, every subscribed instrument is registered with
   ``live_sr_levels_service``.
 * A mid-session SR backfill runs BEFORE the streamer thread is spawned,
@@ -17,9 +17,10 @@ SR integration
   engine when the market opens.
 * Each tick is forwarded to ``live_sr_levels_service.on_tick`` so the
   SR engine builds 1-min candles and detects pivots.
-
-The feed itself is unchanged: broadcast on the "feed" topic, LTP cache,
-health feed log.
+* Every NIFTY / SENSEX index tick is forwarded to
+  ``level_isolated_instrument_service.on_tick`` so the level-isolation
+  engine can watch for R3 / S3 touches. Option ticks are ignored by
+  the isolation engine.
 """
 
 from __future__ import annotations
@@ -32,6 +33,10 @@ from typing import Any
 from core import config
 from core.logger import get_logger
 from services.instrument_registry import instrument_registry
+from services.level_isolated_instrument_service import (
+    CORE_INDEX_KEYS as LEVEL_ISOLATION_INDEX_KEYS,
+    level_isolated_instrument_service,
+)
 from services.live_broadcast import live_broadcast
 from services.live_sr_levels_service import live_sr_levels_service
 from services.token_service import token_service
@@ -114,30 +119,7 @@ class LiveFeedService:
         except Exception:
             logger.exception("[live-feed] SR register_all failed")
 
-    # ------------------------------------------------------------------ #
-    # SR backfill (gated by trading-day / time-window)                   #
-    # ------------------------------------------------------------------ #
     def _run_sr_backfill(self, reason: str) -> None:
-        """Run intraday backfill before the streamer thread spawns.
-
-        GATE
-        ----
-        The backfill only runs when ALL of the following hold:
-
-          * ``SR_BACKFILL_ENABLED`` is True
-          * ``LIVE_SR_ENABLED`` is True
-          * Current time is in ``[SR_BACKFILL_START_HOUR:MINUTE,
-            SR_BACKFILL_END_HOUR:MINUTE]`` IST (default 09:15 – 23:59)
-          * Today is Mon–Fri (not a weekend)
-          * Today is NOT a trading holiday (per Upstox holiday API)
-
-        This method mirrors the service-level check so the skip line is
-        emitted at the feed level as well. ``sr_backfill_service.run``
-        also re-checks the window, so a manual call cannot bypass the
-        gate.
-
-        Wrapped so a failure here never blocks feed start.
-        """
         if not config.SR_BACKFILL_ENABLED:
             logger.info("[live-feed] SR backfill disabled by config")
             return
@@ -150,7 +132,6 @@ class LiveFeedService:
             )
             return
 
-        # ---- Defensive gate: mirror should_run() at the feed level ---- #
         should_run, skip_reason = sr_backfill_service.should_run()
         if not should_run:
             logger.info(
@@ -446,6 +427,26 @@ class LiveFeedService:
                         "[live-feed] SR on_tick failed for %s",
                         instrument_key,
                     )
+
+            # --- LEVEL ISOLATION HOOK --------------------------------- #
+            # Only NIFTY / SENSEX index ticks are relevant; the service
+            # ignores everything else internally, but the explicit key
+            # gate here avoids the call overhead on ~165 option ticks.
+            if (
+                config.LEVEL_ISOLATION_ENABLED
+                and instrument_key in LEVEL_ISOLATION_INDEX_KEYS
+                and ltp is not None
+            ):
+                try:
+                    level_isolated_instrument_service.on_tick(
+                        instrument_key, ltp,
+                    )
+                except Exception:
+                    logger.exception(
+                        "[live-feed] level isolation on_tick failed for %s",
+                        instrument_key,
+                    )
+            # --------------------------------------------------------- #
 
             self._publish_feed_snapshot(entry, tick)
 

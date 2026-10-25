@@ -1,0 +1,1478 @@
+{# templates/isolated_instrument.html #}
+{% extends "base.html" %}
+
+{% block title %}Isolated Instrument · {{ app_name }}{% endblock %}
+
+{% block head %}
+<link
+    href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
+    rel="stylesheet"
+/>
+<link
+    rel="stylesheet"
+    href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css"
+/>
+
+<style>
+    :root {
+        --iso-bg: #f8fafc;
+        --iso-card-bg: #ffffff;
+        --iso-border: #e2e8f0;
+        --iso-text: #0f172a;
+        --iso-muted: #64748b;
+        --iso-primary: #2563eb;
+        --iso-green: #16a34a;
+        --iso-green-bg: #dcfce7;
+        --iso-red: #dc2626;
+        --iso-red-bg: #fee2e2;
+        --iso-amber: #b45309;
+        --iso-amber-bg: #fef3c7;
+        --iso-amber-border: #fde68a;
+        --iso-blue-bg: #dbeafe;
+        --iso-blue-border: #bfdbfe;
+        --iso-shadow: 0 1px 3px rgba(15, 23, 42, 0.06);
+        --iso-shadow-md: 0 8px 24px rgba(15, 23, 42, 0.08);
+    }
+
+    body {
+        background-color: var(--iso-bg) !important;
+        color: var(--iso-text) !important;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+            "Helvetica Neue", Arial, sans-serif;
+    }
+
+    .iso-page {
+        max-width: 1400px;
+        margin: 0 auto;
+        padding: 24px;
+    }
+
+    /* ---- Top bar ---- */
+    .iso-topbar {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 16px;
+        flex-wrap: wrap;
+        margin-bottom: 20px;
+    }
+
+    .iso-topbar-left {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        flex-wrap: wrap;
+    }
+
+    .iso-topbar-title {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-size: 1.4rem;
+        font-weight: 800;
+        margin: 0;
+    }
+
+    .iso-topbar-title i {
+        color: var(--iso-primary);
+    }
+
+    .iso-status-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 14px;
+        border-radius: 999px;
+        font-size: 0.8rem;
+        font-weight: 700;
+        border: 1px solid transparent;
+        text-transform: uppercase;
+        letter-spacing: 0.3px;
+    }
+
+    .iso-status-pill::before {
+        content: "";
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background-color: currentColor;
+    }
+
+    .iso-status-pill.isolated {
+        background: var(--iso-green-bg);
+        color: var(--iso-green);
+        border-color: #bbf7d0;
+    }
+
+    .iso-status-pill.watching {
+        background: var(--iso-blue-bg);
+        color: var(--iso-primary);
+        border-color: var(--iso-blue-border);
+    }
+
+    .iso-status-pill.waiting {
+        background: var(--iso-amber-bg);
+        color: var(--iso-amber);
+        border-color: var(--iso-amber-border);
+    }
+
+    .iso-status-pill.off {
+        background: #f1f5f9;
+        color: var(--iso-muted);
+        border-color: var(--iso-border);
+    }
+
+    .iso-topbar-right {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+
+    .iso-day-label {
+        font-size: 0.85rem;
+        color: var(--iso-muted);
+        font-weight: 600;
+    }
+
+    .iso-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 8px 14px;
+        background: #ffffff;
+        border: 1px solid var(--iso-border);
+        border-radius: 10px;
+        color: var(--iso-text);
+        font-size: 0.82rem;
+        font-weight: 700;
+        cursor: pointer;
+        transition: all 0.15s ease;
+    }
+
+    .iso-btn:hover {
+        background: var(--iso-primary);
+        color: #ffffff;
+        border-color: var(--iso-primary);
+    }
+
+    .iso-btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+    }
+
+    /* ---- Banner ---- */
+    .iso-banner {
+        display: flex;
+        align-items: flex-start;
+        gap: 18px;
+        padding: 22px 26px;
+        margin-bottom: 22px;
+        background: var(--iso-amber-bg);
+        border: 1px solid var(--iso-amber-border);
+        border-left: 5px solid var(--iso-amber);
+        border-radius: 16px;
+        box-shadow: var(--iso-shadow);
+    }
+
+    .iso-banner.is-watching {
+        background: var(--iso-blue-bg);
+        border-color: var(--iso-blue-border);
+        border-left-color: var(--iso-primary);
+    }
+
+    .iso-banner.is-isolated {
+        background: var(--iso-green-bg);
+        border-color: #bbf7d0;
+        border-left-color: var(--iso-green);
+    }
+
+    .banner-icon {
+        flex: 0 0 auto;
+        width: 52px;
+        height: 52px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(255, 255, 255, 0.7);
+        border-radius: 12px;
+        font-size: 1.5rem;
+    }
+
+    .iso-banner .banner-title {
+        font-size: 1.05rem;
+        font-weight: 800;
+        margin-bottom: 6px;
+        color: var(--iso-amber);
+    }
+
+    .iso-banner.is-watching .banner-title {
+        color: var(--iso-primary);
+    }
+
+    .iso-banner.is-isolated .banner-title {
+        color: var(--iso-green);
+    }
+
+    .iso-banner .banner-message {
+        font-size: 0.95rem;
+        color: #78350f;
+        margin-bottom: 6px;
+        line-height: 1.5;
+    }
+
+    .iso-banner.is-watching .banner-message,
+    .iso-banner.is-isolated .banner-message {
+        color: var(--iso-text);
+    }
+
+    .iso-banner .banner-subtext {
+        font-size: 0.82rem;
+        color: var(--iso-amber);
+        opacity: 0.85;
+    }
+
+    /* ---- Hero card ---- */
+    .iso-hero {
+        background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+        color: #f8fafc;
+        border-radius: 20px;
+        padding: 30px 34px;
+        margin-bottom: 22px;
+        box-shadow: 0 16px 44px rgba(15, 23, 42, 0.28);
+        display: flex;
+        justify-content: space-between;
+        gap: 26px;
+        flex-wrap: wrap;
+    }
+
+    .iso-hero-left {
+        flex: 1 1 380px;
+        min-width: 0;
+    }
+
+    .iso-hero-label {
+        display: inline-block;
+        font-size: 0.72rem;
+        font-weight: 800;
+        color: #4ade80;
+        background: rgba(74, 222, 128, 0.12);
+        padding: 4px 12px;
+        border-radius: 999px;
+        letter-spacing: 1px;
+        margin-bottom: 12px;
+    }
+
+    .iso-hero-symbol {
+        font-size: 2rem;
+        font-weight: 800;
+        color: #ffffff;
+        line-height: 1.15;
+        letter-spacing: -0.5px;
+        margin-bottom: 6px;
+        word-break: break-word;
+    }
+
+    .iso-hero-key {
+        font-size: 0.85rem;
+        color: #94a3b8;
+        margin-bottom: 14px;
+        font-family: "JetBrains Mono", "Fira Code", "Courier New", monospace;
+    }
+
+    .iso-hero-tags {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-bottom: 14px;
+    }
+
+    .iso-hero-tags .tag {
+        display: inline-block;
+        padding: 4px 12px;
+        border-radius: 999px;
+        font-size: 0.75rem;
+        font-weight: 700;
+    }
+
+    .iso-hero-tags .tag.r {
+        background: rgba(239, 68, 68, 0.16);
+        color: #fca5a5;
+        border: 1px solid rgba(239, 68, 68, 0.3);
+    }
+
+    .iso-hero-tags .tag.s {
+        background: rgba(34, 197, 94, 0.16);
+        color: #86efac;
+        border: 1px solid rgba(34, 197, 94, 0.3);
+    }
+
+    .iso-hero-tags .tag.th {
+        background: rgba(148, 163, 184, 0.16);
+        color: #cbd5e1;
+        border: 1px solid rgba(148, 163, 184, 0.3);
+    }
+
+    .iso-hero-meta {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+        gap: 10px 20px;
+        font-size: 0.82rem;
+        color: #cbd5e1;
+    }
+
+    .iso-hero-meta .meta-label {
+        color: #94a3b8;
+        font-weight: 600;
+        display: block;
+        font-size: 0.7rem;
+        letter-spacing: 0.5px;
+        text-transform: uppercase;
+        margin-bottom: 2px;
+    }
+
+    .iso-hero-meta .meta-value {
+        color: #ffffff;
+        font-weight: 700;
+        font-size: 0.95rem;
+    }
+
+    .iso-hero-right {
+        flex: 0 0 auto;
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+        justify-content: space-between;
+        gap: 12px;
+        min-width: 220px;
+    }
+
+    .iso-hero-price {
+        text-align: right;
+    }
+
+    .iso-hero-price .price-label {
+        font-size: 0.72rem;
+        color: #94a3b8;
+        letter-spacing: 0.5px;
+        text-transform: uppercase;
+        margin-bottom: 2px;
+    }
+
+    .iso-hero-price .price-value {
+        font-size: 1.6rem;
+        font-weight: 800;
+        color: #ffffff;
+    }
+
+    .iso-hero-price .price-sub {
+        font-size: 0.8rem;
+        color: #94a3b8;
+        margin-top: 4px;
+    }
+
+    .iso-hero-chart-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 12px 22px;
+        background: #16a34a;
+        color: #ffffff;
+        border-radius: 12px;
+        font-weight: 800;
+        font-size: 0.9rem;
+        text-decoration: none;
+        transition: all 0.15s ease;
+        box-shadow: 0 6px 20px rgba(22, 163, 74, 0.35);
+    }
+
+    .iso-hero-chart-btn:hover {
+        background: #15803d;
+        color: #ffffff;
+        transform: translateY(-1px);
+    }
+
+    /* ---- Generic cards ---- */
+    .iso-card {
+        background: var(--iso-card-bg);
+        border: 1px solid var(--iso-border);
+        border-radius: 16px;
+        margin-bottom: 20px;
+        box-shadow: var(--iso-shadow);
+        overflow: hidden;
+    }
+
+    .iso-card-header {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 16px 22px;
+        border-bottom: 1px solid var(--iso-border);
+        background: #f8fafc;
+        font-weight: 800;
+        font-size: 0.95rem;
+    }
+
+    .iso-card-header i {
+        font-size: 1.05rem;
+    }
+
+    .iso-card-body {
+        padding: 20px 22px;
+    }
+
+    .iso-empty {
+        text-align: center;
+        color: var(--iso-muted);
+        padding: 24px;
+        font-size: 0.9rem;
+    }
+
+    /* ---- Two-column layout ---- */
+    .iso-row {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 20px;
+    }
+
+    @media (max-width: 1024px) {
+        .iso-row {
+            grid-template-columns: 1fr;
+        }
+    }
+
+    /* ---- Tables ---- */
+    .iso-table-wrap {
+        overflow-x: auto;
+    }
+
+    .iso-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.85rem;
+    }
+
+    .iso-table thead {
+        background: #f8fafc;
+        border-bottom: 1px solid var(--iso-border);
+    }
+
+    .iso-table th {
+        padding: 10px 14px;
+        text-align: left;
+        font-weight: 700;
+        color: var(--iso-muted);
+        font-size: 0.72rem;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        white-space: nowrap;
+    }
+
+    .iso-table th.num,
+    .iso-table td.num {
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+    }
+
+    .iso-table td {
+        padding: 11px 14px;
+        border-bottom: 1px solid #f1f5f9;
+        vertical-align: middle;
+    }
+
+    .iso-table tr:last-child td {
+        border-bottom: none;
+    }
+
+    .iso-table tr.is-picked td {
+        background: #ecfdf5;
+        font-weight: 700;
+    }
+
+    .type-pill {
+        display: inline-block;
+        padding: 2px 9px;
+        border-radius: 6px;
+        font-size: 0.68rem;
+        font-weight: 800;
+    }
+
+    .type-pill.ce {
+        background: var(--iso-green-bg);
+        color: var(--iso-green);
+    }
+
+    .type-pill.pe {
+        background: var(--iso-red-bg);
+        color: var(--iso-red);
+    }
+
+    .level-tag {
+        display: inline-block;
+        padding: 1px 7px;
+        border-radius: 4px;
+        font-size: 0.68rem;
+        font-weight: 700;
+        background: #e0e7ff;
+        color: #3730a3;
+        margin-right: 3px;
+    }
+
+    .level-tag.r {
+        background: var(--iso-red-bg);
+        color: #991b1b;
+    }
+
+    .level-tag.s {
+        background: var(--iso-green-bg);
+        color: #166534;
+    }
+
+    .touch-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 4px 12px;
+        border-radius: 999px;
+        font-size: 0.75rem;
+        font-weight: 700;
+    }
+
+    .touch-chip.touched {
+        background: var(--iso-green-bg);
+        color: var(--iso-green);
+    }
+
+    .touch-chip.not-touched {
+        background: #f1f5f9;
+        color: var(--iso-muted);
+    }
+
+    /* ---- Reasoning steps ---- */
+    .reasoning-steps {
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+    }
+
+    .reason-step {
+        display: flex;
+        gap: 14px;
+        align-items: flex-start;
+        padding: 14px 16px;
+        background: #f8fafc;
+        border: 1px solid var(--iso-border);
+        border-left: 4px solid var(--iso-primary);
+        border-radius: 12px;
+    }
+
+    .reason-step:last-child {
+        border-left-color: var(--iso-green);
+        background: #ecfdf5;
+    }
+
+    .reason-step-icon {
+        flex: 0 0 auto;
+        width: 36px;
+        height: 36px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: #ffffff;
+        border: 1px solid var(--iso-border);
+        border-radius: 10px;
+        color: var(--iso-primary);
+        font-size: 1.05rem;
+    }
+
+    .reason-step:last-child .reason-step-icon {
+        color: var(--iso-green);
+        border-color: #bbf7d0;
+    }
+
+    .reason-step-body {
+        flex: 1;
+    }
+
+    .reason-step-title {
+        font-size: 0.85rem;
+        font-weight: 800;
+        color: var(--iso-text);
+        margin-bottom: 4px;
+        text-transform: uppercase;
+        letter-spacing: 0.4px;
+    }
+
+    .reason-step-detail {
+        font-size: 0.88rem;
+        color: var(--iso-muted);
+        line-height: 1.55;
+    }
+
+    /* ---- OR levels mini-grid ---- */
+    .or-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        gap: 12px;
+    }
+
+    .or-block {
+        background: #f8fafc;
+        border: 1px solid var(--iso-border);
+        border-radius: 12px;
+        padding: 14px 16px;
+    }
+
+    .or-block-title {
+        font-size: 0.78rem;
+        font-weight: 800;
+        color: var(--iso-primary);
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        margin-bottom: 10px;
+    }
+
+    .or-cell {
+        display: flex;
+        justify-content: space-between;
+        padding: 3px 0;
+        font-size: 0.82rem;
+    }
+
+    .or-cell .or-label {
+        color: var(--iso-muted);
+    }
+
+    .or-cell .or-value {
+        font-weight: 700;
+        font-variant-numeric: tabular-nums;
+    }
+
+    .or-cell.or-hit .or-value {
+        color: var(--iso-green);
+    }
+
+    /* ---- Backfill button state ---- */
+    .iso-btn.primary {
+        background: var(--iso-primary);
+        color: #ffffff;
+        border-color: var(--iso-primary);
+    }
+
+    .iso-btn.primary:hover {
+        background: #1d4ed8;
+        border-color: #1d4ed8;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="iso-page">
+    <!-- Top bar -->
+    <div class="iso-topbar">
+        <div class="iso-topbar-left">
+            <h1 class="iso-topbar-title">
+                <i class="bi bi-bullseye"></i>
+                Isolated Instrument
+            </h1>
+            <span class="iso-status-pill off" id="status-pill">Loading…</span>
+        </div>
+        <div class="iso-topbar-right">
+            <span class="iso-day-label" id="day-label">—</span>
+            <button type="button" class="iso-btn" id="refresh-btn">
+                <i class="bi bi-arrow-clockwise"></i> Refresh
+            </button>
+            <button
+                type="button"
+                class="iso-btn primary"
+                id="backfill-btn"
+                style="display: none;"
+            >
+                <i class="bi bi-recycle"></i> Run Backfill
+            </button>
+        </div>
+    </div>
+
+    <!-- Non-trading / waiting banner -->
+    <div class="iso-banner" id="iso-banner" style="display: none;">
+        <div class="banner-icon" id="banner-icon">
+            <i class="bi bi-hourglass-split"></i>
+        </div>
+        <div class="banner-body">
+            <div class="banner-title" id="banner-title">Not isolated yet</div>
+            <div class="banner-message" id="banner-message">
+                Waiting for the first R3 / S3 touch.
+            </div>
+            <div class="banner-subtext" id="banner-subtext"></div>
+        </div>
+    </div>
+
+    <!-- Hero card: isolated instrument -->
+    <div class="iso-hero" id="iso-hero" style="display: none;">
+        <div class="iso-hero-left">
+            <div class="iso-hero-label">ISOLATED INSTRUMENT</div>
+            <div class="iso-hero-symbol" id="hero-symbol">—</div>
+            <div class="iso-hero-key" id="hero-key">—</div>
+            <div class="iso-hero-tags" id="hero-tags"></div>
+            <div class="iso-hero-meta" id="hero-meta"></div>
+        </div>
+        <div class="iso-hero-right">
+            <a href="#" class="iso-hero-chart-btn" id="hero-chart-btn">
+                <i class="bi bi-graph-up-arrow"></i> Open Chart
+            </a>
+            <div class="iso-hero-price">
+                <div class="price-label">Trigger LTP</div>
+                <div class="price-value" id="hero-trigger-ltp">—</div>
+                <div class="price-sub" id="hero-trigger-sub">—</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Reasoning card -->
+    <div class="iso-card" id="iso-reasoning" style="display: none;">
+        <div class="iso-card-header">
+            <i class="bi bi-diagram-3-fill text-primary"></i>
+            <span>How this instrument was isolated</span>
+        </div>
+        <div class="iso-card-body">
+            <div class="reasoning-steps" id="iso-reasoning-body"></div>
+        </div>
+    </div>
+
+    <!-- Two-column: candidates + touch state -->
+    <div class="iso-row">
+        <div class="iso-card">
+            <div class="iso-card-header">
+                <i class="bi bi-list-ol text-primary"></i>
+                <span id="candidates-title">Candidates considered</span>
+            </div>
+            <div class="iso-card-body">
+                <div class="iso-table-wrap">
+                    <table class="iso-table" id="candidates-table">
+                        <thead>
+                            <tr>
+                                <th>Strike</th>
+                                <th>Type</th>
+                                <th>Levels</th>
+                                <th class="num">Distance</th>
+                                <th></th>
+                            </tr>
+                        </thead>
+                        <tbody id="candidates-body">
+                            <tr><td colspan="5" class="iso-empty">—</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <div class="iso-card">
+            <div class="iso-card-header">
+                <i class="bi bi-clipboard-check text-primary"></i>
+                <span>Touch state</span>
+            </div>
+            <div class="iso-card-body">
+                <div id="touch-body">
+                    <div class="iso-empty">—</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Event log -->
+    <div class="iso-card">
+        <div class="iso-card-header">
+            <i class="bi bi-journal-text text-primary"></i>
+            <span>Event log</span>
+        </div>
+        <div class="iso-card-body">
+            <div class="iso-table-wrap">
+                <table class="iso-table" id="events-table">
+                    <thead>
+                        <tr>
+                            <th>Time (IST)</th>
+                            <th>Index</th>
+                            <th>Side</th>
+                            <th class="num">Trigger LTP</th>
+                            <th class="num">Level</th>
+                            <th>Status</th>
+                            <th>Instrument</th>
+                        </tr>
+                    </thead>
+                    <tbody id="events-body">
+                        <tr><td colspan="7" class="iso-empty">—</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- OR levels reference -->
+    <div class="iso-card" id="or-levels-card" style="display: none;">
+        <div class="iso-card-header">
+            <i class="bi bi-bar-chart-line text-primary"></i>
+            <span>Opening Range levels</span>
+        </div>
+        <div class="iso-card-body">
+            <div class="or-grid" id="or-levels-body"></div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    const DETAIL_URL = "/admin/level-isolation/detail";
+    const BACKFILL_URL = "/admin/level-isolation/backfill";
+    const POLL_MS = 10000;
+
+    const state = {
+        detail: null,
+        pollTimer: null,
+    };
+
+    /* ---------- small formatters ---------- */
+    function parseNum(v) {
+        if (v === null || v === undefined || v === "") return null;
+        const n = Number(v);
+        return Number.isFinite(n) ? n : null;
+    }
+
+    function fmt(v, d) {
+        const n = parseNum(v);
+        if (n === null) return "—";
+        return n.toFixed(d === undefined ? 2 : d);
+    }
+
+    function fmtInt(v) {
+        const n = parseNum(v);
+        return n === null ? "0" : Math.round(n).toLocaleString();
+    }
+
+    function esc(s) {
+        return String(s === null || s === undefined ? "" : s).replace(
+            /[&<>"']/g,
+            c => ({
+                "&": "&amp;",
+                "<": "&lt;",
+                ">": "&gt;",
+                '"': "&quot;",
+                "'": "&#39;",
+            }[c])
+        );
+    }
+
+    function formatTime(iso) {
+        if (!iso) return "—";
+        try {
+            const d = new Date(iso);
+            if (isNaN(d.getTime())) return String(iso);
+            return d.toLocaleTimeString("en-IN", {
+                hour: "2-digit",
+                minute: "2-digit",
+                second: "2-digit",
+                hour12: false,
+            });
+        } catch (_) {
+            return String(iso);
+        }
+    }
+
+    function reasonLabel(reason) {
+        const map = {
+            nifty_r3_touch: "NIFTY touched R3",
+            nifty_s3_touch: "NIFTY touched S3",
+            sensex_r3_touch: "SENSEX touched R3",
+            sensex_s3_touch: "SENSEX touched S3",
+            sensex_r3_with_nifty_reference: "SENSEX touched R3 · NIFTY reference",
+            sensex_s3_with_nifty_reference: "SENSEX touched S3 · NIFTY reference",
+            sensex_r3_fallback: "SENSEX touched R3 · fallback (NIFTY stale)",
+            sensex_s3_fallback: "SENSEX touched S3 · fallback (NIFTY stale)",
+        };
+        return map[reason] || String(reason || "—");
+    }
+
+    /* ---------- renderers ---------- */
+    function renderStatusPill(d) {
+        const pill = document.getElementById("status-pill");
+        if (!pill) return;
+
+        const dayLabel = document.getElementById("day-label");
+        if (dayLabel) {
+            const day = d.day || "";
+            const mkt = d.market || {};
+            dayLabel.textContent = day
+                ? `${day} · ${mkt.state || ""}`
+                : "—";
+        }
+
+        if (d.isolated) {
+            pill.className = "iso-status-pill isolated";
+            pill.textContent = "Isolated";
+        } else if (!d.enabled) {
+            pill.className = "iso-status-pill off";
+            pill.textContent = "Disabled";
+        } else {
+            const mktState = (d.market || {}).state;
+            if (mktState === "in_session" && (d.market || {}).or_ready) {
+                pill.className = "iso-status-pill watching";
+                pill.textContent = "Watching";
+            } else {
+                pill.className = "iso-status-pill waiting";
+                pill.textContent = "Waiting";
+            }
+        }
+    }
+
+    function renderBanner(d) {
+        const banner = document.getElementById("iso-banner");
+        if (!banner) return;
+
+        // If isolated → hide the top banner (hero takes over).
+        if (d.isolated) {
+            banner.style.display = "none";
+            return;
+        }
+
+        const mkt = d.market || {};
+        const state = mkt.state || "in_session";
+        const isWatching =
+            state === "in_session" && mkt.or_ready;
+
+        banner.style.display = "flex";
+        banner.className = "iso-banner" + (isWatching ? " is-watching" : "");
+
+        const iconEl = document.getElementById("banner-icon");
+        const titleEl = document.getElementById("banner-title");
+        const msgEl = document.getElementById("banner-message");
+        const subEl = document.getElementById("banner-subtext");
+
+        let icon = "bi-hourglass-split";
+        let title = "Not isolated yet";
+        let sub = "";
+
+        switch (state) {
+            case "weekend":
+                icon = "bi-calendar-x";
+                title = "Weekend — market closed";
+                sub = "Isolation resumes on the next trading day.";
+                break;
+            case "holiday":
+                icon = "bi-calendar-x";
+                title = "Market holiday";
+                sub = mkt.holiday_description
+                    ? `Reason: ${mkt.holiday_description}`
+                    : "No trading today.";
+                break;
+            case "pre_open":
+                icon = "bi-alarm";
+                title = "Pre-open — waiting for market open";
+                sub =
+                    "OR levels will be computed at 09:16:10 IST; isolation " +
+                    "will begin watching for R3 / S3 touches right after.";
+                break;
+            case "or_warming_up":
+                icon = "bi-lightning-charge";
+                title = "OR levels being computed";
+                sub =
+                    "First candle closed at 09:16 — isolation will start " +
+                    "watching for R3 / S3 touches in a moment.";
+                break;
+            case "post_close":
+                icon = "bi-moon-stars";
+                title = "Market closed";
+                sub = "No new isolation until the next trading session.";
+                break;
+            case "in_session":
+                if (isWatching) {
+                    icon = "bi-bullseye";
+                    title = "Watching for R3 / S3 touches";
+                    sub =
+                        "Candidates will be isolated the moment NIFTY or " +
+                        "SENSEX touches its R3 or S3 level.";
+                } else {
+                    icon = "bi-hourglass-split";
+                    title = "Not isolated yet";
+                }
+                break;
+            default:
+                break;
+        }
+
+        if (iconEl) iconEl.innerHTML = `<i class="bi ${icon}"></i>`;
+        if (titleEl) titleEl.textContent = title;
+        if (msgEl) msgEl.textContent = mkt.message || "";
+        if (subEl) subEl.textContent = sub;
+
+        // Backfill button — only useful when we are in-session, OR is
+        // ready, and nothing has been isolated yet.
+        const backfillBtn = document.getElementById("backfill-btn");
+        if (backfillBtn) {
+            const canBackfill = isWatching && !d.isolated;
+            backfillBtn.style.display = canBackfill ? "inline-flex" : "none";
+        }
+    }
+
+    function renderHero(d) {
+        const hero = document.getElementById("iso-hero");
+        if (!hero) return;
+
+        if (!d.isolated) {
+            hero.style.display = "none";
+            return;
+        }
+
+        hero.style.display = "flex";
+        const iso = d.isolated;
+        const ev = d.trigger_event || {};
+
+        document.getElementById("hero-symbol").textContent =
+            iso.trading_symbol || iso.instrument_key || "—";
+        document.getElementById("hero-key").textContent =
+            iso.instrument_key || "";
+
+        // Tags: levels + strike/type
+        const tagsEl = document.getElementById("hero-tags");
+        tagsEl.innerHTML = "";
+        const tags = [];
+        if (iso.type) {
+            tags.push({
+                cls: iso.type === "CE" ? "s" : "r",
+                text: `${iso.type}`,
+            });
+        }
+        if (iso.strike !== null && iso.strike !== undefined) {
+            tags.push({ cls: "th", text: `Strike ${fmt(iso.strike, 0)}` });
+        }
+        (iso.levels || []).forEach(lv => {
+            const cls = String(lv).startsWith("R")
+                ? "r"
+                : String(lv).startsWith("S")
+                    ? "s"
+                    : "th";
+            tags.push({ cls, text: lv });
+        });
+        tagsEl.innerHTML = tags
+            .map(t => `<span class="tag ${t.cls}">${esc(t.text)}</span>`)
+            .join("");
+
+        // Meta grid
+        const metaEl = document.getElementById("hero-meta");
+        const metaItems = [
+            { label: "Trigger", value: reasonLabel(iso.reason) },
+            { label: "Isolated At", value: formatTime(iso.isolated_at) },
+            { label: "Expiry", value: iso.expiry || "—" },
+            {
+                label: "Trigger Level",
+                value:
+                    `${iso.trigger_level || "—"} = ` +
+                    `${fmt(iso.trigger_level_value)}`,
+            },
+            {
+                label: "Touched At",
+                value: formatTime(iso.touched_at),
+            },
+        ];
+        if (iso.nifty_reference_ltp !== null &&
+            iso.nifty_reference_ltp !== undefined) {
+            metaItems.push({
+                label: "NIFTY @ touch",
+                value: fmt(iso.nifty_reference_ltp),
+            });
+        }
+        metaEl.innerHTML = metaItems
+            .map(
+                m =>
+                    `<div><span class="meta-label">${esc(m.label)}</span>` +
+                    `<span class="meta-value">${esc(m.value)}</span></div>`
+            )
+            .join("");
+
+        // Chart CTA
+        const chartBtn = document.getElementById("hero-chart-btn");
+        if (chartBtn && iso.instrument_key) {
+            const url =
+                "/chart/" + encodeURIComponent(iso.instrument_key);
+            chartBtn.href = url;
+        }
+
+        // Trigger LTP + sub
+        document.getElementById("hero-trigger-ltp").textContent =
+            fmt(ev.trigger_ltp);
+        document.getElementById("hero-trigger-sub").textContent =
+            ev.index && ev.side
+                ? `${ev.index} · ${ev.side}`
+                : "—";
+    }
+
+    function renderReasoning(d) {
+        const card = document.getElementById("iso-reasoning");
+        if (!card) return;
+
+        if (!d.isolated || !d.trigger_event) {
+            card.style.display = "none";
+            return;
+        }
+        card.style.display = "block";
+
+        const iso = d.isolated;
+        const ev = d.trigger_event;
+        const steps = [];
+
+        // Step 1: Trigger
+        steps.push({
+            icon: "bi-lightning-charge-fill",
+            title: "Trigger",
+            detail:
+                `${ev.index} touched ${ev.trigger_level} at ` +
+                `${fmt(ev.trigger_level_value)} (LTP ${fmt(ev.trigger_ltp)}) ` +
+                `at ${formatTime(ev.touched_at)}.`,
+        });
+
+        // Step 2: Candidates
+        if (ev.candidates_count !== null &&
+            ev.candidates_count !== undefined) {
+            steps.push({
+                icon: "bi-list-ul",
+                title: "Candidates considered",
+                detail:
+                    `${ev.candidates_count} ${ev.index} ` +
+                    `${ev.side === "R3" ? "CE" : "PE"} instrument(s) carried ` +
+                    `${ev.trigger_level} / ${ev.trigger_level}_Threshold ` +
+                    `in their level tags.`,
+            });
+        }
+
+        // Step 3: Selection
+        const reason = String(iso.reason || "");
+        if (reason.includes("with_nifty_reference")) {
+            steps.push({
+                icon: "bi-arrow-left-right",
+                title: "Cross-index reference",
+                detail:
+                    `SENSEX touch fired; NIFTY LTP at that moment was ` +
+                    `${fmt(ev.nifty_reference_ltp)} (fresh). ` +
+                    `NIFTY was used as the reference for the pick.`,
+            });
+            steps.push({
+                icon: "bi-bullseye",
+                title: "Selection",
+                detail:
+                    `Picked the NIFTY ${ev.side === "R3" ? "CE" : "PE"} strike ` +
+                    `nearest to NIFTY LTP ${fmt(ev.nifty_reference_ltp)} ` +
+                    `→ strike ${fmt(iso.strike, 0)}.`,
+            });
+        } else if (reason.includes("fallback")) {
+            steps.push({
+                icon: "bi-arrow-repeat",
+                title: "Selection (fallback)",
+                detail:
+                    `NIFTY tick was stale at the moment of the SENSEX ` +
+                    `touch. Fell back to the nearest SENSEX ` +
+                    `${ev.side === "R3" ? "CE" : "PE"} strike to SENSEX ` +
+                    `LTP ${fmt(ev.trigger_ltp)} → strike ${fmt(iso.strike, 0)}.`,
+            });
+        } else {
+            steps.push({
+                icon: "bi-bullseye",
+                title: "Selection",
+                detail:
+                    `Picked the strike nearest to the trigger LTP ` +
+                    `(${fmt(ev.trigger_ltp)}) → strike ${fmt(iso.strike, 0)}.`,
+            });
+        }
+
+        // Step 4: Final
+        steps.push({
+            icon: "bi-check-circle-fill",
+            title: "Isolated",
+            detail: iso.trading_symbol || iso.instrument_key || "—",
+        });
+
+        const body = document.getElementById("iso-reasoning-body");
+        body.innerHTML = steps
+            .map(
+                s =>
+                    `<div class="reason-step">` +
+                    `<div class="reason-step-icon"><i class="bi ${s.icon}"></i></div>` +
+                    `<div class="reason-step-body">` +
+                    `<div class="reason-step-title">${esc(s.title)}</div>` +
+                    `<div class="reason-step-detail">${esc(s.detail)}</div>` +
+                    `</div></div>`
+            )
+            .join("");
+    }
+
+    function renderCandidates(d) {
+        const body = document.getElementById("candidates-body");
+        const titleEl = document.getElementById("candidates-title");
+        if (!body) return;
+
+        const iso = d.isolated;
+        const ev = d.trigger_event || {};
+
+        // Prefer the NIFTY-reference candidates when the SENSEX pick
+        // was made off the NIFTY list.
+        let list;
+        let distanceKey;
+        let refLabel;
+        if (
+            iso &&
+            String(iso.reason || "").includes("with_nifty_reference") &&
+            Array.isArray(ev.nifty_reference_candidates) &&
+            ev.nifty_reference_candidates.length
+        ) {
+            list = ev.nifty_reference_candidates;
+            distanceKey = "distance_to_nifty_ltp";
+            refLabel =
+                `NIFTY reference (LTP ${fmt(ev.nifty_reference_ltp)})`;
+        } else if (Array.isArray(ev.candidates) && ev.candidates.length) {
+            list = ev.candidates;
+            distanceKey = "distance_to_trigger_ltp";
+            refLabel =
+                `${ev.index || "Index"} LTP (${fmt(ev.trigger_ltp)})`;
+        } else {
+            list = [];
+            distanceKey = "distance_to_trigger_ltp";
+            refLabel = "—";
+        }
+
+        if (titleEl) {
+            titleEl.textContent = list.length
+                ? `Candidates considered · ${list.length} · ${refLabel}`
+                : "Candidates considered";
+        }
+
+        if (!list.length) {
+            body.innerHTML =
+                `<tr><td colspan="5" class="iso-empty">` +
+                `No candidates recorded for this isolation yet.` +
+                `</td></tr>`;
+            return;
+        }
+
+        const pickedKey = iso && iso.instrument_key;
+
+        body.innerHTML = list
+            .map(c => {
+                const isPicked = c.instrument_key === pickedKey;
+                const type = (c.type || "").toUpperCase();
+                const levelTags = (c.levels || [])
+                    .map(lv => {
+                        const cls = String(lv).startsWith("R")
+                            ? "r"
+                            : String(lv).startsWith("S")
+                                ? "s"
+                                : "";
+                        return `<span class="level-tag ${cls}">${esc(lv)}</span>`;
+                    })
+                    .join("") || '<span style="color:var(--iso-muted)">—</span>';
+                const dist = c[distanceKey];
+                const distStr =
+                    dist !== null && dist !== undefined ? fmt(dist) : "—";
+                const chartUrl =
+                    "/chart/" + encodeURIComponent(c.instrument_key);
+                return `<tr class="${isPicked ? "is-picked" : ""}">
+                    <td><strong>${fmt(c.strike, 0)}</strong></td>
+                    <td><span class="type-pill ${type.toLowerCase()}">${esc(type)}</span></td>
+                    <td>${levelTags}</td>
+                    <td class="num">${distStr}</td>
+                    <td>
+                        <a href="${chartUrl}" class="iso-btn" style="padding:4px 10px;font-size:0.72rem;">
+                            <i class="bi bi-graph-up-arrow"></i> Chart
+                        </a>
+                    </td>
+                </tr>`;
+            })
+            .join("");
+    }
+
+    function renderTouchState(d) {
+        const body = document.getElementById("touch-body");
+        if (!body) return;
+
+        const ts = d.touch_state || {};
+        const order = ["NIFTY_R3", "NIFTY_S3", "SENSEX_R3", "SENSEX_S3"];
+        const rows = order.map(k => {
+            const touched = !!ts[k];
+            const [index, side] = k.split("_");
+            const chip = touched
+                ? `<span class="touch-chip touched"><i class="bi bi-check-circle-fill"></i> touched</span>`
+                : `<span class="touch-chip not-touched"><i class="bi bi-circle"></i> waiting</span>`;
+            return `<tr>
+                <td><strong>${esc(index)}</strong></td>
+                <td>${esc(side)}</td>
+                <td>${chip}</td>
+            </tr>`;
+        }).join("");
+
+        body.innerHTML = `
+            <table class="iso-table">
+                <thead>
+                    <tr>
+                        <th>Index</th>
+                        <th>Side</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+                <tbody>${rows}</tbody>
+            </table>`;
+    }
+
+    function renderEvents(d) {
+        const body = document.getElementById("events-body");
+        if (!body) return;
+
+        const events = (d.events || []).slice(-50).reverse();
+        if (!events.length) {
+            body.innerHTML =
+                `<tr><td colspan="7" class="iso-empty">` +
+                `No events today.` +
+                `</td></tr>`;
+            return;
+        }
+        body.innerHTML = events
+            .map(ev => {
+                const status = String(ev.status || "");
+                let statusBadge = `<span class="touch-chip not-touched">${esc(status || "—")}</span>`;
+                if (status === "isolated") {
+                    statusBadge = `<span class="touch-chip touched"><i class="bi bi-check-circle-fill"></i> isolated</span>`;
+                }
+                const inst =
+                    ev.isolated_instrument ||
+                    ev.existing_isolated_instrument ||
+                    "—";
+                const instLabel = ev.status === "isolated"
+                    ? `<a href="/chart/${encodeURIComponent(inst)}" style="color:var(--iso-primary);font-weight:700;text-decoration:none;">${esc(inst)}</a>`
+                    : esc(inst);
+                return `<tr>
+                    <td>${formatTime(ev.touched_at)}</td>
+                    <td><strong>${esc(ev.index || "—")}</strong></td>
+                    <td>${esc(ev.side || "—")}</td>
+                    <td class="num">${fmt(ev.trigger_ltp)}</td>
+                    <td class="num">${fmt(ev.trigger_level_value)}</td>
+                    <td>${statusBadge}</td>
+                    <td>${instLabel}</td>
+                </tr>`;
+            })
+            .join("");
+    }
+
+    function renderOrLevels(d) {
+        const card = document.getElementById("or-levels-card");
+        const body = document.getElementById("or-levels-body");
+        if (!card || !body) return;
+
+        const or = d.or_levels || {};
+        const indexes = Object.keys(or);
+        if (!indexes.length) {
+            card.style.display = "none";
+            return;
+        }
+        card.style.display = "block";
+
+        const iso = d.isolated || {};
+        const hitIndex = iso.trigger_index || null;
+        const hitLevel = iso.trigger_level || null;
+
+        body.innerHTML = indexes
+            .map(idx => {
+                const levels = or[idx] || {};
+                const display = [
+                    "H", "L", "A",
+                    "R1", "R2", "R3", "R3_Threshold",
+                    "S1", "S2", "S3", "S3_Threshold",
+                ];
+                const cells = display
+                    .filter(k => levels[k] !== undefined && levels[k] !== null)
+                    .map(k => {
+                        const isHit =
+                            idx === hitIndex && k === hitLevel;
+                        return `<div class="or-cell ${isHit ? "or-hit" : ""}">
+                            <span class="or-label">${esc(k)}</span>
+                            <span class="or-value">${fmt(levels[k])}</span>
+                        </div>`;
+                    })
+                    .join("");
+                return `<div class="or-block">
+                    <div class="or-block-title">${esc(idx)}</div>
+                    ${cells}
+                </div>`;
+            })
+            .join("");
+    }
+
+    function render() {
+        const d = state.detail;
+        if (!d) return;
+        renderStatusPill(d);
+        renderBanner(d);
+        renderHero(d);
+        renderReasoning(d);
+        renderCandidates(d);
+        renderTouchState(d);
+        renderEvents(d);
+        renderOrLevels(d);
+    }
+
+    /* ---------- data loading ---------- */
+    async function loadDetail() {
+        try {
+            const res = await fetch(DETAIL_URL, {
+                headers: { Accept: "application/json" },
+            });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            state.detail = await res.json();
+            render();
+        } catch (err) {
+            console.error("[isolated] detail load failed:", err);
+        }
+    }
+
+    async function runBackfill() {
+        const btn = document.getElementById("backfill-btn");
+        if (!btn) return;
+        const original = btn.innerHTML;
+        btn.disabled = true;
+        btn.innerHTML =
+            '<i class="bi bi-hourglass-split"></i> Running…';
+        try {
+            const res = await fetch(BACKFILL_URL, { method: "POST" });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            await loadDetail();
+        } catch (err) {
+            console.error("[isolated] backfill failed:", err);
+        } finally {
+            btn.disabled = false;
+            btn.innerHTML = original;
+        }
+    }
+
+    /* ---------- bootstrap ---------- */
+    document.addEventListener("DOMContentLoaded", () => {
+        // First-paint detail from the server (if any)
+        if (window.__INITIAL_DETAIL__) {
+            state.detail = window.__INITIAL_DETAIL__;
+            render();
+        }
+        // Always fetch fresh, then poll
+        loadDetail();
+        state.pollTimer = setInterval(loadDetail, POLL_MS);
+
+        const refreshBtn = document.getElementById("refresh-btn");
+        if (refreshBtn) refreshBtn.addEventListener("click", loadDetail);
+
+        const backfillBtn = document.getElementById("backfill-btn");
+        if (backfillBtn) backfillBtn.addEventListener("click", runBackfill);
+    });
+
+    window.addEventListener("beforeunload", () => {
+        if (state.pollTimer) clearInterval(state.pollTimer);
+    });
+</script>
+
+<script>
+    // Server-side first-paint payload. Emitted last so it cannot
+    // shadow the DETAIL_URL / state definitions above.
+    window.__INITIAL_DETAIL__ = {{ initial_detail|tojson|safe }};
+</script>
+{% endblock %}

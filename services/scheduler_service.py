@@ -1,22 +1,14 @@
-# File: services/scheduler_service.py
+# services/scheduler_service.py
 """Singleton APScheduler wrapper.
 
 Jobs:
     * token_lifecycle_check         — interval
     * daily_refresh                 — cron, 08:30 IST Mon-Fri
     * first_candle_calc             — cron, 09:16:10 IST Mon-Fri
-
-Readiness / preflight jobs:
     * readiness_digest              — cron, 08:45 IST
     * preflight_recheck             — cron, 09:05 IST
-
-Daily backup:
+    * level_isolation_recheck       — cron, every 5 min, 09:16–15:30 IST Mon-Fri
     * daily_backup                  — cron, 16:00 IST
-
-Diagnostics
------------
-Uses ``get_logger(__file__)`` so every line reaches the file handlers
-in ``logs/`` and ``logs_text/``.
 """
 
 from __future__ import annotations
@@ -41,6 +33,9 @@ class SchedulerService:
         from token_tasks.daily_backup_task import run_daily_backup
         from token_tasks.daily_refresh import run_daily_refresh
         from token_tasks.first_candle_task import run_first_candle_calculation
+        from token_tasks.level_isolated_instrument_task import (
+            run_level_isolation_recheck,
+        )
         from token_tasks.readiness_digest_task import (
             run_preflight_recheck,
             run_readiness_digest,
@@ -106,6 +101,17 @@ class SchedulerService:
                 replace_existing=True, misfire_grace_time=120,
             )
 
+        # -- Level isolation recheck (every 5 min during market hours) -- #
+        if getattr(config, "LEVEL_ISOLATION_ENABLED", True):
+            scheduler.add_job(
+                run_level_isolation_recheck, "cron",
+                day_of_week=config.DAILY_REFRESH_DAYS,
+                hour="9-15",
+                minute="*/5",
+                id="level_isolation_recheck",
+                replace_existing=True, misfire_grace_time=120,
+            )
+
         # -- Daily backup ----------------------------------------------- #
         if config.DAILY_BACKUP_ENABLED:
             scheduler.add_job(
@@ -122,7 +128,8 @@ class SchedulerService:
 
         logger.info(
             "Scheduler started — daily=%02d:%02d, first_candle=%02d:%02d:%02d, "
-            "digest=%02d:%02d, preflight=%02d:%02d, DailyBackup=%02d:%02d",
+            "digest=%02d:%02d, preflight=%02d:%02d, "
+            "level_isolation_recheck=*/5 (9-15), DailyBackup=%02d:%02d",
             config.DAILY_REFRESH_HOUR, config.DAILY_REFRESH_MINUTE,
             getattr(config, "FIRST_CANDLE_HOUR", 9),
             getattr(config, "FIRST_CANDLE_MINUTE", 16),

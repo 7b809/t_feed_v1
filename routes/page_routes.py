@@ -1,4 +1,4 @@
-# File: routes/page_routes.py
+# routes/page_routes.py
 """HTML page routes.
 
 Serves the Jinja2-rendered pages that make up the UI:
@@ -7,6 +7,7 @@ Serves the Jinja2-rendered pages that make up the UI:
     GET /charts               -> instrument_list.html (Upstox search)
     GET /chart/{instrument_key}
                               -> chart.html (candles + EMA + OR levels)
+    GET /isolated             -> isolated_instrument.html (level-isolation page)
     GET /favicon.ico          -> 204 No Content
 
 The templates live at <project_root>/templates/. If your project uses a
@@ -52,12 +53,7 @@ def _resolve_underlying_name(entry: dict[str, Any]) -> str:
 
 
 def _build_instrument_context(instrument_key: str) -> dict[str, Any]:
-    """Return the ``instrument`` dict the chart template expects.
-
-    Falls back to a minimal stub when the key is not in the registry —
-    the frontend still works because it fetches candles directly from
-    Upstox.
-    """
+    """Return the ``instrument`` dict the chart template expects."""
     entry = instrument_registry.get(instrument_key)
     if entry is None:
         return {
@@ -136,11 +132,7 @@ def home(request: Request) -> HTMLResponse:
 
 @router.get("/charts", response_class=HTMLResponse)
 def charts_page(request: Request) -> HTMLResponse:
-    """Instrument search page.
-
-    The search itself is performed against ``/api/upstox/search`` from
-    the browser, so this page only needs the title.
-    """
+    """Instrument search page."""
     return templates.TemplateResponse(
         request=request,
         name="instrument_list.html",
@@ -154,11 +146,7 @@ def charts_page(request: Request) -> HTMLResponse:
 
 @router.get("/chart/{instrument_key:path}", response_class=HTMLResponse)
 def chart_page(request: Request, instrument_key: str) -> HTMLResponse:
-    """Chart page.
-
-    ``instrument_key`` arrives URL-encoded from the browser
-    (e.g. ``NSE_FO%7C50201`` -> ``NSE_FO|50201``).
-    """
+    """Chart page."""
     instrument = _build_instrument_context(instrument_key)
     instrument_name = instrument.get("trading_symbol") or instrument_key
 
@@ -172,5 +160,34 @@ def chart_page(request: Request, instrument_key: str) -> HTMLResponse:
             "instrument": instrument,
             "instruments": _build_side_panel_instruments(),
             "total_candles": 0,
+        },
+    )
+
+
+@router.get("/isolated", response_class=HTMLResponse)
+def isolated_page(request: Request) -> HTMLResponse:
+    """Level-isolation page.
+
+    The page is driven entirely by the JSON returned from
+    ``GET /admin/level-isolation/detail``. The server-side fetch here
+    only supplies a first-paint payload so the page renders without a
+    visible "Loading…" flash; the JS re-fetches and re-renders on a
+    10-second poll.
+    """
+    initial_detail: dict[str, Any] | None = None
+    try:
+        from services.level_isolated_instrument_service import (
+            level_isolated_instrument_service,
+        )
+        initial_detail = level_isolated_instrument_service.get_detail()
+    except Exception:
+        logger.exception("[isolated-page] get_detail failed")
+
+    return templates.TemplateResponse(
+        request=request,
+        name="isolated_instrument.html",
+        context={
+            "app_name": "Market Data Foundation",
+            "initial_detail": initial_detail,
         },
     )

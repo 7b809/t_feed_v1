@@ -19,64 +19,19 @@ Startup task list (infrastructure only):
     7.  Wire broadcast loop + cross handler
     8.  Reset today's live-cross state
     9.  Start / restart live feed
+    9b. Level-isolation backfill (replays intraday candles to
+        reconstruct today's "would-have-isolated" instrument)
     10. Start scheduler (idempotent)
     11. Start Telegram bot (idempotent)
     12. Telegram completion notification
     13. Return structured result
 
-Startup configuration validation
---------------------------------
-Before anything else runs, the lifespan calls
-``services.config_validation.validate_config()`` which catches the
-class of misconfiguration that does not raise an error but silently
-breaks a pipeline stage (e.g. an invalid day-of-week token in
-``DAILY_REFRESH_DAYS``).
-
-Errors are:
-
-  * logged at ERROR level,
-  * surfaced on Telegram as a single "Config Validation Failed"
-    message (one alert per process start, not per-check),
-  * recorded for the readiness endpoint by the surrounding systems.
-
-The process deliberately **continues** — a single subsystem being
-misconfigured does not justify taking the whole engine offline
-mid-session. The 08:45 readiness digest will show RED for the
-affected checks, and the operator can act on ``/admin/ops/runbook``.
-
-Market holiday gate
--------------------
-Before running the unified refresh, startup asks
-``services.market_holiday_service`` whether the current market date
-is a trading holiday. Behaviour:
-
-    * ``is_holiday = True``   -> pipeline skipped; Telegram message
-                                 says "APPLICATION STARTED · HOLIDAY";
-                                 scheduler + Telegram bot still start
-                                 so token checks keep working.
-    * ``is_holiday = False``  -> full pipeline runs as before.
-    * ``status = "error"``    -> treated as **not a holiday** so a
-                                 provider outage can never silently
-                                 skip the pipeline. The error is
-                                 recorded in ``holiday_gate`` for
-                                 debugging.
-
-The same gate is exposed via ``GET /admin/market-holiday``.
-
-Shutdown handling is owned by the lifespan only.
-
-Telegram bot state reporting
-----------------------------
-Both startup branches read ``telegram_token_bot.is_running`` — a
-truthful runtime flag set only once polling has actually begun — so
-a declined / timed-out Windows prompt is correctly reported as
-"bot not running".
-
 Admin surfaces mounted by this module:
 
-    Folder API            routes/folder_routes.py
-    Market Holiday API    routes/market_holiday_routes.py
-    Readiness API         routes/readiness_routes.py
+    Folder API             routes/folder_routes.py
+    Market Holiday API     routes/market_holiday_routes.py
+    Readiness API          routes/readiness_routes.py
+    Level-Isolation API    routes/isolated_instrument_routes.py
 """
 
 import asyncio
@@ -91,6 +46,7 @@ from routes.admin_routes import _run_full_refresh_sync
 from routes.admin_routes import router as admin_router
 from routes.daily_backup_routes import router as daily_backup_router
 from routes.folder_routes import router as folder_router
+from routes.isolated_instrument_routes import router as isolated_instrument_router
 from routes.layout_routes import router as layout_router
 from routes.live_routes import router as live_router
 from routes.log_routes import router as log_router
@@ -301,12 +257,20 @@ async def app_lifespan(app: FastAPI):
         registry_count = (result.get("registry") or {}).get("count", 0)
         telegram_running = _telegram_bot_running()
 
+        # ---- Level-isolation result (new) ----------------------------- #
+        isolation_summary = result.get("level_isolation") or {}
+        isolated = isolation_summary.get("isolated") or {}
+        isolation_status = isolation_summary.get("status")
+
         logger.info(
             "Application startup complete. feed_instruments=%d "
-            "telegram_polling=%s holiday=%s",
+            "telegram_polling=%s holiday=%s level_isolation_status=%s "
+            "isolated=%s",
             registry_count,
             telegram_running,
             holiday_gate.get("is_holiday"),
+            isolation_status,
+            isolated.get("instrument_key"),
         )
 
         # ---- Startup Telegram ------------------------------------------ #
@@ -317,12 +281,25 @@ async def app_lifespan(app: FastAPI):
             else f"🏖️ Holiday:       no\n"
         )
 
+        isolation_line = ""
+        if isolated:
+            isolation_line = (
+                f"🎯 Isolated:      "
+                f"{isolated.get('trading_symbol') or isolated.get('instrument_key')} "
+                f"({isolated.get('reason')})\n"
+            )
+        elif isolation_status:
+            isolation_line = (
+                f"🎯 Isolation:     {isolation_status}\n"
+            )
+
         startup_message = (
             f"{_DIV}\n"
             f"🚀 APPLICATION STARTED\n"
             f"{_DIV}\n"
             f"📊 Instruments:     {registry_count}\n"
             f"{holiday_line}"
+            f"{isolation_line}"
             f"📡 Live feed:       "
             f"{'✓' if result.get('feed_restarted') else '✗'}\n"
             f"⏰ Scheduler:       "
@@ -404,3 +381,4 @@ app.include_router(margin_router)
 app.include_router(daily_backup_router)
 app.include_router(layout_router)
 app.include_router(readiness_router)
+app.include_router(isolated_instrument_router)   # ← NEW
