@@ -3,61 +3,12 @@
 
 Runs at 09:16:10 IST Mon–Fri (after the 09:15 first candle closes).
 
-Market-hours gate
------------------
-Before touching Upstox, the service checks whether today is a trading
-day and whether the current time is within the market session
-(09:15–15:30 IST, Mon–Fri, non-holiday). If not, it returns
-``skipped=True`` with a ``reason`` and a ``next_open`` countdown so the
-task wrapper can send a friendly Telegram message instead of a fake
-"computed 0/0" result.
-
-Skip reasons:
-    * ``weekend``         — Saturday or Sunday
-    * ``holiday``         — market holiday per market_holiday_service
-    * ``pre_open``        — weekday, before 09:15 IST
-    * ``post_close``      — weekday, after 15:30 IST
-
-For each instrument (when not skipped):
-    1. Fetch the 09:15–09:16 1-min candle via Upstox HistoryV3
-       (``get_intra_day_candle_data(key, "minutes", "1")``).
-       The intraday + historical endpoints do NOT require an explicit
-       Authorization header — verified manually.
-    2. Read the last known EMA cross from ``ema_crosses.json``
-       (fast_period=9, slow_period=21). Historical crosses are
-       ground truth.
-    3. Compute Opening Range levels (D_H / D_L formula below).
-    4. Detect whether the 09:15 candle produced a new EMA cross
-       relative to the last historical candle (reverse-cross check
-       against the recorded slow EMA).
-    5. Persist ``first_candle.json`` next to the existing
-       ``candles.json`` / ``ema_crosses.json``.
-
-OR formula (per spec)
----------------------
-    fc = first candle (09:15–09:16)
-    H  = fc.high;  L = fc.low
-    A  = (H + L) / 2
-
-    D_H = |H - A|
-    D_L = |A - L|
-
-    R1 = A + D_H / 2
-    S1 = A - D_L / 2
-
-    R2 = H + D_H
-    S2 = L - D_L
-
-    R3 = R2 + D_H
-    S3 = S2 - D_L
-
-    R3_Threshold = (R2 + R3) / 2
-    S3_Threshold = (S2 + S3) / 2
-
-Output file (per instrument folder)
------------------------------------
-    data/<underlying>/<strike>_<CE|PE>/first_candle.json
-    data/index/<nifty|sensex>/first_candle.json
+After the per-instrument OR + EMA-cross pass completes, this service
+also triggers ``level_instrument_filter_service.run(...)`` which
+converts the index OR levels into the CE/PE option instruments that
+the live SR engine should track. That filter writes
+``data/index/<nifty|sensex>/level_instruments.json`` and registers the
+filtered instruments with ``live_sr_levels_service``.
 """
 
 from __future__ import annotations
@@ -83,8 +34,7 @@ _MAX_WORKERS = max(1, int(getattr(config, "FIRST_CANDLE_WORKERS", 8)))
 
 _MARKET_OPEN = dtime(9, 15)
 _MARKET_CLOSE = dtime(15, 30)
-_VALID_WEEKDAYS = {0, 1, 2, 3, 4}  # Mon-Fri (datetime.weekday())
-
+_VALID_WEEKDAYS = {0, 1, 2, 3, 4}  # Mon-Fri
 
 # --------------------------------------------------------------------------- #
 # Market-gate helpers                                                         #
@@ -92,17 +42,10 @@ _VALID_WEEKDAYS = {0, 1, 2, 3, 4}  # Mon-Fri (datetime.weekday())
 def _now_market() -> datetime:
     return datetime.now(_MARKET_TZ)
 
-
 def _is_weekend(dt: datetime) -> bool:
     return dt.weekday() not in _VALID_WEEKDAYS
 
-
 def _is_holiday_today() -> tuple[bool, str | None]:
-    """Ask market_holiday_service whether today is a trading holiday.
-
-    Returns (is_holiday, description). On any error, returns (False, None)
-    so a provider outage never blocks the calculation.
-    """
     try:
         payload = market_holiday_service.get_today()
         if str(payload.get("status") or "").lower() == "holiday":
@@ -115,12 +58,7 @@ def _is_holiday_today() -> tuple[bool, str | None]:
         logger.exception("[first-candle] holiday gate raised; assuming not holiday")
     return (False, None)
 
-
 def _next_market_open(after: datetime) -> datetime:
-    """Return the next 09:15 IST on a weekday that is not a holiday.
-
-    Looks up to 14 days ahead (covers long holiday stretches).
-    """
     candidate = after.replace(hour=9, minute=15, second=0, microsecond=0)
     if candidate <= after:
         candidate += timedelta(days=1)
@@ -135,11 +73,9 @@ def _next_market_open(after: datetime) -> datetime:
             if not is_hol:
                 return candidate
         candidate += timedelta(days=1)
-    return candidate  # fallback after 14 days
-
+    return candidate
 
 def _format_countdown(delta: timedelta) -> str:
-    """Format a timedelta as 'Xd HH:MM:SS' or 'HH:MM:SS'."""
     total_sec = max(0, int(delta.total_seconds()))
     days = total_sec // 86400
     hours = (total_sec % 86400) // 3600
@@ -148,18 +84,7 @@ def _format_countdown(delta: timedelta) -> str:
     hms = f"{hours:02d}:{mins:02d}:{secs:02d}"
     return f"{days}d {hms}" if days > 0 else hms
 
-
 def _market_gate_check() -> dict[str, Any]:
-    """Return a gate decision dict.
-
-    Keys:
-        allow            : bool — True when the calc should proceed
-        skip_reason      : str | None — weekend | holiday | pre_open | post_close
-        skip_message     : str | None — human-friendly reason
-        next_open        : datetime | None — next 09:15 IST trading day
-        countdown_str    : str | None — formatted "Nd HH:MM:SS"
-        countdown_label  : str | None — "Mon 09:15 IST" style
-    """
     now = _now_market()
 
     if _is_weekend(now):
@@ -217,7 +142,6 @@ def _market_gate_check() -> dict[str, Any]:
         "countdown_label": None,
     }
 
-
 # --------------------------------------------------------------------------- #
 # Filesystem helpers                                                          #
 # --------------------------------------------------------------------------- #
@@ -226,7 +150,6 @@ def _safe_folder(name: Any) -> str:
     for ch in ("|", "/", "\\", ":", "*", "?", '"', "<", ">", " "):
         text = text.replace(ch, "_")
     return text.strip("._") or "unknown"
-
 
 def _folder_for_entry(entry: dict[str, Any]) -> Path:
     underlying = str(entry.get("underlying") or "").strip().lower()
@@ -255,9 +178,8 @@ def _folder_for_entry(entry: dict[str, Any]) -> Path:
         / _safe_folder(entry.get("instrument_key"))
     )
 
-
 # --------------------------------------------------------------------------- #
-# Upstox intraday fetch — no explicit token required                          #
+# Upstox intraday fetch                                                       #
 # --------------------------------------------------------------------------- #
 def _load_sdk():
     try:
@@ -265,7 +187,6 @@ def _load_sdk():
         return upstox_client
     except ImportError:
         return None
-
 
 def _coerce_dict(raw: Any) -> dict[str, Any] | None:
     if raw is None:
@@ -284,7 +205,6 @@ def _coerce_dict(raw: Any) -> dict[str, Any] | None:
     if isinstance(data_attr, dict):
         return data_attr
     return None
-
 
 def _fetch_first_candle_upstox(instrument_key: str) -> dict[str, Any] | None:
     sdk = _load_sdk()
@@ -332,9 +252,8 @@ def _fetch_first_candle_upstox(instrument_key: str) -> dict[str, Any] | None:
             continue
     return None
 
-
 # --------------------------------------------------------------------------- #
-# OR level computation (per spec)                                             #
+# OR level computation                                                        #
 # --------------------------------------------------------------------------- #
 def _compute_or_levels(fc: dict[str, Any]) -> dict[str, float]:
     H = float(fc["high"])
@@ -362,9 +281,8 @@ def _compute_or_levels(fc: dict[str, Any]) -> dict[str, float]:
         "S3_Threshold": (S2 + S3) / 2.0,
     }
 
-
 # --------------------------------------------------------------------------- #
-# EMA-cross detection against recorded ema_crosses.json                       #
+# EMA-cross detection                                                         #
 # --------------------------------------------------------------------------- #
 def _read_historical_crosses(entry: dict[str, Any]) -> dict[str, Any] | None:
     folder = _folder_for_entry(entry)
@@ -377,37 +295,24 @@ def _read_historical_crosses(entry: dict[str, Any]) -> dict[str, Any] | None:
         logger.warning("[first-candle] cannot parse %s", p)
         return None
 
-
 def _detect_new_ema_cross(
     entry: dict[str, Any],
     historical: dict[str, Any] | None,
     fc: dict[str, Any],
 ) -> dict[str, Any]:
     if not historical:
-        return {
-            "detected": False,
-            "type": None,
-            "reason": "no_historical_crosses",
-            "compared_against": None,
-        }
+        return {"detected": False, "type": None,
+                "reason": "no_historical_crosses", "compared_against": None}
 
     crosses = historical.get("crosses") or []
     if not crosses:
-        return {
-            "detected": False,
-            "type": None,
-            "reason": "empty_crosses_list",
-            "compared_against": None,
-        }
+        return {"detected": False, "type": None,
+                "reason": "empty_crosses_list", "compared_against": None}
 
     last = crosses[-1]
     if not isinstance(last, dict):
-        return {
-            "detected": False,
-            "type": None,
-            "reason": "malformed_last_cross",
-            "compared_against": None,
-        }
+        return {"detected": False, "type": None,
+                "reason": "malformed_last_cross", "compared_against": None}
 
     last_ts = str(last.get("timestamp") or "")
     last_type = str(last.get("type") or "").lower()
@@ -443,17 +348,11 @@ def _detect_new_ema_cross(
         "compared_against": last_ts or None,
     }
 
-
 # --------------------------------------------------------------------------- #
 # Public service                                                              #
 # --------------------------------------------------------------------------- #
 class FirstCandleService:
-    """Runs the OR + EMA-cross task for every registered instrument.
-
-    Skips automatically on weekends, holidays, and outside the
-    09:15–15:30 IST session, returning a ``skipped=True`` summary with
-    a countdown to the next open.
-    """
+    """Runs the OR + EMA-cross task, then triggers the level filter."""
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
@@ -493,7 +392,6 @@ class FirstCandleService:
             return (key, None, f"{type(exc).__name__}: {exc}")
 
     def run(self, reason: str = "scheduled") -> dict[str, Any]:
-        # ---- Market-hours gate --------------------------------------- #
         gate = _market_gate_check()
         if not gate["allow"]:
             summary = {
@@ -505,24 +403,18 @@ class FirstCandleService:
                 "countdown_str": gate["countdown_str"],
                 "countdown_label": gate["countdown_label"],
                 "ran_at": _now_market().isoformat(),
-                "total": 0,
-                "computed": 0,
-                "errors": 0,
-                "crosses_detected": 0,
-                "elapsed_seconds": 0.0,
+                "total": 0, "computed": 0, "errors": 0,
+                "crosses_detected": 0, "elapsed_seconds": 0.0,
             }
             with self._lock:
                 self._last_run = summary
             logger.info(
                 "[first-candle] SKIPPED reason=%s (%s) — next open in %s (%s)",
-                gate["skip_reason"],
-                gate["skip_message"],
-                gate["countdown_str"],
-                gate["countdown_label"],
+                gate["skip_reason"], gate["skip_message"],
+                gate["countdown_str"], gate["countdown_label"],
             )
             return summary
 
-        # ---- Normal calculation -------------------------------------- #
         entries = list(instrument_registry.all())
         total = len(entries)
         logger.info(
@@ -584,11 +476,43 @@ class FirstCandleService:
             total, len(results), len(skipped),
             len(errors), len(crosses_detected), elapsed,
         )
+
+        # ---- Level-instrument filter -------------------------------- #
+        # Convert the freshly written OR levels into the CE/PE
+        # instruments that the live SR engine should track.
+        try:
+            from services.level_instrument_filter_service import (
+                level_instrument_filter_service,
+            )
+            filter_result = level_instrument_filter_service.run(
+                reason=f"first_candle:{reason}"
+            )
+            summary["level_filter"] = {
+                "status": filter_result.get("status"),
+                "indexes": {
+                    k: {
+                        "status": v.get("status"),
+                        "ce_count": v.get("ce_count"),
+                        "pe_count": v.get("pe_count"),
+                    }
+                    for k, v in (filter_result.get("indexes") or {}).items()
+                },
+            }
+            logger.info(
+                "[first-candle] level filter: %s",
+                summary["level_filter"],
+            )
+        except Exception as exc:
+            logger.exception("[first-candle] level filter failed")
+            summary["level_filter"] = {
+                "status": "error",
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+
         return summary
 
     def last_status(self) -> dict[str, Any]:
         with self._lock:
             return dict(self._last_run)
-
 
 first_candle_service = FirstCandleService()

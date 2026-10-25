@@ -10,11 +10,15 @@
     POST /admin/ops/resubscribe-feed    -> force live-feed reconnect
     POST /admin/ops/revalidate-token    -> force token re-check
 
-Strategy-free
--------------
-EMA backfill, Opening Range, and ProChart are no longer part of the
-system. ``/admin/ops/warmup`` therefore performs **backup + registry
-load only** — the backfill seed call was removed.
+    POST /admin/ops/first-candle        -> manual OR + EMA-cross calc
+    GET  /admin/ops/first-candle-status -> last OR calc summary
+
+Level-instrument filter + live SR levels
+----------------------------------------
+    GET  /admin/ops/level-instruments               -> filtered instruments per index
+    POST /admin/ops/level-instruments/recalc        -> force filter recalc + SR registration
+    GET  /admin/ops/live-sr                          -> SR engine status
+    GET  /admin/ops/live-sr/{instrument_key:path}   -> persisted SR payload for one instrument
 
 All routes return HTTP 200 with a JSON body carrying ``status`` so
 callers can drive automation off the response. No credentials or
@@ -40,34 +44,22 @@ logger = get_logger(__file__)
 
 router = APIRouter(prefix="/admin", tags=["readiness"])
 
-
 # --------------------------------------------------------------------------- #
 # Readiness                                                                   #
 # --------------------------------------------------------------------------- #
 @router.get("/readiness")
 def get_readiness() -> dict[str, Any]:
-    """Return the most recent readiness snapshot (compute one if none)."""
     snap = readiness_service.last_snapshot()
     if snap is None:
         snap = readiness_service.check()
     return snap
 
-
 @router.post("/readiness")
 async def post_readiness() -> dict[str, Any]:
-    """Force a fresh readiness check (no side effects)."""
     return await asyncio.to_thread(readiness_service.check)
-
 
 @router.get("/readiness/history")
 def get_readiness_history(limit: int = 50) -> dict[str, Any]:
-    """Return the tail of the 7-day health log (per-day JSON files).
-
-    The health log lives under ``meta_data/health/`` — written by
-    ``services.readiness_service._append_health_log()``. This route
-    previously read from ``data/health/`` (a stale path) and always
-    returned an empty list; fixed to match the writer.
-    """
     try:
         from pathlib import Path
         import json
@@ -93,13 +85,11 @@ def get_readiness_history(limit: int = 50) -> dict[str, Any]:
         logger.exception("[readiness] history read failed")
         return {"count": 0, "entries": [], "error": "history_unavailable"}
 
-
 # --------------------------------------------------------------------------- #
 # Operator runbook                                                            #
 # --------------------------------------------------------------------------- #
 @router.get("/ops/runbook")
 def get_runbook() -> dict[str, Any]:
-    """Return the operator's incident-response cheat sheet as JSON."""
     return {
         "pre_open_checklist": [
             {"time": "08:30", "action": "auto: daily refresh"},
@@ -107,6 +97,7 @@ def get_runbook() -> dict[str, Any]:
             {"time": "09:05", "action": "auto: pre-flight recheck"},
             {"time": "09:10", "action": "manual: verify GREEN in Telegram"},
             {"time": "09:15", "action": "cash market opens"},
+            {"time": "09:16:10", "action": "auto: first-candle OR + level filter"},
         ],
         "if_red": {
             "token_valid":         "send /save_token in Telegram",
@@ -137,18 +128,11 @@ def get_runbook() -> dict[str, Any]:
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
 
-
 # --------------------------------------------------------------------------- #
 # Manual remediation                                                          #
 # --------------------------------------------------------------------------- #
 @router.post("/ops/warmup")
 async def warmup() -> dict[str, Any]:
-    """Re-extract backup + reload registry (no cleanup, no strategy).
-
-    The EMA backfill seed call was removed when the strategy layer was
-    stripped from the codebase. The endpoint now only refreshes the
-    two infrastructure inputs that later stages depend on.
-    """
     def _run() -> dict[str, Any]:
         from services.backup_data_service import backup_data_service
         from services.instrument_registry import instrument_registry
@@ -165,16 +149,12 @@ async def warmup() -> dict[str, Any]:
 
     return await asyncio.to_thread(_run)
 
-
 @router.post("/ops/smoke-test")
 async def smoke_test() -> dict[str, Any]:
-    """Run the 5-probe smoke test without side effects."""
     return await asyncio.to_thread(readiness_service.smoke_test)
-
 
 @router.post("/ops/resubscribe-feed")
 async def resubscribe_feed() -> dict[str, Any]:
-    """Force live-feed reconnect (does not run a full refresh)."""
     def _run() -> dict[str, Any]:
         from services.live_feed_service import live_feed_service
         ok = live_feed_service.restart()
@@ -187,10 +167,8 @@ async def resubscribe_feed() -> dict[str, Any]:
 
     return await asyncio.to_thread(_run)
 
-
 @router.post("/ops/revalidate-token")
 async def revalidate_token() -> dict[str, Any]:
-    """Force token re-check + Telegram alert."""
     def _run() -> dict[str, Any]:
         from token_tasks.token_monitor import check_upstox_token_validity
         result = check_upstox_token_validity(send_success_message=True)
@@ -202,19 +180,126 @@ async def revalidate_token() -> dict[str, Any]:
 
     return await asyncio.to_thread(_run)
 
-
-# (Append to existing routes/readiness_routes.py)
+# --------------------------------------------------------------------------- #
+# First-candle OR + EMA-cross                                                 #
+# --------------------------------------------------------------------------- #
 @router.post("/ops/first-candle")
 async def trigger_first_candle() -> dict[str, Any]:
-    """Manually trigger the first-candle OR + EMA-cross calculation."""
     def _run() -> dict[str, Any]:
         from services.first_candle_service import first_candle_service
         return first_candle_service.run(reason="manual")
     return await asyncio.to_thread(_run)
 
-
 @router.get("/ops/first-candle-status")
 def first_candle_status() -> dict[str, Any]:
-    """Return the last first-candle run summary."""
     from services.first_candle_service import first_candle_service
     return first_candle_service.last_status()
+
+# --------------------------------------------------------------------------- #
+# Level-instrument filter                                                     #
+# --------------------------------------------------------------------------- #
+@router.get("/ops/level-instruments")
+def list_level_instruments() -> dict[str, Any]:
+    """Return the level-filtered CE/PE instruments per configured index.
+
+    Reads ``data/index/<underlying_lower>/level_instruments.json`` for
+    each underlying in ``LEVEL_FILTER_INDEXES``. Missing files are
+    reported per index rather than raising.
+    """
+    from pathlib import Path
+    import json
+
+    underlyings = [str(u).strip().upper() for u in config.LEVEL_FILTER_INDEXES]
+    out: dict[str, Any] = {}
+    for u in underlyings:
+        if not u:
+            continue
+        path = (
+            Path(config.LIVE_DATA_DIR) / "index" / u.lower()
+            / "level_instruments.json"
+        )
+        if not path.exists():
+            out[u] = {
+                "status": "not_generated",
+                "path": str(path),
+                "hint": "POST /admin/ops/level-instruments/recalc",
+            }
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            out[u] = {
+                "status": "ok",
+                "path": str(path),
+                "strike_step": payload.get("strike_step"),
+                "range_filter": payload.get("range_filter"),
+                "ce_count": len(payload.get("ce_instruments") or []),
+                "pe_count": len(payload.get("pe_instruments") or []),
+                "ce_instruments": payload.get("ce_instruments") or [],
+                "pe_instruments": payload.get("pe_instruments") or [],
+            }
+        except Exception as exc:
+            out[u] = {
+                "status": "error",
+                "path": str(path),
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+
+    return {
+        "count": len(out),
+        "indexes": out,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+@router.post("/ops/level-instruments/recalc")
+async def recalc_level_instruments() -> dict[str, Any]:
+    """Force the level filter to re-run (reads first_candle.json from disk)."""
+    def _run() -> dict[str, Any]:
+        from services.level_instrument_filter_service import (
+            level_instrument_filter_service,
+        )
+        return level_instrument_filter_service.run(reason="manual")
+    return await asyncio.to_thread(_run)
+
+# --------------------------------------------------------------------------- #
+# Live SR levels                                                              #
+# --------------------------------------------------------------------------- #
+@router.get("/ops/live-sr")
+def live_sr_status() -> dict[str, Any]:
+    """Return the live-SR engine status + per-instrument counts."""
+    try:
+        from services.live_sr_levels_service import live_sr_levels_service
+        return live_sr_levels_service.status()
+    except Exception as exc:
+        logger.exception("[live-sr] status failed")
+        return {
+            "status": "error",
+            "error": f"{type(exc).__name__}: {exc}",
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+@router.get("/ops/live-sr/{instrument_key:path}")
+def live_sr_for_instrument(instrument_key: str) -> dict[str, Any]:
+    """Return the persisted ``live_sr_levels.json`` for one instrument."""
+    try:
+        from services.live_sr_levels_service import live_sr_levels_service
+        payload = live_sr_levels_service.get_levels(instrument_key)
+    except Exception as exc:
+        logger.exception("[live-sr] read failed for %s", instrument_key)
+        raise HTTPException(
+            status_code=500,
+            detail={"error": f"{type(exc).__name__}: {exc}"},
+        )
+    if payload is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": "not_tracked_or_no_file",
+                "instrument_key": instrument_key,
+                "hint": (
+                    "Confirm the instrument is registered by "
+                    "GET /admin/ops/level-instruments and has received "
+                    "live ticks since registration."
+                ),
+            },
+        )
+    return payload

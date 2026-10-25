@@ -1,4 +1,4 @@
-# File: core/config.py
+# core/config.py
 """Configuration for the foundational market-data application."""
 
 import os
@@ -331,3 +331,112 @@ FIRST_CANDLE_HOUR = _int("FIRST_CANDLE_HOUR", 9)
 FIRST_CANDLE_MINUTE = _int("FIRST_CANDLE_MINUTE", 16)
 FIRST_CANDLE_SECOND = _int("FIRST_CANDLE_SECOND", 10)
 FIRST_CANDLE_WORKERS = max(1, min(32, _int("FIRST_CANDLE_WORKERS", 8)))
+
+
+# ===========================================================================
+# Level-instrument filter (per-index CE/PE strike list from OR levels)
+# ===========================================================================
+# Given an index's first-candle OR levels, filter the option chain down to
+# the strikes that correspond to R1/R2/R3/R3_Threshold (CE) and
+# S1/S2/S3/S3_Threshold (PE), then apply the S3..R3 range filter.
+#
+# Output (per index):
+#   data/index/<underlying_lower>/level_instruments.json
+#
+# This file is a UI/analysis artefact — the CE/PE strikes the index's OR
+# levels map to, with reasons and level tags. It is independent of the
+# live SR engine (which now tracks every subscribed instrument, not just
+# these filtered strikes).
+LEVEL_FILTER_ENABLED = _bool("LEVEL_FILTER_ENABLED", True)
+
+# Which index underlyings to filter. "NIFTY" and "SENSEX" are the defaults.
+LEVEL_FILTER_INDEXES = _csv("LEVEL_FILTER_INDEXES", "NIFTY,SENSEX")
+
+# Default strike step per index (can be overridden by JSON below).
+LEVEL_FILTER_STRIKE_STEP_NIFTY = max(1, _int("LEVEL_FILTER_STRIKE_STEP_NIFTY", 50))
+LEVEL_FILTER_STRIKE_STEP_SENSEX = max(1, _int("LEVEL_FILTER_STRIKE_STEP_SENSEX", 100))
+
+# Optional JSON override: {"NIFTY": 50, "SENSEX": 100, "BANKNIFTY": 100}
+# Parsed as JSON; invalid JSON falls back to the two env scalars above.
+LEVEL_FILTER_STRIKE_STEPS_JSON = _str("LEVEL_FILTER_STRIKE_STEPS_JSON", "")
+
+# Range filter mode:
+#   "wide"   -> S3 <= strike <= R3          (default)
+#   "strict" -> S3_Threshold <= strike <= R3_Threshold
+LEVEL_FILTER_RANGE_MODE = _str("LEVEL_FILTER_RANGE_MODE", "wide").lower()
+
+# When > 0, also include ATM +/- N strikes in the filter output.
+LEVEL_FILTER_INCLUDE_ATM_PLUS_MINUS = max(
+    0, _int("LEVEL_FILTER_INCLUDE_ATM_PLUS_MINUS", 0)
+)
+
+# ===========================================================================
+# Live SR levels engine (pivot-based, runs on live 1-min candles)
+# ===========================================================================
+# For every tracked instrument, the engine accumulates 1-min candles
+# from live ticks and detects resistance (swing high) / support (swing
+# low) pivots using the strict left/right rule:
+#
+#     candle[i].high > candle[j].high  for j in [i-left, i-1] and [i+1, i+right]
+#     candle[i].low  < candle[j].low   for j in [i-left, i-1] and [i+1, i+right]
+#
+# A pivot at index i is confirmed at index i + right_bars. Confirmed pivots
+# are written to data/<...>/live_sr_levels.json.
+#
+# Track-all mode (default)
+# ------------------------
+# When LIVE_SR_TRACK_ALL_INSTRUMENTS is True (default), every instrument
+# subscribed by the live feed (i.e. every entry in the registry) is
+# registered with the SR engine on feed start and gets a
+# data/<...>/live_sr_levels.json file, even before any pivot is detected.
+# This makes SR available uniformly across the whole universe, not just
+# the level-filtered strikes.
+#
+# When False, only the instruments explicitly registered by other
+# services (currently: level_instrument_filter_service for the index +
+# filtered CE/PE strikes) are tracked.
+LIVE_SR_ENABLED = _bool("LIVE_SR_ENABLED", True)
+LIVE_SR_TRACK_ALL_INSTRUMENTS = _bool("LIVE_SR_TRACK_ALL_INSTRUMENTS", True)
+LIVE_SR_LEFT_BARS = max(1, _int("LIVE_SR_LEFT_BARS", 15))
+LIVE_SR_RIGHT_BARS = max(1, _int("LIVE_SR_RIGHT_BARS", 15))
+LIVE_SR_MAX_CANDLES = max(50, _int("LIVE_SR_MAX_CANDLES", 500))
+LIVE_SR_FILENAME = _str("LIVE_SR_FILENAME", "live_sr_levels.json")
+
+# Persistence throttle. The file is ALWAYS written:
+#   * on initial registration (empty file so readers never see a missing file)
+#   * when a new pivot is confirmed
+#   * when an existing level is broken
+# Additionally, the file is refreshed every N finalized candles so that
+# "candle_count" and "last_candle" do not drift stale. 0 disables the
+# periodic refresh (write only on register / pivot / break). 1 writes on
+# every candle close. Default 5 balances freshness against I/O load on
+# a ~245-instrument registry.
+LIVE_SR_PERSIST_EVERY_N_CANDLES = max(0, _int("LIVE_SR_PERSIST_EVERY_N_CANDLES", 5))
+
+
+# ===========================================================================
+# Mid-day startup backfill via intraday API
+# ===========================================================================
+# If the process starts mid-session (between SR_BACKFILL_START_HOUR/
+# MINUTE and SR_BACKFILL_END_HOUR/MINUTE on a trading day), the SR
+# backfill service fetches today's intraday 1-min candles from Upstox
+# for every tracked instrument and seeds the SR engine with them:
+#
+#     upstox_client.HistoryV3Api.get_intra_day_candle_data(
+#         instrument_key, "minutes", "1"
+#     )
+#
+# That makes OR + SR levels immediately available on the dashboard,
+# without waiting for the live feed to accumulate 31+ candles. The
+# seed is idempotent: it clears in-memory candles/levels, rebuilds
+# from the intraday response, and persists once at the end.
+#
+# Window default: 09:15 -> 23:59 IST. Weekends and holidays are
+# skipped automatically. A Telegram summary is sent on the feed_start
+# path (a log line at INFO is always written).
+SR_BACKFILL_ENABLED = _bool("SR_BACKFILL_ENABLED", True)
+SR_BACKFILL_MAX_WORKERS = max(1, min(16, _int("SR_BACKFILL_MAX_WORKERS", 4)))
+SR_BACKFILL_START_HOUR = _int("SR_BACKFILL_START_HOUR", 9)
+SR_BACKFILL_START_MINUTE = _int("SR_BACKFILL_START_MINUTE", 15)
+SR_BACKFILL_END_HOUR = _int("SR_BACKFILL_END_HOUR", 23)
+SR_BACKFILL_END_MINUTE = _int("SR_BACKFILL_END_MINUTE", 59)

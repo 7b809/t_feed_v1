@@ -1,0 +1,259 @@
+Instrument Filtering Reference — Index / Levels Based Options
+
+Use this as the standard reference for filtering option instruments (CE/PE strikes) from an index opening-range level calculation. The same logic applies to Nifty, BankNifty, FinNifty, or any configured index/underlying; only the strike step and underlying symbol change.
+
+1. Purpose
+Given:
+- an index / underlying,
+- its option chain,
+- the first 1-minute candle of the market session,
+- the configured strike interval,
+- calculate opening-range levels and filter the option instruments that are relevant to those levels.
+
+For Nifty, the first candle is normally:
+09:15:00 to 09:16:00
+If candles are stored newest-first, locate the candle whose timestamp is 09:15 for the trading day.
+
+2. First-Candle Inputs
+From the first candle:
+H = First candle High
+L = First candle Low
+Do not use open/close for the level calculation unless explicitly configured. The reference calculation uses High and Low.
+
+3. Level Calculation
+A   = (H + L) / 2
+
+D_H = |H - A|
+D_L = |A - L|
+
+R1 = A + D_H / 2
+S1 = A - D_L / 2
+
+R2 = H + D_H
+S2 = L - D_L
+
+R3 = R2 + D_H
+S3 = S2 - D_L
+
+R3_Threshold = (R2 + R3) / 2
+S3_Threshold = (S2 + S3) / 2
+Because A is the midpoint, normally:
+D_H = D_L
+
+Meaning of levels:
+Level | Meaning
+---|---
+R1 | First resistance / upper opening-range pivot
+S1 | First support / lower opening-range pivot
+R2 | Stronger resistance extension
+S2 | Stronger support extension
+R3 | Outer resistance extension
+S3 | Outer support extension
+R3_Threshold | Transition / breakout-confirmation zone between R2 and R3
+S3_Threshold | Transition / breakdown-confirmation zone between S2 and S3
+
+4. Strike Conversion Rules
+Raw level values are decimal prices. They must be converted to listed option strikes.
+
+Resistance levels: Use ceil rounding to the next strike:
+strike_R = ceil(raw_level / strike_step) * strike_step
+
+Support levels: Use floor rounding to the previous strike:
+strike_S = floor(raw_level / strike_step) * strike_step
+
+ATM reference: Use nearest listed strike to current spot / first-candle close / midpoint A:
+strike_ATM = round(reference_price / strike_step) * strike_step
+
+If the calculated strike is not listed in the option chain:
+- For resistance/CE selection, move to the next higher listed strike.
+- For support/PE selection, move to the next lower listed strike.
+- Never use a fractional or non-listed strike.
+
+Strike step by index:
+Underlying | Typical strike step
+---|---
+Nifty | 50 or 100, depending on chain/config
+BankNifty | 100
+FinNifty | 50
+Other index | Use configured strike step
+
+The formula does not change. Only strike_step changes.
+
+5. Worked Example From Supplied Data
+First candle:
+Timestamp: 2026-10-22T09:15:00+05:30
+Open:  22687.75
+High:  22697.55
+Low:   22564.90
+Close: 22591.45
+
+Calculated:
+H = 22697.55
+L = 22564.90
+A = 22631.225
+D_H = 66.325
+D_L = 66.325
+
+R1 = 22664.3875
+S1 = 22598.0625
+R2 = 22763.8750
+S2 = 22498.5750
+R3 = 22830.2000
+S3 = 22432.2500
+
+R3_Threshold = 22797.0375
+S3_Threshold = 22465.4125
+
+With 50-point strike step:
+Level | Raw | Rule | Strike
+---|---|---|---
+R1 | 22664.3875 | ceil 50 | 22700
+S1 | 22598.0625 | floor 50 | 22550
+R2 | 22763.8750 | ceil 50 | 22800
+S2 | 22498.5750 | floor 50 | 22450
+R3 | 22830.2000 | ceil 50 | 22850
+S3 | 22432.2500 | floor 50 | 22400
+R3_Threshold | 22797.0375 | ceil 50 | 22800
+S3_Threshold | 22465.4125 | floor 50 | 22450
+
+With 100-point strike step:
+Level | Raw | Rule | Strike
+---|---|---|---
+R1 | 22664.3875 | ceil 100 | 22700
+S1 | 22598.0625 | floor 100 | 22500
+R2 | 22763.8750 | ceil 100 | 22800
+S2 | 22498.5750 | floor 100 | 22400
+R3 | 22830.2000 | ceil 100 | 22900
+S3 | 22432.2500 | floor 100 | 22400
+R3_Threshold | 22797.0375 | ceil 100 | 22800
+S3_Threshold | 22465.4125 | floor 100 | 22400
+
+6. Instrument Filtering Rules
+After strike conversion, filter the option chain as follows.
+
+6.1 Core level instruments
+Always include the listed strikes corresponding to:
+- CE candidates: R1, R2, R3, R3_Threshold
+- PE candidates: S1, S2, S3, S3_Threshold
+
+Rationale:
+- Resistance levels map to CE instruments.
+- Support levels map to PE instruments.
+- Threshold levels are transition/confirmation zones and should be included when they map to a distinct listed strike.
+- If two levels round to the same strike, keep one instrument and attach both level tags.
+
+Example from 50-step data:
+- CE: 22700 (R1), 22800 (R2 / R3_Threshold), 22850 (R3)
+- PE: 22550 (S1), 22450 (S2 / S3_Threshold), 22400 (S3)
+
+6.2 Range filter
+Default inclusion range:
+S3 <= selected strikes <= R3
+Do not include strikes outside S3 and R3 unless a separate configuration explicitly allows outer strikes.
+A stricter filter may use S3_Threshold <= selected strikes <= R3_Threshold. Use the stricter range when the requirement is “only near-level instruments.” Use the wider S3–R3 range when the requirement is “all opening-range instruments.”
+
+6.3 Spot/current-price based focus
+Let P be current index price or latest close.
+- P > R2: Focus CE at R2, R3_Threshold, R3; keep PE at S1/S2 only as hedge/reference
+- R1 < P <= R2: Focus CE at R1, R2; keep PE at S1
+- S1 <= P <= R1: Range zone: include CE at R1 and PE at S1; ATM optional
+- S2 <= P < S1: Focus PE at S1, S2; keep CE at R1
+- P < S2: Focus PE at S2, S3_Threshold, S3; keep CE at R1/R2 only as hedge/reference
+
+6.4 ATM / near-ATM filter
+If the strategy requires ATM instruments, include:
+- ATM strike = nearest listed strike to P
+- ATM ± 1 strike
+- ATM ± 2 strikes
+But ATM instruments should not replace the level strikes. They are an additional filter, not a substitute.
+
+6.5 Liquidity filter
+After level and range filtering, apply liquidity checks:
+- minimum volume / minimum OI as configured,
+- maximum bid-ask spread as configured,
+- exclude strikes with zero volume and zero OI when other listed strikes are available,
+- prefer nearest expiry configured for the strategy.
+
+6.6 Expiry filter
+Use the configured expiry only: weekly expiry OR monthly expiry OR nearest expiry. Do not mix strikes from multiple expiries in one filtered set unless the strategy explicitly requires it.
+
+7. Output Format Reference
+The filtered output should be a list of instruments with reason tags:
+Underlying: NIFTY
+Strike step: 50
+First candle: 2026-10-22 09:15–09:16
+H: 22697.55
+L: 22564.90
+A: 22631.225
+
+CE instruments:
+- strike: 22700, type: CE, levels: [R1], reason: resistance pivot
+- strike: 22800, type: CE, levels: [R2, R3_Threshold], reason: resistance extension / threshold
+- strike: 22850, type: CE, levels: [R3], reason: outer resistance
+
+PE instruments:
+- strike: 22550, type: PE, levels: [S1], reason: support pivot
+- strike: 22450, type: PE, levels: [S2, S3_Threshold], reason: support extension / threshold
+- strike: 22400, type: PE, levels: [S3], reason: outer support
+
+If the same strike appears for multiple levels, merge the tags:
+strike: 22800, type: CE, levels: [R2, R3_Threshold]
+
+8. Reference Pseudocode
+function filter_instruments(underlying, first_candle, option_chain, strike_step, spot):
+    H = first_candle.high
+    L = first_candle.low
+
+    A   = (H + L) / 2
+    D_H = abs(H - A)
+    D_L = abs(A - L)
+
+    R1 = A + D_H / 2
+    S1 = A - D_L / 2
+    R2 = H + D_H
+    S2 = L - D_L
+    R3 = R2 + D_H
+    S3 = S2 - D_L
+    R3_Threshold = (R2 + R3) / 2
+    S3_Threshold = (S2 + S3) / 2
+
+    resistance_levels = [R1, R2, R3, R3_Threshold]
+    support_levels    = [S1, S2, S3, S3_Threshold]
+
+    ce_strikes = unique(
+        ceil_to_step(level, strike_step) for level in resistance_levels
+    )
+    pe_strikes = unique(
+        floor_to_step(level, strike_step) for level in support_levels
+    )
+
+    ce_strikes = map_to_listed_strikes(ce_strikes, option_chain, direction="up")
+    pe_strikes = map_to_listed_strikes(pe_strikes, option_chain, direction="down")
+
+    selected = []
+
+    for strike in ce_strikes:
+        if S3 <= strike <= R3:
+            selected.append({type: "CE", strike: strike, levels: matched_levels})
+
+    for strike in pe_strikes:
+        if S3 <= strike <= R3:
+            selected.append({type: "PE", strike: strike, levels: matched_levels})
+
+    apply_liquidity_filter(selected)
+    apply_expiry_filter(selected)
+
+    return selected
+
+9. Key Rules To Remember
+- Use the first 1-minute candle of the session: 09:15–09:16 for Indian index markets.
+- Use High and Low of that candle for H and L.
+- Compute A, D_H, D_L, R1–R3, S1–S3, and the two threshold levels.
+- Resistance levels are rounded up to the next strike.
+- Support levels are rounded down to the previous strike.
+- Resistance levels map primarily to CE instruments.
+- Support levels map primarily to PE instruments.
+- Keep instruments inside the configured range, normally S3 to R3.
+- Merge duplicate strikes and keep all matching level tags.
+- Apply liquidity, expiry, and ATM filters only after the level/range filter.
+- For any other index, change only the underlying symbol and strike step; the calculation and filtering logic remain the same.

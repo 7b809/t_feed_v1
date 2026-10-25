@@ -1,70 +1,22 @@
-# File: services/live_feed_service.py
+# services/live_feed_service.py
 """Upstox full-mode WebSocket manager.
 
-Subscribes to every instrument in the registry and, for each incoming
-feed, extracts the best available 1-min candle and tick snapshot, then
-broadcasts to connected UI clients.
+Subscribes to every instrument in the registry, and for each incoming
+feed extracts the 1-min candle and tick snapshot, then broadcasts to
+UI clients.
 
-Strategy coupling removed
--------------------------
-The EMA-cross engine is no longer invoked from the live feed. The
-former ``live_ema_engine.on_tick(...)`` call fed the strategy layer
-(cross detection / Opening Range strike activation), which has been
-removed from this codebase. The feed now handles **transport only**:
-parse → publish → done.
+SR integration
+--------------
+* On start, every subscribed instrument is registered with
+  ``live_sr_levels_service``.
+* A mid-session SR backfill runs BEFORE the streamer thread is spawned,
+  so the dashboard has OR/SR levels immediately (see
+  ``sr_backfill_service``).
+* Each tick is forwarded to ``live_sr_levels_service.on_tick`` so the
+  SR engine builds 1-min candles and detects pivots.
 
-LTP cache
----------
-``_latest_ltp`` keeps the most recently seen LTP per instrument key
-for cheap read access via ``get_latest_ltp()``. This is a lightweight
-diagnostic and remains available; it does not touch strategy code.
-
-The cache lives in the feed worker thread and is read from other
-threads. Python dict assignment for a single string key is atomic
-under the GIL, and both writers and readers operate on the same
-singleton instance, so no lock is needed. The cache grows with the
-number of distinct subscribed keys (a few hundred at most) — it is
-never purged during a session.
-
-Reconnect-loop hardening (2026-10-22 fix)
------------------------------------------
-The service used to expose a **hot-loop** hazard: ``start()`` only
-checked ``self._thread.is_alive()``. When the WebSocket repeatedly
-failed (invalid token, network outage), the worker thread stayed alive
-inside its own reconnect loop, so ``start()`` returned ``True`` without
-doing anything — but ``restart()`` (called by ``/admin/hard-refresh``)
-called ``stop()`` which joined the thread with a 10 s timeout. If the
-thread was mid-``self._stop.wait(UPSTOX_WS_RECONNECT_INTERVAL)`` (default
-10 s), the join could time out, leaving the old thread alive while the
-caller believed it had stopped the feed. A subsequent ``start()`` then
-launched a second worker, giving two competing streamers and duplicated
-subscriptions.
-
-This revision makes the lifecycle explicit and race-free:
-
-  * ``_lifecycle_lock`` serialises every ``start`` / ``stop`` /
-    ``restart`` / ``subscribe_instrument`` call so two threads cannot
-    interleave the "join + spawn" sequence.
-  * ``_generation`` is a monotonically-increasing integer stamped onto
-    each worker thread. A worker whose ``_generation`` no longer matches
-    the service's current generation exits its loop on its next
-    iteration — this makes ``stop()`` deterministic even when the
-    worker is inside a long ``self._stop.wait`` call.
-  * ``stop()`` clears the ``Event`` from inside the lock and waits on
-    the worker with the existing 10 s timeout, but now additionally
-    bumps ``_generation`` so a stuck worker is effectively orphaned
-    and will exit at its next check even if the join times out.
-  * ``start()`` refuses to spawn a new worker while a previous one is
-    still alive unless ``stop()`` has been called first — the caller
-    receives ``False`` and the caller can retry once the old worker
-    exits.
-  * ``subscribe_instrument()`` uses the same ``_lifecycle_lock`` so a
-    subscription cannot land on the wrong generation.
-
-The public API is unchanged: ``start()`` / ``stop()`` / ``restart()`` /
-``is_subscribed()`` / ``get_latest_ltp()`` / ``get_latest_ltp_snapshot()``
-/ ``subscribe_instrument()`` / ``status()`` all behave the same from
-the caller's perspective.
+The feed itself is unchanged: broadcast on the "feed" topic, LTP cache,
+health feed log.
 """
 
 from __future__ import annotations
@@ -78,6 +30,7 @@ from core import config
 from core.logger import get_logger
 from services.instrument_registry import instrument_registry
 from services.live_broadcast import live_broadcast
+from services.live_sr_levels_service import live_sr_levels_service
 from services.token_service import token_service
 
 logger = get_logger(__file__)
@@ -106,28 +59,17 @@ class LiveFeedService:
         self._subscribed: list[str] = []
         self._loop = None
         self._last_health_log_time: float = 0.0
-        # Latest LTP cache — see module docstring for concurrency notes.
         self._latest_ltp: dict[str, float] = {}
-
-        # ---- Lifecycle guards (2026-10-22 reconnect-loop hardening) --- #
-        # Serialises every start / stop / restart / subscribe call so
-        # two threads cannot interleave the "join + spawn" sequence.
         self._lifecycle_lock = threading.Lock()
-        # Monotonically-increasing generation stamped onto each worker.
-        # A worker whose generation no longer matches the service's
-        # current generation exits on its next loop check, even if the
-        # join timed out. This makes stop() deterministic.
         self._generation: int = 0
 
     def set_loop(self, loop) -> None:
         self._loop = loop
 
     def _ensure_core_subscriptions(self) -> None:
-        """Ensure critical index feeds (Nifty, Sensex, health feed) are present."""
         targets = [k for k, _ in DEFAULT_CORE_INSTRUMENTS]
         if config.HEALTH_FEED_INSTRUMENT:
             targets.append(config.HEALTH_FEED_INSTRUMENT.strip())
-
         for target in targets:
             if not target:
                 continue
@@ -143,23 +85,56 @@ class LiveFeedService:
                     target,
                 )
 
+    def _register_all_with_sr_engine(self) -> None:
+        if not config.LIVE_SR_ENABLED:
+            return
+        if not config.LIVE_SR_TRACK_ALL_INSTRUMENTS:
+            logger.info(
+                "[live-feed] SR track-all disabled — only level-filtered "
+                "instruments will be tracked by live_sr_levels_service"
+            )
+            return
+        try:
+            entries: list[dict[str, Any]] = []
+            for key in self._subscribed:
+                entry = instrument_registry.get(key)
+                if entry is not None:
+                    entries.append(entry)
+            live_sr_levels_service.register_all(entries)
+            logger.info(
+                "[live-feed] SR track-all: %d instrument(s) registered",
+                len(entries),
+            )
+        except Exception:
+            logger.exception("[live-feed] SR register_all failed")
+
+    def _run_sr_backfill(self, reason: str) -> None:
+        """Run intraday backfill before the streamer thread spawns.
+
+        Wrapped so a failure here never blocks feed start.
+        """
+        if not config.SR_BACKFILL_ENABLED:
+            logger.info("[live-feed] SR backfill disabled by config")
+            return
+        try:
+            from services.sr_backfill_service import sr_backfill_service
+            entries: list[dict[str, Any]] = []
+            for key in self._subscribed:
+                entry = instrument_registry.get(key)
+                if entry is not None:
+                    entries.append(entry)
+            sr_backfill_service.run(reason=reason, entries=entries)
+        except Exception:
+            logger.exception(
+                "[live-feed] SR backfill failed; continuing without it"
+            )
+
     # ------------------------------------------------------------------ #
-    # Lifecycle (start / stop / restart) — all under _lifecycle_lock    #
+    # Lifecycle                                                          #
     # ------------------------------------------------------------------ #
     def start(self) -> bool:
-        """Start the feed worker thread.
-
-        Idempotent and race-free: ``start`` refuses to spawn a new
-        worker while a previous one is still alive unless ``stop()``
-        was called first. The caller receives ``False`` in that case
-        and may retry once the old worker exits.
-
-        Returns ``True`` when the worker is running (either already
-        running or newly spawned), ``False`` otherwise.
-        """
         with self._lifecycle_lock:
             if self._thread and self._thread.is_alive():
-                # Already running — do NOT spawn a second worker.
                 return True
             if not config.UPSTOX_WS_AUTO_START:
                 logger.info("Live feed auto-start disabled by config")
@@ -168,11 +143,11 @@ class LiveFeedService:
             keys = instrument_registry.subscribe_keys()
             self._stop.clear()
             self._subscribed = list(keys)
-
             self._ensure_core_subscriptions()
 
-            # Bump the generation so any lingering worker from a
-            # previous start exits on its next loop check.
+            self._register_all_with_sr_engine()
+            self._run_sr_backfill(reason="feed_start")
+
             self._generation += 1
             generation = self._generation
 
@@ -186,52 +161,44 @@ class LiveFeedService:
             self._started_at = datetime.now(timezone.utc)
             logger.info(
                 "Live feed starting with %d instruments (generation=%d)",
-                len(self._subscribed),
-                generation,
+                len(self._subscribed), generation,
             )
             return True
 
     def stop(self) -> None:
-        """Stop the feed worker thread.
-
-        Bumps ``_generation`` **before** joining the worker so a worker
-        that is currently inside ``self._stop.wait(...)`` will exit at
-        its next generation check even if the join times out. This is
-        what prevents the "old worker + new worker" double-feed state
-        that the previous implementation could enter under repeated
-        restart calls.
-        """
         with self._lifecycle_lock:
             self._stop.set()
-            # Bump the generation FIRST so a stuck worker is orphaned
-            # (it exits at its next generation check) even if the join
-            # below times out.
             self._generation += 1
             old_generation = self._generation - 1
-
             try:
                 if self._streamer is not None:
                     self._streamer.disconnect()
             except Exception:
                 logger.exception("Error disconnecting Upstox streamer")
-
             thread = self._thread
             if thread and thread.is_alive():
                 thread.join(timeout=10)
                 if thread.is_alive():
                     logger.warning(
                         "Live feed worker (generation=%d) did not exit "
-                        "within 10s; it is now orphaned and will exit "
-                        "at its next generation check.",
+                        "within 10s; orphaned.",
                         old_generation,
                     )
             self._thread = None
             logger.info("Live feed stopped")
 
-    def restart(self) -> bool:
-        """Stop then start. Serialised through ``_lifecycle_lock``."""
+    def restart(self, skip_sr_backfill: bool = False) -> bool:
         self.stop()
         time.sleep(1)
+        if skip_sr_backfill:
+            # Temporary flag bypass for the /admin/ops/resubscribe-feed
+            # fast-reconnect path.
+            original = config.SR_BACKFILL_ENABLED
+            config.SR_BACKFILL_ENABLED = False
+            try:
+                return self.start()
+            finally:
+                config.SR_BACKFILL_ENABLED = original
         return self.start()
 
     def is_subscribed(self, instrument_key: str) -> bool:
@@ -239,22 +206,12 @@ class LiveFeedService:
         return key in self._subscribed
 
     # ------------------------------------------------------------------ #
-    # LTP cache accessors (diagnostic only — no strategy coupling)       #
+    # LTP cache                                                          #
     # ------------------------------------------------------------------ #
     def get_latest_ltp(self, instrument_key: str) -> float | None:
-        """Return the most recently seen LTP for a key, or None.
-
-        Safe to call before the feed has produced its first tick — the
-        cache simply returns None until then.
-        """
         return self._latest_ltp.get(str(instrument_key or "").strip())
 
     def get_latest_ltp_snapshot(self, limit: int = 50) -> dict[str, float]:
-        """Return a shallow copy of the LTP cache (for diagnostics).
-
-        ``limit`` caps how many entries are returned; set to 0 for the
-        full cache. Order is not guaranteed.
-        """
         if not self._latest_ltp:
             return {}
         if limit and limit > 0:
@@ -263,30 +220,32 @@ class LiveFeedService:
         return dict(self._latest_ltp)
 
     def subscribe_instrument(self, instrument_key: str) -> bool:
-        """Subscribe an instrument on demand.
-
-        Serialised through ``_lifecycle_lock`` so a subscribe call
-        cannot race the start/stop sequence. If the worker is not
-        running, a new worker is spawned inline.
-        """
         key = str(instrument_key or "").strip()
         if not key:
             return False
         if key in self._subscribed:
             return True
-
         with self._lifecycle_lock:
             if key in self._subscribed:
                 return True
-
             self._subscribed.append(key)
 
-            streamer = self._streamer
-            if streamer is None or not (
-                self._thread and self._thread.is_alive()
+            if (
+                config.LIVE_SR_ENABLED
+                and config.LIVE_SR_TRACK_ALL_INSTRUMENTS
             ):
-                # Cannot call self.start() here — we already hold the
-                # lock. Inline the spawn logic.
+                try:
+                    entry = instrument_registry.get(key)
+                    if entry is not None:
+                        live_sr_levels_service.register_instrument(entry)
+                except Exception:
+                    logger.exception(
+                        "[live-feed] SR register on subscribe failed for %s",
+                        key,
+                    )
+
+            streamer = self._streamer
+            if streamer is None or not (self._thread and self._thread.is_alive()):
                 self._stop.clear()
                 self._generation += 1
                 generation = self._generation
@@ -301,11 +260,9 @@ class LiveFeedService:
                 logger.info(
                     "Live feed starting with %d instruments "
                     "(generation=%d, via subscribe_instrument)",
-                    len(self._subscribed),
-                    generation,
+                    len(self._subscribed), generation,
                 )
                 return True
-
             try:
                 streamer.subscribe([key], config.UPSTOX_WS_MODE)
                 logger.info("Subscribed on demand: %s", key)
@@ -318,46 +275,31 @@ class LiveFeedService:
     # Worker loop                                                        #
     # ------------------------------------------------------------------ #
     def _run(self, generation: int) -> None:
-        """Worker entry point.
-
-        ``generation`` is captured at spawn time. Every loop iteration
-        checks that it still matches ``self._generation`` — if it does
-        not, a ``stop()`` (or a newer ``start()``) has been issued and
-        this worker exits.
-        """
         sdk = _load_sdk()
         if sdk is None:
             logger.error("upstox_client is not installed; live feed disabled")
             return
-
         while not self._stop.is_set() and generation == self._generation:
             try:
                 self._connect_and_listen(sdk, generation)
             except Exception:
                 logger.exception("Live feed crashed; will retry")
-
             if self._stop.is_set() or generation != self._generation:
                 break
             logger.info(
                 "Reconnecting live feed in %ds",
                 config.UPSTOX_WS_RECONNECT_INTERVAL,
             )
-            # Wait on the stop event with a bounded timeout AND check
-            # the generation on each wake-up so a stop() issued while
-            # we are sleeping is honoured immediately.
             self._stop.wait(config.UPSTOX_WS_RECONNECT_INTERVAL)
 
     def _connect_and_listen(self, sdk, generation: int) -> None:
         token = token_service.get_access_token()
         if not token:
             raise RuntimeError("No Upstox access token available for live feed")
-
         self._ensure_core_subscriptions()
-
         configuration = sdk.Configuration()
         configuration.access_token = token
         client = sdk.ApiClient(configuration)
-
         streamer = sdk.MarketDataStreamerV3(
             client, list(self._subscribed), config.UPSTOX_WS_MODE,
         )
@@ -380,7 +322,6 @@ class LiveFeedService:
         streamer.on("message", on_message)
         streamer.on("error", on_error)
         streamer.on("close", on_close)
-
         try:
             streamer.auto_reconnect(
                 True,
@@ -389,19 +330,13 @@ class LiveFeedService:
             )
         except Exception:
             logger.exception("auto_reconnect configuration failed")
-
         logger.info(
             "Connecting live feed mode=%s instruments=%d generation=%d",
-            config.UPSTOX_WS_MODE,
-            len(self._subscribed),
-            generation,
+            config.UPSTOX_WS_MODE, len(self._subscribed), generation,
         )
         streamer.connect()
-
-        # Wait loop: exit on stop OR on generation change.
         while not self._stop.is_set() and generation == self._generation:
             time.sleep(0.5)
-
         try:
             streamer.disconnect()
         except Exception:
@@ -416,7 +351,6 @@ class LiveFeedService:
         )
         if not isinstance(payload, dict):
             return
-
         feeds = payload.get("feeds") or {}
         if not isinstance(feeds, dict):
             return
@@ -431,10 +365,6 @@ class LiveFeedService:
                 continue
 
             self._last_tick_at[instrument_key] = datetime.now(timezone.utc)
-
-            # ---- Cache the latest LTP -------------------------------
-            # Kept as a cheap diagnostic read-accessor for tooling /
-            # monitoring. Nothing strategy-related consumes it anymore.
             ltp = tick.get("ltp")
             if ltp is not None:
                 try:
@@ -442,7 +372,6 @@ class LiveFeedService:
                 except (TypeError, ValueError):
                     pass
 
-            # Health feed log (e.g., every 5 minutes)
             if (
                 config.HEALTH_FEED_LOG
                 and instrument_key == config.HEALTH_FEED_INSTRUMENT
@@ -467,34 +396,31 @@ class LiveFeedService:
                         config.HEALTH_FEED_INSTRUMENT_INTERVAL,
                     )
 
-            # ---- Broadcast to UI clients ----------------------------
-            # NOTE: live_ema_engine.on_tick(...) was removed here. The
-            # strategy layer (EMA crosses, Opening Range) has been
-            # stripped from this codebase; the feed is now transport
-            # only.
+            if config.LIVE_SR_ENABLED:
+                try:
+                    live_sr_levels_service.on_tick(
+                        instrument_key, entry, tick,
+                    )
+                except Exception:
+                    logger.exception(
+                        "[live-feed] SR on_tick failed for %s",
+                        instrument_key,
+                    )
+
             self._publish_feed_snapshot(entry, tick)
 
     def _extract_tick(self, feed: dict[str, Any]) -> dict[str, Any] | None:
-        """Comprehensive extractor supporting Index FullFeed, Option Chain,
-        and MarketFF."""
         if not isinstance(feed, dict):
             return None
-
-        # Look in fullFeed, ff, oc, or directly in root
         ff = feed.get("fullFeed") or feed.get("ff") or {}
         oc = feed.get("oc") or {}
         market_ff = feed.get("marketFF") or ff.get("marketFF") or {}
         index_ff = feed.get("indexFF") or ff.get("indexFF") or {}
         market_level = feed.get("marketLevel") or ff.get("marketLevel") or {}
 
-        # 1. LTP & Prev Close
         ltpc = (
-            feed.get("ltpc")
-            or ff.get("ltpc")
-            or index_ff.get("ltpc")
-            or market_ff.get("ltpc")
-            or oc.get("ltpc")
-            or {}
+            feed.get("ltpc") or ff.get("ltpc") or index_ff.get("ltpc")
+            or market_ff.get("ltpc") or oc.get("ltpc") or {}
         )
         ltp = self._flt(
             ltpc.get("ltp") or feed.get("ltp") or market_ff.get("ltp")
@@ -503,14 +429,10 @@ class LiveFeedService:
             ltpc.get("cp") or feed.get("cp") or feed.get("prev_close")
         )
 
-        # 2. 1-minute candle (I1) and Day OHLC
         candle_1m = None
         market_ohlc = (
-            index_ff.get("marketOHLC")
-            or market_ff.get("marketOHLC")
-            or ff.get("marketOHLC")
-            or feed.get("marketOHLC")
-            or {}
+            index_ff.get("marketOHLC") or market_ff.get("marketOHLC")
+            or ff.get("marketOHLC") or feed.get("marketOHLC") or {}
         )
         ohlc_list = market_ohlc.get("ohlc")
         ohlc_vol = None
@@ -524,21 +446,14 @@ class LiveFeedService:
                             item.get("volume") or item.get("vol")
                         )
 
-        # 3. Volume extraction (vtt/vol/volume across eFeedDetails)
         efd = (
-            feed.get("eFeedDetails")
-            or ff.get("eFeedDetails")
-            or market_ff.get("eFeedDetails")
-            or oc.get("eFeedDetails")
-            or {}
+            feed.get("eFeedDetails") or ff.get("eFeedDetails")
+            or market_ff.get("eFeedDetails") or oc.get("eFeedDetails") or {}
         )
         volume = self._flt(
-            efd.get("vtt")
-            or market_level.get("vtt")
-            or feed.get("vtt")
-            or feed.get("volume")
-            or market_ff.get("volume")
-            or ohlc_vol
+            efd.get("vtt") or market_level.get("vtt")
+            or feed.get("vtt") or feed.get("volume")
+            or market_ff.get("volume") or ohlc_vol
             or (candle_1m.get("volume") if isinstance(candle_1m, dict) else None)
         )
 
@@ -550,6 +465,7 @@ class LiveFeedService:
             "volume": volume,
             "candle_1m": candle_1m,
             "prev_close": prev_close,
+            "ltt": ltpc.get("ltt"),
         }
 
     @staticmethod

@@ -100,6 +100,7 @@ from routes.order_routes import router as order_router
 from routes.page_routes import router as page_router
 from routes.readiness_routes import router as readiness_router
 from routes.upstox_routes import router as upstox_router
+from routes.live_sr_routes import router as live_sr_router
 
 from services.config_validation import validate_config
 from services.live_feed_service import live_feed_service
@@ -392,6 +393,7 @@ app.add_middleware(
 
 app.include_router(page_router)
 app.include_router(live_router)
+app.include_router(live_sr_router)
 app.include_router(admin_router)
 app.include_router(folder_router)
 app.include_router(upstox_router)

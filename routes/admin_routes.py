@@ -16,23 +16,15 @@ part of startup:
     * daily_refresh    — if no run recorded today (meta_data guard)
     * first_candle     — if first_candle.json is missing / stale for today
 
-The pipeline order becomes:
-
-    1.  Telegram start notification
-    2.  Cleanup transient folders
-    3.  Refresh token cache from MongoDB
-    4.  Validate Upstox token
-    5.  Backup extract from MongoDB
-    6.  Reload instrument registry
-    6b. Pre-register core indexes (Nifty 50, SENSEX)
-    6c. BACKFILL: daily_refresh (if missed today)
-    6d. Loop wiring
-    6e. BACKFILL: first_candle (if missed today)
-    7.  Live feed
-    8.  Scheduler
-    9.  Telegram bot
-    10. Telegram completion notification
-    11. Return structured result
+Level-instrument filter
+-----------------------
+After the first-candle block, ``_run_full_refresh_sync`` calls
+``level_instrument_filter_service.run("startup")`` unconditionally.
+That service reads the on-disk ``first_candle.json`` for every
+configured index, writes ``level_instruments.json``, and registers the
+filtered CE/PE instruments (plus the index itself) with
+``live_sr_levels_service``. It is idempotent, so running it twice is
+safe.
 """
 
 from __future__ import annotations
@@ -64,68 +56,49 @@ from services.token_service import token_service
 from token_tasks.telegram_token_bot import telegram_token_bot
 from token_tasks.token_monitor import check_upstox_token_validity
 
-
 logger = get_logger(__file__)
 
 router = APIRouter()
 
-
-# --------------------------------------------------------------------------- #
-# Decorative constants                                                        #
-# --------------------------------------------------------------------------- #
 _DIV = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 _THIN = "────────────────────────────────"
 
-
-# --------------------------------------------------------------------------- #
-# Time / market-hours helpers                                                 #
-# --------------------------------------------------------------------------- #
 def _market_tz() -> ZoneInfo:
     try:
         return ZoneInfo(config.MARKET_TIMEZONE)
     except Exception:
         return ZoneInfo("Asia/Kolkata")
 
-
 def _now_market() -> datetime:
     return datetime.now(_market_tz())
 
-
 def _now_market_time() -> dtime:
     return _now_market().time()
-
 
 _CATCHUP_WINDOW_OPEN = dtime(9, 15)
 _CATCHUP_WINDOW_CLOSE = dtime(23, 59)
 _SESSION_OPEN = dtime(9, 15)
 _SESSION_CLOSE = dtime(15, 30)
 
-
 def _in_market_hours() -> bool:
     return _CATCHUP_WINDOW_OPEN <= _now_market_time() <= _CATCHUP_WINDOW_CLOSE
-
 
 def _post_market() -> bool:
     return _now_market_time() > dtime(15, 30)
 
-
 def _in_active_session() -> bool:
-    """True when now is inside the live trading session Mon-Fri."""
     now = _now_market()
     if now.weekday() > 4:
         return False
     return _SESSION_OPEN <= now.time() <= _SESSION_CLOSE
 
-
 def _is_trading_holiday_today() -> bool:
-    """True when today is a market holiday (best-effort)."""
     try:
         payload = market_holiday_service.get_today()
         return str(payload.get("status") or "").lower() == "holiday"
     except Exception:
         logger.exception("[refresh] holiday check failed — assuming trading day")
         return False
-
 
 def _catchup_snapshot() -> dict[str, Any]:
     now = _now_market_time()
@@ -140,10 +113,6 @@ def _catchup_snapshot() -> dict[str, Any]:
         },
     }
 
-
-# --------------------------------------------------------------------------- #
-# Telegram bot state helper                                                   #
-# --------------------------------------------------------------------------- #
 def _telegram_bot_active(fallback: bool = False) -> bool:
     for attr in ("is_running", "polling", "enabled"):
         value = getattr(telegram_token_bot, attr, None)
@@ -151,16 +120,11 @@ def _telegram_bot_active(fallback: bool = False) -> bool:
             return value
     return fallback
 
-
-# --------------------------------------------------------------------------- #
-# Core-index pre-registration                                                 #
-# --------------------------------------------------------------------------- #
 def _safe_folder_for(name: Any) -> str:
     text = str(name or "unknown").strip()
     for ch in ("|", "/", "\\", ":", "*", "?", '"', "<", ">", " "):
         text = text.replace(ch, "_")
     return text.strip("._") or "unknown"
-
 
 def _ensure_core_indexes_registered() -> int:
     seen: set[str] = set()
@@ -198,12 +162,7 @@ def _ensure_core_indexes_registered() -> int:
 
     return created
 
-
-# --------------------------------------------------------------------------- #
-# Backfill helpers                                                            #
-# --------------------------------------------------------------------------- #
 def _should_backfill_daily_refresh() -> tuple[bool, str]:
-    """Decide if we should re-run the daily refresh as a startup backfill."""
     if not _in_active_session():
         return False, "outside_active_session"
     if _is_trading_holiday_today():
@@ -211,7 +170,6 @@ def _should_backfill_daily_refresh() -> tuple[bool, str]:
     if ran_today("daily_refresh"):
         return False, "already_ran_today"
     return True, "missed_today"
-
 
 def _first_candle_file_for_first_instrument() -> Path | None:
     entries = instrument_registry.all()
@@ -223,9 +181,7 @@ def _first_candle_file_for_first_instrument() -> Path | None:
     except Exception:
         return None
 
-
 def _should_backfill_first_candle() -> tuple[bool, str]:
-    """Decide if we should re-run first_candle as a startup backfill."""
     if not _in_active_session():
         return False, "outside_active_session"
     if _is_trading_holiday_today():
@@ -248,10 +204,6 @@ def _should_backfill_first_candle() -> tuple[bool, str]:
 
     return False, "already_computed_today"
 
-
-# --------------------------------------------------------------------------- #
-# Telegram formatting helpers                                                 #
-# --------------------------------------------------------------------------- #
 def _start_message(reason: str, catchup_meta: dict[str, Any]) -> str:
     return (
         f"{_DIV}\n"
@@ -269,7 +221,6 @@ def _start_message(reason: str, catchup_meta: dict[str, Any]) -> str:
         f"  → 🔧 wiring → 📡 feed → ⏰ scheduler → 🤖 telegram"
     )
 
-
 def _completion_message(
     reason: str,
     catchup_meta: dict[str, Any],
@@ -284,6 +235,7 @@ def _completion_message(
     scheduler_ok: bool,
     telegram_ok: bool,
     first_candle_summary: dict[str, Any] | None,
+    level_filter_summary: dict[str, Any] | None,
     status: str,
 ) -> str:
     fc_line = ""
@@ -297,6 +249,21 @@ def _completion_message(
         fc_line = (
             f"⏸️ OR levels:     skipped ({first_candle_summary.get('skip_reason')})\n"
         )
+
+    lf_line = ""
+    if level_filter_summary:
+        if level_filter_summary.get("status") == "ok":
+            idx_bits = []
+            for k, v in (level_filter_summary.get("indexes") or {}).items():
+                if v.get("status") == "ok":
+                    idx_bits.append(
+                        f"{k}: CE={v.get('ce_count')} PE={v.get('pe_count')}"
+                    )
+            lf_line = f"🧭 Level filter:   {'; '.join(idx_bits) or 'ok'}\n"
+        else:
+            lf_line = (
+                f"🧭 Level filter:   {level_filter_summary.get('status')}\n"
+            )
 
     return (
         f"{_DIV}\n"
@@ -315,6 +282,7 @@ def _completion_message(
         f"files={backup.get('file_count')}\n"
         f"📊 Registry:      {registry.get('count')} instruments\n"
         f"{fc_line}"
+        f"{lf_line}"
         f"{_THIN}\n"
         f"📡 Live feed:     {'✓' if feed_ok else '✗'}\n"
         f"⏰ Scheduler:     {'✓' if scheduler_ok else '✗'}\n"
@@ -323,24 +291,13 @@ def _completion_message(
         f"✅ Status: {status}"
     )
 
-
-# --------------------------------------------------------------------------- #
-# Unified refresh                                                             #
-# --------------------------------------------------------------------------- #
 def _run_full_refresh_sync(
     reason: str = "manual",
     loop: "asyncio.AbstractEventLoop | None" = None,
 ) -> dict[str, Any]:
-    """Execute every infrastructure refresh task in canonical order.
-
-    On startup, additional backfill stages run when today's scheduled
-    jobs were missed (late start during market hours):
-        * daily_refresh  (if not yet run today)
-        * first_candle   (if today's first_candle.json is missing)
-    """
     label = reason.title()
     catchup_meta = _catchup_snapshot()
-    verbose = bool(getattr(config, "STRATEGY_VERBOSE_LOG", False))
+    verbose = bool(getattr(config, "VERBOSE_LOG", False))
 
     telegram_service.send_message(
         f"{label} Refresh Started",
@@ -424,9 +381,6 @@ def _run_full_refresh_sync(
             )
             try:
                 from services.backfill_guard import mark_ran
-                # Already inside the refresh pipeline — the daily_refresh
-                # wrapper would recurse. So we just re-use the same result
-                # and mark it as ran.
                 mark_ran("daily_refresh", reason="startup_backfill", status="ok")
                 backfill_daily = {
                     "activated": True,
@@ -489,6 +443,34 @@ def _run_full_refresh_sync(
                 "[startup] first_candle backfill skipped — %s", why,
             )
 
+    # ---- 6c. Level-instrument filter + SR registration ---------------- #
+    # Unconditional on startup: if first_candle was skipped because the
+    # file was already present, this reads it from disk and registers
+    # the filtered instruments with the SR engine. Idempotent.
+    level_filter_summary: dict[str, Any] | None = None
+    if reason == "startup":
+        try:
+            from services.level_instrument_filter_service import (
+                level_instrument_filter_service,
+            )
+            level_filter_summary = level_instrument_filter_service.run(
+                reason="startup"
+            )
+            logger.info(
+                "[startup] level filter: status=%s indexes=%s",
+                level_filter_summary.get("status"),
+                {
+                    k: v.get("status")
+                    for k, v in (level_filter_summary.get("indexes") or {}).items()
+                },
+            )
+        except Exception as exc:
+            logger.exception("[startup] level filter failed")
+            level_filter_summary = {
+                "status": "error",
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+
     # ---- 7. Scheduler ------------------------------------------------ #
     scheduler_ok = True
     try:
@@ -526,6 +508,7 @@ def _run_full_refresh_sync(
         "registry": registry,
         "backfill_daily_refresh": backfill_daily,
         "first_candle": first_candle_summary,
+        "level_filter": level_filter_summary,
         "feed_restarted": feed_ok,
         "scheduler_started": scheduler_ok,
         "telegram_started": telegram_ok,
@@ -546,6 +529,7 @@ def _run_full_refresh_sync(
         scheduler_ok=scheduler_ok,
         telegram_ok=telegram_ok,
         first_candle_summary=first_candle_summary,
+        level_filter_summary=level_filter_summary,
         status=status,
     )
     telegram_service.send_message(
@@ -560,24 +544,17 @@ def _run_full_refresh_sync(
     logger.info("[%s] refresh COMPLETED — status=%s", reason, status)
     return result
 
-
-# --------------------------------------------------------------------------- #
-# HTTP routes                                                                 #
-# --------------------------------------------------------------------------- #
 @router.post("/admin/hard-refresh")
 async def hard_refresh() -> dict[str, Any]:
     return await asyncio.to_thread(_run_full_refresh_sync, "manual", None)
-
 
 @router.get("/admin/backup-status")
 def backup_status() -> dict[str, Any]:
     return backup_data_service.last_status()
 
-
 @router.get("/admin/cleanup-status")
 def cleanup_status() -> dict[str, Any]:
     return cleanup_service.last_status()
-
 
 @router.post("/admin/cleanup")
 async def run_cleanup() -> dict[str, Any]:

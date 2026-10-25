@@ -1,0 +1,74 @@
+# SR_LEVELS_SPEC.md
+
+# Support / Resistance Levels — Calculation & File Format Spec
+
+This document defines **how support and resistance levels are computed**
+and **exactly how they are persisted** in `sr_levels.json`. It is the
+single source of truth for the algorithm, the record shape, the
+directory layout, and the invariants downstream consumers can rely on.
+
+Anything that writes `sr_levels.json` — the Python pipeline, a manual
+fix, a future Rust/Go port — must produce a file that satisfies every
+rule below.
+
+---
+
+## 1. What a support / resistance level is
+
+A **resistance** is a swing high. A **support** is a swing low. Both
+are detected with the classic *pivot* rule used by TradingView's
+`ta.pivothigh` / `ta.pivotlow` and by the Pine Script indicator
+*Support and Resistance Levels with Breaks* (LuxAlgo, CC BY-NC-SA 4.0).
+
+Let `left_bars` and `right_bars` be two positive integers (defaults:
+`15` and `15`).
+
+Given a 1-minute candle series `C[0..n-1]` where each candle has
+`high`, `low`, `open`, `close`, `volume`, `timestamp`:
+
+- Candle `i` is a **resistance pivot** iff:
+  - `C[i].high > C[j].high` for every `j` in `[i - left_bars, i - 1]`, **and**
+  - `C[i].high > C[j].high` for every `j` in `[i + 1, i + right_bars]`.
+
+- Candle `i` is a **support pivot** iff:
+  - `C[i].low < C[j].low` for every `j` in `[i - left_bars, i - 1]`, **and**
+  - `C[i].low < C[j].low` for every `j` in `[i + 1, i + right_bars]`.
+
+The rule is **strict** on both sides — a candle that merely ties with
+its neighbours is not a pivot. It is the same comparison TradingView
+uses, so the Python output and the Pine Script plot stay in lockstep.
+
+### The confirmation delay
+
+A pivot at index `i` cannot be known at `i`. It becomes known only
+after the last bar of the `right_bars` window has closed:
+
+    confirmation_index = pivot_index + right_bars
+
+That bar — **not** the pivot bar — is the first moment the level is
+actionable. This is the reason `sr_levels.json` stores two timestamps
+per level (`pivot_time` and `confirmed_time`).
+
+### Worked example
+
+Suppose `left_bars = 15`, `right_bars = 15`, and a support pivot
+appears at bar 2577 with a low of `22454.45`.
+
+- The 15 bars before bar 2577 (bars 2562..2576) all have `low > 22454.45`.
+- The 15 bars after bar 2577 (bars 2578..2592) all have `low > 22454.45`.
+- Therefore bar 2577 is a support pivot.
+- It is confirmed at bar `2577 + 15 = 2592`.
+
+Recorded:
+
+```json
+{
+  "level": "support",
+  "price": 22454.45,
+  "pivot_bar_index": 2577,
+  "pivot_time": "2026-10-23T14:42:00+05:30",
+  "confirmed_bar_index": 2592,
+  "confirmed_time": "2026-10-23T14:57:00+05:30",
+  "left_bars": 15,
+  "right_bars": 15
+}
