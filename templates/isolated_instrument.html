@@ -126,6 +126,7 @@
         display: flex;
         align-items: center;
         gap: 10px;
+        flex-wrap: wrap;
     }
 
     .iso-day-label {
@@ -147,6 +148,7 @@
         font-weight: 700;
         cursor: pointer;
         transition: all 0.15s ease;
+        text-decoration: none;
     }
 
     .iso-btn:hover {
@@ -336,6 +338,10 @@
         font-size: 0.95rem;
     }
 
+    .iso-hero-meta .meta-value.highlight {
+        color: #4ade80;
+    }
+
     .iso-hero-right {
         flex: 0 0 auto;
         display: flex;
@@ -362,6 +368,10 @@
         font-size: 1.6rem;
         font-weight: 800;
         color: #ffffff;
+    }
+
+    .iso-hero-price .price-value.instrument {
+        color: #4ade80;
     }
 
     .iso-hero-price .price-sub {
@@ -662,6 +672,163 @@
         background: #1d4ed8;
         border-color: #1d4ed8;
     }
+
+    /* ============================================================ */
+    /* Instrument snapshot (own data at touch)                      */
+    /* ============================================================ */
+    .snapshot-tiles {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: 14px;
+        margin-bottom: 20px;
+    }
+
+    .snapshot-tile {
+        padding: 14px 18px;
+        background: #f8fafc;
+        border: 1px solid var(--iso-border);
+        border-radius: 12px;
+        transition: border-color 0.15s ease;
+    }
+
+    .snapshot-tile:hover {
+        border-color: var(--iso-primary);
+    }
+
+    .snapshot-tile .tile-label {
+        font-size: 0.72rem;
+        font-weight: 800;
+        color: var(--iso-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.4px;
+        margin-bottom: 6px;
+    }
+
+    .snapshot-tile .tile-value {
+        font-size: 1.15rem;
+        font-weight: 800;
+        color: var(--iso-text);
+        font-variant-numeric: tabular-nums;
+        line-height: 1.4;
+    }
+
+    .snapshot-tile .tile-value .ohlc-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 2px 12px;
+        font-size: 0.92rem;
+        font-weight: 700;
+        margin-top: 4px;
+    }
+
+    .snapshot-tile .tile-value .ohlc-grid .ohlc-cell {
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+    }
+
+    .snapshot-tile .tile-value .ohlc-grid .ohlc-cell .ohlc-key {
+        color: var(--iso-muted);
+        font-weight: 600;
+    }
+
+    .snapshot-tile .tile-sub {
+        font-size: 0.72rem;
+        color: var(--iso-muted);
+        margin-top: 6px;
+        font-weight: 600;
+    }
+
+    .snapshot-tile.highlight {
+        background: #ecfdf5;
+        border-color: #bbf7d0;
+    }
+
+    .snapshot-tile.highlight .tile-value {
+        color: var(--iso-green);
+        font-size: 1.5rem;
+    }
+
+    .snapshot-tile.highlight .tile-label {
+        color: #15803d;
+    }
+
+    .snapshot-section-title {
+        font-size: 0.8rem;
+        font-weight: 800;
+        color: var(--iso-text);
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        margin: 16px 0 10px 0;
+        padding-top: 16px;
+        border-top: 1px solid var(--iso-border);
+    }
+
+    .snapshot-section-title:first-child {
+        margin-top: 0;
+        padding-top: 0;
+        border-top: none;
+    }
+
+    .snapshot-or-block {
+        background: #f8fafc;
+        border: 1px solid var(--iso-border);
+        border-radius: 12px;
+        padding: 14px 18px;
+    }
+
+    .snapshot-or-block-title {
+        font-size: 0.8rem;
+        font-weight: 800;
+        color: var(--iso-primary);
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        margin-bottom: 10px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+    }
+
+    .snapshot-or-block-title .snapshot-or-type-badge {
+        display: inline-block;
+        padding: 2px 8px;
+        border-radius: 6px;
+        font-size: 0.68rem;
+        font-weight: 800;
+        background: #e0e7ff;
+        color: #3730a3;
+    }
+
+    .snapshot-or-block-title .snapshot-or-type-badge.ce {
+        background: var(--iso-green-bg);
+        color: var(--iso-green);
+    }
+
+    .snapshot-or-block-title .snapshot-or-type-badge.pe {
+        background: var(--iso-red-bg);
+        color: var(--iso-red);
+    }
+
+    .snapshot-empty-state {
+        grid-column: 1 / -1;
+        padding: 24px;
+        text-align: center;
+        color: var(--iso-muted);
+        font-size: 0.9rem;
+        line-height: 1.6;
+    }
+
+    .snapshot-empty-state i {
+        font-size: 1.8rem;
+        display: block;
+        margin-bottom: 10px;
+        opacity: 0.4;
+    }
+
+    .snapshot-empty-state strong {
+        color: var(--iso-text);
+    }
 </style>
 {% endblock %}
 
@@ -678,6 +845,15 @@
         </div>
         <div class="iso-topbar-right">
             <span class="iso-day-label" id="day-label">—</span>
+            <button
+                type="button"
+                class="iso-btn"
+                id="refresh-snapshot-btn"
+                style="display: none;"
+                title="Re-collect the isolated instrument's own data at the touch"
+            >
+                <i class="bi bi-arrow-repeat"></i> Refresh Snapshot
+            </button>
             <button type="button" class="iso-btn" id="refresh-btn">
                 <i class="bi bi-arrow-clockwise"></i> Refresh
             </button>
@@ -720,9 +896,31 @@
                 <i class="bi bi-graph-up-arrow"></i> Open Chart
             </a>
             <div class="iso-hero-price">
-                <div class="price-label">Trigger LTP</div>
+                <div class="price-label">Instrument LTP @ touch</div>
+                <div class="price-value instrument" id="hero-instrument-ltp">—</div>
+                <div class="price-sub" id="hero-instrument-sub">—</div>
+            </div>
+            <div class="iso-hero-price">
+                <div class="price-label">Index trigger LTP</div>
                 <div class="price-value" id="hero-trigger-ltp">—</div>
                 <div class="price-sub" id="hero-trigger-sub">—</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Instrument snapshot: the isolated instrument's own data -->
+    <div class="iso-card" id="iso-instrument-snapshot" style="display: none;">
+        <div class="iso-card-header">
+            <i class="bi bi-graph-up text-primary"></i>
+            <span id="snapshot-card-title">Isolated instrument · own data at touch</span>
+        </div>
+        <div class="iso-card-body">
+            <div class="snapshot-tiles" id="snapshot-tiles"></div>
+            <div id="snapshot-or-wrap" style="display: none;">
+                <div class="snapshot-section-title">
+                    Instrument's own first-candle OR levels
+                </div>
+                <div id="snapshot-or-grid"></div>
             </div>
         </div>
     </div>
@@ -806,11 +1004,11 @@
         </div>
     </div>
 
-    <!-- OR levels reference -->
+    <!-- Index OR levels reference -->
     <div class="iso-card" id="or-levels-card" style="display: none;">
         <div class="iso-card-header">
             <i class="bi bi-bar-chart-line text-primary"></i>
-            <span>Opening Range levels</span>
+            <span>Index Opening Range levels</span>
         </div>
         <div class="iso-card-body">
             <div class="or-grid" id="or-levels-body"></div>
@@ -823,6 +1021,7 @@
 <script>
     const DETAIL_URL = "/admin/level-isolation/detail";
     const BACKFILL_URL = "/admin/level-isolation/backfill";
+    const REFRESH_SNAPSHOT_URL = "/admin/level-isolation/refresh-snapshot";
     const POLL_MS = 10000;
 
     const state = {
@@ -867,6 +1066,7 @@
             const d = new Date(iso);
             if (isNaN(d.getTime())) return String(iso);
             return d.toLocaleTimeString("en-IN", {
+                timeZone: "Asia/Kolkata",
                 hour: "2-digit",
                 minute: "2-digit",
                 second: "2-digit",
@@ -874,6 +1074,44 @@
             });
         } catch (_) {
             return String(iso);
+        }
+    }
+
+    // Format ISO date OR epoch millis/seconds to "27 OCT 26" (IST).
+    function formatExpiry(val) {
+        if (val === null || val === undefined || val === "") return "—";
+        const s = String(val).trim();
+
+        const isoMatch = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+        if (isoMatch) {
+            const d = new Date(Date.UTC(
+                Number(isoMatch[1]),
+                Number(isoMatch[2]) - 1,
+                Number(isoMatch[3]),
+            ));
+            if (!isNaN(d.getTime())) return formatExpiryDate(d);
+            return s;
+        }
+
+        const num = Number(s);
+        if (Number.isFinite(num) && num > 1e9) {
+            const ms = num > 1e12 ? num : num * 1000;
+            const d = new Date(ms);
+            if (!isNaN(d.getTime())) return formatExpiryDate(d);
+        }
+        return s;
+    }
+
+    function formatExpiryDate(d) {
+        try {
+            return new Intl.DateTimeFormat("en-IN", {
+                timeZone: "Asia/Kolkata",
+                day: "2-digit",
+                month: "short",
+                year: "2-digit",
+            }).format(d).toUpperCase();
+        } catch (_) {
+            return d.toISOString().slice(0, 10);
         }
     }
 
@@ -889,6 +1127,50 @@
             sensex_s3_fallback: "SENSEX touched S3 · fallback (NIFTY stale)",
         };
         return map[reason] || String(reason || "—");
+    }
+
+    function quoteSourceLabel(src) {
+        const map = {
+            live_feed_cache: "live tick",
+            intraday_bar: "touch minute bar",
+            intraday_latest_bar: "latest intraday bar",
+            first_candle_close: "first-candle close",
+            or_midpoint: "OR midpoint",
+            unavailable: "—",
+        };
+        return map[src] || String(src || "—");
+    }
+
+    /* ---------- snapshot availability ---------- */
+    function snapshotAvailability(d) {
+        const iso = d && d.isolated;
+        if (!iso) {
+            return {
+                hasAny: false,
+                needsRefresh: false,
+                hasLtp: false,
+                hasTouch: false,
+                hasFc: false,
+                hasOr: false,
+            };
+        }
+        const ltp = parseNum(iso.instrument_ltp);
+        const hasLtp = ltp !== null;
+        const hasTouch = Object.keys(iso.instrument_touch_ohlc || {}).length > 0;
+        const hasFc = Object.keys(iso.instrument_first_candle || {}).length > 0;
+        const hasOr = Object.keys(iso.instrument_or_levels || {}).length > 0;
+        const hasAny = hasLtp || hasTouch || hasFc || hasOr;
+        // Show the "Refresh Snapshot" button when the two most
+        // important fields (LTP + first candle) aren't both present.
+        const needsRefresh = !hasLtp || !hasFc;
+        return {
+            hasAny,
+            needsRefresh,
+            hasLtp,
+            hasTouch,
+            hasFc,
+            hasOr,
+        };
     }
 
     /* ---------- renderers ---------- */
@@ -927,7 +1209,6 @@
         const banner = document.getElementById("iso-banner");
         if (!banner) return;
 
-        // If isolated → hide the top banner (hero takes over).
         if (d.isolated) {
             banner.style.display = "none";
             return;
@@ -1003,13 +1284,18 @@
         if (msgEl) msgEl.textContent = mkt.message || "";
         if (subEl) subEl.textContent = sub;
 
-        // Backfill button — only useful when we are in-session, OR is
-        // ready, and nothing has been isolated yet.
         const backfillBtn = document.getElementById("backfill-btn");
         if (backfillBtn) {
             const canBackfill = isWatching && !d.isolated;
             backfillBtn.style.display = canBackfill ? "inline-flex" : "none";
         }
+    }
+
+    function renderRefreshSnapshotBtn(d) {
+        const btn = document.getElementById("refresh-snapshot-btn");
+        if (!btn) return;
+        const avail = snapshotAvailability(d);
+        btn.style.display = avail.needsRefresh ? "inline-flex" : "none";
     }
 
     function renderHero(d) {
@@ -1060,7 +1346,7 @@
         const metaItems = [
             { label: "Trigger", value: reasonLabel(iso.reason) },
             { label: "Isolated At", value: formatTime(iso.isolated_at) },
-            { label: "Expiry", value: iso.expiry || "—" },
+            { label: "Expiry", value: formatExpiry(iso.expiry) },
             {
                 label: "Trigger Level",
                 value:
@@ -1080,28 +1366,212 @@
             });
         }
         metaEl.innerHTML = metaItems
-            .map(
-                m =>
+            .map(m => {
+                const cls = m.highlight ? "meta-value highlight" : "meta-value";
+                return (
                     `<div><span class="meta-label">${esc(m.label)}</span>` +
-                    `<span class="meta-value">${esc(m.value)}</span></div>`
-            )
+                    `<span class="${cls}">${esc(m.value)}</span></div>`
+                );
+            })
             .join("");
 
         // Chart CTA
         const chartBtn = document.getElementById("hero-chart-btn");
         if (chartBtn && iso.instrument_key) {
-            const url =
-                "/chart/" + encodeURIComponent(iso.instrument_key);
-            chartBtn.href = url;
+            chartBtn.href = "/chart/" + encodeURIComponent(iso.instrument_key);
         }
 
-        // Trigger LTP + sub
+        // Instrument LTP @ touch
+        const instrLtpEl = document.getElementById("hero-instrument-ltp");
+        const instrSubEl = document.getElementById("hero-instrument-sub");
+        const instrLtp = parseNum(iso.instrument_ltp);
+        if (instrLtpEl) {
+            instrLtpEl.textContent = instrLtp !== null ? `₹${fmt(instrLtp)}` : "—";
+        }
+        if (instrSubEl) {
+            instrSubEl.textContent = iso.instrument_quote_source
+                ? `source: ${quoteSourceLabel(iso.instrument_quote_source)}`
+                : "—";
+        }
+
+        // Trigger LTP (index)
         document.getElementById("hero-trigger-ltp").textContent =
             fmt(ev.trigger_ltp);
         document.getElementById("hero-trigger-sub").textContent =
             ev.index && ev.side
                 ? `${ev.index} · ${ev.side}`
                 : "—";
+    }
+
+    function renderInstrumentSnapshot(d) {
+        const card = document.getElementById("iso-instrument-snapshot");
+        const tilesEl = document.getElementById("snapshot-tiles");
+        const orWrapEl = document.getElementById("snapshot-or-wrap");
+        const orGridEl = document.getElementById("snapshot-or-grid");
+        const titleEl = document.getElementById("snapshot-card-title");
+        if (!card || !tilesEl || !orWrapEl || !orGridEl) return;
+
+        if (!d.isolated) {
+            card.style.display = "none";
+            return;
+        }
+
+        const iso = d.isolated;
+        const avail = snapshotAvailability(d);
+
+        card.style.display = "block";
+        if (titleEl) {
+            titleEl.textContent =
+                `Isolated instrument · own data at touch · ` +
+                `${iso.trading_symbol || iso.instrument_key || ""}`;
+        }
+
+        if (!avail.hasAny) {
+            // No snapshot data — show an informative empty state
+            // with a clear call-to-action.
+            tilesEl.innerHTML = `
+                <div class="snapshot-empty-state">
+                    <i class="bi bi-info-circle"></i>
+                    <div>No instrument-snapshot data is stored for this
+                        isolated record yet.</div>
+                    <div style="margin-top: 8px; font-size: 0.82rem;">
+                        This record was created before the snapshot feature
+                        was deployed. Click
+                        <strong>Refresh Snapshot</strong> in the top bar, or
+                        wait for the 5-minute recheck job to auto-collect it
+                        (during market hours).
+                    </div>
+                </div>
+            `;
+            orWrapEl.style.display = "none";
+            orGridEl.innerHTML = "";
+            return;
+        }
+
+        const instrumentLtp = parseNum(iso.instrument_ltp);
+        const touchOhlc = iso.instrument_touch_ohlc || {};
+        const firstCandle = iso.instrument_first_candle || {};
+        const orLevels = iso.instrument_or_levels || {};
+        const source = iso.instrument_quote_source || "unavailable";
+
+        // ---- Tiles ------------------------------------------------ #
+        tilesEl.innerHTML = "";
+
+        if (instrumentLtp !== null) {
+            tilesEl.insertAdjacentHTML("beforeend", `
+                <div class="snapshot-tile highlight">
+                    <div class="tile-label">Instrument LTP @ touch</div>
+                    <div class="tile-value">₹${fmt(instrumentLtp)}</div>
+                    <div class="tile-sub">source: ${esc(quoteSourceLabel(source))}</div>
+                </div>
+            `);
+        }
+
+        if (avail.hasTouch) {
+            const t = touchOhlc.time_iso ? formatTime(touchOhlc.time_iso) : "—";
+            tilesEl.insertAdjacentHTML("beforeend", `
+                <div class="snapshot-tile">
+                    <div class="tile-label">Instrument touch-bar · ${esc(t)}</div>
+                    <div class="tile-value">
+                        <div class="ohlc-grid">
+                            <div class="ohlc-cell">
+                                <span class="ohlc-key">O</span>
+                                <span>${fmt(touchOhlc.open)}</span>
+                            </div>
+                            <div class="ohlc-cell">
+                                <span class="ohlc-key">H</span>
+                                <span>${fmt(touchOhlc.high)}</span>
+                            </div>
+                            <div class="ohlc-cell">
+                                <span class="ohlc-key">L</span>
+                                <span>${fmt(touchOhlc.low)}</span>
+                            </div>
+                            <div class="ohlc-cell">
+                                <span class="ohlc-key">C</span>
+                                <span>${fmt(touchOhlc.close)}</span>
+                            </div>
+                        </div>
+                    </div>
+                    ${touchOhlc.volume !== undefined && touchOhlc.volume !== null
+                        ? `<div class="tile-sub">vol: ${fmtInt(touchOhlc.volume)}</div>`
+                        : ""}
+                </div>
+            `);
+        }
+
+        if (avail.hasFc) {
+            const fcTime = firstCandle.time_iso
+                ? formatTime(firstCandle.time_iso)
+                : "09:15:00";
+            tilesEl.insertAdjacentHTML("beforeend", `
+                <div class="snapshot-tile">
+                    <div class="tile-label">Instrument first candle · ${esc(fcTime)}</div>
+                    <div class="tile-value">
+                        <div class="ohlc-grid">
+                            <div class="ohlc-cell">
+                                <span class="ohlc-key">O</span>
+                                <span>${fmt(firstCandle.open)}</span>
+                            </div>
+                            <div class="ohlc-cell">
+                                <span class="ohlc-key">H</span>
+                                <span>${fmt(firstCandle.high)}</span>
+                            </div>
+                            <div class="ohlc-cell">
+                                <span class="ohlc-key">L</span>
+                                <span>${fmt(firstCandle.low)}</span>
+                            </div>
+                            <div class="ohlc-cell">
+                                <span class="ohlc-key">C</span>
+                                <span>${fmt(firstCandle.close)}</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `);
+        }
+
+        // ---- OR levels ------------------------------------------- #
+        if (avail.hasOr) {
+            orWrapEl.style.display = "block";
+            const display = [
+                "H", "L", "A",
+                "R1", "R2", "R3", "R3_Threshold",
+                "S1", "S2", "S3", "S3_Threshold",
+            ];
+            const cells = display
+                .filter(k => orLevels[k] !== undefined && orLevels[k] !== null)
+                .map(k => {
+                    return `<div class="or-cell">
+                        <span class="or-label">${esc(k)}</span>
+                        <span class="or-value">${fmt(orLevels[k])}</span>
+                    </div>`;
+                })
+                .join("");
+
+            const typeClass = iso.type === "CE"
+                ? "ce"
+                : iso.type === "PE"
+                    ? "pe"
+                    : "";
+
+            orGridEl.innerHTML = `
+                <div class="snapshot-or-block">
+                    <div class="snapshot-or-block-title">
+                        <span>${esc(iso.trading_symbol || iso.instrument_key || "")}</span>
+                        <span class="snapshot-or-type-badge ${typeClass}">${esc(iso.type || "—")}</span>
+                        <span style="font-weight: 700; color: var(--iso-muted); font-size: 0.72rem;">
+                            Strike ${fmt(iso.strike, 0)} · Expiry ${formatExpiry(iso.expiry)}
+                        </span>
+                    </div>
+                    <div class="or-grid" style="grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));">
+                        ${cells}
+                    </div>
+                </div>
+            `;
+        } else {
+            orWrapEl.style.display = "none";
+            orGridEl.innerHTML = "";
+        }
     }
 
     function renderReasoning(d) {
@@ -1181,7 +1651,20 @@
             });
         }
 
-        // Step 4: Final
+        // Step 4: Instrument snapshot at touch
+        const instrLtp = parseNum(iso.instrument_ltp);
+        if (instrLtp !== null) {
+            steps.push({
+                icon: "bi-cash-stack",
+                title: "Instrument LTP @ touch",
+                detail:
+                    `${iso.trading_symbol || iso.instrument_key} traded at ` +
+                    `₹${fmt(instrLtp)} at the touch moment ` +
+                    `(source: ${quoteSourceLabel(iso.instrument_quote_source)}).`,
+            });
+        }
+
+        // Step 5: Final
         steps.push({
             icon: "bi-check-circle-fill",
             title: "Isolated",
@@ -1210,8 +1693,6 @@
         const iso = d.isolated;
         const ev = d.trigger_event || {};
 
-        // Prefer the NIFTY-reference candidates when the SENSEX pick
-        // was made off the NIFTY list.
         let list;
         let distanceKey;
         let refLabel;
@@ -1406,7 +1887,9 @@
         if (!d) return;
         renderStatusPill(d);
         renderBanner(d);
+        renderRefreshSnapshotBtn(d);
         renderHero(d);
+        renderInstrumentSnapshot(d);
         renderReasoning(d);
         renderCandidates(d);
         renderTouchState(d);
@@ -1447,14 +1930,31 @@
         }
     }
 
+    async function runRefreshSnapshot() {
+        const btn = document.getElementById("refresh-snapshot-btn");
+        if (!btn) return;
+        const original = btn.innerHTML;
+        btn.disabled = true;
+        btn.innerHTML =
+            '<i class="bi bi-hourglass-split"></i> Refreshing…';
+        try {
+            const res = await fetch(REFRESH_SNAPSHOT_URL, { method: "POST" });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            await loadDetail();
+        } catch (err) {
+            console.error("[isolated] refresh-snapshot failed:", err);
+        } finally {
+            btn.disabled = false;
+            btn.innerHTML = original;
+        }
+    }
+
     /* ---------- bootstrap ---------- */
     document.addEventListener("DOMContentLoaded", () => {
-        // First-paint detail from the server (if any)
         if (window.__INITIAL_DETAIL__) {
             state.detail = window.__INITIAL_DETAIL__;
             render();
         }
-        // Always fetch fresh, then poll
         loadDetail();
         state.pollTimer = setInterval(loadDetail, POLL_MS);
 
@@ -1463,6 +1963,11 @@
 
         const backfillBtn = document.getElementById("backfill-btn");
         if (backfillBtn) backfillBtn.addEventListener("click", runBackfill);
+
+        const refreshSnapshotBtn = document.getElementById("refresh-snapshot-btn");
+        if (refreshSnapshotBtn) {
+            refreshSnapshotBtn.addEventListener("click", runRefreshSnapshot);
+        }
     });
 
     window.addEventListener("beforeunload", () => {
@@ -1471,8 +1976,6 @@
 </script>
 
 <script>
-    // Server-side first-paint payload. Emitted last so it cannot
-    // shadow the DETAIL_URL / state definitions above.
     window.__INITIAL_DETAIL__ = {{ initial_detail|tojson|safe }};
 </script>
 {% endblock %}

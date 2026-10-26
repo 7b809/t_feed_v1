@@ -22,6 +22,33 @@ Design
 * Persisted result: ``data/<LEVEL_ISOLATION_FILENAME>`` — one JSON doc
   per day, containing ``isolated``, ``events[]``, ``touch_state``.
 
+Instrument snapshot
+-------------------
+On isolation, ``_collect_instrument_snapshot()`` enriches the
+``isolated`` record with the picked instrument's OWN data at the moment
+of the touch:
+
+  * ``instrument_ltp``              — the CE/PE's LTP
+  * ``instrument_touch_ohlc``       — the CE/PE's O/H/L/C at the touch
+                                      minute (only populated when the
+                                      exact touch bar is found)
+  * ``instrument_first_candle``     — the CE/PE's own 09:15 first candle
+                                      OHLC
+  * ``instrument_or_levels``        — the CE/PE's own OR levels
+  * ``instrument_quote_source``     — which source was used
+                                      ("live_feed_cache" /
+                                       "intraday_bar" /
+                                       "intraday_latest_bar" /
+                                       "first_candle_close" /
+                                       "or_midpoint" /
+                                       "unavailable")
+
+Records created before this feature existed will have NULL snapshot
+fields. ``run_backfill()`` auto-detects stale records and re-collects
+the snapshot **once** without touching the isolation decision — the
+recheck job fires this every 5 minutes during market hours, so the
+record self-heals shortly after the code is deployed.
+
 Startup backfill
 ----------------
 Between ``LEVEL_ISOLATION_BACKFILL_WINDOW_START_*`` and ``_END_*`` on a
@@ -29,21 +56,14 @@ trading day, ``run_backfill()`` replays today's 1-min intraday candles
 minute-by-minute and reconstructs the "would-have-isolated" instrument:
   * touch detection uses bar **high** for R3, bar **low** for S3;
   * LTP-based decisions (nearest strike) use bar **close**.
+On the backfill path, the instrument snapshot also does one intraday
+REST call per isolated instrument (once per day, at startup, on a
+worker thread — never blocks the live feed).
 
 UI-facing detail endpoint
 -------------------------
 ``get_detail()`` returns a JSON-safe snapshot for the ``/isolated`` HTML
-page and the ``GET /admin/level-isolation/detail`` JSON endpoint:
-  * ``market`` — trading-day / session state + a human-readable message
-    that distinguishes weekend / holiday / pre-open / OR warming-up /
-    in-session / post-close.
-  * ``isolated`` — the persisted isolation record (or ``None``).
-  * ``trigger_event`` — the event that produced the isolation (with the
-    full candidate list + per-candidate distances).
-  * ``candidates`` — convenience copy of ``trigger_event.candidates``.
-  * ``events`` — the full day's touch log.
-  * ``touch_state`` — per (index, side) one-shot flags.
-  * ``or_levels`` — the reference OR levels currently on disk.
+page and the ``GET /admin/level-isolation/detail`` JSON endpoint.
 
 Safety
 ------
@@ -476,6 +496,255 @@ class LevelIsolatedInstrumentService:
         )
 
     # ------------------------------------------------------------------ #
+    # Underlying resolution                                              #
+    # ------------------------------------------------------------------ #
+    @staticmethod
+    def _resolve_underlying_for_candidate(
+        candidate: dict[str, Any],
+    ) -> str:
+        """Return the option's underlying ticker (NIFTY / SENSEX / …).
+
+        Resolution order:
+          1. registry lookup (most accurate)
+          2. trading_symbol first token (e.g. "NIFTY 22400 PE 27 OCT 26")
+          3. empty string
+
+        This deliberately ignores ``event.index`` because a SENSEX
+        trigger may have picked a NIFTY instrument (the
+        "with_nifty_reference" path), and the folder layout on disk is
+        keyed by the *instrument's* underlying, not the trigger's.
+        """
+        key = str(candidate.get("instrument_key") or "").strip()
+        if key:
+            try:
+                from services.instrument_registry import instrument_registry
+                entry = instrument_registry.get(key)
+                if entry and entry.get("underlying"):
+                    return str(entry["underlying"]).strip().upper()
+            except Exception:
+                logger.exception(
+                    "[level-isolation] registry underlying lookup failed for %s",
+                    key,
+                )
+        symbol = str(candidate.get("trading_symbol") or "").strip()
+        if symbol:
+            first = symbol.split()[0]
+            if first:
+                return first.upper()
+        return ""
+
+    # ------------------------------------------------------------------ #
+    # OR-level computation (matches first_candle_service)                #
+    # ------------------------------------------------------------------ #
+    @staticmethod
+    def _compute_or_levels(fc: dict[str, Any]) -> dict[str, float] | None:
+        """Compute OR levels from a first-candle dict, or None."""
+        try:
+            H = float(fc["high"])
+            L = float(fc["low"])
+        except (TypeError, ValueError, KeyError):
+            return None
+        A = (H + L) / 2.0
+        D_H = abs(H - A)
+        D_L = abs(A - L)
+        R1 = A + D_H / 2.0
+        S1 = A - D_L / 2.0
+        R2 = H + D_H
+        S2 = L - D_L
+        R3 = R2 + D_H
+        S3 = S2 - D_L
+        return {
+            "H": H, "L": L, "A": A,
+            "D_H": D_H, "D_L": D_L,
+            "R1": R1, "R2": R2, "R3": R3,
+            "S1": S1, "S2": S2, "S3": S3,
+            "R3_Threshold": (R2 + R3) / 2.0,
+            "S3_Threshold": (S2 + S3) / 2.0,
+        }
+
+    # ------------------------------------------------------------------ #
+    # Instrument snapshot (own data at touch)                            #
+    # ------------------------------------------------------------------ #
+    def _collect_instrument_snapshot(
+        self,
+        candidate: dict[str, Any],
+        underlying: str,
+        touch_dt: datetime | None,
+        allow_rest: bool,
+    ) -> dict[str, Any]:
+        """Collect the isolated instrument's OWN data at the touch.
+
+        Resolution order for ``instrument_ltp``:
+          1. live feed cache   (instant; populated on the live path)
+          2. exact touch bar   (backfill path only; ~200–500 ms)
+          3. latest intraday   (backfill path only; when touch bar missing)
+          4. first_candle.close (weak fallback if 1–3 unavailable)
+          5. OR midpoint        (last resort; always present when OR exists)
+
+        Alongside LTP, we also try to read the instrument's own
+        ``first_candle.json`` from its folder. If the file is missing
+        (e.g. it was one of the 26 skipped during startup backfill),
+        we derive both the first-candle OHLC and the OR levels from the
+        intraday 09:15 bar — no extra network call.
+        """
+        snapshot: dict[str, Any] = {
+            "instrument_ltp": None,
+            "instrument_touch_ohlc": None,
+            "instrument_first_candle": None,
+            "instrument_or_levels": None,
+            "instrument_quote_source": "unavailable",
+        }
+
+        key = str(candidate.get("instrument_key") or "").strip()
+        if not key:
+            return snapshot
+
+        # ---- 1. Live feed cache (fast; used on live path) ---------- #
+        try:
+            from services.live_feed_service import live_feed_service
+            ltp = live_feed_service.get_latest_ltp(key)
+            if ltp is not None:
+                snapshot["instrument_ltp"] = float(ltp)
+                snapshot["instrument_quote_source"] = "live_feed_cache"
+        except Exception:
+            logger.exception(
+                "[level-isolation] live LTP cache read failed for %s", key,
+            )
+
+        # ---- 2. Read the instrument's own first_candle.json -------- #
+        resolved_underlying = self._resolve_underlying_for_candidate(candidate)
+        folder_underlying = (resolved_underlying or underlying or "").strip().lower()
+        strike = candidate.get("strike")
+        type_upper = str(candidate.get("type") or "").upper()
+
+        if folder_underlying and strike is not None and type_upper:
+            try:
+                strike_int = int(float(strike))
+            except (TypeError, ValueError):
+                strike_int = None
+            if strike_int is not None:
+                folder = (
+                    Path(config.LIVE_DATA_DIR)
+                    / folder_underlying
+                    / f"{strike_int}_{type_upper}"
+                )
+                fc_path = folder / "first_candle.json"
+                if fc_path.exists():
+                    try:
+                        payload = json.loads(fc_path.read_text(encoding="utf-8"))
+                        # Only use the file if it's for today.
+                        if str(payload.get("date") or "") == _today_iso():
+                            snapshot["instrument_first_candle"] = payload.get("first_candle")
+                            snapshot["instrument_or_levels"] = payload.get("or_levels")
+                            # Weak fallback for LTP if cache was empty.
+                            if snapshot["instrument_ltp"] is None:
+                                fc_close = (payload.get("first_candle") or {}).get("close")
+                                if fc_close is not None:
+                                    try:
+                                        snapshot["instrument_ltp"] = float(fc_close)
+                                        snapshot["instrument_quote_source"] = "first_candle_close"
+                                    except (TypeError, ValueError):
+                                        pass
+                    except Exception:
+                        logger.exception(
+                            "[level-isolation] unreadable first_candle.json for %s",
+                            key,
+                        )
+                else:
+                    logger.info(
+                        "[level-isolation] first_candle.json missing for %s at %s",
+                        key, fc_path,
+                    )
+
+        # ---- 3. Intraday REST (backfill path only) ----------------- #
+        if allow_rest:
+            try:
+                candles = self._fetch_intraday(key)
+            except Exception:
+                candles = []
+
+            if candles:
+                # 3a. Match exact touch bar (best signal).
+                matched: dict[str, Any] | None = None
+                if touch_dt is not None:
+                    try:
+                        target_minute = touch_dt.strftime("%Y-%m-%dT%H:%M")
+                    except Exception:
+                        target_minute = None
+                    if target_minute:
+                        for c in candles:
+                            if str(c.get("time", "")).startswith(target_minute):
+                                matched = c
+                                break
+
+                if matched is not None:
+                    snapshot["instrument_touch_ohlc"] = {
+                        "open": matched.get("open"),
+                        "high": matched.get("high"),
+                        "low": matched.get("low"),
+                        "close": matched.get("close"),
+                        "volume": matched.get("volume"),
+                        "time_iso": matched.get("time"),
+                    }
+                    try:
+                        snapshot["instrument_ltp"] = float(matched["close"])
+                        snapshot["instrument_quote_source"] = "intraday_bar"
+                    except (TypeError, ValueError, KeyError):
+                        pass
+                else:
+                    # 3b. Fallback: latest bar for LTP only. We do NOT
+                    # populate instrument_touch_ohlc from the wrong bar
+                    # (that would silently lie about "the touch price").
+                    last = candles[-1]
+                    try:
+                        snapshot["instrument_ltp"] = float(last["close"])
+                        snapshot["instrument_quote_source"] = "intraday_latest_bar"
+                    except (TypeError, ValueError, KeyError):
+                        pass
+                    if touch_dt is not None:
+                        logger.warning(
+                            "[level-isolation] exact touch bar not found "
+                            "for %s at %s — using latest intraday bar for "
+                            "LTP only (touch_ohlc left empty)",
+                            key, touch_dt,
+                        )
+
+                # 3c. Derive first_candle from the 09:15 intraday bar
+                # when the on-disk file was missing. This rescues
+                # instruments that were skipped during startup backfill.
+                if snapshot["instrument_first_candle"] is None:
+                    for c in candles:
+                        t = str(c.get("time", ""))
+                        if "T09:15" in t:
+                            fc = {
+                                "time_iso": c.get("time"),
+                                "open": c.get("open"),
+                                "high": c.get("high"),
+                                "low": c.get("low"),
+                                "close": c.get("close"),
+                            }
+                            snapshot["instrument_first_candle"] = fc
+                            snapshot["instrument_or_levels"] = self._compute_or_levels(fc)
+                            logger.info(
+                                "[level-isolation] derived first_candle + "
+                                "OR levels for %s from intraday 09:15 bar",
+                                key,
+                            )
+                            break
+
+        # ---- 4. Last-resort: OR midpoint (H+L)/2 ------------------- #
+        if snapshot["instrument_ltp"] is None:
+            orl = snapshot["instrument_or_levels"] or {}
+            try:
+                a = float(orl.get("A"))
+                snapshot["instrument_ltp"] = a
+                snapshot["instrument_quote_source"] = "or_midpoint"
+            except (TypeError, ValueError):
+                pass
+
+        return snapshot
+
+    # ------------------------------------------------------------------ #
     # Isolation                                                          #
     # ------------------------------------------------------------------ #
     def _isolate(
@@ -484,6 +753,30 @@ class LevelIsolatedInstrumentService:
         reason: str,
         event: dict[str, Any],
     ) -> None:
+        # Determine the touch moment (used for the instrument snapshot's
+        # touch-bar match).
+        touch_dt: datetime | None = None
+        touched_at_str = event.get("touched_at")
+        if touched_at_str:
+            try:
+                touch_dt = datetime.fromisoformat(str(touched_at_str))
+            except Exception:
+                touch_dt = None
+        if touch_dt is None:
+            touch_dt = _now_market()
+
+        # Whether we're on the backfill path (only then do we do an
+        # intraday REST call for the picked instrument's OHLC).
+        is_backfill = str(event.get("source") or "") == "backfill"
+
+        underlying = str(event.get("index") or "").strip().upper()
+        snapshot = self._collect_instrument_snapshot(
+            candidate,
+            underlying=underlying,
+            touch_dt=touch_dt,
+            allow_rest=is_backfill,
+        )
+
         isolated = {
             "instrument_key": candidate.get("instrument_key"),
             "trading_symbol": candidate.get("trading_symbol"),
@@ -504,17 +797,31 @@ class LevelIsolatedInstrumentService:
             "nifty_reference_candidates_count": event.get(
                 "nifty_reference_candidates_count"
             ),
+            # ---- NEW: the isolated instrument's OWN data at touch -- #
+            "instrument_ltp": snapshot.get("instrument_ltp"),
+            "instrument_touch_ohlc": snapshot.get("instrument_touch_ohlc"),
+            "instrument_first_candle": snapshot.get("instrument_first_candle"),
+            "instrument_or_levels": snapshot.get("instrument_or_levels"),
+            "instrument_quote_source": snapshot.get("instrument_quote_source"),
         }
         self._state["isolated"] = isolated
         event["status"] = "isolated"
         event["isolated_instrument"] = candidate.get("instrument_key")
+        event["instrument_ltp"] = snapshot.get("instrument_ltp")
+        event["instrument_quote_source"] = snapshot.get("instrument_quote_source")
         self._state["events"].append(event)
         self._save_state()
 
         logger.info(
-            "[level-isolation] ISOLATED key=%s reason=%s trigger=%s %s LTP=%s",
+            "[level-isolation] ISOLATED key=%s reason=%s trigger=%s %s "
+            "idx_ltp=%s inst_ltp=%s src=%s has_fc=%s has_or=%s",
             candidate.get("instrument_key"), reason,
-            event.get("index"), event.get("side"), event.get("trigger_ltp"),
+            event.get("index"), event.get("side"),
+            event.get("trigger_ltp"),
+            snapshot.get("instrument_ltp"),
+            snapshot.get("instrument_quote_source"),
+            snapshot.get("instrument_first_candle") is not None,
+            snapshot.get("instrument_or_levels") is not None,
         )
 
         if config.LEVEL_ISOLATION_TELEGRAM_ENABLED:
@@ -530,6 +837,11 @@ class LevelIsolatedInstrumentService:
             from services.telegram_service import telegram_service
             _DIV = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             _THIN = "────────────────────────────────"
+            inst_ltp = isolated.get("instrument_ltp")
+            inst_ltp_line = (
+                f"💵 Inst LTP @touch:{inst_ltp}\n"
+                if inst_ltp is not None else ""
+            )
             msg = (
                 f"{_DIV}\n"
                 f"🎯 LEVEL ISOLATION · INSTRUMENT LOCKED\n"
@@ -543,6 +855,7 @@ class LevelIsolatedInstrumentService:
                 f"📈 Trigger LTP:   {isolated.get('trigger_ltp')}\n"
                 f"📊 Trigger Level: {isolated.get('trigger_level')} = "
                 f"{isolated.get('trigger_level_value')}\n"
+                f"{inst_ltp_line}"
                 f"🕒 Isolated At:   {isolated.get('isolated_at')}\n"
                 f"{_THIN}\n"
                 f"💾 Saved to data/{config.LEVEL_ISOLATION_FILENAME}"
@@ -558,6 +871,90 @@ class LevelIsolatedInstrumentService:
     # ------------------------------------------------------------------ #
     # Startup backfill                                                   #
     # ------------------------------------------------------------------ #
+    def _snapshot_needs_backfill(self, iso: dict[str, Any]) -> bool:
+        """True if the record has an isolated entry but no snapshot."""
+        if not isinstance(iso, dict):
+            return True
+        return (
+            iso.get("instrument_ltp") is None
+            and iso.get("instrument_touch_ohlc") is None
+            and iso.get("instrument_first_candle") is None
+            and iso.get("instrument_or_levels") is None
+        )
+
+    @staticmethod
+    def _parse_touched_at(touched_at: Any) -> datetime | None:
+        if not touched_at:
+            return None
+        try:
+            return datetime.fromisoformat(str(touched_at))
+        except Exception:
+            return None
+
+    def _backfill_snapshot_for_existing(
+        self,
+        iso: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Re-collect the snapshot for an already-isolated record.
+
+        Does NOT re-run the isolation decision and does NOT touch
+        ``touch_state``. Only the five snapshot fields are updated.
+        """
+        candidate = {
+            "instrument_key": iso.get("instrument_key"),
+            "trading_symbol": iso.get("trading_symbol"),
+            "strike": iso.get("strike"),
+            "type": iso.get("type"),
+        }
+        underlying = (
+            self._resolve_underlying_for_candidate(candidate)
+            or str(iso.get("trigger_index") or "").strip().upper()
+        )
+        touch_dt = self._parse_touched_at(iso.get("touched_at"))
+        snapshot = self._collect_instrument_snapshot(
+            candidate,
+            underlying=underlying,
+            touch_dt=touch_dt,
+            allow_rest=True,
+        )
+        iso.update(snapshot)
+        self._save_state()
+        logger.info(
+            "[level-isolation] snapshot backfilled — key=%s ltp=%s "
+            "src=%s has_fc=%s has_or=%s has_touch=%s",
+            iso.get("instrument_key"),
+            snapshot.get("instrument_ltp"),
+            snapshot.get("instrument_quote_source"),
+            snapshot.get("instrument_first_candle") is not None,
+            snapshot.get("instrument_or_levels") is not None,
+            snapshot.get("instrument_touch_ohlc") is not None,
+        )
+        return snapshot
+
+    def refresh_snapshot(self) -> dict[str, Any]:
+        """Public entry point — re-collect the snapshot on demand."""
+        with self._lock:
+            self._ensure_today()
+            iso = self._state.get("isolated")
+            if not iso:
+                return {"status": "no_isolated_record"}
+            try:
+                self._backfill_snapshot_for_existing(iso)
+                return {
+                    "status": "ok",
+                    "instrument_ltp": iso.get("instrument_ltp"),
+                    "instrument_quote_source": iso.get("instrument_quote_source"),
+                    "has_first_candle": iso.get("instrument_first_candle") is not None,
+                    "has_or_levels": iso.get("instrument_or_levels") is not None,
+                    "has_touch_ohlc": iso.get("instrument_touch_ohlc") is not None,
+                }
+            except Exception as exc:
+                logger.exception("[level-isolation] refresh_snapshot failed")
+                return {
+                    "status": "error",
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+
     def run_backfill(self, reason: str = "startup") -> dict[str, Any]:
         if not config.LEVEL_ISOLATION_ENABLED:
             return {"status": "disabled"}
@@ -572,6 +969,24 @@ class LevelIsolatedInstrumentService:
             self._ensure_today()
 
             if self._state.get("isolated") is not None:
+                iso = self._state["isolated"]
+                # Self-heal records created before the snapshot feature
+                # existed. Safe: does not re-run isolation, does not
+                # touch touch_state, only fills in the five snapshot
+                # fields. The 5-minute recheck job drives this.
+                if self._snapshot_needs_backfill(iso):
+                    logger.info(
+                        "[level-isolation] isolated record exists but "
+                        "snapshot fields are empty — backfilling snapshot "
+                        "(no re-decision)"
+                    )
+                    try:
+                        self._backfill_snapshot_for_existing(iso)
+                    except Exception:
+                        logger.exception(
+                            "[level-isolation] snapshot backfill for "
+                            "existing record failed"
+                        )
                 return {
                     "status": "already_isolated",
                     "isolated": self._state["isolated"],
@@ -841,9 +1256,6 @@ class LevelIsolatedInstrumentService:
           * ``or_warming_up``   — 09:15 – 09:16:10 IST
           * ``in_session``      — 09:16:10 – 15:30 IST
           * ``post_close``      — after 15:30 IST
-
-        A ``message`` field carries the human-readable copy the UI shows
-        in the banner.
         """
         info = self._holiday_info(now)
         is_weekend = info["is_weekend"]

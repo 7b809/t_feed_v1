@@ -1,29 +1,37 @@
-# File: services/level_instrument_filter_service.py
+# services/level_instrument_filter_service.py
 """Level-instrument filter — turns an index's OR levels into a list of
 CE / PE option instruments that should be tracked by the live SR engine.
 
-Algorithm (per index, per side)
---------------------------------
+Algorithm (per index)
+---------------------
 1. Read ``data/index/<underlying_lower>/first_candle.json`` (written by
    ``first_candle_service``).
 2. Skip when the file is missing, unparseable, or dated before today.
-3. Compute strike candidates:
+3. Compute strike candidates on BOTH sides:
        CE  (resistance):  strike = ceil(raw_level / step) * step
        PE  (support)   :  strike = floor(raw_level / step) * step
    for R1, R2, R3, R3_Threshold  and  S1, S2, S3, S3_Threshold.
-4. De-duplicate strikes; attach every matched level tag to the same
-   instrument (e.g. R2 + R3_Threshold -> one CE at 22800).
-5. Range filter (``LEVEL_FILTER_RANGE_MODE``):
+
+   The rounded strikes are UNIONED into a single ``all_strikes`` map
+   so every unique filtered strike is emitted on BOTH sides —
+   22400 CE *and* 22400 PE, 22600 CE *and* 22600 PE, etc. The
+   ``levels`` array is mirrored across the two sides of the same
+   strike so the dashboard can show calls-and-puts side by side
+   with the same contextual level tags.
+
+4. Range filter (``LEVEL_FILTER_RANGE_MODE``):
        "wide"   -> S3 <= strike <= R3
        "strict" -> S3_Threshold <= strike <= R3_Threshold
    Core level strikes are always kept even when a stricter range would
-   exclude them — this matches the worked example in the reference doc
-   where R3 (22850) and S3 (22400) appear in the output.
-6. Resolve each strike to a **listed** instrument via the registry.
-   Unlisted strikes are moved outward (up for CE, down for PE) until a
-   listed strike is found (configurable max steps).
-7. Persist ``data/index/<underlying_lower>/level_instruments.json``.
-8. Register every resolved instrument (plus the index itself, unless
+   exclude them.
+
+5. Resolve each (strike, side) to a **listed** instrument via the
+   registry. Unlisted strikes are moved outward (up for CE, down for
+   PE) until a listed strike is found (configurable max steps).
+
+6. Persist ``data/index/<underlying_lower>/level_instruments.json``.
+
+7. Register every resolved instrument (plus the index itself, unless
    disabled) with ``live_sr_levels_service``.
 
 Output file shape (``level_instruments.json``)
@@ -33,20 +41,27 @@ Output file shape (``level_instruments.json``)
   "index_instrument_key": "NSE_INDEX|Nifty 50",
   "strike_step": 50,
   "date": "2026-10-27",
-  "first_candle": {"time_iso": ..., "open": ..., "high": ..., "low": ..., "close": ...},
-  "or_levels": {"H": ..., "L": ..., "A": ..., "D_H": ..., "D_L": ...,
-                "R1": ..., "R2": ..., "R3": ..., "S1": ..., "S2": ..., "S3": ...,
-                "R3_Threshold": ..., "S3_Threshold": ...},
+  "first_candle": {...},
+  "or_levels": {...},
   "range_filter": {"mode": "wide", "lo": ..., "hi": ...},
   "ce_instruments": [
-    {"strike": 22700, "instrument_key": "NSE_FO|...", "trading_symbol": "...",
-     "expiry": "...", "levels": ["R1"], "reasons": ["resistance pivot"]},
+    {"strike": 22400, "instrument_key": "NSE_FO|51327",
+     "trading_symbol": "NIFTY 22400 PE 27 OCT 26",
+     "expiry": 1793125799000,
+     "type": "PE",
+     "levels": ["S2", "S3", "S3_Threshold"],
+     "reasons": ["support extension", "outer support", "support threshold"]},
     ...
   ],
   "pe_instruments": [...],
   "index_sr_tracked": true,
   "generated_at": "..."
 }
+
+Every emitted entry now carries the ``type`` field ("CE" / "PE")
+explicitly, so downstream consumers (level-isolation engine,
+dashboard) never have to infer the option side from the list it was
+found in.
 
 Safety
 ------
@@ -108,14 +123,17 @@ _SUPPORT_LEVELS = ("S1", "S2", "S3", "S3_Threshold")
 # Maximum outward steps when hunting for a listed strike.
 _MAX_LISTING_STEPS = 20
 
+
 # --------------------------------------------------------------------------- #
 # Helpers                                                                     #
 # --------------------------------------------------------------------------- #
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
+
 def _today_iso() -> str:
     return datetime.now().astimezone().date().isoformat()
+
 
 def _parse_strike_step_overrides() -> dict[str, int]:
     raw = (config.LEVEL_FILTER_STRIKE_STEPS_JSON or "").strip()
@@ -141,17 +159,21 @@ def _parse_strike_step_overrides() -> dict[str, int]:
             out[str(k).strip().upper()] = step
     return out
 
+
 def _resolve_strike_step(underlying: str) -> int:
     overrides = _parse_strike_step_overrides()
     if underlying in overrides:
         return overrides[underlying]
     return _DEFAULT_STEPS.get(underlying, 50)
 
+
 def _round_up(price: float, step: int) -> int:
     return int(math.ceil(float(price) / float(step)) * step)
 
+
 def _round_down(price: float, step: int) -> int:
     return int(math.floor(float(price) / float(step)) * step)
+
 
 def _parse_expiry_date(value: Any) -> date | None:
     """Return a ``date`` for an expiry that is ISO-string or epoch-millis."""
@@ -177,6 +199,7 @@ def _parse_expiry_date(value: Any) -> date | None:
         return datetime.fromisoformat(cleaned.split("T", 1)[0]).date()
     except ValueError:
         return None
+
 
 def _pick_nearest_expiry(entries: list[dict[str, Any]]) -> dict[str, Any] | None:
     """Pick the entry with the nearest expiry >= today; fall back to first."""
@@ -204,6 +227,7 @@ def _pick_nearest_expiry(entries: list[dict[str, Any]]) -> dict[str, Any] | None
         past.sort(key=lambda t: t[0], reverse=True)
         return past[0][1]
     return undated[0] if undated else entries[0]
+
 
 # --------------------------------------------------------------------------- #
 # Service                                                                     #
@@ -312,8 +336,27 @@ class LevelInstrumentFilterService:
         step = _resolve_strike_step(underlying)
         range_mode = str(config.LEVEL_FILTER_RANGE_MODE or "wide").lower()
 
+        # ---- Build the union of rounded strikes from BOTH sides ------ #
+        # The filter output now contains BOTH CE and PE at each strike,
+        # so the "levels" tag is shared between the two sides of the
+        # same strike. This lets the dashboard show, e.g., "22400 CE"
+        # and "22400 PE" side by side, both tagged with the S2/S3
+        # levels that produced the strike.
         ce_candidates = self._build_candidates(or_levels, _RESISTANCE_LEVELS, step, "up")
         pe_candidates = self._build_candidates(or_levels, _SUPPORT_LEVELS, step, "down")
+
+        all_strikes: dict[int, list[str]] = {}
+
+        for strike, level_names in ce_candidates.items():
+            bucket = all_strikes.setdefault(strike, [])
+            for name in level_names:
+                if name not in bucket:
+                    bucket.append(name)
+        for strike, level_names in pe_candidates.items():
+            bucket = all_strikes.setdefault(strike, [])
+            for name in level_names:
+                if name not in bucket:
+                    bucket.append(name)
 
         # Optional ATM +/- N extras (filtered by the S3..R3 range below).
         if config.LEVEL_FILTER_INCLUDE_ATM_PLUS_MINUS > 0:
@@ -323,17 +366,22 @@ class LevelInstrumentFilterService:
                 strike = atm_strike + offset * step
                 if strike <= 0:
                     continue
-                ce_candidates.setdefault(strike, []).append(f"ATM{offset:+d}")
-                pe_candidates.setdefault(strike, []).append(f"ATM{offset:+d}")
+                tag = f"ATM{offset:+d}"
+                bucket = all_strikes.setdefault(strike, [])
+                if tag not in bucket:
+                    bucket.append(tag)
 
         lo_strike, hi_strike = self._range_bounds(or_levels, step, range_mode)
 
+        # ---- Resolve BOTH CE and PE for every strike ----------------- #
+        # _resolve_instruments() stamps every entry with "type" so the
+        # dashboard can distinguish CE vs PE at the same strike.
         ce_instruments = self._resolve_instruments(
-            underlying, ce_candidates, "CE", step, "up",
+            underlying, all_strikes, "CE", step, "up",
             lo_strike, hi_strike,
         )
         pe_instruments = self._resolve_instruments(
-            underlying, pe_candidates, "PE", step, "down",
+            underlying, all_strikes, "PE", step, "down",
             lo_strike, hi_strike,
         )
 
@@ -470,8 +518,10 @@ class LevelInstrumentFilterService:
             # R3 (22850) and S3 (22400) appear even though they lie just
             # outside the raw S3..R3 band.
             level_names = candidates[strike]
-            is_core = any(name in _RESISTANCE_LEVELS or name in _SUPPORT_LEVELS
-                          for name in level_names)
+            is_core = any(
+                name in _RESISTANCE_LEVELS or name in _SUPPORT_LEVELS
+                for name in level_names
+            )
             if not is_core and lo is not None and hi is not None:
                 if not (lo <= float(strike) <= hi):
                     continue
@@ -508,6 +558,9 @@ class LevelInstrumentFilterService:
                 "instrument_key": entry["instrument_key"],
                 "trading_symbol": entry.get("trading_symbol"),
                 "expiry": entry.get("expiry"),
+                # Explicit option side — consumed by the isolation engine
+                # and by both dashboards' Type column.
+                "type": strike_type,
                 "levels": list(level_names),
                 "reasons": [
                     LEVEL_REASONS[name]
@@ -605,5 +658,6 @@ class LevelInstrumentFilterService:
         status.setdefault("ran_at", _now_iso())
         self._last_status = status
         return status
+
 
 level_instrument_filter_service = LevelInstrumentFilterService()

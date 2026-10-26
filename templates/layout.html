@@ -1,8 +1,9 @@
-{# File: templates/layout.html #}
-{# ProChart multi-chart layout — per-pane metadata, floating scroll nav,
-   per-pane indicator configs (each chart remembers its own EMA / label
-   toggles independently), toolbar toggles target the ACTIVE pane only,
-   unlinked-by-default panes, rich modal search. #}
+{# templates/layout.html #}
+{# File: templates/layout.html — ProChart multi-chart layout.
+   Per-pane metadata, floating scroll nav, per-pane indicator configs
+   (each chart remembers its own EMA / SR / label toggles independently),
+   toolbar toggles target the ACTIVE pane only, unlinked-by-default panes,
+   rich modal search, SR Levels + SR Labels per pane, IST 12-hour time. #}
 {% extends "base.html" %}
 {% block title %}Layout - Trading Dashboard{% endblock %}
 {% block head %}
@@ -187,6 +188,8 @@
   .ind-btn[data-global-indicator="ema9"].active { background: #2962ff; border-color: #2962ff; }
   .ind-btn[data-global-indicator="ema21"].active { background: #f5c451; border-color: #f5c451; color: #111; }
   .ind-btn[data-global-indicator="emaCross"].active { background: linear-gradient(90deg, #089981 0%, #f23645 100%); border-color: transparent; }
+  .ind-btn[data-global-indicator="srLevels"].active { background: linear-gradient(90deg, #FF0000 0%, #233dee 100%); border-color: transparent; }
+  .ind-btn[data-global-indicator="srLabels"].active { background: linear-gradient(90deg, #f5c451 0%, #a855f7 100%); border-color: transparent; color: #111; }
   .indicator-divider { width: 1px; height: 16px; background: var(--border); flex-shrink: 0; margin: 0 4px; }
 
   /* ---------- Grid ---------- */
@@ -247,7 +250,7 @@
   .pane-btn:hover { color: #fff; border-color: var(--blue); background: var(--blue); }
   .pane-btn.linked { background: var(--blue); color: #fff; border-color: var(--blue); }
 
-  /* chart-wrap = relative container so label-layer can overlap the chart */
+  /* chart-wrap = relative container so label-layers can overlap the chart */
   .pane-chart-wrap { flex: 1; position: relative; min-height: 0; }
   .pane-body { position: absolute; inset: 0; }
   .pane-label-layer {
@@ -263,6 +266,59 @@
   }
   .layout-grid-wrap[data-grid="1"] .pane-label { font-size: 11px; padding: 2px 5px; }
   .layout-grid-wrap[data-grid="2"] .pane-label { font-size: 10px; padding: 1px 4px; }
+
+  /* ---------- SR label layer (pivot confirmation labels) ---------- */
+  .pane-sr-label-layer {
+    position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+    overflow: hidden; pointer-events: none; z-index: 4;
+  }
+  .pane-sr-label {
+    position: absolute;
+    display: none;
+    padding: 4px 7px;
+    font-size: 9px;
+    line-height: 1.3;
+    font-weight: 600;
+    color: #ffffff;
+    border-radius: 4px;
+    white-space: pre;
+    pointer-events: none;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.45);
+    border: 1px solid rgba(255,255,255,0.18);
+    min-width: 110px;
+  }
+  .pane-sr-label.resistance {
+    background: rgba(255, 0, 0, 0.92);
+    transform: translate(-50%, -100%);
+    margin-top: -4px;
+  }
+  .pane-sr-label.support {
+    background: rgba(35, 61, 238, 0.92);
+    transform: translate(-50%, 0);
+    margin-top: 4px;
+  }
+  .pane-sr-label .sr-label-title {
+    font-weight: 800;
+    font-size: 9px;
+    letter-spacing: 0.05em;
+    margin-bottom: 2px;
+    padding-bottom: 2px;
+    border-bottom: 1px solid rgba(255,255,255,0.28);
+  }
+  .pane-sr-label .sr-label-row {
+    font-size: 8.5px;
+    opacity: 0.96;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    white-space: nowrap;
+  }
+  .pane-sr-label .sr-label-row strong { font-weight: 700; opacity: 1; }
+
+  /* Responsive SR label sizing per grid */
+  .layout-grid-wrap[data-grid="1"] .pane-sr-label { font-size: 10px; padding: 4px 8px; min-width: 130px; }
+  .layout-grid-wrap[data-grid="2"] .pane-sr-label { font-size: 8.5px; padding: 3px 6px; min-width: 105px; }
+  .layout-grid-wrap[data-grid="4"] .pane-sr-label { font-size: 7.5px; padding: 2px 4px; min-width: 82px; }
+  .layout-grid-wrap[data-grid="4"] .pane-sr-label .sr-label-title { font-size: 7.5px; padding-bottom: 1px; margin-bottom: 1px; }
+  .layout-grid-wrap[data-grid="4"] .pane-sr-label .sr-label-row { font-size: 7px; }
 
   /* ---------- Pane metadata section (below the chart) ---------- */
   .pane-meta {
@@ -552,6 +608,12 @@
     <button class="ind-btn"        data-global-indicator="ema21"    title="EMA 21 line (active pane only)">EMA 21</button>
     <button class="ind-btn active" data-global-indicator="emaCross" title="BUY / SELL markers on EMA 9/21 cross (active pane only)">EMA Cross</button>
   </div>
+  <div class="indicator-divider"></div>
+  <div class="indicator-group">
+    <span class="indicator-label" title="Applies to the active pane only">SR:</span>
+    <button class="ind-btn" data-global-indicator="srLevels" title="Pivot-based Support / Resistance lines (red=resistance, blue=support) — active pane only">SR Levels</button>
+    <button class="ind-btn" data-global-indicator="srLabels" title="Pivot confirmation labels (Resistance / Support with Confirmed / Pivot / Price) — active pane only">SR Labels</button>
+  </div>
 </div>
 
 <div id="layoutGrid" class="layout-grid-wrap" data-grid="{{ layout.grid or 1 }}">
@@ -641,7 +703,7 @@
   //
   // Defaults:
   //   * emaCross ON (labels/markers only — no EMA 9/21 line plots)
-  //   * ema9 / ema21 OFF
+  //   * ema9 / ema21 / srLevels / srLabels OFF
   //   * r3s3 + highLow labels ON; r2s2 OFF
   function defaultPaneState() {
     return {
@@ -649,6 +711,8 @@
       ema9: false,
       ema21: false,
       emaCross: true,
+      srLevels: false,
+      srLabels: false,
     };
   }
 
@@ -685,6 +749,8 @@
           ema9: typeof entry.ema9 === "boolean" ? entry.ema9 : false,
           ema21: typeof entry.ema21 === "boolean" ? entry.ema21 : false,
           emaCross: typeof entry.emaCross === "boolean" ? entry.emaCross : true,
+          srLevels: typeof entry.srLevels === "boolean" ? entry.srLevels : false,
+          srLabels: typeof entry.srLabels === "boolean" ? entry.srLabels : false,
         };
       }
     } catch (e) {
@@ -779,7 +845,7 @@
   });
 
   // ============================================================
-  // PURE INDICATOR MATH (mirrors main chart)
+  // IST TIME HELPERS (12-hour format)
   // ============================================================
   function getDateKeyIST(unixSeconds) {
     if (!Number.isFinite(unixSeconds)) return null;
@@ -791,6 +857,58 @@
     return `${map.year}-${map.month}-${map.day}`;
   }
 
+  // Chart axis tick-mark formatter — always IST, 12-hour.
+  function formatISTTickMark(time, tickMarkType) {
+    if (typeof time !== "number" || !Number.isFinite(time)) return "";
+    const date = new Date(time * 1000);
+    if (Number.isNaN(date.getTime())) return "";
+    const TT = LightweightCharts.TickMarkType || {};
+    try {
+      if (tickMarkType === TT.Year || tickMarkType === TT.Month || tickMarkType === TT.DayOfMonth) {
+        return new Intl.DateTimeFormat("en-IN", {
+          timeZone: "Asia/Kolkata", day: "2-digit", month: "short",
+        }).format(date);
+      }
+      return new Intl.DateTimeFormat("en-IN", {
+        timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", hour12: true,
+      }).format(date);
+    } catch (_e) { return ""; }
+  }
+
+  // Crosshair label formatter — always IST, 12-hour.
+  function formatISTCrosshairTime(time) {
+    if (typeof time !== "number" || !Number.isFinite(time)) return "";
+    const date = new Date(time * 1000);
+    if (Number.isNaN(date.getTime())) return "";
+    try {
+      return new Intl.DateTimeFormat("en-IN", {
+        timeZone: "Asia/Kolkata",
+        weekday: "short", day: "2-digit", month: "short", year: "numeric",
+        hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: true,
+      }).format(date);
+    } catch (_e) { return ""; }
+  }
+
+  // SR label timestamp formatter — IST 12-hour.
+  function formatSRTimeLabel(unixSeconds) {
+    if (!Number.isFinite(unixSeconds)) return "—";
+    const date = new Date(unixSeconds * 1000);
+    if (Number.isNaN(date.getTime())) return "—";
+    try {
+      return new Intl.DateTimeFormat("en-IN", {
+        timeZone: "Asia/Kolkata",
+        year: "numeric", month: "2-digit", day: "2-digit",
+        hour: "2-digit", minute: "2-digit",
+        hour12: true,
+      }).format(date).replace(",", "");
+    } catch (_e) {
+      return date.toISOString();
+    }
+  }
+
+  // ============================================================
+  // PURE INDICATOR MATH (mirrors main chart)
+  // ============================================================
   function calculateOpeningRangeForDay(dayCandles) {
     if (!Array.isArray(dayCandles) || !dayCandles.length) return null;
     const sorted = dayCandles.slice().sort((a, b) => a.time - b.time);
@@ -862,6 +980,246 @@
       }
     }
     return crosses;
+  }
+
+  // ============================================================
+  // SR PIVOT MATHEMATICS — strict pivot rule (matches ta.pivothigh/low)
+  // ============================================================
+  // Resistance pivot at index i iff candles[i].high > candles[j].high
+  //   for every j in [i-left, i-1] and every j in [i+1, i+right]
+  // Support    pivot at index i iff candles[i].low  < candles[j].low
+  //   for every j in [i-left, i-1] and every j in [i+1, i+right]
+  // Pivot at index i is CONFIRMED at i + right (needs `right` bars
+  // of forward look to exist).
+  const SR_LEFT_BARS = 15;
+  const SR_RIGHT_BARS = 15;
+
+  function performFullSRScanForPane(paneInst) {
+    if (!paneInst) return;
+    const candles = paneInst.candles || [];
+    paneInst.srDetectedPivots = [];
+    if (!Array.isArray(candles) || candles.length === 0) return;
+
+    const left = SR_LEFT_BARS;
+    const right = SR_RIGHT_BARS;
+    const minNeeded = left + right + 1;
+    if (candles.length < minNeeded) return;
+
+    for (let i = left; i < candles.length - right; i++) {
+      const c = candles[i];
+      const cHigh = Number(c.high);
+      const cLow  = Number(c.low);
+      if (!Number.isFinite(cHigh) || !Number.isFinite(cLow)) continue;
+
+      let isHigh = true, isLow = true;
+      for (let j = i - left; j < i; j++) {
+        const h = Number(candles[j].high);
+        const l = Number(candles[j].low);
+        if (!Number.isFinite(h) || cHigh <= h) isHigh = false;
+        if (!Number.isFinite(l) || cLow  >= l) isLow  = false;
+        if (!isHigh && !isLow) break;
+      }
+      if (isHigh || isLow) {
+        for (let j = i + 1; j <= i + right; j++) {
+          const h = Number(candles[j].high);
+          const l = Number(candles[j].low);
+          if (!Number.isFinite(h) || cHigh <= h) isHigh = false;
+          if (!Number.isFinite(l) || cLow  >= l) isLow  = false;
+          if (!isHigh && !isLow) break;
+        }
+      }
+
+      const confirmCandle = candles[i + right];
+      if (isHigh) {
+        paneInst.srDetectedPivots.push({
+          type: "resistance", price: cHigh,
+          pivotIndex: i, pivotTime: c.time,
+          confirmIndex: i + right, confirmTime: confirmCandle.time,
+        });
+      }
+      if (isLow) {
+        paneInst.srDetectedPivots.push({
+          type: "support", price: cLow,
+          pivotIndex: i, pivotTime: c.time,
+          confirmIndex: i + right, confirmTime: confirmCandle.time,
+        });
+      }
+    }
+  }
+
+  // ============================================================
+  // SR LINES — render one horizontal line per confirmed pivot
+  // (from pivotTime to next same-type pivot's pivotTime, or end of data)
+  // ============================================================
+  function removeSRLinesForPane(paneInst) {
+    if (!paneInst) return;
+    const lines = paneInst.srLines || [];
+    if (paneInst.chart) {
+      lines.forEach(series => {
+        try { paneInst.chart.removeSeries(series); } catch (e) {}
+      });
+    }
+    paneInst.srLines = [];
+  }
+
+  function renderSRLinesForPane(paneInst) {
+    if (!paneInst || !paneInst.chart || !paneInst.candleSeries) return;
+    removeSRLinesForPane(paneInst);
+    if (!getPaneState(paneInst.index).srLevels) return;
+    const candles = paneInst.candles || [];
+    if (!candles.length) return;
+    const pivots = paneInst.srDetectedPivots || [];
+    if (!pivots.length) return;
+    const lastCandleTime = candles[candles.length - 1].time;
+
+    pivots.forEach((p, i) => {
+      let endTime = lastCandleTime;
+      for (let j = i + 1; j < pivots.length; j++) {
+        if (pivots[j].type === p.type) {
+          endTime = pivots[j].pivotTime;
+          break;
+        }
+      }
+      if (!Number.isFinite(endTime) || endTime <= p.pivotTime) return;
+
+      const isRes = p.type === "resistance";
+      const color = isRes ? "#FF0000" : "#233dee";
+      const series = addLineSeriesToPane(paneInst, {
+        color, lineWidth: 2,
+        lineStyle: LightweightCharts.LineStyle.Solid,
+        priceLineVisible: false, lastValueVisible: false,
+        crosshairMarkerVisible: false,
+        autoscaleInfoProvider: () => null,
+      });
+      if (!series) return;
+      try {
+        series.setData([
+          { time: p.pivotTime, value: p.price },
+          { time: endTime,     value: p.price },
+        ]);
+        paneInst.srLines.push(series);
+      } catch (err) {
+        console.warn("[pane-sr-levels] setData failed:", err);
+      }
+    });
+  }
+
+  // ============================================================
+  // SR LABELS — HTML overlay labels for pivot confirmations
+  // Resistance labels sit ABOVE the level, support labels BELOW.
+  // Independent toggle from SR Levels.
+  // ============================================================
+  function ensureSRLabelLayerForPane(paneInst) {
+    if (!paneInst) return null;
+    if (paneInst.srLabelLayerEl) return paneInst.srLabelLayerEl;
+    const wrap = paneInst.chartWrapEl;
+    if (!wrap) return null;
+    const layer = wrap.querySelector(".pane-sr-label-layer");
+    if (!layer) return null;
+    paneInst.srLabelLayerEl = layer;
+    return layer;
+  }
+
+  function clearSRLabelsForPane(paneInst) {
+    if (!paneInst) return;
+    const els = paneInst.srLabelElements || [];
+    els.forEach(el => {
+      try { if (el.parentNode) el.parentNode.removeChild(el); } catch (e) {}
+    });
+    paneInst.srLabelElements = [];
+  }
+
+  function renderSRLabelsForPane(paneInst) {
+    if (!paneInst) return;
+    clearSRLabelsForPane(paneInst);
+    if (!getPaneState(paneInst.index).srLabels) return;
+    if (!paneInst.chart || !paneInst.candleSeries) return;
+    const layer = ensureSRLabelLayerForPane(paneInst);
+    if (!layer) return;
+    const pivots = paneInst.srDetectedPivots || [];
+    if (!pivots.length) return;
+
+    pivots.forEach(p => {
+      const isRes = p.type === "resistance";
+      const el = document.createElement("div");
+      el.className = `pane-sr-label ${isRes ? "resistance" : "support"}`;
+      el.style.display = "none";
+
+      const priceStr = Number(p.price).toFixed(2);
+      const pivotTimeStr = formatSRTimeLabel(p.pivotTime);
+      const confirmTimeStr = formatSRTimeLabel(p.confirmTime);
+      const title = isRes ? "RESISTANCE" : "SUPPORT";
+
+      el.innerHTML =
+        `<div class="sr-label-title">${title}</div>` +
+        `<div class="sr-label-row">Confirmed: <strong>${confirmTimeStr}</strong></div>` +
+        `<div class="sr-label-row">Pivot: <strong>${pivotTimeStr}</strong></div>` +
+        `<div class="sr-label-row">Price: <strong>${priceStr}</strong></div>`;
+
+      el._srMeta = {
+        time: p.confirmTime,
+        price: p.price,
+        type: p.type,
+      };
+
+      layer.appendChild(el);
+      paneInst.srLabelElements.push(el);
+    });
+
+    positionSRLabelsForPane(paneInst);
+  }
+
+  function positionSRLabelsForPane(paneInst) {
+    if (!paneInst || !paneInst.chart || !paneInst.candleSeries) return;
+    const els = paneInst.srLabelElements || [];
+    if (!els.length) return;
+    const timeScale = paneInst.chart.timeScale();
+    const wrap = paneInst.chartWrapEl;
+    const cw = wrap ? wrap.clientWidth : 0;
+    const ch = wrap ? wrap.clientHeight : 0;
+
+    els.forEach(el => {
+      const meta = el._srMeta;
+      if (!meta) { el.style.display = "none"; return; }
+      const x = timeScale.timeToCoordinate(meta.time);
+      const y = paneInst.candleSeries.priceToCoordinate(meta.price);
+      if (x === null || y === null || !Number.isFinite(x) || !Number.isFinite(y)) {
+        el.style.display = "none"; return;
+      }
+      if (x < -240 || x > cw + 240 || y < -120 || y > ch + 120) {
+        el.style.display = "none"; return;
+      }
+      el.style.display = "block";
+      el.style.left = Math.round(x) + "px";
+      el.style.top = Math.round(y) + "px";
+    });
+  }
+
+  function scheduleSRLabelUpdateForPane(paneInst) {
+    if (!paneInst || paneInst.srLabelUpdateScheduled) return;
+    paneInst.srLabelUpdateScheduled = true;
+    requestAnimationFrame(() => {
+      paneInst.srLabelUpdateScheduled = false;
+      try { positionSRLabelsForPane(paneInst); } catch (e) { /* swallow */ }
+    });
+  }
+
+  // Orchestrator: scan once, then render whichever of lines/labels is on.
+  function refreshSRLevelsForPane(paneInst) {
+    if (!paneInst) return;
+    const st = getPaneState(paneInst.index);
+    const linesOn = !!st.srLevels;
+    const labelsOn = !!st.srLabels;
+    if (!linesOn && !labelsOn) {
+      removeSRLinesForPane(paneInst);
+      clearSRLabelsForPane(paneInst);
+      return;
+    }
+    performFullSRScanForPane(paneInst);
+    if (linesOn) renderSRLinesForPane(paneInst);
+    else removeSRLinesForPane(paneInst);
+    if (labelsOn) renderSRLabelsForPane(paneInst);
+    else clearSRLabelsForPane(paneInst);
   }
 
   // ============================================================
@@ -970,7 +1328,7 @@
   function renderEMALinesForPane(paneInst) {
     if (!paneInst || !paneInst.chart || !paneInst.candleSeries) return;
     const candles = paneInst.candles || [];
-    const st = getPaneState(paneInst.index);   // ← per-pane
+    const st = getPaneState(paneInst.index);
 
     if (st.ema9) {
       if (!paneInst.ema9Series) {
@@ -1007,7 +1365,7 @@
 
   function renderEMACrossMarkersForPane(paneInst) {
     if (!paneInst || !paneInst.candleSeries) return;
-    const st = getPaneState(paneInst.index);   // ← per-pane
+    const st = getPaneState(paneInst.index);
     const candles = paneInst.candles || [];
 
     if (!st.emaCross) {
@@ -1051,6 +1409,7 @@
     renderOpeningRangeLinesForPane(paneInst);
     renderEMALinesForPane(paneInst);
     renderEMACrossMarkersForPane(paneInst);
+    refreshSRLevelsForPane(paneInst);
   }
 
   // ============================================================
@@ -1112,8 +1471,6 @@
         if (!(key in st)) return;
         st[key] = !st[key];
         btn.classList.toggle("active", st[key]);
-        // Deliberately NO auto-enable of ema9/ema21 — the default
-        // per-pane config is "emaCross only, no EMA plots".
         savePaneStates();
         const inst = paneInstances[activePaneIndex];
         if (inst) renderAllIndicatorsForPane(inst);
@@ -1192,15 +1549,34 @@
     return String(Math.round(n));
   }
 
+  // Expiry formatting: now accepts ISO-date strings AND epoch-millis
+  // / epoch-seconds numbers. Always rendered in IST.
   function formatExpiryShort(v) {
-    if (!v) return "—";
+    if (v === null || v === undefined || v === "") return "—";
     const s = String(v);
+
+    // ISO date string like "2026-10-27"
     const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
     if (m) {
       const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
       try {
-        return new Intl.DateTimeFormat("en-IN", { day: "2-digit", month: "short", timeZone: "UTC" }).format(d);
+        return new Intl.DateTimeFormat("en-IN", {
+          day: "2-digit", month: "short", timeZone: "Asia/Kolkata",
+        }).format(d);
       } catch (_e) { /* fall through */ }
+      return s;
+    }
+
+    // Epoch millis / seconds
+    const num = Number(s);
+    if (Number.isFinite(num) && num > 1e9) {
+      const ms = num > 1e12 ? num : num * 1000;
+      const d = new Date(ms);
+      if (!Number.isNaN(d.getTime())) {
+        return new Intl.DateTimeFormat("en-IN", {
+          day: "2-digit", month: "short", timeZone: "Asia/Kolkata",
+        }).format(d);
+      }
     }
     return s;
   }
@@ -1572,8 +1948,17 @@
   function createPaneInstance(paneIndex, instrumentKey) {
     const chartEl = document.getElementById(`pane-chart-${paneIndex}`);
     const labelLayerEl = document.getElementById(`pane-label-layer-${paneIndex}`);
+    const srLabelLayerEl = document.getElementById(`pane-sr-label-layer-${paneIndex}`);
     const wrapEl = chartEl ? chartEl.parentElement : null;
     if (!chartEl || !window.LightweightCharts) return null;
+
+    // Belt-and-suspenders: destroyPaneInstance() already clears these
+    // on pane-swap, but if a caller invokes createPaneInstance() on a
+    // non-empty container (e.g. an aborted swap) we still want a clean
+    // slate so old canvases / labels cannot leak through.
+    try { chartEl.innerHTML = ""; } catch (_e) {}
+    try { if (labelLayerEl) labelLayerEl.innerHTML = ""; } catch (_e) {}
+    try { if (srLabelLayerEl) srLabelLayerEl.innerHTML = ""; } catch (_e) {}
 
     const chart = LightweightCharts.createChart(chartEl, {
       width: chartEl.clientWidth,
@@ -1585,8 +1970,12 @@
       timeScale: {
         borderColor: "#2a2e39", timeVisible: true, secondsVisible: false,
         rightOffset: 6, barSpacing: 7, minBarSpacing: 3,
+        tickMarkFormatter: (time, tickMarkType) => formatISTTickMark(time, tickMarkType),
       },
-      localization: { locale: "en-IN" },
+      localization: {
+        locale: "en-IN",
+        timeFormatter: (time) => formatISTCrosshairTime(time),
+      },
     });
 
     const candleOptions = {
@@ -1610,6 +1999,7 @@
       containerEl: chartEl,
       chartWrapEl: wrapEl,
       labelLayerEl,
+      srLabelLayerEl,
       instrumentKey,
       candles: [],
       lastCandle: null,
@@ -1622,12 +2012,18 @@
       calculatedOpeningRanges: {},
       labelUpdateScheduled: false,
       ema9Series: null, ema21Series: null, markersPrimitive: null,
+      // SR-specific state
+      srDetectedPivots: [],
+      srLines: [],
+      srLabelElements: [],
+      srLabelUpdateScheduled: false,
     };
 
     const resize = () => {
       if (inst.destroyed) return;
       chart.applyOptions({ width: chartEl.clientWidth, height: chartEl.clientHeight });
       schedulePaneLabelUpdate(inst);
+      scheduleSRLabelUpdateForPane(inst);
     };
     window.addEventListener("resize", resize);
     if (typeof ResizeObserver !== "undefined") {
@@ -1646,21 +2042,99 @@
       setPaneMeta(paneIndex, "close", Number(d.close).toFixed(2));
     });
 
-    chart.timeScale().subscribeVisibleTimeRangeChange(() => schedulePaneLabelUpdate(inst));
-    chart.timeScale().subscribeVisibleLogicalRangeChange(() => schedulePaneLabelUpdate(inst));
+    chart.timeScale().subscribeVisibleTimeRangeChange(() => {
+      schedulePaneLabelUpdate(inst);
+      scheduleSRLabelUpdateForPane(inst);
+    });
+    chart.timeScale().subscribeVisibleLogicalRangeChange(() => {
+      schedulePaneLabelUpdate(inst);
+      scheduleSRLabelUpdateForPane(inst);
+    });
 
     paneInstances[paneIndex] = inst;
     return inst;
   }
 
+  /**
+   * Tear down a pane instance completely.
+   *
+   * Three tiers of cleanup, from narrowest to widest:
+   *
+   *   1. HTML overlays that LWC has no knowledge of:
+   *        - OR level labels     (paneInst.levelLabels)
+   *        - SR confirmation labels (paneInst.srLabelElements)
+   *      These are siblings of the chart canvas and are NOT removed by
+   *      chart.remove(), so they must be unlinked explicitly. This is
+   *      the bug that produced the "ghost R2 / S2 / HIGH / LOW labels
+   *      on top of the new chart" report.
+   *
+   *   2. The chart itself:
+   *        chart.remove() destroys the LWC instance and its canvases.
+   *
+   *   3. Defensive container nuking:
+   *        If chart.remove() silently fails (older LWC, exotic series,
+   *        future API changes), clearing the container and both label
+   *        layers' innerHTML guarantees the previous panes' pixels
+   *        cannot bleed through into the newly-rendered chart.
+   */
   function destroyPaneInstance(paneIndex) {
     const inst = paneInstances[paneIndex];
     if (!inst) return;
     inst.destroyed = true;
-    try { if (inst.ws) inst.ws.close(1000, "Pane destroyed"); } catch (e) {}
-    if (inst.reconnectTimer) clearTimeout(inst.reconnectTimer);
-    try { if (inst.resizeObserver) inst.resizeObserver.disconnect(); } catch (e) {}
-    try { inst.chart.remove(); } catch (e) {}
+
+    // ---- 1a. Remove OR level HTML labels -------------------------- #
+    try {
+      (inst.levelLabels || []).forEach(lbl => {
+        try {
+          if (lbl && lbl.element && lbl.element.parentNode) {
+            lbl.element.parentNode.removeChild(lbl.element);
+          }
+        } catch (_e) {}
+      });
+      inst.levelLabels = [];
+    } catch (_e) {
+      console.warn("[pane-destroy] levelLabels cleanup failed");
+    }
+
+    // ---- 1b. Remove SR confirmation HTML labels ------------------- #
+    try {
+      (inst.srLabelElements || []).forEach(el => {
+        try { if (el && el.parentNode) el.parentNode.removeChild(el); } catch (_e) {}
+      });
+      inst.srLabelElements = [];
+    } catch (_e) {
+      console.warn("[pane-destroy] srLabelElements cleanup failed");
+    }
+
+    // ---- 1c. Nuke the two overlay layers' children ---------------- #
+    // Belt-and-suspenders: if any orphan labels slipped past 1a/1b
+    // (e.g. another module appended to the same layer), they're gone.
+    try { if (inst.labelLayerEl) inst.labelLayerEl.innerHTML = ""; } catch (_e) {}
+    try { if (inst.srLabelLayerEl) inst.srLabelLayerEl.innerHTML = ""; } catch (_e) {}
+
+    // ---- 2. Close WS / timers / observers ------------------------ #
+    try { if (inst.ws) inst.ws.close(1000, "Pane destroyed"); } catch (_e) {}
+    if (inst.reconnectTimer) {
+      try { clearTimeout(inst.reconnectTimer); } catch (_e) {}
+      inst.reconnectTimer = null;
+    }
+    try { if (inst.resizeObserver) inst.resizeObserver.disconnect(); } catch (_e) {}
+
+    // ---- 3. Destroy the LWC chart -------------------------------- #
+    try {
+      inst.chart.remove();
+    } catch (_e) {
+      // Do not swallow silently — chart.remove() failing means the
+      // canvas may persist and appear as a ghost behind the new chart.
+      console.warn("[pane-destroy] chart.remove() failed:", _e);
+    }
+
+    // ---- 4. Defensive container nuke ----------------------------- #
+    // Even if chart.remove() worked, the container is now empty. If it
+    // failed, this clears the stale canvas. Either way, the next call
+    // to createPaneInstance() gets a guaranteed-clean DOM node.
+    try { if (inst.containerEl) inst.containerEl.innerHTML = ""; } catch (_e) {}
+
     delete paneInstances[paneIndex];
   }
 
@@ -1712,6 +2186,12 @@
   function updateCandle(paneInst, candle) {
     if (!paneInst || !paneInst.candleSeries || !candle) return;
     if (paneInst.lastCandle && candle.time < paneInst.lastCandle.time) return;
+
+    // Detect new-minute BEFORE mutating lastCandle — SR only re-scans
+    // on new-minute boundary (a confirmed pivot needs a full bar of
+    // right-lookahead, which only becomes available on a new candle).
+    const isNewMinute = !paneInst.lastCandle || candle.time > paneInst.lastCandle.time;
+
     paneInst.candleSeries.update(candle);
     paneInst.lastCandle = candle;
 
@@ -1732,6 +2212,10 @@
     if (st.ema9 || st.ema21 || st.emaCross) {
       renderEMALinesForPane(paneInst);
       renderEMACrossMarkersForPane(paneInst);
+    }
+    if ((st.srLevels || st.srLabels) && isNewMinute) {
+      try { refreshSRLevelsForPane(paneInst); }
+      catch (err) { console.warn("[pane-sr] live refresh failed:", err); }
     }
     schedulePaneLabelUpdate(paneInst);
   }
@@ -1853,6 +2337,7 @@
         }
 
         // Renders per-pane indicators using getPaneState(paneIndex).
+        // Includes SR Levels / SR Labels.
         renderAllIndicatorsForPane(inst);
       }
     } catch (e) {
@@ -1924,6 +2409,7 @@
         <div class="pane-chart-wrap">
           <div class="pane-body" id="pane-chart-${index}"></div>
           <div class="pane-label-layer" id="pane-label-layer-${index}"></div>
+          <div class="pane-sr-label-layer" id="pane-sr-label-layer-${index}"></div>
         </div>
         <div class="pane-meta" id="pane-meta-${index}">
           <div class="pane-meta-header">
