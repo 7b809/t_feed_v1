@@ -1005,6 +1005,155 @@
         margin-bottom: 8px;
         opacity: 0.4;
     }
+
+    /* ============================================================ */
+    /* SR Compare card — search + comparison view (NEW)             */
+    /* ============================================================ */
+    .sr-search-row {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        margin-bottom: 12px;
+    }
+
+    .sr-search-input-wrap {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        background: #ffffff;
+        border: 1px solid var(--iso-border);
+        border-radius: 12px;
+        padding: 10px 14px;
+        transition: border-color 0.15s ease, box-shadow 0.15s ease;
+    }
+
+    .sr-search-input-wrap:focus-within {
+        border-color: var(--iso-primary);
+        box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+    }
+
+    .sr-search-input-wrap i {
+        color: var(--iso-muted);
+        font-size: 0.95rem;
+    }
+
+    .sr-search-input-wrap input {
+        flex: 1;
+        border: none;
+        outline: none;
+        background: transparent;
+        font-size: 0.9rem;
+        color: var(--iso-text);
+        font-weight: 500;
+    }
+
+    .sr-search-input-wrap input::placeholder {
+        color: var(--iso-muted);
+    }
+
+    .sr-search-hint {
+        font-size: 0.72rem;
+        color: var(--iso-muted);
+        font-weight: 600;
+        padding-left: 4px;
+    }
+
+    .sr-search-results {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        margin-bottom: 12px;
+    }
+
+    .sr-search-results:empty {
+        display: none;
+    }
+
+    .sr-search-result {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 10px 14px;
+        background: #ffffff;
+        border: 1px solid var(--iso-border);
+        border-radius: 10px;
+        cursor: pointer;
+        text-align: left;
+        transition: all 0.15s ease;
+        font-family: inherit;
+        font-size: 0.85rem;
+    }
+
+    .sr-search-result:hover {
+        border-color: var(--iso-primary);
+        background: #f0f7ff;
+        transform: translateY(-1px);
+    }
+
+    .sr-search-result.is-official {
+        border-color: var(--iso-green);
+        background: #ecfdf5;
+    }
+
+    .sr-search-result .sr-result-symbol {
+        font-weight: 700;
+        color: var(--iso-text);
+        flex: 1;
+    }
+
+    .sr-search-result .sr-result-meta {
+        font-size: 0.75rem;
+        color: var(--iso-muted);
+        font-weight: 600;
+    }
+
+    .sr-search-info {
+        display: flex;
+        align-items: flex-start;
+        gap: 14px;
+        padding: 16px 18px;
+        border-radius: 12px;
+        margin-bottom: 14px;
+        font-size: 0.88rem;
+        line-height: 1.55;
+    }
+
+    .sr-search-info i {
+        font-size: 1.3rem;
+        flex-shrink: 0;
+        margin-top: 1px;
+    }
+
+    .sr-search-info.is-user-selected {
+        background: var(--iso-blue-bg);
+        border: 1px solid var(--iso-blue-border);
+        border-left: 4px solid var(--iso-primary);
+        color: var(--iso-text);
+    }
+
+    .sr-search-info.is-user-selected i {
+        color: var(--iso-primary);
+    }
+
+    .sr-search-info.is-official {
+        background: var(--iso-green-bg);
+        border: 1px solid #bbf7d0;
+        border-left: 4px solid var(--iso-green);
+        color: var(--iso-text);
+    }
+
+    .sr-search-info.is-official i {
+        color: var(--iso-green);
+    }
+
+    .sr-search-info .muted {
+        color: var(--iso-muted);
+        font-weight: 600;
+    }
+
+    .sr-search-body {
+        margin-top: 4px;
+    }
 </style>
 {% endblock %}
 
@@ -1084,7 +1233,7 @@
         </div>
     </div>
 
-    <!-- SR Tracking card: single merged SR table -->
+    <!-- SR Tracking card: single merged SR table (official isolated instrument) -->
     <div class="iso-card" id="iso-sr-tracking" style="display: none;">
         <div class="iso-card-header">
             <i class="bi bi-activity text-primary"></i>
@@ -1101,6 +1250,38 @@
                     SR tracking activates when an instrument is isolated.
                 </div>
             </div>
+        </div>
+    </div>
+
+    <!-- SR Compare card (NEW): search for any instrument, compare its SR
+         levels against the SAME isolation moment. -->
+    <div class="iso-card" id="iso-sr-compare" style="display: none;">
+        <div class="iso-card-header">
+            <i class="bi bi-search text-primary"></i>
+            <span>Compare with another instrument</span>
+            <div class="sr-header-pills">
+                <span class="sr-count-pill" id="sr-compare-status-pill">Idle</span>
+            </div>
+        </div>
+        <div class="iso-card-body">
+            <div class="sr-search-row">
+                <div class="sr-search-input-wrap">
+                    <i class="bi bi-search"></i>
+                    <input
+                        type="text"
+                        id="sr-search-input"
+                        placeholder="Search instrument (e.g. NIFTY 22400 CE, 22400, PE, SENSEX)..."
+                        autocomplete="off"
+                    >
+                </div>
+                <span class="sr-search-hint" id="sr-search-hint">
+                    Searches the full instrument registry. Select a match to view its SR levels tagged
+                    against the official isolation touch time.
+                </span>
+            </div>
+            <div id="sr-search-results" class="sr-search-results"></div>
+            <div id="sr-search-info" class="sr-search-info" style="display: none;"></div>
+            <div id="sr-search-body" class="sr-search-body"></div>
         </div>
     </div>
 
@@ -1218,6 +1399,9 @@
     const DETAIL_URL = "/admin/level-isolation/detail";
     const BACKFILL_URL = "/admin/level-isolation/backfill";
     const REFRESH_SNAPSHOT_URL = "/admin/level-isolation/refresh-snapshot";
+    const SEARCH_INSTRUMENTS_URL = "/admin/level-isolation/search-instruments";
+    const INSTRUMENT_SR_URL = (key) =>
+        "/admin/level-isolation/instrument-sr/" + encodeURIComponent(key);
     const POLL_MS = 10000;
 
     const state = {
@@ -1227,6 +1411,15 @@
         // Used to badge genuinely-new arrivals (only on after-touch rows)
         // with the "NEW" pill.
         seenAllKeys: new Set(),
+    };
+
+    const compareState = {
+        query: "",
+        results: [],
+        selectedKey: null,
+        selected: null,
+        searchTimer: null,
+        inflight: null,
     };
 
     /* ---------- small formatters ---------- */
@@ -1565,20 +1758,7 @@
     }
 
     /* ============================================================
-       SR Tracking — SINGLE table
-       ------------------------------------------------------------
-       Data source: d.live_sr_levels (built by the backend from the
-       isolated instrument's own data/<underlying>/<strike>_<TYPE>/
-       live_sr_levels.json file).
-
-       Each level already carries `_after_isolation` (bool) — set by
-       the backend by comparing its `confirmed_time` to the touch
-       time. Rows with the flag set are highlighted with a purple
-       tint; the rest use the default table style.
-
-       The whole list is sorted by `confirmed_time` ASCENDING
-       (oldest first) so the display order matches the source
-       live_sr_levels.json file byte-for-byte.
+       SR Tracking — SINGLE table (official isolated instrument)
        ============================================================ */
     function srDedupKey(lvl) {
         const price = parseNum(lvl.price);
@@ -1631,6 +1811,32 @@
             <div class="sr-empty-state">
                 <i class="bi bi-hourglass-split"></i>
                 ${esc(message)}
+            </div>`;
+    }
+
+    function srLevelsTableHtml(levels, opts) {
+        opts = opts || {};
+        const showNew = !!opts.showNew;
+        const newKeys = opts.newKeys || new Set();
+        const rows = levels.map(lvl => {
+            const key = srDedupKey(lvl);
+            const isNew = showNew && !!lvl._after_isolation && newKeys.has(key);
+            return srLevelRowHtml(lvl, { isNew });
+        }).join("");
+        return `
+            <div class="iso-table-wrap">
+                <table class="iso-table">
+                    <thead>
+                        <tr>
+                            <th>Type</th>
+                            <th class="num">Price</th>
+                            <th>Pivot Time</th>
+                            <th>Confirmed Time</th>
+                            <th class="num">L / R Bars</th>
+                        </tr>
+                    </thead>
+                    <tbody>${rows}</tbody>
+                </table>
             </div>`;
     }
 
@@ -1688,9 +1894,6 @@
 
         // Sort by confirmed_time ASCENDING (oldest first) so the display
         // order matches the source live_sr_levels.json file byte-for-byte.
-        // ISO-8601 timestamps sort lexicographically when the tz suffix
-        // is consistent; malformed/empty values naturally group at the
-        // bottom and are harmless.
         levels.sort((a, b) => {
             const ta = String(a.confirmed_time || "");
             const tb = String(b.confirmed_time || "");
@@ -1708,16 +1911,9 @@
             }
         }
 
-        // Reference label for the header (which clock we compare to).
         const refLabel = live.touched_at
             ? `touch @ ${formatTime(live.touched_at)}`
             : (live.reference_at ? `ref @ ${formatTime(live.reference_at)}` : "");
-
-        const rows = levels.map(lvl => {
-            const key = srDedupKey(lvl);
-            const isNew = !!lvl._after_isolation && newKeys.has(key);
-            return srLevelRowHtml(lvl, { isNew });
-        }).join("");
 
         body.innerHTML = `
             <div class="sr-phase-header">
@@ -1729,24 +1925,239 @@
                     <span class="sr-legend-item after">After touch</span>
                 </span>
             </div>
-            <div class="iso-table-wrap">
-                <table class="iso-table">
-                    <thead>
-                        <tr>
-                            <th>Type</th>
-                            <th class="num">Price</th>
-                            <th>Pivot Time</th>
-                            <th>Confirmed Time</th>
-                            <th class="num">L / R Bars</th>
-                        </tr>
-                    </thead>
-                    <tbody>${rows}</tbody>
-                </table>
-            </div>`;
+            ${srLevelsTableHtml(levels, { showNew: true, newKeys })}`;
 
         state.seenAllKeys = allKeys;
     }
 
+    /* ============================================================
+       SR Compare — search box + comparison table (NEW)
+       ============================================================ */
+    function renderCompareCard(d) {
+        const card = document.getElementById("iso-sr-compare");
+        const pill = document.getElementById("sr-compare-status-pill");
+        if (!card) return;
+
+        if (!d || !d.isolated) {
+            card.style.display = "none";
+            if (pill) {
+                pill.textContent = "Idle";
+                pill.className = "sr-count-pill";
+            }
+            return;
+        }
+
+        card.style.display = "block";
+        if (pill && compareState.selected) {
+            pill.textContent = compareState.selected.is_official_isolated
+                ? "Showing official"
+                : "Showing selection";
+            pill.className = compareState.selected.is_official_isolated
+                ? "sr-count-pill has"
+                : "sr-count-pill post";
+        } else if (pill) {
+            pill.textContent = "Idle";
+            pill.className = "sr-count-pill";
+        }
+    }
+
+    function renderSearchResults(results) {
+        const el = document.getElementById("sr-search-results");
+        if (!el) return;
+        if (!results || !results.length) {
+            el.innerHTML = "";
+            return;
+        }
+        const officialKey = state.detail && state.detail.isolated
+            ? state.detail.isolated.instrument_key : null;
+
+        el.innerHTML = results.map(r => {
+            const isOfficial = r.instrument_key === officialKey;
+            const typeStr = String(r.type || "").toUpperCase();
+            const typeCls = typeStr === "CE"
+                ? "resistance"   // CE rows use red-ish accent
+                : typeStr === "PE"
+                    ? "support"   // PE rows use green-ish accent
+                    : "";
+            const metaBits = [];
+            if (r.strike !== null && r.strike !== undefined) {
+                metaBits.push(`Strike ${fmt(r.strike, 0)}`);
+            }
+            if (r.underlying) metaBits.push(esc(r.underlying));
+            if (isOfficial) metaBits.push("<strong>official</strong>");
+
+            return `<button type="button"
+                class="sr-search-result ${isOfficial ? "is-official" : ""}"
+                data-key="${esc(r.instrument_key)}">
+                <span class="sr-type ${typeCls}">${esc(typeStr || "—")}</span>
+                <span class="sr-result-symbol">${esc(r.trading_symbol || r.instrument_key)}</span>
+                <span class="sr-result-meta">${metaBits.join(" · ")}</span>
+            </button>`;
+        }).join("");
+
+        el.querySelectorAll(".sr-search-result").forEach(btn => {
+            btn.addEventListener("click", () => loadComparison(btn.dataset.key));
+        });
+    }
+
+    function scheduleSearch(q) {
+        compareState.query = q;
+        if (compareState.searchTimer) clearTimeout(compareState.searchTimer);
+        if (!q) {
+            renderSearchResults([]);
+            return;
+        }
+        compareState.searchTimer = setTimeout(() => runSearch(q), 250);
+    }
+
+    async function runSearch(q) {
+        if (compareState.inflight) compareState.inflight.abort();
+        compareState.inflight = new AbortController();
+        try {
+            const res = await fetch(
+                SEARCH_INSTRUMENTS_URL + "?query=" + encodeURIComponent(q) + "&limit=15",
+                { signal: compareState.inflight.signal }
+            );
+            if (!res.ok) throw new Error("HTTP " + res.status);
+            const data = await res.json();
+            compareState.results = Array.isArray(data.results) ? data.results : [];
+            renderSearchResults(compareState.results);
+        } catch (e) {
+            if (e.name === "AbortError") return;
+            console.warn("[compare] search failed:", e);
+        }
+    }
+
+    async function loadComparison(instrumentKey) {
+        if (!instrumentKey) return;
+        compareState.selectedKey = instrumentKey;
+
+        const resultsEl = document.getElementById("sr-search-results");
+        if (resultsEl) resultsEl.innerHTML = "";
+        const bodyEl = document.getElementById("sr-search-body");
+        const infoEl = document.getElementById("sr-search-info");
+        if (bodyEl) {
+            bodyEl.innerHTML = `
+                <div class="sr-empty-state">
+                    <i class="bi bi-hourglass-split"></i>
+                    Loading comparison…
+                </div>`;
+        }
+        if (infoEl) infoEl.style.display = "none";
+
+        try {
+            const res = await fetch(INSTRUMENT_SR_URL(instrumentKey));
+            if (!res.ok) throw new Error("HTTP " + res.status);
+            const data = await res.json();
+            compareState.selected = data;
+            renderComparison(data);
+            renderCompareCard(state.detail);
+        } catch (e) {
+            if (bodyEl) {
+                bodyEl.innerHTML = `
+                    <div class="sr-empty-state">
+                        <i class="bi bi-exclamation-triangle"></i>
+                        Failed to load comparison: ${esc(e.message)}
+                    </div>`;
+            }
+        }
+    }
+
+    function renderComparison(data) {
+        const info = document.getElementById("sr-search-info");
+        const body = document.getElementById("sr-search-body");
+        if (!body) return;
+
+        // ---- No official isolation yet ---- //
+        if (!data || data.status === "no_official_isolation") {
+            if (info) info.style.display = "none";
+            body.innerHTML = `
+                <div class="sr-empty-state">
+                    <i class="bi bi-info-circle"></i>
+                    No instrument has been officially isolated yet today.
+                    Wait for NIFTY or SENSEX to touch R3 / S3, then try again.
+                </div>`;
+            return;
+        }
+
+        if (data.status !== "ok") {
+            if (info) info.style.display = "none";
+            body.innerHTML = `
+                <div class="sr-empty-state">
+                    <i class="bi bi-exclamation-triangle"></i>
+                    ${esc(data.error || "Could not load comparison.")}
+                </div>`;
+            return;
+        }
+
+        // ---- Info banner: official vs. user-selected ---- //
+        if (info) {
+            info.style.display = "flex";
+            const isOfficial = !!data.is_official_isolated;
+            info.className = "sr-search-info " + (
+                isOfficial ? "is-official" : "is-user-selected"
+            );
+            info.innerHTML = `
+                <i class="bi ${isOfficial ? "bi-check-circle-fill" : "bi-info-circle-fill"}"></i>
+                <div>
+                    <strong>${isOfficial
+                        ? "This is the officially isolated instrument"
+                        : "You selected a different instrument"}</strong><br>
+                    <span class="muted">Official isolated:</span>
+                    <strong>${esc(data.official_trading_symbol || data.official_instrument_key || "—")}</strong>
+                    <span class="muted">(touched at ${formatTime(data.official_touched_at)})</span><br>
+                    <span class="muted">Your selection:</span>
+                    <strong>${esc(data.trading_symbol || data.instrument_key)}</strong>
+                    ${isOfficial
+                        ? " — matches the official pick."
+                        : " — showing its SR levels tagged against the SAME isolation time."}
+                </div>`;
+        }
+
+        // ---- Levels table ---- //
+        const live = data.live_sr_levels || {};
+        const levels = Array.isArray(live.levels) ? live.levels.slice() : [];
+        const available = !!live.available;
+        const beforeCount = typeof live.before_count === "number"
+            ? live.before_count : 0;
+        const afterCount = typeof live.after_count === "number"
+            ? live.after_count : 0;
+
+        if (!available || levels.length === 0) {
+            const msg = live.error
+                ? `No live_sr_levels.json for this instrument (${live.error}).`
+                : "No SR levels recorded for this instrument yet.";
+            body.innerHTML = srEmptyStateHtml(msg);
+            return;
+        }
+
+        // Sort by confirmed_time ASCENDING (matching official table).
+        levels.sort((a, b) => {
+            const ta = String(a.confirmed_time || "");
+            const tb = String(b.confirmed_time || "");
+            if (ta < tb) return -1;
+            if (ta > tb) return 1;
+            return 0;
+        });
+
+        const refLabel = data.reference_at
+            ? `ref @ ${formatTime(data.reference_at)}`
+            : "";
+
+        body.innerHTML = `
+            <div class="sr-phase-header" style="margin-top: 8px;">
+                <span class="phase-title">${esc(data.trading_symbol || data.instrument_key)}</span>
+                <span class="phase-hint">oldest first</span>
+                ${refLabel ? `<span class="ref-label">${esc(refLabel)}</span>` : ""}
+                <span class="sr-legend">
+                    <span class="sr-legend-item before">Before touch (${beforeCount})</span>
+                    <span class="sr-legend-item after">After touch (${afterCount})</span>
+                </span>
+            </div>
+            ${srLevelsTableHtml(levels, { showNew: false })}`;
+    }
+
+    /* ---------- Standard renderers ---------- */
     function renderInstrumentSnapshot(d) {
         const card = document.getElementById("iso-instrument-snapshot");
         const tilesEl = document.getElementById("snapshot-tiles");
@@ -2188,6 +2599,7 @@
         renderRefreshSnapshotBtn(d);
         renderHero(d);
         renderSRTracking(d);
+        renderCompareCard(d);
         renderInstrumentSnapshot(d);
         renderReasoning(d);
         renderCandidates(d);
@@ -2265,14 +2677,22 @@
         if (refreshSnapshotBtn) {
             refreshSnapshotBtn.addEventListener("click", runRefreshSnapshot);
         }
+
+        const searchInput = document.getElementById("sr-search-input");
+        if (searchInput) {
+            searchInput.addEventListener("input", (ev) => {
+                scheduleSearch(ev.target.value.trim());
+            });
+        }
     });
 
     window.addEventListener("beforeunload", () => {
         if (state.pollTimer) clearInterval(state.pollTimer);
+        if (compareState.searchTimer) clearTimeout(compareState.searchTimer);
     });
 </script>
 
 <script>
     window.__INITIAL_DETAIL__ = {{ initial_detail|tojson|safe }};
 </script>
-{% endblock %} 
+{% endblock %}

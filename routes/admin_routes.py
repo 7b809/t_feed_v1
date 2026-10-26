@@ -9,15 +9,21 @@ Endpoints:
 
 Backfill on late startup
 ------------------------
-If the app starts during market hours on a trading day and either of
-today's scheduled jobs was missed, they are backfilled sequentially as
-part of startup:
+If the app starts during a trading day inside the extended backfill
+window (09:16 → 23:59 IST), today's scheduled jobs are backfilled
+sequentially as part of startup:
 
     * daily_refresh      — if no run recorded today (meta_data guard)
     * first_candle       — if first_candle.json is missing / stale for today
     * level filter       — always runs (reads first_candle from disk)
     * level isolation    — replay intraday candles to reconstruct the day's
                            isolated instrument (see level_isolated_instrument_service)
+
+The first_candle step uses ``backfill=True`` so it runs even after
+15:30. The Upstox intraday API still serves today's full 1-min
+candles after the close, so the 09:15 OR candle can always be
+reconstructed. This is what makes /isolated work when the project is
+started at e.g. 19:08 IST.
 """
 
 from __future__ import annotations
@@ -59,42 +65,34 @@ router = APIRouter()
 _DIV = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 _THIN = "────────────────────────────────"
 
-
 def _market_tz() -> ZoneInfo:
     try:
         return ZoneInfo(config.MARKET_TIMEZONE)
     except Exception:
         return ZoneInfo("Asia/Kolkata")
 
-
 def _now_market() -> datetime:
     return datetime.now(_market_tz())
 
-
 def _now_market_time() -> dtime:
     return _now_market().time()
-
 
 _CATCHUP_WINDOW_OPEN = dtime(9, 15)
 _CATCHUP_WINDOW_CLOSE = dtime(23, 59)
 _SESSION_OPEN = dtime(9, 15)
 _SESSION_CLOSE = dtime(15, 30)
 
-
 def _in_market_hours() -> bool:
     return _CATCHUP_WINDOW_OPEN <= _now_market_time() <= _CATCHUP_WINDOW_CLOSE
 
-
 def _post_market() -> bool:
     return _now_market_time() > dtime(15, 30)
-
 
 def _in_active_session() -> bool:
     now = _now_market()
     if now.weekday() > 4:
         return False
     return _SESSION_OPEN <= now.time() <= _SESSION_CLOSE
-
 
 def _is_trading_holiday_today() -> bool:
     try:
@@ -103,7 +101,6 @@ def _is_trading_holiday_today() -> bool:
     except Exception:
         logger.exception("[refresh] holiday check failed — assuming trading day")
         return False
-
 
 def _catchup_snapshot() -> dict[str, Any]:
     now = _now_market_time()
@@ -118,7 +115,6 @@ def _catchup_snapshot() -> dict[str, Any]:
         },
     }
 
-
 def _telegram_bot_active(fallback: bool = False) -> bool:
     for attr in ("is_running", "polling", "enabled"):
         value = getattr(telegram_token_bot, attr, None)
@@ -126,13 +122,11 @@ def _telegram_bot_active(fallback: bool = False) -> bool:
             return value
     return fallback
 
-
 def _safe_folder_for(name: Any) -> str:
     text = str(name or "unknown").strip()
     for ch in ("|", "/", "\\", ":", "*", "?", '"', "<", ">", " "):
         text = text.replace(ch, "_")
     return text.strip("._") or "unknown"
-
 
 def _ensure_core_indexes_registered() -> int:
     seen: set[str] = set()
@@ -170,7 +164,6 @@ def _ensure_core_indexes_registered() -> int:
 
     return created
 
-
 def _should_backfill_daily_refresh() -> tuple[bool, str]:
     if not _in_active_session():
         return False, "outside_active_session"
@@ -179,7 +172,6 @@ def _should_backfill_daily_refresh() -> tuple[bool, str]:
     if ran_today("daily_refresh"):
         return False, "already_ran_today"
     return True, "missed_today"
-
 
 def _first_candle_file_for_first_instrument() -> Path | None:
     entries = instrument_registry.all()
@@ -191,16 +183,29 @@ def _first_candle_file_for_first_instrument() -> Path | None:
     except Exception:
         return None
 
-
 def _should_backfill_first_candle() -> tuple[bool, str]:
-    if not _in_active_session():
-        return False, "outside_active_session"
+    """Decide whether ``first_candle_service`` should run at startup.
+
+    Extended window (2026-10-26): backfill is now allowed on ANY
+    weekday trading day from 09:16 → 23:59:59 IST — not just the
+    live session (09:15 → 15:30). This makes /isolated work when the
+    project is started post-close (e.g. 19:08), because the intraday
+    API still serves today's full 1-min candle series.
+
+    Weekend, holiday, and pre-open are still rejected — those are
+    genuine non-trading conditions, not just "the data isn't ready".
+    """
+    now = _now_market()
+    if now.weekday() > 4:
+        return False, "weekend"
     if _is_trading_holiday_today():
         return False, "market_holiday"
-    if _now_market_time() < dtime(9, 16):
+    if now.time() < dtime(9, 16):
         return False, "before_first_candle_window"
+    if now.time() > dtime(23, 59, 59):
+        return False, "outside_backfill_window"
 
-    today = _now_market().date().isoformat()
+    today = now.date().isoformat()
     path = _first_candle_file_for_first_instrument()
     if path is None or not path.exists():
         return True, "missing_today"
@@ -214,7 +219,6 @@ def _should_backfill_first_candle() -> tuple[bool, str]:
         return True, "unparseable"
 
     return False, "already_computed_today"
-
 
 def _start_message(reason: str, catchup_meta: dict[str, Any]) -> str:
     return (
@@ -232,7 +236,6 @@ def _start_message(reason: str, catchup_meta: dict[str, Any]) -> str:
         f"  🧹 cleanup → 🔑 token → 📦 backup → 📊 registry\n"
         f"  → 🔧 wiring → 📡 feed → 🎯 level-isolation → ⏰ scheduler → 🤖 telegram"
     )
-
 
 def _completion_message(
     reason: str,
@@ -323,7 +326,6 @@ def _completion_message(
         f"{_DIV}\n"
         f"✅ Status: {status}"
     )
-
 
 def _run_full_refresh_sync(
     reason: str = "manual",
@@ -459,16 +461,22 @@ def _run_full_refresh_sync(
             )
             try:
                 from services.first_candle_service import first_candle_service
-                first_candle_summary = first_candle_service.run(reason="startup_backfill")
+                # backfill=True: allow post-close runs (09:16 → 23:59).
+                # The intraday API still serves today's 1-min candles,
+                # so the 09:15 OR can be reconstructed even at 19:08.
+                first_candle_summary = first_candle_service.run(
+                    reason="startup_backfill", backfill=True,
+                )
                 first_candle_summary["backfill_reason"] = why
                 logger.info(
                     "[startup] first_candle backfill: computed=%d crosses=%d "
-                    "skipped=%d errors=%d elapsed=%ss",
+                    "skipped=%d errors=%d elapsed=%ss reason=%s",
                     first_candle_summary.get("computed", 0),
                     first_candle_summary.get("crosses_detected", 0),
                     first_candle_summary.get("instrument_skipped", 0),
                     first_candle_summary.get("errors", 0),
                     first_candle_summary.get("elapsed_seconds", 0.0),
+                    why,
                 )
             except Exception:
                 logger.exception("[startup] first_candle backfill failed")
@@ -513,9 +521,11 @@ def _run_full_refresh_sync(
                 reason="startup"
             )
             logger.info(
-                "[startup] level isolation: status=%s isolated=%s",
+                "[startup] level isolation: status=%s isolated=%s reason=%s",
                 level_isolation_summary.get("status"),
                 (level_isolation_summary.get("isolated") or {}).get("instrument_key"),
+                level_isolation_summary.get("reason")
+                or level_isolation_summary.get("skip_reason"),
             )
         except Exception as exc:
             logger.exception("[startup] level isolation backfill failed")
@@ -599,21 +609,17 @@ def _run_full_refresh_sync(
     logger.info("[%s] refresh COMPLETED — status=%s", reason, status)
     return result
 
-
 @router.post("/admin/hard-refresh")
 async def hard_refresh() -> dict[str, Any]:
     return await asyncio.to_thread(_run_full_refresh_sync, "manual", None)
-
 
 @router.get("/admin/backup-status")
 def backup_status() -> dict[str, Any]:
     return backup_data_service.last_status()
 
-
 @router.get("/admin/cleanup-status")
 def cleanup_status() -> dict[str, Any]:
     return cleanup_service.last_status()
-
 
 @router.post("/admin/cleanup")
 async def run_cleanup() -> dict[str, Any]:

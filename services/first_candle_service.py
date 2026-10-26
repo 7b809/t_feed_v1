@@ -1,4 +1,4 @@
-# File: services/first_candle_service.py
+# services/first_candle_service.py
 """First-candle OR + EMA-cross detection service.
 
 Runs at 09:16:10 IST Mon–Fri (after the 09:15 first candle closes).
@@ -9,6 +9,19 @@ converts the index OR levels into the CE/PE option instruments that
 the live SR engine should track. That filter writes
 ``data/index/<nifty|sensex>/level_instruments.json`` and registers the
 filtered instruments with ``live_sr_levels_service``.
+
+Backfill mode (2026-10-26)
+--------------------------
+When the project is started post-close (e.g. 19:08 IST) we still need
+today's ``first_candle.json`` files so that ``level_isolated_instrument_service``
+can reconstruct the "would-have-isolated" instrument from the intraday
+API. The gate is now bypassable via ``backfill=True``:
+
+    first_candle_service.run(reason="startup_backfill", backfill=True)
+
+The post-close rejection is bypassed in backfill mode, but weekend,
+holiday, and pre-open are still rejected — those are genuinely
+non-trading conditions, not just "the data hasn't finished yet".
 """
 
 from __future__ import annotations
@@ -84,7 +97,18 @@ def _format_countdown(delta: timedelta) -> str:
     hms = f"{hours:02d}:{mins:02d}:{secs:02d}"
     return f"{days}d {hms}" if days > 0 else hms
 
-def _market_gate_check() -> dict[str, Any]:
+def _market_gate_check(backfill: bool = False) -> dict[str, Any]:
+    """Return the trading-time gate result.
+
+    ``backfill=True`` bypasses the post-close rejection: the Upstox
+    intraday API still serves today's 1-min candles after 15:30, so
+    the 09:15 OR candle can be reconstructed at any point in the
+    extended backfill window (09:16 → 23:59 IST) on a trading day.
+
+    Weekend, holiday, and pre-open are still rejected in backfill
+    mode — those are genuine non-trading conditions, not just
+    "the data isn't ready yet".
+    """
     now = _now_market()
 
     if _is_weekend(now):
@@ -96,6 +120,7 @@ def _market_gate_check() -> dict[str, Any]:
             "next_open": nxt,
             "countdown_str": _format_countdown(nxt - now),
             "countdown_label": nxt.strftime("%a %d %b 09:15 IST"),
+            "backfill_mode": backfill,
         }
 
     is_hol, desc = _is_holiday_today()
@@ -108,6 +133,7 @@ def _market_gate_check() -> dict[str, Any]:
             "next_open": nxt,
             "countdown_str": _format_countdown(nxt - now),
             "countdown_label": nxt.strftime("%a %d %b 09:15 IST"),
+            "backfill_mode": backfill,
         }
 
     now_t = now.time()
@@ -120,9 +146,25 @@ def _market_gate_check() -> dict[str, Any]:
             "next_open": today_open,
             "countdown_str": _format_countdown(today_open - now),
             "countdown_label": today_open.strftime("%a %d %b 09:15 IST"),
+            "backfill_mode": backfill,
         }
 
     if now_t > _MARKET_CLOSE:
+        if backfill:
+            # Post-close backfill mode: allow. The intraday API still
+            # serves today's full 1-min candle series, so the 09:15
+            # OR candle can be reconstructed. This is the path that
+            # makes /isolated work when the project starts at e.g.
+            # 19:08 IST.
+            return {
+                "allow": True,
+                "skip_reason": None,
+                "skip_message": None,
+                "next_open": None,
+                "countdown_str": None,
+                "countdown_label": None,
+                "backfill_mode": True,
+            }
         nxt = _next_market_open(now)
         return {
             "allow": False,
@@ -131,6 +173,7 @@ def _market_gate_check() -> dict[str, Any]:
             "next_open": nxt,
             "countdown_str": _format_countdown(nxt - now),
             "countdown_label": nxt.strftime("%a %d %b 09:15 IST"),
+            "backfill_mode": backfill,
         }
 
     return {
@@ -140,6 +183,7 @@ def _market_gate_check() -> dict[str, Any]:
         "next_open": None,
         "countdown_str": None,
         "countdown_label": None,
+        "backfill_mode": backfill,
     }
 
 # --------------------------------------------------------------------------- #
@@ -391,11 +435,23 @@ class FirstCandleService:
         except Exception as exc:
             return (key, None, f"{type(exc).__name__}: {exc}")
 
-    def run(self, reason: str = "scheduled") -> dict[str, Any]:
-        gate = _market_gate_check()
+    def run(
+        self,
+        reason: str = "scheduled",
+        backfill: bool = False,
+    ) -> dict[str, Any]:
+        """Compute OR levels for every registry instrument.
+
+        ``backfill=True`` bypasses the post-close rejection so today's
+        OR levels can be reconstructed from the intraday API when the
+        project is started after 15:30 (e.g. at 19:08 IST). Weekend,
+        holiday, and pre-open are still rejected in backfill mode.
+        """
+        gate = _market_gate_check(backfill=backfill)
         if not gate["allow"]:
             summary = {
                 "reason": reason,
+                "backfill": backfill,
                 "skipped": True,
                 "skip_reason": gate["skip_reason"],
                 "skip_message": gate["skip_message"],
@@ -409,17 +465,25 @@ class FirstCandleService:
             with self._lock:
                 self._last_run = summary
             logger.info(
-                "[first-candle] SKIPPED reason=%s (%s) — next open in %s (%s)",
-                gate["skip_reason"], gate["skip_message"],
+                "[first-candle] SKIPPED reason=%s (%s) backfill=%s — "
+                "next open in %s (%s)",
+                gate["skip_reason"], gate["skip_message"], backfill,
                 gate["countdown_str"], gate["countdown_label"],
             )
             return summary
 
+        if gate.get("backfill_mode"):
+            logger.info(
+                "[first-candle] post-close BACKFILL MODE — reconstructing "
+                "today's OR from intraday API"
+            )
+
         entries = list(instrument_registry.all())
         total = len(entries)
         logger.info(
-            "[first-candle] START reason=%s instruments=%d workers=%d",
-            reason, total, _MAX_WORKERS,
+            "[first-candle] START reason=%s instruments=%d workers=%d "
+            "backfill=%s",
+            reason, total, _MAX_WORKERS, backfill,
         )
 
         results: dict[str, Any] = {}
@@ -451,6 +515,7 @@ class FirstCandleService:
         elapsed = round(time.monotonic() - t0, 2)
         summary = {
             "reason": reason,
+            "backfill": backfill,
             "skipped": False,
             "skip_reason": None,
             "skip_message": None,
@@ -472,9 +537,9 @@ class FirstCandleService:
             self._last_run = summary
         logger.info(
             "[first-candle] COMPLETE total=%d computed=%d skipped=%d "
-            "errors=%d crosses=%d elapsed=%ss",
+            "errors=%d crosses=%d elapsed=%ss backfill=%s",
             total, len(results), len(skipped),
-            len(errors), len(crosses_detected), elapsed,
+            len(errors), len(crosses_detected), elapsed, backfill,
         )
 
         # ---- Level-instrument filter -------------------------------- #
