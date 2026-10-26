@@ -4,8 +4,12 @@
     GET  /admin/level-isolation/status                    — engine status + last isolated
     GET  /admin/level-isolation/isolated                  — just the isolated record
     GET  /admin/level-isolation/detail                    — UI-facing detail snapshot
-                                                            (includes `sr_tracking`)
+                                                            (includes `sr_tracking`,
+                                                            `active` if promoted)
     GET  /admin/level-isolation/sr-tracking               — SR tracker state only
+    GET  /admin/level-isolation/strategy-signal           — entry-signal block
+    POST /admin/level-isolation/apply-promotion           — promote the ARMED instrument
+    POST /admin/level-isolation/clear-promotion           — remove today's promotion
     GET  /admin/level-isolation/search-instruments        — search the registry
     GET  /admin/level-isolation/instrument-sr/{key}       — SR levels for a searched
                                                             instrument, tagged against
@@ -22,20 +26,28 @@ from typing import Any
 
 from fastapi import APIRouter, Query
 
+from services.isolated_instrument_promotion_service import (
+    isolated_instrument_promotion_service,
+)
 from services.isolated_sr_tracker_service import (
     isolated_sr_tracker_service,
 )
 from services.level_isolated_instrument_service import (
     level_isolated_instrument_service,
 )
+from services.strategy_entry_signal_service import (
+    strategy_entry_signal_service,
+)
 
 router = APIRouter(prefix="/admin/level-isolation", tags=["level-isolation"])
+
 
 @router.get("/status")
 def get_status() -> dict[str, Any]:
     payload = level_isolated_instrument_service.last_status()
     payload["generated_at"] = datetime.now(timezone.utc).isoformat()
     return payload
+
 
 @router.get("/isolated")
 def get_isolated() -> dict[str, Any]:
@@ -46,61 +58,99 @@ def get_isolated() -> dict[str, Any]:
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
 
+
 @router.get("/detail")
 def get_detail() -> dict[str, Any]:
     """UI-facing detail snapshot — consumed by ``/isolated``.
 
-    Returns a JSON-safe dict containing:
-      * ``market``         — trading-day / session state + a human copy
-      * ``isolated``       — the persisted isolation record (or None)
-      * ``trigger_event``  — the event that produced the isolation
-      * ``candidates``     — copy of ``trigger_event.candidates``
-      * ``events``         — the day's touch log
-      * ``touch_state``    — per (index, side) one-shot flags
-      * ``or_levels``      — the reference OR levels currently on disk
-      * ``sr_tracking``    — pre/post isolation SR level tracker state
-      * ``live_sr_levels`` — the official isolated instrument's own SR file
+    In addition to the base isolation detail, this endpoint attaches the
+    current promotion record (if any) so the UI can show the *active*
+    (promoted) instrument alongside the original trigger instrument.
     """
-    return level_isolated_instrument_service.get_detail()
+    data = level_isolated_instrument_service.get_detail()
+
+    try:
+        active = isolated_instrument_promotion_service.read_active()
+    except Exception:
+        active = None
+
+    if active:
+        data["active"] = active
+        try:
+            target_key = str(active.get("to_instrument_key") or "").strip()
+            if target_key:
+                comparison = (
+                    level_isolated_instrument_service
+                    .get_instrument_sr_comparison(target_key)
+                )
+                data["active_live_sr_levels"] = comparison.get(
+                    "live_sr_levels"
+                )
+            else:
+                data["active_live_sr_levels"] = None
+        except Exception:
+            data["active_live_sr_levels"] = None
+    else:
+        data["active"] = None
+        data["active_live_sr_levels"] = None
+
+    return data
+
 
 @router.get("/sr-tracking")
 def get_sr_tracking() -> dict[str, Any]:
-    """Return ONLY the isolated-instrument SR tracker snapshot.
-
-    Contains:
-      * ``instrument_key`` / ``trading_symbol`` — the tracked instrument
-      * ``pre_isolation_levels``  — SR levels present at isolation moment
-      * ``post_isolation_levels`` — SR levels confirmed after isolation
-      * ``waiting_for_first_confirmation`` — True until the first
-        post-isolation pivot lands
-
-    Levels are returned sorted by price ascending. Every confirmed
-    pivot is retained for the day — there is no broken / intact
-    distinction.
-    """
     return isolated_sr_tracker_service.get_detail()
 
+
 # --------------------------------------------------------------------------- #
-# Instrument search + comparison (NEW)                                        #
+# Strategy entry signal                                                       #
+# --------------------------------------------------------------------------- #
+@router.get("/strategy-signal")
+def get_strategy_signal() -> dict[str, Any]:
+    """Pure compute — no side effects. Returns the promotion block so the
+    caller can decide whether to POST to /apply-promotion.
+    """
+    return strategy_entry_signal_service.compute()
+
+
+@router.post("/apply-promotion")
+async def apply_promotion() -> dict[str, Any]:
+    """Apply the promotion recommended by the current strategy signal.
+
+    Recomputes the signal server-side and, if it recommends a promotion
+    that has not been applied yet, promotes the target instrument to be
+    the active isolated instrument.  Returns the promotion result plus
+    the fresh detail (so a caller can reload the page with one round-trip).
+    """
+    def _run() -> dict[str, Any]:
+        signal = strategy_entry_signal_service.compute()
+        result = isolated_instrument_promotion_service.apply_promotion(signal)
+        result["signal"] = signal
+        try:
+            result["detail"] = get_detail()
+        except Exception as exc:
+            result["detail_error"] = f"{type(exc).__name__}: {exc}"
+        return result
+
+    return await asyncio.to_thread(_run)
+
+
+@router.post("/clear-promotion")
+async def clear_promotion() -> dict[str, Any]:
+    """Remove today's promotion record.  Used by tests / manual reset."""
+    return await asyncio.to_thread(
+        isolated_instrument_promotion_service.clear
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Instrument search + comparison                                              #
 # --------------------------------------------------------------------------- #
 @router.get("/search-instruments")
 def search_instruments(
     query: str = Query(..., min_length=1, max_length=50),
     limit: int = Query(default=15, ge=1, le=50),
 ) -> dict[str, Any]:
-    """Search the live instrument registry for matching contracts.
-
-    Matches (case-insensitive substring) on:
-      * ``trading_symbol`` (weight 10, +5 if the symbol starts with ``q``)
-      * ``underlying``     (weight 3)
-      * ``strike_price``   (weight 4, prefix-match on string form)
-      * ``strike_type``    (weight 2, exact match on CE / PE / FUT)
-
-    Returns up to ``limit`` scored results, sorted by relevance (highest
-    score first) then alphabetically by trading_symbol. Empty ``query``
-    returns an empty result set rather than erroring — the UI debounces
-    and only calls this endpoint for non-empty queries.
-    """
     q = str(query or "").strip()
     if not q:
         return {
@@ -165,25 +215,13 @@ def search_instruments(
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
 
+
 @router.get("/instrument-sr/{instrument_key:path}")
 def get_instrument_sr(instrument_key: str) -> dict[str, Any]:
-    """Return the SR levels of a **searched** instrument.
-
-    Levels are tagged with ``_after_isolation`` relative to the
-    **official** isolated record's ``touched_at`` so the comparison is
-    apples-to-apples. The response also carries:
-
-      * ``is_official_isolated`` — True if the searched key matches the
-        officially isolated instrument (that happens when the user picks
-        the same key from the search dropdown)
-      * ``official_instrument_key`` / ``official_trading_symbol`` /
-        ``official_touched_at`` — the reference record
-
-    Never touches the persisted isolation state.
-    """
     return level_isolated_instrument_service.get_instrument_sr_comparison(
         instrument_key
     )
+
 
 @router.post("/backfill")
 async def run_backfill() -> dict[str, Any]:
@@ -192,6 +230,12 @@ async def run_backfill() -> dict[str, Any]:
     )
     return await asyncio.to_thread(run_level_isolation_backfill_manual)
 
+
 @router.post("/reset")
 async def reset() -> dict[str, Any]:
+    # Clear the promotion first so the SR tracker resets to the base state.
+    try:
+        isolated_instrument_promotion_service.clear()
+    except Exception:
+        pass
     return await asyncio.to_thread(level_isolated_instrument_service.reset)

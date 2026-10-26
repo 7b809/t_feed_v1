@@ -81,6 +81,21 @@ TELEGRAM_TOKEN_BOT_POLL_SECONDS = max(1, _int("TELEGRAM_TOKEN_BOT_POLL_SECONDS",
 TELEGRAM_TOKEN_BOT_LONG_POLL_TIMEOUT = max(1, _int("TELEGRAM_TOKEN_BOT_LONG_POLL_TIMEOUT", 20))
 TELEGRAM_TOKEN_BOT_RESTRICT_TO_CHAT = _bool("TELEGRAM_TOKEN_BOT_RESTRICT_TO_CHAT", True)
 
+# Windows start confirmation (see token_tasks/telegram_token_bot.py).
+# On Windows with an interactive console, the bot asks the operator to
+# confirm before beginning Telegram polling (5 s timeout, default No).
+# Headless deployments (Windows Service, scheduled task, no TTY) would
+# never see the prompt and would therefore never start the bot — set
+# this flag to true to bypass the prompt and start immediately.
+# Non-Windows (Linux / macOS): the flag is ignored; the bot always
+# starts as before.
+TELEGRAM_BOT_SKIP_WINDOWS_PROMPT = _bool(
+    "TELEGRAM_BOT_SKIP_WINDOWS_PROMPT", False
+)
+TELEGRAM_BOT_WINDOWS_PROMPT_TIMEOUT_SECONDS = _float(
+    "TELEGRAM_BOT_WINDOWS_PROMPT_TIMEOUT_SECONDS", 5.0
+)
+
 # ---------------------------------------------------------------------------
 # Chart history
 # ---------------------------------------------------------------------------
@@ -167,7 +182,7 @@ CLEANUP_REMOVE_FOLDERS = _csv(
 CLEANUP_RESERVED_FOLDERS = _csv(
     "CLEANUP_RESERVED_FOLDERS",
     "meta_data,logs,logs_text,.git,.venv,venv,myenv,templates,routes,"
-    "services,core,token_tasks,static,tests",
+    "services,core,token_tasks,upstox_services,static,tests",
 )
 
 # ---------------------------------------------------------------------------
@@ -420,4 +435,142 @@ LIVE_SR_REFRESH_FROM_API_ENABLED = _bool(
 # accuracy lag on the freshest pivot / break.
 LIVE_SR_REFRESH_FROM_API_MINUTES = max(
     1, min(60, _int("LIVE_SR_REFRESH_FROM_API_MINUTES", 2))
+)
+
+# ===========================================================================
+# STRATEGY ENTRY SIGNAL — R3/S3 touch → buffered support → confirmed entry
+# ===========================================================================
+# Trigger chain:
+#   1. NIFTY / SENSEX touches R3 or S3.  The touch time (T_touch) is
+#      recorded, the bias side is known (R3 -> CE, S3 -> PE), and the
+#      nearest filtered strike becomes the isolated instrument (this is
+#      handled by LEVEL_ISOLATION_* above — nothing to configure here).
+#   2. For each candidate option (bias side, plus counter side when
+#      crossover is enabled), look for a SUPPORT pivot whose
+#      `pivot_time` falls inside the asymmetric window:
+#
+#          [T_touch, T_touch + STRATEGY_ENTRY_BUFFER_MINUTES]
+#
+#      The window is strictly at-or-after the touch.  Pre-touch pivots
+#      are excluded by default because the only pre-touch "support" a
+#      freshly opened option can carry is the OR low, and using that
+#      re-opens the same losing trade this filter is meant to prevent.
+#      To include pre-touch pivots explicitly set
+#      STRATEGY_ENTRY_INCLUDE_PRETOUCH=true.
+#   3. Block the candidate if any RESISTANCE pivot was confirmed on or
+#      before the entry support's confirmed_time, whose pivot_time is
+#      strictly after the entry support's pivot_time, and whose price
+#      is strictly above the entry support's price.  (Those are the
+#      resistances actually visible on the chart at the moment of
+#      entry.)
+#   4. When the entry support's confirmed_time arrives, the candidate
+#      becomes ARMED and the entry is signalled.  Entry price is the
+#      candle-close at confirmed_time (fallback: live LTP), stop is the
+#      entry support's price, target is the next resistance above
+#      entry.
+#   5. When crossover is enabled and BOTH sides arm on the same day,
+#      whichever side's entry support confirmed EARLIEST wins; the
+#      other is discarded.
+#
+# The signal is exposed as an informational block on `/isolated`
+# (GET /admin/level-isolation/strategy-signal).  Order placement is
+# NOT wired by this feature — that is a separate step.
+# ===========================================================================
+STRATEGY_ENTRY_ENABLED = _bool("STRATEGY_ENTRY_ENABLED", True)
+
+# When True (default), evaluate CE and PE at the isolated strike
+# (crossover).  When False, only the bias side (PE for S3, CE for R3)
+# is considered — a day where the bias side has no valid setup becomes
+# a no-trade day even if the counter side does.
+STRATEGY_ENTRY_ALLOW_CROSSOVER = _bool(
+    "STRATEGY_ENTRY_ALLOW_CROSSOVER", True
+)
+
+# Upper bound of the pivot_time window relative to the touch.  The
+# window is strictly [T_touch, T_touch + BUFFER] — never symmetric.
+# Default 10 covers the canonical 09:21 touch / 09:26 pivot case with
+# slack for slightly-later swings.
+STRATEGY_ENTRY_BUFFER_MINUTES = max(
+    0, _int("STRATEGY_ENTRY_BUFFER_MINUTES", 10)
+)
+
+# When True, allow pivots whose pivot_time is BEFORE touch_time
+# (within the same buffer).  Default False — the PE 09:15 support that
+# would arm on an S3 touch only exists because it is the OR low;
+# including it re-opens the 84% loss the filter prevents.  Leave False
+# unless you have a specific reason.
+STRATEGY_ENTRY_INCLUDE_PRETOUCH = _bool(
+    "STRATEGY_ENTRY_INCLUDE_PRETOUCH", False
+)
+
+# Entry price source:
+#   "market_at_confirmed" (default) — LTP / candle-close at confirmed_time
+#   "pivot_price"                   — the entry support price itself
+# The default matches the "place the order at confirmed_time" semantics
+# that were agreed; "pivot_price" is retained only as a legacy escape
+# hatch and will not fill on fast-moving options.
+STRATEGY_ENTRY_PRICE_MODE = _str(
+    "STRATEGY_ENTRY_PRICE_MODE", "market_at_confirmed"
+).lower()
+
+# When True (default), once a candidate side has ARMED for the day
+# that side is not re-armed even if a new setup appears later.
+# When False, a new confirmed support later in the day can re-arm
+# (produces a new entry block; the frontend may show the latest).
+STRATEGY_ENTRY_ONLY_ONCE_PER_DAY = _bool(
+    "STRATEGY_ENTRY_ONLY_ONCE_PER_DAY", True
+)
+
+# When True (default), a resistance confirmed on or before the entry
+# support's confirmed_time, with pivot_time strictly after the entry
+# support's pivot_time and price strictly above the entry support's
+# price, blocks the candidate.  When False, resistance never blocks.
+STRATEGY_ENTRY_BLOCKED_BY_RESISTANCE = _bool(
+    "STRATEGY_ENTRY_BLOCKED_BY_RESISTANCE", True
+)
+
+# When True (default), if both CE and PE arm on the same day, the one
+# whose entry support confirmed EARLIEST wins; the other is discarded.
+# When False, whichever side is iterated first is chosen — you almost
+# certainly want True.
+STRATEGY_ENTRY_FIRST_TO_CONFIRM_WINS = _bool(
+    "STRATEGY_ENTRY_FIRST_TO_CONFIRM_WINS", True
+)
+
+# Soft warning threshold.  If (entry_LTP - entry_support_price) / entry_LTP
+# exceeds this fraction, the entry block is flagged with a
+# "stop_too_wide" warning.  Not a hard block — the entry still shows
+# as ARMED — but makes it obvious that the stop is far away.  Set to
+# 0 to disable.
+STRATEGY_MAX_STOP_PCT = _float("STRATEGY_MAX_STOP_PCT", 0.35)
+
+# ===========================================================================
+# STRATEGY ENTRY PROMOTION — make the armed instrument the official pick
+# ===========================================================================
+# When the entry-signal ARMS on the COUNTER side (crossover winner), the
+# bias-side instrument that the isolation engine picked at touch time is
+# no longer the instrument we're actually trading.  When this flag is
+# True (default), the counter-side instrument is "promoted" to be the
+# **active** isolated instrument for the rest of the day:
+#
+#   * the SR tracker switches to it,
+#   * the hero card and snapshot card display it,
+#   * the entry-signal card shows "Promoted to ...".
+#
+# The isolation record itself is never modified — the original trigger
+# (bias-side) instrument stays in the record and in the trigger_event
+# for audit.  The promotion is stored in a separate sidecar file:
+#
+#   data/level_isolated_instrument_promotion.json
+#
+# Set to False to disable promotion entirely; the official instrument
+# then stays fixed at the bias side (original behaviour).
+STRATEGY_ENTRY_ALLOW_PROMOTION = _bool("STRATEGY_ENTRY_ALLOW_PROMOTION", True)
+
+# When True, a second promotion may override the first (e.g. the PE
+# arms later in the day after the CE was already promoted).  Default
+# False — the first ARMED side wins and the pick is stable for the
+# day.  Ignored when ALLOW_PROMOTION is False.
+STRATEGY_ENTRY_ALLOW_RE_PROMOTION = _bool(
+    "STRATEGY_ENTRY_ALLOW_RE_PROMOTION", False
 )

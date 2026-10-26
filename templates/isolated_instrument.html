@@ -317,6 +317,13 @@
         border: 1px solid rgba(148, 163, 184, 0.3);
     }
 
+    .iso-hero-tags .tag.promo {
+        background: rgba(124, 58, 237, 0.20);
+        color: #c4b5fd;
+        border: 1px solid rgba(124, 58, 237, 0.45);
+        letter-spacing: 0.6px;
+    }
+
     .iso-hero-meta {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
@@ -867,6 +874,12 @@
         border-color: var(--iso-purple-border);
     }
 
+    .sr-count-pill.chosen {
+        background: var(--iso-green-bg);
+        color: var(--iso-green);
+        border-color: #bbf7d0;
+    }
+
     .sr-phase-header {
         display: flex;
         align-items: center;
@@ -1007,7 +1020,7 @@
     }
 
     /* ============================================================ */
-    /* SR Compare card — search + comparison view (NEW)             */
+    /* SR Compare card — search + comparison view                   */
     /* ============================================================ */
     .sr-search-row {
         display: flex;
@@ -1154,6 +1167,262 @@
     .sr-search-body {
         margin-top: 4px;
     }
+
+    /* ============================================================ */
+    /* Entry Signal card                                            */
+    /* R3/S3 touch -> buffered support -> confirmed entry           */
+    /* ============================================================ */
+    .entry-touch-strip {
+        display: flex;
+        gap: 16px;
+        flex-wrap: wrap;
+        font-size: 0.82rem;
+        color: var(--iso-muted);
+        padding: 12px 16px;
+        background: #f8fafc;
+        border: 1px solid var(--iso-border);
+        border-radius: 10px;
+        margin-bottom: 16px;
+    }
+
+    .entry-touch-strip strong {
+        color: var(--iso-text);
+    }
+
+    .entry-candidates {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 16px;
+    }
+
+    @media (max-width: 900px) {
+        .entry-candidates {
+            grid-template-columns: 1fr;
+        }
+    }
+
+    .entry-candidate {
+        background: #ffffff;
+        border: 1px solid var(--iso-border);
+        border-radius: 12px;
+        padding: 16px;
+        position: relative;
+        transition: all 0.15s ease;
+    }
+
+    .entry-candidate.is-chosen {
+        border-color: var(--iso-green);
+        box-shadow: 0 0 0 2px rgba(22, 163, 74, 0.15);
+    }
+
+    .entry-candidate.is-bias-side {
+        border-top: 4px solid var(--iso-primary);
+    }
+
+    .entry-candidate-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        margin-bottom: 8px;
+        flex-wrap: wrap;
+    }
+
+    .entry-candidate-symbol {
+        font-weight: 800;
+        font-size: 0.95rem;
+        color: var(--iso-text);
+        word-break: break-word;
+    }
+
+    .entry-candidate-pills {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+    }
+
+    .entry-pill {
+        font-size: 0.68rem;
+        font-weight: 800;
+        padding: 2px 8px;
+        border-radius: 6px;
+        text-transform: uppercase;
+        letter-spacing: 0.3px;
+    }
+
+    .entry-pill.type-ce {
+        background: var(--iso-green-bg);
+        color: var(--iso-green);
+    }
+
+    .entry-pill.type-pe {
+        background: var(--iso-red-bg);
+        color: var(--iso-red);
+    }
+
+    .entry-pill.bias {
+        background: var(--iso-blue-bg);
+        color: var(--iso-primary);
+    }
+
+    .entry-pill.state-waiting {
+        background: #f1f5f9;
+        color: var(--iso-muted);
+    }
+
+    .entry-pill.state-waiting_confirmation {
+        background: var(--iso-amber-bg);
+        color: var(--iso-amber);
+    }
+
+    .entry-pill.state-blocked {
+        background: var(--iso-red-bg);
+        color: var(--iso-red);
+    }
+
+    .entry-pill.state-armed {
+        background: var(--iso-green-bg);
+        color: var(--iso-green);
+    }
+
+    .entry-pill.state-discarded {
+        background: #e2e8f0;
+        color: var(--iso-muted);
+    }
+
+    .entry-pill.state-error {
+        background: var(--iso-red-bg);
+        color: var(--iso-red);
+    }
+
+    .entry-note {
+        font-size: 0.78rem;
+        color: var(--iso-muted);
+        line-height: 1.55;
+        margin: 8px 0 6px 0;
+    }
+
+    .entry-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 6px 12px;
+        font-size: 0.8rem;
+        margin-top: 10px;
+    }
+
+    .entry-grid .label {
+        color: var(--iso-muted);
+    }
+
+    .entry-grid .value {
+        color: var(--iso-text);
+        font-weight: 700;
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+    }
+
+    .entry-grid .value small {
+        color: var(--iso-muted);
+        font-weight: 400;
+        font-size: 0.7rem;
+    }
+
+    .entry-warning {
+        background: var(--iso-amber-bg);
+        border-left: 4px solid var(--iso-amber);
+        color: var(--iso-amber);
+        padding: 8px 12px;
+        border-radius: 6px;
+        font-size: 0.78rem;
+        margin-top: 12px;
+        line-height: 1.5;
+    }
+
+    .entry-warnings-list {
+        background: var(--iso-amber-bg);
+        border-left: 4px solid var(--iso-amber);
+        color: var(--iso-amber);
+        padding: 10px 14px;
+        border-radius: 8px;
+        font-size: 0.8rem;
+        margin-top: 12px;
+        line-height: 1.55;
+    }
+
+    .entry-warnings-list ul {
+        margin: 6px 0 0 0;
+        padding-left: 20px;
+    }
+
+    .entry-warnings-list li {
+        margin-bottom: 4px;
+    }
+
+    .entry-empty {
+        grid-column: 1 / -1;
+        padding: 20px;
+        text-align: center;
+        color: var(--iso-muted);
+        font-size: 0.88rem;
+        background: #f8fafc;
+        border: 1px dashed var(--iso-border);
+        border-radius: 10px;
+    }
+
+    .entry-empty i {
+        display: block;
+        font-size: 1.6rem;
+        margin-bottom: 8px;
+        opacity: 0.4;
+    }
+
+    .entry-error {
+        grid-column: 1 / -1;
+        padding: 20px;
+        text-align: center;
+        color: var(--iso-red);
+        font-size: 0.88rem;
+        background: var(--iso-red-bg);
+        border: 1px solid #fecaca;
+        border-radius: 10px;
+    }
+
+    /* Promotion banner inside the Entry Signal card */
+    .entry-promotion-banner {
+        display: flex;
+        align-items: flex-start;
+        gap: 12px;
+        padding: 12px 16px;
+        background: var(--iso-purple-bg);
+        border: 1px solid var(--iso-purple-border);
+        border-left: 4px solid var(--iso-purple);
+        border-radius: 10px;
+        color: var(--iso-text);
+        font-size: 0.85rem;
+        line-height: 1.5;
+        margin-bottom: 14px;
+    }
+
+    .entry-promotion-banner i {
+        color: var(--iso-purple);
+        font-size: 1.2rem;
+        flex-shrink: 0;
+        margin-top: 1px;
+    }
+
+    .entry-promotion-banner strong {
+        color: var(--iso-purple);
+    }
+
+    .entry-promotion-banner .promo-pending {
+        background: rgba(124, 58, 237, 0.08);
+        padding: 2px 8px;
+        border-radius: 6px;
+        font-weight: 700;
+        font-size: 0.78rem;
+        margin-left: 6px;
+        white-space: nowrap;
+    }
 </style>
 {% endblock %}
 
@@ -1207,7 +1476,7 @@
         </div>
     </div>
 
-    <!-- Hero card: isolated instrument -->
+    <!-- Hero card: isolated instrument (or the promoted / active one) -->
     <div class="iso-hero" id="iso-hero" style="display: none;">
         <div class="iso-hero-left">
             <div class="iso-hero-label">ISOLATED INSTRUMENT</div>
@@ -1233,7 +1502,29 @@
         </div>
     </div>
 
-    <!-- SR Tracking card: single merged SR table (official isolated instrument) -->
+    <!-- Entry Signal card: R3/S3-touch → buffered support → confirmed entry -->
+    <div class="iso-card" id="iso-entry-signal" style="display: none;">
+        <div class="iso-card-header">
+            <i class="bi bi-bullseye text-primary"></i>
+            <span>Entry Signal</span>
+            <div class="sr-header-pills">
+                <span class="sr-count-pill" id="entry-chosen-pill">Waiting</span>
+            </div>
+        </div>
+        <div class="iso-card-body">
+            <div class="entry-promotion-banner" id="entry-promotion-banner" style="display: none;"></div>
+            <div class="entry-touch-strip" id="entry-touch-strip"></div>
+            <div class="entry-candidates" id="entry-candidates">
+                <div class="entry-empty">
+                    <i class="bi bi-hourglass-split"></i>
+                    Loading entry signal…
+                </div>
+            </div>
+            <div class="entry-warnings-list" id="entry-warnings" style="display: none;"></div>
+        </div>
+    </div>
+
+    <!-- SR Tracking card: single merged SR table (active isolated instrument) -->
     <div class="iso-card" id="iso-sr-tracking" style="display: none;">
         <div class="iso-card-header">
             <i class="bi bi-activity text-primary"></i>
@@ -1253,7 +1544,7 @@
         </div>
     </div>
 
-    <!-- SR Compare card (NEW): search for any instrument, compare its SR
+    <!-- SR Compare card: search for any instrument, compare its SR
          levels against the SAME isolation moment. -->
     <div class="iso-card" id="iso-sr-compare" style="display: none;">
         <div class="iso-card-header">
@@ -1285,7 +1576,7 @@
         </div>
     </div>
 
-    <!-- Instrument snapshot: the isolated instrument's own data -->
+    <!-- Instrument snapshot: the (active) instrument's own data -->
     <div class="iso-card" id="iso-instrument-snapshot" style="display: none;">
         <div class="iso-card-header">
             <i class="bi bi-graph-up text-primary"></i>
@@ -1399,14 +1690,20 @@
     const DETAIL_URL = "/admin/level-isolation/detail";
     const BACKFILL_URL = "/admin/level-isolation/backfill";
     const REFRESH_SNAPSHOT_URL = "/admin/level-isolation/refresh-snapshot";
+    const APPLY_PROMOTION_URL = "/admin/level-isolation/apply-promotion";
     const SEARCH_INSTRUMENTS_URL = "/admin/level-isolation/search-instruments";
     const INSTRUMENT_SR_URL = (key) =>
         "/admin/level-isolation/instrument-sr/" + encodeURIComponent(key);
+    const ENTRY_SIGNAL_URL = "/admin/level-isolation/strategy-signal";
     const POLL_MS = 10000;
+    const ENTRY_POLL_MS = 10000;
 
     const state = {
         detail: null,
         pollTimer: null,
+        entryPollTimer: null,
+        // Guard against re-posting /apply-promotion while one is in flight.
+        promoInFlight: false,
         // Set of every level key we've already rendered at least once.
         // Used to badge genuinely-new arrivals (only on after-touch rows)
         // with the "NEW" pill.
@@ -1528,6 +1825,8 @@
             intraday_latest_bar: "latest intraday bar",
             first_candle_close: "first-candle close",
             or_midpoint: "OR midpoint",
+            entry_ltp_fallback: "entry LTP fallback",
+            confirmation_bar_close: "confirmation bar close",
             unavailable: "—",
         };
         return map[src] || String(src || "—");
@@ -1660,6 +1959,9 @@
         btn.style.display = avail.needsRefresh ? "inline-flex" : "none";
     }
 
+    /* ============================================================
+       HERO — prefers the promoted (active) record when present
+       ============================================================ */
     function renderHero(d) {
         const hero = document.getElementById("iso-hero");
         if (!hero) return;
@@ -1670,7 +1972,10 @@
         }
 
         hero.style.display = "flex";
-        const iso = d.isolated;
+
+        const active = d.active;
+        const isPromoted = !!(active && active.record);
+        const iso = isPromoted ? active.record : d.isolated;
         const ev = d.trigger_event || {};
 
         document.getElementById("hero-symbol").textContent =
@@ -1698,13 +2003,33 @@
                     : "th";
             tags.push({ cls, text: lv });
         });
+        if (isPromoted) {
+            tags.push({ cls: "promo", text: "PROMOTED" });
+        }
         tagsEl.innerHTML = tags
             .map(t => `<span class="tag ${t.cls}">${esc(t.text)}</span>`)
             .join("");
 
         const metaEl = document.getElementById("hero-meta");
+        const originalReason = (d.isolated || {}).reason;
         const metaItems = [
-            { label: "Trigger", value: reasonLabel(iso.reason) },
+            {
+                label: "Trigger",
+                value: isPromoted
+                    ? `${reasonLabel(originalReason)} · promoted`
+                    : reasonLabel(iso.reason),
+            },
+        ];
+        if (isPromoted) {
+            metaItems.push({
+                label: "Promoted From",
+                value:
+                    active.from_trading_symbol
+                    || active.from_instrument_key
+                    || "—",
+            });
+        }
+        metaItems.push(
             { label: "Isolated At", value: formatTime(iso.isolated_at) },
             { label: "Expiry", value: formatExpiry(iso.expiry) },
             {
@@ -1712,7 +2037,7 @@
                 value: `${iso.trigger_level || "—"} = ${fmt(iso.trigger_level_value)}`,
             },
             { label: "Touched At", value: formatTime(iso.touched_at) },
-        ];
+        );
         if (iso.nifty_reference_ltp !== null &&
             iso.nifty_reference_ltp !== undefined) {
             metaItems.push({
@@ -1758,7 +2083,300 @@
     }
 
     /* ============================================================
-       SR Tracking — SINGLE table (official isolated instrument)
+       Entry Signal — R3/S3-touch → buffered support → confirmed entry
+       Includes auto-apply for the promotion block.
+       ============================================================ */
+    function renderEntryTouchStrip(payload) {
+        const el = document.getElementById("entry-touch-strip");
+        if (!el) return;
+        const t = payload.touch || {};
+        el.innerHTML =
+            '<span>Side: <strong>' + esc(t.side || "—") + '</strong></span>' +
+            '<span>Bias: <strong>' + esc(t.bias_type || "—") + '</strong></span>' +
+            '<span>Touch: <strong>' + esc(formatTime(t.time)) + '</strong></span>' +
+            '<span>Window: <strong>' +
+                esc(formatTime(t.window_start)) + ' → ' +
+                esc(formatTime(t.window_end)) +
+            '</strong> (' + esc(t.buffer_minutes != null ? t.buffer_minutes : "—") +
+            'm)</span>';
+    }
+
+    function renderPromotionBanner(payload) {
+        const banner = document.getElementById("entry-promotion-banner");
+        if (!banner) return;
+
+        const promo = (payload && payload.promotion) || {};
+        const already = !!promo.already_applied;
+        const recommended = !!promo.recommended;
+        const targetKey = promo.target_instrument_key;
+        const targetSym = promo.target_trading_symbol || targetKey;
+
+        if (!already && !recommended) {
+            banner.style.display = "none";
+            banner.innerHTML = "";
+            return;
+        }
+
+        banner.style.display = "flex";
+        if (already) {
+            banner.innerHTML =
+                '<i class="bi bi-check-circle-fill"></i>' +
+                '<div><strong>Instrument promoted.</strong> ' +
+                'This <span class="promo-pending">' +
+                esc(payload.chosen_side || "") +
+                '</span> is now the <strong>active</strong> isolated instrument ' +
+                '(' + esc(targetSym || "") + '). ' +
+                'The SR tracker and snapshot below track it.</div>';
+        } else {
+            banner.innerHTML =
+                '<i class="bi bi-arrow-up-circle-fill"></i>' +
+                '<div><strong>Promoting…</strong> ' +
+                'The entry signal armed on ' +
+                '<span class="promo-pending">' +
+                esc(payload.chosen_side || "") +
+                '</span>. ' +
+                'Promoting ' + esc(targetSym || "") +
+                ' to be the active isolated instrument.</div>';
+        }
+    }
+
+    function renderEntryCandidate(c) {
+        const side = c.side || "—";
+        const typeCls = side === "CE" ? "type-ce" : "type-pe";
+        const stateVal = c.state || "waiting";
+        const stateCls = "state-" + stateVal;
+        const isChosen = !!c.chosen;
+        const isBias = !!c.is_bias_side;
+
+        const pills = [
+            '<span class="entry-pill ' + typeCls + '">' + esc(side) + '</span>',
+            isBias ? '<span class="entry-pill bias">BIAS</span>' : '',
+            '<span class="entry-pill ' + stateCls + '">' +
+                esc(stateVal.replace(/_/g, " ")) + '</span>',
+        ].filter(Boolean).join("");
+
+        const sym = c.trading_symbol || c.instrument_key || "—";
+
+        let note = "";
+        if (c.state === "waiting" && c.state_note === "no_support_pivot_in_window") {
+            note = "No support pivot inside the post-touch buffer yet.";
+        } else if (c.state === "waiting" && c.state_note === "no_sr_levels") {
+            note = "No live SR levels persisted yet for this instrument.";
+        } else if (c.state === "waiting_confirmation") {
+            const es = c.entry_support || {};
+            note = "Support at " + fmt(es.price) +
+                " (pivot " + formatTime(es.pivot_time) + "). " +
+                "Confirms at " + formatTime(es.confirmed_time) + ".";
+            if (c.seconds_until_confirmation != null) {
+                const mins = Math.max(0, Math.round(c.seconds_until_confirmation / 60));
+                note += " (~" + mins + "m)";
+            }
+        } else if (c.state === "blocked") {
+            const b = c.blocking_resistance || {};
+            note = "Blocked by resistance " + fmt(b.price) +
+                " (confirmed " + formatTime(b.confirmed_time) + ").";
+        } else if (c.state === "discarded") {
+            note = "Another side confirmed first — entry discarded for the day.";
+        } else if (c.state === "armed") {
+            note = "Entry support confirmed. Place MARKET order for this side.";
+        } else if (c.state === "error") {
+            note = c.state_note || "Computation error.";
+        }
+
+        let grid = "";
+        if (c.state === "armed" && c.entry) {
+            const e = c.entry;
+            const es = c.entry_support || {};
+            grid =
+                '<div class="entry-grid">' +
+                    '<div class="label">Entry LTP</div>' +
+                    '<div class="value">' + fmt(e.price) +
+                        ' <small>(' + esc(e.price_source || "—") + ')</small></div>' +
+                    '<div class="label">Entry time</div>' +
+                    '<div class="value">' + formatTime(e.time) + '</div>' +
+                    '<div class="label">Support (stop)</div>' +
+                    '<div class="value">' + fmt(e.stop) + '</div>' +
+                    '<div class="label">Stop risk</div>' +
+                    '<div class="value">' +
+                        (e.stop_pct != null ? (e.stop_pct * 100).toFixed(1) + '%' : "—") +
+                    '</div>' +
+                    '<div class="label">Target</div>' +
+                    '<div class="value">' +
+                        (e.target != null ? fmt(e.target) : "—") +
+                    '</div>' +
+                    '<div class="label">Support pivot</div>' +
+                    '<div class="value">' + formatTime(es.pivot_time) + '</div>' +
+                    '<div class="label">Support confirmed</div>' +
+                    '<div class="value">' + formatTime(es.confirmed_time) + '</div>' +
+                    '<div class="label">Minutes after touch</div>' +
+                    '<div class="value">' + fmt(es.minutes_from_touch, 1) + '</div>' +
+                '</div>';
+        } else if (c.entry_support) {
+            const es = c.entry_support;
+            grid =
+                '<div class="entry-grid">' +
+                    '<div class="label">Support price</div>' +
+                    '<div class="value">' + fmt(es.price) + '</div>' +
+                    '<div class="label">Pivot time</div>' +
+                    '<div class="value">' + formatTime(es.pivot_time) + '</div>' +
+                    '<div class="label">Confirms at</div>' +
+                    '<div class="value">' + formatTime(es.confirmed_time) + '</div>' +
+                    '<div class="label">Minutes after touch</div>' +
+                    '<div class="value">' + fmt(es.minutes_from_touch, 1) + '</div>' +
+                '</div>';
+        }
+
+        const warnHtml = (c.warning && c.warning_detail)
+            ? '<div class="entry-warning">⚠️ ' + esc(c.warning_detail) + '</div>'
+            : '';
+
+        return (
+            '<div class="entry-candidate' +
+                (isChosen ? ' is-chosen' : '') +
+                (isBias ? ' is-bias-side' : '') + '">' +
+                '<div class="entry-candidate-head">' +
+                    '<div class="entry-candidate-symbol">' + esc(sym) + '</div>' +
+                    '<div class="entry-candidate-pills">' + pills + '</div>' +
+                '</div>' +
+                '<div class="entry-note">' + esc(note) + '</div>' +
+                grid +
+                warnHtml +
+            '</div>'
+        );
+    }
+
+    function renderEntrySignal(payload) {
+        const card = document.getElementById("iso-entry-signal");
+        const candidatesEl = document.getElementById("entry-candidates");
+        const warningsEl = document.getElementById("entry-warnings");
+        const chosenPill = document.getElementById("entry-chosen-pill");
+        const touchStripEl = document.getElementById("entry-touch-strip");
+        if (!card || !candidatesEl) return;
+
+        // Hide when there is no isolated instrument (or feature disabled).
+        if (!payload || payload.status === "disabled" || payload.status === "no_isolation") {
+            card.style.display = "none";
+            return;
+        }
+
+        card.style.display = "block";
+
+        // Error / non-OK statuses
+        if (payload.status !== "ok") {
+            if (chosenPill) {
+                chosenPill.textContent = "Error";
+                chosenPill.className = "sr-count-pill";
+            }
+            if (touchStripEl) touchStripEl.innerHTML = "";
+            candidatesEl.innerHTML =
+                '<div class="entry-error">' +
+                '<i class="bi bi-exclamation-triangle"></i> ' +
+                esc(payload.note || payload.error || payload.status) +
+                '</div>';
+            if (warningsEl) {
+                warningsEl.style.display = "none";
+                warningsEl.innerHTML = "";
+            }
+            const promoBanner = document.getElementById("entry-promotion-banner");
+            if (promoBanner) {
+                promoBanner.style.display = "none";
+                promoBanner.innerHTML = "";
+            }
+            return;
+        }
+
+        // Promotion banner + auto-apply
+        renderPromotionBanner(payload);
+        const promo = payload.promotion || {};
+        if (
+            promo.recommended
+            && !promo.already_applied
+            && !state.promoInFlight
+        ) {
+            state.promoInFlight = true;
+            fetch(APPLY_PROMOTION_URL, { method: "POST" })
+                .then(r => r.json())
+                .then(res => {
+                    state.promoInFlight = false;
+                    if (res && res.promoted) {
+                        // Refresh both the detail (hero / SR / snapshot)
+                        // and the signal itself so the banner flips to
+                        // "already_applied".
+                        loadDetail();
+                        loadEntrySignal();
+                    } else {
+                        // No-op or already promoted elsewhere — refresh
+                        // the signal so the banner re-syncs.
+                        loadEntrySignal();
+                    }
+                })
+                .catch(err => {
+                    state.promoInFlight = false;
+                    console.warn("[promotion] apply failed:", err);
+                });
+        }
+
+        // Chosen pill
+        if (chosenPill) {
+            const chosen = payload.chosen_side;
+            const already = !!promo.already_applied;
+            if (chosen) {
+                chosenPill.textContent = already
+                    ? `Promoted: ${chosen}`
+                    : `Chosen: ${chosen}`;
+                chosenPill.className = "sr-count-pill chosen";
+            } else {
+                chosenPill.textContent = "Waiting";
+                chosenPill.className = "sr-count-pill";
+            }
+        }
+
+        renderEntryTouchStrip(payload);
+
+        // Candidates
+        const list = payload.candidates || [];
+        if (!list.length) {
+            candidatesEl.innerHTML =
+                '<div class="entry-empty">' +
+                '<i class="bi bi-info-circle"></i>' +
+                'No candidate instruments resolved at this strike.' +
+                '</div>';
+        } else {
+            candidatesEl.innerHTML = list.map(renderEntryCandidate).join("");
+        }
+
+        // Warnings block
+        const warns = payload.warnings || [];
+        if (warningsEl) {
+            if (warns.length) {
+                warningsEl.style.display = "block";
+                warningsEl.innerHTML =
+                    '<strong>⚠️ Warnings</strong>' +
+                    '<ul>' +
+                    warns.map(w => '<li>' + esc(w) + '</li>').join("") +
+                    '</ul>';
+            } else {
+                warningsEl.style.display = "none";
+                warningsEl.innerHTML = "";
+            }
+        }
+    }
+
+    async function loadEntrySignal() {
+        try {
+            const res = await fetch(ENTRY_SIGNAL_URL, {
+                headers: { Accept: "application/json" },
+            });
+            if (!res.ok) throw new Error("HTTP " + res.status);
+            const data = await res.json();
+            renderEntrySignal(data);
+        } catch (e) {
+            console.warn("[entry-signal] load failed:", e);
+        }
+    }
+
+    /* ============================================================
+       SR Tracking — SINGLE table (active isolated instrument)
        ============================================================ */
     function srDedupKey(lvl) {
         const price = parseNum(lvl.price);
@@ -1864,7 +2482,12 @@
 
         card.style.display = "block";
 
-        const live = d.live_sr_levels || {};
+        // Prefer the promoted instrument's live SR levels when a
+        // promotion has landed.  Falls back to the original isolated
+        // instrument's SR file otherwise.
+        const live = (d.active && d.active_live_sr_levels)
+            ? d.active_live_sr_levels
+            : (d.live_sr_levels || {});
         const levels = Array.isArray(live.levels) ? live.levels.slice() : [];
         const available = !!live.available;
         const beforeCount = typeof live.before_count === "number"
@@ -1915,9 +2538,14 @@
             ? `touch @ ${formatTime(live.touched_at)}`
             : (live.reference_at ? `ref @ ${formatTime(live.reference_at)}` : "");
 
+        const isPromoted = !!(d.active && d.active.record);
+        const headerTitle = isPromoted
+            ? `SR Levels · Active (promoted) Instrument`
+            : `SR Levels · Isolated Instrument`;
+
         body.innerHTML = `
             <div class="sr-phase-header">
-                <span class="phase-title">SR Levels · Isolated Instrument</span>
+                <span class="phase-title">${esc(headerTitle)}</span>
                 <span class="phase-hint">oldest first</span>
                 ${refLabel ? `<span class="ref-label">${esc(refLabel)}</span>` : ""}
                 <span class="sr-legend">
@@ -1931,7 +2559,7 @@
     }
 
     /* ============================================================
-       SR Compare — search box + comparison table (NEW)
+       SR Compare — search box + comparison table
        ============================================================ */
     function renderCompareCard(d) {
         const card = document.getElementById("iso-sr-compare");
@@ -1975,9 +2603,9 @@
             const isOfficial = r.instrument_key === officialKey;
             const typeStr = String(r.type || "").toUpperCase();
             const typeCls = typeStr === "CE"
-                ? "resistance"   // CE rows use red-ish accent
+                ? "resistance"
                 : typeStr === "PE"
-                    ? "support"   // PE rows use green-ish accent
+                    ? "support"
                     : "";
             const metaBits = [];
             if (r.strike !== null && r.strike !== undefined) {
@@ -2068,7 +2696,6 @@
         const body = document.getElementById("sr-search-body");
         if (!body) return;
 
-        // ---- No official isolation yet ---- //
         if (!data || data.status === "no_official_isolation") {
             if (info) info.style.display = "none";
             body.innerHTML = `
@@ -2090,7 +2717,6 @@
             return;
         }
 
-        // ---- Info banner: official vs. user-selected ---- //
         if (info) {
             info.style.display = "flex";
             const isOfficial = !!data.is_official_isolated;
@@ -2114,7 +2740,6 @@
                 </div>`;
         }
 
-        // ---- Levels table ---- //
         const live = data.live_sr_levels || {};
         const levels = Array.isArray(live.levels) ? live.levels.slice() : [];
         const available = !!live.available;
@@ -2131,7 +2756,6 @@
             return;
         }
 
-        // Sort by confirmed_time ASCENDING (matching official table).
         levels.sort((a, b) => {
             const ta = String(a.confirmed_time || "");
             const tb = String(b.confirmed_time || "");
@@ -2157,7 +2781,7 @@
             ${srLevelsTableHtml(levels, { showNew: false })}`;
     }
 
-    /* ---------- Standard renderers ---------- */
+    /* ---------- Instrument snapshot (prefers promoted record) ---------- */
     function renderInstrumentSnapshot(d) {
         const card = document.getElementById("iso-instrument-snapshot");
         const tilesEl = document.getElementById("snapshot-tiles");
@@ -2171,13 +2795,17 @@
             return;
         }
 
-        const iso = d.isolated;
-        const avail = snapshotAvailability(d);
+        // Prefer the promoted instrument's record when a promotion has
+        // landed.  Falls back to the original isolated record otherwise.
+        const isPromoted = !!(d.active && d.active.record);
+        const iso = isPromoted ? d.active.record : d.isolated;
+        const avail = snapshotAvailability({ isolated: iso });
 
         card.style.display = "block";
         if (titleEl) {
+            const suffix = isPromoted ? " · promoted" : "";
             titleEl.textContent =
-                `Isolated instrument · own data at touch · ` +
+                `Isolated instrument · own data at touch${suffix} · ` +
                 `${iso.trading_symbol || iso.instrument_key || ""}`;
         }
 
@@ -2387,6 +3015,17 @@
             title: "Isolated",
             detail: iso.trading_symbol || iso.instrument_key || "—",
         });
+
+        // If a promotion landed, surface it as an extra reasoning step.
+        if (d.active && d.active.record) {
+            steps.push({
+                icon: "bi-arrow-up-circle-fill",
+                title: "Promoted",
+                detail:
+                    `Strategy entry armed on ${d.active.to_trading_symbol || d.active.to_instrument_key} ` +
+                    `— promoted from ${d.active.from_trading_symbol || d.active.from_instrument_key}.`,
+            });
+        }
 
         const body = document.getElementById("iso-reasoning-body");
         body.innerHTML = steps
@@ -2632,6 +3271,7 @@
             const res = await fetch(BACKFILL_URL, { method: "POST" });
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             await loadDetail();
+            await loadEntrySignal();
         } catch (err) {
             console.error("[isolated] backfill failed:", err);
         } finally {
@@ -2650,6 +3290,7 @@
             const res = await fetch(REFRESH_SNAPSHOT_URL, { method: "POST" });
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             await loadDetail();
+            await loadEntrySignal();
         } catch (err) {
             console.error("[isolated] refresh-snapshot failed:", err);
         } finally {
@@ -2667,8 +3308,17 @@
         loadDetail();
         state.pollTimer = setInterval(loadDetail, POLL_MS);
 
+        // Entry Signal — separate poll (independent endpoint, own lifecycle)
+        loadEntrySignal();
+        state.entryPollTimer = setInterval(loadEntrySignal, ENTRY_POLL_MS);
+
         const refreshBtn = document.getElementById("refresh-btn");
-        if (refreshBtn) refreshBtn.addEventListener("click", loadDetail);
+        if (refreshBtn) {
+            refreshBtn.addEventListener("click", () => {
+                loadDetail();
+                loadEntrySignal();
+            });
+        }
 
         const backfillBtn = document.getElementById("backfill-btn");
         if (backfillBtn) backfillBtn.addEventListener("click", runBackfill);
@@ -2688,6 +3338,7 @@
 
     window.addEventListener("beforeunload", () => {
         if (state.pollTimer) clearInterval(state.pollTimer);
+        if (state.entryPollTimer) clearInterval(state.entryPollTimer);
         if (compareState.searchTimer) clearTimeout(compareState.searchTimer);
     });
 </script>
