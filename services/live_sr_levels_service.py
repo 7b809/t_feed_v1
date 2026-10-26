@@ -18,24 +18,86 @@ Confirmed pivots are recorded with both ``pivot_time`` and
 ``confirmed_time`` and written to ``live_sr_levels.json`` next to the
 instrument's ``candles.json`` / ``first_candle.json``.
 
-Isolated-SR tracker hook
-------------------------
-Every *new* level appended by ``_append_level()`` is also forwarded to
-``services.isolated_sr_tracker_service.isolated_sr_tracker_service``
-when the instrument is the currently isolated one.  The tracker
-records the confirmation as ``post_isolation`` for the dashboard and
-Telegram.  The fast-path check inside the tracker (`is_tracking`) is
-O(1) so the hook costs nothing for the ~166 non-isolated instruments.
+## 2026-10-26 — accuracy overhaul
+---------------------------------
+Live SR was producing early-today pivots that differed from the
+(verified-against-TradingView) on-demand calc at ``GET /live-sr/calc``.
+Two changes fix this:
 
-Mid-session backfill
---------------------
-``seed_candles(key, entry, candles)`` accepts a list of pre-existing
-1-min candles (typically today's intraday series from Upstox). It
-clears the instrument's in-memory state, feeds the full series in
-chronological order, runs ``_scan_all_pivots`` over the whole buffer,
-and persists once at the end. This is how the dashboard has correct
-SR levels immediately after a mid-session startup, without waiting for
-live ticks to accumulate 31+ candles. Seeding is idempotent.
+1. **Seed with historical + intraday, not intraday-only.**
+   ``sr_backfill_service`` now (optionally) merges ``candles.json``
+   (historical) with today's intraday before calling ``seed_candles``.
+   This gives the live engine the same pre-today tail the calc uses,
+   so pivots that form at 09:26 but need 15 bars of yesterday's close
+   are now detected.
+
+2. **Periodic authoritative refresh via Upstox API.**
+   Tick-aggregated option candles can miss the true minute OHLC (the
+   last tick before rollover isn't the close). A scheduler job
+   (``live_sr_refresh_from_api``) re-seeds each instrument from the
+   authoritative ``HistoryV3Api.get_intra_day_candle_data`` response
+   every ``LIVE_SR_REFRESH_FROM_API_MINUTES`` (default 2). Fresh
+   pivots therefore land in the persisted file within ≤2 minutes of
+   when the API knows about them.
+
+Together these make ``live_sr_levels.json`` a near-mirror of the
+calc's ``levels`` array, with only the expected ≤2-minute lag on the
+very freshest pivot.
+
+Today-only pivots
+-----------------
+``_append_level`` now skips pivots whose ``confirmed_time`` is not on
+today's IST calendar date. Historical pivots detected during a seed
+are used only as context — they never enter ``state["levels"]`` and
+never appear in the persisted file.
+
+Rationale: the file is consumed by the isolation tracker as
+"pre-isolation levels" and by the dashboard as "today's SR structure".
+Yesterday's pivots are noise for both.
+
+No broken / intact distinction
+------------------------------
+Every confirmed pivot is retained for the day. There is no break
+tracking — a level that price has crossed stays on the chart, exactly
+as TradingView renders pivot lines. This matches the on-demand calc's
+behaviour and keeps the persisted file, the calc response, the
+isolated dashboard, and the Telegram messages all consistent.
+
+Thread safety
+-------------
+``seed_candles`` builds a **fresh state dict** and atomically swaps it
+into ``self._states`` under ``self._guard`` at the end. Concurrent
+ticks during a seed write to the OLD state dict (which gets discarded),
+so no half-updated state is ever visible. This makes it safe to call
+``seed_candles`` while the feed is live — which the periodic refresh
+job does every 2 minutes.
+
+Scope
+-----
+When ``LIVE_SR_TRACK_ALL_INSTRUMENTS`` is True (default), every
+instrument the live feed subscribes to is tracked. When False, only
+instruments explicitly registered by ``level_instrument_filter_service``
+are tracked.
+
+Candle source (unchanged)
+-------------------------
+* Index feeds carry ``candle_1m`` (interval ``I1``) — used directly.
+* Option feeds only carry ``ltpc`` — OHLC is built from LTP ticks,
+  then corrected by the periodic authoritative refresh.
+
+Persistence (unchanged)
+-----------------------
+The file is written when:
+  * the instrument is registered (empty file, or hydrated)
+  * a new pivot is confirmed
+  * every ``LIVE_SR_PERSIST_EVERY_N_CANDLES`` finalized candles
+  * at the end of every ``seed_candles`` / ``refresh_from_api`` call
+
+Logging policy (unchanged, VERBOSE_LOG-gated)
+---------------------------------------------
+Per-instrument lines fire only when ``VERBOSE_LOG=true``. Summary
+lines (``register_all complete`` / ``in-memory state cleared``) are
+always logged. Failures are always logged.
 """
 
 from __future__ import annotations
@@ -61,8 +123,37 @@ def _verbose() -> bool:
     return bool(getattr(config, "VERBOSE_LOG", False))
 
 # --------------------------------------------------------------------------- #
-# Path helpers                                                                #
+# Date / path helpers                                                        #
 # --------------------------------------------------------------------------- #
+def _today_date():
+    return datetime.now(_MARKET_TZ).date()
+
+def _today_iso() -> str:
+    return datetime.now(_MARKET_TZ).date().isoformat()
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+def _parse_iso_ts(value: Any) -> datetime | None:
+    """Best-effort ISO / epoch parse into a tz-aware datetime."""
+    if value is None or value == "":
+        return None
+    try:
+        n = float(value)
+        if n > 1e10:
+            return datetime.fromtimestamp(n / 1000.0, tz=_MARKET_TZ)
+        if n > 1e9:
+            return datetime.fromtimestamp(n, tz=_MARKET_TZ)
+    except (TypeError, ValueError):
+        pass
+    try:
+        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except Exception:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=_MARKET_TZ)
+    return dt
+
 def _safe_folder(name: Any) -> str:
     text = str(name or "unknown").strip()
     for ch in ("|", "/", "\\", ":", "*", "?", '"', "<", ">", " "):
@@ -96,27 +187,16 @@ def _folder_for_entry(entry: dict[str, Any]) -> Path:
         / _safe_folder(entry.get("instrument_key"))
     )
 
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-def _today_iso() -> str:
-    return datetime.now(_MARKET_TZ).date().isoformat()
-
 def _to_ms(value: Any) -> int | None:
     if value is None or value == "":
         return None
     try:
         n = float(value)
     except (TypeError, ValueError):
-        try:
-            dt = datetime.fromisoformat(
-                str(value).replace("Z", "+00:00")
-            )
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            return int(dt.timestamp() * 1000)
-        except Exception:
+        dt = _parse_iso_ts(value)
+        if dt is None:
             return None
+        return int(dt.timestamp() * 1000)
     if n > 1e12:
         return int(n)
     if n > 1e10:
@@ -213,7 +293,7 @@ class LiveSRLevelsService:
             return sorted(self._registered)
 
     # ------------------------------------------------------------------ #
-    # Seed from pre-existing candles (mid-session backfill)              #
+    # Seed / refresh                                                     #
     # ------------------------------------------------------------------ #
     def seed_candles(
         self,
@@ -221,11 +301,25 @@ class LiveSRLevelsService:
         entry: dict[str, Any],
         candles: list[dict[str, Any]],
     ) -> dict[str, Any]:
+        """Bulk-seed the SR engine from a list of 1-min candles.
+
+        ## 2026-10-26 change
+        A fresh state dict is built and only swapped into
+        ``self._states`` under ``self._guard`` at the end. Concurrent
+        ticks during the scan write to the (soon-to-be-discarded) old
+        state, so no half-updated state is ever visible. Safe to call
+        while the feed is live.
+
+        The seed truncates the incoming candles to ``LIVE_SR_MAX_CANDLES``
+        (keeps the LATEST bars). Callers can pass the full historical +
+        intraday merge without worrying about buffer overrun.
+        """
         result: dict[str, Any] = {
             "instrument_key": instrument_key,
             "candles_seeded": 0,
+            "candles_truncated_from": 0,
             "pivots_detected": 0,
-            "total_levels": 0,
+            "pivots_today": 0,
             "error": None,
         }
         if not config.LIVE_SR_ENABLED:
@@ -237,22 +331,24 @@ class LiveSRLevelsService:
             result["error"] = "no_candles"
             return result
 
+        # Register first so we have entry / date in `_states`.
         self.register_instrument(entry)
         with self._guard:
-            state = self._states.get(key)
-        if state is None:
+            old_state = self._states.get(key)
+        if old_state is None:
             result["error"] = "no_state"
             return result
 
+        # ---- Normalise incoming candles ---------------------------- #
         internal: dict[int, dict[str, Any]] = {}
         for raw in candles:
             if not isinstance(raw, dict):
                 continue
-            ts_ms = _to_ms(raw.get("time") or raw.get("ts_ms"))
+            ts_ms = _to_ms(raw.get("time") or raw.get("ts") or raw.get("ts_ms"))
             if ts_ms is None:
                 continue
             try:
-                candle = {
+                c = {
                     "time": _ms_to_iso(ts_ms),
                     "ts_ms": ts_ms,
                     "bucket": ts_ms // 60000,
@@ -264,7 +360,7 @@ class LiveSRLevelsService:
                 }
             except (KeyError, TypeError, ValueError):
                 continue
-            internal[candle["bucket"]] = candle
+            internal[c["bucket"]] = c
 
         if not internal:
             result["error"] = "no_valid_candles"
@@ -272,45 +368,111 @@ class LiveSRLevelsService:
 
         ordered = [internal[b] for b in sorted(internal.keys())]
 
-        original_levels = list(state.get("levels") or [])
-        original_candles = list(state.get("candles") or [])
-        original_last_checked = state.get("last_checked_index", -1)
+        # ---- Truncate to buffer cap -------------------------------- #
+        max_candles = max(50, int(config.LIVE_SR_MAX_CANDLES))
+        if len(ordered) > max_candles:
+            result["candles_truncated_from"] = len(ordered)
+            ordered = ordered[-max_candles:]
 
-        state["_suppress_persist"] = True
+        # ---- Build the NEW state fresh ----------------------------- #
+        new_state = self._init_state(entry, _today_iso())
+        new_state["candles"] = ordered
+        new_state["levels"] = []
+        new_state["forming"] = None
+        new_state["last_checked_index"] = -1
+        new_state["_suppress_persist"] = True
+
         try:
-            state["candles"] = ordered
-            state["levels"] = []
-            state["forming"] = None
-            state["last_checked_index"] = -1
-
-            self._scan_all_pivots(state)
+            self._scan_all_pivots(new_state)
         except Exception as exc:
             logger.exception(
-                "[live-sr] seed scan failed for %s; rolling back", key,
+                "[live-sr] seed scan failed for %s", key,
             )
-            state["levels"] = original_levels
-            state["candles"] = original_candles
-            state["last_checked_index"] = original_last_checked
             result["error"] = f"{type(exc).__name__}: {exc}"
             return result
         finally:
-            state["_suppress_persist"] = False
-            state["candles_since_persist"] = 0
+            new_state["_suppress_persist"] = False
+            new_state["candles_since_persist"] = 0
+
+        # ---- Atomic swap ------------------------------------------- #
+        with self._guard:
+            self._states[key] = new_state
+            self._registered.add(key)
 
         try:
-            self._persist(key, state)
+            self._persist(key, new_state)
         except Exception:
             logger.exception("[live-sr] seed persist failed for %s", key)
 
+        # ---- Stats ------------------------------------------------- #
         result["candles_seeded"] = len(ordered)
-        result["pivots_detected"] = len(state["levels"])
-        result["total_levels"] = len(state["levels"])
+        result["pivots_today"] = len(new_state["levels"])
+        result["pivots_detected"] = len(new_state["levels"])
+
         if _verbose():
             logger.info(
-                "[live-sr] seeded %s: candles=%d pivots=%d",
-                key, len(ordered), len(state["levels"]),
+                "[live-sr] seeded %s: candles=%d pivots=%d "
+                "truncated_from=%d",
+                key, len(ordered), len(new_state["levels"]),
+                result["candles_truncated_from"],
             )
         return result
+
+    def refresh_from_api(
+        self,
+        instrument_key: str,
+        entry: dict[str, Any],
+        lookback_days: int | None = None,
+    ) -> dict[str, Any]:
+        """Refresh one instrument from historical + intraday API.
+
+        Thin wrapper used by the periodic scheduler job
+        ``live_sr_refresh_from_api`` (every 2 minutes by default):
+
+            1. Load historical candles from candles.json.
+            2. Fetch today's intraday candles from Upstox.
+            3. Merge (intraday wins on collision).
+            4. seed_candles() — this re-derives pivots.
+
+        Never raises. Failures land in ``error`` and the previous state
+        is preserved.
+        """
+        try:
+            from services.live_sr_calc_service import live_sr_calc_service
+        except Exception as exc:
+            return {
+                "instrument_key": instrument_key,
+                "error": f"calc_service_import_failed: {type(exc).__name__}",
+            }
+
+        lb = (
+            lookback_days
+            if lookback_days is not None
+            else int(config.LIVE_SR_CALC_DEFAULT_LOOKBACK_DAYS)
+        )
+
+        try:
+            historical = live_sr_calc_service.load_historical_candles_for_entry(
+                entry, lb,
+            )
+        except Exception:
+            historical = []
+
+        try:
+            intraday = live_sr_calc_service.fetch_intraday_candles_for_entry(
+                instrument_key,
+            )
+        except Exception:
+            intraday = []
+
+        merged = live_sr_calc_service.merge_candles(historical, intraday)
+        if not merged:
+            return {
+                "instrument_key": instrument_key,
+                "error": "no_candles_from_either_source",
+            }
+
+        return self.seed_candles(instrument_key, entry, merged)
 
     def _scan_all_pivots(self, state: dict[str, Any]) -> bool:
         candles = state["candles"]
@@ -512,8 +674,6 @@ class LiveSRLevelsService:
 
         changed = False
         try:
-            if self._update_breaks(state, candle):
-                changed = True
             if self._detect_pivot(state):
                 changed = True
         finally:
@@ -590,15 +750,25 @@ class LiveSRLevelsService:
         if confirmed_index >= len(state["candles"]):
             return False
         confirmed_candle = state["candles"][confirmed_index]
+        confirmed_time_str = confirmed_candle["time"]
+
+        # ---- Skip non-today pivots --------------------------------- #
+        confirmed_dt = _parse_iso_ts(confirmed_time_str)
+        if confirmed_dt is None:
+            return False
+        if confirmed_dt.astimezone(_MARKET_TZ).date() != _today_date():
+            return False
 
         price = float(
             candle["high"] if level_type == "resistance" else candle["low"]
         )
+
+        # ---- Robust dedup ----------------------------------------- #
         for existing in state["levels"]:
             if (
                 existing["level"] == level_type
                 and abs(existing["price"] - price) < 1e-6
-                and existing["pivot_bar_index"] == pivot_index
+                and existing.get("confirmed_time") == confirmed_time_str
             ):
                 return False
 
@@ -608,21 +778,13 @@ class LiveSRLevelsService:
             "pivot_bar_index": pivot_index,
             "pivot_time": candle["time"],
             "confirmed_bar_index": confirmed_index,
-            "confirmed_time": confirmed_candle["time"],
+            "confirmed_time": confirmed_time_str,
             "left_bars": left,
             "right_bars": right,
-            "broken": False,
-            "broken_at": None,
-            "broken_price": None,
-            "broken_bar_index": None,
         }
         state["levels"].append(level_record)
 
-        # ---- Isolated-SR tracker hook ------------------------------- #
-        # Fires only when this instrument is the currently isolated one
-        # (checked O(1) via `is_tracking`). Every other confirmation on
-        # the ~166 non-isolated instruments pays exactly one string
-        # comparison and one `_today_iso()` call.
+        # ---- Isolated-SR tracker hook ----------------------------- #
         self._notify_isolated_tracker(state, level_record)
 
         return True
@@ -637,8 +799,6 @@ class LiveSRLevelsService:
             key = str(entry.get("instrument_key") or "").strip()
             if not key:
                 return
-            # Local import to avoid a module-load cycle:
-            # isolated_sr_tracker_service -> live_sr_levels_service.
             from services.isolated_sr_tracker_service import (
                 isolated_sr_tracker_service,
             )
@@ -650,31 +810,6 @@ class LiveSRLevelsService:
             logger.exception(
                 "[live-sr] isolated-sr tracker hook failed"
             )
-
-    def _update_breaks(
-        self,
-        state: dict[str, Any],
-        candle: dict[str, Any],
-    ) -> bool:
-        close = float(candle["close"])
-        bar_index = len(state["candles"]) - 1
-        changed = False
-        for level in state["levels"]:
-            if level["broken"]:
-                continue
-            if level["level"] == "resistance" and close > level["price"]:
-                level["broken"] = True
-                level["broken_at"] = candle["time"]
-                level["broken_price"] = close
-                level["broken_bar_index"] = bar_index
-                changed = True
-            elif level["level"] == "support" and close < level["price"]:
-                level["broken"] = True
-                level["broken_at"] = candle["time"]
-                level["broken_price"] = close
-                level["broken_bar_index"] = bar_index
-                changed = True
-        return changed
 
     # ------------------------------------------------------------------ #
     # Persistence                                                        #
@@ -737,7 +872,23 @@ class LiveSRLevelsService:
             return None
 
         state = self._init_state(entry, today)
-        state["levels"] = list(payload.get("levels") or [])
+
+        # Strip residual broken fields when hydrating an older file so
+        # downstream consumers see a clean shape regardless of on-disk
+        # history.
+        raw_levels = payload.get("levels") or []
+        cleaned: list[dict[str, Any]] = []
+        for lvl in raw_levels:
+            if not isinstance(lvl, dict):
+                continue
+            copy = dict(lvl)
+            copy.pop("broken", None)
+            copy.pop("broken_at", None)
+            copy.pop("broken_price", None)
+            copy.pop("broken_bar_index", None)
+            cleaned.append(copy)
+        state["levels"] = cleaned
+
         if _verbose():
             logger.info(
                 "[live-sr] hydrated %s from disk: %d level(s)",
@@ -772,10 +923,26 @@ class LiveSRLevelsService:
         if not path.exists():
             return None
         try:
-            return json.loads(path.read_text(encoding="utf-8"))
+            payload = json.loads(path.read_text(encoding="utf-8"))
         except Exception:
             logger.exception("[live-sr] read failed for %s", key)
             return None
+
+        # Strip residual broken fields from older files.
+        if isinstance(payload, dict):
+            levels = payload.get("levels") or []
+            cleaned = []
+            for lvl in levels:
+                if not isinstance(lvl, dict):
+                    continue
+                copy = dict(lvl)
+                copy.pop("broken", None)
+                copy.pop("broken_at", None)
+                copy.pop("broken_price", None)
+                copy.pop("broken_bar_index", None)
+                cleaned.append(copy)
+            payload["levels"] = cleaned
+        return payload
 
     def reset_state(self) -> None:
         with self._guard:
@@ -807,6 +974,12 @@ class LiveSRLevelsService:
             "right_bars": int(config.LIVE_SR_RIGHT_BARS),
             "max_candles": int(config.LIVE_SR_MAX_CANDLES),
             "persist_every_n_candles": int(config.LIVE_SR_PERSIST_EVERY_N_CANDLES),
+            "refresh_from_api_enabled": bool(
+                getattr(config, "LIVE_SR_REFRESH_FROM_API_ENABLED", True)
+            ),
+            "refresh_from_api_minutes": int(
+                getattr(config, "LIVE_SR_REFRESH_FROM_API_MINUTES", 2)
+            ),
             "registered": len(self._registered),
             "tracking": tracking,
             "candles_total": candle_total,
@@ -816,6 +989,5 @@ class LiveSRLevelsService:
             "instruments_total": tracking,
             "generated_at": _now_iso(),
         }
-
 
 live_sr_levels_service = LiveSRLevelsService()

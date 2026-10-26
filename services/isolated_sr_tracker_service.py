@@ -33,13 +33,12 @@ means:
     with an older one is still recorded because ``confirmed_time``
     differs.
 
-Merging current broken status
------------------------------
-When ``get_detail()`` runs, the tracker merges the *current*
-``broken`` / ``broken_at`` / ``broken_price`` fields from
-``live_sr_levels_service`` into each stored level.  That keeps the
-dashboard in sync with breakages without having to also watch
-``_update_breaks()``.
+Dashboard output
+----------------
+``get_detail()`` returns both ``pre_isolation_levels`` and
+``post_isolation_levels`` **sorted by price ascending** (supports and
+resistances intermixed). There is no broken / intact distinction —
+every confirmed pivot is retained for the day.
 """
 
 from __future__ import annotations
@@ -72,6 +71,17 @@ def _now_iso() -> str:
 
 def _now_market_iso() -> str:
     return datetime.now(_MARKET_TZ).isoformat()
+
+def _strip_legacy_fields(level: dict[str, Any]) -> dict[str, Any]:
+    """Return a shallow copy of ``level`` without any broken-* fields."""
+    if not isinstance(level, dict):
+        return {}
+    out = dict(level)
+    out.pop("broken", None)
+    out.pop("broken_at", None)
+    out.pop("broken_price", None)
+    out.pop("broken_bar_index", None)
+    return out
 
 # --------------------------------------------------------------------------- #
 # Service                                                                     #
@@ -119,9 +129,17 @@ class IsolatedSRTrackerService:
             return
         if str(loaded.get("day") or "") != _today_iso():
             return
+
+        # Strip any residual broken fields persisted by an older build.
+        for phase in ("pre_isolation_levels", "post_isolation_levels"):
+            cleaned = [
+                _strip_legacy_fields(lvl)
+                for lvl in (loaded.get(phase) or [])
+                if isinstance(lvl, dict)
+            ]
+            loaded[phase] = cleaned
+
         self._state = loaded
-        # Rebuild the dedup set from persisted levels so a mid-day
-        # restart does not double-record any already-known pivot.
         self._seen_keys = set()
         for phase in ("pre_isolation_levels", "post_isolation_levels"):
             for lvl in self._state.get(phase) or []:
@@ -174,15 +192,7 @@ class IsolatedSRTrackerService:
     # Public fast-path check                                             #
     # ------------------------------------------------------------------ #
     def is_tracking(self, instrument_key: str) -> bool:
-        """Return True iff we are watching ``instrument_key`` for *today*.
-
-        Called from ``live_sr_levels_service._append_level`` on every
-        pivot confirmation across the whole registry, so this must be
-        cheap.  It reads ``_state`` without the lock — dict ``get()``
-        is atomic under the GIL and the worst-case stale read is a
-        single no-op confirmation that the next call will handle
-        correctly under the lock.
-        """
+        """Return True iff we are watching ``instrument_key`` for *today*."""
         key = str(instrument_key or "")
         if not key:
             return False
@@ -227,7 +237,7 @@ class IsolatedSRTrackerService:
 
             # Snapshot existing SR levels as pre-isolation.
             for lvl in self._snapshot_current_levels(key):
-                record = dict(lvl)
+                record = _strip_legacy_fields(lvl)
                 record["_phase"] = "pre_isolation"
                 self._state["pre_isolation_levels"].append(record)
                 self._seen_keys.add(self._dedup_key(record))
@@ -281,7 +291,7 @@ class IsolatedSRTrackerService:
                 return
             self._seen_keys.add(dedup)
 
-            record = dict(level)
+            record = _strip_legacy_fields(level)
             record["_phase"] = "post_isolation"
             self._state["post_isolation_levels"].append(record)
 
@@ -354,9 +364,24 @@ class IsolatedSRTrackerService:
     # Dashboard / API                                                    #
     # ------------------------------------------------------------------ #
     def get_detail(self) -> dict[str, Any]:
-        """Return a JSON-safe snapshot for the dashboard / admin API."""
+        """Return a JSON-safe snapshot for the dashboard / admin API.
+
+        ``pre_isolation_levels`` and ``post_isolation_levels`` are both
+        returned **sorted by price ascending**. There is no broken /
+        intact distinction; every confirmed pivot is retained.
+        """
         with self._lock:
             self._ensure_today()
+            pre = [
+                _strip_legacy_fields(x)
+                for x in (self._state.get("pre_isolation_levels") or [])
+                if isinstance(x, dict)
+            ]
+            post = [
+                _strip_legacy_fields(x)
+                for x in (self._state.get("post_isolation_levels") or [])
+                if isinstance(x, dict)
+            ]
             detail: dict[str, Any] = {
                 "enabled": bool(config.LEVEL_ISOLATION_ENABLED),
                 "day": self._state.get("day"),
@@ -364,18 +389,10 @@ class IsolatedSRTrackerService:
                 "trading_symbol": self._state.get("trading_symbol"),
                 "isolated_at": self._state.get("isolated_at"),
                 "isolated_reason": self._state.get("isolated_reason"),
-                "pre_isolation_levels": [
-                    dict(x) for x in (self._state.get("pre_isolation_levels") or [])
-                ],
-                "post_isolation_levels": [
-                    dict(x) for x in (self._state.get("post_isolation_levels") or [])
-                ],
-                "pre_isolation_count": len(
-                    self._state.get("pre_isolation_levels") or []
-                ),
-                "post_isolation_count": len(
-                    self._state.get("post_isolation_levels") or []
-                ),
+                "pre_isolation_levels": pre,
+                "post_isolation_levels": post,
+                "pre_isolation_count": len(pre),
+                "post_isolation_count": len(post),
                 "first_post_isolation_seen": bool(
                     self._state.get("first_post_isolation_seen")
                 ),
@@ -387,28 +404,14 @@ class IsolatedSRTrackerService:
                 "generated_at": _now_iso(),
             }
 
-        # Merge CURRENT broken status from the live SR engine (outside
-        # the lock so a slow read does not block other confirmations).
-        key = detail.get("instrument_key")
-        if key:
-            try:
-                from services.live_sr_levels_service import live_sr_levels_service
-                payload = live_sr_levels_service.get_levels(key)
-                if isinstance(payload, dict):
-                    current_by_key: dict[tuple, dict[str, Any]] = {}
-                    for lvl in payload.get("levels") or []:
-                        if isinstance(lvl, dict):
-                            current_by_key[self._dedup_key(lvl)] = lvl
-                    for phase in ("pre_isolation_levels", "post_isolation_levels"):
-                        for lvl in detail.get(phase) or []:
-                            cur = current_by_key.get(self._dedup_key(lvl))
-                            if cur:
-                                lvl["broken"] = cur.get("broken")
-                                lvl["broken_at"] = cur.get("broken_at")
-                                lvl["broken_price"] = cur.get("broken_price")
-                                lvl["broken_bar_index"] = cur.get("broken_bar_index")
-            except Exception:
-                logger.exception("[isolated-sr] merge broken status failed")
+        # Sort both lists by price ascending — TradingView behaviour,
+        # supports and resistances intermixed.
+        detail["pre_isolation_levels"].sort(
+            key=lambda l: float(l.get("price") or 0.0)
+        )
+        detail["post_isolation_levels"].sort(
+            key=lambda l: float(l.get("price") or 0.0)
+        )
 
         return detail
 
@@ -423,6 +426,5 @@ class IsolatedSRTrackerService:
             self._save_state()
         logger.info("[isolated-sr] state reset")
         return {"status": "reset", "day": self._state.get("day")}
-
 
 isolated_sr_tracker_service = IsolatedSRTrackerService()

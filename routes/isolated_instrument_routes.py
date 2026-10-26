@@ -68,8 +68,10 @@ def get_sr_tracking() -> dict[str, Any]:
       * ``post_isolation_levels`` — SR levels confirmed after isolation
       * ``waiting_for_first_confirmation`` — True until the first
         post-isolation pivot lands
-      * merged ``broken`` / ``broken_at`` / ``broken_price`` fields on
-        every level, reflecting the *current* state of the SR engine
+
+    Levels are returned sorted by price ascending. Every confirmed
+    pivot is retained for the day — there is no broken / intact
+    distinction.
     """
     return isolated_sr_tracker_service.get_detail()
 

@@ -347,3 +347,77 @@ LEVEL_ISOLATION_SR_FILENAME = _str(
 LEVEL_ISOLATION_SR_TELEGRAM_ENABLED = _bool(
     "LEVEL_ISOLATION_SR_TELEGRAM_ENABLED", True
 )
+
+# ===========================================================================
+# LIVE SR CALC — on-demand stateless SR computation
+# ===========================================================================
+# Feeds the /live-sr/calc endpoints.
+#
+#   services/live_sr_calc_service.py
+#   routes/live_sr_calc_routes.py
+#
+# Unlike `live_sr_levels_service` (which maintains per-instrument state
+# and persists to data/<...>/live_sr_levels.json), this calculator is
+# STATELESS and always fetches fresh data:
+#   1. Historical candles from data/<...>/candles.json
+#   2. Today's intraday 1-min candles from Upstox HistoryV3Api
+#
+# Then runs the same strict-pivot scan as live_sr_levels_service on the
+# merged series and returns the resulting levels.
+#
+# Every response is deterministic for the same underlying data, so
+# callers can poll the endpoint safely — no shared state, no writes.
+#
+# Endpoints:
+#   GET  /live-sr/calc?instrument_key=...          (or triple params)
+#   GET  /live-sr/calc/{underlying}/{strike}/{type}
+#   POST /live-sr/calc/batch
+# ===========================================================================
+
+# Default historical lookback window (days). 1..30, default 5.
+LIVE_SR_CALC_DEFAULT_LOOKBACK_DAYS = max(1, min(30, _int(
+    "LIVE_SR_CALC_DEFAULT_LOOKBACK_DAYS", 5
+)))
+
+# Hard cap on the number of merged candles used for pivot detection
+# (default 3000). Protects against pathological lookback_days values
+# and bounds the pivot scan time.
+LIVE_SR_CALC_MAX_CANDLES = max(100, min(10000, _int(
+    "LIVE_SR_CALC_MAX_CANDLES", 3000
+)))
+
+# ===========================================================================
+# LIVE SR — accuracy tuning
+# ===========================================================================
+# Two settings that directly affect the accuracy of the persisted
+# `live_sr_levels.json` (the file consumed by the isolation tracker and
+# shown under `live_sr` on GET /live-sr/calc).
+#
+# See services/live_sr_levels_service.py module docstring for the full
+# "accuracy overhaul" note.
+# ===========================================================================
+
+# When True (default), sr_backfill_service merges historical candles
+# (data/<...>/candles.json) with today's intraday before seeding the
+# live SR engine. Without this, pivots that need context from
+# yesterday's tail (e.g. the 09:26 support on NIFTY 22400 CE) are
+# missed.
+SR_BACKFILL_INCLUDE_HISTORICAL = _bool("SR_BACKFILL_INCLUDE_HISTORICAL", True)
+
+# Periodic re-seed of the live SR engine from the authoritative Upstox
+# intraday API. Fixes the drift between tick-aggregated option candles
+# and the true OHLC (break flags, freshness of very recent pivots).
+#
+# Set to False to disable the scheduler job entirely — the feed-start
+# backfill still runs.
+LIVE_SR_REFRESH_FROM_API_ENABLED = _bool(
+    "LIVE_SR_REFRESH_FROM_API_ENABLED", True
+)
+
+# Refresh interval, in minutes. Default 2. Values 1..60 are supported.
+# Higher values reduce Upstox API load (each refresh issues one
+# intraday call per tracked instrument) at the cost of a larger
+# accuracy lag on the freshest pivot / break.
+LIVE_SR_REFRESH_FROM_API_MINUTES = max(
+    1, min(60, _int("LIVE_SR_REFRESH_FROM_API_MINUTES", 2))
+)

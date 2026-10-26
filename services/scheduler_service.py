@@ -9,6 +9,9 @@ Jobs:
     * preflight_recheck             — cron, 09:05 IST
     * level_isolation_recheck       — cron, every 5 min, 09:16–15:30 IST Mon-Fri
     * daily_backup                  — cron, 16:00 IST
+    * live_sr_refresh_from_api      — interval, every N minutes
+                                      (NEW 2026-10-26: keeps live SR
+                                       levels in sync with Upstox OHLC)
 """
 
 from __future__ import annotations
@@ -19,7 +22,6 @@ from core import config
 from core.logger import get_logger
 
 logger = get_logger(__file__)
-
 
 class SchedulerService:
     def __init__(self) -> None:
@@ -123,13 +125,49 @@ class SchedulerService:
                 replace_existing=True, misfire_grace_time=1800,
             )
 
+        # -- Live SR refresh from Upstox API --------------------------- #
+        # Every N minutes, re-seed each tracked instrument from the
+        # authoritative intraday API. Fixes the accuracy drift that
+        # tick-aggregated option candles were causing (see
+        # live_sr_levels_service module docstring, 2026-10-26 entry).
+        if getattr(config, "LIVE_SR_REFRESH_FROM_API_ENABLED", True):
+            def _refresh_live_sr() -> None:
+                try:
+                    from services.sr_backfill_service import sr_backfill_service
+                    summary = sr_backfill_service.run(
+                        reason="periodic_refresh",
+                        send_telegram=False,
+                    )
+                    logger.info(
+                        "[scheduler] live_sr_refresh_from_api — "
+                        "status=%s instruments=%s seeded=%s errors=%s",
+                        summary.get("status"),
+                        summary.get("instruments_total"),
+                        summary.get("instruments_seeded"),
+                        summary.get("errors"),
+                    )
+                except Exception:
+                    logger.exception(
+                        "[scheduler] live_sr_refresh_from_api failed"
+                    )
+
+            scheduler.add_job(
+                _refresh_live_sr, "interval",
+                minutes=max(1, int(getattr(
+                    config, "LIVE_SR_REFRESH_FROM_API_MINUTES", 2,
+                ))),
+                id="live_sr_refresh_from_api",
+                replace_existing=True, misfire_grace_time=60,
+            )
+
         scheduler.start()
         self._scheduler = scheduler
 
         logger.info(
             "Scheduler started — daily=%02d:%02d, first_candle=%02d:%02d:%02d, "
             "digest=%02d:%02d, preflight=%02d:%02d, "
-            "level_isolation_recheck=*/5 (9-15), DailyBackup=%02d:%02d",
+            "level_isolation_recheck=*/5 (9-15), DailyBackup=%02d:%02d, "
+            "live_sr_refresh=%dm (enabled=%s)",
             config.DAILY_REFRESH_HOUR, config.DAILY_REFRESH_MINUTE,
             getattr(config, "FIRST_CANDLE_HOUR", 9),
             getattr(config, "FIRST_CANDLE_MINUTE", 16),
@@ -137,6 +175,8 @@ class SchedulerService:
             config.READINESS_DIGEST_HOUR, config.READINESS_DIGEST_MINUTE,
             config.READINESS_PREFLIGHT_HOUR, config.READINESS_PREFLIGHT_MINUTE,
             config.DAILY_BACKUP_HOUR, config.DAILY_BACKUP_MINUTE,
+            int(getattr(config, "LIVE_SR_REFRESH_FROM_API_MINUTES", 2)),
+            bool(getattr(config, "LIVE_SR_REFRESH_FROM_API_ENABLED", True)),
         )
 
         return scheduler
@@ -162,6 +202,5 @@ class SchedulerService:
             "Scheduler service is now stopped; a subsequent start() "
             "will create a new BackgroundScheduler."
         )
-
 
 scheduler_service = SchedulerService()

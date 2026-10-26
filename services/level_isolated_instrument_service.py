@@ -26,13 +26,23 @@ Isolated-SR tracker integration
 -------------------------------
 Whenever ``_isolate()`` fires, the isolated record is also handed to
 ``services.isolated_sr_tracker_service.isolated_sr_tracker_service.on_isolation``
-so the tracker can:
-  * snapshot the *current* SR levels as ``pre_isolation``;
-  * watch ``live_sr_levels_service._append_level`` for new pivot
-    confirmations on the isolated instrument and record them as
-    ``post_isolation`` (with Telegram + dashboard updates).
+so the tracker can snapshot the *current* SR levels as ``pre_isolation``
+and watch for new pivots on the isolated instrument.
 
-``get_detail()`` merges the tracker's data under ``sr_tracking``.
+``get_detail()`` merges the tracker's data under ``sr_tracking`` AND
+also attaches the isolated instrument's own ``live_sr_levels.json``
+under ``live_sr_levels`` — the authoritative view the dashboard
+renders.
+
+The ``live_sr_levels.levels`` array is sorted by ``confirmed_time``
+ascending (oldest first) so the display order matches the source file
+byte-for-byte. Each level carries an extra ``_after_isolation`` flag
+computed by comparing its ``confirmed_time`` to the touch time
+(``isolated.touched_at``). Rows with ``_after_isolation=true`` are
+visually highlighted on the dashboard; rows with ``false`` are shown
+plain. There is no broken / intact distinction — every confirmed pivot
+is retained.
+
 ``reset()`` also resets the tracker.
 
 Mid-day restart recovery
@@ -1255,6 +1265,219 @@ class LevelIsolatedInstrumentService:
             "message": message,
         }
 
+    # ------------------------------------------------------------------ #
+    # Live SR levels — read the isolated instrument's own JSON file      #
+    # ------------------------------------------------------------------ #
+    def _load_live_sr_levels_for_isolated(
+        self,
+        iso: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Read the isolated instrument's own live_sr_levels.json file.
+
+        The path is built from the instrument's own underlying / strike /
+        type (NOT from ``trigger_index`` — a cross-index isolation can
+        fire on SENSEX while picking a NIFTY option).
+
+        Each level gets a new ``_after_isolation`` flag by comparing its
+        ``confirmed_time`` to the touch moment (``iso.touched_at``,
+        falling back to ``iso.isolated_at`` if the touch time is absent).
+        Rows with the flag set are visually highlighted on the
+        dashboard; rows without it are shown plain.
+
+        Levels are sorted **by confirmed_time ascending** (oldest first)
+        so the display order matches the source ``live_sr_levels.json``
+        file byte-for-byte. Any legacy ``broken`` / ``broken_at`` /
+        ``broken_price`` / ``broken_bar_index`` fields are stripped so
+        consumers see a clean shape regardless of on-disk history.
+
+        Returns a dict::
+
+            {
+              "available":      bool,
+              "path":           str | None,
+              "candle_count":   int,
+              "total_levels":   int,
+              "before_count":   int,   # confirmed_time < touched_at
+              "after_count":    int,   # confirmed_time >= touched_at
+              "touched_at":     str | None,   # raw iso.touched_at
+              "reference_at":   str | None,   # parsed ISO reference
+              "levels":         [level dict + _after_isolation flag],
+              "error":          str | None,
+            }
+
+        Never raises.
+        """
+        result: dict[str, Any] = {
+            "available": False,
+            "path": None,
+            "candle_count": 0,
+            "total_levels": 0,
+            "before_count": 0,
+            "after_count": 0,
+            "touched_at": None,
+            "reference_at": None,
+            "levels": [],
+            "error": None,
+        }
+
+        if not isinstance(iso, dict):
+            result["error"] = "no_isolated_record"
+            return result
+
+        key = str(iso.get("instrument_key") or "").strip()
+        if not key:
+            result["error"] = "missing_instrument_key"
+            return result
+
+        # ---- Resolve the option's own underlying -------------------- #
+        # Priority order (first hit wins):
+        #   1. explicit ``underlying`` on the isolated record
+        #   2. registry lookup by instrument_key (most reliable)
+        #   3. first word of ``trading_symbol``
+        #   4. ``trigger_index`` (LAST — may be the wrong index for
+        #      cross-index isolation, e.g. SENSEX touch -> NIFTY option)
+        underlying = ""
+        if iso.get("underlying"):
+            underlying = str(iso["underlying"]).strip().lower()
+        if not underlying:
+            try:
+                from services.instrument_registry import instrument_registry
+                entry = instrument_registry.get(key)
+                if entry and entry.get("underlying"):
+                    underlying = str(entry["underlying"]).strip().lower()
+            except Exception:
+                pass
+        if not underlying:
+            symbol = str(iso.get("trading_symbol") or "").strip()
+            if symbol:
+                underlying = symbol.split()[0].lower()
+        if not underlying and iso.get("trigger_index"):
+            underlying = str(iso["trigger_index"]).strip().lower()
+
+        strike = iso.get("strike")
+        strike_type = str(iso.get("type") or "").upper()
+
+        if not underlying or strike is None or not strike_type:
+            result["error"] = "cannot_resolve_path"
+            return result
+
+        try:
+            strike_int = int(float(strike))
+        except (TypeError, ValueError):
+            result["error"] = "invalid_strike"
+            return result
+
+        folder = (
+            Path(config.LIVE_DATA_DIR)
+            / underlying
+            / f"{strike_int}_{strike_type}"
+        )
+        path = folder / config.LIVE_SR_FILENAME
+        result["path"] = str(path)
+
+        if not path.exists():
+            result["error"] = "file_missing"
+            return result
+
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            result["error"] = f"unreadable: {type(exc).__name__}"
+            logger.warning(
+                "[level-isolation] cannot parse %s: %s",
+                path, type(exc).__name__,
+            )
+            return result
+
+        if not isinstance(payload, dict):
+            result["error"] = "not_a_dict"
+            return result
+
+        result["available"] = True
+        try:
+            result["candle_count"] = int(payload.get("candle_count") or 0)
+        except (TypeError, ValueError):
+            result["candle_count"] = 0
+
+        # ---- Reference time: touched_at -> isolated_at -> None ------ #
+        touched_at_raw = iso.get("touched_at")
+        isolated_at_raw = iso.get("isolated_at")
+        ref_str = touched_at_raw or isolated_at_raw
+        result["touched_at"] = touched_at_raw
+
+        ref_dt: datetime | None = None
+        if ref_str:
+            try:
+                ref_dt = datetime.fromisoformat(str(ref_str))
+                if ref_dt.tzinfo is None:
+                    ref_dt = ref_dt.replace(tzinfo=_MARKET_TZ)
+                result["reference_at"] = ref_dt.isoformat()
+            except Exception:
+                ref_dt = None
+                result["reference_at"] = None
+
+        # ---- Normalise + annotate levels ---------------------------- #
+        raw_levels = payload.get("levels") or []
+        if not isinstance(raw_levels, list):
+            raw_levels = []
+
+        cleaned: list[dict[str, Any]] = []
+        before_count = 0
+        after_count = 0
+
+        for lvl in raw_levels:
+            if not isinstance(lvl, dict):
+                continue
+            copy = dict(lvl)
+
+            # Strip any residual broken-* fields from older files.
+            copy.pop("broken", None)
+            copy.pop("broken_at", None)
+            copy.pop("broken_price", None)
+            copy.pop("broken_bar_index", None)
+
+            # Determine "after isolation" by comparing confirmed_time
+            # against the touch time. If we have no reference time,
+            # default to False so nothing gets highlighted.
+            after = False
+            confirmed_str = str(copy.get("confirmed_time") or "")
+            if ref_dt is not None and confirmed_str:
+                try:
+                    confirmed_dt = datetime.fromisoformat(
+                        confirmed_str.replace("Z", "+00:00")
+                    )
+                    if confirmed_dt.tzinfo is None:
+                        confirmed_dt = confirmed_dt.replace(tzinfo=_MARKET_TZ)
+                    after = confirmed_dt >= ref_dt
+                except Exception:
+                    after = False
+
+            copy["_after_isolation"] = bool(after)
+            if after:
+                after_count += 1
+            else:
+                before_count += 1
+
+            cleaned.append(copy)
+
+        # Sort by confirmed_time ascending (oldest first) so the display
+        # order matches the source JSON file byte-for-byte.
+        # ISO-8601 timestamps with a consistent tz suffix sort correctly
+        # lexicographically, so a plain string sort is sufficient and
+        # robust against timezone-less / malformed values (they end up
+        # grouped at the bottom).
+        def _confirmed_sort_key(level: dict[str, Any]) -> str:
+            return str(level.get("confirmed_time") or "")
+
+        cleaned.sort(key=_confirmed_sort_key)
+
+        result["levels"] = cleaned
+        result["total_levels"] = len(cleaned)
+        result["before_count"] = before_count
+        result["after_count"] = after_count
+
+        return result
+
     def get_detail(self) -> dict[str, Any]:
         with self._lock:
             now = _now_market()
@@ -1289,9 +1512,24 @@ class LevelIsolatedInstrumentService:
                 "generated_at": _now_iso(),
             }
 
-        # Attach the SR-tracking snapshot for the UI. Done outside the
-        # lock because `get_detail()` on the tracker reads the live SR
-        # engine file and merges broken status.
+        # ---- Attach the isolated instrument's OWN live SR levels ---- #
+        # Reads ``data/<underlying>/<strike>_<TYPE>/live_sr_levels.json``
+        # directly. Done outside the lock because it does file I/O.
+        try:
+            if isinstance(isolated, dict):
+                detail["live_sr_levels"] = self._load_live_sr_levels_for_isolated(
+                    isolated
+                )
+            else:
+                detail["live_sr_levels"] = None
+        except Exception:
+            logger.exception("[level-isolation] live_sr_levels load failed")
+            detail["live_sr_levels"] = None
+
+        # ---- Attach the SR-tracking snapshot (sidecar) ------------- #
+        # Still used by Telegram, /sr-tracking, and any external
+        # consumers. The dashboard does NOT use it for the SR table
+        # anymore — it renders ``live_sr_levels`` above instead.
         try:
             from services.isolated_sr_tracker_service import (
                 isolated_sr_tracker_service,
@@ -1323,6 +1561,5 @@ class LevelIsolatedInstrumentService:
                 )
             logger.info("[level-isolation] state reset")
             return self.get_detail()
-
 
 level_isolated_instrument_service = LevelIsolatedInstrumentService()

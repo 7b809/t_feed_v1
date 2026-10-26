@@ -834,7 +834,7 @@
     }
 
     /* ============================================================ */
-    /* SR Tracking (isolated instrument — pre/post isolation)       */
+    /* SR Tracking — single merged table                            */
     /* ============================================================ */
     .sr-header-pills {
         margin-left: auto;
@@ -856,52 +856,23 @@
     }
 
     .sr-count-pill.has {
-        background: var(--iso-purple-bg);
-        color: var(--iso-purple);
-        border-color: var(--iso-purple-border);
+        background: #e0e7ff;
+        color: #3730a3;
+        border-color: #bfdbfe;
     }
 
     .sr-count-pill.post {
-        background: var(--iso-green-bg);
-        color: var(--iso-green);
-        border-color: #bbf7d0;
-    }
-
-    .sr-waiting-banner {
-        display: flex;
-        align-items: flex-start;
-        gap: 14px;
-        padding: 16px 18px;
-        border-radius: 12px;
-        background: var(--iso-amber-bg);
-        border: 1px solid var(--iso-amber-border);
-        border-left: 4px solid var(--iso-amber);
-        color: #78350f;
-        font-size: 0.9rem;
-        line-height: 1.55;
-        margin-bottom: 18px;
-    }
-
-    .sr-waiting-banner i {
-        font-size: 1.4rem;
-        color: var(--iso-amber);
-        flex-shrink: 0;
-        margin-top: 2px;
-    }
-
-    .sr-waiting-banner strong {
-        color: var(--iso-amber);
+        background: var(--iso-purple-bg);
+        color: var(--iso-purple);
+        border-color: var(--iso-purple-border);
     }
 
     .sr-phase-header {
         display: flex;
         align-items: center;
         gap: 10px;
-        margin: 20px 0 12px 0;
-    }
-
-    .sr-phase-header:first-child {
-        margin-top: 0;
+        margin: 0 0 12px 0;
+        flex-wrap: wrap;
     }
 
     .sr-phase-header .phase-title {
@@ -912,23 +883,67 @@
         color: var(--iso-text);
     }
 
-    .sr-phase-badge {
-        display: inline-block;
+    .sr-phase-header .phase-hint {
+        font-size: 0.7rem;
+        color: var(--iso-muted);
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.4px;
+    }
+
+    .sr-phase-header .ref-label {
+        font-size: 0.72rem;
+        color: var(--iso-muted);
+        font-weight: 600;
+        font-family: "JetBrains Mono", "Fira Code", "Courier New", monospace;
+    }
+
+    /* ---- Legend explaining row colors ---- */
+    .sr-legend {
+        margin-left: auto;
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+    }
+
+    .sr-legend-item {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
         padding: 3px 10px;
         border-radius: 6px;
         font-size: 0.68rem;
-        font-weight: 800;
-        letter-spacing: 0.5px;
+        font-weight: 700;
+        letter-spacing: 0.3px;
+        text-transform: uppercase;
     }
 
-    .sr-phase-badge.pre {
-        background: #e0e7ff;
-        color: #3730a3;
+    .sr-legend-item::before {
+        content: "";
+        width: 10px;
+        height: 10px;
+        border-radius: 3px;
     }
 
-    .sr-phase-badge.post {
-        background: var(--iso-green-bg);
-        color: var(--iso-green);
+    .sr-legend-item.before {
+        background: #f8fafc;
+        color: var(--iso-muted);
+        border: 1px solid var(--iso-border);
+    }
+
+    .sr-legend-item.before::before {
+        background: #f1f5f9;
+        border: 1px solid #cbd5e1;
+    }
+
+    .sr-legend-item.after {
+        background: #f5f3ff;
+        color: var(--iso-purple);
+        border: 1px solid var(--iso-purple-border);
+    }
+
+    .sr-legend-item.after::before {
+        background: var(--iso-purple);
     }
 
     .sr-type {
@@ -950,28 +965,16 @@
         color: var(--iso-green);
     }
 
-    .broken-pill {
-        display: inline-block;
-        padding: 2px 9px;
-        border-radius: 5px;
-        font-size: 0.68rem;
-        font-weight: 700;
-    }
-
-    .broken-pill.intact {
-        background: #f1f5f9;
-        color: var(--iso-muted);
-    }
-
-    .broken-pill.broken {
-        background: var(--iso-red-bg);
-        color: var(--iso-red);
-    }
-
-    .sr-post-row-new td {
+    /* After-touch rows — purple tint + left accent. */
+    .sr-row-after-isolation td {
         background: #f5f3ff !important;
     }
 
+    .sr-row-after-isolation td:first-child {
+        border-left: 3px solid var(--iso-purple);
+    }
+
+    /* Small badge for genuinely-new arrivals (since last poll). */
     .sr-new-badge {
         display: inline-block;
         padding: 1px 7px;
@@ -1081,14 +1084,14 @@
         </div>
     </div>
 
-    <!-- SR Tracking card: pre / post isolation SR levels -->
+    <!-- SR Tracking card: single merged SR table -->
     <div class="iso-card" id="iso-sr-tracking" style="display: none;">
         <div class="iso-card-header">
             <i class="bi bi-activity text-primary"></i>
             <span>SR Tracking · Isolated Instrument</span>
             <div class="sr-header-pills">
-                <span class="sr-count-pill" id="sr-pre-pill">Pre: 0</span>
-                <span class="sr-count-pill post" id="sr-post-pill">Post: 0</span>
+                <span class="sr-count-pill" id="sr-before-pill">Before: 0</span>
+                <span class="sr-count-pill post" id="sr-after-pill">After: 0</span>
             </div>
         </div>
         <div class="iso-card-body">
@@ -1220,10 +1223,10 @@
     const state = {
         detail: null,
         pollTimer: null,
-        // Set of post-isolation level dedup keys we've already rendered
-        // at least once. Used to highlight newly-arrived confirmations
-        // in violet so the operator can see them at a glance.
-        seenPostKeys: new Set(),
+        // Set of every level key we've already rendered at least once.
+        // Used to badge genuinely-new arrivals (only on after-touch rows)
+        // with the "NEW" pill.
+        seenAllKeys: new Set(),
     };
 
     /* ---------- small formatters ---------- */
@@ -1274,7 +1277,6 @@
         }
     }
 
-    // Format ISO date OR epoch millis/seconds to "27 OCT 26" (IST).
     function formatExpiry(val) {
         if (val === null || val === undefined || val === "") return "—";
         const s = String(val).trim();
@@ -1338,17 +1340,12 @@
         return map[src] || String(src || "—");
     }
 
-    /* ---------- snapshot availability ---------- */
     function snapshotAvailability(d) {
         const iso = d && d.isolated;
         if (!iso) {
             return {
-                hasAny: false,
-                needsRefresh: false,
-                hasLtp: false,
-                hasTouch: false,
-                hasFc: false,
-                hasOr: false,
+                hasAny: false, needsRefresh: false,
+                hasLtp: false, hasTouch: false, hasFc: false, hasOr: false,
             };
         }
         const ltp = parseNum(iso.instrument_ltp);
@@ -1357,17 +1354,8 @@
         const hasFc = Object.keys(iso.instrument_first_candle || {}).length > 0;
         const hasOr = Object.keys(iso.instrument_or_levels || {}).length > 0;
         const hasAny = hasLtp || hasTouch || hasFc || hasOr;
-        // Show the "Refresh Snapshot" button when the two most
-        // important fields (LTP + first candle) aren't both present.
         const needsRefresh = !hasLtp || !hasFc;
-        return {
-            hasAny,
-            needsRefresh,
-            hasLtp,
-            hasTouch,
-            hasFc,
-            hasOr,
-        };
+        return { hasAny, needsRefresh, hasLtp, hasTouch, hasFc, hasOr };
     }
 
     /* ---------- renderers ---------- */
@@ -1412,9 +1400,8 @@
         }
 
         const mkt = d.market || {};
-        const state = mkt.state || "in_session";
-        const isWatching =
-            state === "in_session" && mkt.or_ready;
+        const mktState = mkt.state || "in_session";
+        const isWatching = mktState === "in_session" && mkt.or_ready;
 
         banner.style.display = "flex";
         banner.className = "iso-banner" + (isWatching ? " is-watching" : "");
@@ -1428,52 +1415,37 @@
         let title = "Not isolated yet";
         let sub = "";
 
-        switch (state) {
+        switch (mktState) {
             case "weekend":
-                icon = "bi-calendar-x";
-                title = "Weekend — market closed";
+                icon = "bi-calendar-x"; title = "Weekend — market closed";
                 sub = "Isolation resumes on the next trading day.";
                 break;
             case "holiday":
-                icon = "bi-calendar-x";
-                title = "Market holiday";
+                icon = "bi-calendar-x"; title = "Market holiday";
                 sub = mkt.holiday_description
-                    ? `Reason: ${mkt.holiday_description}`
-                    : "No trading today.";
+                    ? `Reason: ${mkt.holiday_description}` : "No trading today.";
                 break;
             case "pre_open":
-                icon = "bi-alarm";
-                title = "Pre-open — waiting for market open";
-                sub =
-                    "OR levels will be computed at 09:16:10 IST; isolation " +
-                    "will begin watching for R3 / S3 touches right after.";
+                icon = "bi-alarm"; title = "Pre-open — waiting for market open";
+                sub = "OR levels will be computed at 09:16:10 IST; isolation will begin watching for R3 / S3 touches right after.";
                 break;
             case "or_warming_up":
-                icon = "bi-lightning-charge";
-                title = "OR levels being computed";
-                sub =
-                    "First candle closed at 09:16 — isolation will start " +
-                    "watching for R3 / S3 touches in a moment.";
+                icon = "bi-lightning-charge"; title = "OR levels being computed";
+                sub = "First candle closed at 09:16 — isolation will start watching for R3 / S3 touches in a moment.";
                 break;
             case "post_close":
-                icon = "bi-moon-stars";
-                title = "Market closed";
+                icon = "bi-moon-stars"; title = "Market closed";
                 sub = "No new isolation until the next trading session.";
                 break;
             case "in_session":
                 if (isWatching) {
-                    icon = "bi-bullseye";
-                    title = "Watching for R3 / S3 touches";
-                    sub =
-                        "Candidates will be isolated the moment NIFTY or " +
-                        "SENSEX touches its R3 or S3 level.";
+                    icon = "bi-bullseye"; title = "Watching for R3 / S3 touches";
+                    sub = "Candidates will be isolated the moment NIFTY or SENSEX touches its R3 or S3 level.";
                 } else {
-                    icon = "bi-hourglass-split";
-                    title = "Not isolated yet";
+                    icon = "bi-hourglass-split"; title = "Not isolated yet";
                 }
                 break;
-            default:
-                break;
+            default: break;
         }
 
         if (iconEl) iconEl.innerHTML = `<i class="bi ${icon}"></i>`;
@@ -1513,7 +1485,6 @@
         document.getElementById("hero-key").textContent =
             iso.instrument_key || "";
 
-        // Tags: levels + strike/type
         const tagsEl = document.getElementById("hero-tags");
         tagsEl.innerHTML = "";
         const tags = [];
@@ -1538,7 +1509,6 @@
             .map(t => `<span class="tag ${t.cls}">${esc(t.text)}</span>`)
             .join("");
 
-        // Meta grid
         const metaEl = document.getElementById("hero-meta");
         const metaItems = [
             { label: "Trigger", value: reasonLabel(iso.reason) },
@@ -1546,14 +1516,9 @@
             { label: "Expiry", value: formatExpiry(iso.expiry) },
             {
                 label: "Trigger Level",
-                value:
-                    `${iso.trigger_level || "—"} = ` +
-                    `${fmt(iso.trigger_level_value)}`,
+                value: `${iso.trigger_level || "—"} = ${fmt(iso.trigger_level_value)}`,
             },
-            {
-                label: "Touched At",
-                value: formatTime(iso.touched_at),
-            },
+            { label: "Touched At", value: formatTime(iso.touched_at) },
         ];
         if (iso.nifty_reference_ltp !== null &&
             iso.nifty_reference_ltp !== undefined) {
@@ -1572,15 +1537,13 @@
             })
             .join("");
 
-// Chart CTA
-const chartBtn = document.getElementById("hero-chart-btn");
-if (chartBtn && iso.instrument_key) {
-    chartBtn.href = "/chart/" + encodeURIComponent(iso.instrument_key);
-    chartBtn.target = "_blank";
-    chartBtn.rel = "noopener noreferrer";
-}
+        const chartBtn = document.getElementById("hero-chart-btn");
+        if (chartBtn && iso.instrument_key) {
+            chartBtn.href = "/chart/" + encodeURIComponent(iso.instrument_key);
+            chartBtn.target = "_blank";
+            chartBtn.rel = "noopener noreferrer";
+        }
 
-        // Instrument LTP @ touch
         const instrLtpEl = document.getElementById("hero-instrument-ltp");
         const instrSubEl = document.getElementById("hero-instrument-sub");
         const instrLtp = parseNum(iso.instrument_ltp);
@@ -1593,7 +1556,6 @@ if (chartBtn && iso.instrument_key) {
                 : "—";
         }
 
-        // Trigger LTP (index)
         document.getElementById("hero-trigger-ltp").textContent =
             fmt(ev.trigger_ltp);
         document.getElementById("hero-trigger-sub").textContent =
@@ -1603,11 +1565,22 @@ if (chartBtn && iso.instrument_key) {
     }
 
     /* ============================================================
-       SR Tracking (pre / post isolation levels)
+       SR Tracking — SINGLE table
+       ------------------------------------------------------------
+       Data source: d.live_sr_levels (built by the backend from the
+       isolated instrument's own data/<underlying>/<strike>_<TYPE>/
+       live_sr_levels.json file).
+
+       Each level already carries `_after_isolation` (bool) — set by
+       the backend by comparing its `confirmed_time` to the touch
+       time. Rows with the flag set are highlighted with a purple
+       tint; the rest use the default table style.
+
+       The whole list is sorted by `confirmed_time` ASCENDING
+       (oldest first) so the display order matches the source
+       live_sr_levels.json file byte-for-byte.
        ============================================================ */
     function srDedupKey(lvl) {
-        // Matches the tracker service's dedup key so we can decide which
-        // post-isolation rows are "new since last render".
         const price = parseNum(lvl.price);
         return [
             String(lvl.level || ""),
@@ -1618,6 +1591,8 @@ if (chartBtn && iso.instrument_key) {
 
     function srLevelRowHtml(lvl, opts) {
         const isNew = opts && opts.isNew;
+        const isAfter = !!lvl._after_isolation;
+
         const typeStr = String(lvl.level || "").toLowerCase();
         const typeCls = typeStr === "resistance"
             ? "resistance"
@@ -1629,12 +1604,7 @@ if (chartBtn && iso.instrument_key) {
             : typeStr === "support"
                 ? "SUPPORT"
                 : (lvl.level || "—").toUpperCase();
-        const broken = !!lvl.broken;
-        const brokenCls = broken ? "broken" : "intact";
-        const brokenLabel = broken ? "BROKEN" : "intact";
-        const brokenTitle = broken
-            ? `${lvl.broken_at || ""} @ ${fmt(lvl.broken_price)}`.trim()
-            : "still open";
+
         const lb = lvl.left_bars === undefined || lvl.left_bars === null
             ? "—"
             : String(lvl.left_bars);
@@ -1642,7 +1612,9 @@ if (chartBtn && iso.instrument_key) {
             ? "—"
             : String(lvl.right_bars);
 
-        return `<tr class="${isNew ? "sr-post-row-new" : ""}">
+        const rowClass = isAfter ? "sr-row-after-isolation" : "";
+
+        return `<tr class="${rowClass}">
             <td>
                 <span class="sr-type ${typeCls}">${esc(typeLabel)}</span>
                 ${isNew ? `<span class="sr-new-badge">NEW</span>` : ""}
@@ -1651,36 +1623,7 @@ if (chartBtn && iso.instrument_key) {
             <td>${formatTime(lvl.pivot_time)}</td>
             <td>${formatTime(lvl.confirmed_time)}</td>
             <td class="num">${esc(lb)} / ${esc(rb)}</td>
-            <td><span class="broken-pill ${brokenCls}" title="${esc(brokenTitle)}">${esc(brokenLabel)}</span></td>
         </tr>`;
-    }
-
-    function srTableHtml(levels, phase) {
-        if (!Array.isArray(levels) || levels.length === 0) {
-            return "";
-        }
-        const rows = levels.map(lvl => {
-            const isNew =
-                phase === "post" &&
-                !state.seenPostKeys.has(srDedupKey(lvl));
-            return srLevelRowHtml(lvl, { isNew });
-        }).join("");
-        return `
-            <div class="iso-table-wrap">
-                <table class="iso-table">
-                    <thead>
-                        <tr>
-                            <th>Type</th>
-                            <th class="num">Price</th>
-                            <th>Pivot Time</th>
-                            <th>Confirmed Time</th>
-                            <th class="num">L / R Bars</th>
-                            <th>Status</th>
-                        </tr>
-                    </thead>
-                    <tbody>${rows}</tbody>
-                </table>
-            </div>`;
     }
 
     function srEmptyStateHtml(message) {
@@ -1694,159 +1637,114 @@ if (chartBtn && iso.instrument_key) {
     function renderSRTracking(d) {
         const card = document.getElementById("iso-sr-tracking");
         const body = document.getElementById("sr-tracking-body");
-        const prePill = document.getElementById("sr-pre-pill");
-        const postPill = document.getElementById("sr-post-pill");
+        const beforePill = document.getElementById("sr-before-pill");
+        const afterPill = document.getElementById("sr-after-pill");
         if (!card || !body) return;
 
-        // If not isolated, hide the card entirely — no SR tracking exists.
+        // Not isolated → hide the card entirely.
         if (!d.isolated) {
             card.style.display = "none";
-            if (prePill) {
-                prePill.textContent = "Pre: 0";
-                prePill.className = "sr-count-pill";
+            if (beforePill) {
+                beforePill.textContent = "Before: 0";
+                beforePill.className = "sr-count-pill";
             }
-            if (postPill) {
-                postPill.textContent = "Post: 0";
-                postPill.className = "sr-count-pill post";
+            if (afterPill) {
+                afterPill.textContent = "After: 0";
+                afterPill.className = "sr-count-pill post";
             }
-            state.seenPostKeys = new Set();
+            state.seenAllKeys = new Set();
             return;
         }
 
         card.style.display = "block";
 
-        const sr = d.sr_tracking || {};
-        const preLevels = Array.isArray(sr.pre_isolation_levels)
-            ? sr.pre_isolation_levels
-            : [];
-        const postLevels = Array.isArray(sr.post_isolation_levels)
-            ? sr.post_isolation_levels
-            : [];
-        const preCount = typeof sr.pre_isolation_count === "number"
-            ? sr.pre_isolation_count
-            : preLevels.length;
-        const postCount = typeof sr.post_isolation_count === "number"
-            ? sr.post_isolation_count
-            : postLevels.length;
-        const waiting = !!sr.waiting_for_first_confirmation;
+        const live = d.live_sr_levels || {};
+        const levels = Array.isArray(live.levels) ? live.levels.slice() : [];
+        const available = !!live.available;
+        const beforeCount = typeof live.before_count === "number"
+            ? live.before_count
+            : levels.filter(l => !l._after_isolation).length;
+        const afterCount = typeof live.after_count === "number"
+            ? live.after_count
+            : levels.filter(l => l._after_isolation).length;
 
-        if (prePill) {
-            prePill.textContent = `Pre: ${preCount}`;
-            prePill.className = "sr-count-pill" + (preCount > 0 ? " has" : "");
+        if (beforePill) {
+            beforePill.textContent = `Before: ${beforeCount}`;
+            beforePill.className = "sr-count-pill" + (beforeCount > 0 ? " has" : "");
         }
-        if (postPill) {
-            postPill.textContent = `Post: ${postCount}`;
-            postPill.className = "sr-count-pill post";
+        if (afterPill) {
+            afterPill.textContent = `After: ${afterCount}`;
+            afterPill.className = "sr-count-pill" + (afterCount > 0 ? " post" : "");
         }
 
-        // Compute which post-isolation levels are new since last render
-        // BEFORE building the HTML (so srLevelRowHtml can badge them).
-        const currentPostKeys = new Set(postLevels.map(srDedupKey));
+        if (!available || levels.length === 0) {
+            const msg = live.error
+                ? `Live SR levels file unavailable (${live.error}).`
+                : "No SR levels recorded on this instrument yet.";
+            body.innerHTML = srEmptyStateHtml(msg);
+            state.seenAllKeys = new Set();
+            return;
+        }
+
+        // Sort by confirmed_time ASCENDING (oldest first) so the display
+        // order matches the source live_sr_levels.json file byte-for-byte.
+        // ISO-8601 timestamps sort lexicographically when the tz suffix
+        // is consistent; malformed/empty values naturally group at the
+        // bottom and are harmless.
+        levels.sort((a, b) => {
+            const ta = String(a.confirmed_time || "");
+            const tb = String(b.confirmed_time || "");
+            if (ta < tb) return -1;
+            if (ta > tb) return 1;
+            return 0;
+        });
+
+        // NEW badge: levels that arrived since the last poll.
+        const allKeys = new Set(levels.map(srDedupKey));
         const newKeys = new Set();
-        for (const k of currentPostKeys) {
-            if (!state.seenPostKeys.has(k)) newKeys.add(k);
+        if (state.seenAllKeys && state.seenAllKeys.size > 0) {
+            for (const k of allKeys) {
+                if (!state.seenAllKeys.has(k)) newKeys.add(k);
+            }
         }
 
-        let html = "";
+        // Reference label for the header (which clock we compare to).
+        const refLabel = live.touched_at
+            ? `touch @ ${formatTime(live.touched_at)}`
+            : (live.reference_at ? `ref @ ${formatTime(live.reference_at)}` : "");
 
-        // Waiting banner (only before the first post-isolation confirmation).
-        if (waiting) {
-            const instrSymbol = esc(sr.trading_symbol || sr.instrument_key || "—");
-            html += `
-                <div class="sr-waiting-banner">
-                    <i class="bi bi-hourglass-split"></i>
-                    <div>
-                        <strong>Waiting for the first post-isolation SR confirmation.</strong><br>
-                        Instrument <span style="font-family: monospace;">${instrSymbol}</span>
-                        was isolated at ${formatTime(sr.isolated_at)}.
-                        The tracker has recorded
-                        <strong>${preCount}</strong> pre-isolation level(s).
-                        The next pivot that gets confirmed on this instrument
-                        will be saved, shown here, and announced on Telegram.
-                    </div>
-                </div>`;
-        }
+        const rows = levels.map(lvl => {
+            const key = srDedupKey(lvl);
+            const isNew = !!lvl._after_isolation && newKeys.has(key);
+            return srLevelRowHtml(lvl, { isNew });
+        }).join("");
 
-        // ---- Pre-isolation section ---------------------------------- #
-        html += `
+        body.innerHTML = `
             <div class="sr-phase-header">
-                <span class="phase-title">Pre-Isolation Levels</span>
-                <span class="sr-phase-badge pre">AT ISOLATION</span>
+                <span class="phase-title">SR Levels · Isolated Instrument</span>
+                <span class="phase-hint">oldest first</span>
+                ${refLabel ? `<span class="ref-label">${esc(refLabel)}</span>` : ""}
+                <span class="sr-legend">
+                    <span class="sr-legend-item before">Before touch</span>
+                    <span class="sr-legend-item after">After touch</span>
+                </span>
+            </div>
+            <div class="iso-table-wrap">
+                <table class="iso-table">
+                    <thead>
+                        <tr>
+                            <th>Type</th>
+                            <th class="num">Price</th>
+                            <th>Pivot Time</th>
+                            <th>Confirmed Time</th>
+                            <th class="num">L / R Bars</th>
+                        </tr>
+                    </thead>
+                    <tbody>${rows}</tbody>
+                </table>
             </div>`;
 
-        if (preLevels.length === 0) {
-            html += srEmptyStateHtml(
-                "No SR levels were confirmed on this instrument before isolation."
-            );
-        } else {
-            // Mark every post-*new* level against the pre table too, so
-            // the badge only shows for truly new post-isolation pivots.
-            // Pre-isolation rows never get the NEW badge.
-            const preHtml = (() => {
-                const rows = preLevels.map(lvl =>
-                    srLevelRowHtml(lvl, { isNew: false })
-                ).join("");
-                return `
-                    <div class="iso-table-wrap">
-                        <table class="iso-table">
-                            <thead>
-                                <tr>
-                                    <th>Type</th>
-                                    <th class="num">Price</th>
-                                    <th>Pivot Time</th>
-                                    <th>Confirmed Time</th>
-                                    <th class="num">L / R Bars</th>
-                                    <th>Status</th>
-                                </tr>
-                            </thead>
-                            <tbody>${rows}</tbody>
-                        </table>
-                    </div>`;
-            })();
-            html += preHtml;
-        }
-
-        // ---- Post-isolation section --------------------------------- #
-        html += `
-            <div class="sr-phase-header">
-                <span class="phase-title">Post-Isolation Levels</span>
-                <span class="sr-phase-badge post">CONFIRMED AFTER ISOLATION</span>
-            </div>`;
-
-        if (postLevels.length === 0) {
-            html += srEmptyStateHtml(
-                waiting
-                    ? "Waiting for the first pivot confirmation after isolation…"
-                    : "No post-isolation SR confirmations yet."
-            );
-        } else {
-            const rows = postLevels.map(lvl => {
-                const isNew = newKeys.has(srDedupKey(lvl));
-                return srLevelRowHtml(lvl, { isNew });
-            }).join("");
-            html += `
-                <div class="iso-table-wrap">
-                    <table class="iso-table">
-                        <thead>
-                            <tr>
-                                <th>Type</th>
-                                <th class="num">Price</th>
-                                <th>Pivot Time</th>
-                                <th>Confirmed Time</th>
-                                <th class="num">L / R Bars</th>
-                                <th>Status</th>
-                            </tr>
-                        </thead>
-                        <tbody>${rows}</tbody>
-                    </table>
-                </div>`;
-        }
-
-        body.innerHTML = html;
-
-        // Remember every post-isolation level we just rendered, so the
-        // next poll only badges genuinely new ones.
-        state.seenPostKeys = currentPostKeys;
+        state.seenAllKeys = allKeys;
     }
 
     function renderInstrumentSnapshot(d) {
@@ -1873,8 +1771,6 @@ if (chartBtn && iso.instrument_key) {
         }
 
         if (!avail.hasAny) {
-            // No snapshot data — show an informative empty state
-            // with a clear call-to-action.
             tilesEl.innerHTML = `
                 <div class="snapshot-empty-state">
                     <i class="bi bi-info-circle"></i>
@@ -1900,7 +1796,6 @@ if (chartBtn && iso.instrument_key) {
         const orLevels = iso.instrument_or_levels || {};
         const source = iso.instrument_quote_source || "unavailable";
 
-        // ---- Tiles ------------------------------------------------ #
         tilesEl.innerHTML = "";
 
         if (instrumentLtp !== null) {
@@ -1920,22 +1815,10 @@ if (chartBtn && iso.instrument_key) {
                     <div class="tile-label">Instrument touch-bar · ${esc(t)}</div>
                     <div class="tile-value">
                         <div class="ohlc-grid">
-                            <div class="ohlc-cell">
-                                <span class="ohlc-key">O</span>
-                                <span>${fmt(touchOhlc.open)}</span>
-                            </div>
-                            <div class="ohlc-cell">
-                                <span class="ohlc-key">H</span>
-                                <span>${fmt(touchOhlc.high)}</span>
-                            </div>
-                            <div class="ohlc-cell">
-                                <span class="ohlc-key">L</span>
-                                <span>${fmt(touchOhlc.low)}</span>
-                            </div>
-                            <div class="ohlc-cell">
-                                <span class="ohlc-key">C</span>
-                                <span>${fmt(touchOhlc.close)}</span>
-                            </div>
+                            <div class="ohlc-cell"><span class="ohlc-key">O</span><span>${fmt(touchOhlc.open)}</span></div>
+                            <div class="ohlc-cell"><span class="ohlc-key">H</span><span>${fmt(touchOhlc.high)}</span></div>
+                            <div class="ohlc-cell"><span class="ohlc-key">L</span><span>${fmt(touchOhlc.low)}</span></div>
+                            <div class="ohlc-cell"><span class="ohlc-key">C</span><span>${fmt(touchOhlc.close)}</span></div>
                         </div>
                     </div>
                     ${touchOhlc.volume !== undefined && touchOhlc.volume !== null
@@ -1954,29 +1837,16 @@ if (chartBtn && iso.instrument_key) {
                     <div class="tile-label">Instrument first candle · ${esc(fcTime)}</div>
                     <div class="tile-value">
                         <div class="ohlc-grid">
-                            <div class="ohlc-cell">
-                                <span class="ohlc-key">O</span>
-                                <span>${fmt(firstCandle.open)}</span>
-                            </div>
-                            <div class="ohlc-cell">
-                                <span class="ohlc-key">H</span>
-                                <span>${fmt(firstCandle.high)}</span>
-                            </div>
-                            <div class="ohlc-cell">
-                                <span class="ohlc-key">L</span>
-                                <span>${fmt(firstCandle.low)}</span>
-                            </div>
-                            <div class="ohlc-cell">
-                                <span class="ohlc-key">C</span>
-                                <span>${fmt(firstCandle.close)}</span>
-                            </div>
+                            <div class="ohlc-cell"><span class="ohlc-key">O</span><span>${fmt(firstCandle.open)}</span></div>
+                            <div class="ohlc-cell"><span class="ohlc-key">H</span><span>${fmt(firstCandle.high)}</span></div>
+                            <div class="ohlc-cell"><span class="ohlc-key">L</span><span>${fmt(firstCandle.low)}</span></div>
+                            <div class="ohlc-cell"><span class="ohlc-key">C</span><span>${fmt(firstCandle.close)}</span></div>
                         </div>
                     </div>
                 </div>
             `);
         }
 
-        // ---- OR levels ------------------------------------------- #
         if (avail.hasOr) {
             orWrapEl.style.display = "block";
             const display = [
@@ -1986,19 +1856,14 @@ if (chartBtn && iso.instrument_key) {
             ];
             const cells = display
                 .filter(k => orLevels[k] !== undefined && orLevels[k] !== null)
-                .map(k => {
-                    return `<div class="or-cell">
-                        <span class="or-label">${esc(k)}</span>
-                        <span class="or-value">${fmt(orLevels[k])}</span>
-                    </div>`;
-                })
+                .map(k => `<div class="or-cell">
+                    <span class="or-label">${esc(k)}</span>
+                    <span class="or-value">${fmt(orLevels[k])}</span>
+                </div>`)
                 .join("");
 
             const typeClass = iso.type === "CE"
-                ? "ce"
-                : iso.type === "PE"
-                    ? "pe"
-                    : "";
+                ? "ce" : iso.type === "PE" ? "pe" : "";
 
             orGridEl.innerHTML = `
                 <div class="snapshot-or-block">
@@ -2034,7 +1899,6 @@ if (chartBtn && iso.instrument_key) {
         const ev = d.trigger_event;
         const steps = [];
 
-        // Step 1: Trigger
         steps.push({
             icon: "bi-lightning-charge-fill",
             title: "Trigger",
@@ -2044,7 +1908,6 @@ if (chartBtn && iso.instrument_key) {
                 `at ${formatTime(ev.touched_at)}.`,
         });
 
-        // Step 2: Candidates
         if (ev.candidates_count !== null &&
             ev.candidates_count !== undefined) {
             steps.push({
@@ -2058,7 +1921,6 @@ if (chartBtn && iso.instrument_key) {
             });
         }
 
-        // Step 3: Selection
         const reason = String(iso.reason || "");
         if (reason.includes("with_nifty_reference")) {
             steps.push({
@@ -2097,7 +1959,6 @@ if (chartBtn && iso.instrument_key) {
             });
         }
 
-        // Step 4: Instrument snapshot at touch
         const instrLtp = parseNum(iso.instrument_ltp);
         if (instrLtp !== null) {
             steps.push({
@@ -2110,7 +1971,6 @@ if (chartBtn && iso.instrument_key) {
             });
         }
 
-        // Step 5: Final
         steps.push({
             icon: "bi-check-circle-fill",
             title: "Isolated",
@@ -2119,14 +1979,13 @@ if (chartBtn && iso.instrument_key) {
 
         const body = document.getElementById("iso-reasoning-body");
         body.innerHTML = steps
-            .map(
-                s =>
-                    `<div class="reason-step">` +
-                    `<div class="reason-step-icon"><i class="bi ${s.icon}"></i></div>` +
-                    `<div class="reason-step-body">` +
-                    `<div class="reason-step-title">${esc(s.title)}</div>` +
-                    `<div class="reason-step-detail">${esc(s.detail)}</div>` +
-                    `</div></div>`
+            .map(s =>
+                `<div class="reason-step">` +
+                `<div class="reason-step-icon"><i class="bi ${s.icon}"></i></div>` +
+                `<div class="reason-step-body">` +
+                `<div class="reason-step-title">${esc(s.title)}</div>` +
+                `<div class="reason-step-detail">${esc(s.detail)}</div>` +
+                `</div></div>`
             )
             .join("");
     }
@@ -2150,13 +2009,11 @@ if (chartBtn && iso.instrument_key) {
         ) {
             list = ev.nifty_reference_candidates;
             distanceKey = "distance_to_nifty_ltp";
-            refLabel =
-                `NIFTY reference (LTP ${fmt(ev.nifty_reference_ltp)})`;
+            refLabel = `NIFTY reference (LTP ${fmt(ev.nifty_reference_ltp)})`;
         } else if (Array.isArray(ev.candidates) && ev.candidates.length) {
             list = ev.candidates;
             distanceKey = "distance_to_trigger_ltp";
-            refLabel =
-                `${ev.index || "Index"} LTP (${fmt(ev.trigger_ltp)})`;
+            refLabel = `${ev.index || "Index"} LTP (${fmt(ev.trigger_ltp)})`;
         } else {
             list = [];
             distanceKey = "distance_to_trigger_ltp";
@@ -2179,38 +2036,38 @@ if (chartBtn && iso.instrument_key) {
 
         const pickedKey = iso && iso.instrument_key;
 
-       body.innerHTML = list
-    .map(c => {
-        const isPicked = c.instrument_key === pickedKey;
-        const type = (c.type || "").toUpperCase();
-        const levelTags = (c.levels || [])
-            .map(lv => {
-                const cls = String(lv).startsWith("R")
-                    ? "r"
-                    : String(lv).startsWith("S")
-                        ? "s"
-                        : "";
-                return `<span class="level-tag ${cls}">${esc(lv)}</span>`;
+        body.innerHTML = list
+            .map(c => {
+                const isPicked = c.instrument_key === pickedKey;
+                const type = (c.type || "").toUpperCase();
+                const levelTags = (c.levels || [])
+                    .map(lv => {
+                        const cls = String(lv).startsWith("R")
+                            ? "r"
+                            : String(lv).startsWith("S")
+                                ? "s"
+                                : "";
+                        return `<span class="level-tag ${cls}">${esc(lv)}</span>`;
+                    })
+                    .join("") || '<span style="color:var(--iso-muted)">—</span>';
+                const dist = c[distanceKey];
+                const distStr =
+                    dist !== null && dist !== undefined ? fmt(dist) : "—";
+                const chartUrl =
+                    "/chart/" + encodeURIComponent(c.instrument_key);
+                return `<tr class="${isPicked ? "is-picked" : ""}">
+                    <td><strong>${fmt(c.strike, 0)}</strong></td>
+                    <td><span class="type-pill ${type.toLowerCase()}">${esc(type)}</span></td>
+                    <td>${levelTags}</td>
+                    <td class="num">${distStr}</td>
+                    <td>
+                        <a href="${chartUrl}" target="_blank" rel="noopener noreferrer" class="iso-btn" style="padding:4px 10px;font-size:0.72rem;">
+                            <i class="bi bi-graph-up-arrow"></i> Chart
+                        </a>
+                    </td>
+                </tr>`;
             })
-            .join("") || '<span style="color:var(--iso-muted)">—</span>';
-        const dist = c[distanceKey];
-        const distStr =
-            dist !== null && dist !== undefined ? fmt(dist) : "—";
-        const chartUrl =
-            "/chart/" + encodeURIComponent(c.instrument_key);
-        return `<tr class="${isPicked ? "is-picked" : ""}">
-            <td><strong>${fmt(c.strike, 0)}</strong></td>
-            <td><span class="type-pill ${type.toLowerCase()}">${esc(type)}</span></td>
-            <td>${levelTags}</td>
-            <td class="num">${distStr}</td>
-            <td>
-                <a href="${chartUrl}" target="_blank" rel="noopener noreferrer" class="iso-btn" style="padding:4px 10px;font-size:0.72rem;">
-                    <i class="bi bi-graph-up-arrow"></i> Chart
-                </a>
-            </td>
-        </tr>`;
-    })
-    .join("");
+            .join("");
     }
 
     function renderTouchState(d) {
@@ -2221,12 +2078,12 @@ if (chartBtn && iso.instrument_key) {
         const order = ["NIFTY_R3", "NIFTY_S3", "SENSEX_R3", "SENSEX_S3"];
         const rows = order.map(k => {
             const touched = !!ts[k];
-            const [index, side] = k.split("_");
+            const [idxName, side] = k.split("_");
             const chip = touched
                 ? `<span class="touch-chip touched"><i class="bi bi-check-circle-fill"></i> touched</span>`
                 : `<span class="touch-chip not-touched"><i class="bi bi-circle"></i> waiting</span>`;
             return `<tr>
-                <td><strong>${esc(index)}</strong></td>
+                <td><strong>${esc(idxName)}</strong></td>
                 <td>${esc(side)}</td>
                 <td>${chip}</td>
             </tr>`;
@@ -2235,11 +2092,7 @@ if (chartBtn && iso.instrument_key) {
         body.innerHTML = `
             <table class="iso-table">
                 <thead>
-                    <tr>
-                        <th>Index</th>
-                        <th>Side</th>
-                        <th>Status</th>
-                    </tr>
+                    <tr><th>Index</th><th>Side</th><th>Status</th></tr>
                 </thead>
                 <tbody>${rows}</tbody>
             </table>`;
@@ -2312,8 +2165,7 @@ if (chartBtn && iso.instrument_key) {
                 const cells = display
                     .filter(k => levels[k] !== undefined && levels[k] !== null)
                     .map(k => {
-                        const isHit =
-                            idx === hitIndex && k === hitLevel;
+                        const isHit = idx === hitIndex && k === hitLevel;
                         return `<div class="or-cell ${isHit ? "or-hit" : ""}">
                             <span class="or-label">${esc(k)}</span>
                             <span class="or-value">${fmt(levels[k])}</span>
@@ -2363,8 +2215,7 @@ if (chartBtn && iso.instrument_key) {
         if (!btn) return;
         const original = btn.innerHTML;
         btn.disabled = true;
-        btn.innerHTML =
-            '<i class="bi bi-hourglass-split"></i> Running…';
+        btn.innerHTML = '<i class="bi bi-hourglass-split"></i> Running…';
         try {
             const res = await fetch(BACKFILL_URL, { method: "POST" });
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -2382,8 +2233,7 @@ if (chartBtn && iso.instrument_key) {
         if (!btn) return;
         const original = btn.innerHTML;
         btn.disabled = true;
-        btn.innerHTML =
-            '<i class="bi bi-hourglass-split"></i> Refreshing…';
+        btn.innerHTML = '<i class="bi bi-hourglass-split"></i> Refreshing…';
         try {
             const res = await fetch(REFRESH_SNAPSHOT_URL, { method: "POST" });
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
