@@ -440,6 +440,29 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
     </button>
   </div>
 
+    <div class="chart-toggles-card" id="labelToggleBar">
+    <div class="chart-toggles-title"><i class="bi bi-tags me-1"></i>Labels</div>
+    <button type="button" class="label-toggle-btn" data-toggle="r2s2" title="Show / hide R2 and S2 labels (lines stay)">R2 / S2</button>
+    <button type="button" class="label-toggle-btn active" data-toggle="r3s3" title="Show / hide R3 and S3 labels (lines stay)">R3 / S3</button>
+    <button type="button" class="label-toggle-btn active" data-toggle="highLow" title="Show / hide HIGH and LOW labels (lines stay)">HIGH / LOW</button>
+    <button type="button" class="label-toggle-btn avg-btn" disabled title="AVG label is always shown">AVG <i class="bi bi-lock-fill ms-1" style="font-size:8px;"></i></button>
+  </div>
+
+  <div class="chart-toggles-card" id="indicatorToggleBar">
+    <div class="chart-toggles-title"><i class="bi bi-graph-up-arrow me-1"></i>Indicators</div>
+    <button type="button" class="label-toggle-btn" data-indicator="ema9" title="Show / hide EMA 9 line">EMA 9</button>
+    <button type="button" class="label-toggle-btn" data-indicator="ema21" title="Show / hide EMA 21 line">EMA 21</button>
+    <button type="button" class="label-toggle-btn active" data-indicator="emaCross" title="Show / hide EMA 9/21 crossover BUY / SELL signals"><i class="bi bi-arrow-left-right me-1"></i>EMA Cross</button>
+    <!-- SR Levels: pivot-based Support/Resistance lines (default OFF) -->
+    <button type="button" class="label-toggle-btn" data-indicator="srLevels" title="Show / hide pivot-based Support/Resistance lines (red=resistance, blue=support)">
+      <i class="bi bi-hr me-1"></i>SR Levels
+    </button>
+    <!-- SR Labels: pivot confirmation labels (default OFF). Independent of SR Levels. -->
+    <button type="button" class="label-toggle-btn" data-indicator="srLabels" title="Show / hide pivot confirmation labels (Resistance / Support with confirmed time, pivot time and price)">
+      <i class="bi bi-tag me-1"></i>SR Labels
+    </button>
+  </div>
+  
   <div class="chart-card" id="chartCard">
     <div id="chart"></div>
 
@@ -487,28 +510,7 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
     </div>
   </div>
 
-  <div class="chart-toggles-card" id="labelToggleBar">
-    <div class="chart-toggles-title"><i class="bi bi-tags me-1"></i>Labels</div>
-    <button type="button" class="label-toggle-btn" data-toggle="r2s2" title="Show / hide R2 and S2 labels (lines stay)">R2 / S2</button>
-    <button type="button" class="label-toggle-btn active" data-toggle="r3s3" title="Show / hide R3 and S3 labels (lines stay)">R3 / S3</button>
-    <button type="button" class="label-toggle-btn active" data-toggle="highLow" title="Show / hide HIGH and LOW labels (lines stay)">HIGH / LOW</button>
-    <button type="button" class="label-toggle-btn avg-btn" disabled title="AVG label is always shown">AVG <i class="bi bi-lock-fill ms-1" style="font-size:8px;"></i></button>
-  </div>
 
-  <div class="chart-toggles-card" id="indicatorToggleBar">
-    <div class="chart-toggles-title"><i class="bi bi-graph-up-arrow me-1"></i>Indicators</div>
-    <button type="button" class="label-toggle-btn" data-indicator="ema9" title="Show / hide EMA 9 line">EMA 9</button>
-    <button type="button" class="label-toggle-btn" data-indicator="ema21" title="Show / hide EMA 21 line">EMA 21</button>
-    <button type="button" class="label-toggle-btn active" data-indicator="emaCross" title="Show / hide EMA 9/21 crossover BUY / SELL signals"><i class="bi bi-arrow-left-right me-1"></i>EMA Cross</button>
-    <!-- SR Levels: pivot-based Support/Resistance lines (default OFF) -->
-    <button type="button" class="label-toggle-btn" data-indicator="srLevels" title="Show / hide pivot-based Support/Resistance lines (red=resistance, blue=support)">
-      <i class="bi bi-hr me-1"></i>SR Levels
-    </button>
-    <!-- SR Labels: pivot confirmation labels (default OFF). Independent of SR Levels. -->
-    <button type="button" class="label-toggle-btn" data-indicator="srLabels" title="Show / hide pivot confirmation labels (Resistance / Support with confirmed time, pivot time and price)">
-      <i class="bi bi-tag me-1"></i>SR Labels
-    </button>
-  </div>
 
   {% set _type = (instrument.get('option_type') or instrument.get('instrument_type') or '') | upper %}
   <div class="instrument-info-card" id="instrumentInfoCard">
@@ -2185,8 +2187,7 @@ searchResults.addEventListener("click", function (e) {
   if (!key) return;
   searchResults.classList.remove("visible");
   globalSearchInput.value = "";
-  window.location.href = "/chart/" + encodeURIComponent(key);
-});
+window.open("/chart/" + encodeURIComponent(key), "_blank");});
 
 // ============================================================
 // READ INSTRUMENT KEY
@@ -2317,10 +2318,10 @@ async function doSwapOption() {
 
   try {
     const oppKey = await findOppositeInstrumentKey(swapResolvedMeta, opp);
-    if (oppKey && oppKey !== currentInstrumentKey) {
-      window.location.href = "/chart/" + encodeURIComponent(oppKey);
-      return;
-    }
+if (oppKey && oppKey !== currentInstrumentKey) {
+  window.open("/chart/" + encodeURIComponent(oppKey), "_blank");
+  return;
+}
     if (swapOptionLabel) swapOptionLabel.textContent = "Not found";
     setTimeout(() => {
       if (swapOptionLabel) swapOptionLabel.textContent = origLabel;

@@ -30,6 +30,9 @@
         --iso-amber-border: #fde68a;
         --iso-blue-bg: #dbeafe;
         --iso-blue-border: #bfdbfe;
+        --iso-purple: #7c3aed;
+        --iso-purple-bg: #ede9fe;
+        --iso-purple-border: #ddd6fe;
         --iso-shadow: 0 1px 3px rgba(15, 23, 42, 0.06);
         --iso-shadow-md: 0 8px 24px rgba(15, 23, 42, 0.08);
     }
@@ -829,6 +832,176 @@
     .snapshot-empty-state strong {
         color: var(--iso-text);
     }
+
+    /* ============================================================ */
+    /* SR Tracking (isolated instrument — pre/post isolation)       */
+    /* ============================================================ */
+    .sr-header-pills {
+        margin-left: auto;
+        display: flex;
+        gap: 8px;
+    }
+
+    .sr-count-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        padding: 3px 11px;
+        border-radius: 999px;
+        font-size: 0.72rem;
+        font-weight: 800;
+        background: #f1f5f9;
+        color: var(--iso-muted);
+        border: 1px solid var(--iso-border);
+    }
+
+    .sr-count-pill.has {
+        background: var(--iso-purple-bg);
+        color: var(--iso-purple);
+        border-color: var(--iso-purple-border);
+    }
+
+    .sr-count-pill.post {
+        background: var(--iso-green-bg);
+        color: var(--iso-green);
+        border-color: #bbf7d0;
+    }
+
+    .sr-waiting-banner {
+        display: flex;
+        align-items: flex-start;
+        gap: 14px;
+        padding: 16px 18px;
+        border-radius: 12px;
+        background: var(--iso-amber-bg);
+        border: 1px solid var(--iso-amber-border);
+        border-left: 4px solid var(--iso-amber);
+        color: #78350f;
+        font-size: 0.9rem;
+        line-height: 1.55;
+        margin-bottom: 18px;
+    }
+
+    .sr-waiting-banner i {
+        font-size: 1.4rem;
+        color: var(--iso-amber);
+        flex-shrink: 0;
+        margin-top: 2px;
+    }
+
+    .sr-waiting-banner strong {
+        color: var(--iso-amber);
+    }
+
+    .sr-phase-header {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin: 20px 0 12px 0;
+    }
+
+    .sr-phase-header:first-child {
+        margin-top: 0;
+    }
+
+    .sr-phase-header .phase-title {
+        font-size: 0.8rem;
+        font-weight: 800;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        color: var(--iso-text);
+    }
+
+    .sr-phase-badge {
+        display: inline-block;
+        padding: 3px 10px;
+        border-radius: 6px;
+        font-size: 0.68rem;
+        font-weight: 800;
+        letter-spacing: 0.5px;
+    }
+
+    .sr-phase-badge.pre {
+        background: #e0e7ff;
+        color: #3730a3;
+    }
+
+    .sr-phase-badge.post {
+        background: var(--iso-green-bg);
+        color: var(--iso-green);
+    }
+
+    .sr-type {
+        display: inline-block;
+        padding: 2px 9px;
+        border-radius: 5px;
+        font-size: 0.68rem;
+        font-weight: 800;
+        letter-spacing: 0.4px;
+    }
+
+    .sr-type.resistance {
+        background: var(--iso-red-bg);
+        color: var(--iso-red);
+    }
+
+    .sr-type.support {
+        background: var(--iso-green-bg);
+        color: var(--iso-green);
+    }
+
+    .broken-pill {
+        display: inline-block;
+        padding: 2px 9px;
+        border-radius: 5px;
+        font-size: 0.68rem;
+        font-weight: 700;
+    }
+
+    .broken-pill.intact {
+        background: #f1f5f9;
+        color: var(--iso-muted);
+    }
+
+    .broken-pill.broken {
+        background: var(--iso-red-bg);
+        color: var(--iso-red);
+    }
+
+    .sr-post-row-new td {
+        background: #f5f3ff !important;
+    }
+
+    .sr-new-badge {
+        display: inline-block;
+        padding: 1px 7px;
+        border-radius: 4px;
+        font-size: 0.62rem;
+        font-weight: 800;
+        letter-spacing: 0.3px;
+        background: var(--iso-purple);
+        color: #ffffff;
+        margin-left: 6px;
+        vertical-align: middle;
+    }
+
+    .sr-empty-state {
+        padding: 22px 18px;
+        text-align: center;
+        color: var(--iso-muted);
+        font-size: 0.85rem;
+        background: #f8fafc;
+        border: 1px dashed var(--iso-border);
+        border-radius: 10px;
+        line-height: 1.55;
+    }
+
+    .sr-empty-state i {
+        display: block;
+        font-size: 1.6rem;
+        margin-bottom: 8px;
+        opacity: 0.4;
+    }
 </style>
 {% endblock %}
 
@@ -904,6 +1077,26 @@
                 <div class="price-label">Index trigger LTP</div>
                 <div class="price-value" id="hero-trigger-ltp">—</div>
                 <div class="price-sub" id="hero-trigger-sub">—</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- SR Tracking card: pre / post isolation SR levels -->
+    <div class="iso-card" id="iso-sr-tracking" style="display: none;">
+        <div class="iso-card-header">
+            <i class="bi bi-activity text-primary"></i>
+            <span>SR Tracking · Isolated Instrument</span>
+            <div class="sr-header-pills">
+                <span class="sr-count-pill" id="sr-pre-pill">Pre: 0</span>
+                <span class="sr-count-pill post" id="sr-post-pill">Post: 0</span>
+            </div>
+        </div>
+        <div class="iso-card-body">
+            <div id="sr-tracking-body">
+                <div class="sr-empty-state">
+                    <i class="bi bi-hourglass-split"></i>
+                    SR tracking activates when an instrument is isolated.
+                </div>
             </div>
         </div>
     </div>
@@ -1027,6 +1220,10 @@
     const state = {
         detail: null,
         pollTimer: null,
+        // Set of post-isolation level dedup keys we've already rendered
+        // at least once. Used to highlight newly-arrived confirmations
+        // in violet so the operator can see them at a glance.
+        seenPostKeys: new Set(),
     };
 
     /* ---------- small formatters ---------- */
@@ -1375,11 +1572,13 @@
             })
             .join("");
 
-        // Chart CTA
-        const chartBtn = document.getElementById("hero-chart-btn");
-        if (chartBtn && iso.instrument_key) {
-            chartBtn.href = "/chart/" + encodeURIComponent(iso.instrument_key);
-        }
+// Chart CTA
+const chartBtn = document.getElementById("hero-chart-btn");
+if (chartBtn && iso.instrument_key) {
+    chartBtn.href = "/chart/" + encodeURIComponent(iso.instrument_key);
+    chartBtn.target = "_blank";
+    chartBtn.rel = "noopener noreferrer";
+}
 
         // Instrument LTP @ touch
         const instrLtpEl = document.getElementById("hero-instrument-ltp");
@@ -1401,6 +1600,253 @@
             ev.index && ev.side
                 ? `${ev.index} · ${ev.side}`
                 : "—";
+    }
+
+    /* ============================================================
+       SR Tracking (pre / post isolation levels)
+       ============================================================ */
+    function srDedupKey(lvl) {
+        // Matches the tracker service's dedup key so we can decide which
+        // post-isolation rows are "new since last render".
+        const price = parseNum(lvl.price);
+        return [
+            String(lvl.level || ""),
+            price === null ? "0" : price.toFixed(4),
+            String(lvl.confirmed_time || ""),
+        ].join("|");
+    }
+
+    function srLevelRowHtml(lvl, opts) {
+        const isNew = opts && opts.isNew;
+        const typeStr = String(lvl.level || "").toLowerCase();
+        const typeCls = typeStr === "resistance"
+            ? "resistance"
+            : typeStr === "support"
+                ? "support"
+                : "";
+        const typeLabel = typeStr === "resistance"
+            ? "RESISTANCE"
+            : typeStr === "support"
+                ? "SUPPORT"
+                : (lvl.level || "—").toUpperCase();
+        const broken = !!lvl.broken;
+        const brokenCls = broken ? "broken" : "intact";
+        const brokenLabel = broken ? "BROKEN" : "intact";
+        const brokenTitle = broken
+            ? `${lvl.broken_at || ""} @ ${fmt(lvl.broken_price)}`.trim()
+            : "still open";
+        const lb = lvl.left_bars === undefined || lvl.left_bars === null
+            ? "—"
+            : String(lvl.left_bars);
+        const rb = lvl.right_bars === undefined || lvl.right_bars === null
+            ? "—"
+            : String(lvl.right_bars);
+
+        return `<tr class="${isNew ? "sr-post-row-new" : ""}">
+            <td>
+                <span class="sr-type ${typeCls}">${esc(typeLabel)}</span>
+                ${isNew ? `<span class="sr-new-badge">NEW</span>` : ""}
+            </td>
+            <td class="num"><strong>${fmt(lvl.price)}</strong></td>
+            <td>${formatTime(lvl.pivot_time)}</td>
+            <td>${formatTime(lvl.confirmed_time)}</td>
+            <td class="num">${esc(lb)} / ${esc(rb)}</td>
+            <td><span class="broken-pill ${brokenCls}" title="${esc(brokenTitle)}">${esc(brokenLabel)}</span></td>
+        </tr>`;
+    }
+
+    function srTableHtml(levels, phase) {
+        if (!Array.isArray(levels) || levels.length === 0) {
+            return "";
+        }
+        const rows = levels.map(lvl => {
+            const isNew =
+                phase === "post" &&
+                !state.seenPostKeys.has(srDedupKey(lvl));
+            return srLevelRowHtml(lvl, { isNew });
+        }).join("");
+        return `
+            <div class="iso-table-wrap">
+                <table class="iso-table">
+                    <thead>
+                        <tr>
+                            <th>Type</th>
+                            <th class="num">Price</th>
+                            <th>Pivot Time</th>
+                            <th>Confirmed Time</th>
+                            <th class="num">L / R Bars</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>${rows}</tbody>
+                </table>
+            </div>`;
+    }
+
+    function srEmptyStateHtml(message) {
+        return `
+            <div class="sr-empty-state">
+                <i class="bi bi-hourglass-split"></i>
+                ${esc(message)}
+            </div>`;
+    }
+
+    function renderSRTracking(d) {
+        const card = document.getElementById("iso-sr-tracking");
+        const body = document.getElementById("sr-tracking-body");
+        const prePill = document.getElementById("sr-pre-pill");
+        const postPill = document.getElementById("sr-post-pill");
+        if (!card || !body) return;
+
+        // If not isolated, hide the card entirely — no SR tracking exists.
+        if (!d.isolated) {
+            card.style.display = "none";
+            if (prePill) {
+                prePill.textContent = "Pre: 0";
+                prePill.className = "sr-count-pill";
+            }
+            if (postPill) {
+                postPill.textContent = "Post: 0";
+                postPill.className = "sr-count-pill post";
+            }
+            state.seenPostKeys = new Set();
+            return;
+        }
+
+        card.style.display = "block";
+
+        const sr = d.sr_tracking || {};
+        const preLevels = Array.isArray(sr.pre_isolation_levels)
+            ? sr.pre_isolation_levels
+            : [];
+        const postLevels = Array.isArray(sr.post_isolation_levels)
+            ? sr.post_isolation_levels
+            : [];
+        const preCount = typeof sr.pre_isolation_count === "number"
+            ? sr.pre_isolation_count
+            : preLevels.length;
+        const postCount = typeof sr.post_isolation_count === "number"
+            ? sr.post_isolation_count
+            : postLevels.length;
+        const waiting = !!sr.waiting_for_first_confirmation;
+
+        if (prePill) {
+            prePill.textContent = `Pre: ${preCount}`;
+            prePill.className = "sr-count-pill" + (preCount > 0 ? " has" : "");
+        }
+        if (postPill) {
+            postPill.textContent = `Post: ${postCount}`;
+            postPill.className = "sr-count-pill post";
+        }
+
+        // Compute which post-isolation levels are new since last render
+        // BEFORE building the HTML (so srLevelRowHtml can badge them).
+        const currentPostKeys = new Set(postLevels.map(srDedupKey));
+        const newKeys = new Set();
+        for (const k of currentPostKeys) {
+            if (!state.seenPostKeys.has(k)) newKeys.add(k);
+        }
+
+        let html = "";
+
+        // Waiting banner (only before the first post-isolation confirmation).
+        if (waiting) {
+            const instrSymbol = esc(sr.trading_symbol || sr.instrument_key || "—");
+            html += `
+                <div class="sr-waiting-banner">
+                    <i class="bi bi-hourglass-split"></i>
+                    <div>
+                        <strong>Waiting for the first post-isolation SR confirmation.</strong><br>
+                        Instrument <span style="font-family: monospace;">${instrSymbol}</span>
+                        was isolated at ${formatTime(sr.isolated_at)}.
+                        The tracker has recorded
+                        <strong>${preCount}</strong> pre-isolation level(s).
+                        The next pivot that gets confirmed on this instrument
+                        will be saved, shown here, and announced on Telegram.
+                    </div>
+                </div>`;
+        }
+
+        // ---- Pre-isolation section ---------------------------------- #
+        html += `
+            <div class="sr-phase-header">
+                <span class="phase-title">Pre-Isolation Levels</span>
+                <span class="sr-phase-badge pre">AT ISOLATION</span>
+            </div>`;
+
+        if (preLevels.length === 0) {
+            html += srEmptyStateHtml(
+                "No SR levels were confirmed on this instrument before isolation."
+            );
+        } else {
+            // Mark every post-*new* level against the pre table too, so
+            // the badge only shows for truly new post-isolation pivots.
+            // Pre-isolation rows never get the NEW badge.
+            const preHtml = (() => {
+                const rows = preLevels.map(lvl =>
+                    srLevelRowHtml(lvl, { isNew: false })
+                ).join("");
+                return `
+                    <div class="iso-table-wrap">
+                        <table class="iso-table">
+                            <thead>
+                                <tr>
+                                    <th>Type</th>
+                                    <th class="num">Price</th>
+                                    <th>Pivot Time</th>
+                                    <th>Confirmed Time</th>
+                                    <th class="num">L / R Bars</th>
+                                    <th>Status</th>
+                                </tr>
+                            </thead>
+                            <tbody>${rows}</tbody>
+                        </table>
+                    </div>`;
+            })();
+            html += preHtml;
+        }
+
+        // ---- Post-isolation section --------------------------------- #
+        html += `
+            <div class="sr-phase-header">
+                <span class="phase-title">Post-Isolation Levels</span>
+                <span class="sr-phase-badge post">CONFIRMED AFTER ISOLATION</span>
+            </div>`;
+
+        if (postLevels.length === 0) {
+            html += srEmptyStateHtml(
+                waiting
+                    ? "Waiting for the first pivot confirmation after isolation…"
+                    : "No post-isolation SR confirmations yet."
+            );
+        } else {
+            const rows = postLevels.map(lvl => {
+                const isNew = newKeys.has(srDedupKey(lvl));
+                return srLevelRowHtml(lvl, { isNew });
+            }).join("");
+            html += `
+                <div class="iso-table-wrap">
+                    <table class="iso-table">
+                        <thead>
+                            <tr>
+                                <th>Type</th>
+                                <th class="num">Price</th>
+                                <th>Pivot Time</th>
+                                <th>Confirmed Time</th>
+                                <th class="num">L / R Bars</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody>${rows}</tbody>
+                    </table>
+                </div>`;
+        }
+
+        body.innerHTML = html;
+
+        // Remember every post-isolation level we just rendered, so the
+        // next poll only badges genuinely new ones.
+        state.seenPostKeys = currentPostKeys;
     }
 
     function renderInstrumentSnapshot(d) {
@@ -1733,38 +2179,38 @@
 
         const pickedKey = iso && iso.instrument_key;
 
-        body.innerHTML = list
-            .map(c => {
-                const isPicked = c.instrument_key === pickedKey;
-                const type = (c.type || "").toUpperCase();
-                const levelTags = (c.levels || [])
-                    .map(lv => {
-                        const cls = String(lv).startsWith("R")
-                            ? "r"
-                            : String(lv).startsWith("S")
-                                ? "s"
-                                : "";
-                        return `<span class="level-tag ${cls}">${esc(lv)}</span>`;
-                    })
-                    .join("") || '<span style="color:var(--iso-muted)">—</span>';
-                const dist = c[distanceKey];
-                const distStr =
-                    dist !== null && dist !== undefined ? fmt(dist) : "—";
-                const chartUrl =
-                    "/chart/" + encodeURIComponent(c.instrument_key);
-                return `<tr class="${isPicked ? "is-picked" : ""}">
-                    <td><strong>${fmt(c.strike, 0)}</strong></td>
-                    <td><span class="type-pill ${type.toLowerCase()}">${esc(type)}</span></td>
-                    <td>${levelTags}</td>
-                    <td class="num">${distStr}</td>
-                    <td>
-                        <a href="${chartUrl}" class="iso-btn" style="padding:4px 10px;font-size:0.72rem;">
-                            <i class="bi bi-graph-up-arrow"></i> Chart
-                        </a>
-                    </td>
-                </tr>`;
+       body.innerHTML = list
+    .map(c => {
+        const isPicked = c.instrument_key === pickedKey;
+        const type = (c.type || "").toUpperCase();
+        const levelTags = (c.levels || [])
+            .map(lv => {
+                const cls = String(lv).startsWith("R")
+                    ? "r"
+                    : String(lv).startsWith("S")
+                        ? "s"
+                        : "";
+                return `<span class="level-tag ${cls}">${esc(lv)}</span>`;
             })
-            .join("");
+            .join("") || '<span style="color:var(--iso-muted)">—</span>';
+        const dist = c[distanceKey];
+        const distStr =
+            dist !== null && dist !== undefined ? fmt(dist) : "—";
+        const chartUrl =
+            "/chart/" + encodeURIComponent(c.instrument_key);
+        return `<tr class="${isPicked ? "is-picked" : ""}">
+            <td><strong>${fmt(c.strike, 0)}</strong></td>
+            <td><span class="type-pill ${type.toLowerCase()}">${esc(type)}</span></td>
+            <td>${levelTags}</td>
+            <td class="num">${distStr}</td>
+            <td>
+                <a href="${chartUrl}" target="_blank" rel="noopener noreferrer" class="iso-btn" style="padding:4px 10px;font-size:0.72rem;">
+                    <i class="bi bi-graph-up-arrow"></i> Chart
+                </a>
+            </td>
+        </tr>`;
+    })
+    .join("");
     }
 
     function renderTouchState(d) {
@@ -1823,7 +2269,7 @@
                     ev.existing_isolated_instrument ||
                     "—";
                 const instLabel = ev.status === "isolated"
-                    ? `<a href="/chart/${encodeURIComponent(inst)}" style="color:var(--iso-primary);font-weight:700;text-decoration:none;">${esc(inst)}</a>`
+                    ? `<a href="/chart/${encodeURIComponent(inst)}" target="_blank" rel="noopener noreferrer" style="color:var(--iso-primary);font-weight:700;text-decoration:none;">${esc(inst)}</a>`
                     : esc(inst);
                 return `<tr>
                     <td>${formatTime(ev.touched_at)}</td>
@@ -1889,6 +2335,7 @@
         renderBanner(d);
         renderRefreshSnapshotBtn(d);
         renderHero(d);
+        renderSRTracking(d);
         renderInstrumentSnapshot(d);
         renderReasoning(d);
         renderCandidates(d);

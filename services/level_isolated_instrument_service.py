@@ -22,57 +22,24 @@ Design
 * Persisted result: ``data/<LEVEL_ISOLATION_FILENAME>`` — one JSON doc
   per day, containing ``isolated``, ``events[]``, ``touch_state``.
 
-Instrument snapshot
--------------------
-On isolation, ``_collect_instrument_snapshot()`` enriches the
-``isolated`` record with the picked instrument's OWN data at the moment
-of the touch:
+Isolated-SR tracker integration
+-------------------------------
+Whenever ``_isolate()`` fires, the isolated record is also handed to
+``services.isolated_sr_tracker_service.isolated_sr_tracker_service.on_isolation``
+so the tracker can:
+  * snapshot the *current* SR levels as ``pre_isolation``;
+  * watch ``live_sr_levels_service._append_level`` for new pivot
+    confirmations on the isolated instrument and record them as
+    ``post_isolation`` (with Telegram + dashboard updates).
 
-  * ``instrument_ltp``              — the CE/PE's LTP
-  * ``instrument_touch_ohlc``       — the CE/PE's O/H/L/C at the touch
-                                      minute (only populated when the
-                                      exact touch bar is found)
-  * ``instrument_first_candle``     — the CE/PE's own 09:15 first candle
-                                      OHLC
-  * ``instrument_or_levels``        — the CE/PE's own OR levels
-  * ``instrument_quote_source``     — which source was used
-                                      ("live_feed_cache" /
-                                       "intraday_bar" /
-                                       "intraday_latest_bar" /
-                                       "first_candle_close" /
-                                       "or_midpoint" /
-                                       "unavailable")
+``get_detail()`` merges the tracker's data under ``sr_tracking``.
+``reset()`` also resets the tracker.
 
-Records created before this feature existed will have NULL snapshot
-fields. ``run_backfill()`` auto-detects stale records and re-collects
-the snapshot **once** without touching the isolation decision — the
-recheck job fires this every 5 minutes during market hours, so the
-record self-heals shortly after the code is deployed.
-
-Startup backfill
-----------------
-Between ``LEVEL_ISOLATION_BACKFILL_WINDOW_START_*`` and ``_END_*`` on a
-trading day, ``run_backfill()`` replays today's 1-min intraday candles
-minute-by-minute and reconstructs the "would-have-isolated" instrument:
-  * touch detection uses bar **high** for R3, bar **low** for S3;
-  * LTP-based decisions (nearest strike) use bar **close**.
-On the backfill path, the instrument snapshot also does one intraday
-REST call per isolated instrument (once per day, at startup, on a
-worker thread — never blocks the live feed).
-
-UI-facing detail endpoint
--------------------------
-``get_detail()`` returns a JSON-safe snapshot for the ``/isolated`` HTML
-page and the ``GET /admin/level-isolation/detail`` JSON endpoint.
-
-Safety
-------
-* Never raises for expected failure modes; always returns a summary.
-* Non-trading hours / non-trading days / missing OR files → no-op.
-* Atomic writes (``.tmp`` + ``replace``) so a crash cannot corrupt the
-  persisted state file.
-* Telegram fires from a **background daemon thread** so the live feed
-  loop is never blocked by an HTTP call.
+Mid-day restart recovery
+------------------------
+On startup ``run_backfill()`` re-attaches the tracker to any persisted
+isolated record via ``_ensure_tracker_attached()`` so the daily 5-min
+recheck keeps the SR-tracking sidecar up to date.
 """
 
 from __future__ import annotations
@@ -92,7 +59,6 @@ logger = get_logger(__file__)
 
 _MARKET_TZ = ZoneInfo("Asia/Kolkata")
 
-# Registry key for the two indexes we care about.
 CORE_INDEX_KEYS: dict[str, str] = {
     "NSE_INDEX|Nifty 50": "NIFTY",
     "BSE_INDEX|SENSEX":   "SENSEX",
@@ -106,18 +72,14 @@ _MARKET_CLOSE = dtime(15, 30)
 _OR_READY = dtime(9, 16, 10)
 _VALID_WEEKDAYS = {0, 1, 2, 3, 4}
 
-
 def _now_market() -> datetime:
     return datetime.now(_MARKET_TZ)
-
 
 def _today_iso() -> str:
     return _now_market().date().isoformat()
 
-
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
-
 
 class LevelIsolatedInstrumentService:
     def __init__(self) -> None:
@@ -189,6 +151,32 @@ class LevelIsolatedInstrumentService:
             self._load_or_create_state()
 
     # ------------------------------------------------------------------ #
+    # Isolated-SR tracker attachment                                     #
+    # ------------------------------------------------------------------ #
+    def _ensure_tracker_attached(self) -> None:
+        """Make sure the SR tracker is watching the current isolated record.
+
+        Idempotent: ``on_isolation`` returns early if the same instrument
+        is already being tracked for today.
+        """
+        iso = self._state.get("isolated")
+        if not isinstance(iso, dict):
+            return
+        key = str(iso.get("instrument_key") or "").strip()
+        if not key:
+            return
+        try:
+            from services.isolated_sr_tracker_service import (
+                isolated_sr_tracker_service,
+            )
+            if not isolated_sr_tracker_service.is_tracking(key):
+                isolated_sr_tracker_service.on_isolation(iso)
+        except Exception:
+            logger.exception(
+                "[level-isolation] SR tracker attach failed"
+            )
+
+    # ------------------------------------------------------------------ #
     # Market gates                                                       #
     # ------------------------------------------------------------------ #
     @staticmethod
@@ -206,7 +194,6 @@ class LevelIsolatedInstrumentService:
             payload = market_holiday_service.get_today()
             return str(payload.get("status") or "").lower() != "holiday"
         except Exception:
-            # Provider error -> assume trading day (never silently skip).
             return True
 
     def _in_backfill_window(self, now: datetime) -> bool:
@@ -224,7 +211,6 @@ class LevelIsolatedInstrumentService:
     # Live tick entry point                                              #
     # ------------------------------------------------------------------ #
     def on_tick(self, instrument_key: str, ltp: Any) -> None:
-        """Called from ``live_feed_service._handle_feed`` for NIFTY/SENSEX."""
         if not config.LEVEL_ISOLATION_ENABLED:
             return
 
@@ -502,18 +488,6 @@ class LevelIsolatedInstrumentService:
     def _resolve_underlying_for_candidate(
         candidate: dict[str, Any],
     ) -> str:
-        """Return the option's underlying ticker (NIFTY / SENSEX / …).
-
-        Resolution order:
-          1. registry lookup (most accurate)
-          2. trading_symbol first token (e.g. "NIFTY 22400 PE 27 OCT 26")
-          3. empty string
-
-        This deliberately ignores ``event.index`` because a SENSEX
-        trigger may have picked a NIFTY instrument (the
-        "with_nifty_reference" path), and the folder layout on disk is
-        keyed by the *instrument's* underlying, not the trigger's.
-        """
         key = str(candidate.get("instrument_key") or "").strip()
         if key:
             try:
@@ -538,7 +512,6 @@ class LevelIsolatedInstrumentService:
     # ------------------------------------------------------------------ #
     @staticmethod
     def _compute_or_levels(fc: dict[str, Any]) -> dict[str, float] | None:
-        """Compute OR levels from a first-candle dict, or None."""
         try:
             H = float(fc["high"])
             L = float(fc["low"])
@@ -572,21 +545,6 @@ class LevelIsolatedInstrumentService:
         touch_dt: datetime | None,
         allow_rest: bool,
     ) -> dict[str, Any]:
-        """Collect the isolated instrument's OWN data at the touch.
-
-        Resolution order for ``instrument_ltp``:
-          1. live feed cache   (instant; populated on the live path)
-          2. exact touch bar   (backfill path only; ~200–500 ms)
-          3. latest intraday   (backfill path only; when touch bar missing)
-          4. first_candle.close (weak fallback if 1–3 unavailable)
-          5. OR midpoint        (last resort; always present when OR exists)
-
-        Alongside LTP, we also try to read the instrument's own
-        ``first_candle.json`` from its folder. If the file is missing
-        (e.g. it was one of the 26 skipped during startup backfill),
-        we derive both the first-candle OHLC and the OR levels from the
-        intraday 09:15 bar — no extra network call.
-        """
         snapshot: dict[str, Any] = {
             "instrument_ltp": None,
             "instrument_touch_ohlc": None,
@@ -599,7 +557,6 @@ class LevelIsolatedInstrumentService:
         if not key:
             return snapshot
 
-        # ---- 1. Live feed cache (fast; used on live path) ---------- #
         try:
             from services.live_feed_service import live_feed_service
             ltp = live_feed_service.get_latest_ltp(key)
@@ -611,7 +568,6 @@ class LevelIsolatedInstrumentService:
                 "[level-isolation] live LTP cache read failed for %s", key,
             )
 
-        # ---- 2. Read the instrument's own first_candle.json -------- #
         resolved_underlying = self._resolve_underlying_for_candidate(candidate)
         folder_underlying = (resolved_underlying or underlying or "").strip().lower()
         strike = candidate.get("strike")
@@ -632,11 +588,9 @@ class LevelIsolatedInstrumentService:
                 if fc_path.exists():
                     try:
                         payload = json.loads(fc_path.read_text(encoding="utf-8"))
-                        # Only use the file if it's for today.
                         if str(payload.get("date") or "") == _today_iso():
                             snapshot["instrument_first_candle"] = payload.get("first_candle")
                             snapshot["instrument_or_levels"] = payload.get("or_levels")
-                            # Weak fallback for LTP if cache was empty.
                             if snapshot["instrument_ltp"] is None:
                                 fc_close = (payload.get("first_candle") or {}).get("close")
                                 if fc_close is not None:
@@ -656,7 +610,6 @@ class LevelIsolatedInstrumentService:
                         key, fc_path,
                     )
 
-        # ---- 3. Intraday REST (backfill path only) ----------------- #
         if allow_rest:
             try:
                 candles = self._fetch_intraday(key)
@@ -664,7 +617,6 @@ class LevelIsolatedInstrumentService:
                 candles = []
 
             if candles:
-                # 3a. Match exact touch bar (best signal).
                 matched: dict[str, Any] | None = None
                 if touch_dt is not None:
                     try:
@@ -692,9 +644,6 @@ class LevelIsolatedInstrumentService:
                     except (TypeError, ValueError, KeyError):
                         pass
                 else:
-                    # 3b. Fallback: latest bar for LTP only. We do NOT
-                    # populate instrument_touch_ohlc from the wrong bar
-                    # (that would silently lie about "the touch price").
                     last = candles[-1]
                     try:
                         snapshot["instrument_ltp"] = float(last["close"])
@@ -709,9 +658,6 @@ class LevelIsolatedInstrumentService:
                             key, touch_dt,
                         )
 
-                # 3c. Derive first_candle from the 09:15 intraday bar
-                # when the on-disk file was missing. This rescues
-                # instruments that were skipped during startup backfill.
                 if snapshot["instrument_first_candle"] is None:
                     for c in candles:
                         t = str(c.get("time", ""))
@@ -732,7 +678,6 @@ class LevelIsolatedInstrumentService:
                             )
                             break
 
-        # ---- 4. Last-resort: OR midpoint (H+L)/2 ------------------- #
         if snapshot["instrument_ltp"] is None:
             orl = snapshot["instrument_or_levels"] or {}
             try:
@@ -753,8 +698,6 @@ class LevelIsolatedInstrumentService:
         reason: str,
         event: dict[str, Any],
     ) -> None:
-        # Determine the touch moment (used for the instrument snapshot's
-        # touch-bar match).
         touch_dt: datetime | None = None
         touched_at_str = event.get("touched_at")
         if touched_at_str:
@@ -765,8 +708,6 @@ class LevelIsolatedInstrumentService:
         if touch_dt is None:
             touch_dt = _now_market()
 
-        # Whether we're on the backfill path (only then do we do an
-        # intraday REST call for the picked instrument's OHLC).
         is_backfill = str(event.get("source") or "") == "backfill"
 
         underlying = str(event.get("index") or "").strip().upper()
@@ -797,7 +738,6 @@ class LevelIsolatedInstrumentService:
             "nifty_reference_candidates_count": event.get(
                 "nifty_reference_candidates_count"
             ),
-            # ---- NEW: the isolated instrument's OWN data at touch -- #
             "instrument_ltp": snapshot.get("instrument_ltp"),
             "instrument_touch_ohlc": snapshot.get("instrument_touch_ohlc"),
             "instrument_first_candle": snapshot.get("instrument_first_candle"),
@@ -823,6 +763,17 @@ class LevelIsolatedInstrumentService:
             snapshot.get("instrument_first_candle") is not None,
             snapshot.get("instrument_or_levels") is not None,
         )
+
+        # ---- Attach the SR tracker -------------------------------- #
+        try:
+            from services.isolated_sr_tracker_service import (
+                isolated_sr_tracker_service,
+            )
+            isolated_sr_tracker_service.on_isolation(isolated)
+        except Exception:
+            logger.exception(
+                "[level-isolation] SR tracker on_isolation failed"
+            )
 
         if config.LEVEL_ISOLATION_TELEGRAM_ENABLED:
             threading.Thread(
@@ -872,7 +823,6 @@ class LevelIsolatedInstrumentService:
     # Startup backfill                                                   #
     # ------------------------------------------------------------------ #
     def _snapshot_needs_backfill(self, iso: dict[str, Any]) -> bool:
-        """True if the record has an isolated entry but no snapshot."""
         if not isinstance(iso, dict):
             return True
         return (
@@ -895,11 +845,6 @@ class LevelIsolatedInstrumentService:
         self,
         iso: dict[str, Any],
     ) -> dict[str, Any]:
-        """Re-collect the snapshot for an already-isolated record.
-
-        Does NOT re-run the isolation decision and does NOT touch
-        ``touch_state``. Only the five snapshot fields are updated.
-        """
         candidate = {
             "instrument_key": iso.get("instrument_key"),
             "trading_symbol": iso.get("trading_symbol"),
@@ -932,7 +877,6 @@ class LevelIsolatedInstrumentService:
         return snapshot
 
     def refresh_snapshot(self) -> dict[str, Any]:
-        """Public entry point — re-collect the snapshot on demand."""
         with self._lock:
             self._ensure_today()
             iso = self._state.get("isolated")
@@ -970,10 +914,9 @@ class LevelIsolatedInstrumentService:
 
             if self._state.get("isolated") is not None:
                 iso = self._state["isolated"]
-                # Self-heal records created before the snapshot feature
-                # existed. Safe: does not re-run isolation, does not
-                # touch touch_state, only fills in the five snapshot
-                # fields. The 5-minute recheck job drives this.
+                # Re-attach the SR tracker on mid-day restart.
+                self._ensure_tracker_attached()
+
                 if self._snapshot_needs_backfill(iso):
                     logger.info(
                         "[level-isolation] isolated record exists but "
@@ -1215,7 +1158,6 @@ class LevelIsolatedInstrumentService:
             }
 
     def _holiday_info(self, now: datetime) -> dict[str, Any]:
-        """Return a best-effort holiday classification for ``now``."""
         if now.weekday() not in _VALID_WEEKDAYS:
             return {
                 "is_weekend": True,
@@ -1247,16 +1189,6 @@ class LevelIsolatedInstrumentService:
             }
 
     def _market_context(self, now: datetime) -> dict[str, Any]:
-        """Classify the current market moment for the UI.
-
-        The returned ``state`` is one of:
-          * ``weekend``         — Saturday / Sunday
-          * ``holiday``         — trading holiday per Upstox
-          * ``pre_open``        — weekday before 09:15 IST
-          * ``or_warming_up``   — 09:15 – 09:16:10 IST
-          * ``in_session``      — 09:16:10 – 15:30 IST
-          * ``post_close``      — after 15:30 IST
-        """
         info = self._holiday_info(now)
         is_weekend = info["is_weekend"]
         is_holiday = info["is_holiday"]
@@ -1324,7 +1256,6 @@ class LevelIsolatedInstrumentService:
         }
 
     def get_detail(self) -> dict[str, Any]:
-        """Return a UI-facing snapshot of the level-isolation state."""
         with self._lock:
             now = _now_market()
             market = self._market_context(now)
@@ -1339,7 +1270,9 @@ class LevelIsolatedInstrumentService:
                         trigger_event = ev
                         break
 
-            return {
+            self._ensure_tracker_attached()
+
+            detail = {
                 "enabled": config.LEVEL_ISOLATION_ENABLED,
                 "day": self._state.get("day") or _today_iso(),
                 "market": market,
@@ -1356,6 +1289,20 @@ class LevelIsolatedInstrumentService:
                 "generated_at": _now_iso(),
             }
 
+        # Attach the SR-tracking snapshot for the UI. Done outside the
+        # lock because `get_detail()` on the tracker reads the live SR
+        # engine file and merges broken status.
+        try:
+            from services.isolated_sr_tracker_service import (
+                isolated_sr_tracker_service,
+            )
+            detail["sr_tracking"] = isolated_sr_tracker_service.get_detail()
+        except Exception:
+            logger.exception("[level-isolation] sr_tracking merge failed")
+            detail["sr_tracking"] = None
+
+        return detail
+
     def reset(self) -> dict[str, Any]:
         with self._lock:
             self._state = self._empty_state()
@@ -1365,6 +1312,15 @@ class LevelIsolatedInstrumentService:
             self._last_sensex_tick_at = None
             self._last_check_monotonic = 0.0
             self._save_state()
+            try:
+                from services.isolated_sr_tracker_service import (
+                    isolated_sr_tracker_service,
+                )
+                isolated_sr_tracker_service.reset()
+            except Exception:
+                logger.exception(
+                    "[level-isolation] SR tracker reset failed"
+                )
             logger.info("[level-isolation] state reset")
             return self.get_detail()
 

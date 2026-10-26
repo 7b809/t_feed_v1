@@ -210,7 +210,7 @@ body { background-color: var(--bg-body); color: var(--text-primary); font-family
             if (item.lot_size) bits.push(`Lot: ${fmt(item.lot_size)}`);
 
             return `
-                <a href="/chart/${encodeURIComponent(key)}" class="instrument-card">
+                <a href="/chart/${encodeURIComponent(key)}" target="_blank" rel="noopener noreferrer" class="instrument-card">
                     <div class="d-flex align-items-center justify-content-between">
                         <div style="min-width:0;">
                             <div class="instrument-symbol text-truncate">${symbol}</div>

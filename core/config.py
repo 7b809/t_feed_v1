@@ -310,3 +310,40 @@ LEVEL_ISOLATION_BACKFILL_WINDOW_END_MINUTE = _int(
 )
 
 LEVEL_ISOLATION_TELEGRAM_ENABLED = _bool("LEVEL_ISOLATION_TELEGRAM_ENABLED", True)
+
+# ===========================================================================
+# ISOLATED SR TRACKER — watch SR confirmations for the isolated instrument
+# ===========================================================================
+# When an instrument is isolated, `isolated_sr_tracker_service` snapshots
+# every SR level currently recorded by `live_sr_levels_service` as
+# "pre-isolation" and then watches for NEW pivot confirmations on the
+# same instrument for the rest of the day.  Each new confirmation is
+# persisted (sidecar file, separate from the isolation state file) and
+# can be surfaced on Telegram and the dashboard at /isolated.
+#
+# Sidecar file: <LIVE_DATA_DIR>/<LEVEL_ISOLATION_SR_FILENAME>
+#
+# Dedup is on (level_type, price, confirmed_time), so:
+#   * re-seeding the SR engine does not double-count pivots;
+#   * a level already snapshotted as pre-isolation is never re-added as
+#     post-isolation;
+#   * a genuinely new pivot (new candle) that happens to share a price
+#     with an older one is still recorded.
+#
+# See:
+#   services/isolated_sr_tracker_service.py
+#   services/level_isolated_instrument_service.py  (_isolate / get_detail)
+#   services/live_sr_levels_service.py             (_append_level hook)
+#   routes/isolated_instrument_routes.py           (/sr-tracking endpoint)
+#   templates/isolated_instrument.html             (SR Tracking card)
+# ===========================================================================
+LEVEL_ISOLATION_SR_FILENAME = _str(
+    "LEVEL_ISOLATION_SR_FILENAME", "level_isolated_instrument_sr.json"
+)
+
+# When True (default), every new post-isolation SR confirmation fires a
+# Telegram message.  When False, confirmations are still persisted and
+# shown on the dashboard; only the Telegram send is suppressed.
+LEVEL_ISOLATION_SR_TELEGRAM_ENABLED = _bool(
+    "LEVEL_ISOLATION_SR_TELEGRAM_ENABLED", True
+)
