@@ -1,0 +1,480 @@
+GEAR 1 (G1)
+R3 / S3-touch isolation → crossover-armed entry → promoted instrument → order
+
+1. One-line summary
+G1 isolates one CE or PE option the moment NIFTY or SENSEX touches its own R3 or S3 level, then watches both sides at that strike for a post-touch support pivot. Whichever side confirms first is promoted to be the active instrument and becomes the buy signal. The order is placed manually from the /isolated dashboard or via the order API on the promoted instrument.
+
+2. When G1 runs
+G1 runs on every trading weekday (Mon–Fri, non-holiday) as a continuous pipeline. There is no single "G1 start" event — the pipeline is always live during market hours and self-gates by time-of-day and market state.
+
+Clock (IST)	Event
+09:15:00	Cash market opens. Live feed starts streaming NIFTY/SENSEX.
+09:16:10	First-candle service computes OR levels for all instruments.
+~09:16:15	Level filter produces the CE/PE strike list for NIFTY/SENSEX.
+~09:16:30	Live SR engine starts accumulating 1-min pivots.
+09:16:10 → 15:30	Isolation engine watches NIFTY/SENSEX for R3/S3 touches.
+09:16:10 → 15:30	Strategy entry evaluates both sides every 10s (browser) or every 5 min (scheduler).
+15:30:00	Market closes. No new touches accepted.
+any time	Manual order placed from /isolated or /admin/orders/*.
+Startup catch-up: if the app boots mid-session or post-close, each step replays from historical + intraday data so /isolated renders the would-have-been decision for the day.
+
+3. Inputs G1 requires
+Before G1 can do anything, the following must exist in data/:
+
+text
+data/index/nifty/first_candle.json        — NIFTY 09:15 OHLC + OR levels
+data/index/sensex/first_candle.json       — SENSEX 09:15 OHLC + OR levels
+data/index/nifty/level_instruments.json   — filtered CE/PE strike list
+data/index/sensex/level_instruments.json  — filtered CE/PE strike list
+data/<underlying>/<strike>_<TYPE>/live_sr_levels.json  — pivots per instrument
+And the live feed must be up so live_feed_service.get_latest_ltp(key) returns fresh LTPs for both index keys and all option instruments.
+
+4. Step-by-step logic
+Step 1 — Compute OR levels (09:16:10)
+For each index, the 09:15 1-min candle produces:
+
+text
+H = high of first candle
+L = low of first candle
+A = (H + L) / 2
+D_H = |H − A|
+D_L = |A − L|
+R1 = A + D_H / 2
+S1 = A − D_L / 2
+R2 = H + D_H
+S2 = L − D_L
+R3 = R2 + D_H
+S3 = S2 − D_L
+R3_Threshold = (R2 + R3) / 2
+S3_Threshold = (S2 + S3) / 2
+Writes first_candle.json with these + the raw candle. Triggers the level filter.
+
+Step 2 — Filter to a CE/PE strike list
+For each index, from its OR levels:
+
+CE candidates — for each resistance level in {R1, R2, R3, R3_Threshold}:
+
+strike = ceil(level / step) * step
+
+PE candidates — for each support level in {S1, S2, S3, S3_Threshold}:
+
+strike = floor(level / step) * step
+
+step = 50 for NIFTY, 100 for SENSEX (configurable).
+
+The two candidate maps are unioned: every strike in the union is then resolved to both a CE instrument and a PE instrument. So a strike like 22400 appears as both NIFTY 22400 CE and NIFTY 22400 PE in the final list.
+
+Range filter (default wide):
+
+wide: keep strikes in [S3, R3]
+
+strict: keep strikes in [S3_Threshold, R3_Threshold]
+
+Core level strikes are always kept even if a strict range would exclude them.
+
+Listed-strike resolution: for each strike+side, look up the registry. If the exact strike isn't listed, walk outward by step (up for CE, down for PE) up to 20 steps until a listed instrument is found. Unresolvable strikes are dropped with a log line.
+
+Each entry written to level_instruments.json carries:
+
+json
+{
+  "strike": 22400,
+  "instrument_key": "NSE_FO|51327",
+  "trading_symbol": "NIFTY 22400 PE 27 OCT 26",
+  "expiry": 1793125799000,
+  "type": "PE",
+  "levels": ["S2", "S3", "S3_Threshold"],
+  "reasons": ["support extension", "outer support", "support threshold"]
+}
+Registers every filtered instrument (plus the index itself) with the live SR engine.
+
+Step 3 — Live SR engine accumulates pivots
+The live SR engine tracks every subscribed instrument, building 1-minute candles from ticks. For each instrument, using left=15, right=15:
+
+Resistance pivot at bar i iff C[i].high > C[j].high for every j in [i−15, i−1] AND every j in [i+1, i+15]
+
+Support pivot at bar i iff C[i].low < C[j].low for every j in [i−15, i−1] AND every j in [i+1, i+15]
+
+A pivot at index i is confirmed at bar i + 15.
+
+Every confirmed pivot is written into live_sr_levels.json with:
+
+json
+{
+  "level": "support",
+  "price": 155.00,
+  "pivot_time": "2026-10-26T09:26:00+05:30",
+  "confirmed_time": "2026-10-26T09:41:00+05:30",
+  "pivot_bar_index": 11,
+  "confirmed_bar_index": 26,
+  "left_bars": 15,
+  "right_bars": 15
+}
+Only today's pivots enter the file. Historical seed data is used only as look-back context (a pivot forming at 09:15 needs 15 bars of yesterday's tail).
+
+Accuracy is re-synced from the Upstox intraday API every 2 minutes (configurable) so tick-aggregated OHLC drift is corrected.
+
+Step 4 — Watch for R3 / S3 touches
+The isolation engine watches the LTP of NSE_INDEX|Nifty 50 and BSE_INDEX|SENSEX. For each index LTP:
+
+R3 touch fired when index_ltp >= or_levels[index].R3
+
+S3 touch fired when index_ltp <= or_levels[index].S3
+
+Priority order when multiple touches fire on the same minute:
+
+text
+NIFTY-R3  →  NIFTY-S3  →  SENSEX-R3  →  SENSEX-S3
+The first touch in this order that fires isolates an instrument and ends the search for the day. Once isolated, all subsequent touches are logged as already_isolated and ignored for instrument selection.
+
+Touch detection is throttled to one check per 2 seconds regardless of tick rate.
+
+Step 5 — Pick the bias-side instrument at touch
+The bias side is fixed by the touch type:
+
+R3 touch → bias side = CE
+
+S3 touch → bias side = PE
+
+From that index's level_instruments.json, filter candidates:
+
+Primary filter — bias-side instruments whose levels array contains R3 or R3_Threshold (for CE) / S3 or S3_Threshold (for PE).
+
+Fallback — if the primary filter returns empty, use all bias-side instruments for that index.
+
+Among the surviving candidates, pick the one whose strike is nearest to the trigger LTP (absolute distance).
+
+SENSEX special case:
+When the touch is SENSEX-based, the engine checks the NIFTY LTP at that exact moment:
+
+If the last NIFTY tick is ≤ 30 seconds old: use NIFTY as the reference. Pick the NIFTY instrument (either side) nearest to NIFTY LTP.
+
+If the NIFTY tick is stale (> 30 s): fall back to SENSEX's own nearest strike.
+
+This produces the reasons:
+
+text
+nifty_r3_touch                                (NIFTY R3)
+nifty_s3_touch                                (NIFTY S3)
+sensex_r3_touch                               (SENSEX R3, no NIFTY reference used)
+sensex_r3_with_nifty_reference                (SENSEX R3, NIFTY reference used)
+sensex_r3_fallback                            (SENSEX R3, NIFTY stale → SENSEX fallback)
+(same for _s3_ variants)
+Step 6 — Snapshot the picked instrument at touch
+The moment isolation fires, the picked instrument's own state is captured and frozen into the record:
+
+LTP at touch — from the live feed cache, else the touch-minute intraday bar, else the first-candle close, else the OR midpoint
+
+Touch-minute OHLC — from the intraday API for the exact minute of the touch
+
+First-candle OHLC — the instrument's own 09:15 candle
+
+OR levels — the instrument's own R1..S3 levels computed from its first candle
+
+These are stored under the isolated record so the UI can show the instrument's own price context, not just the index's.
+
+Step 7 — Persist the isolation record
+Written to data/level_isolated_instrument.json:
+
+json
+{
+  "day": "2026-10-26",
+  "isolated": {
+    "instrument_key": "NSE_FO|51327",
+    "trading_symbol": "NIFTY 22400 PE 27 OCT 26",
+    "strike": 22400,
+    "type": "PE",
+    "expiry": 1793125799000,
+    "levels": ["S2", "S3", "S3_Threshold"],
+    "reason": "nifty_s3_touch",
+    "isolated_at": "2026-10-26T09:21:00+05:30",
+    "touched_at": "2026-10-26T09:21:00+05:30",
+    "trigger_index": "NIFTY",
+    "trigger_side": "S3",
+    "trigger_level": "S3",
+    "trigger_level_value": 22415.70,
+    "trigger_ltp": 22412.15,
+    "instrument_ltp": 106.95,
+    "instrument_quote_source": "intraday_bar",
+    "instrument_touch_ohlc": { ... },
+    "instrument_first_candle": { ... },
+    "instrument_or_levels": { ... }
+  },
+  "events": [ ... ],
+  "touch_state": {
+    "NIFTY_R3": false,
+    "NIFTY_S3": true,
+    "SENSEX_R3": false,
+    "SENSEX_S3": false
+  }
+}
+Attaches the isolated SR tracker. Fires a Telegram message ("Level Isolation · Instrument Locked").
+
+Step 8 — SR tracker begins watching the isolated instrument
+On isolation, the tracker:
+
+Reads live_sr_levels.json for the isolated instrument and records every currently-present level as pre_isolation.
+
+Subscribes to the live SR engine for any new pivot confirmations on that same instrument.
+
+For each new pivot: record as post_isolation, dedup on (level_type, price, confirmed_time).
+
+Persists to data/level_isolated_instrument_sr.json.
+
+Every confirmed pivot is retained for the day. There is no "broken"/"intact" distinction — TradingView behaviour.
+
+Step 9 — Strategy entry signal evaluates both sides
+Every 10 s (browser) or every 5 min (scheduler safety net), the entry signal is recomputed from scratch. It reads:
+
+The isolation record (touch time + bias side)
+
+The current live_sr_levels.json for both CE and PE at the isolated strike
+
+Window:
+
+text
+W = [touch_time, touch_time + BUFFER_MINUTES]     (default buffer = 10 min)
+For each candidate side (bias + counter when crossover is enabled):
+
+Collect support pivots whose pivot_time falls strictly inside W. Sort by pivot_time ascending.
+
+For each support S (earliest first):
+
+Resistance check: for every resistance pivot R in the same file, R blocks S if and only if:
+
+R.pivot_time > S.pivot_time, AND
+
+R.price > S.price, AND
+
+R.confirmed_time ≤ S.confirmed_time
+
+If a blocking resistance exists: skip this support and try the next one.
+
+If no blocker:
+
+If S.confirmed_time > now: candidate state = waiting_confirmation.
+
+If S.confirmed_time ≤ now: candidate state = armed. Compute:
+
+entry_price = candle close at S.confirmed_time, else live LTP
+
+stop = S.price
+
+target = nearest resistance above entry_price, else None
+
+stop_pct = (entry_price − stop) / entry_price
+
+If stop_pct > STRATEGY_MAX_STOP_PCT (0.35) → warning stop_too_wide
+
+If stop_pct < 0 → warning price_at_or_below_support
+
+First non-blocked support that passes wins for that side. Remaining supports are not re-tried.
+
+If every support in the window was blocked: candidate state = blocked.
+
+First-to-confirm rule:
+
+If both sides arm on the same day and STRATEGY_ENTRY_FIRST_TO_CONFIRM_WINS = true (default):
+
+Sort both armed candidates by confirmed_time ascending.
+
+The earliest wins. It becomes chosen.
+
+The other is marked discarded with note first_to_confirm_won_by_other_side.
+
+Response shape (per candidate):
+
+json
+{
+  "side": "CE",
+  "instrument_key": "NSE_FO|51326",
+  "trading_symbol": "NIFTY 22400 CE 27 OCT 26",
+  "is_bias_side": false,
+  "state": "armed",
+  "entry_support": {
+    "price": 155.00,
+    "pivot_time": "2026-10-26T09:26:00+05:30",
+    "confirmed_time": "2026-10-26T09:41:00+05:30",
+    "minutes_from_touch": 5.0
+  },
+  "entry": {
+    "price": 177.00,
+    "price_source": "candle_close_at_confirmed",
+    "time": "2026-10-26T09:41:00+05:30",
+    "stop": 155.00,
+    "stop_pct": 0.1243,
+    "target": 220.50,
+    "target_pivot_time": "..."
+  },
+  "warning": null,
+  "chosen": true
+}
+Step 10 — Promotion (counter side wins)
+After the chosen side is determined:
+
+If chosen == bias-side instrument (e.g. PE won on an S3 day): no promotion. The original isolated instrument stays active. G1 ends here; the trade is on the bias-side PE.
+
+If chosen == counter-side instrument (e.g. CE won on an S3 day): the counter-side instrument is promoted to be the active instrument. The strategy_entry_signal_service returns a promotion block:
+
+json
+{
+  "recommended": true,
+  "already_applied": false,
+  "target_instrument_key": "NSE_FO|51326",
+  "target_trading_symbol": "NIFTY 22400 CE 27 OCT 26",
+  "target_side": "CE",
+  "official_isolated_key": "NSE_FO|51327",
+  "promotion_allowed": true,
+  "re_promotion_allowed": false
+}
+Promotion is applied asynchronously via POST /admin/level-isolation/apply-promotion. The promotion service:
+
+Validates recommended and target key.
+
+Captures the promoted instrument's LTP, first candle, OR levels, confirmation-bar OHLC.
+
+Writes data/level_isolated_instrument_promotion.json (sidecar — the isolation record is never modified).
+
+Re-keys the SR tracker to the promoted instrument via isolated_sr_tracker_service.on_isolation(promoted_record). The PE's tracker state is discarded.
+
+Fires a Telegram message ("Instrument Promoted").
+
+Returns the promotion payload + fresh detail.
+
+One promotion per day by default (STRATEGY_ENTRY_ALLOW_RE_PROMOTION=false). Once promoted, the pick is stable for the rest of the session.
+
+Promotion is triggered by:
+
+The browser auto-POSTing to /apply-promotion when it sees recommended && !already_applied.
+
+The 5-min scheduler task as a safety net (covers the browser-closed case).
+
+Step 11 — Order placement (manual)
+Order placement is entirely manual. G1 does not auto-execute. After the strategy entry ARMS:
+
+The operator reviews the /isolated dashboard.
+
+For a CE arm: buys the CE on the promoted instrument.
+
+For a PE arm: buys the PE on the original isolated instrument.
+
+Order API (POST /admin/orders/buy or /admin/orders/sell):
+
+Runtime gate — order_runtime_service.is_enabled(). If off, returns {"status": "disabled"}.
+
+Token read — token_service.get_access_token(). Held only in a local variable for the duration of the call. Never logged, never returned.
+
+Lots → quantity via upstox_services.lot_sizes.lots_to_quantity:
+
+Resolution order: explicit underlying → registry → scan key for known ticker substring → per-exchange default (NSE_FO = 65, BSE_FO = 20) → unit fallback.
+
+NIFTY = 65, SENSEX = 20, BANKNIFTY = 30, FINNIFTY = 60, MIDCPNIFTY = 120.
+
+Build request — PlaceOrderV3Request(quantity, product="D", validity="DAY", price=0, order_type="MARKET", transaction_type="BUY"|"SELL", instrument_token, is_amo=False, slice=False, ...).
+
+Call Upstox — OrderApiV3.place_order(body).
+
+Sanitise — provider response is passed through upstox_services._sanitise.sanitise_payload before being logged or returned.
+
+Return — {status, instrument_key, underlying, transaction_type, lots, lot_size, lot_source, quantity, order_type, product, response, error, called_at}.
+
+The stop and target from the strategy-entry block are informational — they are not wired into the order. There is no auto-stop-loss, no bracket order, no auto-exit. The operator monitors manually.
+
+5. Decision rules summary
+Question	G1 answer
+When does isolation fire?	First R3/S3 touch of the day, priority NIFTY-R3 → NIFTY-S3 → SENSEX-R3 → SENSEX-S3.
+Which side gets isolated?	Bias side: CE for R3 touch, PE for S3 touch.
+Which strike?	Nearest filtered strike to the trigger LTP.
+Which side trades?	Whichever side arms first (earliest confirmed_time). Crossover allowed.
+When is a side ARMED?	Its earliest non-blocked support pivot in [touch, touch + 10 min] has confirmed.
+What blocks a support?	A resistance with pivot_time > support.pivot_time, price > support.price, confirmed_time ≤ support.confirmed_time.
+Entry price	Candle close at confirmed_time; fallback to live LTP.
+Stop	Support pivot price.
+Target	Next resistance above entry.
+When to promote?	When the chosen side ≠ bias-side instrument.
+When to buy?	Manual, after ARMED.
+Auto-exit?	No. Manual only.
+6. Data files G1 produces
+text
+data/level_isolated_instrument.json
+    isolation record: the trigger-side instrument, snapshot, events, touch_state
+
+data/level_isolated_instrument_sr.json
+    SR tracker sidecar: pre_isolation_levels + post_isolation_levels
+    for the currently-tracked instrument (bias-side, or promoted)
+
+data/level_isolated_instrument_promotion.json
+    promotion sidecar: from/to instruments, reason, evidence, and the
+    promoted instrument's own snapshot (mirror of `isolated` shape)
+    Only written when a promotion has occurred.
+7. Config flags that shape G1
+Flag	Default	Effect
+LEVEL_ISOLATION_ENABLED	true	Master switch for isolation.
+LEVEL_ISOLATION_CHECK_INTERVAL_SECONDS	2.0	Touch detection throttle.
+LEVEL_ISOLATION_NIFTY_TICK_STALE_SECONDS	30	SENSEX-touch stale reference threshold.
+LEVEL_ISOLATION_BACKFILL_WINDOW_START_HOUR/MINUTE	09:16	Startup backfill window.
+LEVEL_ISOLATION_BACKFILL_WINDOW_END_HOUR/MINUTE	23:59	Startup backfill window.
+STRATEGY_ENTRY_ENABLED	true	Master switch for the entry signal.
+STRATEGY_ENTRY_ALLOW_CROSSOVER	true	Evaluate both sides every poll.
+STRATEGY_ENTRY_BUFFER_MINUTES	10	Asymmetric window [touch, touch + buffer].
+STRATEGY_ENTRY_ONLY_ONCE_PER_DAY	true	Once a side ARMs, it stays chosen.
+STRATEGY_ENTRY_BLOCKED_BY_RESISTANCE	true	Enable the resistance-blocker check.
+STRATEGY_ENTRY_FIRST_TO_CONFIRM_WINS	true	Earliest confirmed_time wins.
+STRATEGY_MAX_STOP_PCT	0.35	Soft warning threshold for stop distance.
+STRATEGY_ENTRY_ALLOW_PROMOTION	true	Counter-side instrument can become active.
+STRATEGY_ENTRY_ALLOW_RE_PROMOTION	false	Only one promotion per day.
+LIVE_SR_LEFT_BARS / LIVE_SR_RIGHT_BARS	15 / 15	Pivot detection window.
+LIVE_SR_TRACK_ALL_INSTRUMENTS	true	Track every subscribed instrument (vs only filtered).
+LIVE_SR_REFRESH_FROM_API_MINUTES	2	Re-sync period from Upstox API.
+LEVEL_FILTER_STRIKE_STEP_NIFTY	50	NIFTY strike rounding step.
+LEVEL_FILTER_STRIKE_STEP_SENSEX	100	SENSEX strike rounding step.
+LEVEL_FILTER_RANGE_MODE	wide	wide = S3..R3, strict = thresholds.
+LEVEL_FILTER_INCLUDE_ATM_PLUS_MINUS	0	Optional ATM ±N extras.
+8. Failure modes
+Condition	G1 behaviour
+No first candle for an index	That index is skipped by the level filter; its candidates list is empty.
+No filtered instruments	Touch fires but candidates_count = 0; isolation event logged as no_candidates. No isolation.
+NIFTY tick stale during SENSEX touch	Falls back to SENSEX's own nearest strike (*_fallback reason).
+No SR levels yet for a candidate	state = waiting, state_note = no_sr_levels. Re-tries on next poll.
+No support pivot inside [touch, touch + buffer]	state = waiting, state_note = no_support_pivot_in_window. Stays waiting until the buffer elapses.
+Support found but waiting for confirmation	state = waiting_confirmation with seconds_until_confirmation.
+All supports blocked by resistances	state = blocked. If both sides end up blocked, no trade.
+No side arms by end of day	No trade. Isolation record persists for audit.
+Promotion target not in candidates	apply_promotion returns reason: "target_not_in_candidates"; original bias side stays active.
+Second promotion attempt (default config)	Returns reason: "already_promoted_today"; pick stays locked.
+Order API called while toggle off	{"status": "disabled"}.
+Order API called with no token	{"status": "no_token"}.
+Upstox rejects the order	Returns {"status": "error", "error": "Upstox ApiException (HTTP …): …"} with the response body sanitised.
+9. What G1 does NOT do
+No automatic order placement. The operator places orders manually.
+
+No auto-stop-loss or auto-target. The stop and target from the entry signal are informational; nothing watches them.
+
+No auto-exit at market close. Positions are managed manually.
+
+No re-isolation of the trigger side. Once the bias-side instrument is isolated, it is fixed for the day. The promotion mechanism only changes which instrument is active, not which instrument was triggered.
+
+No multi-strike basket. One strike is isolated. One instrument is active. One order.
+
+No volatility regime detection. G1 assumes a "normal" day where an OR-based bias-side touch followed by a post-touch support pivot is the right decision. This is the point of G2+ — G1 only handles the standard rule.
+
+No cross-day carry. All state resets at midnight IST. A new day starts fresh.
+
+10. See also
+/isolated — the operator dashboard for G1. Renders hero, entry signal, SR tracking, snapshot, reasoning, candidates, touch state, event log, OR levels.
+
+GET /admin/level-isolation/detail — the underlying JSON for /isolated. Includes active (promotion) and active_live_sr_levels when a promotion exists.
+
+GET /admin/level-isolation/strategy-signal — the pure compute of the entry signal + promotion block.
+
+POST /admin/level-isolation/apply-promotion — applies a promotion.
+
+POST /admin/level-isolation/backfill — re-runs the intraday replay to reconstruct the day's would-have-isolated instrument (used at startup).
+
+POST /admin/level-isolation/reset — clears the day's state (and any promotion) for testing.
+
+POST /admin/orders/buy / /admin/orders/sell — order placement.
+
+POST /admin/orders/runtime-enable / runtime-disable — the manual safety gate.
+
+services/isolated_instrument_promotion_service.py — the promotion service. Idempotent per day, sidecar-based, never touches the isolation record.

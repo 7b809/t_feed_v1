@@ -22,6 +22,25 @@ API. The gate is now bypassable via ``backfill=True``:
 The post-close rejection is bypassed in backfill mode, but weekend,
 holiday, and pre-open are still rejected — those are genuinely
 non-trading conditions, not just "the data hasn't finished yet".
+
+Index retry (2026-10-27)
+------------------------
+The 09:16:10 scheduled run was observed to fail for the two index
+keys (``NSE_INDEX|Nifty 50``, ``BSE_INDEX|SENSEX``) while the same
+run succeeded for ~95 option instruments.  The Upstox intraday API
+finalises the 09:15 index bar ~20–40 s after the 09:16:00 minute
+close, so a single fetch at 09:16:10 misses it.  The same API works
+cleanly by 09:16:40 (see the SR-backfill run at that timestamp in the
+2026-10-27 log).
+
+``_fetch_first_candle_upstox`` now retries **index keys only** with a
+short backoff so the scheduled run collects the index bar before it
+returns.  Options are not retried because a genuinely missing option
+bar usually means the option has not traded at all in the first
+minute, and retrying ~75 thin options would waste 30+ s of API calls
+on every run.  For defence in depth, the level-isolation 5-minute
+recheck self-heals by re-running this service if either index file
+is missing (see ``services/level_isolated_instrument_service.py``).
 """
 
 from __future__ import annotations
@@ -44,6 +63,23 @@ logger = get_logger(__file__)
 
 _MARKET_TZ = ZoneInfo("Asia/Kolkata")
 _MAX_WORKERS = max(1, int(getattr(config, "FIRST_CANDLE_WORKERS", 8)))
+
+# --------------------------------------------------------------------------- #
+# Index retry policy                                                          #
+# --------------------------------------------------------------------------- #
+# 09:16:10 -> 09:16:45 window.  Empirically the index bar is available
+# by 09:16:40 (see the 2026-10-27 SR-backfill run at that second).  5
+# attempts × 7 s delay = 28 s of backoff, so the last fetch lands at
+# ~09:16:45 which is comfortably after the empirical cutoff.
+_INDEX_FETCH_ATTEMPTS = 5
+_INDEX_FETCH_DELAY_SECONDS = 7.0
+_INDEX_KEY_PREFIXES = ("NSE_INDEX|", "BSE_INDEX|")
+
+# Options are NOT retried — a missing option candle at 09:16:10 usually
+# means the option has not traded in the first minute at all.  If the
+# index file ends up missing, the level-isolation 5-minute recheck
+# self-heals by re-running this service.
+_OPTION_FETCH_ATTEMPTS = 1
 
 _MARKET_OPEN = dtime(9, 15)
 _MARKET_CLOSE = dtime(15, 30)
@@ -250,7 +286,15 @@ def _coerce_dict(raw: Any) -> dict[str, Any] | None:
         return data_attr
     return None
 
-def _fetch_first_candle_upstox(instrument_key: str) -> dict[str, Any] | None:
+def _is_index_key(instrument_key: str) -> bool:
+    return str(instrument_key or "").startswith(_INDEX_KEY_PREFIXES)
+
+def _fetch_first_candle_once(instrument_key: str) -> dict[str, Any] | None:
+    """Single-shot fetch of the 09:15 candle for ``instrument_key``.
+
+    Returns the first-candle dict, or ``None`` when the API does not
+    yet expose a 09:15 bar. Never raises.
+    """
     sdk = _load_sdk()
     if sdk is None:
         logger.error("upstox_client not installed")
@@ -294,6 +338,48 @@ def _fetch_first_candle_upstox(instrument_key: str) -> dict[str, Any] | None:
             }
         except Exception:
             continue
+    return None
+
+def _fetch_first_candle_upstox(instrument_key: str) -> dict[str, Any] | None:
+    """Fetch the 09:15 candle, retrying index keys with a short backoff.
+
+    Index keys (NSE_INDEX|*, BSE_INDEX|*) are retried up to
+    ``_INDEX_FETCH_ATTEMPTS`` times with a ``_INDEX_FETCH_DELAY_SECONDS``
+    delay between attempts. Options are single-shot.
+    """
+    if _is_index_key(instrument_key):
+        attempts = _INDEX_FETCH_ATTEMPTS
+        delay = _INDEX_FETCH_DELAY_SECONDS
+    else:
+        attempts = _OPTION_FETCH_ATTEMPTS
+        delay = 0.0
+
+    result: dict[str, Any] | None = None
+    for attempt in range(attempts):
+        result = _fetch_first_candle_once(instrument_key)
+        if result is not None:
+            if attempt > 0:
+                logger.info(
+                    "[first-candle] %s: succeeded on attempt %d/%d "
+                    "after %.1fs of retries",
+                    instrument_key, attempt + 1, attempts,
+                    attempt * delay,
+                )
+            return result
+        if attempt < attempts - 1:
+            logger.info(
+                "[first-candle] %s: 09:15 candle not yet available "
+                "(attempt %d/%d) — retrying in %.1fs",
+                instrument_key, attempt + 1, attempts, delay,
+            )
+            time.sleep(delay)
+
+    if _is_index_key(instrument_key) and attempts > 1:
+        logger.warning(
+            "[first-candle] %s: no 09:15 candle after %d attempts "
+            "(%.1fs total) — level filter / isolation may be affected",
+            instrument_key, attempts, (attempts - 1) * delay,
+        )
     return None
 
 # --------------------------------------------------------------------------- #

@@ -52,6 +52,24 @@ Mid-day restart recovery
 On startup ``run_backfill()`` re-attaches the tracker to any persisted
 isolated record via ``_ensure_tracker_attached()`` so the daily 5-min
 recheck keeps the SR-tracking sidecar up to date.
+
+Self-heal (2026-10-27)
+----------------------
+The 2026-10-27 log showed the 09:16:10 first-candle run failing for
+both index keys while option instruments succeeded.  Because the
+level-instrument filter reads ``first_candle.json`` from disk, the
+missing index file made ``level_instruments.json`` also missing, and
+the isolation engine returned ``skipped: missing_inputs`` every 5
+minutes for the rest of the session.
+
+``run_backfill()`` now calls ``_maybe_self_heal()`` before acquiring
+the isolation lock.  If either ``first_candle.json`` or
+``level_instruments.json`` is missing or stale for any configured
+index, the self-heal re-runs ``first_candle_service.run(backfill=True)``
+which itself re-runs the level-instrument filter.  Because the 5-min
+recheck fires at 09:20:00 (after the retry window inside
+``_fetch_first_candle_upstox`` has had time to complete), the isolation
+engine recovers automatically without operator intervention.
 """
 
 from __future__ import annotations
@@ -186,6 +204,80 @@ class LevelIsolatedInstrumentService:
         except Exception:
             logger.exception(
                 "[level-isolation] SR tracker attach failed"
+            )
+
+    # ------------------------------------------------------------------ #
+    # Self-heal                                                          #
+    # ------------------------------------------------------------------ #
+    def _maybe_self_heal(self, reason: str = "startup") -> None:
+        """Trigger ``first_candle_service.run(backfill=True)`` when the
+        inputs required by the isolation engine are missing or stale.
+
+        Required inputs (today's date):
+
+            data/index/nifty/first_candle.json
+            data/index/sensex/first_candle.json
+            data/index/nifty/level_instruments.json
+            data/index/sensex/level_instruments.json
+
+        The first two are produced by ``first_candle_service`` and the
+        last two by ``level_instrument_filter_service`` (which is
+        invoked by ``first_candle_service.run`` at the end of every
+        run).  If either pair is missing for either index, the entire
+        isolation engine is dead for the day.
+
+        Runs once at the top of every 5-minute recheck, so a failed
+        09:16:10 run self-corrects by ~09:20:xx.  Never raises.
+        """
+        today = _today_iso()
+        needs_heal: list[str] = []
+
+        for index_name, idx_lower in (("NIFTY", "nifty"), ("SENSEX", "sensex")):
+            for filename in ("first_candle.json", "level_instruments.json"):
+                path = (
+                    Path(config.LIVE_DATA_DIR)
+                    / "index" / idx_lower / filename
+                )
+                if not path.exists():
+                    needs_heal.append(f"{index_name}/{filename} (missing)")
+                    continue
+                try:
+                    payload = json.loads(path.read_text(encoding="utf-8"))
+                except Exception:
+                    needs_heal.append(f"{index_name}/{filename} (unreadable)")
+                    continue
+                if str(payload.get("date") or "") != today:
+                    needs_heal.append(
+                        f"{index_name}/{filename} (stale: "
+                        f"{payload.get('date')!r})"
+                    )
+
+        if not needs_heal:
+            return
+
+        logger.warning(
+            "[level-isolation] self-heal triggered (reason=%s): %s — "
+            "running first_candle_service.run(backfill=True)",
+            reason, needs_heal,
+        )
+        try:
+            from services.first_candle_service import first_candle_service
+            summary = first_candle_service.run(
+                reason=f"level_isolation_self_heal:{reason}",
+                backfill=True,
+            )
+            logger.info(
+                "[level-isolation] self-heal complete — total=%s "
+                "computed=%s skipped=%s errors=%s elapsed=%ss",
+                summary.get("total"),
+                summary.get("computed"),
+                summary.get("instrument_skipped"),
+                summary.get("errors"),
+                summary.get("elapsed_seconds"),
+            )
+        except Exception:
+            logger.exception(
+                "[level-isolation] self-heal first_candle failed"
             )
 
     # ------------------------------------------------------------------ #
@@ -921,6 +1013,18 @@ class LevelIsolatedInstrumentService:
         if not self._in_backfill_window(now):
             return {"status": "skipped", "reason": "outside_window"}
 
+        # Self-heal: if first_candle.json / level_instruments.json is
+        # missing or stale for either index, the isolation engine
+        # cannot fire. Trigger a first_candle backfill (which itself
+        # re-runs the level filter) so the 5-minute recheck can recover
+        # from the 09:16:10 index race without operator intervention.
+        #
+        # This call is deliberately OUTSIDE `with self._lock:` because
+        # first_candle_service.run() can take ~40s (index retries) and
+        # holding the isolation lock that long would block on_tick
+        # from the live-feed thread.
+        self._maybe_self_heal(reason=reason)
+
         with self._lock:
             self._ensure_today()
 
@@ -1268,7 +1372,7 @@ class LevelIsolatedInstrumentService:
         }
 
     # ------------------------------------------------------------------ #
-    # Live SR levels — SHARED LOADER (NEW — used by both the official
+    # Live SR levels — SHARED LOADER (used by both the official
     # isolation view AND the "compare with another instrument" view)
     # ------------------------------------------------------------------ #
     def _read_live_sr_for(
@@ -1479,7 +1583,7 @@ class LevelIsolatedInstrumentService:
         return self._read_live_sr_for(iso, ref_dt)
 
     # ------------------------------------------------------------------ #
-    # Compare-with-another-instrument (NEW)                              #
+    # Compare-with-another-instrument                                    #
     # ------------------------------------------------------------------ #
     def get_instrument_sr_comparison(
         self,

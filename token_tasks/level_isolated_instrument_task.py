@@ -10,6 +10,23 @@ strategy-entry engine whether the current ARMED winner differs from the
 official isolated instrument, and if so applies the promotion. This is
 the 5-minute safety net so promotions land even when the browser is
 closed.
+
+Logging
+-------
+The recheck result line now includes the ``reason`` / ``skip_reason``
+returned by the isolation service so operators can distinguish
+``missing_inputs`` (self-heal territory) from ``outside_window`` (the
+scheduled job fired before 09:16) from ``no_merged_data`` (the intraday
+API returned no candles).
+
+Self-heal
+---------
+``run_level_isolation_recheck`` delegates to
+``level_isolated_instrument_service.run_backfill`` which (since the
+2026-10-27 fix) calls ``_maybe_self_heal()`` internally when the
+first_candle / level_instruments files are missing.  This task does
+not need to do anything special for self-heal — the service handles
+it before acquiring its lock.
 """
 
 from __future__ import annotations
@@ -31,7 +48,6 @@ logger = get_logger(__file__)
 
 _DIV = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 _THIN = "────────────────────────────────"
-
 
 def _try_promote() -> None:
     """Promote the entry-signal winner to be the active instrument.
@@ -62,14 +78,23 @@ def _try_promote() -> None:
     except Exception:
         logger.exception("[level-isolation-task] promotion step failed")
 
-
 def run_level_isolation_recheck(reason: str = "scheduled") -> None:
     """Called by the scheduler every 5 minutes during market hours."""
     logger.info("[level-isolation-task] recheck start reason=%s", reason)
     try:
         result = level_isolated_instrument_service.run_backfill(reason=reason)
         status = result.get("status")
-        logger.info("[level-isolation-task] recheck result status=%s", status)
+        # Surface the reason so ``missing_inputs`` / ``outside_window`` /
+        # ``no_merged_data`` are distinguishable in the log stream.
+        reason_val = (
+            result.get("reason")
+            or result.get("skip_reason")
+            or "—"
+        )
+        logger.info(
+            "[level-isolation-task] recheck result status=%s reason=%s",
+            status, reason_val,
+        )
     except Exception as exc:
         logger.exception("[level-isolation-task] recheck failed")
         try:
@@ -86,7 +111,6 @@ def run_level_isolation_recheck(reason: str = "scheduled") -> None:
     # Promote the entry-signal winner (5-min safety net, in case the
     # browser is closed).
     _try_promote()
-
 
 def run_level_isolation_backfill_manual() -> dict:
     """Manual backfill from the admin route. Never raises."""
