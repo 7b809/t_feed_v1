@@ -411,6 +411,128 @@
         transform: translateY(-1px);
     }
 
+    /* ============================================================ */
+    /* "Compare in Layout" button — opens /layout_1 with 2 panes    */
+    /* (trigger index + isolated instrument) in a NEW TAB.         */
+    /* ============================================================ */
+    .iso-hero-layout-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 12px 22px;
+        background: var(--iso-primary);
+        color: #ffffff;
+        border-radius: 12px;
+        font-weight: 800;
+        font-size: 0.9rem;
+        text-decoration: none;
+        transition: all 0.15s ease;
+        box-shadow: 0 6px 20px rgba(37, 99, 235, 0.35);
+    }
+
+    .iso-hero-layout-btn:hover {
+        background: #1d4ed8;
+        color: #ffffff;
+        transform: translateY(-1px);
+    }
+
+    .iso-hero-layout-btn.is-hidden {
+        display: none;
+    }
+
+    /* ============================================================ */
+    /* Live Feed card                                               */
+    /* ============================================================ */
+    .live-feed-tiles {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+        gap: 14px;
+    }
+
+    .live-tile {
+        padding: 16px 20px;
+        background: #f8fafc;
+        border: 1px solid var(--iso-border);
+        border-radius: 14px;
+        transition: border-color 0.15s ease, box-shadow 0.15s ease;
+    }
+
+    .live-tile:hover {
+        border-color: var(--iso-primary);
+        box-shadow: 0 4px 12px rgba(37, 99, 235, 0.08);
+    }
+
+    .live-tile.live-tile-primary {
+        background: linear-gradient(135deg, #f0f7ff 0%, #ffffff 100%);
+        border-color: var(--iso-primary);
+        grid-column: span 2;
+    }
+
+    @media (max-width: 768px) {
+        .live-tile.live-tile-primary {
+            grid-column: span 1;
+        }
+    }
+
+    .live-tile-label {
+        font-size: 0.72rem;
+        font-weight: 800;
+        color: var(--iso-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        margin-bottom: 8px;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+    }
+
+    .live-tile-value {
+        font-size: 1.5rem;
+        font-weight: 800;
+        color: var(--iso-text);
+        font-variant-numeric: tabular-nums;
+        line-height: 1.2;
+        transition: color 0.2s ease;
+    }
+
+    .live-tile.live-tile-primary .live-tile-value {
+        font-size: 2rem;
+    }
+
+    .live-tile-value.up {
+        color: var(--iso-green);
+    }
+
+    .live-tile-value.down {
+        color: var(--iso-red);
+    }
+
+    .live-tile-sub {
+        font-size: 0.82rem;
+        color: var(--iso-muted);
+        font-weight: 700;
+        margin-top: 6px;
+        font-variant-numeric: tabular-nums;
+    }
+
+    .live-tile-sub.up {
+        color: var(--iso-green);
+    }
+
+    .live-tile-sub.down {
+        color: var(--iso-red);
+    }
+
+    .live-feed-meta {
+        font-size: 0.78rem;
+        color: var(--iso-muted);
+        font-weight: 600;
+        margin-top: 14px;
+        padding-top: 12px;
+        border-top: 1px solid var(--iso-border);
+        font-variant-numeric: tabular-nums;
+    }
+
     /* ---- Generic cards ---- */
     .iso-card {
         background: var(--iso-card-bg);
@@ -1489,6 +1611,12 @@
             <a href="#" class="iso-hero-chart-btn" id="hero-chart-btn">
                 <i class="bi bi-graph-up-arrow"></i> Open Chart
             </a>
+            <!-- NEW: side-by-side comparison of trigger index + isolated instrument -->
+            <a href="#" class="iso-hero-layout-btn is-hidden" id="hero-layout-btn"
+               target="_blank" rel="noopener noreferrer"
+               title="Open a new tab with the underlying index and this isolated instrument side-by-side">
+                <i class="bi bi-columns-gap"></i> Compare in Layout
+            </a>
             <div class="iso-hero-price">
                 <div class="price-label">Instrument LTP @ touch</div>
                 <div class="price-value instrument" id="hero-instrument-ltp">—</div>
@@ -1499,6 +1627,22 @@
                 <div class="price-value" id="hero-trigger-ltp">—</div>
                 <div class="price-sub" id="hero-trigger-sub">—</div>
             </div>
+        </div>
+    </div>
+
+    <!-- Live Feed card: real-time WebSocket feed for the active instrument -->
+    <div class="iso-card" id="iso-live-feed" style="display: none;">
+        <div class="iso-card-header">
+            <i class="bi bi-broadcast text-primary"></i>
+            <span id="live-feed-card-title">Live Feed</span>
+            <div class="sr-header-pills">
+                <span class="sr-count-pill" id="live-feed-status-pill">Connecting…</span>
+                <span class="sr-count-pill has" id="live-feed-sub-count-pill">0 subscribed</span>
+            </div>
+        </div>
+        <div class="iso-card-body">
+            <div class="live-feed-tiles" id="live-feed-tiles"></div>
+            <div class="live-feed-meta" id="live-feed-meta">Waiting for first tick…</div>
         </div>
     </div>
 
@@ -1698,6 +1842,20 @@
     const POLL_MS = 10000;
     const ENTRY_POLL_MS = 10000;
 
+    /* Canonical index instrument keys — used by the "Compare in Layout"
+       button and by the Live Feed card. */
+    const INDEX_KEYS = {
+        NIFTY: "NSE_INDEX|Nifty 50",
+        SENSEX: "BSE_INDEX|SENSEX",
+    };
+
+    /* Live-feed WebSocket — dedicated /list-feeds connection. */
+    const LIVE_WS_URL = () => {
+        const proto = location.protocol === "https:" ? "wss:" : "ws:";
+        return `${proto}//${location.host}/list-feeds`;
+    };
+    const LIVE_RECONNECT_MS = 4000;
+
     const state = {
         detail: null,
         pollTimer: null,
@@ -1718,6 +1876,39 @@
         searchTimer: null,
         inflight: null,
     };
+
+    /* ============================================================
+       Live-feed state
+       ============================================================ */
+    const liveFeedState = {
+        ws: null,
+        connected: false,
+        reconnectTimer: null,
+        // Currently subscribed instrument keys (mirrors the server's
+        // subscriber set — updated optimistically on send + reconciled
+        // from the ack).
+        subscribedKeys: new Set(),
+        // Latest tick snapshot per instrument_key.
+        ticks: {},
+        // Current primary instrument key (promoted if any, else isolated).
+        activeInstrumentKey: null,
+        activeInstrumentSymbol: null,
+        // Trigger index key (NIFTY / SENSEX) — one of the two always.
+        triggerIndexKey: null,
+        // Canonical index keys.
+        indexKeys: INDEX_KEYS,
+    };
+
+    /* Coalesce rapid tick bursts into a single animation-frame render. */
+    let liveRenderPending = false;
+    function scheduleLiveRender() {
+        if (liveRenderPending) return;
+        liveRenderPending = true;
+        window.requestAnimationFrame(() => {
+            liveRenderPending = false;
+            renderLiveFeed();
+        });
+    }
 
     /* ---------- small formatters ---------- */
     function parseNum(v) {
@@ -1848,6 +2039,415 @@
         const hasAny = hasLtp || hasTouch || hasFc || hasOr;
         const needsRefresh = !hasLtp || !hasFc;
         return { hasAny, needsRefresh, hasLtp, hasTouch, hasFc, hasOr };
+    }
+
+    /* ============================================================
+       Compare-in-Layout URL builder
+       ============================================================
+       Returns "/layout_1?panes=<index_key>,<instrument_key>" when the
+       trigger index can be resolved, or "?panes=<instrument_key>" when
+       it cannot (single-pane fallback).
+
+       The receiving layout.html supports ?panes=key1,key2 (also
+       ?panes=key1&panes=key2) as a temporary 2-pane comparison —
+       nothing is persisted on the backend.
+       ============================================================ */
+    function buildLayoutCompareUrl(iso) {
+        if (!iso || !iso.instrument_key) return null;
+
+        // Resolve the trigger index key: prefer iso.trigger_index, fall
+        // back to iso.underlying.
+        const triggerIndex = String(iso.trigger_index || "").toUpperCase();
+        const underlying = String(iso.underlying || "").toUpperCase();
+        let indexKey = "";
+        if (triggerIndex === "NIFTY" || (!triggerIndex && underlying === "NIFTY")) {
+            indexKey = INDEX_KEYS.NIFTY;
+        } else if (triggerIndex === "SENSEX" || (!triggerIndex && underlying === "SENSEX")) {
+            indexKey = INDEX_KEYS.SENSEX;
+        }
+
+        const params = new URLSearchParams();
+        if (indexKey) params.append("panes", indexKey);
+        params.append("panes", iso.instrument_key);
+        return "/layout_1?" + params.toString();
+    }
+
+    /* ============================================================
+       Live Feed — WebSocket connection & subscriptions
+       ============================================================ */
+
+    /**
+     * Return the set of instrument keys that should currently be
+     * subscribed: both indices (always) + the active isolated
+     * instrument (promoted wins over original when present).
+     */
+    function computeWantedLiveKeys() {
+        const wanted = new Set([
+            liveFeedState.indexKeys.NIFTY,
+            liveFeedState.indexKeys.SENSEX,
+        ]);
+        const d = state.detail;
+        if (d && d.isolated) {
+            const isPromoted = !!(d.active && d.active.record);
+            const iso = isPromoted ? d.active.record : d.isolated;
+            const key = iso.instrument_key;
+            if (key) wanted.add(key);
+        }
+        return wanted;
+    }
+
+    function setLiveFeedStatus(st) {
+        const pill = document.getElementById("live-feed-status-pill");
+        if (!pill) return;
+        if (st === "connected") {
+            pill.textContent = "Live";
+            pill.className = "sr-count-pill has";
+            pill.style.background = "";
+            pill.style.color = "";
+        } else if (st === "connecting") {
+            pill.textContent = "Connecting…";
+            pill.className = "sr-count-pill";
+            pill.style.background = "";
+            pill.style.color = "";
+        } else {
+            pill.textContent = "Disconnected";
+            pill.className = "sr-count-pill";
+            pill.style.background = "var(--iso-red-bg)";
+            pill.style.color = "var(--iso-red)";
+        }
+    }
+
+    function updateLiveSubCountPill() {
+        const pill = document.getElementById("live-feed-sub-count-pill");
+        if (!pill) return;
+        const n = liveFeedState.subscribedKeys.size;
+        pill.textContent = `${n} subscribed`;
+    }
+
+    /**
+     * Send a `set` message to replace the current server-side
+     * subscription list. Returns true when the message was queued.
+     */
+    function sendLiveSubscriptionSet(keys) {
+        if (!liveFeedState.ws || liveFeedState.ws.readyState !== WebSocket.OPEN) {
+            return false;
+        }
+        try {
+            liveFeedState.ws.send(JSON.stringify({
+                action: "set",
+                instrument_keys: keys,
+            }));
+            liveFeedState.subscribedKeys = new Set(keys);
+            updateLiveSubCountPill();
+            return true;
+        } catch (e) {
+            console.warn("[live-feed] send set failed:", e);
+            return false;
+        }
+    }
+
+    function connectLiveFeed() {
+        if (liveFeedState.ws &&
+            (liveFeedState.ws.readyState === WebSocket.OPEN ||
+             liveFeedState.ws.readyState === WebSocket.CONNECTING)) {
+            return;
+        }
+        setLiveFeedStatus("connecting");
+
+        let ws;
+        try {
+            ws = new WebSocket(LIVE_WS_URL());
+        } catch (e) {
+            console.warn("[live-feed] WebSocket ctor failed:", e);
+            scheduleLiveFeedReconnect();
+            return;
+        }
+        liveFeedState.ws = ws;
+
+        ws.onopen = () => {
+            liveFeedState.connected = true;
+            setLiveFeedStatus("connected");
+            // Push the current wanted set — this is authoritative,
+            // not whatever `subscribedKeys` happened to contain
+            // before the connection opened.
+            const wanted = computeWantedLiveKeys();
+            sendLiveSubscriptionSet(Array.from(wanted));
+        };
+
+        ws.onmessage = (event) => {
+            let data;
+            try {
+                data = JSON.parse(event.data);
+            } catch (_) {
+                return;
+            }
+            handleLiveMessage(data);
+        };
+
+        ws.onclose = () => {
+            liveFeedState.connected = false;
+            liveFeedState.ws = null;
+            setLiveFeedStatus("disconnected");
+            scheduleLiveFeedReconnect();
+        };
+
+        ws.onerror = () => {
+            /* handled by onclose */
+        };
+    }
+
+    function scheduleLiveFeedReconnect() {
+        if (liveFeedState.reconnectTimer) return;
+        liveFeedState.reconnectTimer = setTimeout(() => {
+            liveFeedState.reconnectTimer = null;
+            connectLiveFeed();
+        }, LIVE_RECONNECT_MS);
+    }
+
+    /**
+     * Reconcile the client's wanted-key set with the server's current
+     * subscription. Called from `render()` on every detail refresh, so
+     * a promotion / mid-day isolation / etc. naturally updates the
+     * live feed on the next poll cycle.
+     */
+    function syncLiveSubscriptions() {
+        const d = state.detail;
+        const card = document.getElementById("iso-live-feed");
+        const titleEl = document.getElementById("live-feed-card-title");
+        if (!card) return;
+
+        if (!d) {
+            card.style.display = "none";
+            return;
+        }
+
+        const wanted = computeWantedLiveKeys();
+
+        // Track the currently active instrument for the primary tile.
+        const iso = (d.isolated && d.active && d.active.record)
+            ? d.active.record
+            : d.isolated;
+        liveFeedState.activeInstrumentKey = iso && iso.instrument_key
+            ? iso.instrument_key
+            : null;
+        liveFeedState.activeInstrumentSymbol = iso && iso.trading_symbol
+            ? iso.trading_symbol
+            : liveFeedState.activeInstrumentKey;
+
+        // Trigger-index key (NIFTY or SENSEX).
+        const triggerIndex = iso && iso.trigger_index ? iso.trigger_index : null;
+        if (triggerIndex === "NIFTY") {
+            liveFeedState.triggerIndexKey = liveFeedState.indexKeys.NIFTY;
+        } else if (triggerIndex === "SENSEX") {
+            liveFeedState.triggerIndexKey = liveFeedState.indexKeys.SENSEX;
+        } else {
+            liveFeedState.triggerIndexKey = null;
+        }
+
+        // Update server-side set if it differs from what we sent.
+        const sameSet =
+            wanted.size === liveFeedState.subscribedKeys.size &&
+            [...wanted].every(k => liveFeedState.subscribedKeys.has(k));
+        if (!sameSet) {
+            sendLiveSubscriptionSet(Array.from(wanted));
+        }
+
+        // Card is always visible; title changes with isolation state.
+        card.style.display = "block";
+        if (titleEl) {
+            if (d.isolated) {
+                const isPromoted = !!(d.active && d.active.record);
+                const suffix = isPromoted ? " (promoted)" : "";
+                titleEl.textContent =
+                    "Live Feed · " + (liveFeedState.activeInstrumentSymbol || "Active Instrument") + suffix;
+            } else {
+                titleEl.textContent = "Live Feed · Watching Indices";
+            }
+        }
+
+        renderLiveFeed();
+    }
+
+    /* ---- Tick handling ---- */
+    function handleLiveMessage(data) {
+        if (!data || typeof data !== "object") return;
+
+        const type = data.type;
+
+        if (type === "subscribed" ||
+            type === "subscriptions_replaced" ||
+            type === "subscribed_list") {
+            if (Array.isArray(data.instrument_keys)) {
+                liveFeedState.subscribedKeys = new Set(data.instrument_keys);
+                updateLiveSubCountPill();
+            }
+            return;
+        }
+        if (type === "unsubscribed") {
+            if (Array.isArray(data.instrument_keys)) {
+                for (const k of data.instrument_keys) {
+                    liveFeedState.subscribedKeys.delete(k);
+                }
+                updateLiveSubCountPill();
+            }
+            return;
+        }
+        if (type === "subscriptions_cleared") {
+            liveFeedState.subscribedKeys = new Set();
+            updateLiveSubCountPill();
+            return;
+        }
+        if (type === "error") {
+            console.warn("[live-feed] server error:", data.error);
+            return;
+        }
+        if (type === "ping" || type === "connected") return;
+
+        // Tick message: { instrument_key, ltp, prev_close, volume, ... }
+        const key = data.instrument_key;
+        if (!key) return;
+
+        const prev = liveFeedState.ticks[key] || {};
+        const ltp = parseNum(data.ltp);
+        const prevClose = parseNum(data.prev_close) ?? prev.prev_close ?? null;
+
+        let change = parseNum(data.change);
+        let changePct = parseNum(data.change_pct);
+        if (change === null && ltp !== null && prevClose) {
+            change = ltp - prevClose;
+        }
+        if (changePct === null && change !== null && prevClose) {
+            changePct = (change / prevClose) * 100;
+        }
+
+        liveFeedState.ticks[key] = {
+            ltp,
+            prev_close: prevClose,
+            change,
+            change_pct: changePct,
+            volume: parseNum(data.volume),
+            timestamp: data.timestamp || new Date().toISOString(),
+        };
+
+        scheduleLiveRender();
+    }
+
+    /* ---- Rendering ---- */
+    function renderLiveTile({
+        label,
+        labelIcon,
+        value,
+        valueClass,
+        sub,
+        subClass,
+        primary,
+    }) {
+        return `
+            <div class="live-tile${primary ? " live-tile-primary" : ""}">
+                <div class="live-tile-label">
+                    ${labelIcon ? `<i class="bi ${labelIcon}"></i>` : ""}
+                    ${esc(label)}
+                </div>
+                <div class="live-tile-value ${valueClass || ""}">${value}</div>
+                ${sub ? `<div class="live-tile-sub ${subClass || ""}">${sub}</div>` : ""}
+            </div>`;
+    }
+
+    function renderLiveFeed() {
+        const card = document.getElementById("iso-live-feed");
+        const tilesEl = document.getElementById("live-feed-tiles");
+        const metaEl = document.getElementById("live-feed-meta");
+        if (!card || !tilesEl) return;
+
+        const d = state.detail;
+        const hasIsolation = !!(d && d.isolated);
+
+        let html = "";
+
+        // ---- Primary tile: active instrument LTP (if isolated) ---- //
+        if (hasIsolation && liveFeedState.activeInstrumentKey) {
+            const key = liveFeedState.activeInstrumentKey;
+            const tick = liveFeedState.ticks[key] || {};
+            const ltp = parseNum(tick.ltp);
+            const change = parseNum(tick.change);
+            const changePct = parseNum(tick.change_pct);
+            const valueCls = change === null ? "" : (change >= 0 ? "up" : "down");
+            const changePrefix = (change !== null && change >= 0) ? "+" : "";
+
+            html += renderLiveTile({
+                label: liveFeedState.activeInstrumentSymbol || key,
+                labelIcon: "bi-lightning-charge-fill",
+                value: ltp !== null ? `₹${fmt(ltp)}` : "—",
+                valueClass: valueCls,
+                sub: change !== null
+                    ? `${changePrefix}${fmt(change)}${changePct !== null ? ` (${fmt(changePct)}%)` : ""}`
+                    : "waiting for tick…",
+                subClass: valueCls,
+                primary: true,
+            });
+
+            // Prev close (reference)
+            if (tick.prev_close !== null && tick.prev_close !== undefined) {
+                html += renderLiveTile({
+                    label: "Prev Close",
+                    value: `₹${fmt(tick.prev_close)}`,
+                });
+            }
+
+            // Volume
+            if (tick.volume !== null && tick.volume !== undefined) {
+                html += renderLiveTile({
+                    label: "Volume",
+                    labelIcon: "bi-bar-chart-line",
+                    value: fmtInt(tick.volume),
+                });
+            }
+        }
+
+        // ---- Index tiles: NIFTY 50 and SENSEX live ---- //
+        const indexDefs = [
+            { name: "NIFTY 50", key: liveFeedState.indexKeys.NIFTY },
+            { name: "SENSEX",   key: liveFeedState.indexKeys.SENSEX },
+        ];
+        for (const def of indexDefs) {
+            const tick = liveFeedState.ticks[def.key] || {};
+            const ltp = parseNum(tick.ltp);
+            const change = parseNum(tick.change);
+            const changePct = parseNum(tick.change_pct);
+            const valueCls = change === null ? "" : (change >= 0 ? "up" : "down");
+            const changePrefix = (change !== null && change >= 0) ? "+" : "";
+            const isTrigger = liveFeedState.triggerIndexKey === def.key;
+            const triggerSuffix = isTrigger ? " · trigger" : "";
+
+            html += renderLiveTile({
+                label: def.name + triggerSuffix,
+                labelIcon: "bi-graph-up",
+                value: ltp !== null ? fmt(ltp) : "—",
+                valueClass: valueCls,
+                sub: change !== null
+                    ? `${changePrefix}${fmt(change)}${changePct !== null ? ` (${fmt(changePct)}%)` : ""}`
+                    : "waiting for tick…",
+                subClass: valueCls,
+            });
+        }
+
+        tilesEl.innerHTML = html;
+
+        // Meta line — last tick time for the primary (if isolated).
+        if (metaEl) {
+            if (hasIsolation && liveFeedState.activeInstrumentKey) {
+                const primary = liveFeedState.ticks[liveFeedState.activeInstrumentKey];
+                if (primary && primary.timestamp) {
+                    metaEl.textContent =
+                        `Last update: ${formatTime(primary.timestamp)} · live via WebSocket`;
+                } else {
+                    metaEl.textContent = "Waiting for first tick on the isolated instrument…";
+                }
+            } else {
+                metaEl.textContent =
+                    "Watching indices live. An isolated instrument will be added to the feed automatically.";
+            }
+        }
     }
 
     /* ---------- renderers ---------- */
@@ -2060,6 +2660,30 @@
             chartBtn.href = "/chart/" + encodeURIComponent(iso.instrument_key);
             chartBtn.target = "_blank";
             chartBtn.rel = "noopener noreferrer";
+        }
+
+        // ---------------------------------------------------------
+        // "Compare in Layout" — opens a new tab with a 2-pane
+        // temporary layout: trigger index side-by-side with the
+        // active (promoted if present) isolated instrument.
+        // The temp layout is decoded by layout.html's
+        // readQueryOverrides() and never saved to the backend.
+        // ---------------------------------------------------------
+        const layoutBtn = document.getElementById("hero-layout-btn");
+        if (layoutBtn) {
+            const url = buildLayoutCompareUrl(iso);
+            if (url) {
+                layoutBtn.href = url;
+                layoutBtn.classList.remove("is-hidden");
+                layoutBtn.title =
+                    "Open " +
+                    (iso.trigger_index ? iso.trigger_index + " · " : "") +
+                    (iso.trading_symbol || iso.instrument_key) +
+                    " side-by-side in a new tab";
+            } else {
+                layoutBtn.removeAttribute("href");
+                layoutBtn.classList.add("is-hidden");
+            }
         }
 
         const instrLtpEl = document.getElementById("hero-instrument-ltp");
@@ -3245,6 +3869,9 @@
         renderTouchState(d);
         renderEvents(d);
         renderOrLevels(d);
+        // Live Feed card is managed separately so it can update on every
+        // detail refresh (isolation appeared, promotion landed, etc.).
+        syncLiveSubscriptions();
     }
 
     /* ---------- data loading ---------- */
@@ -3312,6 +3939,11 @@
         loadEntrySignal();
         state.entryPollTimer = setInterval(loadEntrySignal, ENTRY_POLL_MS);
 
+        // Live Feed — WebSocket connection to /list-feeds. Subscriptions
+        // are (re)computed every time `state.detail` refreshes so the
+        // current active instrument + both indices are always watched.
+        connectLiveFeed();
+
         const refreshBtn = document.getElementById("refresh-btn");
         if (refreshBtn) {
             refreshBtn.addEventListener("click", () => {
@@ -3336,10 +3968,23 @@
         }
     });
 
+    // Reconnect promptly when the tab regains visibility after a sleep.
+    document.addEventListener("visibilitychange", () => {
+        if (!document.hidden &&
+            (!liveFeedState.ws ||
+             liveFeedState.ws.readyState === WebSocket.CLOSED)) {
+            connectLiveFeed();
+        }
+    });
+
     window.addEventListener("beforeunload", () => {
         if (state.pollTimer) clearInterval(state.pollTimer);
         if (state.entryPollTimer) clearInterval(state.entryPollTimer);
         if (compareState.searchTimer) clearTimeout(compareState.searchTimer);
+        if (liveFeedState.reconnectTimer) clearTimeout(liveFeedState.reconnectTimer);
+        if (liveFeedState.ws) {
+            try { liveFeedState.ws.close(); } catch (_) {}
+        }
     });
 </script>
 

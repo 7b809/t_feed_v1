@@ -1,3 +1,4 @@
+# services/live_broadcast.py
 """In-process pub/sub hub for live ticks and live EMA crosses.
 
 Each client registers a filter (instrument keys, or (underlying, strike,
@@ -17,6 +18,15 @@ by worker threads running the Upstox WebSocket) are provided:
 `publish_sync` requires that `set_loop(loop)` has been called once at
 startup with the running asyncio loop. It schedules the coroutine on
 that loop and returns immediately.
+
+List-of-feeds support (2026-10-27)
+----------------------------------
+`resolve_subscription_params` now accepts either a single
+``instrument_key`` (string) **or** a list of keys. The existing
+``Subscriber.instrument_keys`` is already a ``set``, so the broadcast
+fan-out was always list-capable — only the route-level parsing was
+single-key. ``parse_instrument_list`` is the shared normaliser used by
+every route that accepts a comma-separated ``instruments=`` query.
 """
 
 from __future__ import annotations
@@ -65,6 +75,53 @@ class LiveBroadcast:
     def set_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         """Store the running asyncio loop for sync publishing."""
         self._loop = loop
+
+    # ------------------------------------------------------------------ #
+    # Static helpers                                                     #
+    # ------------------------------------------------------------------ #
+    @staticmethod
+    def parse_instrument_list(raw: Any) -> list[str]:
+        """Normalise ``raw`` into a clean, de-duplicated list of keys.
+
+        Accepts:
+
+            None / ""                     -> []
+            "NSE_FO|1,NSE_FO|2"           -> ["NSE_FO|1", "NSE_FO|2"]
+            "NSE_FO|1 NSE_FO|2"           -> split on whitespace too
+            ["NSE_FO|1", "NSE_FO|2"]      -> ["NSE_FO|1", "NSE_FO|2"]
+            ("NSE_FO|1", "NSE_FO|2", ...) -> same
+            {..set..}                     -> same
+
+        Whitespace is trimmed; empty items are dropped; duplicates are
+        removed (first occurrence wins to preserve caller intent).
+        """
+        if raw is None:
+            return []
+
+        if isinstance(raw, (list, tuple, set)):
+            items: list[Any] = list(raw)
+        else:
+            text = str(raw).strip()
+            if not text:
+                return []
+            # Accept comma OR whitespace separators so callers can use
+            # `instruments=a,b,c` or `keys=a b c` interchangeably.
+            for sep in (",", " "):
+                if sep in text:
+                    items = text.split(sep)
+                    break
+            else:
+                items = [text]
+
+        out: list[str] = []
+        seen: set[str] = set()
+        for item in items:
+            s = str(item).strip()
+            if not s or s in seen:
+                continue
+            seen.add(s)
+            out.append(s)
+        return out
 
     # ------------------------------------------------------------------ #
     # Subscriptions                                                      #
@@ -155,32 +212,43 @@ class LiveBroadcast:
     # ------------------------------------------------------------------ #
     @staticmethod
     def resolve_subscription_params(
-        instrument_key: str | None,
+        instrument_key: str | list[str] | None,
         underlying: str | None,
         strike: str | None,
         strike_type: str | None,
     ) -> tuple[list[str], list[tuple[str, str, str]], bool]:
-        """Return (keys, triples, all_instruments) for a subscribe call."""
+        """Return ``(keys, triples, all_instruments)`` for a subscribe call.
+
+        ``instrument_key`` may be:
+
+          * ``None``                     -> no keys added
+          * ``"NSE_FO|123"``             -> single key
+          * ``"NSE_FO|123,NSE_FO|456"``  -> comma-separated list
+          * ``["NSE_FO|123", ...]``      -> list
+
+        When ``underlying`` + ``strike`` + ``strike_type`` are all
+        provided, they are resolved to an additional instrument key and
+        appended (or, on miss, added as a triple filter). Duplicates
+        are removed while preserving caller order.
+        """
         from services.instrument_registry import instrument_registry
 
-        keys: list[str] = []
+        keys: list[str] = LiveBroadcast.parse_instrument_list(instrument_key)
         triples: list[tuple[str, str, str]] = []
-
-        if instrument_key:
-            keys.append(instrument_key.strip())
 
         if underlying and strike and strike_type:
             entry = instrument_registry.resolve(underlying, strike, strike_type)
             if entry:
-                keys.append(entry["instrument_key"])
+                if entry["instrument_key"] not in keys:
+                    keys.append(entry["instrument_key"])
             else:
-                triples.append(
-                    (
-                        underlying.upper().replace(" ", ""),
-                        str(strike),
-                        strike_type.upper(),
-                    )
+                triple = (
+                    underlying.upper().replace(" ", ""),
+                    str(strike),
+                    strike_type.upper(),
                 )
+                if triple not in triples:
+                    triples.append(triple)
 
         return keys, triples, False
 

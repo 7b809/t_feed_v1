@@ -1,4 +1,4 @@
-# File: routes/live_routes.py
+# routes/live_routes.py
 """Live data REST and WebSocket routes.
 
 Every endpoint that reads a *single* instrument accepts either an
@@ -15,6 +15,39 @@ On a triple miss the route makes one best-effort Upstox search (when
 registers the result ad-hoc, and only then returns 404 — so any real
 strike resolves once.
 
+WebSocket routes
+----------------
+    WS   /ws/live           — single instrument OR triple OR all=true
+    WS   /ws/chart          — same as /ws/live (chart-page convenience)
+    WS   /all-feeds         — all instruments (unless a key/triple given)
+    WS   /ws/all-feeds      — alias of /all-feeds
+    WS   /list-feeds        — NEW: subscribe to a LIST of instruments
+    WS   /ws/list-feeds     — alias of /list-feeds
+
+List-of-feeds
+-------------
+``/list-feeds`` requires an explicit list of instruments, passed as:
+
+    ?instruments=NSE_FO|123,NSE_FO|456,NSE_FO|789
+    ?keys=NSE_FO|123,NSE_FO|456          (alias)
+    ?instrument_key=NSE_FO|123           (single, still accepted)
+
+The connection receives **only** ticks for the listed instruments.
+Clients can update the list live without reconnecting by sending:
+
+    {"action": "subscribe",   "instrument_keys": ["NSE_FO|123", ...]}
+    {"action": "unsubscribe", "instrument_keys": ["NSE_FO|123", ...]}
+    {"action": "set",         "instrument_keys": ["NSE_FO|123", ...]}   # replace
+    {"action": "clear"}                                                  # empty list
+
+``instruments`` (comma-separated) is also accepted on the message body
+in place of ``instrument_keys`` for symmetry with the query string.
+
+Every existing route (``/ws/live``, ``/ws/chart``, ``/all-feeds``) also
+accepts the comma-separated ``instruments=`` / ``keys=`` form now, so
+a caller can subscribe to several keys on any WS path. Behaviour is
+otherwise unchanged.
+
 Strategy-layer removal
 ----------------------
 The EMA engine and live-cross store were deleted with the strategy
@@ -30,6 +63,7 @@ remaining endpoints only touch the feed snapshot layer:
     WS   /ws/live
     WS   /ws/chart
     WS   /all-feeds  (and /ws/all-feeds)
+    WS   /list-feeds (and /ws/list-feeds)          <-- NEW
 """
 
 from __future__ import annotations
@@ -59,6 +93,10 @@ router = APIRouter()
 
 _UPSTOX_SEARCH_URL = "https://api.upstox.com/v2/instruments/search"
 _UPSTOX_RESOLVE_TIMEOUT = 10
+
+# Soft cap on a single /list-feeds subscription so a stray client cannot
+# ask for every listed contract on the exchange.
+_MAX_LIST_FEED_INSTRUMENTS = 500
 
 
 # ---------------------------------------------------------------------------
@@ -306,29 +344,66 @@ def resolve_instrument(
 # ---------------------------------------------------------------------------
 # WebSocket helpers
 # ---------------------------------------------------------------------------
-def _parse_filters(ws: WebSocket):
+def _parse_filters(
+    ws: WebSocket,
+) -> tuple[list[str], str | None, str | None, str | None, bool]:
+    """Return ``(keys, underlying, strike, type, all_)`` from query params.
+
+    ``keys`` is always a list — a single ``instrument_key=`` produces a
+    one-element list, while ``instruments=a,b,c`` (or ``keys=a,b,c``)
+    produces the full list. Comma OR whitespace separators accepted.
+    """
     q = ws.query_params
-    instrument_key = q.get("instrument_key") or q.get("key")
+    raw_keys = (
+        q.get("instruments")
+        or q.get("keys")
+        or q.get("instrument_keys")
+        or q.get("instrument_key")
+        or q.get("key")
+    )
+    keys = live_broadcast.parse_instrument_list(raw_keys)
     underlying = q.get("underlying")
     strike = q.get("strike")
     type_ = q.get("type")
     all_ = (q.get("all", "false").lower() in {"1", "true", "yes"})
-    return instrument_key, underlying, strike, type_, all_
+    return keys, underlying, strike, type_, all_
 
 
 def _ensure_subscription(instrument_key: str | None) -> None:
+    """Register + subscribe a single key with the live feed."""
     if not instrument_key:
         return
-    key = instrument_key.strip()
+    key = str(instrument_key).strip()
+    if not key:
+        return
     if not instrument_registry.get(key):
         instrument_registry.register_adhoc(key)
     if not live_feed_service.is_subscribed(key):
         live_feed_service.subscribe_instrument(key)
 
 
+def _ensure_subscriptions(keys: list[str] | None) -> None:
+    """Register + subscribe every key in ``keys`` with the live feed."""
+    if not keys:
+        return
+    for k in keys:
+        _ensure_subscription(k)
+
+
 async def _pump_with_client_listener(ws: WebSocket, sub) -> None:
     """Pump broadcast messages to client while concurrently listening
-    for incoming subscriptions."""
+    for incoming subscription messages.
+
+    Supported client -> server messages::
+
+        {"action": "subscribe",   "instrument_keys": ["a", "b"]}
+        {"action": "unsubscribe", "instrument_keys": ["a"]}
+        {"action": "set",         "instrument_keys": ["a", "b"]}   # replace
+        {"action": "clear"}                                        # empty list
+
+    ``instruments`` (comma-separated) is accepted as an alias for
+    ``instrument_keys`` so callers can mirror the query-string form.
+    """
     async def _send_loop():
         while True:
             message = await sub.queue.get()
@@ -339,18 +414,60 @@ async def _pump_with_client_listener(ws: WebSocket, sub) -> None:
             text = await ws.receive_text()
             try:
                 data = json.loads(text)
-                if isinstance(data, dict):
-                    action = data.get("action") or data.get("type")
-                    key = data.get("instrument_key") or data.get("key")
-                    if action in {"subscribe", "sub"} and key:
-                        _ensure_subscription(key)
-                        sub.instrument_keys.add(key)
-                        await ws.send_text(
-                            json.dumps({"type": "subscribed",
-                                        "instrument_key": key})
-                        )
             except Exception:
-                pass
+                continue
+            if not isinstance(data, dict):
+                continue
+
+            action = data.get("action") or data.get("type")
+            raw_keys = (
+                data.get("instrument_keys")
+                or data.get("instruments")
+                or data.get("instrument_key")
+                or data.get("key")
+            )
+            keys = live_broadcast.parse_instrument_list(raw_keys)
+
+            try:
+                if action in {"subscribe", "sub"} and keys:
+                    _ensure_subscriptions(keys)
+                    for k in keys:
+                        sub.instrument_keys.add(k)
+                    await ws.send_text(json.dumps({
+                        "type": "subscribed",
+                        "instrument_keys": keys,
+                        "total_subscriptions": len(sub.instrument_keys),
+                    }))
+                elif action in {"unsubscribe", "unsub"} and keys:
+                    for k in keys:
+                        sub.instrument_keys.discard(k)
+                    await ws.send_text(json.dumps({
+                        "type": "unsubscribed",
+                        "instrument_keys": keys,
+                        "total_subscriptions": len(sub.instrument_keys),
+                    }))
+                elif action == "set" and keys:
+                    _ensure_subscriptions(keys)
+                    sub.instrument_keys = set(keys)
+                    await ws.send_text(json.dumps({
+                        "type": "subscriptions_replaced",
+                        "instrument_keys": list(sub.instrument_keys),
+                        "total_subscriptions": len(sub.instrument_keys),
+                    }))
+                elif action == "clear":
+                    sub.instrument_keys = set()
+                    await ws.send_text(json.dumps({
+                        "type": "subscriptions_cleared",
+                        "total_subscriptions": 0,
+                    }))
+            except Exception as exc:
+                try:
+                    await ws.send_text(json.dumps({
+                        "type": "error",
+                        "error": f"{type(exc).__name__}: {exc}",
+                    }))
+                except Exception:
+                    pass
 
     send_task = asyncio.create_task(_send_loop())
     recv_task = asyncio.create_task(_recv_loop())
@@ -381,13 +498,13 @@ async def _pump_with_client_listener(ws: WebSocket, sub) -> None:
 @router.websocket("/ws/live")
 async def ws_live(ws: WebSocket) -> None:
     await ws.accept()
-    instrument_key, underlying, strike, type_, all_ = _parse_filters(ws)
+    keys_param, underlying, strike, type_, all_ = _parse_filters(ws)
 
-    if instrument_key:
-        _ensure_subscription(instrument_key)
+    if keys_param:
+        _ensure_subscriptions(keys_param)
 
     keys, triples, _ = live_broadcast.resolve_subscription_params(
-        instrument_key, underlying, strike, type_
+        keys_param, underlying, strike, type_
     )
     sub = await live_broadcast.subscribe(
         "feed",
@@ -412,12 +529,12 @@ async def ws_live(ws: WebSocket) -> None:
 @router.websocket("/ws/chart")
 async def ws_chart(ws: WebSocket) -> None:
     await ws.accept()
-    instrument_key, underlying, strike, type_, all_ = _parse_filters(ws)
-    if instrument_key:
-        _ensure_subscription(instrument_key)
+    keys_param, underlying, strike, type_, all_ = _parse_filters(ws)
+    if keys_param:
+        _ensure_subscriptions(keys_param)
 
     keys, triples, _ = live_broadcast.resolve_subscription_params(
-        instrument_key, underlying, strike, type_
+        keys_param, underlying, strike, type_
     )
     sub = await live_broadcast.subscribe(
         "feed",
@@ -443,16 +560,16 @@ async def ws_chart(ws: WebSocket) -> None:
 async def ws_all_feeds(ws: WebSocket) -> None:
     """Direct route for client charts pointing to /all-feeds."""
     await ws.accept()
-    instrument_key, underlying, strike, type_, all_ = _parse_filters(ws)
+    keys_param, underlying, strike, type_, all_ = _parse_filters(ws)
 
-    if instrument_key:
-        _ensure_subscription(instrument_key)
+    if keys_param:
+        _ensure_subscriptions(keys_param)
         all_ = False
     else:
         all_ = True
 
     keys, triples, _ = live_broadcast.resolve_subscription_params(
-        instrument_key, underlying, strike, type_
+        keys_param, underlying, strike, type_
     )
     sub = await live_broadcast.subscribe(
         "feed",
@@ -469,6 +586,86 @@ async def ws_all_feeds(ws: WebSocket) -> None:
                 "status": "connected",
                 "instrument_keys": list(sub.instrument_keys),
                 "all": sub.all_instruments,
+            }
+        )
+    )
+    await _pump_with_client_listener(ws, sub)
+
+
+@router.websocket("/list-feeds")
+@router.websocket("/ws/list-feeds")
+async def ws_list_feeds(ws: WebSocket) -> None:
+    """Subscribe to an explicit LIST of instruments only.
+
+    Query string::
+
+        ?instruments=NSE_FO|123,NSE_FO|456,NSE_FO|789
+        ?keys=NSE_FO|123,NSE_FO|456        (alias)
+        ?instrument_key=NSE_FO|123         (single, still accepted)
+
+    Unlike ``/all-feeds``, this route **rejects** a connection that does
+    not specify at least one instrument. That keeps the contract clear:
+    “I want these specific instruments, nothing else”.
+
+    The subscription list can be updated live (without reconnecting) by
+    sending any of the messages handled by ``_pump_with_client_listener``
+    — ``subscribe`` / ``unsubscribe`` / ``set`` / ``clear``.
+    """
+    await ws.accept()
+
+    keys_param, underlying, strike, type_, _ = _parse_filters(ws)
+
+    if not keys_param and not (underlying and strike and type_):
+        await ws.close(
+            code=1008,
+            reason=(
+                "list-feeds requires at least one instrument — pass "
+                "`instruments=a,b,c` or `instrument_key=...`"
+            ),
+        )
+        return
+
+    if len(keys_param) > _MAX_LIST_FEED_INSTRUMENTS:
+        await ws.close(
+            code=1008,
+            reason=(
+                f"too many instruments in list-feeds "
+                f"(max {_MAX_LIST_FEED_INSTRUMENTS})"
+            ),
+        )
+        return
+
+    if keys_param:
+        _ensure_subscriptions(keys_param)
+
+    keys, triples, _ = live_broadcast.resolve_subscription_params(
+        keys_param, underlying, strike, type_
+    )
+
+    if not keys and not triples:
+        await ws.close(
+            code=1008,
+            reason="no resolvable instruments in the requested list",
+        )
+        return
+
+    sub = await live_broadcast.subscribe(
+        "feed",
+        instrument_keys=keys,
+        triples=triples,
+        all_instruments=False,   # list-feeds never falls back to "all"
+    )
+
+    await ws.send_text(
+        json.dumps(
+            {
+                "type": "subscribed",
+                "topic": "feed",
+                "mode": "list",
+                "instrument_keys": list(sub.instrument_keys),
+                "triples": [list(t) for t in sub.triples],
+                "total_subscriptions": len(sub.instrument_keys),
+                "all": False,
             }
         )
     )

@@ -766,7 +766,7 @@ function buildIndexCardHTML(underlying) {
                 <span>ATM: <strong id="atm-${underlying}">--</strong></span>
             </div>
             <div class="d-flex align-items-center gap-2">
-               <a href="/chart/${encodeURIComponent(key)}" target="_blank" rel="noopener noreferrer" class="btn btn-sm btn-outline-primary rounded-3 fw-bold d-inline-flex align-items-center gap-1" onclick="event.stopPropagation();" title="Open Candlestick Chart">
+               <a href="/chart/${encodeURIComponent(key)}"  rel="noopener noreferrer" class="btn btn-sm btn-outline-primary rounded-3 fw-bold d-inline-flex align-items-center gap-1" onclick="event.stopPropagation();" title="Open Candlestick Chart">
     <i class="bi bi-graph-up-arrow"></i><span>Chart</span>
 </a>
                 <button type="button" class="toggle-chain-btn">
@@ -939,7 +939,7 @@ function buildStrikeCardsListHTML(items, type, atmStrike, baseLtp) {
         
         const dist = Math.abs(strike - baseLtp).toFixed(0);
         return `
-        <a href="${chartUrl}" target="_blank" rel="noopener noreferrer" class="strike-card ${isATM ? 'is-atm' : ''}" id="card-${escapeHtml(o.instrument_key)}" data-strike="${strike}" title="Open chart for ${escapeHtml(sym)}">
+        <a href="${chartUrl}"  rel="noopener noreferrer" class="strike-card ${isATM ? 'is-atm' : ''}" id="card-${escapeHtml(o.instrument_key)}" data-strike="${strike}" title="Open chart for ${escapeHtml(sym)}">
             ${isATM ? `<div class="atm-tag">ATM</div>` : ''}
             <div class="strike-header-row">
                 <div class="strike-title">${escapeHtml(sym)}</div>
@@ -1179,7 +1179,7 @@ function buildFilteredRowHtml(underlying, inst) {
             <span class="sr-badge ${srBadgeCls}">${srCount}</span>
         </td>
         <td>
-            <a href="${chartUrl}" target="_blank" rel="noopener noreferrer" class="chart-link-btn" title="Open chart">
+            <a href="${chartUrl}"  rel="noopener noreferrer" class="chart-link-btn" title="Open chart">
                 <i class="bi bi-graph-up-arrow"></i> Chart
             </a>
         </td>

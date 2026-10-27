@@ -3,7 +3,18 @@
    Per-pane metadata, floating scroll nav, per-pane indicator configs
    (each chart remembers its own EMA / SR / label toggles independently),
    toolbar toggles target the ACTIVE pane only, unlinked-by-default panes,
-   rich modal search, SR Levels + SR Labels per pane, IST 12-hour time. #}
+   rich modal search, SR Levels + SR Labels per pane, IST 12-hour time.
+
+   Query-param comparison mode (2026-10-27)
+   ----------------------------------------
+   Opening this page with ?panes=<key1>,<key2> (or ?panes=k1&panes=k2,
+   or ?pair=k1,k2, or ?compare=k1,k2) renders a TEMPORARY 2-pane
+   comparison layout in the browser without touching the backend.
+
+   Used by /isolated's "Compare in Layout" button to show the
+   underlying trigger index side-by-side with the isolated instrument.
+   Temporary layouts cannot be saved, deleted, or re-created — the
+   user just closes the tab. See readQueryOverrides() and boot(). #}
 {% extends "base.html" %}
 {% block title %}Layout - Trading Dashboard{% endblock %}
 {% block head %}
@@ -153,6 +164,25 @@
   .toolbar-btn.primary:hover { background: #1c4ce0; }
   .toolbar-btn.danger { background: rgba(242,54,69,0.1); border-color: rgba(242,54,69,0.4); color: #ff8a95; }
   .toolbar-btn.danger:hover { background: rgba(242,54,69,0.2); }
+  .toolbar-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+    background: var(--surface);
+    border-color: var(--border);
+    color: var(--muted);
+  }
+  .toolbar-btn:disabled:hover {
+    border-color: var(--border);
+    color: var(--muted);
+    background: var(--surface);
+  }
+
+  /* Disabled selects / inputs (temporary-comparison mode) */
+  .layout-name-input:disabled,
+  .layout-select:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
 
   /* ---------- Indicator toolbar ---------- */
   .indicator-toolbar {
@@ -2575,12 +2605,68 @@
   });
 
   // ============================================================
+  // QUERY-PARAM PANE OVERRIDES (temporary comparison layout)
+  // ============================================================
+  // Opening /layout_1?panes=key1,key2  (or ?panes=key1&panes=key2,
+  // or ?pair=key1,key2, or ?compare=key1,key2) renders a temporary
+  // 2-pane layout in the browser without touching the backend.
+  //
+  // Used by /isolated's "Compare in Layout" button to show the
+  // underlying trigger index side-by-side with the isolated instrument.
+  // Temporary layouts cannot be saved, deleted, or re-created — the
+  // user just closes the tab.
+  function readQueryOverrides() {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      let raw = params.getAll("panes");
+      if (!raw.length) raw = params.getAll("pair");
+      if (!raw.length) raw = params.getAll("compare");
+      if (!raw.length) return null;
+
+      const keys = [];
+      for (const item of raw) {
+        for (const k of String(item).split(",")) {
+          const key = k.trim();
+          if (key) keys.push(key);
+        }
+      }
+      if (!keys.length) return null;
+
+      let grid = 1;
+      if (keys.length >= 2) grid = 2;
+      if (keys.length >= 3) grid = 4;
+
+      const panes = [];
+      for (let i = 0; i < grid; i++) {
+        panes.push({
+          instrument_key: keys[i] || keys[0],
+          interval: "5m",
+        });
+      }
+      return { keys, grid, panes };
+    } catch (_e) {
+      return null;
+    }
+  }
+
+  // ============================================================
   // BOOT
   // ============================================================
   async function boot() {
     // Clean up the old global prefs key (deprecated — replaced by
     // per-pane configs stored under PANE_CONFIGS_KEY_PREFIX).
     try { localStorage.removeItem(LEGACY_GLOBAL_PREFS_KEY); } catch (_e) {}
+
+    // Apply any ?panes=... query overrides BEFORE the first render.
+    // This produces a temporary comparison layout that is never saved
+    // to the backend — closing the tab discards it.
+    const queryOverride = readQueryOverrides();
+    if (queryOverride) {
+      layoutState.id = null;
+      layoutState.name = "Comparison view";
+      layoutState.grid = queryOverride.grid;
+      layoutState.panes = queryOverride.panes;
+    }
 
     bindToolbarHandlers();
     setupFloatingScrollButtons();
@@ -2590,6 +2676,32 @@
     bindPaneActions();
     updateLinkedPill();   // starts as "Unlinked" because layoutState.linked=false
     setActivePaneIndex(0);
+
+    // In temporary-comparison mode, disable every backend-mutating
+    // action so a user cannot accidentally save/delete against a
+    // layout that does not exist on the server.
+    if (queryOverride) {
+      if (saveBtn) {
+        saveBtn.disabled = true;
+        saveBtn.title = "Cannot save a temporary comparison layout";
+      }
+      if (newBtn) {
+        newBtn.disabled = true;
+        newBtn.title = "Close this tab and open a saved layout to create a new one";
+      }
+      if (deleteBtn) {
+        deleteBtn.disabled = true;
+        deleteBtn.title = "Cannot delete a temporary comparison layout";
+      }
+      if (layoutNameInput) {
+        layoutNameInput.value = "Comparison view (temporary)";
+        layoutNameInput.disabled = true;
+      }
+      if (layoutSelect) {
+        layoutSelect.disabled = true;
+        layoutSelect.title = "Temporary comparison — close this tab to return to your saved layouts";
+      }
+    }
   }
 
   if (document.readyState === "loading") {
