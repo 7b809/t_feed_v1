@@ -1850,10 +1850,18 @@
     };
 
     /* Live-feed WebSocket — dedicated /list-feeds connection. */
-    const LIVE_WS_URL = () => {
-        const proto = location.protocol === "https:" ? "wss:" : "ws:";
-        return `${proto}//${location.host}/list-feeds`;
-    };
+    const LIVE_WS_URL = (seedKeys) => {
+    const proto = location.protocol === "https:" ? "wss:" : "ws:";
+    const base = `${proto}//${location.host}/list-feeds`;
+    const keys = (Array.isArray(seedKeys) && seedKeys.length)
+        ? seedKeys
+        : [INDEX_KEYS.NIFTY, INDEX_KEYS.SENSEX];
+    // Comma-separated single param. parse_instrument_list() on the
+    // backend splits on comma OR whitespace, so this always produces
+    // a non-empty `keys_param` and the route does not reject the
+    // upgrade with close-code 1008.
+    return `${base}?instruments=${encodeURIComponent(keys.join(","))}`;
+};
     const LIVE_RECONNECT_MS = 4000;
 
     const state = {
@@ -2155,13 +2163,18 @@
         setLiveFeedStatus("connecting");
 
         let ws;
-        try {
-            ws = new WebSocket(LIVE_WS_URL());
-        } catch (e) {
-            console.warn("[live-feed] WebSocket ctor failed:", e);
-            scheduleLiveFeedReconnect();
-            return;
-        }
+try {
+    // Seed the URL with the current wanted set so /list-feeds accepts
+    // the HTTP-upgrade. `computeWantedLiveKeys()` always includes both
+    // index keys, so this is never empty even before the first detail
+    // poll completes.
+    const seed = Array.from(computeWantedLiveKeys());
+    ws = new WebSocket(LIVE_WS_URL(seed));
+} catch (e) {
+    console.warn("[live-feed] WebSocket ctor failed:", e);
+    scheduleLiveFeedReconnect();
+    return;
+}
         liveFeedState.ws = ws;
 
         ws.onopen = () => {
