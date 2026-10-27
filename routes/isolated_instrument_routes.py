@@ -5,8 +5,10 @@
     GET  /admin/level-isolation/isolated                  — just the isolated record
     GET  /admin/level-isolation/detail                    — UI-facing detail snapshot
                                                             (includes `sr_tracking`,
-                                                            `active` if promoted)
+                                                            `active` if promoted,
+                                                            with confirmed_time_price)
     GET  /admin/level-isolation/sr-tracking               — SR tracker state only
+                                                            (pre & post isolation levels)
     GET  /admin/level-isolation/strategy-signal           — entry-signal block
     POST /admin/level-isolation/apply-promotion           — promote the ARMED instrument
     POST /admin/level-isolation/clear-promotion           — remove today's promotion
@@ -65,7 +67,8 @@ def get_detail() -> dict[str, Any]:
 
     In addition to the base isolation detail, this endpoint attaches the
     current promotion record (if any) so the UI can show the *active*
-    (promoted) instrument alongside the original trigger instrument.
+    (promoted) instrument alongside the original trigger instrument,
+    including confirmed_time_price across all tracked SR levels.
     """
     data = level_isolated_instrument_service.get_detail()
 
@@ -99,6 +102,9 @@ def get_detail() -> dict[str, Any]:
 
 @router.get("/sr-tracking")
 def get_sr_tracking() -> dict[str, Any]:
+    """Return SR tracker state containing pre_isolation_levels and
+    post_isolation_levels, each carrying confirmed_time_price.
+    """
     return isolated_sr_tracker_service.get_detail()
 
 

@@ -194,11 +194,18 @@ def _build_instrument_row(
     sr_levels = (sr_payload or {}).get("levels") or []
     sr_count = len(sr_levels)
     sr_latest = None
+    sr_latest_confirmed_price = None
     if sr_levels:
+        last_lvl = sr_levels[-1]
         try:
-            sr_latest = float(sr_levels[-1].get("price"))
+            sr_latest = float(last_lvl.get("price"))
         except (TypeError, ValueError):
             sr_latest = None
+        if last_lvl.get("confirmed_time_price") is not None:
+            try:
+                sr_latest_confirmed_price = float(last_lvl["confirmed_time_price"])
+            except (TypeError, ValueError):
+                sr_latest_confirmed_price = None
 
     ltp_snapshot = None
     try:
@@ -218,6 +225,7 @@ def _build_instrument_row(
         "level_price": level_price,
         "sr_levels_count": sr_count,
         "sr_latest_level": sr_latest,
+        "sr_latest_confirmed_price": sr_latest_confirmed_price,
         "sr_available": bool(sr_payload),
         "ltp_server_snapshot": ltp_snapshot,
         "chart_url": f"/chart/{key.replace('|', '%7C').replace(' ', '%20')}",

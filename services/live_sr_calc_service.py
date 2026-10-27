@@ -104,7 +104,8 @@ The candle-backup writer produces files shaped like::
           "volume":    12740,
           "oi":        1412970
         },
-        ...\n      ]
+        ...
+      ]
     }
 
 Candle normalisation
@@ -319,7 +320,7 @@ def _normalise_candle(raw: Any) -> dict[str, Any] | None:
                 "bucket": int(dt.timestamp() // 60),
                 "open": float(o),
                 "high": float(h),
-                "low": float(l),
+                "low": float(h),
                 "close": float(c),
                 "volume": float(v),
             }
@@ -1171,6 +1172,12 @@ class LiveSRCalcService:
             )
 
             confirmed_idx = i + right
+            confirmed_candle = candles[confirmed_idx]
+            confirmed_time_price = float(
+                confirmed_candle.get("close")
+                if confirmed_candle.get("close") is not None
+                else confirmed_candle.get("ltp", 0.0)
+            )
 
             if left_ok_res and right_ok_res:
                 levels.append({
@@ -1179,7 +1186,8 @@ class LiveSRCalcService:
                     "pivot_bar_index": i,
                     "pivot_time": c["time"],
                     "confirmed_bar_index": confirmed_idx,
-                    "confirmed_time": candles[confirmed_idx]["time"],
+                    "confirmed_time": confirmed_candle["time"],
+                    "confirmed_time_price": confirmed_time_price,
                     "left_bars": left,
                     "right_bars": right,
                     "is_today": False,
@@ -1192,7 +1200,8 @@ class LiveSRCalcService:
                     "pivot_bar_index": i,
                     "pivot_time": c["time"],
                     "confirmed_bar_index": confirmed_idx,
-                    "confirmed_time": candles[confirmed_idx]["time"],
+                    "confirmed_time": confirmed_candle["time"],
+                    "confirmed_time_price": confirmed_time_price,
                     "left_bars": left,
                     "right_bars": right,
                     "is_today": False,

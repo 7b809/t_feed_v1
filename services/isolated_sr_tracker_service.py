@@ -301,11 +301,12 @@ class IsolatedSRTrackerService:
 
             logger.info(
                 "[isolated-sr] POST-ISOLATION level confirmed — "
-                "key=%s type=%s price=%s confirmed=%s first=%s",
+                "key=%s type=%s price=%s confirmed=%s confirmed_price=%s first=%s",
                 instrument_key,
                 level.get("level"),
                 level.get("price"),
                 level.get("confirmed_time"),
+                level.get("confirmed_time_price"),
                 is_first,
             )
 
@@ -334,6 +335,10 @@ class IsolatedSRTrackerService:
                 if is_first
                 else "🆕 Phase:          POST-ISOLATION\n"
             )
+            confirmed_price_line = ""
+            if level.get("confirmed_time_price") is not None:
+                confirmed_price_line = f"💵 Confirmed Price: {level.get('confirmed_time_price')}\n"
+
             msg = (
                 f"{_DIV}\n"
                 f"🎯 {('FIRST ' if is_first else '')}SR LEVEL CONFIRMED\n"
@@ -345,6 +350,7 @@ class IsolatedSRTrackerService:
                 f"💰 Price:          {level.get('price')}\n"
                 f"🕒 Pivot Time:     {level.get('pivot_time')}\n"
                 f"✅ Confirmed At:   {level.get('confirmed_time')}\n"
+                f"{confirmed_price_line}"
                 f"📏 Bars:           L={level.get('left_bars')} R={level.get('right_bars')}\n"
                 f"{phase_line}"
                 f"{_THIN}\n"

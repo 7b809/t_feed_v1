@@ -14,9 +14,10 @@ rule from ``SR_LEVELS_SPEC.md``:
                                 and   j in [i+1, i+right]
 
 A pivot at index ``i`` is confirmed at bar ``i + right_bars``.
-Confirmed pivots are recorded with both ``pivot_time`` and
-``confirmed_time`` and written to ``live_sr_levels.json`` next to the
-instrument's ``candles.json`` / ``first_candle.json``.
+Confirmed pivots are recorded with ``pivot_time``, ``confirmed_time``,
+and ``confirmed_time_price`` (the close of the confirmation candle),
+and written to ``live_sr_levels.json`` next to the instrument's
+``candles.json`` / ``first_candle.json``.
 
 ## 2026-10-26 — accuracy overhaul
 ---------------------------------
@@ -772,6 +773,12 @@ class LiveSRLevelsService:
             ):
                 return False
 
+        confirmed_time_price = float(
+            confirmed_candle.get("close")
+            if confirmed_candle.get("close") is not None
+            else confirmed_candle.get("ltp", 0.0)
+        )
+
         level_record = {
             "level": level_type,
             "price": price,
@@ -779,6 +786,7 @@ class LiveSRLevelsService:
             "pivot_time": candle["time"],
             "confirmed_bar_index": confirmed_index,
             "confirmed_time": confirmed_time_str,
+            "confirmed_time_price": confirmed_time_price,
             "left_bars": left,
             "right_bars": right,
         }
@@ -873,9 +881,6 @@ class LiveSRLevelsService:
 
         state = self._init_state(entry, today)
 
-        # Strip residual broken fields when hydrating an older file so
-        # downstream consumers see a clean shape regardless of on-disk
-        # history.
         raw_levels = payload.get("levels") or []
         cleaned: list[dict[str, Any]] = []
         for lvl in raw_levels:
@@ -928,7 +933,6 @@ class LiveSRLevelsService:
             logger.exception("[live-sr] read failed for %s", key)
             return None
 
-        # Strip residual broken fields from older files.
         if isinstance(payload, dict):
             levels = payload.get("levels") or []
             cleaned = []

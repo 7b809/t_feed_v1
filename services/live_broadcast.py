@@ -27,6 +27,17 @@ List-of-feeds support (2026-10-27)
 fan-out was always list-capable — only the route-level parsing was
 single-key. ``parse_instrument_list`` is the shared normaliser used by
 every route that accepts a comma-separated ``instruments=`` query.
+
+Comma-only parsing (2026-10-27 fix)
+-----------------------------------
+``parse_instrument_list`` splits **only on commas**. Whitespace is
+never a separator because Upstox index keys legitimately contain
+spaces, e.g. ``NSE_INDEX|Nifty 50`` and ``NSE_INDEX|Nifty Next 50``.
+Earlier revisions split on whitespace too, which silently turned
+``NSE_INDEX|Nifty 50`` into the two invalid keys ``NSE_INDEX|Nifty``
+and ``50`` and caused downstream ``UDAPI100011`` /
+``UDAPI1021`` errors in ``live_sr_calc_service``. Callers that need
+multiple keys must send them comma-separated or as a list.
 """
 
 from __future__ import annotations
@@ -87,13 +98,19 @@ class LiveBroadcast:
 
             None / ""                     -> []
             "NSE_FO|1,NSE_FO|2"           -> ["NSE_FO|1", "NSE_FO|2"]
-            "NSE_FO|1 NSE_FO|2"           -> split on whitespace too
             ["NSE_FO|1", "NSE_FO|2"]      -> ["NSE_FO|1", "NSE_FO|2"]
             ("NSE_FO|1", "NSE_FO|2", ...) -> same
             {..set..}                     -> same
 
-        Whitespace is trimmed; empty items are dropped; duplicates are
-        removed (first occurrence wins to preserve caller intent).
+        ONLY comma is treated as a separator. Whitespace is NEVER a
+        separator because Upstox index keys contain spaces, e.g.
+        ``NSE_INDEX|Nifty 50`` and ``NSE_INDEX|Nifty Next 50``.
+        Callers that need multiple keys must use comma-separated
+        values or pass a list/tuple/set.
+
+        Whitespace around each item is trimmed; empty items are
+        dropped; duplicates are removed (first occurrence wins to
+        preserve caller intent).
         """
         if raw is None:
             return []
@@ -104,14 +121,10 @@ class LiveBroadcast:
             text = str(raw).strip()
             if not text:
                 return []
-            # Accept comma OR whitespace separators so callers can use
-            # `instruments=a,b,c` or `keys=a b c` interchangeably.
-            for sep in (",", " "):
-                if sep in text:
-                    items = text.split(sep)
-                    break
-            else:
-                items = [text]
+            # Comma-only split. Do NOT split on whitespace — that would
+            # corrupt "NSE_INDEX|Nifty 50" into two invalid instrument
+            # keys ("NSE_INDEX|Nifty" and "50").
+            items = text.split(",")
 
         out: list[str] = []
         seen: set[str] = set()

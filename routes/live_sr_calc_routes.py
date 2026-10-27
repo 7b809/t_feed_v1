@@ -44,7 +44,17 @@ The persisted levels are **NOT merged into ``levels``**:
 
 Both ``levels`` and ``live_sr.levels`` are returned **sorted by price
 ascending** (supports and resistances intermixed, matching TradingView).
-Neither carries any "broken" / "intact" fields.
+Neither carries any "broken" / "intact" fields. Each level object carries:
+    level                — "support" | "resistance"
+    price                — pivot price
+    pivot_bar_index      — bar index of the pivot
+    pivot_time           — ISO timestamp of pivot candle
+    confirmed_bar_index  — bar index of confirmation candle
+    confirmed_time       — ISO timestamp of confirmation candle
+    confirmed_time_price — candle close price at confirmation time
+    left_bars            — left lookback window
+    right_bars           — right confirmation window
+    is_today             — bool (in levels array)
 
 Common query parameters (all optional):
 

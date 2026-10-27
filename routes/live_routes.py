@@ -32,6 +32,9 @@ List-of-feeds
     ?keys=NSE_FO|123,NSE_FO|456          (alias)
     ?instrument_key=NSE_FO|123           (single, still accepted)
 
+Multiple keys MUST be comma-separated. Whitespace is NOT a separator
+because Upstox index keys contain spaces (e.g. ``NSE_INDEX|Nifty 50``).
+
 The connection receives **only** ticks for the listed instruments.
 Clients can update the list live without reconnecting by sending:
 
@@ -351,7 +354,13 @@ def _parse_filters(
 
     ``keys`` is always a list — a single ``instrument_key=`` produces a
     one-element list, while ``instruments=a,b,c`` (or ``keys=a,b,c``)
-    produces the full list. Comma OR whitespace separators accepted.
+    produces the full list.
+
+    Multiple keys MUST be comma-separated. Whitespace is NOT a
+    separator because Upstox index keys contain spaces, e.g.
+    ``NSE_INDEX|Nifty 50``. Parsing is delegated to
+    ``live_broadcast.parse_instrument_list`` so every WS route shares
+    the same rule.
     """
     q = ws.query_params
     raw_keys = (

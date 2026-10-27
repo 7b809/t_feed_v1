@@ -1,3 +1,4 @@
+# token_tasks/token_monitor.py
 """Token validity monitoring.
 
 This module is deliberately conservative about what it logs and sends.
@@ -9,8 +10,9 @@ Rules enforced here:
 
     * The raw access token is never interpolated into any log line,
       Telegram message, or returned error string.
-    * User identifiers (user_id, user_name) are masked in logs and
-      Telegram messages.
+    * User identifiers (user_id, user_name) are FULLY redacted in
+      logs and Telegram messages — not a single character of the
+      original value is revealed.
     * Any provider error string is passed through ``_sanitize_error``,
       which redacts JWT-length runs before the string is logged or
       returned.
@@ -33,19 +35,29 @@ logger = get_logger(__file__)
 # redacted before it can reach a log handler or Telegram.
 _JWT_MIN_LEN = 40
 
+# Fixed placeholder returned for any non-empty PII value. Using a
+# constant means length is not leaked either.
+_PII_REDACTED = "[redacted]"
+
 
 def _mask_pii(value) -> str:
-    """Mask a user id / user name for safe logging.
+    """Fully redact a user id / user name for safe logging.
 
-    Keeps the first 2 and last 2 characters of long values; returns
-    ``***`` for anything too short to partially reveal.
+    No characters of the original value are revealed, and the length
+    of the value is not exposed either. Empty input maps to an empty
+    string so callers can still distinguish "missing" from "present".
+
+    Examples::
+
+        _mask_pii("ABCD1234")  -> "[redacted]"
+        _mask_pii("ab")        -> "[redacted]"
+        _mask_pii("")          -> ""
+        _mask_pii(None)        -> ""
     """
     text = str(value or "").strip()
     if not text:
         return ""
-    if len(text) <= 4:
-        return "***"
-    return f"{text[:2]}***{text[-2:]}"
+    return _PII_REDACTED
 
 
 def _sanitize_error(value) -> str:
@@ -148,8 +160,8 @@ def check_upstox_token_validity(
             profile.get("data", {}) if isinstance(profile, dict) else {}
         )
 
-        # Masked identifiers only — raw user_id / user_name never reach
-        # the log stream.
+        # Fully redacted identifiers — no characters of user_id /
+        # user_name reach the log stream.
         logger.info(
             "Upstox token validation successful. user_id=%s, user_name=%s, broker=%s",
             _mask_pii(profile_data.get("user_id")),

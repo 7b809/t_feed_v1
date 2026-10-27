@@ -196,20 +196,27 @@ def _live_ltp(instrument_key: str) -> float | None:
 def _entry_price_for(
     instrument_key: str,
     confirmed_time_iso: str,
+    confirmed_time_price: float | None = None,
 ) -> tuple[float | None, str | None]:
     """Return ``(price, source)`` for the entry.
 
     Source is one of:
-      * ``"candle_close_at_confirmed"`` — the exact LTP at confirmation
-      * ``"live_ltp"``                  — fallback to current live LTP
-      * ``None``                        — no price available
+      * ``"confirmed_time_price"``        — price directly attached to confirmed SR pivot
+      * ``"candle_close_at_confirmed"``   — candle close looked up at confirmation time
+      * ``"live_ltp"``                    — fallback to current live LTP
+      * ``None``                          — no price available
     """
+    if confirmed_time_price is not None and confirmed_time_price > 0:
+        return confirmed_time_price, "confirmed_time_price"
+
     close = _candle_close_at(instrument_key, confirmed_time_iso)
     if close is not None:
         return close, "candle_close_at_confirmed"
+
     ltp = _live_ltp(instrument_key)
     if ltp is not None:
         return ltp, "live_ltp"
+
     return None, None
 
 
@@ -318,10 +325,19 @@ def _compute_candidate(
             price = float(lvl.get("price"))
         except (TypeError, ValueError):
             continue
+
+        confirmed_time_price = None
+        if lvl.get("confirmed_time_price") is not None:
+            try:
+                confirmed_time_price = float(lvl["confirmed_time_price"])
+            except (TypeError, ValueError):
+                confirmed_time_price = None
+
         supports_in_window.append({
             "price": price,
             "pivot_time": _iso(p_dt),
             "confirmed_time": lvl.get("confirmed_time"),
+            "confirmed_time_price": confirmed_time_price,
             "pivot_dt": p_dt,
             "raw": lvl,
         })
@@ -382,6 +398,7 @@ def _compute_candidate(
             "price": s["price"],
             "pivot_time": s["pivot_time"],
             "confirmed_time": s["confirmed_time"],
+            "confirmed_time_price": s.get("confirmed_time_price"),
             "minutes_from_touch": round(minutes_from_touch, 2),
         }
         cand["entry_support"] = entry_support
@@ -397,7 +414,7 @@ def _compute_candidate(
 
         # ---- ARMED --------------------------------------------- #
         entry_price, price_source = _entry_price_for(
-            key, s["confirmed_time"],
+            key, s["confirmed_time"], s.get("confirmed_time_price"),
         )
         stop_price = float(s["price"])
 
