@@ -1,480 +1,418 @@
-GEAR 1 (G1)
-R3 / S3-touch isolation → crossover-armed entry → promoted instrument → order
+G1 v2 — Fast entry-pivot + LTP-tier stop-loss
+Deliverable: a full replacement for GEAR 1 (G1).txt. §1–2 explain why we're changing. §3–5 are the new spec. §6 has worked examples including your 10:04/10:19 case. §7–10 are config, invariants, edge cases, rollout.
 
-1. One-line summary
-G1 isolates one CE or PE option the moment NIFTY or SENSEX touches its own R3 or S3 level, then watches both sides at that strike for a post-touch support pivot. Whichever side confirms first is promoted to be the active instrument and becomes the buy signal. The order is placed manually from the /isolated dashboard or via the order API on the promoted instrument.
+1. Why we're changing — the 10:04 / 10:19 case
+The v1 engine did exactly what v1 was written to do. It just isn't the right thing to do on an option that moves 60% in 15 minutes.
 
-2. When G1 runs
-G1 runs on every trading weekday (Mon–Fri, non-holiday) as a continuous pipeline. There is no single "G1 start" event — the pipeline is always live during market hours and self-gates by time-of-day and market state.
+1.1 What actually happened on 2026-10-27
+IST	Event	PE 22800
+10:01:00	NIFTY touches R3 (22784.30). Bias = CE. Isolated = NIFTY 22800 CE.	—
+10:04:00	PE 22800 forms a support pivot (15-bar low). pivot_time = 10:04.	62.75
+10:04 → 10:19	Pivot sits in unconfirmed state. Price climbs.	62.75 → 100.55
+10:19:00	15-bar confirmation hits. confirmed_time = 10:19. PE side → armed.	100.55
+—	v1 entry = close at 10:19 = 100.55. Stop = support = 62.75. Risk = 37.6%.	—
+—	v1 fires warning = "stop_too_wide" (max 35%) but the trade still arms.	—
+1.2 Why 37.6% is not a "trade"
+The stop-loss is 37.6% below the entry. On a 100-rupee option, that is a ~38 rupee loss for a ~10 rupee target (the next resistance was 110.70). Reward:risk was 0.27 : 1. That is a losing trade by construction — the market has to move 4× more in your favour than against you, in the 30-minute window before theta eats the premium.
 
-Clock (IST)	Event
-09:15:00	Cash market opens. Live feed starts streaming NIFTY/SENSEX.
-09:16:10	First-candle service computes OR levels for all instruments.
-~09:16:15	Level filter produces the CE/PE strike list for NIFTY/SENSEX.
-~09:16:30	Live SR engine starts accumulating 1-min pivots.
-09:16:10 → 15:30	Isolation engine watches NIFTY/SENSEX for R3/S3 touches.
-09:16:10 → 15:30	Strategy entry evaluates both sides every 10s (browser) or every 5 min (scheduler).
-15:30:00	Market closes. No new touches accepted.
-any time	Manual order placed from /isolated or /admin/orders/*.
-Startup catch-up: if the app boots mid-session or post-close, each step replays from historical + intraday data so /isolated renders the would-have-been decision for the day.
+The old STRATEGY_MAX_STOP_PCT = 0.35 was supposed to prevent this. It didn't, because v1 treats it as a soft warning, not a block. The trade arms, the operator sees a yellow triangle, and the discipline has to come from a human watching a screen. That's not a strategy.
 
-3. Inputs G1 requires
-Before G1 can do anything, the following must exist in data/:
+1.3 Three independent root causes
+#	Root cause	Effect on 2026-10-27
+1	Entry price uses the display confirmed_time (15 bars)	15-minute lag between the pivot forming (10:04) and the entry being priced (10:19). On a fast-moving option that's a 60% drift.
+2	Stop = support pivot price, unconditionally	For cheap options, support can be 40%+ below LTP. A "support" stop on a 70-rupee option that bounced from 62.75 is not a stop — it's a hope.
+3	STRATEGY_MAX_STOP_PCT is advisory	Fires, logs, does not block. The bad trade proceeds.
+All three have to be fixed together. Fixing (1) alone gets you a good entry sometimes, but on a gap day the support can still be far. Fixing (2) alone gives you a good stop but on a bad entry. Fixing (3) alone blocks the 10:04 case entirely — you never trade it, even though a perfectly fine 10:06 entry existed.
+
+2. The two changes in a nutshell
+Change A — dual confirmation windows.
+Keep left=15 / right=15 for the SR chart, the /isolated SR Tracking card, and the Telegram SR messages. Add a fast scan with left=15 / right=3 that runs only for the entry signal, only after isolation. A support pivot that was a 15-bar low at 10:04 is confirmed for entry purposes at 10:07, not 10:19. Entry price = close at 10:07 ≈ 70. Support structure unchanged.
+
+Change B — LTP-tier stop-loss.
+Stop is no longer support_price. Stop is entry_price × (1 − sl_pct) where sl_pct comes from a configurable tier table keyed on entry_price:
+
+LTP bucket	sl_pct
+LTP < 100	15%
+100 ≤ LTP < 200	12%
+200 ≤ LTP ≤ 300	10%
+LTP > 300	5%
+On the 10:04 pivot: entry ≈ 70 → tier <100 → sl_pct = 15% → stop = 70 × 0.85 = 59.50, risk = 15% — within the 35% hard cap, so it arms cleanly.
+
+Resistance blocker. Kept as-is (no change proposed). It is effectively a no-op today — see §9.1. That is fine for now; it does not affect the new logic.
+
+3. New entry-pivot model (Option A)
+3.1 Dual confirmation, one candle series
+Every support pivot is tracked with two confirmed-times simultaneously:
+
+Field	Right bars	Used by
+confirmed_time	15	Chart, /isolated SR Tracking card, Telegram SR messages, the "pre_isolation / post_isolation" sidecar. Unchanged.
+confirmed_time_fast	3	Entry-signal arming, resistance-blocker check, first-to-confirm tiebreak. New.
+Both timestamps derive from the same pivot_bar_index and pivot_time. The pivot itself is identical — it must still be a strict 15-bar low (left=15). Only the "when is it tradeable" moment differs.
+
+3.2 The fast scan runs only post-isolation
+The left=15 / right=3 scan is not part of the always-on SR engine. It is invoked lazily by strategy_entry_signal_service.compute() only when an isolated instrument exists, and only for the two instruments at the isolated strike (CE and PE).
+
+Pre-isolation: only right=15 runs. No extra CPU.
+Post-isolation: right=15 (display) and right=3 (entry) both run for 2 instruments. Cost is negligible.
+
+3.3 Fast scan algorithm
+Read the live SR engine's in-memory candle series for the instrument (same source _candle_close_at already uses). Run a strict pivot scan with left=15, right=3:
 
 text
-data/index/nifty/first_candle.json        — NIFTY 09:15 OHLC + OR levels
-data/index/sensex/first_candle.json       — SENSEX 09:15 OHLC + OR levels
-data/index/nifty/level_instruments.json   — filtered CE/PE strike list
-data/index/sensex/level_instruments.json  — filtered CE/PE strike list
-data/<underlying>/<strike>_<TYPE>/live_sr_levels.json  — pivots per instrument
-And the live feed must be up so live_feed_service.get_latest_ltp(key) returns fresh LTPs for both index keys and all option instruments.
+for i in [15, len(candles) − 3):
+    c = candles[i]
+    support   if  c.low  < candles[j].low   for all j in [i−15, i−1] ∪ [i+1, i+3]
+    resistance if  c.high > candles[j].high  for all j in [i−15, i−1] ∪ [i+1, i+3]
+The result is a list of {price, pivot_time, pivot_bar_index, confirmed_bar_index, confirmed_time} records — identical shape to the v1 SR levels, except right_bars = 3.
 
-4. Step-by-step logic
-Step 1 — Compute OR levels (09:16:10)
-For each index, the 09:15 1-min candle produces:
+The fast list is not persisted to disk. It is a pure in-memory view for the current poll.
+
+3.4 Fallback when the fast bar is not yet closed
+If confirmed_time_fast == now (the confirming bar is still forming), the entry price falls back to the live LTP. The arm still fires (the pivot is confirmed — 3 bars exist), but the price is taken from the tick, not the bar close. Same fallback chain as v1.
+
+4. New stop-loss model (LTP-tier)
+4.1 The tier table
+entry_price	sl_pct	Example stop
+< 100	15%	70 → 59.50
+100 – 199.95	12%	150 → 132.00
+200 – 300	10%	280 → 252.00
+> 300	5%	350 → 332.50
+Values are configurable via STRATEGY_ENTRY_STOP_LTP_TIERS (JSON array, see §7). The table above is the default.
+
+4.2 Computation
+text
+sl_pct   = tier_lookup(entry_price)
+sl_pct   = min(sl_pct, STRATEGY_MAX_STOP_PCT)     # hard cap, default 0.35
+stop_raw = entry_price × (1 − sl_pct)
+stop     = round_down_to_tick(stop_raw)            # see §4.3
+stop_pct = (entry_price − stop) / entry_price      # for display / audit
+stop_pct is now always ≤ sl_pct by construction. It is no longer an outcome variable the engine "discovers"; it is a parameter of the strategy.
+
+4.3 Tick rounding — round down, not up
+round_down_to_tick(stop_raw) — i.e. move the stop further from entry until it lands on a valid tick. Rationale: on a low-priced option (e.g. entry 0.50, tick 0.05, sl_pct=15% → stop_raw = 0.425), rounding up to 0.45 gives a 10% stop (tighter than intended → premature exit); rounding down to 0.40 gives a 20% stop (wider → room to breathe). Round-down matches the operator's intent ("give me ~15% room") and errs on the side of not being whipsawed.
+
+Configurable via STRATEGY_ENTRY_STOP_TICK_ROUNDING = "down" | "up" | "nearest" (default "down").
+
+4.4 Hard cap and fail-safe
+If the tier table yields sl_pct > STRATEGY_MAX_STOP_PCT (0.35), that is a configuration error — every default tier is well under 0.35. The engine:
+
+Clamps sl_pct to STRATEGY_MAX_STOP_PCT.
+
+Logs ERROR [strategy-entry] sl_pct <x> exceeds hard cap <y>; clamping. Fix STRATEGY_ENTRY_STOP_LTP_TIERS.
+
+Continues with the clamped value so the trade is not silently dropped.
+
+If entry_price ≤ 0 (bad data, illiquid instrument, dead tick): block the candidate with state_note = "invalid_entry_price".
+
+5. Updated step-by-step logic (full v2 spec)
+Only the changed steps are annotated. Everything else is byte-for-byte identical to v1 and reproduced here so the file is self-contained.
+
+Step 1 — Compute OR levels (09:16:10) — unchanged
+Same as v1. H, L, A, D_H, D_L, R1, S1, R2, S2, R3, S3, R3_Threshold, S3_Threshold written to data/index/<idx>/first_candle.json.
+
+Step 2 — Filter to a CE/PE strike list — unchanged
+Same as v1. ceil(Rx/step) × step for CE, floor(Sx/step) × step for PE, union, range filter, listing resolution. Output level_instruments.json with type on each entry.
+
+Step 3 — Live SR engine accumulates pivots — unchanged
+left=15 / right=15 for chart, /isolated SR Tracking, Telegram. Every confirmed pivot written to live_sr_levels.json. This step is untouched by v2.
+
+Step 4 — Watch for R3 / S3 touches — unchanged
+Priority NIFTY-R3 → NIFTY-S3 → SENSEX-R3 → SENSEX-S3, throttled to 2 s. First touch isolates, rest log as already_isolated.
+
+Step 5 — Pick the bias-side instrument at touch — unchanged
+Bias side fixed by touch (R3→CE, S3→PE). Nearest filtered strike to trigger LTP. SENSEX special case with NIFTY reference / stale-tick fallback. Same as v1.
+
+Step 6 — Snapshot the picked instrument at touch — unchanged
+Own LTP, touch-minute OHLC, first-candle OHLC, own OR levels frozen into the isolation record.
+
+Step 7 — Persist the isolation record — unchanged
+data/level_isolated_instrument.json. Tracker attached. Telegram "Level Isolation · Instrument Locked".
+
+Step 8 — SR tracker begins watching — unchanged
+pre_isolation snapshot, then every new right=15 confirmation as post_isolation, sidecar file, dedup on (level, price, confirmed_time).
+
+Step 9 — Strategy entry signal — CHANGED
+Recomputed every 10 s (browser) / 5 min (scheduler). Read:
+
+The isolation record (touch time, bias side).
+
+The fast pivot scan (left=15 / right=3) for both sides at the isolated strike (§3.3).
+
+The fast resistance scan (left=15 / right=3) for the resistance-blocker check.
 
 text
-H = high of first candle
-L = low of first candle
-A = (H + L) / 2
-D_H = |H − A|
-D_L = |A − L|
-R1 = A + D_H / 2
-S1 = A − D_L / 2
-R2 = H + D_H
-S2 = L − D_L
-R3 = R2 + D_H
-S3 = S2 − D_L
-R3_Threshold = (R2 + R3) / 2
-S3_Threshold = (S2 + S3) / 2
-Writes first_candle.json with these + the raw candle. Triggers the level filter.
+W = [touch_time, touch_time + STRATEGY_ENTRY_BUFFER_MINUTES]   # unchanged, 10 min
 
-Step 2 — Filter to a CE/PE strike list
-For each index, from its OR levels:
+for each candidate side (bias + counter when crossover):
+    supports_in_window ← fast_supports where pivot_time ∈ W
+    sort by pivot_time ascending
 
-CE candidates — for each resistance level in {R1, R2, R3, R3_Threshold}:
+    for each support S (earliest first):
+        # Resistance-blocker — unchanged rule, evaluated on the fast window
+        blocker ← first R such that
+                    R.pivot_time > S.pivot_time
+                  AND R.price      > S.price
+                  AND R.confirmed_time_fast ≤ S.confirmed_time_fast
+        if blocker: skip S, try next
 
-strike = ceil(level / step) * step
+        # Arm / waiting gate — based on fast confirmation
+        if S.confirmed_time_fast > now:
+            state = waiting_confirmation
+            return
+        else:
+            state = armed
+            entry_price, source = price_at(S.confirmed_time_fast)   # close, else LTP
 
-PE candidates — for each support level in {S1, S2, S3, S3_Threshold}:
+            # NEW: structural sanity blocks (all hard-blocks)
+            if entry_price is None:            → blocked "no_entry_price"
+            if entry_price <= 0:               → blocked "invalid_entry_price"
+            if entry_price < S.price:          → blocked "entry_below_support"
 
-strike = floor(level / step) * step
+            # NEW: LTP-tier stop
+            sl_pct   = tier(entry_price)
+            sl_pct   = min(sl_pct, STRATEGY_MAX_STOP_PCT)
+            stop_raw = entry_price × (1 − sl_pct)
+            stop     = round_tick(stop_raw)
+            stop_pct = (entry_price − stop) / entry_price
 
-step = 50 for NIFTY, 100 for SENSEX (configurable).
+            # NEW: informational warnings (do not block)
+            warning = None
+            if (entry_price − S.price) / entry_price > 0.20:
+                warning = "support_far_below_entry"
 
-The two candidate maps are unioned: every strike in the union is then resolved to both a CE instrument and a PE instrument. So a strike like 22400 appears as both NIFTY 22400 CE and NIFTY 22400 PE in the final list.
+            # Target — unchanged rule (next resistance above entry)
+            target = nearest resistance above entry_price
 
-Range filter (default wide):
+            entry = {
+                price:        entry_price,
+                price_source: "candle_close_at_confirmed_fast" | "live_ltp",
+                time:         S.confirmed_time_fast,
+                stop:         stop,
+                stop_pct:     stop_pct,
+                sl_pct:       sl_pct,
+                stop_source:  "ltp_tier",
+                target:       target,
+                target_pivot_time: …,
+            }
+            return
 
-wide: keep strikes in [S3, R3]
+    state = blocked "all_supports_in_window_blocked"
+Tiebreak (both sides armed):
 
-strict: keep strikes in [S3_Threshold, R3_Threshold]
+text
+sort armed candidates by confirmed_time_fast ascending
+earliest wins → chosen
+other → discarded, note = "first_to_confirm_won_by_other_side"
+The tiebreak now uses confirmed_time_fast, not confirmed_time, so the winner is decided at the fast-confirmation moment, consistent with the entry.
 
-Core level strikes are always kept even if a strict range would exclude them.
+What the entry block now looks like in the API response:
 
-Listed-strike resolution: for each strike+side, look up the registry. If the exact strike isn't listed, walk outward by step (up for CE, down for PE) up to 20 steps until a listed instrument is found. Unresolvable strikes are dropped with a log line.
-
-Each entry written to level_instruments.json carries:
-
-json
+jsonc
 {
-  "strike": 22400,
-  "instrument_key": "NSE_FO|51327",
-  "trading_symbol": "NIFTY 22400 PE 27 OCT 26",
-  "expiry": 1793125799000,
-  "type": "PE",
-  "levels": ["S2", "S3", "S3_Threshold"],
-  "reasons": ["support extension", "outer support", "support threshold"]
-}
-Registers every filtered instrument (plus the index itself) with the live SR engine.
-
-Step 3 — Live SR engine accumulates pivots
-The live SR engine tracks every subscribed instrument, building 1-minute candles from ticks. For each instrument, using left=15, right=15:
-
-Resistance pivot at bar i iff C[i].high > C[j].high for every j in [i−15, i−1] AND every j in [i+1, i+15]
-
-Support pivot at bar i iff C[i].low < C[j].low for every j in [i−15, i−1] AND every j in [i+1, i+15]
-
-A pivot at index i is confirmed at bar i + 15.
-
-Every confirmed pivot is written into live_sr_levels.json with:
-
-json
-{
-  "level": "support",
-  "price": 155.00,
-  "pivot_time": "2026-10-26T09:26:00+05:30",
-  "confirmed_time": "2026-10-26T09:41:00+05:30",
-  "pivot_bar_index": 11,
-  "confirmed_bar_index": 26,
-  "left_bars": 15,
-  "right_bars": 15
-}
-Only today's pivots enter the file. Historical seed data is used only as look-back context (a pivot forming at 09:15 needs 15 bars of yesterday's tail).
-
-Accuracy is re-synced from the Upstox intraday API every 2 minutes (configurable) so tick-aggregated OHLC drift is corrected.
-
-Step 4 — Watch for R3 / S3 touches
-The isolation engine watches the LTP of NSE_INDEX|Nifty 50 and BSE_INDEX|SENSEX. For each index LTP:
-
-R3 touch fired when index_ltp >= or_levels[index].R3
-
-S3 touch fired when index_ltp <= or_levels[index].S3
-
-Priority order when multiple touches fire on the same minute:
-
-text
-NIFTY-R3  →  NIFTY-S3  →  SENSEX-R3  →  SENSEX-S3
-The first touch in this order that fires isolates an instrument and ends the search for the day. Once isolated, all subsequent touches are logged as already_isolated and ignored for instrument selection.
-
-Touch detection is throttled to one check per 2 seconds regardless of tick rate.
-
-Step 5 — Pick the bias-side instrument at touch
-The bias side is fixed by the touch type:
-
-R3 touch → bias side = CE
-
-S3 touch → bias side = PE
-
-From that index's level_instruments.json, filter candidates:
-
-Primary filter — bias-side instruments whose levels array contains R3 or R3_Threshold (for CE) / S3 or S3_Threshold (for PE).
-
-Fallback — if the primary filter returns empty, use all bias-side instruments for that index.
-
-Among the surviving candidates, pick the one whose strike is nearest to the trigger LTP (absolute distance).
-
-SENSEX special case:
-When the touch is SENSEX-based, the engine checks the NIFTY LTP at that exact moment:
-
-If the last NIFTY tick is ≤ 30 seconds old: use NIFTY as the reference. Pick the NIFTY instrument (either side) nearest to NIFTY LTP.
-
-If the NIFTY tick is stale (> 30 s): fall back to SENSEX's own nearest strike.
-
-This produces the reasons:
-
-text
-nifty_r3_touch                                (NIFTY R3)
-nifty_s3_touch                                (NIFTY S3)
-sensex_r3_touch                               (SENSEX R3, no NIFTY reference used)
-sensex_r3_with_nifty_reference                (SENSEX R3, NIFTY reference used)
-sensex_r3_fallback                            (SENSEX R3, NIFTY stale → SENSEX fallback)
-(same for _s3_ variants)
-Step 6 — Snapshot the picked instrument at touch
-The moment isolation fires, the picked instrument's own state is captured and frozen into the record:
-
-LTP at touch — from the live feed cache, else the touch-minute intraday bar, else the first-candle close, else the OR midpoint
-
-Touch-minute OHLC — from the intraday API for the exact minute of the touch
-
-First-candle OHLC — the instrument's own 09:15 candle
-
-OR levels — the instrument's own R1..S3 levels computed from its first candle
-
-These are stored under the isolated record so the UI can show the instrument's own price context, not just the index's.
-
-Step 7 — Persist the isolation record
-Written to data/level_isolated_instrument.json:
-
-json
-{
-  "day": "2026-10-26",
-  "isolated": {
-    "instrument_key": "NSE_FO|51327",
-    "trading_symbol": "NIFTY 22400 PE 27 OCT 26",
-    "strike": 22400,
-    "type": "PE",
-    "expiry": 1793125799000,
-    "levels": ["S2", "S3", "S3_Threshold"],
-    "reason": "nifty_s3_touch",
-    "isolated_at": "2026-10-26T09:21:00+05:30",
-    "touched_at": "2026-10-26T09:21:00+05:30",
-    "trigger_index": "NIFTY",
-    "trigger_side": "S3",
-    "trigger_level": "S3",
-    "trigger_level_value": 22415.70,
-    "trigger_ltp": 22412.15,
-    "instrument_ltp": 106.95,
-    "instrument_quote_source": "intraday_bar",
-    "instrument_touch_ohlc": { ... },
-    "instrument_first_candle": { ... },
-    "instrument_or_levels": { ... }
-  },
-  "events": [ ... ],
-  "touch_state": {
-    "NIFTY_R3": false,
-    "NIFTY_S3": true,
-    "SENSEX_R3": false,
-    "SENSEX_S3": false
-  }
-}
-Attaches the isolated SR tracker. Fires a Telegram message ("Level Isolation · Instrument Locked").
-
-Step 8 — SR tracker begins watching the isolated instrument
-On isolation, the tracker:
-
-Reads live_sr_levels.json for the isolated instrument and records every currently-present level as pre_isolation.
-
-Subscribes to the live SR engine for any new pivot confirmations on that same instrument.
-
-For each new pivot: record as post_isolation, dedup on (level_type, price, confirmed_time).
-
-Persists to data/level_isolated_instrument_sr.json.
-
-Every confirmed pivot is retained for the day. There is no "broken"/"intact" distinction — TradingView behaviour.
-
-Step 9 — Strategy entry signal evaluates both sides
-Every 10 s (browser) or every 5 min (scheduler safety net), the entry signal is recomputed from scratch. It reads:
-
-The isolation record (touch time + bias side)
-
-The current live_sr_levels.json for both CE and PE at the isolated strike
-
-Window:
-
-text
-W = [touch_time, touch_time + BUFFER_MINUTES]     (default buffer = 10 min)
-For each candidate side (bias + counter when crossover is enabled):
-
-Collect support pivots whose pivot_time falls strictly inside W. Sort by pivot_time ascending.
-
-For each support S (earliest first):
-
-Resistance check: for every resistance pivot R in the same file, R blocks S if and only if:
-
-R.pivot_time > S.pivot_time, AND
-
-R.price > S.price, AND
-
-R.confirmed_time ≤ S.confirmed_time
-
-If a blocking resistance exists: skip this support and try the next one.
-
-If no blocker:
-
-If S.confirmed_time > now: candidate state = waiting_confirmation.
-
-If S.confirmed_time ≤ now: candidate state = armed. Compute:
-
-entry_price = candle close at S.confirmed_time, else live LTP
-
-stop = S.price
-
-target = nearest resistance above entry_price, else None
-
-stop_pct = (entry_price − stop) / entry_price
-
-If stop_pct > STRATEGY_MAX_STOP_PCT (0.35) → warning stop_too_wide
-
-If stop_pct < 0 → warning price_at_or_below_support
-
-First non-blocked support that passes wins for that side. Remaining supports are not re-tried.
-
-If every support in the window was blocked: candidate state = blocked.
-
-First-to-confirm rule:
-
-If both sides arm on the same day and STRATEGY_ENTRY_FIRST_TO_CONFIRM_WINS = true (default):
-
-Sort both armed candidates by confirmed_time ascending.
-
-The earliest wins. It becomes chosen.
-
-The other is marked discarded with note first_to_confirm_won_by_other_side.
-
-Response shape (per candidate):
-
-json
-{
-  "side": "CE",
-  "instrument_key": "NSE_FO|51326",
-  "trading_symbol": "NIFTY 22400 CE 27 OCT 26",
-  "is_bias_side": false,
+  "side": "PE",
+  "instrument_key": "NSE_FO|51345",
+  "trading_symbol": "NIFTY 22800 PE 27 OCT 26",
+  "is_bias_side": true,
   "state": "armed",
   "entry_support": {
-    "price": 155.00,
-    "pivot_time": "2026-10-26T09:26:00+05:30",
-    "confirmed_time": "2026-10-26T09:41:00+05:30",
-    "minutes_from_touch": 5.0
+    "price": 62.75,
+    "pivot_time": "2026-10-27T10:04:00+05:30",
+    "confirmed_time_fast": "2026-10-27T10:07:00+05:30",
+    "confirmed_time":      "2026-10-27T10:19:00+05:30",
+    "minutes_from_touch": 3.0
   },
   "entry": {
-    "price": 177.00,
-    "price_source": "candle_close_at_confirmed",
-    "time": "2026-10-26T09:41:00+05:30",
-    "stop": 155.00,
-    "stop_pct": 0.1243,
-    "target": 220.50,
-    "target_pivot_time": "..."
+    "price":       70.0,
+    "price_source": "candle_close_at_confirmed_fast",
+    "time":         "2026-10-27T10:07:00+05:30",
+    "stop":         59.5,
+    "stop_pct":     0.15,
+    "sl_pct":       0.15,
+    "stop_source":  "ltp_tier",
+    "target":       110.7,
+    "target_pivot_time": "…"
   },
   "warning": null,
   "chosen": true
 }
-Step 10 — Promotion (counter side wins)
-After the chosen side is determined:
+Note: confirmed_time (15-bar) is still surfaced so the operator can see both moments. entry.price_source is now candle_close_at_confirmed_fast (the _fast suffix is the only rename).
 
-If chosen == bias-side instrument (e.g. PE won on an S3 day): no promotion. The original isolated instrument stays active. G1 ends here; the trade is on the bias-side PE.
+Step 10 — Promotion — unchanged in logic
+Only the trigger condition is subtly different: because both sides are now evaluated on the fast window, chosen_side can flip to a counter-side that arms 3 bars after its pivot rather than 15. Everything else (sidecar, SR re-key, one-per-day, browser + 5-min safety net) is unchanged.
 
-If chosen == counter-side instrument (e.g. CE won on an S3 day): the counter-side instrument is promoted to be the active instrument. The strategy_entry_signal_service returns a promotion block:
+Step 11 — Order placement — unchanged
+Manual. POST /admin/orders/buy|sell with lot conversion, sanitised provider response, no token in any log line.
 
-json
-{
-  "recommended": true,
-  "already_applied": false,
-  "target_instrument_key": "NSE_FO|51326",
-  "target_trading_symbol": "NIFTY 22400 CE 27 OCT 26",
-  "target_side": "CE",
-  "official_isolated_key": "NSE_FO|51327",
-  "promotion_allowed": true,
-  "re_promotion_allowed": false
-}
-Promotion is applied asynchronously via POST /admin/level-isolation/apply-promotion. The promotion service:
+6. Worked examples
+6.1 Your 10:04 case (LTP < 100, fast confirmation wins)
+Inputs: touch 10:01 (NIFTY R3, PE bias). PE 22800 support pivot: price 62.75, pivot_time = 10:04:00.
 
-Validates recommended and target key.
+v1	v2
+confirmed_time_fast	—	10:07:00
+confirmed_time (display)	10:19:00	10:19:00 (unchanged)
+Entry price	100.55 (close at 10:19)	≈ 70 (close at 10:07)
+sl_pct (tier)	— (used support)	70 < 100 → 15%
+Stop	62.75 (support)	70 × 0.85 = 59.50
+Stop distance	37.6%	15.0%
+Target	110.70	110.70
+Reward : Risk	10.15 : 37.80 = 0.27	40.70 : 10.50 = 3.88
+Hard warning	stop_too_wide (advisory)	— (within cap, no warning)
+Armed?	Yes	Yes
+Tradeable?	No (0.27 R:R, 38% risk)	Yes (3.88 R:R, 15% risk)
+Entry price is approximate — the actual 10:07 close depends on the tick path — but the structure is deterministic: the entry is at the 3-bar confirmation, not the 15-bar one, and the stop is 15% below that, not at the support.
 
-Captures the promoted instrument's LTP, first candle, OR levels, confirmation-bar OHLC.
+6.2 Mid-tier (100 ≤ LTP < 200)
+Entry 150, support 130.
 
-Writes data/level_isolated_instrument_promotion.json (sidecar — the isolation record is never modified).
+sl_pct = 12% → stop = 132, risk = 12%, reward (target 175) : risk = 25 : 18 = 1.39 : 1. Arms.
 
-Re-keys the SR tracker to the promoted instrument via isolated_sr_tracker_service.on_isolation(promoted_record). The PE's tracker state is discarded.
+If support is 130, the stop (132) is above the support. That means the pct-stop fires before the support breaks. Operator sees support_far_below_entry (gap = (150−130)/150 = 13.3% — under the 20% warning threshold, so no warning). Fine.
 
-Fires a Telegram message ("Instrument Promoted").
+6.3 Upper-tier (200 ≤ LTP ≤ 300)
+Entry 280, support 240.
 
-Returns the promotion payload + fresh detail.
+sl_pct = 10% → stop = 252, risk = 10%. Target 320 → reward 40 : risk 28 = 1.43 : 1. Arms.
 
-One promotion per day by default (STRATEGY_ENTRY_ALLOW_RE_PROMOTION=false). Once promoted, the pick is stable for the rest of the session.
+Support gap (280−240)/280 = 14.3% → no warning.
 
-Promotion is triggered by:
+6.4 Above-tier (LTP > 300)
+Entry 350, support 300.
 
-The browser auto-POSTing to /apply-promotion when it sees recommended && !already_applied.
+sl_pct = 5% → stop = 332.50, risk = 5%. Target 380 → reward 30 : risk 17.5 = 1.71 : 1. Arms.
 
-The 5-min scheduler task as a safety net (covers the browser-closed case).
+This tier exists because 350+ rupee options have enough premium that a 5% move is already a meaningful loss; wider stops there are usually overkill.
 
-Step 11 — Order placement (manual)
-Order placement is entirely manual. G1 does not auto-execute. After the strategy entry ARMS:
+6.5 Very low LTP edge (< 20)
+Entry 15, tick 0.05.
 
-The operator reviews the /isolated dashboard.
+sl_pct = 15% → stop_raw = 12.75 → round_down → 12.75 (already on tick). Risk = 15%. Arms.
 
-For a CE arm: buys the CE on the promoted instrument.
+Entry 5: stop_raw = 4.25, tick 0.05 → 4.25 is valid. Risk = 15%. Arms, but note: at 5 rupees, 15% = 0.75 rupees = 15 ticks, which is one bar of noise on a PE that moves 20 ticks a minute. Operator should size down or skip. This is a note, not a block — the tier is the same, the operator owns the sizing.
 
-For a PE arm: buys the PE on the original isolated instrument.
+Entry 0.50: stop_raw = 0.425 → round_down → 0.40 (20% stop). Slightly wider than the 15% requested; that is the tick-rounding behaviour. Acceptable.
 
-Order API (POST /admin/orders/buy or /admin/orders/sell):
+Entry ≤ 0: block invalid_entry_price.
 
-Runtime gate — order_runtime_service.is_enabled(). If off, returns {"status": "disabled"}.
+6.6 Block case — entry below support
+Entry 62.75 (fast close went below the support), support 62.75. entry < support → blocked "entry_below_support". This is the "support didn't hold" case the pct-stop cannot save you from. New hard block (v1 had this as a soft price_at_or_below_support warning).
 
-Token read — token_service.get_access_token(). Held only in a local variable for the duration of the call. Never logged, never returned.
-
-Lots → quantity via upstox_services.lot_sizes.lots_to_quantity:
-
-Resolution order: explicit underlying → registry → scan key for known ticker substring → per-exchange default (NSE_FO = 65, BSE_FO = 20) → unit fallback.
-
-NIFTY = 65, SENSEX = 20, BANKNIFTY = 30, FINNIFTY = 60, MIDCPNIFTY = 120.
-
-Build request — PlaceOrderV3Request(quantity, product="D", validity="DAY", price=0, order_type="MARKET", transaction_type="BUY"|"SELL", instrument_token, is_amo=False, slice=False, ...).
-
-Call Upstox — OrderApiV3.place_order(body).
-
-Sanitise — provider response is passed through upstox_services._sanitise.sanitise_payload before being logged or returned.
-
-Return — {status, instrument_key, underlying, transaction_type, lots, lot_size, lot_source, quantity, order_type, product, response, error, called_at}.
-
-The stop and target from the strategy-entry block are informational — they are not wired into the order. There is no auto-stop-loss, no bracket order, no auto-exit. The operator monitors manually.
-
-5. Decision rules summary
-Question	G1 answer
-When does isolation fire?	First R3/S3 touch of the day, priority NIFTY-R3 → NIFTY-S3 → SENSEX-R3 → SENSEX-S3.
-Which side gets isolated?	Bias side: CE for R3 touch, PE for S3 touch.
-Which strike?	Nearest filtered strike to the trigger LTP.
-Which side trades?	Whichever side arms first (earliest confirmed_time). Crossover allowed.
-When is a side ARMED?	Its earliest non-blocked support pivot in [touch, touch + 10 min] has confirmed.
-What blocks a support?	A resistance with pivot_time > support.pivot_time, price > support.price, confirmed_time ≤ support.confirmed_time.
-Entry price	Candle close at confirmed_time; fallback to live LTP.
-Stop	Support pivot price.
-Target	Next resistance above entry.
-When to promote?	When the chosen side ≠ bias-side instrument.
-When to buy?	Manual, after ARMED.
-Auto-exit?	No. Manual only.
-6. Data files G1 produces
-text
-data/level_isolated_instrument.json
-    isolation record: the trigger-side instrument, snapshot, events, touch_state
-
-data/level_isolated_instrument_sr.json
-    SR tracker sidecar: pre_isolation_levels + post_isolation_levels
-    for the currently-tracked instrument (bias-side, or promoted)
-
-data/level_isolated_instrument_promotion.json
-    promotion sidecar: from/to instruments, reason, evidence, and the
-    promoted instrument's own snapshot (mirror of `isolated` shape)
-    Only written when a promotion has occurred.
-7. Config flags that shape G1
+7. Config reference (v2)
+7.1 New flags
 Flag	Default	Effect
-LEVEL_ISOLATION_ENABLED	true	Master switch for isolation.
-LEVEL_ISOLATION_CHECK_INTERVAL_SECONDS	2.0	Touch detection throttle.
-LEVEL_ISOLATION_NIFTY_TICK_STALE_SECONDS	30	SENSEX-touch stale reference threshold.
-LEVEL_ISOLATION_BACKFILL_WINDOW_START_HOUR/MINUTE	09:16	Startup backfill window.
-LEVEL_ISOLATION_BACKFILL_WINDOW_END_HOUR/MINUTE	23:59	Startup backfill window.
-STRATEGY_ENTRY_ENABLED	true	Master switch for the entry signal.
-STRATEGY_ENTRY_ALLOW_CROSSOVER	true	Evaluate both sides every poll.
-STRATEGY_ENTRY_BUFFER_MINUTES	10	Asymmetric window [touch, touch + buffer].
-STRATEGY_ENTRY_ONLY_ONCE_PER_DAY	true	Once a side ARMs, it stays chosen.
-STRATEGY_ENTRY_BLOCKED_BY_RESISTANCE	true	Enable the resistance-blocker check.
-STRATEGY_ENTRY_FIRST_TO_CONFIRM_WINS	true	Earliest confirmed_time wins.
-STRATEGY_MAX_STOP_PCT	0.35	Soft warning threshold for stop distance.
-STRATEGY_ENTRY_ALLOW_PROMOTION	true	Counter-side instrument can become active.
-STRATEGY_ENTRY_ALLOW_RE_PROMOTION	false	Only one promotion per day.
-LIVE_SR_LEFT_BARS / LIVE_SR_RIGHT_BARS	15 / 15	Pivot detection window.
-LIVE_SR_TRACK_ALL_INSTRUMENTS	true	Track every subscribed instrument (vs only filtered).
-LIVE_SR_REFRESH_FROM_API_MINUTES	2	Re-sync period from Upstox API.
-LEVEL_FILTER_STRIKE_STEP_NIFTY	50	NIFTY strike rounding step.
-LEVEL_FILTER_STRIKE_STEP_SENSEX	100	SENSEX strike rounding step.
-LEVEL_FILTER_RANGE_MODE	wide	wide = S3..R3, strict = thresholds.
-LEVEL_FILTER_INCLUDE_ATM_PLUS_MINUS	0	Optional ATM ±N extras.
-8. Failure modes
-Condition	G1 behaviour
-No first candle for an index	That index is skipped by the level filter; its candidates list is empty.
-No filtered instruments	Touch fires but candidates_count = 0; isolation event logged as no_candidates. No isolation.
-NIFTY tick stale during SENSEX touch	Falls back to SENSEX's own nearest strike (*_fallback reason).
-No SR levels yet for a candidate	state = waiting, state_note = no_sr_levels. Re-tries on next poll.
-No support pivot inside [touch, touch + buffer]	state = waiting, state_note = no_support_pivot_in_window. Stays waiting until the buffer elapses.
-Support found but waiting for confirmation	state = waiting_confirmation with seconds_until_confirmation.
-All supports blocked by resistances	state = blocked. If both sides end up blocked, no trade.
-No side arms by end of day	No trade. Isolation record persists for audit.
-Promotion target not in candidates	apply_promotion returns reason: "target_not_in_candidates"; original bias side stays active.
-Second promotion attempt (default config)	Returns reason: "already_promoted_today"; pick stays locked.
-Order API called while toggle off	{"status": "disabled"}.
-Order API called with no token	{"status": "no_token"}.
-Upstox rejects the order	Returns {"status": "error", "error": "Upstox ApiException (HTTP …): …"} with the response body sanitised.
-9. What G1 does NOT do
-No automatic order placement. The operator places orders manually.
+STRATEGY_ENTRY_PIVOT_LEFT_BARS	15	Left window for entry-signal pivot scan. Kept equal to display LIVE_SR_LEFT_BARS so the pivot is the same in both views.
+STRATEGY_ENTRY_PIVOT_RIGHT_BARS	3	Right window for entry-signal confirmation. Lower = faster entry, more pivots. Range 1–5 recommended.
+STRATEGY_ENTRY_STOP_LTP_TIERS	[{"max_ltp":100,"sl_pct":0.15},{"max_ltp":200,"sl_pct":0.12},{"max_ltp":300,"sl_pct":0.10},{"max_ltp":null,"sl_pct":0.05}]	JSON array. max_ltp is the upper bound of the tier (exclusive for > boundaries); null = open-ended. Parsed defensively — bad JSON falls back to the default above.
+STRATEGY_ENTRY_STOP_TICK_ROUNDING	"down"	"down" / "up" / "nearest". See §4.3.
+7.2 Changed flags
+Flag	v1	v2
+STRATEGY_MAX_STOP_PCT	0.35 — soft warning, does not block	0.35 — hard cap on sl_pct; clamping → ERROR log → continue
+STRATEGY_ENTRY_PRICE_MODE	"market_at_confirmed" | "pivot_price"	Removed. Entry is always "close at confirmed_time_fast, else live LTP". pivot_price was the broken path; deleting it prevents accidental re-use.
+7.3 Unchanged flags
+STRATEGY_ENTRY_ENABLED, STRATEGY_ENTRY_ALLOW_CROSSOVER, STRATEGY_ENTRY_BUFFER_MINUTES, STRATEGY_ENTRY_INCLUDE_PRETOUCH, STRATEGY_ENTRY_ONLY_ONCE_PER_DAY, STRATEGY_ENTRY_BLOCKED_BY_RESISTANCE, STRATEGY_ENTRY_FIRST_TO_CONFIRM_WINS, STRATEGY_ENTRY_ALLOW_PROMOTION, STRATEGY_ENTRY_ALLOW_RE_PROMOTION.
 
-No auto-stop-loss or auto-target. The stop and target from the entry signal are informational; nothing watches them.
+STRATEGY_ENTRY_BUFFER_MINUTES (10 min) still gates which pivots qualify as post-touch — it is a filter on pivot_time, not on confirmed_time_fast. A pivot that forms at 10:08 (pivot_time in window) confirms fast at 10:11 — still within the buffer, still valid.
 
-No auto-exit at market close. Positions are managed manually.
+7.4 Removed flags (deprecated, tolerated in .env)
+STRATEGY_ENTRY_INCLUDE_PRETOUCH is still read (Option C was not selected). All other v1 flags are unchanged.
 
-No re-isolation of the trigger side. Once the bias-side instrument is isolated, it is fixed for the day. The promotion mechanism only changes which instrument is active, not which instrument was triggered.
+8. What stays the same as v1
+Everything below is untouched — the v1 file remains authoritative for these sections:
 
-No multi-strike basket. One strike is isolated. One instrument is active. One order.
+Step 1 OR level formulas.
 
-No volatility regime detection. G1 assumes a "normal" day where an OR-based bias-side touch followed by a post-touch support pivot is the right decision. This is the point of G2+ — G1 only handles the standard rule.
+Step 2 level-instrument filter (strike rounding, range filter, listing fallback, type field on each entry).
 
-No cross-day carry. All state resets at midnight IST. A new day starts fresh.
+Step 3 live SR engine (left=15 / right=15), 2-min API re-sync, live_sr_levels.json persistence.
 
-10. See also
-/isolated — the operator dashboard for G1. Renders hero, entry signal, SR tracking, snapshot, reasoning, candidates, touch state, event log, OR levels.
+Step 4 touch detection (NIFTY-R3 → NIFTY-S3 → SENSEX-R3 → SENSEX-S3, 2 s throttle).
 
-GET /admin/level-isolation/detail — the underlying JSON for /isolated. Includes active (promotion) and active_live_sr_levels when a promotion exists.
+Step 5 strike selection, SENSEX NIFTY-reference / stale-tick fallback.
 
-GET /admin/level-isolation/strategy-signal — the pure compute of the entry signal + promotion block.
+Step 6 instrument snapshot at touch (own LTP, touch OHLC, first candle, OR levels).
 
-POST /admin/level-isolation/apply-promotion — applies a promotion.
+Step 7 isolation record persistence.
 
-POST /admin/level-isolation/backfill — re-runs the intraday replay to reconstruct the day's would-have-isolated instrument (used at startup).
+Step 8 SR tracker sidecar (pre_isolation / post_isolation, dedup on (level, price, confirmed_time)).
 
-POST /admin/level-isolation/reset — clears the day's state (and any promotion) for testing.
+Step 10 promotion sidecar and lifecycle.
 
-POST /admin/orders/buy / /admin/orders/sell — order placement.
+Step 11 manual order placement.
 
-POST /admin/orders/runtime-enable / runtime-disable — the manual safety gate.
+First-to-confirm tiebreak rule — only the field it sorts on changed (confirmed_time → confirmed_time_fast).
 
-services/isolated_instrument_promotion_service.py — the promotion service. Idempotent per day, sidecar-based, never touches the isolation record.
+All Telegram messages, /isolated dashboard, /admin/level-isolation/* routes, level_isolated_instrument_promotion_service, level_isolated_instrument_service — no signature changes. The entry block gains new fields (stop_source, sl_pct, confirmed_time_fast); v1 consumers that read only stop / stop_pct / price / time keep working.
+
+9. Notes and edge cases
+9.1 The resistance blocker is currently a no-op
+The v1 rule is:
+
+R blocks S iff R.pivot_time > S.pivot_time AND R.price > S.price AND R.confirmed_time ≤ S.confirmed_time.
+
+If both R and S use the same confirmation lag (15 bars in v1, 3 bars in v2), then R.pivot_time > S.pivot_time implies R.confirmed_time > S.confirmed_time. The third clause is therefore always false, and the blocker never fires. It is dead code today.
+
+We are keeping the code path unchanged for v2 — it does not affect the 10:04 case, and removing it would be a behaviour change we don't need to make right now. If you ever want a real resistance check, the correct direction is the opposite: R.pivot_time < S.pivot_time (R formed before S, S coiled under it, and R was confirmed by the time S confirms) → block. That is a v3 change; note it, don't action it.
+
+The user's hunch ("not resistance not about to create") is best served by the fast window: any resistance that forms at 10:05 or later cannot be confirmed (even fast) by 10:07, so it cannot block. The fast window already gives you what you want.
+
+9.2 New hard blocks
+The v2 entry block has three hard blocks:
+
+state_note	Condition	Rationale
+invalid_entry_price	entry_price ≤ 0	Bad tick / no candle.
+no_entry_price	Both candle close and live LTP missing	Feed down.
+entry_below_support	entry_price < S.price	Price broke support before confirmation; the pivot is not the floor any more. Was a soft warning in v1; promoted to block in v2.
+9.3 Fast bar not closed yet
+When confirmed_time_fast == now (the 3rd bar is still forming), entry_price falls back to live LTP. The entry block carries price_source = "live_ltp" so the operator can see the difference. The stop is still computed from the LTP: stop = ltp × (1 − sl_pct). This is consistent — the stop is "X% below whatever I paid", not "X% below the fast close".
+
+9.4 Multiple fast-confirmed supports
+Iterate by pivot_time ascending (same as v1). First non-blocked wins. Remaining supports are not re-tried. This is intentional — a second pivot 5 minutes later would be a different setup, and re-arming on it would violate STRATEGY_ENTRY_ONLY_ONCE_PER_DAY = true.
+
+9.5 Backward compatibility with v1 records
+A v1 level_isolated_instrument.json on disk has no confirmed_time_fast field in its entry_support block. On the first poll after upgrade:
+
+The entry signal recomputes from scratch (it always does). It re-reads the candle series, runs the fast scan, and produces a fresh entry block. It does not read the persisted confirmed_time_fast from any sidecar.
+
+Therefore no migration is needed for the entry block. The sidecar (level_isolated_instrument_sr.json) is unchanged — it stores the 15-bar confirmed_time only.
+
+level_isolated_instrument_promotion.json from a v1 run has an evidence.entry_support_confirmed_time field with the 15-bar value. On upgrade, that field keeps its v1 meaning (display confirmation) — it is not recomputed. No file rewrite. The promotion is "already applied today", so the operator sees the v1 promotion and the v2 entry block on the same page. That's fine — the promotion was a historical fact.
+
+On the next day, everything is clean.
+
+9.6 Tick granularity on low LTP
+Entry 0.50, sl_pct = 15%, stop_raw = 0.425, tick 0.05 → round_down = 0.40 → actual risk 20%. The stop is wider than the tier requested. This is documented behaviour (§4.3). If you want strict tier adherence, set STRATEGY_ENTRY_STOP_TICK_ROUNDING = "nearest" and accept that some stops land at 0.45 (tighter than 15%, premature exit risk).
+
+9.7 The "very low LTP" note
+At LTP < 20, a 15% stop is 3 ticks or less. That is bar noise on most days. The engine will still arm (as configured), but the operator should consider STRATEGY_ENTRY_STOP_LTP_TIERS with an extra {"max_ltp": 20, "sl_pct": 0.20} tier. This is a configuration change, not a code change — the parser already supports arbitrary tier counts.
+
+10. Migration & rollout
+Rollout order:
+
+Deploy the config with STRATEGY_ENTRY_PIVOT_RIGHT_BARS = 3 and STRATEGY_ENTRY_STOP_LTP_TIERS set to the default table. Leave STRATEGY_MAX_STOP_PCT = 0.35 (unchanged).
+
+/isolated continues to render the same SR Tracking card. The entry block for the current day (if a trade already armed under v1) will now show state = "armed" with the fast confirmed_time_fast and the new stop. If the fast confirmation is in the past, the entry is immediately valid. If the operator already placed the v1 order, they should ignore the v2 entry block for the remainder of the day and let the position play out — the v2 recompute is for the next trade, not a retroactive close signal.
+
+Next trading day: everything is clean. The first support pivot on the isolated strike will arm at pivot_time + 3 min, with the tier-based stop.
+
+What to watch in the logs:
+
+[strategy-entry] fast scan — one line per poll, per candidate side. Should be quick (2 instrument × 2 side).
+
+[strategy-entry] armed — side=PE entry=70.00 stop=59.50 sl_pct=0.15 source=ltp_tier — the happy path.
+
+[strategy-entry] blocked — reason=entry_below_support — the new hard block. If this fires frequently on your universe, the fast window is too fast (3 bars is tight on a choppy day) → try right=4.
+
+[strategy-entry] sl_pct exceeds hard cap at ERROR level — misconfigured STRATEGY_ENTRY_STOP_LTP_TIERS. Fix the JSON.
+
+No changes needed to:
+
+level_isolated_instrument_service
+
+isolated_sr_tracker_service
+
+isolated_instrument_promotion_service
+
+live_sr_levels_service (display engine)
+
+level_instrument_filter_service
+
+any route or template except the entry-signal block on /isolated (which will automatically show the new fields)

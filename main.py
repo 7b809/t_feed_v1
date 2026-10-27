@@ -21,6 +21,8 @@ Startup task list (infrastructure only):
     9.  Start / restart live feed
     9b. Level-isolation backfill (replays intraday candles to
         reconstruct today's "would-have-isolated" instrument)
+    9c. Dummy-order catch-up (creates any missing dummy orders for
+        today's armed candidates and updates the existing ones)  <-- NEW
     10. Start scheduler (idempotent)
     11. Start Telegram bot (idempotent)
     12. Telegram completion notification
@@ -32,6 +34,8 @@ Admin surfaces mounted by this module:
     Market Holiday API     routes/market_holiday_routes.py
     Readiness API          routes/readiness_routes.py
     Level-Isolation API    routes/isolated_instrument_routes.py
+    Simulation API         routes/simulation_routes.py
+    Dummy-Orders API       routes/dummy_order_routes.py        <-- NEW
 """
 
 import asyncio
@@ -45,6 +49,7 @@ from core.logger import get_logger
 from routes.admin_routes import _run_full_refresh_sync
 from routes.admin_routes import router as admin_router
 from routes.daily_backup_routes import router as daily_backup_router
+from routes.dummy_order_routes import router as dummy_order_router  # <-- NEW
 from routes.folder_routes import router as folder_router
 from routes.isolated_instrument_routes import router as isolated_instrument_router
 from routes.layout_routes import router as layout_router
@@ -55,6 +60,7 @@ from routes.market_holiday_routes import router as market_holiday_router
 from routes.order_routes import router as order_router
 from routes.page_routes import router as page_router
 from routes.readiness_routes import router as readiness_router
+from routes.simulation_routes import router as simulation_router
 from routes.upstox_routes import router as upstox_router
 from routes.live_sr_routes import router as live_sr_router
 from routes.live_sr_calc_routes import router as live_sr_calc_router
@@ -81,11 +87,7 @@ _THIN = "───────────────────────�
 # Telegram bot state helper                                                    #
 # --------------------------------------------------------------------------- #
 def _telegram_bot_running() -> bool:
-    """Return the bot's **actual** polling state.
-
-    Reads ``telegram_token_bot.is_running`` (truthful flag). Falls back
-    to ``enabled`` on older builds.
-    """
+    """Return the bot's **actual** polling state."""
     running = getattr(telegram_token_bot, "is_running", None)
     if isinstance(running, bool):
         return running
@@ -199,6 +201,37 @@ def _holiday_gate_for_startup() -> dict[str, Any]:
 
 
 # --------------------------------------------------------------------------- #
+# Dummy-order catch-up                                                         #
+# --------------------------------------------------------------------------- #
+def _dummy_order_catchup() -> dict[str, Any]:
+    """Run one dummy-order scan right after startup so today's already-
+    armed candidates get their dummy orders created (or reconciled)
+    immediately — without waiting for the first scheduler tick.
+    """
+    try:
+        from services.dummy_order_service import dummy_order_service
+        summary = dummy_order_service.run_once(reason="startup")
+        logger.info(
+            "[startup] dummy-order catch-up — status=%s created=%s "
+            "updated=%s closed=%s open=%s total=%s mode=%s",
+            summary.get("status"),
+            summary.get("created"),
+            summary.get("updated"),
+            summary.get("closed"),
+            summary.get("open_count"),
+            summary.get("total_today"),
+            summary.get("mode"),
+        )
+        return summary
+    except Exception as exc:
+        logger.exception("[startup] dummy-order catch-up failed")
+        return {
+            "status": "error",
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+
+
+# --------------------------------------------------------------------------- #
 # Lifespan                                                                     #
 # --------------------------------------------------------------------------- #
 @asynccontextmanager
@@ -256,10 +289,13 @@ async def app_lifespan(app: FastAPI):
         )
         result["holiday_gate"] = holiday_gate
 
+        # ---- Dummy-order catch-up (NEW) ------------------------------ #
+        dummy_summary = await asyncio.to_thread(_dummy_order_catchup)
+        result["dummy_orders"] = dummy_summary
+
         registry_count = (result.get("registry") or {}).get("count", 0)
         telegram_running = _telegram_bot_running()
 
-        # ---- Level-isolation result (new) ----------------------------- #
         isolation_summary = result.get("level_isolation") or {}
         isolated = isolation_summary.get("isolated") or {}
         isolation_status = isolation_summary.get("status")
@@ -267,12 +303,13 @@ async def app_lifespan(app: FastAPI):
         logger.info(
             "Application startup complete. feed_instruments=%d "
             "telegram_polling=%s holiday=%s level_isolation_status=%s "
-            "isolated=%s",
+            "isolated=%s dummy_orders=%s",
             registry_count,
             telegram_running,
             holiday_gate.get("is_holiday"),
             isolation_status,
             isolated.get("instrument_key"),
+            dummy_summary.get("status"),
         )
 
         # ---- Startup Telegram ------------------------------------------ #
@@ -295,6 +332,22 @@ async def app_lifespan(app: FastAPI):
                 f"🎯 Isolation:     {isolation_status}\n"
             )
 
+        dummy_line = ""
+        if dummy_summary.get("status") == "ok":
+            dummy_line = (
+                f"📋 Dummy orders:  "
+                f"created={dummy_summary.get('created')} "
+                f"open={dummy_summary.get('open_count')} "
+                f"closed={dummy_summary.get('closed_count')}\n"
+            )
+        elif dummy_summary.get("status") in {"skipped", "no_signal"}:
+            dummy_line = f"📋 Dummy orders:  {dummy_summary.get('status')}\n"
+        else:
+            dummy_line = (
+                f"📋 Dummy orders:  {dummy_summary.get('status')} "
+                f"({dummy_summary.get('error') or dummy_summary.get('detail') or '—'})\n"
+            )
+
         startup_message = (
             f"{_DIV}\n"
             f"🚀 APPLICATION STARTED\n"
@@ -302,6 +355,7 @@ async def app_lifespan(app: FastAPI):
             f"📊 Instruments:     {registry_count}\n"
             f"{holiday_line}"
             f"{isolation_line}"
+            f"{dummy_line}"
             f"📡 Live feed:       "
             f"{'✓' if result.get('feed_restarted') else '✗'}\n"
             f"⏰ Scheduler:       "
@@ -373,7 +427,7 @@ app.add_middleware(
 app.include_router(page_router)
 app.include_router(live_router)
 app.include_router(live_sr_router)
-app.include_router(live_sr_calc_router)      # NEW
+app.include_router(live_sr_calc_router)
 app.include_router(admin_router)
 app.include_router(folder_router)
 app.include_router(upstox_router)
@@ -384,4 +438,6 @@ app.include_router(margin_router)
 app.include_router(daily_backup_router)
 app.include_router(layout_router)
 app.include_router(readiness_router)
-app.include_router(isolated_instrument_router)   # ← NEW
+app.include_router(isolated_instrument_router)
+app.include_router(simulation_router)
+app.include_router(dummy_order_router)       # <-- NEW

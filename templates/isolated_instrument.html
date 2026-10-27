@@ -411,10 +411,6 @@
         transform: translateY(-1px);
     }
 
-    /* ============================================================ */
-    /* "Compare in Layout" button — opens /layout_1 with 2 panes    */
-    /* (trigger index + isolated instrument) in a NEW TAB.         */
-    /* ============================================================ */
     .iso-hero-layout-btn {
         display: inline-flex;
         align-items: center;
@@ -440,9 +436,7 @@
         display: none;
     }
 
-    /* ============================================================ */
-    /* Live Feed card                                               */
-    /* ============================================================ */
+    /* ---- Live Feed card ---- */
     .live-feed-tiles {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
@@ -805,9 +799,7 @@
         border-color: #1d4ed8;
     }
 
-    /* ============================================================ */
-    /* Instrument snapshot (own data at touch)                      */
-    /* ============================================================ */
+    /* ---- Instrument snapshot (own data at touch) ---- */
     .snapshot-tiles {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
@@ -962,9 +954,7 @@
         color: var(--iso-text);
     }
 
-    /* ============================================================ */
-    /* SR Tracking — single merged table                            */
-    /* ============================================================ */
+    /* ---- SR Tracking — single merged table ---- */
     .sr-header-pills {
         margin-left: auto;
         display: flex;
@@ -1000,6 +990,13 @@
         background: var(--iso-green-bg);
         color: var(--iso-green);
         border-color: #bbf7d0;
+    }
+
+    /* Error variant for the simulation status pill (used when a run fails). */
+    .sr-count-pill.error {
+        background: var(--iso-red-bg);
+        color: var(--iso-red);
+        border-color: #fecaca;
     }
 
     .sr-phase-header {
@@ -1100,7 +1097,6 @@
         color: var(--iso-green);
     }
 
-    /* After-touch rows — purple tint + left accent. */
     .sr-row-after-isolation td {
         background: #f5f3ff !important;
     }
@@ -1109,7 +1105,6 @@
         border-left: 3px solid var(--iso-purple);
     }
 
-    /* Small badge for genuinely-new arrivals (since last poll). */
     .sr-new-badge {
         display: inline-block;
         padding: 1px 7px;
@@ -1141,9 +1136,7 @@
         opacity: 0.4;
     }
 
-    /* ============================================================ */
-    /* SR Compare card — search + comparison view                   */
-    /* ============================================================ */
+    /* ---- SR Compare card — search + comparison view ---- */
     .sr-search-row {
         display: flex;
         flex-direction: column;
@@ -1290,10 +1283,7 @@
         margin-top: 4px;
     }
 
-    /* ============================================================ */
-    /* Entry Signal card                                            */
-    /* R3/S3 touch -> buffered support -> confirmed entry           */
-    /* ============================================================ */
+    /* ---- Entry Signal card ---- */
     .entry-touch-strip {
         display: flex;
         gap: 16px;
@@ -1509,7 +1499,6 @@
         border-radius: 10px;
     }
 
-    /* Promotion banner inside the Entry Signal card */
     .entry-promotion-banner {
         display: flex;
         align-items: flex-start;
@@ -1544,6 +1533,191 @@
         font-size: 0.78rem;
         margin-left: 6px;
         white-space: nowrap;
+    }
+
+    /* ---- Simulation card (dummy-order replay) ---- */
+    .sim-run-row {
+        display: flex;
+        gap: 10px;
+        margin-bottom: 14px;
+        flex-wrap: wrap;
+        align-items: center;
+    }
+
+    .sim-run-row .sim-hint {
+        font-size: 0.8rem;
+        color: var(--iso-muted);
+        font-weight: 600;
+        line-height: 1.4;
+        flex: 1 1 240px;
+    }
+
+    .sim-regime-banner {
+        display: flex;
+        align-items: flex-start;
+        gap: 12px;
+        padding: 12px 16px;
+        border-radius: 10px;
+        margin-bottom: 14px;
+        font-size: 0.85rem;
+        line-height: 1.5;
+        background: var(--iso-purple-bg);
+        border: 1px solid var(--iso-purple-border);
+        border-left: 4px solid var(--iso-purple);
+        color: var(--iso-text);
+    }
+
+    .sim-regime-banner i {
+        font-size: 1.2rem;
+        flex-shrink: 0;
+        margin-top: 1px;
+    }
+
+    .sim-regime-banner strong {
+        font-weight: 800;
+    }
+
+    .sim-verdict-winner {
+        background: var(--iso-green-bg);
+        border-left: 4px solid var(--iso-green);
+        color: var(--iso-green);
+        padding: 10px 14px;
+        border-radius: 8px;
+        font-size: 0.82rem;
+        margin-top: 12px;
+        line-height: 1.55;
+    }
+
+    .sim-verdict-tie {
+        background: #f1f5f9;
+        border-left: 4px solid var(--iso-muted);
+        color: var(--iso-muted);
+        padding: 10px 14px;
+        border-radius: 8px;
+        font-size: 0.82rem;
+        margin-top: 12px;
+    }
+
+    .sim-notes {
+        background: #f8fafc;
+        border-left: 4px solid var(--iso-primary);
+        color: var(--iso-text);
+        padding: 10px 14px;
+        border-radius: 8px;
+        font-size: 0.8rem;
+        margin-top: 12px;
+        line-height: 1.55;
+    }
+
+    .sim-notes strong {
+        color: var(--iso-primary);
+        display: block;
+        margin-bottom: 6px;
+        font-size: 0.82rem;
+        letter-spacing: 0.3px;
+        text-transform: uppercase;
+    }
+
+    .sim-notes ul {
+        margin: 0;
+        padding-left: 18px;
+    }
+
+    .sim-notes li {
+        margin-bottom: 3px;
+    }
+
+    /* ---- Dummy Orders card (live-tracked) ---- */
+    .do-summary-strip {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+        gap: 12px;
+        margin-bottom: 16px;
+    }
+
+    .do-summary-tile {
+        padding: 12px 16px;
+        background: #f8fafc;
+        border: 1px solid var(--iso-border);
+        border-radius: 10px;
+    }
+
+    .do-summary-tile .do-label {
+        font-size: 0.7rem;
+        font-weight: 800;
+        color: var(--iso-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        margin-bottom: 4px;
+    }
+
+    .do-summary-tile .do-value {
+        font-size: 1.15rem;
+        font-weight: 800;
+        font-variant-numeric: tabular-nums;
+        color: var(--iso-text);
+    }
+
+    .do-summary-tile .do-value.up { color: var(--iso-green); }
+    .do-summary-tile .do-value.down { color: var(--iso-red); }
+
+    .do-status-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 2px 8px;
+        border-radius: 6px;
+        font-size: 0.68rem;
+        font-weight: 800;
+        letter-spacing: 0.3px;
+        text-transform: uppercase;
+    }
+
+    .do-status-pill.open             { background: var(--iso-blue-bg); color: var(--iso-primary); }
+    .do-status-pill.target_hit       { background: var(--iso-green-bg); color: var(--iso-green); }
+    .do-status-pill.stop_hit         { background: var(--iso-red-bg); color: var(--iso-red); }
+    .do-status-pill.end_of_day       { background: #f1f5f9; color: var(--iso-muted); }
+    .do-status-pill.cancelled        { background: #e2e8f0; color: var(--iso-muted); }
+
+    .do-scenario-pill {
+        display: inline-block;
+        padding: 1px 7px;
+        border-radius: 4px;
+        font-size: 0.65rem;
+        font-weight: 800;
+        letter-spacing: 0.3px;
+    }
+
+    .do-scenario-pill.signal_v2 { background: #dbeafe; color: #1e40af; }
+    .do-scenario-pill.regime    { background: var(--iso-purple-bg); color: var(--iso-purple); }
+
+    .do-table td.num {
+        font-variant-numeric: tabular-nums;
+    }
+
+    .do-row-open td {
+        background: #f0f7ff;
+    }
+
+    .do-row-closed td {
+        opacity: 0.85;
+    }
+
+    .do-empty {
+        padding: 24px;
+        text-align: center;
+        color: var(--iso-muted);
+        font-size: 0.88rem;
+        background: #f8fafc;
+        border: 1px dashed var(--iso-border);
+        border-radius: 10px;
+    }
+
+    .do-empty i {
+        display: block;
+        font-size: 1.8rem;
+        margin-bottom: 8px;
+        opacity: 0.4;
     }
 </style>
 {% endblock %}
@@ -1611,7 +1785,6 @@
             <a href="#" class="iso-hero-chart-btn" id="hero-chart-btn">
                 <i class="bi bi-graph-up-arrow"></i> Open Chart
             </a>
-            <!-- NEW: side-by-side comparison of trigger index + isolated instrument -->
             <a href="#" class="iso-hero-layout-btn is-hidden" id="hero-layout-btn"
                target="_blank" rel="noopener noreferrer"
                title="Open a new tab with the underlying index and this isolated instrument side-by-side">
@@ -1630,7 +1803,7 @@
         </div>
     </div>
 
-    <!-- Live Feed card: real-time WebSocket feed for the active instrument -->
+    <!-- Live Feed card -->
     <div class="iso-card" id="iso-live-feed" style="display: none;">
         <div class="iso-card-header">
             <i class="bi bi-broadcast text-primary"></i>
@@ -1646,7 +1819,7 @@
         </div>
     </div>
 
-    <!-- Entry Signal card: R3/S3-touch → buffered support → confirmed entry -->
+    <!-- Entry Signal card -->
     <div class="iso-card" id="iso-entry-signal" style="display: none;">
         <div class="iso-card-header">
             <i class="bi bi-bullseye text-primary"></i>
@@ -1668,7 +1841,7 @@
         </div>
     </div>
 
-    <!-- SR Tracking card: single merged SR table (active isolated instrument) -->
+    <!-- SR Tracking card -->
     <div class="iso-card" id="iso-sr-tracking" style="display: none;">
         <div class="iso-card-header">
             <i class="bi bi-activity text-primary"></i>
@@ -1688,8 +1861,7 @@
         </div>
     </div>
 
-    <!-- SR Compare card: search for any instrument, compare its SR
-         levels against the SAME isolation moment. -->
+    <!-- SR Compare card -->
     <div class="iso-card" id="iso-sr-compare" style="display: none;">
         <div class="iso-card-header">
             <i class="bi bi-search text-primary"></i>
@@ -1720,7 +1892,61 @@
         </div>
     </div>
 
-    <!-- Instrument snapshot: the (active) instrument's own data -->
+    <!-- ============================================================ -->
+    <!-- Simulation card — post-close dummy-order replay              -->
+    <!-- ============================================================ -->
+    <div class="iso-card" id="iso-simulation" style="display: none;">
+        <div class="iso-card-header">
+            <i class="bi bi-calculator text-primary"></i>
+            <span>Simulation · Dummy-Order Replay</span>
+            <div class="sr-header-pills">
+                <span class="sr-count-pill" id="sim-status-pill">Idle</span>
+            </div>
+        </div>
+        <div class="iso-card-body">
+            <div class="sim-run-row">
+                <button type="button" class="iso-btn primary" id="sim-run-btn">
+                    <i class="bi bi-play-circle"></i> Run Simulation
+                </button>
+                <span class="sim-hint" id="sim-hint">
+                    Replays the day's intraday candles from the entry fill forward.
+                    Stateless — safe to click repeatedly.
+                </span>
+            </div>
+            <div class="sim-regime-banner" id="sim-regime-banner" style="display: none;"></div>
+            <div id="sim-body">
+                <div class="sr-empty-state">
+                    <i class="bi bi-calculator"></i>
+                    Click <strong>Run Simulation</strong> to replay the entry
+                    against the day's intraday candles.
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ============================================================ -->
+    <!-- Dummy Orders card — live-tracked, persisted to disk          -->
+    <!-- ============================================================ -->
+    <div class="iso-card" id="iso-dummy-orders" style="display: none;">
+        <div class="iso-card-header">
+            <i class="bi bi-clipboard-data text-primary"></i>
+            <span>Dummy Orders · Live Tracking</span>
+            <div class="sr-header-pills">
+                <span class="sr-count-pill" id="do-status-pill">Loading…</span>
+            </div>
+        </div>
+        <div class="iso-card-body">
+            <div class="do-summary-strip" id="do-summary-strip"></div>
+            <div id="do-body">
+                <div class="do-empty">
+                    <i class="bi bi-hourglass-split"></i>
+                    Dummy orders appear here as soon as the entry signal arms.
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Instrument snapshot -->
     <div class="iso-card" id="iso-instrument-snapshot" style="display: none;">
         <div class="iso-card-header">
             <i class="bi bi-graph-up text-primary"></i>
@@ -1851,28 +2077,20 @@
 
     /* Live-feed WebSocket — dedicated /list-feeds connection. */
     const LIVE_WS_URL = (seedKeys) => {
-    const proto = location.protocol === "https:" ? "wss:" : "ws:";
-    const base = `${proto}//${location.host}/list-feeds`;
-    const keys = (Array.isArray(seedKeys) && seedKeys.length)
-        ? seedKeys
-        : [INDEX_KEYS.NIFTY, INDEX_KEYS.SENSEX];
-    // Comma-separated single param. parse_instrument_list() on the
-    // backend splits on comma OR whitespace, so this always produces
-    // a non-empty `keys_param` and the route does not reject the
-    // upgrade with close-code 1008.
-    return `${base}?instruments=${encodeURIComponent(keys.join(","))}`;
-};
+        const proto = location.protocol === "https:" ? "wss:" : "ws:";
+        const base = `${proto}//${location.host}/list-feeds`;
+        const keys = (Array.isArray(seedKeys) && seedKeys.length)
+            ? seedKeys
+            : [INDEX_KEYS.NIFTY, INDEX_KEYS.SENSEX];
+        return `${base}?instruments=${encodeURIComponent(keys.join(","))}`;
+    };
     const LIVE_RECONNECT_MS = 4000;
 
     const state = {
         detail: null,
         pollTimer: null,
         entryPollTimer: null,
-        // Guard against re-posting /apply-promotion while one is in flight.
         promoInFlight: false,
-        // Set of every level key we've already rendered at least once.
-        // Used to badge genuinely-new arrivals (only on after-touch rows)
-        // with the "NEW" pill.
         seenAllKeys: new Set(),
     };
 
@@ -1892,18 +2110,11 @@
         ws: null,
         connected: false,
         reconnectTimer: null,
-        // Currently subscribed instrument keys (mirrors the server's
-        // subscriber set — updated optimistically on send + reconciled
-        // from the ack).
         subscribedKeys: new Set(),
-        // Latest tick snapshot per instrument_key.
         ticks: {},
-        // Current primary instrument key (promoted if any, else isolated).
         activeInstrumentKey: null,
         activeInstrumentSymbol: null,
-        // Trigger index key (NIFTY / SENSEX) — one of the two always.
         triggerIndexKey: null,
-        // Canonical index keys.
         indexKeys: INDEX_KEYS,
     };
 
@@ -2026,6 +2237,9 @@
             or_midpoint: "OR midpoint",
             entry_ltp_fallback: "entry LTP fallback",
             confirmation_bar_close: "confirmation bar close",
+            candle_close_at_confirmed_fast: "candle close @ fast confirm",
+            candle_close_at_confirmed: "candle close @ confirm",
+            live_ltp: "live LTP",
             unavailable: "—",
         };
         return map[src] || String(src || "—");
@@ -2071,7 +2285,7 @@
     }
 
     /* ============================================================
-       Live Feed — WebSocket connection & subscriptions
+       Live Feed
        ============================================================ */
     function computeWantedLiveKeys() {
         const wanted = new Set([
@@ -2177,9 +2391,7 @@
             scheduleLiveFeedReconnect();
         };
 
-        ws.onerror = () => {
-            /* handled by onclose */
-        };
+        ws.onerror = () => {};
     }
 
     function scheduleLiveFeedReconnect() {
@@ -2244,7 +2456,6 @@
         renderLiveFeed();
     }
 
-    /* ---- Tick handling ---- */
     function handleLiveMessage(data) {
         if (!data || typeof data !== "object") return;
 
@@ -2307,7 +2518,6 @@
         scheduleLiveRender();
     }
 
-    /* ---- Rendering ---- */
     function renderLiveTile({
         label,
         labelIcon,
@@ -2339,7 +2549,6 @@
 
         let html = "";
 
-        // ---- Primary tile: active instrument LTP (if isolated) ---- //
         if (hasIsolation && liveFeedState.activeInstrumentKey) {
             const key = liveFeedState.activeInstrumentKey;
             const tick = liveFeedState.ticks[key] || {};
@@ -2377,7 +2586,6 @@
             }
         }
 
-        // ---- Index tiles: NIFTY 50 and SENSEX live ---- //
         const indexDefs = [
             { name: "NIFTY 50", key: liveFeedState.indexKeys.NIFTY },
             { name: "SENSEX",   key: liveFeedState.indexKeys.SENSEX },
@@ -2531,9 +2739,7 @@
         btn.style.display = avail.needsRefresh ? "inline-flex" : "none";
     }
 
-    /* ============================================================
-       HERO — prefers the promoted (active) record when present
-       ============================================================ */
+    /* ---------- HERO ---------- */
     function renderHero(d) {
         const hero = document.getElementById("iso-hero");
         if (!hero) return;
@@ -2671,10 +2877,7 @@
                 : "—";
     }
 
-    /* ============================================================
-       Entry Signal — R3/S3-touch → buffered support → confirmed entry
-       Includes auto-apply for the promotion block.
-       ============================================================ */
+    /* ---------- Entry Signal ---------- */
     function renderEntryTouchStrip(payload) {
         const el = document.getElementById("entry-touch-strip");
         if (!el) return;
@@ -2780,11 +2983,12 @@
                 '<div class="entry-grid">' +
                     '<div class="label">Entry LTP</div>' +
                     '<div class="value">' + fmt(e.price) +
-                        ' <small>(' + esc(e.price_source || "—") + ')</small></div>' +
+                        ' <small>(' + esc(quoteSourceLabel(e.price_source)) + ')</small></div>' +
                     '<div class="label">Entry time</div>' +
                     '<div class="value">' + formatTime(e.time) + '</div>' +
-                    '<div class="label">Support (stop)</div>' +
-                    '<div class="value">' + fmt(e.stop) + '</div>' +
+                    '<div class="label">Stop-loss</div>' +
+                    '<div class="value">' + fmt(e.stop) +
+                        (e.stop_source ? ' <small>(' + esc(e.stop_source) + ')</small>' : '') + '</div>' +
                     '<div class="label">Stop risk</div>' +
                     '<div class="value">' +
                         (e.stop_pct != null ? (e.stop_pct * 100).toFixed(1) + '%' : "—") +
@@ -2793,13 +2997,14 @@
                     '<div class="value">' +
                         (e.target != null ? fmt(e.target) : "—") +
                     '</div>' +
+                    '<div class="label">Support price</div>' +
+                    '<div class="value">' + fmt(es.price) + '</div>' +
                     '<div class="label">Support pivot</div>' +
                     '<div class="value">' + formatTime(es.pivot_time) + '</div>' +
-                    '<div class="label">Support confirmed</div>' +
+                    '<div class="label">Fast confirm</div>' +
+                    '<div class="value">' + formatTime(es.confirmed_time_fast || es.confirmed_time) + '</div>' +
+                    '<div class="label">Display confirm</div>' +
                     '<div class="value">' + formatTime(es.confirmed_time) + '</div>' +
-                    (es.confirmed_time_price != null ?
-                        '<div class="label">Confirmed price</div>' +
-                        '<div class="value">' + fmt(es.confirmed_time_price) + '</div>' : '') +
                     '<div class="label">Minutes after touch</div>' +
                     '<div class="value">' + fmt(es.minutes_from_touch, 1) + '</div>' +
                 '</div>';
@@ -2811,11 +3016,10 @@
                     '<div class="value">' + fmt(es.price) + '</div>' +
                     '<div class="label">Pivot time</div>' +
                     '<div class="value">' + formatTime(es.pivot_time) + '</div>' +
-                    '<div class="label">Confirms at</div>' +
+                    '<div class="label">Fast confirm</div>' +
+                    '<div class="value">' + formatTime(es.confirmed_time_fast || es.confirmed_time) + '</div>' +
+                    '<div class="label">Display confirm</div>' +
                     '<div class="value">' + formatTime(es.confirmed_time) + '</div>' +
-                    (es.confirmed_time_price != null ?
-                        '<div class="label">Confirmed price</div>' +
-                        '<div class="value">' + fmt(es.confirmed_time_price) + '</div>' : '') +
                     '<div class="label">Minutes after touch</div>' +
                     '<div class="value">' + fmt(es.minutes_from_touch, 1) + '</div>' +
                 '</div>';
@@ -2959,9 +3163,7 @@
         }
     }
 
-    /* ============================================================
-       SR Tracking — SINGLE table (active isolated instrument)
-       ============================================================ */
+    /* ---------- SR Tracking ---------- */
     function srDedupKey(lvl) {
         const price = parseNum(lvl.price);
         return [
@@ -3138,9 +3340,7 @@
         state.seenAllKeys = allKeys;
     }
 
-    /* ============================================================
-       SR Compare — search box + comparison table
-       ============================================================ */
+    /* ---------- SR Compare ---------- */
     function renderCompareCard(d) {
         const card = document.getElementById("iso-sr-compare");
         const pill = document.getElementById("sr-compare-status-pill");
@@ -3361,7 +3561,7 @@
             ${srLevelsTableHtml(levels, { showNew: false })}`;
     }
 
-    /* ---------- Instrument snapshot (prefers promoted record) ---------- */
+    /* ---------- Instrument snapshot ---------- */
     function renderInstrumentSnapshot(d) {
         const card = document.getElementById("iso-instrument-snapshot");
         const tilesEl = document.getElementById("snapshot-tiles");
@@ -3502,6 +3702,7 @@
         }
     }
 
+    /* ---------- Reasoning ---------- */
     function renderReasoning(d) {
         const card = document.getElementById("iso-reasoning");
         if (!card) return;
@@ -3617,6 +3818,7 @@
             .join("");
     }
 
+    /* ---------- Candidates ---------- */
     function renderCandidates(d) {
         const body = document.getElementById("candidates-body");
         const titleEl = document.getElementById("candidates-title");
@@ -3697,6 +3899,7 @@
             .join("");
     }
 
+    /* ---------- Touch state ---------- */
     function renderTouchState(d) {
         const body = document.getElementById("touch-body");
         if (!body) return;
@@ -3725,6 +3928,7 @@
             </table>`;
     }
 
+    /* ---------- Event log ---------- */
     function renderEvents(d) {
         const body = document.getElementById("events-body");
         if (!body) return;
@@ -3764,6 +3968,7 @@
             .join("");
     }
 
+    /* ---------- OR levels ---------- */
     function renderOrLevels(d) {
         const card = document.getElementById("or-levels-card");
         const body = document.getElementById("or-levels-body");
@@ -3807,6 +4012,7 @@
             .join("");
     }
 
+    /* ---------- Master render ---------- */
     function render() {
         const d = state.detail;
         if (!d) return;
@@ -3932,6 +4138,518 @@
             try { liveFeedState.ws.close(); } catch (_) {}
         }
     });
+
+    /* ============================================================
+       SIMULATION — post-close dummy-order replay
+       Wrapped in an IIFE so it owns a single namespace. Runs after
+       `state` and all formatters above are defined.
+       ============================================================ */
+    (function attachSimulation() {
+        const SIM_RUN_URL = "/admin/simulation/run";
+
+        const runBtn = document.getElementById("sim-run-btn");
+        const bodyEl = document.getElementById("sim-body");
+        const statusPill = document.getElementById("sim-status-pill");
+        const regimeBanner = document.getElementById("sim-regime-banner");
+        const card = document.getElementById("iso-simulation");
+
+        if (!runBtn || !bodyEl) return;
+
+        /* ---- Show card only when there is an isolated instrument ---- */
+        function updateVisibility() {
+            if (!card) return;
+            const d = state && state.detail;
+            if (d && d.isolated) {
+                card.style.display = "block";
+            } else {
+                card.style.display = "none";
+            }
+        }
+        // Initial paint + a low-frequency check so the card appears as
+        // soon as the first detail poll completes.
+        updateVisibility();
+        setInterval(updateVisibility, 1000);
+
+        /* ---- Status pill helper ---- */
+        function setStatus(text, cls) {
+            if (!statusPill) return;
+            statusPill.textContent = text;
+            statusPill.className = "sr-count-pill" + (cls ? " " + cls : "");
+        }
+
+        /* ---- Formatters local to this block ---- */
+        function fmtPct(v) {
+            const n = Number(v);
+            return Number.isFinite(n) ? (n * 100).toFixed(1) + "%" : "—";
+        }
+        function fmtR(v) {
+            const n = Number(v);
+            return Number.isFinite(n) ? (n >= 0 ? "+" : "") + n.toFixed(2) + "R" : "—";
+        }
+        function fmtTime(iso) {
+            if (!iso) return "—";
+            try {
+                const d = new Date(iso);
+                if (isNaN(d.getTime())) return String(iso);
+                return d.toLocaleTimeString("en-IN", {
+                    timeZone: "Asia/Kolkata",
+                    hour: "2-digit",
+                    minute: "2-digit",
+                    second: "2-digit",
+                    hour12: false,
+                });
+            } catch (_) {
+                return String(iso);
+            }
+        }
+
+        /* ---- Regime → banner colour ---- */
+        function regimeColor(regimeName) {
+            const r = String(regimeName || "").toLowerCase();
+            if (r.startsWith("high")) return "var(--iso-red)";
+            if (r.startsWith("low")) return "var(--iso-green)";
+            return "var(--iso-primary)";
+        }
+
+        /* ---- Scenario renderer ---- */
+        function renderScenario(key, s, isWinner) {
+            const r = (s && s.replay) || {};
+            const exitReason = r.exit_reason || "—";
+            const pnl = Number.isFinite(Number(r.pnl_pct)) ? Number(r.pnl_pct) : null;
+            const rMult = Number.isFinite(Number(r.r_multiple)) ? Number(r.r_multiple) : null;
+            const stopPct = Number.isFinite(Number(s.stop_pct)) ? Number(s.stop_pct) : null;
+            const targetPct = Number.isFinite(Number(s.target_pct)) ? Number(s.target_pct) : null;
+            const rr = Number.isFinite(Number(s.rr_ratio)) ? Number(s.rr_ratio) : null;
+
+            const pnlCls = pnl == null ? "" : (pnl >= 0 ? "up" : "down");
+            const stateCls = pnl == null
+                ? "state-waiting"
+                : (pnl >= 0 ? "state-armed" : "state-blocked");
+
+            const exitTimeStr = String(r.exit_time || "").replace("T", " ").slice(0, 19) || "—";
+
+            return `
+                <div class="entry-candidate${isWinner ? " is-chosen" : ""}" data-scenario="${esc(key)}">
+                    <div class="entry-candidate-head">
+                        <div class="entry-candidate-symbol">${esc(s.label || key)}</div>
+                        <div class="entry-candidate-pills">
+                            ${isWinner ? '<span class="entry-pill state-armed">🏆 WINNER</span>' : ''}
+                            <span class="entry-pill ${stateCls}">${esc(exitReason)}</span>
+                        </div>
+                    </div>
+                    <div class="entry-grid">
+                        <div class="label">Entry price</div>
+                        <div class="value">₹${fmt(s.entry_price)}</div>
+
+                        <div class="label">Stop-loss</div>
+                        <div class="value">₹${fmt(s.stop_price)} (${fmtPct(-stopPct)})</div>
+
+                        <div class="label">Target</div>
+                        <div class="value">${s.target_price != null ? `₹${fmt(s.target_price)} (+${fmtPct(targetPct)})` : "—"}</div>
+
+                        <div class="label">R:R (nominal)</div>
+                        <div class="value">${rr != null ? rr.toFixed(2) + " : 1" : "—"}</div>
+
+                        <div class="label">Stop source</div>
+                        <div class="value"><small>${esc(s.stop_source || "—")}</small></div>
+
+                        <div class="label">Candles scanned</div>
+                        <div class="value">${r.candles_scanned != null ? r.candles_scanned : "—"}</div>
+
+                        <div class="label">Exit price</div>
+                        <div class="value">₹${fmt(r.exit_price)}</div>
+
+                        <div class="label">Exit time</div>
+                        <div class="value"><small>${esc(exitTimeStr)}</small></div>
+
+                        <div class="label">PnL</div>
+                        <div class="value ${pnlCls}">${pnl != null ? fmtPct(pnl) : "—"}</div>
+
+                        <div class="label">R-multiple</div>
+                        <div class="value ${pnlCls}">${rMult != null ? fmtR(rMult) : "—"}</div>
+
+                        <div class="label">MFE</div>
+                        <div class="value">₹${fmt(r.mfe)}</div>
+
+                        <div class="label">MAE</div>
+                        <div class="value">₹${fmt(r.mae)}</div>
+                    </div>
+                </div>
+            `;
+        }
+
+        /* ---- Full result renderer ---- */
+        function renderResult(data) {
+            if (!data || data.status !== "ok") {
+                const reason = (data && (data.reason || data.error || data.status)) || "unknown";
+                bodyEl.innerHTML = `
+                    <div class="sr-empty-state">
+                        <i class="bi bi-exclamation-triangle"></i>
+                        Simulation could not run: <strong>${esc(reason)}</strong>
+                    </div>`;
+                setStatus("Error", "error");
+                if (regimeBanner) {
+                    regimeBanner.style.display = "none";
+                    regimeBanner.innerHTML = "";
+                }
+                return;
+            }
+
+            setStatus("Replayed", "has");
+
+            /* ---- Regime banner ---- */
+            const regime = data.regime || {};
+            if (regimeBanner) {
+                regimeBanner.style.display = "flex";
+                const clsColor = regimeColor(regime.regime);
+                regimeBanner.style.borderColor = clsColor;
+                regimeBanner.innerHTML = `
+                    <i class="bi bi-tag-fill" style="color:${clsColor}"></i>
+                    <div>
+                        <strong style="color:${clsColor}">Regime: ${esc(regime.regime || "—")}</strong><br>
+                        <span style="font-size:0.85rem;color:var(--iso-muted)">
+                            ${esc(regime.reason || "")}
+                        </span>
+                    </div>
+                `;
+            }
+
+            /* ---- Scenario cards ---- */
+            const sc = data.scenarios || {};
+            const verdict = data.verdict || {};
+            const winner = verdict.winner;
+
+            const scenarioHtml = Object.entries(sc).map(([k, s]) => {
+                const isWin = (k === "signal_v2" && winner === "signal_v2")
+                    || (k === "regime" && winner === "regime");
+                return renderScenario(k, s, isWin);
+            }).join("");
+
+            /* ---- Notes ---- */
+            const notes = (data.notes || []).map(n => `<li>${esc(n)}</li>`).join("");
+
+            /* ---- Entry strip ---- */
+            const entry = data.entry || {};
+            const entryStrip = `
+                <div class="entry-touch-strip">
+                    <span>Instrument: <strong>${esc(data.trading_symbol || data.instrument_key)}</strong></span>
+                    <span>Side: <strong>${esc(data.side || "—")}</strong></span>
+                    <span>Entry: <strong>₹${fmt(entry.price)}</strong></span>
+                    <span>Entry time: <strong>${esc(String(entry.time || "").replace("T", " ").slice(0, 19) || "—")}</strong></span>
+                    <span>Source: <strong>${esc(quoteSourceLabel(entry.price_source))}</strong></span>
+                    <span>Candles in session: <strong>${data.candles_total || 0}</strong></span>
+                </div>
+            `;
+
+            /* ---- Verdict strip ---- */
+            let verdictHtml = "";
+            if (winner && winner !== "unknown" && winner !== "tie") {
+                const wLabel = winner === "regime" ? "Regime scenario" : "Signal scenario";
+                verdictHtml = `
+                    <div class="sim-verdict-winner">
+                        🏆 <strong>${esc(wLabel)} wins.</strong>
+                        ${esc(verdict.reason || "")}
+                    </div>`;
+            } else if (winner === "tie") {
+                verdictHtml = `
+                    <div class="sim-verdict-tie">
+                        Both scenarios produced the same R-multiple (tie).
+                    </div>`;
+            }
+
+            /* ---- Compose ---- */
+            bodyEl.innerHTML = `
+                ${entryStrip}
+                <div class="entry-candidates">${scenarioHtml}</div>
+                ${verdictHtml}
+                <div class="sim-notes">
+                    <strong>📝 Notes</strong>
+                    <ul>${notes || "<li>—</li>"}</ul>
+                </div>
+            `;
+        }
+
+        /* ---- Run ---- */
+        async function runSimulation() {
+            if (!runBtn) return;
+            const orig = runBtn.innerHTML;
+            runBtn.disabled = true;
+            runBtn.innerHTML = '<i class="bi bi-hourglass-split"></i> Running…';
+            setStatus("Running…", "");
+
+            try {
+                const resp = await fetch(SIM_RUN_URL);
+                if (!resp.ok) {
+                    throw new Error("HTTP " + resp.status);
+                }
+                const data = await resp.json();
+                renderResult(data);
+            } catch (e) {
+                bodyEl.innerHTML = `
+                    <div class="sr-empty-state">
+                        <i class="bi bi-exclamation-triangle"></i>
+                        Simulation request failed: ${esc(e.message || String(e))}
+                    </div>`;
+                setStatus("Error", "error");
+            } finally {
+                runBtn.disabled = false;
+                runBtn.innerHTML = orig;
+            }
+        }
+
+        if (runBtn) {
+            runBtn.addEventListener("click", runSimulation);
+        }
+    })();
+
+    /* ============================================================
+       DUMMY ORDERS — live tracking card
+       Polls /admin/dummy-orders/summary for the aggregates and
+       /admin/dummy-orders for the per-order rows. Refreshes every
+       15s (faster than the detail poll so the operator can see
+       live order status without waiting a full 10s cycle).
+       ============================================================ */
+    (function attachDummyOrders() {
+        const STATE_URL = "/admin/dummy-orders";
+        const SUMMARY_URL = "/admin/dummy-orders/summary";
+        const POLL_MS = 15000;
+
+        const card = document.getElementById("iso-dummy-orders");
+        const summaryStrip = document.getElementById("do-summary-strip");
+        const bodyEl = document.getElementById("do-body");
+        const statusPill = document.getElementById("do-status-pill");
+
+        if (!card || !summaryStrip || !bodyEl) return;
+
+        let pollTimer = null;
+
+        function setStatus(text, cls) {
+            if (!statusPill) return;
+            statusPill.textContent = text;
+            statusPill.className = "sr-count-pill" + (cls ? " " + cls : "");
+        }
+
+        function fmtPct(v) {
+            const n = Number(v);
+            return Number.isFinite(n) ? (n * 100).toFixed(1) + "%" : "—";
+        }
+        function fmtR(v) {
+            const n = Number(v);
+            return Number.isFinite(n) ? (n >= 0 ? "+" : "") + n.toFixed(2) + "R" : "—";
+        }
+        function fmtTime(iso) {
+            if (!iso) return "—";
+            try {
+                const d = new Date(iso);
+                if (isNaN(d.getTime())) return String(iso);
+                return d.toLocaleTimeString("en-IN", {
+                    timeZone: "Asia/Kolkata",
+                    hour: "2-digit",
+                    minute: "2-digit",
+                    second: "2-digit",
+                    hour12: false,
+                });
+            } catch (_) {
+                return String(iso);
+            }
+        }
+
+        function renderSummary(data) {
+            if (!summaryStrip) return;
+            const dayPnl = Number(data.day_pnl_pct) || 0;
+            const dayR = Number(data.day_r_multiple) || 0;
+            const pnlCls = dayPnl >= 0 ? "up" : "down";
+            const rCls = dayR >= 0 ? "up" : "down";
+
+            summaryStrip.innerHTML = `
+                <div class="do-summary-tile">
+                    <div class="do-label">Day PnL</div>
+                    <div class="do-value ${pnlCls}">${fmtPct(dayPnl)}</div>
+                </div>
+                <div class="do-summary-tile">
+                    <div class="do-label">Day R</div>
+                    <div class="do-value ${rCls}">${fmtR(dayR)}</div>
+                </div>
+                <div class="do-summary-tile">
+                    <div class="do-label">Open</div>
+                    <div class="do-value">${data.open_count || 0}</div>
+                </div>
+                <div class="do-summary-tile">
+                    <div class="do-label">Closed</div>
+                    <div class="do-value">${data.closed_count || 0}</div>
+                </div>
+                <div class="do-summary-tile">
+                    <div class="do-label">Total today</div>
+                    <div class="do-value">${data.total_today || 0}</div>
+                </div>
+                <div class="do-summary-tile">
+                    <div class="do-label">Mode</div>
+                    <div class="do-value">${esc(data.mode || "—")}</div>
+                </div>
+            `;
+        }
+
+        function renderRow(o) {
+            const status = String(o.status || "").toLowerCase();
+            const scenario = String(o.scenario || "");
+            const scnCls = scenario === "regime" ? "regime" : "signal_v2";
+            const scnLabel = scenario === "regime" ? "regime" : "signal v2";
+            const statusCls = status.replace(/_/g, "_");
+            const statusLabel = status.replace(/_/g, " ");
+
+            const entry = Number(o.entry_price);
+            const current = Number(o.current_ltp);
+            const stop = Number(o.stop_price);
+            const target = Number(o.target_price);
+
+            const closedPnl = Number(o.closed_pnl_pct);
+            const closedR = Number(o.closed_r_multiple);
+            const curPnl = Number(o.current_pnl_pct);
+            const curR = Number(o.current_r_multiple);
+
+            const pnlValue = Number.isFinite(closedPnl) ? closedPnl : curPnl;
+            const rValue = Number.isFinite(closedR) ? closedR : curR;
+
+            const pnlCls = Number.isFinite(pnlValue) ? (pnlValue >= 0 ? "up" : "down") : "";
+            const rowCls = status === "open" ? "do-row-open" : "do-row-closed";
+
+            const currentStr = Number.isFinite(current) ? `₹${fmt(current)}` : "—";
+            const currentPill = o.current_ltp_at
+                ? `<div style="font-size:0.7rem;color:var(--iso-muted)">${fmtTime(o.current_ltp_at)}</div>`
+                : "";
+
+            return `
+                <tr class="${rowCls}">
+                    <td>
+                        <div style="font-weight:700;font-size:0.82rem;">${esc(o.trading_symbol || o.instrument_key || "")}</div>
+                        <div style="font-size:0.7rem;color:var(--iso-muted)">${esc(o.instrument_key || "")}</div>
+                    </td>
+                    <td><span class="do-scenario-pill ${scnCls}">${esc(scnLabel)}</span></td>
+                    <td>${esc(o.side || "—")}</td>
+                    <td class="num">₹${fmt(entry)}</td>
+                    <td class="num">₹${fmt(stop)}</td>
+                    <td class="num">₹${fmt(target)}</td>
+                    <td class="num">
+                        ${currentStr}
+                        ${currentPill}
+                    </td>
+                    <td><span class="do-status-pill ${statusCls}">${esc(statusLabel)}</span></td>
+                    <td class="num ${pnlCls}">${Number.isFinite(pnlValue) ? fmtPct(pnlValue) : "—"}</td>
+                    <td class="num ${pnlCls}">${Number.isFinite(rValue) ? fmtR(rValue) : "—"}</td>
+                    <td class="num">₹${fmt(o.mfe)}</td>
+                    <td class="num">₹${fmt(o.mae)}</td>
+                </tr>
+            `;
+        }
+
+        function renderOrders(data) {
+            if (!bodyEl) return;
+            const orders = Array.isArray(data.orders) ? data.orders.slice() : [];
+
+            if (!orders.length) {
+                bodyEl.innerHTML = `
+                    <div class="do-empty">
+                        <i class="bi bi-hourglass-split"></i>
+                        No dummy orders for today yet — they appear here as
+                        soon as a candidate arms on the entry signal.
+                    </div>`;
+                return;
+            }
+
+            // Sort: OPEN first (by entry_time asc), then closed (by closed_at desc)
+            orders.sort((a, b) => {
+                const aOpen = a.status === "OPEN" ? 0 : 1;
+                const bOpen = b.status === "OPEN" ? 0 : 1;
+                if (aOpen !== bOpen) return aOpen - bOpen;
+                if (aOpen === 0) {
+                    return String(a.entry_time || "").localeCompare(
+                        String(b.entry_time || "")
+                    );
+                }
+                return String(b.closed_at || "").localeCompare(
+                    String(a.closed_at || "")
+                );
+            });
+
+            bodyEl.innerHTML = `
+                <div class="iso-table-wrap">
+                    <table class="iso-table do-table">
+                        <thead>
+                            <tr>
+                                <th>Instrument</th>
+                                <th>Scenario</th>
+                                <th>Side</th>
+                                <th class="num">Entry</th>
+                                <th class="num">Stop</th>
+                                <th class="num">Target</th>
+                                <th class="num">Current</th>
+                                <th>Status</th>
+                                <th class="num">PnL</th>
+                                <th class="num">R</th>
+                                <th class="num">MFE</th>
+                                <th class="num">MAE</th>
+                            </tr>
+                        </thead>
+                        <tbody>${orders.map(renderRow).join("")}</tbody>
+                    </table>
+                </div>
+            `;
+        }
+
+        async function refresh() {
+            try {
+                const [stateRes, sumRes] = await Promise.all([
+                    fetch(STATE_URL, { headers: { Accept: "application/json" } }),
+                    fetch(SUMMARY_URL, { headers: { Accept: "application/json" } }),
+                ]);
+                if (!stateRes.ok || !sumRes.ok) throw new Error("HTTP error");
+                const state = await stateRes.json();
+                const summary = await sumRes.json();
+
+                renderSummary(summary);
+                renderOrders(state);
+
+                const total = summary.total_today || 0;
+                const open = summary.open_count || 0;
+                if (total === 0) {
+                    setStatus("Waiting", "");
+                } else if (open > 0) {
+                    setStatus(`${open} open · ${total} total`, "has");
+                } else {
+                    setStatus(`${total} closed`, "chosen");
+                }
+            } catch (e) {
+                console.warn("[dummy-orders] refresh failed:", e);
+                setStatus("Error", "error");
+            }
+        }
+
+        function updateVisibility() {
+            if (!card) return;
+            const d = state && state.detail;
+            // Always show the card when there is any isolation today —
+            // even before any order exists, so the operator knows
+            // where to look.
+            if (d && d.isolated) {
+                card.style.display = "block";
+            } else {
+                card.style.display = "none";
+            }
+        }
+
+        // First paint + visibility
+        updateVisibility();
+        setInterval(updateVisibility, 1000);
+
+        // Initial refresh + polling
+        refresh();
+        pollTimer = setInterval(refresh, POLL_MS);
+
+        // Clean up on page unload
+        window.addEventListener("beforeunload", () => {
+            if (pollTimer) clearInterval(pollTimer);
+        });
+    })();
 </script>
 
 <script>

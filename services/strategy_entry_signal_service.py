@@ -1,10 +1,11 @@
 # services/strategy_entry_signal_service.py
-"""R3/S3-touch -> buffered support pivot -> confirmed entry signal.
+"""R3/S3-touch -> buffered fast-pivot -> LTP-tier stop-loss entry signal (G1 v2).
 
 Reads today's isolation record (from `level_isolated_instrument_service`)
-and the persisted SR levels of both the bias side and the counter side
-(from `live_sr_levels_service`) and produces the entry-signal block that
-powers the "Entry Signal" card on `/isolated`.
+and the persisted SR levels of both the bias side and the counter side,
+runs a FAST pivot scan (left=15, right=3) on the live candle series for
+both sides, and produces the entry-signal block that powers the "Entry
+Signal" card on `/isolated`.
 
 Signal chain (see core/config.py STRATEGY_ENTRY_* block for tunables):
 
@@ -12,31 +13,53 @@ Signal chain (see core/config.py STRATEGY_ENTRY_* block for tunables):
                  │   window = [touch_time, touch_time + BUFFER]
                  ▼
     ┌───────────────────────────┐
-    │  SUPPORT pivot in window  │   for each candidate side
+    │  FAST SUPPORT pivot in    │   for each candidate side
+    │  window (left=15, right=3)│   pivot_time ∈ window
     └────────────┬──────────────┘
                  │
                  ▼
     ┌───────────────────────────┐
     │  Not blocked by a         │   resistance pivot
-    │  resistance?              │   pivot_time > support.pivot_time
-    │                           │   price     > support.price
-    │                           │   confirmed ≤ support.confirmed_time
+    │  resistance?              │   pivot_time   > support.pivot_time
+    │                           │   price        > support.price
+    │                           │   confirmed_fast ≤ support.confirmed_fast
     └────────────┬──────────────┘
                  │
                  ▼
     ┌───────────────────────────┐
-    │  Wait for confirmed_time  │   ARMED on confirmed_time
-    │  → entry LTP = candle     │   (candle close at confirmed_time,
-    │    close at confirmed     │    falls back to live LTP)
+    │  Wait for confirmed_fast  │   ARMED when confirmed_time_fast ≤ now
+    │  → entry price = candle   │   (candle close, fallback: live LTP)
+    │    close at confirmed_fast│
+    └────────────┬──────────────┘
+                 │
+                 ▼
+    ┌───────────────────────────┐
+    │  LTP-tier stop-loss       │   sl_pct = tier_lookup(entry_price)
+    │  stop = entry × (1 - sl)  │   stop_pct = (entry − stop) / entry
     └───────────────────────────┘
+
+G1 v2 changes (compared to v1)
+------------------------------
+* Dual confirmation windows: `confirmed_time` (display, 15 bars) is
+  still surfaced for the chart / SR card / Telegram. The entry uses
+  `confirmed_time_fast` (default 3 bars), so a pivot that formed at
+  10:04 arms at 10:07 (not 10:19).
+* LTP-tier stop-loss: stop = entry_price × (1 − sl_pct), sl_pct from
+  `STRATEGY_ENTRY_STOP_LTP_TIERS`, not from the support price.
+* New hard blocks: `invalid_entry_price` (≤0), `no_entry_price`
+  (candle close and LTP both missing), `entry_below_support`
+  (entry_price < support.price).
+* New soft warning: `support_far_below_entry` (support >20% below
+  entry — informational, does not block).
+* `STRATEGY_ENTRY_PRICE_MODE` removed. Entry is always "close at
+  confirmed_time_fast, else live LTP".
 
 Crossover
 ---------
 When `STRATEGY_ENTRY_ALLOW_CROSSOVER` is True, BOTH the bias side and
 the counter side are evaluated every poll. Whichever reaches ARMED with
-the earliest `confirmed_time` becomes the chosen candidate; the other
-(if it also arms) is marked "discarded". When False, only the bias side
-is evaluated (no crossover).
+the earliest `confirmed_time_fast` becomes the chosen candidate; the
+other (if it also arms) is marked "discarded".
 
 Promotion
 ---------
@@ -45,10 +68,7 @@ When the CHOSEN side differs from the official isolated instrument
 caller to promote the counter-side instrument to the active/official
 pick.  Applying the promotion is delegated to
 `isolated_instrument_promotion_service` — this service stays a pure
-read/compute routine (no side effects).  The promotion block also
-exposes `active_instrument_key`, which is the promoted key if a
-promotion has already been applied today, else the original isolated
-key.
+read/compute routine (no side effects).
 
 Once-per-day
 ------------
@@ -60,12 +80,15 @@ display the final pick.
 Threading
 ---------
 All state is recomputed on every `compute()` call. There is no mutable
-state on the service itself (unlike the SR tracker), so multiple
-concurrent readers are safe. The service holds no locks.
+state on the service itself, so multiple concurrent readers are safe.
+The service holds no locks. The fast scan reads the SR engine's candle
+state under the SR engine's guard — a brief, non-blocking read.
 """
 
 from __future__ import annotations
 
+import json
+import math
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -84,14 +107,11 @@ def _market_tz() -> ZoneInfo:
     except Exception:
         return ZoneInfo("Asia/Kolkata")
 
-
 def _now_market() -> datetime:
     return datetime.now(_market_tz())
 
-
 def _now_utc_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
-
 
 def _parse_iso(value: Any) -> datetime | None:
     """Parse an ISO-8601 string into a tz-aware datetime (or None)."""
@@ -113,14 +133,11 @@ def _parse_iso(value: Any) -> datetime | None:
         dt = dt.replace(tzinfo=_market_tz())
     return dt.astimezone(_market_tz())
 
-
 def _iso(dt: datetime) -> str:
     return dt.astimezone(_market_tz()).isoformat()
 
-
 def _minutes_between(a: datetime, b: datetime) -> float:
     return (b - a).total_seconds() / 60.0
-
 
 # --------------------------------------------------------------------------- #
 # Touch-side parsing                                                          #
@@ -139,6 +156,151 @@ def _parse_touch_reason(reason: Any) -> tuple[str | None, str | None]:
         return "S3", "PE"
     return None, None
 
+# --------------------------------------------------------------------------- #
+# G1 v2 — LTP-tier stop-loss helpers                                          #
+# --------------------------------------------------------------------------- #
+_DEFAULT_STOP_TIERS: list[dict[str, Any]] = [
+    {"max_ltp": 100.0, "sl_pct": 0.15},
+    {"max_ltp": 200.0, "sl_pct": 0.12},
+    {"max_ltp": 300.0, "sl_pct": 0.10},
+    {"max_ltp": None,  "sl_pct": 0.05},
+]
+
+def _parse_stop_tiers() -> list[dict[str, Any]]:
+    """Parse STRATEGY_ENTRY_STOP_LTP_TIERS defensively.
+
+    Bad JSON, non-list, or entries with invalid ``sl_pct`` fall back to
+    the default tier table. Called on every arm (cheap; the raw string
+    is short).
+    """
+    raw = (getattr(config, "STRATEGY_ENTRY_STOP_LTP_TIERS", "") or "").strip()
+    if not raw:
+        return _DEFAULT_STOP_TIERS
+
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError):
+        logger.warning(
+            "[strategy-entry] STRATEGY_ENTRY_STOP_LTP_TIERS is not valid "
+            "JSON; using default tiers."
+        )
+        return _DEFAULT_STOP_TIERS
+
+    if not isinstance(parsed, list) or not parsed:
+        return _DEFAULT_STOP_TIERS
+
+    out: list[dict[str, Any]] = []
+    for item in parsed:
+        if not isinstance(item, dict):
+            continue
+        try:
+            sl_pct = float(item.get("sl_pct"))
+        except (TypeError, ValueError):
+            continue
+        if sl_pct <= 0 or sl_pct >= 1:
+            continue
+        max_ltp_raw = item.get("max_ltp")
+        max_ltp: float | None
+        if max_ltp_raw is None:
+            max_ltp = None
+        else:
+            try:
+                max_ltp = float(max_ltp_raw)
+            except (TypeError, ValueError):
+                continue
+            if max_ltp <= 0:
+                continue
+        out.append({"max_ltp": max_ltp, "sl_pct": sl_pct})
+
+    if not out:
+        return _DEFAULT_STOP_TIERS
+
+    # Ensure an open-ended (max_ltp=None) tier is present; if not,
+    # append the last tier with max_ltp set to None as a fallback.
+    if not any(t.get("max_ltp") is None for t in out):
+        last_sl = out[-1]["sl_pct"]
+        out.append({"max_ltp": None, "sl_pct": last_sl})
+
+    return out
+
+def _tier_lookup(entry_price: float) -> float:
+    """Return the configured sl_pct for this entry price."""
+    tiers = _parse_stop_tiers()
+    for tier in tiers:
+        max_ltp = tier.get("max_ltp")
+        if max_ltp is None or entry_price < max_ltp:
+            return float(tier["sl_pct"])
+    return float(tiers[-1]["sl_pct"]) if tiers else 0.15
+
+def _get_tick_size(instrument_key: str) -> float:
+    """Return the tick size for rounding.
+
+    Falls back to 0.05 (NSE/BSE F&O options default) when the registry
+    entry does not carry a usable tick_size.
+    """
+    try:
+        from services.instrument_registry import instrument_registry
+        entry = instrument_registry.get(instrument_key)
+        if entry:
+            ts = entry.get("tick_size")
+            if ts is not None:
+                ts_f = float(ts)
+                if ts_f > 0:
+                    return ts_f
+    except Exception:
+        pass
+    return 0.05
+
+def _round_to_tick(value: float, tick: float, mode: str) -> float:
+    """Round value to the nearest tick based on mode."""
+    if tick <= 0:
+        return float(value)
+    mode = (mode or "down").lower()
+    if mode == "up":
+        return math.ceil(value / tick) * tick
+    if mode == "nearest":
+        return round(value / tick) * tick
+    # default: down
+    return math.floor(value / tick) * tick
+
+def _compute_ltp_tier_stop(
+    entry_price: float,
+    instrument_key: str,
+) -> tuple[float, float, float | None, str]:
+    """Compute the LTP-tier stop-loss.
+
+    Returns ``(stop_price, sl_pct, stop_pct, stop_source)``.
+
+    Applies the STRATEGY_MAX_STOP_PCT hard cap (logs ERROR when the
+    tiers request more than the cap). Rounds to the instrument's tick
+    via STRATEGY_ENTRY_STOP_TICK_ROUNDING.
+    """
+    sl_pct = _tier_lookup(entry_price)
+
+    hard_cap = float(getattr(config, "STRATEGY_MAX_STOP_PCT", 0.35))
+    if sl_pct > hard_cap:
+        logger.error(
+            "[strategy-entry] sl_pct %.4f exceeds hard cap %.4f; clamping. "
+            "Fix STRATEGY_ENTRY_STOP_LTP_TIERS.",
+            sl_pct, hard_cap,
+        )
+        sl_pct = hard_cap
+
+    stop_raw = entry_price * (1.0 - sl_pct)
+    tick = _get_tick_size(instrument_key)
+    mode = str(getattr(config, "STRATEGY_ENTRY_STOP_TICK_ROUNDING", "down")).lower()
+    stop = _round_to_tick(stop_raw, tick, mode)
+
+    if stop <= 0:
+        # Pathological data — fall back to the raw computed value so the
+        # caller still sees a positive number (the entry block's
+        # entry_below_support / invalid_entry_price blocks already ran).
+        stop = stop_raw
+
+    stop_pct = ((entry_price - stop) / entry_price) if entry_price > 0 else None
+    return float(stop), float(sl_pct), (
+        round(stop_pct, 6) if stop_pct is not None else None
+    ), "ltp_tier"
 
 # --------------------------------------------------------------------------- #
 # Candle-close-at-time lookup                                                 #
@@ -181,7 +343,6 @@ def _candle_close_at(instrument_key: str, iso_time: str) -> float | None:
 
     return None
 
-
 def _live_ltp(instrument_key: str) -> float | None:
     try:
         from services.live_feed_service import live_feed_service
@@ -192,59 +353,200 @@ def _live_ltp(instrument_key: str) -> float | None:
     except Exception:
         return None
 
-
 def _entry_price_for(
     instrument_key: str,
     confirmed_time_iso: str,
-    confirmed_time_price: float | None = None,
 ) -> tuple[float | None, str | None]:
-    """Return ``(price, source)`` for the entry.
+    """Return ``(price, source)`` for the entry using FAST confirmation.
 
     Source is one of:
-      * ``"confirmed_time_price"``        — price directly attached to confirmed SR pivot
-      * ``"candle_close_at_confirmed"``   — candle close looked up at confirmation time
-      * ``"live_ltp"``                    — fallback to current live LTP
-      * ``None``                          — no price available
+      * ``"candle_close_at_confirmed_fast"`` — exact candle close at
+        ``confirmed_time_fast``
+      * ``"live_ltp"``                       — fallback when the bar
+                                               isn't yet finalized or
+                                               the candle isn't in state
+      * ``None``                             — no price available
     """
-    if confirmed_time_price is not None and confirmed_time_price > 0:
-        return confirmed_time_price, "confirmed_time_price"
-
     close = _candle_close_at(instrument_key, confirmed_time_iso)
     if close is not None:
-        return close, "candle_close_at_confirmed"
-
+        return close, "candle_close_at_confirmed_fast"
     ltp = _live_ltp(instrument_key)
     if ltp is not None:
         return ltp, "live_ltp"
-
     return None, None
 
+# --------------------------------------------------------------------------- #
+# G1 v2 — Fast pivot scan on the live SR engine's candle series              #
+# --------------------------------------------------------------------------- #
+def _run_pivot_scan(
+    instrument_key: str,
+    left_bars: int,
+    right_bars: int,
+) -> list[dict[str, Any]]:
+    """Run a strict pivot scan on the SR engine's in-memory candles.
 
-# --------------------------------------------------------------------------- #
-# SR levels reading                                                           #
-# --------------------------------------------------------------------------- #
-def _read_levels(instrument_key: str) -> list[dict[str, Any]]:
-    """Return today's persisted SR levels for ``instrument_key`` (or [])."""
+    Returns a list of pivot records::
+
+        {
+          "level":             "support" | "resistance",
+          "price":             <float>,
+          "pivot_bar_index":   <int>,
+          "pivot_time":        <ISO>,
+          "confirmed_bar_index": <int>,
+          "confirmed_time":    <ISO>,   # = FAST confirmed time
+          "left_bars":         <int>,
+          "right_bars":        <int>,
+        }
+
+    Pivot rule (same as live_sr_levels_service, but with the caller's
+    ``right_bars``)::
+
+        support   pivot at bar i  iff  C[i].low  < C[j].low  for every
+                                       j in [i-left, i-1] and [i+1, i+right]
+        resistance pivot at bar i  iff  C[i].high > C[j].high for every
+                                       j in [i-left, i-1] and [i+1, i+right]
+
+    Never raises. Returns [] on any failure (missing state, unreadable
+    candles, too few bars).
+    """
     try:
         from services.live_sr_levels_service import live_sr_levels_service
-        payload = live_sr_levels_service.get_levels(instrument_key)
+        with live_sr_levels_service._guard:  # type: ignore[attr-defined]
+            state = live_sr_levels_service._states.get(instrument_key)  # type: ignore[attr-defined]
+            if state is None:
+                return []
+            candles = list(state.get("candles") or [])
     except Exception:
         logger.exception(
-            "[strategy-entry] live_sr_levels_service lookup failed for %s",
+            "[strategy-entry] fast scan failed to read candle series for %s",
             instrument_key,
         )
         return []
 
-    if not isinstance(payload, dict):
+    if not candles:
+        return []
+    if len(candles) < left_bars + right_bars + 1:
         return []
 
-    levels = payload.get("levels") or []
     out: list[dict[str, Any]] = []
-    for lvl in levels:
-        if isinstance(lvl, dict):
-            out.append(dict(lvl))
+    n = len(candles)
+
+    for i in range(left_bars, n - right_bars):
+        c = candles[i]
+        try:
+            c_high = float(c["high"])
+            c_low = float(c["low"])
+            c_time = c["time"]
+        except (KeyError, TypeError, ValueError):
+            continue
+
+        # ---- Support pivot? ---- #
+        is_support = True
+        for j in range(i - left_bars, i):
+            try:
+                if float(candles[j]["low"]) <= c_low:
+                    is_support = False
+                    break
+            except (KeyError, TypeError, ValueError):
+                is_support = False
+                break
+        if is_support:
+            for j in range(i + 1, i + right_bars + 1):
+                try:
+                    if float(candles[j]["low"]) <= c_low:
+                        is_support = False
+                        break
+                except (KeyError, TypeError, ValueError):
+                    is_support = False
+                    break
+
+        if is_support:
+            confirm_idx = i + right_bars
+            try:
+                confirmed_time = candles[confirm_idx]["time"]
+            except (IndexError, KeyError, TypeError):
+                continue
+            out.append({
+                "level": "support",
+                "price": c_low,
+                "pivot_bar_index": i,
+                "pivot_time": c_time,
+                "confirmed_bar_index": confirm_idx,
+                "confirmed_time": confirmed_time,
+                "left_bars": left_bars,
+                "right_bars": right_bars,
+            })
+
+        # ---- Resistance pivot? ---- #
+        is_resistance = True
+        for j in range(i - left_bars, i):
+            try:
+                if float(candles[j]["high"]) >= c_high:
+                    is_resistance = False
+                    break
+            except (KeyError, TypeError, ValueError):
+                is_resistance = False
+                break
+        if is_resistance:
+            for j in range(i + 1, i + right_bars + 1):
+                try:
+                    if float(candles[j]["high"]) >= c_high:
+                        is_resistance = False
+                        break
+                except (KeyError, TypeError, ValueError):
+                    is_resistance = False
+                    break
+
+        if is_resistance:
+            confirm_idx = i + right_bars
+            try:
+                confirmed_time = candles[confirm_idx]["time"]
+            except (IndexError, KeyError, TypeError):
+                continue
+            out.append({
+                "level": "resistance",
+                "price": c_high,
+                "pivot_bar_index": i,
+                "pivot_time": c_time,
+                "confirmed_bar_index": confirm_idx,
+                "confirmed_time": confirmed_time,
+                "left_bars": left_bars,
+                "right_bars": right_bars,
+            })
+
     return out
 
+def _derive_display_confirmed_time(
+    instrument_key: str,
+    pivot_bar_index: int,
+) -> str | None:
+    """Return the display (15-bar) ``confirmed_time`` for a fast pivot.
+
+    Uses the same candle series as `_run_pivot_scan` but adds
+    ``LIVE_SR_RIGHT_BARS`` (default 15) to the pivot index. Returns
+    None when the display bar hasn't finalized yet (i.e. the pivot is
+    not yet a display-confirmed SR level).
+    """
+    if pivot_bar_index is None or pivot_bar_index < 0:
+        return None
+    try:
+        from services.live_sr_levels_service import live_sr_levels_service
+        with live_sr_levels_service._guard:  # type: ignore[attr-defined]
+            state = live_sr_levels_service._states.get(instrument_key)  # type: ignore[attr-defined]
+            if state is None:
+                return None
+            candles = list(state.get("candles") or [])
+    except Exception:
+        return None
+
+    display_right = int(getattr(config, "LIVE_SR_RIGHT_BARS", 15))
+    confirm_idx = pivot_bar_index + display_right
+    if confirm_idx < 0 or confirm_idx >= len(candles):
+        return None
+    try:
+        return str(candles[confirm_idx]["time"])
+    except (KeyError, TypeError):
+        return None
 
 # --------------------------------------------------------------------------- #
 # Counterpart lookup                                                          #
@@ -263,7 +565,6 @@ def _both_sides(
     pe = instrument_registry.resolve(underlying, strike, "PE")
     return ce, pe
 
-
 # --------------------------------------------------------------------------- #
 # Per-candidate signal                                                        #
 # --------------------------------------------------------------------------- #
@@ -278,7 +579,8 @@ def _empty_candidate(
         "instrument_key": instrument_key,
         "trading_symbol": trading_symbol,
         "is_bias_side": is_bias_side,
-        "state": "waiting",  # waiting | waiting_confirmation | blocked | armed | discarded
+        # waiting | waiting_confirmation | blocked | armed | discarded | error
+        "state": "waiting",
         "state_note": None,
         "entry_support": None,
         "blocking_resistance": None,
@@ -286,7 +588,6 @@ def _empty_candidate(
         "warning": None,
         "warning_detail": None,
     }
-
 
 def _compute_candidate(
     side: str,
@@ -296,7 +597,7 @@ def _compute_candidate(
     window_end: datetime,
     now: datetime,
 ) -> dict[str, Any]:
-    """Compute the signal for ONE candidate side (CE or PE)."""
+    """Compute the signal for ONE candidate side (CE or PE) under G1 v2."""
     if entry is None:
         return _empty_candidate(side, None, None, is_bias_side)
 
@@ -304,12 +605,18 @@ def _compute_candidate(
     symbol = entry.get("trading_symbol")
     cand = _empty_candidate(side, key, symbol, is_bias_side)
 
-    levels = _read_levels(key)
+    # ---- 1. FAST pivot scan --------------------------------------- #
+    left_bars = int(getattr(
+        config, "STRATEGY_ENTRY_PIVOT_LEFT_BARS", config.LIVE_SR_LEFT_BARS
+    ))
+    right_bars = int(getattr(config, "STRATEGY_ENTRY_PIVOT_RIGHT_BARS", 3))
+    levels = _run_pivot_scan(key, left_bars, right_bars)
+
     if not levels:
         cand["state_note"] = "no_sr_levels"
         return cand
 
-    # ---- Collect supports in the [touch_time, window_end] window --- #
+    # ---- 2. Supports whose pivot_time is inside the window --------- #
     supports_in_window: list[dict[str, Any]] = []
     for lvl in levels:
         if str(lvl.get("level") or "").lower() != "support":
@@ -325,19 +632,11 @@ def _compute_candidate(
             price = float(lvl.get("price"))
         except (TypeError, ValueError):
             continue
-
-        confirmed_time_price = None
-        if lvl.get("confirmed_time_price") is not None:
-            try:
-                confirmed_time_price = float(lvl["confirmed_time_price"])
-            except (TypeError, ValueError):
-                confirmed_time_price = None
-
         supports_in_window.append({
             "price": price,
             "pivot_time": _iso(p_dt),
-            "confirmed_time": lvl.get("confirmed_time"),
-            "confirmed_time_price": confirmed_time_price,
+            "confirmed_time_fast": lvl.get("confirmed_time"),
+            "pivot_bar_index": lvl.get("pivot_bar_index"),
             "pivot_dt": p_dt,
             "raw": lvl,
         })
@@ -347,20 +646,19 @@ def _compute_candidate(
         cand["state_note"] = "no_support_pivot_in_window"
         return cand
 
-    # ---- Earliest pivot first ------------------------------------ #
+    # ---- 3. Iterate in pivot_time order ---------------------------- #
     supports_in_window.sort(key=lambda s: s["pivot_dt"])
 
-    # ---- Iterate — first non-blocked support wins ---------------- #
     for s in supports_in_window:
         support_pivot_dt = s["pivot_dt"]
-        support_confirmed_dt = _parse_iso(s["confirmed_time"])
-        if support_confirmed_dt is None:
-            # Malformed confirmed_time — skip.
+        support_confirmed_fast_iso = s["confirmed_time_fast"]
+        support_confirmed_fast_dt = _parse_iso(support_confirmed_fast_iso)
+        if support_confirmed_fast_dt is None:
             continue
 
-        # ---- Blocking resistance check -------------------------- #
+        # ---- 4. Resistance blocker (unchanged rule, fast window) --- #
         blocker: dict[str, Any] | None = None
-        if config.STRATEGY_ENTRY_BLOCKED_BY_RESISTANCE:
+        if getattr(config, "STRATEGY_ENTRY_BLOCKED_BY_RESISTANCE", True):
             for lvl in levels:
                 if str(lvl.get("level") or "").lower() != "resistance":
                     continue
@@ -376,9 +674,8 @@ def _compute_candidate(
                     continue
                 if r_pivot_dt <= support_pivot_dt:
                     continue
-                if r_conf_dt > support_confirmed_dt:
+                if r_conf_dt > support_confirmed_fast_dt:
                     continue
-                # First blocking resistance wins.
                 if blocker is None or r_price < float(blocker.get("price") or 0.0):
                     blocker = {
                         "price": r_price,
@@ -387,113 +684,132 @@ def _compute_candidate(
                     }
 
         if blocker is not None:
-            # This support is blocked — try the next one in the window.
             cand["blocking_resistance"] = blocker
             cand["state_note"] = "all_supports_blocked_so_far"
             continue
 
-        # ---- Not blocked — check confirmation ------------------ #
+        # ---- 5. Derive display (15-bar) confirmed_time ------------- #
+        display_confirmed_iso = _derive_display_confirmed_time(
+            key, s["pivot_bar_index"] or -1,
+        )
+
         minutes_from_touch = _minutes_between(touch_dt, support_pivot_dt)
         entry_support = {
             "price": s["price"],
             "pivot_time": s["pivot_time"],
-            "confirmed_time": s["confirmed_time"],
-            "confirmed_time_price": s.get("confirmed_time_price"),
+            "confirmed_time_fast": support_confirmed_fast_iso,
+            "confirmed_time": display_confirmed_iso,
             "minutes_from_touch": round(minutes_from_touch, 2),
         }
         cand["entry_support"] = entry_support
         cand["blocking_resistance"] = None
 
-        if support_confirmed_dt > now:
+        # ---- 6. Waiting for fast confirmation? -------------------- #
+        if support_confirmed_fast_dt > now:
             cand["state"] = "waiting_confirmation"
             cand["state_note"] = "support_found_waiting_for_confirmation"
             cand["seconds_until_confirmation"] = int(
-                (support_confirmed_dt - now).total_seconds()
+                (support_confirmed_fast_dt - now).total_seconds()
             )
             return cand
 
-        # ---- ARMED --------------------------------------------- #
+        # ---- 7. ARMED — resolve entry price ----------------------- #
         entry_price, price_source = _entry_price_for(
-            key, s["confirmed_time"], s.get("confirmed_time_price"),
+            key, support_confirmed_fast_iso,
         )
-        stop_price = float(s["price"])
 
-        # Soft stop-width warning.
-        warning = None
-        warning_detail = None
-        stop_pct: float | None = None
-        if entry_price is not None and entry_price > 0:
-            stop_pct = (entry_price - stop_price) / entry_price
-            if stop_pct < 0:
-                warning = "price_at_or_below_support"
-                warning_detail = (
-                    "Entry LTP is at or below the entry support price — "
-                    "the support did not hold during the confirmation wait."
-                )
-            elif (
-                config.STRATEGY_MAX_STOP_PCT > 0
-                and stop_pct > config.STRATEGY_MAX_STOP_PCT
-            ):
-                warning = "stop_too_wide"
-                warning_detail = (
-                    f"Stop {stop_price:.2f} is {stop_pct * 100:.1f}% below "
-                    f"entry {entry_price:.2f} "
-                    f"(max {config.STRATEGY_MAX_STOP_PCT * 100:.1f}%)."
-                )
+        # Hard block: no price at all
+        if entry_price is None:
+            cand["state"] = "blocked"
+            cand["state_note"] = "no_entry_price"
+            cand["entry"] = None
+            return cand
 
-        # Target = next resistance above entry, or None.
+        # Hard block: invalid price
+        if entry_price <= 0:
+            cand["state"] = "blocked"
+            cand["state_note"] = "invalid_entry_price"
+            cand["entry"] = None
+            return cand
+
+        # Hard block: entry price broke the support
+        if entry_price < s["price"]:
+            cand["state"] = "blocked"
+            cand["state_note"] = "entry_below_support"
+            cand["entry"] = None
+            return cand
+
+        # ---- 8. LTP-tier stop-loss -------------------------------- #
+        stop_price, sl_pct, stop_pct, stop_source = _compute_ltp_tier_stop(
+            entry_price, key,
+        )
+
+        # ---- 9. Soft warning: support far below entry ------------- #
+        warning: str | None = None
+        warning_detail: str | None = None
+        support_gap_pct = (entry_price - s["price"]) / entry_price
+        if support_gap_pct > 0.20:
+            warning = "support_far_below_entry"
+            warning_detail = (
+                f"Support {s['price']:.2f} is "
+                f"{support_gap_pct * 100:.1f}% below entry "
+                f"{entry_price:.2f}; stop is "
+                f"{sl_pct * 100:.1f}% below entry."
+            )
+
+        # ---- 10. Target: next resistance above entry -------------- #
         target_price: float | None = None
         target_pivot_time: str | None = None
-        if entry_price is not None:
-            best_r: dict[str, Any] | None = None
-            for lvl in levels:
-                if str(lvl.get("level") or "").lower() != "resistance":
-                    continue
-                try:
-                    r_price = float(lvl.get("price"))
-                except (TypeError, ValueError):
-                    continue
-                if r_price <= entry_price:
-                    continue
-                if best_r is None or r_price < float(best_r.get("price") or 0.0):
-                    best_r = lvl
-            if best_r is not None:
-                try:
-                    target_price = float(best_r.get("price"))
-                except (TypeError, ValueError):
-                    target_price = None
-                target_pivot_time = best_r.get("pivot_time")
+        best_r: dict[str, Any] | None = None
+        for lvl in levels:
+            if str(lvl.get("level") or "").lower() != "resistance":
+                continue
+            try:
+                r_price = float(lvl.get("price"))
+            except (TypeError, ValueError):
+                continue
+            if r_price <= entry_price:
+                continue
+            if best_r is None or r_price < float(best_r.get("price") or 0.0):
+                best_r = lvl
+        if best_r is not None:
+            try:
+                target_price = float(best_r.get("price"))
+            except (TypeError, ValueError):
+                target_price = None
+            target_pivot_time = best_r.get("pivot_time")
 
         cand["state"] = "armed"
-        cand["state_note"] = "entry_support_confirmed"
+        cand["state_note"] = "entry_support_confirmed_fast"
         cand["warning"] = warning
         cand["warning_detail"] = warning_detail
         cand["entry"] = {
             "price": entry_price,
             "price_source": price_source,
-            "time": s["confirmed_time"],
+            "time": support_confirmed_fast_iso,
             "stop": stop_price,
-            "stop_pct": round(stop_pct, 4) if stop_pct is not None else None,
+            "stop_pct": stop_pct,
+            "sl_pct": sl_pct,
+            "stop_source": stop_source,
             "target": target_price,
             "target_pivot_time": target_pivot_time,
         }
         return cand
 
-    # Every support in the window was blocked.
+    # All supports in window were blocked.
     cand["state"] = "blocked"
     cand["state_note"] = "all_supports_in_window_blocked"
     return cand
-
 
 # --------------------------------------------------------------------------- #
 # Service                                                                     #
 # --------------------------------------------------------------------------- #
 class StrategyEntrySignalService:
-    """Stateless computation of the entry-signal block for /isolated."""
+    """Stateless computation of the entry-signal block for /isolated (G1 v2)."""
 
     def compute(self) -> dict[str, Any]:
         # ---- 0. Feature toggle ---------------------------------- #
-        if not config.STRATEGY_ENTRY_ENABLED:
+        if not getattr(config, "STRATEGY_ENTRY_ENABLED", True):
             return {
                 "status": "disabled",
                 "reason": "STRATEGY_ENTRY_ENABLED is False",
@@ -562,7 +878,7 @@ class StrategyEntrySignalService:
                 "generated_at": _now_utc_iso(),
             }
 
-        # ---- 4. Resolve the isolated registry entry + both sides - #
+        # ---- 4. Resolve isolated registry entry + both sides ----- #
         try:
             from services.instrument_registry import instrument_registry
             iso_entry = instrument_registry.get(instrument_key)
@@ -605,7 +921,7 @@ class StrategyEntrySignalService:
         # ---- 5. Build candidates -------------------------------- #
         now = _now_market()
         window_end = touch_dt + timedelta(
-            minutes=int(config.STRATEGY_ENTRY_BUFFER_MINUTES)
+            minutes=int(getattr(config, "STRATEGY_ENTRY_BUFFER_MINUTES", 10))
         )
 
         candidate_specs: list[tuple[str, dict[str, Any] | None, bool]] = []
@@ -613,7 +929,10 @@ class StrategyEntrySignalService:
         if bias_entry is not None:
             candidate_specs.append((bias_type, bias_entry, True))
 
-        if config.STRATEGY_ENTRY_ALLOW_CROSSOVER and counter_entry is not None:
+        allow_crossover = bool(
+            getattr(config, "STRATEGY_ENTRY_ALLOW_CROSSOVER", True)
+        )
+        if allow_crossover and counter_entry is not None:
             opposite = "PE" if bias_type == "CE" else "CE"
             candidate_specs.append((opposite, counter_entry, False))
 
@@ -638,15 +957,18 @@ class StrategyEntrySignalService:
                 cand["state_note"] = f"{type(exc).__name__}: {exc}"
             candidates.append(cand)
 
-        # ---- 6. First-to-confirm winner ------------------------- #
+        # ---- 6. First-to-confirm winner (fast timestamps) ------- #
         chosen: dict[str, Any] | None = None
         armed = [c for c in candidates if c.get("state") == "armed"]
 
+        first_wins = bool(
+            getattr(config, "STRATEGY_ENTRY_FIRST_TO_CONFIRM_WINS", True)
+        )
         if armed:
-            if config.STRATEGY_ENTRY_FIRST_TO_CONFIRM_WINS and len(armed) > 1:
+            if first_wins and len(armed) > 1:
                 def _confirmed_dt(c: dict[str, Any]) -> str:
                     es = c.get("entry_support") or {}
-                    return str(es.get("confirmed_time") or "")
+                    return str(es.get("confirmed_time_fast") or "")
                 armed.sort(key=_confirmed_dt)
                 chosen = armed[0]
                 for c in armed[1:]:
@@ -655,7 +977,6 @@ class StrategyEntrySignalService:
             else:
                 chosen = armed[0]
 
-        # Mark chosen boolean on every candidate for easy UI use.
         for c in candidates:
             c["chosen"] = (chosen is not None and c is chosen)
 
@@ -684,7 +1005,9 @@ class StrategyEntrySignalService:
                 "time": _iso(touch_dt),
                 "side": touch_side,
                 "bias_type": bias_type,
-                "buffer_minutes": int(config.STRATEGY_ENTRY_BUFFER_MINUTES),
+                "buffer_minutes": int(
+                    getattr(config, "STRATEGY_ENTRY_BUFFER_MINUTES", 10)
+                ),
                 "window_start": _iso(touch_dt),
                 "window_end": _iso(window_end),
             },
@@ -720,8 +1043,15 @@ class StrategyEntrySignalService:
             and str(active_key) == str(chosen_key)
         )
 
+        allow_promotion = bool(
+            getattr(config, "STRATEGY_ENTRY_ALLOW_PROMOTION", True)
+        )
+        allow_re_promotion = bool(
+            getattr(config, "STRATEGY_ENTRY_ALLOW_RE_PROMOTION", False)
+        )
+
         blockers: list[str] = []
-        if not config.STRATEGY_ENTRY_ALLOW_PROMOTION:
+        if not allow_promotion:
             blockers.append("disabled")
         if chosen_key is None:
             blockers.append("no_armed_candidate")
@@ -729,10 +1059,7 @@ class StrategyEntrySignalService:
             blockers.append("chosen_is_bias_side")
         elif already_applied:
             blockers.append("already_applied")
-        elif (
-            active_state is not None
-            and not config.STRATEGY_ENTRY_ALLOW_RE_PROMOTION
-        ):
+        elif active_state is not None and not allow_re_promotion:
             blockers.append("already_promoted_today")
 
         response["promotion"] = {
@@ -746,10 +1073,8 @@ class StrategyEntrySignalService:
             ),
             "target_side": response.get("chosen_side"),
             "official_isolated_key": instrument_key,
-            "promotion_allowed": bool(config.STRATEGY_ENTRY_ALLOW_PROMOTION),
-            "re_promotion_allowed": bool(
-                config.STRATEGY_ENTRY_ALLOW_RE_PROMOTION
-            ),
+            "promotion_allowed": allow_promotion,
+            "re_promotion_allowed": allow_re_promotion,
         }
         response["active_instrument_key"] = active_key or instrument_key
 
@@ -774,37 +1099,67 @@ class StrategyEntrySignalService:
                 note = c.get("state_note") or ""
                 if note == "no_sr_levels":
                     out.append(
-                        f"{side}: no live SR levels persisted yet for this instrument"
+                        f"{side}: no fast SR pivots available yet for this "
+                        f"instrument (candle series too short or empty)"
                     )
                 elif note == "no_support_pivot_in_window":
                     out.append(
                         f"{side}: no support pivot inside "
                         f"[{_iso(touch_dt)} → +"
-                        f"{config.STRATEGY_ENTRY_BUFFER_MINUTES}min]"
+                        f"{int(getattr(config, 'STRATEGY_ENTRY_BUFFER_MINUTES', 10))}min]"
                     )
-            elif state == "blocked":
-                blocker = c.get("blocking_resistance") or {}
+            elif state == "waiting_confirmation":
+                es = c.get("entry_support") or {}
                 out.append(
-                    f"{side}: blocked by resistance "
-                    f"{blocker.get('price')} "
-                    f"(confirmed {blocker.get('confirmed_time')})"
+                    f"{side}: support at {es.get('price')} found — "
+                    f"waiting for fast confirmation at "
+                    f"{es.get('confirmed_time_fast')}"
                 )
+            elif state == "blocked":
+                note = c.get("state_note") or ""
+                if note == "entry_below_support":
+                    out.append(
+                        f"{side}: entry price is below the support — "
+                        f"the support did not hold during the "
+                        f"confirmation wait."
+                    )
+                elif note == "invalid_entry_price":
+                    out.append(
+                        f"{side}: invalid entry price (≤ 0) — bad tick "
+                        f"or dead instrument."
+                    )
+                elif note == "no_entry_price":
+                    out.append(
+                        f"{side}: no entry price available "
+                        f"(candle close and live LTP both missing)."
+                    )
+                elif note == "all_supports_in_window_blocked":
+                    out.append(
+                        f"{side}: all support pivots inside the window "
+                        f"were blocked by resistances."
+                    )
+                else:
+                    blocker = c.get("blocking_resistance") or {}
+                    out.append(
+                        f"{side}: blocked by resistance "
+                        f"{blocker.get('price')} "
+                        f"(confirmed {blocker.get('confirmed_time')})"
+                    )
             elif state == "armed" and c.get("warning"):
                 out.append(
-                    f"{side}: {c.get('warning')} — {c.get('warning_detail')}"
+                    f"{side}: {c.get('warning')} — "
+                    f"{c.get('warning_detail')}"
                 )
 
         if not any(c.get("state") == "armed" for c in candidates):
-            # Nothing armed yet — informational only.
             if all(c.get("state") == "waiting" for c in candidates):
                 out.append(
-                    "No candidate has produced a support pivot inside the "
-                    "post-touch buffer yet."
+                    "No candidate has produced a support pivot inside "
+                    "the post-touch buffer yet."
                 )
 
         _ = now  # reserved for future timing warnings
         return out
-
 
 # --------------------------------------------------------------------------- #
 # Singleton                                                                   #

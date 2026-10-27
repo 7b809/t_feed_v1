@@ -9,10 +9,8 @@ from dotenv import load_dotenv
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(PROJECT_ROOT / ".env")
 
-
 def _str(name: str, default: str = "") -> str:
     return os.getenv(name, default).strip()
-
 
 def _int(name: str, default: int) -> int:
     try:
@@ -20,13 +18,11 @@ def _int(name: str, default: int) -> int:
     except (TypeError, ValueError):
         return default
 
-
 def _float(name: str, default: float) -> float:
     try:
         return float(os.getenv(name, str(default)))
     except (TypeError, ValueError):
         return default
-
 
 def _bool(name: str, default: bool = False) -> bool:
     value = os.getenv(name)
@@ -34,11 +30,9 @@ def _bool(name: str, default: bool = False) -> bool:
         return default
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
-
 def _csv(name: str, default: str = "") -> list[str]:
     raw = _str(name, default)
     return [part.strip() for part in raw.split(",") if part.strip()]
-
 
 # ---------------------------------------------------------------------------
 # Application port
@@ -438,58 +432,76 @@ LIVE_SR_REFRESH_FROM_API_MINUTES = max(
 )
 
 # ===========================================================================
-# STRATEGY ENTRY SIGNAL — R3/S3 touch → buffered support → confirmed entry
+# STRATEGY ENTRY SIGNAL — G1 v2 (fast pivot + LTP-tier stop-loss)
 # ===========================================================================
 # Trigger chain:
-#   1. NIFTY / SENSEX touches R3 or S3.  The touch time (T_touch) is
-#      recorded, the bias side is known (R3 -> CE, S3 -> PE), and the
-#      nearest filtered strike becomes the isolated instrument (this is
-#      handled by LEVEL_ISOLATION_* above — nothing to configure here).
-#   2. For each candidate option (bias side, plus counter side when
-#      crossover is enabled), look for a SUPPORT pivot whose
-#      `pivot_time` falls inside the asymmetric window:
-#
+#   1. NIFTY / SENSEX touches R3 or S3 (unchanged). The bias side is
+#      fixed by the touch (R3 -> CE, S3 -> PE) and the nearest filtered
+#      strike is chosen as the isolated instrument (LEVEL_ISOLATION_*).
+#   2. On the isolated strike, pivot highs/lows are detected with TWO
+#      right-bar windows:
+#         • display: LIVE_SR_LEFT_BARS / LIVE_SR_RIGHT_BARS (unchanged;
+#           used by the chart, SR Tracking card, Telegram).
+#         • entry:   STRATEGY_ENTRY_PIVOT_LEFT_BARS /
+#                    STRATEGY_ENTRY_PIVOT_RIGHT_BARS.
+#      The pivot bar itself is identical (left-bar rule). Only the
+#      tradeable confirmation moment differs — with left=15, right=3 a
+#      pivot that formed at 10:04 becomes tradeable at 10:07 instead of
+#      10:19. Entry runs only after isolation, for the two instruments
+#      at the isolated strike; pre-isolation cost is zero.
+#   3. For each candidate side (bias + counter when crossover), supports
+#      whose pivot_time falls inside the window
 #          [T_touch, T_touch + STRATEGY_ENTRY_BUFFER_MINUTES]
+#      are iterated in pivot_time order. First non-blocked support wins.
+#   4. A support is blocked when a resistance pivot exists with
+#          pivot_time > support.pivot_time
+#      AND price      > support.price
+#      AND confirmed_time_fast ≤ support.confirmed_time_fast
+#      (Unchanged rule; the fast confirmation times are used for both
+#      sides. Effectively a no-op with any fixed lag, kept for
+#      forward compatibility.)
+#   5. Entry price:
+#          • candle close at support.confirmed_time_fast, else
+#          • live LTP (fallback when the confirming bar is still
+#            forming or the candle isn't yet in the live series).
+#      The legacy "pivot_price" mode has been removed. Entry is always
+#      "close at fast confirmation, else live LTP".
+#   6. Stop-loss — LTP-tier:
+#          sl_pct   = tier_lookup(entry_price)
+#          sl_pct   = min(sl_pct, STRATEGY_MAX_STOP_PCT)   # hard cap
+#          stop_raw = entry_price × (1 − sl_pct)
+#          stop     = round_to_tick(stop_raw, mode = TICK_ROUNDING)
+#          stop_pct = (entry_price − stop) / entry_price
+#      Stop is no longer the support price. Support is retained for
+#      context and for the resistance-blocker check only.
+#   7. Hard blocks: invalid_entry_price (≤0), no_entry_price (both
+#      candle close and LTP missing), entry_below_support (entry_price
+#      < support.price — the support did not hold during the wait).
+#   8. Soft warning (does not block): support_far_below_entry
+#      (support >20% below entry — informational only).
+#   9. Tiebreak (both sides armed): sort by confirmed_time_fast
+#      ascending; earliest wins.
+#  10. Promotion (unchanged mechanics): if the chosen side is the
+#      counter side, promote that instrument to be the active isolated
+#      one via isolated_instrument_promotion_service.
 #
-#      The window is strictly at-or-after the touch.  Pre-touch pivots
-#      are excluded by default because the only pre-touch "support" a
-#      freshly opened option can carry is the OR low, and using that
-#      re-opens the same losing trade this filter is meant to prevent.
-#      To include pre-touch pivots explicitly set
-#      STRATEGY_ENTRY_INCLUDE_PRETOUCH=true.
-#   3. Block the candidate if any RESISTANCE pivot was confirmed on or
-#      before the entry support's confirmed_time, whose pivot_time is
-#      strictly after the entry support's pivot_time, and whose price
-#      is strictly above the entry support's price.  (Those are the
-#      resistances actually visible on the chart at the moment of
-#      entry.)
-#   4. When the entry support's confirmed_time arrives, the candidate
-#      becomes ARMED and the entry is signalled.  Entry price is the
-#      candle-close at confirmed_time (fallback: live LTP), stop is the
-#      entry support's price, target is the next resistance above
-#      entry.
-#   5. When crossover is enabled and BOTH sides arm on the same day,
-#      whichever side's entry support confirmed EARLIEST wins; the
-#      other is discarded.
-#
-# The signal is exposed as an informational block on `/isolated`
-# (GET /admin/level-isolation/strategy-signal).  Order placement is
+# The signal is exposed on /isolated and via
+# GET /admin/level-isolation/strategy-signal. Order placement is
 # NOT wired by this feature — that is a separate step.
 # ===========================================================================
 STRATEGY_ENTRY_ENABLED = _bool("STRATEGY_ENTRY_ENABLED", True)
 
 # When True (default), evaluate CE and PE at the isolated strike
 # (crossover).  When False, only the bias side (PE for S3, CE for R3)
-# is considered — a day where the bias side has no valid setup becomes
-# a no-trade day even if the counter side does.
+# is considered.
 STRATEGY_ENTRY_ALLOW_CROSSOVER = _bool(
     "STRATEGY_ENTRY_ALLOW_CROSSOVER", True
 )
 
-# Upper bound of the pivot_time window relative to the touch.  The
+# Upper bound of the pivot_time window relative to the touch. The
 # window is strictly [T_touch, T_touch + BUFFER] — never symmetric.
-# Default 10 covers the canonical 09:21 touch / 09:26 pivot case with
-# slack for slightly-later swings.
+# A pivot that forms at 10:08 (within the buffer) confirms fast at
+# 10:11 — still within the buffer, still valid.
 STRATEGY_ENTRY_BUFFER_MINUTES = max(
     0, _int("STRATEGY_ENTRY_BUFFER_MINUTES", 10)
 )
@@ -497,80 +509,260 @@ STRATEGY_ENTRY_BUFFER_MINUTES = max(
 # When True, allow pivots whose pivot_time is BEFORE touch_time
 # (within the same buffer).  Default False — the PE 09:15 support that
 # would arm on an S3 touch only exists because it is the OR low;
-# including it re-opens the 84% loss the filter prevents.  Leave False
-# unless you have a specific reason.
+# including it re-opens the 84% loss the filter prevents.
 STRATEGY_ENTRY_INCLUDE_PRETOUCH = _bool(
     "STRATEGY_ENTRY_INCLUDE_PRETOUCH", False
 )
 
-# Entry price source:
-#   "market_at_confirmed" (default) — LTP / candle-close at confirmed_time
-#   "pivot_price"                   — the entry support price itself
-# The default matches the "place the order at confirmed_time" semantics
-# that were agreed; "pivot_price" is retained only as a legacy escape
-# hatch and will not fill on fast-moving options.
-STRATEGY_ENTRY_PRICE_MODE = _str(
-    "STRATEGY_ENTRY_PRICE_MODE", "market_at_confirmed"
-).lower()
+# NOTE: STRATEGY_ENTRY_PRICE_MODE was removed in G1 v2. Entry is
+# always "close at confirmed_time_fast, else live LTP". The old
+# "pivot_price" mode was the broken path; deleting it prevents
+# accidental re-use. Existing .env files that still set it are
+# ignored.
 
 # When True (default), once a candidate side has ARMED for the day
 # that side is not re-armed even if a new setup appears later.
-# When False, a new confirmed support later in the day can re-arm
-# (produces a new entry block; the frontend may show the latest).
+# When False, a new confirmed support later in the day can re-arm.
 STRATEGY_ENTRY_ONLY_ONCE_PER_DAY = _bool(
     "STRATEGY_ENTRY_ONLY_ONCE_PER_DAY", True
 )
 
 # When True (default), a resistance confirmed on or before the entry
-# support's confirmed_time, with pivot_time strictly after the entry
-# support's pivot_time and price strictly above the entry support's
-# price, blocks the candidate.  When False, resistance never blocks.
+# support's confirmed_time_fast, with pivot_time strictly after the
+# entry support's pivot_time and price strictly above the entry
+# support's price, blocks the candidate. When False, resistance never
+# blocks.
 STRATEGY_ENTRY_BLOCKED_BY_RESISTANCE = _bool(
     "STRATEGY_ENTRY_BLOCKED_BY_RESISTANCE", True
 )
 
 # When True (default), if both CE and PE arm on the same day, the one
-# whose entry support confirmed EARLIEST wins; the other is discarded.
-# When False, whichever side is iterated first is chosen — you almost
-# certainly want True.
+# whose entry support confirmed EARLIEST (by confirmed_time_fast) wins;
+# the other is discarded.
 STRATEGY_ENTRY_FIRST_TO_CONFIRM_WINS = _bool(
     "STRATEGY_ENTRY_FIRST_TO_CONFIRM_WINS", True
 )
 
-# Soft warning threshold.  If (entry_LTP - entry_support_price) / entry_LTP
-# exceeds this fraction, the entry block is flagged with a
-# "stop_too_wide" warning.  Not a hard block — the entry still shows
-# as ARMED — but makes it obvious that the stop is far away.  Set to
-# 0 to disable.
+# ---- G1 v2 — Fast entry-pivot window ------------------------------------
+# LEFT defaults to LIVE_SR_LEFT_BARS so the pivot bar is identical in
+# both the display and entry views. Only the RIGHT bar count differs.
+# A smaller RIGHT means faster arming. Range 1..5 recommended.
+STRATEGY_ENTRY_PIVOT_LEFT_BARS = max(
+    1, _int("STRATEGY_ENTRY_PIVOT_LEFT_BARS", LIVE_SR_LEFT_BARS)
+)
+STRATEGY_ENTRY_PIVOT_RIGHT_BARS = max(
+    1, min(10, _int("STRATEGY_ENTRY_PIVOT_RIGHT_BARS", 3))
+)
+
+# ---- G1 v2 — LTP-tier stop-loss -----------------------------------------
+# JSON array of tiers: [{"max_ltp": <float|null>, "sl_pct": <0..1>}, ...].
+# Lookup: first tier whose max_ltp is null or > entry_price. Default
+# table gives 15% / 12% / 10% / 5% for LTP buckets <100 / <200 / <300
+# / open-ended. Parsed defensively; bad JSON falls back to the default.
+STRATEGY_ENTRY_STOP_LTP_TIERS = _str(
+    "STRATEGY_ENTRY_STOP_LTP_TIERS",
+    '[{"max_ltp":100,"sl_pct":0.15},'
+    '{"max_ltp":200,"sl_pct":0.12},'
+    '{"max_ltp":300,"sl_pct":0.10},'
+    '{"max_ltp":null,"sl_pct":0.05}]',
+)
+
+# "down" | "up" | "nearest". "down" moves the stop further from
+# entry (wider stop, less whipsaw). Only matters when the exact
+# percentage lands between two ticks.
+STRATEGY_ENTRY_STOP_TICK_ROUNDING = _str(
+    "STRATEGY_ENTRY_STOP_TICK_ROUNDING", "down"
+).lower()
+
+# Absolute maximum sl_pct any tier can yield. Tiers whose sl_pct
+# exceeds this cap are clamped and an ERROR is logged.
 STRATEGY_MAX_STOP_PCT = _float("STRATEGY_MAX_STOP_PCT", 0.35)
 
-# ===========================================================================
-# STRATEGY ENTRY PROMOTION — make the armed instrument the official pick
-# ===========================================================================
-# When the entry-signal ARMS on the COUNTER side (crossover winner), the
-# bias-side instrument that the isolation engine picked at touch time is
-# no longer the instrument we're actually trading.  When this flag is
-# True (default), the counter-side instrument is "promoted" to be the
-# **active** isolated instrument for the rest of the day:
-#
-#   * the SR tracker switches to it,
-#   * the hero card and snapshot card display it,
-#   * the entry-signal card shows "Promoted to ...".
-#
-# The isolation record itself is never modified — the original trigger
-# (bias-side) instrument stays in the record and in the trigger_event
-# for audit.  The promotion is stored in a separate sidecar file:
-#
+# ---- G1 v2 — Promotion --------------------------------------------------
+# When the entry-signal ARMS on the COUNTER side, promote that
+# instrument to be the active isolated instrument for the rest of the
+# day. The isolation record itself is never modified; the promotion
+# is stored in a separate sidecar file:
 #   data/level_isolated_instrument_promotion.json
-#
-# Set to False to disable promotion entirely; the official instrument
-# then stays fixed at the bias side (original behaviour).
-STRATEGY_ENTRY_ALLOW_PROMOTION = _bool("STRATEGY_ENTRY_ALLOW_PROMOTION", True)
+STRATEGY_ENTRY_ALLOW_PROMOTION = _bool(
+    "STRATEGY_ENTRY_ALLOW_PROMOTION", True
+)
 
-# When True, a second promotion may override the first (e.g. the PE
-# arms later in the day after the CE was already promoted).  Default
-# False — the first ARMED side wins and the pick is stable for the
-# day.  Ignored when ALLOW_PROMOTION is False.
+# When True, a second promotion may override the first. Default False
+# — the first ARMED side wins and the pick is stable for the day.
 STRATEGY_ENTRY_ALLOW_RE_PROMOTION = _bool(
     "STRATEGY_ENTRY_ALLOW_RE_PROMOTION", False
 )
+
+# ===========================================================================
+# SIMULATION — dummy-order replay for the isolated instrument (post-close)
+# ===========================================================================
+# The simulation service replays the isolated instrument's day using
+# the authoritative intraday 1-min candles. It builds TWO scenarios
+# side by side so the operator can compare the strategy signal's own
+# target with the regime-based target computed from the option's own
+# OR levels:
+#
+#   A) "signal_v2"  — the target and stop that the strategy entry
+#                     signal produced (nearest resistance above entry
+#                     for the target; LTP-tier stop for the stop).
+#
+#   B) "regime"     — the target and stop picked by the simulation's
+#                     regime classifier (see below), using the option's
+#                     own OR levels H, L, A, R1, R2, R3, S1, S2, S3.
+#
+# Regime classification (entry = E):
+#
+#   LOW_EXTREME   (E < S3)              target = OR.L     stop = tier
+#   LOW           (S3 ≤ E < S2)         target = OR.L     stop = tier
+#   LOW_MID       (S2 ≤ E < A)          target = OR.A     stop = tier
+#   MID           (A ≤ E < R2)          target = nearest R > E   stop = tier
+#   HIGH          (R2 ≤ E < R3)         target = E + (R2 − A)
+#                                       stop   = min(tier, E − (A − L))
+#   HIGH_EXTREME  (E ≥ R3)              target = E + (R2 − A)
+#                                       stop   = min(tier, E − (A − L))
+#
+# The HIGH / HIGH_EXTREME assumption: on a high-volatility day (price
+# is already through R2), the range step (R2 − A) is the "momentum
+# projection" — price is expected to keep moving in the SAME direction
+# (i.e. the option premium continues to expand). The stop is tightened
+# to the smaller of the tier stop and one OR half-range (A − L), so a
+# mean-reverting spike doesn't take out a wide stop.
+#
+# Both scenarios are replayed against the SAME intraday candle series,
+# starting from the entry fill (entry.time = close of the confirming
+# 1-min bar). Exit order per bar:
+#
+#   * If BOTH target and stop are inside the bar's [low, high] range,
+#     SIMULATION_SAME_BAR_STOP_FIRST decides the winner (default True
+#     — conservative: assume the stop hit first because we can't know
+#     the intrabar order).
+#   * Otherwise, whichever boundary the bar touches first wins.
+#   * If neither boundary is touched by the end of the session, the
+#     scenario is UNRESOLVED and the exit price = last close.
+#
+# Tick rounding of the target and stop is controlled by
+# SIMULATION_TICK_ROUNDING ("nearest" / "down" / "up"; default
+# "nearest"). Ticks come from the registry entry's tick_size, falling
+# back to 0.05 (NSE/BSE F&O default).
+#
+# The endpoint is POST-only and stateless — no disk writes, no
+# background jobs, no Telegram. It is purely a "what would have
+# happened" diagnostic on the isolated page.
+# ===========================================================================
+SIMULATION_ENABLED = _bool("SIMULATION_ENABLED", True)
+
+# When True (default) the response carries BOTH scenarios (signal_v2
+# and regime) side by side. When False, only the signal_v2 scenario is
+# returned (regime is disabled). Useful for A/B comparison while the
+# regime logic is being tuned.
+SIMULATION_USE_REGIME_TARGETS = _bool(
+    "SIMULATION_USE_REGIME_TARGETS", True
+)
+
+# How the HIGH / HIGH_EXTREME regime computes the stop:
+#   "tier"     -> use the LTP-tier stop only
+#   "range"    -> use only the OR half-range: E − (A − L)
+#   "tighter"  -> min(tier, range) — default; wider stop may breach
+#                 the OR range and should be avoided
+SIMULATION_STOP_MODE_HIGH = _str(
+    "SIMULATION_STOP_MODE_HIGH", "tighter"
+).lower()
+
+# When target and stop are BOTH inside the same 1-min bar's [low, high]
+# range, which hit first? Default True (conservative — assume stop).
+SIMULATION_SAME_BAR_STOP_FIRST = _bool(
+    "SIMULATION_SAME_BAR_STOP_FIRST", True
+)
+
+# Tick rounding for the target and stop prices. "nearest" / "down" / "up".
+SIMULATION_TICK_ROUNDING = _str(
+    "SIMULATION_TICK_ROUNDING", "nearest"
+).lower()
+
+# ===========================================================================
+# DUMMY ORDERS — LIVE-tracked dummy orders persisted to disk
+# ===========================================================================
+# During live market hours, the dummy_order_service polls the entry
+# signal every DUMMY_ORDER_TRACK_INTERVAL_SECONDS seconds. When a
+# candidate is "armed", it creates a dummy-order record (never a real
+# order) and tracks it forward against live LTP ticks + periodic
+# intraday-bar reconciliation. Closed orders are frozen; open orders
+# auto-close at DUMMY_ORDER_EOD_HOUR:MINUTE.
+#
+# Persistence:
+#   <LIVE_DATA_DIR>/<DUMMY_ORDER_FILENAME>  (default dummy_orders.json)
+#
+# The file is reset on the first run of each new trading day. The
+# existing daily MEGA backup already archives data/ at 16:00 IST, so
+# yesterday's dummy_orders.json is preserved in the daily zip even
+# though cleanup wipes it at the next 08:30 startup.
+#
+# Two variants per armed candidate (when both targets are available):
+#   * signal_v2  — target = nearest resistance above entry; stop = tier
+#   * regime     — target = OR-regime target (L / A / R-next / extended);
+#                  stop = tier (same as signal_v2)
+# Both share the same stop so the R-multiple comparison is 1:1.
+#
+# This is a **dummy** — no real Upstox order is ever placed by this
+# service. Every record is labelled "dummy" in the file so there's no
+# ambiguity during audit.
+# ===========================================================================
+DUMMY_ORDER_ENABLED = _bool("DUMMY_ORDER_ENABLED", True)
+
+# How often the scheduler fires the tracking job, in seconds. Each fire
+# is a full scan (create-if-new + update existing + save). 30 s is the
+# default; keep it under 60 s so a fast-moving option is caught within
+# a couple of bars.
+DUMMY_ORDER_TRACK_INTERVAL_SECONDS = max(
+    5, _int("DUMMY_ORDER_TRACK_INTERVAL_SECONDS", 30)
+)
+
+# How often, in minutes, to reconcile each open order from fresh intraday
+# 1-min bars (via Upstox HistoryV3Api). This catches intratick whips that
+# a 30 s LTP poll would miss. Set to 0 to disable bar reconcile entirely
+# (LTP-only tracking — faster but slightly less accurate MFE/MAE).
+DUMMY_ORDER_RECONCILE_MINUTES = max(
+    0, _int("DUMMY_ORDER_RECONCILE_MINUTES", 2)
+)
+
+# Live-tracking window (IST). Orders can only be CREATED after
+# DUMMY_ORDER_START_HOUR:MINUTE. Between start and EOD, the service is
+# in "live" mode: LTP updates every poll + periodic bar reconcile.
+DUMMY_ORDER_START_HOUR = _int("DUMMY_ORDER_START_HOUR", 9)
+DUMMY_ORDER_START_MINUTE = _int("DUMMY_ORDER_START_MINUTE", 15)
+
+# After DUMMY_ORDER_EOD_HOUR:MINUTE, the service switches to "retroactive"
+# mode: any still-OPEN order is reconciled from the day's complete bar
+# history, then auto-closed at the last pre-close bar (or at stop /
+# target if that was hit during the day). Use 15:35 to give the 15:30
+# close bar time to settle.
+DUMMY_ORDER_EOD_HOUR = _int("DUMMY_ORDER_EOD_HOUR", 15)
+DUMMY_ORDER_EOD_MINUTE = _int("DUMMY_ORDER_EOD_MINUTE", 35)
+
+# Persistence filename under LIVE_DATA_DIR.
+DUMMY_ORDER_FILENAME = _str(
+    "DUMMY_ORDER_FILENAME", "dummy_orders.json"
+)
+
+# When True (default), a second order variant (regime target) is created
+# for each armed candidate. When False, only the signal_v2 order is
+# created. Disable if you want a single canonical dummy order per
+# armed candidate.
+DUMMY_ORDER_CREATE_REGIME_VARIANT = _bool(
+    "DUMMY_ORDER_CREATE_REGIME_VARIANT", True
+)
+
+# Safety cap on the number of records per day. The service stops creating
+# new orders once this is reached (existing ones keep updating). Guards
+# against a runaway loop that arms the same candidate repeatedly.
+DUMMY_ORDER_MAX_ORDERS_PER_DAY = max(
+    1, _int("DUMMY_ORDER_MAX_ORDERS_PER_DAY", 100)
+)
+# When True (default), each dummy order fires exactly TWO Telegram
+# messages over its lifetime — one on creation, one on close. Updates
+# (LTP, MFE, MAE, current R) stay silent. Combined with the real-world
+# cap of ~2 scenario orders per day, the worst-case volume is 4
+# messages/day. Set to False for a fully silent tracker (useful in
+# development environments where the operator watches /isolated live).
+DUMMY_ORDER_TELEGRAM_ENABLED = _bool("DUMMY_ORDER_TELEGRAM_ENABLED", True)

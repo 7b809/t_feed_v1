@@ -10,8 +10,8 @@ Jobs:
     * level_isolation_recheck       — cron, every 5 min, 09:16–15:30 IST Mon-Fri
     * daily_backup                  — cron, 16:00 IST
     * live_sr_refresh_from_api      — interval, every N minutes
-                                      (NEW 2026-10-26: keeps live SR
-                                       levels in sync with Upstox OHLC)
+    * dummy_order_tracker           — interval, every DUMMY_ORDER_TRACK_INTERVAL_SECONDS
+                                      (NEW 2026-10-27: live-tracks dummy orders)
 """
 
 from __future__ import annotations
@@ -126,10 +126,6 @@ class SchedulerService:
             )
 
         # -- Live SR refresh from Upstox API --------------------------- #
-        # Every N minutes, re-seed each tracked instrument from the
-        # authoritative intraday API. Fixes the accuracy drift that
-        # tick-aggregated option candles were causing (see
-        # live_sr_levels_service module docstring, 2026-10-26 entry).
         if getattr(config, "LIVE_SR_REFRESH_FROM_API_ENABLED", True):
             def _refresh_live_sr() -> None:
                 try:
@@ -160,6 +156,48 @@ class SchedulerService:
                 replace_existing=True, misfire_grace_time=60,
             )
 
+        # -- Dummy order live tracker ----------------------------------- #
+        # Every DUMMY_ORDER_TRACK_INTERVAL_SECONDS (default 30 s) the
+        # service polls the entry signal, creates any missing dummy
+        # orders for armed candidates, updates open orders from live
+        # LTP + periodic bar reconcile, and auto-closes at EOD.
+        # The service is a no-op outside the DUMMY_ORDER window, so it
+        # is safe to schedule all day.
+        if getattr(config, "DUMMY_ORDER_ENABLED", True):
+            def _dummy_order_tick() -> None:
+                try:
+                    from services.dummy_order_service import (
+                        dummy_order_service,
+                    )
+                    summary = dummy_order_service.run_once(
+                        reason="scheduled",
+                    )
+                    if summary.get("status") not in {"skipped"}:
+                        logger.info(
+                            "[scheduler] dummy_order_tracker — "
+                            "status=%s created=%s updated=%s closed=%s "
+                            "open=%s total=%s",
+                            summary.get("status"),
+                            summary.get("created"),
+                            summary.get("updated"),
+                            summary.get("closed"),
+                            summary.get("open_count"),
+                            summary.get("total_today"),
+                        )
+                except Exception:
+                    logger.exception(
+                        "[scheduler] dummy_order_tracker failed"
+                    )
+
+            scheduler.add_job(
+                _dummy_order_tick, "interval",
+                seconds=max(5, int(getattr(
+                    config, "DUMMY_ORDER_TRACK_INTERVAL_SECONDS", 30,
+                ))),
+                id="dummy_order_tracker",
+                replace_existing=True, misfire_grace_time=30,
+            )
+
         scheduler.start()
         self._scheduler = scheduler
 
@@ -167,7 +205,8 @@ class SchedulerService:
             "Scheduler started — daily=%02d:%02d, first_candle=%02d:%02d:%02d, "
             "digest=%02d:%02d, preflight=%02d:%02d, "
             "level_isolation_recheck=*/5 (9-15), DailyBackup=%02d:%02d, "
-            "live_sr_refresh=%dm (enabled=%s)",
+            "live_sr_refresh=%dm (enabled=%s), "
+            "dummy_order_tracker=%ds (enabled=%s)",
             config.DAILY_REFRESH_HOUR, config.DAILY_REFRESH_MINUTE,
             getattr(config, "FIRST_CANDLE_HOUR", 9),
             getattr(config, "FIRST_CANDLE_MINUTE", 16),
@@ -177,6 +216,8 @@ class SchedulerService:
             config.DAILY_BACKUP_HOUR, config.DAILY_BACKUP_MINUTE,
             int(getattr(config, "LIVE_SR_REFRESH_FROM_API_MINUTES", 2)),
             bool(getattr(config, "LIVE_SR_REFRESH_FROM_API_ENABLED", True)),
+            int(getattr(config, "DUMMY_ORDER_TRACK_INTERVAL_SECONDS", 30)),
+            bool(getattr(config, "DUMMY_ORDER_ENABLED", True)),
         )
 
         return scheduler
