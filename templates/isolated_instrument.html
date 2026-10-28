@@ -33,6 +33,9 @@
         --iso-purple: #7c3aed;
         --iso-purple-bg: #ede9fe;
         --iso-purple-border: #ddd6fe;
+        --iso-simulate: #ea580c;
+        --iso-simulate-bg: #ffedd5;
+        --iso-simulate-border: #fed7aa;
         --iso-shadow: 0 1px 3px rgba(15, 23, 42, 0.06);
         --iso-shadow-md: 0 8px 24px rgba(15, 23, 42, 0.08);
     }
@@ -105,6 +108,12 @@
         background: var(--iso-green-bg);
         color: var(--iso-green);
         border-color: #bbf7d0;
+    }
+
+    .iso-status-pill.simulate {
+        background: var(--iso-simulate-bg);
+        color: var(--iso-simulate);
+        border-color: var(--iso-simulate-border);
     }
 
     .iso-status-pill.watching {
@@ -191,6 +200,12 @@
         border-left-color: var(--iso-green);
     }
 
+    .iso-banner.is-simulate {
+        background: var(--iso-simulate-bg);
+        border-color: var(--iso-simulate-border);
+        border-left-color: var(--iso-simulate);
+    }
+
     .banner-icon {
         flex: 0 0 auto;
         width: 52px;
@@ -218,6 +233,10 @@
         color: var(--iso-green);
     }
 
+    .iso-banner.is-simulate .banner-title {
+        color: var(--iso-simulate);
+    }
+
     .iso-banner .banner-message {
         font-size: 0.95rem;
         color: #78350f;
@@ -226,7 +245,8 @@
     }
 
     .iso-banner.is-watching .banner-message,
-    .iso-banner.is-isolated .banner-message {
+    .iso-banner.is-isolated .banner-message,
+    .iso-banner.is-simulate .banner-message {
         color: var(--iso-text);
     }
 
@@ -248,6 +268,12 @@
         justify-content: space-between;
         gap: 26px;
         flex-wrap: wrap;
+        border: 1px solid transparent;
+    }
+
+    .iso-hero.is-simulate {
+        border-color: var(--iso-simulate);
+        box-shadow: 0 16px 44px rgba(234, 88, 12, 0.32);
     }
 
     .iso-hero-left {
@@ -265,6 +291,11 @@
         border-radius: 999px;
         letter-spacing: 1px;
         margin-bottom: 12px;
+    }
+
+    .iso-hero.is-simulate .iso-hero-label {
+        color: #fdba74;
+        background: rgba(253, 186, 116, 0.16);
     }
 
     .iso-hero-symbol {
@@ -324,6 +355,13 @@
         letter-spacing: 0.6px;
     }
 
+    .iso-hero-tags .tag.sim {
+        background: rgba(234, 88, 12, 0.22);
+        color: #fdba74;
+        border: 1px solid rgba(234, 88, 12, 0.5);
+        letter-spacing: 0.6px;
+    }
+
     .iso-hero-meta {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
@@ -350,6 +388,10 @@
 
     .iso-hero-meta .meta-value.highlight {
         color: #4ade80;
+    }
+
+    .iso-hero-meta .meta-value.sim {
+        color: #fdba74;
     }
 
     .iso-hero-right {
@@ -460,6 +502,11 @@
         background: linear-gradient(135deg, #f0f7ff 0%, #ffffff 100%);
         border-color: var(--iso-primary);
         grid-column: span 2;
+    }
+
+    .live-tile.live-tile-trigger {
+        border-color: var(--iso-simulate);
+        background: linear-gradient(135deg, #fff7ed 0%, #ffffff 100%);
     }
 
     @media (max-width: 768px) {
@@ -622,6 +669,14 @@
     .iso-table tr.is-picked td {
         background: #ecfdf5;
         font-weight: 700;
+    }
+
+    .iso-table tr.is-trigger-row td {
+        background: #fff7ed;
+    }
+
+    .iso-table tr.is-simulate-row td:first-child {
+        border-left: 3px solid var(--iso-simulate);
     }
 
     .type-pill {
@@ -797,6 +852,17 @@
     .iso-btn.primary:hover {
         background: #1d4ed8;
         border-color: #1d4ed8;
+    }
+
+    .iso-btn.simulate {
+        background: var(--iso-simulate);
+        color: #ffffff;
+        border-color: var(--iso-simulate);
+    }
+
+    .iso-btn.simulate:hover {
+        background: #c2410c;
+        border-color: #c2410c;
     }
 
     /* ---- Instrument snapshot (own data at touch) ---- */
@@ -992,7 +1058,12 @@
         border-color: #bbf7d0;
     }
 
-    /* Error variant for the simulation status pill (used when a run fails). */
+    .sr-count-pill.sim {
+        background: var(--iso-simulate-bg);
+        color: var(--iso-simulate);
+        border-color: var(--iso-simulate-border);
+    }
+
     .sr-count-pill.error {
         background: var(--iso-red-bg);
         color: var(--iso-red);
@@ -1331,6 +1402,10 @@
         border-top: 4px solid var(--iso-primary);
     }
 
+    .entry-candidate.is-auto-reverse {
+        border-top: 4px solid var(--iso-purple);
+    }
+
     .entry-candidate-head {
         display: flex;
         align-items: center;
@@ -1375,6 +1450,11 @@
     .entry-pill.bias {
         background: var(--iso-blue-bg);
         color: var(--iso-primary);
+    }
+
+    .entry-pill.auto-reverse {
+        background: var(--iso-purple-bg);
+        color: var(--iso-purple);
     }
 
     .entry-pill.state-waiting {
@@ -1443,6 +1523,17 @@
         background: var(--iso-amber-bg);
         border-left: 4px solid var(--iso-amber);
         color: var(--iso-amber);
+        padding: 8px 12px;
+        border-radius: 6px;
+        font-size: 0.78rem;
+        margin-top: 12px;
+        line-height: 1.5;
+    }
+
+    .entry-reversal {
+        background: var(--iso-purple-bg);
+        border-left: 4px solid var(--iso-purple);
+        color: var(--iso-purple);
         padding: 8px 12px;
         border-radius: 6px;
         font-size: 0.78rem;
@@ -1732,6 +1823,9 @@
                 Isolated Instrument
             </h1>
             <span class="iso-status-pill off" id="status-pill">Loading…</span>
+            <span class="iso-status-pill simulate" id="simulate-pill" style="display: none;">
+                <i class="bi bi-arrow-clockwise"></i> SIMULATE MODE
+            </span>
         </div>
         <div class="iso-topbar-right">
             <span class="iso-day-label" id="day-label">—</span>
@@ -1749,7 +1843,7 @@
             </button>
             <button
                 type="button"
-                class="iso-btn primary"
+                class="iso-btn simulate"
                 id="backfill-btn"
                 style="display: none;"
             >
@@ -1796,7 +1890,7 @@
                 <div class="price-sub" id="hero-instrument-sub">—</div>
             </div>
             <div class="iso-hero-price">
-                <div class="price-label">Index trigger LTP</div>
+                <div class="price-label">Trigger LTP</div>
                 <div class="price-value" id="hero-trigger-ltp">—</div>
                 <div class="price-sub" id="hero-trigger-sub">—</div>
             </div>
@@ -1877,7 +1971,7 @@
                     <input
                         type="text"
                         id="sr-search-input"
-                        placeholder="Search instrument (e.g. NIFTY 22400 CE, 22400, PE, SENSEX)..."
+                        placeholder="Search instrument (e.g. NIFTY 22400 CE, 22400, PE, SENSEX)…"
                         autocomplete="off"
                     >
                 </div>
@@ -2004,7 +2098,10 @@
         <div class="iso-card">
             <div class="iso-card-header">
                 <i class="bi bi-clipboard-check text-primary"></i>
-                <span>Touch state</span>
+                <span>Multi-index touch state</span>
+                <div class="sr-header-pills">
+                    <span class="sr-count-pill" id="touch-state-pill">0 / 8</span>
+                </div>
             </div>
             <div class="iso-card-body">
                 <div id="touch-body">
@@ -2028,6 +2125,7 @@
                             <th>Time (IST)</th>
                             <th>Index</th>
                             <th>Side</th>
+                            <th class="num">Priority</th>
                             <th class="num">Trigger LTP</th>
                             <th class="num">Level</th>
                             <th>Status</th>
@@ -2035,7 +2133,7 @@
                         </tr>
                     </thead>
                     <tbody id="events-body">
-                        <tr><td colspan="7" class="iso-empty">—</td></tr>
+                        <tr><td colspan="8" class="iso-empty">—</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -2046,7 +2144,7 @@
     <div class="iso-card" id="or-levels-card" style="display: none;">
         <div class="iso-card-header">
             <i class="bi bi-bar-chart-line text-primary"></i>
-            <span>Index Opening Range levels</span>
+            <span>Monitored index Opening Range levels</span>
         </div>
         <div class="iso-card-body">
             <div class="or-grid" id="or-levels-body"></div>
@@ -2057,6 +2155,9 @@
 
 {% block scripts %}
 <script>
+    /* ============================================================
+       G1 v3.2 — multi-index boundary surveillance + NIFTY routing
+       ============================================================ */
     const DETAIL_URL = "/admin/level-isolation/detail";
     const BACKFILL_URL = "/admin/level-isolation/backfill";
     const REFRESH_SNAPSHOT_URL = "/admin/level-isolation/refresh-snapshot";
@@ -2068,20 +2169,41 @@
     const POLL_MS = 10000;
     const ENTRY_POLL_MS = 10000;
 
-    /* Canonical index instrument keys — used by the "Compare in Layout"
-       button and by the Live Feed card. */
+    /* Canonical index instrument keys — G1 v3.2 four-index universe. */
     const INDEX_KEYS = {
-        NIFTY: "NSE_INDEX|Nifty 50",
-        SENSEX: "BSE_INDEX|SENSEX",
+        NIFTY:       "NSE_INDEX|Nifty 50",
+        BANKNIFTY:   "NSE_INDEX|Nifty Bank",
+        MIDCPNIFTY:  "NSE_INDEX|NIFTY MID SELECT",
+        SENSEX:      "BSE_INDEX|SENSEX",
+    };
+
+    /* Canonical name → instrument key. */
+    const CANONICAL_TO_KEY = {
+        NIFTY:       INDEX_KEYS.NIFTY,
+        BANKNIFTY:   INDEX_KEYS.BANKNIFTY,
+        MIDCPNIFTY:  INDEX_KEYS.MIDCPNIFTY,
+        SENSEX:      INDEX_KEYS.SENSEX,
+    };
+
+    /* Ordered list — also the priority display order. */
+    const INDEX_ORDER = ["NIFTY", "BANKNIFTY", "MIDCPNIFTY", "SENSEX"];
+
+    /* Default priority ranks (overridden from server payload when present). */
+    const DEFAULT_PRIORITY = {
+        NIFTY: 1,
+        BANKNIFTY: 2,
+        MIDCPNIFTY: 3,
+        SENSEX: 4,
     };
 
     /* Live-feed WebSocket — dedicated /list-feeds connection. */
     const LIVE_WS_URL = (seedKeys) => {
         const proto = location.protocol === "https:" ? "wss:" : "ws:";
         const base = `${proto}//${location.host}/list-feeds`;
+        const fallback = INDEX_ORDER.map(n => CANONICAL_TO_KEY[n]);
         const keys = (Array.isArray(seedKeys) && seedKeys.length)
             ? seedKeys
-            : [INDEX_KEYS.NIFTY, INDEX_KEYS.SENSEX];
+            : fallback;
         return `${base}?instruments=${encodeURIComponent(keys.join(","))}`;
     };
     const LIVE_RECONNECT_MS = 4000;
@@ -2115,10 +2237,8 @@
         activeInstrumentKey: null,
         activeInstrumentSymbol: null,
         triggerIndexKey: null,
-        indexKeys: INDEX_KEYS,
     };
 
-    /* Coalesce rapid tick bursts into a single animation-frame render. */
     let liveRenderPending = false;
     function scheduleLiveRender() {
         if (liveRenderPending) return;
@@ -2214,12 +2334,18 @@
         }
     }
 
+    /* ---------- G1 v3.2 reason labels (4 indices) ---------- */
     function reasonLabel(reason) {
         const map = {
-            nifty_r3_touch: "NIFTY touched R3",
-            nifty_s3_touch: "NIFTY touched S3",
-            sensex_r3_touch: "SENSEX touched R3",
-            sensex_s3_touch: "SENSEX touched S3",
+            nifty_r3_touch:       "NIFTY touched R3",
+            nifty_s3_touch:       "NIFTY touched S3",
+            banknifty_r3_touch:   "BANKNIFTY touched R3",
+            banknifty_s3_touch:   "BANKNIFTY touched S3",
+            midcpnifty_r3_touch:  "MIDCPNIFTY touched R3",
+            midcpnifty_s3_touch:  "MIDCPNIFTY touched S3",
+            sensex_r3_touch:      "SENSEX touched R3",
+            sensex_s3_touch:      "SENSEX touched S3",
+            // Legacy v2 labels kept for old records still on disk.
             sensex_r3_with_nifty_reference: "SENSEX touched R3 · NIFTY reference",
             sensex_s3_with_nifty_reference: "SENSEX touched S3 · NIFTY reference",
             sensex_r3_fallback: "SENSEX touched R3 · fallback (NIFTY stale)",
@@ -2239,7 +2365,9 @@
             confirmation_bar_close: "confirmation bar close",
             candle_close_at_confirmed_fast: "candle close @ fast confirm",
             candle_close_at_confirmed: "candle close @ confirm",
+            counter_candle_at_rejection: "counter candle @ rejection",
             live_ltp: "live LTP",
+            trigger_ltp_fallback: "trigger LTP fallback",
             unavailable: "—",
         };
         return map[src] || String(src || "—");
@@ -2263,19 +2391,30 @@
         return { hasAny, needsRefresh, hasLtp, hasTouch, hasFc, hasOr };
     }
 
+    function isSimulateMode(detail) {
+        if (!detail) return false;
+        const iso = detail.isolated;
+        return !!(iso && iso.source === "backfill");
+    }
+
     /* ============================================================
-       Compare-in-Layout URL builder
+       Compare-in-Layout URL builder (G1 v3.2: routed index + iso)
        ============================================================ */
     function buildLayoutCompareUrl(iso) {
         if (!iso || !iso.instrument_key) return null;
 
-        const triggerIndex = String(iso.trigger_index || "").toUpperCase();
-        const underlying = String(iso.underlying || "").toUpperCase();
+        // Prefer the routed index (always NIFTY under v3.2) since that's
+        // the underlying of the isolated option. Fall back to the
+        // trigger index for any legacy record without a routed_index.
         let indexKey = "";
-        if (triggerIndex === "NIFTY" || (!triggerIndex && underlying === "NIFTY")) {
-            indexKey = INDEX_KEYS.NIFTY;
-        } else if (triggerIndex === "SENSEX" || (!triggerIndex && underlying === "SENSEX")) {
-            indexKey = INDEX_KEYS.SENSEX;
+        const routed = String(iso.routed_index || "").toUpperCase();
+        if (routed && CANONICAL_TO_KEY[routed]) {
+            indexKey = CANONICAL_TO_KEY[routed];
+        } else {
+            const trig = String(iso.trigger_index || "").toUpperCase();
+            if (trig && CANONICAL_TO_KEY[trig]) {
+                indexKey = CANONICAL_TO_KEY[trig];
+            }
         }
 
         const params = new URLSearchParams();
@@ -2288,10 +2427,7 @@
        Live Feed
        ============================================================ */
     function computeWantedLiveKeys() {
-        const wanted = new Set([
-            liveFeedState.indexKeys.NIFTY,
-            liveFeedState.indexKeys.SENSEX,
-        ]);
+        const wanted = new Set(INDEX_ORDER.map(n => CANONICAL_TO_KEY[n]));
         const d = state.detail;
         if (d && d.isolated) {
             const isPromoted = !!(d.active && d.active.record);
@@ -2425,14 +2561,13 @@
             ? iso.trading_symbol
             : liveFeedState.activeInstrumentKey;
 
-        const triggerIndex = iso && iso.trigger_index ? iso.trigger_index : null;
-        if (triggerIndex === "NIFTY") {
-            liveFeedState.triggerIndexKey = liveFeedState.indexKeys.NIFTY;
-        } else if (triggerIndex === "SENSEX") {
-            liveFeedState.triggerIndexKey = liveFeedState.indexKeys.SENSEX;
-        } else {
-            liveFeedState.triggerIndexKey = null;
-        }
+        // Identify the trigger index key (G1 v3.2: any of 4).
+        const triggerCanonical = iso && iso.trigger_index
+            ? String(iso.trigger_index).toUpperCase()
+            : null;
+        liveFeedState.triggerIndexKey = triggerCanonical
+            ? (CANONICAL_TO_KEY[triggerCanonical] || null)
+            : null;
 
         const sameSet =
             wanted.size === liveFeedState.subscribedKeys.size &&
@@ -2446,10 +2581,12 @@
             if (d.isolated) {
                 const isPromoted = !!(d.active && d.active.record);
                 const suffix = isPromoted ? " (promoted)" : "";
+                const simulateSuffix = isSimulateMode(d) ? " · SIMULATE" : "";
                 titleEl.textContent =
-                    "Live Feed · " + (liveFeedState.activeInstrumentSymbol || "Active Instrument") + suffix;
+                    "Live Feed · " + (liveFeedState.activeInstrumentSymbol || "Active Instrument") +
+                    suffix + simulateSuffix;
             } else {
-                titleEl.textContent = "Live Feed · Watching Indices";
+                titleEl.textContent = "Live Feed · Watching 4 indices";
             }
         }
 
@@ -2526,9 +2663,14 @@
         sub,
         subClass,
         primary,
+        trigger,
     }) {
+        const tileCls =
+            "live-tile" +
+            (primary ? " live-tile-primary" : "") +
+            (trigger ? " live-tile-trigger" : "");
         return `
-            <div class="live-tile${primary ? " live-tile-primary" : ""}">
+            <div class="${tileCls}">
                 <div class="live-tile-label">
                     ${labelIcon ? `<i class="bi ${labelIcon}"></i>` : ""}
                     ${esc(label)}
@@ -2586,9 +2728,12 @@
             }
         }
 
+        // Four index tiles — G1 v3.2 universe.
         const indexDefs = [
-            { name: "NIFTY 50", key: liveFeedState.indexKeys.NIFTY },
-            { name: "SENSEX",   key: liveFeedState.indexKeys.SENSEX },
+            { name: "NIFTY 50",    key: CANONICAL_TO_KEY.NIFTY },
+            { name: "BANKNIFTY",   key: CANONICAL_TO_KEY.BANKNIFTY },
+            { name: "MIDCPNIFTY",  key: CANONICAL_TO_KEY.MIDCPNIFTY },
+            { name: "SENSEX",      key: CANONICAL_TO_KEY.SENSEX },
         ];
         for (const def of indexDefs) {
             const tick = liveFeedState.ticks[def.key] || {};
@@ -2602,13 +2747,14 @@
 
             html += renderLiveTile({
                 label: def.name + triggerSuffix,
-                labelIcon: "bi-graph-up",
+                labelIcon: isTrigger ? "bi-lightning-charge-fill" : "bi-graph-up",
                 value: ltp !== null ? fmt(ltp) : "—",
                 valueClass: valueCls,
                 sub: change !== null
                     ? `${changePrefix}${fmt(change)}${changePct !== null ? ` (${fmt(changePct)}%)` : ""}`
                     : "waiting for tick…",
                 subClass: valueCls,
+                trigger: isTrigger,
             });
         }
 
@@ -2625,7 +2771,7 @@
                 }
             } else {
                 metaEl.textContent =
-                    "Watching indices live. An isolated instrument will be added to the feed automatically.";
+                    "Watching 4 indices live. An isolated NIFTY strike will be added to the feed automatically.";
             }
         }
     }
@@ -2633,6 +2779,7 @@
     /* ---------- renderers ---------- */
     function renderStatusPill(d) {
         const pill = document.getElementById("status-pill");
+        const simPill = document.getElementById("simulate-pill");
         if (!pill) return;
 
         const dayLabel = document.getElementById("day-label");
@@ -2644,9 +2791,19 @@
                 : "—";
         }
 
+        const simulate = isSimulateMode(d);
+        if (simPill) {
+            simPill.style.display = simulate ? "inline-flex" : "none";
+        }
+
         if (d.isolated) {
-            pill.className = "iso-status-pill isolated";
-            pill.textContent = "Isolated";
+            if (simulate) {
+                pill.className = "iso-status-pill simulate";
+                pill.textContent = "Isolated · Simulate";
+            } else {
+                pill.className = "iso-status-pill isolated";
+                pill.textContent = "Isolated";
+            }
         } else if (!d.enabled) {
             pill.className = "iso-status-pill off";
             pill.textContent = "Disabled";
@@ -2654,7 +2811,7 @@
             const mktState = (d.market || {}).state;
             if (mktState === "in_session" && (d.market || {}).or_ready) {
                 pill.className = "iso-status-pill watching";
-                pill.textContent = "Watching";
+                pill.textContent = "Watching 4 indices";
             } else {
                 pill.className = "iso-status-pill waiting";
                 pill.textContent = "Waiting";
@@ -2674,9 +2831,13 @@
         const mkt = d.market || {};
         const mktState = mkt.state || "in_session";
         const isWatching = mktState === "in_session" && mkt.or_ready;
+        const simulateAvailable = !!mkt.simulate_mode;
 
         banner.style.display = "flex";
-        banner.className = "iso-banner" + (isWatching ? " is-watching" : "");
+        banner.className =
+            "iso-banner" +
+            (isWatching ? " is-watching" : "") +
+            (simulateAvailable ? " is-simulate" : "");
 
         const iconEl = document.getElementById("banner-icon");
         const titleEl = document.getElementById("banner-title");
@@ -2699,20 +2860,27 @@
                 break;
             case "pre_open":
                 icon = "bi-alarm"; title = "Pre-open — waiting for market open";
-                sub = "OR levels will be computed at 09:16:10 IST; isolation will begin watching for R3 / S3 touches right after.";
+                sub = "OR levels will be computed at 09:16:10 IST; isolation will begin watching all 4 indices for R3 / S3 touches right after.";
                 break;
             case "or_warming_up":
                 icon = "bi-lightning-charge"; title = "OR levels being computed";
-                sub = "First candle closed at 09:16 — isolation will start watching for R3 / S3 touches in a moment.";
+                sub = "First candle closed at 09:16 — isolation will start watching NIFTY / BANKNIFTY / MIDCPNIFTY / SENSEX for R3 / S3 touches in a moment.";
                 break;
             case "post_close":
-                icon = "bi-moon-stars"; title = "Market closed";
-                sub = "No new isolation until the next trading session.";
+                if (simulateAvailable) {
+                    icon = "bi-arrow-clockwise";
+                    title = "Market closed · SIMULATE MODE available";
+                    sub = "Click Run Backfill to reconstruct today's would-have-isolated NIFTY strike from the day's intraday candles.";
+                } else {
+                    icon = "bi-moon-stars";
+                    title = "Market closed";
+                    sub = "No new isolation until the next trading session.";
+                }
                 break;
             case "in_session":
                 if (isWatching) {
-                    icon = "bi-bullseye"; title = "Watching for R3 / S3 touches";
-                    sub = "Candidates will be isolated the moment NIFTY or SENSEX touches its R3 or S3 level.";
+                    icon = "bi-bullseye"; title = "Watching 4 indices for R3 / S3 touches";
+                    sub = "Priority: NIFTY > BANKNIFTY > MIDCPNIFTY > SENSEX. Every touch routes to a NIFTY strike.";
                 } else {
                     icon = "bi-hourglass-split"; title = "Not isolated yet";
                 }
@@ -2727,8 +2895,11 @@
 
         const backfillBtn = document.getElementById("backfill-btn");
         if (backfillBtn) {
-            const canBackfill = isWatching && !d.isolated;
+            const canBackfill = (isWatching || simulateAvailable) && !d.isolated;
             backfillBtn.style.display = canBackfill ? "inline-flex" : "none";
+            backfillBtn.className = canBackfill
+                ? "iso-btn simulate"
+                : "iso-btn";
         }
     }
 
@@ -2755,6 +2926,9 @@
         const isPromoted = !!(active && active.record);
         const iso = isPromoted ? active.record : d.isolated;
         const ev = d.trigger_event || {};
+        const simulate = isSimulateMode(d);
+
+        hero.classList.toggle("is-simulate", simulate);
 
         document.getElementById("hero-symbol").textContent =
             iso.trading_symbol || iso.instrument_key || "—";
@@ -2764,6 +2938,9 @@
         const tagsEl = document.getElementById("hero-tags");
         tagsEl.innerHTML = "";
         const tags = [];
+        if (simulate) {
+            tags.push({ cls: "sim", text: "SIMULATE" });
+        }
         if (iso.type) {
             tags.push({
                 cls: iso.type === "CE" ? "s" : "r",
@@ -2790,12 +2967,28 @@
 
         const metaEl = document.getElementById("hero-meta");
         const originalReason = (d.isolated || {}).reason;
+        const triggerIdx = iso.trigger_index || "—";
+        const triggerPriority = iso.trigger_priority;
+        const routedIdx = iso.routed_index || "NIFTY";
+        const routedLtp = iso.routed_nifty_ltp;
+
+        const triggerLine =
+            triggerIdx + " " + (iso.trigger_side || "—") +
+            (triggerPriority ? ` · P${triggerPriority}` : "");
+        const routedLine =
+            routedIdx + (routedLtp != null ? ` @ ${fmt(routedLtp)}` : "");
+
         const metaItems = [
             {
-                label: "Trigger",
+                label: isPromoted ? "Trigger · promoted" : "Trigger",
                 value: isPromoted
                     ? `${reasonLabel(originalReason)} · promoted`
-                    : reasonLabel(iso.reason),
+                    : triggerLine,
+            },
+            {
+                label: "Routed To",
+                value: routedLine,
+                highlight: !simulate,
             },
         ];
         if (isPromoted) {
@@ -2816,16 +3009,31 @@
             },
             { label: "Touched At", value: formatTime(iso.touched_at) },
         );
-        if (iso.nifty_reference_ltp !== null &&
-            iso.nifty_reference_ltp !== undefined) {
+
+        const alsoTouched = iso.simultaneous_touches || [];
+        if (alsoTouched.length) {
             metaItems.push({
-                label: "NIFTY @ touch",
-                value: fmt(iso.nifty_reference_ltp),
+                label: "Also Touched",
+                value: alsoTouched
+                    .map(t => `${t.canonical || t.index} ${t.side || ""}`.trim())
+                    .join(", "),
+                highlight: false,
             });
         }
+
+        if (simulate) {
+            metaItems.push({
+                label: "Source",
+                value: "SIMULATE — post-close replay",
+                simulate: true,
+            });
+        }
+
         metaEl.innerHTML = metaItems
             .map(m => {
-                const cls = m.highlight ? "meta-value highlight" : "meta-value";
+                let cls = "meta-value";
+                if (m.simulate) cls += " sim";
+                else if (m.highlight) cls += " highlight";
                 return (
                     `<div><span class="meta-label">${esc(m.label)}</span>` +
                     `<span class="${cls}">${esc(m.value)}</span></div>`
@@ -2848,7 +3056,8 @@
                 layoutBtn.classList.remove("is-hidden");
                 layoutBtn.title =
                     "Open " +
-                    (iso.trigger_index ? iso.trigger_index + " · " : "") +
+                    routedIdx +
+                    " · " +
                     (iso.trading_symbol || iso.instrument_key) +
                     " side-by-side in a new tab";
             } else {
@@ -2882,9 +3091,24 @@
         const el = document.getElementById("entry-touch-strip");
         if (!el) return;
         const t = payload.touch || {};
+        const iso = payload.isolated || {};
+        const simulate = iso.source === "backfill";
+
+        const srcTag = simulate
+            ? ' <strong style="color:var(--iso-simulate)">· SIMULATE</strong>'
+            : "";
+
         el.innerHTML =
-            '<span>Side: <strong>' + esc(t.side || "—") + '</strong></span>' +
+            '<span>Trigger: <strong>' +
+                esc(iso.trigger_index || "—") + " " + esc(t.side || "—") +
+                srcTag +
+            '</strong></span>' +
             '<span>Bias: <strong>' + esc(t.bias_type || "—") + '</strong></span>' +
+            '<span>Routed to: <strong>' +
+                esc(iso.routed_index || "NIFTY") +
+                (iso.routed_nifty_ltp != null
+                    ? " @ " + fmt(iso.routed_nifty_ltp) : "") +
+            '</strong></span>' +
             '<span>Touch: <strong>' + esc(formatTime(t.time)) + '</strong></span>' +
             '<span>Window: <strong>' +
                 esc(formatTime(t.window_start)) + ' → ' +
@@ -2932,6 +3156,167 @@
         }
     }
 
+    /* Build a candidate note (why is this candidate in this state). */
+    function entryCandidateNote(c) {
+        if (c.state === "waiting") {
+            if (c.state_note === "no_support_pivot_in_window") {
+                return "No support pivot inside the post-touch buffer yet.";
+            }
+            if (c.state_note === "no_sr_levels") {
+                return "No live SR levels persisted yet for this instrument.";
+            }
+            return "";
+        }
+        if (c.state === "waiting_confirmation") {
+            const es = c.entry_support || {};
+            const br = c.blocking_resistance || {};
+            if (es.price) {
+                let note = "Support at " + fmt(es.price) +
+                    " (pivot " + formatTime(es.pivot_time) + "). " +
+                    "Fast confirms at " +
+                    formatTime(es.confirmed_time_fast || es.confirmed_time) + ".";
+                if (c.seconds_until_confirmation != null) {
+                    const mins = Math.max(0, Math.round(c.seconds_until_confirmation / 60));
+                    note += " (~" + mins + "m)";
+                }
+                return note;
+            }
+            if (br.price) {
+                let note = "Resistance at " + fmt(br.price) +
+                    " (pivot " + formatTime(br.pivot_time) + "). " +
+                    "Fast confirms at " + formatTime(br.confirmed_time) + ".";
+                if (c.seconds_until_confirmation != null) {
+                    const mins = Math.max(0, Math.round(c.seconds_until_confirmation / 60));
+                    note += " " + (c.state_note && c.state_note.includes("auto_reverse")
+                        ? "(awaiting auto-reverse, ~" + mins + "m)"
+                        : "(~" + mins + "m)");
+                }
+                return note;
+            }
+            return "";
+        }
+        if (c.state === "blocked") {
+            const b = c.blocking_resistance || {};
+            const n = c.state_note || "";
+            if (n === "all_candidates_in_window_blocked") {
+                return "Buffer window expired with no tradeable confirmation.";
+            }
+            if (n === "entry_below_support") {
+                return "Entry price broke the support during confirmation wait.";
+            }
+            if (n === "invalid_entry_price") {
+                return "Invalid entry price (≤0) — bad tick or dead instrument.";
+            }
+            if (n === "no_entry_price") {
+                return "No entry price available (candle close and LTP both missing).";
+            }
+            if (n === "invalid_counter_price") {
+                return "Auto-reverse failed — counter-side LTP unavailable.";
+            }
+            if (b.price) {
+                return "Blocked by resistance " + fmt(b.price) +
+                    " (confirmed " + formatTime(b.confirmed_time) + ").";
+            }
+            return n || "Blocked.";
+        }
+        if (c.state === "discarded") {
+            const rt = c.reversal_trigger || {};
+            if (c.state_note === "rejected_and_reversed" && rt.bias_resistance_price != null) {
+                const rejSide = c.side || "?";
+                const armSide = rejSide === "CE" ? "PE" : "CE";
+                return "Bias " + rejSide + " rejected at ₹" +
+                    fmt(rt.bias_resistance_price) +
+                    " (confirmed " + formatTime(rt.bias_resistance_confirmed_time_fast) + ")" +
+                    " — auto-reversed to " + armSide + ".";
+            }
+            return "Another side confirmed first — entry discarded for the day.";
+        }
+        if (c.state === "armed") {
+            if (c.entry_type === "auto_reverse_on_rejection") {
+                return "Auto-reverse fired: bias side rejected → counter side armed.";
+            }
+            return "Entry support confirmed. Place MARKET order for this side.";
+        }
+        if (c.state === "error") {
+            return c.state_note || "Computation error.";
+        }
+        return "";
+    }
+
+    /* Build the armed-entry grid.
+       - Normal bias-side arm → support-based grid.
+       - Auto-reverse counter-side arm → reversal-evidence grid.
+    */
+    function entryCandidateGrid(c) {
+        if (c.state !== "armed" || !c.entry) {
+            if (c.entry_support) {
+                const es = c.entry_support;
+                return (
+                    '<div class="entry-grid">' +
+                        '<div class="label">Support price</div>' +
+                        '<div class="value">' + fmt(es.price) + '</div>' +
+                        '<div class="label">Pivot time</div>' +
+                        '<div class="value">' + formatTime(es.pivot_time) + '</div>' +
+                        '<div class="label">Fast confirm</div>' +
+                        '<div class="value">' + formatTime(es.confirmed_time_fast || es.confirmed_time) + '</div>' +
+                        '<div class="label">Display confirm</div>' +
+                        '<div class="value">' + formatTime(es.confirmed_time) + '</div>' +
+                    '</div>'
+                );
+            }
+            return "";
+        }
+
+        const e = c.entry;
+        const isReversal = c.entry_type === "auto_reverse_on_rejection";
+        const rt = c.reversal_trigger || {};
+
+        const commonRows = [
+            '<div class="label">Entry price</div>',
+            '<div class="value">' + fmt(e.price) +
+                ' <small>(' + esc(quoteSourceLabel(e.price_source)) + ')</small></div>',
+            '<div class="label">Entry time</div>',
+            '<div class="value">' + formatTime(e.time) + '</div>',
+            '<div class="label">Stop-loss</div>',
+            '<div class="value">' + fmt(e.stop) +
+                (e.stop_source ? ' <small>(' + esc(e.stop_source) + ')</small>' : '') + '</div>',
+            '<div class="label">Stop risk</div>',
+            '<div class="value">' +
+                (e.stop_pct != null ? (e.stop_pct * 100).toFixed(1) + '%' : "—") +
+            '</div>',
+            '<div class="label">Target</div>',
+            '<div class="value">' +
+                (e.target != null ? fmt(e.target) : "—") +
+            '</div>',
+        ];
+
+        let extraRows = '';
+        if (isReversal) {
+            extraRows =
+                '<div class="label">Rejected side</div>' +
+                '<div class="value">' + esc(rt.rejected_side || "—") + '</div>' +
+                '<div class="label">Rejected at</div>' +
+                '<div class="value">₹' + fmt(rt.bias_resistance_price) + '</div>' +
+                '<div class="label">Rejection time</div>' +
+                '<div class="value">' + formatTime(rt.bias_resistance_confirmed_time_fast) + '</div>' +
+                '<div class="label">Entry type</div>' +
+                '<div class="value">auto-reverse</div>';
+        } else if (c.entry_support) {
+            const es = c.entry_support;
+            extraRows =
+                '<div class="label">Support price</div>' +
+                '<div class="value">' + fmt(es.price) + '</div>' +
+                '<div class="label">Support pivot</div>' +
+                '<div class="value">' + formatTime(es.pivot_time) + '</div>' +
+                '<div class="label">Fast confirm</div>' +
+                '<div class="value">' + formatTime(es.confirmed_time_fast || es.confirmed_time) + '</div>' +
+                '<div class="label">Display confirm</div>' +
+                '<div class="value">' + formatTime(es.confirmed_time) + '</div>';
+        }
+
+        return '<div class="entry-grid">' + commonRows.join('') + extraRows + '</div>';
+    }
+
     function renderEntryCandidate(c) {
         const side = c.side || "—";
         const typeCls = side === "CE" ? "type-ce" : "type-pe";
@@ -2939,107 +3324,47 @@
         const stateCls = "state-" + stateVal;
         const isChosen = !!c.chosen;
         const isBias = !!c.is_bias_side;
+        const isReversal = c.entry_type === "auto_reverse_on_rejection";
 
         const pills = [
             '<span class="entry-pill ' + typeCls + '">' + esc(side) + '</span>',
             isBias ? '<span class="entry-pill bias">BIAS</span>' : '',
+            isReversal ? '<span class="entry-pill auto-reverse">↺ AUTO-REV</span>' : '',
             '<span class="entry-pill ' + stateCls + '">' +
                 esc(stateVal.replace(/_/g, " ")) + '</span>',
         ].filter(Boolean).join("");
 
         const sym = c.trading_symbol || c.instrument_key || "—";
+        const note = entryCandidateNote(c);
+        const grid = entryCandidateGrid(c);
 
-        let note = "";
-        if (c.state === "waiting" && c.state_note === "no_support_pivot_in_window") {
-            note = "No support pivot inside the post-touch buffer yet.";
-        } else if (c.state === "waiting" && c.state_note === "no_sr_levels") {
-            note = "No live SR levels persisted yet for this instrument.";
-        } else if (c.state === "waiting_confirmation") {
-            const es = c.entry_support || {};
-            note = "Support at " + fmt(es.price) +
-                " (pivot " + formatTime(es.pivot_time) + "). " +
-                "Confirms at " + formatTime(es.confirmed_time) + ".";
-            if (c.seconds_until_confirmation != null) {
-                const mins = Math.max(0, Math.round(c.seconds_until_confirmation / 60));
-                note += " (~" + mins + "m)";
-            }
-        } else if (c.state === "blocked") {
-            const b = c.blocking_resistance || {};
-            note = "Blocked by resistance " + fmt(b.price) +
-                " (confirmed " + formatTime(b.confirmed_time) + ").";
-        } else if (c.state === "discarded") {
-            note = "Another side confirmed first — entry discarded for the day.";
-        } else if (c.state === "armed") {
-            note = "Entry support confirmed. Place MARKET order for this side.";
-        } else if (c.state === "error") {
-            note = c.state_note || "Computation error.";
+        let extraHtml = '';
+        if (c.warning && c.warning_detail) {
+            extraHtml += '<div class="entry-warning">⚠️ ' + esc(c.warning_detail) + '</div>';
         }
-
-        let grid = "";
-        if (c.state === "armed" && c.entry) {
-            const e = c.entry;
-            const es = c.entry_support || {};
-            grid =
-                '<div class="entry-grid">' +
-                    '<div class="label">Entry LTP</div>' +
-                    '<div class="value">' + fmt(e.price) +
-                        ' <small>(' + esc(quoteSourceLabel(e.price_source)) + ')</small></div>' +
-                    '<div class="label">Entry time</div>' +
-                    '<div class="value">' + formatTime(e.time) + '</div>' +
-                    '<div class="label">Stop-loss</div>' +
-                    '<div class="value">' + fmt(e.stop) +
-                        (e.stop_source ? ' <small>(' + esc(e.stop_source) + ')</small>' : '') + '</div>' +
-                    '<div class="label">Stop risk</div>' +
-                    '<div class="value">' +
-                        (e.stop_pct != null ? (e.stop_pct * 100).toFixed(1) + '%' : "—") +
-                    '</div>' +
-                    '<div class="label">Target</div>' +
-                    '<div class="value">' +
-                        (e.target != null ? fmt(e.target) : "—") +
-                    '</div>' +
-                    '<div class="label">Support price</div>' +
-                    '<div class="value">' + fmt(es.price) + '</div>' +
-                    '<div class="label">Support pivot</div>' +
-                    '<div class="value">' + formatTime(es.pivot_time) + '</div>' +
-                    '<div class="label">Fast confirm</div>' +
-                    '<div class="value">' + formatTime(es.confirmed_time_fast || es.confirmed_time) + '</div>' +
-                    '<div class="label">Display confirm</div>' +
-                    '<div class="value">' + formatTime(es.confirmed_time) + '</div>' +
-                    '<div class="label">Minutes after touch</div>' +
-                    '<div class="value">' + fmt(es.minutes_from_touch, 1) + '</div>' +
-                '</div>';
-        } else if (c.entry_support) {
-            const es = c.entry_support;
-            grid =
-                '<div class="entry-grid">' +
-                    '<div class="label">Support price</div>' +
-                    '<div class="value">' + fmt(es.price) + '</div>' +
-                    '<div class="label">Pivot time</div>' +
-                    '<div class="value">' + formatTime(es.pivot_time) + '</div>' +
-                    '<div class="label">Fast confirm</div>' +
-                    '<div class="value">' + formatTime(es.confirmed_time_fast || es.confirmed_time) + '</div>' +
-                    '<div class="label">Display confirm</div>' +
-                    '<div class="value">' + formatTime(es.confirmed_time) + '</div>' +
-                    '<div class="label">Minutes after touch</div>' +
-                    '<div class="value">' + fmt(es.minutes_from_touch, 1) + '</div>' +
+        if (isReversal && c.state === "discarded" && c.reversal_trigger) {
+            const rt = c.reversal_trigger;
+            extraHtml +=
+                '<div class="entry-reversal">' +
+                    '↺ <strong>Auto-reverse fired</strong> — ' +
+                    esc(rt.rejected_side || side) + ' rejected at ₹' +
+                    fmt(rt.bias_resistance_price) +
+                    ' (confirmed ' + formatTime(rt.bias_resistance_confirmed_time_fast) + ').' +
                 '</div>';
         }
-
-        const warnHtml = (c.warning && c.warning_detail)
-            ? '<div class="entry-warning">⚠️ ' + esc(c.warning_detail) + '</div>'
-            : '';
 
         return (
             '<div class="entry-candidate' +
                 (isChosen ? ' is-chosen' : '') +
-                (isBias ? ' is-bias-side' : '') + '">' +
+                (isBias ? ' is-bias-side' : '') +
+                (isReversal ? ' is-auto-reverse' : '') + '">' +
                 '<div class="entry-candidate-head">' +
                     '<div class="entry-candidate-symbol">' + esc(sym) + '</div>' +
                     '<div class="entry-candidate-pills">' + pills + '</div>' +
                 '</div>' +
                 '<div class="entry-note">' + esc(note) + '</div>' +
                 grid +
-                warnHtml +
+                extraHtml +
             '</div>'
         );
     }
@@ -3110,10 +3435,15 @@
         if (chosenPill) {
             const chosen = payload.chosen_side;
             const already = !!promo.already_applied;
+            const entryType = payload.chosen_entry_type;
             if (chosen) {
-                chosenPill.textContent = already
+                let label = already
                     ? `Promoted: ${chosen}`
                     : `Chosen: ${chosen}`;
+                if (entryType === "auto_reverse_on_rejection") {
+                    label += " ↺";
+                }
+                chosenPill.textContent = label;
                 chosenPill.className = "sr-count-pill chosen";
             } else {
                 chosenPill.textContent = "Waiting";
@@ -3482,7 +3812,8 @@
                 <div class="sr-empty-state">
                     <i class="bi bi-info-circle"></i>
                     No instrument has been officially isolated yet today.
-                    Wait for NIFTY or SENSEX to touch R3 / S3, then try again.
+                    Wait for an R3 / S3 touch on any of NIFTY / BANKNIFTY /
+                    MIDCPNIFTY / SENSEX, then try again.
                 </div>`;
             return;
         }
@@ -3702,7 +4033,7 @@
         }
     }
 
-    /* ---------- Reasoning ---------- */
+    /* ---------- Reasoning (G1 v3.2 multi-index routing) ---------- */
     function renderReasoning(d) {
         const card = document.getElementById("iso-reasoning");
         if (!card) return;
@@ -3715,67 +4046,55 @@
 
         const iso = d.isolated;
         const ev = d.trigger_event;
+        const simulate = iso.source === "backfill";
         const steps = [];
+
+        if (simulate) {
+            steps.push({
+                icon: "bi-arrow-clockwise",
+                title: "Simulate Mode",
+                detail:
+                    "Record reconstructed from today's intraday 1-min candles " +
+                    "after the market close. Replay uses the same priority " +
+                    "arbitration and NIFTY routing as live.",
+            });
+        }
 
         steps.push({
             icon: "bi-lightning-charge-fill",
             title: "Trigger",
             detail:
-                `${ev.index} touched ${ev.trigger_level} at ` +
+                `${iso.trigger_index || ev.index} touched ${ev.trigger_level} at ` +
                 `${fmt(ev.trigger_level_value)} (LTP ${fmt(ev.trigger_ltp)}) ` +
-                `at ${formatTime(ev.touched_at)}.`,
+                `at ${formatTime(ev.touched_at)}` +
+                (iso.trigger_priority ? ` · priority P${iso.trigger_priority}` : "") + ".",
         });
 
-        if (ev.candidates_count !== null &&
-            ev.candidates_count !== undefined) {
+        if (Array.isArray(iso.simultaneous_touches) && iso.simultaneous_touches.length) {
             steps.push({
-                icon: "bi-list-ul",
-                title: "Candidates considered",
+                icon: "bi-list-ol",
+                title: "Simultaneous touches",
                 detail:
-                    `${ev.candidates_count} ${ev.index} ` +
-                    `${ev.side === "R3" ? "CE" : "PE"} instrument(s) carried ` +
-                    `${ev.trigger_level} / ${ev.trigger_level}_Threshold ` +
-                    `in their level tags.`,
+                    "Also touched in the same window: " +
+                    iso.simultaneous_touches
+                        .map(t => `${t.canonical || t.index} ${t.side || ""}`.trim())
+                        .join(", ") + ". Priority order resolved to " +
+                    iso.trigger_index + ".",
             });
         }
 
-        const reason = String(iso.reason || "");
-        if (reason.includes("with_nifty_reference")) {
-            steps.push({
-                icon: "bi-arrow-left-right",
-                title: "Cross-index reference",
-                detail:
-                    `SENSEX touch fired; NIFTY LTP at that moment was ` +
-                    `${fmt(ev.nifty_reference_ltp)} (fresh). ` +
-                    `NIFTY was used as the reference for the pick.`,
-            });
-            steps.push({
-                icon: "bi-bullseye",
-                title: "Selection",
-                detail:
-                    `Picked the NIFTY ${ev.side === "R3" ? "CE" : "PE"} strike ` +
-                    `nearest to NIFTY LTP ${fmt(ev.nifty_reference_ltp)} ` +
-                    `→ strike ${fmt(iso.strike, 0)}.`,
-            });
-        } else if (reason.includes("fallback")) {
-            steps.push({
-                icon: "bi-arrow-repeat",
-                title: "Selection (fallback)",
-                detail:
-                    `NIFTY tick was stale at the moment of the SENSEX ` +
-                    `touch. Fell back to the nearest SENSEX ` +
-                    `${ev.side === "R3" ? "CE" : "PE"} strike to SENSEX ` +
-                    `LTP ${fmt(ev.trigger_ltp)} → strike ${fmt(iso.strike, 0)}.`,
-            });
-        } else {
-            steps.push({
-                icon: "bi-bullseye",
-                title: "Selection",
-                detail:
-                    `Picked the strike nearest to the trigger LTP ` +
-                    `(${fmt(ev.trigger_ltp)}) → strike ${fmt(iso.strike, 0)}.`,
-            });
-        }
+        // Routing step — G1 v3.2 always routes to NIFTY.
+        const routedIdx = iso.routed_index || "NIFTY";
+        const routedLtp = iso.routed_nifty_ltp;
+        steps.push({
+            icon: "bi-arrow-right-circle",
+            title: "Routed to " + routedIdx,
+            detail:
+                "Regardless of which index fired the touch, strike selection " +
+                "runs on " + routedIdx + " spot LTP" +
+                (routedLtp != null ? " (" + fmt(routedLtp) + ")" : "") +
+                " → nearest 50 strike = " + fmt(iso.strike, 0) + ".",
+        });
 
         const instrLtp = parseNum(iso.instrument_ltp);
         if (instrLtp !== null) {
@@ -3830,19 +4149,14 @@
         let list;
         let distanceKey;
         let refLabel;
-        if (
-            iso &&
-            String(iso.reason || "").includes("with_nifty_reference") &&
-            Array.isArray(ev.nifty_reference_candidates) &&
-            ev.nifty_reference_candidates.length
-        ) {
-            list = ev.nifty_reference_candidates;
-            distanceKey = "distance_to_nifty_ltp";
-            refLabel = `NIFTY reference (LTP ${fmt(ev.nifty_reference_ltp)})`;
-        } else if (Array.isArray(ev.candidates) && ev.candidates.length) {
+        if (Array.isArray(ev.candidates) && ev.candidates.length) {
             list = ev.candidates;
             distanceKey = "distance_to_trigger_ltp";
-            refLabel = `${ev.index || "Index"} LTP (${fmt(ev.trigger_ltp)})`;
+            const routedLtp = iso && iso.routed_nifty_ltp != null
+                ? iso.routed_nifty_ltp
+                : ev.trigger_ltp;
+            const routedIdx = iso && iso.routed_index ? iso.routed_index : "NIFTY";
+            refLabel = `${routedIdx} spot (${fmt(routedLtp)})`;
         } else {
             list = [];
             distanceKey = "distance_to_trigger_ltp";
@@ -3899,32 +4213,66 @@
             .join("");
     }
 
-    /* ---------- Touch state ---------- */
+    /* ---------- Touch state (8 rows: 4 indices × 2 sides) ---------- */
     function renderTouchState(d) {
         const body = document.getElementById("touch-body");
+        const pill = document.getElementById("touch-state-pill");
         if (!body) return;
 
         const ts = d.touch_state || {};
-        const order = ["NIFTY_R3", "NIFTY_S3", "SENSEX_R3", "SENSEX_S3"];
-        const rows = order.map(k => {
-            const touched = !!ts[k];
-            const [idxName, side] = k.split("_");
-            const chip = touched
-                ? `<span class="touch-chip touched"><i class="bi bi-check-circle-fill"></i> touched</span>`
-                : `<span class="touch-chip not-touched"><i class="bi bi-circle"></i> waiting</span>`;
-            return `<tr>
-                <td><strong>${esc(idxName)}</strong></td>
-                <td>${esc(side)}</td>
-                <td>${chip}</td>
-            </tr>`;
-        }).join("");
+        const or = d.or_levels || {};
+        const priorityMap = {};
+        if (Array.isArray(d.monitored_indices)) {
+            for (const m of d.monitored_indices) {
+                if (m && m.canonical) {
+                    priorityMap[String(m.canonical).toUpperCase()] = m.priority;
+                }
+            }
+        }
+        const getPriority = (canonical) =>
+            priorityMap[canonical] || DEFAULT_PRIORITY[canonical] || 99;
+
+        // G1 v3.2: render all 4 indices × 2 sides = 8 rows, in priority order.
+        const rows = [];
+        let touchedCount = 0;
+        for (const canonical of INDEX_ORDER) {
+            const priority = getPriority(canonical);
+            const levels = or[canonical] || {};
+            for (const side of ["R3", "S3"]) {
+                const key = `${canonical}_${side}`;
+                const touched = !!ts[key];
+                if (touched) touchedCount++;
+                const levelValue = levels[side];
+                const chip = touched
+                    ? `<span class="touch-chip touched"><i class="bi bi-check-circle-fill"></i> touched</span>`
+                    : `<span class="touch-chip not-touched"><i class="bi bi-circle"></i> waiting</span>`;
+                rows.push(`<tr>
+                    <td><strong>${esc(canonical)}</strong></td>
+                    <td>${esc(side)}</td>
+                    <td class="num">P${esc(priority)}</td>
+                    <td class="num">${levelValue != null ? fmt(levelValue) : "—"}</td>
+                    <td>${chip}</td>
+                </tr>`);
+            }
+        }
+
+        if (pill) {
+            pill.textContent = `${touchedCount} / 8`;
+            pill.className = "sr-count-pill" + (touchedCount > 0 ? " has" : "");
+        }
 
         body.innerHTML = `
             <table class="iso-table">
                 <thead>
-                    <tr><th>Index</th><th>Side</th><th>Status</th></tr>
+                    <tr>
+                        <th>Index</th>
+                        <th>Side</th>
+                        <th class="num">Priority</th>
+                        <th class="num">Level</th>
+                        <th>Status</th>
+                    </tr>
                 </thead>
-                <tbody>${rows}</tbody>
+                <tbody>${rows.join("")}</tbody>
             </table>`;
     }
 
@@ -3936,7 +4284,7 @@
         const events = (d.events || []).slice(-50).reverse();
         if (!events.length) {
             body.innerHTML =
-                `<tr><td colspan="7" class="iso-empty">` +
+                `<tr><td colspan="8" class="iso-empty">` +
                 `No events today.` +
                 `</td></tr>`;
             return;
@@ -3944,9 +4292,14 @@
         body.innerHTML = events
             .map(ev => {
                 const status = String(ev.status || "");
-                let statusBadge = `<span class="touch-chip not-touched">${esc(status || "—")}</span>`;
+                const source = String(ev.source || "");
+                const isSimulate = source === "backfill";
+                let statusBadge =
+                    `<span class="touch-chip not-touched">${esc(status || "—")}</span>`;
                 if (status === "isolated") {
-                    statusBadge = `<span class="touch-chip touched"><i class="bi bi-check-circle-fill"></i> isolated</span>`;
+                    statusBadge = isSimulate
+                        ? `<span class="touch-chip touched" style="background: var(--iso-simulate-bg); color: var(--iso-simulate);"><i class="bi bi-arrow-clockwise"></i> simulate</span>`
+                        : `<span class="touch-chip touched"><i class="bi bi-check-circle-fill"></i> isolated</span>`;
                 }
                 const inst =
                     ev.isolated_instrument ||
@@ -3955,10 +4308,14 @@
                 const instLabel = ev.status === "isolated"
                     ? `<a href="/chart/${encodeURIComponent(inst)}" target="_blank" rel="noopener noreferrer" style="color:var(--iso-primary);font-weight:700;text-decoration:none;">${esc(inst)}</a>`
                     : esc(inst);
-                return `<tr>
+                const rowCls =
+                    (ev.status === "isolated" ? " is-trigger-row" : "") +
+                    (isSimulate ? " is-simulate-row" : "");
+                return `<tr class="${rowCls.trim()}">
                     <td>${formatTime(ev.touched_at)}</td>
                     <td><strong>${esc(ev.index || "—")}</strong></td>
                     <td>${esc(ev.side || "—")}</td>
+                    <td class="num">P${esc(ev.trigger_priority || "—")}</td>
                     <td class="num">${fmt(ev.trigger_ltp)}</td>
                     <td class="num">${fmt(ev.trigger_level_value)}</td>
                     <td>${statusBadge}</td>
@@ -3986,7 +4343,22 @@
         const hitIndex = iso.trigger_index || null;
         const hitLevel = iso.trigger_level || null;
 
-        body.innerHTML = indexes
+        // Sort by priority order if known.
+        const priorityMap = {};
+        if (Array.isArray(d.monitored_indices)) {
+            for (const m of d.monitored_indices) {
+                if (m && m.canonical) {
+                    priorityMap[String(m.canonical).toUpperCase()] = m.priority;
+                }
+            }
+        }
+        const sorted = indexes.slice().sort((a, b) => {
+            const pa = priorityMap[a] || DEFAULT_PRIORITY[a] || 99;
+            const pb = priorityMap[b] || DEFAULT_PRIORITY[b] || 99;
+            return pa - pb;
+        });
+
+        body.innerHTML = sorted
             .map(idx => {
                 const levels = or[idx] || {};
                 const display = [
@@ -4004,8 +4376,15 @@
                         </div>`;
                     })
                     .join("");
+                const priority = priorityMap[idx] || DEFAULT_PRIORITY[idx] || "—";
+                const isHitIndex = idx === hitIndex;
                 return `<div class="or-block">
-                    <div class="or-block-title">${esc(idx)}</div>
+                    <div class="or-block-title">
+                        ${esc(idx)}
+                        <span style="font-weight:600;color:var(--iso-muted);font-size:0.7rem;margin-left:6px;">
+                            (P${esc(priority)}${isHitIndex ? " · trigger" : ""})
+                        </span>
+                    </div>
                     ${cells}
                 </div>`;
             })
@@ -4050,7 +4429,7 @@
         if (!btn) return;
         const original = btn.innerHTML;
         btn.disabled = true;
-        btn.innerHTML = '<i class="bi bi-hourglass-split"></i> Running…';
+        btn.innerHTML = '<i class="bi bi-hourglass-split"></i> Running replay…';
         try {
             const res = await fetch(BACKFILL_URL, { method: "POST" });
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -4141,8 +4520,6 @@
 
     /* ============================================================
        SIMULATION — post-close dummy-order replay
-       Wrapped in an IIFE so it owns a single namespace. Runs after
-       `state` and all formatters above are defined.
        ============================================================ */
     (function attachSimulation() {
         const SIM_RUN_URL = "/admin/simulation/run";
@@ -4155,7 +4532,6 @@
 
         if (!runBtn || !bodyEl) return;
 
-        /* ---- Show card only when there is an isolated instrument ---- */
         function updateVisibility() {
             if (!card) return;
             const d = state && state.detail;
@@ -4165,19 +4541,15 @@
                 card.style.display = "none";
             }
         }
-        // Initial paint + a low-frequency check so the card appears as
-        // soon as the first detail poll completes.
         updateVisibility();
         setInterval(updateVisibility, 1000);
 
-        /* ---- Status pill helper ---- */
         function setStatus(text, cls) {
             if (!statusPill) return;
             statusPill.textContent = text;
             statusPill.className = "sr-count-pill" + (cls ? " " + cls : "");
         }
 
-        /* ---- Formatters local to this block ---- */
         function fmtPct(v) {
             const n = Number(v);
             return Number.isFinite(n) ? (n * 100).toFixed(1) + "%" : "—";
@@ -4203,7 +4575,6 @@
             }
         }
 
-        /* ---- Regime → banner colour ---- */
         function regimeColor(regimeName) {
             const r = String(regimeName || "").toLowerCase();
             if (r.startsWith("high")) return "var(--iso-red)";
@@ -4211,7 +4582,6 @@
             return "var(--iso-primary)";
         }
 
-        /* ---- Scenario renderer ---- */
         function renderScenario(key, s, isWinner) {
             const r = (s && s.replay) || {};
             const exitReason = r.exit_reason || "—";
@@ -4278,7 +4648,6 @@
             `;
         }
 
-        /* ---- Full result renderer ---- */
         function renderResult(data) {
             if (!data || data.status !== "ok") {
                 const reason = (data && (data.reason || data.error || data.status)) || "unknown";
@@ -4297,7 +4666,6 @@
 
             setStatus("Replayed", "has");
 
-            /* ---- Regime banner ---- */
             const regime = data.regime || {};
             if (regimeBanner) {
                 regimeBanner.style.display = "flex";
@@ -4314,7 +4682,6 @@
                 `;
             }
 
-            /* ---- Scenario cards ---- */
             const sc = data.scenarios || {};
             const verdict = data.verdict || {};
             const winner = verdict.winner;
@@ -4325,10 +4692,8 @@
                 return renderScenario(k, s, isWin);
             }).join("");
 
-            /* ---- Notes ---- */
             const notes = (data.notes || []).map(n => `<li>${esc(n)}</li>`).join("");
 
-            /* ---- Entry strip ---- */
             const entry = data.entry || {};
             const entryStrip = `
                 <div class="entry-touch-strip">
@@ -4341,7 +4706,6 @@
                 </div>
             `;
 
-            /* ---- Verdict strip ---- */
             let verdictHtml = "";
             if (winner && winner !== "unknown" && winner !== "tie") {
                 const wLabel = winner === "regime" ? "Regime scenario" : "Signal scenario";
@@ -4357,7 +4721,6 @@
                     </div>`;
             }
 
-            /* ---- Compose ---- */
             bodyEl.innerHTML = `
                 ${entryStrip}
                 <div class="entry-candidates">${scenarioHtml}</div>
@@ -4369,7 +4732,6 @@
             `;
         }
 
-        /* ---- Run ---- */
         async function runSimulation() {
             if (!runBtn) return;
             const orig = runBtn.innerHTML;
@@ -4404,10 +4766,6 @@
 
     /* ============================================================
        DUMMY ORDERS — live tracking card
-       Polls /admin/dummy-orders/summary for the aggregates and
-       /admin/dummy-orders for the per-order rows. Refreshes every
-       15s (faster than the detail poll so the operator can see
-       live order status without waiting a full 10s cycle).
        ============================================================ */
     (function attachDummyOrders() {
         const STATE_URL = "/admin/dummy-orders";
@@ -4556,7 +4914,6 @@
                 return;
             }
 
-            // Sort: OPEN first (by entry_time asc), then closed (by closed_at desc)
             orders.sort((a, b) => {
                 const aOpen = a.status === "OPEN" ? 0 : 1;
                 const bOpen = b.status === "OPEN" ? 0 : 1;
@@ -4627,9 +4984,6 @@
         function updateVisibility() {
             if (!card) return;
             const d = state && state.detail;
-            // Always show the card when there is any isolation today —
-            // even before any order exists, so the operator knows
-            // where to look.
             if (d && d.isolated) {
                 card.style.display = "block";
             } else {
@@ -4637,15 +4991,12 @@
             }
         }
 
-        // First paint + visibility
         updateVisibility();
         setInterval(updateVisibility, 1000);
 
-        // Initial refresh + polling
         refresh();
         pollTimer = setInterval(refresh, POLL_MS);
 
-        // Clean up on page unload
         window.addEventListener("beforeunload", () => {
             if (pollTimer) clearInterval(pollTimer);
         });

@@ -1,5 +1,21 @@
 # core/config.py
-"""Configuration for the foundational market-data application."""
+"""Configuration for the foundational market-data application.
+
+G1 v3.2 additions (2026-10-28)
+------------------------------
+* Multi-index boundary surveillance — STRATEGY_MONITORED_INDICES,
+  STRATEGY_TOUCH_PRIORITY_ORDER, STRATEGY_ROUTED_EXECUTION_INDEX.
+* Auto-reverse on bias-side rejection — STRATEGY_ENTRY_ALLOW_AUTO_REVERSE,
+  STRATEGY_ENTRY_PRIORITIZE_SUPPORT.
+* LEVEL_FILTER_INDEXES now defaults to all four monitored indices
+  (NIFTY, BANKNIFTY, MIDCPNIFTY, SENSEX) so that OR levels exist for
+  every index the touch engine watches.
+* LEVEL_FILTER_STRIKE_STEP_{BANKNIFTY,MIDCPNIFTY} added so the filter
+  resolves strikes for those underlyings too (informational only;
+  execution always routes to NIFTY).
+* LEVEL_ISOLATION_BACKFILL_WINDOW opens at 09:15 (instead of 09:16) so
+  the 09:15 candle that opens the OR window is included in the replay.
+"""
 
 import os
 from pathlib import Path
@@ -32,6 +48,35 @@ def _bool(name: str, default: bool = False) -> bool:
 
 def _csv(name: str, default: str = "") -> list[str]:
     raw = _str(name, default)
+    return [part.strip() for part in raw.split(",") if part.strip()]
+
+def _csv_or_json_list(name: str, default: str = "") -> list[str]:
+    """Accept either a comma-separated list or a JSON array in .env.
+
+    * ``KEY=NSE_INDEX|Nifty 50,NSE_INDEX|Nifty Bank``      (CSV)
+    * ``KEY=["NSE_INDEX|Nifty 50","NSE_INDEX|Nifty Bank"]`` (JSON)
+
+    Both forms produce the same list of stripped strings. This exists
+    because STRATEGY_MONITORED_INDICES and STRATEGY_TOUCH_PRIORITY_ORDER
+    are documented as JSON arrays in the G1 v3.2 spec, but our other
+    settings use CSV. Supporting both means an operator can copy the
+    spec sample verbatim OR follow the project's existing CSV style.
+    """
+    import json
+    raw = _str(name, default)
+    if not raw:
+        return []
+    if raw.lstrip().startswith("["):
+        try:
+            parsed = json.loads(raw)
+        except (TypeError, ValueError):
+            parsed = None
+        if isinstance(parsed, list):
+            return [
+                str(part).strip()
+                for part in parsed
+                if str(part).strip()
+            ]
     return [part.strip() for part in raw.split(",") if part.strip()]
 
 # ---------------------------------------------------------------------------
@@ -219,13 +264,25 @@ FIRST_CANDLE_WORKERS = max(1, min(32, _int("FIRST_CANDLE_WORKERS", 8)))
 
 # ===========================================================================
 # Level-instrument filter (per-index CE/PE strike list from OR levels)
+#
+# G1 v3.2 — LEVEL_FILTER_INDEXES now covers all four monitored indices
+# so first_candle.json exists for every index the touch engine watches.
+# Only NIFTY's level_instruments.json is consumed for execution (the
+# other three are informational). The strike step per underlying is
+# configurable below so BANKNIFTY (100) and MIDCPNIFTY (25) resolve
+# cleanly if you ever route to those indices.
 # ===========================================================================
 LEVEL_FILTER_ENABLED = _bool("LEVEL_FILTER_ENABLED", True)
 
-LEVEL_FILTER_INDEXES = _csv("LEVEL_FILTER_INDEXES", "NIFTY,SENSEX")
+LEVEL_FILTER_INDEXES = _csv(
+    "LEVEL_FILTER_INDEXES",
+    "NIFTY,BANKNIFTY,MIDCPNIFTY,SENSEX",
+)
 
 LEVEL_FILTER_STRIKE_STEP_NIFTY = max(1, _int("LEVEL_FILTER_STRIKE_STEP_NIFTY", 50))
 LEVEL_FILTER_STRIKE_STEP_SENSEX = max(1, _int("LEVEL_FILTER_STRIKE_STEP_SENSEX", 100))
+LEVEL_FILTER_STRIKE_STEP_BANKNIFTY = max(1, _int("LEVEL_FILTER_STRIKE_STEP_BANKNIFTY", 100))
+LEVEL_FILTER_STRIKE_STEP_MIDCPNIFTY = max(1, _int("LEVEL_FILTER_STRIKE_STEP_MIDCPNIFTY", 25))
 
 LEVEL_FILTER_STRIKE_STEPS_JSON = _str("LEVEL_FILTER_STRIKE_STEPS_JSON", "")
 
@@ -243,11 +300,15 @@ LEVEL_FILTER_INCLUDE_INDEX_SR = _bool("LEVEL_FILTER_INCLUDE_INDEX_SR", True)
 
 # ===========================================================================
 # Live SR levels engine (pivot-based, runs on live 1-min candles)
+#
+# LIVE_SR_LEFT_BARS / LIVE_SR_RIGHT_BARS control the DISPLAY window
+# (chart, /isolated SR Tracking card, Telegram). The fast entry scan
+# uses STRATEGY_ENTRY_PIVOT_* below.
 # ===========================================================================
 LIVE_SR_ENABLED = _bool("LIVE_SR_ENABLED", True)
 LIVE_SR_TRACK_ALL_INSTRUMENTS = _bool("LIVE_SR_TRACK_ALL_INSTRUMENTS", True)
 LIVE_SR_LEFT_BARS = max(1, _int("LIVE_SR_LEFT_BARS", 15))
-LIVE_SR_RIGHT_BARS = max(1, _int("LIVE_SR_RIGHT_BARS", 3))
+LIVE_SR_RIGHT_BARS = max(1, _int("LIVE_SR_RIGHT_BARS", 15))
 LIVE_SR_MAX_CANDLES = max(50, _int("LIVE_SR_MAX_CANDLES", 500))
 LIVE_SR_FILENAME = _str("LIVE_SR_FILENAME", "live_sr_levels.json")
 LIVE_SR_PERSIST_EVERY_N_CANDLES = max(0, _int("LIVE_SR_PERSIST_EVERY_N_CANDLES", 5))
@@ -263,23 +324,88 @@ SR_BACKFILL_END_HOUR = _int("SR_BACKFILL_END_HOUR", 23)
 SR_BACKFILL_END_MINUTE = _int("SR_BACKFILL_END_MINUTE", 59)
 
 # ===========================================================================
-# LEVEL ISOLATION — pick one filtered CE/PE instrument on R3 / S3 touch
+# G1 v3.2 — MULTI-INDEX BOUNDARY SURVEILLANCE
 # ===========================================================================
-# After first_candle produces or_levels and level_filter writes
-# level_instruments.json, the isolation engine watches NIFTY / SENSEX
-# LTP for R3 / S3 touches and picks ONE filtered instrument per day
-# using the following priority (one-shot per side):
+# Monitored indices and priority arbitration. When the project starts
+# after the market close, the level-isolation engine replays the day
+# for ALL configured indices (not just NIFTY and SENSEX), applies the
+# priority order below, and reconstructs the "would-have-isolated"
+# NIFTY strike — this is the simulate mode.
 #
-#     NIFTY-R3 -> NIFTY-S3 -> SENSEX-R3 -> SENSEX-S3
+# STRATEGY_MONITORED_INDICES accepts either form in .env:
+#     STRATEGY_MONITORED_INDICES=NSE_INDEX|Nifty 50,NSE_INDEX|Nifty Bank,NSE_INDEX|NIFTY MID SELECT,BSE_INDEX|SENSEX
+#     STRATEGY_MONITORED_INDICES=["NSE_INDEX|Nifty 50","NSE_INDEX|Nifty Bank","NSE_INDEX|NIFTY MID SELECT","BSE_INDEX|SENSEX"]
 #
-# * NIFTY / SENSEX pick: nearest filtered strike to the index LTP.
-# * SENSEX-only touch  : reads the NIFTY LTP *at that moment* and picks
-#                        the nearest NIFTY filtered instrument.
-# * Stale NIFTY tick   : if older than LEVEL_ISOLATION_NIFTY_TICK_STALE_SECONDS
-#                        the engine falls back to SENSEX's own nearest.
+# Every entry must be one of the four keys the isolation engine knows
+# about (defined in services/level_isolated_instrument_service.INDEX_METADATA).
+# ===========================================================================
+STRATEGY_MONITORED_INDICES = _csv_or_json_list(
+    "STRATEGY_MONITORED_INDICES",
+    "NSE_INDEX|Nifty 50,"
+    "NSE_INDEX|Nifty Bank,"
+    "NSE_INDEX|NIFTY MID SELECT,"
+    "BSE_INDEX|SENSEX",
+)
+
+# Priority order for simultaneous touches (first = highest priority).
+# Values MUST be a subset of the canonical names derived from
+# STRATEGY_MONITORED_INDICES: NIFTY / BANKNIFTY / MIDCPNIFTY / SENSEX.
+STRATEGY_TOUCH_PRIORITY_ORDER = _csv_or_json_list(
+    "STRATEGY_TOUCH_PRIORITY_ORDER",
+    "NIFTY,BANKNIFTY,MIDCPNIFTY,SENSEX",
+)
+
+# Which index gets the strike selection (execution routing). Under G1
+# v3.2 this is always NIFTY 50 regardless of which index fired the touch.
+STRATEGY_ROUTED_EXECUTION_INDEX = _str(
+    "STRATEGY_ROUTED_EXECUTION_INDEX", "NSE_INDEX|Nifty 50"
+)
+
+# Priority rank per canonical index name. Derived from
+# STRATEGY_TOUCH_PRIORITY_ORDER so changing the order above re-ranks
+# the touch arbitration without touching any service code.
+def _priority_map() -> dict[str, int]:
+    return {
+        str(name).strip().upper(): i + 1
+        for i, name in enumerate(STRATEGY_TOUCH_PRIORITY_ORDER)
+        if str(name).strip()
+    }
+
+STRATEGY_INDEX_PRIORITY = _priority_map()
+
+# ===========================================================================
+# LEVEL ISOLATION — G1 v3.2 multi-index arbitration + NIFTY routing
+# ===========================================================================
+# Monitored indices: NIFTY / BANKNIFTY / MIDCPNIFTY / SENSEX (see
+# STRATEGY_MONITORED_INDICES above).
+#
+# Priority arbitration (one-shot per day):
+#
+#     NIFTY-R3 -> NIFTY-S3 -> BANKNIFTY-R3 -> BANKNIFTY-S3
+#         -> MIDCPNIFTY-R3 -> MIDCPNIFTY-S3 -> SENSEX-R3 -> SENSEX-S3
+#
+# The FIRST touch to resolve (by priority rank when multiple arrive
+# within the 2-second polling window) becomes the winning touch.
+#
+# ALWAYS routes to a NIFTY strike:
+#     * Bias = CE if the winning touch was R3, PE if it was S3.
+#     * Strike = nearest round 50 NIFTY strike to the NIFTY spot LTP
+#       at the moment of the winning touch.
 #
 # Persisted to data/<LEVEL_ISOLATION_FILENAME>; a full event log for
 # the day is preserved in the same file under "events".
+#
+# The record carries:
+#     * trigger_index / trigger_side  (which index fired)
+#     * trigger_priority              (arbitration rank)
+#     * simultaneous_touches          (other indices that fired in the
+#                                      same 2-second window)
+#     * routed_index                  (always NIFTY)
+#     * routed_nifty_ltp              (NIFTY spot at touch)
+#     * instrument_*                  (own option data snapshot)
+#     * source                        ("live" or "backfill" /
+#                                      "simulate" — the UI shows
+#                                      "SIMULATE MODE" for the latter)
 # ===========================================================================
 LEVEL_ISOLATION_ENABLED = _bool("LEVEL_ISOLATION_ENABLED", True)
 
@@ -288,28 +414,30 @@ LEVEL_ISOLATION_FILENAME = _str(
     "LEVEL_ISOLATION_FILENAME", "level_isolated_instrument.json"
 )
 
-# Throttle for the on-tick touch check (per NIFTY / SENSEX tick event).
+# Throttle for the on-tick touch check (per any index tick event).
 # The check runs at most once every N seconds regardless of tick rate.
 LEVEL_ISOLATION_CHECK_INTERVAL_SECONDS = max(
     0.5, _float("LEVEL_ISOLATION_CHECK_INTERVAL_SECONDS", 2.0)
 )
 
 # Max age (seconds) of the last NIFTY tick before it is treated as
-# stale for the "SENSEX-touch -> check current NIFTY LTP" branch. On a
-# stale tick, the engine falls back to the SENSEX-side nearest pick.
+# stale during routing. Under G1 v3.2 the routing always needs a
+# fresh NIFTY spot LTP; when NIFTY is stale for a non-NIFTY trigger
+# the touch is still recorded but isolation is deferred until the
+# next NIFTY tick.
 LEVEL_ISOLATION_NIFTY_TICK_STALE_SECONDS = max(
     1, _int("LEVEL_ISOLATION_NIFTY_TICK_STALE_SECONDS", 30)
 )
 
-# Startup backfill window (intraday-candle replay). Defaults mirror the
-# SR backfill window: 09:16 -> 23:59 IST. Any startup between these
-# times on a trading day reconstructs the "would-have-isolated"
-# instrument by replaying today's 1-min intraday candles.
+# Startup backfill window (intraday-candle replay). Widened to start
+# at 09:15 (instead of 09:16) so the 09:15 opening candle is included
+# in the replay that builds today's OR levels. End is 23:59 so a
+# 23:46 startup still reconstructs the whole session.
 LEVEL_ISOLATION_BACKFILL_WINDOW_START_HOUR = _int(
     "LEVEL_ISOLATION_BACKFILL_WINDOW_START_HOUR", 9
 )
 LEVEL_ISOLATION_BACKFILL_WINDOW_START_MINUTE = _int(
-    "LEVEL_ISOLATION_BACKFILL_WINDOW_START_MINUTE", 16
+    "LEVEL_ISOLATION_BACKFILL_WINDOW_START_MINUTE", 15
 )
 LEVEL_ISOLATION_BACKFILL_WINDOW_END_HOUR = _int(
     "LEVEL_ISOLATION_BACKFILL_WINDOW_END_HOUR", 23
@@ -432,55 +560,66 @@ LIVE_SR_REFRESH_FROM_API_MINUTES = max(
 )
 
 # ===========================================================================
-# STRATEGY ENTRY SIGNAL — G1 v2 (fast pivot + LTP-tier stop-loss)
+# STRATEGY ENTRY SIGNAL — G1 v3.2 (fast pivot + LTP-tier stop + auto-reverse)
 # ===========================================================================
 # Trigger chain:
-#   1. NIFTY / SENSEX touches R3 or S3 (unchanged). The bias side is
-#      fixed by the touch (R3 -> CE, S3 -> PE) and the nearest filtered
-#      strike is chosen as the isolated instrument (LEVEL_ISOLATION_*).
-#   2. On the isolated strike, pivot highs/lows are detected with TWO
-#      right-bar windows:
-#         • display: LIVE_SR_LEFT_BARS / LIVE_SR_RIGHT_BARS (unchanged;
-#           used by the chart, SR Tracking card, Telegram).
-#         • entry:   STRATEGY_ENTRY_PIVOT_LEFT_BARS /
-#                    STRATEGY_ENTRY_PIVOT_RIGHT_BARS.
-#      The pivot bar itself is identical (left-bar rule). Only the
-#      tradeable confirmation moment differs — with left=15, right=3 a
-#      pivot that formed at 10:04 becomes tradeable at 10:07 instead of
-#      10:19. Entry runs only after isolation, for the two instruments
-#      at the isolated strike; pre-isolation cost is zero.
-#   3. For each candidate side (bias + counter when crossover), supports
-#      whose pivot_time falls inside the window
-#          [T_touch, T_touch + STRATEGY_ENTRY_BUFFER_MINUTES]
-#      are iterated in pivot_time order. First non-blocked support wins.
-#   4. A support is blocked when a resistance pivot exists with
-#          pivot_time > support.pivot_time
-#      AND price      > support.price
-#      AND confirmed_time_fast ≤ support.confirmed_time_fast
-#      (Unchanged rule; the fast confirmation times are used for both
-#      sides. Effectively a no-op with any fixed lag, kept for
-#      forward compatibility.)
-#   5. Entry price:
-#          • candle close at support.confirmed_time_fast, else
-#          • live LTP (fallback when the confirming bar is still
-#            forming or the candle isn't yet in the live series).
-#      The legacy "pivot_price" mode has been removed. Entry is always
-#      "close at fast confirmation, else live LTP".
-#   6. Stop-loss — LTP-tier:
+#
+#   1. Any of NIFTY / BANKNIFTY / MIDCPNIFTY / SENSEX touches its R3 or
+#      S3 (multi-index arbitration, see LEVEL ISOLATION above). The bias
+#      side is fixed by the touch (R3 -> CE, S3 -> PE) and the nearest
+#      NIFTY round-50 strike to NIFTY spot LTP is the isolated strike.
+#
+#   2. On the isolated NIFTY strike, the entry engine runs a FAST pivot
+#      scan (left=15, right=3) on the bias-side option's candle series:
+#         • display window:  LIVE_SR_LEFT_BARS / LIVE_SR_RIGHT_BARS
+#                            (unchanged; used by the chart, SR Tracking
+#                            card, Telegram).
+#         • entry window:    STRATEGY_ENTRY_PIVOT_LEFT_BARS /
+#                            STRATEGY_ENTRY_PIVOT_RIGHT_BARS.
+#
+#      With left=15, right=3, a pivot that formed at 10:04 becomes
+#      tradeable at 10:07 instead of 10:19.
+#
+#   3. Buffer window is [T_touch, T_touch + BUFFER_MINUTES]. Supports
+#      (and, for the auto-reverse path, resistances) whose pivot_time
+#      falls inside the window are iterated in pivot_time order.
+#
+#   4. Decision priority (SUPPORT TAKES PRIORITY):
+#         CASE 1  Fast SUPPORT confirms on the bias side
+#                 → ARM THE BIAS SIDE on support bounce.
+#
+#         CASE 2  Fast RESISTANCE confirms on the bias side with NO
+#                 fast support in the window
+#                 → AUTO-REVERSE to the COUNTER side, taking the live
+#                   LTP of the counter instrument at the exact instant
+#                   of the bias-side rejection. entry_type becomes
+#                   "auto_reverse_on_rejection".
+#
+#         CASE 3  Buffer window expires with no valid confirmation
+#                 → HARD BLOCK "all_candidates_in_window_blocked".
+#
+#   5. Entry price (both cases):
+#         • candle close at support.confirmed_time_fast, else
+#         • live LTP (fallback when the confirming bar is still
+#           forming or the candle isn't in the live series).
+#
+#   6. Stop-loss — LTP-tier (unchanged from G1 v2):
 #          sl_pct   = tier_lookup(entry_price)
 #          sl_pct   = min(sl_pct, STRATEGY_MAX_STOP_PCT)   # hard cap
 #          stop_raw = entry_price × (1 − sl_pct)
 #          stop     = round_to_tick(stop_raw, mode = TICK_ROUNDING)
 #          stop_pct = (entry_price − stop) / entry_price
-#      Stop is no longer the support price. Support is retained for
-#      context and for the resistance-blocker check only.
+#
 #   7. Hard blocks: invalid_entry_price (≤0), no_entry_price (both
 #      candle close and LTP missing), entry_below_support (entry_price
 #      < support.price — the support did not hold during the wait).
+#
 #   8. Soft warning (does not block): support_far_below_entry
 #      (support >20% below entry — informational only).
-#   9. Tiebreak (both sides armed): sort by confirmed_time_fast
-#      ascending; earliest wins.
+#
+#   9. Tiebreak (both bias and counter armed): sort by
+#      confirmed_time_fast ascending; earliest wins.
+#
 #  10. Promotion (unchanged mechanics): if the chosen side is the
 #      counter side, promote that instrument to be the active isolated
 #      one via isolated_instrument_promotion_service.
@@ -532,6 +671,10 @@ STRATEGY_ENTRY_ONLY_ONCE_PER_DAY = _bool(
 # entry support's pivot_time and price strictly above the entry
 # support's price, blocks the candidate. When False, resistance never
 # blocks.
+#
+# NOTE: this rule is a NO-OP today (see G1 v3.2 spec §9.1). It is
+# retained for forward compatibility — the auto-reverse path below
+# does not depend on it.
 STRATEGY_ENTRY_BLOCKED_BY_RESISTANCE = _bool(
     "STRATEGY_ENTRY_BLOCKED_BY_RESISTANCE", True
 )
@@ -543,7 +686,28 @@ STRATEGY_ENTRY_FIRST_TO_CONFIRM_WINS = _bool(
     "STRATEGY_ENTRY_FIRST_TO_CONFIRM_WINS", True
 )
 
-# ---- G1 v2 — Fast entry-pivot window ------------------------------------
+# ---- G1 v3.2 — Auto-reverse on bias-side rejection ----------------------
+# When True (default) and the bias side confirms a fast RESISTANCE with
+# NO fast SUPPORT inside the buffer window, the engine flips to the
+# counter side and arms at the live LTP of the counter instrument at
+# the exact instant of the bias-side rejection.
+#
+# Set to False to disable auto-reverse entirely (the engine then waits
+# for a bias-side support or blocks at window expiry — pre-v3.2
+# behaviour).
+STRATEGY_ENTRY_ALLOW_AUTO_REVERSE = _bool(
+    "STRATEGY_ENTRY_ALLOW_AUTO_REVERSE", True
+)
+
+# When True (default) and BOTH a support and a resistance confirm on
+# the bias side inside the window, the SUPPORT WINS and the bias side
+# arms (momentum follow). When False, resistance wins and auto-reverse
+# fires even when a support also confirmed.
+STRATEGY_ENTRY_PRIORITIZE_SUPPORT = _bool(
+    "STRATEGY_ENTRY_PRIORITIZE_SUPPORT", True
+)
+
+# ---- G1 v3.2 — Fast entry-pivot window ----------------------------------
 # LEFT defaults to LIVE_SR_LEFT_BARS so the pivot bar is identical in
 # both the display and entry views. Only the RIGHT bar count differs.
 # A smaller RIGHT means faster arming. Range 1..5 recommended.
@@ -554,7 +718,7 @@ STRATEGY_ENTRY_PIVOT_RIGHT_BARS = max(
     1, min(10, _int("STRATEGY_ENTRY_PIVOT_RIGHT_BARS", 3))
 )
 
-# ---- G1 v2 — LTP-tier stop-loss -----------------------------------------
+# ---- G1 v3.2 — LTP-tier stop-loss ---------------------------------------
 # JSON array of tiers: [{"max_ltp": <float|null>, "sl_pct": <0..1>}, ...].
 # Lookup: first tier whose max_ltp is null or > entry_price. Default
 # table gives 15% / 12% / 10% / 5% for LTP buckets <100 / <200 / <300
@@ -578,11 +742,12 @@ STRATEGY_ENTRY_STOP_TICK_ROUNDING = _str(
 # exceeds this cap are clamped and an ERROR is logged.
 STRATEGY_MAX_STOP_PCT = _float("STRATEGY_MAX_STOP_PCT", 0.35)
 
-# ---- G1 v2 — Promotion --------------------------------------------------
-# When the entry-signal ARMS on the COUNTER side, promote that
-# instrument to be the active isolated instrument for the rest of the
-# day. The isolation record itself is never modified; the promotion
-# is stored in a separate sidecar file:
+# ---- G1 v3.2 — Promotion -------------------------------------------------
+# When the entry-signal ARMS on the COUNTER side (either via crossover
+# or via auto-reverse), promote that instrument to be the active
+# isolated instrument for the rest of the day. The isolation record
+# itself is never modified; the promotion is stored in a separate
+# sidecar file:
 #   data/level_isolated_instrument_promotion.json
 STRATEGY_ENTRY_ALLOW_PROMOTION = _bool(
     "STRATEGY_ENTRY_ALLOW_PROMOTION", True
