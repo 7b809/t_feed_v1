@@ -156,6 +156,12 @@
             color: #fb923c;
         }
 
+        /* Purple/violet theme for the Expired / Active Chart page */
+        .nav-icon-badge.expired-theme {
+            background: rgba(168, 85, 247, 0.2);
+            color: #c084fc;
+        }
+
         .app-main-content-wrapper {
             width: 100%;
         }
@@ -186,6 +192,17 @@
                 font-size: 0.75rem;
             }
         }
+
+        /* Slightly narrower nav labels on 768px–1024px so all 6 links fit */
+        @media (min-width: 641px) and (max-width: 1024px) {
+            .app-nav-item-group {
+                gap: 8px;
+            }
+            .app-nav-button {
+                padding: 7px 12px;
+                font-size: 0.8rem;
+            }
+        }
     </style>
 
     {% block head %}{% endblock %}
@@ -196,7 +213,7 @@
 <nav class="app-header-navbar">
 
     <!-- BRAND / LOGO -->
-    <a href="/"  rel="noopener noreferrer" class="app-brand-wrapper">
+    <a href="/" rel="noopener noreferrer" class="app-brand-wrapper">
         <div class="app-brand-icon-box">
             <i class="bi bi-activity"></i>
         </div>
@@ -207,14 +224,13 @@
     <div class="app-nav-item-group">
 
         <!-- HOME -->
-        <a href="/"  rel="noopener noreferrer" class="app-nav-button">
+        <a href="/" rel="noopener noreferrer" class="app-nav-button">
             <span class="nav-icon-badge home-theme">
                 <i class="bi bi-house-door-fill"></i>
             </span>
             <span>Home</span>
         </a>
 
-        
         <!-- ISOLATED INSTRUMENT -->
         <a href="/isolated" target="_blank" rel="noopener noreferrer" class="app-nav-button">
             <span class="nav-icon-badge iso-theme">
@@ -222,7 +238,7 @@
             </span>
             <span>Isolated</span>
         </a>
-        
+
         <!-- CHARTS -->
         <a href="/charts" target="_blank" rel="noopener noreferrer" class="app-nav-button">
             <span class="nav-icon-badge charts-theme">
@@ -231,14 +247,21 @@
             <span>Charts</span>
         </a>
 
+        <!-- EXPIRED / ACTIVE CHART -->
+        <a href="/expired-chart" target="_blank" rel="noopener noreferrer" class="app-nav-button">
+            <span class="nav-icon-badge expired-theme">
+                <i class="bi bi-hourglass-split"></i>
+            </span>
+            <span>Expired</span>
+        </a>
+
         <!-- MULTI-CHART LAYOUT -->
-        <a href="/layout_1"  rel="noopener noreferrer" class="app-nav-button">
+        <a href="/layout_1" rel="noopener noreferrer" class="app-nav-button">
             <span class="nav-icon-badge layout-theme">
                 <i class="bi bi-grid-3x3-gap-fill"></i>
             </span>
             <span>Layout</span>
         </a>
-
 
         <!-- LOGS -->
         <a href="/logs" target="_blank" rel="noopener noreferrer" class="app-nav-button">

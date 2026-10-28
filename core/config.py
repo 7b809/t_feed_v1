@@ -170,7 +170,7 @@ VERBOSE_LOG = _bool("VERBOSE_LOG", False)
 # ---------------------------------------------------------------------------
 CLEANUP_REMOVE_FOLDERS = _csv(
     "CLEANUP_REMOVE_FOLDERS",
-    "data,temp,downloads,output,__pycache__,.pytest_cache,htmlcov,test_logs",
+    "data,downloads,output,__pycache__,.pytest_cache,htmlcov,test_logs",
 )
 
 CLEANUP_RESERVED_FOLDERS = _csv(

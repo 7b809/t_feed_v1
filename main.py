@@ -65,6 +65,12 @@ from routes.upstox_routes import router as upstox_router
 from routes.live_sr_routes import router as live_sr_router
 from routes.live_sr_calc_routes import router as live_sr_calc_router
 
+from upstox_app.apis.expired_instruments_api import (   # <-- NEW
+    router as expired_instruments_router,
+)
+
+from routes.expired_chart_routes import router as expired_chart_router  # <-- NEW
+
 
 from services.config_validation import validate_config
 from services.live_feed_service import live_feed_service
@@ -431,6 +437,8 @@ app.include_router(live_sr_calc_router)
 app.include_router(admin_router)
 app.include_router(folder_router)
 app.include_router(upstox_router)
+app.include_router(expired_instruments_router)   # <-- NEW
+app.include_router(expired_chart_router)          # <-- NEW
 app.include_router(log_router)
 app.include_router(market_holiday_router)
 app.include_router(order_router)
