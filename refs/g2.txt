@@ -1,0 +1,498 @@
+G2 v1 — Gap-day OR-level touch + fast SR confirmation + dummy orders.txt
+Deliverable: a new gear G2 that runs alongside G1 on gap-up / gap-down days. It watches the index OR levels, detects level touches/breaks, confirms with the L15/R3 fast SR scan, and writes dummy intraday orders (paper only — no broker call). §1 explains why G2 exists. §2–6 are the model. §7 is the full step-by-step. §8 is config. §9 has worked examples including today's 2026-10-28 case. §10 is edge cases, invariants, rollout, and the file map.
+
+1. Why G2 exists — the gap-day case G1 cannot cover
+G1 v2 is an isolation-driven gear: it needs an R3/S3 touch, then a fast support pivot at the isolated strike, then arms. On a gap-up / gap-down day that pattern often does not appear early:
+
+The opening move is a sharp drop or rise (the gap), not a clean touch of R3/S3.
+
+The day then does a volatile recovery and settles into consolidation — price chops inside the OR band instead of trending.
+
+On such days G1 may not fire at all, or only near the close after a late R3/S3 touch.
+
+G2 fills that gap: it treats any OR level touch or break as the event, confirms with the same fast pivot engine, and places a dummy order so the day is still traded (in paper) and the behaviour is logged. G1 is not disabled — it keeps evaluating, is deprioritised, and any G1 arm while G2 is active is surfaced but not auto-promoted.
+
+Labels (2-word tags, as requested):
+
+Gap up, then drops into the band → gap-up drop
+
+Gap down, then rises into the band → gap-down rise
+
+Gap up, then flushes further down → gap-up flush
+
+Gap down, then flushes further down → gap-down flush
+
+The tag is stored on the day state as g2_label and shown on the dashboard.
+
+2. What G2 is, in one paragraph
+G2 activates when the day opens with a gap (open vs previous close ≥ ±0.3%) and price re-enters the R1–S1 band and stays inside it for 15 consecutive 1-min bars (the consolidation check). Once active, G2 watches every OR level (H, L, A, R1, R2, R3, S1, S2, S3, R3_Threshold, S3_Threshold) on NIFTY and SENSEX for a touch (LTP within 0.1% of the level) or a break (close beyond the R3_Threshold / S3_Threshold). On a touch or break it runs the L15/R3 fast SR scan, looks for a pivot whose pivot_time is within 5 minutes of the touch and whose price is within 0.1% of the level, and if confirmed writes a dummy order on the nearest filtered CE/PE strike with the G1 v2 LTP-tier stop and the nearest fast resistance pivot as target. Max 3 dummy orders per underlying per day, one per level per day. Display engine, sidecar, and Telegram all stay on R15 — only G2's confirmation uses R3.
+
+3. Activation model — gap detection + consolidation
+3.1 Gap detection
+For each underlying in G2_UNDERLYINGS (NIFTY, SENSEX):
+
+text
+prev_close = previous trading day's official close (from first_candle.json history or the daily OHLC store)
+today_open = first candle open (09:15 bar)
+gap_pct    = (today_open − prev_close) / prev_close
+
+gap_up   = gap_pct ≥  G2_GAP_PCT_MIN   (default 0.003 → +0.30%)
+gap_down = gap_pct ≤ −G2_GAP_PCT_MIN   (default −0.30%)
+If neither, G2 does not activate for that underlying. gap_pct and gap_direction are stored on the day state.
+
+3.2 Consolidation check
+Only evaluated if a gap exists:
+
+text
+band_low  = S1   (from or_levels)
+band_high = R1
+Walk the 1-min candles from 09:15 forward. Count the longest run of consecutive bars whose close is inside [band_low, band_high]. If that run ≥ G2_CONSOLIDATION_BARS (default 15), consolidation_confirmed = true and G2 is active.
+
+The run is allowed to start at any bar, but the first bar of the run must be after the first re-entry into the band. Before re-entry the price may be outside (that is the gap move).
+
+If the price never re-enters the band, or the longest run is < 15, consolidation_confirmed = false and G2 stays inactive for that underlying.
+
+The consolidation check is re-evaluated every poll until it becomes true; once true it is latched for the day.
+
+3.3 Day state written on activation
+jsonc
+// data/g2/g2_day_state_2026-10-28_NIFTY.json
+{
+  "date": "2026-10-28",
+  "underlying": "NIFTY",
+  "g2_enabled": true,
+  "prev_close": 22750.0,
+  "today_open": 22678.0,
+  "gap_pct": -0.00317,
+  "gap_direction": "down",
+  "consolidation_confirmed": true,
+  "consolidation_bars": 15,
+  "consolidation_range": "R1_S1",
+  "g2_active": true,
+  "g2_label": "gap-down rise",
+  "activated_at": "2026-10-28T10:35:00+05:30",
+  "or_levels": { "H": 22691.5, "L": 22559.5, "A": 22625.5,
+                 "R1": 22658.5, "R2": 22757.5, "R3": 22823.5,
+                 "S1": 22592.5, "S2": 22493.5, "S3": 22427.5,
+                 "R3_Threshold": 22790.5, "S3_Threshold": 22460.5,
+                 "D_H": 66.0, "D_L": 66.0 },
+  "levels_ordered_today": [],
+  "orders_written_today": 0
+}
+4. OR-level touch model — any level, both directions
+4.1 Watch list
+For each active underlying, watch every level in or_levels:
+
+Group	Levels	Touch from
+Core OR	H, L, A	either side
+Extensions	R1, R2, R3, S1, S2, S3	either side
+Break thresholds	R3_Threshold, S3_Threshold	break-only (close beyond)
+4.2 Touch vs break
+Touch = LTP comes within G2_LEVEL_TOLERANCE_PCT (default 0.001 = 0.1%) of the level, from either side, on a 1-min bar that has not yet closed beyond the level. The side of approach is recorded as approach = "from_below" or "from_above".
+
+Break = a 1-min bar closes beyond R3_Threshold (above) or S3_Threshold (below). G2_BREAK_CONFIRM_CLOSES = 1 (one close is enough).
+
+A touch that then closes beyond the level in the same bar is upgraded to a break (break wins).
+
+4.3 Touch throttle and dedup
+Touch detection is polled every 2 s per underlying (G2_TOUCH_THROTTLE_SECONDS = 2), same throttle as G1 Step 4.
+
+A level is deduped after it produces an order: G2_ONE_PER_LEVEL_PER_DAY = true. A level that touched but was blocked (no SR confirmation) may be retried once on a new touch after ≥ 5 bars; a level that produced an order is never retried that day.
+
+One dummy order per level per day per underlying, capped at G2_MAX_ORDERS_PER_DAY = 3 per underlying per day.
+
+4.4 Level priority on simultaneous touches
+If multiple levels are within tolerance on the same poll, process in this order:
+
+R3_Threshold / S3_Threshold (breaks first)
+
+R3, S3
+
+R2, S2
+
+R1, S1
+
+H, L, A
+
+First level in this order that passes §5 confirmation wins; the rest are logged as skipped_priority.
+
+4.5 Touch record
+jsonc
+{
+  "underlying": "NIFTY",
+  "level": "S1",
+  "level_value": 22592.5,
+  "touch_time": "2026-10-28T10:30:00+05:30",
+  "touch_ltp": 22593.1,
+  "approach": "from_above",
+  "event_type": "touch" | "break",
+  "bar_index": 75
+}
+5. Fast SR confirmation — L15/R3, buffer, tolerance
+5.1 Reuse the G1 v2 fast scan
+G2 does not fork the pivot engine. It calls the same fast scan introduced in G1 v2 §3.3:
+
+left = G2_ENTRY_PIVOT_LEFT_BARS = 15
+
+right = G2_ENTRY_PIVOT_RIGHT_BARS = 3
+
+Source: the live SR engine's in-memory candle series for the underlying (index) or for the mapped option instrument (see §5.4).
+
+The display engine, sidecar, and Telegram remain on R15. Only G2's confirmation uses R3.
+
+5.2 Matching a pivot to a touch
+A fast pivot P confirms a touch at level L iff both hold:
+
+text
+|P.pivot_time − touch_time| ≤ G2_TOUCH_BUFFER_MINUTES   (default 5 min)
+|P.price − level_value|       ≤ G2_LEVEL_TOLERANCE_PCT × level_value   (default 0.1%)
+The pivot does not have to sit exactly on the level. The touch defines the event; the pivot defines the structural confirmation. P.confirmed_time_fast is the moment G2 is allowed to act.
+
+5.3 Support / resistance classification
+If P is a support pivot (15-bar low) and L is an S-level → confirmed = "support".
+
+If P is a resistance pivot (15-bar high) and L is an R-level → confirmed = "resistance".
+
+A support pivot at an R-level, or a resistance pivot at an S-level, is a mismatch → block sr_level_mismatch, log, no order.
+
+5.4 Which candle series the pivot is read from
+G2 confirmation pivots are read from the underlying index series (NIFTY / SENSEX), not from the option. The OR levels are index levels; the pivot must be an index pivot at that level.
+
+The order is then mapped to the nearest filtered CE/PE strike (§6), and the entry price, stop, and target are computed on the option's series (close at confirmed_time_fast, else option LTP).
+
+5.5 No confirmation
+If no fast pivot matches within the buffer and tolerance → no order. Log:
+
+text
+[g2] no_fast_sr_at_level underlying=NIFTY level=S1 touch=10:30 pivots_scanned=4
+The level remains eligible for a retry on a new touch after ≥ 5 bars (see §4.3).
+
+6. Dummy order model
+6.1 Instrument mapping
+Order is written on the nearest filtered CE/PE strike for the underlying — same strike filter as G1 Step 2 (ceil(Rx/step)×step for CE, floor(Sx/step)×step for PE, range filter, listing resolution).
+
+underlying stays NIFTY / SENSEX; instrument_key is the option key; strike_price, strike_type are filled.
+
+No real order is sent. status = "dummy" is mandatory on every record.
+
+6.2 Side mapping (confirmed parameters)
+Event	Confirmed	Setup	Dummy side
+Touch R from below, reject	Resistance	bounce	PE
+Touch S from above, reject	Support	bounce	CE
+Close above R3_Threshold	Resistance broken	break	CE
+Close below S3_Threshold	Support broken	break	PE
+Source: G2_BOUNCE_SIDE_MAP = {"R":"PE","S":"CE"}, G2_BREAK_SIDE_MAP = {"R":"CE","S":"PE"}.
+
+6.3 Entry, stop, target
+Entry price = option close at confirmed_time_fast; if that bar is still forming, fall back to live option LTP (price_source = "live_ltp"). Same fallback chain as G1 v2 §3.4.
+
+Stop = G1 v2 LTP-tier stop, reused verbatim:
+
+text
+sl_pct   = tier(entry_price)               # STRATEGY_ENTRY_STOP_LTP_TIERS
+sl_pct   = min(sl_pct, STRATEGY_MAX_STOP_PCT)   # hard cap 0.35
+stop_raw = entry_price × (1 − sl_pct)
+stop     = round_down_to_tick(stop_raw)    # STRATEGY_ENTRY_STOP_TICK_ROUNDING = "down"
+stop_pct = (entry_price − stop) / entry_price
+Target = nearest fast resistance pivot above entry on the option, same rule as G1 v2 §5 Step 9. Additionally record target_level = the next OR level in the trade direction (R1→R2→R3, S1→S2→S3) as an index-space reference, even if the option-pivot target is null.
+
+Hard blocks (no order written):
+
+entry_price is None → no_entry_price
+
+entry_price ≤ 0 → invalid_entry_price
+
+bounce-side check: for a PE bounce at R, entry_price must be ≥ the option support pivot used for the target; for a CE bounce at S, entry_price must be ≥ the option support pivot. If violated → entry_below_support (PE) / entry_above_resistance (CE). This mirrors G1 v2's structural sanity blocks.
+
+6.4 Order record
+jsonc
+// data/g2/dummy_orders_2026-10-28_NIFTY.json  (append-only array)
+{
+  "id": "G2-NIFTY-20261028-0001",
+  "date": "2026-10-28",
+  "underlying": "NIFTY",
+  "instrument_key": "NSE_FO|...",
+  "trading_symbol": "NIFTY 22600 CE 28 OCT 26",
+  "strike_price": 22600,
+  "strike_type": "CE",
+  "side": "CE",
+  "level": "S1",
+  "level_value": 22592.5,
+  "level_type": "S",
+  "touch_time": "2026-10-28T10:30:00+05:30",
+  "touch_ltp": 22593.1,
+  "approach": "from_above",
+  "setup_type": "bounce",
+  "confirmed": "support",
+  "confirmed_time_fast": "2026-10-28T10:33:00+05:30",
+  "confirmed_time_r15": "2026-10-28T10:45:00+05:30",
+  "minutes_from_touch": 3.0,
+  "entry": {
+    "price": 85.0,
+    "price_source": "candle_close_at_confirmed_fast",
+    "stop": 72.25,
+    "stop_pct": 0.15,
+    "sl_pct": 0.15,
+    "stop_source": "ltp_tier",
+    "target": 102.5,
+    "target_source": "fast_resistance_pivot",
+    "target_level": 22658.5,
+    "target_level_type": "R1"
+  },
+  "status": "dummy",
+  "g2_active": true,
+  "g2_label": "gap-down rise",
+  "created_at": "2026-10-28T10:33:02+05:30"
+}
+6.5 Cap and one-per-level enforcement
+Before writing:
+
+If len(orders_written_today) ≥ G2_MAX_ORDERS_PER_DAY → skip, log g2_max_orders_reached.
+
+If level already in levels_ordered_today → skip, log level_already_ordered.
+
+Else write, append level to levels_ordered_today, increment orders_written_today, persist day state.
+
+7. Step-by-step logic (full G2 v1 spec)
+Steps 1–3 reuse existing infrastructure. G2 diverges from G1 at Step 4.
+
+Step 1 — Compute OR levels — unchanged (G1 Step 1). first_candle.json already contains or_levels, ema_cross_at_first_candle.
+
+Step 2 — Load gap reference — new. Read previous trading day's close for each G2_UNDERLYING from the daily OHLC store. Persist to day state.
+
+Step 3 — Activation loop — new. Every poll (10 s browser / 5 min scheduler, same cadence as G1 Step 9):
+
+text
+if not G2_ENABLED: return
+for U in G2_UNDERLYINGS:
+    state = load_day_state(date, U)
+    if state.g2_active: continue
+    gap_pct = (today_open − prev_close) / prev_close
+    if |gap_pct| < G2_GAP_PCT_MIN: mark inactive, continue
+    if longest_run_inside(R1, S1) ≥ G2_CONSOLIDATION_BARS:
+        state.g2_active = true
+        state.g2_label  = derive_label(gap_direction, consolidation_side)
+        persist; log "[g2] activated U=%s gap=%s label=%s"
+Step 4 — Touch / break detection — new. Every 2 s per active underlying:
+
+text
+for level, value in or_levels.items():
+    if level in state.levels_ordered_today: continue
+    ltp = live_ltp(U)
+    if level in ("R3_Threshold","S3_Threshold"):
+        if bar_closed_beyond(level): emit_break(level, value)
+    else:
+        if |ltp − value| ≤ G2_LEVEL_TOLERANCE_PCT × value: emit_touch(level, value, approach)
+Priority order §4.4. Emit at most one event per poll per underlying.
+
+Step 5 — Fast SR confirmation — new. On a touch/break event:
+
+text
+fast_pivots = fast_scan(U, left=15, right=3)          # reuse G1 v2 §3.3
+match = first P in fast_pivots where
+          |P.pivot_time − touch_time| ≤ G2_TOUCH_BUFFER_MINUTES
+          AND |P.price − level_value| ≤ G2_LEVEL_TOLERANCE_PCT × level_value
+if not match:
+    log "[g2] no_fast_sr_at_level"; return (eligible for retry on new touch)
+confirmed = classify(match, level)                    # support / resistance
+if mismatch: log; block "sr_level_mismatch"
+Step 6 — Side and setup — new.
+
+text
+setup = "break" if event_type == "break" else "bounce"
+side  = (G2_BREAK_SIDE_MAP if setup=="break" else G2_BOUNCE_SIDE_MAP)[level_type]   # "R" or "S"
+Step 7 — Instrument mapping — new. Resolve nearest filtered CE/PE strike for side at the touched level (same filter as G1 Step 2). Fetch option series for entry/stop/target.
+
+Step 8 — Entry, stop, target — new. Per §6.3. Run hard blocks. If blocked, log and return.
+
+Step 9 — Cap and dedup — new. Per §6.5. If capped or level already ordered, log and return.
+
+Step 10 — Write dummy order — new. Append to dummy_orders_<date>_<underlying>.json, update day state, log:
+
+text
+[g2] dummy_order U=NIFTY level=S1 setup=bounce side=CE entry=85.00 stop=72.25 sl_pct=0.15 target=102.50
+Step 11 — Surface — new. Dashboard /g2 shows day state, level watch table (touched / confirmed / ordered / blocked), dummy order list. Telegram message G2 Dummy Order · NIFTY S1 · CE on each write. No real order. No promotion. No G1 side effects.
+
+Step 12 — G1 interaction — new. If G1 arms while g2_active = true, log g1_armed_while_g2_active, surface on /isolated with a banner, do not auto-promote. Operator decides. G2_DISABLE_G1 = false means G1 keeps running.
+
+8. Config reference (v1)
+python
+# core/config.py
+# === existing G1 v2 config unchanged above this block ===
+
+# G2 v1 — gap-day OR-level touch + fast SR confirmation + dummy orders
+G2_ENABLED                       = True
+G2_UNDERLYINGS                   = ["NIFTY", "SENSEX"]
+G2_GAP_REFERENCE                 = "prev_close"          # only supported value in v1
+G2_GAP_PCT_MIN                   = 0.003                 # ±0.30%
+G2_CONSOLIDATION_BARS            = 15
+G2_CONSOLIDATION_RANGE           = "R1_S1"               # band = [S1, R1]
+G2_DISABLE_G1                    = False                 # G1 still evaluated, deprioritised
+
+G2_ENTRY_PIVOT_LEFT_BARS         = 15                    # must equal LIVE_SR_LEFT_BARS
+G2_ENTRY_PIVOT_RIGHT_BARS        = 3                     # fast confirmation
+G2_TOUCH_BUFFER_MINUTES          = 5                     # pivot_time vs touch_time
+G2_LEVEL_TOLERANCE_PCT           = 0.001                 # 0.1% of level value
+G2_TOUCH_THROTTLE_SECONDS        = 2
+G2_BREAK_CONFIRM_CLOSES          = 1
+
+G2_BOUNCE_SIDE_MAP               = {"R": "PE", "S": "CE"}
+G2_BREAK_SIDE_MAP                = {"R": "CE", "S": "PE"}
+G2_MAX_ORDERS_PER_DAY            = 3                     # per underlying per day
+G2_ONE_PER_LEVEL_PER_DAY         = True
+
+G2_STOP_MODEL                    = "ltp_tier"            # reuse G1 v2 tier table
+G2_TARGET_MODEL                  = "next_or_level"       # plus nearest fast resistance pivot
+G2_ENTRY_STOP_TICK_ROUNDING      = "down"                # reuse G1 v2
+
+G2_DAY_STATE_DIR                 = "data/g2"
+G2_ORDER_DIR                     = "data/g2"
+Reused G1 v2 flags (do not duplicate):
+STRATEGY_ENTRY_STOP_LTP_TIERS, STRATEGY_MAX_STOP_PCT, STRATEGY_ENTRY_STOP_TICK_ROUNDING, LIVE_SR_LEFT_BARS.
+
+Removed / not applicable: none. G2 has no G2_ENTRY_INCLUDE_PRETOUCH, no G2_ENTRY_ALLOW_CROSSOVER — those are G1 isolation concepts and do not apply to level-touch trading.
+
+9. Worked examples
+9.1 Today — 2026-10-28 NIFTY (strict evaluation)
+Inputs from the 09:15 candle: O=22678, H=22691.5, L=22559.5, C=22578.4.
+
+Computed OR levels:
+
+text
+A  = 22625.5,  D  = 66.0
+R1 = 22658.5   R2 = 22757.5   R3 = 22823.5
+S1 = 22592.5   S2 = 22493.5   S3 = 22427.5
+R3_Threshold = 22790.5   S3_Threshold = 22460.5
+Gap check: prev close unknown in the file. If prev close ≈ 22676.5 (2026-10-27 first-candle close), gap_pct = +0.007% → not a gap. If prev close were 22750, gap_pct = −0.317% → gap down. Outcome depends on the actual prev close — flag for operator.
+
+Consolidation check (assume gap down): band = [S1, R1] = [22592.5, 22658.5]. Open 22678 is above the band. Price fell through the band to 22497.7 (below S1), then recovered only to 22563.75 — still below S1. Longest run inside the band = 0 bars. Consolidation fails.
+
+Verdict today: under the confirmed parameters, G2 is not active today. The day is a trend-down / weak-recovery day below S1, not an R1–S1 consolidation day. G1 also does not fire (R3 22823.5 and S3_Threshold 22460.5 were never touched).
+
+If you want to catch today: either (a) lower G2_GAP_PCT_MIN, (b) widen G2_CONSOLIDATION_RANGE to "S2_S1" or "R1_S2" for gap-down days, or (c) add an opening-drop component (G2_OPENING_DROP_PCT_MIN). All three are config changes, not code — flag for a decision, do not action now.
+
+9.2 Confirmed gap-down bounce (hypothetical clean case)
+Prev close 22750, open 22650 → gap_pct = −0.44% → gap down. First candle H=22680, L=22580 → A=22630, D=50; R1=22655, S1=22605. Price re-enters [22605, 22655] and stays 15 bars → g2_active=true, g2_label="gap-down rise".
+
+At 10:30 LTP 22606 → touch S1 from above. Fast scan finds support pivot at 10:30, price 22604 (within 0.1%), confirmed_time_fast=10:33. Map: S + bounce → CE. Nearest CE strike = 22600 CE, LTP 85. Tier <100 → 15% → stop 72.25. Target = nearest fast resistance pivot above 85 on the option (say 102.5). Record written, status="dummy".
+
+9.3 Gap-up drop, resistance rejection
+Prev close 22500, open 22620 → +0.53% → gap up. First candle H=22640, L=22580 → A=22610, D=30; R1=22625, S1=22595. Price drops into [22595, 22625] and consolidates 15 bars → g2_active=true, g2_label="gap-up drop".
+
+At 11:00 LTP 22624 → touch R1 from below. Fast resistance pivot at 11:00, price 22626, confirmed_time_fast=11:03. Map: R + bounce → PE. Nearest PE strike 22600 PE, LTP 90 → stop 76.5 (15%). Target = nearest fast resistance pivot above 90.
+
+9.4 Break case — S3_Threshold
+Same gap-down day as 9.2. At 13:00 a 1-min bar closes at 22450 < S3_Threshold 22455 → break. Map: S + break → PE. Entry = PE close at the break bar; tier stop; target = next support pivot below entry on the option (or null; target_level = null since S3 was the last S-level).
+
+9.5 Block — no fast pivot at the level
+Touch R1 from below at 11:00, but the fast scan finds no pivot within 5 min and 0.1% → log no_fast_sr_at_level, no order. Level stays eligible for retry on a new touch after ≥ 5 bars.
+
+10. Edge cases, invariants, rollout, file map
+10.1 Edge cases
+Case	Behaviour
+Gap present, consolidation never confirmed	g2_active=false; log g2_waiting_consolidation; no orders
+No gap	g2_active=false; G1 runs normally
+Both R3_Threshold and S3_Threshold break same bar	Priority R3_Threshold first (bull break)
+Touch and break same bar	Break wins; setup_type="break"
+Fast bar still forming at confirmed_time_fast	Entry falls back to live LTP (price_source="live_ltp"); stop still ltp × (1−sl_pct)
+entry_price ≤ 0	Block invalid_entry_price
+PE bounce entry below its option support pivot	Block entry_below_support
+CE bounce entry above its option resistance pivot	Block entry_above_resistance
+Level already ordered today	Skip level_already_ordered
+G2_MAX_ORDERS_PER_DAY reached	Skip g2_max_orders_reached
+G1 arms while g2_active	Log g1_armed_while_g2_active; surface; no auto-promote
+Fast bar not closed and no LTP	Block no_entry_price
+10.2 Invariants
+Display R15, G2 R3. The display engine, sidecar, and Telegram never see G2's R3 pivots.
+
+Underlying pivots, option pricing. Confirmation pivots come from the index series; entry/stop/target come from the option series.
+
+Dummy only. status="dummy" on every record. No broker call anywhere in the G2 path.
+
+One per level per day, cap 3. Enforced before write.
+
+G1 never disabled by G2 in v1. G2_DISABLE_G1=false.
+
+NIFTY + SENSEX only. BANKNIFTY deferred.
+
+10.3 Rollout
+Deploy core/config.py with the G2 block. Leave G1 v2 unchanged.
+
+Deploy core/g2/* services and api/routes/g2.py, templates/g2_dashboard.html.
+
+Next trading day: watch logs —
+
+[g2] activated — day state written.
+
+[g2] touch / [g2] break — level events.
+
+[g2] dummy_order — happy path.
+
+[g2] no_fast_sr_at_level — tune G2_TOUCH_BUFFER_MINUTES / tolerance if frequent.
+
+[g2] g2_max_orders_reached — expected on choppy days.
+
+No migration needed: G2 writes new files under data/g2/; G1 files are untouched.
+
+10.4 File map (path headers as requested)
+python
+# core/config.py
+# (G2 block added per §8)
+python
+# core/g2/g2_day_state_service.py
+# - load_day_state(date, underlying)
+# - save_day_state(state)
+# - evaluate_gap(prev_close, today_open) -> (gap_pct, gap_direction)
+# - evaluate_consolidation(candles, r1, s1, n) -> (confirmed, longest_run)
+# - derive_label(gap_direction, consolidation_side) -> str
+python
+# core/g2/g2_level_touch_service.py
+# - load_or_levels(first_candle_json) -> dict
+# - detect_touch_or_break(underlying, or_levels, live_ltp, recent_candles)
+#     -> list[TouchEvent]  (throttled, priority-ordered)
+# - level_priority(level) -> int
+# - dedup(events, day_state) -> list[TouchEvent]
+python
+# core/g2/g2_fast_sr_service.py
+# - fast_scan(underlying, left=15, right=3) -> list[Pivot]
+#     (thin wrapper over G1 v2 §3.3 scan; no fork)
+# - match_pivot(pivots, touch_time, level_value, buffer_min, tolerance_pct)
+#     -> Pivot | None
+# - classify(pivot, level) -> "support" | "resistance" | "mismatch"
+python
+# core/g2/g2_entry_signal_service.py
+# - compute(date, underlying) -> EntryDecision
+#     entry_price, price_source, stop, stop_pct, sl_pct, stop_source,
+#     target, target_source, target_level, target_level_type,
+#     side, setup_type, confirmed, confirmed_time_fast, confirmed_time_r15,
+#     state ("armed" | "blocked"), state_note
+# - hard_blocks(decision) -> state_note | None
+python
+# core/g2/g2_dummy_order_service.py
+# - write_dummy_order(decision, day_state) -> OrderRecord
+# - enforce_cap_and_dedup(day_state, level) -> None | reason
+# - persist_orders(date, underlying, record)
+python
+# core/g2/g2_orchestrator.py
+# - poll()  (called by browser 10s / scheduler 5m)
+#     activation -> touch -> fast_sr -> entry -> cap -> write -> surface
+python
+# api/routes/g2.py
+# GET  /g2                     -> dashboard
+# GET  /g2/day-state           -> current day state (both underlyings)
+# GET  /g2/orders              -> dummy orders for the day
+# GET  /g2/levels              -> level watch table
+html
+<!-- templates/g2_dashboard.html -->
+<!-- day state banner, gap label, level watch table, dummy order list, G1 banner if g1_armed_while_g2_active -->
+python
+# core/scheduler.py
+# add: every 5 min -> g2_orchestrator.poll()
+python
+# core/telegram/g2_messages.py
+# send_g2_activated(state)
+# send_g2_dummy_order(record)
+Summary of the confirmed parameter set in force:
+G2_ENABLED=True, G2_UNDERLYINGS=["NIFTY","SENSEX"], G2_GAP_PCT_MIN=0.003, G2_CONSOLIDATION_BARS=15, G2_CONSOLIDATION_RANGE="R1_S1", G2_DISABLE_G1=False, G2_ENTRY_PIVOT_LEFT_BARS=15, G2_ENTRY_PIVOT_RIGHT_BARS=3, G2_TOUCH_BUFFER_MINUTES=5, G2_LEVEL_TOLERANCE_PCT=0.001, G2_BOUNCE_SIDE_MAP={"R":"PE","S":"CE"}, G2_BREAK_SIDE_MAP={"R":"CE","S":"PE"}, G2_MAX_ORDERS_PER_DAY=3, G2_STOP_MODEL="ltp_tier", G2_TARGET_MODEL="next_or_level".
+
+One open item to note (not actioned): today's 2026-10-28 case does not activate G2 under G2_CONSOLIDATION_RANGE="R1_S1" because the consolidation is below S1. If you want gap-down days that consolidate below S1 to qualify, change the range to "R1_S2" or "S1_S2" — a config change, no code. Flag for your decision.

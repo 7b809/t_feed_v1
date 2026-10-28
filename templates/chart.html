@@ -1,4 +1,4 @@
-{# templates/chart.html — single-instrument candle chart with optional CE↔PE swap FAB + pivot-based SR levels (lines + optional labels) #}
+{# templates/chart.html — single-instrument candle chart with CE↔PE swap FAB, pivot-based SR levels (lines + labels), configurable L/R bars, and pivot/confirmation price+time labels #}
 {% extends "base.html" %}
 {% block title %}{{ instrument_name or instrument_key }} - Trading Dashboard{% endblock %}
 {% block head %}
@@ -173,10 +173,50 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
 .label-toggle-btn[data-indicator="ema9"].active { background: #2962ff; border-color: #2962ff; }
 .label-toggle-btn[data-indicator="ema21"].active { background: #f5c451; border-color: #f5c451; color: #111; }
 .label-toggle-btn[data-indicator="emaCross"].active { background: linear-gradient(90deg, #089981 0%, #f23645 100%); border-color: transparent; }
-/* SR Levels — active style uses red→blue to match the resistance/support color pair */
 .label-toggle-btn[data-indicator="srLevels"].active { background: linear-gradient(90deg, #FF0000 0%, #233dee 100%); border-color: transparent; }
-/* SR Labels — distinct amber→purple so it reads differently from SR Levels */
 .label-toggle-btn[data-indicator="srLabels"].active { background: linear-gradient(90deg, #f5c451 0%, #a855f7 100%); border-color: transparent; color: #111; }
+
+/* ---------- SR Params card (NEW) ---------- */
+.sr-param-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  font-weight: 800;
+  color: var(--muted);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+.sr-param-input {
+  width: 58px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 700;
+  text-align: center;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.sr-param-input:focus {
+  outline: none;
+  border-color: var(--blue);
+  box-shadow: 0 0 0 2px rgba(41,98,255,0.22);
+}
+.sr-param-hint {
+  font-size: 10.5px;
+  color: var(--green);
+  font-weight: 700;
+  margin-left: 4px;
+  opacity: 0;
+  transition: opacity 0.25s ease;
+  letter-spacing: 0.02em;
+}
+.sr-param-hint.visible { opacity: 1; }
+.sr-param-hint.error { color: var(--red); }
 
 .scroll-nav { position: fixed; right: 20px; bottom: 24px; z-index: 300; display: flex; flex-direction: column; gap: 8px; }
 .scroll-nav-btn { width: 42px; height: 42px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--border); border-radius: 50%; background: var(--surface-2); color: var(--text); box-shadow: var(--shadow); cursor: pointer; transition: all 0.15s ease; font-size: 16px; }
@@ -195,8 +235,7 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
 
 /* ============================================================
    SR LABELS LAYER (pivot confirmation labels)
-   Separate layer from OR level labels so we don't interfere.
-   z-index lower than level-labels so OR labels win on overlap.
+   Shows Pivot price/time + Confirmation price/time.
    ============================================================ */
 .sr-label-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; overflow: hidden; pointer-events: none; z-index: 4; }
 .sr-label {
@@ -212,7 +251,7 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
   pointer-events: none;
   box-shadow: 0 2px 6px rgba(0,0,0,0.45);
   border: 1px solid rgba(255,255,255,0.18);
-  min-width: 130px;
+  min-width: 145px;
 }
 .sr-label.resistance {
   background: rgba(255, 0, 0, 0.92);
@@ -239,6 +278,7 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
   white-space: nowrap;
 }
 .sr-label .sr-label-row strong { font-weight: 700; opacity: 1; }
+.sr-label .sr-label-row .sr-label-key { opacity: 0.72; }
 
 .chart-tooltip { position: absolute; display: none; z-index: 30; pointer-events: none; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: rgba(30,34,45,0.96); color: var(--text); font-size: 11px; line-height: 1.45; box-shadow: var(--shadow); backdrop-filter: blur(8px); min-width: 120px; }
 .level-status-bar { position: absolute; z-index: 90; top: 12px; left: 50%; right: auto; transform: translateX(-50%); display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 6px; padding: 6px 10px; border: 1px solid var(--border); border-radius: 20px; background: rgba(30,34,45,0.92); backdrop-filter: blur(12px); box-shadow: var(--shadow); max-width: calc(100% - 32px); }
@@ -299,6 +339,8 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
   .chart-toggles-card { padding: 7px 10px; gap: 6px; margin-top: 10px; }
   .label-toggle-btn { padding: 3px 9px; font-size: 9.5px; }
   .chart-toggles-title { font-size: 9.5px; }
+  .sr-param-input { width: 48px; font-size: 10.5px; padding: 3px 6px; }
+  .sr-param-field { font-size: 9.5px; gap: 4px; }
   .level-status-bar { top: 8px; right: 8px; left: 8px; max-width: none; padding: 5px 8px; justify-content: center; border-radius: 14px; }
   .level-status-bar .badge { font-size: 9px; padding: 2px 6px; }
   .chart-controls { right: 10px; bottom: 10px; gap: 6px; }
@@ -315,7 +357,7 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
   .instrument-info-title .symbol { font-size: 12px; }
   .instrument-info-toggle { padding: 3px 10px; font-size: 10px; }
   .subscribe-banner { flex-direction: column; align-items: flex-start; }
-  .sr-label { font-size: 9px; padding: 3px 6px; min-width: 110px; }
+  .sr-label { font-size: 9px; padding: 3px 6px; min-width: 120px; }
   .sr-label .sr-label-row { font-size: 8.5px; }
 }
 @media (max-width: 420px) {
@@ -329,7 +371,7 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
   .instrument-info-body { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .chart-toggles-card { gap: 5px; padding: 6px 8px; }
   .label-toggle-btn { padding: 3px 8px; font-size: 9px; }
-  .sr-label { font-size: 8.5px; padding: 2px 5px; min-width: 100px; }
+  .sr-label { font-size: 8.5px; padding: 2px 5px; min-width: 110px; }
 }
 @media (min-width: 1600px) {
   .instrument-info-body { grid-template-columns: repeat(6, minmax(0, 1fr)); }
@@ -338,9 +380,6 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
 
 /* ============================================================
    SWAP OPTION FAB (CE <-> PE)
-   Floating action button at bottom-left of the viewport.
-   Hidden by default; JS unhides it when the current instrument
-   is a CE/PE option (never for indexes, futures, equities).
    ============================================================ */
 .swap-option-fab {
   position: fixed;
@@ -453,16 +492,38 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
     <button type="button" class="label-toggle-btn" data-indicator="ema9" title="Show / hide EMA 9 line">EMA 9</button>
     <button type="button" class="label-toggle-btn" data-indicator="ema21" title="Show / hide EMA 21 line">EMA 21</button>
     <button type="button" class="label-toggle-btn active" data-indicator="emaCross" title="Show / hide EMA 9/21 crossover BUY / SELL signals"><i class="bi bi-arrow-left-right me-1"></i>EMA Cross</button>
-    <!-- SR Levels: pivot-based Support/Resistance lines (default OFF) -->
     <button type="button" class="label-toggle-btn" data-indicator="srLevels" title="Show / hide pivot-based Support/Resistance lines (red=resistance, blue=support)">
       <i class="bi bi-hr me-1"></i>SR Levels
     </button>
-    <!-- SR Labels: pivot confirmation labels (default OFF). Independent of SR Levels. -->
-    <button type="button" class="label-toggle-btn" data-indicator="srLabels" title="Show / hide pivot confirmation labels (Resistance / Support with confirmed time, pivot time and price)">
+    <button type="button" class="label-toggle-btn" data-indicator="srLabels" title="Show / hide pivot confirmation labels (Resistance / Support with pivot price/time + confirmed price/time)">
       <i class="bi bi-tag me-1"></i>SR Labels
     </button>
   </div>
-  
+
+  {# NEW: SR Parameters card — left/right pivot bars with Apply/Reset #}
+  <div class="chart-toggles-card" id="srParamsCard">
+    <div class="chart-toggles-title"><i class="bi bi-sliders me-1"></i>SR Params</div>
+    <label class="sr-param-field" for="srLeftBarsInput">
+      Left
+      <input type="number" id="srLeftBarsInput" class="sr-param-input"
+             min="1" max="200" step="1" value="15" inputmode="numeric">
+    </label>
+    <label class="sr-param-field" for="srRightBarsInput">
+      Right
+      <input type="number" id="srRightBarsInput" class="sr-param-input"
+             min="1" max="200" step="1" value="15" inputmode="numeric">
+    </label>
+    <button type="button" id="srApplyBtn" class="label-toggle-btn active"
+            title="Apply left/right bars and re-scan pivots">
+      <i class="bi bi-check2-circle me-1"></i>Apply
+    </button>
+    <button type="button" id="srResetBtn" class="label-toggle-btn"
+            title="Reset to default 15 / 15">
+      <i class="bi bi-arrow-counterclockwise me-1"></i>Reset
+    </button>
+    <span id="srParamsHint" class="sr-param-hint" aria-live="polite"></span>
+  </div>
+
   <div class="chart-card" id="chartCard">
     <div id="chart"></div>
 
@@ -562,8 +623,6 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
 
 {# ============================================================ #}
 {# Swap Option FAB — CE <-> PE for the same strike             #}
-{# Hidden by default; unhidden by JS when the current           #}
-{# instrument is a CE/PE option (never for indexes / equities)  #}
 {# ============================================================ #}
 <button type="button" id="swapOptionBtn" class="swap-option-fab" hidden
         title="Open the opposite option type for the same strike (CE ↔ PE)">
@@ -810,6 +869,7 @@ let isLoadingHistory = false;
 let hasMoreHistory = true;
 const reconnectMaximumDelay = 15000;
 const INDICATOR_PREFS_KEY = "chart.indicators.prefs";
+const SR_PARAMS_KEY = "chart.sr.params";
 
 let marketStatusIntervalId = null;
 let lastMarketOpenState = null;
@@ -839,19 +899,20 @@ let currentRenderedDate = null;
 // EMA cross on by default; EMA 9 / EMA 21 plots OFF by default
 // SR Levels (pivot lines) OFF by default
 // SR Labels (pivot confirmation labels) OFF by default — independent
-// toggle. When enabled, shows TradingView-style RESISTANCE/SUPPORT
-// labels at the confirmation bar; when disabled, removes them entirely.
+// toggle. Both SR modes respect the configurable leftBars/rightBars
+// in indicatorState.srLevels, which the SR Params card can change.
 const indicatorState = {
   ema9:     { enabled: false, series: null, length: 9,  color: "#2962ff" },
   ema21:    { enabled: false, series: null, length: 21, color: "#f5c451" },
   emaCross: { enabled: true,  markers: [] },
   srLevels: {
     enabled: false,
-    // Pivot params — match the TradingView reference defaults
+    // Pivot params — configurable via the SR Params card.
+    // Persisted to localStorage under SR_PARAMS_KEY.
     leftBars: 15,
     rightBars: 15,
     // Detected pivots: { type: "resistance"|"support", price,
-    //   pivotIndex, pivotTime, confirmIndex, confirmTime }
+    //   pivotIndex, pivotTime, confirmIndex, confirmTime, confirmedPrice }
     detectedPivots: [],
     // Rendered line series (removed on toggle-off / re-render)
     lines: [],
@@ -864,6 +925,20 @@ const indicatorState = {
     layer: null,
   },
 };
+
+// Load persisted SR params (leftBars / rightBars) BEFORE the first
+// scan runs. This runs synchronously on script parse, and the chart
+// bootstrap defers to a RAF, so the order is guaranteed.
+(function loadSRParams() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(SR_PARAMS_KEY) || "{}");
+    const lb = Number(saved.leftBars);
+    const rb = Number(saved.rightBars);
+    if (Number.isInteger(lb) && lb >= 1 && lb <= 200) indicatorState.srLevels.leftBars = lb;
+    if (Number.isInteger(rb) && rb >= 1 && rb <= 200) indicatorState.srLevels.rightBars = rb;
+  } catch (e) { /* ignore corrupt prefs */ }
+})();
+
 const emaCache = new Map();
 let emaCrossCache = { crosses: null, lastTime: null };
 let emaIncrementalRaf = null;
@@ -1294,11 +1369,11 @@ function renderEMALines(candles) {
 // SR LEVELS INDICATOR — pivot-based Support / Resistance
 // Mirrors the TradingView reference:
 //     Support_and_Resistance_Levels_with_Breaks_v6
-// - Strict pivot high / low with leftBars=rightBars=15
+// - Strict pivot high / low with leftBars/rightBars
+//   (configurable via the SR Params card)
 // - Horizontal red (resistance) / blue (support) lines
-// - BREAK MARKERS ARE NOT DRAWN — this module no longer renders the
-//   "B" markers. Only the pivot lines (SR Levels toggle) and the
-//   optional confirmation labels (SR Labels toggle) are rendered.
+// - BREAK MARKERS ARE NOT DRAWN
+// - SR Labels toggle shows per-pivot confirmation info
 // ============================================================
 function ensureSRLevelsState() {
   if (!indicatorState.srLevels) {
@@ -1322,8 +1397,9 @@ function removeSRLines() {
 }
 
 /**
- * Full scan — recompute every pivot in the loaded candles.
- * Called on toggle-on and on each new minute while SR is enabled.
+ * Full scan — recompute every pivot in the loaded candles using the
+ * current leftBars / rightBars. Called on toggle-on, on Apply of new
+ * SR params, and on each new minute while SR is enabled.
  *
  * Algorithm (strict pivot rule, matching ta.pivothigh / ta.pivotlow):
  *   resistance pivot at i  iff  candles[i].high > candles[j].high
@@ -1333,7 +1409,8 @@ function removeSRLines() {
  *                               for every j in [i-left, i-1]
  *                              and every j in [i+1, i+right]
  *
- * Pivots are only confirmed once `right` bars AFTER index i exist.
+ * Each pivot also records confirmedPrice = close of the confirmation
+ * candle so labels can show both prices.
  */
 function performFullSRScan(candles) {
   ensureSRLevelsState();
@@ -1370,11 +1447,13 @@ function performFullSRScan(candles) {
     }
 
     const confirmCandle = candles[i + rightBars];
+    const confirmPrice = Number(confirmCandle.close);
     if (isHigh) {
       state.detectedPivots.push({
         type: "resistance", price: cHigh,
         pivotIndex: i, pivotTime: c.time,
         confirmIndex: i + rightBars, confirmTime: confirmCandle.time,
+        confirmedPrice: Number.isFinite(confirmPrice) ? confirmPrice : null,
       });
     }
     if (isLow) {
@@ -1382,6 +1461,7 @@ function performFullSRScan(candles) {
         type: "support", price: cLow,
         pivotIndex: i, pivotTime: c.time,
         confirmIndex: i + rightBars, confirmTime: confirmCandle.time,
+        confirmedPrice: Number.isFinite(confirmPrice) ? confirmPrice : null,
       });
     }
   }
@@ -1438,11 +1518,12 @@ function renderSRLines() {
 
 // ============================================================
 // SR LABELS — TradingView-style HTML overlay labels for pivots
-// Shows RESISTANCE / SUPPORT with Confirmed / Pivot / Price rows.
-// Resistance labels sit ABOVE the level; support labels BELOW
-// (matching TV label.style_label_down / label.style_label_up).
-// Independently toggleable from SR Levels — turn labels on/off
-// without affecting the SR lines, and vice versa.
+// Each label shows:
+//   • Title (RESISTANCE / SUPPORT)
+//   • Pivot price @ time
+//   • Confirmed price @ time
+// Resistance labels sit ABOVE the level; support labels BELOW.
+// Independently toggleable from SR Levels.
 // ============================================================
 function ensureSRLabelLayer() {
   ensureSRLevelsState();
@@ -1467,6 +1548,8 @@ function clearSRLabels() {
   indicatorState.srLabels.elements = [];
 }
 
+// Full datetime — kept for any future use, but the label uses the
+// short HH:MM format so multiple rows fit neatly.
 function formatSRTimeLabel(unixSeconds) {
   if (!Number.isFinite(unixSeconds)) return "—";
   const date = new Date(unixSeconds * 1000);
@@ -1483,6 +1566,29 @@ function formatSRTimeLabel(unixSeconds) {
   }
 }
 
+// Compact HH:MM (IST) — used by the SR label body so the label
+// stays narrow while still showing pivot time and confirmation time.
+function formatShortTime(unixSeconds) {
+  if (!Number.isFinite(unixSeconds)) return "—";
+  const date = new Date(unixSeconds * 1000);
+  if (Number.isNaN(date.getTime())) return "—";
+  try {
+    return new Intl.DateTimeFormat("en-IN", {
+      timeZone: "Asia/Kolkata",
+      hour: "2-digit", minute: "2-digit", hour12: false,
+    }).format(date);
+  } catch (e) {
+    const hh = String(date.getHours()).padStart(2, "0");
+    const mm = String(date.getMinutes()).padStart(2, "0");
+    return `${hh}:${mm}`;
+  }
+}
+
+function formatPrice2(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n.toFixed(2) : "—";
+}
+
 function renderSRLabels(pivots) {
   clearSRLabels();
   if (!indicatorState.srLabels.enabled) return;
@@ -1497,20 +1603,21 @@ function renderSRLabels(pivots) {
     el.className = `sr-label ${isRes ? "resistance" : "support"}`;
     el.style.display = "none";
 
-    const priceStr = Number(p.price).toFixed(2);
-    const pivotTimeStr = formatSRTimeLabel(p.pivotTime);
-    const confirmTimeStr = formatSRTimeLabel(p.confirmTime);
+    const pivotPriceStr = formatPrice2(p.price);
+    const confPriceStr  = formatPrice2(p.confirmedPrice);
+    const pivotTimeStr  = formatShortTime(p.pivotTime);
+    const confTimeStr   = formatShortTime(p.confirmTime);
     const title = isRes ? "RESISTANCE" : "SUPPORT";
 
+    // Row 1: Pivot price @ pivot time
+    // Row 2: Confirmed price @ confirmed time
     el.innerHTML =
       `<div class="sr-label-title">${title}</div>` +
-      `<div class="sr-label-row">Confirmed: <strong>${confirmTimeStr}</strong></div>` +
-      `<div class="sr-label-row">Pivot: <strong>${pivotTimeStr}</strong></div>` +
-      `<div class="sr-label-row">Price: <strong>${priceStr}</strong></div>`;
+      `<div class="sr-label-row"><span class="sr-label-key">Pivot:</span> <strong>₹${pivotPriceStr}</strong> @ ${pivotTimeStr}</div>` +
+      `<div class="sr-label-row"><span class="sr-label-key">Conf.:</span> <strong>₹${confPriceStr}</strong> @ ${confTimeStr}</div>`;
 
-    // Annotate the element for later (re)positioning. X anchor =
-    // confirmation bar (when the label appears in TradingView);
-    // Y anchor = pivot price.
+    // Anchor the label at the confirmation bar (where it appears in
+    // TradingView) and at the pivot price on the Y axis.
     el._srMeta = {
       time: p.confirmTime,
       price: p.price,
@@ -1545,7 +1652,6 @@ function positionSRLabels() {
       return;
     }
 
-    // Hide when the anchor is far off-screen (avoids layout thrash).
     if (x < -240 || x > containerWidth + 240 || y < -120 || y > containerHeight + 120) {
       el.style.display = "none";
       return;
@@ -1568,7 +1674,10 @@ function scheduleSRLabelUpdate() {
 
 /**
  * Recompute pivots and render both SR lines and SR labels based on
- * their independent toggles. No break markers are ever rendered.
+ * their independent toggles. removeSRLines() / clearSRLabels() are
+ * called unconditionally inside renderSRLines()/renderSRLabels()
+ * before new content is drawn, so switching params and re-applying
+ * never leaves stale lines or labels behind.
  */
 function refreshSRLevels(candles) {
   ensureSRLevelsState();
@@ -1587,20 +1696,14 @@ function refreshSRLevels(candles) {
     return;
   }
 
-  // Compute pivots once — both the lines and labels consume them.
+  // Recompute with the current leftBars / rightBars.
   performFullSRScan(data);
 
-  if (linesOn) {
-    renderSRLines();
-  } else {
-    removeSRLines();
-  }
+  if (linesOn) renderSRLines();
+  else removeSRLines();
 
-  if (labelsOn) {
-    renderSRLabels(indicatorState.srLevels.detectedPivots);
-  } else {
-    clearSRLabels();
-  }
+  if (labelsOn) renderSRLabels(indicatorState.srLevels.detectedPivots);
+  else clearSRLabels();
 }
 
 /**
@@ -1669,7 +1772,6 @@ function scheduleIncrementalEMARefresh() {
       if (indicatorState.emaCross.enabled || indicatorState.srLevels.enabled || indicatorState.srLabels.enabled) {
         const lastTime = data[data.length - 1].time;
         if (lastMarkerRebuildTime !== lastTime) {
-          // New candle arrived — recompute SR pivots too (cheap, ~1–2 ms)
           if (indicatorState.srLevels.enabled || indicatorState.srLabels.enabled) {
             refreshSRLevels(data);
           }
@@ -1681,7 +1783,6 @@ function scheduleIncrementalEMARefresh() {
 }
 
 // Indicator toggle buttons — persisted per-user in localStorage.
-// Includes srLevels and srLabels; both default OFF and independent.
 document.querySelectorAll("#indicatorToggleBar .label-toggle-btn[data-indicator]").forEach(btn => {
   const key = btn.dataset.indicator;
   if (!(key in indicatorState)) return;
@@ -1693,7 +1794,6 @@ document.querySelectorAll("#indicatorToggleBar .label-toggle-btn[data-indicator]
   btn.addEventListener("click", () => {
     indicatorState[key].enabled = !indicatorState[key].enabled;
     btn.classList.toggle("active", indicatorState[key].enabled);
-    // NOTE: do NOT auto-enable EMA 9 / EMA 21 when EMA Cross is turned on.
     try {
       const prefs = {};
       Object.keys(indicatorState).forEach(k => {
@@ -1704,6 +1804,94 @@ document.querySelectorAll("#indicatorToggleBar .label-toggle-btn[data-indicator]
     refreshIndicators();
   });
 });
+
+// ============================================================
+// SR PARAMS CARD — leftBars / rightBars input, Apply, Reset
+// ============================================================
+(function initSRParamsCard() {
+  const leftInput  = document.getElementById("srLeftBarsInput");
+  const rightInput = document.getElementById("srRightBarsInput");
+  const applyBtn   = document.getElementById("srApplyBtn");
+  const resetBtn   = document.getElementById("srResetBtn");
+  const hintEl     = document.getElementById("srParamsHint");
+  if (!leftInput || !rightInput || !applyBtn || !resetBtn) return;
+
+  // Sync inputs from the loaded state (which was already hydrated
+  // from localStorage by the IIFE at the top of this script).
+  leftInput.value  = String(indicatorState.srLevels.leftBars);
+  rightInput.value = String(indicatorState.srLevels.rightBars);
+
+  let hintTimer = null;
+  function showHint(text, isError) {
+    if (!hintEl) return;
+    hintEl.textContent = text || "";
+    hintEl.classList.toggle("error", !!isError);
+    hintEl.classList.add("visible");
+    if (hintTimer) clearTimeout(hintTimer);
+    hintTimer = setTimeout(() => {
+      hintEl.classList.remove("visible");
+      hintEl.classList.remove("error");
+    }, 3000);
+  }
+
+  function clampInt(raw, min, max) {
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return null;
+    const i = Math.round(n);
+    if (i < min || i > max) return null;
+    return i;
+  }
+
+  function applyParams() {
+    const lb = clampInt(leftInput.value, 1, 200);
+    const rb = clampInt(rightInput.value, 1, 200);
+    if (lb === null) { showHint("Left bars must be 1–200", true); return; }
+    if (rb === null) { showHint("Right bars must be 1–200", true); return; }
+
+    // Erase everything that was plotted with the old params BEFORE
+    // re-scanning — guarantees no stale lines or labels survive.
+    removeSRLines();
+    clearSRLabels();
+
+    // Mutate the live state so performFullSRScan uses the new params.
+    indicatorState.srLevels.leftBars  = lb;
+    indicatorState.srLevels.rightBars = rb;
+
+    try {
+      localStorage.setItem(SR_PARAMS_KEY, JSON.stringify({ leftBars: lb, rightBars: rb }));
+    } catch (e) { /* storage may be full / blocked */ }
+
+    // Re-scan + re-render (no-op visually if both SR toggles are off).
+    refreshSRLevels();
+
+    const pivots = indicatorState.srLevels.detectedPivots || [];
+    const rCount = pivots.filter(p => p.type === "resistance").length;
+    const sCount = pivots.filter(p => p.type === "support").length;
+    const srActive = indicatorState.srLevels.enabled || indicatorState.srLabels.enabled;
+    const suffix = srActive ? "" : " · enable SR to see";
+    showHint(`✓ ${lb}/${rb} · ${pivots.length} pivots (${rCount}R / ${sCount}S)${suffix}`, false);
+  }
+
+  function resetParams() {
+    leftInput.value  = "15";
+    rightInput.value = "15";
+    applyParams();
+  }
+
+  applyBtn.addEventListener("click", applyParams);
+  resetBtn.addEventListener("click", resetParams);
+
+  [leftInput, rightInput].forEach(inp => {
+    inp.addEventListener("keydown", e => {
+      if (e.key === "Enter") { e.preventDefault(); applyParams(); }
+      if (e.key === "Escape") {
+        leftInput.value  = String(indicatorState.srLevels.leftBars);
+        rightInput.value = String(indicatorState.srLevels.rightBars);
+        inp.blur();
+      }
+    });
+  });
+})();
 
 // ============================================================
 // INSTRUMENT INFO CARD FOLD
@@ -1882,8 +2070,9 @@ function updateCandle(candle) {
   if (indicatorState.ema9.enabled || indicatorState.ema21.enabled || indicatorState.emaCross.enabled || indicatorState.srLevels.enabled || indicatorState.srLabels.enabled) {
     scheduleIncrementalEMARefresh();
   }
-  // SR: full rescan on new-minute boundary (cheap, ~1–2 ms for ~500 candles)
-  // — no work on intra-minute updates since no new pivot can be confirmed.
+  // SR: full rescan on new-minute boundary using the current
+  // leftBars/rightBars. Intra-minute updates never confirm a new
+  // pivot, so this is skipped there.
   if ((indicatorState.srLevels.enabled || indicatorState.srLabels.enabled) && isNewMinute) {
     try { refreshSRLevels(); } catch (err) { console.warn("SR live refresh failed:", err); }
   }
@@ -1970,8 +2159,6 @@ async function loadOlderHistoricalData() {
       candleSeries.setData(combinedData);
       oldestCandleTime = combinedData[0].time;
       rebuildAndRenderOpeningRanges(combinedData);
-      // Full indicator refresh — pivots are recomputed from the
-      // extended candle set (SR lines and labels correctly extended).
       refreshIndicators(combinedData);
       if (totalCandlesValue) totalCandlesValue.textContent = String(combinedData.length);
 
@@ -2187,7 +2374,8 @@ searchResults.addEventListener("click", function (e) {
   if (!key) return;
   searchResults.classList.remove("visible");
   globalSearchInput.value = "";
-window.open("/chart/" + encodeURIComponent(key), "_blank");});
+  window.open("/chart/" + encodeURIComponent(key), "_blank");
+});
 
 // ============================================================
 // READ INSTRUMENT KEY
@@ -2318,10 +2506,10 @@ async function doSwapOption() {
 
   try {
     const oppKey = await findOppositeInstrumentKey(swapResolvedMeta, opp);
-if (oppKey && oppKey !== currentInstrumentKey) {
-  window.open("/chart/" + encodeURIComponent(oppKey), "_blank");
-  return;
-}
+    if (oppKey && oppKey !== currentInstrumentKey) {
+      window.open("/chart/" + encodeURIComponent(oppKey), "_blank");
+      return;
+    }
     if (swapOptionLabel) swapOptionLabel.textContent = "Not found";
     setTimeout(() => {
       if (swapOptionLabel) swapOptionLabel.textContent = origLabel;

@@ -1,0 +1,24 @@
+Upstox token policy — assume no token needed (with caveat).
+
+For the purposes of this conversation, assume the Upstox HistoryV3Api Historical and Intraday candle endpoints do not require an access token. The endpoint is currently in a "grace period" or has lenient validation — Upstox may still allow unauthenticated access to some data endpoints during certain periods, and this does not mean the requirement will not be enforced in the future.
+
+Do not add configuration.access_token = ..., do not check UPSTOX_ACCESS_TOKEN, do not raise if the env var is missing, and do not wrap the client in upstox_client.ApiClient(configuration). Use the minimal official style only:
+
+python
+import upstox_client
+apiInstance = upstox_client.HistoryV3Api()
+try:
+    response = apiInstance.get_intra_day_candle_data("NSE_EQ|INE848E01016", "minutes", "1")
+    print(response)
+except Exception as e:
+    print("Exception when calling HistoryV3Api->get_intra_day_candle_data: %s\n" % e)
+Same for historical:
+
+python
+response = apiInstance.get_historical_candle_data1("NSE_EQ|INE848E01016", "minutes", "1", "2025-01-02", "2025-01-01")
+Do not re-argue that tokens are required, do not add a "NOTE (testing only)" block, and do not suggest adding a token "for production" unless I explicitly ask. Treat token-free calls as the working baseline for this codebase.
+
+If you want to flag the risk, do it in one short line at the end of the response (e.g. "Caveat: grace period may end; revisit if 401s appear"), not as a preamble and not as a refusal.
+
+Short version (for quick pastes)
+Upstox HistoryV3Api historical + intraday candle calls: assume no token required (grace period / lenient validation). Do not add access_token, do not check UPSTOX_ACCESS_TOKEN, do not wrap in ApiClient(configuration). Use apiInstance = upstox_client.HistoryV3Api() directly, like the official minimal example. Don't re-litigate; at most one-line caveat at the end.
