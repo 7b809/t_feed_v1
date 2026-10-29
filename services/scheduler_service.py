@@ -76,7 +76,7 @@ class SchedulerService:
                 run_first_candle_calculation, "cron",
                 day_of_week=config.DAILY_REFRESH_DAYS,
                 hour=getattr(config, "FIRST_CANDLE_HOUR", 9),
-                minute=getattr(config, "FIRST_CANDLE_MINUTE", 16),
+                minute=getattr(config, "FIRST_CANDLE_MINUTE", 17),
                 second=getattr(config, "FIRST_CANDLE_SECOND", 10),
                 id="first_candle_calc",
                 replace_existing=True, misfire_grace_time=60,

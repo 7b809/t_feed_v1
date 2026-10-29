@@ -992,7 +992,7 @@ function applyMarketStatusToUI(status) {
             "Non-Trading Day";
         document.getElementById("non-market-message").textContent = status.message;
         document.getElementById("non-market-subtext").textContent =
-            `OR & SR data will be available after 09:16:10 IST on ${status.next_open_label}. ` +
+            `OR & SR data will be available after 09:17:10 IST on ${status.next_open_label}. ` +
             `Countdown: ${formatCountdown(status.countdown_seconds)}.`;
     } else {
         banner.style.display = "none";

@@ -122,7 +122,7 @@ _MARKET_CLOSE = dtime(15, 30)
 # before this time (e.g. the level-isolation 5-minute recheck firing
 # at exactly 09:15:00) is rejected up front rather than burning 5 x 7 s
 # = 28 s on retries that the API cannot satisfy yet.
-_OR_READY = dtime(9, 16, 10)
+_OR_READY = dtime(9, 17, 10)
 _VALID_WEEKDAYS = {0, 1, 2, 3, 4}  # Mon-Fri
 
 # --------------------------------------------------------------------------- #

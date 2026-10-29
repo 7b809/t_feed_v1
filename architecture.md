@@ -500,7 +500,7 @@ Telegram order-toggle commands (NEW):
 
 Trigger:
   - scheduler job "opening_range_calc" at OPENING_RANGE_HOUR:MINUTE:SECOND
-    default 09:16:10 IST
+    default 09:17:10 IST
   - startup / daily refresh / hard refresh also call calculate_all()
 
 Flow:

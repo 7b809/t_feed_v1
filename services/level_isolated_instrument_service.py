@@ -165,7 +165,7 @@ _S3_TRIGGER_LEVELS = ("S3", "S3_Threshold")
 
 _MARKET_OPEN = dtime(9, 15)
 _MARKET_CLOSE = dtime(15, 30)
-_OR_READY = dtime(9, 16, 10)
+_OR_READY = dtime(9, 17, 10)
 _VALID_WEEKDAYS = {0, 1, 2, 3, 4}
 
 # Tolerance for comparing stored first-candle H/L against the intraday

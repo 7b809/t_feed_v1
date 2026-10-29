@@ -200,7 +200,7 @@ def _should_backfill_first_candle() -> tuple[bool, str]:
         return False, "weekend"
     if _is_trading_holiday_today():
         return False, "market_holiday"
-    if now.time() < dtime(9, 16):
+    if now.time() < dtime(9, 17):
         return False, "before_first_candle_window"
     if now.time() > dtime(23, 59, 59):
         return False, "outside_backfill_window"
