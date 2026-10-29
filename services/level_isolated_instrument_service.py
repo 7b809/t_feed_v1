@@ -165,10 +165,54 @@ class LevelIsolatedInstrumentService:
     # Isolated-SR tracker attachment                                     #
     # ------------------------------------------------------------------ #
     def _ensure_tracker_attached(self) -> None:
+        """Ensure the isolated-SR tracker is watching the correct
+        instrument for the rest of the day.
+
+        The tracker must follow the *active* instrument, not
+        unconditionally the official (bias-side) one. After a
+        promotion, the entry-signal winner becomes the active
+        instrument; without consulting the promotion sidecar first,
+        every subsequent call to this method (from ``get_detail``,
+        ``run_backfill``, and ``get_instrument_sr_comparison``) would
+        call ``on_isolation(official_iso)`` and reset the tracker back
+        to the bias side -- silently dropping every post-isolation SR
+        confirmation the promoted instrument had collected.
+
+        Order of resolution:
+
+            1. If a promotion exists today with a ``record`` payload,
+               use that record (the promoted instrument's context).
+            2. Otherwise fall back to the official isolated record.
+        """
         iso = self._state.get("isolated")
         if not isinstance(iso, dict):
             return
-        key = str(iso.get("instrument_key") or "").strip()
+
+        # Step 1 -- consult the promotion sidecar. Any failure here
+        # must not block the tracker attach for the official record.
+        tracker_target: dict[str, Any] = iso
+        try:
+            from services.isolated_instrument_promotion_service import (
+                isolated_instrument_promotion_service,
+            )
+            active = isolated_instrument_promotion_service.read_active()
+            if (
+                isinstance(active, dict)
+                and isinstance(active.get("record"), dict)
+            ):
+                promoted_record = active["record"]
+                promoted_key = str(
+                    promoted_record.get("instrument_key") or ""
+                ).strip()
+                if promoted_key:
+                    tracker_target = promoted_record
+        except Exception:
+            logger.exception(
+                "[level-isolation] promotion lookup failed during "
+                "tracker attach; falling back to official record"
+            )
+
+        key = str(tracker_target.get("instrument_key") or "").strip()
         if not key:
             return
         try:
@@ -176,7 +220,7 @@ class LevelIsolatedInstrumentService:
                 isolated_sr_tracker_service,
             )
             if not isolated_sr_tracker_service.is_tracking(key):
-                isolated_sr_tracker_service.on_isolation(iso)
+                isolated_sr_tracker_service.on_isolation(tracker_target)
         except Exception:
             logger.exception(
                 "[level-isolation] SR tracker attach failed"

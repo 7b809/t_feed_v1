@@ -64,14 +64,20 @@ otherwise unchanged.
 Strategy-layer removal
 ----------------------
 The EMA engine and live-cross store were deleted with the strategy
-layer. Their routes (/live/ema*, /live/candles, /live/crosses,
-/live/snapshot, /ws/ema-crosses, /ws/ema) have been removed. The
-remaining endpoints only touch the feed snapshot layer:
+layer. The remaining REST endpoints only touch the feed snapshot layer:
 
     GET  /live/status
     GET  /live/instruments
     GET  /live/instruments/resolve
-    GET  /live/ws-help                    <-- NEW: WebSocket guide
+    GET  /live/snapshot                    <-- RESTORED (LTP snapshot only)
+    GET  /live/snapshot/{instrument_key}   <-- RESTORED (path form)
+    GET  /live/ws-help                     <-- NEW: WebSocket guide
+
+The ``/live/snapshot`` route does **not** include the old ``ema`` block
+— the strategy layer is gone. It only reports the last-tick LTP, the
+last-tick timestamp, and whether the instrument is currently
+subscribed. The readiness smoke-test probe (``services/readiness_service``)
+checks ``ltp > 0`` from this endpoint, so it must remain reachable.
 
     # WebSockets
     WS   /ws/live
@@ -85,6 +91,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from datetime import datetime, timezone
 from typing import Any
 
 import requests
@@ -309,6 +316,8 @@ def _ws_help_text(base_ws: str, base_http: str) -> str:
     add(f"  GET  {base_http}/live/status")
     add(f"  GET  {base_http}/live/instruments")
     add(f"  GET  {base_http}/live/instruments/resolve?underlying=NIFTY&strike=25000&type=CE")
+    add(f"  GET  {base_http}/live/snapshot?instrument_key=NSE_FO%7C54452")
+    add(f"  GET  {base_http}/live/snapshot/NSE_FO%7C54452")
     add(f"  GET  {base_http}/api/upstox/subscription-status?instrument_key=NSE_FO%7C54452")
     add(f"  POST {base_http}/api/upstox/subscribe")
     add("")
@@ -416,6 +425,7 @@ def _ws_help_json(base_ws: str, base_http: str) -> dict[str, Any]:
             "status":            f"{base_http}/live/status",
             "instruments":       f"{base_http}/live/instruments",
             "resolve":           f"{base_http}/live/instruments/resolve",
+            "snapshot":          f"{base_http}/live/snapshot",
             "subscription_status": f"{base_http}/api/upstox/subscription-status",
             "subscribe":         f"{base_http}/api/upstox/subscribe",
         },
@@ -661,6 +671,64 @@ def _feed_snapshot(entry: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _build_snapshot(entry: dict[str, Any]) -> dict[str, Any]:
+    """Return the current live snapshot for one instrument.
+
+    Shape (JSON-safe, no token, no credential)::
+
+        {
+          "status": "ok" | "no_tick_yet",
+          "instrument_key": "...",
+          "trading_symbol": "...",
+          "underlying": "...",
+          "strike_price": 25000,
+          "strike_type": "CE",
+          "expiry": "...",
+          "is_index": false,
+          "subscribed": true,
+          "last_tick_at": "2026-10-29T09:15:32.123456+00:00",
+          "timestamp":   "2026-10-29T09:15:32.123456+00:00",
+          "ltp": 177.35,
+          "feed_running": true,
+          "generated_at": "2026-10-29T09:15:33.000000+00:00"
+        }
+
+    ``ltp`` is taken from ``live_feed_service.get_latest_ltp()`` — the
+    same in-process cache used by ``/live/instruments/resolve`` callers
+    and by the entry-signal service. It is ``None`` when the instrument
+    has not yet ticked in this process's lifetime, so callers that need
+    a non-null LTP should check ``status``.
+
+    The readiness smoke-test probe
+    (``services/readiness_service.smoke_test``) reads ``ltp`` from this
+    payload and asserts ``ltp > 0``. It is intentionally decoupled from
+    the WebSocket broadcast so a broken WS client cannot cause a false
+    readiness failure.
+    """
+    key = str(entry.get("instrument_key") or "").strip()
+    ltp = live_feed_service.get_latest_ltp(key)
+    feed_status = live_feed_service.status()
+    last_tick = (feed_status.get("last_tick_at") or {}).get(key)
+    subscribed = live_feed_service.is_subscribed(key)
+    now = datetime.now(timezone.utc).isoformat()
+    return {
+        "status": "ok" if ltp is not None else "no_tick_yet",
+        "instrument_key": key,
+        "trading_symbol": entry.get("trading_symbol"),
+        "underlying": entry.get("underlying"),
+        "strike_price": entry.get("strike_price"),
+        "strike_type": entry.get("strike_type"),
+        "expiry": entry.get("expiry"),
+        "is_index": bool(entry.get("is_index")),
+        "subscribed": subscribed,
+        "last_tick_at": last_tick,
+        "timestamp": last_tick or now,
+        "ltp": ltp,
+        "feed_running": bool(feed_status.get("running")),
+        "generated_at": now,
+    }
+
+
 # ---------------------------------------------------------------------------
 # REST — status / registry
 # ---------------------------------------------------------------------------
@@ -700,6 +768,48 @@ def resolve_instrument(
         strike_type=type,
     )
     return entry  # type: ignore[return-value]
+
+
+@router.get("/live/snapshot")
+def live_snapshot_by_selector(
+    underlying: str | None = Query(default=None),
+    strike: str | None = Query(default=None),
+    type: str | None = Query(default=None, alias="type"),
+    instrument_key: str | None = Query(default=None),
+) -> dict[str, Any]:
+    """Live-tick snapshot for one instrument (selector form).
+
+    Use this or ``/live/snapshot/{instrument_key}`` — both resolve the
+    same way and return the same payload. The pipe in an instrument key
+    must be URL-encoded when passed as ``?instrument_key=`` too:
+
+        /live/snapshot?instrument_key=NSE_INDEX%7CNifty%2050
+        /live/snapshot?underlying=NIFTY&strike=25000&type=CE
+    """
+    entry = _resolve_entry(
+        instrument_key=instrument_key,
+        underlying=underlying,
+        strike=strike,
+        strike_type=type,
+    )
+    return _build_snapshot(entry)  # type: ignore[arg-type]
+
+
+@router.get("/live/snapshot/{instrument_key:path}")
+def live_snapshot_by_key(instrument_key: str) -> dict[str, Any]:
+    """Live-tick snapshot for one instrument (path form).
+
+    The readiness smoke-test probe
+    (``services/readiness_service.smoke_test``) hits this route:
+
+        /live/snapshot/NSE_INDEX%7CNifty%2050
+
+    and asserts the returned ``ltp`` is non-null and ``> 0``. A 404 here
+    is a real degradation — the digest would report YELLOW with a broken
+    ``nifty_snapshot`` probe.
+    """
+    entry = _resolve_entry(instrument_key=instrument_key)
+    return _build_snapshot(entry)  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------------------

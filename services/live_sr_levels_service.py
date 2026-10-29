@@ -600,9 +600,34 @@ class LiveSRLevelsService:
         except (TypeError, ValueError):
             return
         volume = float(tick.get("volume") or 0.0)
-        ts_ms = _to_ms(tick.get("ltt")) or int(
-            datetime.now(timezone.utc).timestamp() * 1000
-        )
+
+        # ---- ltt guard (2026-10-28) -------------------------------- #
+        # `ltt` is the Upstox last-traded timestamp for this tick. It
+        # is present on every real tick during market hours, but is
+        # absent on some post-close / keep-alive messages where Upstox
+        # sends an LTP update without a corresponding LTT.
+        #
+        # Falling back to wall-clock `now()` in that case is wrong:
+        # the LTP is historical but the timestamp is current, so every
+        # post-close tick spawns a fresh 1-min bar at the same LTP. A
+        # "new" pivot therefore confirms every 30s (new confirmed_time),
+        # and the dummy-order service hashes the advancing
+        # confirmed_time into a fresh order_id -- producing ~120
+        # duplicate dummy orders per hour that all close with
+        # END_OF_DAY pnl=0.00%.
+        #
+        # Skipping the tick when ltt is missing preserves the state
+        # accumulated during the trading session and stops the
+        # post-close ticker from inventing bars that never happened.
+        ts_ms = _to_ms(tick.get("ltt"))
+        if ts_ms is None:
+            if _verbose():
+                logger.debug(
+                    "[live-sr] skipping ltp tick with no ltt for %s",
+                    key,
+                )
+            return
+
         bucket = ts_ms // 60000
 
         forming = state.get("forming")

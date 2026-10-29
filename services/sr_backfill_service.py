@@ -11,6 +11,21 @@ tail).
 
 Config: ``SR_BACKFILL_INCLUDE_HISTORICAL`` (default true).
 
+## 2026-10-28 change — historical-candle cache
+The periodic refresh job (``live_sr_refresh_from_api``, every
+``LIVE_SR_REFRESH_FROM_API_MINUTES`` minutes) used to re-read every
+instrument's ``candles.json`` from disk on every cycle. With 170
+instruments × ~500 candles each, that was ~85,000 JSON objects parsed
+per cycle for data that does not change intraday (the backup archive
+is re-extracted once per daily refresh at 08:30 IST).
+
+Historical candles are now cached in-process for the trading day.
+Only the FIRST ``run()`` of the day pays the disk-read cost; every
+subsequent cycle reuses the cache. ``reason="manual"`` triggers still
+invalidate the cache so a backup re-extract via ``/admin/hard-refresh``
+is picked up on the next manual SR backfill. ``clear_historical_cache()``
+is exposed for direct invocation.
+
 Runs when ALL of the following hold:
   * ``SR_BACKFILL_ENABLED`` is True
   * ``LIVE_SR_ENABLED`` is True
@@ -31,6 +46,7 @@ periodic refresh passes ``send_telegram=False`` to avoid flooding.
 
 from __future__ import annotations
 
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, time as dtime, timezone
 from typing import Any
@@ -42,6 +58,99 @@ from core.logger import get_logger
 logger = get_logger(__file__)
 
 _MARKET_TZ = ZoneInfo("Asia/Kolkata")
+
+# --------------------------------------------------------------------------- #
+# Historical-candle cache                                                     #
+# --------------------------------------------------------------------------- #
+# Historical candles from each instrument's candles.json are stable for
+# the whole trading day; the backup archive itself is re-extracted once
+# per daily refresh (08:30 IST). Re-reading 170 files every 2 minutes
+# just to re-seed pivots against a tail that did not move is wasted I/O.
+#
+# Cache invalidation:
+#   * auto on IST date rollover (see _load_historical_cached)
+#   * explicit via clear_historical_cache()
+#   * forced from run(reason="manual")
+_HISTORICAL_CACHE: dict[tuple[str, int], list[dict[str, Any]]] = {}
+_HISTORICAL_CACHE_DAY: str = ""
+_HISTORICAL_CACHE_LOCK = threading.Lock()
+
+
+def _today_market_iso() -> str:
+    return _now_market().date().isoformat()
+
+
+def _load_historical_cached(
+    entry: dict[str, Any],
+    lookback_days: int,
+) -> list[dict[str, Any]]:
+    """Return historical candles for ``entry``, cached for the day.
+
+    The cache key is ``(instrument_key, lookback_days)`` so a caller
+    that overrides the lookback for a specific instrument (none do
+    today; the periodic refresh always uses
+    ``LIVE_SR_CALC_DEFAULT_LOOKBACK_DAYS``) does not collide with the
+    default-window cached value.
+
+    Returns ``[]`` for an instrument with no ``candles.json`` on disk
+    (ad-hoc indexes registered on demand, brand-new options with no
+    backup entry yet). That empty list IS cached — a missing backup
+    file is not a transient condition within a session, so re-reading
+    it every 2 minutes would only add disk I/O. Manual triggers bypass
+    the cache, so a newly-appeared backup file is picked up the next
+    time someone clicks ``POST /live-sr/backfill`` or triggers a hard
+    refresh.
+
+    Never raises.
+    """
+    global _HISTORICAL_CACHE_DAY
+
+    key = str(entry.get("instrument_key") or "").strip()
+    if not key:
+        return []
+
+    today = _today_market_iso()
+    cache_key = (key, int(lookback_days))
+
+    with _HISTORICAL_CACHE_LOCK:
+        if _HISTORICAL_CACHE_DAY != today:
+            _HISTORICAL_CACHE.clear()
+            _HISTORICAL_CACHE_DAY = today
+        cached = _HISTORICAL_CACHE.get(cache_key)
+
+    if cached is not None:
+        return cached
+
+    try:
+        from services.live_sr_calc_service import live_sr_calc_service
+        historical = live_sr_calc_service.load_historical_candles_for_entry(
+            entry, lookback_days,
+        )
+    except Exception:
+        logger.exception(
+            "[sr-backfill] historical load failed for %s", key,
+        )
+        historical = []
+
+    with _HISTORICAL_CACHE_LOCK:
+        _HISTORICAL_CACHE[cache_key] = historical
+    return historical
+
+
+def clear_historical_cache() -> int:
+    """Drop the in-process historical-candle cache.
+
+    Returns the number of entries that were discarded. Safe to call
+    from any thread. Used automatically by ``run(reason="manual")`` and
+    available for direct invocation after a backup re-extract.
+    """
+    global _HISTORICAL_CACHE_DAY
+    with _HISTORICAL_CACHE_LOCK:
+        n = len(_HISTORICAL_CACHE)
+        _HISTORICAL_CACHE.clear()
+        _HISTORICAL_CACHE_DAY = ""
+    return n
+
 
 # --------------------------------------------------------------------------- #
 # Small time helpers                                                          #
@@ -127,8 +236,11 @@ def _fetch_merged_candles(
     """Fetch historical + intraday merged candles for one instrument.
 
     Uses the shared loader / merger from ``live_sr_calc_service`` so the
-    backfill path and the calc endpoint stay in lockstep. Never raises —
-    a failure on either source returns whatever the other produced.
+    backfill path and the calc endpoint stay in lockstep. Historical
+    candles go through ``_load_historical_cached`` (per-day in-process
+    cache); intraday candles are fetched fresh on every call. Never
+    raises — a failure on either source returns whatever the other
+    produced.
     """
     try:
         from services.live_sr_calc_service import live_sr_calc_service
@@ -143,15 +255,8 @@ def _fetch_merged_candles(
     if not key:
         return []
 
-    try:
-        historical = live_sr_calc_service.load_historical_candles_for_entry(
-            entry, lookback_days,
-        )
-    except Exception:
-        logger.exception(
-            "[sr-backfill] historical load failed for %s", key,
-        )
-        historical = []
+    # Cached — see _load_historical_cached docstring.
+    historical = _load_historical_cached(entry, lookback_days)
 
     try:
         intraday = live_sr_calc_service.fetch_intraday_candles_for_entry(key)
@@ -250,6 +355,17 @@ class SRBackfillService:
             logger.info("[sr-backfill] skipped — %s", why)
             self._last_status = summary
             return summary
+
+        # Manual triggers always read fresh historical data. This is
+        # the path an operator uses after POST /admin/hard-refresh
+        # (which re-extracts the backup archive), so the newly-written
+        # candles.json files must be picked up immediately.
+        if reason == "manual":
+            cleared = clear_historical_cache()
+            logger.info(
+                "[sr-backfill] historical cache cleared "
+                "(entries=%d) for manual trigger", cleared,
+            )
 
         if entries is None:
             from services.instrument_registry import instrument_registry
@@ -360,6 +476,11 @@ class SRBackfillService:
             "pivots=%d errors=%d elapsed=%.1fs",
             len(entries), seeded_instruments, candles_total,
             pivots_total, errors, elapsed,
+        )
+        logger.info(
+            "[sr-backfill] historical cache: day=%s entries=%d",
+            _HISTORICAL_CACHE_DAY or "cold",
+            len(_HISTORICAL_CACHE),
         )
 
         if send_telegram:

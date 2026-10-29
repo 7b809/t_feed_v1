@@ -26,7 +26,7 @@ The persisted levels are deliberately **NOT merged into ``levels``**:
 
 Callers who want both views side-by-side get them without cross-
 contamination; callers who want to merge can do so in their own code
-based on their own semantics (fresh ≠ live).
+based on their own semantics (fresh != live).
 
 Public loader helpers
 ---------------------
@@ -320,7 +320,7 @@ def _normalise_candle(raw: Any) -> dict[str, Any] | None:
                 "bucket": int(dt.timestamp() // 60),
                 "open": float(o),
                 "high": float(h),
-                "low": float(h),
+                "low": float(l),
                 "close": float(c),
                 "volume": float(v),
             }

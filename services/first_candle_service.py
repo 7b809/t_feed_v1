@@ -83,6 +83,14 @@ _OPTION_FETCH_ATTEMPTS = 1
 
 _MARKET_OPEN = dtime(9, 15)
 _MARKET_CLOSE = dtime(15, 30)
+# The 09:15 1-min candle is only guaranteed to exist from ~09:15:30
+# onwards; Upstox usually finalises it by 09:16:00, occasionally by
+# 09:16:40.  09:16:10 matches the scheduled task time and empirically
+# succeeds on the first fetch.  Any caller invoking `_market_gate_check`
+# before this time (e.g. the level-isolation 5-minute recheck firing
+# at exactly 09:15:00) is rejected up front rather than burning 5 x 7 s
+# = 28 s on retries that the API cannot satisfy yet.
+_OR_READY = dtime(9, 16, 10)
 _VALID_WEEKDAYS = {0, 1, 2, 3, 4}  # Mon-Fri
 
 # --------------------------------------------------------------------------- #
@@ -139,11 +147,20 @@ def _market_gate_check(backfill: bool = False) -> dict[str, Any]:
     ``backfill=True`` bypasses the post-close rejection: the Upstox
     intraday API still serves today's 1-min candles after 15:30, so
     the 09:15 OR candle can be reconstructed at any point in the
-    extended backfill window (09:16 → 23:59 IST) on a trading day.
+    extended backfill window (09:16 -> 23:59 IST) on a trading day.
 
     Weekend, holiday, and pre-open are still rejected in backfill
     mode — those are genuine non-trading conditions, not just
     "the data isn't ready yet".
+
+    The 09:15:00 -> 09:16:09 window is also rejected (``or_warming_up``)
+    because the 09:15 1-min candle is not yet finalised by the Upstox
+    intraday API.  Without this gate, any caller that fires at exactly
+    09:15:00 (e.g. the level-isolation 5-minute recheck) wastes the
+    full ``_INDEX_FETCH_ATTEMPTS`` x ``_INDEX_FETCH_DELAY_SECONDS`` =
+    28 s retry window on a candle that cannot exist yet, then
+    returns ``no_first_candle`` for every instrument.  Rejecting
+    up front lets the scheduled 09:16:10 run pick the OR cleanly.
     """
     now = _now_market()
 
@@ -173,6 +190,7 @@ def _market_gate_check(backfill: bool = False) -> dict[str, Any]:
         }
 
     now_t = now.time()
+
     if now_t < _MARKET_OPEN:
         today_open = now.replace(hour=9, minute=15, second=0, microsecond=0)
         return {
@@ -182,6 +200,31 @@ def _market_gate_check(backfill: bool = False) -> dict[str, Any]:
             "next_open": today_open,
             "countdown_str": _format_countdown(today_open - now),
             "countdown_label": today_open.strftime("%a %d %b 09:15 IST"),
+            "backfill_mode": backfill,
+        }
+
+    # Market is technically open but the 09:15 OR candle has not been
+    # finalised by the Upstox intraday API yet.  Reject immediately so
+    # callers do not burn the full 28 s retry window on a candle that
+    # cannot exist yet (see module docstring and inline comment above
+    # _OR_READY).
+    if now_t < _OR_READY:
+        today_or_ready = now.replace(
+            hour=_OR_READY.hour,
+            minute=_OR_READY.minute,
+            second=_OR_READY.second,
+            microsecond=0,
+        )
+        return {
+            "allow": False,
+            "skip_reason": "or_warming_up",
+            "skip_message": (
+                "OR warming up (first candle closes at 09:16:00 IST; "
+                "retry at 09:16:10 IST)"
+            ),
+            "next_open": today_or_ready,
+            "countdown_str": _format_countdown(today_or_ready - now),
+            "countdown_label": today_or_ready.strftime("%a %d %b 09:16:10 IST"),
             "backfill_mode": backfill,
         }
 
@@ -532,6 +575,10 @@ class FirstCandleService:
         OR levels can be reconstructed from the intraday API when the
         project is started after 15:30 (e.g. at 19:08 IST). Weekend,
         holiday, and pre-open are still rejected in backfill mode.
+
+        Both modes reject the 09:15:00 -> 09:16:09 window (``or_warming_up``)
+        because the 09:15 1-min candle does not exist in the Upstox
+        intraday API yet.
         """
         gate = _market_gate_check(backfill=backfill)
         if not gate["allow"]:
@@ -559,9 +606,15 @@ class FirstCandleService:
             return summary
 
         if gate.get("backfill_mode"):
+            phase = (
+                "post-close "
+                if _now_market().time() > _MARKET_CLOSE
+                else ""
+            )
             logger.info(
-                "[first-candle] post-close BACKFILL MODE — reconstructing "
-                "today's OR from intraday API"
+                "[first-candle] %sBACKFILL MODE — reconstructing "
+                "today's OR from intraday API",
+                phase,
             )
 
         entries = list(instrument_registry.all())

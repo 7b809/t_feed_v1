@@ -17,10 +17,10 @@ SR integration + level isolation
   engine when the market opens.
 * Each tick is forwarded to ``live_sr_levels_service.on_tick`` so the
   SR engine builds 1-min candles and detects pivots.
-* Every NIFTY / SENSEX index tick is forwarded to
-  ``level_isolated_instrument_service.on_tick`` so the level-isolation
-  engine can watch for R3 / S3 touches. Option ticks are ignored by
-  the isolation engine.
+* Every NIFTY / BANKNIFTY / MIDCPNIFTY / SENSEX index tick is forwarded
+  to ``level_isolated_instrument_service.on_tick`` so the
+  level-isolation engine can watch for R3 / S3 touches. Option ticks
+  are ignored by the isolation engine.
 """
 
 from __future__ import annotations
@@ -45,6 +45,8 @@ logger = get_logger(__file__)
 
 DEFAULT_CORE_INSTRUMENTS = [
     ("NSE_INDEX|Nifty 50", "NIFTY 50"),
+    ("NSE_INDEX|Nifty Bank", "NIFTY BANK"),
+    ("NSE_INDEX|NIFTY MID SELECT", "NIFTY MID SELECT"),
     ("BSE_INDEX|SENSEX", "SENSEX"),
 ]
 
@@ -429,7 +431,7 @@ class LiveFeedService:
                     )
 
             # --- LEVEL ISOLATION HOOK --------------------------------- #
-            # Only NIFTY / SENSEX index ticks are relevant; the service
+            # Only monitored index ticks are relevant; the service
             # ignores everything else internally, but the explicit key
             # gate here avoids the call overhead on ~165 option ticks.
             if (

@@ -1,3 +1,4 @@
+# services/normalization.py
 """Shared normalization for user-facing instrument selectors.
 
 Users pass query parameters in many shapes:
@@ -48,6 +49,7 @@ UNDERLYING_ALIASES: dict[str, tuple[str, ...]] = {
     "BANKNIFTY": (
         "BANKNIFTY", "BANK_NIFTY", "BANK-NIFTY",
         "NIFTYBANK", "NIFTY_BANK", "BANK NIFTY",
+        "NIFTY BANK",
     ),
     "FINNIFTY": (
         "FINNIFTY", "FIN_NIFTY", "FIN-NIFTY",
@@ -56,6 +58,8 @@ UNDERLYING_ALIASES: dict[str, tuple[str, ...]] = {
     "MIDCPNIFTY": (
         "MIDCPNIFTY", "MIDCP_NIFTY", "MIDCAPNIFTY",
         "MIDCAP_NIFTY", "MIDCP NIFTY",
+        "NIFTY MID SELECT", "NIFTY_MID_SELECT", "NIFTY-MID-SELECT",
+        "NIFTYMIDSELECT", "NIFTY MIDCAP SELECT",
     ),
 }
 

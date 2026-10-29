@@ -17,6 +17,9 @@
                                                             instrument, tagged against
                                                             the official isolation time
     POST /admin/level-isolation/backfill                  — re-run the intraday replay
+    POST /admin/level-isolation/refresh-snapshot          — re-collect the isolated
+                                                            instrument's own data at the
+                                                            touch (no re-decision)
     POST /admin/level-isolation/reset                     — clear the day's state
 """
 
@@ -235,6 +238,24 @@ async def run_backfill() -> dict[str, Any]:
         run_level_isolation_backfill_manual,
     )
     return await asyncio.to_thread(run_level_isolation_backfill_manual)
+
+
+@router.post("/refresh-snapshot")
+async def refresh_snapshot() -> dict[str, Any]:
+    """Re-collect the isolated instrument's own data at the touch.
+
+    The ``/isolated`` page's "Refresh Snapshot" button targets this
+    endpoint.  It is a snapshot-only backfill — the isolation decision
+    itself is never changed.  It exists for records created before the
+    snapshot feature was deployed, whose ``instrument_ltp`` /
+    ``instrument_touch_ohlc`` / ``instrument_first_candle`` /
+    ``instrument_or_levels`` fields are empty.  The 5-minute recheck
+    job performs the same operation on its own, but this gives the
+    operator an immediate way to populate the fields without waiting.
+    """
+    return await asyncio.to_thread(
+        level_isolated_instrument_service.refresh_snapshot
+    )
 
 
 @router.post("/reset")
