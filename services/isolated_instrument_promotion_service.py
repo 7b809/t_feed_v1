@@ -157,34 +157,6 @@ operator must also clear the promotion sidecar (``POST /admin/
 level-isolation/clear-promotion``) so the next ``apply_promotion()``
 writes a sidecar without a frozen entry.
 
-G1 v4.2 fix bundle (2026-10-29 replay analysis)
------------------------------------------------
-The 2026-10-29 replay exposed that `_is_path_b_active()` was not a
-reliable Path B guard in two situations:
-
-  1. **Master switch ignored.** When
-     ``STRATEGY_EXT_PATH_B_ENABLED=false``, the entry-signal service
-     correctly falls back to Path A behaviour, but this guard still
-     returned ``True`` for any external-index trigger — blocking
-     promotion even though the operator had opted out of Path B
-     entirely. ``_is_path_b_active()`` now short-circuits to
-     ``False`` when the master switch is off, matching
-     ``strategy_entry_signal_service.compute()`` and
-     ``dummy_order_service._path_b_mode()``.
-
-  2. **Legacy record defaulted to Path A.** When an isolation
-     record predates the ``trigger_is_self_nifty`` field, the guard
-     looked only at that field — which was ``None`` — and returned
-     ``False``, so a Path B session was silently promoted as if it
-     were Path A. The guard now derives defensively from
-     ``execution_path`` first, then from ``trigger_index !=
-     "NIFTY"``, before falling back to Path A. This closes the
-     2026-10-29 16:10:44 incident, where a MIDCPNIFTY R3 (Path B)
-     session was promoted to the counter-side PE.
-
-Both changes are additive: they only tighten the block condition,
-never loosen it. Path A promotions continue to work unchanged.
-
 Sidecar file (unchanged path)
 -----------------------------
 ``<LIVE_DATA_DIR>/level_isolated_instrument_promotion.json``
@@ -345,7 +317,7 @@ def _freeze_enabled() -> bool:
     ))
 
 # --------------------------------------------------------------------------- #
-# G1 v4.1 — Path B guard (hardened in v4.2)                                   #
+# NEW (G1 v4.1): Path B guard                                                 #
 # --------------------------------------------------------------------------- #
 def _is_path_b_active() -> bool:
     """Return True when the day's isolation was triggered by an
@@ -355,40 +327,13 @@ def _is_path_b_active() -> bool:
     instrument stays active for the whole session, and the dummy-order
     service is the sole executor. ``False`` means either no isolation
     yet (safe to continue — the caller's normal guards will fire) or
-    a Path A isolation (NIFTY self-trigger), or Path B is disabled
-    by the operator.
+    a Path A isolation (NIFTY self-trigger).
 
-    G1 v4.2 fixes:
-
-      * **Master switch honoured.** When
-        ``STRATEGY_EXT_PATH_B_ENABLED`` is ``false`` the operator has
-        asked for the pre-v4.1 single-path model. The entry-signal
-        service and the dummy-order service already fall back to
-        Path A in that case; this guard now matches them by
-        returning ``False`` regardless of the trigger source.
-        Without this, an operator who disabled Path B would find
-        promotion still blocked on every external-index trigger.
-
-      * **Legacy record derivation.** When the isolation record
-        predates the ``trigger_is_self_nifty`` field (older
-        deployments, stale sidecars from before the v4.1 rollout),
-        the old guard returned ``False`` for the missing field — so
-        a Path B session was silently promoted as if it were Path A.
-        The guard now derives from ``execution_path`` first, then
-        from ``trigger_index != "NIFTY"``, before falling back to
-        Path A. This mirrors ``dummy_order_service._path_b_mode()``
-        and ``strategy_entry_signal_service.compute()``, so all
-        three consumers agree on the execution path for the day.
-
-    Never raises. On any isolation-service lookup failure, logs the
-    exception and returns ``False`` so that a transient outage cannot
-    invent a Path B block that would otherwise break the Path A flow.
+    Never raises. On any lookup failure, logs and returns ``False`` so
+    that a transient isolation-service outage cannot invent a
+    path-B block that would otherwise break the Path A flow. The
+    operator sees the exception in the log.
     """
-    # ---- G1 v4.2 — master switch ------------------------------ #
-    if not bool(getattr(config, "STRATEGY_EXT_PATH_B_ENABLED", True)):
-        return False
-
-    # ---- Read the isolation record ---------------------------- #
     try:
         from services.level_isolated_instrument_service import (
             level_isolated_instrument_service,
@@ -401,32 +346,12 @@ def _is_path_b_active() -> bool:
         return False
 
     iso = (iso_status or {}).get("isolated") or {}
-    if not iso:
-        return False
-
-    # ---- Primary signal: trigger_is_self_nifty ---------------- #
-    is_self_nifty = iso.get("trigger_is_self_nifty")
-    if is_self_nifty is not None:
-        return is_self_nifty is False
-
-    # ---- Legacy record — derive defensively ------------------- #
-    # Order matches dummy_order_service._path_b_mode() and
-    # strategy_entry_signal_service.compute() so all three consumers
-    # agree on the execution path for the same record.
-    path_field = str(iso.get("execution_path") or "").strip()
-    if path_field == "B_external_trigger":
+    if iso and iso.get("trigger_is_self_nifty") is False:
         return True
-    if path_field == "A_self_trigger":
-        return False
-
-    trig = str(iso.get("trigger_index") or "").strip().upper()
-    if trig and trig != "NIFTY":
-        return True
-
     return False
 
 # --------------------------------------------------------------------------- #
-# Frozen-entry extraction                                                     #
+# NEW: frozen-entry extraction                                               #
 # --------------------------------------------------------------------------- #
 def _extract_candidate_block(c: dict[str, Any]) -> dict[str, Any]:
     """Return the stable, UI-facing fields of a single candidate block.
@@ -547,7 +472,7 @@ class IsolatedInstrumentPromotionService:
         return self.read_active() is not None
 
     # ------------------------------------------------------------------ #
-    # Frozen-entry accessors                                              #
+    # NEW: frozen-entry accessors                                         #
     # ------------------------------------------------------------------ #
     def get_frozen_entry(self) -> dict[str, Any] | None:
         """Return today's frozen entry block, or ``None``.
@@ -617,7 +542,7 @@ class IsolatedInstrumentPromotionService:
                 "generated_at": _now_utc_iso(),
             }
 
-        # ---- Path B never triggers promotion ---------------------- #
+        # ---- G1 v4.1 — Path B never triggers promotion ------------- #
         # When the session was isolated by an EXTERNAL index
         # (MIDCPNIFTY / BANKNIFTY / SENSEX), the bias-side instrument
         # stays active for the whole day. The frozen entry must not be
@@ -727,7 +652,7 @@ class IsolatedInstrumentPromotionService:
                 "generated_at": _now_utc_iso(),
             }
 
-        # ---- Path B never triggers promotion ---------------------- #
+        # ---- G1 v4.1 — Path B never triggers promotion ------------- #
         # When the session was isolated by an EXTERNAL index
         # (MIDCPNIFTY / BANKNIFTY / SENSEX), the bias-side instrument
         # stays active for the whole day. Promotion is only valid for

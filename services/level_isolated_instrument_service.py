@@ -104,20 +104,6 @@ effect. All three are now wired:
         sweep that ``first_candle_service.run()`` performs. Structural
         issues (missing file, stale date, unreadable) still trigger
         the full sweep because those cannot be resolved per-underlying.
-
-G1 v4.2 run_backfill() self-heal (2026-10-29)
----------------------------------------------
-    * ``run_backfill()`` now calls ``_self_heal_execution_path()`` on any
-      already-isolated record that was written before v4.2. Legacy state
-      files persist the isolation without ``trigger_is_self_nifty`` /
-      ``execution_path``, so downstream consumers reading the persisted
-      ``isolated`` dict directly (dummy-order service, promotion, UI)
-      could fall back to Path A on a session where the trigger was
-      actually MIDCPNIFTY / BANKNIFTY / SENSEX. The self-heal derives
-      both fields from ``trigger_index`` and persists them back to disk.
-      ``get_execution_path()`` already derived defensively at read time;
-      this fix makes the *persisted* record consistent so every consumer
-      sees the same value.
 """
 
 from __future__ import annotations
@@ -1661,53 +1647,6 @@ class LevelIsolatedInstrumentService:
                 )
             return ""
 
-    # ------------------------------------------------------------------ #
-    # NEW (G1 v4.2): self-heal execution-path fields on legacy records   #
-    # ------------------------------------------------------------------ #
-    def _self_heal_execution_path(self, iso: dict[str, Any]) -> bool:
-        """G1 v4.2 — populate ``trigger_is_self_nifty`` / ``execution_path``
-        on legacy isolation records that were written before those fields
-        existed.
-
-        The live path always writes both fields (see ``_isolate``), but a
-        state file produced by a pre-v4.2 build will lack them. Downstream
-        consumers that read the persisted ``isolated`` dict directly (e.g.
-        the dummy-order service) would then fall back to Path A even when
-        the trigger was MIDCPNIFTY / BANKNIFTY / SENSEX. This helper derives
-        both fields from ``trigger_index`` and returns True when anything
-        was written, so the caller knows to persist the state.
-
-        Never raises.
-        """
-        if not isinstance(iso, dict) or not iso:
-            return False
-
-        changed = False
-        trigger_canonical = str(iso.get("trigger_index") or "").strip().upper()
-
-        if iso.get("trigger_is_self_nifty") is None:
-            iso["trigger_is_self_nifty"] = (trigger_canonical == "NIFTY")
-            changed = True
-
-        if not str(iso.get("execution_path") or "").strip():
-            iso["execution_path"] = (
-                "A_self_trigger"
-                if bool(iso.get("trigger_is_self_nifty"))
-                else "B_external_trigger"
-            )
-            changed = True
-
-        if changed:
-            logger.info(
-                "[level-isolation] self-healed execution-path fields on "
-                "legacy isolation record — trigger=%s "
-                "trigger_is_self_nifty=%s execution_path=%s",
-                trigger_canonical or "—",
-                iso.get("trigger_is_self_nifty"),
-                iso.get("execution_path"),
-            )
-        return changed
-
     def _send_telegram(self, isolated: dict[str, Any]) -> None:
         try:
             from services.telegram_service import telegram_service
@@ -1847,18 +1786,6 @@ class LevelIsolatedInstrumentService:
                 iso = self._state["isolated"]
                 self._ensure_tracker_attached()
 
-                # G1 v4.2 self-heal: legacy isolation records (written
-                # by pre-v4.2 builds) may be missing the
-                # `trigger_is_self_nifty` / `execution_path` fields.
-                # Derive + persist them here so downstream consumers
-                # (dummy-order, promotion, UI) branch on the same value
-                # the live path would have written — preventing legacy
-                # sessions from silently falling back to Path A when the
-                # trigger was actually an external index.
-                execution_path_self_healed = self._self_heal_execution_path(iso)
-                if execution_path_self_healed:
-                    self._save_state()
-
                 if self._snapshot_needs_backfill(iso):
                     logger.info(
                         "[level-isolation] isolated record exists but "
@@ -1875,7 +1802,6 @@ class LevelIsolatedInstrumentService:
                 return {
                     "status": "already_isolated",
                     "isolated": self._state["isolated"],
-                    "execution_path_self_healed": execution_path_self_healed,
                 }
 
             filtered = self._load_filtered_instruments()

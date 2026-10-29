@@ -1951,21 +1951,6 @@
         font-weight: 600;
         margin-top: 2px;
     }
-
-    /* ---- Issue 10 — legacy Path A badge shown on rows created before
-       Path B activated so the operator can tell the two apart. ---- */
-    .do-path-a-badge {
-        display: inline-block;
-        padding: 1px 7px;
-        border-radius: 4px;
-        font-size: 0.62rem;
-        font-weight: 800;
-        letter-spacing: 0.4px;
-        background: #f1f5f9;
-        color: var(--iso-muted);
-        border: 1px solid var(--iso-border);
-        margin-left: 4px;
-    }
 </style>
 {% endblock %}
 
@@ -5189,8 +5174,8 @@
                     <div class="do-label">Day ₹ PnL</div>
                     <div class="do-value ${rsCls}">${fmtRs(totalRs)}</div>
                 </div>
-                <div class="do-summary-tile" title="Average per-order PnL %, not a compounded day return">
-                    <div class="do-label">Avg PnL %</div>
+                <div class="do-summary-tile">
+                    <div class="do-label">Day PnL %</div>
                     <div class="do-value ${pnlCls}">${fmtPct(dayPnl)}</div>
                 </div>
                 <div class="do-summary-tile">
@@ -5254,33 +5239,10 @@
             return `<span class="src-type signal">SIGNAL</span>`;
         }
 
-        /* Issue 7 — Path B orders are BUY-side option entries; the
-           meaningful side for the operator is the option type (CE / PE),
-           not the trade direction. Render CE/PE as a pill for Path B
-           orders, keep the raw side for Path A (legacy / single-trade)
-           orders. */
-        function buildSideCell(o, isPathB) {
-            if (isPathB) {
-                const optType = String(o.strike_type || o.type || "").toUpperCase();
-                if (optType === "CE" || optType === "PE") {
-                    const cls = optType === "CE" ? "ce" : "pe";
-                    return `<span class="type-pill ${cls}">${esc(optType)}</span>`;
-                }
-            }
-            return esc(o.side || "—");
-        }
-
-        function renderRow(o, hasPathB) {
+        function renderRow(o) {
             const status = String(o.status || "").toLowerCase();
             const scenario = String(o.scenario || "");
             const isPathB = String(o.path || "") === "B_external_trigger";
-            /* Issue 10 — legacy Path A orders (no `path` field, or
-               path === "A_self_trigger") that coexisted with Path B in
-               the same day's journal are tagged so the operator can tell
-               them apart from Path B rows at a glance. Only shown when
-               the day actually contains at least one Path B order —
-               otherwise the tag would be visual noise. */
-            const isLegacyPathA = hasPathB && !isPathB;
             const scnCls = scenario === "regime"
                 ? "regime"
                 : scenario === "path_b_sr_level"
@@ -5336,12 +5298,7 @@
             // G1 v4.3 — Path B badge on instrument cell
             const pathBadge = isPathB
                 ? '<span class="do-path-b-badge">PATH B</span>'
-                : (isLegacyPathA
-                    ? '<span class="do-path-a-badge">PATH A</span>'
-                    : "");
-
-            // Issue 7 — Side column: CE/PE for Path B, raw side for Path A.
-            const sideCell = buildSideCell(o, isPathB);
+                : "";
 
             // G1 v4.3 — ₹ PnL subtext for closed orders (uses persisted
             // closed_profit_rs when available, else derives from
@@ -5378,7 +5335,7 @@
                         <span class="do-scenario-pill ${scnCls}">${esc(scnLabel)}</span>
                         ${lotBadge}
                     </td>
-                    <td>${sideCell}</td>
+                    <td>${esc(o.side || "—")}</td>
                     <td class="num">
                         ₹${fmt(entry)}
                         ${priceSrcHtml}
@@ -5428,13 +5385,6 @@
                 return;
             }
 
-            /* Issue 10 — a single flag decides whether legacy Path A
-               rows get the "PATH A" badge. Computed once here so every
-               row sees the same answer. */
-            const hasPathB = orders.some(
-                o => String(o.path || "") === "B_external_trigger"
-            );
-
             orders.sort((a, b) => {
                 const aOpen = a.status === "OPEN" ? 0 : 1;
                 const bOpen = b.status === "OPEN" ? 0 : 1;
@@ -5470,7 +5420,7 @@
                                 <th class="num">MAE</th>
                             </tr>
                         </thead>
-                        <tbody>${orders.map(o => renderRow(o, hasPathB)).join("")}</tbody>
+                        <tbody>${orders.map(renderRow).join("")}</tbody>
                     </table>
                 </div>
             `;

@@ -68,70 +68,6 @@ field):
       rest of the session (existing open orders continue to trail
       and close normally).
 
-G1 v4.2 fix bundle (2026-10-29 replay analysis)
------------------------------------------------
-The 2026-10-29 retroactive replay exposed several Path B defects.
-This revision closes them all:
-
-  1. **Lockdown in retroactive mode** — ``_reconcile_from_bars``
-     used to funnel Path B closes through ``_close_order`` (the Path A
-     close path), which does not set ``strategy_locked_today``. Every
-     Path B target-hit in the replay therefore left ``locked=False``.
-     ``_reconcile_from_bars`` now dispatches to a dedicated
-     ``_reconcile_path_b_from_bars`` that closes via
-     ``_close_path_b_order`` — which sets the lockdown flag.
-
-  2. **Rupee-trailing engine in retroactive mode** — the old replay
-     used ``simulation_service._replay_scenario`` (a fixed
-     stop/target walk). Path B needs the Rupee-trailing state machine
-     (activation, trailing gap, trailing floor, R3 breakout). A new
-     ``_replay_path_b_scenario`` implements the Path B state machine
-     bar-by-bar; both live reconcile and retroactive close use it.
-
-  3. **Sequential create → simulate → check-lock** — the old
-     ``_run_path_b_once`` created all eligible SR orders first and
-     only then ran the close pass. In retroactive mode this fabricated
-     orders that would never exist after an early target-hit +
-     lockdown. The new loop sorts levels by ``confirmed_time`` and,
-     for each: creates the order, immediately reconciles it, and
-     breaks if ``strategy_locked_today`` is now True.
-
-  4. **Master switch honouring** — ``_path_b_mode`` now returns
-     ``A_self_trigger`` when ``STRATEGY_EXT_PATH_B_ENABLED=false``,
-     matching the entry-signal service. Previously the flag was
-     ignored here, so Path B order creation continued even with
-     Path B disabled.
-
-  5. **Legacy record derivation** — the Path B detection now also
-     falls back to the persisted ``execution_path`` field (when
-     present) and to ``trigger_index != "NIFTY"``. Records missing
-     ``trigger_is_self_nifty`` are no longer silently treated as
-     Path A.
-
-  6. **Simulated exit timestamps** — ``_close_order`` /
-     ``_close_path_b_order`` accept an ``exit_dt`` argument.
-     Retroactive closes now use the bar's own time instead of the
-     wall-clock moment of processing.
-
-  7. **CE/PE on Path B records** — the ``type`` field now carries
-     ``"CE"`` / ``"PE"`` (was ``"BUY"``), and an explicit
-     ``instrument_type`` field is added. ``side`` stays ``"BUY"``
-     per spec.
-
-  8. **Closed Rupee PnL on Path B** — ``_close_path_b_order``
-     persists ``closed_profit_rs`` and ``closed_r_multiple`` so the
-     dashboard Rupee PnL strip no longer needs to re-derive from
-     ``closed_pnl_pct * entry * lot``.
-
-  9. **Live MFE/MAE tracking** — ``_update_path_b_profit`` now updates
-     ``max_high_since_entry`` / ``min_low_since_entry`` / ``mfe`` /
-     ``mae`` on every LTP tick, not only during bar reconcile.
-
- 10. **Per-order ``execution_path_at_creation``** — every order (Path
-     A and Path B) carries this field so a stale Path A order created
-     before a Path B session can be distinguished from a genuine
-     Path A order in the dashboard.
-
 Failure modes (all returned in ``status``)
 ------------------------------------------
     ok            — scan completed
@@ -268,13 +204,12 @@ class DummyOrderService:
                             "[dummy-order] switching to PATH B "
                             "(external-index trigger)"
                         )
-                    pb_created, _, pb_closed = self._run_path_b_once(
+                    pb_created, _, _ = self._run_path_b_once(
                         reason, now, window_state, path_b_ctx["iso"],
                     )
-                    pb_updated, extra_closed = self._update_all_open(
+                    pb_updated, pb_closed = self._update_all_open(
                         now, window_state,
                     )
-                    pb_closed += extra_closed
                     if window_state == "retroactive":
                         pb_closed += self._auto_close_eod(now)
                     self._save(now)
@@ -386,7 +321,7 @@ class DummyOrderService:
             return {"status": "reset", "day": self._state.get("day")}
 
     # ------------------------------------------------------------------ #
-    # Path B debug helper                                                 #
+    # NEW (G1 v4.1): Path B debug helper                                  #
     # ------------------------------------------------------------------ #
     def get_path_b_state(self) -> dict[str, Any]:
         """Return the Path B debug state (for admin endpoints)."""
@@ -412,23 +347,10 @@ class DummyOrderService:
             }
 
     # ------------------------------------------------------------------ #
-    # Path B detection helper                                             #
+    # NEW (G1 v4.1): Path B detection helper                              #
     # ------------------------------------------------------------------ #
     def _path_b_mode(self) -> dict[str, Any]:
-        """Return the current isolation's Path B context (or empty).
-
-        G1 v4.2 fixes:
-
-          * The ``STRATEGY_EXT_PATH_B_ENABLED`` master switch is
-            honoured. When false, returns ``A_self_trigger`` regardless
-            of trigger source, matching the entry-signal service.
-          * Legacy records without ``trigger_is_self_nifty`` now
-            derive from ``execution_path`` first, then from
-            ``trigger_index != "NIFTY"``.
-        """
-        if not bool(getattr(config, "STRATEGY_EXT_PATH_B_ENABLED", True)):
-            return {"mode": "A_self_trigger", "iso": None}
-
+        """Return the current isolation's Path B context (or empty)."""
         try:
             from services.level_isolated_instrument_service import (
                 level_isolated_instrument_service,
@@ -444,17 +366,10 @@ class DummyOrderService:
 
         is_self_nifty = iso.get("trigger_is_self_nifty")
         if is_self_nifty is None:
-            # Legacy record — derive from execution_path first, then
-            # from trigger_index, then default to Path A.
-            path_field = str(iso.get("execution_path") or "").strip()
-            if path_field == "B_external_trigger":
-                is_self_nifty = False
-            elif path_field == "A_self_trigger":
-                is_self_nifty = True
-            else:
-                trig = str(iso.get("trigger_index") or "").upper()
-                is_self_nifty = (trig == "NIFTY")
-
+            # Legacy record — derive defensively from trigger index.
+            is_self_nifty = (
+                str(iso.get("trigger_index") or "").upper() == "NIFTY"
+            )
         mode = "A_self_trigger" if is_self_nifty else "B_external_trigger"
         return {"mode": mode, "iso": iso}
 
@@ -493,9 +408,9 @@ class DummyOrderService:
             "updated_at": None,
             "orders": [],
             # NEW (G1 v4.1): session-level Path B state.
-            "execution_path": None,
-            "strategy_locked_today": False,
-            "path_b_placed_keys": [],
+            "execution_path": None,          # "A_self_trigger" | "B_external_trigger" | None
+            "strategy_locked_today": False,  # set True when any Path B trade hits target
+            "path_b_placed_keys": [],        # dedup key list for Path B orders
         }
 
     def _load_from_disk(self) -> None:
@@ -645,13 +560,8 @@ class DummyOrderService:
             ),
             "strike": signal.get("isolated", {}).get("strike"),
             "type": side,
-            "instrument_type": side,
             "side": side,
             "is_bias_side": bool(candidate.get("is_bias_side")),
-            # G1 v4.2 — every order records which execution path was
-            # active when it was created. Lets the dashboard distinguish
-            # a legacy Path A order from a genuine Path B session.
-            "execution_path_at_creation": "A_self_trigger",
 
             "entry_time": entry_time_iso,
             "entry_price": round(entry_price, 4),
@@ -694,6 +604,8 @@ class DummyOrderService:
             "closed_mfe": None,
             "closed_mae": None,
 
+            # Notification dedup flags — survive restart because
+            # they live on the persisted record.
             "_notified_created": False,
             "_notified_closed": False,
         }
@@ -707,6 +619,7 @@ class DummyOrderService:
             scenario, retroactively_created,
         )
 
+        # Notify (once per order)
         self._notify_created(order)
 
         return order, True
@@ -771,7 +684,7 @@ class DummyOrderService:
         return float(target) if target > entry_price else None
 
     # ------------------------------------------------------------------ #
-    # Path B order builder                                                #
+    # NEW (G1 v4.1): Path B order builder                                 #
     # ------------------------------------------------------------------ #
     def _run_path_b_once(
         self,
@@ -782,11 +695,6 @@ class DummyOrderService:
     ) -> tuple[int, int, int]:
         """Path B — watch post-isolation SR levels on the bias instrument.
 
-        G1 v4.2 — sequential create → simulate → check-lock. Levels are
-        processed in ``confirmed_time`` order so that retroactive replay
-        mirrors live behaviour: a target-hit early in the day freezes
-        the strategy before later levels can create orders.
-
         Returns (created, updated, closed).
         """
         created = 0
@@ -794,6 +702,8 @@ class DummyOrderService:
         closed = 0
 
         if bool(self._state.get("strategy_locked_today")):
+            # Day is frozen. Existing open orders continue their own
+            # trailing loops via _update_all_open (called by caller).
             return created, updated, closed
 
         bias_key = str(iso.get("instrument_key") or "").strip()
@@ -803,7 +713,7 @@ class DummyOrderService:
         touched_at_iso = iso.get("touched_at") or iso.get("isolated_at") or ""
         touched_dt = _parse_iso(touched_at_iso)
 
-        # Resolve bias entry from registry.
+        # Resolve counter side from the same strike.
         bias_entry = None
         try:
             from services.instrument_registry import instrument_registry
@@ -859,8 +769,6 @@ class DummyOrderService:
 
         placed_keys = set(self._state.get("path_b_placed_keys") or [])
 
-        # ---- Collect eligible levels, then sort chronologically ---- #
-        eligible: list[dict[str, Any]] = []
         for level in (sr_payload.get("levels") or []):
             if not isinstance(level, dict):
                 continue
@@ -875,8 +783,9 @@ class DummyOrderService:
                 if touched_dt is not None and confirmed_dt <= touched_dt:
                     continue  # strictly post-isolation only
 
+                price_raw = level.get("price")
                 try:
-                    level_price = float(level.get("price"))
+                    level_price = float(price_raw)
                 except (TypeError, ValueError):
                     continue
 
@@ -890,59 +799,7 @@ class DummyOrderService:
                 if dedup_key in placed_keys:
                     continue
 
-                eligible.append({
-                    "level": level,
-                    "level_type": level_type,
-                    "level_price": level_price,
-                    "confirmed_iso": confirmed_iso,
-                    "confirmed_dt": confirmed_dt,
-                    "dedup_key": dedup_key,
-                })
-            except Exception:
-                logger.exception(
-                    "[dummy-order] path B level pre-validation failed for %s",
-                    level,
-                )
-
-        eligible.sort(key=lambda e: e["confirmed_dt"])
-
-        # ---- Sequential create → simulate → check-lock ----------- #
-        for info in eligible:
-            if self._state.get("strategy_locked_today"):
-                break
-
-            if info["dedup_key"] in placed_keys:
-                continue
-
-            try:
-                level_type = info["level_type"]
-                level_price = info["level_price"]
-                confirmed_iso = info["confirmed_iso"]
-
-                target_key = (
-                    bias_key if level_type == "support" else counter_key
-                )
-
-                # Determine CE / PE of the TARGET instrument.
-                target_entry = None
-                try:
-                    from services.instrument_registry import instrument_registry
-                    target_entry = instrument_registry.get(target_key)
-                except Exception:
-                    target_entry = None
-
-                target_instrument_type = str(
-                    (target_entry or {}).get("strike_type")
-                    or iso.get("type")
-                    or ""
-                ).upper()
-                if target_instrument_type not in {"CE", "PE"}:
-                    # Fallback: derive from bias side.
-                    target_instrument_type = (
-                        bias_type if target_key == bias_key
-                        else ("PE" if bias_type == "CE" else "CE")
-                    )
-
+                target_key = bias_key if level_type == "support" else counter_key
                 entry_price, price_source = self._resolve_path_b_entry_price(
                     target_key, confirmed_iso, now,
                 )
@@ -956,11 +813,14 @@ class DummyOrderService:
                     target_key, entry_price, confirmed_iso,
                 )
 
-                target_pct_val: float | None = None
-                if target_price is not None and entry_price > 0:
-                    target_pct_val = (target_price - entry_price) / entry_price
+                target_entry = None
+                try:
+                    from services.instrument_registry import instrument_registry
+                    target_entry = instrument_registry.get(target_key)
+                except Exception:
+                    target_entry = None
 
-                order: dict[str, Any] = {
+                order = {
                     "order_id": (
                         f"{target_key}|{level_type.upper()}|{confirmed_iso}"
                     ),
@@ -969,16 +829,14 @@ class DummyOrderService:
                     "scenario": "path_b_sr_level",
                     "instrument_key": target_key,
                     "trading_symbol": (
-                        (target_entry or {}).get("trading_symbol")
-                        or target_key
+                        target_entry.get("trading_symbol")
+                        if target_entry else target_key
                     ),
                     "underlying": underlying,
                     "strike": strike,
-                    "type": target_instrument_type,
-                    "instrument_type": target_instrument_type,
+                    "type": "BUY",
                     "side": "BUY",
                     "is_bias_side": (target_key == bias_key),
-                    "execution_path_at_creation": "B_external_trigger",
 
                     "entry_time": confirmed_iso,
                     "entry_price": round(entry_price, 4),
@@ -991,10 +849,6 @@ class DummyOrderService:
                         round(target_price, 4)
                         if target_price is not None else None
                     ),
-                    "target_pct": (
-                        round(target_pct_val, 6)
-                        if target_pct_val is not None else None
-                    ),
                     "target_pivot_time": target_time,
 
                     "lot_size": lot_size,
@@ -1002,10 +856,11 @@ class DummyOrderService:
                         "instrument": bias_key,
                         "type": level_type,
                         "price": round(level_price, 4),
-                        "pivot_time": info["level"].get("pivot_time"),
+                        "pivot_time": level.get("pivot_time"),
                         "confirmed_time": confirmed_iso,
                     },
 
+                    # ---- Rupee-based profit engine state ---------------- #
                     "profit_state": "PRE_TRAIL",
                     "peak_profit_rs": 0.0,
                     "trailing_stop_price": None,
@@ -1039,42 +894,26 @@ class DummyOrderService:
 
                 self._state["orders"].append(order)
                 self._by_id[order["order_id"]] = order
-                placed_keys.add(info["dedup_key"])
+                placed_keys.add(dedup_key)
                 self._state["path_b_placed_keys"] = sorted(placed_keys)
                 created += 1
                 logger.info(
                     "[dummy-order] PATH B created %s | level=%s px=%s "
-                    "entry=%.2f stop=%.2f target=%s lot=%d inst=%s",
+                    "entry=%.2f stop=%.2f target=%s lot=%d",
                     order["order_id"], level_type, level_price,
                     entry_price, stop_price, target_price, lot_size,
-                    target_instrument_type,
                 )
                 self._notify_created(order)
-
-                # G1 v4.2 — immediately reconcile this order so that a
-                # retroactive replay sees the target-hit → lockdown
-                # before later orders are created.
-                before_status = order.get("status")
-                self._reconcile_path_b_from_bars(
-                    order, now,
-                    complete_day=(window_state == "retroactive"),
-                )
-                if (
-                    order.get("status") != before_status
-                    and order.get("status") != "OPEN"
-                ):
-                    closed += 1
-
             except Exception:
                 logger.exception(
                     "[dummy-order] path B order build failed for level %s",
-                    info.get("level"),
+                    level,
                 )
 
         return created, updated, closed
 
     # ------------------------------------------------------------------ #
-    # Path B helper methods                                               #
+    # NEW (G1 v4.1): Path B helper methods                                #
     # ------------------------------------------------------------------ #
     @staticmethod
     def _resolve_path_b_entry_price(
@@ -1116,6 +955,7 @@ class DummyOrderService:
                 "[dummy-order] path B stop calculation failed for %s",
                 instrument_key,
             )
+            # Conservative fallback — 15% floor.
             pct = 0.15
             stop = round(entry_price * (1 - pct), 4)
             return stop, pct, pct, "fallback_15pct"
@@ -1126,7 +966,10 @@ class DummyOrderService:
         entry_price: float,
         entry_confirmed_iso: str,
     ) -> tuple[float | None, str | None]:
-        """Return (target_price, target_confirmed_time) for a Path B order."""
+        """Return (target_price, target_confirmed_time) for a Path B order.
+
+        Uses the same `_pick_target_resistance` helper that Path A uses.
+        """
         try:
             from services.strategy_entry_signal_service import (
                 _run_pivot_scan, _pick_target_resistance,
@@ -1228,7 +1071,7 @@ class DummyOrderService:
         stop = _safe_float(order.get("stop_price"))
         target = _safe_float(order.get("target_price"))
 
-        # G1 v4.1 — Path B Rupee-based profit engine
+        # ---- G1 v4.1 — Path B Rupee-based profit engine ----------- #
         if str(order.get("path") or "") == "B_external_trigger":
             self._update_path_b_profit(order, ltp, now)
             return
@@ -1270,7 +1113,7 @@ class DummyOrderService:
             return
 
     # ------------------------------------------------------------------ #
-    # Path B Rupee-based profit engine                                    #
+    # NEW (G1 v4.1): Path B Rupee-based profit engine                     #
     # ------------------------------------------------------------------ #
     def _update_path_b_profit(
         self,
@@ -1278,13 +1121,7 @@ class DummyOrderService:
         ltp: float,
         now: datetime,
     ) -> None:
-        """Path B Rupee-based trailing profit engine.
-
-        G1 v4.2 — also updates the price-based watermarks
-        (``max_high_since_entry`` / ``min_low_since_entry`` / ``mfe`` /
-        ``mae``) so the dashboard reflects them on every LTP tick
-        instead of only during bar reconcile.
-        """
+        """Path B Rupee-based trailing profit engine."""
         entry = _safe_float(order.get("entry_price"))
         lot = int(order.get("lot_size") or 0)
         target = _safe_float(order.get("target_price"))
@@ -1294,23 +1131,6 @@ class DummyOrderService:
         order["current_ltp"] = round(ltp, 4)
         order["current_ltp_at"] = now.isoformat()
 
-        # Price-based watermarks (dashboard MFE/MAE columns).
-        order["max_high_since_entry"] = round(
-            max(_safe_float(order.get("max_high_since_entry")) or entry, ltp),
-            4,
-        )
-        order["min_low_since_entry"] = round(
-            min(_safe_float(order.get("min_low_since_entry")) or entry, ltp),
-            4,
-        )
-        order["mfe"] = round(
-            order["max_high_since_entry"] - entry, 4,
-        )
-        order["mae"] = round(
-            order["min_low_since_entry"] - entry, 4,
-        )
-
-        # Rupee-based profit tracking.
         profit_rs = (ltp - entry) * lot
         order["current_profit_rs"] = round(profit_rs, 2)
         peak = max(
@@ -1318,7 +1138,7 @@ class DummyOrderService:
         )
         order["peak_profit_rs"] = round(peak, 2)
 
-        # ---- Activation (PRE_TRAIL → TRAILING) ------------------- #
+        # ---- Activation check (PRE_TRAIL -> TRAILING) ------------ #
         if order.get("profit_state") == "PRE_TRAIL":
             activation_rs = float(getattr(
                 config, "STRATEGY_EXT_PROFIT_ACTIVATION_RS", 1000.0,
@@ -1369,8 +1189,8 @@ class DummyOrderService:
     ) -> float | None:
         """Return the current trailing stop price.
 
-        lock_rs = max(TRAIL_FLOOR_RS, peak_profit_rs - TRAIL_GAP_RS)
-        trail   = entry + lock_rs / lot_size
+        lock_rs  = max(TRAIL_FLOOR_RS, peak_profit_rs - TRAIL_GAP_RS)
+        trail    = entry + lock_rs / lot_size
         """
         entry = _safe_float(order.get("entry_price"))
         lot = int(order.get("lot_size") or 0)
@@ -1394,12 +1214,9 @@ class DummyOrderService:
             return False
         try:
             from services.simulation_service import _read_option_or_levels
-            side = (
-                str(order.get("instrument_type") or "").upper()
-                or str(order.get("side") or "").upper()
-            )
             or_levels = _read_option_or_levels(
-                order.get("instrument_key"), side,
+                order.get("instrument_key"),
+                order.get("side"),
             )
             if not or_levels:
                 return False
@@ -1486,285 +1303,34 @@ class DummyOrderService:
             logger.exception("[dummy-order] bearish regime check failed")
             return False
 
-    # ------------------------------------------------------------------ #
-    # Path B bar replay                                                   #
-    # ------------------------------------------------------------------ #
-    def _replay_path_b_scenario(
-        self,
-        *,
-        candles: list[dict[str, Any]],
-        entry_time_iso: str,
-        entry_price: float,
-        stop_price: float,
-        target_price: float | None,
-        lot_size: int,
-        or_levels: dict[str, Any] | None = None,
-    ) -> dict[str, Any] | None:
-        """Replay the Rupee-trailing Path B state machine bar-by-bar.
-
-        Returns ``None`` when the replay cannot run (missing candles,
-        invalid entry time, or no post-entry bars). Otherwise returns:
-
-            exit_price        — the price at which the order would exit
-            exit_time         — bar time of the exit
-            exit_reason       — TARGET_HIT / TRAILING_STOP_HIT /
-                                STOP_HIT / END_OF_DAY
-            max_high          — max bar high since entry
-            min_low           — min bar low since entry
-            peak_profit_rs    — max Rupee profit since entry
-            profit_state_final — "TRAILING" or "PRE_TRAIL"
-        """
-        if lot_size <= 0:
-            return None
-
-        entry_dt = _parse_iso(entry_time_iso)
-        if entry_dt is None:
-            return None
-
-        same_bar_stop_first = bool(getattr(
-            config, "SIMULATION_SAME_BAR_STOP_FIRST", True,
-        ))
-        activation_rs = float(getattr(
-            config, "STRATEGY_EXT_PROFIT_ACTIVATION_RS", 1000.0,
-        ))
-        gap = float(getattr(config, "STRATEGY_EXT_TRAIL_GAP_RS", 500.0))
-        floor = float(getattr(
-            config, "STRATEGY_EXT_TRAIL_FLOOR_RS", 1000.0,
-        ))
-
-        r3_breakout_enabled = bool(getattr(
-            config, "STRATEGY_EXT_R3_BREAKOUT_ACTIVATION_ENABLED", True,
-        ))
-        r2 = _safe_float((or_levels or {}).get("R2"))
-        r3 = _safe_float((or_levels or {}).get("R3"))
-        r3_activation_possible = (
-            r3_breakout_enabled
-            and r2 is not None
-            and r3 is not None
-            and entry_price < r2
-        )
-
-        profit_state = "PRE_TRAIL"
-        peak_rs = 0.0
-        max_high = entry_price
-        min_low = entry_price
-
-        exit_price: float | None = None
-        exit_time: str | None = None
-        exit_reason: str | None = None
-
-        for candle in candles:
-            c_dt = _parse_iso(candle.get("time"))
-            if c_dt is None or c_dt <= entry_dt:
-                continue
-
-            hi = _safe_float(candle.get("high"))
-            lo = _safe_float(candle.get("low"))
-            if hi is None or lo is None:
-                continue
-
-            max_high = max(max_high, hi)
-            min_low = min(min_low, lo)
-
-            bar_peak = (hi - entry_price) * lot_size
-            peak_rs = max(peak_rs, bar_peak)
-
-            was_trailing = (profit_state == "TRAILING")
-            activated_here = False
-            if not was_trailing:
-                if peak_rs >= activation_rs:
-                    activated_here = True
-                elif r3_activation_possible and hi >= r3:
-                    activated_here = True
-
-            in_trailing = was_trailing or activated_here
-
-            if in_trailing:
-                lock_rs = max(floor, peak_rs - gap)
-                adverse = entry_price + (lock_rs / lot_size)
-                adverse_reason = "TRAILING_STOP_HIT"
-            else:
-                adverse = stop_price
-                adverse_reason = "STOP_HIT"
-
-            # Conservative: if PRE_TRAIL at bar start but activates
-            # mid-bar, and the bar's low hits the ORIGINAL stop, assume
-            # the stop was hit first (before activation could lift the
-            # stop).
-            if (
-                not was_trailing
-                and activated_here
-                and lo <= stop_price
-                and same_bar_stop_first
-            ):
-                adverse = stop_price
-                adverse_reason = "STOP_HIT"
-
-            hit_target = target_price is not None and hi >= target_price
-            hit_adverse = lo <= adverse
-
-            if hit_target and hit_adverse:
-                if same_bar_stop_first:
-                    exit_price = adverse
-                    exit_reason = adverse_reason
-                else:
-                    exit_price = target_price
-                    exit_reason = "TARGET_HIT"
-                exit_time = str(candle.get("time"))
-                break
-
-            if hit_target:
-                exit_price = target_price
-                exit_reason = "TARGET_HIT"
-                exit_time = str(candle.get("time"))
-                break
-
-            if hit_adverse:
-                exit_price = adverse
-                exit_reason = adverse_reason
-                exit_time = str(candle.get("time"))
-                break
-
-            # No exit — roll state forward.
-            if in_trailing:
-                profit_state = "TRAILING"
-
-        if exit_price is None:
-            # Unresolved — walk backwards for the last close.
-            last_close = None
-            last_time = None
-            for candle in reversed(candles):
-                c_dt = _parse_iso(candle.get("time"))
-                if c_dt is None or c_dt <= entry_dt:
-                    continue
-                cl = _safe_float(candle.get("close"))
-                if cl is not None:
-                    last_close = cl
-                    last_time = str(candle.get("time"))
-                    break
-            if last_close is None:
-                return None
-            exit_price = last_close
-            exit_time = last_time
-            exit_reason = "END_OF_DAY"
-
-        return {
-            "exit_price": exit_price,
-            "exit_time": exit_time,
-            "exit_reason": exit_reason,
-            "max_high": max_high,
-            "min_low": min_low,
-            "peak_profit_rs": peak_rs,
-            "profit_state_final": profit_state,
-        }
-
-    # ------------------------------------------------------------------ #
-    # Close paths                                                         #
-    # ------------------------------------------------------------------ #
-    def _close_order(
-        self,
-        order: dict[str, Any],
-        reason: str,
-        price: float,
-        exit_dt: datetime | None = None,
-    ) -> None:
-        """Close ANY order. Dispatches to the Path A or Path B close.
-
-        ``exit_dt`` is the actual exit timestamp — for retroactive
-        reconciles this is the bar time, for live LTP closes it is
-        the wall time. When ``None``, falls back to ``_now_market()``.
-        """
-        if exit_dt is None:
-            exit_dt = _now_market()
-
-        if str(order.get("path") or "") == "B_external_trigger":
-            self._close_path_b_order(order, reason, price, exit_dt)
-            return
-        self._close_path_a_order(order, reason, price, exit_dt)
-
-    def _close_path_a_order(
-        self,
-        order: dict[str, Any],
-        reason: str,
-        price: float,
-        exit_dt: datetime,
-    ) -> None:
-        """Path A close: fixed stop/target logic."""
-        if order.get("status") != "OPEN":
-            return
-
-        entry = _safe_float(order.get("entry_price"))
-        stop = _safe_float(order.get("stop_price"))
-        if entry is None or entry <= 0:
-            return
-        pnl = (price - entry) / entry
-        stop_pct = ((entry - stop) / entry) if stop is not None else 0.0
-        r = (pnl / stop_pct) if stop_pct > 0 else 0.0
-
-        order["status"] = reason
-        order["closed_at"] = exit_dt.isoformat()
-        order["closed_price"] = round(price, 4)
-        order["closed_pnl_pct"] = round(pnl, 6)
-        order["closed_r_multiple"] = round(r, 4)
-        order["closed_mfe"] = round(_safe_float(order.get("mfe")) or 0.0, 4)
-        order["closed_mae"] = round(_safe_float(order.get("mae")) or 0.0, 4)
-        order["current_ltp"] = round(price, 4)
-        order["current_ltp_at"] = exit_dt.isoformat()
-
-        # Defensive: persist Rupee PnL when a lot size is available.
-        lot = int(order.get("lot_size") or 0)
-        if lot > 0:
-            order["closed_profit_rs"] = round((price - entry) * lot, 2)
-
-        logger.info(
-            "[dummy-order] closed %s | reason=%s price=%.2f pnl=%+.2f%% R=%+.2f",
-            order.get("order_id"), reason, price, pnl * 100, r,
-        )
-
-        self._notify_closed(order)
-
     def _close_path_b_order(
         self,
         order: dict[str, Any],
         reason: str,
         price: float,
-        exit_dt: datetime,
+        now: datetime,
     ) -> None:
         """Close a Path B order and trigger strategy lockdown if needed."""
-        if order.get("status") != "OPEN":
-            return
-
         entry = _safe_float(order.get("entry_price"))
         lot = int(order.get("lot_size") or 0)
-        stop = _safe_float(order.get("stop_price"))
         if entry is None or entry <= 0 or lot <= 0:
             return
 
         profit_rs = (price - entry) * lot
         pnl_pct = (price - entry) / entry
-        stop_pct = ((entry - stop) / entry) if stop is not None else 0.0
-        r_multiple = (pnl_pct / stop_pct) if stop_pct > 0 else 0.0
 
         order["status"] = reason
-        order["closed_at"] = exit_dt.isoformat()
+        order["closed_at"] = now.isoformat()
         order["closed_price"] = round(price, 4)
         order["closed_pnl_pct"] = round(pnl_pct, 6)
         order["closed_profit_rs"] = round(profit_rs, 2)
-        order["closed_r_multiple"] = round(r_multiple, 4)
-        order["closed_mfe"] = round(
-            _safe_float(order.get("mfe")) or 0.0, 4,
-        )
-        order["closed_mae"] = round(
-            _safe_float(order.get("mae")) or 0.0, 4,
-        )
         order["current_ltp"] = round(price, 4)
-        order["current_ltp_at"] = exit_dt.isoformat()
+        order["current_ltp_at"] = now.isoformat()
 
         logger.info(
             "[dummy-order] PATH B closed %s | reason=%s price=%.2f "
-            "profit_rs=%.2f pnl=%+.2f%% R=%+.2f",
-            order.get("order_id"), reason, price, profit_rs,
-            pnl_pct * 100, r_multiple,
+            "profit_rs=%.2f pnl=%+.2f%%",
+            order.get("order_id"), reason, price, profit_rs, pnl_pct * 100,
         )
 
         # Target hit → strategy lockdown.
@@ -1781,31 +1347,13 @@ class DummyOrderService:
 
         self._notify_closed(order)
 
-    # ------------------------------------------------------------------ #
-    # Bar-level reconcile                                                 #
-    # ------------------------------------------------------------------ #
     def _reconcile_from_bars(
         self,
         order: dict[str, Any],
         now: datetime,
         complete_day: bool,
     ) -> None:
-        """Dispatch to the Path A or Path B bar reconcile."""
-        if order.get("status") != "OPEN":
-            return
-
-        if str(order.get("path") or "") == "B_external_trigger":
-            self._reconcile_path_b_from_bars(order, now, complete_day)
-            return
-        self._reconcile_path_a_from_bars(order, now, complete_day)
-
-    def _reconcile_path_a_from_bars(
-        self,
-        order: dict[str, Any],
-        now: datetime,
-        complete_day: bool,
-    ) -> None:
-        """Path A reconcile: fixed stop/target walk."""
+        """Bar-level reconcile: pull intraday candles, replay unseen bars."""
         if order.get("status") != "OPEN":
             return
         try:
@@ -1871,107 +1419,42 @@ class DummyOrderService:
             self._close_order(order, "TARGET_HIT", target_price, now)
             return
 
-    def _reconcile_path_b_from_bars(
+    def _close_order(
         self,
         order: dict[str, Any],
+        reason: str,
+        price: float,
         now: datetime,
-        complete_day: bool,
     ) -> None:
-        """Path B reconcile: Rupee-trailing state machine."""
-        if order.get("status") != "OPEN":
+        entry = _safe_float(order.get("entry_price"))
+        stop = _safe_float(order.get("stop_price"))
+        if entry is None or entry <= 0:
             return
-        try:
-            from services.live_sr_calc_service import live_sr_calc_service
-        except Exception:
-            return
+        pnl = (price - entry) / entry
+        stop_pct = ((entry - stop) / entry) if stop is not None else 0.0
+        r = (pnl / stop_pct) if stop_pct > 0 else 0.0
 
-        key = str(order.get("instrument_key") or "")
-        if not key:
-            return
-
-        candles = live_sr_calc_service.fetch_intraday_candles_for_entry(key)
-        if not candles:
-            return
-
-        if not complete_day:
-            now_ts = now.timestamp()
-            trimmed = []
-            for c in candles:
-                c_dt = _parse_iso(c.get("time"))
-                if c_dt is None:
-                    continue
-                if c_dt.timestamp() <= now_ts:
-                    trimmed.append(c)
-            candles = trimmed or candles
-
-        entry_iso = order.get("entry_time")
-        entry_price = _safe_float(order.get("entry_price"))
-        stop_price = _safe_float(order.get("stop_price"))
-        target_price = _safe_float(order.get("target_price"))
-        lot_size = int(order.get("lot_size") or 0)
-
-        if (
-            entry_iso is None
-            or entry_price is None
-            or stop_price is None
-            or lot_size <= 0
-        ):
-            return
-
-        # OR levels for the R3-breakout activation trigger.
-        or_levels = None
-        try:
-            from services.simulation_service import _read_option_or_levels
-            side = (
-                str(order.get("instrument_type") or "").upper()
-                or str(order.get("side") or "").upper()
-            )
-            or_levels = _read_option_or_levels(key, side)
-        except Exception:
-            or_levels = None
-
-        replay = self._replay_path_b_scenario(
-            candles=candles,
-            entry_time_iso=entry_iso,
-            entry_price=entry_price,
-            stop_price=stop_price,
-            target_price=target_price,
-            lot_size=lot_size,
-            or_levels=or_levels,
+        order["status"] = reason
+        order["closed_at"] = now.isoformat()
+        order["closed_price"] = round(price, 4)
+        order["closed_pnl_pct"] = round(pnl, 6)
+        order["closed_r_multiple"] = round(r, 4)
+        order["closed_mfe"] = round(_safe_float(order.get("mfe")) or 0.0, 4)
+        order["closed_mae"] = round(_safe_float(order.get("mae")) or 0.0, 4)
+        order["current_ltp"] = round(price, 4)
+        order["current_ltp_at"] = now.isoformat()
+        logger.info(
+            "[dummy-order] closed %s | reason=%s price=%.2f pnl=%+.2f%% R=%+.2f",
+            order.get("order_id"), reason, price, pnl * 100, r,
         )
-        if replay is None:
-            return
 
-        order["max_high_since_entry"] = round(replay["max_high"], 4)
-        order["min_low_since_entry"] = round(replay["min_low"], 4)
-        order["mfe"] = round(replay["max_high"] - entry_price, 4)
-        order["mae"] = round(replay["min_low"] - entry_price, 4)
-        order["peak_profit_rs"] = round(replay["peak_profit_rs"], 2)
-        if replay.get("profit_state_final"):
-            order["profit_state"] = replay["profit_state_final"]
-
-        if candles:
-            order["last_reconciled_bar_time"] = candles[-1].get("time")
-
-        exit_reason = replay.get("exit_reason")
-        exit_price = replay.get("exit_price")
-        exit_time_iso = replay.get("exit_time")
-        exit_dt = _parse_iso(exit_time_iso) if exit_time_iso else None
-
-        # Live mode: END_OF_DAY just means "no exit yet in available
-        # candles". Keep the order OPEN for the next reconcile.
-        if exit_reason == "END_OF_DAY" and not complete_day:
-            return
-
-        if exit_reason and exit_price is not None:
-            if exit_dt is None:
-                exit_dt = now
-            self._close_path_b_order(order, exit_reason, exit_price, exit_dt)
+        # Notify (once per order)
+        self._notify_closed(order)
 
     def _auto_close_eod(self, now: datetime) -> int:
         """Close any OPEN orders at EOD. Returns count closed."""
         closed = 0
-        for order in list(self._state["orders"]):
+        for order in self._state["orders"]:
             if not isinstance(order, dict) or order.get("status") != "OPEN":
                 continue
 
@@ -1980,31 +1463,24 @@ class DummyOrderService:
                 closed += 1
                 continue
 
-            last_price, last_time = self._last_bar_close_and_time(order)
+            last_price = self._last_bar_close(order)
             if last_price is not None:
-                exit_dt = _parse_iso(last_time) if last_time else now
-                self._close_order(
-                    order, "END_OF_DAY", last_price, exit_dt or now,
-                )
+                self._close_order(order, "END_OF_DAY", last_price, now)
                 closed += 1
         return closed
 
-    def _last_bar_close_and_time(
-        self,
-        order: dict[str, Any],
-    ) -> tuple[float | None, str | None]:
+    def _last_bar_close(self, order: dict[str, Any]) -> float | None:
         try:
             from services.live_sr_calc_service import live_sr_calc_service
         except Exception:
-            return None, None
+            return None
         key = str(order.get("instrument_key") or "")
         if not key:
-            return None, None
+            return None
         candles = live_sr_calc_service.fetch_intraday_candles_for_entry(key)
         if not candles:
-            return None, None
-        last = candles[-1]
-        return _safe_float(last.get("close")), last.get("time")
+            return None
+        return _safe_float(candles[-1].get("close"))
 
     # ------------------------------------------------------------------ #
     # Telegram notifications                                              #
@@ -2027,73 +1503,38 @@ class DummyOrderService:
             rr = _safe_float(order.get("rr_ratio"))
             scenario = str(order.get("scenario") or "")
             side = str(order.get("side") or "")
-            inst_type = str(
-                order.get("instrument_type")
-                or order.get("type")
-                or ""
-            ).upper()
-            lot = int(order.get("lot_size") or 0)
-
-            # Path B orders use CE/PE on the type field; Path A uses the
-            # option side. Display whichever is meaningful.
-            type_label = inst_type if inst_type in {"CE", "PE"} else side
-            if side == "BUY" and inst_type in {"CE", "PE"}:
-                type_label = inst_type
-                side_display = f"{inst_type} · BUY"
-            else:
-                side_display = f"{side} · {scenario}"
 
             warnings = order.get("warnings") or []
             notes_lines = warnings if warnings else ["—"]
 
-            extra_fields: list[tuple[str, Any]] = []
-            origin = order.get("origin_level") or {}
-            if origin:
-                extra_fields.append((
-                    "Origin level",
-                    f"{origin.get('type', '?').upper()} @ "
-                    f"₹{_safe_float(origin.get('price')) or 0.0:.2f}",
-                ))
-                if origin.get("confirmed_time"):
-                    extra_fields.append((
-                        "Level confirmed",
-                        _fmt_time(origin["confirmed_time"]),
-                    ))
-            if lot > 0:
-                extra_fields.append(("Lot size", lot))
-
             title = f"Dummy Order · Created · {scenario}"
-            fields = [
-                (
-                    "Instrument",
-                    order.get("trading_symbol") or order.get("instrument_key"),
-                ),
-                ("Key", order.get("instrument_key")),
-                ("Type", type_label or side),
-                ("Scenario", scenario),
-                (
-                    "Entry",
-                    f"₹{entry:.2f} @ {_fmt_time(order.get('entry_time'))}",
-                ),
-                (
-                    "Stop",
-                    f"₹{stop:.2f} (−{stop_pct * 100:.1f}%)",
-                ),
-                (
-                    "Target",
-                    f"₹{target:.2f} (+{target_pct * 100:.1f}%)"
-                    if target > 0 else "—",
-                ),
-                (
-                    "R:R (nominal)",
-                    f"{rr:.2f} : 1" if rr is not None else "—",
-                ),
-            ] + extra_fields
-
             msg = build(
                 emoji="📝",
                 title=title,
-                fields=fields,
+                fields=[
+                    (
+                        "Instrument",
+                        order.get("trading_symbol") or order.get("instrument_key"),
+                    ),
+                    ("Key", order.get("instrument_key")),
+                    ("Side / Scenario", f"{side} · {scenario}"),
+                    (
+                        "Entry",
+                        f"₹{entry:.2f} @ {_fmt_time(order.get('entry_time'))}",
+                    ),
+                    (
+                        "Stop",
+                        f"₹{stop:.2f} (−{stop_pct * 100:.1f}%)",
+                    ),
+                    (
+                        "Target",
+                        f"₹{target:.2f} (+{target_pct * 100:.1f}%)",
+                    ),
+                    (
+                        "R:R (nominal)",
+                        f"{rr:.2f} : 1" if rr is not None else "—",
+                    ),
+                ],
                 sections=[("Notes", "📝", notes_lines)],
                 status="info",
             )
@@ -2118,36 +1559,17 @@ class DummyOrderService:
             r = _safe_float(order.get("closed_r_multiple")) or 0.0
             mfe = _safe_float(order.get("closed_mfe")) or 0.0
             mae = _safe_float(order.get("closed_mae")) or 0.0
-            profit_rs = _safe_float(order.get("closed_profit_rs"))
             status = str(order.get("status") or "")
             scenario = str(order.get("scenario") or "")
             side = str(order.get("side") or "")
-            inst_type = str(
-                order.get("instrument_type")
-                or order.get("type")
-                or ""
-            ).upper()
-
-            type_label = inst_type if inst_type in {"CE", "PE"} else side
-            side_display = (
-                f"{inst_type} · BUY"
-                if side == "BUY" and inst_type in {"CE", "PE"}
-                else f"{side} · {scenario}"
-            )
 
             status_label = status.replace("_", " ")
             log_level = {
                 "TARGET_HIT": "SUCCESS",
                 "STOP_HIT": "WARNING",
-                "TRAILING_STOP_HIT": "WARNING",
-                "BEARISH_EXIT": "INFO",
                 "END_OF_DAY": "INFO",
             }.get(status, "INFO")
             build_status = "success" if pnl >= 0 else "warning"
-
-            pnl_str = f"{pnl * 100:+.2f}%"
-            if profit_rs is not None:
-                pnl_str = f"{pnl_str} ({'+' if profit_rs >= 0 else ''}₹{profit_rs:.2f})"
 
             title = f"Dummy Order · Closed · {status_label}"
             msg = build(
@@ -2159,14 +1581,13 @@ class DummyOrderService:
                         order.get("trading_symbol") or order.get("instrument_key"),
                     ),
                     ("Key", order.get("instrument_key")),
-                    ("Type", type_label or side),
-                    ("Scenario", scenario),
+                    ("Side / Scenario", f"{side} · {scenario}"),
                     (
                         "Exit",
                         f"{status_label} @ ₹{exit_price:.2f}",
                     ),
                     ("Closed at", _fmt_time(order.get("closed_at"))),
-                    ("PnL", pnl_str),
+                    ("PnL", f"{pnl * 100:+.2f}%"),
                     ("R-multiple", f"{r:+.2f}R"),
                     ("MFE", f"{mfe:+.2f}"),
                     ("MAE", f"{mae:+.2f}"),
@@ -2218,51 +1639,21 @@ class DummyOrderService:
         ]
         closed_rs = [r for r in closed_rs if r is not None]
 
-        # Sum of per-trade Rupee PnL (accurate for both paths).
-        closed_rs_rupees: list[float] = []
-        for o in closed_orders:
-            val = _safe_float(o.get("closed_profit_rs"))
-            if val is not None:
-                closed_rs_rupees.append(val)
-
         by_scenario: dict[str, dict[str, Any]] = {}
-        for scenario in ("signal_v2", "regime", "path_b_sr_level"):
+        for scenario in ("signal_v2", "regime"):
             subset = [o for o in orders if o.get("scenario") == scenario]
             subset_closed = [o for o in subset if o.get("status") != "OPEN"]
             pnls = [_safe_float(o.get("closed_pnl_pct")) for o in subset_closed]
             pnls = [p for p in pnls if p is not None]
             rs = [_safe_float(o.get("closed_r_multiple")) for o in subset_closed]
             rs = [r for r in rs if r is not None]
-            rs_rupees = [
-                _safe_float(o.get("closed_profit_rs"))
-                for o in subset_closed
-            ]
-            rs_rupees = [v for v in rs_rupees if v is not None]
             by_scenario[scenario] = {
                 "count": len(subset),
                 "open": sum(1 for o in subset if o.get("status") == "OPEN"),
                 "closed": len(subset_closed),
-                "sum_pnl_pct": round(sum(pnls), 6) if pnls else 0.0,
-                "sum_r_multiple": round(sum(rs), 4) if rs else 0.0,
-                "sum_pnl_rs": round(sum(rs_rupees), 2) if rs_rupees else 0.0,
+                "day_pnl_pct": round(sum(pnls), 6) if pnls else 0.0,
+                "day_r_multiple": round(sum(rs), 4) if rs else 0.0,
             }
-
-        # Path A vs Path B counts — uses execution_path_at_creation
-        # when present, falling back to ``path`` for legacy records.
-        path_a = 0
-        path_b = 0
-        for o in orders:
-            ep = o.get("execution_path_at_creation")
-            if ep is None:
-                ep = (
-                    "B_external_trigger"
-                    if str(o.get("path") or "") == "B_external_trigger"
-                    else "A_self_trigger"
-                )
-            if ep == "B_external_trigger":
-                path_b += 1
-            else:
-                path_a += 1
 
         return {
             "status": status,
@@ -2275,15 +1666,8 @@ class DummyOrderService:
             "open_count": len(open_orders),
             "closed_count": len(closed_orders),
             "total_today": len(orders),
-            # NOTE: ``day_pnl_pct`` is a simple sum of per-trade pnl
-            # percentages, NOT a portfolio return. Kept for backward
-            # compatibility; the dashboard should label it accordingly.
             "day_pnl_pct": round(sum(closed_pnls), 6) if closed_pnls else 0.0,
             "day_r_multiple": round(sum(closed_rs), 4) if closed_rs else 0.0,
-            "day_pnl_rs": (
-                round(sum(closed_rs_rupees), 2)
-                if closed_rs_rupees else 0.0
-            ),
             "avg_pnl_pct": (
                 round(sum(closed_pnls) / len(closed_pnls), 6)
                 if closed_pnls else 0.0
@@ -2293,8 +1677,6 @@ class DummyOrderService:
                 if closed_rs else 0.0
             ),
             "by_scenario": by_scenario,
-            "path_a_count": path_a,
-            "path_b_count": path_b,
             "execution_path": self._state.get("execution_path"),
             "strategy_locked_today": bool(
                 self._state.get("strategy_locked_today")

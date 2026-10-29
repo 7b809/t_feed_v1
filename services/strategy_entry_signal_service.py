@@ -66,57 +66,6 @@ G1 v4.2 changes (2026-10-29)
       falls through to the Path A logic regardless of trigger source
       (i.e. behaves exactly as v4.1).
 
-G1 v4.2 fix bundle (2026-10-29 replay analysis)
------------------------------------------------
-The 2026-10-29 replay exposed two Path B routing defects in this
-service that mirrored the same defects in ``dummy_order_service``
-and ``isolated_instrument_promotion_service``:
-
-  1. **Legacy record defaulted to Path A.** When the isolation
-     record predates the ``trigger_is_self_nifty`` field (older
-     deployments, stale sidecars from before the v4.1 rollout), the
-     old check ``iso.get("trigger_is_self_nifty") is False`` was
-     ``False`` for the missing field — so the whole ``compute()``
-     fell through to Path A logic. The 10-minute scan and
-     auto-reverse then ran on what was actually a Path B session,
-     and a MIDCPNIFTY R3 (Path B) session was silently promoted as
-     if it were Path A.
-
-     ``_derive_trigger_is_self_nifty()`` now derives the correct
-     execution path in a fixed order:
-
-         1. ``trigger_is_self_nifty`` field if present (authoritative).
-         2. ``execution_path`` ("A_self_trigger" / "B_external_trigger").
-         3. ``trigger_index == "NIFTY"``.
-         4. Default ``True`` (Path A) for records that carry no
-            signal at all.
-
-     Each legacy derivation logs a WARNING, so an operator can see
-     exactly which field the decision came from on a pre-v4.1
-     sidecar.
-
-  2. **Master switch visibility.** The
-     ``STRATEGY_EXT_PATH_B_ENABLED`` check was already present, but
-     it was written as ``if not ...: pass else: ...``, which made it
-     easy to misread. The branch is now an explicit early-return
-     guard: when the flag is off, the service drops straight to the
-     Path A logic — matching ``dummy_order_service._path_b_mode()``
-     and ``isolated_instrument_promotion_service._is_path_b_active()``
-     which now short-circuit the same way.
-
-     The response's ``isolated.trigger_is_self_nifty`` field is
-     also populated from ``_derive_trigger_is_self_nifty()`` so
-     downstream consumers (dashboard, dummy-order service) always
-     see the correct value, even for legacy records that never had
-     the field written.
-
-Both changes are additive: Path A behaviour is unchanged, and the
-two fixes only tighten the Path B routing condition (never loosen
-it). The three consumers of ``trigger_is_self_nifty``
-(``strategy_entry_signal_service``, ``dummy_order_service``,
-``isolated_instrument_promotion_service``) now agree on the
-execution path for the same record.
-
 G1 v4.1 flag-wiring fix (2026-10-29)
 ------------------------------------
 Two v4.1 kill switches were defined in ``core/config.py`` but never
@@ -212,95 +161,6 @@ def _parse_touch_reason(reason: Any) -> tuple[str | None, str | None]:
     if "s3" in r:
         return "S3", "PE"
     return None, None
-
-# --------------------------------------------------------------------------- #
-# G1 v4.2 — Path A / Path B derivation (shared with the other consumers)      #
-# --------------------------------------------------------------------------- #
-def _derive_trigger_is_self_nifty(iso: dict[str, Any]) -> bool:
-    """Return True when the isolation was triggered by NIFTY itself.
-
-    ``True``  → Path A (NIFTY self-trigger; 10-minute scan + auto-reverse run).
-    ``False`` → Path B (external index; multi-order SR watch, no scan).
-
-    G1 v4.2 — the previous revision only looked at the
-    ``trigger_is_self_nifty`` field. That field was introduced with
-    G1 v4.1, so every isolation record written before the upgrade
-    (legacy sidecars persisted across a deploy, or files created
-    before the v4.1 rollout) has ``trigger_is_self_nifty = None``
-    and was silently classified as Path A. This is the exact failure
-    that let a MIDCPNIFTY R3 (Path B) session promote as if it were
-    Path A on 2026-10-29.
-
-    Resolution order (first match wins):
-
-      1. ``trigger_is_self_nifty`` — authoritative when present.
-      2. ``execution_path``        — "A_self_trigger" / "B_external_trigger".
-      3. ``trigger_index == "NIFTY"`` — the old v4.0 field.
-      4. Default ``True``          — record carries no signal at all;
-                                     assume Path A so the existing
-                                     Path A flow is preserved.
-
-    Each legacy derivation logs a WARNING so the operator can see
-    exactly which field was used. Matches
-    ``dummy_order_service._path_b_mode()`` and
-    ``isolated_instrument_promotion_service._is_path_b_active()``
-    so all three consumers agree on the execution path for the
-    same record.
-    """
-    if not isinstance(iso, dict):
-        return True
-
-    # ---- 1. Authoritative field ----------------------------------- #
-    val = iso.get("trigger_is_self_nifty")
-    if val is not None:
-        return bool(val)
-
-    # ---- 2. execution_path ---------------------------------------- #
-    path = str(iso.get("execution_path") or "").strip()
-    if path == "B_external_trigger":
-        logger.warning(
-            "[strategy-entry] legacy isolation record missing "
-            "trigger_is_self_nifty; derived Path B from "
-            "execution_path=%r", path,
-        )
-        return False
-    if path == "A_self_trigger":
-        logger.warning(
-            "[strategy-entry] legacy isolation record missing "
-            "trigger_is_self_nifty; derived Path A from "
-            "execution_path=%r", path,
-        )
-        return True
-
-    # ---- 3. trigger_index ----------------------------------------- #
-    trig = str(iso.get("trigger_index") or "").strip().upper()
-    if trig:
-        derived = (trig == "NIFTY")
-        logger.warning(
-            "[strategy-entry] legacy isolation record missing "
-            "trigger_is_self_nifty and execution_path; derived %s "
-            "from trigger_index=%s",
-            "Path A" if derived else "Path B",
-            trig,
-        )
-        return derived
-
-    # ---- 4. Fall back to Path A ----------------------------------- #
-    logger.warning(
-        "[strategy-entry] isolation record missing all Path A/B "
-        "signals (trigger_is_self_nifty / execution_path / "
-        "trigger_index); defaulting to Path A",
-    )
-    return True
-
-def _path_b_master_switch_enabled() -> bool:
-    """Return True when Path B is enabled per configuration.
-
-    ``STRATEGY_EXT_PATH_B_ENABLED`` (default True). When False the
-    operator has asked for the pre-v4.1 single-path model: every
-    session runs the Path A logic, regardless of trigger source.
-    """
-    return bool(getattr(config, "STRATEGY_EXT_PATH_B_ENABLED", True))
 
 # --------------------------------------------------------------------------- #
 # LTP-tier stop-loss (unchanged from G1 v2)                                   #
@@ -572,7 +432,7 @@ def _pick_target_resistance(
         config, "STRATEGY_ENTRY_TARGET_REQUIRE_POST_ENTRY", True
     ))
 
-    # ---- Primary: first confirmed-after-entry resistance above price # #
+    # ---- Primary: first confirmed-after-entry resistance above price #
     if require_post_entry and entry_conf_dt is not None:
         time_filtered: list[tuple[datetime, dict[str, Any]]] = []
         for lvl in levels:
@@ -594,7 +454,7 @@ def _pick_target_resistance(
             time_filtered.sort(key=lambda t: t[0])
             return time_filtered[0][1]
 
-    # ---- Fallback: lowest-priced resistance above entry ------------ #
+    # ---- Fallback: lowest-priced resistance above entry -------------- #
     best: dict[str, Any] | None = None
     best_price: float | None = None
     for lvl in levels:
@@ -1206,34 +1066,23 @@ class StrategyEntrySignalService:
         # --------------------------------------------------------------- #
         # G1 v4.1 — split execution paths by trigger source.
         #
-        # G1 v4.2 — this branch is now an explicit early-return guard:
-        #
-        #   1. If Path B is disabled by the operator
-        #      (STRATEGY_EXT_PATH_B_ENABLED=false), drop straight to
-        #      Path A logic. This matches
-        #      dummy_order_service._path_b_mode() and
-        #      isolated_instrument_promotion_service._is_path_b_active()
-        #      which now short-circuit the same way.
-        #
-        #   2. Otherwise, derive the execution path from the isolation
-        #      record using ``_derive_trigger_is_self_nifty()``. This
-        #      helper is the single source of truth for the derivation
-        #      and handles legacy records that predate the
-        #      ``trigger_is_self_nifty`` field.
-        #
-        #   3. If the derived path is Path B, return the multi-order
-        #      SR-watch payload (no 10-minute scan, no auto-reverse).
-        #
-        #   4. Otherwise, fall through to the Path A logic below,
-        #      which is unchanged from v4.1.
+        # Path A (trigger_is_self_nifty=True)  : unchanged from v4.0.
+        # Path B (trigger_is_self_nifty=False) : the 10-min scan and
+        #                                        auto-reverse are DISABLED.
+        #                                        The bias-side instrument
+        #                                        stays isolated all day and
+        #                                        the dummy-order service
+        #                                        manages multi-order SR
+        #                                        level execution + Rupee
+        #                                        trailing independently.
         # --------------------------------------------------------------- #
-        iso = (iso_status or {}).get("isolated") or {}
-
-        if iso and _path_b_master_switch_enabled():
-            if not _derive_trigger_is_self_nifty(iso):
+        if not bool(getattr(config, "STRATEGY_EXT_PATH_B_ENABLED", True)):
+            # Path B disabled entirely; fall through to Path A logic.
+            pass
+        else:
+            iso = (iso_status or {}).get("isolated") or {}
+            if iso and iso.get("trigger_is_self_nifty") is False:
                 return self._build_path_b_response(iso_status, iso)
-        # (If Path B is disabled, or the record derives to Path A,
-        #  the Path A logic below runs unchanged.)
 
         isolated = (iso_status or {}).get("isolated") or {}
         if not isolated:
@@ -1362,12 +1211,7 @@ class StrategyEntrySignalService:
                     or isolated.get("trigger_side")
                 ),
                 "trigger_level_value": isolated.get("trigger_level_value"),
-                # G1 v4.2 — expose the DERIVED value so downstream
-                # consumers see the correct path even for legacy
-                # records that never had this field written.
-                "trigger_is_self_nifty": _derive_trigger_is_self_nifty(
-                    isolated
-                ),
+                "trigger_is_self_nifty": isolated.get("trigger_is_self_nifty"),
             },
             "touch": {
                 "time": _iso(touch_dt),
