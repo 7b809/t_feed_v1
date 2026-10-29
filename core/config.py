@@ -15,6 +15,33 @@ G1 v3.2 additions (2026-10-28)
   execution always routes to NIFTY).
 * LEVEL_ISOLATION_BACKFILL_WINDOW opens at 09:15 (instead of 09:16) so
   the 09:15 candle that opens the OR window is included in the replay.
+
+G1 v4.1 additions (2026-10-29)
+------------------------------
+Six new opt-out flags, each tied to one fix from the ``/isolated`` page
+analysis (see ``/isolated page against G1 v4.0``). All default to
+``True`` — the fixes are enabled out of the box and no ``.env`` change
+is required. Each flag exists purely as a kill switch so an operator
+can disable one change in isolation without reverting the whole v4.1
+bundle.
+
+    STRATEGY_ENTRY_REGISTER_COUNTER_SIDE        -> §5.A
+    STRATEGY_ENTRY_CANDLE_FALLBACK_ENABLED      -> §5.B
+    STRATEGY_ENTRY_TARGET_REQUIRE_POST_ENTRY    -> §5.C
+    LEVEL_ISOLATION_REPLAY_USE_SERIES_OR        -> §5.D (replay)
+    LEVEL_ISOLATION_OR_SELF_HEAL_VERIFY_HL      -> §5.D (self-heal)
+    STRATEGY_ENTRY_FREEZE_ENTRY_ON_PROMOTION    -> §5.E
+
+G1 v4.1 hotfix (2026-10-29)
+---------------------------
+``STRATEGY_RELATIONAL_R3_BIAS`` and ``STRATEGY_RELATIONAL_S3_BIAS`` are
+read by ``level_isolated_instrument_service._process_winning_touch`` but
+were missing from this file — the startup backfill crashed with::
+
+    AttributeError: module 'core.config' has no attribute
+    'STRATEGY_RELATIONAL_R3_BIAS'
+
+Both are restored below under LEVEL ISOLATION.
 """
 
 import os
@@ -350,13 +377,18 @@ STRATEGY_MONITORED_INDICES = _csv_or_json_list(
 # Priority order for simultaneous touches (first = highest priority).
 # Values MUST be a subset of the canonical names derived from
 # STRATEGY_MONITORED_INDICES: NIFTY / BANKNIFTY / MIDCPNIFTY / SENSEX.
+#
+# G1 v4.0 default order — MIDCPNIFTY leads, BANKNIFTY next, NIFTY is
+# the routed execution index, SENSEX is the BSE anchor. The .env.example
+# documents the same order. Changing this re-ranks touch arbitration
+# without touching service code.
 STRATEGY_TOUCH_PRIORITY_ORDER = _csv_or_json_list(
     "STRATEGY_TOUCH_PRIORITY_ORDER",
-    "NIFTY,BANKNIFTY,MIDCPNIFTY,SENSEX",
+    "MIDCPNIFTY,BANKNIFTY,NIFTY,SENSEX",
 )
 
 # Which index gets the strike selection (execution routing). Under G1
-# v3.2 this is always NIFTY 50 regardless of which index fired the touch.
+# v3.2+ this is always NIFTY 50 regardless of which index fired the touch.
 STRATEGY_ROUTED_EXECUTION_INDEX = _str(
     "STRATEGY_ROUTED_EXECUTION_INDEX", "NSE_INDEX|Nifty 50"
 )
@@ -383,6 +415,9 @@ STRATEGY_INDEX_PRIORITY = _priority_map()
 #
 #     NIFTY-R3 -> NIFTY-S3 -> BANKNIFTY-R3 -> BANKNIFTY-S3
 #         -> MIDCPNIFTY-R3 -> MIDCPNIFTY-S3 -> SENSEX-R3 -> SENSEX-S3
+#
+# (Effective order is determined at runtime by
+# STRATEGY_TOUCH_PRIORITY_ORDER above.)
 #
 # The FIRST touch to resolve (by priority rank when multiple arrive
 # within the 2-second polling window) becomes the winning touch.
@@ -414,6 +449,27 @@ LEVEL_ISOLATION_FILENAME = _str(
     "LEVEL_ISOLATION_FILENAME", "level_isolated_instrument.json"
 )
 
+# ---- G1 v4.1 hotfix — trigger-side → bias-side mapping ----------------
+# Read by level_isolated_instrument_service._process_winning_touch to
+# decide which option side to isolate at the routed NIFTY strike:
+#
+#     trigger_side == "R3"  →  bias = STRATEGY_RELATIONAL_R3_BIAS  ("CE")
+#     trigger_side == "S3"  →  bias = STRATEGY_RELATIONAL_S3_BIAS  ("PE")
+#
+# Under G1 v4.0 semantics:
+#     * R3 (upward break of the opening range)  → CE (calls, upside)
+#     * S3 (downward break of the opening range) → PE (puts, downside)
+#
+# Both default to the canonical value but are configurable in .env if
+# you ever want to experiment with the opposite semantics. Values are
+# normalised to upper-case so "ce", "Ce", "CE" all work.
+STRATEGY_RELATIONAL_R3_BIAS = _str(
+    "STRATEGY_RELATIONAL_R3_BIAS", "CE"
+).upper()
+STRATEGY_RELATIONAL_S3_BIAS = _str(
+    "STRATEGY_RELATIONAL_S3_BIAS", "PE"
+).upper()
+
 # Throttle for the on-tick touch check (per any index tick event).
 # The check runs at most once every N seconds regardless of tick rate.
 LEVEL_ISOLATION_CHECK_INTERVAL_SECONDS = max(
@@ -421,7 +477,7 @@ LEVEL_ISOLATION_CHECK_INTERVAL_SECONDS = max(
 )
 
 # Max age (seconds) of the last NIFTY tick before it is treated as
-# stale during routing. Under G1 v3.2 the routing always needs a
+# stale during routing. Under G1 v3.2+ the routing always needs a
 # fresh NIFTY spot LTP; when NIFTY is stale for a non-NIFTY trigger
 # the touch is still recorded but isolation is deferred until the
 # next NIFTY tick.
@@ -447,6 +503,41 @@ LEVEL_ISOLATION_BACKFILL_WINDOW_END_MINUTE = _int(
 )
 
 LEVEL_ISOLATION_TELEGRAM_ENABLED = _bool("LEVEL_ISOLATION_TELEGRAM_ENABLED", True)
+
+# ---- G1 v4.1 — Replay / self-heal integrity (§5.D) ---------------------
+# Both flags close the "phantom R3 touch" class of bug: the replay
+# used to check touches against the *on-disk* first_candle.json OR
+# levels while iterating a *freshly fetched* intraday candle series.
+# When those two disagree (stale file, wider OR window, previous-day
+# file that survived a restart), a touch is recorded against an R3
+# the index never actually reached — e.g. R3 = 13329.65 vs today's
+# high = 13298.75, with the recorded trigger_ltp 13310.60 below R3.
+#
+# LEVEL_ISOLATION_REPLAY_USE_SERIES_OR
+#   When True (default), `_replay()` recomputes OR levels from the
+#   same series it is iterating (via
+#   `first_candle_service.compute_for_series`) instead of trusting
+#   the file. This is the primary fix — the OR values used for the
+#   trigger check are guaranteed consistent with the candles.
+#
+# LEVEL_ISOLATION_OR_SELF_HEAL_VERIFY_HL
+#   When True (default), `_maybe_self_heal()` additionally compares
+#   the cached OR file's first_candle H / L against today's real
+#   first intraday bar (via
+#   `live_sr_calc_service.get_first_intraday_candle`) and forces a
+#   targeted recompute on mismatch. Catches the "stale-but-today-
+#   dated" case that the existing missing-file / stale-date check
+#   does not catch. Cheap: one index fetch + (worst case) 1–2
+#   option recomputes, not the full registry sweep.
+#
+# Set either to False to restore pre-v4.1 behaviour for that specific
+# path. Both True is the recommended default.
+LEVEL_ISOLATION_REPLAY_USE_SERIES_OR = _bool(
+    "LEVEL_ISOLATION_REPLAY_USE_SERIES_OR", True
+)
+LEVEL_ISOLATION_OR_SELF_HEAL_VERIFY_HL = _bool(
+    "LEVEL_ISOLATION_OR_SELF_HEAL_VERIFY_HL", True
+)
 
 # ===========================================================================
 # ISOLATED SR TRACKER — watch SR confirmations for the isolated instrument
@@ -759,6 +850,47 @@ STRATEGY_ENTRY_ALLOW_RE_PROMOTION = _bool(
     "STRATEGY_ENTRY_ALLOW_RE_PROMOTION", False
 )
 
+# ---- G1 v4.1 — Entry-signal correctness (§5.A / §5.B / §5.C / §5.E) ----
+# Four opt-out flags covering the /isolated page analysis fixes. All
+# default to True (= fixed behaviour); each False restores the pre-v4.1
+# path for that single aspect.
+#
+# STRATEGY_ENTRY_REGISTER_COUNTER_SIDE (§5.A)
+#   When True (default) and STRATEGY_ENTRY_ALLOW_CROSSOVER is also
+#   True, `_isolate()` registers BOTH the bias-side and counter-side
+#   instruments with `live_sr_levels_service` immediately after strike
+#   resolution, and includes both sides' candidates (tagged
+#   `side: "bias" | "counter"`) in `event["candidates"]`.
+#
+# STRATEGY_ENTRY_CANDLE_FALLBACK_ENABLED (§5.B)
+#   When True (default), `_entry_price_for()` falls through to
+#   `live_sr_calc_service.get_candle_close_at()` when the fast path
+#   (`live_sr_levels_service._states[key]["candles"]`) cannot resolve
+#   the confirming minute.
+#
+# STRATEGY_ENTRY_TARGET_REQUIRE_POST_ENTRY (§5.C)
+#   When True (default), the target resistance must satisfy
+#   `r.confirmed_time_fast > entry_support.confirmed_time_fast` in
+#   addition to `r.price > entry_price`.
+#
+# STRATEGY_ENTRY_FREEZE_ENTRY_ON_PROMOTION (§5.E)
+#   When True (default), `isolated_instrument_promotion_service.apply_promotion()`
+#   writes `frozen_entry = {price, price_source, stop, target, time,
+#   frozen_at}` onto the promotion record at the moment the winning
+#   side is armed, and returns it on the result dict.
+STRATEGY_ENTRY_REGISTER_COUNTER_SIDE = _bool(
+    "STRATEGY_ENTRY_REGISTER_COUNTER_SIDE", True
+)
+STRATEGY_ENTRY_CANDLE_FALLBACK_ENABLED = _bool(
+    "STRATEGY_ENTRY_CANDLE_FALLBACK_ENABLED", True
+)
+STRATEGY_ENTRY_TARGET_REQUIRE_POST_ENTRY = _bool(
+    "STRATEGY_ENTRY_TARGET_REQUIRE_POST_ENTRY", True
+)
+STRATEGY_ENTRY_FREEZE_ENTRY_ON_PROMOTION = _bool(
+    "STRATEGY_ENTRY_FREEZE_ENTRY_ON_PROMOTION", True
+)
+
 # ===========================================================================
 # SIMULATION — dummy-order replay for the isolated instrument (post-close)
 # ===========================================================================
@@ -787,29 +919,16 @@ STRATEGY_ENTRY_ALLOW_RE_PROMOTION = _bool(
 #   HIGH_EXTREME  (E ≥ R3)              target = E + (R2 − A)
 #                                       stop   = min(tier, E − (A − L))
 #
-# The HIGH / HIGH_EXTREME assumption: on a high-volatility day (price
-# is already through R2), the range step (R2 − A) is the "momentum
-# projection" — price is expected to keep moving in the SAME direction
-# (i.e. the option premium continues to expand). The stop is tightened
-# to the smaller of the tier stop and one OR half-range (A − L), so a
-# mean-reverting spike doesn't take out a wide stop.
-#
 # Both scenarios are replayed against the SAME intraday candle series,
 # starting from the entry fill (entry.time = close of the confirming
 # 1-min bar). Exit order per bar:
 #
 #   * If BOTH target and stop are inside the bar's [low, high] range,
 #     SIMULATION_SAME_BAR_STOP_FIRST decides the winner (default True
-#     — conservative: assume the stop hit first because we can't know
-#     the intrabar order).
+#     — conservative: assume the stop hit first).
 #   * Otherwise, whichever boundary the bar touches first wins.
 #   * If neither boundary is touched by the end of the session, the
 #     scenario is UNRESOLVED and the exit price = last close.
-#
-# Tick rounding of the target and stop is controlled by
-# SIMULATION_TICK_ROUNDING ("nearest" / "down" / "up"; default
-# "nearest"). Ticks come from the registry entry's tick_size, falling
-# back to 0.05 (NSE/BSE F&O default).
 #
 # The endpoint is POST-only and stateless — no disk writes, no
 # background jobs, no Telegram. It is purely a "what would have
@@ -819,8 +938,7 @@ SIMULATION_ENABLED = _bool("SIMULATION_ENABLED", True)
 
 # When True (default) the response carries BOTH scenarios (signal_v2
 # and regime) side by side. When False, only the signal_v2 scenario is
-# returned (regime is disabled). Useful for A/B comparison while the
-# regime logic is being tuned.
+# returned (regime is disabled).
 SIMULATION_USE_REGIME_TARGETS = _bool(
     "SIMULATION_USE_REGIME_TARGETS", True
 )
@@ -828,8 +946,7 @@ SIMULATION_USE_REGIME_TARGETS = _bool(
 # How the HIGH / HIGH_EXTREME regime computes the stop:
 #   "tier"     -> use the LTP-tier stop only
 #   "range"    -> use only the OR half-range: E − (A − L)
-#   "tighter"  -> min(tier, range) — default; wider stop may breach
-#                 the OR range and should be avoided
+#   "tighter"  -> min(tier, range) — default
 SIMULATION_STOP_MODE_HIGH = _str(
     "SIMULATION_STOP_MODE_HIGH", "tighter"
 ).lower()
@@ -858,50 +975,32 @@ SIMULATION_TICK_ROUNDING = _str(
 # Persistence:
 #   <LIVE_DATA_DIR>/<DUMMY_ORDER_FILENAME>  (default dummy_orders.json)
 #
-# The file is reset on the first run of each new trading day. The
-# existing daily MEGA backup already archives data/ at 16:00 IST, so
-# yesterday's dummy_orders.json is preserved in the daily zip even
-# though cleanup wipes it at the next 08:30 startup.
-#
-# Two variants per armed candidate (when both targets are available):
-#   * signal_v2  — target = nearest resistance above entry; stop = tier
-#   * regime     — target = OR-regime target (L / A / R-next / extended);
-#                  stop = tier (same as signal_v2)
-# Both share the same stop so the R-multiple comparison is 1:1.
-#
 # This is a **dummy** — no real Upstox order is ever placed by this
 # service. Every record is labelled "dummy" in the file so there's no
 # ambiguity during audit.
 # ===========================================================================
 DUMMY_ORDER_ENABLED = _bool("DUMMY_ORDER_ENABLED", True)
 
-# How often the scheduler fires the tracking job, in seconds. Each fire
-# is a full scan (create-if-new + update existing + save). 30 s is the
-# default; keep it under 60 s so a fast-moving option is caught within
-# a couple of bars.
+# How often the scheduler fires the tracking job, in seconds.
 DUMMY_ORDER_TRACK_INTERVAL_SECONDS = max(
     5, _int("DUMMY_ORDER_TRACK_INTERVAL_SECONDS", 30)
 )
 
 # How often, in minutes, to reconcile each open order from fresh intraday
-# 1-min bars (via Upstox HistoryV3Api). This catches intratick whips that
-# a 30 s LTP poll would miss. Set to 0 to disable bar reconcile entirely
-# (LTP-only tracking — faster but slightly less accurate MFE/MAE).
+# 1-min bars (via Upstox HistoryV3Api). Set to 0 to disable bar reconcile
+# entirely (LTP-only tracking).
 DUMMY_ORDER_RECONCILE_MINUTES = max(
     0, _int("DUMMY_ORDER_RECONCILE_MINUTES", 2)
 )
 
 # Live-tracking window (IST). Orders can only be CREATED after
-# DUMMY_ORDER_START_HOUR:MINUTE. Between start and EOD, the service is
-# in "live" mode: LTP updates every poll + periodic bar reconcile.
+# DUMMY_ORDER_START_HOUR:MINUTE.
 DUMMY_ORDER_START_HOUR = _int("DUMMY_ORDER_START_HOUR", 9)
 DUMMY_ORDER_START_MINUTE = _int("DUMMY_ORDER_START_MINUTE", 15)
 
 # After DUMMY_ORDER_EOD_HOUR:MINUTE, the service switches to "retroactive"
 # mode: any still-OPEN order is reconciled from the day's complete bar
-# history, then auto-closed at the last pre-close bar (or at stop /
-# target if that was hit during the day). Use 15:35 to give the 15:30
-# close bar time to settle.
+# history, then auto-closed.
 DUMMY_ORDER_EOD_HOUR = _int("DUMMY_ORDER_EOD_HOUR", 15)
 DUMMY_ORDER_EOD_MINUTE = _int("DUMMY_ORDER_EOD_MINUTE", 35)
 
@@ -911,23 +1010,15 @@ DUMMY_ORDER_FILENAME = _str(
 )
 
 # When True (default), a second order variant (regime target) is created
-# for each armed candidate. When False, only the signal_v2 order is
-# created. Disable if you want a single canonical dummy order per
-# armed candidate.
+# for each armed candidate.
 DUMMY_ORDER_CREATE_REGIME_VARIANT = _bool(
     "DUMMY_ORDER_CREATE_REGIME_VARIANT", True
 )
 
-# Safety cap on the number of records per day. The service stops creating
-# new orders once this is reached (existing ones keep updating). Guards
-# against a runaway loop that arms the same candidate repeatedly.
+# Safety cap on the number of records per day.
 DUMMY_ORDER_MAX_ORDERS_PER_DAY = max(
     1, _int("DUMMY_ORDER_MAX_ORDERS_PER_DAY", 100)
 )
 # When True (default), each dummy order fires exactly TWO Telegram
-# messages over its lifetime — one on creation, one on close. Updates
-# (LTP, MFE, MAE, current R) stay silent. Combined with the real-world
-# cap of ~2 scenario orders per day, the worst-case volume is 4
-# messages/day. Set to False for a fully silent tracker (useful in
-# development environments where the operator watches /isolated live).
+# messages over its lifetime — one on creation, one on close.
 DUMMY_ORDER_TELEGRAM_ENABLED = _bool("DUMMY_ORDER_TELEGRAM_ENABLED", True)

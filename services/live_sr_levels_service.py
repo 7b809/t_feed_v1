@@ -94,6 +94,26 @@ The file is written when:
   * every ``LIVE_SR_PERSIST_EVERY_N_CANDLES`` finalized candles
   * at the end of every ``seed_candles`` / ``refresh_from_api`` call
 
+G1 v4.1 additions (2026-10-29)
+------------------------------
+* **`get_levels()` now falls back to in-memory state** when the
+  on-disk file is missing or unreadable. This closes a subtle gap in
+  the isolated-SR tracker: ``_snapshot_current_levels()`` reads via
+  ``get_levels()``, and a transient persist failure during
+  ``seed_candles`` previously produced the "Before: 0 / After: N"
+  artefact on ``/isolated`` even though the levels were correct in
+  memory. The primary fix lives in
+  ``level_isolated_instrument_service._register_isolated_pair_with_sr()``
+  (register BOTH sides before promotion); this fallback is the
+  defence-in-depth read-path guarantee.
+
+* **New public candle accessors** — ``get_candle_close_at()``,
+  ``get_candles()``, ``get_latest_candle()``, ``has_candle_at()``.
+  Callers (notably ``strategy_entry_signal_service._candle_close_at()``)
+  can now query the SR engine's candle series through a stable public
+  API instead of reaching into ``_guard`` / ``_states``. The existing
+  direct access continues to work unchanged, so this is additive.
+
 Logging policy (unchanged, VERBOSE_LOG-gated)
 ---------------------------------------------
 Per-instrument lines fire only when ``VERBOSE_LOG=true``. Summary
@@ -942,37 +962,192 @@ class LiveSRLevelsService:
         }
 
     def get_levels(self, instrument_key: str) -> dict[str, Any] | None:
+        """Return the persisted ``live_sr_levels.json`` payload for one
+        instrument.
+
+        G1 v4.1 — **falls back to the in-memory state** when the on-disk
+        file is missing or unreadable but the state has levels. This is
+        the defence-in-depth read path for the isolated-SR tracker:
+        ``_snapshot_current_levels()`` reads through this method to seed
+        the tracker's ``pre_isolation_levels`` list, and the previous
+        revision returned ``None`` whenever ``_persist()`` had silently
+        failed during a seed — producing the "Before: 0 / After: N"
+        artefact on ``/isolated`` even though the levels were correct in
+        memory.
+
+        The primary fix lives in
+        ``level_isolated_instrument_service._register_isolated_pair_with_sr()``
+        (register BOTH sides with the SR engine before promotion). This
+        fallback guarantees the read side cannot regress if that
+        registration is somehow bypassed.
+        """
         key = str(instrument_key or "").strip()
         with self._guard:
             state = self._states.get(key)
         if state is None:
             return None
+
         entry = state.get("entry") or {}
-        folder = _folder_for_entry(entry)
-        path = folder / config.LIVE_SR_FILENAME
-        if not path.exists():
-            return None
         try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
+            folder = _folder_for_entry(entry)
+            path = folder / config.LIVE_SR_FILENAME
         except Exception:
-            logger.exception("[live-sr] read failed for %s", key)
+            path = None
+
+        # ---- Primary: read the persisted file --------------------- #
+        if path is not None and path.exists():
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                logger.exception("[live-sr] read failed for %s", key)
+                payload = None
+
+            if isinstance(payload, dict):
+                levels = payload.get("levels") or []
+                cleaned = []
+                for lvl in levels:
+                    if not isinstance(lvl, dict):
+                        continue
+                    copy = dict(lvl)
+                    copy.pop("broken", None)
+                    copy.pop("broken_at", None)
+                    copy.pop("broken_price", None)
+                    copy.pop("broken_bar_index", None)
+                    cleaned.append(copy)
+                payload["levels"] = cleaned
+                return payload
+
+        # ---- Fallback: build the payload from in-memory state ----- #
+        levels_mem = state.get("levels") or []
+        candles_mem = state.get("candles") or []
+        if not levels_mem and not candles_mem:
+            # Nothing meaningful to return
             return None
 
-        if isinstance(payload, dict):
-            levels = payload.get("levels") or []
-            cleaned = []
-            for lvl in levels:
-                if not isinstance(lvl, dict):
-                    continue
-                copy = dict(lvl)
-                copy.pop("broken", None)
-                copy.pop("broken_at", None)
-                copy.pop("broken_price", None)
-                copy.pop("broken_bar_index", None)
-                cleaned.append(copy)
-            payload["levels"] = cleaned
-        return payload
+        logger.warning(
+            "[live-sr] get_levels falling back to in-memory state for "
+            "%s (disk file missing/unreadable; levels=%d candles=%d)",
+            key, len(levels_mem), len(candles_mem),
+        )
+        return {
+            "instrument_key": key,
+            "underlying": entry.get("underlying"),
+            "strike_price": entry.get("strike_price"),
+            "strike_type": entry.get("strike_type"),
+            "trading_symbol": entry.get("trading_symbol"),
+            "date": state.get("date"),
+            "left_bars": state.get("left_bars"),
+            "right_bars": state.get("right_bars"),
+            "candle_count": len(candles_mem),
+            "levels": [
+                {
+                    k: v
+                    for k, v in lvl.items()
+                    if k not in (
+                        "broken", "broken_at",
+                        "broken_price", "broken_bar_index",
+                    )
+                }
+                for lvl in levels_mem
+                if isinstance(lvl, dict)
+            ],
+            "last_candle": candles_mem[-1] if candles_mem else None,
+            "updated_at": _now_iso(),
+            "_source": "memory_fallback",
+        }
 
+    # ------------------------------------------------------------------ #
+    # Public candle accessors (G1 v4.1)                                  #
+    # ------------------------------------------------------------------ #
+    def get_candle_close_at(
+        self,
+        instrument_key: str,
+        target_minute_iso: str,
+    ) -> float | None:
+        """Return the close of the 1-min candle whose minute bucket
+        matches ``target_minute_iso`` (minute-rounded).
+
+        Reads from the in-memory state. Returns ``None`` when:
+
+          * the instrument is not tracked,
+          * the parsed timestamp is invalid,
+          * no candle matches the target minute,
+          * the matching candle has no numeric ``close``.
+
+        This is the public accessor used by
+        ``strategy_entry_signal_service._candle_close_at()``. That
+        method previously reached into ``_guard`` / ``_states``
+        directly for backward compatibility with early revisions of the
+        service; both paths continue to work, but new callers should
+        prefer this method.
+        """
+        key = str(instrument_key or "").strip()
+        if not key:
+            return None
+        target_dt = _parse_iso_ts(target_minute_iso)
+        if target_dt is None:
+            return None
+        target_minute = target_dt.replace(second=0, microsecond=0)
+
+        with self._guard:
+            state = self._states.get(key)
+            if state is None:
+                return None
+            candles = list(state.get("candles") or [])
+
+        for candle in candles:
+            c_dt = _parse_iso_ts(candle.get("time"))
+            if c_dt is None:
+                continue
+            if c_dt.replace(second=0, microsecond=0) == target_minute:
+                try:
+                    return float(candle["close"])
+                except (KeyError, TypeError, ValueError):
+                    return None
+        return None
+
+    def get_candles(self, instrument_key: str) -> list[dict[str, Any]]:
+        """Return a copy of the in-memory 1-min candle series for one
+        instrument. Empty list when the instrument is not tracked."""
+        key = str(instrument_key or "").strip()
+        with self._guard:
+            state = self._states.get(key)
+            if state is None:
+                return []
+            return [dict(c) for c in (state.get("candles") or [])]
+
+    def get_latest_candle(
+        self,
+        instrument_key: str,
+    ) -> dict[str, Any] | None:
+        """Return a copy of the most recent fully-formed 1-min candle,
+        or ``None`` when the instrument is not tracked or no candles
+        have been accumulated yet."""
+        key = str(instrument_key or "").strip()
+        with self._guard:
+            state = self._states.get(key)
+            if state is None:
+                return None
+            candles = state.get("candles") or []
+            if not candles:
+                return None
+            return dict(candles[-1])
+
+    def has_candle_at(
+        self,
+        instrument_key: str,
+        target_minute_iso: str,
+    ) -> bool:
+        """True iff the in-memory candle series has a candle at the
+        given minute bucket. Convenience wrapper around
+        ``get_candle_close_at()``."""
+        return self.get_candle_close_at(
+            instrument_key, target_minute_iso,
+        ) is not None
+
+    # ------------------------------------------------------------------ #
+    # Lifecycle / status                                                 #
+    # ------------------------------------------------------------------ #
     def reset_state(self) -> None:
         with self._guard:
             self._states.clear()

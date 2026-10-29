@@ -6,11 +6,17 @@
     GET  /admin/level-isolation/detail                    — UI-facing detail snapshot
                                                             (includes `sr_tracking`,
                                                             `active` if promoted,
-                                                            with confirmed_time_price)
+                                                            with confirmed_time_price,
+                                                            and `active.frozen_entry`
+                                                            after G1 v4.1 §5.E)
     GET  /admin/level-isolation/sr-tracking               — SR tracker state only
                                                             (pre & post isolation levels)
     GET  /admin/level-isolation/strategy-signal           — entry-signal block
+                                                            (includes `frozen_entry`
+                                                            after G1 v4.1 §5.E)
     POST /admin/level-isolation/apply-promotion           — promote the ARMED instrument
+                                                            (result includes the
+                                                            frozen entry block)
     POST /admin/level-isolation/clear-promotion           — remove today's promotion
     GET  /admin/level-isolation/search-instruments        — search the registry
     GET  /admin/level-isolation/instrument-sr/{key}       — SR levels for a searched
@@ -21,6 +27,44 @@
                                                             instrument's own data at the
                                                             touch (no re-decision)
     POST /admin/level-isolation/reset                     — clear the day's state
+
+G1 v4.1 (2026-10-29)
+--------------------
+The ``/isolated`` page analysis flagged that the strategy-entry card
+was recomputing on every 10 s template poll, causing the "entry price
+drifts" symptom (§3 / §4.4 / §4.5 of the analysis). Two route-level
+changes fix this without touching the arbitration logic:
+
+* ``/strategy-signal`` now overlays ``frozen_entry`` from the promotion
+  record onto its response when a promotion has been applied (§5.E).
+  The template reads ``signal.frozen_entry`` if present; otherwise it
+  falls back to the computed per-side entries — which is the correct
+  behaviour for *un-promoted* candidates, whose entry price should
+  still be live-derived because the decision has not yet been frozen.
+
+* ``/detail`` returns ``active.frozen_entry`` for free (it already
+  returns the full ``active`` record; the promotion service now
+  populates the ``frozen_entry`` key on that record, so this route
+  surfaces it without any code change here).
+
+Both changes are additive: when no promotion exists,
+``signal.frozen_entry`` is ``None`` and ``active.frozen_entry`` is
+absent — the template falls through to the existing computed path.
+
+The §5.B fix in ``strategy_entry_signal_service._entry_price_for()``
+(prefer candle close at ``confirmed_time_fast`` over live LTP) is what
+makes the *frozen* entry a correct historical value; §5.E captures
+that correct value once and pins it for the rest of the session.
+
+Re-promotion caveat
+-------------------
+If ``STRATEGY_ENTRY_ALLOW_RE_PROMOTION`` is True (default: False), a
+re-promotion overwrites ``frozen_entry`` with the new winner's block.
+That is intentional: re-promotion is an explicit opt-in config that
+says "a later win should override the earlier one". The default
+single-promotion-per-day policy keeps the first frozen entry stable
+for the rest of the session, matching what the dummy-order service
+already does (create-once, update-status-only).
 """
 
 from __future__ import annotations
@@ -72,6 +116,14 @@ def get_detail() -> dict[str, Any]:
     current promotion record (if any) so the UI can show the *active*
     (promoted) instrument alongside the original trigger instrument,
     including confirmed_time_price across all tracked SR levels.
+
+    After G1 v4.1 (§5.E) the promotion record carries a ``frozen_entry``
+    block: ``{price, price_source, stop, target, time, frozen_at}``,
+    captured at the moment the winning side was armed. The ``/isolated``
+    template reads ``active.frozen_entry`` from this payload to render
+    the entry-signal card without needing a separate ``/strategy-signal``
+    round-trip — and without the entry price drifting on the 10 s poll
+    (which was §3 / §4.4 of the analysis).
     """
     data = level_isolated_instrument_service.get_detail()
 
@@ -116,10 +168,60 @@ def get_sr_tracking() -> dict[str, Any]:
 # --------------------------------------------------------------------------- #
 @router.get("/strategy-signal")
 def get_strategy_signal() -> dict[str, Any]:
-    """Pure compute — no side effects. Returns the promotion block so the
-    caller can decide whether to POST to /apply-promotion.
+    """Return the entry-signal block.
+
+    Pure compute — no side effects — but with one G1 v4.1 (§5.E)
+    addition: when a promotion has been applied, the response includes a
+    top-level ``frozen_entry`` block copied from the promotion record:
+
+        {
+            "frozen_entry": {
+                "price":        <float>,
+                "price_source": "candle_close_at_confirmed_fast" | "live_ltp",
+                "stop":         <float>,
+                "target":       <float>,
+                "time":         <ISO-8601>,
+                "frozen_at":    <ISO-8601>,
+            },
+            "frozen": true,
+            ...  # computed signal fields below, unchanged
+        }
+
+    The ``/isolated`` template renders the entry-signal card from
+    ``frozen_entry`` when present, and from the computed per-side
+    entries otherwise. This pins the card to the value captured at
+    arming rather than the value that would be recomputed against
+    the current live LTP — the drifting behaviour flagged in analysis
+    §3 / §4.4 / §4.5.
+
+    When no promotion has been applied, ``frozen_entry`` is ``None``
+    and ``frozen`` is ``False`` — the caller should then render the
+    computed per-side entries (which is correct because an un-promoted
+    candidate's entry price is still being live-derived).
+
+    The compute() call is still performed unconditionally so that the
+    live arm / reject status, promotion recommendation, and per-side
+    level snapshot stay fresh on the template's 10 s poll. Only the
+    three "settled" fields — entry price, stop, target — come from the
+    frozen entry when one exists.
     """
-    return strategy_entry_signal_service.compute()
+    signal = strategy_entry_signal_service.compute()
+
+    # G1 v4.1 §5.E — overlay the frozen entry from the active promotion
+    # record when one exists. The frozen values are the authoritative
+    # entry / stop / target captured at arming time.
+    frozen: dict[str, Any] | None = None
+    try:
+        active = isolated_instrument_promotion_service.read_active()
+    except Exception:
+        active = None
+
+    if active and isinstance(active.get("frozen_entry"), dict):
+        frozen = dict(active["frozen_entry"])
+
+    signal["frozen_entry"] = frozen
+    signal["frozen"] = frozen is not None
+    return signal
 
 
 @router.post("/apply-promotion")
@@ -128,8 +230,16 @@ async def apply_promotion() -> dict[str, Any]:
 
     Recomputes the signal server-side and, if it recommends a promotion
     that has not been applied yet, promotes the target instrument to be
-    the active isolated instrument.  Returns the promotion result plus
+    the active isolated instrument. Returns the promotion result plus
     the fresh detail (so a caller can reload the page with one round-trip).
+
+    After G1 v4.1 (§5.E) the returned ``result`` block carries a
+    ``frozen_entry`` key (populated by
+    ``isolated_instrument_promotion_service.apply_promotion()``) with
+    the price / stop / target / source captured at the moment of
+    promotion. ``result["detail"]["active"]["frozen_entry"]`` carries
+    the same block via the refreshed detail snapshot, so both paths
+    surface the frozen entry consistently.
     """
     def _run() -> dict[str, Any]:
         signal = strategy_entry_signal_service.compute()

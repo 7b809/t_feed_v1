@@ -91,6 +91,8 @@
             display: flex;
             align-items: center;
             gap: 12px;
+            flex-wrap: wrap;
+            justify-content: flex-end;
         }
 
         /* Colorful Nav Buttons */
@@ -107,6 +109,7 @@
             font-size: 0.85rem;
             font-weight: 600;
             transition: all 0.25s ease;
+            white-space: nowrap;
         }
 
         .app-nav-button:hover {
@@ -176,6 +179,12 @@
             color: #c084fc;
         }
 
+        /* NEW: Teal/emerald theme for API Explorer */
+        .nav-icon-badge.api-theme {
+            background: rgba(20, 184, 166, 0.2);
+            color: #2dd4bf;
+        }
+
         .app-main-content-wrapper {
             width: 100%;
         }
@@ -207,7 +216,7 @@
             }
         }
 
-        /* Slightly narrower nav labels on 768px–1024px so all 6 links fit */
+        /* Slightly narrower nav labels on 768px–1024px so all 7 links fit */
         @media (min-width: 641px) and (max-width: 1024px) {
             .app-nav-item-group {
                 gap: 8px;
@@ -226,7 +235,7 @@
 
 {#
     Navigation strategy (professional single-window pattern):
-      • SAME TAB  → primary app views (Home, Charts, Expired, Layout).
+      • SAME TAB  → primary app views (Home, Charts, Expired, Layout, API Explorer).
                     These are in-app pages that share session/state; opening
                     them in the same tab keeps history clean and avoids
                     tab-pile-up on the user's browser.
@@ -294,6 +303,15 @@
                 <i class="bi bi-grid-3x3-gap-fill"></i>
             </span>
             <span>Layout</span>
+        </a>
+
+        <!-- NEW: API EXPLORER → SAME TAB (in-app tooling page) -->
+        <a href="/api-explorer"
+           class="app-nav-button {{ 'is-active' if active_path == '/api-explorer' else '' }}">
+            <span class="nav-icon-badge api-theme">
+                <i class="bi bi-code-square"></i>
+            </span>
+            <span>API Explorer</span>
         </a>
 
         <!-- LOGS → NEW TAB (diagnostic / monitoring surface) -->

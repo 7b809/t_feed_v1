@@ -41,6 +41,38 @@ minute, and retrying ~75 thin options would waste 30+ s of API calls
 on every run.  For defence in depth, the level-isolation 5-minute
 recheck self-heals by re-running this service if either index file
 is missing (see ``services/level_isolated_instrument_service.py``).
+
+Same-series OR computation (G1 v4.1, 2026-10-29)
+------------------------------------------------
+``level_isolated_instrument_service._replay()`` used to mix the OR
+levels from the on-disk ``first_candle.json`` with candles freshly
+fetched from the intraday API. That decoupling let a stale OR file
+(yesterday's values, or values computed from a different window)
+record "touches" that never happened — e.g. R3 = 13329.65 against a
+replay series whose today-high was 13298.75. The fix is to recompute
+OR from the exact series being replayed::
+
+    or_result = first_candle_service.compute_for_series(underlying, candles)
+
+``compute_for_series()`` returns ``{"first_candle": {...},
+"or_levels": {...}}`` (or ``None`` when no 09:15 bar is present in
+the supplied candles) so the caller can validate the trigger against
+OR values that are guaranteed consistent with the candles it is
+iterating.
+
+Targeted recompute (G1 v4.1, 2026-10-29)
+----------------------------------------
+``level_isolated_instrument_service._maybe_self_heal()`` now needs to
+verify that ``first_candle.json["first_candle"]["high"|"low"]`` match
+today's real first intraday bar, and force a fresh OR computation
+when they disagree — not just when the file is missing or has a
+stale ``date``. To make that cheap, this module exposes
+``recompute_for_underlying(underlying, backfill=True)`` which runs
+``_one()`` only for the registry entries of the given underlying
+(typically 1–2 instruments) instead of the full ~100-instrument
+sweep that ``run()`` performs. Also exposes the read helper
+``_read_first_candle_file(underlying)`` so the caller does not have
+to duplicate the path layout.
 """
 
 from __future__ import annotations
@@ -300,6 +332,35 @@ def _folder_for_entry(entry: dict[str, Any]) -> Path:
         / "index"
         / _safe_folder(entry.get("instrument_key"))
     )
+
+def _read_first_candle_file(underlying: str) -> dict[str, Any] | None:
+    """Read today's ``first_candle.json`` for an index underlying.
+
+    Returns the parsed dict, or ``None`` when the file is missing,
+    unreadable, or not a dict.
+
+    Used by ``level_isolated_instrument_service._maybe_self_heal()``
+    as the "cached" side of the H/L comparison (G1 v4.1 fix §5.D):
+    the caller compares ``payload["first_candle"]["high"|"low"]``
+    against ``live_sr_calc_service.get_first_intraday_candle()`` and
+    forces a recompute when they disagree.
+    """
+    p = (
+        Path(config.LIVE_DATA_DIR)
+        / "index"
+        / _safe_folder(underlying)
+        / "first_candle.json"
+    )
+    if not p.exists():
+        return None
+    try:
+        payload = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        logger.warning("[first-candle] cannot parse %s", p)
+        return None
+    if not isinstance(payload, dict):
+        return None
+    return payload
 
 # --------------------------------------------------------------------------- #
 # Upstox intraday fetch                                                       #
@@ -563,6 +624,161 @@ class FirstCandleService:
             return (key, payload, None)
         except Exception as exc:
             return (key, None, f"{type(exc).__name__}: {exc}")
+
+    # ------------------------------------------------------------------ #
+    # Same-series OR computation (G1 v4.1, §5.D)                         #
+    # ------------------------------------------------------------------ #
+    def compute_for_series(
+        self,
+        underlying: str,
+        candles: list[dict[str, Any]],
+        *,
+        date: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Compute OR levels from an arbitrary candle series.
+
+        Used by ``level_isolated_instrument_service._replay()`` to
+        ensure the OR values used for the trigger check are derived
+        from the **same series** the replay is iterating, rather than
+        from the on-disk ``first_candle.json`` — mixing the two was
+        the root cause of the phantom MIDCPNIFTY "R3 touch"
+        (analysis §4.1 / §4.5): R3 = 13329.65 from a stale file was
+        checked against a replay whose series never exceeded
+        13298.75.
+
+        ``candles`` must be a list of dicts with at least ``time``
+        (ISO-8601), ``open``, ``high``, ``low``, ``close`` — the
+        shape produced by ``live_sr_calc_service._merge_by_minute``.
+        ``date`` defaults to today's IST date; override when
+        replaying a non-today session.
+
+        Returns ``{"first_candle": {...}, "or_levels": {...}}`` or
+        ``None`` when no 09:15 bar for ``date`` is present in
+        ``candles``.
+        """
+        target_date = date or datetime.now(_MARKET_TZ).date().isoformat()
+
+        first_candle: dict[str, Any] | None = None
+        for c in candles:
+            try:
+                dt = datetime.fromisoformat(
+                    str(c.get("time") or "").replace("Z", "+00:00")
+                )
+            except Exception:
+                continue
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=_MARKET_TZ)
+            dt_market = dt.astimezone(_MARKET_TZ)
+            if dt_market.date().isoformat() != target_date:
+                continue
+            if dt_market.hour == 9 and dt_market.minute == 15:
+                try:
+                    first_candle = {
+                        "time_iso": dt_market.isoformat(),
+                        "open": float(c["open"]),
+                        "high": float(c["high"]),
+                        "low":  float(c["low"]),
+                        "close": float(c["close"]),
+                    }
+                except (KeyError, TypeError, ValueError):
+                    return None
+                break
+
+        if first_candle is None:
+            return None
+
+        return {
+            "first_candle": first_candle,
+            "or_levels": _compute_or_levels(first_candle),
+        }
+
+    # ------------------------------------------------------------------ #
+    # Targeted recompute (G1 v4.1, §5.D)                                 #
+    # ------------------------------------------------------------------ #
+    def recompute_for_underlying(
+        self,
+        underlying: str,
+        *,
+        reason: str = "self_heal",
+        backfill: bool = False,
+    ) -> dict[str, Any]:
+        """Recompute the OR file for a single underlying.
+
+        Used by ``level_isolated_instrument_service._maybe_self_heal()``
+        when ``first_candle.json["first_candle"]["high"|"low"]``
+        disagree with today's real first intraday bar — the H/L check
+        that catches a *stale-but-today-dated* OR file surviving a
+        restart (analysis §4.1 / §5.D).
+
+        Runs the same market gate as ``run()``, then invokes ``_one()``
+        only for registry entries whose ``underlying`` matches the
+        target (~1–2 instruments) instead of the full ~100-instrument
+        sweep. Returns a summary dict shaped like ``run()``'s but with
+        ``underlying`` added and ``total`` counting only matching
+        instruments.
+        """
+        gate = _market_gate_check(backfill=backfill)
+        if not gate["allow"]:
+            summary = {
+                "reason": reason,
+                "backfill": backfill,
+                "skipped": True,
+                "skip_reason": gate["skip_reason"],
+                "skip_message": gate["skip_message"],
+                "next_open": gate["next_open"].isoformat() if gate["next_open"] else None,
+                "countdown_str": gate["countdown_str"],
+                "countdown_label": gate["countdown_label"],
+                "ran_at": _now_market().isoformat(),
+                "underlying": underlying,
+                "total": 0, "computed": 0, "errors": 0,
+            }
+            with self._lock:
+                self._last_run = summary
+            logger.info(
+                "[first-candle] RECOMPUTE SKIPPED underlying=%s reason=%s (%s)",
+                underlying, gate["skip_reason"], gate["skip_message"],
+            )
+            return summary
+
+        u = str(underlying or "").strip().lower()
+        matching = [
+            e for e in instrument_registry.all()
+            if str(e.get("underlying") or "").strip().lower() == u
+        ]
+
+        results: dict[str, Any] = {}
+        errors: list[str] = []
+        for entry in matching:
+            key, payload, err = self._one(entry)
+            if err:
+                errors.append(f"{key}: {err}")
+            elif payload is not None:
+                results[key] = payload
+
+        summary = {
+            "reason": reason,
+            "backfill": backfill,
+            "skipped": False,
+            "skip_reason": None,
+            "skip_message": None,
+            "next_open": None,
+            "countdown_str": None,
+            "countdown_label": None,
+            "underlying": underlying,
+            "total": len(matching),
+            "computed": len(results),
+            "errors": len(errors),
+            "error_list": errors[:10],
+            "ran_at": _now_market().isoformat(),
+        }
+        with self._lock:
+            self._last_run = summary
+        logger.info(
+            "[first-candle] RECOMPUTE COMPLETE underlying=%s total=%d "
+            "computed=%d errors=%d backfill=%s",
+            underlying, len(matching), len(results), len(errors), backfill,
+        )
+        return summary
 
     def run(
         self,

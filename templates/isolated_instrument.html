@@ -679,6 +679,10 @@
         border-left: 3px solid var(--iso-simulate);
     }
 
+    .iso-table tr.is-counter-candidate td {
+        opacity: 0.82;
+    }
+
     .type-pill {
         display: inline-block;
         padding: 2px 9px;
@@ -1457,6 +1461,15 @@
         color: var(--iso-purple);
     }
 
+    /* G1 v4.1 §5.E — "PINNED" pill on the chosen candidate when its
+       entry values come from `payload.frozen_entry` rather than the
+       live-recomputed path. */
+    .entry-pill.frozen {
+        background: var(--iso-amber-bg);
+        color: var(--iso-amber);
+        border: 1px solid var(--iso-amber-border);
+    }
+
     .entry-pill.state-waiting {
         background: #f1f5f9;
         color: var(--iso-muted);
@@ -1516,6 +1529,14 @@
     .entry-grid .value small {
         color: var(--iso-muted);
         font-weight: 400;
+        font-size: 0.7rem;
+    }
+
+    /* G1 v4.1 §5.E — inline "pinned" marker on the entry-price row
+       when the value is frozen. */
+    .entry-grid .value small.entry-frozen-mark {
+        color: var(--iso-amber);
+        font-weight: 700;
         font-size: 0.7rem;
     }
 
@@ -1624,6 +1645,38 @@
         font-size: 0.78rem;
         margin-left: 6px;
         white-space: nowrap;
+    }
+
+    /* ---- G1 v4.1 §5.F — candidate side chips (Candidates table) ---- */
+    .side-chip {
+        display: inline-block;
+        padding: 2px 9px;
+        border-radius: 5px;
+        font-size: 0.65rem;
+        font-weight: 800;
+        letter-spacing: 0.4px;
+        text-transform: uppercase;
+    }
+
+    .side-chip.bias {
+        background: var(--iso-blue-bg);
+        color: var(--iso-primary);
+        border: 1px solid var(--iso-blue-border);
+    }
+
+    .side-chip.counter {
+        background: var(--iso-purple-bg);
+        color: var(--iso-purple);
+        border: 1px solid var(--iso-purple-border);
+    }
+
+    .side-chip.legacy {
+        background: #f1f5f9;
+        color: var(--iso-muted);
+        border: 1px solid var(--iso-border);
+        font-style: italic;
+        text-transform: none;
+        letter-spacing: 0;
     }
 
     /* ---- Simulation card (dummy-order replay) ---- */
@@ -2080,6 +2133,7 @@
                     <table class="iso-table" id="candidates-table">
                         <thead>
                             <tr>
+                                <th>Side</th>
                                 <th>Strike</th>
                                 <th>Type</th>
                                 <th>Levels</th>
@@ -2088,7 +2142,7 @@
                             </tr>
                         </thead>
                         <tbody id="candidates-body">
-                            <tr><td colspan="5" class="iso-empty">—</td></tr>
+                            <tr><td colspan="6" class="iso-empty">—</td></tr>
                         </tbody>
                     </table>
                 </div>
@@ -2171,28 +2225,30 @@
 
     /* Canonical index instrument keys — G1 v3.2 four-index universe. */
     const INDEX_KEYS = {
-        NIFTY:       "NSE_INDEX|Nifty 50",
-        BANKNIFTY:   "NSE_INDEX|Nifty Bank",
         MIDCPNIFTY:  "NSE_INDEX|NIFTY MID SELECT",
+        BANKNIFTY:   "NSE_INDEX|Nifty Bank",
+        NIFTY:       "NSE_INDEX|Nifty 50",
         SENSEX:      "BSE_INDEX|SENSEX",
     };
 
     /* Canonical name → instrument key. */
     const CANONICAL_TO_KEY = {
-        NIFTY:       INDEX_KEYS.NIFTY,
-        BANKNIFTY:   INDEX_KEYS.BANKNIFTY,
         MIDCPNIFTY:  INDEX_KEYS.MIDCPNIFTY,
+        BANKNIFTY:   INDEX_KEYS.BANKNIFTY,
+        NIFTY:       INDEX_KEYS.NIFTY,
         SENSEX:      INDEX_KEYS.SENSEX,
     };
 
-    /* Ordered list — also the priority display order. */
-    const INDEX_ORDER = ["NIFTY", "BANKNIFTY", "MIDCPNIFTY", "SENSEX"];
+    /* Ordered list — also the priority display order (v4.0 cross-index
+       lead-lag: MIDCPNIFTY and BANKNIFTY lead, NIFTY is routed execution,
+       SENSEX is the BSE anchor). */
+    const INDEX_ORDER = ["MIDCPNIFTY", "BANKNIFTY", "NIFTY", "SENSEX"];
 
     /* Default priority ranks (overridden from server payload when present). */
     const DEFAULT_PRIORITY = {
-        NIFTY: 1,
+        MIDCPNIFTY: 1,
         BANKNIFTY: 2,
-        MIDCPNIFTY: 3,
+        NIFTY: 3,
         SENSEX: 4,
     };
 
@@ -3270,11 +3326,18 @@
         const e = c.entry;
         const isReversal = c.entry_type === "auto_reverse_on_rejection";
         const rt = c.reversal_trigger || {};
+        const isFrozen = !!e._frozen;
+
+        const priceRowValue =
+            fmt(e.price) +
+            ' <small>(' + esc(quoteSourceLabel(e.price_source)) + ')</small>' +
+            (isFrozen
+                ? ' <small class="entry-frozen-mark" title="Frozen at arming time — G1 v4.1 §5.E">📌 pinned</small>'
+                : '');
 
         const commonRows = [
             '<div class="label">Entry price</div>',
-            '<div class="value">' + fmt(e.price) +
-                ' <small>(' + esc(quoteSourceLabel(e.price_source)) + ')</small></div>',
+            '<div class="value">' + priceRowValue + '</div>',
             '<div class="label">Entry time</div>',
             '<div class="value">' + formatTime(e.time) + '</div>',
             '<div class="label">Stop-loss</div>',
@@ -3325,10 +3388,12 @@
         const isChosen = !!c.chosen;
         const isBias = !!c.is_bias_side;
         const isReversal = c.entry_type === "auto_reverse_on_rejection";
+        const isFrozen = !!(c.entry && c.entry._frozen);
 
         const pills = [
             '<span class="entry-pill ' + typeCls + '">' + esc(side) + '</span>',
             isBias ? '<span class="entry-pill bias">BIAS</span>' : '',
+            isFrozen ? '<span class="entry-pill frozen" title="Entry values frozen at arming time (G1 v4.1 §5.E)">📌 PINNED</span>' : '',
             isReversal ? '<span class="entry-pill auto-reverse">↺ AUTO-REV</span>' : '',
             '<span class="entry-pill ' + stateCls + '">' +
                 esc(stateVal.replace(/_/g, " ")) + '</span>',
@@ -3453,7 +3518,39 @@
 
         renderEntryTouchStrip(payload);
 
-        const list = payload.candidates || [];
+        /* ---- G1 v4.1 §5.E — overlay frozen entry onto chosen candidate ----
+           The backend (`/admin/level-isolation/strategy-signal`) overlays
+           `payload.frozen_entry` from the promotion record when a promotion
+           has been applied. That block carries the entry / stop / target
+           captured at arming time — the "settled" values. We rewrite the
+           chosen candidate's `entry` in place so `renderEntryCandidate()`
+           and `entryCandidateGrid()` display the frozen values instead of
+           the recomputed ones. Non-chosen candidates keep their live values,
+           which is correct (they haven't been promoted yet).
+
+           Legacy records (pre-v4.1 promotion) have no `frozen_entry` in the
+           payload — the fallthrough preserves the existing behaviour.
+        */
+        let list = (payload.candidates || []).slice();
+        const frozenEntry = payload.frozen_entry;
+        if (frozenEntry && typeof frozenEntry === "object" && list.length) {
+            list = list.map(c => {
+                if (!c.chosen || !c.entry) return c;
+                return {
+                    ...c,
+                    entry: {
+                        ...c.entry,
+                        price:         frozenEntry.price        ?? c.entry.price,
+                        price_source:  frozenEntry.price_source ?? c.entry.price_source,
+                        stop:          frozenEntry.stop         ?? c.entry.stop,
+                        target:        frozenEntry.target       ?? c.entry.target,
+                        time:          frozenEntry.time         ?? c.entry.time,
+                        _frozen:       true,
+                    },
+                };
+            });
+        }
+
         if (!list.length) {
             candidatesEl.innerHTML =
                 '<div class="entry-empty">' +
@@ -3464,7 +3561,22 @@
             candidatesEl.innerHTML = list.map(renderEntryCandidate).join("");
         }
 
-        const warns = payload.warnings || [];
+        /* ---- Warnings: existing ones + a new §5.E diagnostic ---------------
+           If the frozen entry was captured from live LTP (not a candle
+           close) the §5.B fallback probably failed — this is exactly the
+           root cause the analysis describes. Surface it as a warning so
+           the operator doesn't have to read `frozen_entry.price_source`
+           manually.
+        */
+        const warns = (payload.warnings || []).slice();
+        if (frozenEntry && frozenEntry.price_source === "live_ltp") {
+            warns.push(
+                "Frozen entry captured from LIVE LTP, not a historical candle close. " +
+                "The counter-side candle lookup probably failed — check that " +
+                "_isolate() registered both sides and that STRATEGY_ENTRY_CANDLE_FALLBACK_ENABLED " +
+                "is on (G1 v4.1 §5.A / §5.B)."
+            );
+        }
         if (warningsEl) {
             if (warns.length) {
                 warningsEl.style.display = "block";
@@ -4137,7 +4249,7 @@
             .join("");
     }
 
-    /* ---------- Candidates ---------- */
+    /* ---------- Candidates (G1 v4.1 §5.F — side column) ---------- */
     function renderCandidates(d) {
         const body = document.getElementById("candidates-body");
         const titleEl = document.getElementById("candidates-title");
@@ -4163,15 +4275,27 @@
             refLabel = "—";
         }
 
+        /* G1 v4.1 §5.F — the event now carries BOTH bias-side and
+           counter-side candidates when STRATEGY_ENTRY_ALLOW_CROSSOVER
+           is on. Tell the operator which is which by appending
+           " · bias + counter side" to the title when any row is tagged
+           as counter. Legacy records (pre-v4.1) carry only bias-side
+           candidates and won't have any `side === "counter"` rows, so
+           they show the plain title. */
+        const hasCounter = list.some(c => String(c.side || "").toLowerCase() === "counter");
         if (titleEl) {
-            titleEl.textContent = list.length
-                ? `Candidates considered · ${list.length} · ${refLabel}`
-                : "Candidates considered";
+            if (list.length) {
+                const crossoverSuffix = hasCounter ? " · bias + counter side" : "";
+                titleEl.textContent =
+                    `Candidates considered · ${list.length} · ${refLabel}${crossoverSuffix}`;
+            } else {
+                titleEl.textContent = "Candidates considered";
+            }
         }
 
         if (!list.length) {
             body.innerHTML =
-                `<tr><td colspan="5" class="iso-empty">` +
+                `<tr><td colspan="6" class="iso-empty">` +
                 `No candidates recorded for this isolation yet.` +
                 `</td></tr>`;
             return;
@@ -4183,6 +4307,22 @@
             .map(c => {
                 const isPicked = c.instrument_key === pickedKey;
                 const type = (c.type || "").toUpperCase();
+
+                /* Side chip — bias (blue) or counter (purple). Legacy
+                   records carry no `side` field; we tag them "legacy" so
+                   the operator can tell the difference between a real
+                   bias-side-only list (pre-v4.1) and a properly tagged
+                   crossover-inclusive one. */
+                const sideRaw = String(c.side || "").toLowerCase();
+                let sideChip;
+                if (sideRaw === "counter") {
+                    sideChip = '<span class="side-chip counter">counter</span>';
+                } else if (sideRaw === "bias") {
+                    sideChip = '<span class="side-chip bias">bias</span>';
+                } else {
+                    sideChip = '<span class="side-chip legacy">—</span>';
+                }
+
                 const levelTags = (c.levels || [])
                     .map(lv => {
                         const cls = String(lv).startsWith("R")
@@ -4198,7 +4338,11 @@
                     dist !== null && dist !== undefined ? fmt(dist) : "—";
                 const chartUrl =
                     "/chart/" + encodeURIComponent(c.instrument_key);
-                return `<tr class="${isPicked ? "is-picked" : ""}">
+                const rowCls =
+                    (isPicked ? "is-picked " : "") +
+                    (sideRaw === "counter" ? "is-counter-candidate" : "");
+                return `<tr class="${rowCls.trim()}">
+                    <td>${sideChip}</td>
                     <td><strong>${fmt(c.strike, 0)}</strong></td>
                     <td><span class="type-pill ${type.toLowerCase()}">${esc(type)}</span></td>
                     <td>${levelTags}</td>

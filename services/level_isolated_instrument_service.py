@@ -1,17 +1,53 @@
 # services/level_isolated_instrument_service.py
-"""Level-isolation engine — G1 v3.2 multi-index with NIFTY routing.
+"""Level-isolation engine — G1 v4.0 cross-index with NIFTY routing.
 
-Key changes vs G1 v2:
-    * Watches FOUR indices: NIFTY, BANKNIFTY, MIDCPNIFTY, SENSEX.
-    * Priority arbitration: NIFTY > BANKNIFTY > MIDCPNIFTY > SENSEX.
-    * ALWAYS routes to NIFTY strike (never the trigger-index strike).
-    * Backfill replay fetches intraday candles for all four indices,
-      merges by minute, and runs the priority arbitration. A 23:46
-      startup will correctly detect a 15:26 BANKNIFTY R3 touch.
-    * The isolation record carries both `trigger_index` (which fired)
-      and `routed_index` (NIFTY — where the strike came from) plus a
-      `source` field ("live" vs "backfill") so the UI can show
-      SIMULATE MODE when post-close.
+Key changes vs G1 v3.2:
+    * Priority order flipped to MIDCPNIFTY > BANKNIFTY > NIFTY > SENSEX
+      (cross-index lead-lag: mid-cap and high-beta lead the broader
+      market, so their R3/S3 touches carry the highest arbitration
+      priority).
+    * The `INDEX_METADATA` dict preserves this order so first-touch
+      iteration and the returned `monitored_indices` list both reflect
+      the v4.0 arbitration sequence.
+    * All other behaviour (NIFTY-only strike routing, 15/3 fast pivot
+      scan, auto-reverse on bias-side rejection, once-per-day lock)
+      is unchanged from v3.2.
+
+G1 v4.1 additions (2026-10-29)
+------------------------------
+    * `_process_winning_touch()` now collects **both** the bias side AND
+      the counter side (PE for an R3 touch, CE for an S3 touch) as
+      candidates when `STRATEGY_ENTRY_ALLOW_CROSSOVER=true`. Each
+      candidate is tagged `side="bias"` or `side="counter"` so the UI
+      can show the full 4-candidate set rather than the bias-side-only 2.
+      The **pick** still comes from bias-side candidates only — the
+      arbitration behaviour is unchanged.
+
+    * `_isolate()` now registers the counter-side option with
+      `live_sr_levels_service` **and** seeds it with today's intraday
+      candles (`seed_candles`) before returning. This closes the
+      long-standing "entry price = live LTP instead of 09:23 candle
+      close" bug that appeared in simulate mode: previously
+      `strategy_entry_signal_service._candle_close_at()` could not find
+      the counter-side candle state (because the PE was never registered
+      with the SR engine) and fell back to `live_ltp`. Same fix also
+      removes the SR tracker's "Before: 0 / After: 29" bug — the PE's
+      pivots are now present in the SR engine when `on_isolation()`
+      runs for the promotion, so `_snapshot_current_levels()` returns
+      the full pre-isolation set instead of `[]`.
+
+    * `run_backfill()` now verifies each index's `first_candle.json`
+      H/L against the actual 09:15 bar returned by the intraday API
+      (`_verify_or_against_intraday`). Any mismatch forces a fresh
+      `first_candle_service.run(backfill=True)` before the replay so a
+      stale OR cannot produce a phantom touch. This is the fix for the
+      scenario where a `first_candle.json` from a previous day survives
+      a restart with today's date but yesterday's H/L.
+
+    * A feed subscription is also requested for the counter-side
+      instrument (best-effort) so that, on a live day, the counter-side
+      SR state continues to accumulate ticks and does not go stale
+      before the promotion runs.
 """
 
 from __future__ import annotations
@@ -32,25 +68,23 @@ logger = get_logger(__file__)
 _MARKET_TZ = ZoneInfo("Asia/Kolkata")
 
 # --------------------------------------------------------------------------- #
-# Monitored index metadata (G1 v3.2)                                          #
+# Monitored index metadata (G1 v4.0 — MIDCPNIFTY leads)
 # --------------------------------------------------------------------------- #
-# Canonical G1 v3.2 index set. Order in this dict is not the priority
-# order — priority comes from config.STRATEGY_INDEX_PRIORITY.
 INDEX_METADATA: dict[str, dict[str, Any]] = {
-    "NSE_INDEX|Nifty 50": {
-        "canonical": "NIFTY",
-        "folder": "nifty",
-        "priority": int(config.STRATEGY_INDEX_PRIORITY.get("NIFTY", 1)),
+    "NSE_INDEX|NIFTY MID SELECT": {
+        "canonical": "MIDCPNIFTY",
+        "folder": "midcpnifty",
+        "priority": int(config.STRATEGY_INDEX_PRIORITY.get("MIDCPNIFTY", 1)),
     },
     "NSE_INDEX|Nifty Bank": {
         "canonical": "BANKNIFTY",
         "folder": "banknifty",
         "priority": int(config.STRATEGY_INDEX_PRIORITY.get("BANKNIFTY", 2)),
     },
-    "NSE_INDEX|NIFTY MID SELECT": {
-        "canonical": "MIDCPNIFTY",
-        "folder": "midcpnifty",
-        "priority": int(config.STRATEGY_INDEX_PRIORITY.get("MIDCPNIFTY", 3)),
+    "NSE_INDEX|Nifty 50": {
+        "canonical": "NIFTY",
+        "folder": "nifty",
+        "priority": int(config.STRATEGY_INDEX_PRIORITY.get("NIFTY", 3)),
     },
     "BSE_INDEX|SENSEX": {
         "canonical": "SENSEX",
@@ -78,6 +112,13 @@ _MARKET_CLOSE = dtime(15, 30)
 _OR_READY = dtime(9, 16, 10)
 _VALID_WEEKDAYS = {0, 1, 2, 3, 4}
 
+# Tolerance for comparing stored first-candle H/L against the intraday
+# 09:15 bar (defensive self-heal check). Upstox reports the same values
+# for both paths so any deviation beyond a small rounding slack means
+# the OR file is stale.
+_OR_MISMATCH_TOLERANCE = 0.5
+
+
 # --------------------------------------------------------------------------- #
 # Small helpers                                                               #
 # --------------------------------------------------------------------------- #
@@ -90,11 +131,11 @@ def _today_iso() -> str:
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
+
 class LevelIsolatedInstrumentService:
     def __init__(self) -> None:
         self._lock = threading.RLock()
         self._state: dict[str, Any] = self._empty_state()
-        # Latest LTP + tick timestamps per index key (for live mode).
         self._last_ltp: dict[str, float] = {}
         self._last_tick_at: dict[str, datetime] = {}
         self._last_check_monotonic: float = 0.0
@@ -112,9 +153,9 @@ class LevelIsolatedInstrumentService:
             "isolated": None,
             "events": [],
             "touch_state": {
-                "NIFTY_R3": False, "NIFTY_S3": False,
-                "BANKNIFTY_R3": False, "BANKNIFTY_S3": False,
                 "MIDCPNIFTY_R3": False, "MIDCPNIFTY_S3": False,
+                "BANKNIFTY_R3": False, "BANKNIFTY_S3": False,
+                "NIFTY_R3": False, "NIFTY_S3": False,
                 "SENSEX_R3": False, "SENSEX_S3": False,
             },
             "last_update": None,
@@ -134,7 +175,6 @@ class LevelIsolatedInstrumentService:
         if loaded.get("day") != self._state["day"]:
             return
         self._state = loaded
-        # Backfill older touch_state entries so v2 files stay readable
         for k, v in self._state["touch_state"].items():
             self._state["touch_state"][k] = bool(v)
 
@@ -165,31 +205,10 @@ class LevelIsolatedInstrumentService:
     # Isolated-SR tracker attachment                                     #
     # ------------------------------------------------------------------ #
     def _ensure_tracker_attached(self) -> None:
-        """Ensure the isolated-SR tracker is watching the correct
-        instrument for the rest of the day.
-
-        The tracker must follow the *active* instrument, not
-        unconditionally the official (bias-side) one. After a
-        promotion, the entry-signal winner becomes the active
-        instrument; without consulting the promotion sidecar first,
-        every subsequent call to this method (from ``get_detail``,
-        ``run_backfill``, and ``get_instrument_sr_comparison``) would
-        call ``on_isolation(official_iso)`` and reset the tracker back
-        to the bias side -- silently dropping every post-isolation SR
-        confirmation the promoted instrument had collected.
-
-        Order of resolution:
-
-            1. If a promotion exists today with a ``record`` payload,
-               use that record (the promoted instrument's context).
-            2. Otherwise fall back to the official isolated record.
-        """
         iso = self._state.get("isolated")
         if not isinstance(iso, dict):
             return
 
-        # Step 1 -- consult the promotion sidecar. Any failure here
-        # must not block the tracker attach for the official record.
         tracker_target: dict[str, Any] = iso
         try:
             from services.isolated_instrument_promotion_service import (
@@ -227,14 +246,9 @@ class LevelIsolatedInstrumentService:
             )
 
     # ------------------------------------------------------------------ #
-    # Self-heal                                                          #
+    # Self-heal (filesystem-level: missing / stale-date)                 #
     # ------------------------------------------------------------------ #
     def _maybe_self_heal(self, reason: str = "startup") -> None:
-        """Ensure first_candle.json and level_instruments.json exist for
-        all configured indices. Only NIFTY's level_instruments.json is
-        strictly required for execution; the other three only need
-        first_candle.json (for R3/S3).
-        """
         today = _today_iso()
         needs_heal: list[str] = []
 
@@ -289,6 +303,100 @@ class LevelIsolatedInstrumentService:
             logger.exception(
                 "[level-isolation] self-heal first_candle failed"
             )
+
+    # ------------------------------------------------------------------ #
+    # NEW: OR-vs-intraday content verification                           #
+    # ------------------------------------------------------------------ #
+    def _verify_or_against_intraday(
+        self,
+        intraday: dict[str, list[dict[str, Any]]],
+    ) -> list[str]:
+        """Verify each index's ``first_candle.json`` H/L matches the real
+        09:15 bar from the intraday API.
+
+        Returns the list of canonical index names (e.g. ``["MIDCPNIFTY"]``)
+        whose OR needs to be recomputed. An empty list means every OR
+        file on disk is consistent with today's intraday data.
+
+        This check catches the case that ``_maybe_self_heal`` cannot: a
+        ``first_candle.json`` file that has today's ``date`` field (so
+        the date check passes) but whose H/L came from a different day
+        — e.g. a file written by an earlier service run that was never
+        overwritten after the backup was re-extracted.
+
+        Never raises. All failure modes (missing file, unparseable JSON,
+        no intraday candles for that index) are treated as "cannot
+        verify" — i.e. that index is **not** flagged as stale. The
+        caller decides what to do with the result.
+        """
+        stale: list[str] = []
+
+        for key, meta in INDEX_METADATA.items():
+            canonical = str(meta.get("canonical") or "").strip()
+            if not canonical:
+                continue
+
+            candles = intraday.get(key) or []
+            if not candles:
+                continue
+
+            # Find the 09:15 bar from the intraday series
+            first_bar: dict[str, Any] | None = None
+            for candle in candles:
+                t = str(candle.get("time") or "")
+                if "T09:15" in t:
+                    first_bar = candle
+                    break
+            if first_bar is None:
+                continue
+
+            try:
+                intraday_high = float(first_bar.get("high"))
+                intraday_low = float(first_bar.get("low"))
+            except (TypeError, ValueError):
+                continue
+            if not (intraday_high > 0 and intraday_low > 0):
+                continue
+
+            # Read the stored first_candle.json
+            folder = (
+                Path(config.LIVE_DATA_DIR)
+                / "index" / canonical.lower()
+            )
+            fc_path = folder / "first_candle.json"
+            if not fc_path.exists():
+                # Missing is handled by _maybe_self_heal — skip here
+                continue
+            try:
+                payload = json.loads(fc_path.read_text(encoding="utf-8"))
+            except Exception:
+                stale.append(canonical)
+                continue
+
+            stored_fc = payload.get("first_candle") or {}
+            try:
+                stored_high = float(stored_fc.get("high"))
+                stored_low = float(stored_fc.get("low"))
+            except (TypeError, ValueError):
+                stale.append(canonical)
+                continue
+
+            if (
+                abs(stored_high - intraday_high) > _OR_MISMATCH_TOLERANCE
+                or abs(stored_low - intraday_low) > _OR_MISMATCH_TOLERANCE
+            ):
+                logger.warning(
+                    "[level-isolation] OR mismatch for %s: "
+                    "stored H/L=%.2f/%.2f vs intraday H/L=%.2f/%.2f "
+                    "(tol=%.2f) — flagging stale",
+                    canonical,
+                    stored_high, stored_low,
+                    intraday_high, intraday_low,
+                    _OR_MISMATCH_TOLERANCE,
+                )
+                stale.append(canonical)
+
+        return stale
 
     # ------------------------------------------------------------------ #
     # Market gates                                                       #
@@ -361,14 +469,16 @@ class LevelIsolatedInstrumentService:
     # Input file readers                                                 #
     # ------------------------------------------------------------------ #
     def _load_or_levels(self) -> dict[str, dict[str, Any]]:
-        """Return ``{canonical: or_levels}`` for every configured index."""
         out: dict[str, dict[str, Any]] = {}
         for underlying in config.LEVEL_FILTER_INDEXES:
             u = str(underlying or "").strip().upper()
             if not u:
                 continue
             idx_lower = u.lower()
-            path = Path(config.LIVE_DATA_DIR) / "index" / idx_lower / "first_candle.json"
+            path = (
+                Path(config.LIVE_DATA_DIR)
+                / "index" / idx_lower / "first_candle.json"
+            )
             if not path.exists():
                 continue
             try:
@@ -384,9 +494,6 @@ class LevelIsolatedInstrumentService:
         return out
 
     def _load_filtered_instruments(self) -> dict[str, dict[str, Any]]:
-        """Return ``{canonical: payload}`` for every configured index that
-        has a `level_instruments.json` on disk.
-        """
         out: dict[str, dict[str, Any]] = {}
         for underlying in config.LEVEL_FILTER_INDEXES:
             u = str(underlying or "").strip().upper()
@@ -410,7 +517,7 @@ class LevelIsolatedInstrumentService:
         return out
 
     # ------------------------------------------------------------------ #
-    # Live touch check (G1 v3.2 — priority arbitration)                  #
+    # Live touch check (G1 v4.0 — MIDCPNIFTY-first arbitration)          #
     # ------------------------------------------------------------------ #
     def _check_touches(self, now: datetime) -> None:
         if self._state.get("isolated") is not None:
@@ -420,12 +527,10 @@ class LevelIsolatedInstrumentService:
         filtered = self._load_filtered_instruments()
         if not or_levels:
             return
-        # NIFTY filtered instruments are the execution universe.
         nifty_filtered = filtered.get("NIFTY")
         if not nifty_filtered:
             return
 
-        # Collect every candidate touch across all four indices.
         touches: list[dict[str, Any]] = []
         for canonical, levels in or_levels.items():
             key = CANONICAL_TO_KEY.get(canonical)
@@ -467,13 +572,12 @@ class LevelIsolatedInstrumentService:
         if not touches:
             return
 
-        # Priority arbitration — NIFTY > BANKNIFTY > MIDCPNIFTY > SENSEX
+        # v4.0 arbitration: MIDCPNIFTY > BANKNIFTY > NIFTY > SENSEX
         touches.sort(key=lambda t: (t["priority"], t["touched_at"]))
 
         simultaneous = len(touches) > 1
         winner = touches[0]
 
-        # Mark every touch as observed so the UI can show what fired.
         for t in touches:
             self._state["touch_state"][
                 f"{t['canonical']}_{t['side']}"
@@ -508,6 +612,9 @@ class LevelIsolatedInstrumentService:
             ],
         )
 
+    # ------------------------------------------------------------------ #
+    # MODIFIED: winning-touch handler — bias + counter candidates        #
+    # ------------------------------------------------------------------ #
     def _process_winning_touch(
         self,
         winner: dict[str, Any],
@@ -517,24 +624,20 @@ class LevelIsolatedInstrumentService:
         source: str,
         simultaneous_touches: list[dict[str, Any]] | None = None,
     ) -> None:
-        """Route a winning touch to the NIFTY strike and persist isolation."""
         trigger_canonical = winner["canonical"]
         trigger_side = winner["side"]
-        trigger_key = winner["instrument_key"]
 
-        # Determine bias from the touch side.
-        bias = "CE" if trigger_side == "R3" else "PE"
+        # v4.0 — bias from R3 = CE, from S3 = PE
+        bias = config.STRATEGY_RELATIONAL_R3_BIAS if trigger_side == "R3" \
+            else config.STRATEGY_RELATIONAL_S3_BIAS
+        if bias not in {"CE", "PE"}:
+            bias = "CE" if trigger_side == "R3" else "PE"
 
-        # Read NIFTY spot LTP at trigger — this is the routing anchor.
         nifty_key = CANONICAL_TO_KEY.get("NIFTY")
         nifty_ltp = self._last_ltp.get(nifty_key) if nifty_key else None
         nifty_ltp_source = "live_feed_cache"
 
         if nifty_ltp is None:
-            # Post-close backfill path has no live NIFTY tick. The replay
-            # populates it; if we reach here from live mode and NIFTY is
-            # genuinely stale, fall back to the winner's own LTP only if
-            # the winner IS NIFTY. Otherwise skip.
             if trigger_canonical == "NIFTY":
                 nifty_ltp = winner["trigger_ltp"]
                 nifty_ltp_source = "trigger_ltp_fallback"
@@ -546,8 +649,11 @@ class LevelIsolatedInstrumentService:
                 )
                 return
 
-        candidates = self._find_nifty_candidates(trigger_side, nifty_filtered)
-        if not candidates:
+        # ---- Bias-side candidates (used for the pick) ---------------- #
+        bias_candidates = self._find_nifty_candidates(
+            trigger_side, nifty_filtered,
+        )
+        if not bias_candidates:
             logger.warning(
                 "[level-isolation] no NIFTY %s candidates available for "
                 "trigger %s %s — isolation skipped",
@@ -556,9 +662,28 @@ class LevelIsolatedInstrumentService:
             return
 
         pick = min(
-            candidates,
+            bias_candidates,
             key=lambda c: abs(self._strike(c) - float(nifty_ltp)),
         )
+
+        # ---- Counter-side candidates (display / auto-reverse context) - #
+        # G1 v4.1: when crossover is enabled, the entry engine evaluates
+        # BOTH sides. Surface the counter side in the candidate list so
+        # the UI shows the full 4-candidate set instead of bias-side-only.
+        # The `pick` above is still chosen from bias_candidates only —
+        # arbitration behaviour is unchanged.
+        counter_candidates: list[dict[str, Any]] = []
+        if bool(getattr(config, "STRATEGY_ENTRY_ALLOW_CROSSOVER", True)):
+            counter_side = "S3" if trigger_side == "R3" else "R3"
+            counter_candidates = self._find_nifty_candidates(
+                counter_side, nifty_filtered,
+            )
+
+        tagged_candidates: list[dict[str, Any]] = []
+        for c in bias_candidates:
+            tagged_candidates.append({**c, "side": "bias"})
+        for c in counter_candidates:
+            tagged_candidates.append({**c, "side": "counter"})
 
         event: dict[str, Any] = {
             "index": trigger_canonical,
@@ -572,8 +697,12 @@ class LevelIsolatedInstrumentService:
             "simultaneous_touches": simultaneous_touches or [],
             "routed_nifty_ltp": float(nifty_ltp),
             "routed_nifty_ltp_source": nifty_ltp_source,
-            "candidates_count": len(candidates),
-            "candidates": self._enrich_candidates(candidates, float(nifty_ltp)),
+            "candidates_count": len(tagged_candidates),
+            "bias_candidates_count": len(bias_candidates),
+            "counter_candidates_count": len(counter_candidates),
+            "candidates": self._enrich_candidates(
+                tagged_candidates, float(nifty_ltp),
+            ),
         }
 
         reason = f"{trigger_canonical.lower()}_{trigger_side.lower()}_touch"
@@ -595,12 +724,16 @@ class LevelIsolatedInstrumentService:
         ref_ltp: float,
         distance_field: str = "distance_to_trigger_ltp",
     ) -> list[dict[str, Any]]:
+        # G1 v4.1: carry the "side" tag through so the UI can show
+        # a bias/counter column without re-deriving it. Existing
+        # candidates without a side default to "bias".
         return [
             {
                 "instrument_key": c.get("instrument_key"),
                 "trading_symbol": c.get("trading_symbol"),
                 "strike": c.get("strike"),
                 "type": c.get("type"),
+                "side": c.get("side", "bias"),
                 "levels": c.get("levels"),
                 distance_field: round(abs(self._strike(c) - ref_ltp), 2),
             }
@@ -612,13 +745,6 @@ class LevelIsolatedInstrumentService:
         side: str,
         nifty_filtered: dict[str, Any],
     ) -> list[dict[str, Any]]:
-        """Return NIFTY CE (for R3) or PE (for S3) candidate strike list.
-
-        For R3 touches we want CE strikes (call side of the market).
-        For S3 touches we want PE strikes (put side of the market).
-        Priority: strikes whose level tags include R3/R3_Threshold or
-        S3/S3_Threshold. Fallback: full side.
-        """
         if side == "R3":
             instruments = nifty_filtered.get("ce_instruments") or []
             trigger_levels = _R3_TRIGGER_LEVELS
@@ -636,6 +762,207 @@ class LevelIsolatedInstrumentService:
         if primary:
             return primary
         return list(instruments)
+
+    # ------------------------------------------------------------------ #
+    # NEW: counter-side resolution + SR registration                     #
+    # ------------------------------------------------------------------ #
+    def _find_counter_candidate(
+        self,
+        bias_candidate: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """Resolve the counter-side option (PE↔CE) at the same strike.
+
+        Returns a candidate dict shaped like the ones from
+        ``_find_nifty_candidates`` — with ``instrument_key``,
+        ``trading_symbol``, ``strike``, ``type``, ``expiry`` and
+        ``levels`` fields — or ``None`` when the registry cannot resolve
+        the counter side.
+
+        Never raises.
+        """
+        bias_type = str(bias_candidate.get("type") or "").upper()
+        if bias_type not in {"CE", "PE"}:
+            return None
+
+        strike = bias_candidate.get("strike")
+        if strike is None:
+            return None
+
+        underlying = self._resolve_underlying_for_candidate(bias_candidate)
+        if not underlying:
+            underlying = "NIFTY"
+
+        counter_type = "PE" if bias_type == "CE" else "CE"
+
+        try:
+            from services.instrument_registry import instrument_registry
+            entry = instrument_registry.resolve(underlying, strike, counter_type)
+            if entry is None:
+                return None
+            return {
+                "instrument_key": entry.get("instrument_key"),
+                "trading_symbol": entry.get("trading_symbol"),
+                "strike": entry.get("strike_price"),
+                "type": counter_type,
+                "expiry": entry.get("expiry"),
+                "levels": [],
+            }
+        except Exception:
+            logger.exception(
+                "[level-isolation] counter-side resolve failed for "
+                "%s %s %s",
+                underlying, strike, counter_type,
+            )
+            return None
+
+    def _register_isolated_pair_with_sr(
+        self,
+        bias_candidate: dict[str, Any],
+        counter_candidate: dict[str, Any] | None,
+    ) -> None:
+        """Register the bias-side **and** counter-side instruments with
+        the SR engine, seeding both with today's intraday candles.
+
+        Why this exists
+        ---------------
+        ``strategy_entry_signal_service._entry_price_for()`` looks up the
+        confirming candle's close via ``_candle_close_at()`` which reads
+        from ``live_sr_levels_service._states[key]["candles"]``. If the
+        counter-side option was never registered with the SR engine,
+        that lookup returns ``None`` and the entry price silently falls
+        back to ``_live_ltp()`` — which during a **simulate-mode replay**
+        means the *current* wall-clock price (~₹61) instead of the
+        *touch-time* candle close (~₹186). That produced both the wrong
+        entry price on ``/isolated`` and the wrong stop / target / R
+        multiple on the dummy order.
+
+        Seeding the counter side here, immediately after isolation (and
+        therefore before any entry-signal computation), closes that hole.
+
+        Also registers the same instrument with the live feed (best
+        effort) so that on a live day the counter-side SR state keeps
+        growing and does not go stale before the promotion runs.
+
+        Never raises. Every failure path logs and continues — a failure
+        to register the counter side must not break the isolation itself.
+        """
+        try:
+            from services.live_sr_levels_service import live_sr_levels_service
+            from services.instrument_registry import instrument_registry
+        except Exception:
+            logger.exception(
+                "[level-isolation] SR/registry import failed during "
+                "counter-side registration"
+            )
+            return
+
+        candidates: list[dict[str, Any]] = [bias_candidate]
+        if counter_candidate:
+            candidates.append(counter_candidate)
+
+        for candidate in candidates:
+            key = str(candidate.get("instrument_key") or "").strip()
+            if not key:
+                continue
+
+            try:
+                entry = instrument_registry.get(key)
+                if entry is None:
+                    entry = instrument_registry.register_adhoc(key)
+                if entry is None:
+                    continue
+
+                already_tracking = live_sr_levels_service.is_tracking(key)
+
+                # Register (idempotent — no-op if already present today)
+                live_sr_levels_service.register_instrument(entry)
+
+                # Seed today's candles when this is the first time we are
+                # tracking this instrument. Critical for the backfill /
+                # simulate path where the SR engine was populated by the
+                # feed-start backfill but the counter side was not yet a
+                # registered instrument.
+                if not already_tracking:
+                    self._seed_candles_for_instrument(key, entry)
+
+                # Best-effort feed subscription so live ticks continue
+                # updating the counter-side SR state after isolation.
+                try:
+                    from services.live_feed_service import live_feed_service
+                    if not live_feed_service.is_subscribed(key):
+                        live_feed_service.subscribe_instrument(key)
+                except Exception:
+                    logger.exception(
+                        "[level-isolation] feed subscribe failed for %s", key,
+                    )
+            except Exception:
+                logger.exception(
+                    "[level-isolation] SR registration failed for %s", key,
+                )
+
+    def _seed_candles_for_instrument(
+        self,
+        key: str,
+        entry: dict[str, Any],
+    ) -> None:
+        """Fetch today's intraday candles for ``key`` and seed the SR
+        engine with them (plus the historical tail when available).
+
+        Idempotent — callers should only invoke this when the instrument
+        is not yet in the SR engine. Never raises.
+        """
+        try:
+            from services.live_sr_calc_service import live_sr_calc_service
+            from services.live_sr_levels_service import live_sr_levels_service
+        except Exception:
+            logger.exception(
+                "[level-isolation] seed_candles import failed for %s", key,
+            )
+            return
+
+        try:
+            intraday = live_sr_calc_service.fetch_intraday_candles_for_entry(key)
+        except Exception:
+            logger.exception(
+                "[level-isolation] intraday fetch failed for %s", key,
+            )
+            return
+        if not intraday:
+            logger.info(
+                "[level-isolation] no intraday candles for %s — "
+                "seed skipped", key,
+            )
+            return
+
+        historical: list[dict[str, Any]] = []
+        try:
+            historical = live_sr_calc_service.load_historical_candles_for_entry(
+                entry,
+                int(config.LIVE_SR_CALC_DEFAULT_LOOKBACK_DAYS),
+            )
+        except Exception:
+            historical = []
+
+        merged = (
+            live_sr_calc_service.merge_candles(historical, intraday)
+            if historical else intraday
+        )
+        if not merged:
+            return
+
+        try:
+            summary = live_sr_levels_service.seed_candles(key, entry, merged)
+            logger.info(
+                "[level-isolation] seeded SR candles for %s — "
+                "candles=%s pivots=%s",
+                key,
+                summary.get("candles_seeded"),
+                summary.get("pivots_detected"),
+            )
+        except Exception:
+            logger.exception(
+                "[level-isolation] seed_candles raised for %s", key,
+            )
 
     # ------------------------------------------------------------------ #
     # Underlying resolution                                              #
@@ -663,9 +990,6 @@ class LevelIsolatedInstrumentService:
                 return first.upper()
         return ""
 
-    # ------------------------------------------------------------------ #
-    # OR-level computation (matches first_candle_service)                #
-    # ------------------------------------------------------------------ #
     @staticmethod
     def _compute_or_levels(fc: dict[str, Any]) -> dict[str, float] | None:
         try:
@@ -829,7 +1153,7 @@ class LevelIsolatedInstrumentService:
         return snapshot
 
     # ------------------------------------------------------------------ #
-    # Isolation                                                          #
+    # MODIFIED: isolation — register both sides with SR                  #
     # ------------------------------------------------------------------ #
     def _isolate(
         self,
@@ -850,9 +1174,6 @@ class LevelIsolatedInstrumentService:
 
         is_backfill = str(event.get("source") or "") == "backfill"
 
-        # The instrument's underlying is NIFTY (routed execution index)
-        # not the trigger index. But the strike lives under the underlying
-        # symbol on disk — for options that is NIFTY.
         routed_key = str(config.STRATEGY_ROUTED_EXECUTION_INDEX or "NSE_INDEX|Nifty 50")
         routed_canonical = KEY_TO_CANONICAL.get(routed_key, "NIFTY")
 
@@ -873,7 +1194,6 @@ class LevelIsolatedInstrumentService:
             "reason": reason,
             "source": "backfill" if is_backfill else "live",
             "isolated_at": _now_market().isoformat(),
-            # G1 v3.2 routing context
             "trigger_index": trigger_index_canonical,
             "trigger_instrument_key": event.get("instrument_index_key")
                 or CANONICAL_TO_KEY.get(trigger_index_canonical),
@@ -888,7 +1208,6 @@ class LevelIsolatedInstrumentService:
             "routed_nifty_ltp": event.get("routed_nifty_ltp"),
             "routed_nifty_ltp_source": event.get("routed_nifty_ltp_source"),
             "touched_at": event.get("touched_at"),
-            # Instrument snapshot fields
             "instrument_ltp": snapshot.get("instrument_ltp"),
             "instrument_touch_ohlc": snapshot.get("instrument_touch_ohlc"),
             "instrument_first_candle": snapshot.get("instrument_first_candle"),
@@ -916,7 +1235,23 @@ class LevelIsolatedInstrumentService:
             isolated["source"],
         )
 
-        # Attach the SR tracker.
+        # ---- G1 v4.1: register BOTH sides with the SR engine --------- #
+        # This runs BEFORE the SR tracker hook and BEFORE any later
+        # entry-signal computation. It makes the counter-side option's
+        # candle series available in `live_sr_levels_service._states`,
+        # which is what `strategy_entry_signal_service._candle_close_at()`
+        # reads from. Without this, the counter-side entry price silently
+        # falls back to `live_ltp` on a simulate-mode replay.
+        counter_candidate: dict[str, Any] | None = None
+        try:
+            if bool(getattr(config, "STRATEGY_ENTRY_ALLOW_CROSSOVER", True)):
+                counter_candidate = self._find_counter_candidate(candidate)
+            self._register_isolated_pair_with_sr(candidate, counter_candidate)
+        except Exception:
+            logger.exception(
+                "[level-isolation] counter-side SR registration failed"
+            )
+
         try:
             from services.isolated_sr_tracker_service import (
                 isolated_sr_tracker_service,
@@ -986,7 +1321,7 @@ class LevelIsolatedInstrumentService:
             logger.exception("[level-isolation] telegram send failed")
 
     # ------------------------------------------------------------------ #
-    # Startup backfill (G1 v3.2 — 4 index replay)                        #
+    # Startup backfill (G1 v4.0 — 4 index replay, v4.1 OR verify)        #
     # ------------------------------------------------------------------ #
     def _snapshot_needs_backfill(self, iso: dict[str, Any]) -> bool:
         if not isinstance(iso, dict):
@@ -1056,14 +1391,6 @@ class LevelIsolatedInstrumentService:
                 }
 
     def run_backfill(self, reason: str = "startup") -> dict[str, Any]:
-        """Replay the day for ALL FOUR indices and reconstruct isolation.
-
-        This is the G1 v3.2 "simulate mode": if the project starts
-        after the market close (within the 09:15–23:59 backfill window),
-        the replay finds the earliest touch across NIFTY / BANKNIFTY /
-        MIDCPNIFTY / SENSEX, applies priority arbitration, and routes
-        the resulting isolation to a NIFTY strike.
-        """
         if not config.LEVEL_ISOLATION_ENABLED:
             return {"status": "disabled"}
 
@@ -1073,9 +1400,6 @@ class LevelIsolatedInstrumentService:
         if not self._in_backfill_window(now):
             return {"status": "skipped", "reason": "outside_window"}
 
-        # Self-heal first_candle.json / level_instruments.json for
-        # every configured index. Runs before acquiring the lock
-        # because first_candle_service.run() can take ~40 s.
         self._maybe_self_heal(reason=reason)
 
         with self._lock:
@@ -1111,7 +1435,6 @@ class LevelIsolatedInstrumentService:
             if not nifty_filtered:
                 return {"status": "skipped", "reason": "missing_nifty_filtered"}
 
-            # Fetch intraday candles for ALL FOUR indices.
             intraday: dict[str, list[dict[str, Any]]] = {}
             for key in INDEX_METADATA.keys():
                 intraday[key] = self._fetch_intraday(key)
@@ -1119,7 +1442,41 @@ class LevelIsolatedInstrumentService:
             if not any(intraday.values()):
                 return {"status": "skipped", "reason": "no_intraday_data"}
 
-            # Merge by minute (across all four indices).
+            # -------------------------------------------------------- #
+            # G1 v4.1: verify each index's stored OR against the real  #
+            # 09:15 bar from the intraday series. Any mismatch means    #
+            # first_candle.json is stale — recompute it before replay   #
+            # so a phantom touch cannot fire on a wrong R3 / S3.        #
+            # -------------------------------------------------------- #
+            try:
+                stale_indices = self._verify_or_against_intraday(intraday)
+            except Exception:
+                stale_indices = []
+                logger.exception(
+                    "[level-isolation] OR-vs-intraday verification failed"
+                )
+
+            if stale_indices:
+                logger.warning(
+                    "[level-isolation] stale OR detected for %s — "
+                    "recomputing first_candle before replay",
+                    stale_indices,
+                )
+                try:
+                    from services.first_candle_service import (
+                        first_candle_service,
+                    )
+                    first_candle_service.run(
+                        reason=f"level_isolation_or_stale:{reason}",
+                        backfill=True,
+                    )
+                    or_levels = self._load_or_levels()
+                except Exception:
+                    logger.exception(
+                        "[level-isolation] OR recompute failed — "
+                        "replaying with existing or_levels"
+                    )
+
             merged = self._merge_all_by_minute(intraday)
             if not merged:
                 return {"status": "skipped", "reason": "no_merged_data"}
@@ -1141,6 +1498,7 @@ class LevelIsolatedInstrumentService:
                 "candles_replayed": len(merged),
                 "isolated": isolated,
                 "source": "backfill",
+                "stale_or_indices": stale_indices,
             }
 
     def _fetch_intraday(self, instrument_key: str) -> list[dict[str, Any]]:
@@ -1198,7 +1556,6 @@ class LevelIsolatedInstrumentService:
         self,
         intraday: dict[str, list[dict[str, Any]]],
     ) -> list[str]:
-        """Return a sorted list of every minute that appears in any index."""
         minutes: set[str] = set()
         for candles in intraday.values():
             for c in candles:
@@ -1213,7 +1570,6 @@ class LevelIsolatedInstrumentService:
         or_levels: dict[str, dict[str, Any]],
         nifty_filtered: dict[str, Any],
     ) -> dict[str, Any] | None:
-        # Fast per-index lookup by minute
         by_minute: dict[str, dict[str, dict[str, Any]]] = {}
         for key, candles in intraday.items():
             by_minute[key] = {
@@ -1223,15 +1579,16 @@ class LevelIsolatedInstrumentService:
         nifty_key = CANONICAL_TO_KEY.get("NIFTY")
 
         for minute in merged:
-            # Capture NIFTY LTP for routing
-            nifty_candle = by_minute.get(nifty_key, {}).get(minute) if nifty_key else None
+            nifty_candle = (
+                by_minute.get(nifty_key, {}).get(minute)
+                if nifty_key else None
+            )
             if nifty_candle is not None:
                 self._last_ltp[nifty_key] = float(nifty_candle["close"])
-                self._last_tick_at[nifty_key] = datetime.fromisoformat(minute).replace(
-                    tzinfo=_MARKET_TZ,
-                )
+                self._last_tick_at[nifty_key] = datetime.fromisoformat(
+                    minute,
+                ).replace(tzinfo=_MARKET_TZ)
 
-            # Collect touches in this minute across all indices
             touches: list[dict[str, Any]] = []
             for key, meta in INDEX_METADATA.items():
                 candle = by_minute.get(key, {}).get(minute)
@@ -1275,7 +1632,6 @@ class LevelIsolatedInstrumentService:
             touches.sort(key=lambda t: (t["priority"], t["touched_at"]))
             winner = touches[0]
 
-            # Mark every touch as observed
             for t in touches:
                 self._state["touch_state"][
                     f"{t['canonical']}_{t['side']}"
@@ -1291,7 +1647,6 @@ class LevelIsolatedInstrumentService:
                 " [simultaneous]" if simultaneous else "",
             )
 
-            # Populate NIFTY LTP at the touch minute for routing
             if nifty_key and by_minute.get(nifty_key, {}).get(minute):
                 self._last_ltp[nifty_key] = float(
                     by_minute[nifty_key][minute]["close"]
@@ -1429,7 +1784,10 @@ class LevelIsolatedInstrumentService:
             )
         else:
             state = "in_session"
-            message = "Watching 4 indices (NIFTY / BANKNIFTY / MIDCPNIFTY / SENSEX) for R3 / S3 touches."
+            message = (
+                "Watching 4 indices (MIDCPNIFTY / BANKNIFTY / NIFTY / "
+                "SENSEX) for R3 / S3 touches."
+            )
 
         return {
             "is_trading_day": is_trading,
@@ -1445,14 +1803,9 @@ class LevelIsolatedInstrumentService:
             "session_close": _MARKET_CLOSE.isoformat(),
             "state": state,
             "message": message,
-            # G1 v3.2 — the UI uses this to decide whether to show
-            # the "SIMULATE MODE" indicator for a replayed record.
             "simulate_mode": (not in_session) and self._in_backfill_window(now),
         }
 
-    # ------------------------------------------------------------------ #
-    # Live SR levels — shared loader (unchanged from v2)                 #
-    # ------------------------------------------------------------------ #
     def _read_live_sr_for(
         self,
         source: dict[str, Any],
@@ -1788,5 +2141,6 @@ class LevelIsolatedInstrumentService:
                 )
             logger.info("[level-isolation] state reset")
             return self.get_detail()
+
 
 level_isolated_instrument_service = LevelIsolatedInstrumentService()

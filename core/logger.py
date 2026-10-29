@@ -1,18 +1,94 @@
-import os
+# core/logger.py
+"""Project-wide logging configuration.
+
+Layout
+------
+Every module that calls ``get_logger(__file__)`` writes to **three**
+destinations:
+
+    console                                    (stderr, with colours optionally)
+    logs/<module>.log                          (rotating by line count)
+    logs_text/<module>.txt                     (plain append-only mirror)
+
+and, in addition, every record is **fanned out** into a single shared
+project-wide file pair:
+
+    logs/<PROJECT_LOG_NAME>.log                (rotating by line count)
+    logs_text/<PROJECT_LOG_NAME>.txt           (plain append-only mirror)
+
+``PROJECT_LOG_NAME`` defaults to ``"local_project"`` (settable via the
+``PROJECT_LOG_NAME`` environment variable) so the combined file is
+called e.g. ``logs/local_project.log`` by default.
+
+Why the combined file is a *single shared handler pair*
+------------------------------------------------------
+Rotating a log file is inherently racy if two ``logging.Handler``
+instances own the same path: on ``doRollover()`` one handler renames
+``app.log -> app.log.1`` while another still holds an open write
+handle on the old inode. On Linux the second handler keeps writing
+to the unlinked inode (silently losing records after rotation); on
+Windows the rename fails outright with ``PermissionError``.
+
+The old shape of ``get_logger()`` — "one handler per module per file" —
+is fine for per-module files (each module owns a distinct path), but
+would break for a shared combined path. So this module creates the
+combined handler pair **once per process** and caches it in module
+level globals. Every logger produced by ``get_logger()`` then attaches
+those same two handler instances. ``logging.Handler.handle()`` is
+thread-safe (it holds ``self.lock``), so multiple loggers writing
+through the same handler is the standard, supported case.
+
+The file is opened in append mode, so a restart appends to the same
+combined file. Rotation is still per-handler: once the combined file
+hits ``COMBINED_MAX_LINES``, it rotates to ``.1`` … ``.3`` and starts
+a fresh ``local_project.log``. The per-module files have their own
+independent counters and rotation schedules.
+
+Changing the format of one destination
+--------------------------------------
+``_build_formatter()`` is shared by every handler so every line looks
+the same everywhere. If you ever want a different format for the
+combined file (e.g. no ``[%(filename)s:%(lineno)d]`` because you're
+grepping across modules), add a second formatter function and pass it
+to the combined handler constructor — nothing else in the pipeline
+has to change.
+"""
+
+from __future__ import annotations
+
 import logging
+import os
 
-# Path to the logs directory
-LOGS_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs"
+# --------------------------------------------------------------------------- #
+# Paths + project name                                                        #
+# --------------------------------------------------------------------------- #
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+_PROJECT_ROOT = os.path.dirname(_THIS_DIR)
+
+LOGS_DIR = os.path.join(_PROJECT_ROOT, "logs")
+TEXT_LOGS_DIR = os.path.join(_PROJECT_ROOT, "logs_text")
+
+# Base name for the single combined project-wide log files.
+# Override with PROJECT_LOG_NAME=<name> in .env if you want e.g.
+# "fastapi_project.log" or "trading_engine.log".
+PROJECT_LOG_NAME = (
+    os.getenv("PROJECT_LOG_NAME", "").strip() or "local_project"
 )
 
-# Path to the plain-text logs directory (a mirror of LOGS_DIR,
-# but containing .txt files that are simpler to read / grep / share).
-TEXT_LOGS_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs_text"
-)
+# Rotation thresholds for the combined project log. Kept larger than
+# the per-module thresholds because the combined file receives the
+# traffic of every module (typically 20-50x the per-module volume).
+COMBINED_MAX_LINES = int(os.getenv("COMBINED_MAX_LINES", "50000"))
+COMBINED_BACKUP_COUNT = int(os.getenv("COMBINED_BACKUP_COUNT", "10"))
+
+# Rotation thresholds for the per-module logs (unchanged defaults).
+PER_MODULE_MAX_LINES = int(os.getenv("PER_MODULE_MAX_LINES", "1000"))
+PER_MODULE_BACKUP_COUNT = int(os.getenv("PER_MODULE_BACKUP_COUNT", "3"))
 
 
+# --------------------------------------------------------------------------- #
+# Handlers                                                                    #
+# --------------------------------------------------------------------------- #
 class LineCountRotatingHandler(logging.FileHandler):
     """
     A file handler that rotates the log file after a maximum number of lines.
@@ -117,20 +193,24 @@ class PlainTextHandler(logging.FileHandler):
     using a slightly simpler, human-friendly format. No rotation is
     performed by default, so the file keeps a complete history in a
     single easy-to-open text file.
-
-    Rotation can still be enabled by passing maxBytes / backupCount
-    (handled by the parent FileHandler when using
-    logging.handlers.RotatingFileHandler instead of FileHandler; here
-    we keep it simple with a plain append-only FileHandler).
     """
 
     def __init__(self, filename, encoding="utf-8"):
         super().__init__(filename, mode="a", encoding=encoding)
 
 
+# --------------------------------------------------------------------------- #
+# Formatter                                                                   #
+# --------------------------------------------------------------------------- #
 def _build_formatter() -> logging.Formatter:
     """
-    Shared formatter used by both the .log and .txt handlers.
+    Shared formatter used by every handler.
+
+    The ``[%(name)s]`` field carries the module logger name
+    (``live_sr_calc_service``, ``isolated_instrument_routes``, …) and
+    is what makes the combined file scannable when records from
+    different modules interleave. ``[%(filename)s:%(lineno)d]`` and
+    ``[%(funcName)s]`` pinpoint the exact source line of every record.
     """
     return logging.Formatter(
         "%(asctime)s [%(levelname)s] [%(name)s] "
@@ -139,14 +219,75 @@ def _build_formatter() -> logging.Formatter:
     )
 
 
+# --------------------------------------------------------------------------- #
+# Combined (project-wide) handler singletons                                  #
+# --------------------------------------------------------------------------- #
+# These are created lazily, once per process, the first time
+# get_logger() is called. Every subsequent get_logger() call attaches
+# the *same two handler instances* to that module's logger, so there is
+# exactly one writer on each combined file for the whole process —
+# rotation is therefore race-free.
+_COMBINED_LOG_HANDLER: LineCountRotatingHandler | None = None
+_COMBINED_TEXT_HANDLER: PlainTextHandler | None = None
+
+
+def _ensure_combined_handlers() -> tuple[
+    LineCountRotatingHandler, PlainTextHandler
+]:
+    """Create (once) and return the shared combined handler pair.
+
+    Called from ``get_logger()`` after the log directories are known
+    to exist. Safe to call concurrently — Python's module import lock
+    guarantees the ``if None:`` check is only executed once.
+    """
+    global _COMBINED_LOG_HANDLER, _COMBINED_TEXT_HANDLER
+
+    if _COMBINED_LOG_HANDLER is not None and _COMBINED_TEXT_HANDLER is not None:
+        return _COMBINED_LOG_HANDLER, _COMBINED_TEXT_HANDLER
+
+    formatter = _build_formatter()
+
+    combined_log_path = os.path.join(
+        LOGS_DIR, f"{PROJECT_LOG_NAME}.log"
+    )
+    combined_log_handler = LineCountRotatingHandler(
+        combined_log_path,
+        maxLines=COMBINED_MAX_LINES,
+        backupCount=COMBINED_BACKUP_COUNT,
+        encoding="utf-8",
+    )
+    combined_log_handler.setLevel(logging.DEBUG)
+    combined_log_handler.setFormatter(formatter)
+
+    combined_text_path = os.path.join(
+        TEXT_LOGS_DIR, f"{PROJECT_LOG_NAME}.txt"
+    )
+    combined_text_handler = PlainTextHandler(
+        combined_text_path,
+        encoding="utf-8",
+    )
+    combined_text_handler.setLevel(logging.DEBUG)
+    combined_text_handler.setFormatter(formatter)
+
+    _COMBINED_LOG_HANDLER = combined_log_handler
+    _COMBINED_TEXT_HANDLER = combined_text_handler
+    return combined_log_handler, combined_text_handler
+
+
+# --------------------------------------------------------------------------- #
+# Public API                                                                  #
+# --------------------------------------------------------------------------- #
 def get_logger(filename: str, log_level=logging.DEBUG) -> logging.Logger:
     """
     Creates and returns a logger that logs all standard logging levels
     to:
 
       - the console
-      - a rotating .log file under logs/
-      - an append-only .txt file under logs_text/
+      - a rotating .log file under logs/<module>.log
+      - an append-only .txt file under logs_text/<module>.txt
+      - the shared combined project log
+            logs/<PROJECT_LOG_NAME>.log
+            logs_text/<PROJECT_LOG_NAME>.txt
 
     Supported levels:
     - DEBUG
@@ -186,48 +327,57 @@ def get_logger(filename: str, log_level=logging.DEBUG) -> logging.Logger:
 
     formatter = _build_formatter()
 
-    # ------------------------------------------------------------------
-    # 1. Console handler
-    # ------------------------------------------------------------------
+    # ------------------------------------------------------------------ #
+    # 1. Console handler                                                  #
+    # ------------------------------------------------------------------ #
     console_handler = logging.StreamHandler()
     console_handler.setLevel(log_level)
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
 
-    # ------------------------------------------------------------------
-    # 2. Rotating .log file handler
-    # ------------------------------------------------------------------
-    log_file_path = os.path.join(
-        LOGS_DIR,
-        f"{base_name}.log",
-    )
+    # ------------------------------------------------------------------ #
+    # 2. Per-module rotating .log file handler                            #
+    # ------------------------------------------------------------------ #
+    log_file_path = os.path.join(LOGS_DIR, f"{base_name}.log")
 
     file_handler = LineCountRotatingHandler(
         log_file_path,
-        maxLines=1000,
-        backupCount=3,
+        maxLines=PER_MODULE_MAX_LINES,
+        backupCount=PER_MODULE_BACKUP_COUNT,
         encoding="utf-8",
     )
-
     file_handler.setLevel(log_level)
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
 
-    # ------------------------------------------------------------------
-    # 3. Plain-text .txt file handler (mirror)
-    # ------------------------------------------------------------------
-    text_file_path = os.path.join(
-        TEXT_LOGS_DIR,
-        f"{base_name}.txt",
-    )
+    # ------------------------------------------------------------------ #
+    # 3. Per-module plain-text .txt file handler (mirror)                 #
+    # ------------------------------------------------------------------ #
+    text_file_path = os.path.join(TEXT_LOGS_DIR, f"{base_name}.txt")
 
     text_handler = PlainTextHandler(
         text_file_path,
         encoding="utf-8",
     )
-
     text_handler.setLevel(log_level)
     text_handler.setFormatter(formatter)
     logger.addHandler(text_handler)
+
+    # ------------------------------------------------------------------ #
+    # 4. Combined project-wide handler pair (shared singletons)           #
+    # ------------------------------------------------------------------ #
+    # These two handler instances are created once for the entire
+    # process and are shared by every module logger. This is what
+    # guarantees a race-free combined file — see the module docstring.
+    #
+    # We set the handler level to DEBUG regardless of log_level, so
+    # that a module which calls get_logger(..., log_level=INFO) still
+    # contributes to the combined file at full DEBUG fidelity. The
+    # module's own logger level (set above) is what gates whether a
+    # record reaches *any* of its handlers — including the combined
+    # ones — so no extra filtering is needed here.
+    combined_log_handler, combined_text_handler = _ensure_combined_handlers()
+    logger.addHandler(combined_log_handler)
+    logger.addHandler(combined_text_handler)
 
     return logger

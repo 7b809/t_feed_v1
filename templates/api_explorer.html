@@ -1,0 +1,1387 @@
+{# templates/api_explorer.html #}
+{% extends "base.html" %}
+
+{% block head %}
+<style>
+    .axe-wrap {
+        padding: 24px 24px 80px;
+        max-width: 1480px;
+        margin: 0 auto;
+    }
+
+    .axe-hero {
+        background: linear-gradient(135deg, rgba(37, 99, 235, 0.18), rgba(124, 58, 237, 0.18));
+        border: 1px solid var(--app-border-color);
+        border-radius: 16px;
+        padding: 20px 24px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        flex-wrap: wrap;
+        margin-bottom: 18px;
+    }
+
+    .axe-hero h1 {
+        font-size: 1.35rem;
+        font-weight: 700;
+        margin: 0 0 4px 0;
+        letter-spacing: -0.3px;
+    }
+
+    .axe-hero p {
+        margin: 0;
+        color: var(--app-text-muted);
+        font-size: 0.9rem;
+    }
+
+    .axe-hero .axe-stat {
+        display: flex;
+        gap: 18px;
+    }
+
+    .axe-hero .axe-stat .pill {
+        background: rgba(255, 255, 255, 0.06);
+        border: 1px solid var(--app-border-color);
+        border-radius: 999px;
+        padding: 6px 14px;
+        font-size: 0.8rem;
+        color: var(--app-text-muted);
+    }
+
+    .axe-hero .axe-stat .pill b {
+        color: var(--app-text-main);
+        font-weight: 700;
+    }
+
+    /* Layout: sidebar | content | try-panel */
+    .axe-grid {
+        display: grid;
+        grid-template-columns: 280px minmax(0, 1fr) 420px;
+        gap: 16px;
+        align-items: start;
+    }
+
+    @media (max-width: 1280px) {
+        .axe-grid {
+            grid-template-columns: 260px minmax(0, 1fr);
+        }
+        .axe-try-panel {
+            grid-column: 1 / -1;
+        }
+    }
+
+    @media (max-width: 820px) {
+        .axe-grid {
+            grid-template-columns: 1fr;
+        }
+        .axe-try-panel {
+            grid-column: auto;
+        }
+    }
+
+    .axe-card {
+        background: rgba(30, 41, 59, 0.7);
+        border: 1px solid var(--app-border-color);
+        border-radius: 12px;
+        overflow: hidden;
+    }
+
+    /* Sidebar */
+    .axe-sidebar {
+        position: sticky;
+        top: 88px;
+        max-height: calc(100vh - 110px);
+        display: flex;
+        flex-direction: column;
+    }
+
+    .axe-sidebar .axe-search {
+        padding: 12px;
+        border-bottom: 1px solid var(--app-border-color);
+    }
+
+    .axe-sidebar .axe-search input {
+        width: 100%;
+        padding: 8px 12px;
+        background: rgba(15, 23, 42, 0.7);
+        border: 1px solid var(--app-border-color);
+        border-radius: 8px;
+        color: var(--app-text-main);
+        font-size: 0.85rem;
+        outline: none;
+    }
+
+    .axe-sidebar .axe-search input:focus {
+        border-color: #2563eb;
+        box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.25);
+    }
+
+    .axe-tags {
+        overflow-y: auto;
+        padding: 8px;
+        flex: 1;
+    }
+
+    .axe-tag-group {
+        margin-bottom: 6px;
+    }
+
+    .axe-tag-btn {
+        width: 100%;
+        text-align: left;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        padding: 8px 10px;
+        background: transparent;
+        border: 1px solid transparent;
+        border-radius: 8px;
+        color: var(--app-text-muted);
+        font-size: 0.85rem;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.18s ease;
+    }
+
+    .axe-tag-btn:hover {
+        background: rgba(255, 255, 255, 0.05);
+        color: var(--app-text-main);
+    }
+
+    .axe-tag-btn.is-active {
+        background: rgba(37, 99, 235, 0.18);
+        border-color: rgba(37, 99, 235, 0.4);
+        color: #93c5fd;
+    }
+
+    .axe-tag-btn .count {
+        font-size: 0.72rem;
+        background: rgba(255, 255, 255, 0.08);
+        padding: 1px 8px;
+        border-radius: 999px;
+        color: var(--app-text-muted);
+    }
+
+    /* Routes list */
+    .axe-routes {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+    }
+
+    .axe-route {
+        background: rgba(30, 41, 59, 0.7);
+        border: 1px solid var(--app-border-color);
+        border-radius: 12px;
+        padding: 14px 16px;
+        cursor: pointer;
+        transition: all 0.18s ease;
+    }
+
+    .axe-route:hover {
+        border-color: rgba(37, 99, 235, 0.6);
+        background: rgba(30, 41, 59, 0.95);
+        transform: translateY(-1px);
+    }
+
+    .axe-route.is-selected {
+        border-color: #2563eb;
+        box-shadow: 0 0 0 1px #2563eb, 0 8px 20px rgba(37, 99, 235, 0.18);
+    }
+
+    .axe-route-head {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+    }
+
+    .method-badge {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 58px;
+        padding: 3px 8px;
+        border-radius: 6px;
+        font-size: 0.72rem;
+        font-weight: 800;
+        letter-spacing: 0.5px;
+        text-transform: uppercase;
+    }
+
+    .method-GET { background: rgba(34, 197, 94, 0.18); color: #4ade80; border: 1px solid rgba(34, 197, 94, 0.35); }
+    .method-POST { background: rgba(59, 130, 246, 0.18); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.35); }
+    .method-PATCH { background: rgba(251, 146, 60, 0.18); color: #fb923c; border: 1px solid rgba(251, 146, 60, 0.35); }
+    .method-PUT { background: rgba(168, 85, 247, 0.18); color: #c084fc; border: 1px solid rgba(168, 85, 247, 0.35); }
+    .method-DELETE { background: rgba(244, 63, 94, 0.18); color: #fb7185; border: 1px solid rgba(244, 63, 94, 0.35); }
+
+    .axe-route-path {
+        font-family: 'JetBrains Mono', 'SF Mono', Consolas, monospace;
+        font-size: 0.85rem;
+        color: #e2e8f0;
+        word-break: break-all;
+    }
+
+    .axe-route-summary {
+        margin-top: 8px;
+        font-size: 0.8rem;
+        color: var(--app-text-muted);
+        line-height: 1.45;
+    }
+
+    .axe-route-tag {
+        font-size: 0.7rem;
+        padding: 2px 8px;
+        border-radius: 999px;
+        background: rgba(148, 163, 184, 0.18);
+        color: #cbd5e1;
+    }
+
+    /* Try panel */
+    .axe-try-panel {
+        position: sticky;
+        top: 88px;
+        max-height: calc(100vh - 110px);
+        display: flex;
+        flex-direction: column;
+    }
+
+    .axe-try-header {
+        padding: 12px 16px;
+        border-bottom: 1px solid var(--app-border-color);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+    }
+
+    .axe-try-header h3 {
+        margin: 0;
+        font-size: 0.95rem;
+        font-weight: 700;
+    }
+
+    .axe-try-body {
+        padding: 14px 16px;
+        overflow-y: auto;
+        flex: 1;
+    }
+
+    .axe-try-empty {
+        color: var(--app-text-muted);
+        font-size: 0.85rem;
+        text-align: center;
+        padding: 40px 12px;
+        line-height: 1.6;
+    }
+
+    .axe-section-title {
+        font-size: 0.7rem;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        color: var(--app-text-muted);
+        font-weight: 700;
+        margin: 14px 0 8px;
+    }
+
+    .axe-section-title:first-child {
+        margin-top: 0;
+    }
+
+    .axe-field {
+        margin-bottom: 10px;
+    }
+
+    .axe-field label {
+        display: block;
+        font-size: 0.75rem;
+        color: var(--app-text-muted);
+        margin-bottom: 4px;
+        font-weight: 600;
+    }
+
+    .axe-field label .req { color: #fb7185; }
+
+    .axe-field input,
+    .axe-field select,
+    .axe-field textarea {
+        width: 100%;
+        padding: 7px 10px;
+        background: rgba(15, 23, 42, 0.8);
+        border: 1px solid var(--app-border-color);
+        border-radius: 8px;
+        color: var(--app-text-main);
+        font-size: 0.82rem;
+        font-family: 'JetBrains Mono', 'SF Mono', Consolas, monospace;
+        outline: none;
+    }
+
+    .axe-field input:focus,
+    .axe-field select:focus,
+    .axe-field textarea:focus {
+        border-color: #2563eb;
+        box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.22);
+    }
+
+    .axe-field textarea { resize: vertical; min-height: 80px; }
+
+    /* -------------------------------------------------------------- */
+    /* Instrument key autocomplete                                    */
+    /* -------------------------------------------------------------- */
+    .axe-instrument-wrap {
+        position: relative;
+    }
+    .axe-instrument-wrap input {
+        padding-right: 30px;
+    }
+    .axe-instrument-icon {
+        position: absolute;
+        right: 10px;
+        top: 50%;
+        transform: translateY(-50%);
+        color: var(--app-text-muted);
+        font-size: 0.85rem;
+        pointer-events: none;
+    }
+    .axe-instrument-dropdown {
+        /* Position is set inline by JS via getBoundingClientRect (fixed) */
+        background: rgba(30, 41, 59, 0.98);
+        border: 1px solid var(--app-border-color);
+        border-radius: 8px;
+        max-height: 280px;
+        overflow-y: auto;
+        z-index: 10001;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.55);
+        display: none;
+        min-width: 240px;
+    }
+    .axe-instrument-dropdown.is-open {
+        display: block;
+    }
+    .axe-instrument-dropdown::-webkit-scrollbar {
+        width: 8px;
+    }
+    .axe-instrument-dropdown::-webkit-scrollbar-thumb {
+        background: rgba(148, 163, 184, 0.3);
+        border-radius: 8px;
+    }
+    .axe-instrument-item {
+        padding: 8px 10px;
+        cursor: pointer;
+        border-bottom: 1px solid rgba(51, 65, 85, 0.4);
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 0.78rem;
+        transition: background 0.12s ease;
+    }
+    .axe-instrument-item:last-child {
+        border-bottom: none;
+    }
+    .axe-instrument-item:hover,
+    .axe-instrument-item.is-active {
+        background: rgba(37, 99, 235, 0.25);
+    }
+    .axe-instrument-item .tpill {
+        flex-shrink: 0;
+        display: inline-block;
+        padding: 1px 6px;
+        border-radius: 4px;
+        font-size: 0.62rem;
+        font-weight: 800;
+        letter-spacing: 0.03em;
+        text-transform: uppercase;
+    }
+    .axe-instrument-item .tpill.ce  { background: rgba(34, 197, 94, 0.18);  color: #4ade80; }
+    .axe-instrument-item .tpill.pe  { background: rgba(244, 63, 94, 0.18);  color: #fb7185; }
+    .axe-instrument-item .tpill.fut { background: rgba(251, 146, 60, 0.18); color: #fb923c; }
+    .axe-instrument-item .tpill.idx { background: rgba(59, 130, 246, 0.18); color: #60a5fa; }
+    .axe-instrument-item .tpill.eq  { background: rgba(148, 163, 184, 0.18); color: #cbd5e1; }
+    .axe-instrument-item .sym {
+        flex: 1;
+        color: #e2e8f0;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        min-width: 0;
+    }
+    .axe-instrument-item .meta {
+        color: var(--app-text-muted);
+        font-size: 0.68rem;
+        white-space: nowrap;
+        flex-shrink: 0;
+    }
+    .axe-instrument-empty {
+        padding: 12px;
+        text-align: center;
+        color: var(--app-text-muted);
+        font-size: 0.78rem;
+    }
+
+    .axe-url-preview {
+        font-family: 'JetBrains Mono', 'SF Mono', Consolas, monospace;
+        font-size: 0.75rem;
+        background: rgba(15, 23, 42, 0.8);
+        border: 1px dashed var(--app-border-color);
+        border-radius: 8px;
+        padding: 8px 10px;
+        word-break: break-all;
+        color: #93c5fd;
+        margin-bottom: 10px;
+    }
+
+    .axe-actions {
+        display: flex;
+        gap: 8px;
+        margin-top: 4px;
+        margin-bottom: 12px;
+    }
+
+    .axe-btn {
+        padding: 8px 16px;
+        border-radius: 8px;
+        border: 1px solid var(--app-border-color);
+        font-size: 0.82rem;
+        font-weight: 700;
+        cursor: pointer;
+        transition: all 0.18s ease;
+    }
+
+    .axe-btn-primary {
+        background: linear-gradient(135deg, #2563eb, #7c3aed);
+        border: none;
+        color: #fff;
+        box-shadow: 0 4px 14px rgba(37, 99, 235, 0.35);
+    }
+
+    .axe-btn-primary:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 6px 18px rgba(37, 99, 235, 0.5);
+    }
+
+    .axe-btn-primary:disabled {
+        opacity: 0.5;
+        cursor: wait;
+        transform: none;
+    }
+
+    .axe-btn-ghost {
+        background: rgba(255, 255, 255, 0.05);
+        color: var(--app-text-main);
+    }
+
+    .axe-btn-ghost:hover {
+        background: rgba(255, 255, 255, 0.12);
+    }
+
+    .axe-resp-head {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 8px;
+    }
+
+    .axe-status {
+        display: inline-block;
+        padding: 3px 10px;
+        border-radius: 999px;
+        font-size: 0.72rem;
+        font-weight: 800;
+    }
+
+    .axe-status.ok { background: rgba(34, 197, 94, 0.18); color: #4ade80; }
+    .axe-status.err { background: rgba(244, 63, 94, 0.18); color: #fb7185; }
+    .axe-status.warn { background: rgba(251, 146, 60, 0.18); color: #fb923c; }
+
+    .axe-resp-meta {
+        font-size: 0.72rem;
+        color: var(--app-text-muted);
+        margin-left: auto;
+    }
+
+    .axe-code {
+        font-family: 'JetBrains Mono', 'SF Mono', Consolas, monospace;
+        font-size: 0.76rem;
+        background: rgba(15, 23, 42, 0.9);
+        border: 1px solid var(--app-border-color);
+        border-radius: 8px;
+        padding: 10px 12px;
+        max-height: 360px;
+        overflow: auto;
+        white-space: pre;
+        line-height: 1.5;
+        color: #e2e8f0;
+    }
+
+    .axe-code .key { color: #93c5fd; }
+    .axe-code .str { color: #86efac; }
+    .axe-code .num { color: #fbbf24; }
+    .axe-code .bool { color: #f472b6; }
+    .axe-code .null { color: #94a3b8; }
+
+    .axe-empty-state {
+        text-align: center;
+        color: var(--app-text-muted);
+        padding: 60px 20px;
+        font-size: 0.9rem;
+    }
+
+    /* Scrollbar */
+    .axe-tags::-webkit-scrollbar,
+    .axe-try-body::-webkit-scrollbar,
+    .axe-code::-webkit-scrollbar {
+        width: 8px;
+    }
+    .axe-tags::-webkit-scrollbar-thumb,
+    .axe-try-body::-webkit-scrollbar-thumb,
+    .axe-code::-webkit-scrollbar-thumb {
+        background: rgba(148, 163, 184, 0.3);
+        border-radius: 8px;
+    }
+
+    .axe-toast {
+        position: fixed;
+        bottom: 24px;
+        right: 24px;
+        background: rgba(30, 41, 59, 0.95);
+        border: 1px solid var(--app-border-color);
+        border-left: 4px solid #2563eb;
+        border-radius: 10px;
+        padding: 12px 18px;
+        font-size: 0.85rem;
+        color: var(--app-text-main);
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+        opacity: 0;
+        transform: translateY(10px);
+        transition: all 0.25s ease;
+        z-index: 10000;
+        pointer-events: none;
+    }
+    .axe-toast.is-visible {
+        opacity: 1;
+        transform: translateY(0);
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="axe-wrap">
+
+    <!-- HERO -->
+    <div class="axe-hero">
+        <div>
+            <h1><i class="bi bi-code-square me-2" style="color:#2dd4bf;"></i>API Explorer</h1>
+            <p>Browse every route exposed by this service. Click a route to try it live.</p>
+        </div>
+        <div class="axe-stat">
+            <span class="pill">Routes: <b id="stat-routes">—</b></span>
+            <span class="pill">Tags: <b id="stat-tags">—</b></span>
+            <span class="pill">Spec: <b>OpenAPI 3.1</b></span>
+        </div>
+    </div>
+
+    <div class="axe-grid">
+
+        <!-- SIDEBAR: tag filter -->
+        <aside class="axe-card axe-sidebar">
+            <div class="axe-search">
+                <input
+                    id="axe-search-input"
+                    type="text"
+                    placeholder="Search route / tag / summary…"
+                    autocomplete="off"
+                />
+            </div>
+            <div class="axe-tags" id="axe-tags"></div>
+        </aside>
+
+        <!-- MIDDLE: route list -->
+        <main>
+            <div id="axe-routes" class="axe-routes"></div>
+            <div id="axe-empty" class="axe-empty-state d-none">
+                <i class="bi bi-inbox" style="font-size:2rem; display:block; margin-bottom:10px;"></i>
+                No routes match your filter.
+            </div>
+        </main>
+
+        <!-- RIGHT: try panel -->
+        <aside class="axe-card axe-try-panel">
+            <div class="axe-try-header">
+                <h3><i class="bi bi-lightning-charge-fill" style="color:#fbbf24;"></i> Try it</h3>
+                <span id="axe-try-method-badge" class="method-badge method-GET d-none">GET</span>
+            </div>
+            <div class="axe-try-body" id="axe-try-body">
+                <div class="axe-try-empty">
+                    <i class="bi bi-cursor-fill" style="font-size:1.4rem; display:block; margin-bottom:8px;"></i>
+                    Pick a route on the left to build and send a request.
+                </div>
+            </div>
+        </aside>
+
+    </div>
+</div>
+
+<div class="axe-toast" id="axe-toast"></div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+    "use strict";
+
+    // ---- state ----------------------------------------------------------
+    const state = {
+        spec: null,
+        routes: [],        // flat list of { method, path, op, tag }
+        tags: {},          // tag -> count
+        activeTag: null,   // null = all
+        search: "",
+        selected: null,    // route object
+        lastResponse: null,
+    };
+
+    // ---- helpers --------------------------------------------------------
+    const $ = (id) => document.getElementById(id);
+
+    function escapeHtml(s) {
+        return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({
+            "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+        }[c]));
+    }
+
+    function toast(msg, type) {
+        const el = $("axe-toast");
+        el.textContent = msg;
+        el.style.borderLeftColor = type === "err" ? "#fb7185" : type === "warn" ? "#fb923c" : "#2563eb";
+        el.classList.add("is-visible");
+        clearTimeout(el._t);
+        el._t = setTimeout(() => el.classList.remove("is-visible"), 2600);
+    }
+
+    // JSON pretty-printer with syntax coloring
+    function prettyJson(obj) {
+        const json = JSON.stringify(obj, null, 2);
+        // Tokenize for coloring
+        return escapeHtml(json).replace(
+            /("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g,
+            (match) => {
+                let cls = "num";
+                if (/^"/.test(match)) {
+                    cls = /:$/.test(match) ? "key" : "str";
+                } else if (/true|false/.test(match)) {
+                    cls = "bool";
+                } else if (/null/.test(match)) {
+                    cls = "null";
+                }
+                return `<span class="${cls}">${match}</span>`;
+            }
+        );
+    }
+
+    // ---- load spec ------------------------------------------------------
+    async function loadSpec() {
+        try {
+            const r = await fetch("/openapi.json", { cache: "no-store" });
+            if (!r.ok) throw new Error("HTTP " + r.status);
+            state.spec = await r.json();
+            flattenRoutes();
+            renderStats();
+            renderTags();
+            renderRoutes();
+        } catch (e) {
+            $("axe-routes").innerHTML =
+                `<div class="axe-empty-state">Failed to load /openapi.json — ${escapeHtml(e.message)}</div>`;
+        }
+    }
+
+    function flattenRoutes() {
+        const paths = state.spec.paths || {};
+        const out = [];
+        const tagCounts = {};
+
+        for (const [path, methods] of Object.entries(paths)) {
+            for (const [method, op] of Object.entries(methods)) {
+                const m = method.toUpperCase();
+                if (!["GET", "POST", "PUT", "PATCH", "DELETE"].includes(m)) continue;
+                const tags = (op.tags && op.tags.length) ? op.tags : ["untagged"];
+                const primaryTag = tags[0];
+                tagCounts[primaryTag] = (tagCounts[primaryTag] || 0) + 1;
+                out.push({
+                    method: m,
+                    path,
+                    op,
+                    tag: primaryTag,
+                });
+            }
+        }
+        out.sort((a, b) => {
+            if (a.tag !== b.tag) return a.tag.localeCompare(b.tag);
+            if (a.path !== b.path) return a.path.localeCompare(b.path);
+            return a.method.localeCompare(b.method);
+        });
+        state.routes = out;
+        state.tags = tagCounts;
+    }
+
+    function renderStats() {
+        $("stat-routes").textContent = state.routes.length;
+        $("stat-tags").textContent = Object.keys(state.tags).length;
+    }
+
+    // ---- sidebar --------------------------------------------------------
+    function renderTags() {
+        const wrap = $("axe-tags");
+        const total = state.routes.length;
+        const tags = Object.entries(state.tags).sort((a, b) => a[0].localeCompare(b[0]));
+
+        let html = `
+            <button class="axe-tag-btn ${state.activeTag === null ? "is-active" : ""}" data-tag="__all__">
+                <span><i class="bi bi-collection me-2"></i>All routes</span>
+                <span class="count">${total}</span>
+            </button>
+        `;
+        for (const [tag, count] of tags) {
+            html += `
+                <button class="axe-tag-btn ${state.activeTag === tag ? "is-active" : ""}" data-tag="${escapeHtml(tag)}">
+                    <span><i class="bi bi-tag-fill me-2" style="opacity:.65;"></i>${escapeHtml(tag)}</span>
+                    <span class="count">${count}</span>
+                </button>
+            `;
+        }
+        wrap.innerHTML = html;
+
+        wrap.querySelectorAll(".axe-tag-btn").forEach((btn) => {
+            btn.addEventListener("click", () => {
+                const tag = btn.dataset.tag;
+                state.activeTag = tag === "__all__" ? null : tag;
+                renderTags();
+                renderRoutes();
+            });
+        });
+    }
+
+    // ---- middle: routes list -------------------------------------------
+    function matchesFilters(route) {
+        if (state.activeTag && route.tag !== state.activeTag) return false;
+        if (!state.search) return true;
+        const s = state.search.toLowerCase();
+        return (
+            route.path.toLowerCase().includes(s) ||
+            route.method.toLowerCase().includes(s) ||
+            (route.tag || "").toLowerCase().includes(s) ||
+            (route.op.summary || "").toLowerCase().includes(s) ||
+            (route.op.description || "").toLowerCase().includes(s) ||
+            (route.op.operationId || "").toLowerCase().includes(s)
+        );
+    }
+
+    function renderRoutes() {
+        const wrap = $("axe-routes");
+        const empty = $("axe-empty");
+        const filtered = state.routes.filter(matchesFilters);
+
+        if (!filtered.length) {
+            wrap.innerHTML = "";
+            empty.classList.remove("d-none");
+            return;
+        }
+        empty.classList.add("d-none");
+
+        wrap.innerHTML = filtered.map((r, i) => {
+            const sel = state.selected &&
+                state.selected.method === r.method &&
+                state.selected.path === r.path;
+            return `
+                <div class="axe-route ${sel ? "is-selected" : ""}" data-idx="${i}">
+                    <div class="axe-route-head">
+                        <span class="method-badge method-${r.method}">${r.method}</span>
+                        <span class="axe-route-path">${escapeHtml(r.path)}</span>
+                        <span class="axe-route-tag ms-auto">${escapeHtml(r.tag)}</span>
+                    </div>
+                    ${r.op.summary ? `<div class="axe-route-summary">${escapeHtml(r.op.summary)}</div>` : ""}
+                </div>
+            `;
+        }).join("");
+
+        wrap.querySelectorAll(".axe-route").forEach((el) => {
+            el.addEventListener("click", () => {
+                const r = filtered[Number(el.dataset.idx)];
+                selectRoute(r);
+            });
+        });
+    }
+
+    // ---- right: try it panel -------------------------------------------
+    function selectRoute(route) {
+        state.selected = route;
+        state.lastResponse = null;
+        renderRoutes();
+        renderTryPanel(route);
+    }
+
+    function collectParameters(route) {
+        // Merge path-level and operation-level parameters (operation wins on dupes)
+        const pathObj = (state.spec.paths || {})[route.path] || {};
+        const pathParams = (pathObj.parameters || []).filter(Boolean);
+        const opParams = ((route.op.parameters) || []).filter(Boolean);
+        const byName = new Map();
+        for (const p of [...pathParams, ...opParams]) {
+            byName.set(`${p.in}:${p.name}`, p);
+        }
+        return Array.from(byName.values()).sort((a, b) => {
+            const order = { path: 0, query: 1, header: 2, cookie: 3 };
+            return (order[a.in] ?? 9) - (order[b.in] ?? 9);
+        });
+    }
+
+    function renderTryPanel(route) {
+        const body = $("axe-try-body");
+        const badge = $("axe-try-method-badge");
+        badge.textContent = route.method;
+        badge.className = "method-badge method-" + route.method;
+
+        const params = collectParameters(route);
+        const hasBody = !!route.op.requestBody;
+
+        // Group by location
+        const groups = { path: [], query: [], header: [] };
+        for (const p of params) {
+            if (groups[p.in]) groups[p.in].push(p);
+        }
+
+        let html = `
+            <div class="axe-url-preview" id="axe-url-preview"></div>
+        `;
+
+        if (groups.path.length) {
+            html += `<div class="axe-section-title">Path parameters</div>`;
+            for (const p of groups.path) {
+                html += paramField(p);
+            }
+        }
+        if (groups.query.length) {
+            html += `<div class="axe-section-title">Query parameters</div>`;
+            for (const p of groups.query) {
+                html += paramField(p);
+            }
+        }
+        if (groups.header.length) {
+            html += `<div class="axe-section-title">Headers</div>`;
+            for (const p of groups.header) {
+                html += paramField(p);
+            }
+        }
+        if (hasBody) {
+            html += `
+                <div class="axe-section-title">Request body (JSON)</div>
+                <div class="axe-field">
+                    <textarea id="axe-body-input" placeholder='{ "key": "value" }'></textarea>
+                </div>
+            `;
+        }
+
+        html += `
+            <div class="axe-actions">
+                <button id="axe-send-btn" class="axe-btn axe-btn-primary">
+                    <i class="bi bi-send-fill me-1"></i> Send ${route.method}
+                </button>
+                <button id="axe-reset-btn" class="axe-btn axe-btn-ghost">
+                    <i class="bi bi-arrow-counterclockwise me-1"></i> Reset
+                </button>
+            </div>
+        `;
+
+        html += `<div class="axe-section-title">Response</div>`;
+        html += `<div id="axe-response-box"><div class="axe-try-empty" style="padding:18px;">No request sent yet.</div></div>`;
+
+        body.innerHTML = html;
+
+        // Pre-fill defaults + render URL preview
+        for (const p of params) {
+            const el = document.getElementById(`axe-param-${p.in}-${p.name}`);
+            if (!el) continue;
+            const schema = p.schema || {};
+            const def = schema.default;
+            if (def !== undefined && def !== null && el.value === "") {
+                el.value = String(def);
+            }
+        }
+        updateUrlPreview();
+
+        // Listen for changes
+        body.querySelectorAll("input, select, textarea").forEach((el) => {
+            el.addEventListener("input", updateUrlPreview);
+            el.addEventListener("change", updateUrlPreview);
+        });
+
+        // Attach instrument-key autocomplete to every search-enabled input.
+        body.querySelectorAll('input[data-instrument-search]').forEach((el) => {
+            bindInstrumentKeyAutocomplete(el);
+        });
+
+        $("axe-send-btn").addEventListener("click", () => sendRequest(route));
+        $("axe-reset-btn").addEventListener("click", () => renderTryPanel(route));
+    }
+
+    // ---- instrument-key autocomplete -----------------------------------
+    // Fields that carry a single Upstox instrument key get a search-enabled
+    // dropdown backed by GET /api/upstox/search. The endpoint already exists
+    // (routes/upstox_routes.py) so no backend change is required.
+    function isSearchableInstrumentField(name) {
+        if (!name) return false;
+        const n = String(name);
+        if (n === "instrument_key") return true;
+        if (n === "expired_instrument_key") return true;
+        if (n === "index_key") return true;
+        return false;
+    }
+
+    function bindInstrumentKeyAutocomplete(inputEl) {
+        const wrap = inputEl.closest(".axe-instrument-wrap");
+        if (!wrap) return;
+        const dropdownEl = wrap.querySelector(".axe-instrument-dropdown");
+        if (!dropdownEl) return;
+
+        let debounceTimer = null;
+        let inflight = null;
+        let results = [];
+        let activeIdx = -1;
+        let justPicked = false;
+
+        function closeDropdown() {
+            dropdownEl.classList.remove("is-open");
+            dropdownEl.innerHTML = "";
+            results = [];
+            activeIdx = -1;
+        }
+
+        function repositionDropdown() {
+            if (!dropdownEl.classList.contains("is-open")) return;
+            const rect = inputEl.getBoundingClientRect();
+            // If input scrolled out of viewport, close
+            if (rect.bottom < 0 || rect.top > window.innerHeight) {
+                closeDropdown();
+                return;
+            }
+            const width = Math.max(rect.width, 260);
+            const height = dropdownEl.offsetHeight || 280;
+            let top = rect.bottom + 4;
+            if (top + height > window.innerHeight - 8) {
+                const aboveTop = rect.top - height - 4;
+                if (aboveTop >= 8) {
+                    top = aboveTop;
+                } else {
+                    top = Math.max(8, window.innerHeight - height - 8);
+                }
+            }
+            let left = rect.left;
+            if (left + width > window.innerWidth - 8) {
+                left = Math.max(8, window.innerWidth - width - 8);
+            }
+            dropdownEl.style.position = "fixed";
+            dropdownEl.style.top = top + "px";
+            dropdownEl.style.left = left + "px";
+            dropdownEl.style.width = width + "px";
+        }
+
+        function renderItems(items) {
+            results = Array.isArray(items) ? items : [];
+            // Preserve activeIdx if still in-bounds; otherwise reset to first
+            if (activeIdx >= results.length) {
+                activeIdx = results.length ? results.length - 1 : -1;
+            }
+            if (activeIdx < 0 && results.length) {
+                activeIdx = 0;
+            }
+            if (!results.length) {
+                dropdownEl.innerHTML = `<div class="axe-instrument-empty">No instruments found</div>`;
+                dropdownEl.classList.add("is-open");
+                repositionDropdown();
+                return;
+            }
+            dropdownEl.innerHTML = results.map((it, i) => {
+                const type = String(it.instrument_type || it.option_type || "").toUpperCase();
+                let pillCls = "eq";
+                if (type === "CE" || type === "CALL") pillCls = "ce";
+                else if (type === "PE" || type === "PUT") pillCls = "pe";
+                else if (type === "FUT" || type === "FUTURE") pillCls = "fut";
+                else if (type === "INDEX" || String(it.segment || "").toUpperCase().includes("INDEX")) pillCls = "idx";
+
+                const sym = it.trading_symbol || it.name || it.instrument_key || "—";
+                const metaBits = [];
+                const strike = it.strike_price != null ? it.strike_price : it.strike;
+                if (strike != null && strike !== "") {
+                    const sn = Number(strike);
+                    metaBits.push(Number.isFinite(sn) ? "₹" + sn.toFixed(0) : "₹" + strike);
+                }
+                if (it.expiry) metaBits.push(String(it.expiry).slice(0, 10));
+
+                return `<div class="axe-instrument-item ${i === activeIdx ? "is-active" : ""}" data-idx="${i}">
+                    <span class="tpill ${pillCls}">${escapeHtml(type || "—")}</span>
+                    <span class="sym">${escapeHtml(sym)}</span>
+                    <span class="meta">${escapeHtml(metaBits.join(" · "))}</span>
+                </div>`;
+            }).join("");
+            dropdownEl.classList.add("is-open");
+            repositionDropdown();
+
+            // Re-bind item mousedown handlers (mousedown fires before blur)
+            dropdownEl.querySelectorAll(".axe-instrument-item").forEach((el) => {
+                el.addEventListener("mousedown", (ev) => {
+                    ev.preventDefault();
+                    pickItem(Number(el.dataset.idx));
+                });
+            });
+        }
+
+        function pickItem(idx) {
+            const item = results[idx];
+            if (!item || !item.instrument_key) return;
+            justPicked = true;
+            inputEl.value = String(item.instrument_key);
+            closeDropdown();
+            inputEl.dispatchEvent(new Event("input", { bubbles: true }));
+            inputEl.dispatchEvent(new Event("change", { bubbles: true }));
+            // Reset the guard after the current tick so the synthetic
+            // input event above does not trigger a new search.
+            setTimeout(() => { justPicked = false; }, 0);
+        }
+
+        async function runSearch(q) {
+            if (!q || q.length < 2) {
+                closeDropdown();
+                return;
+            }
+            // If the user pasted a full key (contains a pipe), skip
+            // the search — they don't need a dropdown.
+            if (q.includes("|")) {
+                closeDropdown();
+                return;
+            }
+            if (inflight) inflight.abort();
+            inflight = new AbortController();
+            try {
+                const params = new URLSearchParams({
+                    query: q,
+                    records: "20",
+                    page_number: "1",
+                });
+                const r = await fetch(`/api/upstox/search?${params.toString()}`, {
+                    signal: inflight.signal,
+                    cache: "no-store",
+                    headers: { Accept: "application/json" },
+                });
+                if (!r.ok) {
+                    renderItems([]);
+                    return;
+                }
+                const body = await r.json();
+                if (body && body.status === "no_token") {
+                    dropdownEl.innerHTML = `<div class="axe-instrument-empty">No Upstox token available — search disabled.</div>`;
+                    dropdownEl.classList.add("is-open");
+                    repositionDropdown();
+                    return;
+                }
+                const items = (body && body.data) || [];
+                activeIdx = -1;   // fresh search → reset active to first item
+                renderItems(items);
+            } catch (e) {
+                if (e.name === "AbortError") return;
+                dropdownEl.innerHTML = `<div class="axe-instrument-empty">Search error: ${escapeHtml(e.message || String(e))}</div>`;
+                dropdownEl.classList.add("is-open");
+                repositionDropdown();
+            }
+        }
+
+        // ---- events -------------------------------------------------- #
+        inputEl.addEventListener("input", () => {
+            if (justPicked) return;
+            const q = inputEl.value.trim();
+            if (debounceTimer) clearTimeout(debounceTimer);
+            debounceTimer = setTimeout(() => runSearch(q), 280);
+        });
+
+        inputEl.addEventListener("focus", () => {
+            if (justPicked) return;
+            const q = inputEl.value.trim();
+            if (q.length >= 2 && !q.includes("|")) {
+                if (debounceTimer) clearTimeout(debounceTimer);
+                debounceTimer = setTimeout(() => runSearch(q), 120);
+            }
+        });
+
+        inputEl.addEventListener("keydown", (e) => {
+            const open = dropdownEl.classList.contains("is-open");
+            if (!open) {
+                if (e.key === "ArrowDown" && results.length) {
+                    e.preventDefault();
+                    renderItems(results);
+                }
+                return;
+            }
+            if (e.key === "ArrowDown") {
+                e.preventDefault();
+                if (results.length) {
+                    activeIdx = Math.min(activeIdx + 1, results.length - 1);
+                    renderItems(results);
+                }
+            } else if (e.key === "ArrowUp") {
+                e.preventDefault();
+                if (results.length) {
+                    activeIdx = Math.max(activeIdx - 1, 0);
+                    renderItems(results);
+                }
+            } else if (e.key === "Enter") {
+                if (activeIdx >= 0 && results[activeIdx]) {
+                    e.preventDefault();
+                    pickItem(activeIdx);
+                }
+            } else if (e.key === "Escape") {
+                closeDropdown();
+            }
+        });
+
+        inputEl.addEventListener("blur", () => {
+            // Delay so mousedown on the item fires first.
+            setTimeout(closeDropdown, 180);
+        });
+
+        // Reposition on scroll / resize so the fixed dropdown tracks the input.
+        const onScrollOrResize = () => repositionDropdown();
+        window.addEventListener("scroll", onScrollOrResize, true);
+        window.addEventListener("resize", onScrollOrResize);
+    }
+
+    function paramField(p) {
+        const required = p.required ? "req" : "";
+        const schema = p.schema || {};
+        const desc = p.description || schema.description || "";
+        const id = `axe-param-${p.in}-${p.name}`;
+        const searchable = isSearchableInstrumentField(p.name);
+
+        // enum → select
+        if (Array.isArray(schema.enum) && schema.enum.length) {
+            return `
+                <div class="axe-field">
+                    <label for="${id}">
+                        ${escapeHtml(p.name)}
+                        ${p.required ? '<span class="req">*</span>' : ""}
+                        <span style="opacity:.55; font-weight:400;">(${p.in})</span>
+                    </label>
+                    <select id="${id}">
+                        <option value="">—</option>
+                        ${schema.enum.map((v) => `<option value="${escapeHtml(String(v))}">${escapeHtml(String(v))}</option>`).join("")}
+                    </select>
+                    ${desc ? `<div style="font-size:.72rem;color:var(--app-text-muted);margin-top:3px;">${escapeHtml(desc)}</div>` : ""}
+                </div>
+            `;
+        }
+        // boolean → select yes/no
+        if (schema.type === "boolean") {
+            return `
+                <div class="axe-field">
+                    <label for="${id}">
+                        ${escapeHtml(p.name)}
+                        ${p.required ? '<span class="req">*</span>' : ""}
+                        <span style="opacity:.55; font-weight:400;">(${p.in})</span>
+                    </label>
+                    <select id="${id}">
+                        <option value="">—</option>
+                        <option value="true">true</option>
+                        <option value="false">false</option>
+                    </select>
+                </div>
+            `;
+        }
+
+        // Searchable instrument-key field → wrapped input + dropdown
+        if (searchable) {
+            const placeholder = "Search instrument or paste key…";
+            return `
+                <div class="axe-field">
+                    <label for="${id}">
+                        ${escapeHtml(p.name)}
+                        ${p.required ? '<span class="req">*</span>' : ""}
+                        <span style="opacity:.55; font-weight:400;">(${p.in})</span>
+                    </label>
+                    <div class="axe-instrument-wrap">
+                        <input
+                            type="text"
+                            id="${id}"
+                            data-in="${p.in}"
+                            data-name="${escapeHtml(p.name)}"
+                            data-instrument-search
+                            placeholder="${escapeHtml(placeholder)}"
+                            autocomplete="off"
+                            spellcheck="false"
+                        />
+                        <i class="bi bi-search axe-instrument-icon"></i>
+                        <div class="axe-instrument-dropdown" data-dropdown-for="${id}"></div>
+                    </div>
+                    ${desc ? `<div style="font-size:.72rem;color:var(--app-text-muted);margin-top:3px;">${escapeHtml(desc)}</div>` : ""}
+                </div>
+            `;
+        }
+
+        // Plain text input
+        return `
+            <div class="axe-field">
+                <label for="${id}">
+                    ${escapeHtml(p.name)}
+                    ${p.required ? '<span class="req">*</span>' : ""}
+                    <span style="opacity:.55; font-weight:400;">(${p.in})</span>
+                </label>
+                <input
+                    type="text"
+                    id="${id}"
+                    data-in="${p.in}"
+                    data-name="${escapeHtml(p.name)}"
+                    placeholder="${escapeHtml(schema.type || "string")}"
+                />
+                ${desc ? `<div style="font-size:.72rem;color:var(--app-text-muted);margin-top:3px;">${escapeHtml(desc)}</div>` : ""}
+            </div>
+        `;
+    }
+
+    function collectFormValues() {
+        const body = $("axe-try-body");
+        const path = {};
+        const query = {};
+        const headers = {};
+
+        body.querySelectorAll("input, select, textarea").forEach((el) => {
+            if (el.id === "axe-body-input") return;
+            if (!el.id || !el.id.startsWith("axe-param-")) return;
+            const m = el.id.match(/^axe-param-(path|query|header)-(.+)$/);
+            if (!m) return;
+            const [, loc, name] = m;
+            const val = el.value;
+            if (val === "" || val == null) return;
+            if (loc === "path") path[name] = val;
+            else if (loc === "query") query[name] = val;
+            else if (loc === "header") headers[name] = val;
+        });
+
+        let bodyJson = null;
+        const bodyEl = document.getElementById("axe-body-input");
+        if (bodyEl && bodyEl.value.trim()) {
+            try {
+                bodyJson = JSON.parse(bodyEl.value);
+            } catch (e) {
+                throw new Error("Request body is not valid JSON: " + e.message);
+            }
+        }
+
+        return { path, query, headers, body: bodyJson };
+    }
+
+    function buildUrl(route, values) {
+        let url = route.path;
+        for (const [k, v] of Object.entries(values.path)) {
+            url = url.replace(`{${k}}`, encodeURIComponent(v));
+        }
+        const qs = new URLSearchParams();
+        for (const [k, v] of Object.entries(values.query)) {
+            qs.append(k, v);
+        }
+        const qstr = qs.toString();
+        return url + (qstr ? "?" + qstr : "");
+    }
+
+    function updateUrlPreview() {
+        if (!state.selected) return;
+        try {
+            const values = collectFormValues();
+            const url = buildUrl(state.selected, values);
+            const preview = $("axe-url-preview");
+            if (preview) {
+                preview.innerHTML = `<span class="method-badge method-${state.selected.method}" style="margin-right:6px;">${state.selected.method}</span>${escapeHtml(url)}`;
+            }
+        } catch (_) {
+            // ignore while typing invalid body
+        }
+    }
+
+    async function sendRequest(route) {
+        const btn = $("axe-send-btn");
+        const box = $("axe-response-box");
+        btn.disabled = true;
+        btn.innerHTML = `<span class="spinner-border spinner-border-sm me-1"></span> Sending…`;
+
+        const t0 = performance.now();
+        try {
+            const values = collectFormValues();
+            const url = buildUrl(route, values);
+            const opts = {
+                method: route.method,
+                headers: { ...values.headers },
+                cache: "no-store",
+            };
+            if (values.body !== null) {
+                opts.headers["Content-Type"] = "application/json";
+                opts.body = JSON.stringify(values.body);
+            }
+
+            const res = await fetch(url, opts);
+            const elapsed = Math.round(performance.now() - t0);
+
+            const ct = res.headers.get("content-type") || "";
+            let payload;
+            let isText = false;
+            if (ct.includes("application/json")) {
+                payload = await res.json();
+            } else {
+                payload = await res.text();
+                isText = true;
+            }
+
+            renderResponse(res.status, res.statusText, elapsed, payload, isText, url);
+            toast(`Response ${res.status} (${elapsed} ms)`, res.ok ? "ok" : "err");
+        } catch (e) {
+            renderError(e, Math.round(performance.now() - t0));
+            toast(e.message || "Request failed", "err");
+        } finally {
+            btn.disabled = false;
+            btn.innerHTML = `<i class="bi bi-send-fill me-1"></i> Send ${route.method}`;
+        }
+    }
+
+    function renderResponse(status, statusText, ms, payload, isText, url) {
+        const box = $("axe-response-box");
+        const cls = status >= 200 && status < 300 ? "ok" : (status >= 400 ? "err" : "warn");
+        const body = isText
+            ? escapeHtml(payload)
+            : prettyJson(payload);
+        box.innerHTML = `
+            <div class="axe-resp-head">
+                <span class="axe-status ${cls}">${status} ${escapeHtml(statusText)}</span>
+                <span class="axe-resp-meta">${ms} ms</span>
+            </div>
+            <div class="axe-code">${body}</div>
+        `;
+    }
+
+    function renderError(e, ms) {
+        const box = $("axe-response-box");
+        box.innerHTML = `
+            <div class="axe-resp-head">
+                <span class="axe-status err">Error</span>
+                <span class="axe-resp-meta">${ms} ms</span>
+            </div>
+            <div class="axe-code">${escapeHtml(e.message || String(e))}</div>
+        `;
+    }
+
+    // ---- wire up search -------------------------------------------------
+    $("axe-search-input").addEventListener("input", (e) => {
+        state.search = e.target.value.trim();
+        renderRoutes();
+    });
+
+    // ---- boot -----------------------------------------------------------
+    loadSpec();
+})();
+</script>
+{% endblock %}

@@ -1,5 +1,5 @@
 # services/strategy_entry_signal_service.py
-"""G1 v3.2 — Dual-sided fast pivot + auto-reverse entry signal.
+"""G1 v4.1 — Dual-sided fast pivot + auto-reverse entry signal.
 
 For the isolated NIFTY strike, this service:
 
@@ -9,11 +9,40 @@ For the isolated NIFTY strike, this service:
      * Fast SUPPORT exists on bias side → ARM BIAS SIDE.
      * Fast RESISTANCE exists on bias side with NO support → TRIGGER
        AUTO-REVERSE to the counter side at the counter instrument's
-       live LTP.
+       candle close at rejection time (or, as a last resort, its
+       live LTP).
      * Nothing confirms inside the buffer window → HARD BLOCK
        "all_candidates_in_window_blocked".
 3. Applies the LTP-tier stop-loss (unchanged from G1 v2).
 4. First-to-confirm tiebreak uses `confirmed_time_fast`.
+
+G1 v4.1 changes (2026-10-29)
+----------------------------
+Fixes the three bugs surfaced by the 2026-10-29 SIMULATE-mode replay:
+
+  1. **Entry price source** — ``_entry_price_for()`` now falls back to
+     a fresh ``HistoryV3Api.get_intra_day_candle_data`` fetch BEFORE
+     falling back to the live LTP. This closes the "entry price is the
+     15:31 wall-clock LTP instead of the 09:23 candle close" bug that
+     appeared when the counter-side instrument was not yet registered
+     with the SR engine (see ``level_isolated_instrument_service
+     ._register_isolated_pair_with_sr``).
+
+  2. **Auto-reverse price priority** — ``_trigger_auto_reverse()`` now
+     uses ``_entry_price_for()``, so it prefers the counter-side candle
+     close at ``bias_resistance_confirmed_time_fast`` over the live LTP.
+     A degraded live-LTP fallback is still permitted (logged at WARNING)
+     so a genuine "confirming bar not yet in the series" race in live
+     mode does not hard-block the trade.
+
+  3. **Target selection** — new ``_pick_target_resistance()`` helper
+     returns the **first resistance confirmed strictly AFTER** the
+     entry confirmation, among those priced above entry. Falls back to
+     the lowest-above-entry resistance only when no time-ordered
+     candidate exists. This replaces the previous "lowest price above
+     entry" selection, which on a day-long down trend picked a
+     resistance that only formed hours AFTER entry (e.g. 63.00 @ 15:24
+     for a 09:23 entry, instead of the correct 110.65 @ 10:56).
 """
 
 from __future__ import annotations
@@ -189,9 +218,11 @@ def _compute_ltp_tier_stop(
     ), "ltp_tier"
 
 # --------------------------------------------------------------------------- #
-# Candle lookup + LTP                                                     #
+# Candle lookup + LTP                                                         #
 # --------------------------------------------------------------------------- #
 def _candle_close_at(instrument_key: str, iso_time: str) -> float | None:
+    """Return the close of the 1-min candle at ``iso_time`` from the
+    SR engine's in-memory state (per-instrument ``_states`` dict)."""
     target = _parse_iso(iso_time)
     if target is None:
         return None
@@ -215,6 +246,52 @@ def _candle_close_at(instrument_key: str, iso_time: str) -> float | None:
                 return None
     return None
 
+def _candle_close_from_intraday(
+    instrument_key: str,
+    iso_time: str,
+) -> float | None:
+    """G1 v4.1 — fallback path when the SR engine has no candle state
+    for ``instrument_key`` at ``iso_time``.
+
+    Fetches today's intraday 1-min candles via the stateless
+    ``live_sr_calc_service`` loader and returns the close of the bar
+    whose minute matches ``iso_time``.
+
+    This path is what makes the entry price correct in simulate mode
+    when the counter-side instrument was not pre-registered with the
+    SR engine (see the companion fix in
+    ``level_isolated_instrument_service._register_isolated_pair_with_sr``,
+    which now registers BOTH sides up front — the two fixes together
+    guarantee a correct entry price even if one of them is bypassed).
+
+    Never raises. Returns ``None`` on any failure.
+    """
+    target = _parse_iso(iso_time)
+    if target is None:
+        return None
+    target_minute = target.replace(second=0, microsecond=0)
+    try:
+        from services.live_sr_calc_service import live_sr_calc_service
+        candles = live_sr_calc_service.fetch_intraday_candles_for_entry(
+            instrument_key
+        )
+    except Exception:
+        logger.exception(
+            "[strategy-entry] intraday fallback fetch failed for %s",
+            instrument_key,
+        )
+        return None
+    for c in candles or []:
+        c_dt = _parse_iso(c.get("time"))
+        if c_dt is None:
+            continue
+        if c_dt.replace(second=0, microsecond=0) == target_minute:
+            try:
+                return float(c["close"])
+            except (KeyError, TypeError, ValueError):
+                return None
+    return None
+
 def _live_ltp(instrument_key: str) -> float | None:
     try:
         from services.live_feed_service import live_feed_service
@@ -229,13 +306,105 @@ def _entry_price_for(
     instrument_key: str,
     confirmed_time_iso: str,
 ) -> tuple[float | None, str | None]:
+    """Resolve the entry price for an armed candidate.
+
+    G1 v4.1 resolution order (strictly descending preference):
+
+        1. ``candle_close_at_confirmed_fast`` — SR engine in-memory state
+        2. ``candle_close_from_intraday``    — fresh intraday API fetch
+        3. ``live_ltp``                      — last resort (logged WARNING
+                                               by the caller because the
+                                               resulting price may be
+                                               wrong in simulate mode)
+
+    The previous revision fell straight through from (1) to (3), which
+    produced the "entry price = 15:31 wall clock LTP" bug in simulate
+    mode. Step (2) closes that gap.
+    """
     close = _candle_close_at(instrument_key, confirmed_time_iso)
     if close is not None:
         return close, "candle_close_at_confirmed_fast"
+
+    close = _candle_close_from_intraday(instrument_key, confirmed_time_iso)
+    if close is not None:
+        return close, "candle_close_from_intraday"
+
     ltp = _live_ltp(instrument_key)
     if ltp is not None:
         return ltp, "live_ltp"
     return None, None
+
+# --------------------------------------------------------------------------- #
+# Target resistance selection (G1 v4.1)                                       #
+# --------------------------------------------------------------------------- #
+def _pick_target_resistance(
+    levels: list[dict[str, Any]],
+    entry_price: float,
+    entry_confirmed_iso: str,
+) -> dict[str, Any] | None:
+    """Return the target resistance for an armed entry.
+
+    G1 v4.1 fix — the previous implementation picked the LOWEST-priced
+    resistance above ``entry_price`` regardless of when it confirmed.
+    On a day-long down trend this selected a resistance that only
+    formed hours AFTER the entry (e.g. 63.00 @ 15:24 for a 09:23
+    entry), which is not a real "next resistance" from the entry's
+    perspective.
+
+    Correct behaviour:
+
+        1. Filter to resistances that confirmed **strictly AFTER**
+           ``entry_confirmed_iso``.
+        2. Filter to resistances priced **strictly ABOVE**
+           ``entry_price``.
+        3. Pick the EARLIEST confirmed among the survivors.
+
+    Fallback: when no resistance survives the time filter (e.g. the
+    option collapsed below every subsequent pivot), return the
+    lowest-priced resistance above entry (previous behaviour) so the
+    caller still gets a target when one exists. Returns ``None`` only
+    when there is no resistance above ``entry_price`` at all.
+    """
+    entry_conf_dt = _parse_iso(entry_confirmed_iso)
+
+    # ---- Primary: first confirmed-after-entry resistance above price #
+    if entry_conf_dt is not None:
+        time_filtered: list[tuple[datetime, dict[str, Any]]] = []
+        for lvl in levels:
+            if str(lvl.get("level") or "").lower() != "resistance":
+                continue
+            try:
+                r_price = float(lvl.get("price"))
+            except (TypeError, ValueError):
+                continue
+            if r_price <= entry_price:
+                continue
+            r_conf_dt = _parse_iso(lvl.get("confirmed_time"))
+            if r_conf_dt is None:
+                continue
+            if r_conf_dt <= entry_conf_dt:
+                continue
+            time_filtered.append((r_conf_dt, lvl))
+        if time_filtered:
+            time_filtered.sort(key=lambda t: t[0])
+            return time_filtered[0][1]
+
+    # ---- Fallback: lowest-priced resistance above entry -------------- #
+    best: dict[str, Any] | None = None
+    best_price: float | None = None
+    for lvl in levels:
+        if str(lvl.get("level") or "").lower() != "resistance":
+            continue
+        try:
+            r_price = float(lvl.get("price"))
+        except (TypeError, ValueError):
+            continue
+        if r_price <= entry_price:
+            continue
+        if best_price is None or r_price < best_price:
+            best = lvl
+            best_price = r_price
+    return best
 
 # --------------------------------------------------------------------------- #
 # Fast pivot scan (unchanged from G1 v2)                                      #
@@ -487,11 +656,14 @@ def _compute_candidate(
     resistances_in_window.sort(key=lambda r: r["pivot_dt"])
 
     # ---- 2. Prioritize support over resistance ------------------- #
+    # G1 v4.0 — the new flag names are aliased in core/config.py to
+    # fall back to the v3.2 names when the new env vars are unset, so
+    # existing .env files keep working without any edit.
     prioritize_support = bool(getattr(
-        config, "STRATEGY_ENTRY_PRIORITIZE_SUPPORT", True
+        config, "STRATEGY_PRIORITIZE_SUPPORT_OVER_RESISTANCE", True
     ))
     allow_auto_reverse = bool(getattr(
-        config, "STRATEGY_ENTRY_ALLOW_AUTO_REVERSE", True
+        config, "STRATEGY_ALLOW_OPPOSITE_REVERSAL_ON_RESISTANCE", True
     ))
 
     # ---- CASE 1: SUPPORT (priority) ------------------------------ #
@@ -528,7 +700,7 @@ def _compute_candidate(
     return cand
 
 # --------------------------------------------------------------------------- #
-# Case 1: arm bias on support                                                 #
+# Case 1: arm bias on support (target selection G1 v4.1)                     #
 # --------------------------------------------------------------------------- #
 def _arm_bias_on_support(
     cand: dict[str, Any],
@@ -629,21 +801,13 @@ def _arm_bias_on_support(
                 f"{entry_price:.2f}."
             )
 
-        # Target: next resistance above entry.
+        # G1 v4.1 — target: first resistance confirmed AFTER the entry
+        # support's confirmed_time_fast, priced above entry_price.
+        best_r = _pick_target_resistance(
+            levels, entry_price, support_confirmed_fast_iso,
+        )
         target_price = None
         target_pivot_time = None
-        best_r = None
-        for lvl in levels:
-            if str(lvl.get("level") or "").lower() != "resistance":
-                continue
-            try:
-                r_price = float(lvl.get("price"))
-            except (TypeError, ValueError):
-                continue
-            if r_price <= entry_price:
-                continue
-            if best_r is None or r_price < float(best_r.get("price") or 0.0):
-                best_r = lvl
         if best_r is not None:
             try:
                 target_price = float(best_r.get("price"))
@@ -674,7 +838,7 @@ def _arm_bias_on_support(
     return cand
 
 # --------------------------------------------------------------------------- #
-# Case 2: auto-reverse on bias-side rejection                                #
+# Case 2: auto-reverse on bias-side rejection (G1 v4.1 fixes)                 #
 # --------------------------------------------------------------------------- #
 def _trigger_auto_reverse(
     cand: dict[str, Any],
@@ -684,8 +848,23 @@ def _trigger_auto_reverse(
     counter_entry: dict[str, Any],
     now: datetime,
 ) -> dict[str, Any]:
-    """Bias side confirmed a fast resistance with no support → flip."""
-    # Take the earliest confirmed resistance in the window.
+    """Bias side confirmed a fast resistance with no support → flip.
+
+    G1 v4.1 changes vs the previous revision
+    ----------------------------------------
+    * The counter-side entry price is now resolved via
+      ``_entry_price_for()`` — i.e. the **candle close at the rejection
+      minute** is preferred, with a fresh intraday fetch as fallback,
+      and live LTP **only as a last resort** (logged WARNING, marked
+      degraded in the entry block). The previous revision preferred
+      the live LTP, which in simulate mode gave the wall-clock price
+      (e.g. 61.65 at 15:31) instead of the historical price at the
+      rejection moment (e.g. 186.55 at 09:23).
+
+    * The target is now selected via ``_pick_target_resistance()``
+      (first resistance confirmed AFTER the rejection), matching the
+      bias-side arm path.
+    """
     for r in resistances_in_window:
         r_conf_iso = r["confirmed_time_fast"]
         r_conf_dt = _parse_iso(r_conf_iso)
@@ -707,16 +886,21 @@ def _trigger_auto_reverse(
         counter_key = str(counter_entry.get("instrument_key") or "")
         counter_symbol = counter_entry.get("trading_symbol")
 
-        # Read live LTP of the COUNTER instrument at the exact moment
-        # of the bias-side rejection.
-        counter_price = _live_ltp(counter_key)
-        price_source = "live_ltp"
-        if counter_price is None:
-            # Last-ditch fallback: use the counter's candle at the same
-            # fast-confirmation minute if available.
-            counter_price = _candle_close_at(counter_key, r_conf_iso)
-            if counter_price is not None:
-                price_source = "counter_candle_at_rejection"
+        # G1 v4.1 — resolve counter price via _entry_price_for() so the
+        # candle close at rejection time wins over the live LTP.
+        counter_price, price_source = _entry_price_for(
+            counter_key, r_conf_iso,
+        )
+
+        # Log the degraded fallback so simulate-mode drift is visible.
+        if counter_price is not None and price_source == "live_ltp":
+            logger.warning(
+                "[strategy-entry] counter-side entry price for %s fell "
+                "back to live_ltp (no candle at %s in SR state or "
+                "intraday fetch) — entry price may be wrong in "
+                "simulate mode",
+                counter_key, r_conf_iso,
+            )
 
         if counter_price is None or counter_price <= 0:
             cand["state"] = "blocked"
@@ -727,7 +911,8 @@ def _trigger_auto_reverse(
             counter_price, counter_key,
         )
 
-        # Target: nearest resistance above entry on the COUNTER series.
+        # Target: first counter-side resistance confirmed AFTER the
+        # rejection minute, priced above the counter entry.
         counter_levels = _run_pivot_scan(
             counter_key,
             int(getattr(
@@ -736,20 +921,11 @@ def _trigger_auto_reverse(
             )),
             int(getattr(config, "STRATEGY_ENTRY_PIVOT_RIGHT_BARS", 3)),
         )
+        best_r = _pick_target_resistance(
+            counter_levels, counter_price, r_conf_iso,
+        )
         target_price = None
         target_pivot_time = None
-        best_r = None
-        for lvl in counter_levels:
-            if str(lvl.get("level") or "").lower() != "resistance":
-                continue
-            try:
-                r_price = float(lvl.get("price"))
-            except (TypeError, ValueError):
-                continue
-            if r_price <= counter_price:
-                continue
-            if best_r is None or r_price < float(best_r.get("price") or 0.0):
-                best_r = lvl
         if best_r is not None:
             try:
                 target_price = float(best_r.get("price"))
@@ -1069,8 +1245,8 @@ class StrategyEntrySignalService:
                     )
                 elif note == "invalid_counter_price":
                     out.append(
-                        f"{side}: auto-reverse failed — counter side LTP "
-                        f"unavailable."
+                        f"{side}: auto-reverse failed — counter side "
+                        f"price unavailable."
                     )
             elif state == "armed" and c.get("warning"):
                 out.append(

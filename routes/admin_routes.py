@@ -327,6 +327,35 @@ def _completion_message(
         f"✅ Status: {status}"
     )
 
+def _cleanup_summary_log(cleanup: dict[str, Any]) -> tuple[list[str], list[str], list[str]]:
+    """Normalise the cleanup_service output into three flat name lists.
+
+    ``cleanup_service.run()`` returns ``{"removed": [...], "skipped": [...],
+    "errors": [...]}`` where each element may be either a plain string
+    (path / folder name) or a dict carrying details. This helper tolerates
+    both shapes and always produces human-readable names for the log line.
+    """
+    def _names(items: list[Any] | None) -> list[str]:
+        out: list[str] = []
+        for item in items or []:
+            if isinstance(item, dict):
+                name = (
+                    item.get("name")
+                    or item.get("folder")
+                    or item.get("path")
+                    or item.get("file")
+                )
+                out.append(str(name) if name is not None else str(item))
+            else:
+                out.append(str(item))
+        return out
+
+    return (
+        _names(cleanup.get("removed")),
+        _names(cleanup.get("skipped")),
+        _names(cleanup.get("errors")),
+    )
+
 def _run_full_refresh_sync(
     reason: str = "manual",
     loop: "asyncio.AbstractEventLoop | None" = None,
@@ -362,6 +391,24 @@ def _run_full_refresh_sync(
                 len(cleanup.get("skipped") or []),
                 len(cleanup.get("errors") or []),
             )
+            # ---- NEW: log *which* items were removed / preserved -------
+            removed_names, preserved_names, error_names = _cleanup_summary_log(cleanup)
+            logger.info(
+                "[%s] cleanup removed=%s",
+                reason,
+                removed_names or "[]",
+            )
+            logger.info(
+                "[%s] cleanup preserved=%s",
+                reason,
+                preserved_names or "[]",
+            )
+            if error_names:
+                logger.warning(
+                    "[%s] cleanup errors=%s",
+                    reason,
+                    error_names,
+                )
     except Exception as exc:
         logger.exception("[%s] cleanup failed", reason)
         cleanup = {

@@ -30,9 +30,8 @@ based on their own semantics (fresh != live).
 
 Public loader helpers
 ---------------------
-Three public methods exist specifically so that
-``services/sr_backfill_service`` can reuse this service's candle
-loaders without duplication:
+Public methods exist specifically so that other services can reuse this
+service's candle loaders without duplication:
 
     ``load_historical_candles_for_entry(entry, lookback_days)``
         → historical candles (list only)
@@ -40,14 +39,21 @@ loaders without duplication:
         → today's intraday candles (list only)
     ``merge_candles(historical, intraday)``
         → merged list (intraday wins on minute collision)
+    ``get_candle_close_at(instrument_key, iso_time)``
+        → close of the 1-min candle at that minute (or None)
+    ``get_first_intraday_candle(instrument_key)``
+        → first intraday candle (or None)
 
-These do NOT go through ``calculate()``; they exist so the periodic
-refresh job (``live_sr_refresh_from_api``, see
+The first three exist so the periodic refresh job
+(``live_sr_refresh_from_api``, see
 ``services/scheduler_service.py``) can produce exactly the same
 historical + intraday merge the calc endpoint uses, and feed it into
-``live_sr_levels_service.seed_candles``. The result: persisted
-``live_sr_levels.json`` gets the same context (yesterday's tail, today's
-API-authoritative OHLC) that ``GET /live-sr/calc`` works from.
+``live_sr_levels_service.seed_candles``.
+
+The last two exist so the entry-signal / isolation engines can resolve
+an historical candle close without re-implementing the minute-bucket
+matching logic (see ``strategy_entry_signal_service._entry_price_for``
+and ``level_isolated_instrument_service._maybe_self_heal``).
 
 INTRAday by default
 -------------------
@@ -675,6 +681,68 @@ class LiveSRCalcService:
         Merges by minute bucket; intraday wins on collision.
         """
         return self._merge_by_minute(historical, intraday)
+
+    # ------------------------------------------------------------------ #
+    # Candle-close helpers (used by entry-signal / isolation engines)   #
+    # ------------------------------------------------------------------ #
+    def get_candle_close_at(
+        self,
+        instrument_key: str,
+        iso_time: str,
+    ) -> float | None:
+        """Return the close price of the 1-min candle at ``iso_time``.
+
+        Convenience wrapper around ``fetch_intraday_candles_for_entry()``
+        that handles the minute-bucket matching (seconds/microseconds
+        zeroed) so callers don't have to re-implement the comparison.
+
+        Used by ``strategy_entry_signal_service._entry_price_for()`` as
+        the fallback path when ``live_sr_levels_service._states`` is
+        missing or doesn't yet contain the instrument (see G1 v4.1 fix
+        §5.B). This makes the historical entry price available in
+        simulate mode even when the counter-side instrument was never
+        registered with the live SR engine.
+
+        Returns ``None`` when:
+          * ``iso_time`` cannot be parsed
+          * no intraday candle exists for that minute
+          * the Upstox fetch fails (never raises)
+        """
+        target = _parse_time(iso_time)
+        if target is None:
+            return None
+        target_minute = target.replace(second=0, microsecond=0)
+
+        candles = self.fetch_intraday_candles_for_entry(instrument_key)
+        for c in candles:
+            c_dt = _parse_time(c.get("time"))
+            if c_dt is None:
+                continue
+            if c_dt.replace(second=0, microsecond=0) == target_minute:
+                try:
+                    return float(c["close"])
+                except (KeyError, TypeError, ValueError):
+                    return None
+        return None
+
+    def get_first_intraday_candle(
+        self,
+        instrument_key: str,
+    ) -> dict[str, Any] | None:
+        """Return the first 1-min intraday candle for ``instrument_key``.
+
+        Used by ``level_isolated_instrument_service._maybe_self_heal()``
+        to verify that ``first_candle.json`` matches today's real first
+        bar (see G1 v4.1 fix §5.D). The first candle's H / L must agree
+        with the cached OR file — otherwise the cached OR is stale and
+        must be recomputed.
+
+        Returns ``None`` when the fetch fails or returns no candles.
+        """
+        candles = self.fetch_intraday_candles_for_entry(instrument_key)
+        if not candles:
+            return None
+        return candles[0]
 
     # ------------------------------------------------------------------ #
     # Selector resolution                                                #
