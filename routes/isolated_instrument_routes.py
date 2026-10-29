@@ -7,13 +7,19 @@
                                                             (includes `sr_tracking`,
                                                             `active` if promoted,
                                                             with confirmed_time_price,
-                                                            and `active.frozen_entry`
-                                                            after G1 v4.1 §5.E)
+                                                            `active.frozen_entry`
+                                                            after G1 v4.1 §5.E, and
+                                                            `dummy_order_path_b_state`
+                                                            after G1 v4.2 §7.1)
     GET  /admin/level-isolation/sr-tracking               — SR tracker state only
                                                             (pre & post isolation levels)
     GET  /admin/level-isolation/strategy-signal           — entry-signal block
                                                             (includes `frozen_entry`
                                                             after G1 v4.1 §5.E)
+    GET  /admin/level-isolation/path-b-state              — Path B execution state
+                                                            (multi-order SR watch,
+                                                            lock flag, placed keys;
+                                                            G1 v4.2 §7.2)
     POST /admin/level-isolation/apply-promotion           — promote the ARMED instrument
                                                             (result includes the
                                                             frozen entry block)
@@ -65,6 +71,28 @@ says "a later win should override the earlier one". The default
 single-promotion-per-day policy keeps the first frozen entry stable
 for the rest of the session, matching what the dummy-order service
 already does (create-once, update-status-only).
+
+G1 v4.2 (2026-10-29)
+--------------------
+Path B visibility additions:
+
+* ``/detail`` now embeds ``dummy_order_path_b_state`` — the session-
+  level Path B snapshot (``execution_path``, ``strategy_locked_today``,
+  ``placed_keys``, ``open_orders``, ``closed_orders``) so the
+  ``/isolated`` template can render the multi-order badge, the lock
+  indicator, and the per-order Rupee profit strip without a second
+  round-trip. ``None`` when the dummy-order service import fails.
+
+* New ``/path-b-state`` endpoint for admin tooling that wants only the
+  Path B state (no full detail payload). Returns ``status: "ok"`` +
+  ``state`` on success, ``status: "error"`` + ``error`` on failure.
+
+Both additions are strictly read-only and defensive: any exception
+within the Path B state lookup degrades the field to ``None`` (for
+``/detail``) or to an error status (for ``/path-b-state``) without
+affecting the rest of the response. Path A callers are unaffected —
+``dummy_order_path_b_state`` will simply show an empty/no-isolation
+snapshot for Path A sessions.
 """
 
 from __future__ import annotations
@@ -124,6 +152,14 @@ def get_detail() -> dict[str, Any]:
     the entry-signal card without needing a separate ``/strategy-signal``
     round-trip — and without the entry price drifting on the 10 s poll
     (which was §3 / §4.4 of the analysis).
+
+    After G1 v4.2 (§7.1) this endpoint also embeds
+    ``dummy_order_path_b_state`` — the session-level Path B snapshot
+    from the dummy-order service (execution_path, strategy_locked_today,
+    placed_keys, open_orders, closed_orders). The ``/isolated`` template
+    uses it to render the multi-order badge, lock indicator, and
+    per-order Rupee profit strip without a second round-trip. ``None``
+    when the dummy-order service is unavailable.
     """
     data = level_isolated_instrument_service.get_detail()
 
@@ -151,6 +187,16 @@ def get_detail() -> dict[str, Any]:
     else:
         data["active"] = None
         data["active_live_sr_levels"] = None
+
+    # G1 v4.1 — expose Path B state so the /isolated page can show
+    # the multi-order badge, lock state, and per-order Rupee profit.
+    try:
+        from services.dummy_order_service import dummy_order_service
+        data["dummy_order_path_b_state"] = (
+            dummy_order_service.get_path_b_state()
+        )
+    except Exception:
+        data["dummy_order_path_b_state"] = None
 
     return data
 
@@ -204,6 +250,12 @@ def get_strategy_signal() -> dict[str, Any]:
     level snapshot stay fresh on the template's 10 s poll. Only the
     three "settled" fields — entry price, stop, target — come from the
     frozen entry when one exists.
+
+    G1 v4.2 note: when the session is in Path B, ``compute()`` itself
+    returns ``status="path_b_mode"`` with empty ``candidates`` and a
+    ``path_b`` block. That response is passed through unchanged; the
+    frozen-entry overlay below only applies when a promotion exists,
+    which (correctly) never happens in Path B.
     """
     signal = strategy_entry_signal_service.compute()
 
@@ -224,6 +276,41 @@ def get_strategy_signal() -> dict[str, Any]:
     return signal
 
 
+# --------------------------------------------------------------------------- #
+# NEW (G1 v4.2 §7.2): Path B state endpoint                                   #
+# --------------------------------------------------------------------------- #
+@router.get("/path-b-state")
+def get_path_b_state() -> dict[str, Any]:
+    """Return the Path B execution state (multi-order SR watch).
+
+    Read-only endpoint used by admin tooling that wants only the Path B
+    snapshot without the heavier ``/detail`` payload. Fields:
+
+        execution_path          — "A_self_trigger" | "B_external_trigger" | None
+        strategy_locked_today   — bool (set once a Path B trade hits target)
+        placed_keys             — dedup keys of already-placed Path B orders
+        open_orders             — count of OPEN Path B orders
+        closed_orders           — count of closed Path B orders
+
+    Returns ``{"status": "ok", "state": {...}, "generated_at": ...}`` on
+    success, or ``{"status": "error", "error": ..., "generated_at": ...}``
+    if the dummy-order service is unavailable. Never raises.
+    """
+    try:
+        from services.dummy_order_service import dummy_order_service
+        return {
+            "status": "ok",
+            "state": dummy_order_service.get_path_b_state(),
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+        }
+    except Exception as exc:
+        return {
+            "status": "error",
+            "error": f"{type(exc).__name__}: {exc}",
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+
 @router.post("/apply-promotion")
 async def apply_promotion() -> dict[str, Any]:
     """Apply the promotion recommended by the current strategy signal.
@@ -240,6 +327,15 @@ async def apply_promotion() -> dict[str, Any]:
     promotion. ``result["detail"]["active"]["frozen_entry"]`` carries
     the same block via the refreshed detail snapshot, so both paths
     surface the frozen entry consistently.
+
+    G1 v4.2 note: when the session is in Path B, both the promotion
+    service (via its own Path B guard) and the strategy-entry service
+    (which returns ``status="path_b_mode"``) will decline to recommend
+    a promotion. This endpoint therefore returns a ``promoted: False``
+    result with ``reason="path_b_external_trigger"`` (or
+    ``"no_valid_signal"``, depending on which guard fires first) without
+    changing anything. That is the intended behaviour — Path B never
+    promotes.
     """
     def _run() -> dict[str, Any]:
         signal = strategy_entry_signal_service.compute()

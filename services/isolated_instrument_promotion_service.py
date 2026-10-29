@@ -101,6 +101,90 @@ The sidecar's ``frozen_entry`` shape::
       }
     }
 
+G1 v4.1 — Path B hard-block (2026-10-29)
+----------------------------------------
+``apply_promotion()`` and ``refresh_frozen_entry()`` now refuse to act
+when the isolation record's ``trigger_is_self_nifty`` is ``False`` —
+i.e. when the day was isolated by an **external index** (MIDCPNIFTY /
+BANKNIFTY / SENSEX). In that scenario the bias-side instrument must
+stay active for the entire session and the dummy-order service is the
+sole executor of multi-order SR levels. Promotion is only valid for
+Path A (NIFTY self-trigger), where the 10-minute scan and auto-reverse
+ran and produced an armed candidate.
+
+Both guards are defensive: if the isolation service cannot be reached
+(import error, filesystem hiccup), the guard logs the exception and
+the promotion logic continues — the reasoning being that an outage on
+the isolation service must not be able to *create* an incorrect
+promotion, but it also must not break the existing (Path A) flow.
+
+G1 v4.1 flag-wiring fix (2026-10-29)
+------------------------------------
+``STRATEGY_ENTRY_FREEZE_ENTRY_ON_PROMOTION`` (§5.E) was defined in
+``core/config.py`` but never read by this service — the frozen-entry
+block was always written regardless of the flag's value. That is now
+fixed. The flag gates **all three** frozen-entry write sites:
+
+    * ``refresh_frozen_entry()`` — returns ``{"status": "skipped",
+      "reason": "freeze_disabled"}`` immediately when the flag is
+      ``false``;
+    * ``apply_promotion()`` idempotent branch — the legacy-record
+      backfill of ``frozen_entry`` is skipped when the flag is
+      ``false`` (the existing sidecar is returned unmodified);
+    * ``apply_promotion()`` new-promotion branch — the ``frozen_entry``
+      key is omitted from the persisted payload when the flag is
+      ``false``, and the success log line reports
+      ``frozen_entry=False`` instead of the previously hard-coded
+      ``frozen_entry=true``.
+
+Behavioural effect when the flag is set to ``false`` in ``.env``:
+
+    * The sidecar is still written (``record`` / ``evidence`` /
+      ``promotion`` metadata) — that part of promotion is independent
+      of the freeze.
+    * ``get_frozen_entry()`` still returns ``None`` for the resulting
+      sidecar because the key is absent. The ``/isolated`` template
+      falls back to the pre-v4.1 recompute path, reproducing the
+      "entry values drift between polls" symptom the analysis
+      documented. That is the intended behaviour for bisecting a
+      frozen-entry regression.
+
+The flag only gates **writes**. Reading an existing ``frozen_entry``
+from a sidecar written while the flag was still ``true`` continues to
+work — so toggling the flag off mid-session does not destabilise an
+already-frozen entry. To fully revert to the recompute path, the
+operator must also clear the promotion sidecar (``POST /admin/
+level-isolation/clear-promotion``) so the next ``apply_promotion()``
+writes a sidecar without a frozen entry.
+
+G1 v4.2 fix bundle (2026-10-29 replay analysis)
+-----------------------------------------------
+The 2026-10-29 replay exposed that `_is_path_b_active()` was not a
+reliable Path B guard in two situations:
+
+  1. **Master switch ignored.** When
+     ``STRATEGY_EXT_PATH_B_ENABLED=false``, the entry-signal service
+     correctly falls back to Path A behaviour, but this guard still
+     returned ``True`` for any external-index trigger — blocking
+     promotion even though the operator had opted out of Path B
+     entirely. ``_is_path_b_active()`` now short-circuits to
+     ``False`` when the master switch is off, matching
+     ``strategy_entry_signal_service.compute()`` and
+     ``dummy_order_service._path_b_mode()``.
+
+  2. **Legacy record defaulted to Path A.** When an isolation
+     record predates the ``trigger_is_self_nifty`` field, the guard
+     looked only at that field — which was ``None`` — and returned
+     ``False``, so a Path B session was silently promoted as if it
+     were Path A. The guard now derives defensively from
+     ``execution_path`` first, then from ``trigger_index !=
+     "NIFTY"``, before falling back to Path A. This closes the
+     2026-10-29 16:10:44 incident, where a MIDCPNIFTY R3 (Path B)
+     session was promoted to the counter-side PE.
+
+Both changes are additive: they only tighten the block condition,
+never loosen it. Path A promotions continue to work unchanged.
+
 Sidecar file (unchanged path)
 -----------------------------
 ``<LIVE_DATA_DIR>/level_isolated_instrument_promotion.json``
@@ -240,7 +324,109 @@ def _live_ltp(instrument_key: str) -> tuple[float | None, str]:
     return None, "unavailable"
 
 # --------------------------------------------------------------------------- #
-# NEW: frozen-entry extraction                                               #
+# G1 v4.1 flag-wiring fix — §5.E kill switch                                  #
+# --------------------------------------------------------------------------- #
+def _freeze_enabled() -> bool:
+    """Return True when frozen-entry writes are enabled.
+
+    ``STRATEGY_ENTRY_FREEZE_ENTRY_ON_PROMOTION`` (default True). When
+    False, the three frozen-entry write sites in this module — the
+    idempotent-branch backfill in ``apply_promotion()``, the main
+    promotion write in ``apply_promotion()``, and ``refresh_frozen_entry()``
+    — all skip writing ``frozen_entry`` to the sidecar. Reading an
+    already-present ``frozen_entry`` from a sidecar written while the
+    flag was still ``true`` continues to work; the flag gates writes
+    only.
+
+    Never raises.
+    """
+    return bool(getattr(
+        config, "STRATEGY_ENTRY_FREEZE_ENTRY_ON_PROMOTION", True,
+    ))
+
+# --------------------------------------------------------------------------- #
+# G1 v4.1 — Path B guard (hardened in v4.2)                                   #
+# --------------------------------------------------------------------------- #
+def _is_path_b_active() -> bool:
+    """Return True when the day's isolation was triggered by an
+    EXTERNAL index (MIDCPNIFTY / BANKNIFTY / SENSEX).
+
+    ``True`` means promotion must be hard-blocked: the bias-side
+    instrument stays active for the whole session, and the dummy-order
+    service is the sole executor. ``False`` means either no isolation
+    yet (safe to continue — the caller's normal guards will fire) or
+    a Path A isolation (NIFTY self-trigger), or Path B is disabled
+    by the operator.
+
+    G1 v4.2 fixes:
+
+      * **Master switch honoured.** When
+        ``STRATEGY_EXT_PATH_B_ENABLED`` is ``false`` the operator has
+        asked for the pre-v4.1 single-path model. The entry-signal
+        service and the dummy-order service already fall back to
+        Path A in that case; this guard now matches them by
+        returning ``False`` regardless of the trigger source.
+        Without this, an operator who disabled Path B would find
+        promotion still blocked on every external-index trigger.
+
+      * **Legacy record derivation.** When the isolation record
+        predates the ``trigger_is_self_nifty`` field (older
+        deployments, stale sidecars from before the v4.1 rollout),
+        the old guard returned ``False`` for the missing field — so
+        a Path B session was silently promoted as if it were Path A.
+        The guard now derives from ``execution_path`` first, then
+        from ``trigger_index != "NIFTY"``, before falling back to
+        Path A. This mirrors ``dummy_order_service._path_b_mode()``
+        and ``strategy_entry_signal_service.compute()``, so all
+        three consumers agree on the execution path for the day.
+
+    Never raises. On any isolation-service lookup failure, logs the
+    exception and returns ``False`` so that a transient outage cannot
+    invent a Path B block that would otherwise break the Path A flow.
+    """
+    # ---- G1 v4.2 — master switch ------------------------------ #
+    if not bool(getattr(config, "STRATEGY_EXT_PATH_B_ENABLED", True)):
+        return False
+
+    # ---- Read the isolation record ---------------------------- #
+    try:
+        from services.level_isolated_instrument_service import (
+            level_isolated_instrument_service,
+        )
+        iso_status = level_isolated_instrument_service.last_status()
+    except Exception:
+        logger.exception(
+            "[promotion] path-B guard lookup failed; continuing",
+        )
+        return False
+
+    iso = (iso_status or {}).get("isolated") or {}
+    if not iso:
+        return False
+
+    # ---- Primary signal: trigger_is_self_nifty ---------------- #
+    is_self_nifty = iso.get("trigger_is_self_nifty")
+    if is_self_nifty is not None:
+        return is_self_nifty is False
+
+    # ---- Legacy record — derive defensively ------------------- #
+    # Order matches dummy_order_service._path_b_mode() and
+    # strategy_entry_signal_service.compute() so all three consumers
+    # agree on the execution path for the same record.
+    path_field = str(iso.get("execution_path") or "").strip()
+    if path_field == "B_external_trigger":
+        return True
+    if path_field == "A_self_trigger":
+        return False
+
+    trig = str(iso.get("trigger_index") or "").strip().upper()
+    if trig and trig != "NIFTY":
+        return True
+
+    return False
+
+# --------------------------------------------------------------------------- #
+# Frozen-entry extraction                                                     #
 # --------------------------------------------------------------------------- #
 def _extract_candidate_block(c: dict[str, Any]) -> dict[str, Any]:
     """Return the stable, UI-facing fields of a single candidate block.
@@ -290,6 +476,13 @@ def _build_frozen_entry(
         the entry-signal header strip stays stable too;
       * the ``signal_generated_at`` timestamp so the operator can see
         when the freeze was captured.
+
+    Note (G1 v4.1 flag-wiring): this helper is pure — it builds the
+    block but does not decide whether to persist it. The three call
+    sites in ``IsolatedInstrumentPromotionService`` gate their writes
+    on ``_freeze_enabled()``; when the flag is off, this helper is
+    never called (the caller short-circuits before it), so no wasted
+    work is performed.
     """
     candidates = signal.get("candidates") or []
     chosen_side = str(target_cand.get("side") or "").upper()
@@ -354,7 +547,7 @@ class IsolatedInstrumentPromotionService:
         return self.read_active() is not None
 
     # ------------------------------------------------------------------ #
-    # NEW: frozen-entry accessors                                         #
+    # Frozen-entry accessors                                              #
     # ------------------------------------------------------------------ #
     def get_frozen_entry(self) -> dict[str, Any] | None:
         """Return today's frozen entry block, or ``None``.
@@ -368,7 +561,10 @@ class IsolatedInstrumentPromotionService:
 
           * no promotion has been applied today, OR
           * the sidecar exists but predates the ``frozen_entry``
-            feature (legacy record — see ``refresh_frozen_entry()``).
+            feature (legacy record — see ``refresh_frozen_entry()``), OR
+          * the sidecar was written while
+            ``STRATEGY_ENTRY_FREEZE_ENTRY_ON_PROMOTION`` was ``false``
+            (the key is absent from the payload in that case).
         """
         active = self.read_active()
         if not isinstance(active, dict):
@@ -398,9 +594,42 @@ class IsolatedInstrumentPromotionService:
         same backfill internally for the legacy case; this method
         is the manual escape hatch.
 
+        G1 v4.1 flag-wiring (§5.E): when
+        ``STRATEGY_ENTRY_FREEZE_ENTRY_ON_PROMOTION`` is ``false``,
+        this method returns ``{"status": "skipped", "reason":
+        "freeze_disabled"}`` immediately without touching the sidecar.
+        The flag gates the *write* only — the existing sidecar (if any)
+        is left unchanged and any ``frozen_entry`` already present in
+        it continues to be readable via ``get_frozen_entry()``.
+
         Never raises. Returns ``{"status": "ok", "frozen_entry": ...}``
         on success, or ``{"status": "error", "error": ...}`` on failure.
         """
+        # ---- G1 v4.1 §5.E — kill switch ---------------------------- #
+        if not _freeze_enabled():
+            logger.info(
+                "[promotion] refresh_frozen_entry skipped — "
+                "STRATEGY_ENTRY_FREEZE_ENTRY_ON_PROMOTION is false"
+            )
+            return {
+                "status": "skipped",
+                "reason": "freeze_disabled",
+                "generated_at": _now_utc_iso(),
+            }
+
+        # ---- Path B never triggers promotion ---------------------- #
+        # When the session was isolated by an EXTERNAL index
+        # (MIDCPNIFTY / BANKNIFTY / SENSEX), the bias-side instrument
+        # stays active for the whole day. The frozen entry must not be
+        # refreshed either — refreshing would imply we are backfilling
+        # an entry block that should not exist for this session.
+        if _is_path_b_active():
+            return {
+                "status": "blocked",
+                "reason": "path_b_external_trigger",
+                "generated_at": _now_utc_iso(),
+            }
+
         if not isinstance(signal, dict) or signal.get("status") != "ok":
             return {
                 "status": "error",
@@ -498,6 +727,18 @@ class IsolatedInstrumentPromotionService:
                 "generated_at": _now_utc_iso(),
             }
 
+        # ---- Path B never triggers promotion ---------------------- #
+        # When the session was isolated by an EXTERNAL index
+        # (MIDCPNIFTY / BANKNIFTY / SENSEX), the bias-side instrument
+        # stays active for the whole day. Promotion is only valid for
+        # Path A (NIFTY self-trigger).
+        if _is_path_b_active():
+            return {
+                "promoted": False,
+                "reason": "path_b_external_trigger",
+                "generated_at": _now_utc_iso(),
+            }
+
         if not isinstance(signal, dict) or signal.get("status") != "ok":
             return {
                 "promoted": False,
@@ -554,8 +795,16 @@ class IsolatedInstrumentPromotionService:
                     # If the existing sidecar was written before the  #
                     # frozen_entry feature, backfill it now so the   #
                     # UI stabilises.                                  #
+                    #                                                 #
+                    # G1 v4.1 flag-wiring (§5.E): this backfill is     #
+                    # gated on STRATEGY_ENTRY_FREEZE_ENTRY_ON_PROMOTION #
+                    # — when disabled, the legacy record is returned   #
+                    # unchanged (no frozen_entry is written).          #
                     # ------------------------------------------------ #
-                    if not existing.get("frozen_entry"):
+                    if (
+                        _freeze_enabled()
+                        and not existing.get("frozen_entry")
+                    ):
                         try:
                             frozen = _build_frozen_entry(signal, target_cand)
                             existing["frozen_entry"] = frozen
@@ -585,6 +834,13 @@ class IsolatedInstrumentPromotionService:
                                 "[promotion] frozen_entry backfill failed "
                                 "for legacy record — keeping sidecar as-is"
                             )
+                    elif not _freeze_enabled() and not existing.get("frozen_entry"):
+                        logger.info(
+                            "[promotion] legacy frozen_entry backfill "
+                            "skipped — STRATEGY_ENTRY_FREEZE_ENTRY_ON_PROMOTION "
+                            "is false (key=%s)",
+                            target_key,
+                        )
 
                     return {
                         "promoted": False,
@@ -711,7 +967,15 @@ class IsolatedInstrumentPromotionService:
             # between polls. On a re-promotion (allow_re_promotion),
             # this overwrites the previous frozen block with the
             # fresh one derived from the new signal.
-            frozen_entry = _build_frozen_entry(signal, target_cand)
+            #
+            # G1 v4.1 flag-wiring (§5.E): when
+            # STRATEGY_ENTRY_FREEZE_ENTRY_ON_PROMOTION is false, the
+            # frozen_entry key is omitted from the persisted payload
+            # and the /isolated template falls back to the pre-v4.1
+            # recompute path (the analysis §3 / §4.4 drift symptom).
+            frozen_entry: dict[str, Any] | None = None
+            if _freeze_enabled():
+                frozen_entry = _build_frozen_entry(signal, target_cand)
 
             payload = {
                 "day": _today_iso(),
@@ -731,9 +995,10 @@ class IsolatedInstrumentPromotionService:
                     "entry_target": entry.get("target"),
                     "strategy_chosen_side": signal.get("chosen_side"),
                 },
-                "frozen_entry": frozen_entry,
                 "record": record,
             }
+            if frozen_entry is not None:
+                payload["frozen_entry"] = frozen_entry
 
             # ---- Persist sidecar atomically ------------------------ #
             try:
@@ -797,12 +1062,13 @@ class IsolatedInstrumentPromotionService:
 
             logger.info(
                 "[promotion] PROMOTED %s -> %s (reason=%s, entry_ltp=%s, "
-                "entry_source=%s, frozen_entry=true)",
+                "entry_source=%s, frozen_entry=%s)",
                 payload["from_instrument_key"],
                 payload["to_instrument_key"],
                 payload["reason"],
                 entry.get("price"),
                 entry.get("price_source"),
+                frozen_entry is not None,
             )
 
             return {

@@ -1832,8 +1832,9 @@
         letter-spacing: 0.3px;
     }
 
-    .do-scenario-pill.signal_v2 { background: #dbeafe; color: #1e40af; }
-    .do-scenario-pill.regime    { background: var(--iso-purple-bg); color: var(--iso-purple); }
+    .do-scenario-pill.signal_v2       { background: #dbeafe; color: #1e40af; }
+    .do-scenario-pill.regime          { background: var(--iso-purple-bg); color: var(--iso-purple); }
+    .do-scenario-pill.path_b_sr_level { background: var(--iso-simulate-bg); color: var(--iso-simulate); }
 
     .do-table td.num {
         font-variant-numeric: tabular-nums;
@@ -1862,6 +1863,108 @@
         font-size: 1.8rem;
         margin-bottom: 8px;
         opacity: 0.4;
+    }
+
+    /* ---- G1 v4.2 — Path B UI additions ---- */
+    .entry-pill.path-b {
+        background: var(--iso-simulate-bg);
+        color: var(--iso-simulate);
+        border: 1px solid var(--iso-simulate-border);
+        font-weight: 800;
+    }
+    .do-path-b-badge {
+        display: inline-block;
+        padding: 1px 7px;
+        border-radius: 4px;
+        font-size: 0.62rem;
+        font-weight: 800;
+        letter-spacing: 0.4px;
+        background: var(--iso-simulate-bg);
+        color: var(--iso-simulate);
+        border: 1px solid var(--iso-simulate-border);
+        margin-left: 4px;
+    }
+
+    /* ---- G1 v4.3 — Source column + lot badge + price-source subtext ---- */
+    .do-source-cell {
+        font-size: 0.72rem;
+        line-height: 1.45;
+        min-width: 120px;
+    }
+    .do-source-cell .src-type {
+        display: inline-block;
+        padding: 1px 6px;
+        border-radius: 3px;
+        font-size: 0.6rem;
+        font-weight: 800;
+        letter-spacing: 0.3px;
+        margin-right: 4px;
+        vertical-align: middle;
+    }
+    .do-source-cell .src-type.resistance {
+        background: var(--iso-red-bg);
+        color: var(--iso-red);
+    }
+    .do-source-cell .src-type.support {
+        background: var(--iso-green-bg);
+        color: var(--iso-green);
+    }
+    .do-source-cell .src-type.signal {
+        background: var(--iso-blue-bg);
+        color: var(--iso-primary);
+    }
+    .do-source-cell .src-price {
+        font-weight: 700;
+        color: var(--iso-text);
+        vertical-align: middle;
+    }
+    .do-source-cell .src-meta {
+        display: block;
+        margin-top: 2px;
+        color: var(--iso-muted);
+        font-size: 0.65rem;
+        font-weight: 600;
+    }
+    .do-lot-badge {
+        display: inline-block;
+        padding: 1px 6px;
+        border-radius: 3px;
+        font-size: 0.62rem;
+        font-weight: 700;
+        background: #f1f5f9;
+        color: var(--iso-muted);
+        border: 1px solid var(--iso-border);
+        margin-left: 4px;
+    }
+    .do-price-src {
+        display: block;
+        font-size: 0.62rem;
+        color: var(--iso-muted);
+        font-weight: 600;
+        margin-top: 2px;
+        line-height: 1.3;
+    }
+    .do-pnl-rs {
+        display: block;
+        font-size: 0.65rem;
+        color: var(--iso-muted);
+        font-weight: 600;
+        margin-top: 2px;
+    }
+
+    /* ---- Issue 10 — legacy Path A badge shown on rows created before
+       Path B activated so the operator can tell the two apart. ---- */
+    .do-path-a-badge {
+        display: inline-block;
+        padding: 1px 7px;
+        border-radius: 4px;
+        font-size: 0.62rem;
+        font-weight: 800;
+        letter-spacing: 0.4px;
+        background: #f1f5f9;
+        color: var(--iso-muted);
+        border: 1px solid var(--iso-border);
+        margin-left: 4px;
     }
 </style>
 {% endblock %}
@@ -1976,6 +2079,17 @@
             </div>
         </div>
         <div class="iso-card-body">
+            <div class="entry-promotion-banner" id="entry-path-b-banner" style="display:none;">
+                <i class="bi bi-signpost-split-fill"></i>
+                <div>
+                    <strong>Path B · External-index trigger.</strong>
+                    The 10-minute fast scan and auto-reverse are
+                    intentionally <em>disabled</em> for this session.
+                    The bias-side instrument stays isolated all day; every
+                    post-isolation SR level spawns its own dummy BUY order
+                    with Rupee-based profit trailing.
+                </div>
+            </div>
             <div class="entry-promotion-banner" id="entry-promotion-banner" style="display: none;"></div>
             <div class="entry-touch-strip" id="entry-touch-strip"></div>
             <div class="entry-candidates" id="entry-candidates">
@@ -2083,6 +2197,12 @@
             </div>
         </div>
         <div class="iso-card-body">
+            <div class="sim-verdict-winner" id="do-lockdown-banner" style="display:none;">
+                🔒 <strong>STRATEGY LOCKED.</strong>
+                A Path B trade has reached its target. No new SR orders
+                will be evaluated for the rest of the day. Existing open
+                positions continue trailing until they exit.
+            </div>
             <div class="do-summary-strip" id="do-summary-strip"></div>
             <div id="do-body">
                 <div class="do-empty">
@@ -2321,6 +2441,13 @@
     function fmtInt(v) {
         const n = parseNum(v);
         return n === null ? "0" : Math.round(n).toLocaleString();
+    }
+
+    function fmtRs(v) {
+        const n = parseNum(v);
+        if (n === null) return "—";
+        const sign = n >= 0 ? "+" : "";
+        return `${sign}₹${n.toFixed(2)}`;
     }
 
     function esc(s) {
@@ -3017,6 +3144,18 @@
         if (isPromoted) {
             tags.push({ cls: "promo", text: "PROMOTED" });
         }
+        // G1 v4.1 — Path B badge.
+        const path = String(
+            (iso && iso.execution_path)
+            || (d && d.execution_path)
+            || ""
+        );
+        if (path === "B_external_trigger") {
+            tags.push({
+                cls: "th",
+                text: "PATH B · MULTI-ORDER",
+            });
+        }
         tagsEl.innerHTML = tags
             .map(t => `<span class="tag ${t.cls}">${esc(t.text)}</span>`)
             .join("");
@@ -3448,6 +3587,47 @@
         }
 
         card.style.display = "block";
+
+        // G1 v4.1 — Path B short-circuit.
+        const pathBBanner = document.getElementById("entry-path-b-banner");
+        if (payload.status === "path_b_mode") {
+            card.style.display = "block";
+            if (pathBBanner) pathBBanner.style.display = "flex";
+            if (chosenPill) {
+                chosenPill.textContent = "Path B · Multi-Order";
+                chosenPill.className = "sr-count-pill chosen";
+            }
+            if (touchStripEl) {
+                const iso = payload.isolated || {};
+                touchStripEl.innerHTML =
+                    '<span>Trigger: <strong>' +
+                        esc(iso.trigger_index || "—") + " " +
+                        esc(iso.trigger_level || "—") +
+                    '</strong></span>' +
+                    '<span>Bias: <strong>' +
+                        esc((payload.path_b || {}).bias_side || "—") +
+                    '</strong></span>' +
+                    '<span>Routed: <strong>' +
+                        esc(iso.routed_index || "NIFTY") +
+                    '</strong></span>' +
+                    '<span>Mode: <strong>Path B · multi-order SR watch</strong></span>';
+            }
+            if (candidatesEl) {
+                candidatesEl.innerHTML =
+                    '<div class="entry-empty">' +
+                    '<i class="bi bi-signpost-split"></i>' +
+                    'Path B: no single-trade candidate. ' +
+                    'See the Dummy Orders card below for the multi-order list.' +
+                    '</div>';
+            }
+            if (warningsEl) {
+                warningsEl.style.display = "none";
+                warningsEl.innerHTML = "";
+            }
+            return;
+        } else {
+            if (pathBBanner) pathBBanner.style.display = "none";
+        }
 
         if (payload.status !== "ok") {
             if (chosenPill) {
@@ -4920,6 +5100,7 @@
         const summaryStrip = document.getElementById("do-summary-strip");
         const bodyEl = document.getElementById("do-body");
         const statusPill = document.getElementById("do-status-pill");
+        const lockdownBanner = document.getElementById("do-lockdown-banner");
 
         if (!card || !summaryStrip || !bodyEl) return;
 
@@ -4956,16 +5137,60 @@
             }
         }
 
-        function renderSummary(data) {
+        /* G1 v4.3 — compute the total Rupee PnL across closed orders.
+           Uses the persisted `closed_profit_rs` when present (Path B
+           orders persist it) and otherwise derives from
+           `closed_pnl_pct * entry_price * lot_size`. */
+        function computeTotalRsPnl(orders) {
+            let total = 0;
+            for (const o of orders || []) {
+                if (!o || o.status === "OPEN") continue;
+                const persisted = Number(o.closed_profit_rs);
+                if (Number.isFinite(persisted)) {
+                    total += persisted;
+                    continue;
+                }
+                const pnlPct = Number(o.closed_pnl_pct);
+                const entry = Number(o.entry_price);
+                const lot = Number(o.lot_size);
+                if (Number.isFinite(pnlPct) && Number.isFinite(entry) && entry > 0) {
+                    if (Number.isFinite(lot) && lot > 0) {
+                        total += entry * pnlPct * lot;
+                    }
+                }
+            }
+            return total;
+        }
+
+        /* G1 v4.3 — count Path A vs Path B orders today. */
+        function countPaths(orders) {
+            let pathA = 0, pathB = 0;
+            for (const o of orders || []) {
+                if (!o) continue;
+                if (String(o.path || "") === "B_external_trigger") pathB++;
+                else pathA++;
+            }
+            return { pathA, pathB };
+        }
+
+        function renderSummary(data, orders) {
             if (!summaryStrip) return;
             const dayPnl = Number(data.day_pnl_pct) || 0;
             const dayR = Number(data.day_r_multiple) || 0;
             const pnlCls = dayPnl >= 0 ? "up" : "down";
             const rCls = dayR >= 0 ? "up" : "down";
 
+            const totalRs = computeTotalRsPnl(orders);
+            const rsCls = totalRs >= 0 ? "up" : "down";
+            const { pathA, pathB } = countPaths(orders);
+
             summaryStrip.innerHTML = `
                 <div class="do-summary-tile">
-                    <div class="do-label">Day PnL</div>
+                    <div class="do-label">Day ₹ PnL</div>
+                    <div class="do-value ${rsCls}">${fmtRs(totalRs)}</div>
+                </div>
+                <div class="do-summary-tile" title="Average per-order PnL %, not a compounded day return">
+                    <div class="do-label">Avg PnL %</div>
                     <div class="do-value ${pnlCls}">${fmtPct(dayPnl)}</div>
                 </div>
                 <div class="do-summary-tile">
@@ -4985,17 +5210,87 @@
                     <div class="do-value">${data.total_today || 0}</div>
                 </div>
                 <div class="do-summary-tile">
+                    <div class="do-label">Path A / Path B</div>
+                    <div class="do-value">${pathA} / ${pathB}</div>
+                </div>
+                <div class="do-summary-tile">
                     <div class="do-label">Mode</div>
                     <div class="do-value">${esc(data.mode || "—")}</div>
                 </div>
             `;
         }
 
-        function renderRow(o) {
+        /* G1 v4.3 — build the Source cell.
+           Path B orders carry an explicit `origin_level` describing the
+           SR level that spawned the order. Path A orders carry
+           `support_price` (when the arm path used a support pivot). Both
+           are surfaced here so the operator can see exactly what
+           triggered each order without opening the JSON. */
+        function buildSourceCell(o) {
+            const origin = o.origin_level || {};
+            if (origin && origin.type && origin.price != null) {
+                const t = String(origin.type).toLowerCase();
+                const cls = t === "resistance" ? "resistance"
+                          : t === "support"    ? "support"
+                          : "signal";
+                const label = t.toUpperCase();
+                return (
+                    `<span class="src-type ${cls}">${esc(label)}</span>` +
+                    `<span class="src-price">₹${fmt(origin.price)}</span>` +
+                    (origin.confirmed_time
+                        ? `<span class="src-meta">conf ${fmtTime(origin.confirmed_time)}</span>`
+                        : "")
+                );
+            }
+            if (o.support_price != null) {
+                return (
+                    `<span class="src-type support">SUPPORT</span>` +
+                    `<span class="src-price">₹${fmt(o.support_price)}</span>` +
+                    (o.support_confirmed_fast
+                        ? `<span class="src-meta">fast ${fmtTime(o.support_confirmed_fast)}</span>`
+                        : "")
+                );
+            }
+            return `<span class="src-type signal">SIGNAL</span>`;
+        }
+
+        /* Issue 7 — Path B orders are BUY-side option entries; the
+           meaningful side for the operator is the option type (CE / PE),
+           not the trade direction. Render CE/PE as a pill for Path B
+           orders, keep the raw side for Path A (legacy / single-trade)
+           orders. */
+        function buildSideCell(o, isPathB) {
+            if (isPathB) {
+                const optType = String(o.strike_type || o.type || "").toUpperCase();
+                if (optType === "CE" || optType === "PE") {
+                    const cls = optType === "CE" ? "ce" : "pe";
+                    return `<span class="type-pill ${cls}">${esc(optType)}</span>`;
+                }
+            }
+            return esc(o.side || "—");
+        }
+
+        function renderRow(o, hasPathB) {
             const status = String(o.status || "").toLowerCase();
             const scenario = String(o.scenario || "");
-            const scnCls = scenario === "regime" ? "regime" : "signal_v2";
-            const scnLabel = scenario === "regime" ? "regime" : "signal v2";
+            const isPathB = String(o.path || "") === "B_external_trigger";
+            /* Issue 10 — legacy Path A orders (no `path` field, or
+               path === "A_self_trigger") that coexisted with Path B in
+               the same day's journal are tagged so the operator can tell
+               them apart from Path B rows at a glance. Only shown when
+               the day actually contains at least one Path B order —
+               otherwise the tag would be visual noise. */
+            const isLegacyPathA = hasPathB && !isPathB;
+            const scnCls = scenario === "regime"
+                ? "regime"
+                : scenario === "path_b_sr_level"
+                    ? "path_b_sr_level"
+                    : "signal_v2";
+            const scnLabel = scenario === "regime"
+                ? "regime"
+                : scenario === "path_b_sr_level"
+                    ? "path b"
+                    : "signal v2";
             const statusCls = status.replace(/_/g, "_");
             const statusLabel = status.replace(/_/g, " ");
 
@@ -5020,23 +5315,98 @@
                 ? `<div style="font-size:0.7rem;color:var(--iso-muted)">${fmtTime(o.current_ltp_at)}</div>`
                 : "";
 
+            // G1 v4.3 — Source column
+            const sourceHtml = buildSourceCell(o);
+
+            // G1 v4.3 — Lot badge (Path B only; Path A has no lot_size)
+            const lotBadge = o.lot_size != null
+                ? `<span class="do-lot-badge">${esc(o.lot_size)}L</span>`
+                : "";
+
+            // G1 v4.3 — entry price source subtext
+            const priceSrcHtml = o.entry_price_source
+                ? `<span class="do-price-src" title="${esc(o.entry_price_source)}">${esc(quoteSourceLabel(o.entry_price_source))}</span>`
+                : "";
+
+            // G1 v4.3 — target pivot time subtext (Path B only)
+            const targetPivotHtml = o.target_pivot_time
+                ? `<span class="do-price-src">@${fmtTime(o.target_pivot_time)}</span>`
+                : "";
+
+            // G1 v4.3 — Path B badge on instrument cell
+            const pathBadge = isPathB
+                ? '<span class="do-path-b-badge">PATH B</span>'
+                : (isLegacyPathA
+                    ? '<span class="do-path-a-badge">PATH A</span>'
+                    : "");
+
+            // Issue 7 — Side column: CE/PE for Path B, raw side for Path A.
+            const sideCell = buildSideCell(o, isPathB);
+
+            // G1 v4.3 — ₹ PnL subtext for closed orders (uses persisted
+            // closed_profit_rs when available, else derives from
+            // closed_pnl_pct * entry * lot).
+            let pnlRsSub = "";
+            if (status !== "open") {
+                const persisted = Number(o.closed_profit_rs);
+                let rsVal = null;
+                if (Number.isFinite(persisted)) {
+                    rsVal = persisted;
+                } else if (Number.isFinite(closedPnl) && Number.isFinite(entry) && entry > 0) {
+                    const lot = Number(o.lot_size);
+                    if (Number.isFinite(lot) && lot > 0) {
+                        rsVal = entry * closedPnl * lot;
+                    }
+                }
+                if (rsVal !== null && Number.isFinite(rsVal)) {
+                    const rsCls = rsVal >= 0 ? "up" : "down";
+                    pnlRsSub = `<span class="do-pnl-rs ${rsCls}">${fmtRs(rsVal)}</span>`;
+                }
+            }
+
             return `
                 <tr class="${rowCls}">
                     <td>
-                        <div style="font-weight:700;font-size:0.82rem;">${esc(o.trading_symbol || o.instrument_key || "")}</div>
+                        <div style="font-weight:700;font-size:0.82rem;">
+                            ${esc(o.trading_symbol || o.instrument_key || "")}
+                            ${pathBadge}
+                        </div>
                         <div style="font-size:0.7rem;color:var(--iso-muted)">${esc(o.instrument_key || "")}</div>
                     </td>
-                    <td><span class="do-scenario-pill ${scnCls}">${esc(scnLabel)}</span></td>
-                    <td>${esc(o.side || "—")}</td>
-                    <td class="num">₹${fmt(entry)}</td>
+                    <td class="do-source-cell">${sourceHtml}</td>
+                    <td>
+                        <span class="do-scenario-pill ${scnCls}">${esc(scnLabel)}</span>
+                        ${lotBadge}
+                    </td>
+                    <td>${sideCell}</td>
+                    <td class="num">
+                        ₹${fmt(entry)}
+                        ${priceSrcHtml}
+                    </td>
                     <td class="num">₹${fmt(stop)}</td>
-                    <td class="num">₹${fmt(target)}</td>
+                    <td class="num">
+                        ₹${fmt(target)}
+                        ${targetPivotHtml}
+                    </td>
                     <td class="num">
                         ${currentStr}
                         ${currentPill}
                     </td>
+                    <td class="num">
+                        ${Number.isFinite(Number(o.current_profit_rs))
+                            ? `₹${Number(o.current_profit_rs).toFixed(2)}`
+                            : "—"}
+                        ${o.profit_state === "TRAILING"
+                            ? `<div style="font-size:0.65rem;color:var(--iso-purple);">TRAIL ${o.trailing_stop_price ? "@ ₹" + Number(o.trailing_stop_price).toFixed(2) : ""}</div>`
+                            : (o.profit_state === "PRE_TRAIL"
+                                ? `<div style="font-size:0.65rem;color:var(--iso-muted);">PRE_TRAIL</div>`
+                                : "")}
+                    </td>
                     <td><span class="do-status-pill ${statusCls}">${esc(statusLabel)}</span></td>
-                    <td class="num ${pnlCls}">${Number.isFinite(pnlValue) ? fmtPct(pnlValue) : "—"}</td>
+                    <td class="num ${pnlCls}">
+                        ${Number.isFinite(pnlValue) ? fmtPct(pnlValue) : "—"}
+                        ${pnlRsSub}
+                    </td>
                     <td class="num ${pnlCls}">${Number.isFinite(rValue) ? fmtR(rValue) : "—"}</td>
                     <td class="num">₹${fmt(o.mfe)}</td>
                     <td class="num">₹${fmt(o.mae)}</td>
@@ -5058,6 +5428,13 @@
                 return;
             }
 
+            /* Issue 10 — a single flag decides whether legacy Path A
+               rows get the "PATH A" badge. Computed once here so every
+               row sees the same answer. */
+            const hasPathB = orders.some(
+                o => String(o.path || "") === "B_external_trigger"
+            );
+
             orders.sort((a, b) => {
                 const aOpen = a.status === "OPEN" ? 0 : 1;
                 const bOpen = b.status === "OPEN" ? 0 : 1;
@@ -5078,12 +5455,14 @@
                         <thead>
                             <tr>
                                 <th>Instrument</th>
-                                <th>Scenario</th>
+                                <th>Source</th>
+                                <th>Scenario / Lot</th>
                                 <th>Side</th>
                                 <th class="num">Entry</th>
                                 <th class="num">Stop</th>
                                 <th class="num">Target</th>
                                 <th class="num">Current</th>
+                                <th class="num">₹ Profit</th>
                                 <th>Status</th>
                                 <th class="num">PnL</th>
                                 <th class="num">R</th>
@@ -5091,7 +5470,7 @@
                                 <th class="num">MAE</th>
                             </tr>
                         </thead>
-                        <tbody>${orders.map(renderRow).join("")}</tbody>
+                        <tbody>${orders.map(o => renderRow(o, hasPathB)).join("")}</tbody>
                     </table>
                 </div>
             `;
@@ -5107,17 +5486,39 @@
                 const state = await stateRes.json();
                 const summary = await sumRes.json();
 
-                renderSummary(summary);
+                const orders = Array.isArray(state.orders) ? state.orders : [];
+
+                renderSummary(summary, orders);
                 renderOrders(state);
 
-                const total = summary.total_today || 0;
-                const open = summary.open_count || 0;
-                if (total === 0) {
-                    setStatus("Waiting", "");
-                } else if (open > 0) {
-                    setStatus(`${open} open · ${total} total`, "has");
+                // G1 v4.1 — Path B badge overrides the generic open/closed status.
+                const isPathB = orders.some(
+                    o => String(o.path || "") === "B_external_trigger"
+                );
+                if (isPathB) {
+                    setStatus(
+                        state.strategy_locked_today
+                            ? "LOCKED · Path B"
+                            : "Path B · " + (summary.open_count || 0) + " open",
+                        "post",
+                    );
                 } else {
-                    setStatus(`${total} closed`, "chosen");
+                    const total = summary.total_today || 0;
+                    const open = summary.open_count || 0;
+                    if (total === 0) {
+                        setStatus("Waiting", "");
+                    } else if (open > 0) {
+                        setStatus(`${open} open · ${total} total`, "has");
+                    } else {
+                        setStatus(`${total} closed`, "chosen");
+                    }
+                }
+
+                // G1 v4.1 — strategy lockdown banner.
+                if (lockdownBanner) {
+                    lockdownBanner.style.display = state.strategy_locked_today
+                        ? "block"
+                        : "none";
                 }
             } catch (e) {
                 console.warn("[dummy-orders] refresh failed:", e);

@@ -42,6 +42,34 @@ were missing from this file — the startup backfill crashed with::
     'STRATEGY_RELATIONAL_R3_BIAS'
 
 Both are restored below under LEVEL ISOLATION.
+
+G1 v4.1 dead-flag removal (2026-10-29)
+--------------------------------------
+Three constants were defined here but **never read by any service** —
+they were documented as behaviour switches but silently fell through
+their ``getattr(..., True)`` defaults (or were hard-coded by
+construction) in the consuming code. All three have been removed so
+operators are not misled into thinking they do something:
+
+    STRATEGY_ENTRY_ONLY_ONCE_PER_DAY       (no reader — enforced by
+                                            the closed 10-min buffer
+                                            window)
+    STRATEGY_ENTRY_FIRST_TO_CONFIRM_WINS   (no reader — bias side
+                                            wins by iteration order,
+                                            not by confirmed_time)
+    STRATEGY_ENTRY_INCLUDE_PRETOUCH        (no reader — pre-touch
+                                            pivots are excluded
+                                            unconditionally in
+                                            _compute_candidate())
+
+Existing ``.env`` files that still set any of the three will have the
+value silently ignored (``os.getenv`` with a default). The behaviours
+those flags claimed are enforced by construction as noted above.
+
+A fourth flag, ``STRATEGY_ENTRY_BLOCKED_BY_RESISTANCE``, remains
+defined because it **is** read by ``_arm_bias_on_support()`` — it
+gates the fast-window resistance blocker. Its docstring still notes
+that the rule is a no-op today (spec §9.1) but the flag is live.
 """
 
 import os
@@ -449,7 +477,7 @@ LEVEL_ISOLATION_FILENAME = _str(
     "LEVEL_ISOLATION_FILENAME", "level_isolated_instrument.json"
 )
 
-# ---- G1 v4.1 hotfix — trigger-side → bias-side mapping ----------------
+# ---- G1 v4.1 hotfix — trigger-side → bias-side mapping ---------------- #
 # Read by level_isolated_instrument_service._process_winning_touch to
 # decide which option side to isolate at the routed NIFTY strike:
 #
@@ -504,7 +532,7 @@ LEVEL_ISOLATION_BACKFILL_WINDOW_END_MINUTE = _int(
 
 LEVEL_ISOLATION_TELEGRAM_ENABLED = _bool("LEVEL_ISOLATION_TELEGRAM_ENABLED", True)
 
-# ---- G1 v4.1 — Replay / self-heal integrity (§5.D) ---------------------
+# ---- G1 v4.1 — Replay / self-heal integrity (§5.D) --------------------- #
 # Both flags close the "phantom R3 touch" class of bug: the replay
 # used to check touches against the *on-disk* first_candle.json OR
 # levels while iterating a *freshly fetched* intraday candle series.
@@ -675,6 +703,12 @@ LIVE_SR_REFRESH_FROM_API_MINUTES = max(
 #      (and, for the auto-reverse path, resistances) whose pivot_time
 #      falls inside the window are iterated in pivot_time order.
 #
+#      Pivots whose pivot_time is BEFORE T_touch are excluded
+#      unconditionally in _compute_candidate(). The previous
+#      STRATEGY_ENTRY_INCLUDE_PRETOUCH flag was a no-op — no service
+#      read it — and has been removed. See "dead-flag removal" in the
+#      header docstring.
+#
 #   4. Decision priority (SUPPORT TAKES PRIORITY):
 #         CASE 1  Fast SUPPORT confirms on the bias side
 #                 → ARM THE BIAS SIDE on support bounce.
@@ -708,8 +742,13 @@ LIVE_SR_REFRESH_FROM_API_MINUTES = max(
 #   8. Soft warning (does not block): support_far_below_entry
 #      (support >20% below entry — informational only).
 #
-#   9. Tiebreak (both bias and counter armed): sort by
-#      confirmed_time_fast ascending; earliest wins.
+#   9. Tiebreak (both bias and counter armed): the bias side is
+#      iterated first in _compute_candidate() and dominates the
+#      `chosen` pick, so the bias side wins by iteration order. There
+#      is no confirmed-time-based tiebreak. (The previous
+#      STRATEGY_ENTRY_FIRST_TO_CONFIRM_WINS flag was a no-op — nothing
+#      read it — and has been removed. See "dead-flag removal" in the
+#      header docstring.)
 #
 #  10. Promotion (unchanged mechanics): if the chosen side is the
 #      counter side, promote that instrument to be the active isolated
@@ -736,26 +775,24 @@ STRATEGY_ENTRY_BUFFER_MINUTES = max(
     0, _int("STRATEGY_ENTRY_BUFFER_MINUTES", 10)
 )
 
-# When True, allow pivots whose pivot_time is BEFORE touch_time
-# (within the same buffer).  Default False — the PE 09:15 support that
-# would arm on an S3 touch only exists because it is the OR low;
-# including it re-opens the 84% loss the filter prevents.
-STRATEGY_ENTRY_INCLUDE_PRETOUCH = _bool(
-    "STRATEGY_ENTRY_INCLUDE_PRETOUCH", False
-)
-
+# NOTE: STRATEGY_ENTRY_INCLUDE_PRETOUCH was removed in G1 v4.1
+# (2026-10-29). It was a no-op — no service read it — and the
+# pre-touch exclusion is enforced unconditionally in
+# _compute_candidate(). Existing .env files that still set it are
+# silently ignored.
+#
+# NOTE: STRATEGY_ENTRY_ONLY_ONCE_PER_DAY was removed in the same pass.
+# It was also a no-op; "arm only once per day" is enforced by the
+# closed 10-minute buffer window rather than by a flag.
+#
+# NOTE: STRATEGY_ENTRY_FIRST_TO_CONFIRM_WINS was removed in the same
+# pass. It was also a no-op; the bias side wins by iteration order in
+# _compute_candidate(), not by confirmed_time_fast.
+#
 # NOTE: STRATEGY_ENTRY_PRICE_MODE was removed in G1 v2. Entry is
 # always "close at confirmed_time_fast, else live LTP". The old
 # "pivot_price" mode was the broken path; deleting it prevents
-# accidental re-use. Existing .env files that still set it are
-# ignored.
-
-# When True (default), once a candidate side has ARMED for the day
-# that side is not re-armed even if a new setup appears later.
-# When False, a new confirmed support later in the day can re-arm.
-STRATEGY_ENTRY_ONLY_ONCE_PER_DAY = _bool(
-    "STRATEGY_ENTRY_ONLY_ONCE_PER_DAY", True
-)
+# accidental re-use.
 
 # When True (default), a resistance confirmed on or before the entry
 # support's confirmed_time_fast, with pivot_time strictly after the
@@ -764,17 +801,11 @@ STRATEGY_ENTRY_ONLY_ONCE_PER_DAY = _bool(
 # blocks.
 #
 # NOTE: this rule is a NO-OP today (see G1 v3.2 spec §9.1). It is
-# retained for forward compatibility — the auto-reverse path below
-# does not depend on it.
+# retained because _arm_bias_on_support() *does* read this flag — the
+# rule is live but has no effect because the fast window's time
+# ordering makes it unreachable. Kept for forward compatibility.
 STRATEGY_ENTRY_BLOCKED_BY_RESISTANCE = _bool(
     "STRATEGY_ENTRY_BLOCKED_BY_RESISTANCE", True
-)
-
-# When True (default), if both CE and PE arm on the same day, the one
-# whose entry support confirmed EARLIEST (by confirmed_time_fast) wins;
-# the other is discarded.
-STRATEGY_ENTRY_FIRST_TO_CONFIRM_WINS = _bool(
-    "STRATEGY_ENTRY_FIRST_TO_CONFIRM_WINS", True
 )
 
 # ---- G1 v3.2 — Auto-reverse on bias-side rejection ----------------------
@@ -1022,3 +1053,88 @@ DUMMY_ORDER_MAX_ORDERS_PER_DAY = max(
 # When True (default), each dummy order fires exactly TWO Telegram
 # messages over its lifetime — one on creation, one on close.
 DUMMY_ORDER_TELEGRAM_ENABLED = _bool("DUMMY_ORDER_TELEGRAM_ENABLED", True)
+
+# ===========================================================================
+# G1 v4.1 — PATH B — EXTERNAL-INDEX TRIGGER (MULTI-ORDER SR WATCH)
+# ===========================================================================
+# When the isolation trigger originates from an EXTERNAL index
+# (MIDCPNIFTY / BANKNIFTY / SENSEX), the 10-minute fast pivot scan and
+# auto-reverse from Path A are DISABLED. The bias-side instrument stays
+# isolated for the whole session and a dummy BUY order is placed for
+# every post-isolation SR level confirmed on that bias instrument:
+#
+#     Support  on bias side  ->  BUY  bias-side instrument
+#     Resistance on bias side ->  BUY  counter-side instrument
+#
+# Every order is tracked against a Rupee-based profit ladder:
+#     peak_profit_rs >= STRATEGY_EXT_PROFIT_ACTIVATION_RS
+#         ->  switch state from PRE_TRAIL to TRAILING
+#         ->  trailing stop = Entry + (peak_profit_rs - TRAIL_GAP_RS) / lot
+#         ->  floor of TRAIL_FLOOR_RS guarantees a minimum locked gain
+#
+# Only NIFTY (65/lot) and SENSEX (20/lot) produce executable dummy
+# orders; other underlyings are tracked for telemetry only.
+# ===========================================================================
+
+# Master switch for Path B behaviour. When False, the engine reverts
+# to the pre-v4.1 single-path model (Path A only, no multi-order SR watch).
+STRATEGY_EXT_PATH_B_ENABLED = _bool("STRATEGY_EXT_PATH_B_ENABLED", True)
+
+# Comma-separated list of underlyings that generate EXECUTABLE dummy
+# orders on Path B. Anything not in this list is tracked for telemetry
+# (SR levels persisted, dashboard visible) but never produces an order.
+STRATEGY_EXT_TRACKED_UNDERLYINGS = _csv(
+    "STRATEGY_EXT_TRACKED_UNDERLYINGS", "NIFTY,SENSEX",
+)
+
+# Lot sizes used by the Rupee profit calculation on Path B.
+STRATEGY_EXT_LOT_SIZE_NIFTY = max(1, _int("STRATEGY_EXT_LOT_SIZE_NIFTY", 65))
+STRATEGY_EXT_LOT_SIZE_SENSEX = max(1, _int("STRATEGY_EXT_LOT_SIZE_SENSEX", 20))
+
+# Rupee-based profit trailing configuration.
+STRATEGY_EXT_PROFIT_ACTIVATION_RS = _float(
+    "STRATEGY_EXT_PROFIT_ACTIVATION_RS", 1000.0,
+)
+STRATEGY_EXT_TRAIL_GAP_RS = _float(
+    "STRATEGY_EXT_TRAIL_GAP_RS", 500.0,
+)
+STRATEGY_EXT_TRAIL_FLOOR_RS = _float(
+    "STRATEGY_EXT_TRAIL_FLOOR_RS", 1000.0,
+)
+
+# Alternate trailing-activation trigger: if entry < R2 and LTP >= R3
+# (both from the option's own OR levels), start trailing immediately
+# even if peak profit has not yet reached the activation threshold.
+STRATEGY_EXT_R3_BREAKOUT_ACTIVATION_ENABLED = _bool(
+    "STRATEGY_EXT_R3_BREAKOUT_ACTIVATION_ENABLED", True,
+)
+
+# Bearish-regime exit while in TRAILING mode.
+STRATEGY_EXT_BEARISH_EXIT_ENABLED = _bool(
+    "STRATEGY_EXT_BEARISH_EXIT_ENABLED", True,
+)
+STRATEGY_EXT_BEARISH_CANDLES = max(
+    1, _int("STRATEGY_EXT_BEARISH_CANDLES", 2),
+)
+
+# When any Path B trade hits its target, freeze the day: no new SR
+# orders are evaluated; open positions continue trailing until closed.
+STRATEGY_EXT_LOCKDOWN_ON_TARGET = _bool(
+    "STRATEGY_EXT_LOCKDOWN_ON_TARGET", True,
+)
+
+# Polling cadence for the multi-index boundary watch. Spec says 2 s.
+STRATEGY_TOUCH_POLL_INTERVAL_SEC = max(
+    0.5, _float("STRATEGY_TOUCH_POLL_INTERVAL_SEC", 2.0),
+)
+
+# Convenience maps derived once at import time.
+STRATEGY_LOT_SIZE_MAP = {
+    "NIFTY": STRATEGY_EXT_LOT_SIZE_NIFTY,
+    "SENSEX": STRATEGY_EXT_LOT_SIZE_SENSEX,
+}
+STRATEGY_EXT_TRACKED_UNDERLYINGS_SET = {
+    str(u).strip().upper()
+    for u in STRATEGY_EXT_TRACKED_UNDERLYINGS
+    if str(u).strip()
+}

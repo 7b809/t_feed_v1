@@ -48,6 +48,76 @@ G1 v4.1 additions (2026-10-29)
       instrument (best-effort) so that, on a live day, the counter-side
       SR state continues to accumulate ticks and does not go stale
       before the promotion runs.
+
+G1 v4.2 additions (2026-10-29)
+------------------------------
+    * `trigger_is_self_nifty` and `execution_path` are now persisted on
+      every isolation record (and on the winning-touch event). This lets
+      downstream services (dummy-order, promotion, UI) branch on
+      "was the trigger NIFTY itself, or an external index?" without
+      re-deriving the answer from `trigger_index`. `execution_path`
+      is one of:
+        - "A_self_trigger"     — the trigger index was NIFTY
+        - "B_external_trigger" — the trigger index was MIDCPNIFTY /
+                                 BANKNIFTY / SENSEX (routed to NIFTY)
+
+    * New `get_execution_path()` helper returns the current isolation's
+      execution path, or ``""`` when no isolation exists yet — so
+      callers can distinguish "not isolated yet" from either of the two
+      paths.
+
+    * `get_detail()` now exposes both fields at the top level for the
+      UI / dummy-order service.
+
+G1 v4.1 flag-wiring fix (2026-10-29)
+------------------------------------
+Three v4.1 kill switches were defined in ``core/config.py`` but never
+read by this service, so setting them to ``false`` in ``.env`` had no
+effect. All three are now wired:
+
+    * ``STRATEGY_ENTRY_REGISTER_COUNTER_SIDE`` (§5.A)
+        ``_isolate()`` now gates the counter-side candidate lookup,
+        SR registration, and inclusion in ``event["candidates"]`` on
+        this flag (in addition to ``STRATEGY_ENTRY_ALLOW_CROSSOVER``).
+        When either is false, only the bias side is registered /
+        surfaced — reproducing pre-v4.1 behaviour for bisecting the
+        counter-side entry-price bug.
+
+    * ``LEVEL_ISOLATION_REPLAY_USE_SERIES_OR`` (§5.D — replay)
+        ``run_backfill()`` now recomputes OR levels from the **same
+        intraday series** the replay iterates (via
+        ``first_candle_service.compute_for_series``) when this flag is
+        true. When false, the on-disk ``first_candle.json`` OR levels
+        are used unchanged (pre-v4.1 behaviour). The on-disk file is
+        still verified/healed by the separate
+        ``_verify_or_against_intraday`` step so the two mechanisms
+        remain complementary: the file gets corrected for future
+        runs, while the current replay uses series-derived OR.
+
+    * ``LEVEL_ISOLATION_OR_SELF_HEAL_VERIFY_HL`` (§5.D — self-heal)
+        ``_maybe_self_heal()`` now additionally compares the cached
+        ``first_candle.json`` H/L against today's real 09:15 intraday
+        bar (via ``live_sr_calc_service.get_first_intraday_candle``)
+        when this flag is true. A mismatch triggers a **targeted**
+        recompute via ``first_candle_service.recompute_for_underlying``
+        (cheap — 1-2 instruments) rather than the full ~100-instrument
+        sweep that ``first_candle_service.run()`` performs. Structural
+        issues (missing file, stale date, unreadable) still trigger
+        the full sweep because those cannot be resolved per-underlying.
+
+G1 v4.2 run_backfill() self-heal (2026-10-29)
+---------------------------------------------
+    * ``run_backfill()`` now calls ``_self_heal_execution_path()`` on any
+      already-isolated record that was written before v4.2. Legacy state
+      files persist the isolation without ``trigger_is_self_nifty`` /
+      ``execution_path``, so downstream consumers reading the persisted
+      ``isolated`` dict directly (dummy-order service, promotion, UI)
+      could fall back to Path A on a session where the trigger was
+      actually MIDCPNIFTY / BANKNIFTY / SENSEX. The self-heal derives
+      both fields from ``trigger_index`` and persists them back to disk.
+      ``get_execution_path()`` already derived defensively at read time;
+      this fix makes the *persisted* record consistent so every consumer
+      sees the same value.
 """
 
 from __future__ import annotations
@@ -246,12 +316,30 @@ class LevelIsolatedInstrumentService:
             )
 
     # ------------------------------------------------------------------ #
-    # Self-heal (filesystem-level: missing / stale-date)                 #
+    # Self-heal (filesystem-level: missing / stale-date / H/L mismatch)  #
     # ------------------------------------------------------------------ #
     def _maybe_self_heal(self, reason: str = "startup") -> None:
+        """Detect stale / missing OR files and fix them.
+
+        Structural issues (missing file, unreadable JSON, stale date)
+        always trigger the full ``first_candle_service.run()`` sweep
+        because they cannot be resolved on a per-underlying basis.
+
+        H/L mismatches against the real 09:15 intraday bar are
+        additionally checked when ``LEVEL_ISOLATION_OR_SELF_HEAL_VERIFY_HL``
+        is true (default). For those, the targeted
+        ``first_candle_service.recompute_for_underlying()`` is used
+        (cheap — 1-2 instruments) unless structural issues are also
+        present, in which case the full sweep handles both cases.
+
+        Never raises. Every failure path logs and continues — a failure
+        to self-heal must not break the caller (``run_backfill``), which
+        will still proceed with the on-disk OR files.
+        """
         today = _today_iso()
         needs_heal: list[str] = []
 
+        # ---- 1. Structural checks (always on) ------------------------ #
         for underlying in config.LEVEL_FILTER_INDEXES:
             u = str(underlying or "").strip().upper()
             if not u:
@@ -276,36 +364,187 @@ class LevelIsolatedInstrumentService:
                         f"{payload.get('date')!r})"
                     )
 
+        # ---- 2. H/L verification (gated by flag) --------------------- #
+        # §5.D (2/2): when this flag is off, only structural issues
+        # trigger self-heal. When on, H/L mismatches against the real
+        # 09:15 intraday bar are also detected and self-healed.
+        hl_mismatch_indices: list[str] = []
+        if bool(getattr(config, "LEVEL_ISOLATION_OR_SELF_HEAL_VERIFY_HL", True)):
+            try:
+                hl_mismatch_indices = (
+                    self._verify_or_hl_against_intraday_for_selfheal()
+                )
+            except Exception:
+                logger.exception(
+                    "[level-isolation] self-heal H/L verification failed"
+                )
+                hl_mismatch_indices = []
+            for canonical in hl_mismatch_indices:
+                needs_heal.append(
+                    f"{canonical}/first_candle.json "
+                    f"(H/L mismatch vs intraday)"
+                )
+
         if not needs_heal:
             return
 
         logger.warning(
-            "[level-isolation] self-heal triggered (reason=%s): %s — "
-            "running first_candle_service.run(backfill=True)",
+            "[level-isolation] self-heal triggered (reason=%s): %s",
             reason, needs_heal,
         )
+
+        # ---- 3. Choose targeted vs full-sweep recompute -------------- #
+        has_structural_issues = any(
+            "(missing)" in item
+            or "(unreadable)" in item
+            or "(stale:" in item
+            for item in needs_heal
+        )
+
         try:
             from services.first_candle_service import first_candle_service
-            summary = first_candle_service.run(
-                reason=f"level_isolation_self_heal:{reason}",
-                backfill=True,
-            )
-            logger.info(
-                "[level-isolation] self-heal complete — total=%s "
-                "computed=%s skipped=%s errors=%s elapsed=%ss",
-                summary.get("total"),
-                summary.get("computed"),
-                summary.get("instrument_skipped"),
-                summary.get("errors"),
-                summary.get("elapsed_seconds"),
-            )
+
+            if hl_mismatch_indices and not has_structural_issues:
+                # Cheap path: only H/L mismatches — recompute the
+                # affected underlyings only.
+                for canonical in hl_mismatch_indices:
+                    try:
+                        summary = first_candle_service.recompute_for_underlying(
+                            canonical.lower(),
+                            reason=f"level_isolation_or_hl:{reason}",
+                            backfill=True,
+                        )
+                        logger.info(
+                            "[level-isolation] targeted OR recompute for "
+                            "%s — total=%s computed=%s errors=%s",
+                            canonical,
+                            summary.get("total"),
+                            summary.get("computed"),
+                            summary.get("errors"),
+                        )
+                    except Exception:
+                        logger.exception(
+                            "[level-isolation] recompute_for_underlying "
+                            "failed for %s", canonical,
+                        )
+            else:
+                # Full sweep: structural issues present (or the H/L
+                # path produced no targeted candidates but structural
+                # issues exist).
+                summary = first_candle_service.run(
+                    reason=f"level_isolation_self_heal:{reason}",
+                    backfill=True,
+                )
+                logger.info(
+                    "[level-isolation] self-heal complete — total=%s "
+                    "computed=%s skipped=%s errors=%s elapsed=%ss",
+                    summary.get("total"),
+                    summary.get("computed"),
+                    summary.get("instrument_skipped"),
+                    summary.get("errors"),
+                    summary.get("elapsed_seconds"),
+                )
         except Exception:
             logger.exception(
                 "[level-isolation] self-heal first_candle failed"
             )
 
+    def _verify_or_hl_against_intraday_for_selfheal(
+        self,
+    ) -> list[str]:
+        """G1 v4.1 §5.D — verify each index's cached
+        ``first_candle.json`` H/L against today's real 09:15 bar.
+
+        Uses ``live_sr_calc_service.get_first_intraday_candle(key)``
+        which is a fresh per-index API fetch. That is why this check is
+        gated by ``LEVEL_ISOLATION_OR_SELF_HEAL_VERIFY_HL`` and why it
+        is only called from ``_maybe_self_heal`` (startup / 5-minute
+        recheck) — never from the per-tick path.
+
+        Returns the list of canonical index names whose stored H/L does
+        not match the intraday bar within ``_OR_MISMATCH_TOLERANCE``.
+        An empty list means either every OR file matches today's real
+        first bar, or no verification could be performed (missing file,
+        API error, no 09:15 bar in the intraday response) — the caller
+        treats those cases as "nothing to self-heal from this check"
+        because the structural checks already handle the missing-file
+        case and the intraday data may simply not be ready yet.
+
+        Never raises. All failure modes are silently skipped.
+        """
+        mismatches: list[str] = []
+
+        try:
+            from services.live_sr_calc_service import live_sr_calc_service
+        except Exception:
+            logger.exception(
+                "[level-isolation] self-heal H/L verify: "
+                "live_sr_calc_service import failed"
+            )
+            return mismatches
+
+        for key, meta in INDEX_METADATA.items():
+            canonical = str(meta.get("canonical") or "").strip()
+            if not canonical:
+                continue
+
+            fc_path = (
+                Path(config.LIVE_DATA_DIR) / "index"
+                / canonical.lower() / "first_candle.json"
+            )
+            if not fc_path.exists():
+                # Structural check handles missing-file case
+                continue
+
+            try:
+                payload = json.loads(fc_path.read_text(encoding="utf-8"))
+            except Exception:
+                # Structural check handles unreadable case
+                continue
+
+            stored_fc = payload.get("first_candle") or {}
+            try:
+                stored_high = float(stored_fc.get("high"))
+                stored_low = float(stored_fc.get("low"))
+            except (TypeError, ValueError):
+                continue
+
+            try:
+                first_bar = live_sr_calc_service.get_first_intraday_candle(key)
+            except Exception:
+                logger.exception(
+                    "[level-isolation] get_first_intraday_candle failed "
+                    "for %s", key,
+                )
+                continue
+            if not isinstance(first_bar, dict):
+                continue
+
+            try:
+                intraday_high = float(first_bar.get("high"))
+                intraday_low = float(first_bar.get("low"))
+            except (TypeError, ValueError):
+                continue
+
+            if (
+                abs(stored_high - intraday_high) > _OR_MISMATCH_TOLERANCE
+                or abs(stored_low - intraday_low) > _OR_MISMATCH_TOLERANCE
+            ):
+                logger.warning(
+                    "[level-isolation] self-heal H/L mismatch for %s: "
+                    "stored H/L=%.2f/%.2f vs intraday H/L=%.2f/%.2f "
+                    "(tol=%.2f)",
+                    canonical,
+                    stored_high, stored_low,
+                    intraday_high, intraday_low,
+                    _OR_MISMATCH_TOLERANCE,
+                )
+                mismatches.append(canonical)
+
+        return mismatches
+
     # ------------------------------------------------------------------ #
-    # NEW: OR-vs-intraday content verification                           #
+    # NEW: OR-vs-intraday content verification (post-intraday-fetch)     #
     # ------------------------------------------------------------------ #
     def _verify_or_against_intraday(
         self,
@@ -323,6 +562,15 @@ class LevelIsolatedInstrumentService:
         the date check passes) but whose H/L came from a different day
         — e.g. a file written by an earlier service run that was never
         overwritten after the backup was re-extracted.
+
+        This is the "late detection" counterpart to
+        ``_verify_or_hl_against_intraday_for_selfheal``. It runs
+        unconditionally (not gated by any flag) because it consumes the
+        intraday candle dict the replay has already fetched — no extra
+        API calls. It catches any residual staleness after
+        ``_maybe_self_heal`` ran, in case the self-heal couldn't fix
+        a file (e.g. because the intraday bar was not yet available at
+        self-heal time but has arrived by replay time).
 
         Never raises. All failure modes (missing file, unparseable JSON,
         no intraday candles for that index) are treated as "cannot
@@ -397,6 +645,73 @@ class LevelIsolatedInstrumentService:
                 stale.append(canonical)
 
         return stale
+
+    # ------------------------------------------------------------------ #
+    # NEW: series-derived OR computation (G1 v4.1 §5.D replay fix)       #
+    # ------------------------------------------------------------------ #
+    def _recompute_or_from_intraday(
+        self,
+        intraday: dict[str, list[dict[str, Any]]],
+    ) -> dict[str, dict[str, Any]]:
+        """G1 v4.1 §5.D — recompute OR levels from the same intraday
+        series the replay iterates.
+
+        For each monitored index, calls
+        ``first_candle_service.compute_for_series(canonical.lower(),
+        candles)`` which locates the 09:15 bar in ``candles`` and
+        computes the OR levels from that bar. Returns a dict keyed by
+        canonical name (e.g. ``"MIDCPNIFTY"``) whose values match the
+        shape of ``_load_or_levels()`` — so the caller can swap them
+        transparently.
+
+        Indices whose candles are missing, whose ``compute_for_series``
+        call raises, or whose series has no 09:15 bar are simply
+        omitted from the result. During replay, an absent canonical
+        means no touches are detected for that index — which is the
+        correct fallback when the series cannot support an OR (better
+        to miss a touch than to fabricate one from a stale OR file).
+
+        Never raises.
+        """
+        out: dict[str, dict[str, Any]] = {}
+
+        try:
+            from services.first_candle_service import first_candle_service
+        except Exception:
+            logger.exception(
+                "[level-isolation] series-OR: first_candle_service "
+                "import failed"
+            )
+            return out
+
+        for key, meta in INDEX_METADATA.items():
+            canonical = str(meta.get("canonical") or "").strip()
+            if not canonical:
+                continue
+
+            candles = intraday.get(key) or []
+            if not candles:
+                continue
+
+            try:
+                result = first_candle_service.compute_for_series(
+                    canonical.lower(), candles,
+                )
+            except Exception:
+                logger.exception(
+                    "[level-isolation] series-OR: compute_for_series "
+                    "failed for %s", canonical,
+                )
+                continue
+
+            if not isinstance(result, dict):
+                continue
+
+            or_levels = result.get("or_levels")
+            if isinstance(or_levels, dict) and or_levels:
+                out[canonical] = or_levels
+
+        return out
 
     # ------------------------------------------------------------------ #
     # Market gates                                                       #
@@ -672,8 +987,18 @@ class LevelIsolatedInstrumentService:
         # the UI shows the full 4-candidate set instead of bias-side-only.
         # The `pick` above is still chosen from bias_candidates only —
         # arbitration behaviour is unchanged.
+        #
+        # G1 v4.1 flag-wiring fix (§5.A): the counter-side collection is
+        # additionally gated by STRATEGY_ENTRY_REGISTER_COUNTER_SIDE. When
+        # either flag is false, only bias-side candidates are surfaced —
+        # reproducing the pre-v4.1 behaviour where the counter side is
+        # neither registered with the SR engine nor shown on the UI.
         counter_candidates: list[dict[str, Any]] = []
-        if bool(getattr(config, "STRATEGY_ENTRY_ALLOW_CROSSOVER", True)):
+        register_counter = (
+            bool(getattr(config, "STRATEGY_ENTRY_ALLOW_CROSSOVER", True))
+            and bool(getattr(config, "STRATEGY_ENTRY_REGISTER_COUNTER_SIDE", True))
+        )
+        if register_counter:
             counter_side = "S3" if trigger_side == "R3" else "R3"
             counter_candidates = self._find_nifty_candidates(
                 counter_side, nifty_filtered,
@@ -685,6 +1010,15 @@ class LevelIsolatedInstrumentService:
         for c in counter_candidates:
             tagged_candidates.append({**c, "side": "counter"})
 
+        # G1 v4.2: persist the execution path on the event so downstream
+        # services (dummy-order, promotion, UI) can branch on it without
+        # re-deriving from trigger_canonical.
+        trigger_is_self_nifty = (trigger_canonical == "NIFTY")
+        execution_path = (
+            "A_self_trigger" if trigger_is_self_nifty
+            else "B_external_trigger"
+        )
+
         event: dict[str, Any] = {
             "index": trigger_canonical,
             "side": trigger_side,
@@ -694,6 +1028,8 @@ class LevelIsolatedInstrumentService:
             "touched_at": winner["touched_at"],
             "source": source,
             "trigger_priority": winner["priority"],
+            "trigger_is_self_nifty": trigger_is_self_nifty,
+            "execution_path": execution_path,
             "simultaneous_touches": simultaneous_touches or [],
             "routed_nifty_ltp": float(nifty_ltp),
             "routed_nifty_ltp_source": nifty_ltp_source,
@@ -1153,7 +1489,7 @@ class LevelIsolatedInstrumentService:
         return snapshot
 
     # ------------------------------------------------------------------ #
-    # MODIFIED: isolation — register both sides with SR                  #
+    # MODIFIED: isolation — register both sides with SR (flag-gated)     #
     # ------------------------------------------------------------------ #
     def _isolate(
         self,
@@ -1214,6 +1550,25 @@ class LevelIsolatedInstrumentService:
             "instrument_or_levels": snapshot.get("instrument_or_levels"),
             "instrument_quote_source": snapshot.get("instrument_quote_source"),
         }
+
+        # G1 v4.2: propagate trigger_is_self_nifty / execution_path onto
+        # the isolated record so downstream services (dummy-order,
+        # promotion, UI) can branch without re-deriving it from
+        # `trigger_index`. Legacy records (pre-v4.2) will be handled
+        # defensively by `get_execution_path()`.
+        isolated["trigger_is_self_nifty"] = bool(
+            event.get(
+                "trigger_is_self_nifty",
+                trigger_index_canonical == "NIFTY",
+            )
+        )
+        isolated["execution_path"] = event.get(
+            "execution_path",
+            "A_self_trigger"
+            if isolated["trigger_is_self_nifty"]
+            else "B_external_trigger",
+        )
+
         self._state["isolated"] = isolated
         event["status"] = "isolated"
         event["isolated_instrument"] = candidate.get("instrument_key")
@@ -1225,7 +1580,7 @@ class LevelIsolatedInstrumentService:
         logger.info(
             "[level-isolation] ISOLATED reason=%s trigger=%s %s "
             "priority=%d routed_%s_ltp=%s strike=%s bias=%s "
-            "source=%s",
+            "source=%s execution_path=%s",
             reason, trigger_index_canonical, event.get("side"),
             event.get("trigger_priority") or 0,
             routed_canonical.lower(),
@@ -1233,18 +1588,31 @@ class LevelIsolatedInstrumentService:
             candidate.get("strike"),
             candidate.get("type"),
             isolated["source"],
+            isolated.get("execution_path"),
         )
 
-        # ---- G1 v4.1: register BOTH sides with the SR engine --------- #
+        # ---- G1 v4.1 §5.A: register BOTH sides with the SR engine ----- #
         # This runs BEFORE the SR tracker hook and BEFORE any later
         # entry-signal computation. It makes the counter-side option's
         # candle series available in `live_sr_levels_service._states`,
         # which is what `strategy_entry_signal_service._candle_close_at()`
         # reads from. Without this, the counter-side entry price silently
         # falls back to `live_ltp` on a simulate-mode replay.
+        #
+        # G1 v4.1 flag-wiring fix (§5.A): the counter-side registration
+        # is gated on STRATEGY_ENTRY_REGISTER_COUNTER_SIDE **and**
+        # STRATEGY_ENTRY_ALLOW_CROSSOVER. When either is false, only the
+        # bias side is registered — reproducing the pre-v4.1 behaviour
+        # where the counter side was never registered with the SR engine.
         counter_candidate: dict[str, Any] | None = None
         try:
-            if bool(getattr(config, "STRATEGY_ENTRY_ALLOW_CROSSOVER", True)):
+            register_counter = (
+                bool(getattr(config, "STRATEGY_ENTRY_ALLOW_CROSSOVER", True))
+                and bool(getattr(
+                    config, "STRATEGY_ENTRY_REGISTER_COUNTER_SIDE", True,
+                ))
+            )
+            if register_counter:
                 counter_candidate = self._find_counter_candidate(candidate)
             self._register_isolated_pair_with_sr(candidate, counter_candidate)
         except Exception:
@@ -1269,6 +1637,76 @@ class LevelIsolatedInstrumentService:
                 daemon=True,
                 name="level-isolation-telegram",
             ).start()
+
+    # ------------------------------------------------------------------ #
+    # NEW (G1 v4.2): execution-path accessor                             #
+    # ------------------------------------------------------------------ #
+    def get_execution_path(self) -> str:
+        """Return the current isolation's execution path, or ''.
+
+        '' when no isolation exists yet (so callers can distinguish
+        'not isolated yet' from either of the two paths).
+        """
+        with self._lock:
+            iso = self._state.get("isolated") or {}
+            path = str(iso.get("execution_path") or "").strip()
+            if path:
+                return path
+            # Legacy records (pre-v4.1) have no path — derive defensively.
+            if iso:
+                return (
+                    "A_self_trigger"
+                    if str(iso.get("trigger_index") or "").upper() == "NIFTY"
+                    else "B_external_trigger"
+                )
+            return ""
+
+    # ------------------------------------------------------------------ #
+    # NEW (G1 v4.2): self-heal execution-path fields on legacy records   #
+    # ------------------------------------------------------------------ #
+    def _self_heal_execution_path(self, iso: dict[str, Any]) -> bool:
+        """G1 v4.2 — populate ``trigger_is_self_nifty`` / ``execution_path``
+        on legacy isolation records that were written before those fields
+        existed.
+
+        The live path always writes both fields (see ``_isolate``), but a
+        state file produced by a pre-v4.2 build will lack them. Downstream
+        consumers that read the persisted ``isolated`` dict directly (e.g.
+        the dummy-order service) would then fall back to Path A even when
+        the trigger was MIDCPNIFTY / BANKNIFTY / SENSEX. This helper derives
+        both fields from ``trigger_index`` and returns True when anything
+        was written, so the caller knows to persist the state.
+
+        Never raises.
+        """
+        if not isinstance(iso, dict) or not iso:
+            return False
+
+        changed = False
+        trigger_canonical = str(iso.get("trigger_index") or "").strip().upper()
+
+        if iso.get("trigger_is_self_nifty") is None:
+            iso["trigger_is_self_nifty"] = (trigger_canonical == "NIFTY")
+            changed = True
+
+        if not str(iso.get("execution_path") or "").strip():
+            iso["execution_path"] = (
+                "A_self_trigger"
+                if bool(iso.get("trigger_is_self_nifty"))
+                else "B_external_trigger"
+            )
+            changed = True
+
+        if changed:
+            logger.info(
+                "[level-isolation] self-healed execution-path fields on "
+                "legacy isolation record — trigger=%s "
+                "trigger_is_self_nifty=%s execution_path=%s",
+                trigger_canonical or "—",
+                iso.get("trigger_is_self_nifty"),
+                iso.get("execution_path"),
+            )
+        return changed
 
     def _send_telegram(self, isolated: dict[str, Any]) -> None:
         try:
@@ -1409,6 +1847,18 @@ class LevelIsolatedInstrumentService:
                 iso = self._state["isolated"]
                 self._ensure_tracker_attached()
 
+                # G1 v4.2 self-heal: legacy isolation records (written
+                # by pre-v4.2 builds) may be missing the
+                # `trigger_is_self_nifty` / `execution_path` fields.
+                # Derive + persist them here so downstream consumers
+                # (dummy-order, promotion, UI) branch on the same value
+                # the live path would have written — preventing legacy
+                # sessions from silently falling back to Path A when the
+                # trigger was actually an external index.
+                execution_path_self_healed = self._self_heal_execution_path(iso)
+                if execution_path_self_healed:
+                    self._save_state()
+
                 if self._snapshot_needs_backfill(iso):
                     logger.info(
                         "[level-isolation] isolated record exists but "
@@ -1425,12 +1875,10 @@ class LevelIsolatedInstrumentService:
                 return {
                     "status": "already_isolated",
                     "isolated": self._state["isolated"],
+                    "execution_path_self_healed": execution_path_self_healed,
                 }
 
-            or_levels = self._load_or_levels()
             filtered = self._load_filtered_instruments()
-            if not or_levels:
-                return {"status": "skipped", "reason": "missing_or_levels"}
             nifty_filtered = filtered.get("NIFTY")
             if not nifty_filtered:
                 return {"status": "skipped", "reason": "missing_nifty_filtered"}
@@ -1442,12 +1890,21 @@ class LevelIsolatedInstrumentService:
             if not any(intraday.values()):
                 return {"status": "skipped", "reason": "no_intraday_data"}
 
+            # Load OR from disk first (used both as a fallback and as the
+            # baseline the verification step below compares against).
+            or_levels = self._load_or_levels()
+
             # -------------------------------------------------------- #
             # G1 v4.1: verify each index's stored OR against the real  #
             # 09:15 bar from the intraday series. Any mismatch means    #
             # first_candle.json is stale — recompute it before replay   #
             # so a phantom touch cannot fire on a wrong R3 / S3.        #
             # -------------------------------------------------------- #
+            # NOTE: this check is the "late detection" counterpart to
+            # the H/L verification inside `_maybe_self_heal` (which is
+            # gated by LEVEL_ISOLATION_OR_SELF_HEAL_VERIFY_HL). It runs
+            # unconditionally because it consumes the intraday candles
+            # already fetched for the replay — no extra API calls.
             try:
                 stale_indices = self._verify_or_against_intraday(intraday)
             except Exception:
@@ -1476,6 +1933,38 @@ class LevelIsolatedInstrumentService:
                         "[level-isolation] OR recompute failed — "
                         "replaying with existing or_levels"
                     )
+
+            # -------------------------------------------------------- #
+            # G1 v4.1 §5.D (replay fix): when the flag is on, replace  #
+            # the on-disk OR with OR recomputed from the SAME intraday #
+            # series the replay iterates. This is the primary fix for  #
+            # the "phantom MIDCPNIFTY R3 touch" class of bug — the OR  #
+            # used for the trigger check is guaranteed consistent with #
+            # the candles. When the flag is off, the (possibly-healed)  #
+            # on-disk OR is used unchanged (pre-v4.1 behaviour).       #
+            # -------------------------------------------------------- #
+            if bool(getattr(config, "LEVEL_ISOLATION_REPLAY_USE_SERIES_OR", True)):
+                series_or = self._recompute_or_from_intraday(intraday)
+                if series_or:
+                    or_levels = series_or
+                    logger.info(
+                        "[level-isolation] replay OR recomputed from "
+                        "series — indices=%s",
+                        sorted(series_or.keys()),
+                    )
+                elif not or_levels:
+                    return {
+                        "status": "skipped",
+                        "reason": "missing_or_levels",
+                    }
+                else:
+                    logger.info(
+                        "[level-isolation] series-OR produced no entries — "
+                        "falling back to on-disk OR levels (indices=%s)",
+                        sorted(or_levels.keys()),
+                    )
+            elif not or_levels:
+                return {"status": "skipped", "reason": "missing_or_levels"}
 
             merged = self._merge_all_by_minute(intraday)
             if not merged:
@@ -2077,6 +2566,17 @@ class LevelIsolatedInstrumentService:
                 "day": self._state.get("day") or _today_iso(),
                 "market": market,
                 "isolated": isolated,
+                # G1 v4.2: expose execution_path / trigger_is_self_nifty at
+                # the top level so the UI and dummy-order service can branch
+                # without digging into `isolated` themselves.
+                "execution_path": (
+                    (isolated or {}).get("execution_path")
+                    if isinstance(isolated, dict) else None
+                ),
+                "trigger_is_self_nifty": (
+                    (isolated or {}).get("trigger_is_self_nifty")
+                    if isinstance(isolated, dict) else None
+                ),
                 "trigger_event": trigger_event,
                 "candidates": (
                     list(trigger_event.get("candidates") or [])

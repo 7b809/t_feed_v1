@@ -43,6 +43,110 @@ Fixes the three bugs surfaced by the 2026-10-29 SIMULATE-mode replay:
      entry" selection, which on a day-long down trend picked a
      resistance that only formed hours AFTER entry (e.g. 63.00 @ 15:24
      for a 09:23 entry, instead of the correct 110.65 @ 10:56).
+
+G1 v4.2 changes (2026-10-29)
+----------------------------
+    * ``StrategyEntrySignalService.compute()`` now branches on
+      ``execution_path`` at the very top:
+
+        - Path A (``trigger_is_self_nifty == True``) — the trigger index
+          was NIFTY itself; behaviour is **unchanged** from v4.1: the
+          10-minute post-touch scan and auto-reverse both run.
+
+        - Path B (``trigger_is_self_nifty == False``) — the trigger
+          index was MIDCPNIFTY / BANKNIFTY / SENSEX. The 10-minute scan
+          and auto-reverse are **intentionally disabled**. The
+          bias-side instrument stays isolated all day, and the
+          dummy-order service independently manages multi-order SR
+          level execution + Rupee trailing on the bias-side instrument.
+
+      The new ``_build_path_b_response()`` helper returns the Path B
+      payload. Path B can be disabled entirely by setting
+      ``STRATEGY_EXT_PATH_B_ENABLED=false``, in which case the service
+      falls through to the Path A logic regardless of trigger source
+      (i.e. behaves exactly as v4.1).
+
+G1 v4.2 fix bundle (2026-10-29 replay analysis)
+-----------------------------------------------
+The 2026-10-29 replay exposed two Path B routing defects in this
+service that mirrored the same defects in ``dummy_order_service``
+and ``isolated_instrument_promotion_service``:
+
+  1. **Legacy record defaulted to Path A.** When the isolation
+     record predates the ``trigger_is_self_nifty`` field (older
+     deployments, stale sidecars from before the v4.1 rollout), the
+     old check ``iso.get("trigger_is_self_nifty") is False`` was
+     ``False`` for the missing field — so the whole ``compute()``
+     fell through to Path A logic. The 10-minute scan and
+     auto-reverse then ran on what was actually a Path B session,
+     and a MIDCPNIFTY R3 (Path B) session was silently promoted as
+     if it were Path A.
+
+     ``_derive_trigger_is_self_nifty()`` now derives the correct
+     execution path in a fixed order:
+
+         1. ``trigger_is_self_nifty`` field if present (authoritative).
+         2. ``execution_path`` ("A_self_trigger" / "B_external_trigger").
+         3. ``trigger_index == "NIFTY"``.
+         4. Default ``True`` (Path A) for records that carry no
+            signal at all.
+
+     Each legacy derivation logs a WARNING, so an operator can see
+     exactly which field the decision came from on a pre-v4.1
+     sidecar.
+
+  2. **Master switch visibility.** The
+     ``STRATEGY_EXT_PATH_B_ENABLED`` check was already present, but
+     it was written as ``if not ...: pass else: ...``, which made it
+     easy to misread. The branch is now an explicit early-return
+     guard: when the flag is off, the service drops straight to the
+     Path A logic — matching ``dummy_order_service._path_b_mode()``
+     and ``isolated_instrument_promotion_service._is_path_b_active()``
+     which now short-circuit the same way.
+
+     The response's ``isolated.trigger_is_self_nifty`` field is
+     also populated from ``_derive_trigger_is_self_nifty()`` so
+     downstream consumers (dashboard, dummy-order service) always
+     see the correct value, even for legacy records that never had
+     the field written.
+
+Both changes are additive: Path A behaviour is unchanged, and the
+two fixes only tighten the Path B routing condition (never loosen
+it). The three consumers of ``trigger_is_self_nifty``
+(``strategy_entry_signal_service``, ``dummy_order_service``,
+``isolated_instrument_promotion_service``) now agree on the
+execution path for the same record.
+
+G1 v4.1 flag-wiring fix (2026-10-29)
+------------------------------------
+Two v4.1 kill switches were defined in ``core/config.py`` but never
+read by this service, so setting them to ``false`` in ``.env`` had no
+effect. Both are now wired:
+
+    * ``STRATEGY_ENTRY_CANDLE_FALLBACK_ENABLED`` (§5.B)
+        ``_entry_price_for()`` now wraps the intraday-API fallback in
+        this flag. When false, resolution falls straight through from
+        the SR-engine candle buffer to live LTP, reproducing pre-v4.1
+        behaviour for bisecting entry-price regressions.
+
+    * ``STRATEGY_ENTRY_TARGET_REQUIRE_POST_ENTRY`` (§5.C)
+        ``_pick_target_resistance()`` now gates its "confirmed strictly
+        AFTER entry" filter on this flag. When false, the pre-v4.1
+        "lowest price above entry" selection is restored.
+
+Two additional flag **name** mismatches are corrected here as well.
+The previous revision read:
+
+    * ``STRATEGY_PRIORITIZE_SUPPORT_OVER_RESISTANCE``  (not in config.py)
+    * ``STRATEGY_ALLOW_OPPOSITE_REVERSAL_ON_RESISTANCE``  (not in config.py)
+
+which silently fell through the ``getattr(..., True)`` defaults. This
+revision reads the exact keys that ``core/config.py`` defines:
+
+    * ``STRATEGY_ENTRY_PRIORITIZE_SUPPORT``
+    * ``STRATEGY_ENTRY_ALLOW_AUTO_REVERSE``
+
+so operators can actually flip them off via ``.env``.
 """
 
 from __future__ import annotations
@@ -108,6 +212,95 @@ def _parse_touch_reason(reason: Any) -> tuple[str | None, str | None]:
     if "s3" in r:
         return "S3", "PE"
     return None, None
+
+# --------------------------------------------------------------------------- #
+# G1 v4.2 — Path A / Path B derivation (shared with the other consumers)      #
+# --------------------------------------------------------------------------- #
+def _derive_trigger_is_self_nifty(iso: dict[str, Any]) -> bool:
+    """Return True when the isolation was triggered by NIFTY itself.
+
+    ``True``  → Path A (NIFTY self-trigger; 10-minute scan + auto-reverse run).
+    ``False`` → Path B (external index; multi-order SR watch, no scan).
+
+    G1 v4.2 — the previous revision only looked at the
+    ``trigger_is_self_nifty`` field. That field was introduced with
+    G1 v4.1, so every isolation record written before the upgrade
+    (legacy sidecars persisted across a deploy, or files created
+    before the v4.1 rollout) has ``trigger_is_self_nifty = None``
+    and was silently classified as Path A. This is the exact failure
+    that let a MIDCPNIFTY R3 (Path B) session promote as if it were
+    Path A on 2026-10-29.
+
+    Resolution order (first match wins):
+
+      1. ``trigger_is_self_nifty`` — authoritative when present.
+      2. ``execution_path``        — "A_self_trigger" / "B_external_trigger".
+      3. ``trigger_index == "NIFTY"`` — the old v4.0 field.
+      4. Default ``True``          — record carries no signal at all;
+                                     assume Path A so the existing
+                                     Path A flow is preserved.
+
+    Each legacy derivation logs a WARNING so the operator can see
+    exactly which field was used. Matches
+    ``dummy_order_service._path_b_mode()`` and
+    ``isolated_instrument_promotion_service._is_path_b_active()``
+    so all three consumers agree on the execution path for the
+    same record.
+    """
+    if not isinstance(iso, dict):
+        return True
+
+    # ---- 1. Authoritative field ----------------------------------- #
+    val = iso.get("trigger_is_self_nifty")
+    if val is not None:
+        return bool(val)
+
+    # ---- 2. execution_path ---------------------------------------- #
+    path = str(iso.get("execution_path") or "").strip()
+    if path == "B_external_trigger":
+        logger.warning(
+            "[strategy-entry] legacy isolation record missing "
+            "trigger_is_self_nifty; derived Path B from "
+            "execution_path=%r", path,
+        )
+        return False
+    if path == "A_self_trigger":
+        logger.warning(
+            "[strategy-entry] legacy isolation record missing "
+            "trigger_is_self_nifty; derived Path A from "
+            "execution_path=%r", path,
+        )
+        return True
+
+    # ---- 3. trigger_index ----------------------------------------- #
+    trig = str(iso.get("trigger_index") or "").strip().upper()
+    if trig:
+        derived = (trig == "NIFTY")
+        logger.warning(
+            "[strategy-entry] legacy isolation record missing "
+            "trigger_is_self_nifty and execution_path; derived %s "
+            "from trigger_index=%s",
+            "Path A" if derived else "Path B",
+            trig,
+        )
+        return derived
+
+    # ---- 4. Fall back to Path A ----------------------------------- #
+    logger.warning(
+        "[strategy-entry] isolation record missing all Path A/B "
+        "signals (trigger_is_self_nifty / execution_path / "
+        "trigger_index); defaulting to Path A",
+    )
+    return True
+
+def _path_b_master_switch_enabled() -> bool:
+    """Return True when Path B is enabled per configuration.
+
+    ``STRATEGY_EXT_PATH_B_ENABLED`` (default True). When False the
+    operator has asked for the pre-v4.1 single-path model: every
+    session runs the Path A logic, regardless of trigger source.
+    """
+    return bool(getattr(config, "STRATEGY_EXT_PATH_B_ENABLED", True))
 
 # --------------------------------------------------------------------------- #
 # LTP-tier stop-loss (unchanged from G1 v2)                                   #
@@ -317,17 +510,21 @@ def _entry_price_for(
                                                resulting price may be
                                                wrong in simulate mode)
 
-    The previous revision fell straight through from (1) to (3), which
-    produced the "entry price = 15:31 wall clock LTP" bug in simulate
-    mode. Step (2) closes that gap.
+    Step (2) is gated on ``STRATEGY_ENTRY_CANDLE_FALLBACK_ENABLED``
+    (default ``True``). Setting it to ``false`` in ``.env`` reproduces
+    the pre-v4.1 path — skip the intraday fallback entirely and jump
+    straight from the SR-engine buffer to live LTP. Useful for
+    bisecting entry-price regressions without reverting the whole
+    bundle.
     """
     close = _candle_close_at(instrument_key, confirmed_time_iso)
     if close is not None:
         return close, "candle_close_at_confirmed_fast"
 
-    close = _candle_close_from_intraday(instrument_key, confirmed_time_iso)
-    if close is not None:
-        return close, "candle_close_from_intraday"
+    if bool(getattr(config, "STRATEGY_ENTRY_CANDLE_FALLBACK_ENABLED", True)):
+        close = _candle_close_from_intraday(instrument_key, confirmed_time_iso)
+        if close is not None:
+            return close, "candle_close_from_intraday"
 
     ltp = _live_ltp(instrument_key)
     if ltp is not None:
@@ -351,7 +548,8 @@ def _pick_target_resistance(
     entry), which is not a real "next resistance" from the entry's
     perspective.
 
-    Correct behaviour:
+    Correct behaviour (when ``STRATEGY_ENTRY_TARGET_REQUIRE_POST_ENTRY``
+    is True — the default):
 
         1. Filter to resistances that confirmed **strictly AFTER**
            ``entry_confirmed_iso``.
@@ -359,16 +557,23 @@ def _pick_target_resistance(
            ``entry_price``.
         3. Pick the EARLIEST confirmed among the survivors.
 
-    Fallback: when no resistance survives the time filter (e.g. the
-    option collapsed below every subsequent pivot), return the
-    lowest-priced resistance above entry (previous behaviour) so the
-    caller still gets a target when one exists. Returns ``None`` only
-    when there is no resistance above ``entry_price`` at all.
+    Fallback (always applied when the time filter is disabled or when
+    no resistance survives it): return the lowest-priced resistance
+    above entry. Returns ``None`` only when there is no resistance
+    above ``entry_price`` at all.
+
+    ``STRATEGY_ENTRY_TARGET_REQUIRE_POST_ENTRY`` is an opt-out kill
+    switch for §5.C. Setting it to ``false`` in ``.env`` restores the
+    pre-v4.1 "lowest above entry" behaviour, useful for bisecting
+    target-selection regressions.
     """
     entry_conf_dt = _parse_iso(entry_confirmed_iso)
+    require_post_entry = bool(getattr(
+        config, "STRATEGY_ENTRY_TARGET_REQUIRE_POST_ENTRY", True
+    ))
 
-    # ---- Primary: first confirmed-after-entry resistance above price #
-    if entry_conf_dt is not None:
+    # ---- Primary: first confirmed-after-entry resistance above price # #
+    if require_post_entry and entry_conf_dt is not None:
         time_filtered: list[tuple[datetime, dict[str, Any]]] = []
         for lvl in levels:
             if str(lvl.get("level") or "").lower() != "resistance":
@@ -389,7 +594,7 @@ def _pick_target_resistance(
             time_filtered.sort(key=lambda t: t[0])
             return time_filtered[0][1]
 
-    # ---- Fallback: lowest-priced resistance above entry -------------- #
+    # ---- Fallback: lowest-priced resistance above entry ------------ #
     best: dict[str, Any] | None = None
     best_price: float | None = None
     for lvl in levels:
@@ -656,14 +861,17 @@ def _compute_candidate(
     resistances_in_window.sort(key=lambda r: r["pivot_dt"])
 
     # ---- 2. Prioritize support over resistance ------------------- #
-    # G1 v4.0 — the new flag names are aliased in core/config.py to
-    # fall back to the v3.2 names when the new env vars are unset, so
-    # existing .env files keep working without any edit.
+    # G1 v4.1 flag-wiring fix — read the exact keys that
+    # ``core/config.py`` defines. The previous revision read
+    # ``STRATEGY_PRIORITIZE_SUPPORT_OVER_RESISTANCE`` and
+    # ``STRATEGY_ALLOW_OPPOSITE_REVERSAL_ON_RESISTANCE``, neither of
+    # which exists in config.py; both ``getattr`` calls silently fell
+    # through to ``True`` regardless of the operator's .env setting.
     prioritize_support = bool(getattr(
-        config, "STRATEGY_PRIORITIZE_SUPPORT_OVER_RESISTANCE", True
+        config, "STRATEGY_ENTRY_PRIORITIZE_SUPPORT", True
     ))
     allow_auto_reverse = bool(getattr(
-        config, "STRATEGY_ALLOW_OPPOSITE_REVERSAL_ON_RESISTANCE", True
+        config, "STRATEGY_ENTRY_ALLOW_AUTO_REVERSE", True
     ))
 
     # ---- CASE 1: SUPPORT (priority) ------------------------------ #
@@ -803,6 +1011,8 @@ def _arm_bias_on_support(
 
         # G1 v4.1 — target: first resistance confirmed AFTER the entry
         # support's confirmed_time_fast, priced above entry_price.
+        # Filter is gated on STRATEGY_ENTRY_TARGET_REQUIRE_POST_ENTRY
+        # inside ``_pick_target_resistance``.
         best_r = _pick_target_resistance(
             levels, entry_price, support_confirmed_fast_iso,
         )
@@ -863,7 +1073,8 @@ def _trigger_auto_reverse(
 
     * The target is now selected via ``_pick_target_resistance()``
       (first resistance confirmed AFTER the rejection), matching the
-      bias-side arm path.
+      bias-side arm path. The post-entry filter is gated on
+      ``STRATEGY_ENTRY_TARGET_REQUIRE_POST_ENTRY``.
     """
     for r in resistances_in_window:
         r_conf_iso = r["confirmed_time_fast"]
@@ -912,7 +1123,8 @@ def _trigger_auto_reverse(
         )
 
         # Target: first counter-side resistance confirmed AFTER the
-        # rejection minute, priced above the counter entry.
+        # rejection minute, priced above the counter entry. Post-entry
+        # filter gated on STRATEGY_ENTRY_TARGET_REQUIRE_POST_ENTRY.
         counter_levels = _run_pivot_scan(
             counter_key,
             int(getattr(
@@ -990,6 +1202,38 @@ class StrategyEntrySignalService:
                 "error": f"{type(exc).__name__}: {exc}",
                 "generated_at": _now_utc_iso(),
             }
+
+        # --------------------------------------------------------------- #
+        # G1 v4.1 — split execution paths by trigger source.
+        #
+        # G1 v4.2 — this branch is now an explicit early-return guard:
+        #
+        #   1. If Path B is disabled by the operator
+        #      (STRATEGY_EXT_PATH_B_ENABLED=false), drop straight to
+        #      Path A logic. This matches
+        #      dummy_order_service._path_b_mode() and
+        #      isolated_instrument_promotion_service._is_path_b_active()
+        #      which now short-circuit the same way.
+        #
+        #   2. Otherwise, derive the execution path from the isolation
+        #      record using ``_derive_trigger_is_self_nifty()``. This
+        #      helper is the single source of truth for the derivation
+        #      and handles legacy records that predate the
+        #      ``trigger_is_self_nifty`` field.
+        #
+        #   3. If the derived path is Path B, return the multi-order
+        #      SR-watch payload (no 10-minute scan, no auto-reverse).
+        #
+        #   4. Otherwise, fall through to the Path A logic below,
+        #      which is unchanged from v4.1.
+        # --------------------------------------------------------------- #
+        iso = (iso_status or {}).get("isolated") or {}
+
+        if iso and _path_b_master_switch_enabled():
+            if not _derive_trigger_is_self_nifty(iso):
+                return self._build_path_b_response(iso_status, iso)
+        # (If Path B is disabled, or the record derives to Path A,
+        #  the Path A logic below runs unchanged.)
 
         isolated = (iso_status or {}).get("isolated") or {}
         if not isolated:
@@ -1101,6 +1345,7 @@ class StrategyEntrySignalService:
 
         response: dict[str, Any] = {
             "status": "ok",
+            "execution_path": "A_self_trigger",
             "day": iso_status.get("day"),
             "isolated": {
                 "instrument_key": instrument_key,
@@ -1117,6 +1362,12 @@ class StrategyEntrySignalService:
                     or isolated.get("trigger_side")
                 ),
                 "trigger_level_value": isolated.get("trigger_level_value"),
+                # G1 v4.2 — expose the DERIVED value so downstream
+                # consumers see the correct path even for legacy
+                # records that never had this field written.
+                "trigger_is_self_nifty": _derive_trigger_is_self_nifty(
+                    isolated
+                ),
             },
             "touch": {
                 "time": _iso(touch_dt),
@@ -1197,6 +1448,91 @@ class StrategyEntrySignalService:
         response["active_instrument_key"] = active_key or instrument_key
 
         return response
+
+    def _build_path_b_response(
+        self,
+        iso_status: dict[str, Any],
+        isolated: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Return the signal payload for Path B (external-index trigger).
+
+        The 10-minute scan and auto-reverse are intentionally NOT run.
+        The bias-side instrument stays isolated for the full session,
+        and the dummy-order service handles multi-order SR-level
+        execution + Rupee trailing.
+        """
+        instrument_key = str(isolated.get("instrument_key") or "").strip()
+        underlying = ""
+        strike = None
+        try:
+            from services.instrument_registry import instrument_registry
+            entry = instrument_registry.get(instrument_key) if instrument_key else None
+            if entry:
+                underlying = str(entry.get("underlying") or "").strip()
+                strike = entry.get("strike_price")
+        except Exception:
+            logger.exception(
+                "[strategy-entry] path B registry lookup failed for %s",
+                instrument_key,
+            )
+
+        touch_side, bias_type = _parse_touch_reason(isolated.get("reason"))
+        if bias_type is None:
+            bias_type = str(isolated.get("type") or "").upper() or None
+
+        return {
+            "status": "path_b_mode",
+            "execution_path": "B_external_trigger",
+            "day": iso_status.get("day"),
+            "isolated": {
+                "instrument_key": instrument_key,
+                "trading_symbol": isolated.get("trading_symbol"),
+                "underlying": underlying,
+                "strike": strike,
+                "reason": isolated.get("reason"),
+                "source": isolated.get("source"),
+                "trigger_index": isolated.get("trigger_index"),
+                "routed_index": isolated.get("routed_index"),
+                "touched_at": isolated.get("touched_at"),
+                "trigger_level": isolated.get("trigger_level") or isolated.get("trigger_side"),
+                "trigger_level_value": isolated.get("trigger_level_value"),
+                "trigger_is_self_nifty": False,
+            },
+            "path_b": {
+                "enabled": True,
+                "tracked_underlyings": list(
+                    getattr(config, "STRATEGY_EXT_TRACKED_UNDERLYINGS", ["NIFTY", "SENSEX"])
+                ),
+                "message": (
+                    "Path B — external trigger. 10-minute scan and "
+                    "auto-reverse are disabled; multi-order SR watch active "
+                    "on the bias-side instrument."
+                ),
+                "bias_side": bias_type,
+                "bias_instrument_key": instrument_key,
+            },
+            "candidates": [],
+            "chosen_side": None,
+            "chosen_instrument_key": None,
+            "chosen_entry_type": None,
+            "promotion": {
+                "recommended": False,
+                "already_applied": False,
+                "blockers": ["path_b_external_trigger"],
+                "current_active_instrument_key": instrument_key,
+                "target_instrument_key": None,
+                "target_trading_symbol": None,
+                "target_side": None,
+                "official_isolated_key": instrument_key,
+                "promotion_allowed": False,
+                "re_promotion_allowed": False,
+            },
+            "active_instrument_key": instrument_key,
+            "warnings": [
+                "Path B: auto-reverse and 10-minute fast scan intentionally disabled."
+            ],
+            "generated_at": _now_utc_iso(),
+        }
 
     @staticmethod
     def _warnings(
