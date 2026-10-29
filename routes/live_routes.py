@@ -24,6 +24,16 @@ WebSocket routes
     WS   /list-feeds        — NEW: subscribe to a LIST of instruments
     WS   /ws/list-feeds     — alias of /list-feeds
 
+Self-documenting help endpoint
+------------------------------
+``GET /live/ws-help`` returns the same guide in three formats:
+
+    ?format=text  (default)  plain UTF-8 text
+    ?format=html             HTML (renders in a browser)
+    ?format=json             structured JSON (for programmatic use)
+
+Alias: ``GET /ws-help``.
+
 List-of-feeds
 -------------
 ``/list-feeds`` requires an explicit list of instruments, passed as:
@@ -61,6 +71,7 @@ remaining endpoints only touch the feed snapshot layer:
     GET  /live/status
     GET  /live/instruments
     GET  /live/instruments/resolve
+    GET  /live/ws-help                    <-- NEW: WebSocket guide
 
     # WebSockets
     WS   /ws/live
@@ -77,7 +88,8 @@ import logging
 from typing import Any
 
 import requests
-from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import HTMLResponse, PlainTextResponse
 
 from core import config
 from services.instrument_registry import instrument_registry
@@ -100,6 +112,352 @@ _UPSTOX_RESOLVE_TIMEOUT = 10
 # Soft cap on a single /list-feeds subscription so a stray client cannot
 # ask for every listed contract on the exchange.
 _MAX_LIST_FEED_INSTRUMENTS = 500
+
+
+# ---------------------------------------------------------------------------
+# WebSocket help — self-documenting
+# ---------------------------------------------------------------------------
+_WS_ROUTES: list[dict[str, Any]] = [
+    {
+        "path": "/ws/live",
+        "aliases": [],
+        "purpose": "General per-client feed. Any filter form accepted.",
+        "requires_filter": False,
+        "supports_all": True,
+        "examples": [
+            "ws://<host>/ws/live?instrument_key=NSE_FO%7C54452",
+            "ws://<host>/ws/live?instruments=NSE_FO%7C54452,NSE_FO%7C54453",
+            "ws://<host>/ws/live?underlying=NIFTY&strike=25000&type=CE",
+            "ws://<host>/ws/live?all=true",
+        ],
+    },
+    {
+        "path": "/ws/chart",
+        "aliases": [],
+        "purpose": "Chart-page alias of /ws/live. `all` forced to false when a key is given.",
+        "requires_filter": False,
+        "supports_all": True,
+        "examples": [
+            "ws://<host>/ws/chart?instrument_key=NSE_FO%7C54452",
+        ],
+    },
+    {
+        "path": "/all-feeds",
+        "aliases": ["/ws/all-feeds"],
+        "purpose": (
+            "Route used by templates/chart.html. No key → firehose "
+            "(all registered instruments). Key → behaves like /ws/live."
+        ),
+        "requires_filter": False,
+        "supports_all": True,
+        "examples": [
+            "ws://<host>/all-feeds?instrument_key=NSE_FO%7C54452",
+            "ws://<host>/all-feeds?instruments=NSE_FO%7C1,NSE_FO%7C2",
+            "ws://<host>/all-feeds   # firehose",
+        ],
+    },
+    {
+        "path": "/list-feeds",
+        "aliases": ["/ws/list-feeds"],
+        "purpose": (
+            "Strict list-only feed. Rejects empty lists with close code "
+            "1008 and enforces a 500-instrument cap. Never falls back to "
+            "`all=true`."
+        ),
+        "requires_filter": True,
+        "supports_all": False,
+        "examples": [
+            "ws://<host>/list-feeds?instruments=NSE_FO%7C1,NSE_FO%7C2,NSE_FO%7C3",
+            "ws://<host>/list-feeds?instrument_key=NSE_FO%7C54452",
+        ],
+    },
+]
+
+
+def _ws_help_text(base_ws: str, base_http: str) -> str:
+    """Plain-text guide rendered by ``GET /live/ws-help``."""
+    lines: list[str] = []
+    add = lines.append
+
+    add("=" * 64)
+    add("LIVE FEED — WEBSOCKET HELP")
+    add("=" * 64)
+    add("")
+    add(f"Base WS URL:    {base_ws}")
+    add(f"Base HTTP URL:  {base_http}")
+    add("")
+    add("All sockets publish the 'feed' topic. Text frames, JSON payloads.")
+    add("Ticks are only emitted during NSE/BSE trading hours")
+    add("(09:15–15:30 IST, Mon–Fri, non-holiday).")
+    add("")
+
+    add("-" * 64)
+    add("ENDPOINTS")
+    add("-" * 64)
+    add("")
+    for route in _WS_ROUTES:
+        add(f"  {route['path']}")
+        if route.get("aliases"):
+            add(f"    aliases: {', '.join(route['aliases'])}")
+        add(f"    purpose: {route['purpose']}")
+        add(f"    requires_filter: {route['requires_filter']}")
+        add(f"    supports_all=true: {route['supports_all']}")
+        add("    examples:")
+        for ex in route["examples"]:
+            add(f"      {ex}")
+        add("")
+
+    add("-" * 64)
+    add("URL-ENCODING")
+    add("-" * 64)
+    add("")
+    add("  Instrument keys contain a pipe (|) and sometimes a space")
+    add("  (NSE_INDEX|Nifty 50). Encode them in the URL:")
+    add("")
+    add("      NSE_FO|54452          ->  NSE_FO%7C54452")
+    add("      NSE_INDEX|Nifty 50    ->  NSE_INDEX%7CNifty%2050")
+    add("")
+    add("  Multiple instruments MUST be comma-separated. Whitespace is")
+    add("  NOT a separator — Upstox index keys contain spaces.")
+    add("")
+
+    add("-" * 64)
+    add("CLIENT -> SERVER CONTROL FRAMES (no reconnect needed)")
+    add("-" * 64)
+    add("")
+    add('  {"action":"subscribe",   "instrument_keys":["NSE_FO|1","NSE_FO|2"]}')
+    add('  {"action":"unsubscribe", "instrument_keys":["NSE_FO|1"]}')
+    add('  {"action":"set",         "instrument_keys":["NSE_FO|9"]}   # replace')
+    add('  {"action":"clear"}                                          # empty set')
+    add("")
+    add("  Aliases: 'instruments' for 'instrument_keys';")
+    add("           'sub' / 'unsub' for 'subscribe' / 'unsubscribe'.")
+    add("")
+
+    add("-" * 64)
+    add("SERVER -> CLIENT FRAMES")
+    add("-" * 64)
+    add("")
+    add("  Handshake (sent once on connect):")
+    add('    {"type":"subscribed","topic":"feed","status":"connected",')
+    add('     "instrument_keys":["NSE_FO|54452"],"all":false}')
+    add("")
+    add("  Tick (many, as they arrive):")
+    add('    {"instrument_key":"NSE_FO|54452",')
+    add('     "timestamp":"2026-10-29T09:15:32.123456+00:00",')
+    add('     "ltp":177.35,"prev_close":168.20,"volume":45210,')
+    add('     "candle_1m":{"open":176.9,"high":177.5,')
+    add('                  "low":176.7,"close":177.35},')
+    add('     "underlying":"NIFTY","strike_price":25000,"strike_type":"CE"}')
+    add("")
+    add("  Control confirmations:")
+    add('    {"type":"subscribed","instrument_keys":[...],"total_subscriptions":N}')
+    add('    {"type":"unsubscribed","instrument_keys":[...],"total_subscriptions":N}')
+    add('    {"type":"subscriptions_replaced","instrument_keys":[...],"total_subscriptions":N}')
+    add('    {"type":"subscriptions_cleared","total_subscriptions":0}')
+    add('    {"type":"error","error":"<ExceptionType>: <message>"}')
+    add("")
+
+    add("-" * 64)
+    add("CLOSE CODES")
+    add("-" * 64)
+    add("")
+    add("  1000  Normal closure (client navigated away, market closed)")
+    add("  1008  Policy violation — /list-feeds with no instruments,")
+    add("        or > 500 instruments requested")
+    add("")
+
+    add("-" * 64)
+    add("PYTHON EXAMPLE")
+    add("-" * 64)
+    add("")
+    add("  import asyncio, json, websockets")
+    add("")
+    add("  async def main():")
+    add(f'      url = "{base_ws}/all-feeds?instrument_key=NSE_FO%7C54452"')
+    add("      async with websockets.connect(url) as ws:")
+    add("          print(json.loads(await ws.recv()))   # handshake")
+    add("          while True:")
+    add("              frame = json.loads(await ws.recv())")
+    add("              if frame.get('type') == 'error':")
+    add("                  print('ERROR:', frame); continue")
+    add("              print(frame.get('instrument_key'), frame.get('ltp'))")
+    add("")
+    add("  asyncio.run(main())")
+    add("")
+
+    add("-" * 64)
+    add("BROWSER (JAVASCRIPT) EXAMPLE")
+    add("-" * 64)
+    add("")
+    add("  const key = 'NSE_FO|54452';")
+    add(f"  const ws  = new WebSocket(")
+    add(f"    '{base_ws}/all-feeds?instrument_key=' + encodeURIComponent(key)")
+    add("  );")
+    add("  ws.onmessage = (ev) => {")
+    add("    const f = JSON.parse(ev.data);")
+    add("    if (f.type) return;   // handshake / control frame")
+    add("    if (f.instrument_key !== key) return;")
+    add("    console.log(f.ltp, f.candle_1m);")
+    add("  };")
+    add("")
+
+    add("-" * 64)
+    add("COMPANION REST ENDPOINTS")
+    add("-" * 64)
+    add("")
+    add(f"  GET  {base_http}/live/status")
+    add(f"  GET  {base_http}/live/instruments")
+    add(f"  GET  {base_http}/live/instruments/resolve?underlying=NIFTY&strike=25000&type=CE")
+    add(f"  GET  {base_http}/api/upstox/subscription-status?instrument_key=NSE_FO%7C54452")
+    add(f"  POST {base_http}/api/upstox/subscribe")
+    add("")
+    add("=" * 64)
+    return "\n".join(lines)
+
+
+def _ws_help_html(base_ws: str, base_http: str) -> str:
+    """HTML rendering of the same guide (pretty in a browser)."""
+    text = _ws_help_text(base_ws, base_http)
+    # HTML-escape the text block and wrap it in a minimal styled <pre>.
+    escaped = (
+        text.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+    )
+    return (
+        "<!doctype html>"
+        "<html lang=\"en\"><head><meta charset=\"utf-8\">"
+        "<title>Live Feed — WebSocket Help</title>"
+        "<style>"
+        "body{background:#0f1115;color:#d1d4dc;font-family:"
+        "ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;"
+        "padding:24px;line-height:1.5;}"
+        "pre{background:#161a23;border:1px solid #2a2e39;"
+        "border-radius:10px;padding:20px;overflow-x:auto;"
+        "font-size:13px;}"
+        "h1{font-family:system-ui,sans-serif;font-size:18px;"
+        "color:#fff;margin:0 0 16px;}"
+        "a{color:#7ea6ff;}"
+        "</style></head><body>"
+        "<h1>Live Feed — WebSocket Help</h1>"
+        "<p style='font-family:system-ui,sans-serif;font-size:13px'>"
+        f"Same content as <code>?</code> "
+        f"<a href=\"{base_http}/live/ws-help?format=text\">?format=text</a> "
+        f"and <a href=\"{base_http}/live/ws-help?format=json\">?format=json</a>."
+        "</p>"
+        f"<pre>{escaped}</pre>"
+        "</body></html>"
+    )
+
+
+def _ws_help_json(base_ws: str, base_http: str) -> dict[str, Any]:
+    """Structured JSON guide (for programmatic consumption)."""
+    return {
+        "title": "Live Feed — WebSocket Help",
+        "base_ws_url": base_ws,
+        "base_http_url": base_http,
+        "trading_hours": "09:15–15:30 IST, Mon–Fri, non-holiday",
+        "topic": "feed",
+        "endpoints": _WS_ROUTES,
+        "url_encoding": {
+            "pipe": "|",
+            "pipe_encoded": "%7C",
+            "space": " ",
+            "space_encoded": "%20",
+            "separator": ",",
+            "separator_note": (
+                "Only commas separate multiple instruments. Whitespace "
+                "is NOT a separator because Upstox index keys contain "
+                "spaces (e.g. 'NSE_INDEX|Nifty 50')."
+            ),
+        },
+        "client_control_frames": [
+            {"action": "subscribe",   "instrument_keys": ["NSE_FO|1", "NSE_FO|2"]},
+            {"action": "unsubscribe", "instrument_keys": ["NSE_FO|1"]},
+            {"action": "set",         "instrument_keys": ["NSE_FO|9"]},
+            {"action": "clear"},
+        ],
+        "server_frames": {
+            "handshake": {
+                "type": "subscribed",
+                "topic": "feed",
+                "status": "connected",
+                "instrument_keys": ["NSE_FO|54452"],
+                "all": False,
+            },
+            "tick": {
+                "instrument_key": "NSE_FO|54452",
+                "timestamp": "2026-10-29T09:15:32.123456+00:00",
+                "ltp": 177.35,
+                "prev_close": 168.20,
+                "volume": 45210,
+                "candle_1m": {
+                    "open": 176.9, "high": 177.5,
+                    "low": 176.7,  "close": 177.35,
+                },
+                "underlying": "NIFTY",
+                "strike_price": 25000,
+                "strike_type": "CE",
+            },
+            "control_confirmations": [
+                {"type": "subscribed"},
+                {"type": "unsubscribed"},
+                {"type": "subscriptions_replaced"},
+                {"type": "subscriptions_cleared"},
+                {"type": "error"},
+            ],
+        },
+        "close_codes": {
+            1000: "Normal closure",
+            1008: "Policy violation — list-feeds with no instruments, or > 500",
+        },
+        "companion_rest": {
+            "status":            f"{base_http}/live/status",
+            "instruments":       f"{base_http}/live/instruments",
+            "resolve":           f"{base_http}/live/instruments/resolve",
+            "subscription_status": f"{base_http}/api/upstox/subscription-status",
+            "subscribe":         f"{base_http}/api/upstox/subscribe",
+        },
+    }
+
+
+def _resolve_base_urls(request: Request) -> tuple[str, str]:
+    """Return ``(base_ws, base_http)`` derived from the incoming request."""
+    scheme = request.url.scheme  # "http" or "https"
+    host = request.headers.get("host") or request.url.netloc
+    http = f"{scheme}://{host}"
+    ws_scheme = "wss" if scheme == "https" else "ws"
+    ws_base = f"{ws_scheme}://{host}"
+    return ws_base, http
+
+
+@router.get(
+    "/live/ws-help",
+    summary="WebSocket connection guide",
+    description=(
+        "Returns a self-documenting guide for every WebSocket route. "
+        "Supports `?format=text` (default), `?format=html`, or "
+        "`?format=json`."
+    ),
+    tags=["websockets"],
+)
+@router.get("/ws-help", include_in_schema=False)
+def ws_help(
+    request: Request,
+    format: str = Query(
+        default="text",
+        description="One of: text | html | json",
+        pattern="^(text|html|json)$",
+    ),
+):
+    base_ws, base_http = _resolve_base_urls(request)
+
+    if format == "html":
+        return HTMLResponse(content=_ws_help_html(base_ws, base_http))
+    if format == "json":
+        return _ws_help_json(base_ws, base_http)
+    return PlainTextResponse(content=_ws_help_text(base_ws, base_http))
 
 
 # ---------------------------------------------------------------------------
