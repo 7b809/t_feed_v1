@@ -365,7 +365,7 @@ def _derive_display_confirmed_time(
             candles = list(state.get("candles") or [])
     except Exception:
         return None
-    display_right = int(getattr(config, "LIVE_SR_RIGHT_BARS", 15))
+    display_right = int(getattr(config, "LIVE_SR_RIGHT_BARS", 3))
     confirm_idx = pivot_bar_index + display_right
     if confirm_idx < 0 or confirm_idx >= len(candles):
         return None
