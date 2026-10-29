@@ -10,8 +10,8 @@ destinations:
     logs/<module>.log                          (rotating by line count)
     logs_text/<module>.txt                     (plain append-only mirror)
 
-and, in addition, every record is **fanned out** into a single shared
-project-wide file pair:
+and, **on non-Windows platforms only**, in addition, every record is
+**fanned out** into a single shared project-wide file pair:
 
     logs/<PROJECT_LOG_NAME>.log                (rotating by line count)
     logs_text/<PROJECT_LOG_NAME>.txt           (plain append-only mirror)
@@ -19,6 +19,18 @@ project-wide file pair:
 ``PROJECT_LOG_NAME`` defaults to ``"local_project"`` (settable via the
 ``PROJECT_LOG_NAME`` environment variable) so the combined file is
 called e.g. ``logs/local_project.log`` by default.
+
+Why the combined file is gated to non-Windows
+---------------------------------------------
+On Windows, ``os.replace`` inside ``doRollover()`` can raise
+``PermissionError`` if any other process (or a lingering handle) still
+has the target file open. Because the combined file is shared
+project-wide and may be tailed / opened by editors, antivirus, or
+another Python process, rotation on Windows is unreliable. To avoid
+silently losing records (or crashing the emit path) we disable the
+combined handler pair on Windows (``os.name == "nt"``). Per-module
+files are still written on every platform, since each module owns a
+distinct path and therefore has no contention.
 
 Why the combined file is a *single shared handler pair*
 ------------------------------------------------------
@@ -40,7 +52,7 @@ through the same handler is the standard, supported case.
 
 The file is opened in append mode, so a restart appends to the same
 combined file. Rotation is still per-handler: once the combined file
-hits ``COMBINED_MAX_LINES``, it rotates to ``.1`` … ``.3`` and starts
+hits ``COMBINED_MAX_LINES``, it rotates to ``.1`` … ``.N`` and starts
 a fresh ``local_project.log``. The per-module files have their own
 independent counters and rotation schedules.
 
@@ -84,6 +96,16 @@ COMBINED_BACKUP_COUNT = int(os.getenv("COMBINED_BACKUP_COUNT", "10"))
 # Rotation thresholds for the per-module logs (unchanged defaults).
 PER_MODULE_MAX_LINES = int(os.getenv("PER_MODULE_MAX_LINES", "1000"))
 PER_MODULE_BACKUP_COUNT = int(os.getenv("PER_MODULE_BACKUP_COUNT", "3"))
+
+# --------------------------------------------------------------------------- #
+# Platform gate for the combined project-wide log pair.                       #
+#                                                                             #
+# Windows has unreliable rotation semantics (``os.replace`` can raise         #
+# ``PermissionError`` when a file is held open by another process, and        #
+# antivirus / editors frequently hold handles on the shared file), so we      #
+# only enable the combined handler pair on non-Windows platforms.            #
+# --------------------------------------------------------------------------- #
+ENABLE_COMBINED_LOG = os.name != "nt"
 
 
 # --------------------------------------------------------------------------- #
@@ -223,10 +245,11 @@ def _build_formatter() -> logging.Formatter:
 # Combined (project-wide) handler singletons                                  #
 # --------------------------------------------------------------------------- #
 # These are created lazily, once per process, the first time
-# get_logger() is called. Every subsequent get_logger() call attaches
-# the *same two handler instances* to that module's logger, so there is
-# exactly one writer on each combined file for the whole process —
-# rotation is therefore race-free.
+# get_logger() is called — and only on non-Windows platforms (see
+# ENABLE_COMBINED_LOG above). Every subsequent get_logger() call
+# attaches the *same two handler instances* to that module's logger,
+# so there is exactly one writer on each combined file for the whole
+# process — rotation is therefore race-free.
 _COMBINED_LOG_HANDLER: LineCountRotatingHandler | None = None
 _COMBINED_TEXT_HANDLER: PlainTextHandler | None = None
 
@@ -237,8 +260,10 @@ def _ensure_combined_handlers() -> tuple[
     """Create (once) and return the shared combined handler pair.
 
     Called from ``get_logger()`` after the log directories are known
-    to exist. Safe to call concurrently — Python's module import lock
-    guarantees the ``if None:`` check is only executed once.
+    to exist, and only when ``ENABLE_COMBINED_LOG`` is True (i.e. on
+    non-Windows platforms). Safe to call concurrently — Python's
+    module import lock guarantees the ``if None:`` check is only
+    executed once.
     """
     global _COMBINED_LOG_HANDLER, _COMBINED_TEXT_HANDLER
 
@@ -285,9 +310,12 @@ def get_logger(filename: str, log_level=logging.DEBUG) -> logging.Logger:
       - the console
       - a rotating .log file under logs/<module>.log
       - an append-only .txt file under logs_text/<module>.txt
-      - the shared combined project log
-            logs/<PROJECT_LOG_NAME>.log
-            logs_text/<PROJECT_LOG_NAME>.txt
+
+    and, **on non-Windows platforms only**, additionally to the shared
+    combined project log:
+
+      - logs/<PROJECT_LOG_NAME>.log
+      - logs_text/<PROJECT_LOG_NAME>.txt
 
     Supported levels:
     - DEBUG
@@ -365,19 +393,26 @@ def get_logger(filename: str, log_level=logging.DEBUG) -> logging.Logger:
 
     # ------------------------------------------------------------------ #
     # 4. Combined project-wide handler pair (shared singletons)           #
+    #                                                                     #
+    # Enabled only on non-Windows platforms. On Windows the shared        #
+    # rotating file can raise ``PermissionError`` during rollover, so     #
+    # we skip the combined pair entirely there and rely on the            #
+    # per-module files instead.                                           #
+    #                                                                     #
+    # These two handler instances are created once for the entire         #
+    # process and are shared by every module logger. This is what         #
+    # guarantees a race-free combined file — see the module docstring.    #
+    #                                                                     #
+    # We set the handler level to DEBUG regardless of log_level, so       #
+    # that a module which calls get_logger(..., log_level=INFO) still     #
+    # contributes to the combined file at full DEBUG fidelity. The        #
+    # module's own logger level (set above) is what gates whether a       #
+    # record reaches *any* of its handlers — including the combined       #
+    # ones — so no extra filtering is needed here.                        #
     # ------------------------------------------------------------------ #
-    # These two handler instances are created once for the entire
-    # process and are shared by every module logger. This is what
-    # guarantees a race-free combined file — see the module docstring.
-    #
-    # We set the handler level to DEBUG regardless of log_level, so
-    # that a module which calls get_logger(..., log_level=INFO) still
-    # contributes to the combined file at full DEBUG fidelity. The
-    # module's own logger level (set above) is what gates whether a
-    # record reaches *any* of its handlers — including the combined
-    # ones — so no extra filtering is needed here.
-    combined_log_handler, combined_text_handler = _ensure_combined_handlers()
-    logger.addHandler(combined_log_handler)
-    logger.addHandler(combined_text_handler)
+    if ENABLE_COMBINED_LOG:
+        combined_log_handler, combined_text_handler = _ensure_combined_handlers()
+        logger.addHandler(combined_log_handler)
+        logger.addHandler(combined_text_handler)
 
     return logger
