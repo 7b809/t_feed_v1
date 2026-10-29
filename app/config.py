@@ -6,10 +6,13 @@ import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
+
 from dotenv import load_dotenv
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(PROJECT_ROOT / ".env")
+
 
 def _bool(name: str, default: bool) -> bool:
     value = os.getenv(name)
@@ -17,17 +20,89 @@ def _bool(name: str, default: bool) -> bool:
         return default
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
+
 def _int(name: str, default: int) -> int:
     try:
         return int(os.getenv(name, str(default)))
     except ValueError as exc:
         raise ValueError(f"{name} must be an integer") from exc
 
+
 def _float(name: str, default: float) -> float:
     try:
         return float(os.getenv(name, str(default)))
     except ValueError as exc:
         raise ValueError(f"{name} must be a number") from exc
+
+
+# ---------- Strategy index priority (env-overridable) ----------
+_DEFAULT_STRATEGY_INDEX_PRIORITY: dict[str, int] = {
+    "NIFTY": 1,
+    "BANKNIFTY": 2,
+    "MIDCPNIFTY": 3,
+    "SENSEX": 4,
+}
+
+
+def _load_strategy_index_priority() -> dict[str, int]:
+    result: dict[str, int] = {}
+    for name, default in _DEFAULT_STRATEGY_INDEX_PRIORITY.items():
+        env_key = f"STRATEGY_INDEX_PRIORITY_{name}"
+        result[name] = _int(env_key, default)
+    return result
+
+
+STRATEGY_INDEX_PRIORITY: dict[str, int] = _load_strategy_index_priority()
+
+
+# ---------- Canonical 4-index catalog ----------
+INDEX_METADATA: dict[str, dict[str, Any]] = {
+    "NSE_INDEX|Nifty 50": {
+        "instrument_key": "NSE_INDEX|Nifty 50",
+        "canonical": "NIFTY",
+        "folder": "nifty",
+        "trading_symbol": "NIFTY",
+        "underlying": "NIFTY",
+        "strike_price": None,
+        "strike_type": "INDEX",
+        "expiry": None,
+        "priority": int(STRATEGY_INDEX_PRIORITY.get("NIFTY", 1)),
+    },
+    "NSE_INDEX|Nifty Bank": {
+        "instrument_key": "NSE_INDEX|Nifty Bank",
+        "canonical": "BANKNIFTY",
+        "folder": "banknifty",
+        "trading_symbol": "BANKNIFTY",
+        "underlying": "NIFTY BANK",
+        "strike_price": None,
+        "strike_type": "INDEX",
+        "expiry": None,
+        "priority": int(STRATEGY_INDEX_PRIORITY.get("BANKNIFTY", 2)),
+    },
+    "NSE_INDEX|NIFTY MID SELECT": {
+        "instrument_key": "NSE_INDEX|NIFTY MID SELECT",
+        "canonical": "MIDCPNIFTY",
+        "folder": "midcpnifty",
+        "trading_symbol": "MIDCPNIFTY",
+        "underlying": "NIFTY MID SELECT",
+        "strike_price": None,
+        "strike_type": "INDEX",
+        "expiry": None,
+        "priority": int(STRATEGY_INDEX_PRIORITY.get("MIDCPNIFTY", 3)),
+    },
+    "BSE_INDEX|SENSEX": {
+        "instrument_key": "BSE_INDEX|SENSEX",
+        "canonical": "SENSEX",
+        "folder": "sensex",
+        "trading_symbol": "SENSEX",
+        "underlying": "SENSEX",
+        "strike_price": None,
+        "strike_type": "INDEX",
+        "expiry": None,
+        "priority": int(STRATEGY_INDEX_PRIORITY.get("SENSEX", 4)),
+    },
+}
+
 
 @dataclass(frozen=True)
 class Settings:
@@ -69,40 +144,57 @@ class Settings:
     cleanup_dirs: str = os.getenv("CLEANUP_DIRS", "storage")
 
     # ---------- Job 2: EMA crosses ----------
-    # NOTE: Upstox is accessed anonymously. No access token is used anywhere
-    # in this project; historical + intraday candle endpoints are called
-    # without an Authorization header.
     ema_fast_period: int = _int("EMA_FAST_PERIOD", 9)
     ema_slow_period: int = _int("EMA_SLOW_PERIOD", 21)
     ema_candle_count: int = _int("EMA_CANDLE_COUNT", 3000)
     ema_history_days: int = _int("EMA_HISTORY_DAYS", 10)
     ema_max_workers: int = _int("EMA_MAX_WORKERS", 5)
     ema_poll_seconds: int = _int("EMA_POLL_SECONDS", 60)
-
-    # Emit a ``heartbeat`` payload per cycle (or every Nth cycle).
-    # Set to 0 to disable, or N > 1 to emit only every Nth cycle.
     ema_heartbeat_cycles: int = _int("EMA_HEARTBEAT_CYCLES", 1)
-
-    # Log the ``Cycle N complete`` line to the COMBINED project log file
-    # only every N cycles. Per-module logs and console still print every cycle.
     ema_cycle_log_every: int = _int("EMA_CYCLE_LOG_EVERY", 100)
-
-    # Timeout around the sync Upstox intraday_1m() call.
     ema_fetch_timeout_seconds: float = _float("EMA_FETCH_TIMEOUT_SECONDS", 30.0)
 
     ema_index_instruments: str = os.getenv(
-        "EMA_INDEX_INSTRUMENTS", "NSE_INDEX|Nifty 50,BSE_INDEX|SENSEX"
+        "EMA_INDEX_INSTRUMENTS",
+        "NSE_INDEX|Nifty 50,NSE_INDEX|Nifty Bank,NSE_INDEX|NIFTY MID SELECT,BSE_INDEX|SENSEX",
     )
     ema_instruments_file: Path = Path(
         os.getenv("EMA_INSTRUMENTS_FILE", "./storage/mega/all_instruments.json")
+    )
+
+    # ---------- Job 3: Pivot levels ----------
+    levels_enabled: bool = _bool("LEVELS_ENABLED", True)
+    levels_compute_hour: int = _int("LEVELS_COMPUTE_HOUR", 9)
+    levels_compute_minute: int = _int("LEVELS_COMPUTE_MINUTE", 17)
+    levels_startup_window_start_hour: int = _int("LEVELS_STARTUP_WINDOW_START_HOUR", 9)
+    levels_startup_window_start_minute: int = _int("LEVELS_STARTUP_WINDOW_START_MINUTE", 17)
+    levels_startup_window_end_hour: int = _int("LEVELS_STARTUP_WINDOW_END_HOUR", 23)
+    levels_startup_window_end_minute: int = _int("LEVELS_STARTUP_WINDOW_END_MINUTE", 59)
+    levels_first_candle_hour: int = _int("LEVELS_FIRST_CANDLE_HOUR", 9)
+    levels_first_candle_minute: int = _int("LEVELS_FIRST_CANDLE_MINUTE", 15)
+    levels_first_candle_window_minutes: int = _int("LEVELS_FIRST_CANDLE_WINDOW_MINUTES", 1)
+
+    # --- Job 3 — post-compute: batch retries + MongoDB persistence ---
+    # Number of ADDITIONAL batch attempts (on top of the initial one) when
+    # the scheduled 09:17 compute does not succeed for all indexes.
+    levels_scheduled_retries: int = _int("LEVELS_SCHEDULED_RETRIES", 3)
+    # Gap between batch retries (seconds).
+    levels_scheduled_retry_gap_seconds: float = _float(
+        "LEVELS_SCHEDULED_RETRY_GAP_SECONDS", 60.0
+    )
+    # MongoDB collection + fixed document _id used to persist today's levels.
+    # Daily scheduled runs overwrite the same _id — no new docs accumulate.
+    levels_project_info_collection: str = os.getenv(
+        "LEVELS_PROJECT_INFO_COLLECTION", "project_info"
+    )
+    levels_project_info_document_id: str = os.getenv(
+        "LEVELS_PROJECT_INFO_DOCUMENT_ID", "pivot_levels"
     )
 
     # ---------- Logging ----------
     logs_dir: Path = Path(os.getenv("LOGS_DIR", "./logs"))
 
     # ---------- Telegram notifications ----------
-    # Enable rich startup / shutdown / refresh / exception / EMA lifecycle
-    # notifications in a Telegram chat. Requires BOT_TOKEN + CHAT_ID.
     telegram_enabled: bool = _bool("TELEGRAM_ENABLED", False)
     telegram_bot_token: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
     telegram_chat_id: str = os.getenv("TELEGRAM_CHAT_ID", "")
@@ -135,6 +227,36 @@ class Settings:
             raise ValueError("EMA_CYCLE_LOG_EVERY must be >= 1")
         if self.ema_fetch_timeout_seconds <= 0:
             raise ValueError("EMA_FETCH_TIMEOUT_SECONDS must be > 0")
+
+        if not (0 <= self.levels_compute_hour < 24 and 0 <= self.levels_compute_minute < 60):
+            raise ValueError("Invalid LEVELS_COMPUTE_HOUR/MINUTE")
+        if not (
+            0 <= self.levels_startup_window_start_hour < 24
+            and 0 <= self.levels_startup_window_start_minute < 60
+        ):
+            raise ValueError("Invalid LEVELS_STARTUP_WINDOW_START_HOUR/MINUTE")
+        if not (
+            0 <= self.levels_startup_window_end_hour < 24
+            and 0 <= self.levels_startup_window_end_minute < 60
+        ):
+            raise ValueError("Invalid LEVELS_STARTUP_WINDOW_END_HOUR/MINUTE")
+        if not (
+            0 <= self.levels_first_candle_hour < 24
+            and 0 <= self.levels_first_candle_minute < 60
+        ):
+            raise ValueError("Invalid LEVELS_FIRST_CANDLE_HOUR/MINUTE")
+        if self.levels_first_candle_window_minutes < 1:
+            raise ValueError("LEVELS_FIRST_CANDLE_WINDOW_MINUTES must be >= 1")
+
+        # Job 3 — post-compute
+        if self.levels_scheduled_retries < 0:
+            raise ValueError("LEVELS_SCHEDULED_RETRIES must be >= 0")
+        if self.levels_scheduled_retry_gap_seconds <= 0:
+            raise ValueError("LEVELS_SCHEDULED_RETRY_GAP_SECONDS must be > 0")
+        if not self.levels_project_info_collection:
+            raise ValueError("LEVELS_PROJECT_INFO_COLLECTION must be non-empty")
+        if not self.levels_project_info_document_id:
+            raise ValueError("LEVELS_PROJECT_INFO_DOCUMENT_ID must be non-empty")
 
     # ---------- Path helpers ----------
     @property
@@ -185,5 +307,6 @@ class Settings:
     @property
     def extracted_limit_bytes(self) -> int:
         return self.max_extracted_size_mb * 1024 * 1024
+
 
 settings = Settings()

@@ -2,43 +2,29 @@
 #
 # Job 2 orchestrator.
 #
-# ── Wall-clock aligned cycles ──────────────────────────────────────────
-# Cycles are anchored to the wall clock at ``HH:MM:10`` (see
-# ``CYCLE_OFFSET_SECONDS``). For the default EMA_POLL_SECONDS=60 this
-# means:
+# ── Index catalog ─────────────────────────────────────────────────────
+# Uses INDEX_METADATA from app.config (NIFTY / BANKNIFTY / MIDCPNIFTY /
+# SENSEX). The metadata drives:
+#   * which indexes are auto-subscribed at bootstrap (from .env
+#     EMA_INDEX_INSTRUMENTS, default = all 4)
+#   * the channel tag: uses ``folder`` (e.g. "banknifty") if present,
+#     else ``canonical``, else ``underlying.lower()`` — so existing
+#     "index:nifty" / "index:sensex" subscribers keep working
+#   * the WS URL path — ``/ws/index/<folder>`` (e.g. /ws/index/banknifty)
 #
-#   candle 9:20→9:21 (closed at 9:21:00)  → processed at 9:21:10
-#   candle 9:21→9:22 (closed at 9:22:00)  → processed at 9:22:10
-#   candle 9:22→9:23 (closed at 9:23:00)  → processed at 9:23:10
+# ── Wall-clock aligned cycles ─────────────────────────────────────────
+# Cycles fire at HH:MM:10 (10 s after the completed 1-min candle closed).
+# Cycle 1 fires immediately on boot so heartbeats flow pre-market; every
+# subsequent cycle snaps to the next :10 boundary. No catch-up burst.
 #
-# Cycle 1 fires immediately on boot (so heartbeats flow pre-market);
-# every subsequent cycle snaps to the next ``:10`` boundary. If a cycle
-# overruns its slot, the next cycle simply picks up the following slot
-# — there is no catch-up burst.
+# ── Prev / New EMA tracking ───────────────────────────────────────────
+# At the start of each cycle every instrument's state is snapshotted into
+# runtime["prev_state"] so the dashboard can render "Last → New" pairs
+# expressed in candle time, not cycle time.
 #
-# For EMA_POLL_SECONDS that is a multiple of 60, alignment is on
-# (minute % (poll_seconds//60)) == 0 + CYCLE_OFFSET_SECONDS. For other
-# values the target falls back to second-level alignment.
-#
-# ── Prev / New EMA tracking ────────────────────────────────────────────
-# At the start of each cycle, every instrument's state is snapshotted into
-# ``runtime["prev_state"]``. The dashboard reads ``ema_fast_prev`` /
-# ``ema_slow_prev`` / ``last_ts_prev`` alongside the live values plus
-# ``last_ts`` so the "Last → New" pair is expressed in **candle time**,
-# not cycle time.
-#
-# ── Today's cross count ────────────────────────────────────────────────
-# ``snapshot()`` exposes ``cross_count_today`` — count of persisted
-# crosses whose IST calendar date equals today's IST date.
-#
-# ── Cold-start state recovery ──────────────────────────────────────────
-# When ``_ema_state/<key>.json`` is missing, ``_ensure_subscribed``
-# derives state from the last persisted cross so indexes show real EMA
-# values instead of ``—``.
-#
-# ── Telegram notifications ─────────────────────────────────────────────
-# * ``ema bootstrap complete``  (after warm-up / cached-state load)
-# * ``ema live loop started``   (once, when start_live() actually starts)
+# ── Cold-start state recovery ─────────────────────────────────────────
+# If _ema_state/<key>.json is missing, state is derived from the last
+# persisted cross so indexes show real EMA values instead of "—".
 
 from __future__ import annotations
 
@@ -49,7 +35,7 @@ import re
 from datetime import datetime, time as dtime, timedelta, timezone
 from typing import Any, TYPE_CHECKING
 
-from app.config import Settings
+from app.config import INDEX_METADATA, Settings
 from app.services.ema_calculator import detect_crosses, parse_ts, update_one_candle
 from app.services.ema_state_store import EmaStateStore
 from app.services.feed_broadcaster import FeedBroadcaster
@@ -66,38 +52,18 @@ MARKET_OPEN = dtime(9, 15)
 LIVE_START = dtime(9, 16, 10)
 MARKET_CLOSE = dtime(15, 30)
 
-# Wall-clock anchor: cycles fire at HH:MM:10 (10 seconds after the
-# completed 1-minute candle closed at HH:MM:00). Adjust if Upstox ever
-# changes candle finalisation latency.
 CYCLE_OFFSET_SECONDS = 10
 
-DEFAULT_INDEX_METADATA: dict[str, dict[str, Any]] = {
-    "NSE_INDEX|Nifty 50": {
-        "instrument_key": "NSE_INDEX|Nifty 50",
-        "underlying": "NIFTY",
-        "strike_price": None,
-        "strike_type": "INDEX",
-        "expiry": None,
-        "trading_symbol": "NIFTY",
-    },
-    "BSE_INDEX|SENSEX": {
-        "instrument_key": "BSE_INDEX|SENSEX",
-        "underlying": "SENSEX",
-        "strike_price": None,
-        "strike_type": "INDEX",
-        "expiry": None,
-        "trading_symbol": "SENSEX",
-    },
-}
 
 class EmaFeedError(RuntimeError):
     pass
 
+
 def _now_ist() -> datetime:
     return datetime.now(tz=IST)
 
+
 def _cross_is_today(ts_value: Any, today_ist_date) -> bool:
-    """True when ``ts_value`` parses to a datetime whose IST date == today."""
     ts = parse_ts(ts_value)
     if ts is None:
         return False
@@ -107,6 +73,7 @@ def _cross_is_today(ts_value: Any, today_ist_date) -> bool:
         return ts.astimezone(IST).date() == today_ist_date
     except (ValueError, OSError):
         return False
+
 
 class EmaFeedService:
     def __init__(
@@ -134,8 +101,6 @@ class EmaFeedService:
         self._cycle_number: int = 0
 
     # ------------------------------------------------------------------ #
-    # Notifier helper
-    # ------------------------------------------------------------------ #
     async def _notify(self, method: str, **kwargs) -> None:
         if self.notifier is None:
             return
@@ -144,8 +109,6 @@ class EmaFeedService:
         except Exception:  # noqa: BLE001
             logger.exception("Telegram %s notification failed", method)
 
-    # ------------------------------------------------------------------ #
-    # Public API
     # ------------------------------------------------------------------ #
     async def bootstrap(self) -> None:
         for key in self.config.index_instrument_keys:
@@ -201,8 +164,6 @@ class EmaFeedService:
         self._live_task = None
 
     # ------------------------------------------------------------------ #
-    # Subscription
-    # ------------------------------------------------------------------ #
     async def subscribe(self, instrument_key: str) -> dict[str, Any]:
         async with self._lock:
             if instrument_key in self._subscribed:
@@ -216,7 +177,7 @@ class EmaFeedService:
         if meta is not None:
             return meta
 
-        synthetic = DEFAULT_INDEX_METADATA.get(instrument_key)
+        synthetic = INDEX_METADATA.get(instrument_key)
         if synthetic is None:
             raise EmaFeedError(
                 f"Instrument {instrument_key} is not present in all_instruments.json"
@@ -250,7 +211,6 @@ class EmaFeedService:
         persisted_state = self.state_store.load_state(instrument_key)
         persisted_crosses = self.state_store.load_crosses(instrument_key, meta)
 
-        # Cold-start fallback: derive state from the last persisted cross.
         if not persisted_state:
             last_crosses = (persisted_crosses or {}).get("crosses") or []
             if last_crosses:
@@ -288,8 +248,6 @@ class EmaFeedService:
         if not seed_from_file_only and not persisted_state:
             await self._warm_up_instrument(instrument_key)
 
-    # ------------------------------------------------------------------ #
-    # Warm-up
     # ------------------------------------------------------------------ #
     async def warmup_all(self) -> None:
         keys = list(self._subscribed)
@@ -350,21 +308,7 @@ class EmaFeedService:
         )
 
     # ------------------------------------------------------------------ #
-    # Wall-clock aligned cycle target
-    # ------------------------------------------------------------------ #
     def _next_cycle_target(self, now: datetime) -> datetime:
-        """
-        Return the next cycle start time.
-
-        * First cycle (``_last_cycle_start is None``) fires **now** so
-          heartbeats start on boot.
-        * Subsequent cycles snap to ``HH:MM:10`` (for the default
-          60s interval). For poll intervals that are a multiple of 60
-          seconds the offset is applied to the aligned minute.
-        * Cycles never fire closer than ``interval / 2`` seconds apart
-          (prevents the "immediate cycle 1 at 10:01:08 → cycle 2 at
-          10:01:10" duplicate when startup lands mid-slot).
-        """
         if self._last_cycle_start is None:
             return now
 
@@ -384,18 +328,12 @@ class EmaFeedService:
             )
             target_this_slot = slot + timedelta(seconds=CYCLE_OFFSET_SECONDS)
 
-            # Just fired → skip this slot's boundary, wait for next.
             if gap_since_last < min_gap:
                 return next_slot
-
-            # Before this slot's offset → fire on this slot's boundary.
             if now < target_this_slot:
                 return target_this_slot
-
-            # Past this slot's boundary → next slot.
             return next_slot
 
-        # Sub-minute intervals: align to second-level boundary + offset.
         epoch = now.timestamp()
         last_epoch = self._last_cycle_start.timestamp()
         periods = math.ceil(
@@ -404,8 +342,6 @@ class EmaFeedService:
         next_epoch = periods * interval + CYCLE_OFFSET_SECONDS
         return datetime.fromtimestamp(next_epoch, tz=now.tzinfo)
 
-    # ------------------------------------------------------------------ #
-    # Live loop — wall-clock aligned
     # ------------------------------------------------------------------ #
     async def _live_loop(self) -> None:
         try:
@@ -441,7 +377,6 @@ class EmaFeedService:
             logger.debug("Cycle %d: no instruments subscribed — skipping", cycle_num)
             return
 
-        # Snapshot prev state BEFORE polling.
         for key in keys:
             rt = self._runtime.get(key)
             if rt is None:
@@ -614,8 +549,6 @@ class EmaFeedService:
         return {"emissions": emissions, "status": "ok", "error": None}
 
     # ------------------------------------------------------------------ #
-    # Payload builders
-    # ------------------------------------------------------------------ #
     def _build_cross_payload(
         self, instrument_key: str, runtime: dict, cross: dict
     ) -> dict[str, Any]:
@@ -641,8 +574,6 @@ class EmaFeedService:
             "last_cross_time": last_cross_time,
         }
 
-    # ------------------------------------------------------------------ #
-    # Snapshot for REST / WS / dashboard
     # ------------------------------------------------------------------ #
     def snapshot(self, instrument_key: str) -> dict[str, Any] | None:
         runtime = self._runtime.get(instrument_key)
@@ -688,16 +619,23 @@ class EmaFeedService:
         return sorted(self._subscribed)
 
     # ------------------------------------------------------------------ #
-    # Helpers
-    # ------------------------------------------------------------------ #
     def _channels_for(self, instrument_key: str, meta: dict[str, Any]) -> list[str]:
         channels = [f"instrument:{instrument_key}"]
         underlying = (meta.get("underlying") or "").lower()
         strike_type = (meta.get("strike_type") or "").upper()
+
         if strike_type == "INDEX" or not strike_type:
-            if underlying:
-                channels.append(f"index:{underlying}")
+            # Prefer folder (banknifty) → canonical (BANKNIFTY) → underlying.
+            tag = (
+                meta.get("folder")
+                or meta.get("canonical")
+                or underlying
+            )
+            tag = (tag or "").strip().lower()
+            if tag:
+                channels.append(f"index:{tag}")
             return channels
+
         strike = meta.get("strike_price")
         if strike is not None and underlying:
             strike_str = str(int(strike)) if float(strike).is_integer() else str(strike)
@@ -717,6 +655,7 @@ class EmaFeedService:
             return
         await asyncio.gather(*coros, return_exceptions=True)
 
+
 # ---------------------------------------------------------------------------
 def _round_or_none(value: Any) -> float | None:
     if value is None:
@@ -726,8 +665,10 @@ def _round_or_none(value: Any) -> float | None:
     except (TypeError, ValueError):
         return None
 
+
 # ---------------------------------------------------------------------------
 _OPTIONS_RE = re.compile(r"^(\d+(?:\.\d+)?)(CE|PE)$", re.IGNORECASE)
+
 
 def parse_options_channel(underlying: str, contract: str) -> tuple[str, str]:
     """'21000CE' or '21000_CE' -> ('21000', 'CE')."""

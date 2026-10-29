@@ -6,6 +6,7 @@ Sends rich HTML messages to a Telegram chat for:
   * project startup / shutdown
   * startup / scheduled / manual refresh lifecycle
   * EMA feed bootstrap and live-loop lifecycle
+  * pivot-levels success / failure
   * unhandled exceptions
 
 All sends are best-effort — a Telegram outage never aborts the caller.
@@ -44,6 +45,15 @@ def _ist_now() -> str:
 
 def _esc(value: Any) -> str:
     return html.escape(str(value)) if value is not None else "—"
+
+
+def _num(value: Any) -> str:
+    if value is None:
+        return "—"
+    try:
+        return f"{float(value):.2f}"
+    except (TypeError, ValueError):
+        return "—"
 
 
 # ---------------------------------------------------------------------------
@@ -295,5 +305,79 @@ class ProjectNotifier:
             f"\n"
             f"⏱ <b>Poll interval:</b> <code>{poll_seconds}s</code>\n"
             f"🕒 <b>Time:</b> <code>{_ist_now()}</code>"
+        )
+        self.telegram.send(text)
+
+    # ------------------------------------------------------------------
+    # Job 3 — Pivot levels (post-compute notifications)
+    # ------------------------------------------------------------------
+    def notify_levels_success(self, *, result: dict) -> None:
+        results = (result or {}).get("results") or {}
+        computed_at = (result or {}).get("computed_at") or ""
+        trigger = (result or {}).get("trigger") or ""
+        trade_date = computed_at[:10] if computed_at else "—"
+
+        entries: list[tuple[int, str, dict]] = []
+        for key, item in results.items():
+            if not isinstance(item, dict) or item.get("status") != "ok":
+                continue
+            try:
+                prio = int(item.get("priority") or 999)
+            except (TypeError, ValueError):
+                prio = 999
+            entries.append((prio, key, item))
+        entries.sort()
+
+        lines: list[str] = []
+        for _prio, _key, item in entries:
+            canonical = item.get("canonical") or "?"
+            lv = item.get("levels") or {}
+            lines.append(
+                f"• <b>{html.escape(str(canonical))}</b>  "
+                f"A=<code>{_num(lv.get('A'))}</code>  "
+                f"R1=<code>{_num(lv.get('R1'))}</code>  "
+                f"S1=<code>{_num(lv.get('S1'))}</code>"
+            )
+        body = "\n".join(lines) if lines else "• —"
+
+        text = (
+            f"📐 <b>Pivot Levels — SUCCESS</b>\n"
+            f"<b>{_esc(self.app_name)}</b>\n"
+            f"\n"
+            f"📅 <b>Trade date:</b> <code>{_esc(trade_date)}</code>\n"
+            f"⏱ <b>Time:</b> <code>{_ist_now()}</code>\n"
+            f"🎯 <b>Trigger:</b> <code>{_esc(trigger)}</code>\n"
+            f"📊 <b>Indexes:</b> <code>{len(entries)}</code>\n"
+            f"\n"
+            f"{body}"
+        )
+        self.telegram.send(text)
+
+    def notify_levels_failure(self, *, result: dict) -> None:
+        results = (result or {}).get("results") or {}
+        trigger = (result or {}).get("trigger") or ""
+
+        failed_lines: list[str] = []
+        for key, item in results.items():
+            if not isinstance(item, dict):
+                continue
+            if item.get("status") == "ok":
+                continue
+            err = item.get("error") or "unknown"
+            failed_lines.append(
+                f"• <code>{_esc(key)}</code>: {html.escape(str(err))[:120]}"
+            )
+        failed_text = "\n".join(failed_lines) if failed_lines else "• —"
+
+        text = (
+            f"⚠️ <b>Pivot Levels — FAILED</b>\n"
+            f"<b>{_esc(self.app_name)}</b>\n"
+            f"\n"
+            f"🎯 <b>Trigger:</b> <code>{_esc(trigger)}</code>\n"
+            f"⏱ <b>Time:</b> <code>{_ist_now()}</code>\n"
+            f"📊 <b>Failed:</b> <code>{len(failed_lines)}</code>\n"
+            f"\n"
+            f"<b>Failed indexes:</b>\n"
+            f"{failed_text}"
         )
         self.telegram.send(text)

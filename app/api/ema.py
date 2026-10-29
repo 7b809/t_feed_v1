@@ -3,23 +3,17 @@
 # REST:
 #   GET  /api/v1/ema/status
 #   GET  /api/v1/ema/instruments
-#   GET  /api/v1/ema/channels        <-- NEW: live WS channel counts
+#   GET  /api/v1/ema/channels
 #   POST /api/v1/ema/subscribe/{instrument_key}
 #   GET  /api/v1/ema/{instrument_key}/latest
 #
 # WebSockets:
-#   /ws/index/{underlying}                       e.g. /ws/index/nifty
+#   /ws/index/{underlying}                       e.g. /ws/index/nifty, /ws/index/banknifty
 #   /ws/ema/options/{underlying}/{contract}      e.g. /ws/ema/options/nifty/22500PE
 #   /ws/ema/{instrument_key}                     e.g. /ws/ema/NSE_FO|51330
 #
-# Behaviour notes
-# ---------------
-# * Auto-subscribe on connect: if a client asks for an option that is not
-#   currently subscribed but IS present in all_instruments.json, the server
-#   finds it and subscribes it on the spot.
-# * Rejection codes: FastAPI/Starlette turns `close()`-before-`accept()` into
-#   an HTTP 403 handshake rejection. To send a real WebSocket close code
-#   (4400 / 4404) the socket MUST be accepted first, then closed.
+# Auto-subscribe on connect for options and raw-instrument endpoints.
+# Rejections accept-then-close so clients see proper 4400/4404 codes.
 
 from __future__ import annotations
 
@@ -28,30 +22,43 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisconnect, status
 
+from app.config import INDEX_METADATA
 from app.services.ema_feed_service import EmaFeedError, parse_options_channel
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["ema"])
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
+
 def _service(request: Request):
     svc = getattr(request.app.state, "ema_feed_service", None)
     if svc is None:
         raise HTTPException(status_code=503, detail="EMA service unavailable")
     return svc
 
+
 def _index_key(underlying: str) -> str:
-    mapping = {
-        "nifty": "NSE_INDEX|Nifty 50",
-        "sensex": "BSE_INDEX|SENSEX",
-    }
-    key = mapping.get(underlying.lower())
-    if not key:
-        raise HTTPException(status_code=404, detail=f"Unknown index '{underlying}'")
-    return key
+    """Resolve an index identifier to its raw instrument_key.
+
+    Accepts any of:
+      * the folder tag        ("nifty", "banknifty", "midcpnifty", "sensex")
+      * the canonical name    ("NIFTY", "BANKNIFTY", "MIDCPNIFTY", "SENSEX")
+      * the full instrument_key ("NSE_INDEX|Nifty 50")
+
+    Case-insensitive.
+    """
+    normalized = (underlying or "").strip().lower()
+    if not normalized:
+        raise HTTPException(status_code=404, detail="Missing index name")
+    for key, meta in INDEX_METADATA.items():
+        if (meta.get("folder") or "").lower() == normalized:
+            return key
+        if (meta.get("canonical") or "").lower() == normalized:
+            return key
+        if key.lower() == normalized:
+            return key
+    raise HTTPException(status_code=404, detail=f"Unknown index '{underlying}'")
+
 
 def _strike_matches(strike_value: Any, requested: str) -> bool:
     if strike_value is None:
@@ -60,6 +67,7 @@ def _strike_matches(strike_value: Any, requested: str) -> bool:
         return float(strike_value) == float(requested)
     except (TypeError, ValueError):
         return str(strike_value) in {requested, f"{requested}.0"}
+
 
 def _find_subscribed_option(
     svc, underlying: str, strike: str, strike_type: str
@@ -76,6 +84,7 @@ def _find_subscribed_option(
         ):
             return key
     return None
+
 
 async def _try_auto_subscribe(
     svc, underlying: str, strike: str, strike_type: str
@@ -109,6 +118,7 @@ async def _try_auto_subscribe(
     )
     return None
 
+
 async def _reject_ws(websocket: WebSocket, code: int, reason: str = "") -> None:
     try:
         await websocket.accept()
@@ -119,14 +129,16 @@ async def _reject_ws(websocket: WebSocket, code: int, reason: str = "") -> None:
     except Exception:  # noqa: BLE001
         pass
 
-# ---------------------------------------------------------------------------
+
+# --------------------------------------------------------------------------- #
 # REST
-# ---------------------------------------------------------------------------
+# --------------------------------------------------------------------------- #
 @router.get("/api/v1/ema/status")
 def ema_status(request: Request) -> dict[str, Any]:
     svc = _service(request)
     keys = svc.subscribed_keys()
     return {"subscribed": keys, "count": len(keys)}
+
 
 @router.get("/api/v1/ema/instruments")
 def ema_instruments(request: Request) -> dict[str, Any]:
@@ -141,12 +153,13 @@ def ema_instruments(request: Request) -> dict[str, Any]:
         ]
     }
 
+
 @router.get("/api/v1/ema/channels")
 def ema_channels(request: Request) -> dict[str, Any]:
-    """Live WebSocket channel counts — used by the dashboard header tiles."""
     svc = _service(request)
     counts = svc.broadcaster.channel_counts()
     return {"channels": counts, "total": sum(counts.values())}
+
 
 @router.post("/api/v1/ema/subscribe/{instrument_key:path}")
 async def ema_subscribe(request: Request, instrument_key: str) -> dict[str, Any]:
@@ -156,6 +169,7 @@ async def ema_subscribe(request: Request, instrument_key: str) -> dict[str, Any]
     except EmaFeedError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
+
 @router.get("/api/v1/ema/{instrument_key:path}/latest")
 def ema_latest(request: Request, instrument_key: str) -> dict[str, Any]:
     svc = _service(request)
@@ -164,9 +178,10 @@ def ema_latest(request: Request, instrument_key: str) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail="Instrument is not subscribed")
     return snapshot
 
-# ---------------------------------------------------------------------------
+
+# --------------------------------------------------------------------------- #
 # WebSockets
-# ---------------------------------------------------------------------------
+# --------------------------------------------------------------------------- #
 async def _serve_ws(ws: WebSocket, channel: str, instrument_key: str, svc) -> None:
     await ws.accept()
     broadcaster = svc.broadcaster
@@ -200,6 +215,7 @@ async def _serve_ws(ws: WebSocket, channel: str, instrument_key: str, svc) -> No
     finally:
         await broadcaster.unregister(channel, ws)
 
+
 @router.websocket("/ws/index/{underlying}")
 async def ws_index(websocket: WebSocket, underlying: str) -> None:
     svc = websocket.app.state.ema_feed_service
@@ -208,7 +224,11 @@ async def ws_index(websocket: WebSocket, underlying: str) -> None:
     except HTTPException as exc:
         await _reject_ws(websocket, 4404, str(exc.detail))
         return
-    await _serve_ws(websocket, f"index:{underlying.lower()}", key, svc)
+    # Normalize the channel tag to the folder so /ws/index/nifty and
+    # /ws/index/NIFTY share a single broadcast channel.
+    folder = (INDEX_METADATA.get(key, {}).get("folder") or underlying).lower()
+    await _serve_ws(websocket, f"index:{folder}", key, svc)
+
 
 @router.websocket("/ws/ema/options/{underlying}/{contract}")
 async def ws_options(websocket: WebSocket, underlying: str, contract: str) -> None:
@@ -235,6 +255,7 @@ async def ws_options(websocket: WebSocket, underlying: str, contract: str) -> No
 
     channel = f"options:{underlying.lower()}:{strike}{strike_type}"
     await _serve_ws(websocket, channel, target, svc)
+
 
 @router.websocket("/ws/ema/{instrument_key:path}")
 async def ws_instrument(websocket: WebSocket, instrument_key: str) -> None:

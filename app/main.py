@@ -13,6 +13,7 @@ from fastapi.responses import FileResponse, JSONResponse
 
 from app.api.ema import router as ema_router
 from app.api.health import router as health_router
+from app.api.levels import router as levels_router
 from app.api.mega_archive import router as mega_router
 from app.api.ws_catalog import router as ws_catalog_router
 from app.config import PROJECT_ROOT, settings
@@ -23,8 +24,11 @@ from app.services.ema_feed_service import EmaFeedService
 from app.services.ema_state_store import EmaStateStore
 from app.services.feed_broadcaster import FeedBroadcaster
 from app.services.instrument_store import InstrumentStore
+from app.services.levels_service import LevelsService
+from app.services.levels_state_store import LevelsStateStore
 from app.services.mega_archive_service import MegaArchiveService
 from app.services.mongodb_service import MongoDocumentService
+from app.services.project_info_service import ProjectInfoService
 from app.services.telegram_service import ProjectNotifier
 from app.services.upstox_client_service import UpstoxService
 
@@ -42,6 +46,7 @@ async def lifespan(app: FastAPI):
     mongo = None
     scheduler = None
     ema_service = None
+    levels_service = None
     notifier = ProjectNotifier(settings)
     app.state.notifier = notifier
 
@@ -74,9 +79,12 @@ async def lifespan(app: FastAPI):
         archive_service = MegaArchiveService(settings, mongo, notifier=notifier)
         app.state.mega_archive_service = archive_service
 
+        # ---------------- Shared MongoDB writer (project_info) ----------------
+        project_info = ProjectInfoService(settings, mongo.client)
+        app.state.project_info_service = project_info
+
         # ------------------------------------------------------------------
         # 2. Startup refresh — SEQUENTIAL, must complete before EMA bootstrap.
-        #    (WinError 5 race fix — see files.txt §6.)
         # ------------------------------------------------------------------
         if settings.refresh_on_startup:
             logger.info("Startup refresh running (blocking) before EMA bootstrap")
@@ -91,10 +99,12 @@ async def lifespan(app: FastAPI):
                 )
 
         # ------------------------------------------------------------------
-        # 3. Job 2 services (constructed AFTER archive extraction).
+        # 3. Shared Upstox client + Job 2 (EMA) + Job 3 (Levels).
         # ------------------------------------------------------------------
         instruments = InstrumentStore(settings.instruments_file)
         upstox = UpstoxService(settings)
+
+        # -------- Job 2 (EMA) --------
         state_store = EmaStateStore(settings)
         broadcaster = FeedBroadcaster()
         ema_service = EmaFeedService(
@@ -107,6 +117,17 @@ async def lifespan(app: FastAPI):
         )
         app.state.ema_feed_service = ema_service
         app.state.feed_broadcaster = broadcaster
+
+        # -------- Job 3 (Levels) --------
+        levels_store = LevelsStateStore(settings)
+        levels_service = LevelsService(
+            settings,
+            upstox,
+            levels_store,
+            notifier=notifier,
+            project_info=project_info,
+        )
+        app.state.levels_service = levels_service
 
         # ------------------------------------------------------------------
         # 4. EMA bootstrap.
@@ -122,14 +143,31 @@ async def lifespan(app: FastAPI):
             )
 
         # ------------------------------------------------------------------
-        # 5. Scheduler last, once both jobs are initialized.
+        # 5. Levels bootstrap.
         # ------------------------------------------------------------------
-        scheduler = SchedulerService(settings, archive_service, ema_service)
+        try:
+            await levels_service.bootstrap()
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Levels bootstrap failed; service will keep running")
+            await asyncio.to_thread(
+                notifier.notify_exception,
+                where="lifespan.levels_bootstrap",
+                exc=exc,
+            )
+
+        # ------------------------------------------------------------------
+        # 6. Scheduler last.
+        # ------------------------------------------------------------------
+        scheduler = SchedulerService(
+            settings,
+            archive_service,
+            ema_service,
+            levels_service,
+        )
         scheduler.set_event_loop(asyncio.get_running_loop())
         app.state.scheduler_service = scheduler
         scheduler.start()
 
-        # Startup Telegram notification (last, once everything is up).
         await asyncio.to_thread(
             notifier.notify_startup,
             host=settings.app_host,
@@ -153,7 +191,6 @@ async def lifespan(app: FastAPI):
             pass
         raise
     finally:
-        # Shutdown notification FIRST, so users see it before handlers detach.
         try:
             await asyncio.to_thread(notifier.notify_shutdown, reason="lifespan exit")
         except Exception:  # noqa: BLE001
@@ -175,25 +212,14 @@ def _startup_refresh(service: MegaArchiveService) -> None:
         logger.exception("Startup refresh failed")
 
 
-app = FastAPI(title=settings.app_name, version="1.3.0", lifespan=lifespan)
+app = FastAPI(title=settings.app_name, version="1.5.0", lifespan=lifespan)
 app.include_router(health_router)
 app.include_router(mega_router)
 app.include_router(ema_router)
+app.include_router(levels_router)
 app.include_router(ws_catalog_router)
 
 
-# ---------------------------------------------------------------------------
-# Static dashboard (templates/index.html)
-#
-# NOTE on FileResponse defaults
-# -----------------------------
-# ``FileResponse`` defaults to ``content_disposition_type="attachment"``
-# even when ``filename`` is None. Left at the default, opening
-# ``http://host:port/`` in a browser DOWNLOADS index.html instead of
-# rendering it. Passing ``content_disposition_type="inline"`` forces the
-# browser to render the HTML. ``Cache-Control: no-store`` is added so
-# browsers always pick up the current template after an edit / redeploy.
-# ---------------------------------------------------------------------------
 @app.get("/", include_in_schema=False)
 def dashboard():
     html_path = TEMPLATES_DIR / "index.html"
@@ -219,7 +245,8 @@ def info():
         "app": settings.app_name,
         "scope": (
             "Job 1: MongoDB -> MEGA ZIP -> safe extraction | "
-            "Job 2: EMA crosses live feed"
+            "Job 2: EMA crosses live feed | "
+            "Job 3: First-candle pivot levels (Telegram + MongoDB persistence)"
         ),
         "docs": "/docs",
         "health": "/health",
@@ -228,12 +255,12 @@ def info():
         "ema_channels": "/api/v1/ema/channels",
         "ws_catalog": "/api/v1/ws/catalog",
         "ws_catalog_lookup": "/api/v1/ws/catalog/{instrument_key}",
+        "levels_all": "/api/v1/levels",
+        "levels_db": "/api/v1/levels/db",
+        "levels_refresh": "/api/v1/levels/refresh",
     }
 
 
-# ---------------------------------------------------------------------------
-# Unhandled exception hook — reports to Telegram and returns JSON 500
-# ---------------------------------------------------------------------------
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
     logger.exception("Unhandled exception on %s %s", request.method, request.url.path)

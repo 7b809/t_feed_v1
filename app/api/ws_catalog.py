@@ -2,29 +2,12 @@
 """
 WebSocket discovery / documentation API.
 
-Exposes what a client needs to connect to the live EMA(9/21) feed:
-
-  * Channel URL patterns for indexes, options, and raw instrument keys.
-  * Event schemas (snapshot / last_cross / cross / no_cross / heartbeat)
-    with realistic sample payloads.
-  * Close codes and reconnect guidance.
-  * Python / JavaScript / CLI code samples.
-  * Auto-subscribe behaviour for options and raw-instrument endpoints.
-  * The currently-subscribed instruments with live state + WS URLs.
-  * Paginated "available" instruments — catalog entries that can be
-    connected but are not yet subscribed — with URLs to use.
-
-Two endpoints:
-
   GET /api/v1/ws/catalog
-      Full response (documentation + live data). Optional query params
-      filter and page the "available" list.
-
   GET /api/v1/ws/catalog/{instrument_key}
-      Per-instrument detail. Returns 404 if the instrument is neither
-      subscribed nor present in all_instruments.json.
 
-Neither endpoint requires auth; nothing here is mutating.
+Index URLs use ``meta["folder"]`` (nifty / banknifty / midcpnifty /
+sensex) so multi-word underlyings like "NIFTY BANK" don't produce URLs
+with spaces.
 """
 
 from __future__ import annotations
@@ -36,16 +19,14 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Query, Request, status
 
+from app.config import INDEX_METADATA
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["ws-catalog"])
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
-
-# ---------------------------------------------------------------------------
-# Static documentation blocks
-# ---------------------------------------------------------------------------
 
 CHANNEL_PATTERNS: dict[str, dict[str, Any]] = {
     "index": {
@@ -56,11 +37,13 @@ CHANNEL_PATTERNS: dict[str, dict[str, Any]] = {
         "example_path": "/ws/index/nifty",
         "known_values": {
             "nifty": "NSE_INDEX|Nifty 50",
+            "banknifty": "NSE_INDEX|Nifty Bank",
+            "midcpnifty": "NSE_INDEX|NIFTY MID SELECT",
             "sensex": "BSE_INDEX|SENSEX",
         },
         "auto_subscribe": (
             "Indexes are seeded at bootstrap. If missing from "
-            "all_instruments.json, DEFAULT_INDEX_METADATA is used so the "
+            "all_instruments.json, INDEX_METADATA is used so the "
             "connection always succeeds."
         ),
     },
@@ -97,10 +80,7 @@ CHANNEL_PATTERNS: dict[str, dict[str, Any]] = {
 
 EVENT_TYPES: dict[str, dict[str, Any]] = {
     "snapshot": {
-        "description": (
-            "Full runtime state. Sent exactly once per connection, "
-            "immediately after the WebSocket handshake."
-        ),
+        "description": "Full runtime state, once per connection.",
         "when": "once per connection",
         "sample": {
             "event": "snapshot",
@@ -112,6 +92,9 @@ EVENT_TYPES: dict[str, dict[str, Any]] = {
                 "strike_price": None,
                 "strike_type": "INDEX",
                 "expiry": None,
+                "canonical": "NIFTY",
+                "folder": "nifty",
+                "priority": 1,
             },
             "ema_fast": 22497.41,
             "ema_slow": 22495.78,
@@ -147,10 +130,7 @@ EVENT_TYPES: dict[str, dict[str, Any]] = {
         },
     },
     "last_cross": {
-        "description": (
-            "Replay of the last known cross. Sent immediately after "
-            "snapshot, only when a cross exists."
-        ),
+        "description": "Replay of last known cross (conditional).",
         "when": "once per connection (conditional)",
         "sample": {
             "event": "last_cross",
@@ -163,10 +143,7 @@ EVENT_TYPES: dict[str, dict[str, Any]] = {
         },
     },
     "cross": {
-        "description": (
-            "Live EMA(9/21) crossover. Emitted inside the cycle that "
-            "processes the closing candle."
-        ),
+        "description": "Live EMA(9/21) crossover.",
         "when": "on each detected crossover",
         "sample": {
             "event": "cross",
@@ -179,10 +156,7 @@ EVENT_TYPES: dict[str, dict[str, Any]] = {
         },
     },
     "no_cross": {
-        "description": (
-            "Emitted when a cycle completes without a crossover. Fires "
-            "once per candle processed."
-        ),
+        "description": "Cycle with no crossover.",
         "when": "on each cycle with no crossover",
         "sample": {
             "event": "no_cross",
@@ -192,10 +166,7 @@ EVENT_TYPES: dict[str, dict[str, Any]] = {
         },
     },
     "heartbeat": {
-        "description": (
-            "Per-cycle status heartbeat. Emitted after each cycle "
-            "(default every cycle; configurable via EMA_HEARTBEAT_CYCLES)."
-        ),
+        "description": "Per-cycle status heartbeat.",
         "when": "once per cycle (default) or every Nth cycle",
         "sample": {
             "event": "heartbeat",
@@ -220,35 +191,20 @@ CLOSE_CODES: dict[int, dict[str, str]] = {
     1000: {"name": "Normal Closure", "reason": "Client disconnected normally."},
     1001: {"name": "Going Away", "reason": "Server shutting down."},
     1011: {"name": "Internal Error", "reason": "Unexpected server-side error."},
-    4400: {
-        "name": "Bad Request",
-        "reason": "Invalid options contract format (e.g. '22500XZ').",
-    },
-    4404: {
-        "name": "Not Found",
-        "reason": "Instrument not found in catalog; auto-subscribe failed.",
-    },
+    4400: {"name": "Bad Request", "reason": "Invalid options contract format."},
+    4404: {"name": "Not Found", "reason": "Instrument not found in catalog."},
 }
 
 CLIENT_BEHAVIOUR: dict[str, Any] = {
     "keepalive": {
-        "description": (
-            "Send any text frame as a keepalive ping. The server reads via "
-            "receive_text() and ignores content."
-        ),
+        "description": "Send any text frame as a keepalive ping.",
         "recommended_interval_seconds": 30,
         "example_payload": "ping",
     },
     "reconnect": {
-        "description": (
-            "Reconnect with exponential backoff (1s → 30s capped). Do not "
-            "busy-loop on 4400/4404."
-        ),
+        "description": "Reconnect with exponential backoff (1s → 30s capped).",
         "on_4400": "Fix the contract format; do not retry.",
-        "on_4404": (
-            "Instrument unavailable — refresh the catalog or pick another "
-            "contract; do not retry."
-        ),
+        "on_4404": "Instrument unavailable; refresh or pick another; do not retry.",
         "on_other_close": "Retry with backoff.",
     },
     "message_sequence": [
@@ -288,23 +244,18 @@ AUTO_SUBSCRIBE: dict[str, Any] = {
     "description": (
         "Options and raw-instrument WebSocket endpoints auto-subscribe the "
         "target instrument on connect, provided it exists in "
-        "all_instruments.json. No separate POST is required."
+        "all_instruments.json."
     ),
     "rest_prewarm": (
         "POST /api/v1/ema/subscribe/{instrument_key} subscribes without "
-        "holding a WebSocket — useful for warm-up."
+        "holding a WebSocket."
     ),
     "catalog_refresh": (
-        "If an instrument is missing from the catalog, refresh the archive "
-        "from MongoDB: POST /api/v1/jobs/mega-archive/hard-refresh "
+        "POST /api/v1/jobs/mega-archive/hard-refresh "
         "(X-API-Key required when API_KEY is set)."
     ),
 }
 
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 def _now_ist_iso() -> str:
     return datetime.now(IST).isoformat()
@@ -349,6 +300,16 @@ def _format_strike(strike: Any) -> str:
     return str(n)
 
 
+def _index_tag(meta: dict[str, Any]) -> str:
+    """Folder → canonical → underlying.lower() for index URLs / channels."""
+    tag = (
+        meta.get("folder")
+        or meta.get("canonical")
+        or (meta.get("underlying") or "")
+    )
+    return (tag or "").strip().lower()
+
+
 def _ws_urls_for(meta: dict[str, Any], base: str) -> dict[str, str]:
     key = meta.get("instrument_key") or ""
     underlying = (meta.get("underlying") or "").lower()
@@ -360,8 +321,9 @@ def _ws_urls_for(meta: dict[str, Any], base: str) -> dict[str, str]:
         urls["instrument"] = f"{base}/ws/ema/{quote(key, safe='')}"
 
     if strike_type == "INDEX" or not strike_type:
-        if underlying:
-            urls["index"] = f"{base}/ws/index/{underlying}"
+        tag = _index_tag(meta)
+        if tag:
+            urls["index"] = f"{base}/ws/index/{tag}"
     else:
         if underlying and strike_price is not None:
             urls["options"] = (
@@ -379,8 +341,9 @@ def _channels_for(meta: dict[str, Any]) -> list[str]:
     if key:
         channels.append(f"instrument:{key}")
     if strike_type == "INDEX" or not strike_type:
-        if underlying:
-            channels.append(f"index:{underlying}")
+        tag = _index_tag(meta)
+        if tag:
+            channels.append(f"index:{tag}")
     elif underlying and meta.get("strike_price") is not None:
         channels.append(
             f"options:{underlying}:"
@@ -410,10 +373,6 @@ def _best_url(urls: dict[str, str]) -> str:
     )
 
 
-# ---------------------------------------------------------------------------
-# GET /api/v1/ws/catalog
-# ---------------------------------------------------------------------------
-
 @router.get("/api/v1/ws/catalog")
 def ws_catalog(
     request: Request,
@@ -431,7 +390,6 @@ def ws_catalog(
 
     subscribed_keys = svc.subscribed_keys()
 
-    # ---- subscribed instruments ----
     subscribed_instruments: list[dict[str, Any]] = []
     option_underlyings: set[str] = set()
 
@@ -455,6 +413,8 @@ def ws_catalog(
                 "strike_price": meta.get("strike_price"),
                 "strike_type": meta.get("strike_type"),
                 "expiry": meta.get("expiry"),
+                "canonical": meta.get("canonical"),
+                "folder": meta.get("folder"),
                 "ws_urls": urls,
                 "active_channels": channels,
                 "client_counts": {
@@ -464,7 +424,6 @@ def ws_catalog(
             }
         )
 
-    # ---- available instruments (paginated) ----
     available: dict[str, Any] | None = None
     if include_available:
         underlying_filter = (underlying or "").strip().upper() or None
@@ -511,6 +470,8 @@ def ws_catalog(
                     "strike_price": meta.get("strike_price"),
                     "strike_type": meta.get("strike_type"),
                     "expiry": meta.get("expiry"),
+                    "canonical": meta.get("canonical"),
+                    "folder": meta.get("folder"),
                     "ws_urls": urls,
                     "recommended_url": _best_url(urls),
                 }
@@ -533,11 +494,22 @@ def ws_catalog(
             "items": page_items,
         }
 
-    # ---- dynamic example URLs for channel patterns ----
     patterns: dict[str, dict[str, Any]] = {
         "index": {
             **{k: v for k, v in CHANNEL_PATTERNS["index"].items() if k != "example_path"},
             "example_url": f"{base}{CHANNEL_PATTERNS['index']['example_path']}",
+            "available_indexes": [
+                {
+                    "canonical": m.get("canonical"),
+                    "folder": m.get("folder"),
+                    "instrument_key": k,
+                    "priority": m.get("priority"),
+                }
+                for k, m in sorted(
+                    INDEX_METADATA.items(),
+                    key=lambda kv: int(kv[1].get("priority", 999)),
+                )
+            ],
         },
         "options": {
             **{k: v for k, v in CHANNEL_PATTERNS["options"].items() if k != "example_path"},
@@ -550,7 +522,6 @@ def ws_catalog(
         },
     }
 
-    # ---- step-by-step for connecting a new instrument ----
     how_to_connect_new_instrument = {
         "step_1_find": {
             "description": "Search the catalog for the instrument you want.",
@@ -609,10 +580,6 @@ def ws_catalog(
     }
 
 
-# ---------------------------------------------------------------------------
-# GET /api/v1/ws/catalog/{instrument_key}
-# ---------------------------------------------------------------------------
-
 @router.get("/api/v1/ws/catalog/{instrument_key:path}")
 def ws_catalog_instrument(
     request: Request,
@@ -631,9 +598,7 @@ def ws_catalog_instrument(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=(
                 f"Instrument '{instrument_key}' is not in the catalog and "
-                f"not currently subscribed. Refresh the archive via "
-                f"POST /api/v1/jobs/mega-archive/hard-refresh, or browse "
-                f"/api/v1/ws/catalog for the available instruments."
+                f"not currently subscribed."
             ),
         )
 
@@ -654,6 +619,8 @@ def ws_catalog_instrument(
         "strike_price": meta.get("strike_price"),
         "strike_type": meta.get("strike_type"),
         "expiry": meta.get("expiry"),
+        "canonical": meta.get("canonical"),
+        "folder": meta.get("folder"),
         "is_subscribed": is_subscribed,
         "ws_urls": urls,
         "recommended_url": best_url,

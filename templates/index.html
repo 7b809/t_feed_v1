@@ -172,8 +172,14 @@
     border-color: rgba(180,83,9,0.25);
     color: var(--amber);
   }
+  .section-head.levels-head h3 .count {
+    background: rgba(124,58,237,0.08);
+    border-color: rgba(124,58,237,0.25);
+    color: var(--purple);
+  }
   .section-head h3 .bi-fire { color: var(--amber) !important; }
   .section-head h3 .bi-collection { color: var(--blue) !important; }
+  .section-head h3 .bi-rulers { color: var(--purple) !important; }
 
   .scroll-controls { display: flex; gap: 6px; }
   .scroll-btn {
@@ -222,6 +228,68 @@
     transform: translateY(-2px);
     box-shadow: 0 10px 30px -10px rgba(26,115,232,0.22);
     border-color: var(--blue);
+  }
+
+  /* Pivot-level cards: compact, purple accent on hover */
+  .levels-card {
+    flex: 0 0 260px;
+    width: 260px;
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    overflow: hidden;
+    box-shadow: 0 1px 2px rgba(16,24,40,0.04);
+    transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+    display: flex; flex-direction: column;
+  }
+  .levels-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 10px 30px -10px rgba(124,58,237,0.22);
+    border-color: var(--purple);
+  }
+  .levels-card .card-head {
+    background: linear-gradient(135deg, rgba(124,58,237,0.06), rgba(255,255,255,0));
+  }
+  .levels-card .kind-badge {
+    background: rgba(124,58,237,0.08);
+    color: var(--purple);
+    border-color: rgba(124,58,237,0.25);
+  }
+  .levels-table { width: 100%; border-collapse: collapse; }
+  .levels-table td {
+    padding: 5px 14px;
+    font-size: 0.78rem;
+    font-variant-numeric: tabular-nums;
+    border-top: 1px solid var(--border);
+  }
+  .levels-table td:first-child {
+    color: var(--muted);
+    font-weight: 600;
+    letter-spacing: 0.4px;
+    width: 55%;
+  }
+  .levels-table td:last-child {
+    text-align: right;
+    color: var(--text);
+    font-weight: 700;
+  }
+  .levels-table tr.lvl-A td       { background: rgba(26,115,232,0.05); }
+  .levels-table tr.lvl-A td:first-child { color: var(--blue); }
+  .levels-table tr.lvl-R td       { background: rgba(15,157,88,0.04); }
+  .levels-table tr.lvl-R td       { color: var(--green) !important; }
+  .levels-table tr.lvl-S td       { background: rgba(197,34,31,0.04); }
+  .levels-table tr.lvl-S td       { color: var(--red) !important; }
+  .levels-table tr.lvl-T td       { background: rgba(180,83,9,0.05); }
+  .levels-table tr.lvl-T td       { color: var(--amber) !important; }
+  .levels-foot {
+    padding: 7px 14px;
+    background: var(--card-bg-alt);
+    border-top: 1px solid var(--border);
+    font-size: 0.66rem;
+    color: var(--muted);
+    display: flex;
+    justify-content: space-between;
+    font-variant-numeric: tabular-nums;
   }
 
   .card-head {
@@ -510,6 +578,7 @@
 
   @media (max-width: 576px) {
     .instrument-card { flex: 0 0 290px; width: 290px; }
+    .levels-card     { flex: 0 0 240px; width: 240px; }
     .price { font-size: 1.5rem; }
   }
 </style>
@@ -577,6 +646,31 @@
     </div>
   </div>
 
+  <!-- ============================================================= -->
+  <!-- Pivot Levels (Job 3)                                          -->
+  <!-- ============================================================= -->
+  <div class="section-head levels-head">
+    <h3>
+      <i class="bi bi-rulers"></i>
+      Pivot Levels
+      <span class="tag-sub">first candle 09:15 → 09:16 IST</span>
+      <span class="count" id="levels-count">0</span>
+    </h3>
+    <div class="scroll-controls">
+      <button class="btn btn-sm btn-outline-primary" id="levels-refresh-btn"
+              title="Recompute pivot levels now (POST /api/v1/levels/refresh)">
+        <i class="bi bi-arrow-clockwise"></i>
+        <span class="d-none d-sm-inline">Refresh</span>
+      </button>
+    </div>
+  </div>
+  <div id="levels-panel" class="instrument-row">
+    <div class="text-muted small">Loading…</div>
+  </div>
+
+  <!-- ============================================================= -->
+  <!-- EMA instruments                                               -->
+  <!-- ============================================================= -->
   <div id="sections"></div>
 
   <div class="empty-state mt-4 d-none" id="empty-state">
@@ -701,6 +795,7 @@
   'use strict';
 
   const REFRESH_MS = 5000;
+  const LEVELS_REFRESH_MS = 60000;
   const OPTIONS_PAGE_SIZE = 50;
 
   const sectionsEl        = document.getElementById('sections');
@@ -716,6 +811,10 @@
   const refreshBtn        = document.getElementById('refresh-btn');
   const addBtn            = document.getElementById('add-btn');
   const toastHost         = document.getElementById('toast-host');
+
+  const levelsPanelEl     = document.getElementById('levels-panel');
+  const levelsRefreshBtn  = document.getElementById('levels-refresh-btn');
+  const levelsCountEl     = document.getElementById('levels-count');
 
   // ===============================================================
   // Formatters
@@ -793,6 +892,18 @@
     } catch (_e) { return String(v); }
   }
 
+  function fmtShortStamp(v) {
+    if (!v) return '—';
+    try {
+      const d = new Date(v);
+      if (isNaN(d.getTime())) return String(v);
+      return d.toLocaleString('en-IN', {
+        timeZone: 'Asia/Kolkata', hour12: true,
+        hour: '2-digit', minute: '2-digit', second: '2-digit',
+      });
+    } catch (_e) { return String(v); }
+  }
+
   // ===============================================================
   // Toasts
   // ===============================================================
@@ -841,8 +952,14 @@
   function compareItems(a, b, isIndexGroup) {
     const A = classify(a.payload);
     const B = classify(b.payload);
-    if (isIndexGroup && A.underlying !== B.underlying) {
-      return A.underlying.localeCompare(B.underlying);
+    if (isIndexGroup) {
+      // Prefer priority (from INDEX_METADATA) → canonical → underlying.
+      const pa = Number((a.payload.meta || {}).priority || 999);
+      const pb = Number((b.payload.meta || {}).priority || 999);
+      if (pa !== pb) return pa - pb;
+      const ca = String((a.payload.meta || {}).canonical || A.underlying || '');
+      const cb = String((b.payload.meta || {}).canonical || B.underlying || '');
+      return ca.localeCompare(cb);
     }
     const sa = strikeOf(a), sb = strikeOf(b);
     if (sa !== sb) return sa - sb;
@@ -854,7 +971,9 @@
   // ===============================================================
   function badgeText(meta) {
     const st = (meta.strike_type || '').toUpperCase();
-    if (st === 'INDEX' || !st) return (meta.underlying || 'INDEX').toUpperCase();
+    if (st === 'INDEX' || !st) {
+      return (meta.canonical || meta.underlying || 'INDEX').toUpperCase();
+    }
     const strike = meta.strike_price;
     let strikeStr = '';
     if (strike !== null && strike !== undefined) {
@@ -940,7 +1059,7 @@
 
   function buildCard(key, payload) {
     const meta = (payload && payload.meta) || {};
-    const symbol = meta.trading_symbol || key;
+    const symbol = meta.trading_symbol || meta.canonical || key;
     const fast = payload.ema_fast;
     const slow = payload.ema_slow;
     let priceCls = 'price-trend-flat';
@@ -1101,7 +1220,7 @@
   }
 
   // ===============================================================
-  // Main dashboard loader
+  // Main dashboard loader (EMA)
   // ===============================================================
   async function load() {
     try {
@@ -1129,6 +1248,170 @@
       }
     }
   }
+
+  // ===============================================================
+  // Pivot Levels (Job 3)
+  // ===============================================================
+  const LEVEL_ORDER = [
+    'R3_Threshold',
+    'R3',
+    'R2',
+    'R1',
+    'A',
+    'S1',
+    'S2',
+    'S3',
+    'S3_Threshold',
+  ];
+
+  function levelRowClass(name) {
+    if (name === 'A') return 'lvl-A';
+    if (name === 'R3_Threshold' || name === 'S3_Threshold') return 'lvl-T';
+    if (name.startsWith('R')) return 'lvl-R';
+    if (name.startsWith('S')) return 'lvl-S';
+    return '';
+  }
+
+  function buildLevelsCard(key, record) {
+    const lv = record.levels || {};
+    const canonical = record.canonical || key;
+    const folder = record.folder || '';
+    const tradeDate = record.trade_date_ist || '—';
+    const computedAt = record.computed_at || '';
+    const isCurrent = !!record.is_current_day;
+    const staleBadge = isCurrent
+      ? ''
+      : '<span class="kind-badge" style="background:rgba(180,83,9,0.08);color:var(--amber);border-color:rgba(180,83,9,0.25);">stale</span>';
+
+    const rows = LEVEL_ORDER.map(function (name) {
+      return `
+        <tr class="${levelRowClass(name)}">
+          <td>${esc(name)}</td>
+          <td>${fmtNum(lv[name], 2)}</td>
+        </tr>
+      `;
+    }).join('');
+
+    return `
+      <div class="levels-card">
+        <div class="card-head">
+          <div style="min-width:0;">
+            <div class="symbol">${esc(canonical)}</div>
+            <div class="symbol-key">${esc(folder || key)}</div>
+          </div>
+          ${staleBadge || `<span class="kind-badge">${esc(canonical)}</span>`}
+        </div>
+
+        <div class="price-block" style="padding-bottom: 6px;">
+          <div class="price-sub">
+            <strong>H</strong> ${fmtNum(lv.H, 2)}
+            &nbsp;·&nbsp;
+            <strong>L</strong> ${fmtNum(lv.L, 2)}
+          </div>
+        </div>
+
+        <table class="levels-table">
+          <tbody>${rows}</tbody>
+        </table>
+
+        <div class="levels-foot">
+          <span><i class="bi bi-calendar-event me-1"></i>${esc(tradeDate)}</span>
+          <span><i class="bi bi-clock me-1"></i>${esc(fmtShortStamp(computedAt))}</span>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderLevels(data) {
+    const indexes = (data && data.indexes) || {};
+    const entries = Object.entries(indexes).filter(function (e) {
+      const v = e[1];
+      return v && v.status === 'ok';
+    });
+    // Sort by priority (server-provided), then canonical, then key.
+    entries.sort(function (a, b) {
+      const pa = Number((a[1].priority) || 999);
+      const pb = Number((b[1].priority) || 999);
+      if (pa !== pb) return pa - pb;
+      const ca = String(a[1].canonical || a[0]);
+      const cb = String(b[1].canonical || b[0]);
+      return ca.localeCompare(cb);
+    });
+
+    levelsCountEl.textContent = String(entries.length);
+
+    if (entries.length === 0) {
+      levelsPanelEl.innerHTML =
+        '<div class="text-muted small">' +
+        'No pivot levels computed yet. They are computed automatically at 09:17 IST, ' +
+        'or press Refresh. (Non-trading day? Market not yet open?)' +
+        '</div>';
+      return;
+    }
+
+    levelsPanelEl.innerHTML = entries
+      .map(function (e) { return buildLevelsCard(e[0], e[1]); })
+      .join('');
+  }
+
+  async function loadLevels() {
+    try {
+      const res = await fetch('/api/v1/levels', { cache: 'no-store' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const data = await res.json();
+      renderLevels(data);
+    } catch (err) {
+      levelsPanelEl.innerHTML =
+        '<div class="text-danger small">Failed to load levels: ' + esc(err.message) + '</div>';
+    }
+  }
+
+  async function refreshLevels() {
+    const originalHtml = levelsRefreshBtn.innerHTML;
+    levelsRefreshBtn.disabled = true;
+    levelsRefreshBtn.innerHTML = '<i class="bi bi-hourglass-split"></i>';
+    try {
+      // NOTE: If API_KEY is set in .env, this endpoint returns 401 without
+      // the X-API-Key header. Trigger a refresh via curl instead, e.g.
+      //   curl -X POST -H "X-API-Key: $API_KEY" http://127.0.0.1:8002/api/v1/levels/refresh
+      const res = await fetch('/api/v1/levels/refresh', { method: 'POST' });
+      if (!res.ok) {
+        let detail = 'HTTP ' + res.status;
+        try {
+          const err = await res.json();
+          if (err && err.detail) {
+            detail = typeof err.detail === 'string'
+              ? err.detail
+              : JSON.stringify(err.detail);
+          }
+        } catch (_e) { /* ignore */ }
+        throw new Error(detail);
+      }
+      const data = await res.json();
+      const results = (data && data.results) || {};
+      const ok = Object.values(results).filter(function (r) {
+        return r && r.status === 'ok';
+      }).length;
+      const total = Object.keys(results).length;
+      toast(
+        '<i class="bi bi-check2-circle text-success me-1"></i> Levels recomputed ' +
+        '(' + ok + '/' + total + ')',
+        'success'
+      );
+      await loadLevels();
+    } catch (err) {
+      toast(
+        '<i class="bi bi-x-circle text-danger me-1"></i> Levels refresh failed: ' +
+        esc(err.message || 'unknown error'),
+        'error'
+      );
+    } finally {
+      levelsRefreshBtn.disabled = false;
+      levelsRefreshBtn.innerHTML = originalHtml;
+    }
+  }
+
+  levelsRefreshBtn.addEventListener('click', refreshLevels);
 
   // ===============================================================
   // Add-Instrument modal state & logic
@@ -1192,7 +1475,7 @@
                   title="${esc(s.instrument_key)}">
             <span class="chip-symbol">
               <i class="bi bi-check2-circle text-success me-1"></i>
-              ${esc(s.trading_symbol || s.instrument_key)}
+              ${esc(s.trading_symbol || s.canonical || s.instrument_key)}
             </span>
             <span class="chip-key">${esc(s.instrument_key)}</span>
           </button>
@@ -1207,7 +1490,7 @@
                   title="${esc(it.instrument_key)}">
             <span class="chip-symbol">
               <i class="bi bi-plus-circle text-primary me-1"></i>
-              ${esc(it.trading_symbol || it.instrument_key)}
+              ${esc(it.trading_symbol || it.canonical || it.instrument_key)}
             </span>
             <span class="chip-key">${esc(it.instrument_key)}</span>
           </button>
@@ -1430,9 +1713,15 @@
   // ===============================================================
   // Boot
   // ===============================================================
-  refreshBtn.addEventListener('click', load);
+  refreshBtn.addEventListener('click', function () {
+    load();
+    loadLevels();
+  });
+
   load();
+  loadLevels();
   setInterval(load, REFRESH_MS);
+  setInterval(loadLevels, LEVELS_REFRESH_MS);
 })();
 </script>
 </body>

@@ -1,11 +1,15 @@
-# app\services\ema_state_store.py
+# app/services/ema_state_store.py
 #
 # Persists Job-2 runtime state so restarts never lose EMA continuity.
 #
 # Files written:
-#   storage/mega/_ema_state/<safe_key>.json         -> {ema_fast, ema_slow, last_ts, last_close}
-#   storage/mega/index/<underlying>/ema_crosses.json   -> index instruments (nifty, sensex)
-#   storage/mega/<underlying>/<strike>_<type>/ema_crosses.json -> options
+#   storage/mega/_ema_state/<safe_key>.json               -> ema state
+#   storage/mega/index/<folder>/ema_crosses.json          -> index crosses
+#   storage/mega/<underlying>/<strike>_<type>/ema_crosses.json -> option crosses
+#
+# <folder> comes from INDEX_METADATA[key]["folder"] (e.g. "nifty",
+# "banknifty"). Falls back to underlying.lower() for legacy entries —
+# which for NIFTY / SENSEX gives exactly the pre-change path.
 
 from __future__ import annotations
 
@@ -30,8 +34,6 @@ class EmaStateStore:
         self.state_dir = config.ema_state_dir
 
     # ------------------------------------------------------------------ #
-    # Path helpers
-    # ------------------------------------------------------------------ #
     @staticmethod
     def _safe(key: str) -> str:
         return _SAFE.sub("_", key)
@@ -43,15 +45,18 @@ class EmaStateStore:
         strike_type = (meta.get("strike_type") or "").upper()
         underlying = (meta.get("underlying") or "").lower()
         if strike_type == "INDEX" or not strike_type:
-            return self.base_dir / "index" / underlying / "ema_crosses.json"
+            folder = (
+                meta.get("folder")
+                or underlying
+                or "index"
+            ).strip().lower() or "index"
+            return self.base_dir / "index" / folder / "ema_crosses.json"
         strike = meta.get("strike_price")
         if strike is None:
             return self.base_dir / underlying / f"{strike_type}" / "ema_crosses.json"
         strike_str = str(int(strike)) if float(strike).is_integer() else str(strike)
         return self.base_dir / underlying / f"{strike_str}_{strike_type}" / "ema_crosses.json"
 
-    # ------------------------------------------------------------------ #
-    # State
     # ------------------------------------------------------------------ #
     def load_state(self, instrument_key: str) -> dict[str, Any] | None:
         path = self.state_file(instrument_key)
@@ -72,8 +77,6 @@ class EmaStateStore:
         tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         tmp.replace(path)
 
-    # ------------------------------------------------------------------ #
-    # Crosses
     # ------------------------------------------------------------------ #
     def load_crosses(self, instrument_key: str, meta: dict[str, Any]) -> dict[str, Any] | None:
         path = self.crosses_file(instrument_key, meta)
