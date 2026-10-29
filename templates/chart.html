@@ -2374,7 +2374,7 @@ searchResults.addEventListener("click", function (e) {
   if (!key) return;
   searchResults.classList.remove("visible");
   globalSearchInput.value = "";
-  window.open("/chart/" + encodeURIComponent(key), "_blank");
+window.open("/chart/" + encodeURIComponent(key), "_self");
 });
 
 // ============================================================
@@ -2507,8 +2507,7 @@ async function doSwapOption() {
   try {
     const oppKey = await findOppositeInstrumentKey(swapResolvedMeta, opp);
     if (oppKey && oppKey !== currentInstrumentKey) {
-      window.open("/chart/" + encodeURIComponent(oppKey), "_blank");
-      return;
+window.open("/chart/" + encodeURIComponent(oppKey), "_self");      return;
     }
     if (swapOptionLabel) swapOptionLabel.textContent = "Not found";
     setTimeout(() => {

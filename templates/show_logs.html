@@ -1,3 +1,4 @@
+<!-- templates/show_logs.html -->
 {% extends "base.html" %}
 
 {% block title %}Logs - {{ app_name }}{% endblock %}
@@ -109,7 +110,7 @@
     border-radius: 6px;
     padding: 6px 12px;
     font-size: 0.85rem;
-    width: 100%;
+    width: calc(100% - 28px);
     margin: 8px 14px 4px 14px;
     transition: border-color 0.2s;
   }
@@ -165,6 +166,8 @@
     border-radius: 20px;
     font-weight: 500;
     letter-spacing: 0.3px;
+    white-space: nowrap;
+    flex-shrink: 0;
   }
   .log-file-item .file-name {
     font-weight: 500;
@@ -172,6 +175,7 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    min-width: 0;
   }
   .log-file-item:hover {
     background: var(--bg-item-hover);
@@ -190,6 +194,25 @@
   .log-file-item.hidden-file {
     display: none;
   }
+
+  /* Folder item tweaks: chevron on the right */
+  .log-file-item.folder-item .folder-chevron {
+    margin-left: 6px;
+    margin-right: 0;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+  }
+  .log-file-item.folder-item:hover .folder-chevron {
+    color: #fff;
+  }
+  /* Folder icon uses amber colour */
+  .log-file-item.folder-item > i.bi-folder-fill {
+    color: #fbbf24;
+  }
+  .log-file-item.folder-item:hover > i.bi-folder-fill {
+    color: #fde68a;
+  }
+
   /* dynamic border colors */
   .log-file-item.color-0 { border-left-color: #f87171; }
   .log-file-item.color-1 { border-left-color: #fbbf24; }
@@ -226,6 +249,10 @@
     color: var(--text-secondary);
     font-size: 0.9rem;
     font-weight: 500;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 40%;
   }
   .log-content-card .card-header .log-title i {
     color: #4a6cf7;
@@ -399,6 +426,133 @@
     color: #4a6cf7;
   }
 
+  /* ---- Panel tabs (Logs / Folders) ---- */
+  .panel-tabs {
+    display: flex;
+    gap: 4px;
+    margin-right: 8px;
+    flex-wrap: wrap;
+  }
+  .panel-tab {
+    background: transparent;
+    border: 1px solid transparent;
+    color: var(--text-secondary);
+    padding: 4px 12px;
+    border-radius: 6px;
+    font-size: 0.78rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    letter-spacing: 0.2px;
+  }
+  .panel-tab:hover {
+    color: var(--text-primary);
+    background: var(--bg-item-hover);
+  }
+  .panel-tab.active {
+    background: #4a6cf7;
+    color: #fff;
+  }
+  .panel-tab i {
+    font-size: 0.85rem;
+    margin-right: 0;
+  }
+  .tab-badge {
+    background: rgba(255,255,255,0.15);
+    color: inherit;
+    padding: 1px 6px;
+    border-radius: 8px;
+    font-size: 0.68rem;
+    font-weight: 800;
+    margin-left: 2px;
+  }
+  .panel-tab.active .tab-badge {
+    background: rgba(255,255,255,0.25);
+  }
+  .tab-content {
+    display: none;
+    flex: 1 1 auto;
+    min-height: 0;
+    flex-direction: column;
+  }
+  .tab-content.active {
+    display: flex;
+  }
+
+  /* ---- Folder breadcrumb / back row ---- */
+  .folder-header-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 14px 0 14px;
+    min-height: 30px;
+  }
+  .folder-back-btn {
+    background: var(--btn-tool-bg);
+    border: 1px solid var(--border-color);
+    color: var(--text-secondary);
+    padding: 3px 10px;
+    border-radius: 6px;
+    font-size: 0.72rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+  }
+  .folder-back-btn:hover {
+    background: #4a6cf7;
+    color: #fff;
+    border-color: #4a6cf7;
+  }
+  .folder-breadcrumb {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1;
+    min-width: 0;
+  }
+  .folder-breadcrumb .bc-link {
+    color: var(--text-primary);
+    text-decoration: none;
+    font-weight: 700;
+    padding: 1px 3px;
+    border-radius: 4px;
+    transition: background 0.15s, color 0.15s;
+  }
+  .folder-breadcrumb .bc-link:hover {
+    color: #4a6cf7;
+    background: rgba(74,108,247,0.1);
+  }
+  .folder-breadcrumb .bc-sep {
+    opacity: 0.5;
+    margin: 0 2px;
+  }
+
+  /* ---- Inline spinner ---- */
+  .spinner-inline {
+    display: inline-block;
+    width: 14px;
+    height: 14px;
+    border: 2px solid rgba(74,108,247,0.25);
+    border-top-color: #4a6cf7;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    vertical-align: middle;
+    margin-right: 6px;
+  }
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+
   /* ---- Responsive tweaks ---- */
   @media (max-width: 768px) {
     .log-page-container .col-md-4 {
@@ -429,9 +583,12 @@
     .toggle-panel-btn {
       font-size: 1.1rem;
     }
+    .log-content-card .card-header .log-title {
+      max-width: 100%;
+    }
   }
 
-  /* Theme toggle button in header (add to base? but we'll add a floating button) */
+  /* Theme toggle button */
   .theme-toggle {
     position: fixed;
     bottom: 20px;
@@ -461,43 +618,85 @@
 
 {% block content %}
 <div class="row log-page-container" id="logPageContainer">
-    <!-- Left: File list (collapsible) -->
+    <!-- Left: File / folder list (collapsible) -->
     <div class="col-md-4" id="leftPanel">
         <div class="log-files-card">
             <div class="card-header">
-                <i class="bi bi-folder2-open"></i> Log Files
-                <span class="badge bg-secondary ms-2" style="font-size:0.7rem; background:var(--border-color) !important;" id="file-count">{{ logs|length }}</span>
+                <div class="panel-tabs" role="tablist">
+                    <button
+                        type="button"
+                        class="panel-tab active"
+                        data-tab="logs"
+                        role="tab"
+                        aria-selected="true"
+                    >
+                        <i class="bi bi-file-earmark-text-fill"></i>
+                        Logs
+                        <span class="tab-badge" id="file-count">{{ logs|length }}</span>
+                    </button>
+                    <button
+                        type="button"
+                        class="panel-tab"
+                        data-tab="folders"
+                        role="tab"
+                        aria-selected="false"
+                    >
+                        <i class="bi bi-folder-fill"></i>
+                        Folders
+                        <span class="tab-badge" id="folder-count"></span>
+                    </button>
+                </div>
                 <span class="header-spacer"></span>
                 <button class="header-btn" id="togglePanelBtn" title="Toggle panel">
                     <i class="bi bi-chevron-left"></i>
                 </button>
             </div>
-            <!-- File search input -->
-            <input type="text" class="file-search-box" id="fileSearchBox" placeholder="Filter files..." />
-            <div class="log-files-list" id="file-list">
-                {% for log in logs %}
-                <div class="log-file-item" data-filename="{{ log.filename }}" data-index="{{ loop.index0 }}">
-                    <i class="bi bi-file-earmark-text"></i>
-                    <span class="file-name">{{ log.filename }}</span>
-                    <span class="file-size">{{ (log.size_bytes / 1024)|round(1) }} KB</span>
+
+            <!-- Logs tab -->
+            <div class="tab-content active" id="tab-logs" role="tabpanel">
+                <input type="text" class="file-search-box" id="fileSearchBox" placeholder="Filter files..." />
+                <div class="log-files-list" id="file-list">
+                    {% for log in logs %}
+                    <div class="log-file-item" data-filename="{{ log.filename }}" data-index="{{ loop.index0 }}">
+                        <i class="bi bi-file-earmark-text"></i>
+                        <span class="file-name">{{ log.filename }}</span>
+                        <span class="file-size">{{ (log.size_bytes / 1024)|round(1) }} KB</span>
+                    </div>
+                    {% else %}
+                    <div class="text-muted" style="padding:20px; text-align:center;">
+                        <i class="bi bi-inbox" style="font-size:2rem; display:block; margin-bottom:10px;"></i>
+                        No log files found.
+                    </div>
+                    {% endfor %}
                 </div>
-                {% else %}
-                <div class="text-muted" style="padding:20px; text-align:center;">
-                    <i class="bi bi-inbox" style="font-size:2rem; display:block; margin-bottom:10px;"></i>
-                    No log files found.
+            </div>
+
+            <!-- Folders tab (drill-down file browser) -->
+            <div class="tab-content" id="tab-folders" role="tabpanel">
+                <div class="folder-header-row">
+                    <button class="folder-back-btn" id="folderBackBtn" style="display:none;">
+                        <i class="bi bi-arrow-left"></i> Back
+                    </button>
+                    <span class="folder-breadcrumb" id="folderBreadcrumb"></span>
                 </div>
-                {% endfor %}
+                <input type="text" class="file-search-box" id="folderSearchBox" placeholder="Filter files..." />
+                <div class="log-files-list" id="folder-list">
+                    <div class="text-muted" style="padding:20px; text-align:center;">
+                        <i class="bi bi-folder2" style="font-size:2rem; display:block; margin-bottom:10px;"></i>
+                        Click a folder to browse its files.
+                    </div>
+                </div>
             </div>
         </div>
     </div>
 
-    <!-- Right: Log content -->
+    <!-- Right: Content viewer -->
     <div class="col-md-8" id="rightPanel">
         <div class="log-content-card">
             <div class="card-header">
                 <span class="log-title"><i class="bi bi-file-earmark-code"></i> <span id="current-file-label">Content</span></span>
                 <span class="spacer"></span>
-                <input type="text" class="log-search-box" id="search-box" placeholder="Search logs..." />
+                <input type="text" class="log-search-box" id="search-box" placeholder="Search..." />
                 <button class="btn-tool" id="zoom-in-btn"><i class="bi bi-zoom-in"></i> Zoom In</button>
                 <button class="btn-tool" id="zoom-out-btn"><i class="bi bi-zoom-out"></i> Zoom Out</button>
                 <button class="btn-tool" id="copy-btn"><i class="bi bi-clipboard"></i> Copy</button>
@@ -508,7 +707,7 @@
             <div id="log-display" class="log-body">
                 <div class="log-empty-state">
                     <i class="bi bi-file-earmark-text"></i>
-                    <span>Select a log file from the list</span>
+                    <span>Select a file from the list</span>
                 </div>
             </div>
         </div>
@@ -525,7 +724,7 @@
 <script>
   document.addEventListener('DOMContentLoaded', function() {
     const logDisplay = document.getElementById('log-display');
-    const fileItems = document.querySelectorAll('.log-file-item');
+    const fileItems = document.querySelectorAll('#file-list .log-file-item');
     const currentFileLabel = document.getElementById('current-file-label');
     const searchBox = document.getElementById('search-box');
     const fileSearchBox = document.getElementById('fileSearchBox');
@@ -536,12 +735,24 @@
     const themeToggle = document.getElementById('themeToggle');
     const themeIcon = document.getElementById('themeIcon');
 
-    let currentFilename = null;
+    const folderSearchBox = document.getElementById('folderSearchBox');
+    const folderList = document.getElementById('folder-list');
+    const folderBackBtn = document.getElementById('folderBackBtn');
+    const folderBreadcrumb = document.getElementById('folderBreadcrumb');
+    const folderCountBadge = document.getElementById('folder-count');
+
     let currentContent = '';
+    let currentSource = null; // {type:'log',filename} | {type:'folder',folder,path}
     let fontSize = 0.82;
     let wordWrap = true;
     let showLineNumbers = false;
     let searchTerm = '';
+
+    // ---- Folder tree browser state ----
+    let foldersLoaded = false;
+    let currentRootFolder = null;   // e.g. 'index', 'nifty', 'sensex'
+    let currentSubPath = '';        // e.g. '' | 'nifty' | 'nifty/21800_CE'
+    let folderFilesCache = [];      // flat list from /admin/folders/<root>/list
 
     // ---- Theme handling ----
     function setTheme(theme) {
@@ -555,7 +766,6 @@
       }
       localStorage.setItem('logTheme', theme);
     }
-    // Load saved theme
     const savedTheme = localStorage.getItem('logTheme') || 'dark';
     setTheme(savedTheme);
     themeToggle.addEventListener('click', function() {
@@ -572,55 +782,77 @@
       icon.className = panelCollapsed ? 'bi bi-chevron-right' : 'bi bi-chevron-left';
     });
 
-    // ---- File search ----
+    // ---- Tabs (Logs / Folders) ----
+    document.querySelectorAll('.panel-tab').forEach(function(tab) {
+      tab.addEventListener('click', function() {
+        const name = this.dataset.tab;
+        document.querySelectorAll('.panel-tab').forEach(function(t) {
+          const active = t === tab;
+          t.classList.toggle('active', active);
+          t.setAttribute('aria-selected', active ? 'true' : 'false');
+        });
+        document.querySelectorAll('.tab-content').forEach(function(c) {
+          c.classList.toggle('active', c.id === 'tab-' + name);
+        });
+        if (name === 'folders' && !foldersLoaded) {
+          loadFolders();
+        }
+      });
+    });
+
+    // ---- File search (logs tab) ----
     fileSearchBox.addEventListener('input', function() {
       const query = this.value.toLowerCase().trim();
-      fileItems.forEach(item => {
+      fileItems.forEach(function(item) {
         const name = item.dataset.filename.toLowerCase();
         const match = name.includes(query);
         item.classList.toggle('hidden-file', !match);
       });
-      // Update file count display
-      const visible = document.querySelectorAll('.log-file-item:not(.hidden-file)').length;
-      document.getElementById('file-count').textContent = visible;
+      const visible = document.querySelectorAll('#file-list .log-file-item:not(.hidden-file)').length;
+      const countEl = document.getElementById('file-count');
+      if (countEl) countEl.textContent = visible;
     });
 
-    // Assign color classes
+    // Assign colour classes to server-rendered log items
     const colorClasses = ['color-0','color-1','color-2','color-3','color-4','color-5','color-6','color-7'];
-    fileItems.forEach((item, index) => {
-      const colorIdx = index % colorClasses.length;
-      item.classList.add(colorClasses[colorIdx]);
+    fileItems.forEach(function(item, index) {
+      item.classList.add(colorClasses[index % colorClasses.length]);
     });
 
-    // ---- Log rendering ----
+    // ---- Log rendering helpers ----
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = text == null ? '' : String(text);
+      return div.innerHTML;
+    }
+
     function colorizeLogLine(line) {
       let colored = line;
       colored = colored.replace(/(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})/g, '<span class="timestamp">$1</span>');
       const levels = ['INFO','WARNING','ERROR','DEBUG','CRITICAL'];
-      levels.forEach(level => {
-        const regex = new RegExp(`\\b${level}\\b`, 'g');
-        colored = colored.replace(regex, `<span class="level-${level}">${level}</span>`);
+      levels.forEach(function(level) {
+        const regex = new RegExp('\\b' + level + '\\b', 'g');
+        colored = colored.replace(regex, '<span class="level-' + level + '">' + level + '</span>');
       });
       return colored;
     }
-    function escapeHtml(text) {
-      const div = document.createElement('div');
-      div.textContent = text;
-      return div.innerHTML;
-    }
+
     function renderLog(content) {
-      if (!content) {
-        logDisplay.innerHTML = `<div class="log-empty-state"><i class="bi bi-file-earmark-text"></i><span>Select a log file from the list</span></div>`;
+      if (!content && content !== '') {
+        logDisplay.innerHTML = '<div class="log-empty-state"><i class="bi bi-file-earmark-text"></i><span>Select a file from the list</span></div>';
         return;
       }
-      const lines = content.split('\n');
+      const text = String(content || '');
+      const lines = text.split('\n');
       if (showLineNumbers) {
         let html = '';
-        lines.forEach((line, index) => {
+        lines.forEach(function(line, index) {
           let lineContent = escapeHtml(line);
           if (searchTerm) {
             const regex = new RegExp(escapeHtml(searchTerm), 'gi');
-            lineContent = lineContent.replace(regex, match => `<span class="search-highlight">${match}</span>`);
+            lineContent = lineContent.replace(regex, function(match) {
+              return '<span class="search-highlight">' + match + '</span>';
+            });
           }
           lineContent = colorizeLogLine(lineContent);
           let lineClass = 'line';
@@ -628,56 +860,379 @@
           else if (line.includes('WARNING')) lineClass += ' highlight-warning';
           else if (line.includes('INFO')) lineClass += ' highlight-info';
           else if (line.includes('SUCCESS')) lineClass += ' highlight-success';
-          html += `<div class="${lineClass}"><span class="line-number">${index + 1}</span><span class="line-content">${lineContent}</span></div>`;
+          html += '<div class="' + lineClass + '"><span class="line-number">' + (index + 1) + '</span><span class="line-content">' + lineContent + '</span></div>';
         });
         logDisplay.innerHTML = html;
       } else {
-        let fullContent = escapeHtml(content);
+        let fullContent = escapeHtml(text);
         if (searchTerm) {
           const regex = new RegExp(escapeHtml(searchTerm), 'gi');
-          fullContent = fullContent.replace(regex, match => `<span class="search-highlight">${match}</span>`);
+          fullContent = fullContent.replace(regex, function(match) {
+            return '<span class="search-highlight">' + match + '</span>';
+          });
         }
         fullContent = colorizeLogLine(fullContent);
         logDisplay.innerHTML = fullContent;
       }
     }
 
+    // ---- Log loading ----
     function loadLog(filename) {
       if (!filename) return;
-      currentFilename = filename;
+      currentSource = { type: 'log', filename: filename };
       currentFileLabel.textContent = filename;
-      fetch(`/ui/logs/${encodeURIComponent(filename)}`)
-        .then(response => {
-          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      fetch('/ui/logs/' + encodeURIComponent(filename))
+        .then(function(response) {
+          if (!response.ok) throw new Error('HTTP ' + response.status);
           return response.text();
         })
-        .then(data => {
+        .then(function(data) {
           currentContent = data;
           renderLog(data);
-          fileItems.forEach(item => item.classList.remove('active'));
-          const activeItem = document.querySelector(`.log-file-item[data-filename="${filename}"]`);
+          fileItems.forEach(function(item) { item.classList.remove('active'); });
+          const sel = '.log-file-item[data-filename="' + (window.CSS && CSS.escape ? CSS.escape(filename) : filename.replace(/"/g, '\\"')) + '"]';
+          const activeItem = document.querySelector('#file-list ' + sel);
           if (activeItem) activeItem.classList.add('active');
         })
-        .catch(error => {
-          logDisplay.innerHTML = `<span class="text-danger">Error loading log: ${error.message}</span>`;
+        .catch(function(error) {
+          logDisplay.innerHTML = '<span class="text-danger">Error loading log: ' + escapeHtml(error.message) + '</span>';
         });
     }
 
-    // File click
-    fileItems.forEach(item => {
+    // ---- File size helpers ----
+    function humanSize(bytes) {
+      const n = Number(bytes);
+      if (!Number.isFinite(n) || n < 0) return '0 B';
+      if (n < 1024) return n + ' B';
+      if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+      if (n < 1024 * 1024 * 1024) return (n / 1024 / 1024).toFixed(1) + ' MB';
+      return (n / 1024 / 1024 / 1024).toFixed(2) + ' GB';
+    }
+
+    function setFolderListHtml(html) {
+      folderList.innerHTML = html;
+    }
+
+    // ================================================================
+    // Folder tree browser
+    // ================================================================
+
+    // Load the list of root folders (data, index, nifty, sensex, ...)
+    function loadFolders() {
+      currentRootFolder = null;
+      currentSubPath = '';
+      folderFilesCache = [];
+      if (folderBackBtn) folderBackBtn.style.display = 'none';
+      if (folderBreadcrumb) folderBreadcrumb.innerHTML = '';
+      folderSearchBox.value = '';
+
+      setFolderListHtml(
+        '<div class="text-muted" style="padding:20px;text-align:center;">' +
+          '<span class="spinner-inline"></span>Loading folders...' +
+        '</div>'
+      );
+
+      fetch('/admin/folders')
+        .then(function(response) {
+          if (!response.ok) throw new Error('HTTP ' + response.status);
+          return response.json();
+        })
+        .then(function(data) {
+          const folders = (data.folders || []).slice();
+          foldersLoaded = true;
+          if (folderCountBadge) folderCountBadge.textContent = String(folders.length);
+          if (!folders.length) {
+            setFolderListHtml(
+              '<div class="text-muted" style="padding:20px;text-align:center;">' +
+                '<i class="bi bi-folder2" style="font-size:2rem;display:block;margin-bottom:10px;"></i>' +
+                'No folders available.' +
+              '</div>'
+            );
+            return;
+          }
+          folders.sort(function(a, b) {
+            return String(a.name).localeCompare(String(b.name));
+          });
+          const html = folders.map(function(f, idx) {
+            const color = colorClasses[idx % colorClasses.length];
+            const metaBits = [];
+            if (typeof f.file_count === 'number') metaBits.push(f.file_count + ' files');
+            if (typeof f.size_bytes === 'number') metaBits.push(humanSize(f.size_bytes));
+            return '<div class="log-file-item folder-item ' + color + '" data-folder="' + escapeHtml(f.name) + '" title="' + escapeHtml(f.name) + '">' +
+                     '<i class="bi bi-folder-fill"></i>' +
+                     '<span class="file-name">' + escapeHtml(f.name) + '</span>' +
+                     '<span class="file-size">' + escapeHtml(metaBits.join(' / ')) + '</span>' +
+                     '<i class="bi bi-chevron-right folder-chevron"></i>' +
+                   '</div>';
+          }).join('');
+          setFolderListHtml(html);
+          folderList.querySelectorAll('.folder-item[data-folder]').forEach(function(el) {
+            el.addEventListener('click', function() {
+              loadFolderFiles(el.dataset.folder);
+            });
+          });
+        })
+        .catch(function(error) {
+          setFolderListHtml(
+            '<div class="text-danger" style="padding:20px;text-align:center;">' +
+              'Error: ' + escapeHtml(error.message) +
+            '</div>'
+          );
+        });
+    }
+
+    // Load the flat file list for a root folder, then render the current level.
+    // preserveSubPath / preserveFilePath let us refresh without losing the current view.
+    function loadFolderFiles(folderName, preserveSubPath, preserveFilePath) {
+      if (!folderName) return;
+      currentRootFolder = folderName;
+      currentSubPath = preserveSubPath || '';
+      folderFilesCache = [];
+      folderSearchBox.value = '';
+
+      setFolderListHtml(
+        '<div class="text-muted" style="padding:20px;text-align:center;">' +
+          '<span class="spinner-inline"></span>Loading files...' +
+        '</div>'
+      );
+
+      const url = '/admin/folders/' + encodeURIComponent(folderName) + '/list?max_files=5000';
+      fetch(url)
+        .then(function(response) {
+          if (!response.ok) throw new Error('HTTP ' + response.status);
+          return response.json();
+        })
+        .then(function(data) {
+          folderFilesCache = data.files || [];
+          renderCurrentLevel();
+          if (preserveFilePath) {
+            const activeItem = Array.from(folderList.querySelectorAll('.folder-file-item'))
+              .find(function(el) { return el.dataset.path === preserveFilePath; });
+            if (activeItem) activeItem.classList.add('active');
+          }
+        })
+        .catch(function(error) {
+          setFolderListHtml(
+            '<div class="text-danger" style="padding:20px;text-align:center;">' +
+              'Error: ' + escapeHtml(error.message) +
+            '</div>'
+          );
+        });
+    }
+
+    // Derive subfolders + direct files at the current subpath from the flat file list.
+    function deriveLevel() {
+      const prefix = currentSubPath ? currentSubPath + '/' : '';
+      const subfolderMap = new Map();
+      const directFiles = [];
+
+      folderFilesCache.forEach(function(f) {
+        const path = String(f.path || '');
+        if (!path.startsWith(prefix)) return;
+        const remainder = path.slice(prefix.length);
+        if (!remainder) return;
+        const slashIdx = remainder.indexOf('/');
+        if (slashIdx === -1) {
+          // File directly in current level
+          directFiles.push({
+            path: path,
+            name: remainder,
+            size_bytes: f.size_bytes,
+            size_human: f.size_human
+          });
+        } else {
+          // Contains a subfolder
+          const subName = remainder.slice(0, slashIdx);
+          const entry = subfolderMap.get(subName) || { name: subName, fileCount: 0, sizeBytes: 0 };
+          entry.fileCount += 1;
+          entry.sizeBytes += Number(f.size_bytes) || 0;
+          subfolderMap.set(subName, entry);
+        }
+      });
+
+      return {
+        subfolders: Array.from(subfolderMap.values()).sort(function(a, b) {
+          return a.name.localeCompare(b.name);
+        }),
+        files: directFiles.sort(function(a, b) {
+          return a.name.localeCompare(b.name);
+        })
+      };
+    }
+
+    // Render breadcrumb as clickable segments
+    function renderBreadcrumb() {
+      if (!currentRootFolder) {
+        folderBreadcrumb.innerHTML = '';
+        folderBackBtn.style.display = 'none';
+        return;
+      }
+      const parts = currentSubPath ? currentSubPath.split('/') : [];
+      let html = '<a href="#" class="bc-link" data-path="">' + escapeHtml(currentRootFolder) + '</a>';
+      let accum = '';
+      parts.forEach(function(part) {
+        accum = accum ? accum + '/' + part : part;
+        html += '<span class="bc-sep">/</span>' +
+                '<a href="#" class="bc-link" data-path="' + escapeHtml(accum) + '">' + escapeHtml(part) + '</a>';
+      });
+      folderBreadcrumb.innerHTML = html;
+      folderBackBtn.style.display = 'inline-flex';
+
+      folderBreadcrumb.querySelectorAll('.bc-link').forEach(function(link) {
+        link.addEventListener('click', function(e) {
+          e.preventDefault();
+          currentSubPath = this.dataset.path || '';
+          folderSearchBox.value = '';
+          renderCurrentLevel();
+        });
+      });
+    }
+
+    // Render the current level: subfolders first, then files
+    function renderCurrentLevel() {
+      renderBreadcrumb();
+
+      const filter = (folderSearchBox.value || '').toLowerCase().trim();
+      const level = deriveLevel();
+
+      let subfolders = level.subfolders;
+      let files = level.files;
+      if (filter) {
+        subfolders = subfolders.filter(function(s) {
+          return s.name.toLowerCase().includes(filter);
+        });
+        files = files.filter(function(f) {
+          return f.name.toLowerCase().includes(filter);
+        });
+      }
+
+      if (!subfolders.length && !files.length) {
+        setFolderListHtml(
+          '<div class="text-muted" style="padding:20px;text-align:center;">' +
+            (filter ? 'No items match filter.' : 'This folder is empty.') +
+          '</div>'
+        );
+        return;
+      }
+
+      let html = '';
+
+      // Subfolders
+      subfolders.forEach(function(s, idx) {
+        const color = colorClasses[idx % colorClasses.length];
+        const meta = [s.fileCount + ' files', humanSize(s.sizeBytes)].join(' / ');
+        html += '<div class="log-file-item folder-item ' + color + '" data-subfolder="' + escapeHtml(s.name) + '" title="' + escapeHtml(s.name) + '">' +
+                  '<i class="bi bi-folder-fill"></i>' +
+                  '<span class="file-name">' + escapeHtml(s.name) + '</span>' +
+                  '<span class="file-size">' + escapeHtml(meta) + '</span>' +
+                  '<i class="bi bi-chevron-right folder-chevron"></i>' +
+                '</div>';
+      });
+
+      // Files
+      files.forEach(function(f, idx) {
+        const color = colorClasses[(idx + 3) % colorClasses.length];
+        const sizeLabel = f.size_human || humanSize(f.size_bytes);
+        html += '<div class="log-file-item folder-file-item ' + color + '" data-path="' + escapeHtml(f.path) + '" title="' + escapeHtml(f.path) + '">' +
+                  '<i class="bi bi-file-earmark-text"></i>' +
+                  '<span class="file-name">' + escapeHtml(f.name) + '</span>' +
+                  '<span class="file-size">' + escapeHtml(sizeLabel) + '</span>' +
+                '</div>';
+      });
+
+      setFolderListHtml(html);
+
+      folderList.querySelectorAll('.folder-item[data-subfolder]').forEach(function(el) {
+        el.addEventListener('click', function() {
+          navigateToSubFolder(el.dataset.subfolder);
+        });
+      });
+      folderList.querySelectorAll('.folder-file-item').forEach(function(el) {
+        el.addEventListener('click', function() {
+          loadFolderFile(el.dataset.path);
+        });
+      });
+    }
+
+    function navigateToSubFolder(name) {
+      if (!name) return;
+      currentSubPath = currentSubPath ? currentSubPath + '/' + name : name;
+      folderSearchBox.value = '';
+      renderCurrentLevel();
+      // Scroll list back to top on level change
+      folderList.scrollTop = 0;
+    }
+
+    // Load a single file's content (path is full relative path within root)
+    function loadFolderFile(path) {
+      if (!currentRootFolder || !path) return;
+      currentSource = { type: 'folder', folder: currentRootFolder, path: path };
+      const label = currentRootFolder + '/' + path;
+      currentFileLabel.textContent = label;
+
+      const url = '/admin/folders/' + encodeURIComponent(currentRootFolder) + '/file?path=' + encodeURIComponent(path);
+      fetch(url)
+        .then(async function(response) {
+          if (!response.ok) {
+            let detail = 'HTTP ' + response.status;
+            try {
+              const body = await response.json();
+              if (body && body.detail && body.detail.error) detail = body.detail.error;
+            } catch (e) { /* ignore */ }
+            throw new Error(detail);
+          }
+          return response.text();
+        })
+        .then(function(data) {
+          currentContent = data;
+          renderLog(data);
+          // Highlight the active file (matched by full path, not filename)
+          folderList.querySelectorAll('.folder-file-item').forEach(function(el) {
+            el.classList.toggle('active', el.dataset.path === path);
+          });
+        })
+        .catch(function(error) {
+          logDisplay.innerHTML = '<span class="text-danger">Error loading file: ' + escapeHtml(error.message) + '</span>';
+        });
+    }
+
+    // ---- Back button ----
+    if (folderBackBtn) {
+      folderBackBtn.addEventListener('click', function() {
+        if (currentSubPath) {
+          // Navigate up one level inside the tree
+          const parts = currentSubPath.split('/');
+          parts.pop();
+          currentSubPath = parts.join('/');
+          folderSearchBox.value = '';
+          renderCurrentLevel();
+        } else {
+          // At root folder level — return to folder list
+          loadFolders();
+        }
+      });
+    }
+
+    // ---- Folder filter ----
+    folderSearchBox.addEventListener('input', function() {
+      if (currentRootFolder) renderCurrentLevel();
+    });
+
+    // ---- File click (server-rendered log items) ----
+    fileItems.forEach(function(item) {
       item.addEventListener('click', function() {
         const filename = this.dataset.filename;
         if (filename) loadLog(filename);
       });
     });
 
-    // Search in log content
+    // ---- Search in displayed content ----
     searchBox.addEventListener('input', function() {
       searchTerm = this.value.trim();
-      if (currentContent) renderLog(currentContent);
+      if (currentContent !== null) renderLog(currentContent);
     });
 
-    // Zoom
+    // ---- Zoom ----
     document.getElementById('zoom-in-btn').addEventListener('click', function() {
       fontSize = Math.min(fontSize + 0.08, 2.0);
       logDisplay.style.fontSize = fontSize + 'rem';
@@ -687,44 +1242,54 @@
       logDisplay.style.fontSize = fontSize + 'rem';
     });
 
-    // Copy
+    // ---- Copy ----
     document.getElementById('copy-btn').addEventListener('click', function() {
       const text = logDisplay.textContent || '';
-      navigator.clipboard.writeText(text).then(() => {
-        const btn = this;
+      navigator.clipboard.writeText(text).then(function() {
+        const btn = document.getElementById('copy-btn');
         const origHtml = btn.innerHTML;
         btn.innerHTML = '<i class="bi bi-check2"></i> Copied!';
-        setTimeout(() => btn.innerHTML = origHtml, 1500);
-      }).catch(err => alert('Could not copy: ' + err));
+        setTimeout(function() { btn.innerHTML = origHtml; }, 1500);
+      }).catch(function(err) {
+        alert('Could not copy: ' + err);
+      });
     });
 
-    // Word Wrap
+    // ---- Word wrap ----
     document.getElementById('word-wrap-btn').addEventListener('click', function() {
       wordWrap = !wordWrap;
       logDisplay.style.whiteSpace = wordWrap ? 'pre-wrap' : 'pre';
       logDisplay.style.wordWrap = wordWrap ? 'break-word' : 'normal';
-      this.innerHTML = wordWrap ? '<i class="bi bi-text-wrap"></i> Wrap' : '<i class="bi bi-text-wrap"></i> No Wrap';
+      this.innerHTML = wordWrap
+        ? '<i class="bi bi-text-wrap"></i> Wrap'
+        : '<i class="bi bi-text-wrap"></i> No Wrap';
     });
 
-    // Line Numbers
+    // ---- Line numbers ----
     document.getElementById('line-numbers-btn').addEventListener('click', function() {
       showLineNumbers = !showLineNumbers;
-      if (currentContent) renderLog(currentContent);
-      this.innerHTML = showLineNumbers ? '<i class="bi bi-list-ul"></i> Lines: ON' : '<i class="bi bi-list-ul"></i> Lines';
+      if (currentContent !== null) renderLog(currentContent);
+      this.innerHTML = showLineNumbers
+        ? '<i class="bi bi-list-ul"></i> Lines: ON'
+        : '<i class="bi bi-list-ul"></i> Lines';
     });
 
-    // Refresh
+    // ---- Refresh current view ----
     document.getElementById('refresh-btn').addEventListener('click', function() {
-      if (currentFilename) {
-        const btn = this;
-        const origHtml = btn.innerHTML;
-        btn.innerHTML = '<i class="bi bi-arrow-clockwise"></i>';
-        loadLog(currentFilename);
-        setTimeout(() => btn.innerHTML = origHtml, 800);
+      if (!currentSource) return;
+      const btn = this;
+      const origHtml = btn.innerHTML;
+      btn.innerHTML = '<i class="bi bi-arrow-clockwise"></i>';
+      if (currentSource.type === 'log') {
+        loadLog(currentSource.filename);
+      } else if (currentSource.type === 'folder') {
+        // Re-fetch the flat folder list (files may have changed) and reload file content
+        loadFolderFiles(currentRootFolder, currentSubPath, currentSource.path);
       }
+      setTimeout(function() { btn.innerHTML = origHtml; }, 800);
     });
 
-    // Auto-load first file if any
+    // Auto-load first log file if any
     if (fileItems.length > 0) {
       const first = fileItems[0];
       loadLog(first.dataset.filename);

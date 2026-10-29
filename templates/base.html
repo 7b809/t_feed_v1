@@ -117,6 +117,20 @@
             box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
         }
 
+        /* Active route highlight */
+        .app-nav-button.is-active {
+            background: rgba(255, 255, 255, 0.12);
+            border-color: rgba(255, 255, 255, 0.28);
+            box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+        }
+
+        /* External-link indicator (subtle arrow) */
+        .app-nav-button .ext-arrow {
+            font-size: 0.65rem;
+            opacity: 0.55;
+            margin-left: -2px;
+        }
+
         /* Icon Badge Pill Backgrounds – one per route */
         .nav-icon-badge {
             width: 26px;
@@ -210,6 +224,19 @@
 
 <body class="app-root-body">
 
+{#
+    Navigation strategy (professional single-window pattern):
+      • SAME TAB  → primary app views (Home, Charts, Expired, Layout).
+                    These are in-app pages that share session/state; opening
+                    them in the same tab keeps history clean and avoids
+                    tab-pile-up on the user's browser.
+      • NEW TAB   → standalone "tool" surfaces (Isolated, Logs).
+                    These are diagnostic / focus views the user often wants
+                    to keep side-by-side with the main dashboard.
+    All new-tab links carry rel="noopener noreferrer" for security/perf.
+#}
+{% set active_path = request.path if request is defined and request else '' %}
+
 <nav class="app-header-navbar">
 
     <!-- BRAND / LOGO -->
@@ -223,52 +250,60 @@
     <!-- NAVIGATION ROUTES -->
     <div class="app-nav-item-group">
 
-        <!-- HOME -->
-        <a href="/" rel="noopener noreferrer" class="app-nav-button">
+        <!-- HOME → SAME TAB (primary view) -->
+        <a href="/"
+           class="app-nav-button {{ 'is-active' if active_path == '/' else '' }}">
             <span class="nav-icon-badge home-theme">
                 <i class="bi bi-house-door-fill"></i>
             </span>
             <span>Home</span>
         </a>
 
-        <!-- ISOLATED INSTRUMENT -->
-        <a href="/isolated" target="_blank" rel="noopener noreferrer" class="app-nav-button">
+        <!-- ISOLATED INSTRUMENT → NEW TAB (standalone focus tool) -->
+        <a href="/isolated" target="_blank" rel="noopener noreferrer"
+           class="app-nav-button">
             <span class="nav-icon-badge iso-theme">
                 <i class="bi bi-bullseye"></i>
             </span>
             <span>Isolated</span>
+            <i class="bi bi-box-arrow-up-right ext-arrow"></i>
         </a>
 
-        <!-- CHARTS -->
-        <a href="/charts" target="_blank" rel="noopener noreferrer" class="app-nav-button">
+        <!-- CHARTS → SAME TAB (primary view) -->
+        <a href="/charts"
+           class="app-nav-button {{ 'is-active' if active_path == '/charts' else '' }}">
             <span class="nav-icon-badge charts-theme">
                 <i class="bi bi-candlestick-fill"></i>
             </span>
             <span>Charts</span>
         </a>
 
-        <!-- EXPIRED / ACTIVE CHART -->
-        <a href="/expired-chart" target="_blank" rel="noopener noreferrer" class="app-nav-button">
+        <!-- EXPIRED / ACTIVE CHART → SAME TAB (chart variant) -->
+        <a href="/expired-chart"
+           class="app-nav-button {{ 'is-active' if active_path == '/expired-chart' else '' }}">
             <span class="nav-icon-badge expired-theme">
                 <i class="bi bi-hourglass-split"></i>
             </span>
             <span>Expired</span>
         </a>
 
-        <!-- MULTI-CHART LAYOUT -->
-        <a href="/layout_1" rel="noopener noreferrer" class="app-nav-button">
+        <!-- MULTI-CHART LAYOUT → SAME TAB (primary view) -->
+        <a href="/layout_1"
+           class="app-nav-button {{ 'is-active' if active_path == '/layout_1' else '' }}">
             <span class="nav-icon-badge layout-theme">
                 <i class="bi bi-grid-3x3-gap-fill"></i>
             </span>
             <span>Layout</span>
         </a>
 
-        <!-- LOGS -->
-        <a href="/logs" target="_blank" rel="noopener noreferrer" class="app-nav-button">
+        <!-- LOGS → NEW TAB (diagnostic / monitoring surface) -->
+        <a href="/logs" target="_blank" rel="noopener noreferrer"
+           class="app-nav-button">
             <span class="nav-icon-badge logs-theme">
                 <i class="bi bi-file-earmark-text-fill"></i>
             </span>
             <span>Logs</span>
+            <i class="bi bi-box-arrow-up-right ext-arrow"></i>
         </a>
 
     </div>
