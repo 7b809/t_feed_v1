@@ -1,4 +1,4 @@
-{# templates/api_explorer.html #}
+# templates/api_explorer.html
 {% extends "base.html" %}
 
 {% block head %}
@@ -501,6 +501,43 @@
         margin-left: auto;
     }
 
+    /* -------------------------------------------------------------- */
+    /* Copy button (response)                                         */
+    /* -------------------------------------------------------------- */
+    .axe-copy-btn {
+        background: rgba(255, 255, 255, 0.06);
+        border: 1px solid var(--app-border-color);
+        border-radius: 6px;
+        color: var(--app-text-main);
+        font-size: 0.72rem;
+        font-weight: 600;
+        padding: 3px 10px;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        transition: all 0.15s ease;
+        margin-left: 6px;
+        white-space: nowrap;
+    }
+    .axe-copy-btn:hover {
+        background: rgba(37, 99, 235, 0.22);
+        border-color: rgba(37, 99, 235, 0.55);
+        color: #93c5fd;
+    }
+    .axe-copy-btn:active {
+        transform: scale(0.97);
+    }
+    .axe-copy-btn.is-copied {
+        background: rgba(34, 197, 94, 0.22);
+        border-color: rgba(34, 197, 94, 0.55);
+        color: #4ade80;
+    }
+    .axe-copy-btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+    }
+
     .axe-code {
         font-family: 'JetBrains Mono', 'SF Mono', Consolas, monospace;
         font-size: 0.76rem;
@@ -640,6 +677,7 @@
         search: "",
         selected: null,    // route object
         lastResponse: null,
+        lastRawResponse: "", // raw text of the last response (for copy)
     };
 
     // ---- helpers --------------------------------------------------------
@@ -678,6 +716,60 @@
                 return `<span class="${cls}">${match}</span>`;
             }
         );
+    }
+
+    // ---- clipboard ------------------------------------------------------
+    async function copyToClipboard(text) {
+        if (!text) throw new Error("Nothing to copy");
+        // Preferred path (secure contexts)
+        if (navigator.clipboard && window.isSecureContext) {
+            await navigator.clipboard.writeText(text);
+            return;
+        }
+        // Fallback for non-secure contexts (e.g. http://localhost)
+        const ta = document.createElement("textarea");
+        ta.value = text;
+        ta.setAttribute("readonly", "");
+        ta.style.position = "fixed";
+        ta.style.top = "-1000px";
+        ta.style.left = "-1000px";
+        ta.style.opacity = "0";
+        document.body.appendChild(ta);
+        ta.select();
+        ta.setSelectionRange(0, ta.value.length);
+        try {
+            const ok = document.execCommand("copy");
+            if (!ok) throw new Error("execCommand('copy') returned false");
+        } finally {
+            document.body.removeChild(ta);
+        }
+    }
+
+    function attachCopyHandler() {
+        const btn = $("axe-copy-btn");
+        if (!btn) return;
+        btn.addEventListener("click", async () => {
+            const text = state.lastRawResponse || "";
+            if (!text) {
+                toast("Nothing to copy", "warn");
+                return;
+            }
+            btn.disabled = true;
+            try {
+                await copyToClipboard(text);
+                btn.classList.add("is-copied");
+                btn.innerHTML = `<i class="bi bi-check2"></i> Copied`;
+                toast("Response copied to clipboard", "ok");
+                setTimeout(() => {
+                    btn.classList.remove("is-copied");
+                    btn.innerHTML = `<i class="bi bi-clipboard"></i> Copy`;
+                }, 1600);
+            } catch (e) {
+                toast("Copy failed: " + (e.message || String(e)), "err");
+            } finally {
+                btn.disabled = false;
+            }
+        });
     }
 
     // ---- load spec ------------------------------------------------------
@@ -817,6 +909,7 @@
     function selectRoute(route) {
         state.selected = route;
         state.lastResponse = null;
+        state.lastRawResponse = "";
         renderRoutes();
         renderTryPanel(route);
     }
@@ -1351,6 +1444,8 @@
     function renderResponse(status, statusText, ms, payload, isText, url) {
         const box = $("axe-response-box");
         const cls = status >= 200 && status < 300 ? "ok" : (status >= 400 ? "err" : "warn");
+        const rawText = isText ? String(payload) : JSON.stringify(payload, null, 2);
+        state.lastRawResponse = rawText;
         const body = isText
             ? escapeHtml(payload)
             : prettyJson(payload);
@@ -1358,20 +1453,30 @@
             <div class="axe-resp-head">
                 <span class="axe-status ${cls}">${status} ${escapeHtml(statusText)}</span>
                 <span class="axe-resp-meta">${ms} ms</span>
+                <button class="axe-copy-btn" id="axe-copy-btn" type="button" title="Copy response">
+                    <i class="bi bi-clipboard"></i> Copy
+                </button>
             </div>
             <div class="axe-code">${body}</div>
         `;
+        attachCopyHandler();
     }
 
     function renderError(e, ms) {
         const box = $("axe-response-box");
+        const rawText = String(e && e.message ? e.message : e);
+        state.lastRawResponse = rawText;
         box.innerHTML = `
             <div class="axe-resp-head">
                 <span class="axe-status err">Error</span>
                 <span class="axe-resp-meta">${ms} ms</span>
+                <button class="axe-copy-btn" id="axe-copy-btn" type="button" title="Copy error">
+                    <i class="bi bi-clipboard"></i> Copy
+                </button>
             </div>
-            <div class="axe-code">${escapeHtml(e.message || String(e))}</div>
+            <div class="axe-code">${escapeHtml(rawText)}</div>
         `;
+        attachCopyHandler();
     }
 
     // ---- wire up search -------------------------------------------------

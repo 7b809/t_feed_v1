@@ -13,6 +13,14 @@
 
     POST /live-sr/calc/batch
         Batch selector resolution — up to 50 instruments in one call.
+        Each result is the raw per-instrument ``calculate()`` payload.
+
+    POST /live-sr/calc/multi
+        Multi-instrument SR — compact per-instrument response.
+        Returns each instrument's ``supports`` and ``resistances`` as
+        flat ascending price arrays (plus counts and last confirmed
+        time). Pass ``compact=false`` to fall back to the raw payload
+        shape produced by ``/batch``.
 
 MODE — intraday by default
 --------------------------
@@ -180,6 +188,56 @@ def _run_calc(
         debug=debug,
     )
 
+
+def _to_float_price(value: Any) -> Any:
+    """Best-effort numeric conversion for level prices."""
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return value
+
+
+def _compact_result(sel: dict[str, Any], raw: dict[str, Any]) -> dict[str, Any]:
+    """Reduce a raw ``calculate()`` payload to just the essential SR levels.
+
+    Produces two flat, price-ascending arrays (``supports`` and
+    ``resistances``) plus counts and the latest confirmation timestamp.
+    This is the shape the multi-instrument endpoint returns by default.
+    """
+    levels = raw.get("levels") or []
+
+    supports_raw = [lv for lv in levels if lv.get("level") == "support"]
+    resistances_raw = [lv for lv in levels if lv.get("level") == "resistance"]
+
+    supports_raw.sort(key=lambda lv: _to_float_price(lv.get("price")) or 0)
+    resistances_raw.sort(key=lambda lv: _to_float_price(lv.get("price")) or 0)
+
+    last_confirmed = None
+    for lv in levels:
+        ct = lv.get("confirmed_time")
+        if ct and (last_confirmed is None or str(ct) > str(last_confirmed)):
+            last_confirmed = ct
+
+    return {
+        "instrument_key": raw.get("instrument_key") or sel.get("instrument_key"),
+        "underlying": raw.get("underlying") or sel.get("underlying"),
+        "strike": raw.get("strike") or sel.get("strike"),
+        "type": raw.get("type") or sel.get("type"),
+        "status": raw.get("status"),
+        "mode": raw.get("mode"),
+        "supports": [_to_float_price(lv.get("price")) for lv in supports_raw],
+        "resistances": [_to_float_price(lv.get("price")) for lv in resistances_raw],
+        "support_count": len(supports_raw),
+        "resistance_count": len(resistances_raw),
+        "level_count": len(levels),
+        "last_confirmed_time": last_confirmed,
+        "warnings": raw.get("warnings") or [],
+        "error": raw.get("error"),
+    }
+
+
 # --------------------------------------------------------------------------- #
 # GET /live-sr/calc  — query-based                                            #
 # --------------------------------------------------------------------------- #
@@ -323,6 +381,119 @@ async def calc_batch(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
 
     return {
         "count": len(results),
+        "results": results,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+# --------------------------------------------------------------------------- #
+# POST /live-sr/calc/multi                                                    #
+#                                                                             #
+# Multi-instrument SR — compact response. Each result is a flat summary:      #
+#     instrument_key, underlying, strike, type, status, mode,                 #
+#     supports[], resistances[], support_count, resistance_count,             #
+#     level_count, last_confirmed_time, warnings[], error                     #
+#                                                                             #
+# This is a purpose-built, ergonomic companion to /batch for callers who     #
+# want to render support/resistance ladders for many instruments without      #
+# walking the full verbose payload. Pass ``compact=false`` to receive the    #
+# raw per-instrument payload (same shape as /batch).                          #
+#                                                                             #
+# Body:                                                                       #
+#     {                                                                       #
+#       "instruments": [                                                      #
+#         {"instrument_key": "NSE_FO|51327"},                                 #
+#         {"underlying": "NIFTY", "strike": "23500", "type": "CE"}            #
+#       ],                                                                    #
+#       "params": {                                                           #
+#         "left_bars": 5, "right_bars": 3, "only_today": true                 #
+#       },                                                                    #
+#       "compact": true                                                       #
+#     }                                                                       #
+# --------------------------------------------------------------------------- #
+@router.post("/multi")
+async def calc_multi(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    instruments = payload.get("instruments") or []
+    if not isinstance(instruments, list) or not instruments:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "instruments_required",
+                "message": "`instruments` must be a non-empty list.",
+            },
+        )
+    if len(instruments) > 50:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "too_many_instruments",
+                "message": "Maximum 50 instruments per multi-call.",
+            },
+        )
+
+    params_global = payload.get("params") or {}
+    compact = bool(payload.get("compact", True))
+
+    def _run() -> list[dict[str, Any]]:
+        results: list[dict[str, Any]] = []
+        for sel in instruments:
+            if not isinstance(sel, dict):
+                results.append({
+                    "status": "invalid_input",
+                    "error": "each instrument must be an object",
+                    "instrument_key": None,
+                    "underlying": None,
+                    "strike": None,
+                    "type": None,
+                })
+                continue
+
+            params_item = sel.get("params") or {}
+            merged_params = {**params_global, **params_item}
+
+            try:
+                raw = live_sr_calc_service.calculate(
+                    instrument_key=sel.get("instrument_key"),
+                    underlying=sel.get("underlying"),
+                    strike=sel.get("strike"),
+                    strike_type=sel.get("type"),
+                    left_bars=merged_params.get("left_bars"),
+                    right_bars=merged_params.get("right_bars"),
+                    lookback_days=merged_params.get("lookback_days"),
+                    only_today=merged_params.get("only_today", True),
+                    include_candles=False,
+                    include_live_sr=False,
+                    debug=merged_params.get("debug", False),
+                )
+                if compact:
+                    results.append(_compact_result(sel, raw))
+                else:
+                    results.append(raw)
+            except Exception as exc:
+                logger.exception(
+                    "[live-sr-calc] multi item failed for selector=%s", sel
+                )
+                results.append({
+                    "status": "error",
+                    "error": f"{type(exc).__name__}: {exc}",
+                    "instrument_key": sel.get("instrument_key"),
+                    "underlying": sel.get("underlying"),
+                    "strike": sel.get("strike"),
+                    "type": sel.get("type"),
+                    "supports": [],
+                    "resistances": [],
+                    "support_count": 0,
+                    "resistance_count": 0,
+                    "level_count": 0,
+                    "last_confirmed_time": None,
+                    "warnings": [],
+                })
+        return results
+
+    results = await asyncio.to_thread(_run)
+
+    return {
+        "count": len(results),
+        "compact": compact,
         "results": results,
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
