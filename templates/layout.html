@@ -2,19 +2,9 @@
 {# File: templates/layout.html — ProChart multi-chart layout.
    Per-pane metadata, floating scroll nav, per-pane indicator configs
    (each chart remembers its own EMA / SR / label toggles independently),
-   toolbar toggles target the ACTIVE pane only, unlinked-by-default panes,
-   rich modal search, SR Levels + SR Labels per pane, IST 12-hour time.
-
-   Query-param comparison mode (2026-10-27)
-   ----------------------------------------
-   Opening this page with ?panes=<key1>,<key2> (or ?panes=k1&panes=k2,
-   or ?pair=k1,k2, or ?compare=k1,k2) renders a TEMPORARY comparison layout
-   in the browser without touching the backend.
-
-   Used by /isolated's "Compare in Layout" button to show the
-   underlying trigger index side-by-side with the isolated instrument.
-   Temporary layouts cannot be saved, deleted, or re-created — the
-   user just closes the tab. See readQueryOverrides() and boot(). #}
+   toolbar toggles target the ACTIVE pane only, individual Left/Right SR bars
+   per pane (just like chart.html), rich modal search, IST 12-hour time.
+#}
 {% extends "base.html" %}
 {% block title %}Layout - Trading Dashboard{% endblock %}
 {% block head %}
@@ -28,7 +18,7 @@
     --blue: #2962ff; --green: #089981; --red: #f23645; --yellow: #f5c451;
     --shadow: 0 12px 30px rgba(0,0,0,0.5);
     --toolbar-h: 56px;
-    --indicator-h: 36px;
+    --indicator-h: 40px;
     --pane-min-h: 380px;
   }
   html, body { height: 100%; margin: 0; }
@@ -171,13 +161,7 @@
     border-color: var(--border);
     color: var(--muted);
   }
-  .toolbar-btn:disabled:hover {
-    border-color: var(--border);
-    color: var(--muted);
-    background: var(--surface);
-  }
 
-  /* Disabled selects / inputs (temporary-comparison mode) */
   .layout-name-input:disabled,
   .layout-select:disabled {
     opacity: 0.55;
@@ -186,31 +170,31 @@
 
   /* ---------- Indicator toolbar ---------- */
   .indicator-toolbar {
-    height: var(--indicator-h); background: var(--surface);
+    min-height: var(--indicator-h); background: var(--surface);
     border-bottom: 1px solid var(--border);
-    display: flex; align-items: center; gap: 10px;
+    display: flex; align-items: center; gap: 8px;
     padding: 0 14px; overflow-x: auto; white-space: nowrap;
     position: relative; z-index: 1;
   }
   .indicator-toolbar::-webkit-scrollbar { height: 4px; }
   .indicator-toolbar::-webkit-scrollbar-thumb { background: var(--surface-3); border-radius: 2px; }
-  .indicator-group { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+  .indicator-group { display: flex; align-items: center; gap: 5px; flex-shrink: 0; }
   .indicator-label {
     font-size: 10px; font-weight: 800; text-transform: uppercase;
-    color: var(--muted); letter-spacing: 0.06em; margin-right: 4px;
+    color: var(--muted); letter-spacing: 0.06em; margin-right: 2px;
   }
   .indicator-scope-hint {
-    font-size: 9px; font-weight: 800; text-transform: uppercase;
+    font-size: 10px; font-weight: 800; text-transform: uppercase;
     color: var(--blue); letter-spacing: 0.06em;
-    padding: 2px 8px;
-    border-radius: 10px;
+    padding: 3px 8px;
+    border-radius: 8px;
     background: rgba(41,98,255,0.12);
     border: 1px solid rgba(41,98,255,0.3);
     flex-shrink: 0;
   }
   .ind-btn {
     border: 1px solid var(--border); background: var(--surface-2); color: var(--muted);
-    border-radius: 12px; padding: 3px 10px; font-size: 10px; font-weight: 800;
+    border-radius: 12px; padding: 3px 9px; font-size: 10px; font-weight: 800;
     cursor: pointer; transition: all .15s; letter-spacing: 0.03em; white-space: nowrap;
   }
   .ind-btn:hover { color: #fff; border-color: var(--blue); }
@@ -221,6 +205,31 @@
   .ind-btn[data-global-indicator="srLevels"].active { background: linear-gradient(90deg, #FF0000 0%, #233dee 100%); border-color: transparent; }
   .ind-btn[data-global-indicator="srLabels"].active { background: linear-gradient(90deg, #f5c451 0%, #a855f7 100%); border-color: transparent; color: #111; }
   .indicator-divider { width: 1px; height: 16px; background: var(--border); flex-shrink: 0; margin: 0 4px; }
+
+  /* ---------- Per-Pane SR Bar Controls in Toolbar ---------- */
+  .pane-sr-param-field {
+    display: inline-flex; align-items: center; gap: 4px;
+    font-size: 9.5px; font-weight: 800; color: var(--muted);
+    letter-spacing: 0.04em; text-transform: uppercase; flex-shrink: 0;
+  }
+  .pane-sr-param-input {
+    width: 48px; background: #0b0e14; border: 1px solid var(--border);
+    color: var(--text); border-radius: 5px; padding: 2px 4px;
+    font-size: 10.5px; font-weight: 700; text-align: center;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  .pane-sr-param-input:focus { outline: none; border-color: var(--blue); }
+  .pane-sr-apply-btn {
+    border: 1px solid var(--blue); background: var(--blue); color: #fff;
+    border-radius: 8px; padding: 2px 8px; font-size: 9.5px; font-weight: 800;
+    cursor: pointer; transition: all .15s;
+  }
+  .pane-sr-apply-btn:hover { background: #1c4ce0; }
+  .pane-sr-apply-feedback {
+    font-size: 9px; color: var(--green); font-weight: 700; margin-left: 2px;
+    opacity: 0; transition: opacity .2s;
+  }
+  .pane-sr-apply-feedback.visible { opacity: 1; }
 
   /* ---------- Grid ---------- */
   .layout-grid-wrap {
@@ -240,7 +249,7 @@
   .layout-grid-wrap[data-grid="4"] { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
 
   @media (max-width: 900px) {
-    :root { --indicator-h: 44px; }
+    :root { --indicator-h: 46px; }
     .layout-grid-wrap[data-grid="2"],
     .layout-grid-wrap[data-grid="3"],
     .layout-grid-wrap[data-grid="4"] {
@@ -273,6 +282,15 @@
   .pane-symbol { display: flex; align-items: center; font-size: 11px; font-weight: 700; color: #fff;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 1; }
   .pane-symbol-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .pane-sr-badge {
+    font-size: 8.5px; font-weight: 800; background: rgba(120,123,134,0.18);
+    border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px;
+    color: var(--muted); font-family: ui-monospace, monospace; margin-left: 6px;
+  }
+  .pane[data-active="true"] .pane-sr-badge {
+    border-color: rgba(41,98,255,0.4);
+    color: #7ea6ff;
+  }
   .pane-actions { display: flex; gap: 4px; }
   .pane-btn {
     width: 24px; height: 22px; display: inline-flex; align-items: center; justify-content: center;
@@ -282,7 +300,6 @@
   .pane-btn:hover { color: #fff; border-color: var(--blue); background: var(--blue); }
   .pane-btn.linked { background: var(--blue); color: #fff; border-color: var(--blue); }
 
-  /* chart-wrap = relative container so label-layers can overlap the chart */
   .pane-chart-wrap { flex: 1; position: relative; min-height: 0; }
   .pane-body { position: absolute; inset: 0; }
   .pane-label-layer {
@@ -346,7 +363,6 @@
   }
   .pane-sr-label .sr-label-row strong { font-weight: 700; opacity: 1; }
 
-  /* Responsive SR label sizing per grid */
   .layout-grid-wrap[data-grid="1"] .pane-sr-label { font-size: 10px; padding: 4px 8px; min-width: 130px; }
   .layout-grid-wrap[data-grid="2"] .pane-sr-label { font-size: 8.5px; padding: 3px 6px; min-width: 105px; }
   .layout-grid-wrap[data-grid="3"] .pane-sr-label { font-size: 8px; padding: 2.5px 5px; min-width: 95px; }
@@ -427,11 +443,8 @@
     background: var(--surface-2); color: var(--muted); font-size: 11px; font-weight: 600;
     cursor: pointer;
   }
-  .status-pill .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
   .status-pill.ok { color: var(--green); }
-  .status-pill.ok .dot { background: var(--green); box-shadow: 0 0 8px rgba(8,153,129,0.8); }
   .status-pill.warn { color: var(--yellow); }
-  .status-pill.warn .dot { background: var(--yellow); }
 
   /* ---------- Floating scroll navigation ---------- */
   .floating-scroll-nav {
@@ -541,47 +554,35 @@
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
 
-  .search-modal-input-wrap {
-    position: relative;
-  }
+  .search-modal-input-wrap { position: relative; }
   .search-modal-input-wrap .search-icon {
     position: absolute; left: 12px; top: 50%;
     transform: translateY(-50%);
     color: var(--muted); font-size: 14px; pointer-events: none;
   }
   .search-modal-input-wrap input {
-    width: 100%;
-    background: #0b0e14; border: 1px solid var(--border); color: var(--text);
-    border-radius: 10px;
-    padding: 10px 14px 10px 38px;
-    font-size: 13px;
+    width: 100%; background: #0b0e14; border: 1px solid var(--border);
+    color: var(--text); border-radius: 10px;
+    padding: 10px 14px 10px 38px; font-size: 13px;
   }
   .search-modal-input-wrap input:focus { outline: none; border-color: var(--blue); }
 
   .search-modal-results {
-    flex: 1; min-height: 0;
-    overflow-y: auto;
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    background: #0b0e14;
+    flex: 1; min-height: 0; overflow-y: auto;
+    border: 1px solid var(--border); border-radius: 10px; background: #0b0e14;
   }
   .search-modal-results::-webkit-scrollbar { width: 6px; }
   .search-modal-results::-webkit-scrollbar-thumb { background: var(--surface-3); border-radius: 6px; }
   .search-modal-results .search-item { font-size: 13px; padding: 10px 14px; }
 
   .search-modal-hint {
-    padding: 8px 2px 0 2px;
-    font-size: 10px;
-    color: var(--muted);
-    text-align: center;
-    letter-spacing: 0.03em;
+    padding: 8px 2px 0 2px; font-size: 10px; color: var(--muted);
+    text-align: center; letter-spacing: 0.03em;
   }
   .search-modal-hint kbd {
     background: var(--surface-2); color: var(--text);
-    padding: 1px 5px; border-radius: 3px;
-    border: 1px solid var(--border);
-    font-size: 10px;
-    font-family: inherit;
+    padding: 1px 5px; border-radius: 3px; border: 1px solid var(--border);
+    font-size: 10px; font-family: inherit;
   }
 </style>
 {% endblock %}
@@ -626,8 +627,8 @@
 </div>
 
 <div class="indicator-toolbar" id="indicatorToolbar">
-  <span class="indicator-scope-hint" id="indicatorScopeHint" title="Toggle buttons affect only the currently active (blue-bordered) pane">
-    Active pane: #0
+  <span class="indicator-scope-hint" id="indicatorScopeHint" title="Controls affect only the currently active (blue-bordered) pane">
+    Active: #0
   </span>
   <div class="indicator-divider"></div>
   <div class="indicator-group">
@@ -646,8 +647,27 @@
   <div class="indicator-divider"></div>
   <div class="indicator-group">
     <span class="indicator-label" title="Applies to the active pane only">SR:</span>
-    <button class="ind-btn" data-global-indicator="srLevels" title="Pivot-based Support / Resistance lines (red=resistance, blue=support) — active pane only">SR Levels</button>
-    <button class="ind-btn" data-global-indicator="srLabels" title="Pivot confirmation labels (Resistance / Support with Confirmed / Pivot / Price) — active pane only">SR Labels</button>
+    <button class="ind-btn" data-global-indicator="srLevels" title="Pivot Support / Resistance lines (red=resistance, blue=support) — active pane only">SR Levels</button>
+    <button class="ind-btn" data-global-indicator="srLabels" title="Pivot confirmation labels — active pane only">SR Labels</button>
+  </div>
+  <div class="indicator-divider"></div>
+  <!-- Per-Pane Left & Right SR bar inputs -->
+  <div class="indicator-group" id="paneSrSettingsGroup">
+    <span class="indicator-label">SR Bars:</span>
+    <label class="pane-sr-param-field" for="toolbarSrLeftInput">
+      L
+      <input type="number" id="toolbarSrLeftInput" class="pane-sr-param-input"
+             min="1" max="200" step="1" inputmode="numeric" title="Left bars for active pane">
+    </label>
+    <label class="pane-sr-param-field" for="toolbarSrRightInput">
+      R
+      <input type="number" id="toolbarSrRightInput" class="pane-sr-param-input"
+             min="1" max="200" step="1" inputmode="numeric" title="Right bars for active pane">
+    </label>
+    <button type="button" id="toolbarSrApplyBtn" class="pane-sr-apply-btn" title="Apply Left & Right bars to active pane">
+      Apply
+    </button>
+    <span id="toolbarSrFeedback" class="pane-sr-apply-feedback">✓ Set</span>
   </div>
 </div>
 
@@ -659,10 +679,6 @@
   {% endfor %}
 </div>
 
-{# ============================================================ #}
-{# Floating scroll navigation — auto-shown only when the grid  #}
-{# overflows (grid=3/4 + metadata on a small screen).           #}
-{# ============================================================ #}
 <div class="floating-scroll-nav hidden" id="floatingScrollNav">
   <button type="button" class="floating-scroll-btn" id="scrollToTopBtn" title="Scroll to top">
     <i class="bi bi-chevron-up"></i>
@@ -672,9 +688,6 @@
   </button>
 </div>
 
-{# ============================================================ #}
-{# Search modal: opened from a pane's "change" button          #}
-{# ============================================================ #}
 <div class="search-modal-overlay" id="instrumentSearchModal" role="dialog" aria-modal="true">
   <div class="search-modal">
     <div class="search-modal-header">
@@ -714,23 +727,21 @@
   "use strict";
 
   const DEFAULT_KEY = {{ default_key | tojson }};
+  const DEFAULT_SR_LEFT = {{ sr_left_bars | tojson }};
+  const DEFAULT_SR_RIGHT = {{ sr_right_bars | tojson }};
 
-  // Persistence keys
-  const PANE_CONFIGS_KEY_PREFIX = "layout.paneConfigs.";     // per-layout blob
-  const LEGACY_GLOBAL_PREFS_KEY = "layout.indicators.prefs"; // old shared blob
+  const PANE_CONFIGS_KEY_PREFIX = "layout.paneConfigs.";
 
   const layoutState = {
     id: {{ layout.id | tojson }},
     name: {{ layout.name | tojson }},
     grid: {{ layout.grid or 1 }},
     panes: {{ panes | tojson }},
-    // Default to UNLINKED so a search from the toolbar (or a "change"
-    // from one pane's ↔ button) only affects the targeted pane.
     linked: false,
   };
 
   // ============================================================
-  // PER-PANE INDICATOR STATE
+  // PER-PANE STATE (Independent SR Left/Right, EMA, & Labels)
   // ============================================================
   function defaultPaneState() {
     return {
@@ -740,10 +751,11 @@
       emaCross: true,
       srLevels: false,
       srLabels: false,
+      srLeftBars: Number(DEFAULT_SR_LEFT) || 15,
+      srRightBars: Number(DEFAULT_SR_RIGHT) || 15,
     };
   }
 
-  // paneIndex (string key) -> PaneState
   let paneStates = {};
 
   function getPaneState(idx) {
@@ -762,22 +774,26 @@
       if (!raw) return;
       const saved = JSON.parse(raw);
       if (!saved || typeof saved !== "object") return;
-      const defaults = defaultPaneState().labelVisibility;
+      const defaults = defaultPaneState();
       for (const k of Object.keys(saved)) {
         const entry = saved[k];
         if (!entry || typeof entry !== "object") continue;
         const lv = entry.labelVisibility || {};
+        const lb = Number(entry.srLeftBars);
+        const rb = Number(entry.srRightBars);
         paneStates[k] = {
           labelVisibility: {
-            r2s2: typeof lv.r2s2 === "boolean" ? lv.r2s2 : defaults.r2s2,
-            r3s3: typeof lv.r3s3 === "boolean" ? lv.r3s3 : defaults.r3s3,
-            highLow: typeof lv.highLow === "boolean" ? lv.highLow : defaults.highLow,
+            r2s2: typeof lv.r2s2 === "boolean" ? lv.r2s2 : defaults.labelVisibility.r2s2,
+            r3s3: typeof lv.r3s3 === "boolean" ? lv.r3s3 : defaults.labelVisibility.r3s3,
+            highLow: typeof lv.highLow === "boolean" ? lv.highLow : defaults.labelVisibility.highLow,
           },
           ema9: typeof entry.ema9 === "boolean" ? entry.ema9 : false,
           ema21: typeof entry.ema21 === "boolean" ? entry.ema21 : false,
           emaCross: typeof entry.emaCross === "boolean" ? entry.emaCross : true,
           srLevels: typeof entry.srLevels === "boolean" ? entry.srLevels : false,
           srLabels: typeof entry.srLabels === "boolean" ? entry.srLabels : false,
+          srLeftBars: (Number.isInteger(lb) && lb >= 1 && lb <= 200) ? lb : defaults.srLeftBars,
+          srRightBars: (Number.isInteger(rb) && rb >= 1 && rb <= 200) ? rb : defaults.srRightBars,
         };
       }
     } catch (e) {
@@ -796,11 +812,9 @@
   }
 
   // ============================================================
-  // DOM REFS + GLOBAL RUNTIME STATE
+  // DOM REFS + RUNTIME
   // ============================================================
   const paneInstances = {};
-
-  // Which pane a global search / toolbar toggle should target.
   let activePaneIndex = 0;
 
   const gridEl = document.getElementById("layoutGrid");
@@ -812,11 +826,14 @@
   const linkStateBadge = document.getElementById("linkStateBadge");
   const indicatorScopeHint = document.getElementById("indicatorScopeHint");
 
-  // Toolbar search elements
   const toolbarSearchInput = document.getElementById("toolbarSearchInput");
   const toolbarSearchDropdown = document.getElementById("toolbarSearchDropdown");
 
-  // Modal elements
+  const toolbarSrLeftInput = document.getElementById("toolbarSrLeftInput");
+  const toolbarSrRightInput = document.getElementById("toolbarSrRightInput");
+  const toolbarSrApplyBtn = document.getElementById("toolbarSrApplyBtn");
+  const toolbarSrFeedback = document.getElementById("toolbarSrFeedback");
+
   const searchModalOverlay = document.getElementById("instrumentSearchModal");
   const searchModalCloseBtn = document.getElementById("searchModalCloseBtn");
   const searchModalPaneLabel = document.getElementById("searchModalPaneLabel");
@@ -824,7 +841,6 @@
   const modalSearchInput = document.getElementById("modalSearchInput");
   const modalSearchResults = document.getElementById("modalSearchResults");
 
-  // Floating scroll-nav elements
   const floatingScrollNav = document.getElementById("floatingScrollNav");
   const scrollToTopBtn = document.getElementById("scrollToTopBtn");
   const scrollToBottomBtn = document.getElementById("scrollToBottomBtn");
@@ -832,6 +848,19 @@
   // ============================================================
   // ACTIVE PANE MANAGEMENT
   // ============================================================
+  function updatePaneBadge(idx) {
+    const paneEl = document.querySelector(`.pane[data-pane-index="${idx}"]`);
+    if (!paneEl) return;
+    const badge = paneEl.querySelector(".pane-sr-badge");
+    if (!badge) return;
+    const st = getPaneState(idx);
+    badge.textContent = `SR ${st.srLeftBars}/${st.srRightBars}`;
+  }
+
+  function updateAllPaneBadges() {
+    Object.keys(paneStates).forEach(idx => updatePaneBadge(Number(idx)));
+  }
+
   function setActivePaneIndex(idx) {
     if (!Number.isFinite(idx)) return;
     activePaneIndex = idx;
@@ -845,7 +874,7 @@
 
   function updateScopeHint(idx) {
     if (!indicatorScopeHint) return;
-    indicatorScopeHint.textContent = `Active pane: #${idx}`;
+    indicatorScopeHint.textContent = `Active: #${idx}`;
   }
 
   function syncToolbarButtonsForPane(idx) {
@@ -858,6 +887,9 @@
       const key = btn.dataset.globalIndicator;
       btn.classList.toggle("active", !!st[key]);
     });
+    if (toolbarSrLeftInput) toolbarSrLeftInput.value = st.srLeftBars;
+    if (toolbarSrRightInput) toolbarSrRightInput.value = st.srRightBars;
+    updatePaneBadge(idx);
   }
 
   gridEl.addEventListener("click", (e) => {
@@ -1004,19 +1036,17 @@
   }
 
   // ============================================================
-  // SR PIVOT MATHEMATICS
+  // SR PIVOT DETECTION (USES PER-PANE LEFT / RIGHT CONFIG)
   // ============================================================
-  const SR_LEFT_BARS  = {{ sr_left_bars  | tojson }};
-  const SR_RIGHT_BARS = {{ sr_right_bars | tojson }};
-
   function performFullSRScanForPane(paneInst) {
     if (!paneInst) return;
     const candles = paneInst.candles || [];
     paneInst.srDetectedPivots = [];
     if (!Array.isArray(candles) || candles.length === 0) return;
 
-    const left = SR_LEFT_BARS;
-    const right = SR_RIGHT_BARS;
+    const st = getPaneState(paneInst.index);
+    const left = st.srLeftBars;
+    const right = st.srRightBars;
     const minNeeded = left + right + 1;
     if (candles.length < minNeeded) return;
 
@@ -1062,9 +1092,6 @@
     }
   }
 
-  // ============================================================
-  // SR LINES
-  // ============================================================
   function removeSRLinesForPane(paneInst) {
     if (!paneInst) return;
     const lines = paneInst.srLines || [];
@@ -1118,9 +1145,6 @@
     });
   }
 
-  // ============================================================
-  // SR LABELS
-  // ============================================================
   function ensureSRLabelLayerForPane(paneInst) {
     if (!paneInst) return null;
     if (paneInst.srLabelLayerEl) return paneInst.srLabelLayerEl;
@@ -1233,9 +1257,6 @@
     else clearSRLabelsForPane(paneInst);
   }
 
-  // ============================================================
-  // LABEL VISIBILITY HELPERS
-  // ============================================================
   function isLabelVisible(levelName, paneIndex) {
     const n = String(levelName || "").toLowerCase();
     if (n === "avg") return true;
@@ -1253,9 +1274,6 @@
     return "#2962ff";
   }
 
-  // ============================================================
-  // PANE INSTANCE INDICATOR HELPERS
-  // ============================================================
   function addLineSeriesToPane(paneInst, options) {
     if (!paneInst || !paneInst.chart) return null;
     try {
@@ -1423,9 +1441,6 @@
     refreshSRLevelsForPane(paneInst);
   }
 
-  // ============================================================
-  // LABEL POSITIONING
-  // ============================================================
   function schedulePaneLabelUpdate(paneInst) {
     if (!paneInst || paneInst.labelUpdateScheduled) return;
     paneInst.labelUpdateScheduled = true;
@@ -1459,7 +1474,7 @@
   }
 
   // ============================================================
-  // TOOLBAR TOGGLE HANDLERS
+  // TOOLBAR TOGGLE & SR APPLY HANDLERS
   // ============================================================
   function bindToolbarHandlers() {
     document.querySelectorAll(".ind-btn[data-global-toggle]").forEach(btn => {
@@ -1487,10 +1502,48 @@
         if (inst) renderAllIndicatorsForPane(inst);
       });
     });
+
+    function applyActivePaneSR() {
+      const lb = parseInt(toolbarSrLeftInput.value, 10);
+      const rb = parseInt(toolbarSrRightInput.value, 10);
+      if (isNaN(lb) || lb < 1 || lb > 200 || isNaN(rb) || rb < 1 || rb > 200) {
+        alert("SR bars must be integers between 1 and 200");
+        return;
+      }
+      const st = getPaneState(activePaneIndex);
+      st.srLeftBars = lb;
+      st.srRightBars = rb;
+      savePaneStates();
+      updatePaneBadge(activePaneIndex);
+
+      const inst = paneInstances[activePaneIndex];
+      if (inst) {
+        refreshSRLevelsForPane(inst);
+      }
+
+      if (toolbarSrFeedback) {
+        toolbarSrFeedback.classList.add("visible");
+        setTimeout(() => toolbarSrFeedback.classList.remove("visible"), 2000);
+      }
+    }
+
+    if (toolbarSrApplyBtn) {
+      toolbarSrApplyBtn.addEventListener("click", applyActivePaneSR);
+    }
+    [toolbarSrLeftInput, toolbarSrRightInput].forEach(inp => {
+      if (inp) {
+        inp.addEventListener("keydown", (e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            applyActivePaneSR();
+          }
+        });
+      }
+    });
   }
 
   // ============================================================
-  // HTTP HELPERS
+  // HTTP & SEARCH
   // ============================================================
   async function apiJson(url, opts) {
     const res = await fetch(url, Object.assign({
@@ -1503,9 +1556,6 @@
     return res.json();
   }
 
-  // ============================================================
-  // INSTRUMENT SEARCH
-  // ============================================================
   async function searchInstruments(query, opts = {}) {
     const params = new URLSearchParams({
       query,
@@ -1563,7 +1613,6 @@
   function formatExpiryShort(v) {
     if (v === null || v === undefined || v === "") return "—";
     const s = String(v);
-
     const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
     if (m) {
       const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
@@ -1574,7 +1623,6 @@
       } catch (_e) { }
       return s;
     }
-
     const num = Number(s);
     if (Number.isFinite(num) && num > 1e9) {
       const ms = num > 1e12 ? num : num * 1000;
@@ -1656,9 +1704,6 @@
     }
   }
 
-  // ============================================================
-  // APPLY AN INSTRUMENT TO A PANE
-  // ============================================================
   function applyInstrumentToPane(paneIndex, instrumentKey) {
     if (!instrumentKey) return;
     if (paneIndex < 0 || paneIndex >= layoutState.panes.length) return;
@@ -1716,7 +1761,6 @@
       renderToolbarResults(data.data || []);
     } catch (e) {
       if (e.name === "AbortError") return;
-      console.warn("toolbar search error:", e);
       toolbarSearchDropdown.innerHTML = `<div class="search-empty">Search failed</div>`;
       toolbarSearchDropdown.classList.add("visible");
     }
@@ -1748,7 +1792,6 @@
     if (e.key === "Enter") {
       e.preventDefault();
       const raw = toolbarSearchInput.value.trim();
-
       if (raw.includes("|") && !toolbarSearchResults.length) {
         applyInstrumentToPane(activePaneIndex, raw);
         toolbarSearchInput.value = "";
@@ -1944,7 +1987,6 @@
 
     const ro = new ResizeObserver(updateVisibility);
     ro.observe(gridEl);
-
     updateVisibility();
   }
 
@@ -2070,18 +2112,14 @@
         } catch (_e) {}
       });
       inst.levelLabels = [];
-    } catch (_e) {
-      console.warn("[pane-destroy] levelLabels cleanup failed");
-    }
+    } catch (_e) {}
 
     try {
       (inst.srLabelElements || []).forEach(el => {
         try { if (el && el.parentNode) el.parentNode.removeChild(el); } catch (_e) {}
       });
       inst.srLabelElements = [];
-    } catch (_e) {
-      console.warn("[pane-destroy] srLabelElements cleanup failed");
-    }
+    } catch (_e) {}
 
     try { if (inst.labelLayerEl) inst.labelLayerEl.innerHTML = ""; } catch (_e) {}
     try { if (inst.srLabelLayerEl) inst.srLabelLayerEl.innerHTML = ""; } catch (_e) {}
@@ -2093,19 +2131,14 @@
     }
     try { if (inst.resizeObserver) inst.resizeObserver.disconnect(); } catch (_e) {}
 
-    try {
-      inst.chart.remove();
-    } catch (_e) {
-      console.warn("[pane-destroy] chart.remove() failed:", _e);
-    }
-
+    try { inst.chart.remove(); } catch (_e) {}
     try { if (inst.containerEl) inst.containerEl.innerHTML = ""; } catch (_e) {}
 
     delete paneInstances[paneIndex];
   }
 
   // ============================================================
-  // FETCH + WEBSOCKET
+  // FETCH & WEBSOCKET
   // ============================================================
   async function fetchCandles(instrumentKey) {
     const today = new Date();
@@ -2177,8 +2210,7 @@
       renderEMACrossMarkersForPane(paneInst);
     }
     if ((st.srLevels || st.srLabels) && isNewMinute) {
-      try { refreshSRLevelsForPane(paneInst); }
-      catch (err) { console.warn("[pane-sr] live refresh failed:", err); }
+      try { refreshSRLevelsForPane(paneInst); } catch (err) {}
     }
     schedulePaneLabelUpdate(paneInst);
   }
@@ -2346,17 +2378,20 @@
     panes.forEach((p, i) => loadPane(i, p.instrument_key));
     bindPaneActions();
     setActivePaneIndex(Math.min(activePaneIndex, panes.length - 1));
+    updateAllPaneBadges();
     updateLinkedPill();
   }
 
   function buildPaneHtml(index, instrumentKey) {
     const isActive = index === activePaneIndex;
+    const st = getPaneState(index);
     return `
       <div class="pane" data-pane-index="${index}" data-instrument-key="${escapeHtml(instrumentKey)}" data-active="${isActive ? 'true' : 'false'}">
         <div class="pane-header">
           <div class="pane-symbol">
             <i class="bi bi-graph-up-arrow text-primary me-1"></i>
             <span class="pane-symbol-text">${escapeHtml(instrumentKey)}</span>
+            <span class="pane-sr-badge" title="SR Left/Right Bars">SR ${st.srLeftBars}/${st.srRightBars}</span>
           </div>
           <div class="pane-actions">
             <button class="pane-btn" data-pane-action="change" data-pane-index="${index}" title="Change instrument (opens search)">
@@ -2472,6 +2507,7 @@
   saveBtn.addEventListener("click", async () => {
     if (!layoutState.id) return;
     try {
+      savePaneStates();
       const updated = await apiJson(`/admin/layouts/${encodeURIComponent(layoutState.id)}`, {
         method: "PATCH",
         body: JSON.stringify({
@@ -2482,6 +2518,7 @@
       });
       layoutState.name = updated.name;
       await refreshLayoutList();
+      alert("Layout saved successfully.");
     } catch (e) { alert("Save failed: " + e.message); }
   });
 
@@ -2528,9 +2565,6 @@
     } catch (e) { alert("Delete failed: " + e.message); }
   });
 
-  // ============================================================
-  // QUERY-PARAM PANE OVERRIDES (temporary comparison layout)
-  // ============================================================
   function readQueryOverrides() {
     try {
       const params = new URLSearchParams(window.location.search);
@@ -2570,8 +2604,6 @@
   // BOOT
   // ============================================================
   async function boot() {
-    try { localStorage.removeItem(LEGACY_GLOBAL_PREFS_KEY); } catch (_e) {}
-
     const queryOverride = readQueryOverrides();
     if (queryOverride) {
       layoutState.id = null;
@@ -2590,26 +2622,11 @@
     setActivePaneIndex(0);
 
     if (queryOverride) {
-      if (saveBtn) {
-        saveBtn.disabled = true;
-        saveBtn.title = "Cannot save a temporary comparison layout";
-      }
-      if (newBtn) {
-        newBtn.disabled = true;
-        newBtn.title = "Close this tab and open a saved layout to create a new one";
-      }
-      if (deleteBtn) {
-        deleteBtn.disabled = true;
-        deleteBtn.title = "Cannot delete a temporary comparison layout";
-      }
-      if (layoutNameInput) {
-        layoutNameInput.value = "Comparison view (temporary)";
-        layoutNameInput.disabled = true;
-      }
-      if (layoutSelect) {
-        layoutSelect.disabled = true;
-        layoutSelect.title = "Temporary comparison — close this tab to return to your saved layouts";
-      }
+      if (saveBtn) { saveBtn.disabled = true; saveBtn.title = "Cannot save a temporary comparison layout"; }
+      if (newBtn) { newBtn.disabled = true; }
+      if (deleteBtn) { deleteBtn.disabled = true; }
+      if (layoutNameInput) { layoutNameInput.value = "Comparison view (temporary)"; layoutNameInput.disabled = true; }
+      if (layoutSelect) { layoutSelect.disabled = true; }
     }
   }
 
