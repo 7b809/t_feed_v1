@@ -1,4 +1,4 @@
-{# templates/chart.html — single-instrument candle chart with CE↔PE swap FAB, pivot-based SR levels (lines + labels), configurable L/R bars, and pivot/confirmation price+time labels #}
+{# templates/chart.html — single-instrument candle chart with CE↔PE swap FAB, pivot SR levels, date filters, and EMA crosses #}
 {% extends "base.html" %}
 {% block title %}{{ instrument_name or instrument_key }} - Trading Dashboard{% endblock %}
 {% block head %}
@@ -176,7 +176,7 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
 .label-toggle-btn[data-indicator="srLevels"].active { background: linear-gradient(90deg, #FF0000 0%, #233dee 100%); border-color: transparent; }
 .label-toggle-btn[data-indicator="srLabels"].active { background: linear-gradient(90deg, #f5c451 0%, #a855f7 100%); border-color: transparent; color: #111; }
 
-/* ---------- SR Params card (NEW) ---------- */
+/* ---------- SR Params & Date Filter card ---------- */
 .sr-param-field {
   display: inline-flex;
   align-items: center;
@@ -202,6 +202,23 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 .sr-param-input:focus {
+  outline: none;
+  border-color: var(--blue);
+  box-shadow: 0 0 0 2px rgba(41,98,255,0.22);
+}
+.sr-date-input {
+  width: 126px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 3px 6px;
+  font-size: 10.5px;
+  font-weight: 700;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.sr-date-input:focus {
   outline: none;
   border-color: var(--blue);
   box-shadow: 0 0 0 2px rgba(41,98,255,0.22);
@@ -235,7 +252,6 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
 
 /* ============================================================
    SR LABELS LAYER (pivot confirmation labels)
-   Shows Pivot price/time + Confirmation price/time.
    ============================================================ */
 .sr-label-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; overflow: hidden; pointer-events: none; z-index: 4; }
 .sr-label {
@@ -340,6 +356,7 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
   .label-toggle-btn { padding: 3px 9px; font-size: 9.5px; }
   .chart-toggles-title { font-size: 9.5px; }
   .sr-param-input { width: 48px; font-size: 10.5px; padding: 3px 6px; }
+  .sr-date-input { width: 110px; font-size: 9.5px; padding: 2px 4px; }
   .sr-param-field { font-size: 9.5px; gap: 4px; }
   .level-status-bar { top: 8px; right: 8px; left: 8px; max-width: none; padding: 5px 8px; justify-content: center; border-radius: 14px; }
   .level-status-bar .badge { font-size: 9px; padding: 2px 6px; }
@@ -479,7 +496,7 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
     </button>
   </div>
 
-    <div class="chart-toggles-card" id="labelToggleBar">
+  <div class="chart-toggles-card" id="labelToggleBar">
     <div class="chart-toggles-title"><i class="bi bi-tags me-1"></i>Labels</div>
     <button type="button" class="label-toggle-btn" data-toggle="r2s2" title="Show / hide R2 and S2 labels (lines stay)">R2 / S2</button>
     <button type="button" class="label-toggle-btn active" data-toggle="r3s3" title="Show / hide R3 and S3 labels (lines stay)">R3 / S3</button>
@@ -500,26 +517,34 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
     </button>
   </div>
 
-  {# NEW: SR Parameters card — left/right pivot bars with Apply/Reset #}
+  <!-- SR Parameters & Date Filter Card -->
   <div class="chart-toggles-card" id="srParamsCard">
-    <div class="chart-toggles-title"><i class="bi bi-sliders me-1"></i>SR Params</div>
+    <div class="chart-toggles-title"><i class="bi bi-sliders me-1"></i>SR & Plot Dates</div>
     <label class="sr-param-field" for="srLeftBarsInput">
       Left
       <input type="number" id="srLeftBarsInput" class="sr-param-input"
-             min="1" max="200" step="1" value="15" inputmode="numeric">
+             min="1" max="200" step="1" value="{{ sr_left_bars }}" inputmode="numeric">
     </label>
     <label class="sr-param-field" for="srRightBarsInput">
       Right
       <input type="number" id="srRightBarsInput" class="sr-param-input"
-             min="1" max="200" step="1" value="15" inputmode="numeric">
+             min="1" max="200" step="1" value="{{ sr_right_bars }}" inputmode="numeric">
+    </label>
+    <label class="sr-param-field ms-1" for="filterStartDate">
+      Start
+      <input type="date" id="filterStartDate" class="sr-date-input">
+    </label>
+    <label class="sr-param-field" for="filterEndDate">
+      End
+      <input type="date" id="filterEndDate" class="sr-date-input">
     </label>
     <button type="button" id="srApplyBtn" class="label-toggle-btn active"
-            title="Apply left/right bars and re-scan pivots">
+            title="Apply SR bars and Date filters to re-plot cleanly">
       <i class="bi bi-check2-circle me-1"></i>Apply
     </button>
-    <button type="button" id="srResetBtn" class="label-toggle-btn"
-            title="Reset to default 15 / 15">
-      <i class="bi bi-arrow-counterclockwise me-1"></i>Reset
+    <button type="button" id="srResetTodayBtn" class="label-toggle-btn"
+            title="Reset to default: Today date only and default pivot bars">
+      <i class="bi bi-calendar-event me-1"></i>Today Only
     </button>
     <span id="srParamsHint" class="sr-param-hint" aria-live="polite"></span>
   </div>
@@ -571,8 +596,6 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
     </div>
   </div>
 
-
-
   {% set _type = (instrument.get('option_type') or instrument.get('instrument_type') or '') | upper %}
   <div class="instrument-info-card" id="instrumentInfoCard">
     <div class="instrument-info-header" id="instrumentInfoHeader">
@@ -621,9 +644,7 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
   <button type="button" class="scroll-nav-btn" id="scrollDownBtn" title="Scroll down"><i class="bi bi-chevron-down"></i></button>
 </div>
 
-{# ============================================================ #}
-{# Swap Option FAB — CE <-> PE for the same strike             #}
-{# ============================================================ #}
+{# Swap Option FAB #}
 <button type="button" id="swapOptionBtn" class="swap-option-fab" hidden
         title="Open the opposite option type for the same strike (CE ↔ PE)">
   <i class="bi bi-arrow-left-right"></i>
@@ -664,7 +685,7 @@ const MARKET_OPEN_MIN_IST    = 0;
 const MARKET_CLOSE_HOUR_IST  = 15;
 const MARKET_CLOSE_MIN_IST   = 30;
 const MARKET_TZ              = "Asia/Kolkata";
-const IST_UTC_OFFSET_MIN = 330;
+const IST_UTC_OFFSET_MIN     = 330;
 
 function getISTParts(date = new Date()) {
   try {
@@ -692,6 +713,11 @@ function getISTParts(date = new Date()) {
       weekday,
     };
   }
+}
+
+function getTodayDateKeyIST() {
+  const p = getISTParts();
+  return `${p.year}-${p.month}-${p.day}`;
 }
 
 function isMarketOpenNow() {
@@ -848,8 +874,6 @@ const resetPriceScaleBtn = document.getElementById("resetPriceScaleBtn");
 const freezePriceScaleBtn = document.getElementById("freezePriceScaleBtn");
 const globalSearchInput = document.getElementById("globalSearchInput");
 const searchResults = document.getElementById("searchResults");
-
-/* Swap Option FAB DOM refs — hidden until init confirms an option */
 const swapOptionBtn = document.getElementById("swapOptionBtn");
 const swapOptionLabel = document.getElementById("swapOptionLabel");
 
@@ -896,39 +920,31 @@ let levelLabelUpdateScheduled = false;
 let chartTooltip = null;
 let currentRenderedDate = null;
 
-// EMA cross on by default; EMA 9 / EMA 21 plots OFF by default
-// SR Levels (pivot lines) OFF by default
-// SR Labels (pivot confirmation labels) OFF by default — independent
-// toggle. Both SR modes respect the configurable leftBars/rightBars
-// in indicatorState.srLevels, which the SR Params card can change.
+// Date filtering state: defaults to today's date only
+const plotDateFilter = {
+  startDate: getTodayDateKeyIST(),
+  endDate: getTodayDateKeyIST(),
+  isDefaultToday: true
+};
+
 const indicatorState = {
   ema9:     { enabled: false, series: null, length: 9,  color: "#2962ff" },
   ema21:    { enabled: false, series: null, length: 21, color: "#f5c451" },
   emaCross: { enabled: true,  markers: [] },
   srLevels: {
     enabled: false,
-    // Pivot params — configurable via the SR Params card.
-    // Persisted to localStorage under SR_PARAMS_KEY.
-    leftBars: 15,
-    rightBars: 15,
-    // Detected pivots: { type: "resistance"|"support", price,
-    //   pivotIndex, pivotTime, confirmIndex, confirmTime, confirmedPrice }
+    leftBars: {{ sr_left_bars | tojson }},
+    rightBars: {{ sr_right_bars | tojson }},
     detectedPivots: [],
-    // Rendered line series (removed on toggle-off / re-render)
     lines: [],
   },
   srLabels: {
     enabled: false,
-    // HTML label elements — each carries a _srMeta object with
-    // { time, price } used by positionSRLabels() to (re)position it.
     elements: [],
     layer: null,
   },
 };
 
-// Load persisted SR params (leftBars / rightBars) BEFORE the first
-// scan runs. This runs synchronously on script parse, and the chart
-// bootstrap defers to a RAF, so the order is guaranteed.
 (function loadSRParams() {
   try {
     const saved = JSON.parse(localStorage.getItem(SR_PARAMS_KEY) || "{}");
@@ -936,17 +952,13 @@ const indicatorState = {
     const rb = Number(saved.rightBars);
     if (Number.isInteger(lb) && lb >= 1 && lb <= 200) indicatorState.srLevels.leftBars = lb;
     if (Number.isInteger(rb) && rb >= 1 && rb <= 200) indicatorState.srLevels.rightBars = rb;
-  } catch (e) { /* ignore corrupt prefs */ }
+  } catch (e) {}
 })();
 
 const emaCache = new Map();
 let emaCrossCache = { crosses: null, lastTime: null };
 let emaIncrementalRaf = null;
-// Marker rebuild tracker — avoids rebuilding on every intra-minute
-// tick; only rebuilds when a new candle arrives or on toggle changes.
 let lastMarkerRebuildTime = null;
-
-// SR label positioning scheduler (RAFs debounced)
 let srLabelUpdateScheduled = false;
 
 const dynamicPriceScale = {
@@ -966,6 +978,19 @@ const dynamicPriceScale = {
     console.warn("Unable to read instrument tick size:", err);
   }
 })();
+
+// ============================================================
+// DATE RANGE FILTER HELPER
+// ============================================================
+function isTimestampInFilterRange(unixSeconds) {
+  if (!unixSeconds) return false;
+  const dateStr = getDateKeyIST(unixSeconds);
+  if (!dateStr) return false;
+
+  if (plotDateFilter.startDate && dateStr < plotDateFilter.startDate) return false;
+  if (plotDateFilter.endDate && dateStr > plotDateFilter.endDate) return false;
+  return true;
+}
 
 // ============================================================
 // PRICE HELPERS
@@ -1366,14 +1391,7 @@ function renderEMALines(candles) {
 }
 
 // ============================================================
-// SR LEVELS INDICATOR — pivot-based Support / Resistance
-// Mirrors the TradingView reference:
-//     Support_and_Resistance_Levels_with_Breaks_v6
-// - Strict pivot high / low with leftBars/rightBars
-//   (configurable via the SR Params card)
-// - Horizontal red (resistance) / blue (support) lines
-// - BREAK MARKERS ARE NOT DRAWN
-// - SR Labels toggle shows per-pivot confirmation info
+// SR LEVELS INDICATOR — Pivot lines & labels filtered by date
 // ============================================================
 function ensureSRLevelsState() {
   if (!indicatorState.srLevels) {
@@ -1396,22 +1414,6 @@ function removeSRLines() {
   indicatorState.srLevels.lines = [];
 }
 
-/**
- * Full scan — recompute every pivot in the loaded candles using the
- * current leftBars / rightBars. Called on toggle-on, on Apply of new
- * SR params, and on each new minute while SR is enabled.
- *
- * Algorithm (strict pivot rule, matching ta.pivothigh / ta.pivotlow):
- *   resistance pivot at i  iff  candles[i].high > candles[j].high
- *                               for every j in [i-left, i-1]
- *                              and every j in [i+1, i+right]
- *   support    pivot at i  iff  candles[i].low  < candles[j].low
- *                               for every j in [i-left, i-1]
- *                              and every j in [i+1, i+right]
- *
- * Each pivot also records confirmedPrice = close of the confirmation
- * candle so labels can show both prices.
- */
 function performFullSRScan(candles) {
   ensureSRLevelsState();
   const state = indicatorState.srLevels;
@@ -1424,6 +1426,10 @@ function performFullSRScan(candles) {
 
   for (let i = leftBars; i < candles.length - rightBars; i++) {
     const c = candles[i];
+    
+    // Only detect / retain pivots within the configured start and end date range (defaults to Today)
+    if (!isTimestampInFilterRange(c.time)) continue;
+
     const cHigh = Number(c.high);
     const cLow  = Number(c.low);
     if (!Number.isFinite(cHigh) || !Number.isFinite(cLow)) continue;
@@ -1467,11 +1473,6 @@ function performFullSRScan(candles) {
   }
 }
 
-/**
- * Render the horizontal SR lines.
- * For each confirmed pivot, draw a flat line from pivotTime forward
- * until the next same-type pivot (or the current end-of-data bar).
- */
 function renderSRLines() {
   ensureSRLevelsState();
   removeSRLines();
@@ -1517,13 +1518,7 @@ function renderSRLines() {
 }
 
 // ============================================================
-// SR LABELS — TradingView-style HTML overlay labels for pivots
-// Each label shows:
-//   • Title (RESISTANCE / SUPPORT)
-//   • Pivot price @ time
-//   • Confirmed price @ time
-// Resistance labels sit ABOVE the level; support labels BELOW.
-// Independently toggleable from SR Levels.
+// SR LABELS — Pivot confirmation labels
 // ============================================================
 function ensureSRLabelLayer() {
   ensureSRLevelsState();
@@ -1548,26 +1543,6 @@ function clearSRLabels() {
   indicatorState.srLabels.elements = [];
 }
 
-// Full datetime — kept for any future use, but the label uses the
-// short HH:MM format so multiple rows fit neatly.
-function formatSRTimeLabel(unixSeconds) {
-  if (!Number.isFinite(unixSeconds)) return "—";
-  const date = new Date(unixSeconds * 1000);
-  if (Number.isNaN(date.getTime())) return "—";
-  try {
-    return new Intl.DateTimeFormat("en-IN", {
-      timeZone: "Asia/Kolkata",
-      year: "numeric", month: "2-digit", day: "2-digit",
-      hour: "2-digit", minute: "2-digit",
-      hour12: false,
-    }).format(date).replace(",", "");
-  } catch (e) {
-    return date.toISOString();
-  }
-}
-
-// Compact HH:MM (IST) — used by the SR label body so the label
-// stays narrow while still showing pivot time and confirmation time.
 function formatShortTime(unixSeconds) {
   if (!Number.isFinite(unixSeconds)) return "—";
   const date = new Date(unixSeconds * 1000);
@@ -1609,15 +1584,11 @@ function renderSRLabels(pivots) {
     const confTimeStr   = formatShortTime(p.confirmTime);
     const title = isRes ? "RESISTANCE" : "SUPPORT";
 
-    // Row 1: Pivot price @ pivot time
-    // Row 2: Confirmed price @ confirmed time
     el.innerHTML =
       `<div class="sr-label-title">${title}</div>` +
       `<div class="sr-label-row"><span class="sr-label-key">Pivot:</span> <strong>₹${pivotPriceStr}</strong> @ ${pivotTimeStr}</div>` +
       `<div class="sr-label-row"><span class="sr-label-key">Conf.:</span> <strong>₹${confPriceStr}</strong> @ ${confTimeStr}</div>`;
 
-    // Anchor the label at the confirmation bar (where it appears in
-    // TradingView) and at the pivot price on the Y axis.
     el._srMeta = {
       time: p.confirmTime,
       price: p.price,
@@ -1672,13 +1643,6 @@ function scheduleSRLabelUpdate() {
   });
 }
 
-/**
- * Recompute pivots and render both SR lines and SR labels based on
- * their independent toggles. removeSRLines() / clearSRLabels() are
- * called unconditionally inside renderSRLines()/renderSRLabels()
- * before new content is drawn, so switching params and re-applying
- * never leaves stale lines or labels behind.
- */
 function refreshSRLevels(candles) {
   ensureSRLevelsState();
   const data = candles || (candleSeries ? candleSeries.data() : []);
@@ -1696,7 +1660,6 @@ function refreshSRLevels(candles) {
     return;
   }
 
-  // Recompute with the current leftBars / rightBars.
   performFullSRScan(data);
 
   if (linesOn) renderSRLines();
@@ -1707,8 +1670,7 @@ function refreshSRLevels(candles) {
 }
 
 /**
- * Rebuild all series markers. Only EMA cross markers are produced
- * now — the SR break "B" markers have been removed.
+ * Rebuild series markers for EMA Cross, respecting the current date filter
  */
 function rebuildAllMarkers() {
   if (!candleSeries) return;
@@ -1717,12 +1679,15 @@ function rebuildAllMarkers() {
 
   const allMarkers = [];
 
-  // ---- EMA cross markers ----------------------------------------- #
   if (indicatorState.emaCross.enabled) {
     const crosses = getOrComputeEMACrosses(data);
     const seenTimes = new Set();
     for (const c of crosses) {
       if (seenTimes.has(c.time)) continue;
+      
+      // Filter EMA crossover markers to specified date window (Today by default)
+      if (!isTimestampInFilterRange(c.time)) continue;
+
       seenTimes.add(c.time);
       const isBull = c.type === "bull";
       allMarkers.push({
@@ -1782,7 +1747,7 @@ function scheduleIncrementalEMARefresh() {
   });
 }
 
-// Indicator toggle buttons — persisted per-user in localStorage.
+// Indicator toggle buttons
 document.querySelectorAll("#indicatorToggleBar .label-toggle-btn[data-indicator]").forEach(btn => {
   const key = btn.dataset.indicator;
   if (!(key in indicatorState)) return;
@@ -1806,20 +1771,25 @@ document.querySelectorAll("#indicatorToggleBar .label-toggle-btn[data-indicator]
 });
 
 // ============================================================
-// SR PARAMS CARD — leftBars / rightBars input, Apply, Reset
+// SR PARAMS & DATE RANGE CARD — Apply, Reset & Date Filter
 // ============================================================
 (function initSRParamsCard() {
-  const leftInput  = document.getElementById("srLeftBarsInput");
-  const rightInput = document.getElementById("srRightBarsInput");
-  const applyBtn   = document.getElementById("srApplyBtn");
-  const resetBtn   = document.getElementById("srResetBtn");
-  const hintEl     = document.getElementById("srParamsHint");
+  const leftInput   = document.getElementById("srLeftBarsInput");
+  const rightInput  = document.getElementById("srRightBarsInput");
+  const startInput  = document.getElementById("filterStartDate");
+  const endInput    = document.getElementById("filterEndDate");
+  const applyBtn    = document.getElementById("srApplyBtn");
+  const resetBtn    = document.getElementById("srResetTodayBtn");
+  const hintEl      = document.getElementById("srParamsHint");
   if (!leftInput || !rightInput || !applyBtn || !resetBtn) return;
 
-  // Sync inputs from the loaded state (which was already hydrated
-  // from localStorage by the IIFE at the top of this script).
   leftInput.value  = String(indicatorState.srLevels.leftBars);
   rightInput.value = String(indicatorState.srLevels.rightBars);
+
+  // Initialize date inputs with today's date
+  const todayKey = getTodayDateKeyIST();
+  if (startInput) startInput.value = todayKey;
+  if (endInput)   endInput.value   = todayKey;
 
   let hintTimer = null;
   function showHint(text, isError) {
@@ -1831,7 +1801,7 @@ document.querySelectorAll("#indicatorToggleBar .label-toggle-btn[data-indicator]
     hintTimer = setTimeout(() => {
       hintEl.classList.remove("visible");
       hintEl.classList.remove("error");
-    }, 3000);
+    }, 3200);
   }
 
   function clampInt(raw, min, max) {
@@ -1848,47 +1818,54 @@ document.querySelectorAll("#indicatorToggleBar .label-toggle-btn[data-indicator]
     if (lb === null) { showHint("Left bars must be 1–200", true); return; }
     if (rb === null) { showHint("Right bars must be 1–200", true); return; }
 
-    // Erase everything that was plotted with the old params BEFORE
-    // re-scanning — guarantees no stale lines or labels survive.
+    const sDate = startInput ? startInput.value : "";
+    const eDate = endInput   ? endInput.value   : "";
+    if (sDate && eDate && sDate > eDate) {
+      showHint("Start date must be <= End date", true);
+      return;
+    }
+
+    // Erase prior plots smoothly before recalculating
     removeSRLines();
     clearSRLabels();
+    applyMarkersToCandleSeries([]);
 
-    // Mutate the live state so performFullSRScan uses the new params.
     indicatorState.srLevels.leftBars  = lb;
     indicatorState.srLevels.rightBars = rb;
 
+    plotDateFilter.startDate = sDate || null;
+    plotDateFilter.endDate   = eDate || null;
+    plotDateFilter.isDefaultToday = (sDate === getTodayDateKeyIST() && eDate === getTodayDateKeyIST());
+
     try {
       localStorage.setItem(SR_PARAMS_KEY, JSON.stringify({ leftBars: lb, rightBars: rb }));
-    } catch (e) { /* storage may be full / blocked */ }
+    } catch (e) {}
 
-    // Re-scan + re-render (no-op visually if both SR toggles are off).
-    refreshSRLevels();
+    // Invalidate and repaint indicators
+    invalidateEMACache();
+    refreshIndicators();
 
     const pivots = indicatorState.srLevels.detectedPivots || [];
-    const rCount = pivots.filter(p => p.type === "resistance").length;
-    const sCount = pivots.filter(p => p.type === "support").length;
-    const srActive = indicatorState.srLevels.enabled || indicatorState.srLabels.enabled;
-    const suffix = srActive ? "" : " · enable SR to see";
-    showHint(`✓ ${lb}/${rb} · ${pivots.length} pivots (${rCount}R / ${sCount}S)${suffix}`, false);
+    const dateLabel = (sDate === eDate && sDate) ? sDate : `${sDate || 'all'} to ${eDate || 'all'}`;
+    showHint(`✓ Applied (${lb}/${rb}) · Dates: ${dateLabel} · ${pivots.length} pivots`, false);
   }
 
-  function resetParams() {
-    leftInput.value  = "15";
-    rightInput.value = "15";
+  function resetToToday() {
+    const today = getTodayDateKeyIST();
+    if (startInput) startInput.value = today;
+    if (endInput)   endInput.value   = today;
+    leftInput.value  = String({{ sr_left_bars | tojson }});
+    rightInput.value = String({{ sr_right_bars | tojson }});
     applyParams();
   }
 
   applyBtn.addEventListener("click", applyParams);
-  resetBtn.addEventListener("click", resetParams);
+  resetBtn.addEventListener("click", resetToToday);
 
-  [leftInput, rightInput].forEach(inp => {
+  [leftInput, rightInput, startInput, endInput].forEach(inp => {
+    if (!inp) return;
     inp.addEventListener("keydown", e => {
       if (e.key === "Enter") { e.preventDefault(); applyParams(); }
-      if (e.key === "Escape") {
-        leftInput.value  = String(indicatorState.srLevels.leftBars);
-        rightInput.value = String(indicatorState.srLevels.rightBars);
-        inp.blur();
-      }
     });
   });
 })();
@@ -2070,9 +2047,6 @@ function updateCandle(candle) {
   if (indicatorState.ema9.enabled || indicatorState.ema21.enabled || indicatorState.emaCross.enabled || indicatorState.srLevels.enabled || indicatorState.srLabels.enabled) {
     scheduleIncrementalEMARefresh();
   }
-  // SR: full rescan on new-minute boundary using the current
-  // leftBars/rightBars. Intra-minute updates never confirm a new
-  // pivot, so this is skipped there.
   if ((indicatorState.srLevels.enabled || indicatorState.srLabels.enabled) && isNewMinute) {
     try { refreshSRLevels(); } catch (err) { console.warn("SR live refresh failed:", err); }
   }
@@ -2374,12 +2348,9 @@ searchResults.addEventListener("click", function (e) {
   if (!key) return;
   searchResults.classList.remove("visible");
   globalSearchInput.value = "";
-window.open("/chart/" + encodeURIComponent(key), "_self");
+  window.open("/chart/" + encodeURIComponent(key), "_self");
 });
 
-// ============================================================
-// READ INSTRUMENT KEY
-// ============================================================
 try { currentInstrumentKey = JSON.parse(document.getElementById("instrument-key-data").textContent); } catch (error) { console.error("Unable to parse instrument key:", error); }
 
 // ============================================================
@@ -2507,7 +2478,8 @@ async function doSwapOption() {
   try {
     const oppKey = await findOppositeInstrumentKey(swapResolvedMeta, opp);
     if (oppKey && oppKey !== currentInstrumentKey) {
-window.open("/chart/" + encodeURIComponent(oppKey), "_self");      return;
+      window.open("/chart/" + encodeURIComponent(oppKey), "_self");
+      return;
     }
     if (swapOptionLabel) swapOptionLabel.textContent = "Not found";
     setTimeout(() => {
@@ -2542,12 +2514,7 @@ if (swapOptionBtn) {
   });
 }
 
-// ============================================================
-// START MARKET STATUS WATCHER IMMEDIATELY
-// ============================================================
 startMarketStatusWatcher();
-
-// Kick off the swap FAB init in the background — non-blocking.
 initSwapOptionButton().catch((err) => console.warn("[swap] init promise rejected:", err));
 
 /* ============================================================
@@ -2597,9 +2564,6 @@ function buildOpeningRangesFromCandles(candles) {
   return result;
 }
 
-/* ============================================================
-   LEVEL LINE HELPERS
-   ============================================================ */
 function addLineSeriesSafe(options) {
   if (!chart) return null;
   try {
@@ -2615,9 +2579,6 @@ function getRangeLevelColor(rangeKey) {
   return "#2962ff";
 }
 
-/* ============================================================
-   HTML OVERLAY LABEL LAYER (Opening Range labels)
-   ============================================================ */
 function ensureLevelLabelLayer() {
   if (levelLabelLayer) return levelLabelLayer;
   if (!chartContainer) return null;
@@ -2660,9 +2621,6 @@ function updateLevelLabelPositions() {
   });
 }
 
-/* ============================================================
-   DRAW / REMOVE LEVEL LINES
-   ============================================================ */
 function drawDayLevelLine(levelName, rawValue, startTime, endTime, color, lineStyle) {
   if (rawValue === null || rawValue === undefined || rawValue === "") return;
   const value = Number(rawValue);
@@ -2712,9 +2670,6 @@ function rebuildAndRenderOpeningRanges(allCandles) {
   renderOpeningRangeLines();
 }
 
-/* ============================================================
-   LEVEL BADGES
-   ============================================================ */
 function updateLevelBadgesForLatestDate() {
   if (!levelStatusBar) return;
   const dates = Object.keys(calculatedOpeningRanges).sort();
@@ -2737,9 +2692,6 @@ function resetLevelBadges() {
   });
 }
 
-/* ============================================================
-   CUSTOM CANDLE TOOLTIP
-   ============================================================ */
 function createChartTooltip() {
   if (chartTooltip) return;
   chartTooltip = document.createElement("div");
@@ -2783,9 +2735,6 @@ function handleCrosshairMove(param) {
   chartTooltip.style.top  = Math.max(5, top) + "px";
 }
 
-/* ============================================================
-   CREATE CHART
-   ============================================================ */
 function createChart(candles) {
   chart = LightweightCharts.createChart(
     chartContainer,
@@ -2896,9 +2845,6 @@ function createChart(candles) {
   applyAutoFitPriceScale();
 }
 
-/* ============================================================
-   PRICE-SCALE BUTTON WIRING
-   ============================================================ */
 if (resetPriceScaleBtn) {
   resetPriceScaleBtn.addEventListener("click", function () {
     applyAutoFitPriceScale();
@@ -2911,9 +2857,9 @@ if (freezePriceScaleBtn) {
   });
 }
 
-/* ============================================================
-   BOOTSTRAP THE CHART
-   ============================================================ */
+// ============================================================
+// BOOTSTRAP THE CHART
+// ============================================================
 async function bootstrapChart() {
   try {
     LoadingOverlay.reset();
@@ -2976,9 +2922,6 @@ if (document.readyState === "complete" || document.readyState === "interactive")
   });
 }
 
-/* ============================================================
-   PAGE CLOSE
-   ============================================================ */
 window.addEventListener("beforeunload", () => {
   pageClosing = true;
   stopPriceScaleWatcher();
