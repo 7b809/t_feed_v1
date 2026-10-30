@@ -2513,7 +2513,6 @@
             midcpnifty_s3_touch:  "MIDCPNIFTY touched S3",
             sensex_r3_touch:      "SENSEX touched R3",
             sensex_s3_touch:      "SENSEX touched S3",
-            // Legacy v2 labels kept for old records still on disk.
             sensex_r3_with_nifty_reference: "SENSEX touched R3 · NIFTY reference",
             sensex_s3_with_nifty_reference: "SENSEX touched S3 · NIFTY reference",
             sensex_r3_fallback: "SENSEX touched R3 · fallback (NIFTY stale)",
@@ -2571,9 +2570,6 @@
     function buildLayoutCompareUrl(iso) {
         if (!iso || !iso.instrument_key) return null;
 
-        // Prefer the routed index (always NIFTY under v3.2) since that's
-        // the underlying of the isolated option. Fall back to the
-        // trigger index for any legacy record without a routed_index.
         let indexKey = "";
         const routed = String(iso.routed_index || "").toUpperCase();
         if (routed && CANONICAL_TO_KEY[routed]) {
@@ -2729,7 +2725,6 @@
             ? iso.trading_symbol
             : liveFeedState.activeInstrumentKey;
 
-        // Identify the trigger index key (G1 v3.2: any of 4).
         const triggerCanonical = iso && iso.trigger_index
             ? String(iso.trigger_index).toUpperCase()
             : null;
@@ -2896,7 +2891,6 @@
             }
         }
 
-        // Four index tiles — G1 v3.2 universe.
         const indexDefs = [
             { name: "NIFTY 50",    key: CANONICAL_TO_KEY.NIFTY },
             { name: "BANKNIFTY",   key: CANONICAL_TO_KEY.BANKNIFTY },
@@ -3129,7 +3123,6 @@
         if (isPromoted) {
             tags.push({ cls: "promo", text: "PROMOTED" });
         }
-        // G1 v4.1 — Path B badge.
         const path = String(
             (iso && iso.execution_path)
             || (d && d.execution_path)
@@ -3336,7 +3329,6 @@
         }
     }
 
-    /* Build a candidate note (why is this candidate in this state). */
     function entryCandidateNote(c) {
         if (c.state === "waiting") {
             if (c.state_note === "no_support_pivot_in_window") {
@@ -3423,10 +3415,6 @@
         return "";
     }
 
-    /* Build the armed-entry grid.
-       - Normal bias-side arm → support-based grid.
-       - Auto-reverse counter-side arm → reversal-evidence grid.
-    */
     function entryCandidateGrid(c) {
         if (c.state !== "armed" || !c.entry) {
             if (c.entry_support) {
@@ -3573,7 +3561,6 @@
 
         card.style.display = "block";
 
-        // G1 v4.1 — Path B short-circuit.
         const pathBBanner = document.getElementById("entry-path-b-banner");
         if (payload.status === "path_b_mode") {
             card.style.display = "block";
@@ -3683,19 +3670,6 @@
 
         renderEntryTouchStrip(payload);
 
-        /* ---- G1 v4.1 §5.E — overlay frozen entry onto chosen candidate ----
-           The backend (`/admin/level-isolation/strategy-signal`) overlays
-           `payload.frozen_entry` from the promotion record when a promotion
-           has been applied. That block carries the entry / stop / target
-           captured at arming time — the "settled" values. We rewrite the
-           chosen candidate's `entry` in place so `renderEntryCandidate()`
-           and `entryCandidateGrid()` display the frozen values instead of
-           the recomputed ones. Non-chosen candidates keep their live values,
-           which is correct (they haven't been promoted yet).
-
-           Legacy records (pre-v4.1 promotion) have no `frozen_entry` in the
-           payload — the fallthrough preserves the existing behaviour.
-        */
         let list = (payload.candidates || []).slice();
         const frozenEntry = payload.frozen_entry;
         if (frozenEntry && typeof frozenEntry === "object" && list.length) {
@@ -3726,13 +3700,6 @@
             candidatesEl.innerHTML = list.map(renderEntryCandidate).join("");
         }
 
-        /* ---- Warnings: existing ones + a new §5.E diagnostic ---------------
-           If the frozen entry was captured from live LTP (not a candle
-           close) the §5.B fallback probably failed — this is exactly the
-           root cause the analysis describes. Surface it as a warning so
-           the operator doesn't have to read `frozen_entry.price_source`
-           manually.
-        */
         const warns = (payload.warnings || []).slice();
         if (frozenEntry && frozenEntry.price_source === "live_ltp") {
             warns.push(
@@ -4360,7 +4327,6 @@
             });
         }
 
-        // Routing step — G1 v3.2 always routes to NIFTY.
         const routedIdx = iso.routed_index || "NIFTY";
         const routedLtp = iso.routed_nifty_ltp;
         steps.push({
@@ -4440,13 +4406,6 @@
             refLabel = "—";
         }
 
-        /* G1 v4.1 §5.F — the event now carries BOTH bias-side and
-           counter-side candidates when STRATEGY_ENTRY_ALLOW_CROSSOVER
-           is on. Tell the operator which is which by appending
-           " · bias + counter side" to the title when any row is tagged
-           as counter. Legacy records (pre-v4.1) carry only bias-side
-           candidates and won't have any `side === "counter"` rows, so
-           they show the plain title. */
         const hasCounter = list.some(c => String(c.side || "").toLowerCase() === "counter");
         if (titleEl) {
             if (list.length) {
@@ -4473,11 +4432,6 @@
                 const isPicked = c.instrument_key === pickedKey;
                 const type = (c.type || "").toUpperCase();
 
-                /* Side chip — bias (blue) or counter (purple). Legacy
-                   records carry no `side` field; we tag them "legacy" so
-                   the operator can tell the difference between a real
-                   bias-side-only list (pre-v4.1) and a properly tagged
-                   crossover-inclusive one. */
                 const sideRaw = String(c.side || "").toLowerCase();
                 let sideChip;
                 if (sideRaw === "counter") {
@@ -4541,7 +4495,6 @@
         const getPriority = (canonical) =>
             priorityMap[canonical] || DEFAULT_PRIORITY[canonical] || 99;
 
-        // G1 v3.2: render all 4 indices × 2 sides = 8 rows, in priority order.
         const rows = [];
         let touchedCount = 0;
         for (const canonical of INDEX_ORDER) {
@@ -4652,7 +4605,6 @@
         const hitIndex = iso.trigger_index || null;
         const hitLevel = iso.trigger_level || null;
 
-        // Sort by priority order if known.
         const priorityMap = {};
         if (Array.isArray(d.monitored_indices)) {
             for (const m of d.monitored_indices) {
@@ -5122,10 +5074,6 @@
             }
         }
 
-        /* G1 v4.3 — compute the total Rupee PnL across closed orders.
-           Uses the persisted `closed_profit_rs` when present (Path B
-           orders persist it) and otherwise derives from
-           `closed_pnl_pct * entry_price * lot_size`. */
         function computeTotalRsPnl(orders) {
             let total = 0;
             for (const o of orders || []) {
@@ -5147,7 +5095,6 @@
             return total;
         }
 
-        /* G1 v4.3 — count Path A vs Path B orders today. */
         function countPaths(orders) {
             let pathA = 0, pathB = 0;
             for (const o of orders || []) {
@@ -5205,12 +5152,6 @@
             `;
         }
 
-        /* G1 v4.3 — build the Source cell.
-           Path B orders carry an explicit `origin_level` describing the
-           SR level that spawned the order. Path A orders carry
-           `support_price` (when the arm path used a support pivot). Both
-           are surfaced here so the operator can see exactly what
-           triggered each order without opening the JSON. */
         function buildSourceCell(o) {
             const origin = o.origin_level || {};
             if (origin && origin.type && origin.price != null) {
@@ -5257,52 +5198,41 @@
             const statusLabel = status.replace(/_/g, " ");
 
             const entry = Number(o.entry_price);
-            const current = Number(o.current_ltp);
             const stop = Number(o.stop_price);
             const target = Number(o.target_price);
 
             const closedPnl = Number(o.closed_pnl_pct);
-            const closedR = Number(o.closed_r_multiple);
             const curPnl = Number(o.current_pnl_pct);
-            const curR = Number(o.current_r_multiple);
 
             const pnlValue = Number.isFinite(closedPnl) ? closedPnl : curPnl;
-            const rValue = Number.isFinite(closedR) ? closedR : curR;
 
             const pnlCls = Number.isFinite(pnlValue) ? (pnlValue >= 0 ? "up" : "down") : "";
             const rowCls = status === "open" ? "do-row-open" : "do-row-closed";
 
-            const currentStr = Number.isFinite(current) ? `₹${fmt(current)}` : "—";
-            const currentPill = o.current_ltp_at
-                ? `<div style="font-size:0.7rem;color:var(--iso-muted)">${fmtTime(o.current_ltp_at)}</div>`
-                : "";
-
-            // G1 v4.3 — Source column
+            // Source column
             const sourceHtml = buildSourceCell(o);
 
-            // G1 v4.3 — Lot badge (Path B only; Path A has no lot_size)
+            // Lot badge (Path B only; Path A has no lot_size)
             const lotBadge = o.lot_size != null
                 ? `<span class="do-lot-badge">${esc(o.lot_size)}L</span>`
                 : "";
 
-            // G1 v4.3 — entry price source subtext
+            // Entry price source subtext
             const priceSrcHtml = o.entry_price_source
                 ? `<span class="do-price-src" title="${esc(o.entry_price_source)}">${esc(quoteSourceLabel(o.entry_price_source))}</span>`
                 : "";
 
-            // G1 v4.3 — target pivot time subtext (Path B only)
+            // Target pivot time subtext (Path B only)
             const targetPivotHtml = o.target_pivot_time
                 ? `<span class="do-price-src">@${fmtTime(o.target_pivot_time)}</span>`
                 : "";
 
-            // G1 v4.3 — Path B badge on instrument cell
+            // Path B badge on instrument cell
             const pathBadge = isPathB
                 ? '<span class="do-path-b-badge">PATH B</span>'
                 : "";
 
-            // G1 v4.3 — ₹ PnL subtext for closed orders (uses persisted
-            // closed_profit_rs when available, else derives from
-            // closed_pnl_pct * entry * lot).
+            // Rupee PnL subtext for closed orders
             let pnlRsSub = "";
             if (status !== "open") {
                 const persisted = Number(o.closed_profit_rs);
@@ -5346,10 +5276,6 @@
                         ${targetPivotHtml}
                     </td>
                     <td class="num">
-                        ${currentStr}
-                        ${currentPill}
-                    </td>
-                    <td class="num">
                         ${Number.isFinite(Number(o.current_profit_rs))
                             ? `₹${Number(o.current_profit_rs).toFixed(2)}`
                             : "—"}
@@ -5364,9 +5290,6 @@
                         ${Number.isFinite(pnlValue) ? fmtPct(pnlValue) : "—"}
                         ${pnlRsSub}
                     </td>
-                    <td class="num ${pnlCls}">${Number.isFinite(rValue) ? fmtR(rValue) : "—"}</td>
-                    <td class="num">₹${fmt(o.mfe)}</td>
-                    <td class="num">₹${fmt(o.mae)}</td>
                 </tr>
             `;
         }
@@ -5391,7 +5314,7 @@
                 if (aOpen !== bOpen) return aOpen - bOpen;
                 if (aOpen === 0) {
                     return String(a.entry_time || "").localeCompare(
-                        String(b.entry_time || "")
+                        String(a.entry_time || "")
                     );
                 }
                 return String(b.closed_at || "").localeCompare(
@@ -5411,13 +5334,9 @@
                                 <th class="num">Entry</th>
                                 <th class="num">Stop</th>
                                 <th class="num">Target</th>
-                                <th class="num">Current</th>
                                 <th class="num">₹ Profit</th>
                                 <th>Status</th>
                                 <th class="num">PnL</th>
-                                <th class="num">R</th>
-                                <th class="num">MFE</th>
-                                <th class="num">MAE</th>
                             </tr>
                         </thead>
                         <tbody>${orders.map(renderRow).join("")}</tbody>
@@ -5441,7 +5360,6 @@
                 renderSummary(summary, orders);
                 renderOrders(state);
 
-                // G1 v4.1 — Path B badge overrides the generic open/closed status.
                 const isPathB = orders.some(
                     o => String(o.path || "") === "B_external_trigger"
                 );
@@ -5464,7 +5382,6 @@
                     }
                 }
 
-                // G1 v4.1 — strategy lockdown banner.
                 if (lockdownBanner) {
                     lockdownBanner.style.display = state.strategy_locked_today
                         ? "block"

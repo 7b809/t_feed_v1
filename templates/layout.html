@@ -8,8 +8,8 @@
    Query-param comparison mode (2026-10-27)
    ----------------------------------------
    Opening this page with ?panes=<key1>,<key2> (or ?panes=k1&panes=k2,
-   or ?pair=k1,k2, or ?compare=k1,k2) renders a TEMPORARY 2-pane
-   comparison layout in the browser without touching the backend.
+   or ?pair=k1,k2, or ?compare=k1,k2) renders a TEMPORARY comparison layout
+   in the browser without touching the backend.
 
    Used by /isolated's "Compare in Layout" button to show the
    underlying trigger index side-by-side with the isolated instrument.
@@ -236,11 +236,13 @@
   .layout-grid-wrap::-webkit-scrollbar-thumb { background: var(--surface-3); border-radius: 8px; }
   .layout-grid-wrap[data-grid="1"] { grid-template-columns: 1fr; grid-template-rows: 1fr; }
   .layout-grid-wrap[data-grid="2"] { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr; }
+  .layout-grid-wrap[data-grid="3"] { grid-template-columns: repeat(3, 1fr); grid-template-rows: 1fr; }
   .layout-grid-wrap[data-grid="4"] { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
 
   @media (max-width: 900px) {
     :root { --indicator-h: 44px; }
     .layout-grid-wrap[data-grid="2"],
+    .layout-grid-wrap[data-grid="3"],
     .layout-grid-wrap[data-grid="4"] {
       grid-template-columns: 1fr;
       grid-template-rows: none;
@@ -296,6 +298,7 @@
   }
   .layout-grid-wrap[data-grid="1"] .pane-label { font-size: 11px; padding: 2px 5px; }
   .layout-grid-wrap[data-grid="2"] .pane-label { font-size: 10px; padding: 1px 4px; }
+  .layout-grid-wrap[data-grid="3"] .pane-label { font-size: 9px; padding: 1px 3px; }
 
   /* ---------- SR label layer (pivot confirmation labels) ---------- */
   .pane-sr-label-layer {
@@ -346,6 +349,7 @@
   /* Responsive SR label sizing per grid */
   .layout-grid-wrap[data-grid="1"] .pane-sr-label { font-size: 10px; padding: 4px 8px; min-width: 130px; }
   .layout-grid-wrap[data-grid="2"] .pane-sr-label { font-size: 8.5px; padding: 3px 6px; min-width: 105px; }
+  .layout-grid-wrap[data-grid="3"] .pane-sr-label { font-size: 8px; padding: 2.5px 5px; min-width: 95px; }
   .layout-grid-wrap[data-grid="4"] .pane-sr-label { font-size: 7.5px; padding: 2px 4px; min-width: 82px; }
   .layout-grid-wrap[data-grid="4"] .pane-sr-label .sr-label-title { font-size: 7.5px; padding-bottom: 1px; margin-bottom: 1px; }
   .layout-grid-wrap[data-grid="4"] .pane-sr-label .sr-label-row { font-size: 7px; }
@@ -590,6 +594,7 @@
     <div class="grid-picker" role="group" aria-label="Grid size">
       <button class="grid-btn" data-grid="1" title="1 chart">1</button>
       <button class="grid-btn" data-grid="2" title="2 charts">2</button>
+      <button class="grid-btn" data-grid="3" title="3 charts">3</button>
       <button class="grid-btn" data-grid="4" title="4 charts">4</button>
     </div>
     <div class="toolbar-search">
@@ -656,7 +661,7 @@
 
 {# ============================================================ #}
 {# Floating scroll navigation — auto-shown only when the grid  #}
-{# overflows (grid=4 + metadata on a small screen).             #}
+{# overflows (grid=3/4 + metadata on a small screen).           #}
 {# ============================================================ #}
 <div class="floating-scroll-nav hidden" id="floatingScrollNav">
   <button type="button" class="floating-scroll-btn" id="scrollToTopBtn" title="Scroll to top">
@@ -727,14 +732,6 @@
   // ============================================================
   // PER-PANE INDICATOR STATE
   // ============================================================
-  // Each pane keeps its own label/indicator config. The toolbar toggle
-  // buttons target activePaneIndex only. Every read of an indicator
-  // option goes through getPaneState(paneIndex).
-  //
-  // Defaults:
-  //   * emaCross ON (labels/markers only — no EMA 9/21 line plots)
-  //   * ema9 / ema21 / srLevels / srLabels OFF
-  //   * r3s3 + highLow labels ON; r2s2 OFF
   function defaultPaneState() {
     return {
       labelVisibility: { r2s2: false, r3s3: true, highLow: true },
@@ -842,7 +839,6 @@
       const pi = Number(p.dataset.paneIndex);
       p.dataset.active = (pi === idx) ? "true" : "false";
     });
-    // Sync toolbar buttons so they reflect THIS pane's config.
     syncToolbarButtonsForPane(idx);
     updateScopeHint(idx);
   }
@@ -864,8 +860,6 @@
     });
   }
 
-  // Delegated click: clicking anywhere on a pane (except its action
-  // buttons) makes it the active pane.
   gridEl.addEventListener("click", (e) => {
     if (e.target.closest(".pane-btn")) return;
     const paneEl = e.target.closest(".pane");
@@ -887,7 +881,6 @@
     return `${map.year}-${map.month}-${map.day}`;
   }
 
-  // Chart axis tick-mark formatter — always IST, 12-hour.
   function formatISTTickMark(time, tickMarkType) {
     if (typeof time !== "number" || !Number.isFinite(time)) return "";
     const date = new Date(time * 1000);
@@ -905,7 +898,6 @@
     } catch (_e) { return ""; }
   }
 
-  // Crosshair label formatter — always IST, 12-hour.
   function formatISTCrosshairTime(time) {
     if (typeof time !== "number" || !Number.isFinite(time)) return "";
     const date = new Date(time * 1000);
@@ -919,7 +911,6 @@
     } catch (_e) { return ""; }
   }
 
-  // SR label timestamp formatter — IST 12-hour.
   function formatSRTimeLabel(unixSeconds) {
     if (!Number.isFinite(unixSeconds)) return "—";
     const date = new Date(unixSeconds * 1000);
@@ -937,7 +928,7 @@
   }
 
   // ============================================================
-  // PURE INDICATOR MATH (mirrors main chart)
+  // PURE INDICATOR MATH
   // ============================================================
   function calculateOpeningRangeForDay(dayCandles) {
     if (!Array.isArray(dayCandles) || !dayCandles.length) return null;
@@ -1013,16 +1004,10 @@
   }
 
   // ============================================================
-  // SR PIVOT MATHEMATICS — strict pivot rule (matches ta.pivothigh/low)
+  // SR PIVOT MATHEMATICS
   // ============================================================
-  // Resistance pivot at index i iff candles[i].high > candles[j].high
-  //   for every j in [i-left, i-1] and every j in [i+1, i+right]
-  // Support    pivot at index i iff candles[i].low  < candles[j].low
-  //   for every j in [i-left, i-1] and every j in [i+1, i+right]
-  // Pivot at index i is CONFIRMED at i + right (needs `right` bars
-  // of forward look to exist).
-  const SR_LEFT_BARS = 15;
-  const SR_RIGHT_BARS = 3;
+  const SR_LEFT_BARS  = {{ sr_left_bars  | tojson }};
+  const SR_RIGHT_BARS = {{ sr_right_bars | tojson }};
 
   function performFullSRScanForPane(paneInst) {
     if (!paneInst) return;
@@ -1078,8 +1063,7 @@
   }
 
   // ============================================================
-  // SR LINES — render one horizontal line per confirmed pivot
-  // (from pivotTime to next same-type pivot's pivotTime, or end of data)
+  // SR LINES
   // ============================================================
   function removeSRLinesForPane(paneInst) {
     if (!paneInst) return;
@@ -1135,9 +1119,7 @@
   }
 
   // ============================================================
-  // SR LABELS — HTML overlay labels for pivot confirmations
-  // Resistance labels sit ABOVE the level, support labels BELOW.
-  // Independent toggle from SR Levels.
+  // SR LABELS
   // ============================================================
   function ensureSRLabelLayerForPane(paneInst) {
     if (!paneInst) return null;
@@ -1234,7 +1216,6 @@
     });
   }
 
-  // Orchestrator: scan once, then render whichever of lines/labels is on.
   function refreshSRLevelsForPane(paneInst) {
     if (!paneInst) return;
     const st = getPaneState(paneInst.index);
@@ -1253,7 +1234,7 @@
   }
 
   // ============================================================
-  // LABEL VISIBILITY HELPERS (per-pane)
+  // LABEL VISIBILITY HELPERS
   // ============================================================
   function isLabelVisible(levelName, paneIndex) {
     const n = String(levelName || "").toLowerCase();
@@ -1478,7 +1459,7 @@
   }
 
   // ============================================================
-  // TOOLBAR TOGGLE HANDLERS (per-pane, targets activePaneIndex only)
+  // TOOLBAR TOGGLE HANDLERS
   // ============================================================
   function bindToolbarHandlers() {
     document.querySelectorAll(".ind-btn[data-global-toggle]").forEach(btn => {
@@ -1523,7 +1504,7 @@
   }
 
   // ============================================================
-  // INSTRUMENT SEARCH (shared by toolbar + modal)
+  // INSTRUMENT SEARCH
   // ============================================================
   async function searchInstruments(query, opts = {}) {
     const params = new URLSearchParams({
@@ -1579,13 +1560,10 @@
     return String(Math.round(n));
   }
 
-  // Expiry formatting: now accepts ISO-date strings AND epoch-millis
-  // / epoch-seconds numbers. Always rendered in IST.
   function formatExpiryShort(v) {
     if (v === null || v === undefined || v === "") return "—";
     const s = String(v);
 
-    // ISO date string like "2026-10-27"
     const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
     if (m) {
       const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
@@ -1593,11 +1571,10 @@
         return new Intl.DateTimeFormat("en-IN", {
           day: "2-digit", month: "short", timeZone: "Asia/Kolkata",
         }).format(d);
-      } catch (_e) { /* fall through */ }
+      } catch (_e) { }
       return s;
     }
 
-    // Epoch millis / seconds
     const num = Number(s);
     if (Number.isFinite(num) && num > 1e9) {
       const ms = num > 1e12 ? num : num * 1000;
@@ -1680,7 +1657,7 @@
   }
 
   // ============================================================
-  // APPLY AN INSTRUMENT TO A PANE (respects linked state)
+  // APPLY AN INSTRUMENT TO A PANE
   // ============================================================
   function applyInstrumentToPane(paneIndex, instrumentKey) {
     if (!instrumentKey) return;
@@ -1804,7 +1781,6 @@
     if (!e.target.closest(".toolbar-search")) hideToolbarSearch();
   });
 
-  // Ctrl+K / Cmd+K focuses the toolbar search
   document.addEventListener("keydown", (e) => {
     if ((e.ctrlKey || e.metaKey) && (e.key === "k" || e.key === "K")) {
       e.preventDefault();
@@ -1982,10 +1958,6 @@
     const wrapEl = chartEl ? chartEl.parentElement : null;
     if (!chartEl || !window.LightweightCharts) return null;
 
-    // Belt-and-suspenders: destroyPaneInstance() already clears these
-    // on pane-swap, but if a caller invokes createPaneInstance() on a
-    // non-empty container (e.g. an aborted swap) we still want a clean
-    // slate so old canvases / labels cannot leak through.
     try { chartEl.innerHTML = ""; } catch (_e) {}
     try { if (labelLayerEl) labelLayerEl.innerHTML = ""; } catch (_e) {}
     try { if (srLabelLayerEl) srLabelLayerEl.innerHTML = ""; } catch (_e) {}
@@ -2042,7 +2014,6 @@
       calculatedOpeningRanges: {},
       labelUpdateScheduled: false,
       ema9Series: null, ema21Series: null, markersPrimitive: null,
-      // SR-specific state
       srDetectedPivots: [],
       srLines: [],
       srLabelElements: [],
@@ -2085,34 +2056,11 @@
     return inst;
   }
 
-  /**
-   * Tear down a pane instance completely.
-   *
-   * Three tiers of cleanup, from narrowest to widest:
-   *
-   *   1. HTML overlays that LWC has no knowledge of:
-   *        - OR level labels     (paneInst.levelLabels)
-   *        - SR confirmation labels (paneInst.srLabelElements)
-   *      These are siblings of the chart canvas and are NOT removed by
-   *      chart.remove(), so they must be unlinked explicitly. This is
-   *      the bug that produced the "ghost R2 / S2 / HIGH / LOW labels
-   *      on top of the new chart" report.
-   *
-   *   2. The chart itself:
-   *        chart.remove() destroys the LWC instance and its canvases.
-   *
-   *   3. Defensive container nuking:
-   *        If chart.remove() silently fails (older LWC, exotic series,
-   *        future API changes), clearing the container and both label
-   *        layers' innerHTML guarantees the previous panes' pixels
-   *        cannot bleed through into the newly-rendered chart.
-   */
   function destroyPaneInstance(paneIndex) {
     const inst = paneInstances[paneIndex];
     if (!inst) return;
     inst.destroyed = true;
 
-    // ---- 1a. Remove OR level HTML labels -------------------------- #
     try {
       (inst.levelLabels || []).forEach(lbl => {
         try {
@@ -2126,7 +2074,6 @@
       console.warn("[pane-destroy] levelLabels cleanup failed");
     }
 
-    // ---- 1b. Remove SR confirmation HTML labels ------------------- #
     try {
       (inst.srLabelElements || []).forEach(el => {
         try { if (el && el.parentNode) el.parentNode.removeChild(el); } catch (_e) {}
@@ -2136,13 +2083,9 @@
       console.warn("[pane-destroy] srLabelElements cleanup failed");
     }
 
-    // ---- 1c. Nuke the two overlay layers' children ---------------- #
-    // Belt-and-suspenders: if any orphan labels slipped past 1a/1b
-    // (e.g. another module appended to the same layer), they're gone.
     try { if (inst.labelLayerEl) inst.labelLayerEl.innerHTML = ""; } catch (_e) {}
     try { if (inst.srLabelLayerEl) inst.srLabelLayerEl.innerHTML = ""; } catch (_e) {}
 
-    // ---- 2. Close WS / timers / observers ------------------------ #
     try { if (inst.ws) inst.ws.close(1000, "Pane destroyed"); } catch (_e) {}
     if (inst.reconnectTimer) {
       try { clearTimeout(inst.reconnectTimer); } catch (_e) {}
@@ -2150,19 +2093,12 @@
     }
     try { if (inst.resizeObserver) inst.resizeObserver.disconnect(); } catch (_e) {}
 
-    // ---- 3. Destroy the LWC chart -------------------------------- #
     try {
       inst.chart.remove();
     } catch (_e) {
-      // Do not swallow silently — chart.remove() failing means the
-      // canvas may persist and appear as a ghost behind the new chart.
       console.warn("[pane-destroy] chart.remove() failed:", _e);
     }
 
-    // ---- 4. Defensive container nuke ----------------------------- #
-    // Even if chart.remove() worked, the container is now empty. If it
-    // failed, this clears the stale canvas. Either way, the next call
-    // to createPaneInstance() gets a guaranteed-clean DOM node.
     try { if (inst.containerEl) inst.containerEl.innerHTML = ""; } catch (_e) {}
 
     delete paneInstances[paneIndex];
@@ -2217,9 +2153,6 @@
     if (!paneInst || !paneInst.candleSeries || !candle) return;
     if (paneInst.lastCandle && candle.time < paneInst.lastCandle.time) return;
 
-    // Detect new-minute BEFORE mutating lastCandle — SR only re-scans
-    // on new-minute boundary (a confirmed pivot needs a full bar of
-    // right-lookahead, which only becomes available on a new candle).
     const isNewMinute = !paneInst.lastCandle || candle.time > paneInst.lastCandle.time;
 
     paneInst.candleSeries.update(candle);
@@ -2366,8 +2299,6 @@
           });
         }
 
-        // Renders per-pane indicators using getPaneState(paneIndex).
-        // Includes SR Levels / SR Labels.
         renderAllIndicatorsForPane(inst);
       }
     } catch (e) {
@@ -2506,7 +2437,7 @@
   document.querySelectorAll(".grid-btn").forEach(btn => {
     btn.addEventListener("click", () => {
       const grid = Number(btn.dataset.grid);
-      if (![1, 2, 4].includes(grid)) return;
+      if (![1, 2, 3, 4].includes(grid)) return;
       const firstKey = layoutState.panes[0]?.instrument_key || DEFAULT_KEY;
       const nextPanes = [];
       for (let i = 0; i < grid; i++) {
@@ -2533,8 +2464,6 @@
     try {
       const id = layoutSelect.value;
       const layout = await apiJson(`/admin/layouts/${encodeURIComponent(id)}`);
-      // Load this layout's per-pane configs from localStorage BEFORE
-      // rendering, so each pane's indicators come up correctly.
       loadPaneStates(layout.id);
       renderLayout(layout);
     } catch (e) { console.warn("layout load failed:", e); }
@@ -2549,10 +2478,6 @@
           name: layoutNameInput.value || layoutState.name,
           grid: layoutState.grid,
           panes: layoutState.panes,
-          // NOTE: pane_configs is intentionally NOT sent to the backend
-          // because layout_service._normalise_layout strips unknown
-          // fields. Per-pane indicator configs are persisted via
-          // localStorage (see savePaneStates()).
         }),
       });
       layoutState.name = updated.name;
@@ -2572,7 +2497,6 @@
       });
       await refreshLayoutList();
       layoutSelect.value = created.id;
-      // Fresh layout → empty config storage → all panes start on defaults.
       loadPaneStates(created.id);
       renderLayout(created);
     } catch (e) { alert("Create failed: " + e.message); }
@@ -2607,14 +2531,6 @@
   // ============================================================
   // QUERY-PARAM PANE OVERRIDES (temporary comparison layout)
   // ============================================================
-  // Opening /layout_1?panes=key1,key2  (or ?panes=key1&panes=key2,
-  // or ?pair=key1,key2, or ?compare=key1,key2) renders a temporary
-  // 2-pane layout in the browser without touching the backend.
-  //
-  // Used by /isolated's "Compare in Layout" button to show the
-  // underlying trigger index side-by-side with the isolated instrument.
-  // Temporary layouts cannot be saved, deleted, or re-created — the
-  // user just closes the tab.
   function readQueryOverrides() {
     try {
       const params = new URLSearchParams(window.location.search);
@@ -2633,8 +2549,9 @@
       if (!keys.length) return null;
 
       let grid = 1;
-      if (keys.length >= 2) grid = 2;
-      if (keys.length >= 3) grid = 4;
+      if (keys.length === 2) grid = 2;
+      else if (keys.length === 3) grid = 3;
+      else if (keys.length >= 4) grid = 4;
 
       const panes = [];
       for (let i = 0; i < grid; i++) {
@@ -2653,13 +2570,8 @@
   // BOOT
   // ============================================================
   async function boot() {
-    // Clean up the old global prefs key (deprecated — replaced by
-    // per-pane configs stored under PANE_CONFIGS_KEY_PREFIX).
     try { localStorage.removeItem(LEGACY_GLOBAL_PREFS_KEY); } catch (_e) {}
 
-    // Apply any ?panes=... query overrides BEFORE the first render.
-    // This produces a temporary comparison layout that is never saved
-    // to the backend — closing the tab discards it.
     const queryOverride = readQueryOverrides();
     if (queryOverride) {
       layoutState.id = null;
@@ -2674,12 +2586,9 @@
     loadPaneStates(layoutState.id);
     renderLayout(layoutState);
     bindPaneActions();
-    updateLinkedPill();   // starts as "Unlinked" because layoutState.linked=false
+    updateLinkedPill();
     setActivePaneIndex(0);
 
-    // In temporary-comparison mode, disable every backend-mutating
-    // action so a user cannot accidentally save/delete against a
-    // layout that does not exist on the server.
     if (queryOverride) {
       if (saveBtn) {
         saveBtn.disabled = true;
