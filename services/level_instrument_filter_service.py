@@ -11,6 +11,57 @@ The isolation engine routes ALL touches to NIFTY strikes, so only
 NIFTY's level_instruments.json is used for execution. The other three
 are still generated because first_candle.json must exist for them
 (each index needs its own R3/S3 for touch detection).
+
+Feed subscription (2026-10-30)
+------------------------------
+After writing ``level_instruments.json`` the service registers the
+CE+PE strikes for each index with **both**:
+
+    * ``live_sr_levels_service`` — so the SR engine tracks them;
+    * ``feed_subscription_manager.set_level_mandatory()`` — so the
+      live feed keeps streaming their ticks.
+
+The second registration is the important one. Before 2026-10-30 the
+strikes in ``level_instruments.json`` were only registered with the
+SR engine (Tier-2 evictable ATM band, or the isolated / promoted key
+if one of them happened to be the level strike). In practice the ATM
+band slides away from a level strike within minutes of the open, at
+which point the SR engine stopped receiving ticks for exactly the
+contracts the isolation engine was watching. The strategy armed on a
+stale candle series and the option-chain LTP panel froze.
+
+``set_level_mandatory()`` closes that hole: it registers the strikes
+as Tier-1 (never evicted) so they keep ticking for the whole session
+regardless of where the ATM band has moved.
+
+The behaviour is gated on ``LIVE_FEED_LEVEL_INSTRUMENTS_MANDATORY``
+(default True). Set it to false in ``.env`` to restore the pre-
+2026-10-30 behaviour (SR-tracked but evictable). The flag is read via
+``getattr(..., True)`` so the feature works even if ``core/config.py``
+has not been updated with the constant yet.
+
+Design notes
+------------
+* The mandatory registration is deliberately in ``_process_index``
+  rather than ``_register_with_sr``: they share a lifecycle
+  (both run after ``level_instruments.json`` is written) but they
+  fail independently — an SR-registration failure must not stop the
+  mandatory set from being updated, and vice versa.
+* ``set_level_mandatory()`` uses **replace** semantics. Every
+  ``run()`` recomputes the strikes from today's OR levels, which do
+  not change mid-session, so a re-run inside the same day is a no-op
+  (the set is identical). The replace semantics matter for the edge
+  case where the filter is re-run after a data reload with a smaller
+  strike set — the stale keys are unregistered automatically.
+* An empty CE+PE list (e.g. ``no_first_candle``) results in
+  ``set_level_mandatory(underlying, [])``, which removes the level-
+  mandatory set for that index. This is the correct fallback: if we
+  cannot resolve strikes, we should not hold stale keys as mandatory.
+* Keys added here do NOT collide with dummy-order mandatory keys.
+  ``feed_subscription_manager`` keeps them in a separate dict
+  (``_level_mandatory``) so a ``set_mandatory()`` replacement from a
+  feed restart never wipes them, and a level-filter re-run never
+  wipes a dummy-order pin.
 """
 
 from __future__ import annotations
@@ -154,6 +205,14 @@ def _pick_nearest_expiry(entries: list[dict[str, Any]]) -> dict[str, Any] | None
         past.sort(key=lambda t: t[0], reverse=True)
         return past[0][1]
     return undated[0] if undated else entries[0]
+
+def _feed_level_mandatory_enabled() -> bool:
+    """Read ``LIVE_FEED_LEVEL_INSTRUMENTS_MANDATORY`` defensively.
+
+    Defaults to True so the behaviour is on out of the box even if
+    ``core/config.py`` has not been updated with the constant yet.
+    """
+    return bool(getattr(config, "LIVE_FEED_LEVEL_INSTRUMENTS_MANDATORY", True))
 
 # --------------------------------------------------------------------------- #
 # Service                                                                     #
@@ -339,6 +398,16 @@ class LevelInstrumentFilterService:
         if config.LIVE_SR_ENABLED:
             self._register_with_sr(index_key, ce_instruments, pe_instruments)
 
+        # NEW (2026-10-30): register the CE+PE strikes as feed-mandatory
+        # so their ticks keep flowing for the whole session, regardless
+        # of where the ATM band slides. Runs unconditionally of
+        # ``LIVE_SR_ENABLED`` — the mandatory-tier registration is
+        # useful even when the SR engine is off, because it guarantees
+        # the dashboard LTP panel keeps updating for the level strikes.
+        feed_mandatory_summary = self._register_with_feed_mandatory(
+            underlying, ce_instruments, pe_instruments,
+        )
+
         return {
             "status": "ok",
             "underlying": underlying,
@@ -349,6 +418,7 @@ class LevelInstrumentFilterService:
             "ce_strikes": [i["strike"] for i in ce_instruments],
             "pe_strikes": [i["strike"] for i in pe_instruments],
             "out_path": str(out_path),
+            "feed_mandatory": feed_mandatory_summary,
         }
 
     @staticmethod
@@ -552,6 +622,112 @@ class LevelInstrumentFilterService:
                 logger.exception(
                     "[level-filter] SR register %s failed", key,
                 )
+
+    # ------------------------------------------------------------------ #
+    # NEW (2026-10-30): feed-mandatory registration                      #
+    # ------------------------------------------------------------------ #
+    def _register_with_feed_mandatory(
+        self,
+        underlying: str,
+        ce_instruments: list[dict[str, Any]],
+        pe_instruments: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Mark the level strikes for ``underlying`` as feed-mandatory.
+
+        Called from ``_process_index`` after ``level_instruments.json``
+        is written. Delegates to
+        ``feed_subscription_manager.set_level_mandatory()``, which:
+
+          * stores the CE+PE strikes for this index in the manager's
+            level-mandatory dict (separate from the base mandatory
+            set, so a feed restart never wipes them);
+          * calls ``apply()`` (when the set changed) so the streamer
+            subscribes to the new keys immediately;
+          * never raises.
+
+        If ``LIVE_FEED_LEVEL_INSTRUMENTS_MANDATORY`` is false, returns
+        ``{"status": "disabled"}`` without touching the manager.
+
+        If the CE+PE lists are empty (e.g. ``no_first_candle`` path
+        never reaches here, but a successful run with zero resolved
+        strikes would), the call becomes
+        ``set_level_mandatory(underlying, [])`` which **removes** the
+        per-index set. That is the correct fallback: we should not
+        keep stale keys mandatory once we cannot resolve today's
+        strikes.
+
+        Never raises. Returns a summary dict for the caller to embed
+        in its per-index payload.
+        """
+        keys: list[str] = []
+        for inst in list(ce_instruments) + list(pe_instruments):
+            if not isinstance(inst, dict):
+                continue
+            key = str(inst.get("instrument_key") or "").strip()
+            if key and key not in keys:
+                keys.append(key)
+
+        summary: dict[str, Any] = {
+            "status": "ok",
+            "underlying": underlying,
+            "keys_total": len(keys),
+            "added": [],
+            "removed": [],
+            "size": 0,
+            "error": None,
+        }
+
+        if not _feed_level_mandatory_enabled():
+            summary["status"] = "disabled"
+            return summary
+
+        try:
+            from services.feed_subscription_manager import (
+                feed_subscription_manager,
+            )
+        except Exception as exc:
+            logger.exception(
+                "[level-filter] feed_subscription_manager import failed "
+                "for %s", underlying,
+            )
+            summary["status"] = "error"
+            summary["error"] = f"{type(exc).__name__}: {exc}"
+            return summary
+
+        try:
+            result = feed_subscription_manager.set_level_mandatory(
+                underlying, keys,
+            )
+        except Exception as exc:
+            logger.exception(
+                "[level-filter] set_level_mandatory failed for %s",
+                underlying,
+            )
+            summary["status"] = "error"
+            summary["error"] = f"{type(exc).__name__}: {exc}"
+            return summary
+
+        if isinstance(result, dict):
+            summary["added"] = list(result.get("added") or [])
+            summary["removed"] = list(result.get("removed") or [])
+            summary["size"] = int(result.get("size") or 0)
+            if not keys:
+                summary["status"] = "cleared"
+        else:
+            # Defensive: a mismatch between this service and the
+            # manager's return contract should not break the filter.
+            summary["size"] = len(keys)
+
+        logger.info(
+            "[level-filter] feed-mandatory %s — keys=%d added=%d "
+            "removed=%d size=%d",
+            underlying,
+            summary["keys_total"],
+            len(summary["added"]),
+            len(summary["removed"]),
+            summary["size"],
+        )
+        return summary
 
     def _record(self, status: dict[str, Any]) -> dict[str, Any]:
         status.setdefault("ran_at", _now_iso())

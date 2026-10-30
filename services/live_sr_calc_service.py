@@ -92,6 +92,34 @@ Data sources (merged by minute; intraday wins on collision):
         ``data/<...>/live_sr_levels.json`` — attached under ``live_sr``,
         never merged into ``levels``.)
 
+Upstox instrument-key resolution
+--------------------------------
+Upstox's ``get_intra_day_candle_data`` rejects any ``instrument_key``
+that does not contain the ``|`` exchange separator with
+``UDAPI1021 — "Instrument key is of invalid format"``. Some callers
+(and some registry entries) pass the bare friendly name
+(``"NIFTY"``, ``"BANKNIFTY"``, ``"SENSEX"``) — those now 400 on every
+poll and spam the log.
+
+``_resolve_upstox_instrument_key`` transparently upgrades these:
+
+    1. Any value already containing ``|`` is returned unchanged.
+    2. Known friendly names map to their canonical Upstox key via
+       ``_FRIENDLY_INSTRUMENT_KEY_MAP``.
+    3. Best-effort registry lookup if the registry exposes a
+       by-symbol finder.
+
+When the key cannot be resolved the intraday fetch is skipped (returns
+``[]`` with ``meta["error"] = "invalid_instrument_key: ..."``) instead
+of firing a doomed HTTP request.
+
+Rate-limit / log hygiene
+------------------------
+A per-resolved-key exponential backoff (15s, 30s, 60s, … capped at
+300s) suppresses repeated identical failures — a persistent 400 no
+longer emits one full warning every 10 seconds. Backoff resets on the
+first successful fetch.
+
 Historical-file format
 ----------------------
 The candle-backup writer produces files shaped like::
@@ -155,6 +183,11 @@ Diagnostics
     ``first_level_time``, ``last_level_time``, ``last_candle``,
     ``updated_at``, ``levels``, ``error``
 
+``_fetch_intraday_candles`` returns a ``meta`` dict that carries:
+
+    ``api``, ``requested_instrument_key``, ``resolved_instrument_key``,
+    ``candles``, ``first_candle``, ``last_candle``, ``error``
+
 Pivot detection mirrors ``LiveSRLevelsService._scan_all_pivots``
 exactly — the strict TradingView-compatible rule:
 
@@ -183,6 +216,7 @@ See ``routes/live_sr_calc_routes.py`` for the HTTP surface.
 from __future__ import annotations
 
 import json
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -208,6 +242,40 @@ _HIGH_FIELDS = ("high", "h")
 _LOW_FIELDS = ("low", "l")
 _CLOSE_FIELDS = ("close", "c")
 _VOLUME_FIELDS = ("volume", "v", "vol", "vtt")
+
+# --------------------------------------------------------------------------- #
+# Friendly-name → Upstox instrument_key map                                   #
+# --------------------------------------------------------------------------- #
+# Upstox's get_intra_day_candle_data() rejects any instrument_key that does
+# not contain the ``|`` exchange separator with UDAPI1021 ("Instrument key is
+# of invalid format"). Callers and older registry entries sometimes pass the
+# bare friendly name (e.g. ``"NIFTY"``), which now 400s on every poll and
+# spams the log. The mapping below upgrades the common friendly names to
+# their canonical Upstox keys before we hit the API.
+#
+# The canonical keys here match the ones the WebSocket ``/list-feeds``
+# endpoint already uses (see the startup log line that lists
+# ``NSE_INDEX|Nifty 50,NSE_INDEX|Nifty Bank,...``).
+_FRIENDLY_INSTRUMENT_KEY_MAP: dict[str, str] = {
+    "NIFTY": "NSE_INDEX|Nifty 50",
+    "NIFTY 50": "NSE_INDEX|Nifty 50",
+    "NIFTY50": "NSE_INDEX|Nifty 50",
+    "NIFTY BANK": "NSE_INDEX|Nifty Bank",
+    "BANKNIFTY": "NSE_INDEX|Nifty Bank",
+    "NIFTY MID SELECT": "NSE_INDEX|NIFTY MID SELECT",
+    "NIFTY MIDCAP SELECT": "NSE_INDEX|NIFTY MID SELECT",
+    "NIFTY FIN SERVICE": "NSE_INDEX|Nifty Fin Service",
+    "FINNIFTY": "NSE_INDEX|Nifty Fin Service",
+    "SENSEX": "BSE_INDEX|SENSEX",
+    "BANKEX": "BSE_INDEX|BANKEX",
+}
+
+# Per-key exponential backoff for the intraday fetch. A persistent
+# failure (e.g. a genuinely bad instrument_key, or Upstox returning 5xx)
+# should not hammer the API or flood the log every ~10s.
+_INTRADAY_BACKOFF_BASE_SEC: float = 15.0   # 1st failure → 15s cooldown
+_INTRADAY_BACKOFF_MAX_SEC: float = 300.0   # cap at 5 minutes
+_INTRADAY_ERROR_LOG_MAX_CHARS: int = 500   # truncate huge HTTP dumps
 
 # --------------------------------------------------------------------------- #
 # Time / path helpers                                                         #
@@ -352,7 +420,21 @@ def _describe_raw(raw: Any) -> dict[str, Any]:
 # Service                                                                     #
 # --------------------------------------------------------------------------- #
 class LiveSRCalcService:
-    """On-demand SR calculator. Stateless and safe to call concurrently."""
+    """On-demand SR calculator. Stateless for candle data; carries a small
+    per-instrument backoff map to suppress repeated intraday-fetch failures.
+
+    The backoff map is the only mutable state on this service. It does NOT
+    affect the returned ``levels`` / ``candles`` — those are always computed
+    fresh from the sources. It only short-circuits the Upstox HTTP call when
+    the same resolved instrument_key has failed too recently.
+    """
+
+    def __init__(self) -> None:
+        # Per-resolved-key intraday-fetch backoff. Keys are the *resolved*
+        # Upstox keys (``EXCHANGE_SEGMENT|SYMBOL``), so the friendly name
+        # and its canonical key share one cooldown slot.
+        self._intraday_fail_until: dict[str, float] = {}
+        self._intraday_fail_count: dict[str, int] = {}
 
     # ------------------------------------------------------------------ #
     # Public entry point                                                 #
@@ -667,6 +749,10 @@ class LiveSRCalcService:
 
         Returns just the candle list. Never raises — a failed Upstox
         call returns ``[]``.
+
+        ``instrument_key`` may be a friendly name (``"NIFTY"``) or an
+        already-resolved Upstox key (``"NSE_INDEX|Nifty 50"``); the
+        private method resolves it before the API call.
         """
         candles, _meta = self._fetch_intraday_candles(instrument_key)
         return candles
@@ -743,6 +829,81 @@ class LiveSRCalcService:
         if not candles:
             return None
         return candles[0]
+
+    # ------------------------------------------------------------------ #
+    # Upstox instrument-key resolution                                   #
+    # ------------------------------------------------------------------ #
+    def _resolve_upstox_instrument_key(self, raw: Any) -> str | None:
+        """Return a valid Upstox ``EXCHANGE_SEGMENT|SYMBOL`` key, or None.
+
+        Upstox's ``get_intra_day_candle_data`` rejects any instrument_key
+        that does not contain the ``|`` separator with:
+
+            UDAPI1021 — "Instrument key is of invalid format"
+
+        Resolution order:
+
+          1. If ``raw`` already contains ``|`` it is returned unchanged.
+          2. Known friendly names (``NIFTY``, ``BANKNIFTY``, ``SENSEX``,
+             ``NIFTY MID SELECT``, …) map via
+             ``_FRIENDLY_INSTRUMENT_KEY_MAP``.
+          3. Best-effort registry lookup by symbol, tolerating any missing
+             finder methods on ``instrument_registry``.
+
+        Returns ``None`` when nothing resolves — the caller must then skip
+        the HTTP call rather than fire a doomed request.
+        """
+        if raw is None:
+            return None
+
+        key = str(raw).strip()
+        if not key:
+            return None
+
+        # 1) Already a valid Upstox key.
+        if "|" in key:
+            return key
+
+        # 2) Known friendly-name mapping.
+        mapped = _FRIENDLY_INSTRUMENT_KEY_MAP.get(key.upper())
+        if mapped:
+            return mapped
+
+        # 3) Best-effort registry lookup by symbol. We don't know the
+        #    exact method name on ``instrument_registry`` across
+        #    deployments, so probe the common candidates.
+        for meth_name in (
+            "get_by_symbol",
+            "find_by_symbol",
+            "by_symbol",
+            "lookup_symbol",
+            "find",
+        ):
+            fn = getattr(instrument_registry, meth_name, None)
+            if not callable(fn):
+                continue
+            try:
+                found = fn(key)
+            except Exception:
+                continue
+            if not found:
+                continue
+
+            ik: Any = None
+            if isinstance(found, dict):
+                ik = (
+                    found.get("instrument_key")
+                    or found.get("upstox_instrument_key")
+                )
+            else:
+                ik = (
+                    getattr(found, "instrument_key", None)
+                    or getattr(found, "upstox_instrument_key", None)
+                )
+            if ik and "|" in str(ik):
+                return str(ik)
+
+        return None
 
     # ------------------------------------------------------------------ #
     # Selector resolution                                                #
@@ -957,18 +1118,50 @@ class LiveSRCalcService:
     ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         meta: dict[str, Any] = {
             "api": "HistoryV3Api.get_intra_day_candle_data",
+            "requested_instrument_key": instrument_key,
+            "resolved_instrument_key": None,
             "candles": 0,
             "first_candle": None,
             "last_candle": None,
             "error": None,
         }
 
+        # ---- 1. Resolve friendly name → EXCHANGE_SEGMENT|SYMBOL ------ #
+        resolved = self._resolve_upstox_instrument_key(instrument_key)
+        meta["resolved_instrument_key"] = resolved
+        if resolved is None:
+            meta["error"] = (
+                f"invalid_instrument_key: {instrument_key!r} — could not "
+                f"resolve to an Upstox EXCHANGE_SEGMENT|SYMBOL key"
+            )
+            logger.warning(
+                "[live-sr-calc] cannot resolve Upstox instrument_key for "
+                "%r — skipping intraday fetch (add it to "
+                "_FRIENDLY_INSTRUMENT_KEY_MAP if it's a known index)",
+                instrument_key,
+            )
+            return [], meta
+
+        # ---- 2. Backoff gate ----------------------------------------- #
+        now = time.monotonic()
+        fail_until = self._intraday_fail_until.get(resolved, 0.0)
+        if now < fail_until:
+            remaining = int(fail_until - now) + 1
+            meta["error"] = (
+                f"cooldown_active: {remaining}s remaining after "
+                f"{self._intraday_fail_count.get(resolved, 0)} "
+                f"consecutive failure(s)"
+            )
+            return [], meta
+
+        # ---- 3. Try to import the SDK -------------------------------- #
         try:
             import upstox_client  # type: ignore
         except ImportError:
             meta["error"] = "upstox_client_not_installed"
             return [], meta
 
+        # ---- 4. HTTP call -------------------------------------------- #
         try:
             cfg = upstox_client.Configuration()
             try:
@@ -981,15 +1174,35 @@ class LiveSRCalcService:
 
             api = upstox_client.HistoryV3Api(upstox_client.ApiClient(cfg))
             response = api.get_intra_day_candle_data(
-                instrument_key, "minutes", "1",
+                resolved, "minutes", "1",
             )
         except Exception as exc:
+            # Record backoff so a persistent failure doesn't spam.
+            count = self._intraday_fail_count.get(resolved, 0) + 1
+            self._intraday_fail_count[resolved] = count
+            delay = min(
+                _INTRADAY_BACKOFF_MAX_SEC,
+                _INTRADAY_BACKOFF_BASE_SEC * (2 ** (count - 1)),
+            )
+            self._intraday_fail_until[resolved] = time.monotonic() + delay
+
             meta["error"] = f"{type(exc).__name__}: {exc}"
+
+            exc_str = str(exc)
+            if len(exc_str) > _INTRADAY_ERROR_LOG_MAX_CHARS:
+                exc_str = exc_str[:_INTRADAY_ERROR_LOG_MAX_CHARS] + "… (truncated)"
+
             logger.warning(
-                "[live-sr-calc] intraday fetch failed for %s: %s: %s",
-                instrument_key, type(exc).__name__, exc,
+                "[live-sr-calc] intraday fetch failed for %r "
+                "(resolved=%s): %s: %s — backing off %.0fs",
+                instrument_key, resolved, type(exc).__name__,
+                exc_str, delay,
             )
             return [], meta
+
+        # ---- 5. Success — clear backoff ------------------------------ #
+        self._intraday_fail_count.pop(resolved, None)
+        self._intraday_fail_until.pop(resolved, None)
 
         body: Any = response
         if hasattr(response, "to_dict"):

@@ -1021,8 +1021,9 @@
   //   for every j in [i-left, i-1] and every j in [i+1, i+right]
   // Pivot at index i is CONFIRMED at i + right (needs `right` bars
   // of forward look to exist).
-  const SR_LEFT_BARS = 15;
-  const SR_RIGHT_BARS = 3;
+// NEW
+const SR_LEFT_BARS  = {{ sr_left_bars  | tojson }};
+const SR_RIGHT_BARS = {{ sr_right_bars | tojson }};
 
   function performFullSRScanForPane(paneInst) {
     if (!paneInst) return;

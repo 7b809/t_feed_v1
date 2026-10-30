@@ -68,6 +68,26 @@ field):
       rest of the session (existing open orders continue to trail
       and close normally).
 
+Feed subscription (2026 capacity policy)
+----------------------------------------
+Every order created by this service — Path A signal_v2, Path A
+regime, Path B support, and Path B resistance — calls
+``_pin_instrument()`` after the order record is appended to
+``_state["orders"]``. That helper delegates to
+``live_feed_service.subscribe_instrument()``, which pins the key in
+the ``feed_subscription_manager`` on-demand LRU tier and ensures the
+streamer is actually subscribed. The net effect: the order's LTP
+updates keep arriving for the rest of the session, even if the
+per-index ATM band slides away from the strike after entry.
+
+Path B's counter-side instrument especially depends on this — it is
+not part of the mandatory set that ``live_feed_service.start()``
+rebuilds from ``level_isolated_instrument_service`` +
+``isolated_instrument_promotion_service`` on restart, so without the
+pin its LTP would freeze at the entry price after a mid-session
+reload. The same is true for Path A's regime-scenario orders on
+strikes that drift outside the ATM band during a trend day.
+
 Failure modes (all returned in ``status``)
 ------------------------------------------
     ok            — scan completed
@@ -94,6 +114,20 @@ Shape of ``data/dummy_orders.json``::
 Each order record is **self-contained** — the instrument metadata,
 entry details, stop, both targets, current tracking, close state, and
 the two notification flags are all in the record.
+
+G1 v4.2 — pivot-right-bars fallback hardening (2026-10-30)
+-----------------------------------------------------------
+Two call-sites that delegate to ``_run_pivot_scan`` for the fast
+pivot window previously used a hard-coded ``3`` as the ``getattr``
+fallback for ``STRATEGY_ENTRY_PIVOT_RIGHT_BARS``. The attribute
+always exists today, so the fallback is dead code — but it would
+silently reintroduce the old right=3 behaviour if the config line
+were ever removed. Both call-sites now fall back to
+``config.LIVE_SR_RIGHT_BARS`` (which itself defaults to ``1``), so
+the pivot scan tracks the display window by construction:
+
+    * ``_regime_target_for()``   — nearest-resistance target search
+    * ``_pick_path_b_target()``  — Path B target selection
 """
 
 from __future__ import annotations
@@ -344,6 +378,10 @@ class DummyOrderService:
                     and str(o.get("path") or "") == "B_external_trigger"
                     and o.get("status") != "OPEN"
                 ),
+                "consecutive_losses": int(self._state.get("consecutive_losses") or 0),
+                "daily_realized_pnl_rs": float(self._state.get("daily_realized_pnl_rs") or 0.0),
+                "lock_reason": self._state.get("lock_reason"),
+                "trailing_stop_mode": getattr(config, "STRATEGY_TRAILING_STOP_MODE", "hybrid"),
             }
 
     # ------------------------------------------------------------------ #
@@ -411,6 +449,10 @@ class DummyOrderService:
             "execution_path": None,          # "A_self_trigger" | "B_external_trigger" | None
             "strategy_locked_today": False,  # set True when any Path B trade hits target
             "path_b_placed_keys": [],        # dedup key list for Path B orders
+            # NEW (G1 v4.2): risk management & circuit breaker tracking
+            "consecutive_losses": 0,
+            "daily_realized_pnl_rs": 0.0,
+            "lock_reason": None,
         }
 
     def _load_from_disk(self) -> None:
@@ -457,6 +499,52 @@ class DummyOrderService:
             tmp.replace(path)
         except Exception:
             logger.exception("[dummy-order] save failed")
+
+    # ------------------------------------------------------------------ #
+    # NEW (2026 capacity policy): feed-subscription pinning               #
+    # ------------------------------------------------------------------ #
+    @staticmethod
+    def _pin_instrument(instrument_key: str) -> None:
+        """Ensure the dummy order's instrument is live-subscribed.
+
+        Called whenever this service creates a Path A or Path B order.
+        Delegates to ``live_feed_service.subscribe_instrument()``, which
+        (as of the 2026 capacity policy) does two things atomically:
+
+          1. Pins the key in ``feed_subscription_manager``'s on-demand
+             LRU tier so it is protected from ATM-band eviction.
+          2. Ensures the streamer is actually subscribed (idempotent if
+             the key is already in ``_subscribed``).
+
+        This matters for the counter side of a Path B pair: on a
+        mid-session restart, ``live_feed_service._build_initial_
+        subscription_set()`` only re-adds the four mandatory index rows
+        + health feed + the currently isolated / promoted key. The
+        counter-side option is not in that set, so without this pin its
+        LTP would not update and the trailing / target checks would
+        freeze at the entry price for the rest of the session. Pinning
+        restores the live feed for that instrument for the entire day.
+
+        The same protection applies to Path A regime-scenario orders on
+        strikes that drift outside the ATM band during a trending
+        session — without the pin they would stop ticking as soon as
+        the band slides away from the strike.
+
+        Never raises. Failures are logged and do not block order
+        creation — a dummy order that is not live-subscribed still
+        gets reconciled from the intraday 1-min bars via
+        ``_reconcile_from_bars()``.
+        """
+        key = str(instrument_key or "").strip()
+        if not key:
+            return
+        try:
+            from services.live_feed_service import live_feed_service
+            live_feed_service.subscribe_instrument(key)
+        except Exception:
+            logger.exception(
+                "[dummy-order] feed subscribe failed for %s", key
+            )
 
     # ------------------------------------------------------------------ #
     # Order creation (Path A — unchanged)                                 #
@@ -597,6 +685,18 @@ class DummyOrderService:
 
             "last_reconciled_bar_time": entry_time_iso,
 
+            # G1 v4.2 ATR trailing stop fields for Path A
+            "atr_14": (
+                _safe_float(entry.get("atr"))
+                or (
+                    __import__('services.regime_detector_service', fromlist=['regime_detector_service']).regime_detector_service.calculate_instrument_atr(instrument_key)
+                    if bool(getattr(config, "STRATEGY_TRAILING_STOP_ENABLED", True)) else None
+                )
+            ),
+            "trailing_stop_mode": getattr(config, "STRATEGY_TRAILING_STOP_MODE", "hybrid"),
+            "profit_state": "PRE_TRAIL",
+            "trailing_stop_price": None,
+
             "closed_at": None,
             "closed_price": None,
             "closed_pnl_pct": None,
@@ -612,6 +712,13 @@ class DummyOrderService:
 
         self._state["orders"].append(order)
         self._by_id[order_id] = order
+
+        # Pin the instrument in the feed-subscription manager so the
+        # order's LTP keeps ticking for the rest of the day even if the
+        # ATM band slides away from this strike. See
+        # ``_pin_instrument`` for the full rationale.
+        self._pin_instrument(instrument_key)
+
         logger.info(
             "[dummy-order] created %s | entry=%.2f stop=%.2f target=%.2f "
             "(scenario=%s, retroactive=%s)",
@@ -651,7 +758,8 @@ class DummyOrderService:
                 config.LIVE_SR_LEFT_BARS,
             ))
             right = int(getattr(
-                config, "STRATEGY_ENTRY_PIVOT_RIGHT_BARS", 3,
+                config, "STRATEGY_ENTRY_PIVOT_RIGHT_BARS",
+                config.LIVE_SR_RIGHT_BARS,
             ))
             pivots = _run_pivot_scan(key, left, right)
             nearest_r: float | None = None
@@ -767,6 +875,45 @@ class DummyOrderService:
         if not sr_payload:
             return created, updated, closed
 
+        # G1 v4.2 Circuit Breaker & Consecutive Loss Check
+        consecutive_losses = int(self._state.get("consecutive_losses") or 0)
+        halt_limit = int(getattr(config, "STRATEGY_RISK_MAX_CONSECUTIVE_LOSSES_HALT", 5))
+        if consecutive_losses >= halt_limit:
+            self._state["strategy_locked_today"] = True
+            self._state["lock_reason"] = f"consecutive_losses_circuit_breaker: {consecutive_losses}"
+            logger.warning("[dummy-order] Halting Path B: %d consecutive losses circuit breaker hit", consecutive_losses)
+            return created, updated, closed
+
+        # Position Sizing Throttle (50% size after 3 consecutive losses)
+        throttle_limit = int(getattr(config, "STRATEGY_RISK_MAX_CONSECUTIVE_LOSSES_THROTTLE", 3))
+        effective_lot_size = lot_size
+        is_risk_throttled = False
+        if consecutive_losses >= throttle_limit:
+            effective_lot_size = max(1, lot_size // 2)
+            is_risk_throttled = True
+            logger.info("[dummy-order] Throttling Path B lot size from %d to %d due to %d consecutive losses", lot_size, effective_lot_size, consecutive_losses)
+
+        # G1 v4.2 Market Regime & ADX Filter Check for Path B
+        regime_info: dict[str, Any] | None = None
+        if bool(getattr(config, "STRATEGY_REGIME_FILTER_ENABLED", True)):
+            try:
+                from services.regime_detector_service import regime_detector_service
+                underlying_key = "NSE_INDEX|Nifty 50" if underlying == "NIFTY" else ("BSE_INDEX|SENSEX" if underlying == "SENSEX" else underlying)
+                regime_info = regime_detector_service.evaluate_market_regime(underlying_key)
+            except Exception:
+                regime_info = None
+
+        if (
+            regime_info is not None
+            and bool(getattr(config, "STRATEGY_REGIME_GATE_ENTRIES", True))
+            and regime_info.get("regime") == "RANGING"
+        ):
+            logger.info(
+                "[dummy-order] PATH B skipping SR orders: market is RANGING (ADX=%.2f < %.2f)",
+                regime_info.get("adx", 0.0), regime_info.get("adx_threshold", 22.0),
+            )
+            return created, updated, closed
+
         placed_keys = set(self._state.get("path_b_placed_keys") or [])
 
         for level in (sr_payload.get("levels") or []):
@@ -851,7 +998,15 @@ class DummyOrderService:
                     ),
                     "target_pivot_time": target_time,
 
-                    "lot_size": lot_size,
+                    "lot_size": effective_lot_size,
+                    "is_risk_throttled": is_risk_throttled,
+                    "consecutive_losses_at_entry": consecutive_losses,
+                    "market_regime": regime_info,
+                    "atr_14": (
+                        __import__('services.regime_detector_service', fromlist=['regime_detector_service']).regime_detector_service.calculate_instrument_atr(target_key)
+                        or round(entry_price * 0.05, 4)
+                    ),
+                    "trailing_stop_mode": getattr(config, "STRATEGY_TRAILING_STOP_MODE", "hybrid"),
                     "origin_level": {
                         "instrument": bias_key,
                         "type": level_type,
@@ -897,6 +1052,17 @@ class DummyOrderService:
                 placed_keys.add(dedup_key)
                 self._state["path_b_placed_keys"] = sorted(placed_keys)
                 created += 1
+
+                # Pin the target instrument (bias OR counter side) so
+                # Path B's Rupee-profit trailing keeps getting live
+                # ticks even after the ATM band slides away from the
+                # strike. Critical for the counter side, which is not
+                # in the initial mandatory set on restart — without
+                # this pin its LTP would freeze at the entry price
+                # for the rest of the session. See
+                # ``_pin_instrument`` for the full rationale.
+                self._pin_instrument(target_key)
+
                 logger.info(
                     "[dummy-order] PATH B created %s | level=%s px=%s "
                     "entry=%.2f stop=%.2f target=%s lot=%d",
@@ -979,7 +1145,8 @@ class DummyOrderService:
                 config.LIVE_SR_LEFT_BARS,
             ))
             right = int(getattr(
-                config, "STRATEGY_ENTRY_PIVOT_RIGHT_BARS", 3,
+                config, "STRATEGY_ENTRY_PIVOT_RIGHT_BARS",
+                config.LIVE_SR_RIGHT_BARS,
             ))
             pivots = _run_pivot_scan(instrument_key, left, right)
             best = _pick_target_resistance(
@@ -1105,6 +1272,36 @@ class DummyOrderService:
             if stop_pct > 0 else 0.0
         )
 
+        # ---- G1 v4.2 ATR Trailing Stop for Path A ---------------- #
+        if bool(getattr(config, "STRATEGY_TRAILING_STOP_ENABLED", True)):
+            atr = _safe_float(order.get("atr_14"))
+            if atr is not None and atr > 0:
+                act_mult = float(getattr(config, "STRATEGY_TRAILING_ACTIVATION_PROFIT_ATR", 1.2))
+                step_mult = float(getattr(config, "STRATEGY_TRAILING_TRAIL_STEP_ATR", 0.5))
+                activation_dist = act_mult * atr
+                step_dist = step_mult * atr
+
+                max_high = _safe_float(order.get("max_high_since_entry")) or ltp
+                advance = max_high - entry
+
+                # Check activation: price reached entry + 1.2 * ATR
+                if advance >= activation_dist:
+                    order["profit_state"] = "TRAILING"
+                    trail = entry
+                    excess = advance - activation_dist
+                    if excess >= step_dist and step_dist > 0:
+                        steps = int(excess // step_dist)
+                        trail = entry + (steps * step_dist)
+
+                    curr_trail = _safe_float(order.get("trailing_stop_price"))
+                    if curr_trail is not None:
+                        trail = max(curr_trail, trail)
+                    order["trailing_stop_price"] = round(trail, 4)
+
+                    if ltp <= trail:
+                        self._close_order(order, "TRAILING_STOP_HIT", trail, now)
+                        return
+
         if ltp <= stop:
             self._close_order(order, "STOP_HIT", stop, now)
             return
@@ -1144,12 +1341,17 @@ class DummyOrderService:
                 config, "STRATEGY_EXT_PROFIT_ACTIVATION_RS", 1000.0,
             ))
             r3_breakout_hit = self._path_b_r3_breakout(order, ltp)
-            if peak >= activation_rs or r3_breakout_hit:
+
+            atr = _safe_float(order.get("atr_14"))
+            act_mult = float(getattr(config, "STRATEGY_TRAILING_ACTIVATION_PROFIT_ATR", 1.2))
+            atr_act_hit = (atr is not None and atr > 0 and (ltp - entry) >= (act_mult * atr))
+
+            if peak >= activation_rs or r3_breakout_hit or atr_act_hit:
                 order["profit_state"] = "TRAILING"
                 logger.info(
                     "[dummy-order] PATH B order %s switched to TRAILING "
-                    "(peak_rs=%.2f, r3=%s)",
-                    order.get("order_id"), peak, r3_breakout_hit,
+                    "(peak_rs=%.2f, r3=%s, atr_act=%s)",
+                    order.get("order_id"), peak, r3_breakout_hit, atr_act_hit,
                 )
 
         # ---- Target hit (highest priority) ----------------------- #
@@ -1189,8 +1391,7 @@ class DummyOrderService:
     ) -> float | None:
         """Return the current trailing stop price.
 
-        lock_rs  = max(TRAIL_FLOOR_RS, peak_profit_rs - TRAIL_GAP_RS)
-        trail    = entry + lock_rs / lot_size
+        Supports Rupee mode, ATR mode, and Hybrid mode (G1 v4.2).
         """
         entry = _safe_float(order.get("entry_price"))
         lot = int(order.get("lot_size") or 0)
@@ -1198,10 +1399,42 @@ class DummyOrderService:
         if entry is None or lot <= 0:
             return None
 
+        mode = str(getattr(config, "STRATEGY_TRAILING_STOP_MODE", "hybrid")).lower()
+
+        # 1. Rupee-based calculation
         gap = float(getattr(config, "STRATEGY_EXT_TRAIL_GAP_RS", 500.0))
         floor = float(getattr(config, "STRATEGY_EXT_TRAIL_FLOOR_RS", 1000.0))
         lock_rs = max(floor, peak - gap)
-        return entry + (lock_rs / lot)
+        rupee_trail = entry + (lock_rs / lot)
+        if mode == "rupee":
+            return rupee_trail
+
+        # 2. ATR-based calculation
+        atr = _safe_float(order.get("atr_14"))
+        atr_trail = None
+        if atr is not None and atr > 0:
+            act_mult = float(getattr(config, "STRATEGY_TRAILING_ACTIVATION_PROFIT_ATR", 1.2))
+            step_mult = float(getattr(config, "STRATEGY_TRAILING_TRAIL_STEP_ATR", 0.5))
+            max_high = _safe_float(order.get("max_high_since_entry")) or entry
+            advance = max_high - entry
+            activation_dist = act_mult * atr
+            step_dist = step_mult * atr
+
+            if advance >= activation_dist:
+                trail_base = entry
+                excess = advance - activation_dist
+                if excess >= step_dist and step_dist > 0:
+                    steps = int(excess // step_dist)
+                    trail_base = entry + (steps * step_dist)
+                atr_trail = trail_base
+
+        if mode == "atr":
+            return atr_trail or rupee_trail
+
+        # 3. Hybrid mode: choose tighter (higher) trailing stop
+        if atr_trail is not None:
+            return max(rupee_trail, atr_trail)
+        return rupee_trail
 
     def _path_b_r3_breakout(
         self,
@@ -1327,10 +1560,35 @@ class DummyOrderService:
         order["current_ltp"] = round(price, 4)
         order["current_ltp_at"] = now.isoformat()
 
+        # Update consecutive loss counter & cumulative daily realized PnL
+        is_loss = (profit_rs < 0)
+        if is_loss:
+            self._state["consecutive_losses"] = int(self._state.get("consecutive_losses") or 0) + 1
+        else:
+            self._state["consecutive_losses"] = 0
+
+        # Check circuit breaker halt
+        halt_limit = int(getattr(config, "STRATEGY_RISK_MAX_CONSECUTIVE_LOSSES_HALT", 5))
+        if self._state["consecutive_losses"] >= halt_limit and not bool(self._state.get("strategy_locked_today")):
+            self._state["strategy_locked_today"] = True
+            self._state["lock_reason"] = f"consecutive_losses_circuit_breaker: {self._state['consecutive_losses']}"
+            logger.warning("[dummy-order] %d consecutive losses circuit breaker hit. Strategy locked.", self._state["consecutive_losses"])
+
+        tot_pnl = float(self._state.get("daily_realized_pnl_rs") or 0.0) + profit_rs
+        self._state["daily_realized_pnl_rs"] = round(tot_pnl, 2)
+
+        # Check Daily Max Drawdown Guard
+        max_dd_rs = float(getattr(config, "STRATEGY_RISK_DAILY_MAX_DRAWDOWN_RS", 3000.0))
+        if tot_pnl <= -max_dd_rs and not bool(self._state.get("strategy_locked_today")):
+            self._state["strategy_locked_today"] = True
+            self._state["lock_reason"] = f"daily_drawdown_limit_exceeded: -₹{abs(tot_pnl):.2f}"
+            logger.warning("[dummy-order] Daily max drawdown exceeded (-₹%.2f). Strategy locked.", abs(tot_pnl))
+
         logger.info(
             "[dummy-order] PATH B closed %s | reason=%s price=%.2f "
-            "profit_rs=%.2f pnl=%+.2f%%",
+            "profit_rs=%.2f pnl=%+.2f%% (consec_losses=%d, tot_pnl_rs=%.2f)",
             order.get("order_id"), reason, price, profit_rs, pnl_pct * 100,
+            self._state.get("consecutive_losses", 0), tot_pnl,
         )
 
         # Target hit → strategy lockdown.
@@ -1443,9 +1701,23 @@ class DummyOrderService:
         order["closed_mae"] = round(_safe_float(order.get("mae")) or 0.0, 4)
         order["current_ltp"] = round(price, 4)
         order["current_ltp_at"] = now.isoformat()
+
+        # Update consecutive loss counter & daily drawdown
+        is_loss = (pnl < 0)
+        if is_loss:
+            self._state["consecutive_losses"] = int(self._state.get("consecutive_losses") or 0) + 1
+        else:
+            self._state["consecutive_losses"] = 0
+
+        halt_limit = int(getattr(config, "STRATEGY_RISK_MAX_CONSECUTIVE_LOSSES_HALT", 5))
+        if self._state["consecutive_losses"] >= halt_limit and not bool(self._state.get("strategy_locked_today")):
+            self._state["strategy_locked_today"] = True
+            self._state["lock_reason"] = f"consecutive_losses_circuit_breaker: {self._state['consecutive_losses']}"
+            logger.warning("[dummy-order] %d consecutive losses circuit breaker hit. Strategy locked.", self._state["consecutive_losses"])
+
         logger.info(
-            "[dummy-order] closed %s | reason=%s price=%.2f pnl=%+.2f%% R=%+.2f",
-            order.get("order_id"), reason, price, pnl * 100, r,
+            "[dummy-order] closed %s | reason=%s price=%.2f pnl=%+.2f%% R=%+.2f (consec_losses=%d)",
+            order.get("order_id"), reason, price, pnl * 100, r, self._state.get("consecutive_losses", 0),
         )
 
         # Notify (once per order)
@@ -1731,7 +2003,6 @@ class DummyOrderService:
             "generated_at": _now_utc_iso(),
         }
 
-
 # --------------------------------------------------------------------------- #
 # Tick-size helper                                                            #
 # --------------------------------------------------------------------------- #
@@ -1746,7 +2017,6 @@ def _get_tick(instrument_key: str) -> float:
     except Exception:
         pass
     return 0.05
-
 
 # --------------------------------------------------------------------------- #
 # Singleton                                                                   #

@@ -96,6 +96,18 @@ revision reads the exact keys that ``core/config.py`` defines:
     * ``STRATEGY_ENTRY_ALLOW_AUTO_REVERSE``
 
 so operators can actually flip them off via ``.env``.
+
+G1 v4.2 — pivot-right-bars fallback hardening (2026-10-30)
+-----------------------------------------------------------
+The fast-pivot window's *right* bar count previously used a hard-coded
+``3`` as the ``getattr`` fallback in two call-sites. The attribute
+always exists today, so the fallback is dead code — but it would
+silently reintroduce the old right=3 behaviour if the config line
+were ever removed. Both call-sites now fall back to
+``config.LIVE_SR_RIGHT_BARS`` (which itself defaults to ``1``), so
+the entry scan tracks the display window by construction.
+``_derive_display_confirmed_time()`` also updated to match the new
+``LIVE_SR_RIGHT_BARS`` default of ``1``.
 """
 
 from __future__ import annotations
@@ -599,7 +611,7 @@ def _derive_display_confirmed_time(
             candles = list(state.get("candles") or [])
     except Exception:
         return None
-    display_right = int(getattr(config, "LIVE_SR_RIGHT_BARS", 3))
+    display_right = int(getattr(config, "LIVE_SR_RIGHT_BARS", 1))
     confirm_idx = pivot_bar_index + display_right
     if confirm_idx < 0 or confirm_idx >= len(candles):
         return None
@@ -684,7 +696,10 @@ def _compute_candidate(
     left_bars = int(getattr(
         config, "STRATEGY_ENTRY_PIVOT_LEFT_BARS", config.LIVE_SR_LEFT_BARS
     ))
-    right_bars = int(getattr(config, "STRATEGY_ENTRY_PIVOT_RIGHT_BARS", 3))
+    right_bars = int(getattr(
+        config, "STRATEGY_ENTRY_PIVOT_RIGHT_BARS", config.LIVE_SR_RIGHT_BARS,
+    ))
+
     levels = _run_pivot_scan(key, left_bars, right_bars)
 
     if not levels:
@@ -733,6 +748,36 @@ def _compute_candidate(
     allow_auto_reverse = bool(getattr(
         config, "STRATEGY_ENTRY_ALLOW_AUTO_REVERSE", True
     ))
+
+    # ---- G1 v4.2 Market Regime & ADX Filter Check ----------------- #
+    regime_info: dict[str, Any] | None = None
+    if bool(getattr(config, "STRATEGY_REGIME_FILTER_ENABLED", True)):
+        try:
+            from services.regime_detector_service import regime_detector_service
+            underlying_sym = str(entry.get("underlying") or "NSE_INDEX|Nifty 50")
+            regime_info = regime_detector_service.evaluate_market_regime(underlying_sym)
+            cand["market_regime"] = regime_info
+        except Exception:
+            logger.exception("[strategy-entry] regime detection failed")
+
+    if (
+        regime_info is not None
+        and bool(getattr(config, "STRATEGY_REGIME_GATE_ENTRIES", True))
+        and regime_info.get("regime") == "RANGING"
+    ):
+        if now <= window_end:
+            cand["state"] = "waiting"
+            cand["state_note"] = (
+                f"waiting_for_trending_regime: adx={regime_info.get('adx', 0.0)} "
+                f"< {regime_info.get('adx_threshold', 22.0)}"
+            )
+            cand["regime_blocked"] = True
+            return cand
+        else:
+            cand["state"] = "blocked"
+            cand["state_note"] = "blocked_by_ranging_regime_window_expired"
+            cand["regime_blocked"] = True
+            return cand
 
     # ---- CASE 1: SUPPORT (priority) ------------------------------ #
     if supports_in_window and (prioritize_support or not resistances_in_window):
@@ -890,6 +935,15 @@ def _arm_bias_on_support(
         cand["entry_type"] = "bias_support_bounce"
         cand["warning"] = warning
         cand["warning_detail"] = warning_detail
+        atr_val = None
+        try:
+            from services.regime_detector_service import regime_detector_service
+            atr_val = regime_detector_service.calculate_instrument_atr(
+                key, period=int(getattr(config, "STRATEGY_ATR_PERIOD", 14))
+            )
+        except Exception:
+            atr_val = None
+
         cand["entry"] = {
             "price": entry_price,
             "price_source": price_source,
@@ -900,6 +954,7 @@ def _arm_bias_on_support(
             "stop_source": stop_source,
             "target": target_price,
             "target_pivot_time": target_pivot_time,
+            "atr": atr_val,
         }
         return cand
 
@@ -991,7 +1046,10 @@ def _trigger_auto_reverse(
                 config, "STRATEGY_ENTRY_PIVOT_LEFT_BARS",
                 config.LIVE_SR_LEFT_BARS,
             )),
-            int(getattr(config, "STRATEGY_ENTRY_PIVOT_RIGHT_BARS", 3)),
+            int(getattr(
+                config, "STRATEGY_ENTRY_PIVOT_RIGHT_BARS",
+                config.LIVE_SR_RIGHT_BARS,
+            )),
         )
         best_r = _pick_target_resistance(
             counter_levels, counter_price, r_conf_iso,
@@ -1021,6 +1079,15 @@ def _trigger_auto_reverse(
         cand["armed_instrument_key"] = counter_key
         cand["armed_trading_symbol"] = counter_symbol
         cand["armed_side"] = "PE" if str(cand.get("side") or "").upper() == "CE" else "CE"
+        atr_val = None
+        try:
+            from services.regime_detector_service import regime_detector_service
+            atr_val = regime_detector_service.calculate_instrument_atr(
+                counter_key, period=int(getattr(config, "STRATEGY_ATR_PERIOD", 14))
+            )
+        except Exception:
+            atr_val = None
+
         cand["entry"] = {
             "price": counter_price,
             "price_source": price_source,
@@ -1031,6 +1098,7 @@ def _trigger_auto_reverse(
             "stop_source": stop_source,
             "target": target_price,
             "target_pivot_time": target_pivot_time,
+            "atr": atr_val,
         }
         return cand
 
@@ -1233,6 +1301,9 @@ class StrategyEntrySignalService:
             "chosen_entry_type": (
                 chosen.get("entry_type") if chosen else None
             ),
+            "market_regime": (
+                bias_cand.get("market_regime") if 'bias_cand' in locals() and isinstance(bias_cand, dict) else None
+            ),
             "warnings": self._warnings(candidates, touch_dt, now),
             "generated_at": _now_utc_iso(),
         }
@@ -1342,6 +1413,11 @@ class StrategyEntrySignalService:
                 "trigger_level_value": isolated.get("trigger_level_value"),
                 "trigger_is_self_nifty": False,
             },
+            "market_regime": (
+                __import__('services.regime_detector_service', fromlist=['regime_detector_service']).regime_detector_service.evaluate_market_regime(underlying or "NSE_INDEX|Nifty 50")
+                if bool(getattr(config, "STRATEGY_REGIME_FILTER_ENABLED", True))
+                else None
+            ),
             "path_b": {
                 "enabled": True,
                 "tracked_underlyings": list(

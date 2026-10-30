@@ -220,6 +220,39 @@ HEALTH_FEED_INSTRUMENT = _str("HEALTH_FEED_INSTRUMENT", "NSE_INDEX|Nifty 50")
 HEALTH_FEED_INSTRUMENT_INTERVAL = max(1, _int("HEALTH_FEED_INSTRUMENT_INTERVAL", 5))
 
 # ---------------------------------------------------------------------------
+# Live-feed subscription budget (2026 capacity policy)
+# ---------------------------------------------------------------------------
+# The Upstox WebSocket in full mode has a hard combined cap of 2,000
+# instruments across all open sockets (basic plan). We stay below that
+# so a reconnect can briefly double-subscribe while the old socket is
+# being torn down without hitting the cap.
+#
+# Setting LIVE_FEED_ATM_BAND_ENABLED=false reverts to the legacy
+# "subscribe every registry key, capped at MAX_TOTAL" behaviour.
+LIVE_FEED_MAX_TOTAL_INSTRUMENTS = max(
+    1, _int("LIVE_FEED_MAX_TOTAL_INSTRUMENTS", 1800)
+)
+LIVE_FEED_ATM_BAND_ENABLED = _bool("LIVE_FEED_ATM_BAND_ENABLED", True)
+LIVE_FEED_ATM_BAND_NIFTY = max(
+    0, _int("LIVE_FEED_ATM_BAND_NIFTY", 10)
+)
+LIVE_FEED_ATM_BAND_BANKNIFTY = max(
+    0, _int("LIVE_FEED_ATM_BAND_BANKNIFTY", 5)
+)
+LIVE_FEED_ATM_BAND_MIDCPNIFTY = max(
+    0, _int("LIVE_FEED_ATM_BAND_MIDCPNIFTY", 5)
+)
+LIVE_FEED_ATM_BAND_SENSEX = max(
+    0, _int("LIVE_FEED_ATM_BAND_SENSEX", 5)
+)
+LIVE_FEED_ATM_RECALC_SECONDS = max(
+    30, _int("LIVE_FEED_ATM_RECALC_SECONDS", 300)
+)
+LIVE_FEED_EVICT_OLDEST_ON_OVERFLOW = _bool(
+    "LIVE_FEED_EVICT_OLDEST_ON_OVERFLOW", True
+)
+
+# ---------------------------------------------------------------------------
 # Live EMA cross engine (retained for compatibility)
 # ---------------------------------------------------------------------------
 EMA_FAST_PERIOD = max(1, _int("EMA_FAST_PERIOD", 9))
@@ -363,7 +396,7 @@ LEVEL_FILTER_INCLUDE_INDEX_SR = _bool("LEVEL_FILTER_INCLUDE_INDEX_SR", True)
 LIVE_SR_ENABLED = _bool("LIVE_SR_ENABLED", True)
 LIVE_SR_TRACK_ALL_INSTRUMENTS = _bool("LIVE_SR_TRACK_ALL_INSTRUMENTS", True)
 LIVE_SR_LEFT_BARS = max(1, _int("LIVE_SR_LEFT_BARS", 15))
-LIVE_SR_RIGHT_BARS = max(1, _int("LIVE_SR_RIGHT_BARS", 3))
+LIVE_SR_RIGHT_BARS = max(1, _int("LIVE_SR_RIGHT_BARS", 1))
 LIVE_SR_MAX_CANDLES = max(50, _int("LIVE_SR_MAX_CANDLES", 500))
 LIVE_SR_FILENAME = _str("LIVE_SR_FILENAME", "live_sr_levels.json")
 LIVE_SR_PERSIST_EVERY_N_CANDLES = max(0, _int("LIVE_SR_PERSIST_EVERY_N_CANDLES", 5))
@@ -837,7 +870,7 @@ STRATEGY_ENTRY_PIVOT_LEFT_BARS = max(
     1, _int("STRATEGY_ENTRY_PIVOT_LEFT_BARS", LIVE_SR_LEFT_BARS)
 )
 STRATEGY_ENTRY_PIVOT_RIGHT_BARS = max(
-    1, min(10, _int("STRATEGY_ENTRY_PIVOT_RIGHT_BARS", 3))
+    1, min(10, _int("STRATEGY_ENTRY_PIVOT_RIGHT_BARS", LIVE_SR_RIGHT_BARS))
 )
 
 # ---- G1 v3.2 — LTP-tier stop-loss ---------------------------------------
@@ -1138,3 +1171,49 @@ STRATEGY_EXT_TRACKED_UNDERLYINGS_SET = {
     for u in STRATEGY_EXT_TRACKED_UNDERLYINGS
     if str(u).strip()
 }
+
+
+# ===========================================================================
+# G1 v4.2 — REGIME FILTER, ADX FILTERING, AND ATR TRAILING STOP ENGINE
+# ===========================================================================
+# Master switch for market regime detection and ADX filtering.
+# When True, G1 evaluates whether the market is trending (ADX >= threshold)
+# or compressing before arming entries, avoiding whipsaws in flat markets.
+STRATEGY_REGIME_FILTER_ENABLED = _bool("STRATEGY_REGIME_FILTER_ENABLED", True)
+
+# Minimum ADX threshold to qualify market as trending (default 22.0).
+STRATEGY_REGIME_MIN_ADX = _float("STRATEGY_REGIME_MIN_ADX", 22.0)
+
+# Bollinger Bandwidth volatility compression settings (default period 20, 2 std).
+STRATEGY_REGIME_BB_PERIOD = max(5, _int("STRATEGY_REGIME_BB_PERIOD", 20))
+STRATEGY_REGIME_BB_STD = _float("STRATEGY_REGIME_BB_STD", 2.0)
+STRATEGY_REGIME_BB_BANDWIDTH_MIN = _float("STRATEGY_REGIME_BB_BANDWIDTH_MIN", 0.015)
+
+# Moving average and RSI parameters for regime direction evaluation.
+STRATEGY_REGIME_FAST_EMA = max(1, _int("STRATEGY_REGIME_FAST_EMA", 9))
+STRATEGY_REGIME_SLOW_EMA = max(1, _int("STRATEGY_REGIME_SLOW_EMA", 21))
+STRATEGY_REGIME_TREND_EMA = max(1, _int("STRATEGY_REGIME_TREND_EMA", 200))
+STRATEGY_REGIME_RSI_PERIOD = max(2, _int("STRATEGY_REGIME_RSI_PERIOD", 14))
+STRATEGY_REGIME_RSI_OVERBOUGHT = _float("STRATEGY_REGIME_RSI_OVERBOUGHT", 68.0)
+STRATEGY_REGIME_RSI_OVERSOLD = _float("STRATEGY_REGIME_RSI_OVERSOLD", 32.0)
+
+# Gate entries when regime is RANGING (True = suppress entries during flat market).
+STRATEGY_REGIME_GATE_ENTRIES = _bool("STRATEGY_REGIME_GATE_ENTRIES", True)
+
+# Trailing Stop Configuration (ATR & Hybrid Trailing Stop Engine).
+STRATEGY_TRAILING_STOP_ENABLED = _bool("STRATEGY_TRAILING_STOP_ENABLED", True)
+# "atr" | "rupee" | "hybrid" (hybrid takes whichever stop locks in higher gain)
+STRATEGY_TRAILING_STOP_MODE = _str("STRATEGY_TRAILING_STOP_MODE", "hybrid").lower()
+STRATEGY_TRAILING_ACTIVATION_PROFIT_ATR = _float("STRATEGY_TRAILING_ACTIVATION_PROFIT_ATR", 1.2)
+STRATEGY_TRAILING_TRAIL_STEP_ATR = _float("STRATEGY_TRAILING_TRAIL_STEP_ATR", 0.5)
+STRATEGY_ATR_PERIOD = max(2, _int("STRATEGY_ATR_PERIOD", 14))
+
+# Risk Management & Consecutive Loss Circuit Breakers.
+STRATEGY_RISK_MAX_CONSECUTIVE_LOSSES_THROTTLE = max(1, _int("STRATEGY_RISK_MAX_CONSECUTIVE_LOSSES_THROTTLE", 3))
+STRATEGY_RISK_MAX_CONSECUTIVE_LOSSES_HALT = max(1, _int("STRATEGY_RISK_MAX_CONSECUTIVE_LOSSES_HALT", 5))
+STRATEGY_RISK_DAILY_MAX_DRAWDOWN_RS = _float("STRATEGY_RISK_DAILY_MAX_DRAWDOWN_RS", 3000.0)
+STRATEGY_RISK_DAILY_MAX_DRAWDOWN_PCT = _float("STRATEGY_RISK_DAILY_MAX_DRAWDOWN_PCT", 0.04)
+
+LIVE_FEED_LEVEL_INSTRUMENTS_MANDATORY = _bool(
+    "LIVE_FEED_LEVEL_INSTRUMENTS_MANDATORY", True
+)

@@ -84,6 +84,18 @@ checks ``ltp > 0`` from this endpoint, so it must remain reachable.
     WS   /ws/chart
     WS   /all-feeds  (and /ws/all-feeds)
     WS   /list-feeds (and /ws/list-feeds)          <-- NEW
+
+2026-10-29 — live-feed subscription-budget integration
+------------------------------------------------------
+``_ensure_subscription()`` now pins the instrument in
+``services.feed_subscription_manager`` before calling
+``live_feed_service.subscribe_instrument()``. This places the key in
+the manager's on-demand LRU tier so it is protected from
+ATM-band eviction for the lifetime of the requesting WebSocket /
+chart client. The pin is also deliberately executed even when the
+instrument is already subscribed — this refreshes the LRU timestamp
+so a long-lived chart page does not fall to the back of the eviction
+queue while other clients race ahead.
 """
 
 from __future__ import annotations
@@ -119,7 +131,6 @@ _UPSTOX_RESOLVE_TIMEOUT = 10
 # Soft cap on a single /list-feeds subscription so a stray client cannot
 # ask for every listed contract on the exchange.
 _MAX_LIST_FEED_INSTRUMENTS = 500
-
 
 # ---------------------------------------------------------------------------
 # WebSocket help — self-documenting
@@ -179,7 +190,6 @@ _WS_ROUTES: list[dict[str, Any]] = [
         ],
     },
 ]
-
 
 def _ws_help_text(base_ws: str, base_http: str) -> str:
     """Plain-text guide rendered by ``GET /live/ws-help``."""
@@ -324,11 +334,9 @@ def _ws_help_text(base_ws: str, base_http: str) -> str:
     add("=" * 64)
     return "\n".join(lines)
 
-
 def _ws_help_html(base_ws: str, base_http: str) -> str:
     """HTML rendering of the same guide (pretty in a browser)."""
     text = _ws_help_text(base_ws, base_http)
-    # HTML-escape the text block and wrap it in a minimal styled <pre>.
     escaped = (
         text.replace("&", "&amp;")
         .replace("<", "&lt;")
@@ -358,7 +366,6 @@ def _ws_help_html(base_ws: str, base_http: str) -> str:
         f"<pre>{escaped}</pre>"
         "</body></html>"
     )
-
 
 def _ws_help_json(base_ws: str, base_http: str) -> dict[str, Any]:
     """Structured JSON guide (for programmatic consumption)."""
@@ -431,7 +438,6 @@ def _ws_help_json(base_ws: str, base_http: str) -> dict[str, Any]:
         },
     }
 
-
 def _resolve_base_urls(request: Request) -> tuple[str, str]:
     """Return ``(base_ws, base_http)`` derived from the incoming request."""
     scheme = request.url.scheme  # "http" or "https"
@@ -440,7 +446,6 @@ def _resolve_base_urls(request: Request) -> tuple[str, str]:
     ws_scheme = "wss" if scheme == "https" else "ws"
     ws_base = f"{ws_scheme}://{host}"
     return ws_base, http
-
 
 @router.get(
     "/live/ws-help",
@@ -468,7 +473,6 @@ def ws_help(
     if format == "json":
         return _ws_help_json(base_ws, base_http)
     return PlainTextResponse(content=_ws_help_text(base_ws, base_http))
-
 
 # ---------------------------------------------------------------------------
 # On-miss Upstox resolution
@@ -575,7 +579,6 @@ def _resolve_via_upstox(
     )
     return entry
 
-
 # ---------------------------------------------------------------------------
 # Instrument resolution helper
 # ---------------------------------------------------------------------------
@@ -659,7 +662,6 @@ def _resolve_entry(
         )
     return None
 
-
 def _feed_snapshot(entry: dict[str, Any]) -> dict[str, Any]:
     """Return the current last-tick snapshot for one instrument, if any."""
     status = live_feed_service.status()
@@ -669,7 +671,6 @@ def _feed_snapshot(entry: dict[str, Any]) -> dict[str, Any]:
         "subscribed": live_feed_service.is_subscribed(entry["instrument_key"]),
         "last_tick_at": last_tick,
     }
-
 
 def _build_snapshot(entry: dict[str, Any]) -> dict[str, Any]:
     """Return the current live snapshot for one instrument.
@@ -728,7 +729,6 @@ def _build_snapshot(entry: dict[str, Any]) -> dict[str, Any]:
         "generated_at": now,
     }
 
-
 # ---------------------------------------------------------------------------
 # REST — status / registry
 # ---------------------------------------------------------------------------
@@ -738,7 +738,6 @@ def live_status() -> dict[str, Any]:
         "feed": live_feed_service.status(),
         "instruments": len(instrument_registry.all()),
     }
-
 
 @router.get("/live/instruments")
 def list_live_instruments(
@@ -752,7 +751,6 @@ def list_live_instruments(
         is_index=is_index,
     )
     return {"count": len(items), "instruments": items}
-
 
 @router.get("/live/instruments/resolve")
 def resolve_instrument(
@@ -768,7 +766,6 @@ def resolve_instrument(
         strike_type=type,
     )
     return entry  # type: ignore[return-value]
-
 
 @router.get("/live/snapshot")
 def live_snapshot_by_selector(
@@ -794,7 +791,6 @@ def live_snapshot_by_selector(
     )
     return _build_snapshot(entry)  # type: ignore[arg-type]
 
-
 @router.get("/live/snapshot/{instrument_key:path}")
 def live_snapshot_by_key(instrument_key: str) -> dict[str, Any]:
     """Live-tick snapshot for one instrument (path form).
@@ -810,7 +806,6 @@ def live_snapshot_by_key(instrument_key: str) -> dict[str, Any]:
     """
     entry = _resolve_entry(instrument_key=instrument_key)
     return _build_snapshot(entry)  # type: ignore[arg-type]
-
 
 # ---------------------------------------------------------------------------
 # WebSocket helpers
@@ -845,19 +840,59 @@ def _parse_filters(
     all_ = (q.get("all", "false").lower() in {"1", "true", "yes"})
     return keys, underlying, strike, type_, all_
 
-
 def _ensure_subscription(instrument_key: str | None) -> None:
-    """Register + subscribe a single key with the live feed."""
+    """Register + subscribe a single key with the live feed.
+
+    Also pins the key in the feed-subscription manager's on-demand LRU
+    so the client's instrument is protected from ATM-band eviction
+    for the lifetime of the connection. The pin is refreshed even
+    when the instrument is already subscribed — a long-lived chart
+    page must not fall to the back of the LRU while other clients
+    race ahead.
+
+    Never raises.
+    """
     if not instrument_key:
         return
     key = str(instrument_key).strip()
     if not key:
         return
-    if not instrument_registry.get(key):
-        instrument_registry.register_adhoc(key)
-    if not live_feed_service.is_subscribed(key):
-        live_feed_service.subscribe_instrument(key)
 
+    # Register ad-hoc if the key is not in the registry. This is what
+    # makes /chart/<raw-key> work for keys that are not in the backup
+    # tree yet.
+    try:
+        if not instrument_registry.get(key):
+            instrument_registry.register_adhoc(key)
+    except Exception:
+        logger.exception(
+            "[live-routes] register_adhoc failed for %s", key
+        )
+
+    # Pin via the feed-subscription manager BEFORE the subscribe check.
+    # This refreshes the LRU timestamp on every call (even for keys
+    # that are already subscribed) so a long-lived client's instrument
+    # is never evicted in favour of a newer, shorter-lived pin.
+    try:
+        from services.feed_subscription_manager import (
+            feed_subscription_manager,
+        )
+        feed_subscription_manager.pin(key)
+    except Exception:
+        logger.exception(
+            "[live-routes] feed-sub manager pin failed for %s", key
+        )
+
+    # Actually subscribe via the streamer. live_feed_service
+    # .subscribe_instrument() also pins via the manager, so this is
+    # idempotent — no double-counting, no race.
+    try:
+        if not live_feed_service.is_subscribed(key):
+            live_feed_service.subscribe_instrument(key)
+    except Exception:
+        logger.exception(
+            "[live-routes] subscribe_instrument failed for %s", key
+        )
 
 def _ensure_subscriptions(keys: list[str] | None) -> None:
     """Register + subscribe every key in ``keys`` with the live feed."""
@@ -865,7 +900,6 @@ def _ensure_subscriptions(keys: list[str] | None) -> None:
         return
     for k in keys:
         _ensure_subscription(k)
-
 
 async def _pump_with_client_listener(ws: WebSocket, sub) -> None:
     """Pump broadcast messages to client while concurrently listening
@@ -968,7 +1002,6 @@ async def _pump_with_client_listener(ws: WebSocket, sub) -> None:
         except Exception:
             pass
 
-
 # ---------------------------------------------------------------------------
 # WebSocket routes
 # ---------------------------------------------------------------------------
@@ -1002,7 +1035,6 @@ async def ws_live(ws: WebSocket) -> None:
     )
     await _pump_with_client_listener(ws, sub)
 
-
 @router.websocket("/ws/chart")
 async def ws_chart(ws: WebSocket) -> None:
     await ws.accept()
@@ -1030,7 +1062,6 @@ async def ws_chart(ws: WebSocket) -> None:
         )
     )
     await _pump_with_client_listener(ws, sub)
-
 
 @router.websocket("/all-feeds")
 @router.websocket("/ws/all-feeds")
@@ -1067,7 +1098,6 @@ async def ws_all_feeds(ws: WebSocket) -> None:
         )
     )
     await _pump_with_client_listener(ws, sub)
-
 
 @router.websocket("/list-feeds")
 @router.websocket("/ws/list-feeds")

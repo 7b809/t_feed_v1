@@ -1,9 +1,19 @@
 # services/live_feed_service.py
 """Upstox full-mode WebSocket manager.
 
-Subscribes to every instrument in the registry, and for each incoming
-feed extracts the 1-min candle and tick snapshot, then broadcasts to
-UI clients.
+Subscriptions are owned by ``feed_subscription_manager`` (2026 capacity
+policy). The feed no longer subscribes to every registry key on
+startup — it subscribes to the mandatory set (four index rows +
+health-feed + isolated/promoted) plus the per-index ATM strike band
+(seeded from cached LTPs and updated every
+``LIVE_FEED_ATM_RECALC_SECONDS`` from live ticks). Any other key is
+pinned on demand (chart page, layout page, /api/upstox/subscribe,
+dummy-order service). The manager caps the total at
+``LIVE_FEED_MAX_TOTAL_INSTRUMENTS`` so reconnects never briefly exceed
+the 2,000 hard cap.
+
+Setting ``LIVE_FEED_ATM_BAND_ENABLED=false`` restores the pre-2026
+"subscribe every registry key, capped at MAX_TOTAL" behaviour.
 
 SR integration + level isolation
 --------------------------------
@@ -12,15 +22,14 @@ SR integration + level isolation
 * A mid-session SR backfill runs BEFORE the streamer thread is spawned,
   so the dashboard has OR/SR levels immediately — BUT ONLY when the
   current market-local time is inside [09:15, 23:59] IST on a
-  Mon–Fri, non-holiday trading day. Outside that window (e.g. a 00:33
-  startup) the backfill is skipped; live ticks will populate the SR
-  engine when the market opens.
+  Mon–Fri, non-holiday trading day.
 * Each tick is forwarded to ``live_sr_levels_service.on_tick`` so the
   SR engine builds 1-min candles and detects pivots.
 * Every NIFTY / BANKNIFTY / MIDCPNIFTY / SENSEX index tick is forwarded
   to ``level_isolated_instrument_service.on_tick`` so the
-  level-isolation engine can watch for R3 / S3 touches. Option ticks
-  are ignored by the isolation engine.
+  level-isolation engine can watch for R3 / S3 touches.
+* Every index tick is also forwarded to
+  ``feed_subscription_manager.on_index_tick`` so the ATM band can slide.
 """
 
 from __future__ import annotations
@@ -71,6 +80,7 @@ class LiveFeedService:
         self._last_health_log_time: float = 0.0
         self._latest_ltp: dict[str, float] = {}
         self._lifecycle_lock = threading.Lock()
+        self._subscribe_lock = threading.RLock()
         self._generation: int = 0
 
     def set_loop(self, loop) -> None:
@@ -109,7 +119,7 @@ class LiveFeedService:
             return
         try:
             entries: list[dict[str, Any]] = []
-            for key in self._subscribed:
+            for key in list(self._subscribed):
                 entry = instrument_registry.get(key)
                 if entry is not None:
                     entries.append(entry)
@@ -144,7 +154,7 @@ class LiveFeedService:
 
         try:
             entries: list[dict[str, Any]] = []
-            for key in self._subscribed:
+            for key in list(self._subscribed):
                 entry = instrument_registry.get(key)
                 if entry is not None:
                     entries.append(entry)
@@ -152,6 +162,175 @@ class LiveFeedService:
         except Exception:
             logger.exception(
                 "[live-feed] SR backfill failed; continuing without it"
+            )
+
+    # ------------------------------------------------------------------ #
+    # NEW: subscription-budget integration                               #
+    # ------------------------------------------------------------------ #
+    def _build_initial_subscription_set(self) -> list[str]:
+        """Determine the initial subscription list via the manager."""
+        from services.feed_subscription_manager import (
+            feed_subscription_manager,
+        )
+
+        mandatory: list[str] = [k for k, _ in DEFAULT_CORE_INSTRUMENTS]
+        if config.HEALTH_FEED_INSTRUMENT:
+            hf = config.HEALTH_FEED_INSTRUMENT.strip()
+            if hf and hf not in mandatory:
+                mandatory.append(hf)
+
+        # Isolated instrument
+        try:
+            iso_status = level_isolated_instrument_service.last_status()
+            iso = (iso_status or {}).get("isolated") or {}
+            iso_key = str(iso.get("instrument_key") or "").strip()
+            if iso_key and iso_key not in mandatory:
+                mandatory.append(iso_key)
+                feed_subscription_manager.set_isolated(iso_key)
+        except Exception:
+            logger.exception(
+                "[live-feed] isolated-instrument lookup failed during start"
+            )
+
+        # Promoted instrument
+        try:
+            from services.isolated_instrument_promotion_service import (
+                isolated_instrument_promotion_service,
+            )
+            active = isolated_instrument_promotion_service.read_active()
+            if isinstance(active, dict):
+                promo_key = str(
+                    active.get("to_instrument_key") or ""
+                ).strip()
+                if promo_key and promo_key not in mandatory:
+                    mandatory.append(promo_key)
+                    feed_subscription_manager.set_promoted(promo_key)
+        except Exception:
+            logger.exception(
+                "[live-feed] promotion lookup failed during start"
+            )
+
+        feed_subscription_manager.set_mandatory(mandatory)
+        feed_subscription_manager.set_apply_callback(
+            self._apply_desired_subscriptions
+        )
+
+        if not getattr(config, "LIVE_FEED_ATM_BAND_ENABLED", True):
+            # Legacy behaviour: everything in the registry, capped at
+            # LIVE_FEED_MAX_TOTAL_INSTRUMENTS.
+            all_keys = list(instrument_registry.subscribe_keys())
+            max_total = int(
+                getattr(config, "LIVE_FEED_MAX_TOTAL_INSTRUMENTS", 1800)
+            )
+            ordered: list[str] = []
+            seen: set[str] = set()
+            for k in mandatory + all_keys:
+                if k and k not in seen:
+                    seen.add(k)
+                    ordered.append(k)
+                    if max_total > 0 and len(ordered) >= max_total:
+                        break
+            logger.info(
+                "[live-feed] legacy mode — subscribing %d key(s) "
+                "(max=%d, registry=%d)",
+                len(ordered), max_total, len(all_keys),
+            )
+            return ordered
+
+        # Manager mode: seed ATM bands from cached LTPs (may be empty on
+        # a fresh process — subsequent index ticks will fill them in).
+        try:
+            feed_subscription_manager.recompute_atm_bands_from_registry(
+                instrument_registry
+            )
+        except Exception:
+            logger.exception(
+                "[live-feed] initial ATM band seeding failed"
+            )
+
+        return feed_subscription_manager.desired_keys()
+
+    def _apply_desired_subscriptions(self, desired: set[str]) -> None:
+        """Callback invoked by ``feed_subscription_manager.apply()``.
+
+        Diffs the desired set against what we currently have,
+        batch-subscribes / unsubscribes on the streamer, and keeps
+        ``self._subscribed`` and the SR engine in sync.
+        """
+        with self._subscribe_lock:
+            current = set(self._subscribed)
+            to_add = desired - current
+            to_remove = current - desired
+            if not to_add and not to_remove:
+                return
+
+            streamer = self._streamer
+            running = bool(
+                self._thread
+                and self._thread.is_alive()
+                and streamer is not None
+            )
+
+            # SR registration for newly-added instruments.
+            if (
+                config.LIVE_SR_ENABLED
+                and config.LIVE_SR_TRACK_ALL_INSTRUMENTS
+                and to_add
+            ):
+                for k in to_add:
+                    try:
+                        entry = instrument_registry.get(k)
+                        if entry is not None:
+                            live_sr_levels_service.register_instrument(
+                                entry
+                            )
+                    except Exception:
+                        logger.exception(
+                            "[live-feed] SR register failed for %s", k
+                        )
+
+            BATCH = 50
+
+            if running:
+                add_list = list(to_add)
+                for i in range(0, len(add_list), BATCH):
+                    chunk = add_list[i:i + BATCH]
+                    try:
+                        streamer.subscribe(
+                            chunk, config.UPSTOX_WS_MODE
+                        )
+                    except Exception:
+                        logger.exception(
+                            "[live-feed] streamer.subscribe batch "
+                            "failed (size=%d)", len(chunk),
+                        )
+                        continue
+
+                remove_list = list(to_remove)
+                for i in range(0, len(remove_list), BATCH):
+                    chunk = remove_list[i:i + BATCH]
+                    try:
+                        streamer.unsubscribe(chunk)
+                    except Exception:
+                        logger.exception(
+                            "[live-feed] streamer.unsubscribe batch "
+                            "failed (size=%d)", len(chunk),
+                        )
+                        continue
+
+            # Update local tracking.
+            for k in to_add:
+                if k not in self._subscribed:
+                    self._subscribed.append(k)
+            if to_remove:
+                self._subscribed = [
+                    k for k in self._subscribed if k not in to_remove
+                ]
+
+            logger.info(
+                "[live-feed] subscription delta applied — +%d -%d "
+                "(total=%d)",
+                len(to_add), len(to_remove), len(self._subscribed),
             )
 
     # ------------------------------------------------------------------ #
@@ -165,10 +344,10 @@ class LiveFeedService:
                 logger.info("Live feed auto-start disabled by config")
                 return False
 
-            keys = instrument_registry.subscribe_keys()
             self._stop.clear()
-            self._subscribed = list(keys)
-            self._ensure_core_subscriptions()
+            self._subscribed = list(
+                self._build_initial_subscription_set()
+            )
 
             self._register_all_with_sr_engine()
             self._run_sr_backfill(reason="feed_start")
@@ -191,26 +370,34 @@ class LiveFeedService:
             return True
 
     def stop(self) -> None:
+        # Set the stop flag and bump the generation without holding
+        # the lifecycle lock during join() — the WS thread may be
+        # inside a subscribe callback (through the manager) that
+        # acquires _subscribe_lock, and we must not deadlock.
+        self._stop.set()
+        self._generation += 1
+        old_generation = self._generation - 1
+
         with self._lifecycle_lock:
-            self._stop.set()
-            self._generation += 1
-            old_generation = self._generation - 1
-            try:
-                if self._streamer is not None:
-                    self._streamer.disconnect()
-            except Exception:
-                logger.exception("Error disconnecting Upstox streamer")
+            streamer = self._streamer
             thread = self._thread
-            if thread and thread.is_alive():
-                thread.join(timeout=10)
-                if thread.is_alive():
-                    logger.warning(
-                        "Live feed worker (generation=%d) did not exit "
-                        "within 10s; orphaned.",
-                        old_generation,
-                    )
             self._thread = None
-            logger.info("Live feed stopped")
+
+        try:
+            if streamer is not None:
+                streamer.disconnect()
+        except Exception:
+            logger.exception("Error disconnecting Upstox streamer")
+
+        if thread and thread.is_alive():
+            thread.join(timeout=10)
+            if thread.is_alive():
+                logger.warning(
+                    "Live feed worker (generation=%d) did not exit "
+                    "within 10s; orphaned.",
+                    old_generation,
+                )
+        logger.info("Live feed stopped")
 
     def restart(self, skip_sr_backfill: bool = False) -> bool:
         self.stop()
@@ -242,13 +429,35 @@ class LiveFeedService:
             return dict(items)
         return dict(self._latest_ltp)
 
+    # ------------------------------------------------------------------ #
+    # On-demand subscription                                             #
+    # ------------------------------------------------------------------ #
     def subscribe_instrument(self, instrument_key: str) -> bool:
+        """Pin + subscribe one instrument on demand.
+
+        Adds the key to the feed-subscription manager's LRU (so it is
+        protected from eviction until the LRU is drained) and then
+        ensures the streamer is actually subscribed to it.
+        """
         key = str(instrument_key or "").strip()
         if not key:
             return False
+
+        # Pin through the manager for LRU accounting.
+        try:
+            from services.feed_subscription_manager import (
+                feed_subscription_manager,
+            )
+            feed_subscription_manager.pin(key)
+        except Exception:
+            logger.exception(
+                "[live-feed] feed-sub manager pin failed for %s", key
+            )
+
         if key in self._subscribed:
             return True
-        with self._lifecycle_lock:
+
+        with self._subscribe_lock:
             if key in self._subscribed:
                 return True
             self._subscribed.append(key)
@@ -263,12 +472,15 @@ class LiveFeedService:
                         live_sr_levels_service.register_instrument(entry)
                 except Exception:
                     logger.exception(
-                        "[live-feed] SR register on subscribe failed for %s",
-                        key,
+                        "[live-feed] SR register on subscribe failed "
+                        "for %s", key,
                     )
 
             streamer = self._streamer
-            if streamer is None or not (self._thread and self._thread.is_alive()):
+            if (
+                streamer is None
+                or not (self._thread and self._thread.is_alive())
+            ):
                 self._stop.clear()
                 self._generation += 1
                 generation = self._generation
@@ -294,6 +506,40 @@ class LiveFeedService:
                 logger.exception("Streamer.subscribe failed for %s", key)
                 return False
 
+    def unsubscribe_instrument(self, instrument_key: str) -> bool:
+        """Remove a key from the on-demand LRU and unsubscribe it."""
+        key = str(instrument_key or "").strip()
+        if not key:
+            return False
+
+        try:
+            from services.feed_subscription_manager import (
+                feed_subscription_manager,
+            )
+            feed_subscription_manager.unpin(key)
+        except Exception:
+            logger.exception(
+                "[live-feed] feed-sub manager unpin failed for %s", key
+            )
+
+        with self._subscribe_lock:
+            if key not in self._subscribed:
+                return True
+            streamer = self._streamer
+            if streamer is not None and self._thread and self._thread.is_alive():
+                try:
+                    streamer.unsubscribe([key])
+                except Exception:
+                    logger.exception(
+                        "[live-feed] streamer.unsubscribe failed for %s",
+                        key,
+                    )
+            self._subscribed = [
+                k for k in self._subscribed if k != key
+            ]
+            logger.info("Unsubscribed on demand: %s", key)
+            return True
+
     # ------------------------------------------------------------------ #
     # Worker loop                                                        #
     # ------------------------------------------------------------------ #
@@ -318,7 +564,9 @@ class LiveFeedService:
     def _connect_and_listen(self, sdk, generation: int) -> None:
         token = token_service.get_access_token()
         if not token:
-            raise RuntimeError("No Upstox access token available for live feed")
+            raise RuntimeError(
+                "No Upstox access token available for live feed"
+            )
         self._ensure_core_subscriptions()
         configuration = sdk.Configuration()
         configuration.access_token = token
@@ -370,7 +618,8 @@ class LiveFeedService:
     # ------------------------------------------------------------------ #
     def _handle_feed(self, message: Any) -> None:
         payload = (
-            message if isinstance(message, dict) else getattr(message, "data", None)
+            message if isinstance(message, dict)
+            else getattr(message, "data", None)
         )
         if not isinstance(payload, dict):
             return
@@ -400,7 +649,9 @@ class LiveFeedService:
                 and instrument_key == config.HEALTH_FEED_INSTRUMENT
             ):
                 now = time.monotonic()
-                interval_seconds = config.HEALTH_FEED_INSTRUMENT_INTERVAL * 60
+                interval_seconds = (
+                    config.HEALTH_FEED_INSTRUMENT_INTERVAL * 60
+                )
                 if (now - self._last_health_log_time) >= interval_seconds:
                     self._last_health_log_time = now
                     candle_1m = tick.get("candle_1m") or {}
@@ -431,9 +682,6 @@ class LiveFeedService:
                     )
 
             # --- LEVEL ISOLATION HOOK --------------------------------- #
-            # Only monitored index ticks are relevant; the service
-            # ignores everything else internally, but the explicit key
-            # gate here avoids the call overhead on ~165 option ticks.
             if (
                 config.LEVEL_ISOLATION_ENABLED
                 and instrument_key in LEVEL_ISOLATION_INDEX_KEYS
@@ -445,7 +693,23 @@ class LiveFeedService:
                     )
                 except Exception:
                     logger.exception(
-                        "[live-feed] level isolation on_tick failed for %s",
+                        "[live-feed] level isolation on_tick failed "
+                        "for %s", instrument_key,
+                    )
+
+                # --- FEED SUBSCRIPTION MANAGER HOOK ------------------ #
+                # Recompute the ATM band for this index (throttled inside
+                # the manager via LIVE_FEED_ATM_RECALC_SECONDS).
+                try:
+                    from services.feed_subscription_manager import (
+                        feed_subscription_manager,
+                    )
+                    feed_subscription_manager.on_index_tick(
+                        instrument_key, float(ltp),
+                    )
+                except Exception:
+                    logger.exception(
+                        "[live-feed] feed-sub manager tick failed for %s",
                         instrument_key,
                     )
             # --------------------------------------------------------- #
@@ -497,7 +761,10 @@ class LiveFeedService:
             efd.get("vtt") or market_level.get("vtt")
             or feed.get("vtt") or feed.get("volume")
             or market_ff.get("volume") or ohlc_vol
-            or (candle_1m.get("volume") if isinstance(candle_1m, dict) else None)
+            or (
+                candle_1m.get("volume")
+                if isinstance(candle_1m, dict) else None
+            )
         )
 
         if ltp is None and candle_1m is None:

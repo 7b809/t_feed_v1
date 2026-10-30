@@ -346,10 +346,10 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
     <div class="chart-toggles-card" id="srParamsCard">
       <div class="chart-toggles-title"><i class="bi bi-sliders me-1"></i>SR Params</div>
       <label class="sr-param-field" for="srLeftBarsInput">Left
-        <input type="number" id="srLeftBarsInput" class="sr-param-input" min="1" max="200" step="1" value="15" inputmode="numeric">
+        <input type="number" id="srLeftBarsInput" class="sr-param-input" min="1" max="200" step="1" value="{{ sr_left_bars }}" inputmode="numeric">
       </label>
       <label class="sr-param-field" for="srRightBarsInput">Right
-        <input type="number" id="srRightBarsInput" class="sr-param-input" min="1" max="200" step="1" value="3" inputmode="numeric">
+        <input type="number" id="srRightBarsInput" class="sr-param-input" min="1" max="200" step="1" value="{{ sr_right_bars }}" inputmode="numeric">
       </label>
       <button type="button" id="srApplyBtn" class="label-toggle-btn active"><i class="bi bi-check2-circle me-1"></i>Apply</button>
       <button type="button" id="srResetBtn" class="label-toggle-btn"><i class="bi bi-arrow-counterclockwise me-1"></i>Reset</button>

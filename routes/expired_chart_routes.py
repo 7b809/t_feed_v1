@@ -49,6 +49,8 @@ from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
 from core.logger import get_logger
+from core import config  # (likely already imported; add if missing)
+
 from services.token_service import token_service
 from upstox_app.services.expired_instruments_service import (
     expired_instruments_service,
@@ -160,6 +162,8 @@ def expired_chart_page_empty(request: Request) -> HTMLResponse:
         context={
             "app_name":       "Market Data Foundation",
             "instrument_key": "",
+            "sr_left_bars":  config.LIVE_SR_LEFT_BARS,
+"sr_right_bars": config.LIVE_SR_RIGHT_BARS,
             "known_indexes":  _KNOWN_INDEXES,
         },
     )

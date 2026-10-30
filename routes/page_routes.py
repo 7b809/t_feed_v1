@@ -27,6 +27,7 @@ from typing import Any
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, Response
 from fastapi.templating import Jinja2Templates
+from core import config  # (likely already imported; add if missing)
 
 from services.instrument_registry import instrument_registry
 
@@ -160,9 +161,11 @@ def chart_page(request: Request, instrument_key: str) -> HTMLResponse:
             "instrument": instrument,
             "instruments": _build_side_panel_instruments(),
             "total_candles": 0,
+            # NEW — single-source-of-truth for the SR Params card
+            "sr_left_bars": config.LIVE_SR_LEFT_BARS,
+            "sr_right_bars": config.LIVE_SR_RIGHT_BARS,
         },
     )
-
 
 @router.get("/isolated", response_class=HTMLResponse)
 def isolated_page(request: Request) -> HTMLResponse:

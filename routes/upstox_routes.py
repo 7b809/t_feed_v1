@@ -527,7 +527,6 @@ def historical_candles_multi(
         "data": data,
     }
 
-
 # ---------------------------------------------------------------------------
 # Live feed subscription
 # ---------------------------------------------------------------------------
@@ -549,14 +548,29 @@ def subscription_status(
         "trading_symbol": entry.get("trading_symbol"),
     }
 
-
 @router.post("/subscribe")
 def subscribe_instrument(payload: dict[str, Any]) -> dict[str, Any]:
-    """Request on-demand subscription to the live feed."""
+    """Request on-demand subscription to the live feed.
+
+    Pins the key in the feed-subscription manager's LRU so it is
+    protected from eviction until the LRU is drained, then ensures the
+    streamer is actually subscribed to it.
+    """
     instrument_key = str(payload.get("instrument_key") or "").strip()
     if not instrument_key:
         raise HTTPException(
             status_code=400, detail="instrument_key is required"
+        )
+
+    try:
+        from services.feed_subscription_manager import (
+            feed_subscription_manager,
+        )
+        feed_subscription_manager.pin(instrument_key)
+    except Exception:
+        logger.exception(
+            "[subscribe] feed-sub manager pin failed for %s",
+            instrument_key,
         )
 
     ok = False
@@ -567,4 +581,19 @@ def subscribe_instrument(payload: dict[str, Any]) -> dict[str, Any]:
             "Dynamic subscribe failed for %s", instrument_key,
         )
 
-    return {"subscribed": ok, "instrument_key": instrument_key}
+    try:
+        from core import config as _cfg
+        max_total = int(
+            getattr(_cfg, "LIVE_FEED_MAX_TOTAL_INSTRUMENTS", 1800)
+        )
+    except Exception:
+        max_total = None
+
+    return {
+        "subscribed": ok,
+        "instrument_key": instrument_key,
+        "max_total_instruments": max_total,
+        "currently_subscribed": (
+            live_feed_service.status().get("instrument_count")
+        ),
+    }

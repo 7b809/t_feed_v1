@@ -18,7 +18,7 @@ from typing import Any
 from fastapi import APIRouter, Body, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
-
+from core import config
 from services.layout_service import layout_service
 
 router = APIRouter(tags=["layout"])
@@ -61,6 +61,9 @@ def _render_layout(request: Request, layout: dict[str, Any]) -> HTMLResponse:
             "layout": layout,
             "panes": panes,
             "default_key": default_key,
+            # NEW
+            "sr_left_bars":  config.LIVE_SR_LEFT_BARS,
+            "sr_right_bars": config.LIVE_SR_RIGHT_BARS,
         },
     )
 

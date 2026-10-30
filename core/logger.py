@@ -10,7 +10,7 @@ destinations:
     logs/<module>.log                          (rotating by line count)
     logs_text/<module>.txt                     (plain append-only mirror)
 
-and, **on non-Windows platforms only**, in addition, every record is
+and, **on Windows only**, in addition, every record is
 **fanned out** into a single shared project-wide file pair:
 
     logs/<PROJECT_LOG_NAME>.log                (rotating by line count)
@@ -20,17 +20,28 @@ and, **on non-Windows platforms only**, in addition, every record is
 ``PROJECT_LOG_NAME`` environment variable) so the combined file is
 called e.g. ``logs/local_project.log`` by default.
 
-Why the combined file is gated to non-Windows
----------------------------------------------
-On Windows, ``os.replace`` inside ``doRollover()`` can raise
-``PermissionError`` if any other process (or a lingering handle) still
-has the target file open. Because the combined file is shared
-project-wide and may be tailed / opened by editors, antivirus, or
-another Python process, rotation on Windows is unreliable. To avoid
-silently losing records (or crashing the emit path) we disable the
-combined handler pair on Windows (``os.name == "nt"``). Per-module
-files are still written on every platform, since each module owns a
-distinct path and therefore has no contention.
+Why the combined file is gated to Windows only
+----------------------------------------------
+On Linux / macOS the project can be run under a supervisor that opens
+many long-lived workers, and ``os.replace`` inside ``doRollover()``
+interacts badly with editors / tailers that hold the shared file open
+across rotations: on Linux the second handler keeps writing to the
+unlinked inode (silently losing records after rotation); on macOS the
+rename succeeds but the tail may be pointed at the wrong inode.
+
+Windows is the platform this project runs on in production, and there
+we **want** a single combined file so operators can grep one log
+across every module. Rotation on Windows can hit ``PermissionError``
+when the file is held open by an editor / antivirus / another Python
+process, so we:
+
+  * enable the combined pair on ``os.name == "nt"`` **only**;
+  * add defensive handling in ``LineCountRotatingHandler.emit()`` so a
+    failed rotation is logged once, retried on the next emit, and the
+    record is never lost.
+
+Per-module files are still written on every platform, since each
+module owns a distinct path and therefore has no contention.
 
 Why the combined file is a *single shared handler pair*
 ------------------------------------------------------
@@ -64,12 +75,49 @@ combined file (e.g. no ``[%(filename)s:%(lineno)d]`` because you're
 grepping across modules), add a second formatter function and pass it
 to the combined handler constructor — nothing else in the pipeline
 has to change.
+
+Startup diagnostics
+-------------------
+When this module is first imported, it prints a single one-line summary
+of the detected OS (``os.name``, ``sys.platform``, ``platform.system()``,
+``platform.release()``) and whether the combined project-wide log is
+ENABLED or DISABLED (and, when disabled, that it is because the host is
+NOT Windows). A second print fires the first time the combined handler
+pair is actually created, showing the concrete file paths.
+
+Both prints use ``print(..., flush=True)`` — not the logger — because
+they execute at module-import time, before any ``get_logger()`` call
+exists. They are useful when diagnosing "why did my combined log
+disappear?" on a non-Windows box.
+
+Rotation robustness on Windows
+------------------------------
+On Windows, ``os.replace`` / ``os.remove`` can raise ``PermissionError``
+when the target file is held open by another process (editor, tail,
+antivirus). Since the combined file is now enabled on Windows, this
+module wraps the ``doRollover()`` call inside ``LineCountRotatingHandler
+.emit()`` in its own ``try/except OSError`` so that:
+
+  * the record is **never lost** — if rotation fails we reopen the
+    existing stream (if ``doRollover`` closed it) and continue
+    appending;
+  * a warning is printed **once per handler instance** so the operator
+    sees the situation without the log stream being flooded;
+  * rotation is retried on the next emit, and succeeds as soon as the
+    file lock is released.
+
+The practical consequence: on a Windows box where the combined log is
+being tailed by an editor, the file may grow past ``COMBINED_MAX_LINES``
+until the lock is released. That is a deliberate trade-off — losing
+records is worse than a temporarily un-rotated file.
 """
 
 from __future__ import annotations
 
 import logging
 import os
+import platform
+import sys
 
 # --------------------------------------------------------------------------- #
 # Paths + project name                                                        #
@@ -100,12 +148,45 @@ PER_MODULE_BACKUP_COUNT = int(os.getenv("PER_MODULE_BACKUP_COUNT", "3"))
 # --------------------------------------------------------------------------- #
 # Platform gate for the combined project-wide log pair.                       #
 #                                                                             #
-# Windows has unreliable rotation semantics (``os.replace`` can raise         #
-# ``PermissionError`` when a file is held open by another process, and        #
-# antivirus / editors frequently hold handles on the shared file), so we      #
-# only enable the combined handler pair on non-Windows platforms.            #
+# 2026-10-30 change: the combined log is now ENABLED ON WINDOWS ONLY and      #
+# DISABLED on every other OS. This is the opposite of the previous            #
+# behaviour, which disabled the combined file on Windows because             #
+# ``os.replace`` inside ``doRollover()`` can raise ``PermissionError``        #
+# when the file is held open by another process.                              #
+#                                                                             #
+# We now handle that failure path in ``LineCountRotatingHandler.emit()``     #
+# (see that class) so the record is never lost and the app never crashes.    #
+# Enabling the combined file on Windows gives operators one place to grep    #
+# across every module — which is exactly what production needs.              #
 # --------------------------------------------------------------------------- #
-ENABLE_COMBINED_LOG = os.name != "nt"
+ENABLE_COMBINED_LOG = os.name == "nt"
+
+# --------------------------------------------------------------------------- #
+# Startup diagnostics — OS + combined-log status.                             #
+#                                                                             #
+# Printed once at module import time (before any logger exists, so we use     #
+# plain print()). This makes it obvious in the startup output which OS the    #
+# host is running and whether the shared combined log is expected to appear   #
+# at ``logs/<PROJECT_LOG_NAME>.log`` / ``logs_text/<PROJECT_LOG_NAME>.txt``.  #
+# --------------------------------------------------------------------------- #
+_COMBINED_LOG_STATE = (
+    "ENABLED"
+    if ENABLE_COMBINED_LOG
+    else "DISABLED (os.name != 'nt' — non-Windows; combined file gated to "
+         "Windows only, per the 2026-10-30 logging policy)"
+)
+
+print(
+    f"[core.logger] OS detected: "
+    f"name={os.name!r} "
+    f"sys.platform={sys.platform!r} "
+    f"system={platform.system()!r} "
+    f"release={platform.release()!r} "
+    f"machine={platform.machine()!r} "
+    f"python={platform.python_version()} "
+    f"-> combined project log is {_COMBINED_LOG_STATE}",
+    flush=True,
+)
 
 
 # --------------------------------------------------------------------------- #
@@ -115,6 +196,25 @@ class LineCountRotatingHandler(logging.FileHandler):
     """
     A file handler that rotates the log file after a maximum number of lines.
     Keeps a maximum specified count of old log files.
+
+    Rotation robustness
+    -------------------
+    On Windows ``os.replace`` / ``os.remove`` can raise ``PermissionError``
+    when the target file is held open by another process. Since the
+    combined project-wide file is now enabled on Windows (2026-10-30),
+    ``emit()`` wraps the ``doRollover()`` call in its own try/except so
+    that:
+
+      * the record is never lost — if rotation fails mid-way, the
+        stream is reopened and the record is appended to the current
+        file;
+      * a warning is printed **once per handler instance**;
+      * rotation is retried on the next emit.
+
+    The practical consequence is that the file may grow past
+    ``maxLines`` while the lock is held, then rotate as soon as the
+    lock is released. This is deliberate — losing records is worse
+    than a temporarily un-rotated file.
     """
 
     def __init__(self, filename, maxLines=1000, backupCount=3, encoding="utf-8"):
@@ -122,6 +222,8 @@ class LineCountRotatingHandler(logging.FileHandler):
         self.maxLines = maxLines
         self.backupCount = backupCount
         self.line_count = self._count_existing_lines()
+        # One-shot warning flag for the "rollover failed" case.
+        self._rollover_warned = False
 
     def _count_existing_lines(self) -> int:
         """
@@ -146,13 +248,53 @@ class LineCountRotatingHandler(logging.FileHandler):
         """
         Emits a record and rotates if writing the record would exceed
         the configured line threshold.
+
+        A rotation failure (most commonly ``PermissionError`` on
+        Windows when the file is held open by another process) is
+        caught here so that the record is still written to the
+        current file and rotation is retried on the next emit.
         """
         try:
             formatted_message = self.format(record)
             record_line_count = formatted_message.count("\n") + 1
 
             if self.shouldRollover(record_line_count):
-                self.doRollover()
+                try:
+                    self.doRollover()
+                except OSError as exc:
+                    # Rotation failed — most likely Windows holding a
+                    # lock on the file. Reopen the stream if
+                    # doRollover() closed it, then continue appending
+                    # so the record is not lost. Rate-limit the
+                    # warning to once per handler instance.
+                    if self.stream is None:
+                        try:
+                            self.stream = self._open()
+                        except Exception:
+                            # Could not reopen at all — fall through to
+                            # handleError so the operator sees it.
+                            self.handleError(record)
+                            return
+
+                    if not self._rollover_warned:
+                        self._rollover_warned = True
+                        try:
+                            print(
+                                f"[core.logger] WARNING: rollover failed "
+                                f"for {self.baseFilename} "
+                                f"({type(exc).__name__}); continuing to "
+                                f"append without rotation. This is "
+                                f"expected on Windows when the file is "
+                                f"held open by another process. Rotation "
+                                f"will be retried on the next emit.",
+                                file=sys.stderr,
+                                flush=True,
+                            )
+                        except Exception:
+                            # print() into sys.stderr can itself fail on
+                            # exotic hosts; never let the log path crash.
+                            pass
+                    # Fall through to append to the current stream.
 
             super().emit(record)
             self.line_count += record_line_count
@@ -176,6 +318,10 @@ class LineCountRotatingHandler(logging.FileHandler):
         file.log.2 -> file.log.3
         file.log.1 -> file.log.2
         file.log   -> file.log.1
+
+        May raise ``OSError`` (``PermissionError`` on Windows) when a
+        target file is held open by another process. The caller —
+        ``emit()`` — handles that exception gracefully.
         """
         if self.stream:
             self.stream.close()
@@ -245,11 +391,11 @@ def _build_formatter() -> logging.Formatter:
 # Combined (project-wide) handler singletons                                  #
 # --------------------------------------------------------------------------- #
 # These are created lazily, once per process, the first time
-# get_logger() is called — and only on non-Windows platforms (see
-# ENABLE_COMBINED_LOG above). Every subsequent get_logger() call
-# attaches the *same two handler instances* to that module's logger,
-# so there is exactly one writer on each combined file for the whole
-# process — rotation is therefore race-free.
+# get_logger() is called — and only on Windows (see ENABLE_COMBINED_LOG
+# above). Every subsequent get_logger() call attaches the *same two
+# handler instances* to that module's logger, so there is exactly one
+# writer on each combined file for the whole process — rotation is
+# therefore race-free.
 _COMBINED_LOG_HANDLER: LineCountRotatingHandler | None = None
 _COMBINED_TEXT_HANDLER: PlainTextHandler | None = None
 
@@ -261,9 +407,9 @@ def _ensure_combined_handlers() -> tuple[
 
     Called from ``get_logger()`` after the log directories are known
     to exist, and only when ``ENABLE_COMBINED_LOG`` is True (i.e. on
-    non-Windows platforms). Safe to call concurrently — Python's
-    module import lock guarantees the ``if None:`` check is only
-    executed once.
+    Windows platforms). Safe to call concurrently — Python's module
+    import lock guarantees the ``if None:`` check is only executed
+    once.
     """
     global _COMBINED_LOG_HANDLER, _COMBINED_TEXT_HANDLER
 
@@ -296,6 +442,16 @@ def _ensure_combined_handlers() -> tuple[
 
     _COMBINED_LOG_HANDLER = combined_log_handler
     _COMBINED_TEXT_HANDLER = combined_text_handler
+
+    # One-time confirmation print — fires the first time any module calls
+    # get_logger() on a platform that supports the combined pair. Useful
+    # in the startup console to prove the shared file is actually wired.
+    print(
+        f"[core.logger] Combined project log ACTIVATED: "
+        f"{combined_log_path} + {combined_text_path}",
+        flush=True,
+    )
+
     return combined_log_handler, combined_text_handler
 
 
@@ -311,7 +467,7 @@ def get_logger(filename: str, log_level=logging.DEBUG) -> logging.Logger:
       - a rotating .log file under logs/<module>.log
       - an append-only .txt file under logs_text/<module>.txt
 
-    and, **on non-Windows platforms only**, additionally to the shared
+    and, **on Windows platforms only**, additionally to the shared
     combined project log:
 
       - logs/<PROJECT_LOG_NAME>.log
@@ -394,10 +550,11 @@ def get_logger(filename: str, log_level=logging.DEBUG) -> logging.Logger:
     # ------------------------------------------------------------------ #
     # 4. Combined project-wide handler pair (shared singletons)           #
     #                                                                     #
-    # Enabled only on non-Windows platforms. On Windows the shared        #
-    # rotating file can raise ``PermissionError`` during rollover, so     #
-    # we skip the combined pair entirely there and rely on the            #
-    # per-module files instead.                                           #
+    # Enabled on Windows only (2026-10-30 logging policy). Windows is     #
+    # the production host and operators want a single file to grep        #
+    # across every module. Rotation failures (``PermissionError`` when    #
+    # the file is held open) are handled inside ``emit()`` so records    #
+    # are never lost.                                                     #
     #                                                                     #
     # These two handler instances are created once for the entire         #
     # process and are shared by every module logger. This is what         #
