@@ -49,7 +49,8 @@ from core.logger import get_logger
 from routes.admin_routes import _run_full_refresh_sync
 from routes.admin_routes import router as admin_router
 from routes.daily_backup_routes import router as daily_backup_router
-from routes.dummy_order_routes import router as dummy_order_router  # <-- NEW
+from routes.dummy_order_routes import router as dummy_order_router  
+from routes.ema_calc_routes import router as ema_calc_router         
 from routes.folder_routes import router as folder_router
 from routes.isolated_instrument_routes import router as isolated_instrument_router
 from routes.layout_routes import router as layout_router
@@ -66,11 +67,11 @@ from routes.live_sr_routes import router as live_sr_router
 from routes.live_sr_calc_routes import router as live_sr_calc_router
 from routes.api_explorer_route import router as api_explorer_router
 
-from upstox_app.apis.expired_instruments_api import (   # <-- NEW
+from upstox_app.apis.expired_instruments_api import (   
     router as expired_instruments_router,
 )
 
-from routes.expired_chart_routes import router as expired_chart_router  # <-- NEW
+from routes.expired_chart_routes import router as expired_chart_router  
 
 
 from services.config_validation import validate_config
@@ -435,12 +436,13 @@ app.include_router(page_router)
 app.include_router(live_router)
 app.include_router(live_sr_router)
 app.include_router(live_sr_calc_router)
+app.include_router(ema_calc_router)              
 app.include_router(admin_router)
 app.include_router(folder_router)
 app.include_router(upstox_router)
-app.include_router(expired_instruments_router)   # <-- NEW
+app.include_router(expired_instruments_router)   
 app.include_router(api_explorer_router)
-app.include_router(expired_chart_router)          # <-- NEW
+app.include_router(expired_chart_router)          
 app.include_router(log_router)
 app.include_router(market_holiday_router)
 app.include_router(order_router)
@@ -450,4 +452,4 @@ app.include_router(layout_router)
 app.include_router(readiness_router)
 app.include_router(isolated_instrument_router)
 app.include_router(simulation_router)
-app.include_router(dummy_order_router)       # <-- NEW
+app.include_router(dummy_order_router)       

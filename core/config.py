@@ -1138,3 +1138,37 @@ STRATEGY_EXT_TRACKED_UNDERLYINGS_SET = {
     for u in STRATEGY_EXT_TRACKED_UNDERLYINGS
     if str(u).strip()
 }
+
+# ===========================================================================
+# EMA CALC — on-demand stateless EMA-cross calculation
+# ===========================================================================
+# Feeds the /ema-calc/calc endpoints.
+#
+#   services/ema_calc_service.py
+#   routes/ema_calc_routes.py
+#
+# Mirrors live_sr_calc_service's design:
+#   * STATELESS — every call fetches fresh data, no shared state, no disk writes
+#   * Merges historical candles from data/<...>/candles.json with today's
+#     intraday 1-min candles from Upstox HistoryV3Api
+#   * Merges by minute; intraday wins on collision
+#   * Detects EMA(9)/EMA(21) crosses using the SAME 6 filters as the
+#     retired live_ema_engine (trend / separation / slope / volume /
+#     body / distance) with EMA_MIN_VALIDATION_SCORE gating.
+#
+# The lookback window (default 11 days) is deliberately larger than the
+# live_sr_calc default (5 days) because EMA(21) needs ~21 bars of warm-up
+# before the first cross can be detected reliably.
+# ===========================================================================
+
+# Default historical lookback window (days). 1..30, default 11.
+# Larger values give EMA(21) more warm-up bars but return a bigger payload.
+EMA_CALC_DEFAULT_LOOKBACK_DAYS = max(1, min(30, _int(
+    "EMA_CALC_DEFAULT_LOOKBACK_DAYS", 11
+)))
+
+# Hard cap on the number of merged candles used for EMA computation.
+# 100..10000, default 3000. Bounds the scan time and the response size.
+EMA_CALC_MAX_CANDLES = max(100, min(10000, _int(
+    "EMA_CALC_MAX_CANDLES", 3000
+)))
