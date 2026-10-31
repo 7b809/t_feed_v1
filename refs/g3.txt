@@ -1,5 +1,6 @@
 ================================================================================
-CONFIG (modified — avg-points SL, R3/+50 trigger, single order)
+CONFIG (modified — avg-points SL with pivot-low clamp, R3/+50 trigger,
+        early-SR fallback, prior-day lookback continuation, single order)
 ================================================================================
   LOT                       = 65
   MAX_ORDERS                = 1          # single order only
@@ -16,6 +17,12 @@ CONFIG (modified — avg-points SL, R3/+50 trigger, single order)
   EARLY_SR_LEFT             = 15
   EARLY_SR_RIGHT            = 3
 
+  # NEW: when the early window has fewer than (LEFT + 1 + RIGHT) candles,
+  # allow the lookback (LEFT) and the confirmation (RIGHT) to pull candles
+  # from the PRIOR trading day's tail / the post-window continuation.
+  EARLY_SR_ALLOW_PRIOR_DAY  = TRUE
+  EARLY_SR_ALLOW_POST_WINDOW_CONFIRM = TRUE
+
   # --- LIVE EXIT resistance (initial) ---
   EXIT_LEFT_INITIAL         = 15
   EXIT_RIGHT_INITIAL        = 30
@@ -29,13 +36,21 @@ CONFIG (modified — avg-points SL, R3/+50 trigger, single order)
 
 
 ================================================================================
-SL — DEFAULT AVG-POINTS SL  (pivot-based SL REMOVED)
+SL — AVG-POINTS SL WITH PIVOT-LOW CLAMP
 ================================================================================
-FUNCTION compute_default_sl(entry, orl):
+FUNCTION compute_default_sl(entry, orl, signal):
     # avg_points = (H - L) / 2 of the opening range
     avg_points = (orl.H - orl.L) / 2.0
-    # SL is always placed below entry (BUY legs only)
-    RETURN entry - avg_points
+
+    # Default SL is entry − avg_points (always below entry, BUY legs only)
+    sl = entry - avg_points
+
+    # NEW: if the default SL sits ABOVE the signal pivot low,
+    # clamp SL below the pivot low using the same avg_points offset.
+    IF signal.pivot_low IS NOT NULL AND sl > signal.pivot_low:
+        sl = signal.pivot_low - avg_points
+
+    RETURN sl
 
 
 ================================================================================
@@ -58,19 +73,144 @@ FUNCTION find_next_resistance(candles, from_idx, entry_price, left, right):
 
 
 ================================================================================
-ENTRY SIGNAL RESOLUTION (unchanged — time-window aware)
+EARLY-WINDOW SR SCAN (modified — prior-day lookback continuation)
+================================================================================
+FUNCTION find_first_sr_in_window(isolated_candles,
+                                 window_start,
+                                 window_end,
+                                 left,
+                                 right,
+                                 allow_prior_day,
+                                 allow_post_window_confirm):
+    # This scans for the FIRST pivot (support or resistance) whose PIVOT BAR
+    # lies inside [window_start, window_end] using `left` prior bars and
+    # `right` confirming bars.
+    #
+    # NEW BEHAVIOUR:
+    #   - If there are not enough candles inside the window to satisfy
+    #     `left` prior bars, borrow the tail of the PREVIOUS day's candles
+    #     (when allow_prior_day = TRUE).
+    #   - If there are not enough candles AFTER the pivot inside the window
+    #     to satisfy `right` confirming bars, allow the confirmation to
+    #     extend into the post-window continuation bars of the same day
+    #     (when allow_post_window_confirm = TRUE).
+
+    # Locate the window boundaries in the continuous (multi-day) series.
+    start_idx = index_of_first_candle_at_or_after(isolated_candles, window_start)
+    end_idx   = index_of_last_candle_at_or_before(isolated_candles, window_end)
+
+    IF start_idx IS NULL OR end_idx IS NULL OR end_idx < start_idx:
+        RETURN NULL
+
+    # Iterate over every potential pivot bar inside the window.
+    FOR i FROM start_idx TO end_idx:
+
+        # ---- Resolve the LEFT lookback window ----
+        left_start = i - left
+        IF left_start < 0:
+            # Not enough history at all — cannot evaluate a pivot here.
+            CONTINUE
+
+        # If the left lookback spills before the current trading day and
+        # prior-day continuation is disabled, skip this pivot.
+        IF NOT allow_prior_day:
+            day_start_idx = index_of_first_candle_of_day(isolated_candles, i)
+            IF left_start < day_start_idx:
+                CONTINUE
+
+        # If the left lookback spills before the window_start and
+        # prior-day continuation is disabled, skip this pivot.
+        IF NOT allow_prior_day AND left_start < start_idx:
+            CONTINUE
+
+        # ---- Resolve the RIGHT confirmation window ----
+        right_end = i + right
+        IF right_end >= len(isolated_candles):
+            # Not enough forward candles at all — cannot confirm.
+            CONTINUE
+
+        # If the right confirmation spills past window_end and
+        # post-window confirmation is disabled, skip this pivot.
+        IF NOT allow_post_window_confirm AND right_end > end_idx:
+            CONTINUE
+
+        # ---- Evaluate pivot (resistance = high, support = low) ----
+        pivot_bar = isolated_candles[i]
+        left_slice  = isolated_candles[left_start : i]
+        right_slice = isolated_candles[i + 1 : right_end + 1]
+
+        is_resistance = TRUE
+        is_support    = TRUE
+
+        FOR k FROM 0 TO len(left_slice) - 1:
+            IF left_slice[k].high >= pivot_bar.high:
+                is_resistance = FALSE
+            IF left_slice[k].low  <= pivot_bar.low:
+                is_support = FALSE
+
+        FOR k FROM 0 TO len(right_slice) - 1:
+            IF right_slice[k].high >= pivot_bar.high:
+                is_resistance = FALSE
+            IF right_slice[k].low  <= pivot_bar.low:
+                is_support = FALSE
+
+        IF is_resistance:
+            RETURN {
+                level         : "resistance",
+                pivot_price   : pivot_bar.high,
+                pivot_idx     : i,
+                pivot_ts      : pivot_bar.ts,
+                pivot_low     : pivot_bar.low,
+                confirmed_idx : right_end,
+                confirm_ts    : isolated_candles[right_end].ts,
+                source        : "EARLY_WINDOW_PRIOR_DAY_CONTINUATION"
+            }
+
+        IF is_support:
+            RETURN {
+                level         : "support",
+                pivot_price   : pivot_bar.low,
+                pivot_idx     : i,
+                pivot_ts      : pivot_bar.ts,
+                pivot_low     : pivot_bar.low,
+                confirmed_idx : right_end,
+                confirm_ts    : isolated_candles[right_end].ts,
+                source        : "EARLY_WINDOW_PRIOR_DAY_CONTINUATION"
+            }
+
+    RETURN NULL
+
+
+================================================================================
+ENTRY SIGNAL RESOLUTION (modified — time-window aware WITH fallback,
+                           prior-day lookback continuation)
 ================================================================================
 FUNCTION resolve_entry_sr(isolated_candles, isolation_time, cfg):
     IF isolation_time < cfg.EARLY_ISOLATION_CUTOFF:
+        # First try to find an SR strictly inside the early window.
+        # NEW: allow prior-day candles to satisfy the LEFT lookback, and
+        # allow post-window candles to satisfy the RIGHT confirmation.
         sr = find_first_sr_in_window(
                  isolated_candles,
                  cfg.EARLY_SR_WINDOW_START,
                  cfg.EARLY_SR_WINDOW_END,
                  cfg.EARLY_SR_LEFT,
-                 cfg.EARLY_SR_RIGHT)
-        IF sr == NULL:
-            RETURN NULL
-        RETURN sr
+                 cfg.EARLY_SR_RIGHT,
+                 cfg.EARLY_SR_ALLOW_PRIOR_DAY,
+                 cfg.EARLY_SR_ALLOW_POST_WINDOW_CONFIRM)
+
+        IF sr != NULL:
+            RETURN sr
+
+        # FALLBACK:
+        # If no early SR exists inside 09:15–09:30, fall back to the
+        # first post-isolation 15/3 SR (search starts at isolation_time).
+        RETURN find_first_sr_for_day(
+                   isolated_candles,
+                   isolation_time,
+                   cfg.SR_LEFT,
+                   cfg.SR_RIGHT)
+
     ELSE:
         RETURN find_first_sr_for_day(
                    isolated_candles,
@@ -80,14 +220,14 @@ FUNCTION resolve_entry_sr(isolated_candles, isolation_time, cfg):
 
 
 ================================================================================
-ORDER RUNNER (simplified — one branch, avg-points SL, R3/+50 trigger)
+ORDER RUNNER (avg-points SL with pivot-low clamp, R3/+50 trigger)
 ================================================================================
-FUNCTION run_order(candles, entry_idx, orl, side, cfg):
+FUNCTION run_order(candles, entry_idx, orl, side, signal, cfg):
     # side ∈ {"BUY"}  (both legs are BUY — isolated PE or opposite PE)
     entry = candles[entry_idx].open
 
-    # --- Default SL: entry − avg_points --------------------------------
-    sl = compute_default_sl(entry, orl)
+    # --- SL: avg-points, clamped below the signal pivot low if needed ---
+    sl = compute_default_sl(entry, orl, signal)
 
     cur_left  = cfg.EXIT_LEFT_INITIAL      # 15
     cur_right = cfg.EXIT_RIGHT_INITIAL     # 30
@@ -95,8 +235,11 @@ FUNCTION run_order(candles, entry_idx, orl, side, cfg):
 
     log = {
         entry             : entry,
+        pivot_low         : signal.pivot_low,
+        avg_points        : (orl.H - orl.L) / 2.0,
         sl_initial        : sl,
         sl_current        : sl,
+        sl_clamped        : (sl != (entry - (orl.H - orl.L) / 2.0)),
         target            : NULL,
         target_pivot_ts   : NULL,
         target_confirm_ts : NULL,
@@ -137,8 +280,8 @@ FUNCTION run_order(candles, entry_idx, orl, side, cfg):
 
             IF trigger:
                 # Move SL to trigger candle's close
-                log.sl_current  = bar.close
-                log.trigger_ts  = bar.ts
+                log.sl_current    = bar.close
+                log.trigger_ts    = bar.ts
                 log.trigger_close = bar.close
                 # Swap live exit config to 15/3
                 cur_left  = cfg.EXIT_LEFT_POST_MOVE
@@ -164,7 +307,7 @@ FUNCTION run_order(candles, entry_idx, orl, side, cfg):
 
 
 ================================================================================
-MAIN SIMULATION (single order — Order 2 logic REMOVED)
+MAIN SIMULATION (single order)
 ================================================================================
 FUNCTION simulate_day(isolated_candles, opposite_candles,
                       fc_isolated, fc_opposite, isolation_time, cfg):
@@ -173,7 +316,7 @@ FUNCTION simulate_day(isolated_candles, opposite_candles,
     or_opp = or_levels(fc_opposite)
     LOG    = { orders:[], or_iso:or_iso, or_opp:or_opp }
 
-    # STEP 1 — entry SR resolution
+    # STEP 1 — entry SR resolution (with early fallback + prior-day lookback)
     sr = resolve_entry_sr(isolated_candles, isolation_time, cfg)
     IF sr == NULL:
         LOG.note = "No SR -> no orders."
@@ -198,7 +341,7 @@ FUNCTION simulate_day(isolated_candles, opposite_candles,
     entry_idx = sr.confirmed_idx
 
     # STEP 3 — single order (no Order 2)
-    o1 = run_order(trade_candles, entry_idx, trade_or, side, cfg)
+    o1 = run_order(trade_candles, entry_idx, trade_or, side, sr, cfg)
     o1.side       = side
     o1.leg        = leg
     o1.instrument = instrument
@@ -214,17 +357,33 @@ FUNCTION simulate_day(isolated_candles, opposite_candles,
 ================================================================================
 BEHAVIOUR NOTES (what each rule now does)
 ================================================================================
-  1. ENTRY SR RESOLUTION is time-window aware (unchanged):
-       - If isolation_time < 09:30 → search SR ONLY inside the 09:15–09:30
-         window (EARLY_SR_LEFT=15 / EARLY_SR_RIGHT=3).
-         No SR inside that window ⇒ NO TRADE for the day.
-       - If isolation_time >= 09:30 → normal post-iso 15/3 SR logic.
+  1. ENTRY SR RESOLUTION is time-window aware WITH EARLY FALLBACK and
+     PRIOR-DAY LOOKBACK CONTINUATION:
+       - If isolation_time < 09:30:
+             * First search SR ONLY with PIVOT BARS inside the 09:15–09:30
+               window (EARLY_SR_LEFT=15 / EARLY_SR_RIGHT=3).
+             * NEW: if the window does not contain enough candles, the
+               LEFT=15 lookback MAY borrow candles from the PREVIOUS
+               trading day's tail (EARLY_SR_ALLOW_PRIOR_DAY = TRUE).
+             * NEW: if the RIGHT=3 confirmation spills past 09:30, the
+               confirmation MAY use post-window candles of the same day
+               (EARLY_SR_ALLOW_POST_WINDOW_CONFIRM = TRUE).
+             * If a valid pivot is found with these rules → use it.
+             * If NOT found → FALLBACK to the first post-isolation 15/3 SR
+               (search starts at isolation_time).
+             * If still none → NO TRADE for the day.
+       - If isolation_time >= 09:30:
+             * Normal post-iso 15/3 SR logic.
+             * If none → NO TRADE for the day.
        - Entry = open of the SR confirmation bar.
 
-  2. SL is now a SIMPLE DEFAULT:
-       - avg_points = (OR.H - OR.L) / 2
-       - SL = entry − avg_points   (always below entry; both legs are BUY)
-       - Pivot-based SL logic is REMOVED.
+  2. SL is AVG-POINTS with PIVOT-LOW CLAMP:
+       - avg_points = (OR.H − OR.L) / 2
+       - Default SL = entry − avg_points   (always below entry; BUY only)
+       - NEW: If the default SL would sit ABOVE the signal pivot low,
+              clamp SL below the pivot low:
+                  SL = pivot_low − avg_points
+       - Pivot-based SL logic (other than the clamp) is REMOVED.
 
   3. SL-MOVE TRIGGER (fires once only):
        - Fires when EITHER condition is met on a bar after entry:
@@ -234,7 +393,7 @@ BEHAVIOUR NOTES (what each rule now does)
        - On trigger:
              SL := trigger candle's close
              live exit config flips from 15/30 → 15/3
-       - The old `R3 − R3_POINTS_TRIGGER` threshold branch is REMOVED.
+       - Fires at the FIRST bar satisfying either condition.
 
   4. EXIT:
        - SL check happens first each bar (conservative — SL wins on ties).
@@ -245,20 +404,40 @@ BEHAVIOUR NOTES (what each rule now does)
   5. ORDER 2 / FLIP LOGIC IS REMOVED:
        - Only one order per day.
        - MAX_ORDERS = 1.
-       - The `order2_eligible` gate, flip-leg selection, and the
-         `RESISTANCE_CONFIRM → Order 2` branch are all removed.
 
   6. BRANCH A / BRANCH B CLASSIFICATION IS REMOVED:
-       - There is no S3-zone branch and no OR-LOW-target branch.
        - All trades use the same SL / trigger / live-resistance flow.
+
+  7. EARLY-WINDOW PRIOR-DAY CONTINUATION:
+       - The 09:15–09:30 window by itself contains only ~16 one-minute
+         candles, which is fewer than LEFT(15) + pivot(1) + RIGHT(3).
+       - Therefore the early SR scan borrows the tail of the previous
+         trading day's candles for the LEFT lookback.
+       - Pivot bars themselves MUST still lie inside 09:15–09:30.
+       - Confirmation bars may extend past 09:30 into the same day.
+       - The earliest valid pivot encountered (by pivot timestamp) is
+         returned as the early SR.
 
 
 ================================================================================
 EDGE CASES (updated)
 ================================================================================
-  * Early isolation (< 09:30) and no SR inside 09:15–09:30 → NO ORDERS.
+  * Early isolation (< 09:30):
+        - If SR found inside 09:15–09:30 (with prior-day lookback
+          continuation) → trade that SR.
+        - Else → FALLBACK to first post-isolation 15/3 SR.
+        - If still none → NO ORDERS.
+  * Prior-day continuation:
+        - Enabled by EARLY_SR_ALLOW_PRIOR_DAY = TRUE.
+        - LEFT=15 lookback may borrow from the previous trading day's tail
+          when the window is too short.
+        - Pivot bar itself MUST be inside 09:15–09:30.
+        - Post-window confirmation allowed when
+          EARLY_SR_ALLOW_POST_WINDOW_CONFIRM = TRUE.
   * Post-09:30 isolation and no post-iso SR → NO ORDERS.
   * Default SL = entry − avg_points (always below entry).
+  * NEW SL CLAMP: if default SL > signal pivot low →
+        SL = pivot_low − avg_points.
   * SL-move trigger fires at most ONCE.
   * Trigger fires at the FIRST bar where price touches R3 OR moves
     more than 50 points above entry — whichever happens first.
