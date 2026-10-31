@@ -1,0 +1,269 @@
+================================================================================
+CONFIG (modified — avg-points SL, R3/+50 trigger, single order)
+================================================================================
+  LOT                       = 65
+  MAX_ORDERS                = 1          # single order only
+  TICK                      = 5.0
+  EARLY_ISOLATION_CUTOFF    = "09:30"
+
+  # --- ENTRY signal SR ---
+  SR_LEFT                   = 15
+  SR_RIGHT                  = 3
+
+  # --- ENTRY SR for EARLY (pre-09:30) isolation ---
+  EARLY_SR_WINDOW_START     = "09:15"
+  EARLY_SR_WINDOW_END       = "09:30"
+  EARLY_SR_LEFT             = 15
+  EARLY_SR_RIGHT            = 3
+
+  # --- LIVE EXIT resistance (initial) ---
+  EXIT_LEFT_INITIAL         = 15
+  EXIT_RIGHT_INITIAL        = 30
+
+  # --- LIVE EXIT resistance (after SL-move trigger) ---
+  EXIT_LEFT_POST_MOVE       = 15
+  EXIT_RIGHT_POST_MOVE      = 3
+
+  # --- SL-move trigger thresholds ---
+  R3_POINTS_TRIGGER         = 50
+
+
+================================================================================
+SL — DEFAULT AVG-POINTS SL  (pivot-based SL REMOVED)
+================================================================================
+FUNCTION compute_default_sl(entry, orl):
+    # avg_points = (H - L) / 2 of the opening range
+    avg_points = (orl.H - orl.L) / 2.0
+    # SL is always placed below entry (BUY legs only)
+    RETURN entry - avg_points
+
+
+================================================================================
+TARGET — LIVE SCANNER (resistance confirmation, config-driven)
+================================================================================
+FUNCTION find_next_resistance(candles, from_idx, entry_price, left, right):
+    # Scans forward from from_idx for the first resistance pivot (with the
+    # given left/right config) whose high > entry_price.
+    FOR i FROM from_idx + 1 TO len(candles) - right - 1:
+        IF is_resistance_pivot(candles, i, left, right):
+            IF candles[i].high > entry_price:
+                RETURN {
+                    level         : candles[i].high,
+                    pivot_idx     : i,
+                    pivot_ts      : candles[i].ts,
+                    confirmed_idx : i + right,
+                    confirm_ts    : candles[i + right].ts
+                }
+    RETURN NULL
+
+
+================================================================================
+ENTRY SIGNAL RESOLUTION (unchanged — time-window aware)
+================================================================================
+FUNCTION resolve_entry_sr(isolated_candles, isolation_time, cfg):
+    IF isolation_time < cfg.EARLY_ISOLATION_CUTOFF:
+        sr = find_first_sr_in_window(
+                 isolated_candles,
+                 cfg.EARLY_SR_WINDOW_START,
+                 cfg.EARLY_SR_WINDOW_END,
+                 cfg.EARLY_SR_LEFT,
+                 cfg.EARLY_SR_RIGHT)
+        IF sr == NULL:
+            RETURN NULL
+        RETURN sr
+    ELSE:
+        RETURN find_first_sr_for_day(
+                   isolated_candles,
+                   isolation_time,
+                   cfg.SR_LEFT,
+                   cfg.SR_RIGHT)
+
+
+================================================================================
+ORDER RUNNER (simplified — one branch, avg-points SL, R3/+50 trigger)
+================================================================================
+FUNCTION run_order(candles, entry_idx, orl, side, cfg):
+    # side ∈ {"BUY"}  (both legs are BUY — isolated PE or opposite PE)
+    entry = candles[entry_idx].open
+
+    # --- Default SL: entry − avg_points --------------------------------
+    sl = compute_default_sl(entry, orl)
+
+    cur_left  = cfg.EXIT_LEFT_INITIAL      # 15
+    cur_right = cfg.EXIT_RIGHT_INITIAL     # 30
+    r3        = orl.R3
+
+    log = {
+        entry             : entry,
+        sl_initial        : sl,
+        sl_current        : sl,
+        target            : NULL,
+        target_pivot_ts   : NULL,
+        target_confirm_ts : NULL,
+        exit_config       : { left: cur_left, right: cur_right },
+        sl_moved          : FALSE,
+        trigger_ts        : NULL,
+        trigger_close     : NULL,
+        exit              : NULL,
+        exit_idx          : NULL,
+        reason            : NULL
+    }
+
+    FOR j FROM entry_idx + 1 TO len(candles) - 1:
+        bar = candles[j]
+
+        # ---- SL check (conservative — fires first in same bar) ----
+        IF side == "BUY" AND bar.low <= log.sl_current:
+            log.exit = log.sl_current; log.exit_idx = j
+            log.reason = "SL"; RETURN log
+        IF side == "SELL" AND bar.high >= log.sl_current:
+            log.exit = log.sl_current; log.exit_idx = j
+            log.reason = "SL"; RETURN log
+
+        # ---- SL-move trigger (only once) ----
+        # Trigger = R3 touch OR price moved > R3_POINTS_TRIGGER from entry
+        IF NOT log.sl_moved:
+            trigger = FALSE
+            IF side == "BUY":
+                IF bar.high >= r3:
+                    trigger = TRUE
+                IF (bar.high - entry) > cfg.R3_POINTS_TRIGGER:
+                    trigger = TRUE
+            ELSE:  # SELL
+                IF bar.low <= r3:
+                    trigger = TRUE
+                IF (entry - bar.low) > cfg.R3_POINTS_TRIGGER:
+                    trigger = TRUE
+
+            IF trigger:
+                # Move SL to trigger candle's close
+                log.sl_current  = bar.close
+                log.trigger_ts  = bar.ts
+                log.trigger_close = bar.close
+                # Swap live exit config to 15/3
+                cur_left  = cfg.EXIT_LEFT_POST_MOVE
+                cur_right = cfg.EXIT_RIGHT_POST_MOVE
+                log.exit_config = { left: cur_left, right: cur_right }
+                log.sl_moved = TRUE
+
+        # ---- Live-target scan with CURRENT config ----
+        res = find_next_resistance(candles, j, entry, cur_left, cur_right)
+        IF res != NULL AND res.confirmed_idx == j:
+            log.target            = res.level
+            log.target_pivot_ts   = res.pivot_ts
+            log.target_confirm_ts = res.confirm_ts
+            log.exit              = bar.close
+            log.exit_idx          = j
+            log.reason = "RESISTANCE_CONFIRM_" +
+                         cur_left + "_" + cur_right + "@" + res.level
+            RETURN log
+
+    # EOD
+    log.exit = candles[-1].close; log.exit_idx = len(candles) - 1
+    log.reason = "EOD"; RETURN log
+
+
+================================================================================
+MAIN SIMULATION (single order — Order 2 logic REMOVED)
+================================================================================
+FUNCTION simulate_day(isolated_candles, opposite_candles,
+                      fc_isolated, fc_opposite, isolation_time, cfg):
+
+    or_iso = or_levels(fc_isolated)
+    or_opp = or_levels(fc_opposite)
+    LOG    = { orders:[], or_iso:or_iso, or_opp:or_opp }
+
+    # STEP 1 — entry SR resolution
+    sr = resolve_entry_sr(isolated_candles, isolation_time, cfg)
+    IF sr == NULL:
+        LOG.note = "No SR -> no orders."
+        RETURN LOG
+    LOG.sr        = sr
+    LOG.sr_source = sr.source
+
+    # STEP 2 — map SR -> trade leg
+    IF sr.level == "support":
+        trade_candles = isolated_candles
+        trade_or      = or_iso
+        side          = "BUY"
+        leg           = "ISOLATED"
+        instrument    = "NIFTY 23100 PE"
+    ELSE:
+        trade_candles = opposite_candles
+        trade_or      = or_opp
+        side          = "BUY"
+        leg           = "OPPOSITE"
+        instrument    = "NIFTY 23100 PE"
+
+    entry_idx = sr.confirmed_idx
+
+    # STEP 3 — single order (no Order 2)
+    o1 = run_order(trade_candles, entry_idx, trade_or, side, cfg)
+    o1.side       = side
+    o1.leg        = leg
+    o1.instrument = instrument
+    o1.signal     = sr
+    o1.pnl_total  = (o1.exit - o1.entry) * cfg.LOT
+    APPEND LOG.orders o1
+
+    LOG.orders_placed = 1
+    LOG.total_pnl     = o1.pnl_total
+    RETURN LOG
+
+
+================================================================================
+BEHAVIOUR NOTES (what each rule now does)
+================================================================================
+  1. ENTRY SR RESOLUTION is time-window aware (unchanged):
+       - If isolation_time < 09:30 → search SR ONLY inside the 09:15–09:30
+         window (EARLY_SR_LEFT=15 / EARLY_SR_RIGHT=3).
+         No SR inside that window ⇒ NO TRADE for the day.
+       - If isolation_time >= 09:30 → normal post-iso 15/3 SR logic.
+       - Entry = open of the SR confirmation bar.
+
+  2. SL is now a SIMPLE DEFAULT:
+       - avg_points = (OR.H - OR.L) / 2
+       - SL = entry − avg_points   (always below entry; both legs are BUY)
+       - Pivot-based SL logic is REMOVED.
+
+  3. SL-MOVE TRIGGER (fires once only):
+       - Fires when EITHER condition is met on a bar after entry:
+             * price touches R3
+             * price moves more than R3_POINTS_TRIGGER (50) points
+               above entry
+       - On trigger:
+             SL := trigger candle's close
+             live exit config flips from 15/30 → 15/3
+       - The old `R3 − R3_POINTS_TRIGGER` threshold branch is REMOVED.
+
+  4. EXIT:
+       - SL check happens first each bar (conservative — SL wins on ties).
+       - Otherwise, scan forward for next resistance pivot above entry
+         using the CURRENT config (15/30 initially, 15/3 after trigger).
+       - Exit at the confirmation bar's close when the pivot is confirmed.
+
+  5. ORDER 2 / FLIP LOGIC IS REMOVED:
+       - Only one order per day.
+       - MAX_ORDERS = 1.
+       - The `order2_eligible` gate, flip-leg selection, and the
+         `RESISTANCE_CONFIRM → Order 2` branch are all removed.
+
+  6. BRANCH A / BRANCH B CLASSIFICATION IS REMOVED:
+       - There is no S3-zone branch and no OR-LOW-target branch.
+       - All trades use the same SL / trigger / live-resistance flow.
+
+
+================================================================================
+EDGE CASES (updated)
+================================================================================
+  * Early isolation (< 09:30) and no SR inside 09:15–09:30 → NO ORDERS.
+  * Post-09:30 isolation and no post-iso SR → NO ORDERS.
+  * Default SL = entry − avg_points (always below entry).
+  * SL-move trigger fires at most ONCE.
+  * Trigger fires at the FIRST bar where price touches R3 OR moves
+    more than 50 points above entry — whichever happens first.
+  * After trigger, exit config stays 15/3 for the rest of the day.
+  * If no resistance pivot above entry is ever confirmed → EOD exit
+    (last close).
+  * Same-bar SL and resistance confirmation → SL wins (conservative).
+  * Order 2 / flip trade is never placed.

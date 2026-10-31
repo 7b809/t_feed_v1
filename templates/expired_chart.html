@@ -1,32 +1,9 @@
 {# templates/expired_chart.html #}
 {# Chart viewer for expired and active instruments.
-
-   LWC "Value is null" fix (2026-10-28)
-   ------------------------------------
-   The Upstox expired-candles endpoint returns candles in DESCENDING
-   order (newest-first). Lightweight Charts requires ASCENDING order;
-   feeding descending data into `setData()` does not throw at the call
-   site but poisons the internal series index. Every subsequent chart
-   render (updateAllViews) then throws `Value is null`.
-
-   The fix (layered, belt-and-suspenders):
-     1. Backend (`routes/expired_chart_routes.py`) sorts candles
-        ascending before returning.
-     2. Frontend (`fetchCandlesFromApi`) re-sorts ascending and
-        de-dupes by `time` — protects against any future backend
-        regression or a direct JSON paste.
-     3. Every line series uses `setLineDataSafe()`, which filters
-        non-finite values, de-dupes, sorts, and REMOVES the series
-        if it cannot produce a valid >=2-point line. This prevents
-        an empty/partial line from leaking into a render pass.
-     4. `applyMarkersToCandleSeries` detaches any previous marker
-        primitive before attaching a new one (v5 primitives stack
-        otherwise) and filters markers with invalid times.
-
-   No live WebSocket feed. No debounced live search bar. All other
-   indicators (EMA, SR pivots with configurable L/R, SR labels),
-   SR params card, instrument info card, price-scale controls,
-   scroll nav, and the CE↔PE swap FAB are preserved. #}
+   - Fixed "Object is disposed" resize and RAF errors during chart reloads.
+   - Added Target End Date input with automatic 11-day lookback calculation.
+   - Robust cleanup and safe ascending candle plotting.
+#}
 {% extends "base.html" %}
 {% block title %}{{ instrument_key or 'Expired / Active Chart' }} - Trading Dashboard{% endblock %}
 {% block head %}
@@ -113,7 +90,7 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
 .content-scroll::-webkit-scrollbar-thumb { background: var(--surface-3); border-radius: 8px; }
 
 .chart-card { position: relative; width: 100%; height: clamp(320px, calc(100dvh - 140px), 920px); min-height: 320px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; box-shadow: var(--shadow); }
-#chart { width: 100%; height: 100%; }
+#chart { width: 100%; height: 100%; position: relative; }
 
 .chart-loading-overlay { position: absolute; inset: 0; z-index: 500; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; background: radial-gradient(circle at center, rgba(19,23,34,0.92), rgba(19,23,34,0.98)); transition: opacity 0.35s ease, visibility 0.35s ease; color: var(--text); pointer-events: all; }
 .chart-loading-overlay.hidden { opacity: 0; visibility: hidden; pointer-events: none; }
@@ -147,12 +124,26 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
 .sr-param-hint.visible { opacity: 1; }
 .sr-param-hint.error { color: var(--red); }
 
+/* ---------- Date range bar & Target End Date input ---------- */
 .date-range-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 12px; padding: 8px 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; }
 .date-range-bar label { font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
 .date-range-bar input[type="date"] { background: var(--bg); border: 1px solid var(--border); color: var(--text); border-radius: 6px; padding: 4px 8px; font-size: 11px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .date-range-bar input[type="date"]:focus { outline: none; border-color: var(--blue); }
-.date-range-bar .btn-apply-dates { border: 1px solid var(--blue); background: var(--blue); color: #fff; border-radius: 14px; padding: 4px 12px; font-size: 10px; font-weight: 800; cursor: pointer; }
+.date-range-bar .form-control-target-date {
+  width: 145px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: #fff;
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 700;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.date-range-bar .form-control-target-date:focus { outline: none; border-color: var(--blue); box-shadow: 0 0 0 2px rgba(41,98,255,0.22); }
+.date-range-bar .btn-apply-dates { border: 1px solid var(--blue); background: var(--blue); color: #fff; border-radius: 14px; padding: 4px 12px; font-size: 10px; font-weight: 800; cursor: pointer; transition: all 0.15s ease; }
 .date-range-bar .btn-apply-dates:hover { background: #1c4ce0; }
+.date-range-bar .target-hint { font-size: 9.5px; color: var(--yellow); margin-left: 2px; }
 
 .scroll-nav { position: fixed; right: 20px; bottom: 24px; z-index: 300; display: flex; flex-direction: column; gap: 8px; }
 .scroll-nav-btn { width: 42px; height: 42px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--border); border-radius: 50%; background: var(--surface-2); color: var(--text); box-shadow: var(--shadow); cursor: pointer; font-size: 16px; }
@@ -230,6 +221,7 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
   .scroll-nav-btn { width: 36px; height: 36px; }
   .instrument-info-body { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .info-tile.wide { grid-column: span 2; }
+  .date-range-bar .form-control-target-date { width: 120px; }
 }
 
 .swap-option-fab { position: fixed; left: 20px; bottom: 24px; z-index: 350; display: inline-flex; align-items: center; gap: 8px; padding: 10px 16px; border: 1px solid var(--border); border-radius: 30px; background: var(--surface-2); color: var(--text); box-shadow: var(--shadow); cursor: pointer; font-size: 12px; font-weight: 700; transition: all 0.15s ease; }
@@ -318,6 +310,9 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
   <div id="chartWrapper" {% if not instrument_key %}style="display:none;"{% endif %}>
 
     <div class="date-range-bar">
+      <!-- Target End Date input with automatic 11-day lookback calculation -->
+<label for="targetEndDateInput">End Date (11d back)</label>
+<input type="date" id="targetEndDateInput" class="form-control-target-date" placeholder="YYYY-MM-DD" title="Select specific end date to plot up to that date with past 11 days candles">
       <label for="fromDateInput">From</label>
       <input type="date" id="fromDateInput">
       <label for="toDateInput">To</label>
@@ -574,6 +569,7 @@ const marketStatusPill   = document.getElementById("marketStatusPill");
 const levelStatusBar     = document.getElementById("level-status");
 const emptyState         = document.getElementById("emptyState");
 const chartWrapper       = document.getElementById("chartWrapper");
+const targetEndDateInput = document.getElementById("targetEndDateInput");
 const fromDateInput      = document.getElementById("fromDateInput");
 const toDateInput        = document.getElementById("toDateInput");
 const applyDatesBtn      = document.getElementById("applyDatesBtn");
@@ -607,6 +603,7 @@ let chart = null;
 let candleSeries = null;
 let lastCandle = null;
 let pageClosing = false;
+let resizeHandlerAttached = false;
 
 const INDICATOR_PREFS_KEY = "chart.indicators.prefs";
 const SR_PARAMS_KEY       = "chart.sr.params";
@@ -671,14 +668,6 @@ const dynamicPriceScale = {
 // ============================================================
 // LWC DATA SAFETY HELPERS
 // ============================================================
-// Lightweight Charts throws "Value is null" during render (not at
-// setData time) if:
-//   * data is not sorted ascending by time,
-//   * a data point has NaN/null/Infinity in any required field,
-//   * there are duplicate times within a series.
-// The helpers below filter every dataset the chart receives, so
-// even a future backend regression cannot poison the chart state.
-
 function safeCandleData(data) {
   if (!Array.isArray(data)) return [];
   const byTime = new Map();
@@ -691,10 +680,9 @@ function safeCandleData(data) {
       !Number.isFinite(c.low)  ||
       !Number.isFinite(c.close)
     ) continue;
-    // Skip zero-range candles that sometimes appear in expired-tail data
     if (c.high < c.low || c.high < c.close || c.high < c.open ||
         c.low > c.close  || c.low > c.open) continue;
-    byTime.set(c.time, c);   // last occurrence wins on duplicates
+    byTime.set(c.time, c);
   }
   return Array.from(byTime.values()).sort((a, b) => a.time - b.time);
 }
@@ -710,25 +698,11 @@ function safeLineData(data) {
   return Array.from(byTime.values()).sort((a, b) => a.time - b.time);
 }
 
-/**
- * Set data on a line series with full validation.
- *
- * - Filters out non-finite values
- * - De-dupes by time
- * - Sorts ascending
- * - Requires at least 2 unique points (LWC line needs a segment
- *   to draw; a 1-point line is legal but pointless, and in some
- *   v5 builds it produces null draw state during updateAllViews).
- * - If the series cannot be drawn, REMOVES it from the chart so it
- *   does not leak into future render passes.
- *
- * Returns true if data was set successfully, false otherwise.
- */
 function setLineDataSafe(series, data) {
-  if (!series) return false;
+  if (!series || !chart || chart._isDisposed) return false;
   const clean = safeLineData(data);
   if (clean.length < 2) {
-    try { if (chart) chart.removeSeries(series); } catch (e) {}
+    try { if (chart && !chart._isDisposed) chart.removeSeries(series); } catch (e) {}
     return false;
   }
   try {
@@ -736,13 +710,56 @@ function setLineDataSafe(series, data) {
     return true;
   } catch (err) {
     console.warn("[line] setData failed; removing series:", err);
-    try { if (chart) chart.removeSeries(series); } catch (e) {}
+    try { if (chart && !chart._isDisposed) chart.removeSeries(series); } catch (e) {}
     return false;
   }
 }
 
 // ============================================================
-// Basic helpers
+// Safe Chart Destroy Helper (Prevents "Object is disposed" error)
+// ============================================================
+function destroyCurrentChart() {
+  stopPriceScaleWatcher();
+  levelLabelUpdateScheduled = false;
+  srLabelUpdateScheduled = false;
+
+  if (markersPrimitive && typeof markersPrimitive.detach === "function") {
+    try { markersPrimitive.detach(); } catch (e) {}
+  }
+  markersPrimitive = null;
+
+  removeOpeningRangeLevels();
+  removeSRLines();
+  clearSRLabels();
+
+  if (indicatorState.ema9.series) {
+    try { if (chart && !chart._isDisposed) chart.removeSeries(indicatorState.ema9.series); } catch (e) {}
+    indicatorState.ema9.series = null;
+  }
+  if (indicatorState.ema21.series) {
+    try { if (chart && !chart._isDisposed) chart.removeSeries(indicatorState.ema21.series); } catch (e) {}
+    indicatorState.ema21.series = null;
+  }
+
+  if (chart) {
+    try {
+      chart._isDisposed = true;
+      chart.remove();
+    } catch (e) {
+      console.warn("Chart remove caught:", e);
+    }
+    chart = null;
+    candleSeries = null;
+  }
+
+  if (chartContainer) chartContainer.innerHTML = "";
+  levelLabelLayer = null;
+  indicatorState.srLabels.layer = null;
+  chartTooltip = null;
+}
+
+// ============================================================
+// Basic helpers & Date parsing
 // ============================================================
 function parseTimestamp(value) {
   if (value === null || value === undefined || value === "") return null;
@@ -782,6 +799,42 @@ function normalizeCandle(rawCandle) {
   }
   return null;
 }
+
+/**
+ * Normalizes user entered dates into standard YYYY-MM-DD format.
+ * Supports: DD-MM-YYYY, DD/MM/YYYY, YYYY-MM-DD.
+ */
+function parseUserDateToISO(input) {
+  if (!input) return null;
+  const s = String(input).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  const parts = s.split(/[-/]/);
+  if (parts.length === 3) {
+    if (parts[0].length === 2 && parts[2].length === 4) {
+      const d = parts[0].padStart(2, "0");
+      const m = parts[1].padStart(2, "0");
+      const y = parts[2];
+      return `${y}-${m}-${d}`;
+    }
+  }
+  const parsed = new Date(s);
+  if (!Number.isNaN(parsed.getTime())) {
+    return parsed.toISOString().slice(0, 10);
+  }
+  return null;
+}
+
+/**
+ * Calculates start date as 11 calendar days before the given end date.
+ */
+function computeElevenDaysPriorISO(endDateISO) {
+  if (!endDateISO) return null;
+  const [y, m, d] = endDateISO.split("-").map(Number);
+  const end = new Date(Date.UTC(y, m - 1, d));
+  const start = new Date(end.getTime() - 11 * 86400 * 1000);
+  return start.toISOString().slice(0, 10);
+}
+
 function getDateKeyIST(unixSeconds) {
   if (!Number.isFinite(unixSeconds)) return null;
   const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date(unixSeconds * 1000));
@@ -825,7 +878,7 @@ function formatPrice(v) { const n = Number(v); return Number.isFinite(n) ? n.toF
 // Price scale helpers
 // ============================================================
 function getPaneHeight() {
-  if (!chart) return (chartContainer && chartContainer.clientHeight) || 500;
+  if (!chart || chart._isDisposed) return (chartContainer && chartContainer.clientHeight) || 500;
   try {
     const ps = chart.priceScale("right");
     if (ps && typeof ps.height === "function") {
@@ -836,7 +889,7 @@ function getPaneHeight() {
   return Math.max(100, (chartContainer && chartContainer.clientHeight || 500) - 30);
 }
 function getVisiblePriceRange() {
-  if (!candleSeries) return null;
+  if (!candleSeries || !chart || chart._isDisposed) return null;
   const paneHeight = getPaneHeight();
   if (!Number.isFinite(paneHeight) || paneHeight <= 0) return null;
   let topPrice, bottomPrice;
@@ -886,7 +939,7 @@ function getPricePrecision(step) {
   return Math.min(decimals, 8);
 }
 function updateDynamicPriceScale() {
-  if (!candleSeries) return;
+  if (!candleSeries || !chart || chart._isDisposed) return;
   const rangeInfo = getVisiblePriceRange();
   if (!rangeInfo) return;
   const topChanged = dynamicPriceScale.lastTopPrice === null || Math.abs(dynamicPriceScale.lastTopPrice - rangeInfo.minPrice) > 1e-9;
@@ -915,7 +968,7 @@ function updateDynamicPriceScale() {
 function startPriceScaleWatcher() {
   if (dynamicPriceScale.rafId !== null) return;
   const tick = (now) => {
-    if (pageClosing) return;
+    if (pageClosing || !chart || chart._isDisposed) return;
     const ts = typeof now === "number" ? now : performance.now();
     if (ts - dynamicPriceScale.lastCheckTs >= dynamicPriceScale.checkIntervalMs) {
       dynamicPriceScale.lastCheckTs = ts;
@@ -929,14 +982,14 @@ function stopPriceScaleWatcher() {
   if (dynamicPriceScale.rafId !== null) { cancelAnimationFrame(dynamicPriceScale.rafId); dynamicPriceScale.rafId = null; }
 }
 function applyAutoFitPriceScale() {
-  if (!chart) return;
+  if (!chart || chart._isDisposed) return;
   priceScaleAuto = true;
   try { chart.priceScale("right").applyOptions({ autoScale: true, scaleMargins: { top: PRICE_HEADROOM_PCT, bottom: PRICE_HEADROOM_PCT } }); }
   catch (e) {}
   updatePriceScaleButtons();
 }
 function applyFreePriceScale() {
-  if (!chart) return;
+  if (!chart || chart._isDisposed) return;
   priceScaleAuto = false;
   try { chart.priceScale("right").applyOptions({ autoScale: false }); } catch (e) {}
   updatePriceScaleButtons();
@@ -985,7 +1038,7 @@ function buildOpeningRangesFromCandles(candles) {
 // LWC helpers
 // ============================================================
 function addLineSeriesSafe(options) {
-  if (!chart) return null;
+  if (!chart || chart._isDisposed) return null;
   try {
     if (typeof chart.addSeries === "function" && LightweightCharts.LineSeries) return chart.addSeries(LightweightCharts.LineSeries, options);
     if (typeof chart.addLineSeries === "function") return chart.addLineSeries(options);
@@ -1018,12 +1071,15 @@ function createLevelLabel(levelName, startTime, value, color) {
   levelLabels.push({ element: el, startTime, value, color, levelName });
 }
 function scheduleLevelLabelUpdate() {
-  if (levelLabelUpdateScheduled) return;
+  if (levelLabelUpdateScheduled || !chart || chart._isDisposed) return;
   levelLabelUpdateScheduled = true;
-  requestAnimationFrame(() => { levelLabelUpdateScheduled = false; updateLevelLabelPositions(); });
+  requestAnimationFrame(() => {
+    levelLabelUpdateScheduled = false;
+    if (chart && !chart._isDisposed) updateLevelLabelPositions();
+  });
 }
 function updateLevelLabelPositions() {
-  if (!chart || !candleSeries || !levelLabels.length) return;
+  if (!chart || chart._isDisposed || !candleSeries || !levelLabels.length) return;
   const timeScale = chart.timeScale();
   const cw = chartContainer.clientWidth;
   const ph = getPaneHeight();
@@ -1050,19 +1106,21 @@ function drawDayLevelLine(levelName, rawValue, startTime, endTime, color, lineSt
   const data = [{ time: startTime, value }];
   if (endTime !== startTime) data.push({ time: endTime, value });
 
-  if (!setLineDataSafe(lineSeries, data)) return;   // helper removes series on failure
+  if (!setLineDataSafe(lineSeries, data)) return;
   levelLines.push(lineSeries);
   createLevelLabel(levelName, startTime, value, color);
 }
 function removeOpeningRangeLevels() {
-  if (chart) levelLines.forEach(line => { try { chart.removeSeries(line); } catch (e) {} });
+  if (chart && !chart._isDisposed) {
+    levelLines.forEach(line => { try { chart.removeSeries(line); } catch (e) {} });
+  }
   levelLines = [];
   levelLabels.forEach(label => { try { if (label.element && label.element.parentNode) label.element.parentNode.removeChild(label.element); } catch (e) {} });
   levelLabels = [];
 }
 function renderOpeningRangeLines() {
   removeOpeningRangeLevels();
-  if (!chart || !candleSeries) return;
+  if (!chart || chart._isDisposed || !candleSeries) return;
   const dates = Object.keys(calculatedOpeningRanges).sort();
   if (!dates.length) return;
   const allData = candleSeries.data();
@@ -1162,16 +1220,14 @@ function getOrComputeEMACrosses(candles) {
   return crosses;
 }
 function applyMarkersToCandleSeries(markers) {
-  if (!candleSeries) return;
+  if (!candleSeries || !chart || chart._isDisposed) return;
   const list = Array.isArray(markers) ? markers : [];
 
-  // Detach any previous v5 marker primitive so they don't stack
   if (markersPrimitive && typeof markersPrimitive.detach === "function") {
     try { markersPrimitive.detach(); } catch (e) {}
   }
   markersPrimitive = null;
 
-  // Filter to valid markers only
   const clean = list.filter(m =>
     m && Number.isFinite(m.time) && typeof m.position === "string"
   );
@@ -1192,7 +1248,7 @@ function applyMarkersToCandleSeries(markers) {
   }
 }
 function renderEMALines(candles) {
-  if (!chart) return;
+  if (!chart || chart._isDisposed) return;
   if (indicatorState.ema9.enabled) {
     if (!indicatorState.ema9.series) indicatorState.ema9.series = addLineSeriesSafe({ color: indicatorState.ema9.color, lineWidth: 2, priceLineVisible: false, lastValueVisible: true, crosshairMarkerVisible: false, title: "EMA 9", autoscaleInfoProvider: () => null });
     if (indicatorState.ema9.series) {
@@ -1202,7 +1258,7 @@ function renderEMALines(candles) {
       }
     }
   } else if (indicatorState.ema9.series) {
-    try { chart.removeSeries(indicatorState.ema9.series); } catch (e) {}
+    try { if (chart && !chart._isDisposed) chart.removeSeries(indicatorState.ema9.series); } catch (e) {}
     indicatorState.ema9.series = null;
   }
   if (indicatorState.ema21.enabled) {
@@ -1214,7 +1270,7 @@ function renderEMALines(candles) {
       }
     }
   } else if (indicatorState.ema21.series) {
-    try { chart.removeSeries(indicatorState.ema21.series); } catch (e) {}
+    try { if (chart && !chart._isDisposed) chart.removeSeries(indicatorState.ema21.series); } catch (e) {}
     indicatorState.ema21.series = null;
   }
 }
@@ -1228,7 +1284,7 @@ function ensureSRLevelsState() {
 }
 function removeSRLines() {
   ensureSRLevelsState();
-  if (!chart) { indicatorState.srLevels.lines = []; return; }
+  if (!chart || chart._isDisposed) { indicatorState.srLevels.lines = []; return; }
   indicatorState.srLevels.lines.forEach(series => { try { chart.removeSeries(series); } catch (e) {} });
   indicatorState.srLevels.lines = [];
 }
@@ -1265,7 +1321,7 @@ function performFullSRScan(candles) {
 function renderSRLines() {
   ensureSRLevelsState();
   removeSRLines();
-  if (!chart || !candleSeries || !indicatorState.srLevels.enabled) return;
+  if (!chart || chart._isDisposed || !candleSeries || !indicatorState.srLevels.enabled) return;
   const candles = candleSeries.data();
   const pivots = indicatorState.srLevels.detectedPivots;
   if (!candles.length || !pivots.length) return;
@@ -1307,7 +1363,7 @@ function clearSRLabels() {
 }
 function renderSRLabels(pivots) {
   clearSRLabels();
-  if (!indicatorState.srLabels.enabled || !chart || !candleSeries) return;
+  if (!indicatorState.srLabels.enabled || !chart || chart._isDisposed || !candleSeries) return;
   const layer = ensureSRLabelLayer();
   if (!layer || !pivots.length) return;
   pivots.forEach(p => {
@@ -1326,7 +1382,7 @@ function renderSRLabels(pivots) {
   positionSRLabels();
 }
 function positionSRLabels() {
-  if (!chart || !candleSeries) return;
+  if (!chart || chart._isDisposed || !candleSeries) return;
   const els = indicatorState.srLabels.elements || [];
   if (!els.length) return;
   const timeScale = chart.timeScale();
@@ -1344,9 +1400,12 @@ function positionSRLabels() {
   });
 }
 function scheduleSRLabelUpdate() {
-  if (srLabelUpdateScheduled) return;
+  if (srLabelUpdateScheduled || !chart || chart._isDisposed) return;
   srLabelUpdateScheduled = true;
-  requestAnimationFrame(() => { srLabelUpdateScheduled = false; positionSRLabels(); });
+  requestAnimationFrame(() => {
+    srLabelUpdateScheduled = false;
+    if (chart && !chart._isDisposed) positionSRLabels();
+  });
 }
 function refreshSRLevels(candles) {
   ensureSRLevelsState();
@@ -1510,7 +1569,7 @@ function createChartTooltip() {
 }
 function hideTooltip() { if (chartTooltip) chartTooltip.style.display = "none"; }
 function handleCrosshairMove(param) {
-  if (!chartTooltip || !candleSeries) return;
+  if (!chartTooltip || !candleSeries || !chart || chart._isDisposed) return;
   if (!param || !param.time || !param.point) { hideTooltip(); return; }
   const d = param.seriesData ? param.seriesData.get(candleSeries) : null;
   if (!d) { hideTooltip(); return; }
@@ -1529,10 +1588,9 @@ function handleCrosshairMove(param) {
 }
 
 // ============================================================
-// Create chart
+// Create chart (with disposal checks)
 // ============================================================
 function createChart(rawCandles) {
-  // *** THE FIX ***  sort + validate + de-dupe candles BEFORE LWC
   const candles = safeCandleData(rawCandles);
   if (candles.length === 0) {
     console.warn("[chart] no valid candles after filtering");
@@ -1540,7 +1598,8 @@ function createChart(rawCandles) {
     return false;
   }
 
-  chartContainer.innerHTML = "";
+  destroyCurrentChart();
+
   chart = LightweightCharts.createChart(chartContainer, {
     width: chartContainer.clientWidth,
     height: chartContainer.clientHeight,
@@ -1551,6 +1610,7 @@ function createChart(rawCandles) {
     timeScale: { borderColor: "#2a2e39", timeVisible: true, secondsVisible: false, rightOffset: 8, barSpacing: 8, minBarSpacing: 3, tickMarkFormatter: (t, tm) => formatTimeLabel(t, tm) },
     localization: { locale: "en-IN", timeFormatter: (t) => formatFullDate(t) },
   });
+  chart._isDisposed = false;
 
   const initialTickSize = dynamicPriceScale.tickSize;
   const initialPrecision = (Number.isFinite(initialTickSize) && initialTickSize > 0) ? getPricePrecision(initialTickSize) : 2;
@@ -1578,7 +1638,6 @@ function createChart(rawCandles) {
   else if (typeof chart.addCandlestickSeries === "function") candleSeries = chart.addCandlestickSeries(candleOptions);
   if (!candleSeries) throw new Error("Unable to create candlestick series");
 
-  // setData with the CLEANED candles (sorted ascending, de-duped)
   candleSeries.setData(candles);
   lastCandle = candles[candles.length - 1];
   updateLivePrice(lastCandle.close);
@@ -1593,15 +1652,22 @@ function createChart(rawCandles) {
   chart.timeScale().subscribeVisibleTimeRangeChange(() => { scheduleLevelLabelUpdate(); scheduleSRLabelUpdate(); });
   chart.timeScale().subscribeVisibleLogicalRangeChange(() => { scheduleLevelLabelUpdate(); scheduleSRLabelUpdate(); updateDynamicPriceScale(); });
 
-  const onResize = () => {
-    if (!chart) return;
-    chart.applyOptions({ width: chartContainer.clientWidth, height: chartContainer.clientHeight });
-    scheduleLevelLabelUpdate();
-    scheduleSRLabelUpdate();
-    updateDynamicPriceScale();
-  };
-  window.addEventListener("resize", onResize);
-  window.addEventListener("orientationchange", () => setTimeout(onResize, 200));
+  if (!resizeHandlerAttached) {
+    const onResize = () => {
+      if (!chart || chart._isDisposed) return;
+      try {
+        chart.applyOptions({ width: chartContainer.clientWidth, height: chartContainer.clientHeight });
+        scheduleLevelLabelUpdate();
+        scheduleSRLabelUpdate();
+        updateDynamicPriceScale();
+      } catch (e) {
+        console.warn("Resize error ignored:", e);
+      }
+    };
+    window.addEventListener("resize", onResize);
+    window.addEventListener("orientationchange", () => setTimeout(onResize, 200));
+    resizeHandlerAttached = true;
+  }
 
   calculatedOpeningRanges = buildOpeningRangesFromCandles(candles);
   renderOpeningRangeLines();
@@ -1626,7 +1692,7 @@ if (resetPriceScaleBtn) resetPriceScaleBtn.addEventListener("click", applyAutoFi
 if (freezePriceScaleBtn) freezePriceScaleBtn.addEventListener("click", () => { if (priceScaleAuto) applyFreePriceScale(); else applyAutoFitPriceScale(); });
 
 // ============================================================
-// Fetch candles from /api/chart2/candles (expired OR active)
+// Fetch candles from /api/chart2/candles
 // ============================================================
 async function fetchCandlesFromApi(instrumentKey, fromDate, toDate) {
   const params = new URLSearchParams({ instrument_key: instrumentKey });
@@ -1637,13 +1703,9 @@ async function fetchCandlesFromApi(instrumentKey, fromDate, toDate) {
   const data = await resp.json();
   if (!resp.ok || data.status !== "ok") throw new Error(data.error || data.status || ("HTTP " + resp.status));
 
-  // *** THE FIX (frontend side) ***
-  // Sort ascending and de-dupe by time. The backend also sorts, but a
-  // direct fetch/paste would bypass that — this guarantees correctness
-  // regardless of what the API returns.
   const normalized = (data.candles || []).map(normalizeCandle).filter(Boolean);
   const byTime = new Map();
-  for (const c of normalized) byTime.set(c.time, c);  // last occurrence wins
+  for (const c of normalized) byTime.set(c.time, c);
   const candles = Array.from(byTime.values()).sort((a, b) => a.time - b.time);
 
   return {
@@ -1730,18 +1792,16 @@ async function loadChart(instrumentKey, fromDate, toDate) {
     populateInfoCard(currentMeta, currentMode, instrumentKey, result.fromDate, result.toDate);
 
     if (!result.candles.length) {
-      LoadingOverlay.setStatus("No candles returned for this instrument / window.", "Empty");
+      LoadingOverlay.setStatus("No candles returned for this window.", "Empty");
       LoadingOverlay.hide(1000);
+      destroyCurrentChart();
+      chartContainer.innerHTML = `<div class="empty-state"><i class="bi bi-calendar-x"></i><h3>No candles found</h3><p>No historical candles exist for the requested dates.</p></div>`;
       return;
     }
 
     LoadingOverlay.setProgress(64);
     LoadingOverlay.setStatus(`Loaded ${result.candles.length} candles`);
 
-    if (chart) { try { chart.remove(); } catch (e) {} chart = null; candleSeries = null; }
-
-    // Wrap chart creation in try/catch — if anything throws, the
-    // user sees a clear message rather than a silent blank chart.
     let ok = false;
     try {
       ok = createChart(result.candles);
@@ -1931,10 +1991,37 @@ document.addEventListener("click", (e) => {
   if (!e.target.closest(".key-input-bar")) searchResults.classList.remove("visible");
 });
 
-applyDatesBtn.addEventListener("click", () => {
+// Apply dates button logic with automatic Target End Date fallback
+function handleApplyDates() {
   if (!currentInstrumentKey) return;
+
+  const targetDateRaw = (targetEndDateInput && targetEndDateInput.value) ? targetEndDateInput.value.trim() : "";
+  if (targetDateRaw) {
+    const targetISO = parseUserDateToISO(targetDateRaw);
+    if (!targetISO) {
+      alert("Invalid End Date format. Please use DD-MM-YYYY or YYYY-MM-DD (e.g. 22-10-2026)");
+      return;
+    }
+    const computedStartISO = computeElevenDaysPriorISO(targetISO);
+    fromDateInput.value = computedStartISO;
+    toDateInput.value = targetISO;
+    loadChart(currentInstrumentKey, computedStartISO, targetISO);
+    return;
+  }
+
+  // If target end date is not given, continue with the current manual date inputs
   loadChart(currentInstrumentKey, fromDateInput.value, toDateInput.value);
-});
+}
+
+applyDatesBtn.addEventListener("click", handleApplyDates);
+if (targetEndDateInput) {
+  targetEndDateInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      handleApplyDates();
+    }
+  });
+}
 
 // ============================================================
 // Expired browser modal
@@ -2038,11 +2125,7 @@ if (initialKey) {
 
 window.addEventListener("beforeunload", () => {
   pageClosing = true;
-  stopPriceScaleWatcher();
-  // Detach markers to clean up primitives before page unload
-  if (markersPrimitive && typeof markersPrimitive.detach === "function") {
-    try { markersPrimitive.detach(); } catch (e) {}
-  }
+  destroyCurrentChart();
 });
 </script>
 {% endblock %}

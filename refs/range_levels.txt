@@ -1,21 +1,157 @@
-fc = first candles = 9.15am to 9.16am candle
+================================================================
+OPENING RANGE (OR) LEVEL FORMULAS
+Source: calculateOpeningRangeForDay() in expired_chart.html
+================================================================
 
-H = Opening Range High of fc 
-L = Opening Range Low of fc
+----------------------------------------------------------------
+STEP 1 — PICK THE OPENING CANDLE
+----------------------------------------------------------------
+For each trading day:
+    1. Group candles by IST date key (YYYY-MM-DD)
+    2. Sort that day's candles ascending by time
+    3. Take the FIRST candle of the day
 
-A = (H + L) / 2
+    Open  = first_candle.open
+    High  = first_candle.high
+    Low   = first_candle.low
+    Close = first_candle.close
 
-D_H = |H - A|
-D_L = |A - L|
+NOTE:
+    The OR is derived from the FIRST candle of the session,
+    NOT a fixed 09:15–09:30 window.
+    If data is 1-minute, the OR uses just the 09:15 candle.
 
-R1 = A + D_H / 2
-S1 = A - D_L / 2
+----------------------------------------------------------------
+STEP 2 — COMPUTE THE MIDPOINT (AVERAGE)
+----------------------------------------------------------------
+    Average = (High + Low) / 2
 
-R2 = H + D_H
-S2 = L - D_L
+----------------------------------------------------------------
+STEP 3 — COMPUTE THE PIVOT DELTAS
+----------------------------------------------------------------
+    R1_Diff = High - Average
+    S1_Diff = Average - Low
 
-R3 = R2 + D_H
-S3 = S2 - D_L
+Because Average = (High + Low) / 2, both are equal:
 
-R3_Threshold = (R2 + R3) / 2
-S3_Threshold = (S2 + S3) / 2
+    R1_Diff = S1_Diff = (High - Low) / 2
+
+Let:
+    Range = High - Low
+
+Then:
+    R1_Diff = S1_Diff = Range / 2
+
+----------------------------------------------------------------
+STEP 4 — COMPUTE THE SIX LEVELS
+----------------------------------------------------------------
+RESISTANCE (above opening High):
+    R1 = High
+    R2 = High + R1_Diff
+    R3 = High + (R1_Diff * 2)
+
+Expanded using Range:
+    R1 = High
+    R2 = High + (Range / 2)
+    R3 = High + Range
+
+SUPPORT (below opening Low):
+    S1 = Low
+    S2 = Low - S1_Diff
+    S3 = Low - (S1_Diff * 2)
+
+Expanded using Range:
+    S1 = Low
+    S2 = Low - (Range / 2)
+    S3 = Low - Range
+
+AVERAGE LINE:
+    AVG = (High + Low) / 2
+
+================================================================
+COMPACT REFERENCE TABLE
+================================================================
+
+    +-------+----------------------------------+
+    | Level | Formula                          |
+    +-------+----------------------------------+
+    | R3    | High + (High - Low)              |
+    | R2    | High + (High - Low) / 2          |
+    | R1    | High                             |
+    | AVG   | (High + Low) / 2                 |
+    | S1    | Low                              |
+    | S2    | Low - (High - Low) / 2           |
+    | S3    | Low - (High - Low)               |
+    +-------+----------------------------------+
+
+================================================================
+SAMPLE EXAMPLE
+================================================================
+
+INPUT (first candle of the day):
+    Open  = 21960
+    High  = 22000
+    Low   = 21900
+    Close = 21980
+
+STEP 1 — Range:
+    Range = High - Low
+    Range = 22000 - 21900
+    Range = 100
+
+STEP 2 — Average:
+    Average = (High + Low) / 2
+    Average = (22000 + 21900) / 2
+    Average = 43900 / 2
+    Average = 21950
+
+STEP 3 — Deltas:
+    R1_Diff = High - Average
+    R1_Diff = 22000 - 21950
+    R1_Diff = 50
+
+    S1_Diff = Average - Low
+    S1_Diff = 21950 - 21900
+    S1_Diff = 50
+
+    (Both equal Range / 2 = 50  ✓)
+
+STEP 4 — Levels:
+
+    R1 = High
+    R1 = 22000
+
+    R2 = High + R1_Diff
+    R2 = 22000 + 50
+    R2 = 22050
+
+    R3 = High + (R1_Diff * 2)
+    R3 = 22000 + 100
+    R3 = 22100
+
+    AVG = (High + Low) / 2
+    AVG = 21950
+
+    S1 = Low
+    S1 = 21900
+
+    S2 = Low - S1_Diff
+    S2 = 21900 - 50
+    S2 = 21850
+
+    S3 = Low - (S1_Diff * 2)
+    S3 = 21900 - 100
+    S3 = 21800
+
+FINAL OUTPUT:
+    +-------+---------+
+    | Level | Value   |
+    +-------+---------+
+    | R3    | 22100   |
+    | R2    | 22050   |
+    | R1    | 22000   |
+    | AVG   | 21950   |
+    | S1    | 21900   |
+    | S2    | 21850   |
+    | S3    | 21800   |
+    +-------+---------+
