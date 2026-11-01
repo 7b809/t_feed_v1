@@ -32,8 +32,8 @@ G1 v4.1 additions (2026-10-29)
       the counter-side candle state (because the PE was never registered
       with the SR engine) and fell back to `live_ltp`. Same fix also
       removes the SR tracker's "Before: 0 / After: 29" bug — the PE's
-      pivots are now present in the SR engine when `on_isolation()`
-      runs for the promotion, so `_snapshot_current_levels()` returns
+      pivots are now present in the SR engine when `on_isolation()` runs
+      for the promotion, so `_snapshot_current_levels()` returns
       the full pre-isolation set instead of `[]`.
 
     * `run_backfill()` now verifies each index's `first_candle.json`
@@ -91,8 +91,8 @@ effect. All three are now wired:
         are used unchanged (pre-v4.1 behaviour). The on-disk file is
         still verified/healed by the separate
         ``_verify_or_against_intraday`` step so the two mechanisms
-        remain complementary: the file gets corrected for future
-        runs, while the current replay uses series-derived OR.
+        remain complementary: the file gets corrected for future runs,
+        while the current replay uses series-derived OR.
 
     * ``LEVEL_ISOLATION_OR_SELF_HEAL_VERIFY_HL`` (§5.D — self-heal)
         ``_maybe_self_heal()`` now additionally compares the cached
@@ -104,6 +104,25 @@ effect. All three are now wired:
         sweep that ``first_candle_service.run()`` performs. Structural
         issues (missing file, stale date, unreadable) still trigger
         the full sweep because those cannot be resolved per-underlying.
+
+G1 v4.2 additions — LIVE SR EXPORT hook (2026-11-02)
+----------------------------------------------------
+    * New helper ``_fire_live_sr_export(instrument_key, source)``.
+      When a live isolation fires (``source == "live"``), it invokes
+      ``isolated_instrument_sr_export_service.run(instrument_key)`` in
+      live mode on a **daemon thread** so the isolation path is never
+      blocked by the export service's synchronous Upstox historical +
+      intraday HTTP fetches (typically 1–3 s per instrument).
+
+      ``source != "live"`` (i.e. post-close replay / simulate mode)
+      is a hard no-op — replay would overwrite the on-disk export
+      files with stale data, so the guard is centralised in the helper
+      itself rather than duplicated at every call site.
+
+      The helper never raises; every failure logs and continues. If
+      ``isolated_instrument_sr_export_service`` fails (missing
+      ``all_instruments.json``, missing Upstox token, HTTP error,
+      etc.), the isolation record is still persisted unchanged.
 """
 
 from __future__ import annotations
@@ -299,6 +318,106 @@ class LevelIsolatedInstrumentService:
         except Exception:
             logger.exception(
                 "[level-isolation] SR tracker attach failed"
+            )
+
+    # ------------------------------------------------------------------ #
+    # NEW (G1 v4.2): fire live isolated-instrument SR export on isolation #
+    # ------------------------------------------------------------------ #
+    def _fire_live_sr_export(
+        self,
+        instrument_key: str,
+        source: str,
+    ) -> None:
+        """Trigger the isolated-instrument SR export service in live mode.
+
+        Fires only for real live isolations (``source == "live"``).
+        Backfill / simulate isolations are a hard no-op — they replay the
+        day post-close, and if we let them run they would overwrite the
+        on-disk export files (``data/isolation/isolated_instrument.json``,
+        ``opposite_instrument.json``, ``isolated_instrument_sr_check.json``)
+        with the post-close replay's view. That may be identical to the
+        live run's output, but it is never guaranteed — and a stale
+        overwrite is far worse than a missing file.
+
+        Runs on a **daemon thread** because
+        ``isolated_instrument_sr_export_service.run()`` performs
+        synchronous Upstox historical + intraday HTTP fetches per
+        instrument (typically 1–3 s per call). Blocking the isolation
+        path here would stall the tick handler / replay loop that
+        triggered the isolation.
+
+        Called with the freshly-isolated instrument's key (e.g.
+        ``NSE_FO|53792``) — exactly what ``run()`` expects for live mode.
+
+        Never raises. Every failure mode logs and continues — a failure
+        to export SR must not break the isolation itself, which has
+        already been persisted to ``data/level_isolated_instrument.json``.
+        """
+        if source != "live":
+            return
+
+        key = str(instrument_key or "").strip()
+        if not key:
+            logger.warning(
+                "[level-isolation] live sr-export skipped — empty "
+                "instrument_key on isolated record"
+            )
+            return
+
+        def _worker() -> None:
+            try:
+                from services.isolated_instrument_sr_export_service import (
+                    isolated_instrument_sr_export_service,
+                )
+            except Exception:
+                logger.exception(
+                    "[level-isolation] live sr-export import failed"
+                )
+                return
+
+            try:
+                result = isolated_instrument_sr_export_service.run(
+                    key,
+                    expired=None,     # live mode
+                    end_date=None,
+                    check_date=None,  # defaults to today (IST)
+                )
+            except Exception:
+                logger.exception(
+                    "[level-isolation] live sr-export raised — key=%s",
+                    key,
+                )
+                return
+
+            if not isinstance(result, dict):
+                logger.warning(
+                    "[level-isolation] live sr-export returned non-dict "
+                    "for %s: %r",
+                    key,
+                    type(result).__name__,
+                )
+                return
+
+            logger.info(
+                "[level-isolation] live sr-export fired — key=%s "
+                "status=%s sr_levels=%s check_date=%s",
+                key,
+                result.get("status"),
+                (result.get("isolated") or {}).get("sr_levels"),
+                result.get("check_date"),
+            )
+
+        try:
+            threading.Thread(
+                target=_worker,
+                daemon=True,
+                name=f"sr-export-{key}",
+            ).start()
+        except Exception:
+            logger.exception(
+                "[level-isolation] could not start sr-export thread "
+                "for %s",
+                key,
             )
 
     # ------------------------------------------------------------------ #
@@ -530,7 +649,7 @@ class LevelIsolatedInstrumentService:
         return mismatches
 
     # ------------------------------------------------------------------ #
-    # NEW: OR-vs-intraday content verification (post-intraday-fetch)     #
+    # OR-vs-intraday content verification (post-intraday-fetch)          #
     # ------------------------------------------------------------------ #
     def _verify_or_against_intraday(
         self,
@@ -633,7 +752,7 @@ class LevelIsolatedInstrumentService:
         return stale
 
     # ------------------------------------------------------------------ #
-    # NEW: series-derived OR computation (G1 v4.1 §5.D replay fix)       #
+    # Series-derived OR computation (G1 v4.1 §5.D replay fix)            #
     # ------------------------------------------------------------------ #
     def _recompute_or_from_intraday(
         self,
@@ -914,7 +1033,7 @@ class LevelIsolatedInstrumentService:
         )
 
     # ------------------------------------------------------------------ #
-    # MODIFIED: winning-touch handler — bias + counter candidates        #
+    # Winning-touch handler — bias + counter candidates                  #
     # ------------------------------------------------------------------ #
     def _process_winning_touch(
         self,
@@ -1086,7 +1205,7 @@ class LevelIsolatedInstrumentService:
         return list(instruments)
 
     # ------------------------------------------------------------------ #
-    # NEW: counter-side resolution + SR registration                     #
+    # Counter-side resolution + SR registration                          #
     # ------------------------------------------------------------------ #
     def _find_counter_candidate(
         self,
@@ -1475,7 +1594,7 @@ class LevelIsolatedInstrumentService:
         return snapshot
 
     # ------------------------------------------------------------------ #
-    # MODIFIED: isolation — register both sides with SR (flag-gated)     #
+    # Isolation — register both sides with SR + fire live SR export      #
     # ------------------------------------------------------------------ #
     def _isolate(
         self,
@@ -1616,6 +1735,28 @@ class LevelIsolatedInstrumentService:
                 "[level-isolation] SR tracker on_isolation failed"
             )
 
+        # ---- NEW (G1 v4.2): fire live isolated-instrument SR export --- #
+        # Triggers `isolated_instrument_sr_export_service.run(key)` in
+        # live mode (expired=None) so the export files under
+        # `data/isolation/` get refreshed on every live isolation:
+        #
+        #     data/isolation/isolated_instrument.json
+        #     data/isolation/opposite_instrument.json
+        #     data/isolation/isolated_instrument_sr_check.json
+        #
+        # The helper is a no-op for `source != "live"` — post-close
+        # replay / simulate must never overwrite the on-disk export
+        # files with a stale post-close view.
+        #
+        # Threaded (daemon) because the export service performs
+        # synchronous Upstox historical + intraday HTTP fetches per
+        # instrument (typically 1-3 s). Blocking here would stall the
+        # tick handler / replay loop that triggered the isolation.
+        self._fire_live_sr_export(
+            isolated.get("instrument_key"),
+            source=str(isolated.get("source") or ""),
+        )
+
         if config.LEVEL_ISOLATION_TELEGRAM_ENABLED:
             threading.Thread(
                 target=self._send_telegram,
@@ -1625,7 +1766,7 @@ class LevelIsolatedInstrumentService:
             ).start()
 
     # ------------------------------------------------------------------ #
-    # NEW (G1 v4.2): execution-path accessor                             #
+    # Execution-path accessor                                            #
     # ------------------------------------------------------------------ #
     def get_execution_path(self) -> str:
         """Return the current isolation's execution path, or ''.
