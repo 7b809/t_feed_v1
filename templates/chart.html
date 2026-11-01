@@ -447,6 +447,67 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
   .swap-option-fab .swap-option-label { display: none; }
   .swap-option-fab i { font-size: 17px; }
 }
+
+/* ---------- Reliable native JSON export disclosure card ---------- */
+.json-export-card {
+  width: 100%;
+  margin: 12px 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+.json-export-card > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 13px 16px;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+.json-export-card > summary::-webkit-details-marker { display: none; }
+.json-export-card > summary::marker { content: ""; }
+.json-export-card > summary:hover { background: var(--surface-2); }
+.json-export-heading { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.json-export-heading i { color: #7ea6ff; font-size: 18px; flex-shrink: 0; }
+.json-export-title { color: #fff; font-size: 12px; font-weight: 800; }
+.json-export-subtitle { color: var(--muted); font-size: 10px; margin-top: 3px; }
+.json-export-chevron { color: var(--muted); transition: transform .18s ease; }
+.json-export-card[open] .json-export-chevron { transform: rotate(180deg); }
+.json-export-body { padding: 12px 14px 14px; border-top: 1px solid var(--border); }
+.json-export-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; }
+.json-export-field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.json-export-field label {
+  color: var(--muted); font-size: 9px; font-weight: 800;
+  letter-spacing: .05em; text-transform: uppercase;
+}
+.json-export-field input {
+  width: 100%; min-width: 0; background: var(--bg); color: var(--text);
+  border: 1px solid var(--border); border-radius: 6px;
+  padding: 7px 8px; font-size: 11px; font-weight: 700;
+}
+.json-export-field input:focus { outline: none; border-color: var(--blue); }
+.json-export-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 12px; }
+.json-export-button {
+  border: 0; border-radius: 8px; background: var(--blue); color: #fff;
+  padding: 9px 15px; font-size: 11px; font-weight: 800; cursor: pointer;
+}
+.json-export-button:hover { filter: brightness(1.12); }
+.json-export-button:disabled { opacity: .55; cursor: wait; }
+.json-export-status { color: var(--muted); font-size: 10px; }
+.json-export-status.error { color: var(--red); }
+@media (max-width: 900px) { .json-export-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 520px) {
+  .json-export-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .json-export-card > summary { padding: 10px 12px; }
+  .json-export-body { padding: 10px; }
+  .json-export-actions { align-items: stretch; }
+  .json-export-button { width: 100%; }
+}
+
 </style>
 {% endblock %}
 {% block content %}
@@ -548,6 +609,56 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
     </button>
     <span id="srParamsHint" class="sr-param-hint" aria-live="polite"></span>
   </div>
+
+  <!-- Native <details> is used deliberately: opening/closing does not depend on JS. -->
+  <details class="json-export-card" id="jsonExportCard">
+    <summary id="jsonExportSummary">
+      <span class="json-export-heading">
+        <i class="bi bi-filetype-json"></i>
+        <span>
+          <span class="json-export-title">Download Chart Data (JSON)</span>
+          <span class="json-export-subtitle d-block">Candles · EMA crosses · Support / Resistance · Instrument metadata</span>
+        </span>
+      </span>
+      <i class="bi bi-chevron-down json-export-chevron" aria-hidden="true"></i>
+    </summary>
+    <div class="json-export-body">
+      <div class="json-export-grid">
+        <div class="json-export-field">
+          <label for="jsonExportStartDate">Start date (IST)</label>
+          <input type="date" id="jsonExportStartDate">
+        </div>
+        <div class="json-export-field">
+          <label for="jsonExportEndDate">End date (IST)</label>
+          <input type="date" id="jsonExportEndDate">
+        </div>
+        <div class="json-export-field">
+          <label for="jsonExportEmaFast">EMA fast</label>
+          <input type="number" id="jsonExportEmaFast" min="1" max="500" step="1" value="9">
+        </div>
+        <div class="json-export-field">
+          <label for="jsonExportEmaSlow">EMA slow</label>
+          <input type="number" id="jsonExportEmaSlow" min="2" max="1000" step="1" value="21">
+        </div>
+        <div class="json-export-field">
+          <label for="jsonExportSrLeft">SR left bars</label>
+          <input type="number" id="jsonExportSrLeft" min="1" max="200" step="1" value="15">
+        </div>
+        <div class="json-export-field">
+          <label for="jsonExportSrRight">SR right bars</label>
+          <input type="number" id="jsonExportSrRight" min="1" max="200" step="1" value="3">
+        </div>
+      </div>
+      <div class="json-export-actions">
+        <button type="button" class="json-export-button" id="downloadChartJsonBtn">
+          <i class="bi bi-download me-1"></i> Download complete JSON
+        </button>
+        <span class="json-export-status" id="jsonExportStatus" role="status" aria-live="polite">
+          Default: latest 11 available trading dates · EMA 9/21 · SR 15/3.
+        </span>
+      </div>
+    </div>
+  </details>
 
   <div class="chart-card" id="chartCard">
     <div id="chart"></div>
@@ -652,6 +763,7 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
 </button>
 
 <script id="instrument-key-data" type="application/json">{{ instrument_key | tojson }}</script>
+<script id="instrument-metadata-data" type="application/json">{{ instrument | tojson }}</script>
 <script id="instrument-tick-size-data" type="application/json">{{ instrument.get('tick_size') | tojson }}</script>
 
 <script defer src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
@@ -2929,5 +3041,356 @@ window.addEventListener("beforeunload", () => {
   if (reconnectTimer) window.clearTimeout(reconnectTimer);
   if (chartSocket) chartSocket.close(1000, "Chart page closed");
 });
+
+// ============================================================
+// COMPLETE CHART DATA JSON EXPORT
+// This code is inside the page's existing inline script. The disclosure
+// itself is native HTML <details>, so it opens even if JS is unavailable.
+// ============================================================
+(function initChartJSONExport() {
+  const card = document.getElementById("jsonExportCard");
+  const startInput = document.getElementById("jsonExportStartDate");
+  const endInput = document.getElementById("jsonExportEndDate");
+  const fastInput = document.getElementById("jsonExportEmaFast");
+  const slowInput = document.getElementById("jsonExportEmaSlow");
+  const leftInput = document.getElementById("jsonExportSrLeft");
+  const rightInput = document.getElementById("jsonExportSrRight");
+  const downloadButton = document.getElementById("downloadChartJsonBtn");
+  const status = document.getElementById("jsonExportStatus");
+
+  if (!card || !startInput || !endInput || !fastInput || !slowInput ||
+      !leftInput || !rightInput || !downloadButton || !status) {
+    console.error("[json-export] Required export elements are missing.");
+    return;
+  }
+
+  let defaultRangeInitialized = false;
+  let rangeInitializedFromFallback = false;
+  let userChangedExportDates = false;
+
+  function setStatus(message, isError) {
+    status.textContent = message;
+    status.classList.toggle("error", Boolean(isError));
+  }
+
+  function getChartCandles() {
+    if (!candleSeries || typeof candleSeries.data !== "function") return [];
+    const rows = candleSeries.data();
+    return Array.isArray(rows) ? rows.slice() : [];
+  }
+
+  function getDateKeyForExport(unixSeconds) {
+    if (typeof getDateKeyIST === "function") return getDateKeyIST(Number(unixSeconds));
+    const d = new Date(Number(unixSeconds) * 1000);
+    return new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit"
+    }).format(d);
+  }
+
+  function getLatestElevenTradingDates(candles) {
+    const todayKey = getDateKeyForExport(Math.floor(Date.now() / 1000));
+    const dates = [...new Set(candles
+      .filter(c => isValidExportCandle(c))
+      .map(c => getDateKeyForExport(c.time))
+      .filter(Boolean)
+      .filter(date => date <= todayKey))]
+      .sort();
+    return dates.slice(-11);
+  }
+
+  function initializeDefaultRange(force) {
+    if (defaultRangeInitialized && !force) return;
+    const candles = getChartCandles();
+    const dates = getLatestElevenTradingDates(candles);
+    const todayKey = getDateKeyForExport(Math.floor(Date.now() / 1000));
+
+    if (dates.length) {
+      startInput.value = dates[0];
+      rangeInitializedFromFallback = false;
+      endInput.value = todayKey;
+      if (dates.length < 11) {
+        setStatus(`Found ${dates.length} available trading date(s); exporting through today. EMA 9/21 · SR 15/3.`, false);
+      } else {
+        setStatus("Default range: latest 11 available trading dates · EMA 9/21 · SR 15/3.", false);
+      }
+    } else {
+      // Fallback until candle history has finished loading. Re-evaluate this
+      // fallback when the card is opened after history has arrived.
+      rangeInitializedFromFallback = true;
+      const now = new Date();
+      const ist = new Date(now.getTime() + 330 * 60000);
+      const start = new Date(Date.UTC(ist.getUTCFullYear(), ist.getUTCMonth(), ist.getUTCDate() - 10));
+      startInput.value = start.toISOString().slice(0, 10);
+      endInput.value = todayKey;
+      setStatus("Waiting for candle history; default date range is the latest 11 calendar dates.", false);
+    }
+    defaultRangeInitialized = true;
+  }
+
+  [startInput, endInput].forEach(input => {
+    input.addEventListener("change", () => { userChangedExportDates = true; });
+  });
+
+  card.addEventListener("toggle", () => {
+    if (card.open && (!defaultRangeInitialized || (rangeInitializedFromFallback && !userChangedExportDates))) {
+      initializeDefaultRange(true);
+    }
+  });
+
+  function parseInteger(input, label, min, max) {
+    const value = Number(input.value);
+    if (!Number.isInteger(value) || value < min || value > max) {
+      throw new Error(`${label} must be a whole number between ${min} and ${max}.`);
+    }
+    return value;
+  }
+
+  function isValidExportCandle(c) {
+    if (!c || !Number.isFinite(Number(c.time))) return false;
+    const fields = ["open", "high", "low", "close"];
+    return fields.every(key => Number.isFinite(Number(c[key])) && Number(c[key]) > 0);
+  }
+
+  function toISTTimestamp(unixSeconds) {
+    const d = new Date(Number(unixSeconds) * 1000);
+    if (!Number.isFinite(d.getTime())) throw new Error("A candle contains an invalid timestamp.");
+    const shifted = new Date(d.getTime() + 330 * 60000);
+    return shifted.toISOString().replace("Z", "+05:30");
+  }
+
+  function calculateEMAForExport(candles, period) {
+    const multiplier = 2 / (period + 1);
+    let previous = null;
+    return candles.map(c => {
+      const close = Number(c.close);
+      previous = previous === null ? close : (close * multiplier) + (previous * (1 - multiplier));
+      return previous;
+    });
+  }
+
+  function buildCrosses(candles, startDate, endDate, fastPeriod, slowPeriod) {
+    const fast = calculateEMAForExport(candles, fastPeriod);
+    const slow = calculateEMAForExport(candles, slowPeriod);
+    const result = [];
+
+    for (let i = 1; i < candles.length; i++) {
+      const previousDiff = fast[i - 1] - slow[i - 1];
+      const currentDiff = fast[i] - slow[i];
+      let type = null;
+      if (previousDiff <= 0 && currentDiff > 0) type = "bullish";
+      else if (previousDiff >= 0 && currentDiff < 0) type = "bearish";
+      if (!type) continue;
+
+      const candle = candles[i];
+      const dateKey = getDateKeyForExport(candle.time);
+      if ((startDate && dateKey < startDate) || (endDate && dateKey > endDate)) continue;
+      const previousCandle = candles[i - 1];
+      const volume = Number(candle.volume || 0);
+      const previousVolume = Number(previousCandle.volume || 0);
+
+      result.push({
+        timestamp: toISTTimestamp(candle.time),
+        type,
+        fast_ema: Number(fast[i].toFixed(6)),
+        slow_ema: Number(slow[i].toFixed(6)),
+        volume,
+        volume_diff: Number((volume - previousVolume).toFixed(6)),
+        ema_diff: Number((fast[i] - slow[i]).toFixed(6))
+      });
+    }
+    return result;
+  }
+
+  function buildSupportResistance(allCandles, selectedCandles, startDate, endDate, leftBars, rightBars) {
+    const selectedIndex = new Map(selectedCandles.map((c, index) => [Number(c.time), index]));
+    const levels = [];
+    if (allCandles.length < leftBars + rightBars + 1) return levels;
+
+    for (let i = leftBars; i < allCandles.length - rightBars; i++) {
+      const pivot = allCandles[i];
+      const pivotDate = getDateKeyForExport(pivot.time);
+      if ((startDate && pivotDate < startDate) || (endDate && pivotDate > endDate)) continue;
+
+      const pivotHigh = Number(pivot.high);
+      const pivotLow = Number(pivot.low);
+      let isResistance = true;
+      let isSupport = true;
+
+      for (let j = i - leftBars; j < i; j++) {
+        if (pivotHigh <= Number(allCandles[j].high)) isResistance = false;
+        if (pivotLow >= Number(allCandles[j].low)) isSupport = false;
+        if (!isResistance && !isSupport) break;
+      }
+      for (let j = i + 1; j <= i + rightBars && (isResistance || isSupport); j++) {
+        if (pivotHigh <= Number(allCandles[j].high)) isResistance = false;
+        if (pivotLow >= Number(allCandles[j].low)) isSupport = false;
+      }
+
+      const confirmation = allCandles[i + rightBars];
+      const pivotExportIndex = selectedIndex.get(Number(pivot.time));
+      const confirmedExportIndex = selectedIndex.get(Number(confirmation.time));
+
+      // Keep the output self-contained: both pivot and confirmation bars
+      // must exist in the exported candles array so the indices are meaningful.
+      if (pivotExportIndex === undefined || confirmedExportIndex === undefined) continue;
+
+      if (isResistance) {
+        levels.push({
+          level: "resistance",
+          price: pivotHigh,
+          pivot_bar_index: pivotExportIndex,
+          pivot_time: toISTTimestamp(pivot.time),
+          confirmed_bar_index: confirmedExportIndex,
+          confirmed_time: toISTTimestamp(confirmation.time),
+          left_bars: leftBars,
+          right_bars: rightBars
+        });
+      }
+      if (isSupport) {
+        levels.push({
+          level: "support",
+          price: pivotLow,
+          pivot_bar_index: pivotExportIndex,
+          pivot_time: toISTTimestamp(pivot.time),
+          confirmed_bar_index: confirmedExportIndex,
+          confirmed_time: toISTTimestamp(confirmation.time),
+          left_bars: leftBars,
+          right_bars: rightBars
+        });
+      }
+    }
+    return levels.sort((a, b) => a.pivot_bar_index - b.pivot_bar_index);
+  }
+
+  function getInstrumentMetadata() {
+    const node = document.getElementById("instrument-metadata-data");
+    let raw = {};
+    try { raw = node ? JSON.parse(node.textContent || "{}") : {}; }
+    catch (error) { console.warn("[json-export] Metadata JSON parse failed:", error); }
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) raw = {};
+
+    const symbolNode = document.getElementById("topSymbolName");
+    const keyNode = document.getElementById("instrument-key-data");
+    let keyFromTemplate = "";
+    try { keyFromTemplate = keyNode ? JSON.parse(keyNode.textContent || '""') : ""; } catch (_) {}
+    return {
+      ...raw,
+      instrument_key: currentInstrumentKey || keyFromTemplate || "",
+      trading_symbol: raw.trading_symbol || raw.tradingsymbol || raw.name ||
+        (symbolNode ? symbolNode.textContent.trim() : "") || currentInstrumentKey || ""
+    };
+  }
+
+  function downloadJsonFile(payload, fileName) {
+    const json = JSON.stringify(payload, null, 2);
+    const blob = new Blob([json], { type: "application/json;charset=utf-8" });
+    const objectUrl = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = objectUrl;
+    link.download = fileName;
+    link.style.display = "none";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    // Do not revoke synchronously: some browsers cancel the download.
+    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1500);
+  }
+
+  downloadButton.addEventListener("click", () => {
+    downloadButton.disabled = true;
+    const oldLabel = downloadButton.innerHTML;
+    downloadButton.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Preparing JSON…';
+
+    try {
+      if (!defaultRangeInitialized || (rangeInitializedFromFallback && !userChangedExportDates)) initializeDefaultRange(true);
+      const fastPeriod = parseInteger(fastInput, "EMA fast", 1, 500);
+      const slowPeriod = parseInteger(slowInput, "EMA slow", 2, 1000);
+      const leftBars = parseInteger(leftInput, "SR left bars", 1, 200);
+      const rightBars = parseInteger(rightInput, "SR right bars", 1, 200);
+      if (fastPeriod >= slowPeriod) throw new Error("EMA fast must be smaller than EMA slow.");
+
+      const startDate = startInput.value || null;
+      const endDate = endInput.value || null;
+      if (startDate && endDate && startDate > endDate) {
+        throw new Error("Start date must be on or before end date.");
+      }
+
+      const allCandles = getChartCandles()
+        .filter(isValidExportCandle)
+        .sort((a, b) => Number(a.time) - Number(b.time));
+
+      if (!allCandles.length) {
+        throw new Error("No candle data is loaded in the chart yet. Wait for the chart to finish loading, then try again.");
+      }
+
+      const selectedCandles = allCandles.filter(c => {
+        const dateKey = getDateKeyForExport(c.time);
+        return (!startDate || dateKey >= startDate) && (!endDate || dateKey <= endDate);
+      });
+      if (!selectedCandles.length) {
+        throw new Error(`No valid candles found between ${startDate || "beginning"} and ${endDate || "latest"}.`);
+      }
+
+      // Calculate EMA on the full loaded history, then select cross events in range.
+      const crosses = buildCrosses(allCandles, startDate, endDate, fastPeriod, slowPeriod);
+      const levels = buildSupportResistance(
+        allCandles, selectedCandles, startDate, endDate, leftBars, rightBars
+      );
+      const instrument = getInstrumentMetadata();
+      const exportTime = new Date().toISOString();
+
+      const payload = {
+        metadata: {
+          instrument_key: instrument.instrument_key,
+          trading_symbol: instrument.trading_symbol,
+          instrument,
+          date_range: {
+            start_date: startDate,
+            end_date: endDate,
+            timezone: "Asia/Kolkata"
+          },
+          exported_at: exportTime,
+          candle_count: selectedCandles.length,
+          ema_cross_count: crosses.length,
+          sr_level_count: levels.length
+        },
+        config: {
+          ema: { fast_period: fastPeriod, slow_period: slowPeriod },
+          sr: { left_bars: leftBars, right_bars: rightBars }
+        },
+        candles: selectedCandles.map(c => ({
+          timestamp: toISTTimestamp(c.time),
+          open: Number(c.open),
+          high: Number(c.high),
+          low: Number(c.low),
+          close: Number(c.close),
+          volume: Number(c.volume || 0),
+          oi: Number(c.oi || 0)
+        })),
+        crosses,
+        levels
+      };
+
+      const safeSymbol = String(instrument.trading_symbol || "instrument")
+        .replace(/[^a-z0-9_-]+/gi, "_").replace(/^_+|_+$/g, "") || "instrument";
+      downloadJsonFile(payload, `${safeSymbol}_${startDate || "all"}_${endDate || "all"}_chart_data.json`);
+      setStatus(
+        `Downloaded ${selectedCandles.length} candles · ${crosses.length} EMA crosses · ${levels.length} SR levels.`,
+        false
+      );
+    } catch (error) {
+      console.error("[json-export] Download failed:", error);
+      setStatus(error && error.message ? error.message : "Unable to generate JSON file.", true);
+    } finally {
+      downloadButton.disabled = false;
+      downloadButton.innerHTML = oldLabel;
+    }
+  });
+
+  // Initialize when the DOM is ready; refresh defaults on opening if chart data
+  // was not available during initial page execution.
+  initializeDefaultRange(false);
+})();
+
 </script>
 {% endblock %}

@@ -260,6 +260,60 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
 .contract-row .meta { color: var(--muted); font-size: 11px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .contract-row .pill { flex-shrink: 0; }
 .contract-list-empty { padding: 24px; text-align: center; color: var(--muted); font-size: 12px; }
+
+/* ---------- Full JSON export card ---------- */
+.json-export-card {
+  margin-top: 12px; width: 100%; background: var(--surface);
+  border: 1px solid var(--border); border-radius: 10px; overflow: hidden;
+  box-shadow: var(--shadow);
+}
+.json-export-card > summary {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; padding: 12px 15px; cursor: pointer; list-style: none;
+}
+.json-export-card > summary::-webkit-details-marker { display: none; }
+.json-export-card > summary:hover { background: var(--surface-2); }
+.json-export-heading { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.json-export-heading > i { color: #7ea6ff; font-size: 18px; }
+.json-export-title { display: block; color: #fff; font-size: 12px; font-weight: 800; }
+.json-export-subtitle { display: block; margin-top: 3px; color: var(--muted); font-size: 10px; }
+.json-export-chevron { color: var(--muted); transition: transform .18s ease; }
+.json-export-card[open] .json-export-chevron { transform: rotate(180deg); }
+.json-export-body { padding: 13px 15px; border-top: 1px solid var(--border); }
+.json-export-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; }
+.json-export-field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.json-export-field label { color: var(--muted); font-size: 9px; font-weight: 800; text-transform: uppercase; letter-spacing: .05em; }
+.json-export-field input {
+  width: 100%; min-width: 0; background: var(--bg); color: var(--text);
+  border: 1px solid var(--border); border-radius: 6px; padding: 7px 8px; font-size: 11px;
+}
+.json-export-field input:focus { outline: none; border-color: var(--blue); }
+.json-export-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 12px; }
+.json-export-button {
+  border: 0; border-radius: 8px; background: var(--blue); color: #fff;
+  padding: 9px 15px; font-size: 11px; font-weight: 800; cursor: pointer;
+}
+.json-export-button:hover { filter: brightness(1.12); }
+.json-export-button:disabled { opacity: .55; cursor: wait; }
+.json-export-status { color: var(--muted); font-size: 10px; }
+.json-export-status.error { color: var(--red); }
+.key-end-date-wrap { display: flex; align-items: center; gap: 5px; flex-shrink: 0; }
+.key-end-date-wrap label { color: var(--muted); font-size: 9px; font-weight: 800; white-space: nowrap; }
+.key-end-date-wrap input {
+  width: 128px; min-width: 0; background: var(--bg); color: var(--text);
+  border: 1px solid var(--border); border-radius: 7px; padding: 6px 7px; font-size: 10px;
+}
+@media (max-width: 900px) { .json-export-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 720px) {
+  .json-export-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .json-export-body { padding: 10px; }
+  .json-export-actions { align-items: stretch; }
+  .json-export-button { width: 100%; }
+  .key-end-date-wrap { gap: 3px; }
+  .key-end-date-wrap label { display: none; }
+  .key-end-date-wrap input { width: 112px; padding: 5px; font-size: 9px; }
+}
+
 </style>
 {% endblock %}
 
@@ -269,6 +323,10 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
   <div class="key-input-bar position-relative">
     <i class="bi bi-key-fill text-warning"></i>
     <input type="text" id="instrumentKeyInput" class="form-control" placeholder="Paste instrument key  e.g. NSE_FO|73899|29-09-2026  or  NSE_FO|43919" autocomplete="off" spellcheck="false">
+    <div class="key-end-date-wrap" title="Optional: load the 11 latest trading dates up to this date">
+      <label for="keyEndDateInput">END</label>
+      <input type="date" id="keyEndDateInput" aria-label="Optional end date">
+    </div>
     <button type="button" class="btn btn-load" id="loadBtn" title="Load chart">Load</button>
     <button type="button" class="btn btn-expired" id="expiredBrowserBtn" title="Browse expired contracts">⌛ Expired</button>
     <div class="search-results" id="searchResults"></div>
@@ -320,6 +378,33 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
       <button type="button" class="btn-apply-dates" id="applyDatesBtn">Apply dates</button>
       <span style="margin-left:auto;font-size:10px;color:var(--muted);" id="modeIndicator"></span>
     </div>
+
+    <details class="json-export-card" id="jsonExportCard">
+      <summary>
+        <span class="json-export-heading">
+          <i class="bi bi-filetype-json"></i>
+          <span>
+            <span class="json-export-title">Download Complete Chart Data (JSON)</span>
+            <span class="json-export-subtitle">Instrument metadata · Candles · EMA crosses · Support / Resistance levels</span>
+          </span>
+        </span>
+        <i class="bi bi-chevron-down json-export-chevron" aria-hidden="true"></i>
+      </summary>
+      <div class="json-export-body">
+        <div class="json-export-grid">
+          <div class="json-export-field"><label for="exportStartDate">Start date (IST)</label><input type="date" id="exportStartDate"></div>
+          <div class="json-export-field"><label for="exportEndDate">End date (IST)</label><input type="date" id="exportEndDate"></div>
+          <div class="json-export-field"><label for="exportEmaFast">EMA fast</label><input type="number" id="exportEmaFast" min="1" max="500" value="9"></div>
+          <div class="json-export-field"><label for="exportEmaSlow">EMA slow</label><input type="number" id="exportEmaSlow" min="2" max="1000" value="21"></div>
+          <div class="json-export-field"><label for="exportSrLeft">SR left bars</label><input type="number" id="exportSrLeft" min="1" max="200" value="15"></div>
+          <div class="json-export-field"><label for="exportSrRight">SR right bars</label><input type="number" id="exportSrRight" min="1" max="200" value="3"></div>
+        </div>
+        <div class="json-export-actions">
+          <button type="button" class="json-export-button" id="downloadChartJsonBtn"><i class="bi bi-download me-1"></i>Download one JSON file</button>
+          <span class="json-export-status" id="jsonExportStatus" role="status" aria-live="polite">Defaults: latest 11 loaded trading dates · EMA 9/21 · SR 15/3.</span>
+        </div>
+      </div>
+    </details>
 
     <div class="chart-toggles-card" id="labelToggleBar">
       <div class="chart-toggles-title"><i class="bi bi-tags me-1"></i>Labels</div>
@@ -556,6 +641,7 @@ const LoadingOverlay = (function () {
 // DOM references
 // ============================================================
 const instrumentKeyInput = document.getElementById("instrumentKeyInput");
+const keyEndDateInput    = document.getElementById("keyEndDateInput");
 const loadBtn            = document.getElementById("loadBtn");
 const expiredBrowserBtn  = document.getElementById("expiredBrowserBtn");
 const searchResults      = document.getElementById("searchResults");
@@ -786,7 +872,8 @@ function normalizeCandle(rawCandle) {
     const close= Number(rawCandle[4]);
     const volume = rawCandle.length > 5 ? Number(rawCandle[5]) : null;
     if (!Number.isFinite(time) || !Number.isFinite(open) || !Number.isFinite(high) || !Number.isFinite(low) || !Number.isFinite(close)) return null;
-    return { time, open, high, low, close, volume: Number.isFinite(volume) ? volume : 0 };
+    const oi = rawCandle.length > 6 ? Number(rawCandle[6]) : 0;
+    return { time, open, high, low, close, volume: Number.isFinite(volume) ? volume : 0, oi: Number.isFinite(oi) ? oi : 0 };
   }
   if (typeof rawCandle === "object") {
     const time = parseTimestamp(rawCandle.time || rawCandle.timestamp || rawCandle.ts);
@@ -795,7 +882,7 @@ function normalizeCandle(rawCandle) {
     const low  = Number(rawCandle.low);
     const close= Number(rawCandle.close);
     if (![time, open, high, low, close].every(Number.isFinite)) return null;
-    return { time, open, high, low, close, volume: Number(rawCandle.volume || 0) };
+    return { time, open, high, low, close, volume: Number(rawCandle.volume || 0), oi: Number(rawCandle.oi || rawCandle.open_interest || 0) };
   }
   return null;
 }
@@ -1762,14 +1849,53 @@ function populateInfoCard(meta, mode, key, fromDate, toDate) {
       : "HistoryV3Api (" + (fromDate || "") + " → " + (toDate || "") + ")";
   }
 
-  if (topSymbolName) topSymbolName.textContent = sym;
-  if (topSymbolKey) topSymbolKey.textContent = key;
+  // Update top header directly from API metadata
+const displaySymbol =
+    meta.trading_symbol ||
+    meta.underlying_symbol ||
+    key ||
+    "Unknown Instrument";
+
+const displayKey =
+    meta.instrument_key ||
+    key ||
+    "Unknown Key";
+
+if (topSymbolName) {
+    topSymbolName.textContent = displaySymbol;
+}
+
+if (topSymbolKey) {
+    topSymbolKey.textContent = displayKey;
+}
+
 }
 
 // ============================================================
 // Full page load
 // ============================================================
-async function loadChart(instrumentKey, fromDate, toDate) {
+function subtractCalendarDaysISO(dateISO, days) {
+  const [y, m, d] = String(dateISO).split("-").map(Number);
+  const date = new Date(Date.UTC(y, m - 1, d) - Number(days) * 86400000);
+  return date.toISOString().slice(0, 10);
+}
+
+function selectLatestTradingDates(candles, endDateISO, count = 11) {
+  const eligible = (candles || []).filter(c =>
+    Number(c.open) > 0 && Number(c.high) > 0 && Number(c.low) > 0 && Number(c.close) > 0 &&
+    (!endDateISO || getDateKeyIST(c.time) <= endDateISO)
+  );
+  const dateKeys = [...new Set(eligible.map(c => getDateKeyIST(c.time)).filter(Boolean))].sort();
+  const selectedDates = dateKeys.slice(-count);
+  if (!selectedDates.length) return { candles: [], dates: [] };
+  const allowed = new Set(selectedDates);
+  return {
+    candles: eligible.filter(c => allowed.has(getDateKeyIST(c.time))),
+    dates: selectedDates
+  };
+}
+
+async function loadChart(instrumentKey, fromDate, toDate, options = {}) {
   if (!instrumentKey) return;
   currentInstrumentKey = instrumentKey;
   emptyState.style.display = "none";
@@ -1780,17 +1906,44 @@ async function loadChart(instrumentKey, fromDate, toDate) {
   LoadingOverlay.setStatus("Fetching candles…", "Loading Chart");
 
   try {
-    const result = await fetchCandlesFromApi(instrumentKey, fromDate, toDate);
+    let result;
+    if (options && options.endDateOnly && toDate) {
+      const requestFrom = subtractCalendarDaysISO(toDate, 60);
+      result = await fetchCandlesFromApi(instrumentKey, requestFrom, toDate);
+      const selected = selectLatestTradingDates(result.candles, toDate, 11);
+      result.candles = selected.candles;
+      result.fromDate = selected.dates[0] || requestFrom;
+      result.toDate = toDate;
+      result.requestedEndDate = toDate;
+      if (!result.candles.length) {
+        throw new Error(`No candles found on or before ${toDate}.`);
+      }
+    } else {
+      result = await fetchCandlesFromApi(instrumentKey, fromDate, toDate);
+    }
     currentMeta = result.meta || {};
     currentMode = result.mode || "";
+
+    // Use the canonical instrument key returned by API metadata
+const resolvedInstrumentKey =
+    currentMeta.instrument_key || instrumentKey;
+
+currentInstrumentKey = resolvedInstrumentKey;
+
+
     modeIndicator.textContent = currentMode === "expired" ? "⌛ Expired instrument" : "• Active instrument";
     modeIndicator.style.color = currentMode === "expired" ? "var(--yellow)" : "#7ea6ff";
 
     fromDateInput.value = result.fromDate || "";
     toDateInput.value = result.toDate || "";
 
-    populateInfoCard(currentMeta, currentMode, instrumentKey, result.fromDate, result.toDate);
-
+populateInfoCard(
+    currentMeta,
+    currentMode,
+    resolvedInstrumentKey,
+    result.fromDate,
+    result.toDate
+);
     if (!result.candles.length) {
       LoadingOverlay.setStatus("No candles returned for this window.", "Empty");
       LoadingOverlay.hide(1000);
@@ -1935,7 +2088,7 @@ function looksLikeKey(v) { return String(v || "").includes("|"); }
 async function runOneShotSearch(q) {
   if (!q) { searchResults.classList.remove("visible"); return; }
   if (looksLikeKey(q)) {
-    window.location.href = CHART_PAGE_BASE + "/" + encodeURIComponent(q);
+    window.location.href = buildChartUrl(q);
     return;
   }
   searchResults.innerHTML = `<div class="search-result-empty">Searching…</div>`;
@@ -1974,10 +2127,16 @@ instrumentKeyInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter") { e.preventDefault(); const q = instrumentKeyInput.value.trim(); if (q) runOneShotSearch(q); }
   if (e.key === "Escape") searchResults.classList.remove("visible");
 });
+function buildChartUrl(instrumentKey) {
+  const url = new URL(CHART_PAGE_BASE + "/" + encodeURIComponent(instrumentKey), window.location.origin);
+  const endDate = keyEndDateInput && keyEndDateInput.value ? keyEndDateInput.value : "";
+  if (endDate) url.searchParams.set("end_date", endDate);
+  return url.pathname + url.search;
+}
 loadBtn.addEventListener("click", () => {
   const q = instrumentKeyInput.value.trim();
   if (!q) return;
-  if (looksLikeKey(q)) window.location.href = CHART_PAGE_BASE + "/" + encodeURIComponent(q);
+  if (looksLikeKey(q)) window.location.href = buildChartUrl(q);
   else runOneShotSearch(q);
 });
 searchResults.addEventListener("click", (e) => {
@@ -1985,7 +2144,7 @@ searchResults.addEventListener("click", (e) => {
   if (!item) return;
   const key = decodeURIComponent(item.dataset.key);
   if (!key) return;
-  window.location.href = CHART_PAGE_BASE + "/" + encodeURIComponent(key);
+  window.location.href = buildChartUrl(key);
 });
 document.addEventListener("click", (e) => {
   if (!e.target.closest(".key-input-bar")) searchResults.classList.remove("visible");
@@ -2002,10 +2161,9 @@ function handleApplyDates() {
       alert("Invalid End Date format. Please use DD-MM-YYYY or YYYY-MM-DD (e.g. 22-10-2026)");
       return;
     }
-    const computedStartISO = computeElevenDaysPriorISO(targetISO);
-    fromDateInput.value = computedStartISO;
+    if (keyEndDateInput) keyEndDateInput.value = targetISO;
     toDateInput.value = targetISO;
-    loadChart(currentInstrumentKey, computedStartISO, targetISO);
+    loadChart(currentInstrumentKey, null, targetISO, { endDateOnly: true });
     return;
   }
 
@@ -2022,6 +2180,235 @@ if (targetEndDateInput) {
     }
   });
 }
+
+// ============================================================
+// Complete JSON export: metadata + candles + EMA crosses + SR pivots
+// ============================================================
+(function initCompleteJSONExport() {
+  const card = document.getElementById("jsonExportCard");
+  const startInput = document.getElementById("exportStartDate");
+  const endInput = document.getElementById("exportEndDate");
+  const fastInput = document.getElementById("exportEmaFast");
+  const slowInput = document.getElementById("exportEmaSlow");
+  const leftInput = document.getElementById("exportSrLeft");
+  const rightInput = document.getElementById("exportSrRight");
+  const button = document.getElementById("downloadChartJsonBtn");
+  const status = document.getElementById("jsonExportStatus");
+  if (!card || !startInput || !endInput || !fastInput || !slowInput ||
+      !leftInput || !rightInput || !button || !status) return;
+
+  let datesInitialized = false;
+  function setStatus(message, error = false) {
+    status.textContent = message;
+    status.classList.toggle("error", !!error);
+  }
+  function getLoadedCandles() {
+    if (!candleSeries || typeof candleSeries.data !== "function") return [];
+    return safeCandleData(candleSeries.data());
+  }
+  function initializeDates(force = false) {
+    if (datesInitialized && !force) return;
+    const candles = getLoadedCandles();
+    const dates = [...new Set(candles.map(c => getDateKeyIST(c.time)).filter(Boolean))].sort();
+    if (dates.length) {
+      startInput.value = dates[Math.max(0, dates.length - 11)];
+      endInput.value = dates[dates.length - 1];
+      setStatus(`Default range: ${Math.min(11, dates.length)} trading dates in loaded candles.`, false);
+    } else {
+      setStatus("Load an instrument before exporting chart data.", false);
+    }
+    datesInitialized = true;
+  }
+  card.addEventListener("toggle", () => { if (card.open) initializeDates(); });
+
+  function validInt(input, label, min, max) {
+    const n = Number(input.value);
+    if (!Number.isInteger(n) || n < min || n > max) {
+      throw new Error(`${label} must be a whole number between ${min} and ${max}.`);
+    }
+    return n;
+  }
+  function toISTISO(time) {
+    const d = new Date(Number(time) * 1000);
+    if (!Number.isFinite(d.getTime())) throw new Error("Invalid candle timestamp found.");
+    const shifted = new Date(d.getTime() + 330 * 60000);
+    return shifted.toISOString().replace("Z", "+05:30");
+  }
+  function calculateExportEMA(candles, period) {
+    const k = 2 / (period + 1);
+    let previous = null;
+    return candles.map(c => {
+      const close = Number(c.close);
+      previous = previous === null ? close : close * k + previous * (1 - k);
+      return previous;
+    });
+  }
+  function buildExportCrosses(allCandles, selectedTimes, startDate, endDate, fastPeriod, slowPeriod) {
+    const fast = calculateExportEMA(allCandles, fastPeriod);
+    const slow = calculateExportEMA(allCandles, slowPeriod);
+    const output = [];
+    for (let i = 1; i < allCandles.length; i++) {
+      const prevDiff = fast[i - 1] - slow[i - 1];
+      const currDiff = fast[i] - slow[i];
+      let type = null;
+      if (prevDiff <= 0 && currDiff > 0) type = "bullish";
+      else if (prevDiff >= 0 && currDiff < 0) type = "bearish";
+      if (!type) continue;
+      const c = allCandles[i];
+      const date = getDateKeyIST(c.time);
+      if ((startDate && date < startDate) || (endDate && date > endDate)) continue;
+      if (!selectedTimes.has(c.time)) continue;
+      const volume = Number(c.volume || 0);
+      const previousVolume = Number(allCandles[i - 1].volume || 0);
+      output.push({
+        timestamp: toISTISO(c.time),
+        type,
+        fast_ema: Number(fast[i].toFixed(4)),
+        slow_ema: Number(slow[i].toFixed(4)),
+        volume: Number(volume.toFixed(4)),
+        volume_diff: Number((volume - previousVolume).toFixed(4)),
+        ema_diff: Number((fast[i] - slow[i]).toFixed(4)),
+        // The source template currently detects EMA direction changes only;
+        // it has no signal scoring/filter engine to calculate these values.
+        score: null,
+        max_score: null,
+        valid: null,
+        filters: {}
+      });
+    }
+    return output;
+  }
+  function buildExportLevels(allCandles, selectedCandles, startDate, endDate, leftBars, rightBars) {
+    const selectedIndex = new Map(selectedCandles.map((c, i) => [c.time, i]));
+    const output = [];
+    if (allCandles.length < leftBars + rightBars + 1) return output;
+
+    for (let i = leftBars; i < allCandles.length - rightBars; i++) {
+      const pivot = allCandles[i];
+      const pivotDate = getDateKeyIST(pivot.time);
+      if ((startDate && pivotDate < startDate) || (endDate && pivotDate > endDate)) continue;
+
+      const high = Number(pivot.high), low = Number(pivot.low);
+      let isResistance = true, isSupport = true;
+      for (let j = i - leftBars; j < i; j++) {
+        if (Number(allCandles[j].high) >= high) isResistance = false;
+        if (Number(allCandles[j].low) <= low) isSupport = false;
+        if (!isResistance && !isSupport) break;
+      }
+      if (isResistance || isSupport) {
+        for (let j = i + 1; j <= i + rightBars; j++) {
+          if (Number(allCandles[j].high) >= high) isResistance = false;
+          if (Number(allCandles[j].low) <= low) isSupport = false;
+          if (!isResistance && !isSupport) break;
+        }
+      }
+
+      const confirmation = allCandles[i + rightBars];
+      const pivotIndex = selectedIndex.get(pivot.time);
+      const confirmedIndex = selectedIndex.get(confirmation.time);
+      // Indices are relative to the exported candles array, so both bars must be present.
+      if (pivotIndex === undefined || confirmedIndex === undefined) continue;
+      if (isResistance) output.push({
+        level: "resistance", price: high,
+        pivot_bar_index: pivotIndex, pivot_time: toISTISO(pivot.time),
+        confirmed_bar_index: confirmedIndex, confirmed_time: toISTISO(confirmation.time),
+        left_bars: leftBars, right_bars: rightBars
+      });
+      if (isSupport) output.push({
+        level: "support", price: low,
+        pivot_bar_index: pivotIndex, pivot_time: toISTISO(pivot.time),
+        confirmed_bar_index: confirmedIndex, confirmed_time: toISTISO(confirmation.time),
+        left_bars: leftBars, right_bars: rightBars
+      });
+    }
+    return output.sort((a, b) => a.pivot_bar_index - b.pivot_bar_index);
+  }
+  function downloadPayload(payload, fileName) {
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json;charset=utf-8" });
+    const objectUrl = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = objectUrl;
+    anchor.download = fileName;
+    anchor.style.display = "none";
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 2000);
+  }
+
+  button.addEventListener("click", () => {
+    const oldHTML = button.innerHTML;
+    button.disabled = true;
+    button.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Preparing JSON…';
+    try {
+      initializeDates();
+      if (!currentInstrumentKey) throw new Error("Load an instrument before exporting.");
+      const fastPeriod = validInt(fastInput, "EMA fast", 1, 500);
+      const slowPeriod = validInt(slowInput, "EMA slow", 2, 1000);
+      const leftBars = validInt(leftInput, "SR left bars", 1, 200);
+      const rightBars = validInt(rightInput, "SR right bars", 1, 200);
+      if (fastPeriod >= slowPeriod) throw new Error("EMA fast must be smaller than EMA slow.");
+
+      const startDate = startInput.value || null;
+      const endDate = endInput.value || null;
+      if (startDate && endDate && startDate > endDate) throw new Error("Start date must be on or before end date.");
+
+      const allCandles = getLoadedCandles();
+      if (!allCandles.length) throw new Error("No candles are loaded. Load the chart and retry.");
+
+      const selectedCandles = allCandles.filter(c => {
+        const date = getDateKeyIST(c.time);
+        return (!startDate || date >= startDate) && (!endDate || date <= endDate);
+      });
+      if (!selectedCandles.length) throw new Error("No candles exist in the selected export date range.");
+
+      const selectedTimes = new Set(selectedCandles.map(c => c.time));
+      const crosses = buildExportCrosses(allCandles, selectedTimes, startDate, endDate, fastPeriod, slowPeriod);
+      const levels = buildExportLevels(allCandles, selectedCandles, startDate, endDate, leftBars, rightBars);
+      const instrument = currentMeta || {};
+      const tradingSymbol = instrument.trading_symbol || instrument.tradingsymbol ||
+        (topSymbolName ? topSymbolName.textContent.trim() : "") || currentInstrumentKey;
+      const exportEndDate = endDate || getDateKeyIST(selectedCandles[selectedCandles.length - 1].time);
+      const exportStartDate = startDate || getDateKeyIST(selectedCandles[0].time);
+
+      const payload = {
+        instrument_key: currentInstrumentKey,
+        trading_symbol: tradingSymbol,
+        start_date: exportStartDate,
+        end_date: exportEndDate,
+        timezone: "Asia/Kolkata",
+        exported_at: new Date().toISOString(),
+        instrument_metadata: instrument,
+        config: {
+          ema: { fast_period: fastPeriod, slow_period: slowPeriod },
+          sr: { left_bars: leftBars, right_bars: rightBars },
+          signal_scoring: {
+            available: false,
+            note: "The supplied template detects EMA direction crossovers but does not contain score, validity, or filter evaluation rules."
+          }
+        },
+        candles: selectedCandles.map(c => ({
+          timestamp: toISTISO(c.time),
+          open: Number(c.open), high: Number(c.high), low: Number(c.low), close: Number(c.close),
+          volume: Number(c.volume || 0), oi: Number(c.oi || 0)
+        })),
+        crosses,
+        levels
+      };
+
+      const safeSymbol = String(tradingSymbol).replace(/[^a-z0-9_-]+/gi, "_").replace(/^_+|_+$/g, "") || "instrument";
+      downloadPayload(payload, `${safeSymbol}_${exportStartDate}_${exportEndDate}_chart_data.json`);
+      setStatus(`Downloaded ${selectedCandles.length} candles · ${crosses.length} EMA crosses · ${levels.length} SR levels.`, false);
+    } catch (error) {
+      console.error("[json-export] failed:", error);
+      setStatus(error.message || "JSON export failed.", true);
+    } finally {
+      button.disabled = false;
+      button.innerHTML = oldHTML;
+    }
+  });
+  initializeDates();
+})();
 
 // ============================================================
 // Expired browser modal
@@ -2093,7 +2480,7 @@ if (contractList) contractList.addEventListener("click", (e) => {
   if (!row) return;
   const key = decodeURIComponent(row.dataset.key);
   if (!key) return;
-  window.location.href = CHART_PAGE_BASE + "/" + encodeURIComponent(key);
+  window.location.href = buildChartUrl(key);
 });
 
 // ============================================================
@@ -2118,7 +2505,14 @@ const initialKey = (function () {
 
 if (initialKey) {
   instrumentKeyInput.value = initialKey;
-  loadChart(initialKey);
+  const requestedEndDate = new URLSearchParams(window.location.search).get("end_date");
+  if (requestedEndDate && /^\d{4}-\d{2}-\d{2}$/.test(requestedEndDate)) {
+    if (keyEndDateInput) keyEndDateInput.value = requestedEndDate;
+    if (targetEndDateInput) targetEndDateInput.value = requestedEndDate;
+    loadChart(initialKey, null, requestedEndDate, { endDateOnly: true });
+  } else {
+    loadChart(initialKey);
+  }
 } else {
   instrumentKeyInput.focus();
 }

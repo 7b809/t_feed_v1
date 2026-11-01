@@ -1,4 +1,4 @@
-{# File: templates/instrument_list.html #}
+{# templates/instrument_list.html — instrument search with default recommendation results on load #}
 {% extends "base.html" %}
 
 {% block title %}Instrument Search{% endblock %}
@@ -45,6 +45,54 @@ body { background-color: var(--bg-body); color: var(--text-primary); font-family
 .panel-body { max-height: calc(100vh - 320px); min-height: 260px; padding: 24px; overflow-y: auto; }
 .panel-body::-webkit-scrollbar { width: 6px; }
 .panel-body::-webkit-scrollbar-thumb { background: #d0d9f0; border-radius: 10px; }
+
+/* ---------- Recommendation banner ---------- */
+.recommendation-banner {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 16px 24px -6px 24px;
+    padding: 12px 16px;
+    background: linear-gradient(135deg, rgba(67, 24, 255, 0.06), rgba(134, 140, 255, 0.10));
+    border: 1px solid rgba(67, 24, 255, 0.18);
+    border-radius: 12px;
+    color: var(--text-primary);
+    animation: recFadeIn 0.35s ease;
+}
+@keyframes recFadeIn {
+    from { opacity: 0; transform: translateY(-4px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+.recommendation-banner .rec-icon {
+    width: 32px; height: 32px;
+    display: flex; align-items: center; justify-content: center;
+    background: linear-gradient(135deg, #868CFF 0%, #4318FF 100%);
+    color: #ffffff;
+    border-radius: 10px;
+    flex-shrink: 0;
+    box-shadow: 0 4px 10px rgba(67, 24, 255, 0.25);
+    font-size: 15px;
+}
+.recommendation-banner .rec-text {
+    display: flex; flex-direction: column; gap: 2px;
+    min-width: 0;
+}
+.recommendation-banner .rec-title {
+    font-size: 10px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--accent-blue);
+}
+.recommendation-banner .rec-subtitle {
+    font-size: 12.5px;
+    font-weight: 500;
+    color: var(--text-secondary);
+}
+.recommendation-banner .rec-subtitle strong {
+    color: var(--text-primary);
+    font-weight: 800;
+}
 
 .instrument-card { display: block; background: #1e293b; border: 1px solid #334155; border-radius: 14px; padding: 18px 22px; margin-bottom: 12px; text-decoration: none; color: #f8fafc; transition: all 0.2s; box-shadow: 0px 4px 12px rgba(0, 0, 0, 0.15); }
 .instrument-card:hover { background: #273449; border-color: #475569; color: #ffffff; transform: translateY(-2px); box-shadow: 0px 8px 20px rgba(0, 0, 0, 0.22); }
@@ -132,10 +180,21 @@ body { background-color: var(--bg-body); color: var(--text-primary); font-family
                     </div>
                 </div>
 
+                <!-- Recommendation banner (shown only when results are auto-suggested) -->
+                <div class="recommendation-banner" id="recommendationBanner" hidden role="status" aria-live="polite">
+                    <div class="rec-icon"><i class="bi bi-stars"></i></div>
+                    <div class="rec-text">
+                        <span class="rec-title">Recommended</span>
+                        <span class="rec-subtitle">
+                            Popular instruments picked for you — start typing above to <strong>search anything else</strong>.
+                        </span>
+                    </div>
+                </div>
+
                 <div class="panel-body" id="resultsBody">
                     <div class="empty-message">
                         <i class="bi bi-search"></i>
-                        Start typing to search across indices, options, futures and equities.
+                        Loading recommendations…
                     </div>
                 </div>
 
@@ -153,24 +212,37 @@ body { background-color: var(--bg-body); color: var(--text-primary); font-family
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 <script>
 (function () {
-    const searchInput   = document.getElementById("searchInput");
-    const exchangeFilter= document.getElementById("exchangeFilter");
-    const segmentFilter = document.getElementById("segmentFilter");
-    const typeFilter    = document.getElementById("typeFilter");
-    const expiryFilter  = document.getElementById("expiryFilter");
-    const resultsBody   = document.getElementById("resultsBody");
-    const paginationBar = document.getElementById("paginationBar");
-    const prevPageBtn   = document.getElementById("prevPageBtn");
-    const nextPageBtn   = document.getElementById("nextPageBtn");
-    const pageInfo      = document.getElementById("pageInfo");
+    // ---------- elements ----------
+    const searchInput          = document.getElementById("searchInput");
+    const exchangeFilter       = document.getElementById("exchangeFilter");
+    const segmentFilter        = document.getElementById("segmentFilter");
+    const typeFilter           = document.getElementById("typeFilter");
+    const expiryFilter         = document.getElementById("expiryFilter");
+    const resultsBody          = document.getElementById("resultsBody");
+    const paginationBar        = document.getElementById("paginationBar");
+    const prevPageBtn          = document.getElementById("prevPageBtn");
+    const nextPageBtn          = document.getElementById("nextPageBtn");
+    const pageInfo             = document.getElementById("pageInfo");
+    const recommendationBanner = document.getElementById("recommendationBanner");
 
-    const PAGE_SIZE = 20;
-    let currentPage = 1;
-    let totalPages  = 1;
-    let lastQuery   = "";
-    let debounceTimer = null;
-    let inFlight    = null;
+    // ---------- config ----------
+    const PAGE_SIZE                    = 20;
+    const MIN_QUERY_LEN                = 2;
+    // The query used to pre-populate the page with recommended results on load.
+    // It is intentionally kept in script only — the search box remains empty so the
+    // user is not "shown" the query. Change this to any symbol you prefer.
+    const DEFAULT_RECOMMENDATION_QUERY = "NIFTY";
 
+    // ---------- state ----------
+    let currentPage            = 1;
+    let totalPages             = 1;
+    let activeQuery            = "";
+    let activeQueryRecommended = false;
+    let debounceTimer          = null;
+    let inFlight               = null;
+    let requestSeq             = 0;
+
+    // ---------- helpers ----------
     function pillClass(item) {
         const t = String(item.instrument_type || "").toUpperCase();
         if (t === "CE") return "ce";
@@ -185,13 +257,22 @@ body { background-color: var(--bg-body); color: var(--text-primary); font-family
         return decimals !== undefined ? n.toFixed(decimals) : n.toString();
     }
 
+    function setRecommendationBanner(visible) {
+        if (!recommendationBanner) return;
+        recommendationBanner.hidden = !visible;
+    }
+
+    // ---------- rendering ----------
     function renderResults(data) {
         const items = (data && data.data) || [];
         if (!items.length) {
+            const msg = activeQueryRecommended
+                ? "No recommended instruments available right now. Try searching for something specific."
+                : "No instruments match your search.";
             resultsBody.innerHTML = `
                 <div class="empty-message">
                     <i class="bi bi-inbox"></i>
-                    No instruments match your search.
+                    ${msg}
                 </div>`;
             return;
         }
@@ -225,34 +306,23 @@ body { background-color: var(--bg-body); color: var(--text-primary); font-family
         resultsBody.innerHTML = html;
     }
 
-    async function runSearch(page) {
-        const q = searchInput.value.trim();
-        if (!q) {
-            resultsBody.innerHTML = `
-                <div class="empty-message">
-                    <i class="bi bi-search"></i>
-                    Start typing to search across indices, options, futures and equities.
-                </div>`;
-            paginationBar.hidden = true;
-            return;
-        }
-        if (q.length < 2) {
-            resultsBody.innerHTML = `<div class="empty-message"><i class="bi bi-info-circle"></i>Type at least 2 characters.</div>`;
-            paginationBar.hidden = true;
-            return;
-        }
+    // ---------- core search ----------
+    async function performSearch({ query, page, recommended }) {
+        const mySeq = ++requestSeq;
+        activeQuery            = query;
+        activeQueryRecommended = !!recommended;
+        currentPage            = page || 1;
 
-        lastQuery = q;
-        currentPage = page || 1;
+        setRecommendationBanner(!!recommended);
 
-        resultsBody.innerHTML = `<div class="empty-message"><span class="spinner-inline"></span>Searching…</div>`;
+        resultsBody.innerHTML = `<div class="empty-message"><span class="spinner-inline"></span>${recommended ? "Loading recommendations…" : "Searching…"}</div>`;
         paginationBar.hidden = true;
 
         if (inFlight) inFlight.abort();
         inFlight = new AbortController();
 
         const params = new URLSearchParams({
-            query: q,
+            query,
             page_number: String(currentPage),
             records: String(PAGE_SIZE),
         });
@@ -266,11 +336,14 @@ body { background-color: var(--bg-body); color: var(--text-primary); font-family
                 method: "GET",
                 signal: inFlight.signal,
             });
+            if (mySeq !== requestSeq) return; // superseded by a newer request
             if (!resp.ok) {
                 const text = await resp.text();
                 throw new Error(`Search failed (${resp.status}) ${text.slice(0, 200)}`);
             }
             const data = await resp.json();
+            if (mySeq !== requestSeq) return;
+
             renderResults(data);
 
             const meta = (data && data.meta_data && data.meta_data.page) || {};
@@ -281,10 +354,39 @@ body { background-color: var(--bg-body); color: var(--text-primary); font-family
             nextPageBtn.disabled = currentPage >= totalPages;
         } catch (err) {
             if (err.name === "AbortError") return;
+            if (mySeq !== requestSeq) return;
             console.error(err);
             resultsBody.innerHTML = `<div class="empty-message text-danger"><i class="bi bi-exclamation-triangle"></i>${err.message}</div>`;
             paginationBar.hidden = true;
         }
+    }
+
+    function enterRecommendationMode(page) {
+        performSearch({
+            query: DEFAULT_RECOMMENDATION_QUERY,
+            page: page || 1,
+            recommended: true,
+        });
+    }
+
+    function runSearch(page) {
+        page = page || 1;
+        const inputQ = searchInput.value.trim();
+
+        // Empty input -> default recommendation (query is hidden from the UI)
+        if (inputQ.length === 0) {
+            enterRecommendationMode(page);
+            return;
+        }
+        // Too short -> hint
+        if (inputQ.length < MIN_QUERY_LEN) {
+            resultsBody.innerHTML = `<div class="empty-message"><i class="bi bi-info-circle"></i>Type at least ${MIN_QUERY_LEN} characters.</div>`;
+            paginationBar.hidden = true;
+            setRecommendationBanner(false);
+            return;
+        }
+        // Normal user search
+        performSearch({ query: inputQ, page, recommended: false });
     }
 
     function scheduleSearch() {
@@ -292,7 +394,16 @@ body { background-color: var(--bg-body); color: var(--text-primary); font-family
         debounceTimer = setTimeout(() => runSearch(1), 350);
     }
 
+    // ---------- wiring ----------
     searchInput.addEventListener("input", scheduleSearch);
+    searchInput.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") {
+            // Clear and revert to recommendations
+            searchInput.value = "";
+            runSearch(1);
+        }
+    });
+
     [exchangeFilter, segmentFilter, typeFilter, expiryFilter].forEach(el => {
         el.addEventListener("change", () => runSearch(1));
     });
@@ -300,8 +411,17 @@ body { background-color: var(--bg-body); color: var(--text-primary); font-family
     prevPageBtn.addEventListener("click", () => { if (currentPage > 1) runSearch(currentPage - 1); });
     nextPageBtn.addEventListener("click", () => { if (currentPage < totalPages) runSearch(currentPage + 1); });
 
-    // Auto-focus on load
-    window.addEventListener("load", () => searchInput.focus());
+    // ---------- initial load ----------
+    // Show recommendations by default — do NOT put the query into the search box.
+    window.addEventListener("load", () => {
+        searchInput.focus();
+        const prefilled = searchInput.value.trim();
+        if (prefilled.length >= MIN_QUERY_LEN) {
+            runSearch(1);
+        } else {
+            enterRecommendationMode(1);
+        }
+    });
 })();
 </script>
 {% endblock %}
