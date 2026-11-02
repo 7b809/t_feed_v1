@@ -560,6 +560,7 @@ const API_EXPIRED_EXPIRIES    = "/api/chart2/expired/expiries";
 const API_EXPIRED_CONTRACTS   = "/api/chart2/expired/contracts";
 const CHART_PAGE_BASE         = "/expired-chart";
 
+
 // ============================================================
 // Market status (pill only — no live feed)
 // ============================================================
@@ -568,6 +569,9 @@ const MARKET_OPEN_MIN_IST    = 0;
 const MARKET_CLOSE_HOUR_IST  = 15;
 const MARKET_CLOSE_MIN_IST   = 30;
 const MARKET_TZ              = "Asia/Kolkata";
+
+const DEFAULT_TRADING_DAYS     = 15;   // how many trading dates to keep/plot
+
 
 function getISTParts(date = new Date()) {
   try {
@@ -918,7 +922,7 @@ function computeElevenDaysPriorISO(endDateISO) {
   if (!endDateISO) return null;
   const [y, m, d] = endDateISO.split("-").map(Number);
   const end = new Date(Date.UTC(y, m - 1, d));
-  const start = new Date(end.getTime() - 11 * 86400 * 1000);
+  const start = new Date(end.getTime() - DEFAULT_TRADING_DAYS * 86400 * 1000);
   return start.toISOString().slice(0, 10);
 }
 
@@ -1880,7 +1884,7 @@ function subtractCalendarDaysISO(dateISO, days) {
   return date.toISOString().slice(0, 10);
 }
 
-function selectLatestTradingDates(candles, endDateISO, count = 11) {
+function selectLatestTradingDates(candles, endDateISO, count = DEFAULT_TRADING_DAYS) {
   const eligible = (candles || []).filter(c =>
     Number(c.open) > 0 && Number(c.high) > 0 && Number(c.low) > 0 && Number(c.close) > 0 &&
     (!endDateISO || getDateKeyIST(c.time) <= endDateISO)
@@ -1908,9 +1912,9 @@ async function loadChart(instrumentKey, fromDate, toDate, options = {}) {
   try {
     let result;
     if (options && options.endDateOnly && toDate) {
-      const requestFrom = subtractCalendarDaysISO(toDate, 60);
+      const requestFrom = subtractCalendarDaysISO(toDate, DEFAULT_TRADING_DAYS * 2);
       result = await fetchCandlesFromApi(instrumentKey, requestFrom, toDate);
-      const selected = selectLatestTradingDates(result.candles, toDate, 11);
+      const selected = selectLatestTradingDates(result.candles, toDate, DEFAULT_TRADING_DAYS);
       result.candles = selected.candles;
       result.fromDate = selected.dates[0] || requestFrom;
       result.toDate = toDate;
@@ -2211,9 +2215,9 @@ if (targetEndDateInput) {
     const candles = getLoadedCandles();
     const dates = [...new Set(candles.map(c => getDateKeyIST(c.time)).filter(Boolean))].sort();
     if (dates.length) {
-      startInput.value = dates[Math.max(0, dates.length - 11)];
+      startInput.value = dates[Math.max(0, dates.length - DEFAULT_TRADING_DAYS)];
       endInput.value = dates[dates.length - 1];
-      setStatus(`Default range: ${Math.min(11, dates.length)} trading dates in loaded candles.`, false);
+      setStatus(`Default range: ${Math.min(DEFAULT_TRADING_DAYS, dates.length)} trading dates in loaded candles.`, false);
     } else {
       setStatus("Load an instrument before exporting chart data.", false);
     }

@@ -799,6 +799,8 @@ const MARKET_CLOSE_MIN_IST   = 30;
 const MARKET_TZ              = "Asia/Kolkata";
 const IST_UTC_OFFSET_MIN     = 330;
 
+const DEFAULT_DAYS_CANDLES = 15;
+
 function getISTParts(date = new Date()) {
   try {
     const fmt = new Intl.DateTimeFormat("en-US", {
@@ -2191,7 +2193,7 @@ function updateCandleFromLtp(ltp, timestamp, volume) {
 // ============================================================
 async function fetchCandlesFromUpstox(instrumentKey) {
   const today = new Date();
-  const from = new Date(today.getTime() - 10 * 86400 * 1000);
+  const from = new Date(today.getTime() - DEFAULT_DAYS_CANDLES * 86400 * 1000);
   const toISO    = today.toISOString().slice(0, 10);
   const fromISO  = from.toISOString().slice(0, 10);
 
@@ -2224,7 +2226,7 @@ async function loadOlderHistoricalData() {
   LoadingOverlay.showBuffering("Buffering past candles…");
 
   const beforeDate = new Date(oldestCandleTime * 1000);
-  const fromDate   = new Date(beforeDate.getTime() - 10 * 86400 * 1000);
+  const fromDate   = new Date(beforeDate.getTime() - DEFAULT_DAYS_CANDLES * 86400 * 1000);
   const toISO      = beforeDate.toISOString().slice(0, 10);
   const fromISO    = fromDate.toISOString().slice(0, 10);
 
