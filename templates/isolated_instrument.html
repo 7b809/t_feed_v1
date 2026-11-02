@@ -1461,9 +1461,6 @@
         color: var(--iso-purple);
     }
 
-    /* G1 v4.1 §5.E — "PINNED" pill on the chosen candidate when its
-       entry values come from `payload.frozen_entry` rather than the
-       live-recomputed path. */
     .entry-pill.frozen {
         background: var(--iso-amber-bg);
         color: var(--iso-amber);
@@ -1532,8 +1529,6 @@
         font-size: 0.7rem;
     }
 
-    /* G1 v4.1 §5.E — inline "pinned" marker on the entry-price row
-       when the value is frozen. */
     .entry-grid .value small.entry-frozen-mark {
         color: var(--iso-amber);
         font-weight: 700;
@@ -1647,7 +1642,7 @@
         white-space: nowrap;
     }
 
-    /* ---- G1 v4.1 §5.F — candidate side chips (Candidates table) ---- */
+    /* ---- Candidate side chips (Candidates table) ---- */
     .side-chip {
         display: inline-block;
         padding: 2px 9px;
@@ -1679,7 +1674,7 @@
         letter-spacing: 0;
     }
 
-    /* ---- Simulation card (dummy-order replay) ---- */
+    /* ---- Simulation card (post-close order replay) ---- */
     .sim-run-row {
         display: flex;
         gap: 10px;
@@ -1740,6 +1735,28 @@
         border-radius: 8px;
         font-size: 0.82rem;
         margin-top: 12px;
+    }
+
+    .sim-verdict-skip {
+        background: var(--iso-red-bg);
+        border-left: 4px solid var(--iso-red);
+        color: var(--iso-red);
+        padding: 10px 14px;
+        border-radius: 8px;
+        font-size: 0.82rem;
+        margin-top: 12px;
+        line-height: 1.55;
+    }
+
+    .sim-verdict-unresolved {
+        background: var(--iso-amber-bg);
+        border-left: 4px solid var(--iso-amber);
+        color: var(--iso-amber);
+        padding: 10px 14px;
+        border-radius: 8px;
+        font-size: 0.82rem;
+        margin-top: 12px;
+        line-height: 1.55;
     }
 
     .sim-notes {
@@ -1817,24 +1834,11 @@
         text-transform: uppercase;
     }
 
-    .do-status-pill.open             { background: var(--iso-blue-bg); color: var(--iso-primary); }
-    .do-status-pill.target_hit       { background: var(--iso-green-bg); color: var(--iso-green); }
-    .do-status-pill.stop_hit         { background: var(--iso-red-bg); color: var(--iso-red); }
-    .do-status-pill.end_of_day       { background: #f1f5f9; color: var(--iso-muted); }
-    .do-status-pill.cancelled        { background: #e2e8f0; color: var(--iso-muted); }
-
-    .do-scenario-pill {
-        display: inline-block;
-        padding: 1px 7px;
-        border-radius: 4px;
-        font-size: 0.65rem;
-        font-weight: 800;
-        letter-spacing: 0.3px;
-    }
-
-    .do-scenario-pill.signal_v2       { background: #dbeafe; color: #1e40af; }
-    .do-scenario-pill.regime          { background: var(--iso-purple-bg); color: var(--iso-purple); }
-    .do-scenario-pill.path_b_sr_level { background: var(--iso-simulate-bg); color: var(--iso-simulate); }
+    .do-status-pill.open                 { background: var(--iso-blue-bg); color: var(--iso-primary); }
+    .do-status-pill.stage_2_resistance_exit { background: var(--iso-green-bg); color: var(--iso-green); }
+    .do-status-pill.stop_hit             { background: var(--iso-red-bg); color: var(--iso-red); }
+    .do-status-pill.end_of_day           { background: #f1f5f9; color: var(--iso-muted); }
+    .do-status-pill.skipped              { background: var(--iso-amber-bg); color: var(--iso-amber); }
 
     .do-table td.num {
         font-variant-numeric: tabular-nums;
@@ -1865,91 +1869,112 @@
         opacity: 0.4;
     }
 
-    /* ---- G1 v4.2 — Path B UI additions ---- */
-    .entry-pill.path-b {
-        background: var(--iso-simulate-bg);
-        color: var(--iso-simulate);
-        border: 1px solid var(--iso-simulate-border);
-        font-weight: 800;
-    }
-    .do-path-b-badge {
-        display: inline-block;
-        padding: 1px 7px;
-        border-radius: 4px;
-        font-size: 0.62rem;
-        font-weight: 800;
-        letter-spacing: 0.4px;
-        background: var(--iso-simulate-bg);
-        color: var(--iso-simulate);
-        border: 1px solid var(--iso-simulate-border);
-        margin-left: 4px;
+    /* ---- Lot size input + overall P&L row ---- */
+    .do-lot-row {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        padding: 14px 18px;
+        margin-bottom: 16px;
+        background: #f0f7ff;
+        border: 1px solid var(--iso-blue-border);
+        border-radius: 12px;
+        flex-wrap: wrap;
     }
 
-    /* ---- G1 v4.3 — Source column + lot badge + price-source subtext ---- */
-    .do-source-cell {
-        font-size: 0.72rem;
-        line-height: 1.45;
-        min-width: 120px;
+    .do-lot-row.is-sim {
+        background: var(--iso-purple-bg);
+        border-color: var(--iso-purple-border);
     }
-    .do-source-cell .src-type {
-        display: inline-block;
-        padding: 1px 6px;
-        border-radius: 3px;
-        font-size: 0.6rem;
+
+    .do-lot-row label {
+        font-size: 0.75rem;
         font-weight: 800;
-        letter-spacing: 0.3px;
-        margin-right: 4px;
-        vertical-align: middle;
-    }
-    .do-source-cell .src-type.resistance {
-        background: var(--iso-red-bg);
-        color: var(--iso-red);
-    }
-    .do-source-cell .src-type.support {
-        background: var(--iso-green-bg);
-        color: var(--iso-green);
-    }
-    .do-source-cell .src-type.signal {
-        background: var(--iso-blue-bg);
-        color: var(--iso-primary);
-    }
-    .do-source-cell .src-price {
-        font-weight: 700;
         color: var(--iso-text);
-        vertical-align: middle;
+        text-transform: uppercase;
+        letter-spacing: 0.4px;
+        margin: 0;
     }
-    .do-source-cell .src-meta {
-        display: block;
-        margin-top: 2px;
-        color: var(--iso-muted);
-        font-size: 0.65rem;
-        font-weight: 600;
-    }
-    .do-lot-badge {
-        display: inline-block;
-        padding: 1px 6px;
-        border-radius: 3px;
-        font-size: 0.62rem;
+
+    .do-lot-row input[type="number"] {
+        width: 90px;
+        padding: 8px 10px;
+        font-size: 1rem;
         font-weight: 700;
-        background: #f1f5f9;
-        color: var(--iso-muted);
         border: 1px solid var(--iso-border);
-        margin-left: 4px;
+        border-radius: 8px;
+        background: #ffffff;
+        color: var(--iso-text);
+        font-variant-numeric: tabular-nums;
+        text-align: center;
     }
-    .do-price-src {
-        display: block;
-        font-size: 0.62rem;
+
+    .do-lot-row input[type="number"]:focus {
+        outline: none;
+        border-color: var(--iso-primary);
+        box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+    }
+
+    .do-lot-row .do-lot-hint {
+        font-size: 0.75rem;
         color: var(--iso-muted);
         font-weight: 600;
-        margin-top: 2px;
-        line-height: 1.3;
+        flex: 1 1 200px;
+        line-height: 1.4;
     }
-    .do-pnl-rs {
-        display: block;
-        font-size: 0.65rem;
+
+    .do-lot-row .do-lot-hint strong {
+        color: var(--iso-text);
+        font-weight: 800;
+    }
+
+    .do-lot-total {
+        margin-left: auto;
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+        gap: 2px;
+        padding-left: 14px;
+        border-left: 1px solid var(--iso-border);
+    }
+
+    .do-lot-total .do-total-label {
+        font-size: 0.68rem;
+        font-weight: 800;
         color: var(--iso-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+
+    .do-lot-total .do-total-value {
+        font-size: 1.35rem;
+        font-weight: 800;
+        font-variant-numeric: tabular-nums;
+        color: var(--iso-text);
+        line-height: 1.1;
+    }
+
+    .do-lot-total .do-total-value.up { color: var(--iso-green); }
+    .do-lot-total .do-total-value.down { color: var(--iso-red); }
+
+    .do-lot-total .do-total-sub {
+        font-size: 0.7rem;
         font-weight: 600;
-        margin-top: 2px;
+        color: var(--iso-muted);
+        font-variant-numeric: tabular-nums;
+    }
+
+    .entry-grid .value.pnl-up { color: var(--iso-green); }
+    .entry-grid .value.pnl-down { color: var(--iso-red); }
+
+    @media (max-width: 600px) {
+        .do-lot-total {
+            margin-left: 0;
+            border-left: none;
+            padding-left: 0;
+            align-items: flex-start;
+            width: 100%;
+        }
     }
 </style>
 {% endblock %}
@@ -2007,7 +2032,7 @@
         </div>
     </div>
 
-    <!-- Hero card: isolated instrument (or the promoted / active one) -->
+    <!-- Hero card: isolated instrument -->
     <div class="iso-hero" id="iso-hero" style="display: none;">
         <div class="iso-hero-left">
             <div class="iso-hero-label">ISOLATED INSTRUMENT</div>
@@ -2070,9 +2095,10 @@
                     <strong>Path B · External-index trigger.</strong>
                     The 10-minute fast scan and auto-reverse are
                     intentionally <em>disabled</em> for this session.
-                    The bias-side instrument stays isolated all day; every
-                    post-isolation SR level spawns its own dummy BUY order
-                    with Rupee-based profit trailing.
+                    The bias-side instrument stays isolated all day; the
+                    order engine watches for the first post-isolation 15/3
+                    SR level and places a single dummy order (same leg for
+                    support / reversal, opposite leg for resistance).
                 </div>
             </div>
             <div class="entry-promotion-banner" id="entry-promotion-banner" style="display: none;"></div>
@@ -2139,12 +2165,12 @@
     </div>
 
     <!-- ============================================================ -->
-    <!-- Simulation card — post-close dummy-order replay              -->
+    <!-- Simulation card — post-close order replay                    -->
     <!-- ============================================================ -->
     <div class="iso-card" id="iso-simulation" style="display: none;">
         <div class="iso-card-header">
             <i class="bi bi-calculator text-primary"></i>
-            <span>Simulation · Dummy-Order Replay</span>
+            <span>Simulation · Order Replay</span>
             <div class="sr-header-pills">
                 <span class="sr-count-pill" id="sim-status-pill">Idle</span>
             </div>
@@ -2155,15 +2181,29 @@
                     <i class="bi bi-play-circle"></i> Run Simulation
                 </button>
                 <span class="sim-hint" id="sim-hint">
-                    Replays the day's intraday candles from the entry fill forward.
-                    Stateless — safe to click repeatedly.
+                    Replays today's intraday candles from the entry fill
+                    forward. Stateless — safe to click repeatedly.
                 </span>
+            </div>
+            <div class="do-lot-row is-sim">
+                <label for="sim-lot-input">Lot size</label>
+                <input type="number" id="sim-lot-input" min="1" value="1" step="1">
+                <span class="do-lot-hint" id="sim-lot-hint">
+                    Used for the P&L calculation below. NIFTY = <strong>65 qty / lot</strong>,
+                    SENSEX = <strong>20 qty / lot</strong>. Shares the same value as
+                    the Dummy Orders card.
+                </span>
+                <div class="do-lot-total">
+                    <span class="do-total-label">Simulated P&L</span>
+                    <span class="do-total-value" id="sim-total-value">—</span>
+                    <span class="do-total-sub" id="sim-total-sub"></span>
+                </div>
             </div>
             <div class="sim-regime-banner" id="sim-regime-banner" style="display: none;"></div>
             <div id="sim-body">
                 <div class="sr-empty-state">
                     <i class="bi bi-calculator"></i>
-                    Click <strong>Run Simulation</strong> to replay the entry
+                    Click <strong>Run Simulation</strong> to replay the order
                     against the day's intraday candles.
                 </div>
             </div>
@@ -2182,17 +2222,25 @@
             </div>
         </div>
         <div class="iso-card-body">
-            <div class="sim-verdict-winner" id="do-lockdown-banner" style="display:none;">
-                🔒 <strong>STRATEGY LOCKED.</strong>
-                A Path B trade has reached its target. No new SR orders
-                will be evaluated for the rest of the day. Existing open
-                positions continue trailing until they exit.
+            <div class="do-lot-row">
+                <label for="do-lot-input">Lot size</label>
+                <input type="number" id="do-lot-input" min="1" value="1" step="1">
+                <span class="do-lot-hint" id="do-lot-hint">
+                    NIFTY = <strong>65 qty / lot</strong> · SENSEX = <strong>20 qty / lot</strong> ·
+                    BANKNIFTY = <strong>35 qty / lot</strong>. Overall P&L scales with this value.
+                </span>
+                <div class="do-lot-total">
+                    <span class="do-total-label">Overall P&L</span>
+                    <span class="do-total-value" id="do-total-value">—</span>
+                    <span class="do-total-sub" id="do-total-sub"></span>
+                </div>
             </div>
             <div class="do-summary-strip" id="do-summary-strip"></div>
             <div id="do-body">
                 <div class="do-empty">
                     <i class="bi bi-hourglass-split"></i>
-                    Dummy orders appear here as soon as the entry signal arms.
+                    The dummy order will appear here after the first
+                    post-isolation 15/3 SR level confirms.
                 </div>
             </div>
         </div>
@@ -2315,12 +2363,11 @@
 {% block scripts %}
 <script>
     /* ============================================================
-       G1 v3.2 — multi-index boundary surveillance + NIFTY routing
+       Multi-index boundary surveillance + NIFTY routing
        ============================================================ */
     const DETAIL_URL = "/admin/level-isolation/detail";
     const BACKFILL_URL = "/admin/level-isolation/backfill";
     const REFRESH_SNAPSHOT_URL = "/admin/level-isolation/refresh-snapshot";
-    const APPLY_PROMOTION_URL = "/admin/level-isolation/apply-promotion";
     const SEARCH_INSTRUMENTS_URL = "/admin/level-isolation/search-instruments";
     const INSTRUMENT_SR_URL = (key) =>
         "/admin/level-isolation/instrument-sr/" + encodeURIComponent(key);
@@ -2328,7 +2375,6 @@
     const POLL_MS = 10000;
     const ENTRY_POLL_MS = 10000;
 
-    /* Canonical index instrument keys — G1 v3.2 four-index universe. */
     const INDEX_KEYS = {
         MIDCPNIFTY:  "NSE_INDEX|NIFTY MID SELECT",
         BANKNIFTY:   "NSE_INDEX|Nifty Bank",
@@ -2336,7 +2382,6 @@
         SENSEX:      "BSE_INDEX|SENSEX",
     };
 
-    /* Canonical name → instrument key. */
     const CANONICAL_TO_KEY = {
         MIDCPNIFTY:  INDEX_KEYS.MIDCPNIFTY,
         BANKNIFTY:   INDEX_KEYS.BANKNIFTY,
@@ -2344,12 +2389,8 @@
         SENSEX:      INDEX_KEYS.SENSEX,
     };
 
-    /* Ordered list — also the priority display order (v4.0 cross-index
-       lead-lag: MIDCPNIFTY and BANKNIFTY lead, NIFTY is routed execution,
-       SENSEX is the BSE anchor). */
     const INDEX_ORDER = ["MIDCPNIFTY", "BANKNIFTY", "NIFTY", "SENSEX"];
 
-    /* Default priority ranks (overridden from server payload when present). */
     const DEFAULT_PRIORITY = {
         MIDCPNIFTY: 1,
         BANKNIFTY: 2,
@@ -2357,7 +2398,6 @@
         SENSEX: 4,
     };
 
-    /* Live-feed WebSocket — dedicated /list-feeds connection. */
     const LIVE_WS_URL = (seedKeys) => {
         const proto = location.protocol === "https:" ? "wss:" : "ws:";
         const base = `${proto}//${location.host}/list-feeds`;
@@ -2369,11 +2409,120 @@
     };
     const LIVE_RECONNECT_MS = 4000;
 
+    /* ============================================================
+       Lot-size configuration + persistence
+       ============================================================ */
+    const LOT_SIZES = {
+        NIFTY:       65,
+        BANKNIFTY:   35,
+        FINNIFTY:    65,
+        MIDCPNIFTY:  120,
+        SENSEX:      20,
+    };
+    const LOT_STORAGE_KEY = "iso_lot_size";
+
+    function detectUnderlying(symbol, instrumentKey) {
+        const s = String(symbol || instrumentKey || "").toUpperCase();
+        if (s.includes("BANKNIFTY") || s.includes("NIFTY BANK")) return "BANKNIFTY";
+        if (s.includes("FINNIFTY")  || s.includes("NIFTY FIN"))  return "FINNIFTY";
+        if (s.includes("MIDCPNIFTY")|| s.includes("NIFTY MID"))  return "MIDCPNIFTY";
+        if (s.includes("SENSEX"))                                return "SENSEX";
+        if (s.includes("NIFTY"))                                 return "NIFTY";
+        return "";
+    }
+
+    function detectLotSize(symbol, instrumentKey) {
+        const u = detectUnderlying(symbol, instrumentKey);
+        if (u && LOT_SIZES[u]) return LOT_SIZES[u];
+        return 1;
+    }
+
+    function getLotSizePref() {
+        try {
+            const raw = localStorage.getItem(LOT_STORAGE_KEY);
+            const n = Number(raw);
+            return Number.isFinite(n) && n >= 1 ? Math.floor(n) : 1;
+        } catch (_) {
+            return 1;
+        }
+    }
+
+    function setLotSizePref(v) {
+        const n = Math.max(1, Math.floor(Number(v) || 1));
+        try { localStorage.setItem(LOT_STORAGE_KEY, String(n)); } catch (_) {}
+        document.dispatchEvent(new CustomEvent("iso:lot-size-changed", {
+            detail: { lots: n },
+        }));
+        return n;
+    }
+
+    function syncLotInputs() {
+        const v = getLotSizePref();
+        ["do-lot-input", "sim-lot-input"].forEach(id => {
+            const el = document.getElementById(id);
+            if (el && Number(el.value) !== v) el.value = v;
+        });
+    }
+
+    /* Format a rupee value with Indian comma grouping and a sign. */
+    function fmtMoney(v) {
+        if (v === null || v === undefined) return "—";
+        const n = Number(v);
+        if (!Number.isFinite(n)) return "—";
+        const abs = Math.abs(n).toLocaleString("en-IN", {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2,
+        });
+        if (Math.abs(n) < 0.005) return "₹0.00";
+        return `${n > 0 ? "+" : "−"}₹${abs}`;
+    }
+
+    /* Compute per-lot and total P&L from either points or entry/exit. */
+    function computeLotPnl({ symbol, instrumentKey, entryPrice, exitPrice, profitPoints, lotsOverride }) {
+        const lotSize = detectLotSize(symbol, instrumentKey);
+        const underlying = detectUnderlying(symbol, instrumentKey);
+        const lotCount = Number.isFinite(Number(lotsOverride))
+            ? Math.max(1, Math.floor(Number(lotsOverride)))
+            : getLotSizePref();
+        const qty = lotSize * lotCount;
+
+        let pts = null;
+        if (Number.isFinite(Number(profitPoints))) {
+            pts = Number(profitPoints);
+        } else if (Number.isFinite(Number(entryPrice)) &&
+                   Number.isFinite(Number(exitPrice)) &&
+                   Number(entryPrice) > 0) {
+            pts = Number(exitPrice) - Number(entryPrice);
+        }
+
+        const perLotRs = pts !== null ? pts * lotSize : null;
+        const totalRs  = pts !== null ? pts * qty     : null;
+        const cls = totalRs === null ? "" : (totalRs >= 0 ? "up" : "down");
+
+        return { lotSize, underlying, lotCount, qty, pts, perLotRs, totalRs, cls };
+    }
+
+    function renderLotGridRows(pnl) {
+        const cls = pnl.cls === "up" ? "pnl-up" : pnl.cls === "down" ? "pnl-down" : "";
+        const und = pnl.underlying ? ` · ${pnl.underlying}` : "";
+        return `
+            <div class="label">Lot size</div>
+            <div class="value">${pnl.lotSize} qty${und}</div>
+            <div class="label">Lots</div>
+            <div class="value">${pnl.lotCount}</div>
+            <div class="label">Total Qty</div>
+            <div class="value">${pnl.qty.toLocaleString("en-IN")}</div>
+            <div class="label">P&amp;L / lot</div>
+            <div class="value ${cls}">${fmtMoney(pnl.perLotRs)}</div>
+            <div class="label">Total P&amp;L</div>
+            <div class="value ${cls}">${fmtMoney(pnl.totalRs)}</div>
+        `;
+    }
+
     const state = {
         detail: null,
         pollTimer: null,
         entryPollTimer: null,
-        promoInFlight: false,
         seenAllKeys: new Set(),
     };
 
@@ -2502,7 +2651,6 @@
         }
     }
 
-    /* ---------- G1 v3.2 reason labels (4 indices) ---------- */
     function reasonLabel(reason) {
         const map = {
             nifty_r3_touch:       "NIFTY touched R3",
@@ -2532,6 +2680,8 @@
             confirmation_bar_close: "confirmation bar close",
             candle_close_at_confirmed_fast: "candle close @ fast confirm",
             candle_close_at_confirmed: "candle close @ confirm",
+            candle_close_at_trigger: "candle close @ trigger",
+            candle_close_from_intraday: "intraday candle close",
             counter_candle_at_rejection: "counter candle @ rejection",
             live_ltp: "live LTP",
             trigger_ltp_fallback: "trigger LTP fallback",
@@ -2565,7 +2715,7 @@
     }
 
     /* ============================================================
-       Compare-in-Layout URL builder (G1 v3.2: routed index + iso)
+       Compare-in-Layout URL builder
        ============================================================ */
     function buildLayoutCompareUrl(iso) {
         if (!iso || !iso.instrument_key) return null;
@@ -2594,9 +2744,7 @@
         const wanted = new Set(INDEX_ORDER.map(n => CANONICAL_TO_KEY[n]));
         const d = state.detail;
         if (d && d.isolated) {
-            const isPromoted = !!(d.active && d.active.record);
-            const iso = isPromoted ? d.active.record : d.isolated;
-            const key = iso.instrument_key;
+            const key = d.isolated.instrument_key;
             if (key) wanted.add(key);
         }
         return wanted;
@@ -2715,9 +2863,7 @@
 
         const wanted = computeWantedLiveKeys();
 
-        const iso = (d.isolated && d.active && d.active.record)
-            ? d.active.record
-            : d.isolated;
+        const iso = d.isolated;
         liveFeedState.activeInstrumentKey = iso && iso.instrument_key
             ? iso.instrument_key
             : null;
@@ -2742,12 +2888,10 @@
         card.style.display = "block";
         if (titleEl) {
             if (d.isolated) {
-                const isPromoted = !!(d.active && d.active.record);
-                const suffix = isPromoted ? " (promoted)" : "";
                 const simulateSuffix = isSimulateMode(d) ? " · SIMULATE" : "";
                 titleEl.textContent =
                     "Live Feed · " + (liveFeedState.activeInstrumentSymbol || "Active Instrument") +
-                    suffix + simulateSuffix;
+                    simulateSuffix;
             } else {
                 titleEl.textContent = "Live Feed · Watching 4 indices";
             }
@@ -3084,9 +3228,7 @@
 
         hero.style.display = "flex";
 
-        const active = d.active;
-        const isPromoted = !!(active && active.record);
-        const iso = isPromoted ? active.record : d.isolated;
+        const iso = d.isolated;
         const ev = d.trigger_event || {};
         const simulate = isSimulateMode(d);
 
@@ -3120,26 +3262,11 @@
                     : "th";
             tags.push({ cls, text: lv });
         });
-        if (isPromoted) {
-            tags.push({ cls: "promo", text: "PROMOTED" });
-        }
-        const path = String(
-            (iso && iso.execution_path)
-            || (d && d.execution_path)
-            || ""
-        );
-        if (path === "B_external_trigger") {
-            tags.push({
-                cls: "th",
-                text: "PATH B · MULTI-ORDER",
-            });
-        }
         tagsEl.innerHTML = tags
             .map(t => `<span class="tag ${t.cls}">${esc(t.text)}</span>`)
             .join("");
 
         const metaEl = document.getElementById("hero-meta");
-        const originalReason = (d.isolated || {}).reason;
         const triggerIdx = iso.trigger_index || "—";
         const triggerPriority = iso.trigger_priority;
         const routedIdx = iso.routed_index || "NIFTY";
@@ -3153,27 +3280,14 @@
 
         const metaItems = [
             {
-                label: isPromoted ? "Trigger · promoted" : "Trigger",
-                value: isPromoted
-                    ? `${reasonLabel(originalReason)} · promoted`
-                    : triggerLine,
+                label: "Trigger",
+                value: triggerLine,
             },
             {
                 label: "Routed To",
                 value: routedLine,
                 highlight: !simulate,
             },
-        ];
-        if (isPromoted) {
-            metaItems.push({
-                label: "Promoted From",
-                value:
-                    active.from_trading_symbol
-                    || active.from_instrument_key
-                    || "—",
-            });
-        }
-        metaItems.push(
             { label: "Isolated At", value: formatTime(iso.isolated_at) },
             { label: "Expiry", value: formatExpiry(iso.expiry) },
             {
@@ -3181,7 +3295,7 @@
                 value: `${iso.trigger_level || "—"} = ${fmt(iso.trigger_level_value)}`,
             },
             { label: "Touched At", value: formatTime(iso.touched_at) },
-        );
+        ];
 
         const alsoTouched = iso.simultaneous_touches || [];
         if (alsoTouched.length) {
@@ -3314,18 +3428,17 @@
                 'This <span class="promo-pending">' +
                 esc(payload.chosen_side || "") +
                 '</span> is now the <strong>active</strong> isolated instrument ' +
-                '(' + esc(targetSym || "") + '). ' +
-                'The SR tracker and snapshot below track it.</div>';
+                '(' + esc(targetSym || "") + ').</div>';
         } else {
             banner.innerHTML =
-                '<i class="bi bi-arrow-up-circle-fill"></i>' +
-                '<div><strong>Promoting…</strong> ' +
-                'The entry signal armed on ' +
+                '<i class="bi bi-info-circle-fill"></i>' +
+                '<div><strong>Promotion is dormant.</strong> ' +
+                'The counter-side signal armed on ' +
                 '<span class="promo-pending">' +
                 esc(payload.chosen_side || "") +
-                '</span>. ' +
-                'Promoting ' + esc(targetSym || "") +
-                ' to be the active isolated instrument.</div>';
+                '</span> (' + esc(targetSym || "") + '), ' +
+                'but the current order engine trades the isolated instrument ' +
+                'directly — promotion is informational only.</div>';
         }
     }
 
@@ -3407,7 +3520,7 @@
             if (c.entry_type === "auto_reverse_on_rejection") {
                 return "Auto-reverse fired: bias side rejected → counter side armed.";
             }
-            return "Entry support confirmed. Place MARKET order for this side.";
+            return "Entry support confirmed.";
         }
         if (c.state === "error") {
             return c.state_note || "Computation error.";
@@ -3444,7 +3557,7 @@
             fmt(e.price) +
             ' <small>(' + esc(quoteSourceLabel(e.price_source)) + ')</small>' +
             (isFrozen
-                ? ' <small class="entry-frozen-mark" title="Frozen at arming time — G1 v4.1 §5.E">📌 pinned</small>'
+                ? ' <small class="entry-frozen-mark" title="Frozen at arming time">📌 pinned</small>'
                 : '');
 
         const commonRows = [
@@ -3505,7 +3618,7 @@
         const pills = [
             '<span class="entry-pill ' + typeCls + '">' + esc(side) + '</span>',
             isBias ? '<span class="entry-pill bias">BIAS</span>' : '',
-            isFrozen ? '<span class="entry-pill frozen" title="Entry values frozen at arming time (G1 v4.1 §5.E)">📌 PINNED</span>' : '',
+            isFrozen ? '<span class="entry-pill frozen">📌 PINNED</span>' : '',
             isReversal ? '<span class="entry-pill auto-reverse">↺ AUTO-REV</span>' : '',
             '<span class="entry-pill ' + stateCls + '">' +
                 esc(stateVal.replace(/_/g, " ")) + '</span>',
@@ -3566,7 +3679,7 @@
             card.style.display = "block";
             if (pathBBanner) pathBBanner.style.display = "flex";
             if (chosenPill) {
-                chosenPill.textContent = "Path B · Multi-Order";
+                chosenPill.textContent = "Path B · External trigger";
                 chosenPill.className = "sr-count-pill chosen";
             }
             if (touchStripEl) {
@@ -3582,14 +3695,13 @@
                     '<span>Routed: <strong>' +
                         esc(iso.routed_index || "NIFTY") +
                     '</strong></span>' +
-                    '<span>Mode: <strong>Path B · multi-order SR watch</strong></span>';
+                    '<span>Mode: <strong>Path B · external trigger</strong></span>';
             }
             if (candidatesEl) {
                 candidatesEl.innerHTML =
                     '<div class="entry-empty">' +
                     '<i class="bi bi-signpost-split"></i>' +
-                    'Path B: no single-trade candidate. ' +
-                    'See the Dummy Orders card below for the multi-order list.' +
+                    'Path B: no single-trade candidate. See the Dummy Orders card below.' +
                     '</div>';
             }
             if (warningsEl) {
@@ -3625,33 +3737,13 @@
         }
 
         renderPromotionBanner(payload);
-        const promo = payload.promotion || {};
-        if (
-            promo.recommended
-            && !promo.already_applied
-            && !state.promoInFlight
-        ) {
-            state.promoInFlight = true;
-            fetch(APPLY_PROMOTION_URL, { method: "POST" })
-                .then(r => r.json())
-                .then(res => {
-                    state.promoInFlight = false;
-                    if (res && res.promoted) {
-                        loadDetail();
-                        loadEntrySignal();
-                    } else {
-                        loadEntrySignal();
-                    }
-                })
-                .catch(err => {
-                    state.promoInFlight = false;
-                    console.warn("[promotion] apply failed:", err);
-                });
-        }
+        // NOTE: auto-POST to /admin/level-isolation/apply-promotion has been
+        // intentionally removed — the promotion service is dormant after the
+        // order-strategy rewrite (no backend task calls apply_promotion()).
 
         if (chosenPill) {
             const chosen = payload.chosen_side;
-            const already = !!promo.already_applied;
+            const already = !!(payload.promotion || {}).already_applied;
             const entryType = payload.chosen_entry_type;
             if (chosen) {
                 let label = already
@@ -3670,26 +3762,7 @@
 
         renderEntryTouchStrip(payload);
 
-        let list = (payload.candidates || []).slice();
-        const frozenEntry = payload.frozen_entry;
-        if (frozenEntry && typeof frozenEntry === "object" && list.length) {
-            list = list.map(c => {
-                if (!c.chosen || !c.entry) return c;
-                return {
-                    ...c,
-                    entry: {
-                        ...c.entry,
-                        price:         frozenEntry.price        ?? c.entry.price,
-                        price_source:  frozenEntry.price_source ?? c.entry.price_source,
-                        stop:          frozenEntry.stop         ?? c.entry.stop,
-                        target:        frozenEntry.target       ?? c.entry.target,
-                        time:          frozenEntry.time         ?? c.entry.time,
-                        _frozen:       true,
-                    },
-                };
-            });
-        }
-
+        const list = (payload.candidates || []).slice();
         if (!list.length) {
             candidatesEl.innerHTML =
                 '<div class="entry-empty">' +
@@ -3701,14 +3774,6 @@
         }
 
         const warns = (payload.warnings || []).slice();
-        if (frozenEntry && frozenEntry.price_source === "live_ltp") {
-            warns.push(
-                "Frozen entry captured from LIVE LTP, not a historical candle close. " +
-                "The counter-side candle lookup probably failed — check that " +
-                "_isolate() registered both sides and that STRATEGY_ENTRY_CANDLE_FALLBACK_ENABLED " +
-                "is on (G1 v4.1 §5.A / §5.B)."
-            );
-        }
         if (warningsEl) {
             if (warns.length) {
                 warningsEl.style.display = "block";
@@ -3844,9 +3909,7 @@
 
         card.style.display = "block";
 
-        const live = (d.active && d.active_live_sr_levels)
-            ? d.active_live_sr_levels
-            : (d.live_sr_levels || {});
+        const live = d.live_sr_levels || {};
         const levels = Array.isArray(live.levels) ? live.levels.slice() : [];
         const available = !!live.available;
         const beforeCount = typeof live.before_count === "number"
@@ -3894,14 +3957,9 @@
             ? `touch @ ${formatTime(live.touched_at)}`
             : (live.reference_at ? `ref @ ${formatTime(live.reference_at)}` : "");
 
-        const isPromoted = !!(d.active && d.active.record);
-        const headerTitle = isPromoted
-            ? `SR Levels · Active (promoted) Instrument`
-            : `SR Levels · Isolated Instrument`;
-
         body.innerHTML = `
             <div class="sr-phase-header">
-                <span class="phase-title">${esc(headerTitle)}</span>
+                <span class="phase-title">SR Levels · Isolated Instrument</span>
                 <span class="phase-hint">oldest first</span>
                 ${refLabel ? `<span class="ref-label">${esc(refLabel)}</span>` : ""}
                 <span class="sr-legend">
@@ -4056,8 +4114,6 @@
                 <div class="sr-empty-state">
                     <i class="bi bi-info-circle"></i>
                     No instrument has been officially isolated yet today.
-                    Wait for an R3 / S3 touch on any of NIFTY / BANKNIFTY /
-                    MIDCPNIFTY / SENSEX, then try again.
                 </div>`;
             return;
         }
@@ -4089,9 +4145,6 @@
                     <span class="muted">(touched at ${formatTime(data.official_touched_at)})</span><br>
                     <span class="muted">Your selection:</span>
                     <strong>${esc(data.trading_symbol || data.instrument_key)}</strong>
-                    ${isOfficial
-                        ? " — matches the official pick."
-                        : " — showing its SR levels tagged against the SAME isolation time."}
                 </div>`;
         }
 
@@ -4150,15 +4203,13 @@
             return;
         }
 
-        const isPromoted = !!(d.active && d.active.record);
-        const iso = isPromoted ? d.active.record : d.isolated;
+        const iso = d.isolated;
         const avail = snapshotAvailability({ isolated: iso });
 
         card.style.display = "block";
         if (titleEl) {
-            const suffix = isPromoted ? " · promoted" : "";
             titleEl.textContent =
-                `Isolated instrument · own data at touch${suffix} · ` +
+                `Isolated instrument · own data at touch · ` +
                 `${iso.trading_symbol || iso.instrument_key || ""}`;
         }
 
@@ -4169,11 +4220,9 @@
                     <div>No instrument-snapshot data is stored for this
                         isolated record yet.</div>
                     <div style="margin-top: 8px; font-size: 0.82rem;">
-                        This record was created before the snapshot feature
-                        was deployed. Click
-                        <strong>Refresh Snapshot</strong> in the top bar, or
-                        wait for the 5-minute recheck job to auto-collect it
-                        (during market hours).
+                        Click <strong>Refresh Snapshot</strong> in the top
+                        bar, or wait for the 5-minute recheck job to
+                        auto-collect it (during market hours).
                     </div>
                 </div>
             `;
@@ -4277,7 +4326,7 @@
         }
     }
 
-    /* ---------- Reasoning (G1 v3.2 multi-index routing) ---------- */
+    /* ---------- Reasoning ---------- */
     function renderReasoning(d) {
         const card = document.getElementById("iso-reasoning");
         if (!card) return;
@@ -4357,16 +4406,6 @@
             detail: iso.trading_symbol || iso.instrument_key || "—",
         });
 
-        if (d.active && d.active.record) {
-            steps.push({
-                icon: "bi-arrow-up-circle-fill",
-                title: "Promoted",
-                detail:
-                    `Strategy entry armed on ${d.active.to_trading_symbol || d.active.to_instrument_key} ` +
-                    `— promoted from ${d.active.from_trading_symbol || d.active.from_instrument_key}.`,
-            });
-        }
-
         const body = document.getElementById("iso-reasoning-body");
         body.innerHTML = steps
             .map(s =>
@@ -4380,7 +4419,7 @@
             .join("");
     }
 
-    /* ---------- Candidates (G1 v4.1 §5.F — side column) ---------- */
+    /* ---------- Candidates ---------- */
     function renderCandidates(d) {
         const body = document.getElementById("candidates-body");
         const titleEl = document.getElementById("candidates-title");
@@ -4476,7 +4515,7 @@
             .join("");
     }
 
-    /* ---------- Touch state (8 rows: 4 indices × 2 sides) ---------- */
+    /* ---------- Touch state ---------- */
     function renderTouchState(d) {
         const body = document.getElementById("touch-body");
         const pill = document.getElementById("touch-state-pill");
@@ -4725,6 +4764,36 @@
 
     /* ---------- bootstrap ---------- */
     document.addEventListener("DOMContentLoaded", () => {
+        // Initialise both lot-size inputs from localStorage.
+        syncLotInputs();
+
+        // Bind lot-size inputs (they share the same value).
+        const doLotInput = document.getElementById("do-lot-input");
+        if (doLotInput) {
+            doLotInput.addEventListener("change", () => {
+                setLotSizePref(doLotInput.value);
+                syncLotInputs();
+            });
+            doLotInput.addEventListener("input", () => {
+                // Live-sync while typing so both inputs stay aligned.
+                const v = Math.max(1, Math.floor(Number(doLotInput.value) || 1));
+                const simInput = document.getElementById("sim-lot-input");
+                if (simInput) simInput.value = v;
+            });
+        }
+        const simLotInput = document.getElementById("sim-lot-input");
+        if (simLotInput) {
+            simLotInput.addEventListener("change", () => {
+                setLotSizePref(simLotInput.value);
+                syncLotInputs();
+            });
+            simLotInput.addEventListener("input", () => {
+                const v = Math.max(1, Math.floor(Number(simLotInput.value) || 1));
+                const doInput = document.getElementById("do-lot-input");
+                if (doInput) doInput.value = v;
+            });
+        }
+
         if (window.__INITIAL_DETAIL__) {
             state.detail = window.__INITIAL_DETAIL__;
             render();
@@ -4780,7 +4849,7 @@
     });
 
     /* ============================================================
-       SIMULATION — post-close dummy-order replay
+       SIMULATION — post-close order replay
        ============================================================ */
     (function attachSimulation() {
         const SIM_RUN_URL = "/admin/simulation/run";
@@ -4790,8 +4859,12 @@
         const statusPill = document.getElementById("sim-status-pill");
         const regimeBanner = document.getElementById("sim-regime-banner");
         const card = document.getElementById("iso-simulation");
+        const totalValueEl = document.getElementById("sim-total-value");
+        const totalSubEl = document.getElementById("sim-total-sub");
 
         if (!runBtn || !bodyEl) return;
+
+        let lastSimResult = null;
 
         function updateVisibility() {
             if (!card) return;
@@ -4835,83 +4908,158 @@
                 return String(iso);
             }
         }
+        function fmtDateTime(iso) {
+            if (!iso) return "—";
+            return String(iso).replace("T", " ").slice(0, 19);
+        }
 
-        function regimeColor(regimeName) {
-            const r = String(regimeName || "").toLowerCase();
-            if (r.startsWith("high")) return "var(--iso-red)";
-            if (r.startsWith("low")) return "var(--iso-green)";
+        function routingColor(mode) {
+            const m = String(mode || "").toLowerCase();
+            if (m.includes("reversal")) return "var(--iso-purple)";
+            if (m.includes("support")) return "var(--iso-green)";
+            if (m.includes("resistance")) return "var(--iso-simulate, #ea580c)";
             return "var(--iso-primary)";
         }
 
-        function renderScenario(key, s, isWinner) {
-            const r = (s && s.replay) || {};
-            const exitReason = r.exit_reason || "—";
-            const pnl = Number.isFinite(Number(r.pnl_pct)) ? Number(r.pnl_pct) : null;
-            const rMult = Number.isFinite(Number(r.r_multiple)) ? Number(r.r_multiple) : null;
-            const stopPct = Number.isFinite(Number(s.stop_pct)) ? Number(s.stop_pct) : null;
-            const targetPct = Number.isFinite(Number(s.target_pct)) ? Number(s.target_pct) : null;
-            const rr = Number.isFinite(Number(s.rr_ratio)) ? Number(s.rr_ratio) : null;
+        function routingLabel(mode) {
+            const m = String(mode || "").toLowerCase();
+            if (m === "reversal_same_leg") return "Reversal · same leg";
+            if (m === "support_same_leg") return "Support · same leg";
+            if (m === "resistance_opposite_leg") return "Resistance · opposite leg";
+            return mode || "—";
+        }
 
-            const pnlCls = pnl == null ? "" : (pnl >= 0 ? "up" : "down");
-            const stateCls = pnl == null
-                ? "state-waiting"
-                : (pnl >= 0 ? "state-armed" : "state-blocked");
+        function renderSingleOrderCard(data) {
+            const order = data.order || {};
+            const replay = data.replay || {};
+            const zone = data.regime || {};
+            const traded = data.traded_instrument || {};
+            const verdict = data.verdict || {};
 
-            const exitTimeStr = String(r.exit_time || "").replace("T", " ").slice(0, 19) || "—";
+            const status = String(order.status || "").toUpperCase();
+            const isSkip = status === "SKIPPED";
+            const outcome = String(verdict.outcome || "").toUpperCase();
+            const stateCls =
+                isSkip ? "state-blocked"
+                : outcome === "WIN" ? "state-armed"
+                : outcome === "LOSS" ? "state-blocked"
+                : "state-waiting";
+
+            const entry = Number(order.entry_price);
+            const stop = Number(order.stop_price);
+            const stopPct = Number(order.stop_pct);
+            const exitPrice = Number(replay.exit_price);
+            const pnl = Number(replay.pnl_pct);
+            const pnlPts = Number(replay.profit_points);
+            const rMult = Number(replay.r_multiple);
+            const pnlCls = Number.isFinite(pnl) ? (pnl >= 0 ? "up" : "down") : "";
+
+            const milestones = (zone.milestones || [])
+                .map(m => `${esc(m.name)}=₹${fmt(m.price)}`)
+                .join(", ") || "—";
+
+            const sym = traded.trading_symbol || traded.instrument_key || "";
+            const pnlLot = computeLotPnl({
+                symbol: sym,
+                instrumentKey: traded.instrument_key,
+                entryPrice: entry,
+                exitPrice: exitPrice,
+                profitPoints: Number.isFinite(pnlPts) ? pnlPts : null,
+            });
+
+            if (isSkip) {
+                return `
+                    <div class="entry-candidate is-chosen">
+                        <div class="entry-candidate-head">
+                            <div class="entry-candidate-symbol">${esc(sym || "—")}</div>
+                            <div class="entry-candidate-pills">
+                                <span class="entry-pill ${stateCls}">SKIPPED</span>
+                                <span class="entry-pill bias">${esc(traded.side || "BUY")}</span>
+                            </div>
+                        </div>
+                        <div class="entry-grid">
+                            <div class="label">Entry price</div>
+                            <div class="value">₹${fmt(entry)} <small>(${esc(quoteSourceLabel(order.entry_price_source))})</small></div>
+                            <div class="label">Entry time</div>
+                            <div class="value">${esc(fmtDateTime(order.entry_time))}</div>
+                            <div class="label">Zone</div>
+                            <div class="value">${esc(zone.zone || "—")}</div>
+                            <div class="label">Milestones</div>
+                            <div class="value"><small>${milestones}</small></div>
+                        </div>
+                        <div class="entry-warning" style="margin-top:12px;">
+                            🚫 <strong>Order skipped.</strong> ${esc(order.skip_reason || zone.reason || "—")}
+                        </div>
+                    </div>
+                `;
+            }
 
             return `
-                <div class="entry-candidate${isWinner ? " is-chosen" : ""}" data-scenario="${esc(key)}">
+                <div class="entry-candidate is-chosen">
                     <div class="entry-candidate-head">
-                        <div class="entry-candidate-symbol">${esc(s.label || key)}</div>
+                        <div class="entry-candidate-symbol">${esc(sym || "—")}</div>
                         <div class="entry-candidate-pills">
-                            ${isWinner ? '<span class="entry-pill state-armed">🏆 WINNER</span>' : ''}
-                            <span class="entry-pill ${stateCls}">${esc(exitReason)}</span>
+                            <span class="entry-pill ${stateCls}">${esc(outcome || "—")}</span>
+                            <span class="entry-pill bias">${esc(traded.side || "BUY")}</span>
                         </div>
                     </div>
                     <div class="entry-grid">
                         <div class="label">Entry price</div>
-                        <div class="value">₹${fmt(s.entry_price)}</div>
+                        <div class="value">₹${fmt(entry)} <small>(${esc(quoteSourceLabel(order.entry_price_source))})</small></div>
+
+                        <div class="label">Entry time</div>
+                        <div class="value">${esc(fmtDateTime(order.entry_time))}</div>
 
                         <div class="label">Stop-loss</div>
-                        <div class="value">₹${fmt(s.stop_price)} (${fmtPct(-stopPct)})</div>
+                        <div class="value">₹${fmt(stop)} ${Number.isFinite(stopPct) ? `(−${(stopPct * 100).toFixed(1)}%)` : ""}</div>
 
-                        <div class="label">Target</div>
-                        <div class="value">${s.target_price != null ? `₹${fmt(s.target_price)} (+${fmtPct(targetPct)})` : "—"}</div>
+                        <div class="label">Zone</div>
+                        <div class="value">${esc(zone.zone || "—")}</div>
 
-                        <div class="label">R:R (nominal)</div>
-                        <div class="value">${rr != null ? rr.toFixed(2) + " : 1" : "—"}</div>
-
-                        <div class="label">Stop source</div>
-                        <div class="value"><small>${esc(s.stop_source || "—")}</small></div>
-
-                        <div class="label">Candles scanned</div>
-                        <div class="value">${r.candles_scanned != null ? r.candles_scanned : "—"}</div>
+                        <div class="label">Exit reason</div>
+                        <div class="value">${esc(replay.exit_reason || "—")}</div>
 
                         <div class="label">Exit price</div>
-                        <div class="value">₹${fmt(r.exit_price)}</div>
+                        <div class="value">₹${fmt(exitPrice)}</div>
 
                         <div class="label">Exit time</div>
-                        <div class="value"><small>${esc(exitTimeStr)}</small></div>
+                        <div class="value"><small>${esc(fmtDateTime(replay.exit_time))}</small></div>
 
                         <div class="label">PnL</div>
-                        <div class="value ${pnlCls}">${pnl != null ? fmtPct(pnl) : "—"}</div>
+                        <div class="value ${pnlCls}">${Number.isFinite(pnl) ? fmtPct(pnl) : "—"}</div>
+
+                        <div class="label">Profit points</div>
+                        <div class="value ${pnlCls}">${Number.isFinite(pnlPts) ? `${pnlPts >= 0 ? "+" : ""}${pnlPts.toFixed(2)} pts` : "—"}</div>
 
                         <div class="label">R-multiple</div>
-                        <div class="value ${pnlCls}">${rMult != null ? fmtR(rMult) : "—"}</div>
+                        <div class="value ${pnlCls}">${Number.isFinite(rMult) ? fmtR(rMult) : "—"}</div>
 
                         <div class="label">MFE</div>
-                        <div class="value">₹${fmt(r.mfe)}</div>
+                        <div class="value">₹${fmt(replay.mfe)}</div>
 
                         <div class="label">MAE</div>
-                        <div class="value">₹${fmt(r.mae)}</div>
+                        <div class="value">₹${fmt(replay.mae)}</div>
+
+                        <div class="label">Candles scanned</div>
+                        <div class="value">${replay.candles_scanned != null ? replay.candles_scanned : "—"}</div>
+
+                        ${renderLotGridRows(pnlLot)}
                     </div>
+                    ${replay.stage_2_triggered_at
+                        ? `<div class="entry-reversal" style="margin-top:12px;">
+                            🎯 <strong>Stage 2 armed</strong> at ${esc(fmtDateTime(replay.stage_2_triggered_at))}
+                            — ${esc(replay.stage_2_trigger_reason || "milestone")}
+                        </div>`
+                        : ""}
                 </div>
             `;
         }
 
         function renderResult(data) {
+            lastSimResult = data;
+
             if (!data || data.status !== "ok") {
-                const reason = (data && (data.reason || data.error || data.status)) || "unknown";
+                const reason = (data && (data.detail || data.reason || data.error || data.status)) || "unknown";
                 bodyEl.innerHTML = `
                     <div class="sr-empty-state">
                         <i class="bi bi-exclamation-triangle"></i>
@@ -4922,69 +5070,127 @@
                     regimeBanner.style.display = "none";
                     regimeBanner.innerHTML = "";
                 }
+                if (totalValueEl) {
+                    totalValueEl.textContent = "—";
+                    totalValueEl.className = "do-total-value";
+                }
+                if (totalSubEl) totalSubEl.textContent = "";
                 return;
             }
 
-            setStatus("Replayed", "has");
-
+            const routing = data.routing || {};
             const regime = data.regime || {};
+            const trigger = data.trigger || {};
+            const priorSupport = data.prior_support || {};
+            const isolated = data.isolated || {};
+            const opposite = data.opposite || {};
+            const traded = data.traded_instrument || {};
+            const verdict = data.verdict || {};
+            const outcome = String(verdict.outcome || "").toUpperCase();
+            const isSkip = outcome === "SKIPPED";
+
+            setStatus(
+                outcome || "Replayed",
+                isSkip ? "error"
+                : outcome === "WIN" ? "chosen"
+                : outcome === "LOSS" ? "error"
+                : "",
+            );
+
+            // Compute simulated P&L for the header total.
+            const replay = data.replay || {};
+            const simPnlLot = computeLotPnl({
+                symbol: traded.trading_symbol || traded.instrument_key,
+                instrumentKey: traded.instrument_key,
+                entryPrice: Number(data.order && data.order.entry_price),
+                exitPrice: Number(replay.exit_price),
+                profitPoints: Number.isFinite(Number(replay.profit_points))
+                    ? Number(replay.profit_points) : null,
+            });
+
+            if (totalValueEl) {
+                if (isSkip || simPnlLot.totalRs === null) {
+                    totalValueEl.textContent = "—";
+                    totalValueEl.className = "do-total-value";
+                } else {
+                    totalValueEl.textContent = fmtMoney(simPnlLot.totalRs);
+                    totalValueEl.className = "do-total-value " + simPnlLot.cls;
+                }
+            }
+            if (totalSubEl) {
+                if (isSkip) {
+                    totalSubEl.textContent = "Order was skipped";
+                } else if (simPnlLot.totalRs !== null) {
+                    totalSubEl.textContent =
+                        `${simPnlLot.lotCount} lot × ${simPnlLot.lotSize} qty = ` +
+                        `${simPnlLot.qty.toLocaleString("en-IN")} qty`;
+                } else {
+                    totalSubEl.textContent = "";
+                }
+            }
+
             if (regimeBanner) {
                 regimeBanner.style.display = "flex";
-                const clsColor = regimeColor(regime.regime);
-                regimeBanner.style.borderColor = clsColor;
+                const color = routingColor(routing.mode);
+                regimeBanner.style.borderColor = color;
                 regimeBanner.innerHTML = `
-                    <i class="bi bi-tag-fill" style="color:${clsColor}"></i>
+                    <i class="bi bi-signpost-split-fill" style="color:${color}"></i>
                     <div>
-                        <strong style="color:${clsColor}">Regime: ${esc(regime.regime || "—")}</strong><br>
-                        <span style="font-size:0.85rem;color:var(--iso-muted)">
-                            ${esc(regime.reason || "")}
-                        </span>
+                        <strong style="color:${color}">${esc(routingLabel(routing.mode))}</strong>
+                        <span style="margin-left:8px;font-size:0.75rem;font-weight:800;color:var(--iso-muted);">→ BUY ${esc(traded.side || "—")}</span><br>
+                        <span style="font-size:0.85rem;color:var(--iso-muted)">${esc(routing.reason || "")}</span>
                     </div>
                 `;
             }
 
-            const sc = data.scenarios || {};
-            const verdict = data.verdict || {};
-            const winner = verdict.winner;
+            // Info strip: trigger + prior support + isolated/opposite/traded
+            const info = [];
+            info.push(`Trigger: <strong>${esc(String(trigger.level || "").toUpperCase())} @ ₹${fmt(trigger.price)}</strong>`);
+            info.push(`Confirmed: <strong>${esc(fmtDateTime(trigger.confirmed_time))}</strong>`);
+            if (priorSupport && priorSupport.price != null) {
+                info.push(`Prior support: <strong>₹${fmt(priorSupport.price)} @ ${esc(fmtTime(priorSupport.confirmed_time))}</strong>`);
+            }
+            info.push(`Isolated: <strong>${esc(isolated.trading_symbol || isolated.instrument_key || "—")}</strong>`);
+            if (opposite && opposite.instrument_key) {
+                info.push(`Opposite: <strong>${esc(opposite.trading_symbol || opposite.instrument_key)}</strong>`);
+            }
+            info.push(`Traded: <strong>${esc(traded.trading_symbol || traded.instrument_key || "—")}</strong>`);
 
-            const scenarioHtml = Object.entries(sc).map(([k, s]) => {
-                const isWin = (k === "signal_v2" && winner === "signal_v2")
-                    || (k === "regime" && winner === "regime");
-                return renderScenario(k, s, isWin);
-            }).join("");
+            const entryStrip = `<div class="entry-touch-strip">${info.map(x => `<span>${x}</span>`).join("")}</div>`;
 
-            const notes = (data.notes || []).map(n => `<li>${esc(n)}</li>`).join("");
-
-            const entry = data.entry || {};
-            const entryStrip = `
-                <div class="entry-touch-strip">
-                    <span>Instrument: <strong>${esc(data.trading_symbol || data.instrument_key)}</strong></span>
-                    <span>Side: <strong>${esc(data.side || "—")}</strong></span>
-                    <span>Entry: <strong>₹${fmt(entry.price)}</strong></span>
-                    <span>Entry time: <strong>${esc(String(entry.time || "").replace("T", " ").slice(0, 19) || "—")}</strong></span>
-                    <span>Source: <strong>${esc(quoteSourceLabel(entry.price_source))}</strong></span>
-                    <span>Candles in session: <strong>${data.candles_total || 0}</strong></span>
+            // Zone strip
+            const orl = data.or_levels || {};
+            const milestones = (regime.milestones || [])
+                .map(m => `${esc(m.name)}=₹${fmt(m.price)}`)
+                .join(", ") || "—";
+            const zoneStrip = `
+                <div class="entry-touch-strip" style="background:var(--iso-purple-bg);border-color:var(--iso-purple-border);">
+                    <span>Zone: <strong>${esc(regime.zone || "—")}</strong></span>
+                    <span>Milestones: <strong>${milestones}</strong></span>
+                    <span>OR H/L: <strong>₹${fmt(orl.H)} / ₹${fmt(orl.L)}</strong></span>
+                    <span>R2: <strong>₹${fmt(orl.R2)}</strong></span>
                 </div>
             `;
 
+            const orderCard = renderSingleOrderCard(data);
+
             let verdictHtml = "";
-            if (winner && winner !== "unknown" && winner !== "tie") {
-                const wLabel = winner === "regime" ? "Regime scenario" : "Signal scenario";
-                verdictHtml = `
-                    <div class="sim-verdict-winner">
-                        🏆 <strong>${esc(wLabel)} wins.</strong>
-                        ${esc(verdict.reason || "")}
-                    </div>`;
-            } else if (winner === "tie") {
-                verdictHtml = `
-                    <div class="sim-verdict-tie">
-                        Both scenarios produced the same R-multiple (tie).
-                    </div>`;
+            if (outcome === "SKIPPED") {
+                verdictHtml = `<div class="sim-verdict-skip">🚫 <strong>Order SKIPPED.</strong> ${esc(verdict.reason || "—")}</div>`;
+            } else if (outcome === "WIN") {
+                verdictHtml = `<div class="sim-verdict-winner">🏆 <strong>WIN.</strong> ${esc(verdict.reason || "")}</div>`;
+            } else if (outcome === "LOSS") {
+                verdictHtml = `<div class="sim-verdict-tie" style="background:var(--iso-red-bg);border-left-color:var(--iso-red);color:var(--iso-red);">❌ <strong>LOSS.</strong> ${esc(verdict.reason || "")}</div>`;
+            } else {
+                verdictHtml = `<div class="sim-verdict-unresolved">⏳ <strong>${esc(outcome || "UNRESOLVED")}.</strong> ${esc(verdict.reason || "")}</div>`;
             }
+
+            const notes = (data.notes || []).map(n => `<li>${esc(n)}</li>`).join("");
 
             bodyEl.innerHTML = `
                 ${entryStrip}
-                <div class="entry-candidates">${scenarioHtml}</div>
+                ${zoneStrip}
+                <div class="entry-candidates">${orderCard}</div>
                 ${verdictHtml}
                 <div class="sim-notes">
                     <strong>📝 Notes</strong>
@@ -5023,6 +5229,11 @@
         if (runBtn) {
             runBtn.addEventListener("click", runSimulation);
         }
+
+        // Re-render last result when the shared lot-size value changes.
+        document.addEventListener("iso:lot-size-changed", () => {
+            if (lastSimResult) renderResult(lastSimResult);
+        });
     })();
 
     /* ============================================================
@@ -5037,7 +5248,8 @@
         const summaryStrip = document.getElementById("do-summary-strip");
         const bodyEl = document.getElementById("do-body");
         const statusPill = document.getElementById("do-status-pill");
-        const lockdownBanner = document.getElementById("do-lockdown-banner");
+        const totalValueEl = document.getElementById("do-total-value");
+        const totalSubEl = document.getElementById("do-total-sub");
 
         if (!card || !summaryStrip || !bodyEl) return;
 
@@ -5052,10 +5264,6 @@
         function fmtPct(v) {
             const n = Number(v);
             return Number.isFinite(n) ? (n * 100).toFixed(1) + "%" : "—";
-        }
-        function fmtR(v) {
-            const n = Number(v);
-            return Number.isFinite(n) ? (n >= 0 ? "+" : "") + n.toFixed(2) + "R" : "—";
         }
         function fmtTime(iso) {
             if (!iso) return "—";
@@ -5073,274 +5281,285 @@
                 return String(iso);
             }
         }
-
-        function computeTotalRsPnl(orders) {
-            let total = 0;
-            for (const o of orders || []) {
-                if (!o || o.status === "OPEN") continue;
-                const persisted = Number(o.closed_profit_rs);
-                if (Number.isFinite(persisted)) {
-                    total += persisted;
-                    continue;
-                }
-                const pnlPct = Number(o.closed_pnl_pct);
-                const entry = Number(o.entry_price);
-                const lot = Number(o.lot_size);
-                if (Number.isFinite(pnlPct) && Number.isFinite(entry) && entry > 0) {
-                    if (Number.isFinite(lot) && lot > 0) {
-                        total += entry * pnlPct * lot;
-                    }
-                }
-            }
-            return total;
+        function fmtDateTime(iso) {
+            if (!iso) return "—";
+            return String(iso).replace("T", " ").slice(0, 19);
         }
 
-        function countPaths(orders) {
-            let pathA = 0, pathB = 0;
-            for (const o of orders || []) {
-                if (!o) continue;
-                if (String(o.path || "") === "B_external_trigger") pathB++;
-                else pathA++;
-            }
-            return { pathA, pathB };
+        function extractOrder(state) {
+            if (!state) return null;
+            if (state.order && typeof state.order === "object") return state.order;
+            if (Array.isArray(state.orders) && state.orders.length) return state.orders[0];
+            return null;
         }
 
-        function renderSummary(data, orders) {
+        function computeOrderLotPnl(order) {
+            if (!order) return null;
+            const status = String(order.status || "").toUpperCase();
+            const isOpen = status === "OPEN";
+            const isSkip = status === "SKIPPED" || status === "NO_ORDER";
+            if (isSkip) return null;
+
+            const entry = Number(order.entry_price);
+            const closedPnl = Number(order.closed_profit_pts);
+            const closedPrice = Number(order.closed_price);
+            const curLtp = Number(order.current_ltp);
+
+            if (!isOpen && Number.isFinite(closedPnl)) {
+                return computeLotPnl({
+                    symbol: order.trading_symbol,
+                    instrumentKey: order.instrument_key,
+                    entryPrice: entry,
+                    profitPoints: closedPnl,
+                });
+            }
+            if (!isOpen && Number.isFinite(closedPrice)) {
+                return computeLotPnl({
+                    symbol: order.trading_symbol,
+                    instrumentKey: order.instrument_key,
+                    entryPrice: entry,
+                    exitPrice: closedPrice,
+                });
+            }
+            if (isOpen && Number.isFinite(curLtp)) {
+                return computeLotPnl({
+                    symbol: order.trading_symbol,
+                    instrumentKey: order.instrument_key,
+                    entryPrice: entry,
+                    exitPrice: curLtp,
+                });
+            }
+            return null;
+        }
+
+        function renderLotHeader(order) {
+            if (!totalValueEl && !totalSubEl) return;
+            const pnl = computeOrderLotPnl(order);
+            if (!pnl || pnl.totalRs === null) {
+                if (totalValueEl) {
+                    totalValueEl.textContent = "—";
+                    totalValueEl.className = "do-total-value";
+                }
+                if (totalSubEl) {
+                    totalSubEl.textContent = order
+                        ? `${detectLotSize(order.trading_symbol, order.instrument_key)} qty / lot`
+                        : "";
+                }
+                return;
+            }
+            if (totalValueEl) {
+                totalValueEl.textContent = fmtMoney(pnl.totalRs);
+                totalValueEl.className = "do-total-value " + pnl.cls;
+            }
+            if (totalSubEl) {
+                totalSubEl.textContent =
+                    `${pnl.lotCount} lot × ${pnl.lotSize} qty = ` +
+                    `${pnl.qty.toLocaleString("en-IN")} qty`;
+            }
+        }
+
+        function renderSummary(state, order) {
             if (!summaryStrip) return;
-            const dayPnl = Number(data.day_pnl_pct) || 0;
-            const dayR = Number(data.day_r_multiple) || 0;
-            const pnlCls = dayPnl >= 0 ? "up" : "down";
-            const rCls = dayR >= 0 ? "up" : "down";
 
-            const totalRs = computeTotalRsPnl(orders);
-            const rsCls = totalRs >= 0 ? "up" : "down";
-            const { pathA, pathB } = countPaths(orders);
+            const o = order || {};
+            const status = String(o.status || "NO_ORDER").toUpperCase();
+            const isOpen = status === "OPEN";
+            const isSkip = status === "SKIPPED";
+            const isClosed = !isOpen && !isSkip && status !== "NO_ORDER";
+
+            const entry = Number(o.entry_price);
+            const curLtp = Number(o.current_ltp);
+            const closedPnlPct = Number(o.closed_pnl_pct);
+            const closedPts = Number(o.closed_profit_pts);
+            const curPnlPct = (entry > 0 && Number.isFinite(curLtp))
+                ? (curLtp - entry) / entry
+                : null;
+            const pnl = isClosed ? closedPnlPct : curPnlPct;
+            const pnlCls = Number.isFinite(pnl) ? (pnl >= 0 ? "up" : "down") : "";
+
+            const pnlLot = computeOrderLotPnl(o);
+            const lotSizeVal = pnlLot ? pnlLot.lotSize : detectLotSize(o.trading_symbol, o.instrument_key);
+            const qtyVal = pnlLot ? pnlLot.qty : (lotSizeVal * getLotSizePref());
+            const lotCount = pnlLot ? pnlLot.lotCount : getLotSizePref();
+            const totalRs = pnlLot ? pnlLot.totalRs : null;
+            const totalCls = pnlLot ? pnlLot.cls : "";
 
             summaryStrip.innerHTML = `
                 <div class="do-summary-tile">
-                    <div class="do-label">Day ₹ PnL</div>
-                    <div class="do-value ${rsCls}">${fmtRs(totalRs)}</div>
+                    <div class="do-label">Status</div>
+                    <div class="do-value" style="font-size:0.9rem;">
+                        ${esc(status.replace(/_/g, " "))}
+                    </div>
                 </div>
                 <div class="do-summary-tile">
-                    <div class="do-label">Day PnL %</div>
-                    <div class="do-value ${pnlCls}">${fmtPct(dayPnl)}</div>
+                    <div class="do-label">PnL %</div>
+                    <div class="do-value ${pnlCls}">${Number.isFinite(pnl) ? fmtPct(pnl) : "—"}</div>
                 </div>
                 <div class="do-summary-tile">
-                    <div class="do-label">Day R</div>
-                    <div class="do-value ${rCls}">${fmtR(dayR)}</div>
+                    <div class="do-label">Profit pts</div>
+                    <div class="do-value ${pnlCls}">${
+                        isClosed && Number.isFinite(closedPts)
+                            ? `${closedPts >= 0 ? "+" : ""}${closedPts.toFixed(2)}`
+                            : "—"
+                    }</div>
                 </div>
                 <div class="do-summary-tile">
-                    <div class="do-label">Open</div>
-                    <div class="do-value">${data.open_count || 0}</div>
+                    <div class="do-label">Lots × Qty</div>
+                    <div class="do-value" style="font-size:0.9rem;">
+                        ${lotCount} × ${qtyVal.toLocaleString("en-IN")}
+                    </div>
                 </div>
                 <div class="do-summary-tile">
-                    <div class="do-label">Closed</div>
-                    <div class="do-value">${data.closed_count || 0}</div>
+                    <div class="do-label">P&amp;L (₹)</div>
+                    <div class="do-value ${totalCls}">${fmtMoney(totalRs)}</div>
                 </div>
                 <div class="do-summary-tile">
-                    <div class="do-label">Total today</div>
-                    <div class="do-value">${data.total_today || 0}</div>
+                    <div class="do-label">Routing</div>
+                    <div class="do-value" style="font-size:0.8rem;">${esc(o.routing_mode || "—")}</div>
                 </div>
                 <div class="do-summary-tile">
-                    <div class="do-label">Path A / Path B</div>
-                    <div class="do-value">${pathA} / ${pathB}</div>
+                    <div class="do-label">Zone</div>
+                    <div class="do-value" style="font-size:0.85rem;">${esc(o.zone || "—")}</div>
                 </div>
                 <div class="do-summary-tile">
-                    <div class="do-label">Mode</div>
-                    <div class="do-value">${esc(data.mode || "—")}</div>
+                    <div class="do-label">Profit state</div>
+                    <div class="do-value" style="font-size:0.85rem;">${esc(o.profit_state || "—")}</div>
+                </div>
+                <div class="do-summary-tile">
+                    <div class="do-label">Execution</div>
+                    <div class="do-value" style="font-size:0.8rem;">${esc(state.execution_path || "—")}</div>
                 </div>
             `;
         }
 
-        function buildSourceCell(o) {
-            const origin = o.origin_level || {};
-            if (origin && origin.type && origin.price != null) {
-                const t = String(origin.type).toLowerCase();
-                const cls = t === "resistance" ? "resistance"
-                          : t === "support"    ? "support"
-                          : "signal";
-                const label = t.toUpperCase();
-                return (
-                    `<span class="src-type ${cls}">${esc(label)}</span>` +
-                    `<span class="src-price">₹${fmt(origin.price)}</span>` +
-                    (origin.confirmed_time
-                        ? `<span class="src-meta">conf ${fmtTime(origin.confirmed_time)}</span>`
-                        : "")
-                );
-            }
-            if (o.support_price != null) {
-                return (
-                    `<span class="src-type support">SUPPORT</span>` +
-                    `<span class="src-price">₹${fmt(o.support_price)}</span>` +
-                    (o.support_confirmed_fast
-                        ? `<span class="src-meta">fast ${fmtTime(o.support_confirmed_fast)}</span>`
-                        : "")
-                );
-            }
-            return `<span class="src-type signal">SIGNAL</span>`;
-        }
-
-        function renderRow(o) {
-            const status = String(o.status || "").toLowerCase();
-            const scenario = String(o.scenario || "");
-            const isPathB = String(o.path || "") === "B_external_trigger";
-            const scnCls = scenario === "regime"
-                ? "regime"
-                : scenario === "path_b_sr_level"
-                    ? "path_b_sr_level"
-                    : "signal_v2";
-            const scnLabel = scenario === "regime"
-                ? "regime"
-                : scenario === "path_b_sr_level"
-                    ? "path b"
-                    : "signal v2";
-            const statusCls = status.replace(/_/g, "_");
-            const statusLabel = status.replace(/_/g, " ");
-
-            const entry = Number(o.entry_price);
-            const stop = Number(o.stop_price);
-            const target = Number(o.target_price);
-
-            const closedPnl = Number(o.closed_pnl_pct);
-            const curPnl = Number(o.current_pnl_pct);
-
-            const pnlValue = Number.isFinite(closedPnl) ? closedPnl : curPnl;
-
-            const pnlCls = Number.isFinite(pnlValue) ? (pnlValue >= 0 ? "up" : "down") : "";
-            const rowCls = status === "open" ? "do-row-open" : "do-row-closed";
-
-            // Source column
-            const sourceHtml = buildSourceCell(o);
-
-            // Lot badge (Path B only; Path A has no lot_size)
-            const lotBadge = o.lot_size != null
-                ? `<span class="do-lot-badge">${esc(o.lot_size)}L</span>`
-                : "";
-
-            // Entry price source subtext
-            const priceSrcHtml = o.entry_price_source
-                ? `<span class="do-price-src" title="${esc(o.entry_price_source)}">${esc(quoteSourceLabel(o.entry_price_source))}</span>`
-                : "";
-
-            // Target pivot time subtext (Path B only)
-            const targetPivotHtml = o.target_pivot_time
-                ? `<span class="do-price-src">@${fmtTime(o.target_pivot_time)}</span>`
-                : "";
-
-            // Path B badge on instrument cell
-            const pathBadge = isPathB
-                ? '<span class="do-path-b-badge">PATH B</span>'
-                : "";
-
-            // Rupee PnL subtext for closed orders
-            let pnlRsSub = "";
-            if (status !== "open") {
-                const persisted = Number(o.closed_profit_rs);
-                let rsVal = null;
-                if (Number.isFinite(persisted)) {
-                    rsVal = persisted;
-                } else if (Number.isFinite(closedPnl) && Number.isFinite(entry) && entry > 0) {
-                    const lot = Number(o.lot_size);
-                    if (Number.isFinite(lot) && lot > 0) {
-                        rsVal = entry * closedPnl * lot;
-                    }
-                }
-                if (rsVal !== null && Number.isFinite(rsVal)) {
-                    const rsCls = rsVal >= 0 ? "up" : "down";
-                    pnlRsSub = `<span class="do-pnl-rs ${rsCls}">${fmtRs(rsVal)}</span>`;
-                }
-            }
-
-            return `
-                <tr class="${rowCls}">
-                    <td>
-                        <div style="font-weight:700;font-size:0.82rem;">
-                            ${esc(o.trading_symbol || o.instrument_key || "")}
-                            ${pathBadge}
-                        </div>
-                        <div style="font-size:0.7rem;color:var(--iso-muted)">${esc(o.instrument_key || "")}</div>
-                    </td>
-                    <td class="do-source-cell">${sourceHtml}</td>
-                    <td>
-                        <span class="do-scenario-pill ${scnCls}">${esc(scnLabel)}</span>
-                        ${lotBadge}
-                    </td>
-                    <td>${esc(o.side || "—")}</td>
-                    <td class="num">
-                        ₹${fmt(entry)}
-                        ${priceSrcHtml}
-                    </td>
-                    <td class="num">₹${fmt(stop)}</td>
-                    <td class="num">
-                        ₹${fmt(target)}
-                        ${targetPivotHtml}
-                    </td>
-                    <td class="num">
-                        ${Number.isFinite(Number(o.current_profit_rs))
-                            ? `₹${Number(o.current_profit_rs).toFixed(2)}`
-                            : "—"}
-                        ${o.profit_state === "TRAILING"
-                            ? `<div style="font-size:0.65rem;color:var(--iso-purple);">TRAIL ${o.trailing_stop_price ? "@ ₹" + Number(o.trailing_stop_price).toFixed(2) : ""}</div>`
-                            : (o.profit_state === "PRE_TRAIL"
-                                ? `<div style="font-size:0.65rem;color:var(--iso-muted);">PRE_TRAIL</div>`
-                                : "")}
-                    </td>
-                    <td><span class="do-status-pill ${statusCls}">${esc(statusLabel)}</span></td>
-                    <td class="num ${pnlCls}">
-                        ${Number.isFinite(pnlValue) ? fmtPct(pnlValue) : "—"}
-                        ${pnlRsSub}
-                    </td>
-                </tr>
-            `;
-        }
-
-        function renderOrders(data) {
-            if (!bodyEl) return;
-            const orders = Array.isArray(data.orders) ? data.orders.slice() : [];
-
-            if (!orders.length) {
+        function renderOrder(state, order) {
+            if (!order) {
                 bodyEl.innerHTML = `
                     <div class="do-empty">
                         <i class="bi bi-hourglass-split"></i>
-                        No dummy orders for today yet — they appear here as
-                        soon as a candidate arms on the entry signal.
+                        No dummy order yet for today — awaiting the first
+                        post-isolation 15/3 SR confirmation on the bias-side
+                        instrument.
                     </div>`;
                 return;
             }
 
-            orders.sort((a, b) => {
-                const aOpen = a.status === "OPEN" ? 0 : 1;
-                const bOpen = b.status === "OPEN" ? 0 : 1;
-                if (aOpen !== bOpen) return aOpen - bOpen;
-                if (aOpen === 0) {
-                    return String(a.entry_time || "").localeCompare(
-                        String(a.entry_time || "")
-                    );
-                }
-                return String(b.closed_at || "").localeCompare(
-                    String(a.closed_at || "")
-                );
-            });
+            const status = String(order.status || "").toUpperCase();
+            const isOpen = status === "OPEN";
+            const isSkip = status === "SKIPPED";
+
+            const trigger = order.trigger || {};
+            const priorSupport = order.prior_support || {};
+            const entry = Number(order.entry_price);
+            const stop = Number(order.stop_price);
+            const stopPct = Number(order.stop_pct);
+            const exitPrice = Number(order.closed_price);
+            const pnlPct = Number(order.closed_pnl_pct);
+            const pts = Number(order.closed_profit_pts);
+            const pnlCls = Number.isFinite(pnlPct) ? (pnlPct >= 0 ? "up" : "down") : "";
+            const statusCls = isOpen
+                ? "state-armed"
+                : isSkip
+                    ? "state-blocked"
+                    : (pnlPct >= 0 ? "state-armed" : "state-blocked");
+
+            const milestones = (order.milestones || [])
+                .map(m => `${esc(m.name)}=₹${fmt(m.price)}`)
+                .join(", ") || "—";
+
+            const priorSupportRow = (priorSupport && priorSupport.price != null)
+                ? `
+                    <div class="label">Prior support</div>
+                    <div class="value">₹${fmt(priorSupport.price)} @ ${esc(fmtTime(priorSupport.confirmed_time))}</div>
+                `
+                : "";
+
+            const exitRows = (!isOpen && !isSkip) ? `
+                <div class="label">Exit reason</div>
+                <div class="value">${esc(order.closed_reason || "—")}</div>
+
+                <div class="label">Exit price</div>
+                <div class="value">₹${fmt(exitPrice)}</div>
+
+                <div class="label">Exit time</div>
+                <div class="value"><small>${esc(fmtDateTime(order.closed_time || order.closed_at))}</small></div>
+
+                <div class="label">PnL</div>
+                <div class="value ${pnlCls}">${Number.isFinite(pnlPct) ? fmtPct(pnlPct) : "—"}</div>
+
+                <div class="label">Profit pts</div>
+                <div class="value ${pnlCls}">${Number.isFinite(pts) ? `${pts >= 0 ? "+" : ""}${pts.toFixed(2)}` : "—"}</div>
+            ` : "";
+
+            const stage2Row = order.stage_2_triggered_at ? `
+                <div class="entry-reversal" style="margin-top:12px;">
+                    🎯 <strong>Stage 2 armed</strong> at
+                    ${esc(fmtDateTime(order.stage_2_triggered_at))}
+                    — ${esc(order.stage_2_trigger_reason || "milestone")}
+                </div>
+            ` : "";
+
+            const skipRow = isSkip
+                ? `<div class="entry-warning" style="margin-top:12px;">
+                    🚫 <strong>SKIPPED.</strong> ${esc(order.skip_reason || "—")}
+                </div>`
+                : "";
+
+            const pnlLot = computeOrderLotPnl(order);
+            const lotRows = pnlLot ? renderLotGridRows(pnlLot) : "";
 
             bodyEl.innerHTML = `
-                <div class="iso-table-wrap">
-                    <table class="iso-table do-table">
-                        <thead>
-                            <tr>
-                                <th>Instrument</th>
-                                <th>Source</th>
-                                <th>Scenario / Lot</th>
-                                <th>Side</th>
-                                <th class="num">Entry</th>
-                                <th class="num">Stop</th>
-                                <th class="num">Target</th>
-                                <th class="num">₹ Profit</th>
-                                <th>Status</th>
-                                <th class="num">PnL</th>
-                            </tr>
-                        </thead>
-                        <tbody>${orders.map(renderRow).join("")}</tbody>
-                    </table>
+                <div class="entry-candidate ${isOpen ? "is-chosen" : ""}" style="margin-top:8px;">
+                    <div class="entry-candidate-head">
+                        <div class="entry-candidate-symbol">${esc(order.trading_symbol || order.instrument_key || "—")}</div>
+                        <div class="entry-candidate-pills">
+                            <span class="entry-pill ${statusCls}">${esc(status.replace(/_/g, " "))}</span>
+                            <span class="entry-pill bias">${esc(order.routing_mode || "—")}</span>
+                            ${order.bias_type ? `<span class="entry-pill ${String(order.bias_type).toLowerCase() === "ce" ? "type-ce" : "type-pe"}">${esc(order.bias_type)}</span>` : ""}
+                        </div>
+                    </div>
+                    <div class="entry-grid">
+                        <div class="label">Entry</div>
+                        <div class="value">₹${fmt(entry)} <small>(${esc(quoteSourceLabel(order.entry_price_source))})</small></div>
+
+                        <div class="label">Entry time</div>
+                        <div class="value">${esc(fmtDateTime(order.entry_time))}</div>
+
+                        <div class="label">Stop-loss</div>
+                        <div class="value">₹${fmt(stop)} ${Number.isFinite(stopPct) ? `(−${(stopPct * 100).toFixed(1)}%)` : ""}</div>
+
+                        <div class="label">Zone</div>
+                        <div class="value">${esc(order.zone || "—")}</div>
+
+                        <div class="label">Trigger</div>
+                        <div class="value">${esc(String(trigger.level || "").toUpperCase())} @ ₹${fmt(trigger.price)}</div>
+
+                        <div class="label">Trigger time</div>
+                        <div class="value"><small>${esc(fmtDateTime(trigger.confirmed_time))}</small></div>
+
+                        ${priorSupportRow}
+
+                        <div class="label">Current LTP</div>
+                        <div class="value">₹${fmt(order.current_ltp)}</div>
+
+                        <div class="label">MFE</div>
+                        <div class="value">₹${fmt(order.mfe)}</div>
+
+                        <div class="label">MAE</div>
+                        <div class="value">₹${fmt(order.mae)}</div>
+
+                        ${exitRows}
+                        ${lotRows}
+                    </div>
+
+                    <div class="entry-touch-strip" style="margin-top:12px;">
+                        <span>Milestones: <strong>${milestones}</strong></span>
+                        <span>Profit state: <strong>${esc(order.profit_state || "—")}</strong></span>
+                        <span>Source level: <strong>${esc(String((order.trigger || {}).level || "").toUpperCase())} @ ${esc((order.trigger || {}).confirmed_time || "—")}</strong></span>
+                    </div>
+
+                    ${stage2Row}
+                    ${skipRow}
                 </div>
             `;
         }
@@ -5353,39 +5572,37 @@
                 ]);
                 if (!stateRes.ok || !sumRes.ok) throw new Error("HTTP error");
                 const state = await stateRes.json();
-                const summary = await sumRes.json();
+                // sumRes is fetched for parity with the old code but its
+                // fields are superseded by state.order; kept for any future
+                // summary-only additions.
+                await sumRes.json();
 
-                const orders = Array.isArray(state.orders) ? state.orders : [];
+                const order = extractOrder(state);
+                renderLotHeader(order);
+                renderSummary(state, order);
+                renderOrder(state, order);
 
-                renderSummary(summary, orders);
-                renderOrders(state);
-
-                const isPathB = orders.some(
-                    o => String(o.path || "") === "B_external_trigger"
-                );
-                if (isPathB) {
+                const status = order
+                    ? String(order.status || "").toUpperCase()
+                    : "NO_ORDER";
+                if (status === "NO_ORDER") {
+                    setStatus("Waiting", "");
+                } else if (status === "SKIPPED") {
+                    setStatus("Skipped", "error");
+                } else if (status === "OPEN") {
+                    const ps = String(order.profit_state || "").toUpperCase();
                     setStatus(
-                        state.strategy_locked_today
-                            ? "LOCKED · Path B"
-                            : "Path B · " + (summary.open_count || 0) + " open",
-                        "post",
+                        ps === "STAGE_2" ? "Open · Stage 2" : "Open · Stage 1",
+                        ps === "STAGE_2" ? "chosen" : "has",
                     );
+                } else if (status === "STAGE_2_RESISTANCE_EXIT") {
+                    setStatus("Stage 2 exit", "chosen");
+                } else if (status === "STOP_HIT") {
+                    setStatus("Stopped out", "error");
+                } else if (status === "END_OF_DAY") {
+                    setStatus("EOD closed", "");
                 } else {
-                    const total = summary.total_today || 0;
-                    const open = summary.open_count || 0;
-                    if (total === 0) {
-                        setStatus("Waiting", "");
-                    } else if (open > 0) {
-                        setStatus(`${open} open · ${total} total`, "has");
-                    } else {
-                        setStatus(`${total} closed`, "chosen");
-                    }
-                }
-
-                if (lockdownBanner) {
-                    lockdownBanner.style.display = state.strategy_locked_today
-                        ? "block"
-                        : "none";
+                    setStatus(status.replace(/_/g, " ").toLowerCase(), "");
                 }
             } catch (e) {
                 console.warn("[dummy-orders] refresh failed:", e);
@@ -5408,6 +5625,11 @@
 
         refresh();
         pollTimer = setInterval(refresh, POLL_MS);
+
+        // Re-render immediately when the shared lot-size value changes.
+        document.addEventListener("iso:lot-size-changed", () => {
+            refresh();
+        });
 
         window.addEventListener("beforeunload", () => {
             if (pollTimer) clearInterval(pollTimer);
