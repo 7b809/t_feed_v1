@@ -1,205 +1,135 @@
-# services/telegram_format.py
-"""Telegram message formatter tailored for both mobile and desktop readability.
-
-Design Decisions:
------------------
-1. HTML formatting: avoids Markdown escaping bugs with special characters (., _, -, ()).
-2. Monospace values: wrapping key data (prices, strike keys, tokens) in <code> blocks
-   makes them monospaced and tap-to-copy on mobile Telegram apps.
-3. Compact row-by-row layout: keeps lines under 35-40 chars so nothing soft-wraps
-   awkwardly on small mobile screens, while staying clean and organized on desktop.
-4. Expandable blocks: long diagnostic text, traces, or JSON payloads are encapsulated
-   inside <blockquote expandable> so mobile chats don't get bloated.
-"""
-
+# services/telegram_service.py
 import html
-from typing import Any, Dict, List, Optional, Tuple, Union
+import re
+import requests
+from typing import Optional
+
+from core import config
+from core.logger import get_logger
+
+logger = get_logger(__file__)
+
+LEVEL_ICONS = {
+    "INFO": "ℹ️",
+    "SUCCESS": "✅",
+    "WARNING": "⚠️",
+    "ERROR": "🚨",
+    "STARTUP": "🚀",
+    "SHUTDOWN": "🛑",
+}
+
+TELEGRAM_MAX_LEN = 4000
 
 
-def escape(text: Any) -> str:
-    """Safely escape text for Telegram HTML parse_mode."""
-    if text is None:
-        return ""
-    return html.escape(str(text))
+class TelegramService:
+    def __init__(self):
+        self.bot_token = getattr(config, "TELEGRAM_BOT_TOKEN", None)
+        self.chat_id = getattr(config, "TELEGRAM_CHAT_ID", None)
+        self.enabled = getattr(config, "TELEGRAM_ENABLED", False)
+        self.timeout = getattr(config, "TELEGRAM_TIMEOUT_SECONDS", 10)
+
+    def _safe_html(self, text: str) -> str:
+        """Sanitizes text for Telegram HTML parse_mode.
+        
+        If caller already passed pre-formatted HTML (contains tags like <b>, <code>),
+        it preserves valid tags and escapes loose ampersands.
+        If caller passed plain raw text, it escapes <, >, and & completely.
+        """
+        if not text:
+            return ""
+
+        # Check if caller already formatted with supported Telegram tags
+        has_tags = bool(re.search(r"</?(?:b|i|code|pre|blockquote|a)\b", text))
+
+        if not has_tags:
+            # Raw text: completely escape everything so nothing breaks
+            return html.escape(str(text))
+
+        # Already has HTML: only escape unescaped ampersands
+        return re.sub(r"&(?!([a-zA-Z0-9]+|#[0-9]{1,6});)", "&amp;", str(text))
+
+    def send_message(
+        self,
+        title: str,
+        message: str = "",
+        level: str = "INFO",
+        expandable_details: Optional[str] = None,
+        disable_notification: bool = False,
+    ) -> bool:
+        """Universal notification dispatcher.
+        
+        Guarantees mobile/desktop formatting regardless of how callers pass data:
+        - Style A (title + message): Combines into structured, copy-friendly view.
+        - Style B (pre-formatted single string in title): Preserves tags safely.
+        - Style C (raw unescaped text / exceptions): Automatically sanitized.
+        """
+        if not (self.enabled and self.bot_token and self.chat_id):
+            return False
+
+        lvl = level.upper() if level else "INFO"
+        icon = LEVEL_ICONS.get(lvl, "📌")
+
+        safe_title = self._safe_html(title)
+        safe_message = self._safe_html(message)
+
+        # Style B: Single pre-formatted string passed as `title` (message is empty)
+        if not safe_message:
+            # If title doesn't already have an icon/badge, prefix it
+            if not any(safe_title.strip().startswith(ic) for ic in LEVEL_ICONS.values()):
+                text = f"{icon} <b>[{lvl}]</b> {safe_title}"
+            else:
+                text = safe_title
+        # Style A: Separate title and body passed
+        else:
+            text = f"{icon} <b>[{lvl}] {safe_title}</b>\n\n{safe_message}"
+
+        # Attach collapsible details block if provided (e.g. stacktrace / raw json)
+        if expandable_details:
+            escaped_details = html.escape(str(expandable_details))
+            text += f"\n\n<blockquote expandable><code>{escaped_details}</code></blockquote>"
+
+        # Prevent 400 Bad Request: message too long
+        if len(text) > TELEGRAM_MAX_LEN:
+            text = text[:TELEGRAM_MAX_LEN] + "\n\n<i>... [truncated]</i>"
+
+        payload = {
+            "chat_id": self.chat_id,
+            "text": text,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True,
+            "disable_notification": disable_notification,
+        }
+
+        try:
+            response = requests.post(
+                f"https://api.telegram.org/bot{self.bot_token}/sendMessage",
+                json=payload,
+                timeout=self.timeout,
+            )
+            response.raise_for_status()
+            return True
+        except Exception as exc:
+            # Fallback: if HTML parsing somehow fails, retry as plain text without tags
+            try:
+                raw_fallback = re.sub(r"<[^>]+>", "", text)
+                payload["text"] = raw_fallback
+                payload.pop("parse_mode", None)
+                requests.post(
+                    f"https://api.telegram.org/bot{self.bot_token}/sendMessage",
+                    json=payload,
+                    timeout=self.timeout,
+                )
+                return True
+            except Exception:
+                logger.warning("Telegram notification failed (%s).", type(exc).__name__)
+                return False
+
+    def send_shutdown_message(self, details: str = "") -> bool:
+        return self.send_message(
+            "Application stopped",
+            details or "Shutdown complete.",
+            level="SHUTDOWN",
+        )
 
 
-def code(text: Any) -> str:
-    """Format inline monospaced copyable text."""
-    return f"<code>{escape(text)}</code>"
-
-
-def bold(text: Any) -> str:
-    """Format bold text."""
-    return f"<b>{escape(text)}</b>"
-
-
-def italic(text: Any) -> str:
-    """Format italic text."""
-    return f"<i>{escape(text)}</i>"
-
-
-def kv_line(label: str, value: Any, mono: bool = True) -> str:
-    """Render a single key-value row optimized for narrow mobile widths."""
-    formatted_val = code(value) if mono else escape(value)
-    return f"• <b>{escape(label)}:</b> {formatted_val}"
-
-
-def build(
-    title: str,
-    emoji: str = "🎯",
-    subtitle: Optional[str] = None,
-    fields: Optional[List[Tuple[str, Any]]] = None,
-    raw_lines: Optional[List[str]] = None,
-    details: Optional[str] = None,
-    footer: Optional[str] = None,
-) -> str:
-    """Build a standard pre-formatted message payload (Style B).
-
-    Parameters
-    ----------
-    title : str
-        Main headline/action.
-    emoji : str
-        Visual prefix icon.
-    subtitle : Optional[str]
-        Secondary descriptor line.
-    fields : Optional[List[Tuple[str, Any]]]
-        List of (Label, Value) tuples rendered as compact key-value bullets.
-    raw_lines : Optional[List[str]]
-        Pre-formatted descriptive lines added to the body.
-    details : Optional[str]
-        Long/technical payload placed inside a collapsible Telegram blockquote.
-    footer : Optional[str]
-        Closing meta line (e.g. timestamp or engine run id).
-    """
-    chunks: List[str] = []
-
-    # Header line
-    header = f"{emoji} <b>{escape(title)}</b>"
-    if subtitle:
-        header += f"\n<i>{escape(subtitle)}</i>"
-    chunks.append(header)
-
-    # Key-value structured rows
-    if fields:
-        field_lines = [kv_line(lbl, val) for lbl, val in fields if val is not None]
-        if field_lines:
-            chunks.append("\n".join(field_lines))
-
-    # Freeform narrative rows
-    if raw_lines:
-        valid_lines = [line for line in raw_lines if line]
-        if valid_lines:
-            chunks.append("\n".join(valid_lines))
-
-    # Expandable section for heavy payloads / stacktraces
-    if details:
-        chunks.append(f'<blockquote expandable>{code(details)}</blockquote>')
-
-    # Footer note
-    if footer:
-        chunks.append(f"⏱ <i>{escape(footer)}</i>")
-
-    return "\n\n".join(chunks)
-
-
-# ---------------------------------------------------------------------------
-# Domain-Specific Builders (Orders, Strategy Alerts, Tracking, Health)
-# ---------------------------------------------------------------------------
-
-
-def format_order_alert(
-    action: str,
-    symbol: str,
-    quantity: int,
-    price: float,
-    order_id: Optional[str] = None,
-    order_type: str = "MARKET",
-    sl: Optional[float] = None,
-    target: Optional[float] = None,
-    tag: Optional[str] = None,
-) -> str:
-    """Format trade executions and order notifications."""
-    action_upper = action.upper()
-    emoji = "🟢" if "BUY" in action_upper else "🔴" if "SELL" in action_upper else "⚡"
-
-    fields: List[Tuple[str, Any]] = [
-        ("Instrument", symbol),
-        ("Qty", quantity),
-        ("Price", f"{price:.2f}" if isinstance(price, (int, float)) else price),
-        ("Type", order_type),
-    ]
-
-    if sl is not None:
-        fields.append(("SL", f"{sl:.2f}" if isinstance(sl, (int, float)) else sl))
-    if target is not None:
-        fields.append(("Target", f"{target:.2f}" if isinstance(target, (int, float)) else target))
-    if order_id:
-        fields.append(("Order ID", order_id))
-    if tag:
-        fields.append(("Tag", tag))
-
-    return build(
-        title=f"Order {action_upper}",
-        emoji=emoji,
-        fields=fields,
-    )
-
-
-def format_stage_tracker(
-    strategy_name: str,
-    stage: Union[str, int],
-    status: str,
-    symbol: Optional[str] = None,
-    ltp: Optional[float] = None,
-    trigger_rule: Optional[str] = None,
-    metrics: Optional[Dict[str, Any]] = None,
-    extra_details: Optional[str] = None,
-) -> str:
-    """Format strategy execution stage progress (e.g. S2 Stage 1/2/3)."""
-    fields: List[Tuple[str, Any]] = []
-
-    if symbol:
-        fields.append(("Symbol", symbol))
-    if ltp is not None:
-        fields.append(("LTP", f"{ltp:.2f}" if isinstance(ltp, (int, float)) else ltp))
-    if trigger_rule:
-        fields.append(("Trigger", trigger_rule))
-
-    if metrics:
-        for k, v in metrics.items():
-            formatted_val = f"{v:.2f}" if isinstance(v, float) else v
-            fields.append((k, formatted_val))
-
-    return build(
-        title=f"{strategy_name} · Stage {stage}",
-        emoji="🎯",
-        subtitle=f"Status: {status.upper()}",
-        fields=fields,
-        details=extra_details,
-    )
-
-
-def format_token_status(
-    service: str,
-    status: str,
-    expiry_time: Optional[str] = None,
-    is_valid: bool = True,
-    error_message: Optional[str] = None,
-) -> str:
-    """Format daily token refresh / auth lifecycle alerts."""
-    emoji = "🔑" if is_valid else "⚠️"
-    fields: List[Tuple[str, Any]] = [
-        ("Service", service),
-        ("Status", status),
-    ]
-    if expiry_time:
-        fields.append(("Expires At", expiry_time))
-    if error_message:
-        fields.append(("Error", error_message))
-
-    return build(
-        title="Token Lifecycle Event",
-        emoji=emoji,
-        fields=fields,
-    )
+telegram_service = TelegramService()
