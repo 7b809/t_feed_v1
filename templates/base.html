@@ -3,7 +3,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
 
     <title>T - Dashboard</title>
 
@@ -29,46 +29,54 @@
             --app-border-color: #334155;
             --app-text-main: #f8fafc;
             --app-text-muted: #94a3b8;
+            --navbar-height: 64px;
         }
 
-        * {
+        *, *::before, *::after {
             box-sizing: border-box;
+            margin: 0;
+            padding: 0;
         }
 
-        body.app-root-body {
-            margin: 0;
+        html, body.app-root-body {
+            min-height: 100vh;
+            min-height: 100dvh;
             background-color: var(--app-bg-dark);
             color: var(--app-text-main);
-            font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            -webkit-font-smoothing: antialiased;
         }
 
-        /* Modern Glassmorphism Top Navigation Bar */
+        /* Fixed / Sticky Nav Bar */
         .app-header-navbar {
-            height: 68px;
+            height: var(--navbar-height);
             display: flex;
             align-items: center;
             justify-content: space-between;
-            padding: 0 24px;
-            background: rgba(30, 41, 59, 0.85);
+            padding: 0 20px;
+            background: rgba(30, 41, 59, 0.95);
             backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
             border-bottom: 1px solid var(--app-border-color);
             position: sticky;
             top: 0;
-            z-index: 9999;
-            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25);
+            z-index: 1030;
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
         }
 
-        /* Brand Styling with Gradient Icon Box */
+        /* Brand Styling */
         .app-brand-wrapper {
-            display: flex;
+            display: inline-flex;
             align-items: center;
             gap: 12px;
             text-decoration: none;
+            user-select: none;
         }
 
         .app-brand-icon-box {
-            width: 40px;
-            height: 40px;
+            width: 38px;
+            height: 38px;
+            min-width: 38px;
             border-radius: 10px;
             background: linear-gradient(135deg, #2563eb, #7c3aed);
             display: flex;
@@ -76,154 +84,164 @@
             justify-content: center;
             color: #ffffff;
             font-size: 1.25rem;
-            box-shadow: 0 0 15px rgba(37, 99, 235, 0.4);
+            box-shadow: 0 0 12px rgba(37, 99, 235, 0.35);
         }
 
         .app-brand-title {
             color: var(--app-text-main);
-            font-size: 1.15rem;
+            font-size: 1.1rem;
             font-weight: 700;
-            letter-spacing: -0.3px;
+            letter-spacing: -0.2px;
+            white-space: nowrap;
         }
 
-        /* Nav Group */
+        /* Desktop Nav Item Container */
         .app-nav-item-group {
             display: flex;
             align-items: center;
-            gap: 12px;
-            flex-wrap: wrap;
-            justify-content: flex-end;
+            gap: 8px;
         }
 
-        /* Colorful Nav Buttons */
+        /* Standardized Nav Button */
         .app-nav-button {
             display: inline-flex;
             align-items: center;
             gap: 8px;
-            padding: 8px 16px;
-            background: rgba(255, 255, 255, 0.05);
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            border-radius: 10px;
+            padding: 7px 12px;
+            height: 38px;
+            background: rgba(255, 255, 255, 0.04);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 8px;
             color: var(--app-text-main);
             text-decoration: none;
             font-size: 0.85rem;
             font-weight: 600;
-            transition: all 0.25s ease;
             white-space: nowrap;
+            transition: all 0.2s ease-in-out;
         }
 
         .app-nav-button:hover {
-            background: rgba(255, 255, 255, 0.12);
+            background: rgba(255, 255, 255, 0.1);
             color: #ffffff;
-            border-color: rgba(255, 255, 255, 0.25);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+            border-color: rgba(255, 255, 255, 0.2);
         }
 
-        /* Active route highlight */
         .app-nav-button.is-active {
             background: rgba(255, 255, 255, 0.12);
-            border-color: rgba(255, 255, 255, 0.28);
-            box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+            border-color: rgba(255, 255, 255, 0.3);
+            box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1);
         }
 
-        /* External-link indicator (subtle arrow) */
         .app-nav-button .ext-arrow {
             font-size: 0.65rem;
-            opacity: 0.55;
+            opacity: 0.6;
             margin-left: -2px;
         }
 
-        /* Icon Badge Pill Backgrounds – one per route */
+        /* Consistent Nav Badge Geometry */
         .nav-icon-badge {
             width: 26px;
             height: 26px;
+            min-width: 26px;
             border-radius: 6px;
             display: inline-flex;
             align-items: center;
             justify-content: center;
             font-size: 0.85rem;
+            flex-shrink: 0;
         }
 
-        .nav-icon-badge.home-theme {
-            background: rgba(59, 130, 246, 0.2);
-            color: #60a5fa;
+        /* Theme Color Badges */
+        .nav-icon-badge.home-theme     { background: rgba(59, 130, 246, 0.2);  color: #60a5fa; }
+        .nav-icon-badge.charts-theme   { background: rgba(34, 197, 94, 0.2);   color: #4ade80; }
+        .nav-icon-badge.layout-theme   { background: rgba(6, 182, 212, 0.2);   color: #22d3ee; }
+        .nav-icon-badge.iso-theme      { background: rgba(244, 63, 94, 0.2);   color: #fb7185; }
+        .nav-icon-badge.logs-theme     { background: rgba(251, 146, 60, 0.2);  color: #fb923c; }
+        .nav-icon-badge.expired-theme  { background: rgba(168, 85, 247, 0.2);  color: #c084fc; }
+        .nav-icon-badge.api-theme      { background: rgba(20, 184, 166, 0.2);  color: #2dd4bf; }
+
+        /* Mobile Hamburger Toggle */
+        .mobile-nav-toggle {
+            display: none;
+            width: 38px;
+            height: 38px;
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid var(--app-border-color);
+            color: var(--app-text-main);
+            align-items: center;
+            justify-content: center;
+            font-size: 1.3rem;
+            cursor: pointer;
         }
 
-        .nav-icon-badge.charts-theme {
-            background: rgba(34, 197, 94, 0.2);
-            color: #4ade80;
+        .mobile-nav-toggle:focus {
+            outline: none;
+            box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.5);
         }
 
-        /* Sky/cyan theme for multi-chart layout */
-        .nav-icon-badge.layout-theme {
-            background: rgba(6, 182, 212, 0.2);
-            color: #22d3ee;
+        /* Mobile Offcanvas Drawer */
+        .offcanvas.mobile-drawer {
+            background-color: var(--app-bg-dark);
+            border-left: 1px solid var(--app-border-color);
+            max-width: 280px;
         }
 
-        /* Red/rose theme for the isolated-instrument page */
-        .nav-icon-badge.iso-theme {
-            background: rgba(244, 63, 94, 0.2);
-            color: #fb7185;
+        .offcanvas.mobile-drawer .offcanvas-header {
+            border-bottom: 1px solid var(--app-border-color);
+            padding: 16px;
         }
 
-        /* Amber/orange theme for Logs */
-        .nav-icon-badge.logs-theme {
-            background: rgba(251, 146, 60, 0.2);
-            color: #fb923c;
+        .offcanvas.mobile-drawer .btn-close-custom {
+            background: none;
+            border: none;
+            color: var(--app-text-muted);
+            font-size: 1.35rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
         }
 
-        /* Purple/violet theme for the Expired / Active Chart page */
-        .nav-icon-badge.expired-theme {
-            background: rgba(168, 85, 247, 0.2);
-            color: #c084fc;
+        .mobile-drawer-body {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            padding: 16px;
         }
 
-        /* NEW: Teal/emerald theme for API Explorer */
-        .nav-icon-badge.api-theme {
-            background: rgba(20, 184, 166, 0.2);
-            color: #2dd4bf;
+        .mobile-drawer-body .app-nav-button {
+            width: 100%;
+            height: 44px;
+            padding: 8px 14px;
+            font-size: 0.92rem;
+            justify-content: flex-start;
         }
 
+        .mobile-drawer-body .app-nav-button .ext-arrow {
+            margin-left: auto;
+        }
+
+        /* Main Content Container */
         .app-main-content-wrapper {
             width: 100%;
+            min-height: calc(100vh - var(--navbar-height));
+            min-height: calc(100dvh - var(--navbar-height));
+            position: relative;
         }
 
-        /* Mobile Optimization */
-        @media (max-width: 640px) {
+        /* Mobile Layout Adjustments (Hide horizontal nav, show drawer button) */
+        @media (max-width: 991px) {
             .app-header-navbar {
-                padding: 0 12px;
-                height: 60px;
+                padding: 0 14px;
             }
 
-            .app-brand-title {
+            .app-nav-item-group {
                 display: none;
             }
 
-            .app-nav-item-group {
-                gap: 6px;
-            }
-
-            .app-nav-button {
-                padding: 6px 10px;
-                font-size: 0.75rem;
-            }
-
-            .nav-icon-badge {
-                width: 22px;
-                height: 22px;
-                font-size: 0.75rem;
-            }
-        }
-
-        /* Slightly narrower nav labels on 768px–1024px so all 7 links fit */
-        @media (min-width: 641px) and (max-width: 1024px) {
-            .app-nav-item-group {
-                gap: 8px;
-            }
-            .app-nav-button {
-                padding: 7px 12px;
-                font-size: 0.8rem;
+            .mobile-nav-toggle {
+                display: flex;
             }
         }
     </style>
@@ -233,101 +251,120 @@
 
 <body class="app-root-body">
 
-{#
-    Navigation strategy (professional single-window pattern):
-      • SAME TAB  → primary app views (Home, Charts, Expired, Layout, API Explorer).
-                    These are in-app pages that share session/state; opening
-                    them in the same tab keeps history clean and avoids
-                    tab-pile-up on the user's browser.
-      • NEW TAB   → standalone "tool" surfaces (Isolated, Logs).
-                    These are diagnostic / focus views the user often wants
-                    to keep side-by-side with the main dashboard.
-    All new-tab links carry rel="noopener noreferrer" for security/perf.
-#}
 {% set active_path = request.path if request is defined and request else '' %}
 
+<!-- TOP NAVBAR -->
 <nav class="app-header-navbar">
 
     <!-- BRAND / LOGO -->
-    <a href="/" rel="noopener noreferrer" class="app-brand-wrapper">
+    <a href="/" class="app-brand-wrapper">
         <div class="app-brand-icon-box">
             <i class="bi bi-activity"></i>
         </div>
         <span class="app-brand-title">T - Dashboard</span>
     </a>
 
-    <!-- NAVIGATION ROUTES -->
+    <!-- DESKTOP NAVIGATION -->
     <div class="app-nav-item-group">
-
-        <!-- HOME → SAME TAB (primary view) -->
-        <a href="/"
-           class="app-nav-button {{ 'is-active' if active_path == '/' else '' }}">
-            <span class="nav-icon-badge home-theme">
-                <i class="bi bi-house-door-fill"></i>
-            </span>
+        <a href="/" class="app-nav-button {{ 'is-active' if active_path == '/' else '' }}">
+            <span class="nav-icon-badge home-theme"><i class="bi bi-house-door-fill"></i></span>
             <span>Home</span>
         </a>
 
-        <!-- ISOLATED INSTRUMENT → NEW TAB (standalone focus tool) -->
-        <a href="/isolated" target="_blank" rel="noopener noreferrer"
-           class="app-nav-button">
-            <span class="nav-icon-badge iso-theme">
-                <i class="bi bi-bullseye"></i>
-            </span>
+        <a href="/isolated" target="_blank" rel="noopener noreferrer" class="app-nav-button">
+            <span class="nav-icon-badge iso-theme"><i class="bi bi-bullseye"></i></span>
             <span>Isolated</span>
             <i class="bi bi-box-arrow-up-right ext-arrow"></i>
         </a>
 
-        <!-- CHARTS → SAME TAB (primary view) -->
-        <a href="/charts"
-           class="app-nav-button {{ 'is-active' if active_path == '/charts' else '' }}">
-            <span class="nav-icon-badge charts-theme">
-                <i class="bi bi-candlestick-fill"></i>
-            </span>
+        <a href="/charts" class="app-nav-button {{ 'is-active' if active_path == '/charts' else '' }}">
+            <span class="nav-icon-badge charts-theme"><i class="bi bi-candlestick-fill"></i></span>
             <span>Charts</span>
         </a>
 
-        <!-- EXPIRED / ACTIVE CHART → SAME TAB (chart variant) -->
-        <a href="/expired-chart"
-           class="app-nav-button {{ 'is-active' if active_path == '/expired-chart' else '' }}">
-            <span class="nav-icon-badge expired-theme">
-                <i class="bi bi-hourglass-split"></i>
-            </span>
+        <a href="/expired-chart" class="app-nav-button {{ 'is-active' if active_path == '/expired-chart' else '' }}">
+            <span class="nav-icon-badge expired-theme"><i class="bi bi-hourglass-split"></i></span>
             <span>Expired</span>
         </a>
 
-        <!-- MULTI-CHART LAYOUT → SAME TAB (primary view) -->
-        <a href="/layout_1"
-           class="app-nav-button {{ 'is-active' if active_path == '/layout_1' else '' }}">
-            <span class="nav-icon-badge layout-theme">
-                <i class="bi bi-grid-3x3-gap-fill"></i>
-            </span>
+        <a href="/layout_1" class="app-nav-button {{ 'is-active' if active_path == '/layout_1' else '' }}">
+            <span class="nav-icon-badge layout-theme"><i class="bi bi-grid-3x3-gap-fill"></i></span>
             <span>Layout</span>
         </a>
 
-        <!-- NEW: API EXPLORER → SAME TAB (in-app tooling page) -->
-        <a href="/api-explorer"
-           class="app-nav-button {{ 'is-active' if active_path == '/api-explorer' else '' }}">
-            <span class="nav-icon-badge api-theme">
-                <i class="bi bi-code-square"></i>
-            </span>
+        <a href="/api-explorer" class="app-nav-button {{ 'is-active' if active_path == '/api-explorer' else '' }}">
+            <span class="nav-icon-badge api-theme"><i class="bi bi-code-square"></i></span>
             <span>API Explorer</span>
         </a>
 
-        <!-- LOGS → NEW TAB (diagnostic / monitoring surface) -->
-        <a href="/logs" target="_blank" rel="noopener noreferrer"
-           class="app-nav-button">
-            <span class="nav-icon-badge logs-theme">
-                <i class="bi bi-file-earmark-text-fill"></i>
-            </span>
+        <a href="/logs" target="_blank" rel="noopener noreferrer" class="app-nav-button">
+            <span class="nav-icon-badge logs-theme"><i class="bi bi-file-earmark-text-fill"></i></span>
             <span>Logs</span>
             <i class="bi bi-box-arrow-up-right ext-arrow"></i>
         </a>
-
     </div>
+
+    <!-- MOBILE HAMBURGER BUTTON -->
+    <button class="mobile-nav-toggle" type="button" data-bs-toggle="offcanvas" data-bs-target="#mobileNavDrawer" aria-controls="mobileNavDrawer" aria-label="Open Navigation">
+        <i class="bi bi-list"></i>
+    </button>
 
 </nav>
 
+<!-- MOBILE OFFCANVAS DRAWER -->
+<div class="offcanvas offcanvas-end mobile-drawer" tabindex="-1" id="mobileNavDrawer" aria-labelledby="mobileNavDrawerLabel">
+    <div class="offcanvas-header">
+        <div class="app-brand-wrapper">
+            <div class="app-brand-icon-box">
+                <i class="bi bi-activity"></i>
+            </div>
+            <span class="app-brand-title" id="mobileNavDrawerLabel">Navigation</span>
+        </div>
+        <button type="button" class="btn-close-custom" data-bs-dismiss="offcanvas" aria-label="Close">
+            <i class="bi bi-x-lg"></i>
+        </button>
+    </div>
+    <div class="offcanvas-body mobile-drawer-body">
+        <a href="/" class="app-nav-button {{ 'is-active' if active_path == '/' else '' }}">
+            <span class="nav-icon-badge home-theme"><i class="bi bi-house-door-fill"></i></span>
+            <span>Home</span>
+        </a>
+
+        <a href="/isolated" target="_blank" rel="noopener noreferrer" class="app-nav-button">
+            <span class="nav-icon-badge iso-theme"><i class="bi bi-bullseye"></i></span>
+            <span>Isolated</span>
+            <i class="bi bi-box-arrow-up-right ext-arrow"></i>
+        </a>
+
+        <a href="/charts" class="app-nav-button {{ 'is-active' if active_path == '/charts' else '' }}">
+            <span class="nav-icon-badge charts-theme"><i class="bi bi-candlestick-fill"></i></span>
+            <span>Charts</span>
+        </a>
+
+        <a href="/expired-chart" class="app-nav-button {{ 'is-active' if active_path == '/expired-chart' else '' }}">
+            <span class="nav-icon-badge expired-theme"><i class="bi bi-hourglass-split"></i></span>
+            <span>Expired</span>
+        </a>
+
+        <a href="/layout_1" class="app-nav-button {{ 'is-active' if active_path == '/layout_1' else '' }}">
+            <span class="nav-icon-badge layout-theme"><i class="bi bi-grid-3x3-gap-fill"></i></span>
+            <span>Layout</span>
+        </a>
+
+        <a href="/api-explorer" class="app-nav-button {{ 'is-active' if active_path == '/api-explorer' else '' }}">
+            <span class="nav-icon-badge api-theme"><i class="bi bi-code-square"></i></span>
+            <span>API Explorer</span>
+        </a>
+
+        <a href="/logs" target="_blank" rel="noopener noreferrer" class="app-nav-button">
+            <span class="nav-icon-badge logs-theme"><i class="bi bi-file-earmark-text-fill"></i></span>
+            <span>Logs</span>
+            <i class="bi bi-box-arrow-up-right ext-arrow"></i>
+        </a>
+    </div>
+</div>
+
+<!-- MAIN PAGE CONTENT INJECTION -->
 <div class="app-main-content-wrapper">
     {% block content %}{% endblock %}
 </div>
@@ -335,7 +372,6 @@
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 
 <script>
-    // Safely assign global host variable to prevent redeclaration errors
     window.apiHost = window.apiHost || window.location.origin;
 </script>
 
