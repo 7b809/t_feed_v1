@@ -16,6 +16,7 @@
         --text-dark: #0f172a;
         --text-muted: #64748b;
         --primary-blue: #2563eb;
+        --primary-purple: #7c3aed;
         --call-green: #16a34a;
         --call-green-bg: #f0fdf4;
         --put-red: #dc2626;
@@ -25,19 +26,22 @@
         --warn-amber: #b45309;
         --warn-amber-bg: #fef3c7;
         --warn-amber-border: #fde68a;
+        --fab-clearance: 96px;
     }
 
     body {
         background-color: var(--dash-bg) !important;
         color: var(--text-dark) !important;
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+        -webkit-font-smoothing: antialiased;
     }
 
     .dash-container {
         max-width: 1560px;
         margin: 0 auto;
         padding: 24px;
-        min-height: calc(100vh - 68px);
+        min-height: calc(100vh - 64px);
+        min-height: calc(100dvh - var(--navbar-height, 64px));
     }
 
     /* ---- Non-trading-day banner ---- */
@@ -65,7 +69,7 @@
         color: var(--warn-amber);
         font-size: 1.5rem;
     }
-    .non-market-banner .banner-content { flex: 1; }
+    .non-market-banner .banner-content { flex: 1; min-width: 0; }
     .non-market-banner .banner-title {
         font-weight: 800;
         font-size: 1.05rem;
@@ -116,6 +120,7 @@
         font-size: 0.78rem;
         font-weight: 700;
         border: 1px solid transparent;
+        white-space: nowrap;
     }
     .status-badge::before {
         content: "";
@@ -166,7 +171,9 @@
         display: flex;
         align-items: center;
         gap: 10px;
+        min-width: 0;
     }
+    .index-symbol-tag span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .index-price-large {
         font-size: 1.55rem;
         font-weight: 800;
@@ -197,6 +204,7 @@
         align-items: center;
         gap: 8px;
         transition: all 0.2s ease;
+        white-space: nowrap;
     }
     .toggle-chain-btn:hover {
         background: var(--primary-blue);
@@ -233,6 +241,7 @@
         margin-bottom: 14px;
         font-weight: 800;
         font-size: 0.95rem;
+        gap: 8px;
     }
     .pill-badge {
         font-size: 0.72rem;
@@ -245,7 +254,7 @@
 
     .strike-cards-grid {
         display: grid;
-        grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+        grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
         gap: 12px;
     }
     .strike-card {
@@ -260,6 +269,7 @@
         display: block;
         box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
         cursor: pointer;
+        min-width: 0;
     }
     .strike-card:hover {
         transform: translateY(-2px);
@@ -293,6 +303,8 @@
         font-size: 0.92rem;
         color: var(--text-dark);
         line-height: 1.3;
+        min-width: 0;
+        word-break: break-word;
     }
     .btn-strike-chart {
         display: inline-flex;
@@ -330,6 +342,7 @@
         align-items: center;
         font-size: 0.75rem;
         padding: 2px 0;
+        gap: 8px;
     }
     .data-row .lbl { color: var(--text-muted); }
 
@@ -486,6 +499,7 @@
         font-weight: 700;
         text-decoration: none;
         transition: all 0.15s ease;
+        white-space: nowrap;
     }
     .chart-link-btn:hover {
         background: var(--primary-blue);
@@ -500,9 +514,170 @@
         font-size: 0.9rem;
     }
 
+    /* ============================================================
+       RESPONSIVE — PC-first, tuned for tablets & phones
+       ============================================================ */
+
+    /* --- Tablet (FAB is visible from <=991px) --- */
+    @media (max-width: 991px) {
+        .dash-container {
+            padding: 16px;
+            padding-bottom: calc(var(--fab-clearance) + env(safe-area-inset-bottom, 0px));
+            min-height: calc(100dvh - var(--navbar-height, 64px));
+        }
+
+        /* Index header wraps into 2 rows: info / actions */
+        .index-block-header {
+            flex-wrap: wrap;
+            row-gap: 10px;
+            padding: 14px 16px;
+        }
+        .index-block-header > div:first-child {
+            flex: 1 1 100%;
+            gap: 10px 14px !important;
+        }
+        .index-block-header > div:last-child {
+            flex: 1 1 100%;
+            justify-content: space-between;
+        }
+        .index-symbol-tag { font-size: 1.1rem; }
+        .index-price-large { font-size: 1.25rem; min-width: 0; }
+        .index-stats-strip { display: none !important; }
+    }
+
+    /* --- Mobile --- */
     @media (max-width: 768px) {
-        .filtered-index-meta { gap: 8px; }
-        .filtered-table th, .filtered-table td { padding: 8px 10px; }
+        .dash-container {
+            padding: 12px;
+            padding-bottom: calc(var(--fab-clearance) + env(safe-area-inset-bottom, 0px));
+        }
+
+        /* Non-market banner tighter */
+        .non-market-banner {
+            gap: 12px;
+            padding: 14px 16px;
+            border-radius: 12px;
+        }
+        .non-market-banner .banner-icon {
+            width: 40px;
+            height: 40px;
+            font-size: 1.25rem;
+            border-radius: 10px;
+        }
+        .non-market-banner .banner-title { font-size: 0.98rem; }
+        .non-market-banner .banner-message { font-size: 0.85rem; }
+
+        /* Hero stacks */
+        .top-hero-banner {
+            flex-direction: column;
+            align-items: stretch;
+            gap: 12px;
+            padding: 16px;
+            border-radius: 14px;
+            margin-bottom: 18px;
+        }
+        .top-hero-title { font-size: 1.15rem; gap: 8px; }
+        .top-hero-banner > div:last-child {
+            width: 100%;
+            flex-wrap: wrap;
+            gap: 8px !important;
+        }
+        .status-badge { font-size: 0.72rem; padding: 5px 11px; }
+
+        /* Index cards */
+        .index-block-card { border-radius: 14px; margin-bottom: 16px; }
+        .index-symbol-tag { font-size: 1rem; }
+        .index-price-large { font-size: 1.15rem; }
+        .index-block-header .btn,
+        .index-block-header .toggle-chain-btn { font-size: 0.76rem; padding: 6px 11px; }
+
+        /* Option chain */
+        .option-chain-body { padding: 12px; }
+        .chain-column-box { padding: 12px; border-radius: 12px; }
+        .chain-column-title { font-size: 0.88rem; margin-bottom: 10px; }
+        .strike-cards-grid {
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 10px;
+        }
+        .strike-card { padding: 12px; }
+        .strike-title { font-size: 0.85rem; }
+        .strike-ltp { font-size: 1.15rem; }
+        .strike-meta { font-size: 0.7rem; }
+        .data-row { font-size: 0.72rem; }
+        .btn-strike-chart { width: 28px; height: 28px; font-size: 0.82rem; }
+        .strike-header-row { padding-right: 30px; }
+
+        /* Filtered section */
+        .filtered-section { margin-top: 20px; }
+        .filtered-section .section-title { font-size: 1.05rem; }
+        .filtered-index-header { padding: 14px 16px; }
+        .filtered-index-title { font-size: 1rem; }
+        .filtered-index-meta { gap: 6px 12px; font-size: 0.74rem; }
+
+        /* Filtered table → card layout on phones */
+        .filtered-table-wrap { overflow-x: visible; }
+        .filtered-table,
+        .filtered-table tbody,
+        .filtered-table tr,
+        .filtered-table td {
+            display: block;
+            width: 100%;
+        }
+        .filtered-table thead { display: none; }
+        .filtered-table tr {
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 10px 14px;
+            margin-bottom: 10px;
+            background: #ffffff;
+            box-shadow: var(--shadow-sm);
+        }
+        .filtered-table tr:last-child { margin-bottom: 0; }
+        .filtered-table tr:hover td { background: transparent; }
+        .filtered-table td {
+            border: none;
+            padding: 5px 0;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            text-align: right;
+        }
+        .filtered-table td::before {
+            content: attr(data-label);
+            font-size: 0.7rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-muted);
+            text-align: left;
+            flex: 0 0 auto;
+        }
+        .filtered-table td[data-label=""]::before,
+        .filtered-table td[colspan]::before { display: none; }
+        .filtered-table td[colspan] {
+            display: block;
+            text-align: center;
+            padding: 12px 0;
+        }
+        .filtered-table .level-tag { margin-bottom: 0; }
+        .chart-link-btn { font-size: 0.7rem; padding: 5px 11px; }
+    }
+
+    /* --- Small phones --- */
+    @media (max-width: 420px) {
+        .dash-container { padding: 10px; }
+        .top-hero-title { font-size: 1.05rem; }
+        .index-symbol-tag { font-size: 0.95rem; }
+        .index-price-large { font-size: 1.05rem; }
+        .strike-cards-grid { grid-template-columns: 1fr; }
+        .status-badge { font-size: 0.68rem; padding: 4px 9px; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+        .strike-card,
+        .index-block-card,
+        .toggle-chain-btn { transition: none; }
     }
 </style>
 {% endblock %}
@@ -525,7 +700,7 @@
         <div>
             <div class="top-hero-title">
                 <i class="bi bi-graph-up-arrow text-primary"></i>
-                <span>Market Indices & Option Chains</span>
+                <span>Market Indices &amp; Option Chains</span>
             </div>
             <div class="text-muted small">
                 Live monitoring for primary indices (NIFTY 50, SENSEX) and nearby option strikes
@@ -726,7 +901,7 @@ function updateCountBadge() {
 }
 
 /* ============================================================
-   Index Card Rendering (existing)
+   Index Card Rendering
    ============================================================ */
 function renderAllIndexCards() {
     const container = document.getElementById("indices-container");
@@ -766,9 +941,9 @@ function buildIndexCardHTML(underlying) {
                 <span>ATM: <strong id="atm-${underlying}">--</strong></span>
             </div>
             <div class="d-flex align-items-center gap-2">
-               <a href="/chart/${encodeURIComponent(key)}"  rel="noopener noreferrer" class="btn btn-sm btn-outline-primary rounded-3 fw-bold d-inline-flex align-items-center gap-1" onclick="event.stopPropagation();" title="Open Candlestick Chart">
-    <i class="bi bi-graph-up-arrow"></i><span>Chart</span>
-</a>
+               <a href="/chart/${encodeURIComponent(key)}" rel="noopener noreferrer" class="btn btn-sm btn-outline-primary rounded-3 fw-bold d-inline-flex align-items-center gap-1" onclick="event.stopPropagation();" title="Open Candlestick Chart">
+                    <i class="bi bi-graph-up-arrow"></i><span>Chart</span>
+                </a>
                 <button type="button" class="toggle-chain-btn">
                     <span id="btn-text-${underlying}">${isExpanded ? 'Fold Chain' : 'Option Chain'}</span>
                     <i class="bi bi-chevron-down chevron-icon"></i>
@@ -936,10 +1111,10 @@ function buildStrikeCardsListHTML(items, type, atmStrike, baseLtp) {
         const changeCls = getTrendClass(change || 0);
         const sym = o.trading_symbol || o.instrument_key;
         const isATM = strike === atmStrike;
-        
         const dist = Math.abs(strike - baseLtp).toFixed(0);
+        const chartUrl = `/chart/${encodeURIComponent(o.instrument_key)}`;   // FIXED: was undefined
         return `
-        <a href="${chartUrl}"  rel="noopener noreferrer" class="strike-card ${isATM ? 'is-atm' : ''}" id="card-${escapeHtml(o.instrument_key)}" data-strike="${strike}" title="Open chart for ${escapeHtml(sym)}">
+        <a href="${chartUrl}" rel="noopener noreferrer" class="strike-card ${isATM ? 'is-atm' : ''}" id="card-${escapeHtml(o.instrument_key)}" data-strike="${strike}" title="Open chart for ${escapeHtml(sym)}">
             ${isATM ? `<div class="atm-tag">ATM</div>` : ''}
             <div class="strike-header-row">
                 <div class="strike-title">${escapeHtml(sym)}</div>
@@ -997,11 +1172,9 @@ function applyMarketStatusToUI(status) {
     } else {
         banner.style.display = "none";
     }
-    // Also update section meta.
     const meta = document.getElementById("filtered-meta");
     if (meta && !status.is_trading_day) {
-        meta.textContent =
-            `Level data will populate on ${status.next_open_label}.`;
+        meta.textContent = `Level data will populate on ${status.next_open_label}.`;
     }
 }
 
@@ -1026,8 +1199,7 @@ async function loadAllFilteredIndexes() {
     if (meta) {
         const ms = state.marketStatus;
         if (ms && !ms.is_trading_day) {
-            meta.textContent =
-                `Non-trading day · next session ${ms.next_open_label}`;
+            meta.textContent = `Non-trading day · next session ${ms.next_open_label}`;
         } else if (renderedCount === 0) {
             meta.textContent = "No level data available yet";
         } else {
@@ -1076,7 +1248,6 @@ function renderFilteredError(underlying, message) {
 function renderFilteredIndexCard(underlying, data) {
     const container = document.getElementById("filtered-instruments-container");
     if (!container) return;
-    // Remove the initial loading spinner once the first card renders.
     const loading = container.querySelector(".filtered-loading");
     if (loading) loading.remove();
 
@@ -1094,7 +1265,6 @@ function renderFilteredIndexCard(underlying, data) {
     const ce = data.ce_instruments || [];
     const pe = data.pe_instruments || [];
     const or = data.or_levels || {};
-    const fc = data.first_candle || {};
     const rangeFilter = data.range_filter || {};
 
     const instruments = [...ce, ...pe];
@@ -1145,7 +1315,6 @@ function renderFilteredIndexCard(underlying, data) {
     if (existing) existing.outerHTML = html;
     else container.insertAdjacentHTML("beforeend", html);
 
-    // Immediately overwrite LTP cells from the WS cache for a fast paint.
     instruments.forEach(inst => updateFilteredLtpCells(inst.instrument_key));
 }
 
@@ -1167,19 +1336,19 @@ function buildFilteredRowHtml(underlying, inst) {
     const chartUrl = inst.chart_url || `/chart/${encodeURIComponent(key)}`;
     return `
     <tr data-instrument-key="${escapeHtml(key)}">
-        <td>
+        <td data-label="Type">
             <span class="type-pill ${type === 'CE' ? 'ce' : 'pe'}">${escapeHtml(type)}</span>
         </td>
-        <td class="num"><strong>${formatDec(strike, 0)}</strong></td>
-        <td>${levelTags || '<span class="text-muted">—</span>'}</td>
-        <td class="num">${formatDec(inst.level_price)}</td>
-        <td>${escapeHtml(formatExpiry(inst.expiry))}</td>
-        <td class="num fw-bold" data-ltp-for="${escapeHtml(key)}">${ltpHtml}</td>
-        <td class="num">
+        <td class="num" data-label="Strike"><strong>${formatDec(strike, 0)}</strong></td>
+        <td data-label="Levels">${levelTags || '<span class="text-muted">—</span>'}</td>
+        <td class="num" data-label="Level Px">${formatDec(inst.level_price)}</td>
+        <td data-label="Expiry">${escapeHtml(formatExpiry(inst.expiry))}</td>
+        <td class="num fw-bold" data-label="LTP" data-ltp-for="${escapeHtml(key)}">${ltpHtml}</td>
+        <td class="num" data-label="SR">
             <span class="sr-badge ${srBadgeCls}">${srCount}</span>
         </td>
-        <td>
-            <a href="${chartUrl}"  rel="noopener noreferrer" class="chart-link-btn" title="Open chart">
+        <td data-label="">
+            <a href="${chartUrl}" rel="noopener noreferrer" class="chart-link-btn" title="Open chart">
                 <i class="bi bi-graph-up-arrow"></i> Chart
             </a>
         </td>
@@ -1198,7 +1367,7 @@ function updateFilteredLtpCells(instrumentKey) {
 }
 
 /* ============================================================
-   SR polling (updates SR counts without full re-render)
+   SR polling
    ============================================================ */
 function startSrPolling() {
     if (state.srPollTimer) return;
@@ -1242,13 +1411,12 @@ function updateSrOnly(underlying, data) {
             srCell.className = `sr-badge ${count > 0 ? "has-levels" : "zero"}`;
         }
     });
-    // Also refresh the header meta (index SR count, LTP).
     const card = document.getElementById(`filtered-card-${underlying}`);
     if (card) {
         const header = card.querySelector(".filtered-index-meta");
         if (header) {
-            const srCount = header.querySelectorAll("strong")[6]; // "Index SR"
-            const ltpCount = header.querySelectorAll("strong")[7]; // "Index LTP"
+            const srCount = header.querySelectorAll("strong")[6];
+            const ltpCount = header.querySelectorAll("strong")[7];
             if (srCount) srCount.textContent = formatInt(data.index_sr_levels_count || 0);
             if (ltpCount) ltpCount.textContent = formatDec(data.index_ltp);
         }
@@ -1256,7 +1424,7 @@ function updateSrOnly(underlying, data) {
 }
 
 /* ============================================================
-   WebSocket (existing)
+   WebSocket
    ============================================================ */
 function connectWebSocket() {
     if (state.ws && (state.ws.readyState === WebSocket.OPEN || state.ws.readyState === WebSocket.CONNECTING)) return;
@@ -1342,7 +1510,6 @@ function extractAndApplyTick(instrumentKey, block) {
 
     state.ticks[instrumentKey] = { ltp, prev_close: prev, change, change_pct: changePct, open, high, low, volume };
 
-    // Update existing option chain card (existing behaviour)
     const cardLtp = document.getElementById(`ltp-card-${instrumentKey}`);
     if (cardLtp && ltp !== null) {
         const cls = getTrendClass(change);
@@ -1358,10 +1525,8 @@ function extractAndApplyTick(instrumentKey, block) {
         if (cardVol) cardVol.textContent = formatInt(volume);
     }
 
-    // Update filtered-instruments table LTP
     updateFilteredLtpCells(instrumentKey);
 
-    // Update index summary
     Object.keys(state.indices).forEach(u => {
         if (state.indices[u].instrument_key === instrumentKey) updateIndexCardDisplay(u);
     });
