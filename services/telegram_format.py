@@ -1,20 +1,95 @@
 # services/telegram_format.py
-"""Telegram message formatter tailored for both mobile and desktop readability.
+"""Telegram message formatter.
 
-Design Decisions:
------------------
-1. HTML formatting: avoids Markdown escaping bugs with special characters (., _, -, ()).
-2. Monospace values: wrapping key data (prices, strike keys, tokens) in <code> blocks
-   makes them monospaced and tap-to-copy on mobile Telegram apps.
-3. Compact row-by-row layout: keeps lines under 35-40 chars so nothing soft-wraps
-   awkwardly on small mobile screens, while staying clean and organized on desktop.
-4. Expandable blocks: long diagnostic text, traces, or JSON payloads are encapsulated
-   inside <blockquote expandable> so mobile chats don't get bloated.
+This module now supports **two** output styles simultaneously:
+
+1. **Plain-Unicode (legacy)** — original helpers: ``DIVIDER``, ``THIN``,
+   ``STATUS_ICON``, ``status_icon``, ``header``, ``divider``, ``line``,
+   ``section``, ``bullet``, ``footer``, and the *old* ``build(emoji, title, ...)``
+   signature. These return plain Unicode text with ``*bold*`` markers and are
+   safe with no ``parse_mode``.
+
+2. **HTML (new)** — ``escape``, ``code``, ``bold``, ``italic``, ``kv_line``,
+   ``build(title=..., emoji=..., ...)``, plus domain builders
+   ``format_order_alert``, ``format_stage_tracker``, ``format_token_status``.
+   These return HTML and require ``parse_mode="HTML"`` on the wire (the
+   companion ``TelegramService.send_message`` auto-detects and sets it).
+
+The single ``build()`` entry point dispatches between the two styles based on
+the arguments supplied, so existing call sites importing ``build, divider, THIN``
+from this module keep working unchanged.
 """
+
+from __future__ import annotations
 
 import html
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+
+# =============================================================================
+# Plain-Unicode helpers (kept for backwards compatibility)
+# =============================================================================
+
+DIVIDER = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+THIN = "─────────────────────────────"
+
+STATUS_ICON: Dict[str, str] = {
+    "success": "✅",
+    "ok": "✅",
+    "completed": "✅",
+    "started": "🚀",
+    "running": "⏳",
+    "warning": "⚠️",
+    "finished": "⚠️",
+    "skipped": "⏭️",
+    "no_data": "📭",
+    "error": "❌",
+    "failed": "❌",
+    "disabled": "🚫",
+    "info": "ℹ️",
+    "isolated": "🔒",
+    "activated": "🎯",
+    "placed": "💰",
+}
+
+
+def status_icon(status: Optional[str]) -> str:
+    return STATUS_ICON.get(str(status or "").lower(), "ℹ️")
+
+
+def header(emoji: str, title: str) -> str:
+    """Return the top-of-message header line (plain text)."""
+    return f"{emoji} *{title.upper()}*"
+
+
+def divider() -> str:
+    return DIVIDER
+
+
+def line(label: str, value: Any, *, icon: str = "•", pad: int = 12) -> str:
+    """Return one formatted 'label: value' line (plain text)."""
+    lbl = f"{label}:".ljust(pad)
+    return f"{icon} {lbl}{value}"
+
+
+def section(title: str, emoji: str = "📊") -> str:
+    return f"\n{emoji} *{title}*"
+
+
+def bullet(text: str, emoji: str = "•") -> str:
+    return f"   {emoji} {text}"
+
+
+def footer(status: str, detail: str = "") -> str:
+    icon = status_icon(status)
+    word = status.upper()
+    suffix = f" — {detail}" if detail else ""
+    return f"\n{icon} *Status: {word}*{suffix}"
+
+
+# =============================================================================
+# HTML helpers (new)
+# =============================================================================
 
 def escape(text: Any) -> str:
     """Safely escape text for Telegram HTML parse_mode."""
@@ -44,7 +119,45 @@ def kv_line(label: str, value: Any, mono: bool = True) -> str:
     return f"• <b>{escape(label)}:</b> {formatted_val}"
 
 
-def build(
+# =============================================================================
+# build() — dispatches between legacy (plain) and new (HTML) call styles
+# =============================================================================
+
+# Keywords that only exist in the legacy signature
+_LEGACY_KWARGS = {"sections", "status", "status_detail", "icon_map"}
+# Keywords that only exist in the new signature
+_NEW_KWARGS = {"subtitle", "raw_lines", "details", "footer"}
+
+
+def _build_legacy(
+    emoji: str,
+    title: str,
+    fields: Optional[List[Tuple[str, Any]]] = None,
+    sections: Optional[List[Tuple[str, str, List[str]]]] = None,
+    status: str = "info",
+    status_detail: str = "",
+    icon_map: Optional[Dict[str, str]] = None,
+) -> str:
+    """Original plain-Unicode build — preserved verbatim."""
+    parts: List[str] = [header(emoji, title), divider()]
+
+    if fields:
+        icon_map = icon_map or {}
+        for label, value in fields:
+            ic = icon_map.get(label, "•")
+            parts.append(line(label, value, icon=ic))
+
+    if sections:
+        for sec_title, sec_emoji, bullets in sections:
+            parts.append(section(sec_title, sec_emoji))
+            for b in bullets:
+                parts.append(bullet(b))
+
+    parts.append(footer(status, status_detail))
+    return "\n".join(parts)
+
+
+def _build_html(
     title: str,
     emoji: str = "🎯",
     subtitle: Optional[str] = None,
@@ -53,60 +166,74 @@ def build(
     details: Optional[str] = None,
     footer: Optional[str] = None,
 ) -> str:
-    """Build a standard pre-formatted message payload (Style B).
-
-    Parameters
-    ----------
-    title : str
-        Main headline/action.
-    emoji : str
-        Visual prefix icon.
-    subtitle : Optional[str]
-        Secondary descriptor line.
-    fields : Optional[List[Tuple[str, Any]]]
-        List of (Label, Value) tuples rendered as compact key-value bullets.
-    raw_lines : Optional[List[str]]
-        Pre-formatted descriptive lines added to the body.
-    details : Optional[str]
-        Long/technical payload placed inside a collapsible Telegram blockquote.
-    footer : Optional[str]
-        Closing meta line (e.g. timestamp or engine run id).
-    """
+    """New HTML build — returns HTML that requires parse_mode='HTML'."""
     chunks: List[str] = []
 
-    # Header line
-    header = f"{emoji} <b>{escape(title)}</b>"
+    head = f"{emoji} <b>{escape(title)}</b>"
     if subtitle:
-        header += f"\n<i>{escape(subtitle)}</i>"
-    chunks.append(header)
+        head += f"\n<i>{escape(subtitle)}</i>"
+    chunks.append(head)
 
-    # Key-value structured rows
     if fields:
         field_lines = [kv_line(lbl, val) for lbl, val in fields if val is not None]
         if field_lines:
             chunks.append("\n".join(field_lines))
 
-    # Freeform narrative rows
     if raw_lines:
-        valid_lines = [line for line in raw_lines if line]
-        if valid_lines:
-            chunks.append("\n".join(valid_lines))
+        valid = [ln for ln in raw_lines if ln]
+        if valid:
+            chunks.append("\n".join(valid))
 
-    # Expandable section for heavy payloads / stacktraces
     if details:
-        chunks.append(f'<blockquote expandable>{code(details)}</blockquote>')
+        chunks.append(f"<blockquote expandable>{code(details)}</blockquote>")
 
-    # Footer note
     if footer:
         chunks.append(f"⏱ <i>{escape(footer)}</i>")
 
     return "\n\n".join(chunks)
 
 
-# ---------------------------------------------------------------------------
-# Domain-Specific Builders (Orders, Strategy Alerts, Tracking, Health)
-# ---------------------------------------------------------------------------
+def _looks_like_legacy_positional(first: Any, second: Any) -> bool:
+    """Heuristic: legacy ``build(emoji, title, ...)`` has a short emoji first."""
+    if not (isinstance(first, str) and isinstance(second, str)):
+        return False
+    return len(first) <= 4 and len(second) > len(first)
 
+
+def build(*args: Any, **kwargs: Any) -> str:
+    """Unified builder supporting both the legacy and new call styles.
+
+    Legacy — returns plain Unicode (no ``parse_mode`` needed)::
+
+        build("🎯", "STRATEGY 1 · RUNNING",
+              fields=[("Instrument", "NIFTY")],
+              status="success")
+
+    New — returns HTML (``parse_mode="HTML"``)::
+
+        build(title="STRATEGY 1 · RUNNING", emoji="🎯",
+              fields=[("Instrument", "NIFTY")],
+              subtitle="Status: RUNNING")
+    """
+    # 1) Explicit legacy keyword → legacy rendering
+    if _LEGACY_KWARGS & kwargs.keys():
+        return _build_legacy(*args, **kwargs)
+
+    # 2) Explicit new keyword → HTML rendering
+    if _NEW_KWARGS & kwargs.keys():
+        return _build_html(*args, **kwargs)
+
+    # 3) Positional heuristic: build(emoji, title, ...) vs build(title, ...)
+    if len(args) >= 2 and _looks_like_legacy_positional(args[0], args[1]):
+        return _build_legacy(*args, **kwargs)
+
+    # 4) Default: new-style HTML build
+    return _build_html(*args, **kwargs)
+
+
+# =============================================================================
+# Domain-Specific Builders (Orders, Strategy Alerts, Token Status)
+# =============================================================================
 
 def format_order_alert(
     action: str,
@@ -119,7 +246,7 @@ def format_order_alert(
     target: Optional[float] = None,
     tag: Optional[str] = None,
 ) -> str:
-    """Format trade executions and order notifications."""
+    """Format trade executions and order notifications (HTML)."""
     action_upper = action.upper()
     emoji = "🟢" if "BUY" in action_upper else "🔴" if "SELL" in action_upper else "⚡"
 
@@ -139,11 +266,7 @@ def format_order_alert(
     if tag:
         fields.append(("Tag", tag))
 
-    return build(
-        title=f"Order {action_upper}",
-        emoji=emoji,
-        fields=fields,
-    )
+    return build(title=f"Order {action_upper}", emoji=emoji, fields=fields)
 
 
 def format_stage_tracker(
@@ -156,7 +279,7 @@ def format_stage_tracker(
     metrics: Optional[Dict[str, Any]] = None,
     extra_details: Optional[str] = None,
 ) -> str:
-    """Format strategy execution stage progress (e.g. S2 Stage 1/2/3)."""
+    """Format strategy execution stage progress (HTML)."""
     fields: List[Tuple[str, Any]] = []
 
     if symbol:
@@ -187,7 +310,7 @@ def format_token_status(
     is_valid: bool = True,
     error_message: Optional[str] = None,
 ) -> str:
-    """Format daily token refresh / auth lifecycle alerts."""
+    """Format daily token refresh / auth lifecycle alerts (HTML)."""
     emoji = "🔑" if is_valid else "⚠️"
     fields: List[Tuple[str, Any]] = [
         ("Service", service),
@@ -198,8 +321,4 @@ def format_token_status(
     if error_message:
         fields.append(("Error", error_message))
 
-    return build(
-        title="Token Lifecycle Event",
-        emoji=emoji,
-        fields=fields,
-    )
+    return build(title="Token Lifecycle Event", emoji=emoji, fields=fields)
