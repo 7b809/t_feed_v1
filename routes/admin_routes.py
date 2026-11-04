@@ -24,12 +24,43 @@ The first_candle step uses ``backfill=True`` so it runs even after
 candles after the close, so the 09:15 OR candle can always be
 reconstructed. This is what makes /isolated work when the project is
 started at e.g. 19:08 IST.
+
+2026-11-04 — cleanup now uses shutil + os directly
+---------------------------------------------------
+The unified-refresh cleanup step previously delegated the actual
+removal to ``services.cleanup_service.run()``. It now performs the
+deletion in-process via ``shutil.rmtree()`` (directories) and
+``os.remove()`` (files / symlinks), driven by:
+
+    * ``config.CLEANUP_REMOVE_FOLDERS``    — targets
+    * ``config.CLEANUP_RESERVED_FOLDERS``  — always preserved
+    * ``config.PROJECT_ROOT``              — base for relative paths
+
+Behaviour notes:
+
+    * Symlinks are removed with ``os.remove`` — the symlink is
+      deleted, never its target. This prevents an attacker-planted
+      symlink from becoming a directory-traversal vector.
+    * Reserved names always win — if a name is in both the remove
+      and reserved lists, it is skipped.
+    * Missing targets are recorded under ``skipped`` (matching the
+      old cleanup_service behaviour); they are not errors.
+    * PermissionError and other per-target exceptions are recorded
+      under ``errors`` with the target name prefix, so the log line
+      ``cleanup errors=[...]`` is actionable.
+    * The returned dict carries the same ``{status, reason, ran_at,
+      removed, skipped, errors}`` shape the rest of this module
+      (``_completion_message`` / ``_cleanup_summary_log``) expects —
+      no downstream code changed.
 """
 
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, time as dtime
+import os
+import shutil
+import threading
+from datetime import datetime, time as dtime, timezone
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -220,6 +251,159 @@ def _should_backfill_first_candle() -> tuple[bool, str]:
 
     return False, "already_computed_today"
 
+# --------------------------------------------------------------------------- #
+# Cleanup via shutil + os (2026-11-04)                                        #
+# --------------------------------------------------------------------------- #
+# Replaces ``cleanup_service.run()`` for the actual file-system deletion.
+# The service import is retained above for the fallback path in
+# ``/admin/cleanup-status`` (so operators whose status endpoint is called
+# before the first local run still see something meaningful).
+#
+# The cleanup rules are unchanged:
+#   * Iterate ``config.CLEANUP_REMOVE_FOLDERS``.
+#   * Skip anything listed in ``config.CLEANUP_RESERVED_FOLDERS``.
+#   * Resolve relative names against ``config.PROJECT_ROOT``.
+#   * Use ``os.remove`` for files / symlinks, ``shutil.rmtree`` for dirs.
+#   * Missing targets go under ``skipped`` (matching old service behaviour).
+#   * Per-target exceptions go under ``errors`` (with target prefix).
+# --------------------------------------------------------------------------- #
+_last_cleanup_status: dict[str, Any] = {"status": "never"}
+_last_cleanup_lock = threading.Lock()
+
+
+def _project_root() -> Path:
+    """Return the project root directory.
+
+    Prefers ``config.PROJECT_ROOT`` (defined in ``core/config.py``).
+    Falls back to the parent of ``LIVE_DATA_DIR`` and finally to the
+    current working directory — three ways to get the same directory,
+    so a stripped-down config can never make cleanup mis-resolve a
+    relative path.
+    """
+    root = getattr(config, "PROJECT_ROOT", None)
+    if root is not None:
+        return Path(root)
+    live = getattr(config, "LIVE_DATA_DIR", None)
+    if live is not None:
+        return Path(live).parent
+    return Path.cwd()
+
+
+def _resolve_cleanup_path(name: str) -> Path:
+    """Resolve a cleanup target against the project root.
+
+    Absolute paths are used as-is (defensive — allows an operator to
+    target something outside the project root via an explicit absolute
+    path in ``CLEANUP_REMOVE_FOLDERS``). Relative paths are anchored to
+    ``_project_root()``.
+    """
+    p = Path(name)
+    if not p.is_absolute():
+        p = _project_root() / name
+    return p
+
+
+def _run_cleanup_with_os_shutil(reason: str = "manual") -> dict[str, Any]:
+    """Remove configured transient folders / files using shutil + os.
+
+    Returns the same shape the previous ``cleanup_service.run()``
+    returned, so ``_completion_message`` and ``_cleanup_summary_log``
+    keep working without modification::
+
+        {
+          "status":  "ok" | "partial",
+          "reason":  "<reason>",
+          "ran_at":  "<ISO-8601 UTC>",
+          "removed": ["<name>", ...],
+          "skipped": ["<name>", ...],
+          "errors":  ["<name>: <ExceptionType>: <msg>", ...],
+        }
+
+    Reserved names always win (case-insensitive on the target's basename
+    and on the raw config string) so a name that accidentally appears in
+    both lists is never removed.
+
+    Symlinks are removed with ``os.remove`` — the symlink is deleted,
+    its target is left untouched. This closes the directory-traversal
+    vector where a planted symlink could trick ``shutil.rmtree`` into
+    walking outside the project root.
+
+    Never raises. Safe to call from any thread.
+    """
+    global _last_cleanup_status
+
+    # ---- Reserved set (case-insensitive) --------------------------- #
+    reserved_set: set[str] = set()
+    for raw in (getattr(config, "CLEANUP_RESERVED_FOLDERS", None) or []):
+        s = str(raw or "").strip().lower()
+        if s:
+            reserved_set.add(s)
+
+    # ---- Target list ---------------------------------------------- #
+    targets: list[str] = []
+    for raw in (getattr(config, "CLEANUP_REMOVE_FOLDERS", None) or []):
+        s = str(raw or "").strip()
+        if s:
+            targets.append(s)
+
+    removed: list[str] = []
+    skipped: list[str] = []
+    errors: list[str] = []
+
+    for name in targets:
+        # Reserved check: both the raw string AND its basename.
+        base = Path(name).name.lower()
+        if name.lower() in reserved_set or base in reserved_set:
+            skipped.append(name)
+            continue
+
+        path = _resolve_cleanup_path(name)
+
+        try:
+            # ``is_symlink`` must come BEFORE ``exists``: a dangling
+            # symlink reports exists() == False but should still be
+            # removed. Handle the three cases explicitly.
+            if path.is_symlink():
+                os.remove(str(path))
+                removed.append(name)
+            elif path.exists():
+                if path.is_dir():
+                    shutil.rmtree(str(path))
+                else:
+                    os.remove(str(path))
+                removed.append(name)
+            else:
+                skipped.append(name)
+        except FileNotFoundError:
+            # Race: another process removed it between exists() and
+            # the delete. Treat as skipped, not error.
+            skipped.append(name)
+        except PermissionError as exc:
+            errors.append(f"{name}: PermissionError: {exc}")
+        except OSError as exc:
+            errors.append(f"{name}: OSError: {exc}")
+        except Exception as exc:
+            errors.append(f"{name}: {type(exc).__name__}: {exc}")
+
+    status = {
+        "status": "ok" if not errors else "partial",
+        "reason": reason,
+        "ran_at": datetime.now(timezone.utc).isoformat(),
+        "removed": removed,
+        "skipped": skipped,
+        "errors": errors,
+    }
+
+    with _last_cleanup_lock:
+        _last_cleanup_status = status
+
+    logger.info(
+        "[%s] cleanup (shutil+os) — removed=%d skipped=%d errors=%d",
+        reason, len(removed), len(skipped), len(errors),
+    )
+
+    return status
+
 def _start_message(reason: str, catchup_meta: dict[str, Any]) -> str:
     return (
         f"{_DIV}\n"
@@ -328,12 +512,13 @@ def _completion_message(
     )
 
 def _cleanup_summary_log(cleanup: dict[str, Any]) -> tuple[list[str], list[str], list[str]]:
-    """Normalise the cleanup_service output into three flat name lists.
+    """Normalise the cleanup output into three flat name lists.
 
-    ``cleanup_service.run()`` returns ``{"removed": [...], "skipped": [...],
-    "errors": [...]}`` where each element may be either a plain string
-    (path / folder name) or a dict carrying details. This helper tolerates
-    both shapes and always produces human-readable names for the log line.
+    Tolerates both the old ``cleanup_service.run()`` shape (elements
+    can be plain strings OR dicts with ``name``/``folder``/``path``/
+    ``file``) and the new ``_run_cleanup_with_os_shutil()`` shape
+    (always plain strings). This keeps the log line correct during a
+    rolling migration.
     """
     def _names(items: list[Any] | None) -> list[str]:
         out: list[str] = []
@@ -378,9 +563,12 @@ def _run_full_refresh_sync(
         catchup_meta["current_time_ist"],
     )
 
-    # ---- 1. Cleanup ---------------------------------------------------- #
+    # ---- 1. Cleanup (shutil + os) ------------------------------------- #
+    # 2026-11-04: deleted in-process via shutil.rmtree / os.remove
+    # instead of delegating to cleanup_service.run(). See the module
+    # docstring for the invariants this preserves.
     try:
-        cleanup = cleanup_service.run(reason=reason)
+        cleanup = _run_cleanup_with_os_shutil(reason=reason)
         if verbose:
             logger.info("[%s] cleanup: %s", reason, cleanup)
         else:
@@ -391,7 +579,7 @@ def _run_full_refresh_sync(
                 len(cleanup.get("skipped") or []),
                 len(cleanup.get("errors") or []),
             )
-            # ---- NEW: log *which* items were removed / preserved -------
+            # ---- log *which* items were removed / preserved --------- #
             removed_names, preserved_names, error_names = _cleanup_summary_log(cleanup)
             logger.info(
                 "[%s] cleanup removed=%s",
@@ -666,8 +854,28 @@ def backup_status() -> dict[str, Any]:
 
 @router.get("/admin/cleanup-status")
 def cleanup_status() -> dict[str, Any]:
-    return cleanup_service.last_status()
+    """Return the most recent cleanup status.
+
+    Prefers the local ``_run_cleanup_with_os_shutil`` result (2026-11-04:
+    cleanup is now performed with shutil + os). Falls back to
+    ``cleanup_service.last_status()`` when this process has never run
+    a local cleanup yet — so an operator inspecting the endpoint before
+    the first refresh (or on a fresh process where the only cleanup
+    was done by an older code path) still sees something meaningful.
+    """
+    with _last_cleanup_lock:
+        local = dict(_last_cleanup_status)
+    if local.get("status") not in (None, "never"):
+        return local
+    try:
+        return cleanup_service.last_status()
+    except Exception:
+        logger.exception("[cleanup-status] fallback failed")
+        return local
 
 @router.post("/admin/cleanup")
 async def run_cleanup() -> dict[str, Any]:
-    return await asyncio.to_thread(cleanup_service.run, "manual")
+    """Run the folder cleanup standalone (shutil + os)."""
+    return await asyncio.to_thread(
+        _run_cleanup_with_os_shutil, "manual",
+    )

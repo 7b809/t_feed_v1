@@ -123,6 +123,71 @@ G1 v4.2 additions — LIVE SR EXPORT hook (2026-11-02)
       ``isolated_instrument_sr_export_service`` fails (missing
       ``all_instruments.json``, missing Upstox token, HTTP error,
       etc.), the isolation record is still persisted unchanged.
+
+G1 v4.3 additions (2026-11-04) — deterministic isolation records
+----------------------------------------------------------------
+Three changes to make the isolation record **deterministic** across the
+live path (``_check_touches``) and the replay path (``_replay``), and
+to stop the ``AttributeError`` that was aborting the backfill:
+
+1. **`trigger_index` is the authoritative trigger field.**
+   Every isolation record already carried ``trigger_index`` (e.g.
+   ``"MIDCPNIFTY"``). This revision documents that it is the **only**
+   authoritative trigger field — ``execution_path`` and
+   ``trigger_is_self_nifty`` are derived from it. Downstream services
+   (``dummy_order_service`` in particular) must derive the execution
+   path from ``trigger_index``, not from ``execution_path``.
+
+2. **`execution_path` is deprecated and derived.**
+   Kept in the record schema (and in the winning-touch event dict) for
+   backward compatibility with any admin UI that reads it. Its value
+   is now **always** computed from ``trigger_index`` via
+   ``_derive_execution_path()`` — never copied from the incoming event.
+   This guarantees that the live path and the backfill path produce
+   the same ``execution_path`` for the same trigger.
+   ``trigger_is_self_nifty`` is derived the same way via
+   ``_derive_trigger_is_self_nifty()``.
+
+3. **AttributeError fix for `STRATEGY_RELATIONAL_*_BIAS`.**
+   ``_process_winning_touch()`` previously read
+   ``config.STRATEGY_RELATIONAL_R3_BIAS`` / ``S3_BIAS`` directly. If
+   either was not defined in ``config``, the whole backfill aborted
+   mid-run (observed 2026-10-29 16:06:21) and the subsequent
+   dummy-order catch-up ran against a half-built state. The method now
+   reads via ``getattr(config, ..., default)`` and falls back to the
+   direction-appropriate default (``CE`` for R3, ``PE`` for S3) when
+   the attribute is missing or has an unexpected value. Two additional
+   ``config`` reads on the isolation critical path
+   (``LEVEL_ISOLATION_TELEGRAM_ENABLED``, ``STRATEGY_ROUTED_EXECUTION_INDEX``)
+   are similarly hardened.
+
+### What is identical between live and backfill
+
+For the same trigger (same index, same side, same minute), the
+following fields are guaranteed identical across ``_check_touches()``
+and ``_replay()``:
+
+    * trigger_index
+    * trigger_side
+    * trigger_level / trigger_level_value / trigger_priority
+    * trigger_is_self_nifty   (derived from trigger_index)
+    * execution_path           (derived from trigger_index)
+    * routed_index / routed_instrument_key / routed_nifty_ltp_source
+    * candidates / bias_candidates_count / counter_candidates_count
+
+### What is intentionally different
+
+    * source — "live" vs "backfill" (describes capture origin only;
+      never use for behavioural logic)
+    * touched_at / isolated_at — wall-clock vs candle timestamps
+    * trigger_ltp / routed_nifty_ltp — live tick LTP vs candle close
+    * instrument_ltp / instrument_touch_ohlc / instrument_first_candle
+      / instrument_or_levels / instrument_quote_source — live snapshot
+      vs replay reconstruction
+
+Downstream consumers must not branch on any of these fields for
+correctness — they are diagnostic. Branch on ``trigger_index`` (or the
+derived ``execution_path``) for behavioural logic.
 """
 
 from __future__ import annotations
@@ -215,6 +280,43 @@ class LevelIsolatedInstrumentService:
         self._last_tick_at: dict[str, datetime] = {}
         self._last_check_monotonic: float = 0.0
         self._load_or_create_state()
+
+    # ------------------------------------------------------------------ #
+    # Derived-field helpers (G1 v4.3)                                    #
+    # ------------------------------------------------------------------ #
+    @staticmethod
+    def _derive_trigger_is_self_nifty(trigger_index: Any) -> bool:
+        """Derive whether the trigger was NIFTY itself from the raw
+        ``trigger_index``.
+
+        This is the **single source of truth** for the
+        ``trigger_is_self_nifty`` field. The persisted field is a
+        derived read-only mirror kept for backward compatibility — its
+        value is always computed here, never copied from an incoming
+        event, so the live path and the backfill path always agree.
+        """
+        return str(trigger_index or "").strip().upper() == "NIFTY"
+
+    @staticmethod
+    def _derive_execution_path(trigger_index: Any) -> str:
+        """Derive the execution path from the raw ``trigger_index``.
+
+        Returns ``"A_self_trigger"`` when the trigger was NIFTY itself,
+        ``"B_external_trigger"`` otherwise.
+
+        This is the **single source of truth** for the
+        ``execution_path`` field. The persisted field is a deprecated
+        derived read-only mirror kept for backward compatibility. New
+        callers should derive from ``trigger_index`` directly; this
+        helper exists so the derivation is identical everywhere.
+        """
+        return (
+            "A_self_trigger"
+            if LevelIsolatedInstrumentService._derive_trigger_is_self_nifty(
+                trigger_index
+            )
+            else "B_external_trigger"
+        )
 
     # ------------------------------------------------------------------ #
     # State file I/O                                                     #
@@ -1047,11 +1149,31 @@ class LevelIsolatedInstrumentService:
         trigger_canonical = winner["canonical"]
         trigger_side = winner["side"]
 
-        # v4.0 — bias from R3 = CE, from S3 = PE
-        bias = config.STRATEGY_RELATIONAL_R3_BIAS if trigger_side == "R3" \
-            else config.STRATEGY_RELATIONAL_S3_BIAS
-        if bias not in {"CE", "PE"}:
-            bias = "CE" if trigger_side == "R3" else "PE"
+        # v4.0 — bias from R3 = CE, from S3 = PE.
+        #
+        # G1 v4.3 fix (2026-10-29 16:06:21 crash): read the bias flags via
+        # ``getattr`` so a missing config attribute does not abort the
+        # backfill. A partial backfill is worse than a slightly-wrong bias
+        # — it leaves the SR engine and the dummy-order catch-up in a
+        # half-built state. We fall back to the direction-appropriate
+        # default when the attribute is missing or holds an unexpected
+        # value.
+        bias_default = "CE" if trigger_side == "R3" else "PE"
+        if trigger_side in ("R3", "S3"):
+            bias = getattr(
+                config,
+                f"STRATEGY_RELATIONAL_{trigger_side}_BIAS",
+                bias_default,
+            )
+            if bias not in {"CE", "PE"}:
+                bias = bias_default
+        else:
+            logger.warning(
+                "[level-isolation] unexpected trigger_side=%r — "
+                "defaulting bias to %s",
+                trigger_side, bias_default,
+            )
+            bias = bias_default
 
         nifty_key = CANONICAL_TO_KEY.get("NIFTY")
         nifty_ltp = self._last_ltp.get(nifty_key) if nifty_key else None
@@ -1115,14 +1237,15 @@ class LevelIsolatedInstrumentService:
         for c in counter_candidates:
             tagged_candidates.append({**c, "side": "counter"})
 
-        # G1 v4.2: persist the execution path on the event so downstream
-        # services (dummy-order, promotion, UI) can branch on it without
-        # re-deriving from trigger_canonical.
-        trigger_is_self_nifty = (trigger_canonical == "NIFTY")
-        execution_path = (
-            "A_self_trigger" if trigger_is_self_nifty
-            else "B_external_trigger"
+        # G1 v4.3: `execution_path` and `trigger_is_self_nifty` on the
+        # event are **derived** from `trigger_canonical` via the same
+        # helpers used in `_isolate()`. This guarantees that both paths
+        # (live and backfill) produce identical values, and that the
+        # event dict and the isolated record always agree.
+        trigger_is_self_nifty = self._derive_trigger_is_self_nifty(
+            trigger_canonical,
         )
+        execution_path = self._derive_execution_path(trigger_canonical)
 
         event: dict[str, Any] = {
             "index": trigger_canonical,
@@ -1133,6 +1256,8 @@ class LevelIsolatedInstrumentService:
             "touched_at": winner["touched_at"],
             "source": source,
             "trigger_priority": winner["priority"],
+            # Deprecated: derived from `index` above. Kept for backward
+            # compat with any admin UI that reads these directly.
             "trigger_is_self_nifty": trigger_is_self_nifty,
             "execution_path": execution_path,
             "simultaneous_touches": simultaneous_touches or [],
@@ -1379,7 +1504,9 @@ class LevelIsolatedInstrumentService:
         try:
             historical = live_sr_calc_service.load_historical_candles_for_entry(
                 entry,
-                int(config.LIVE_SR_CALC_DEFAULT_LOOKBACK_DAYS),
+                int(getattr(
+                    config, "LIVE_SR_CALC_DEFAULT_LOOKBACK_DAYS", 5,
+                )),
             )
         except Exception:
             historical = []
@@ -1615,7 +1742,10 @@ class LevelIsolatedInstrumentService:
 
         is_backfill = str(event.get("source") or "") == "backfill"
 
-        routed_key = str(config.STRATEGY_ROUTED_EXECUTION_INDEX or "NSE_INDEX|Nifty 50")
+        routed_key = str(
+            getattr(config, "STRATEGY_ROUTED_EXECUTION_INDEX", None)
+            or "NSE_INDEX|Nifty 50"
+        )
         routed_canonical = KEY_TO_CANONICAL.get(routed_key, "NIFTY")
 
         snapshot = self._collect_instrument_snapshot(
@@ -1635,6 +1765,9 @@ class LevelIsolatedInstrumentService:
             "reason": reason,
             "source": "backfill" if is_backfill else "live",
             "isolated_at": _now_market().isoformat(),
+            # G1 v4.3: `trigger_index` is the AUTHORITATIVE trigger field.
+            # Downstream services (dummy_order_service) MUST derive the
+            # execution path from this value, not from `execution_path`.
             "trigger_index": trigger_index_canonical,
             "trigger_instrument_key": event.get("instrument_index_key")
                 or CANONICAL_TO_KEY.get(trigger_index_canonical),
@@ -1656,23 +1789,29 @@ class LevelIsolatedInstrumentService:
             "instrument_quote_source": snapshot.get("instrument_quote_source"),
         }
 
-        # G1 v4.2: propagate trigger_is_self_nifty / execution_path onto
-        # the isolated record so downstream services (dummy-order,
-        # promotion, UI) can branch without re-deriving it from
-        # `trigger_index`. Legacy records (pre-v4.2) will be handled
-        # defensively by `get_execution_path()`.
-        isolated["trigger_is_self_nifty"] = bool(
-            event.get(
-                "trigger_is_self_nifty",
-                trigger_index_canonical == "NIFTY",
-            )
+        # G1 v4.3: `trigger_is_self_nifty` and `execution_path` are
+        # **derived read-only fields**, computed from `trigger_index`
+        # (the authoritative source) via the same helpers used in
+        # `_process_winning_touch()`. Never copied from the incoming
+        # event, so a live-path event and a backfill-path event with the
+        # same trigger index produce byte-identical values here.
+        #
+        # `execution_path` is deprecated: downstream consumers should
+        # derive from `trigger_index` directly. It is kept in the record
+        # schema for backward compat with any admin UI that reads it.
+        isolated["trigger_is_self_nifty"] = self._derive_trigger_is_self_nifty(
+            trigger_index_canonical,
         )
-        isolated["execution_path"] = event.get(
-            "execution_path",
-            "A_self_trigger"
-            if isolated["trigger_is_self_nifty"]
-            else "B_external_trigger",
+        isolated["execution_path"] = self._derive_execution_path(
+            trigger_index_canonical,
         )
+
+        # Keep the event dict in sync with the derived values, so the
+        # event stored in `_state["events"]` and the isolated record
+        # never disagree. This also corrects any legacy event that
+        # arrived with a stale or missing `execution_path`.
+        event["trigger_is_self_nifty"] = isolated["trigger_is_self_nifty"]
+        event["execution_path"] = isolated["execution_path"]
 
         self._state["isolated"] = isolated
         event["status"] = "isolated"
@@ -1757,7 +1896,9 @@ class LevelIsolatedInstrumentService:
             source=str(isolated.get("source") or ""),
         )
 
-        if config.LEVEL_ISOLATION_TELEGRAM_ENABLED:
+        # G1 v4.3: use getattr so a missing config attribute does not
+        # abort the backfill after the isolation has been persisted.
+        if getattr(config, "LEVEL_ISOLATION_TELEGRAM_ENABLED", True):
             threading.Thread(
                 target=self._send_telegram,
                 args=(isolated,),
@@ -1773,19 +1914,27 @@ class LevelIsolatedInstrumentService:
 
         '' when no isolation exists yet (so callers can distinguish
         'not isolated yet' from either of the two paths).
+
+        G1 v4.3 — **deprecated**: prefer deriving the path from
+        ``trigger_index`` (available on the isolated record) directly via
+        ``_derive_execution_path()``. This method is kept for backward
+        compatibility and always agrees with the derived value — it
+        derives from ``trigger_index`` first and only falls back to the
+        deprecated persisted ``execution_path`` for pre-v4.0 records that
+        predate ``trigger_index`` persistence.
         """
         with self._lock:
-            iso = self._state.get("isolated") or {}
-            path = str(iso.get("execution_path") or "").strip()
-            if path:
-                return path
-            # Legacy records (pre-v4.1) have no path — derive defensively.
-            if iso:
-                return (
-                    "A_self_trigger"
-                    if str(iso.get("trigger_index") or "").upper() == "NIFTY"
-                    else "B_external_trigger"
-                )
+            iso = self._state.get("isolated")
+            if not isinstance(iso, dict) or not iso:
+                return ""
+            trigger_index = iso.get("trigger_index")
+            if trigger_index:
+                return self._derive_execution_path(trigger_index)
+            # Legacy record without trigger_index — use the deprecated
+            # persisted field if it holds a valid value.
+            persisted = str(iso.get("execution_path") or "").strip()
+            if persisted in ("A_self_trigger", "B_external_trigger"):
+                return persisted
             return ""
 
     def _send_telegram(self, isolated: dict[str, Any]) -> None:
@@ -2247,7 +2396,7 @@ class LevelIsolatedInstrumentService:
                     for k, v in INDEX_METADATA.items()
                 ],
                 "routed_execution_index": str(
-                    config.STRATEGY_ROUTED_EXECUTION_INDEX
+                    getattr(config, "STRATEGY_ROUTED_EXECUTION_INDEX", None)
                     or "NSE_INDEX|Nifty 50"
                 ),
                 "nifty_ltp": self._last_ltp.get(
@@ -2636,6 +2785,15 @@ class LevelIsolatedInstrumentService:
                 # G1 v4.2: expose execution_path / trigger_is_self_nifty at
                 # the top level so the UI and dummy-order service can branch
                 # without digging into `isolated` themselves.
+                #
+                # G1 v4.3: `execution_path` is now derived from
+                # `trigger_index` (the authoritative field). It is kept
+                # here for backward compat; new callers should derive
+                # from `trigger_index` directly.
+                "trigger_index": (
+                    (isolated or {}).get("trigger_index")
+                    if isinstance(isolated, dict) else None
+                ),
                 "execution_path": (
                     (isolated or {}).get("execution_path")
                     if isinstance(isolated, dict) else None
@@ -2662,7 +2820,7 @@ class LevelIsolatedInstrumentService:
                     for k, v in INDEX_METADATA.items()
                 ],
                 "routed_execution_index": str(
-                    config.STRATEGY_ROUTED_EXECUTION_INDEX
+                    getattr(config, "STRATEGY_ROUTED_EXECUTION_INDEX", None)
                     or "NSE_INDEX|Nifty 50"
                 ),
                 "generated_at": _now_iso(),

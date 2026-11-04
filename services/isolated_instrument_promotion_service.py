@@ -98,7 +98,9 @@ The sidecar's ``frozen_entry`` shape::
         "buffer_minutes": 10,
         "window_start":   "2026-10-29T09:18:00+05:30",
         "window_end":     "2026-10-29T09:28:00+05:30"
-      }
+      },
+      "entry_source_verified": true,
+      "entry_source_warning":  null
     }
 
 G1 v4.1 — Path B hard-block (2026-10-29)
@@ -157,6 +159,37 @@ operator must also clear the promotion sidecar (``POST /admin/
 level-isolation/clear-promotion``) so the next ``apply_promotion()``
 writes a sidecar without a frozen entry.
 
+2026-11-04 — frozen-entry source verification
+---------------------------------------------
+Verified against the 2026-11-02 order-strategy rewrite and the
+2026-11-04 deterministic-replay guards:
+
+  * ``_build_frozen_entry()`` is a PURE snapshot of
+    ``target_cand["entry"]``. It does NOT inject LTP; it does NOT
+    consult the live feed; it does NOT consult the live buffer. The
+    frozen block's ``entry.price_source`` is exactly what
+    ``strategy_entry_signal_service._entry_price_for()`` returned
+    upstream.
+
+  * The two LTP fallbacks that DO exist in this file —
+    ``record["instrument_ltp"]`` (via ``_live_ltp()``) and
+    ``record["instrument_touch_ohlc"]`` (via ``_confirmation_bar_ohlc()
+    `` reading ``live_sr_levels_service._states[...]["candles"]``) —
+    populate fields on the ``record`` block ONLY, not on
+    ``frozen_entry``. The two blocks are disjoint.
+
+  * Under the stock config (``DUMMY_ORDER_ALLOW_LTP_ENTRY_FALLBACK=false``
+    and ``DUMMY_ORDER_STRICT_DETERMINISTIC_REPLAY=true``), the upstream
+    ``_entry_price_for()`` resolves through
+    ``live_sr_calc_service.get_candle_close_at()`` (fixed series,
+    API-backed) before it ever reaches the LTP tail, so
+    ``price_source`` should always be ``"candle_close_at_confirmed_fast"``.
+    If it isn't, the patch below surfaces the drift on
+    ``frozen_entry.entry_source_warning`` and logs it — the frozen
+    entry still preserves whatever the upstream signal returned, but
+    the operator can act (``clear-promotion`` + re-trigger) once the
+    upstream data recovers.
+
 Sidecar file (unchanged path)
 -----------------------------
 ``<LIVE_DATA_DIR>/level_isolated_instrument_promotion.json``
@@ -189,6 +222,25 @@ _MARKET_TZ = ZoneInfo("Asia/Kolkata")
 
 _DIV = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 _THIN = "────────────────────────────────"
+
+# --------------------------------------------------------------------------- #
+# 2026-11-04 — deterministic entry-source verification                        #
+# --------------------------------------------------------------------------- #
+# The only entry-price sources that satisfy the determinism contract:
+# they represent a historical candle close from the fixed replay series
+# (or its stateless API-backed equivalent), NOT the live LTP. Anything
+# else is a drift signal and gets surfaced on the frozen block.
+#
+# `candle_close_at_confirmed_fast` is the contractual source produced
+# by strategy_entry_signal_service._entry_price_for() for both the
+# fast path AND the stateless-calc fallback path. Operators who add
+# new deterministic sources should extend this set here rather than
+# in the upstream service.
+# --------------------------------------------------------------------------- #
+_DETERMINISTIC_ENTRY_SOURCES = frozenset({
+    "candle_close_at_confirmed_fast",
+})
+
 
 # --------------------------------------------------------------------------- #
 # Small helpers                                                               #
@@ -295,6 +347,29 @@ def _live_ltp(instrument_key: str) -> tuple[float | None, str]:
         pass
     return None, "unavailable"
 
+def _classify_entry_source(entry: dict[str, Any]) -> tuple[bool, str | None]:
+    """Return ``(is_deterministic, warning_message)``.
+
+    A "deterministic" entry price is one whose ``price_source`` is a
+    historical candle close from the fixed replay series (see
+    ``_DETERMINISTIC_ENTRY_SOURCES``). Anything else — most notably
+    ``live_ltp`` — is a drift signal and should be surfaced on the
+    frozen block so operators can act (clear the promotion + re-trigger
+    once the upstream data has recovered).
+
+    Never raises. Returns ``(False, "<reason>")`` on any structural
+    problem with ``entry`` so the caller still has a diagnostic string.
+    """
+    if not isinstance(entry, dict):
+        return False, "missing_entry_block"
+    source = str(entry.get("price_source") or "").strip()
+    if not source:
+        return False, "missing_price_source"
+    if source in _DETERMINISTIC_ENTRY_SOURCES:
+        return True, None
+    return False, f"non_deterministic_source:{source}"
+
+
 # --------------------------------------------------------------------------- #
 # G1 v4.1 flag-wiring fix — §5.E kill switch                                  #
 # --------------------------------------------------------------------------- #
@@ -317,7 +392,7 @@ def _freeze_enabled() -> bool:
     ))
 
 # --------------------------------------------------------------------------- #
-# NEW (G1 v4.1): Path B guard                                                 #
+# G1 v4.1: Path B guard                                                       #
 # --------------------------------------------------------------------------- #
 def _is_path_b_active() -> bool:
     """Return True when the day's isolation was triggered by an
@@ -351,7 +426,7 @@ def _is_path_b_active() -> bool:
     return False
 
 # --------------------------------------------------------------------------- #
-# NEW: frozen-entry extraction                                               #
+# Frozen-entry extraction                                                     #
 # --------------------------------------------------------------------------- #
 def _extract_candidate_block(c: dict[str, Any]) -> dict[str, Any]:
     """Return the stable, UI-facing fields of a single candidate block.
@@ -400,7 +475,11 @@ def _build_frozen_entry(
       * the touch metadata (time, side, bias type, window bounds) so
         the entry-signal header strip stays stable too;
       * the ``signal_generated_at`` timestamp so the operator can see
-        when the freeze was captured.
+        when the freeze was captured;
+      * (2026-11-04) the ``entry_source_verified`` / ``entry_source_
+        warning`` fields — a purely informational audit trail that
+        flags a non-deterministic ``price_source`` on the chosen
+        entry without altering the frozen values.
 
     Note (G1 v4.1 flag-wiring): this helper is pure — it builds the
     block but does not decide whether to persist it. The three call
@@ -413,6 +492,45 @@ def _build_frozen_entry(
     chosen_side = str(target_cand.get("side") or "").upper()
 
     chosen_block = _extract_candidate_block(target_cand)
+
+    # ---- 2026-11-04: source verification (audit-only) --------------- #
+    # Never substitutes a value — this is a read-only check on what the
+    # upstream signal produced. The frozen block keeps the exact
+    # ``price_source`` the signal returned; this field is only surfaced
+    # so the /isolated template and the logs reflect any drift.
+    entry_block = chosen_block.get("entry") or {}
+    is_deterministic, source_warning = _classify_entry_source(entry_block)
+
+    if not is_deterministic:
+        # Log level reflects the operator's determinism policy. This
+        # does NOT gate the write — the frozen block is still persisted
+        # verbatim. Operators who hit a non-deterministic source on
+        # stock config should treat it as a real regression and
+        # investigate strategy_entry_signal_service.
+        strict = bool(getattr(
+            config, "DUMMY_ORDER_STRICT_DETERMINISTIC_REPLAY", True,
+        ))
+        allow_ltp = bool(getattr(
+            config, "DUMMY_ORDER_ALLOW_LTP_ENTRY_FALLBACK", False,
+        ))
+        if strict and not allow_ltp:
+            logger.warning(
+                "[promotion] frozen_entry source is NOT deterministic "
+                "(%s, instrument=%s) — the frozen entry will preserve "
+                "this value for the rest of the day. Verify the "
+                "upstream signal; if wrong, POST "
+                "/admin/level-isolation/clear-promotion and re-trigger "
+                "once the fixed-series data recovers.",
+                source_warning,
+                target_cand.get("instrument_key"),
+            )
+        else:
+            logger.info(
+                "[promotion] frozen_entry source=%s (determinism check "
+                "skipped: strict=%s, allow_ltp=%s, instrument=%s)",
+                source_warning, strict, allow_ltp,
+                target_cand.get("instrument_key"),
+            )
 
     # Find the "rejected" candidate (the first non-chosen candidate
     # whose side differs from the chosen one). This is the bias-side
@@ -440,6 +558,10 @@ def _build_frozen_entry(
         "signal_generated_at": signal.get("generated_at"),
         "signal_day": signal.get("day"),
         "touch": signal.get("touch") or {},
+        # 2026-11-04 — audit fields. Never used to alter the frozen
+        # values; consumed by templates / operators.
+        "entry_source_verified": is_deterministic,
+        "entry_source_warning": source_warning,
     }
 
 # --------------------------------------------------------------------------- #
@@ -472,7 +594,7 @@ class IsolatedInstrumentPromotionService:
         return self.read_active() is not None
 
     # ------------------------------------------------------------------ #
-    # NEW: frozen-entry accessors                                         #
+    # Frozen-entry accessors                                              #
     # ------------------------------------------------------------------ #
     def get_frozen_entry(self) -> dict[str, Any] | None:
         """Return today's frozen entry block, or ``None``.
@@ -625,9 +747,11 @@ class IsolatedInstrumentPromotionService:
 
             logger.info(
                 "[promotion] frozen_entry refreshed for %s "
-                "(chosen_side=%s)",
+                "(chosen_side=%s, source_verified=%s, source_warning=%s)",
                 target_key,
                 frozen.get("chosen_side"),
+                frozen.get("entry_source_verified"),
+                frozen.get("entry_source_warning"),
             )
             return {
                 "status": "ok",
@@ -744,7 +868,8 @@ class IsolatedInstrumentPromotionService:
                             logger.info(
                                 "[promotion] backfilled frozen_entry for "
                                 "legacy promotion record — key=%s "
-                                "chosen_side=%s entry_price=%s source=%s",
+                                "chosen_side=%s entry_price=%s source=%s "
+                                "source_verified=%s",
                                 target_key,
                                 frozen.get("chosen_side"),
                                 (frozen.get("chosen_candidate") or {})
@@ -753,6 +878,7 @@ class IsolatedInstrumentPromotionService:
                                 (frozen.get("chosen_candidate") or {})
                                 .get("entry", {})
                                 .get("price_source"),
+                                frozen.get("entry_source_verified"),
                             )
                         except Exception:
                             logger.exception(
@@ -832,7 +958,8 @@ class IsolatedInstrumentPromotionService:
                 if confirmed_time_iso else {}
             )
 
-            # LTP fallback chain
+            # LTP fallback chain — populates record["instrument_ltp"]
+            # ONLY. Never reaches frozen_entry.chosen_candidate.entry.
             quote_source = ltp_source
             if ltp is None and entry.get("price") is not None:
                 ltp = _safe_float(entry.get("price"))
@@ -987,13 +1114,14 @@ class IsolatedInstrumentPromotionService:
 
             logger.info(
                 "[promotion] PROMOTED %s -> %s (reason=%s, entry_ltp=%s, "
-                "entry_source=%s, frozen_entry=%s)",
+                "entry_source=%s, frozen_entry=%s, source_verified=%s)",
                 payload["from_instrument_key"],
                 payload["to_instrument_key"],
                 payload["reason"],
                 entry.get("price"),
                 entry.get("price_source"),
                 frozen_entry is not None,
+                (frozen_entry or {}).get("entry_source_verified"),
             )
 
             return {

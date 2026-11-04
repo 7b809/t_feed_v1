@@ -11,56 +11,117 @@ FastAPI market-data engine for:
   - Upstox live WebSocket feed
   - Live 1-minute candle aggregation
   - Live EMA fast/slow cross detection
-  - Opening Range (OR) level calculation
-  - Live cross persistence and WebSocket broadcasting
-  - Scheduler for token checks, daily refresh, OR calculation
+  - First Candle OR + level-instrument filter (per-index CE/PE strikes)
+  - Level-isolation arbitration across four monitored indices
+  - Live SR levels (pivot-based, per instrument)
+  - Isolated-instrument SR tracker (pre/post-isolation snapshot)
+  - Post-isolation deterministic dummy orders (t_feed_v1-market-engine-v3)
+  - Scheduler for token checks, daily refresh, first-candle, isolation, SR refresh
   - Market holiday gate (Upstox Market Holidays & Timings API)
-  - Strategy 1 pipeline (buffer filter → isolation → R2 activation → order)
-  - Strategy 2 pipeline (S3-touch watcher → next-cross order)
-  - Runtime order toggle (enable / disable live order placement)
-  - Lot-based order surface: place_order (buy/sell), exit_all_positions,
-    margin_check (ChargeApi.post_margin)
+  - Runtime order toggle (enable / disable live Upstox orders)
+  - Lot-based live order surface: place_order, exit_all_positions, margin_check
   - Admin + Telegram control of the above
 
 IMPORTANT:
-  README/architecture.md were partially outdated prior to this revision.
-  The updated document below reflects the actual code as of the
-  strategy-race fix, holiday gate, and order-surface work.
+  README/architecture.md were outdated prior to earlier revisions, and are
+  outdated AGAIN after the 2026-11-02 order-strategy rewrite and the
+  2026-11-04 deterministic-replay guard additions. This document reflects
+  the current code.
+
+  Prior to 2026-11-02 the pipeline was:
+      Strategy 1  (Stage 1: buffer filter -> Stage 2: isolation ->
+                   Stage 3: R2 activation -> Stage 4: order)
+      Strategy 2  (Stage 3: S3-touch watcher -> Stage 4: next-cross order)
+  Strategy 1 / Stage 1-4 and Strategy 2 / Stage 3-4 names no longer
+  appear in the current configuration or code. Their responsibilities
+  have been refactored into the pipeline described below:
+      first_candle_service          -> OR levels (per instrument)
+      level_instrument_filter       -> CE/PE strike lists per index
+      level_isolated_instrument     -> isolation on R3/S3 touch (arbitration)
+      live_sr_levels_service        -> SR levels on the isolated instrument
+      isolated_sr_tracker           -> pre/post-isolation SR snapshot
+      dummy_order_service           -> t_feed_v1-market-engine-v3 execution
+
+  Any operator who still has STRATEGY_STAGE_*, STRATEGY_2_STAGE_*, or
+  the removed STRATEGY_EXT_* keys in .env is running on stale values —
+  the current code ignores them (see the DEPRECATION sections in
+  core/config.py and .env.example).
 
 KEY ADDITIONS SINCE THE PREVIOUS REVISION
 -----------------------------------------
-1. Opening Range REST fallback for the late 09:15 index candle
-   (services/opening_range_service.py).
+A. 2026-11-02 — ORDER-STRATEGY REWRITE
+   * services/dummy_order_service.py implements the
+     t_feed_v1-market-engine-v3 spec (single-path post-isolation
+     execution; the old Path A / Path B / Rupee-trailing /
+     promotion-based counter-side order creation is REMOVED).
+   * STRATEGY_EXT_* config keys are removed (except a deprecated
+     STRATEGY_EXT_PATH_B_ENABLED shim that is ignored).
+   * isolated_instrument_promotion_service.apply_promotion() is
+     DORMANT — no code path calls it.
+   * Removed: dummy_order_service Path A/B branching, regime-variant
+     creation, MAX_ORDERS_PER_DAY cap, LTP+bar reconcile cadence.
 
-2. Per-instrument and global OR retry in Stage 1
-   (services/strategy_selection_service.py,
-    routes/admin_routes.py).
+B. 2026-11-04 — DETERMINISTIC REPLAY GUARDS
+   * Six new DUMMY_ORDER_* flags make the post-isolation execution
+     pipeline auditable and enforce "same day + same isolation record
+     + same intraday-API response = same dummy orders, regardless of
+     process start time":
+         DUMMY_ORDER_ALLOW_LTP_ENTRY_FALLBACK            (default false)
+         DUMMY_ORDER_STRICT_DETERMINISTIC_REPLAY         (default true)
+         DUMMY_ORDER_WAIT_FOR_SR_BACKFILL                (default true)
+         DUMMY_ORDER_WAIT_FOR_SR_BACKFILL_TIMEOUT_SECONDS (default 120)
+         DUMMY_ORDER_DISABLE_RUNTIME_PATH_SWITCH         (default true)
+         DUMMY_ORDER_DRIFT_GUARD                         (default true)
+   * scheduler_service._dummy_order_tick() now short-circuits until
+     sr_backfill_service.is_ready_for_today() returns True (the same
+     latch main.py uses). Prevents the 30-second tick from creating
+     orders against a partially-built series (the 14:16-on-2026-10-29
+     bug class).
+   * scheduler_service._refresh_live_sr() now passes
+     update_replay=False. The every-2-minute refresh touches ONLY the
+     live buffer; the replay series used by the startup catch-up is
+     built once and then frozen for the day so DUMMY_ORDER_DRIFT_GUARD
+     can guarantee existing entries are never recomputed.
+   * services/config_validation.py gains:
+         ERROR   if ALLOW_LTP_ENTRY_FALLBACK and STRICT_DETERMINISTIC_REPLAY
+                 are both true (mutually exclusive in intent).
+         WARNING if WAIT_FOR_SR_BACKFILL is false.
+         WARNING if DISABLE_RUNTIME_PATH_SWITCH is false.
+   * STRATEGY_ENTRY_* is now SIMULATION-ONLY. The diagnostic consumers
+     (POST /admin/simulation/run, GET /admin/level-isolation/strategy-signal)
+     still read those keys, but services/dummy_order_service.py does not.
 
-3. Strategy 2 Telegram quiet gate at two layers
-   (services/scheduler_service.py,
-    token_tasks/strategy_2_isolation_task.py).
+C. Level-isolation pipeline (baseline, replacing Strategy 1/2)
+   * services/first_candle_service.py            OR levels
+   * services/level_instrument_filter_service.py CE/PE strikes per index
+   * services/level_isolated_instrument_service.py isolation (arbitration)
+   * services/live_sr_levels_service.py          pivot-based live SR
+   * services/isolated_sr_tracker_service.py     pre/post-isolation SR
+   * services/sr_backfill_service.py             intraday seed + replay
+   * services/live_sr_calc_service.py            stateless SR calculator
+   * services/dummy_order_service.py             t_feed_v1 execution
 
-4. Market holiday service + gate + admin routes
-   (services/market_holiday_service.py,
-    routes/market_holiday_routes.py,
-    main.py).
+D. Market holiday service + gate + admin routes (baseline)
+   * services/market_holiday_service.py
+   * routes/market_holiday_routes.py
+   * main.py::_holiday_gate_for_startup()
 
-5. Runtime order toggle + order/margin HTTP surface + Telegram
-   commands
-   (services/order_runtime_service.py,
-    upstox_services/_sanitise.py,
-    upstox_services/lot_sizes.py,
-    upstox_services/place_order.py,
-    upstox_services/exit_all_positions.py,
-    upstox_services/margin_check.py,
-    routes/order_routes.py,
-    routes/margin_routes.py,
-    token_tasks/order_toggle_commands.py,
-    token_tasks/telegram_token_bot.py).
+E. Runtime order toggle + order/margin HTTP surface + Telegram commands
+   * services/order_runtime_service.py
+   * upstox_services/_sanitise.py
+   * upstox_services/lot_sizes.py
+   * upstox_services/place_order.py
+   * upstox_services/exit_all_positions.py
+   * upstox_services/margin_check.py
+   * routes/order_routes.py
+   * routes/margin_routes.py
+   * token_tasks/order_toggle_commands.py
+   * token_tasks/telegram_token_bot.py
 
-6. Security policy: no access token or account identifier appears in
-   any log line or API response. Provider error bodies and verbose
-   responses are redacted by upstox_services._sanitise.sanitise_payload.
+F. Security policy
+   * No access token or account identifier appears in any log line
+     or API response. Provider error bodies and verbose responses
+     are redacted by upstox_services._sanitise.sanitise_payload.
 
 
 ================================================================================
@@ -79,7 +140,7 @@ Launch commands:
 
 Lifespan:
   startup:
-    _holiday_gate_for_startup()      <-- NEW
+    _holiday_gate_for_startup()
       if is_holiday: skip unified refresh
                      start scheduler + telegram bot
                      send "APPLICATION STARTED · HOLIDAY"
@@ -89,8 +150,8 @@ Lifespan:
   shutdown:
     Telegram stopping notification
     live_feed_service.stop()
-    strategy_live_tracker_service.stop()
-    strategy_2_live_tracker_service.stop()
+    strategy_2_live_tracker_service.stop()    # NOTE: retained for compat;
+                                              # see §9 for current pipeline
     telegram_token_bot.stop()
     scheduler_service.shutdown()
     Telegram stopped notification
@@ -103,7 +164,7 @@ Lifespan:
                          +-----------------------------+
                          |        Browser / UI         |
                          |  index, charts, logs pages  |
-                         |  strategy dashboard         |
+                         |  isolated-instrument page   |
                          +--------------+--------------+
                                         |
                                         | HTTP / WebSocket
@@ -118,15 +179,14 @@ Lifespan:
 |    admin_routes.py             /admin/hard-refresh, /admin/backup-status,      |
 |                                /admin/cleanup-status, /admin/cleanup           |
 |    folder_routes.py            /admin/folders, /admin/folders/{name}/download  |
-|    opening_range_routes.py     /admin/opening-range/*                          |
-|    strategy_routes.py          /admin/strategy/*           (Strategy 1)        |
-|    strategy_2_routes.py        /admin/strategy2/*          (Strategy 2)        |
+|    isolated_instrument_routes.py /isolated, /admin/level-isolation/*           |
+|    live_sr_calc_routes.py      /live-sr/calc/*                                 |
 |    dashboard_routes.py         /dashboard, /ui/dashboard/strategy              |
 |    upstox_routes.py            /api/upstox/*                                   |
 |    log_routes.py               /logs, /ui/logs, /ui/logs/{filename}            |
-|    market_holiday_routes.py    /admin/market-holiday*                          |  <-- NEW
-|    order_routes.py             /admin/orders/*             (buy/sell/exit)     |  <-- NEW
-|    margin_routes.py            /admin/orders/margin*       (ChargeApi)         |  <-- NEW
+|    market_holiday_routes.py    /admin/market-holiday*                          |
+|    order_routes.py             /admin/orders/*                                 |
+|    margin_routes.py            /admin/orders/margin*                           |
 +------------------------------------+-------------------------------------------+
                                      |
                                      v
@@ -141,14 +201,15 @@ Lifespan:
 |    services/telegram_service.py           notifications                        |
 |    token_tasks/telegram_token_bot.py      /save_token, /token_status, /orders* |
 |    token_tasks/order_toggle_commands.py   /orders_enable, /orders_disable,     |
-|                                           /orders_status                      |  <-- NEW
+|                                           /orders_status                      |
 |                                                                                |
 |  Data / Registry:                                                              |
-|    services/backup_data_service.py        Mongo blob → data/ zip extraction    |
+|    services/backup_data_service.py        Mongo blob -> data/ zip extraction   |
 |    services/instrument_registry.py        scan data/ for ema_crosses.json      |
 |    services/cleanup_service.py            delete transient folders             |
-|    services/market_holiday_service.py     Upstox holiday check + cache         |  <-- NEW
-|    services/order_runtime_service.py      runtime order toggle (ON at start)   |  <-- NEW
+|    services/market_holiday_service.py     Upstox holiday check + cache         |
+|    services/order_runtime_service.py      runtime order toggle (ON at start)   |
+|    services/backfill_guard.py             ran_today / mark_ran meta_data guard |
 |                                                                                |
 |  Live pipeline:                                                                |
 |    services/live_feed_service.py          Upstox WebSocket                     |
@@ -157,30 +218,33 @@ Lifespan:
 |    services/live_broadcast.py             in-process pub/sub                   |
 |    services/live_backfill_service.py      seed EMA from backup + intraday      |
 |                                                                                |
-|  Opening Range:                                                                |
-|    services/opening_range_service.py      OR levels + opening_range.json       |
-|                                           + REST fallback for late 09:15       |  <-- NEW
+|  First-candle OR + level filter:                                               |
+|    services/first_candle_service.py       OR levels + first_candle.json        |
+|    services/level_instrument_filter_service.py  CE/PE strike list per index    |
 |                                                                                |
-|  Strategy 1:                                                                   |
-|    services/strategy_selection_service.py     Stage 1 + OR retry               |  <-- NEW
-|    services/strategy_isolation_service.py     Stage 2                          |
-|    services/strategy_live_tracker_service.py  Stage 3 (R2 watcher)             |
-|    services/strategy_order_service.py         Stage 4 (paper order)            |
+|  Level isolation + SR:                                                         |
+|    services/live_sr_levels_service.py     pivot-based live SR (per instrument)  |
+|    services/sr_backfill_service.py        intraday seed + replay series        |
+|    services/level_isolated_instrument_service.py  isolation + replay backfill  |
+|    services/isolated_sr_tracker_service.py pre/post-isolation SR snapshot      |
+|    services/live_sr_calc_service.py       stateless on-demand SR calculator    |
 |                                                                                |
-|  Strategy 2:                                                                   |
-|    services/strategy_2_isolation_service.py    Stage 3 (S3-touch)              |
-|    services/strategy_2_live_tracker_service.py Stage 3 watcher thread          |
-|    services/strategy_2_order_service.py        Stage 4 (next-cross)            |
+|  Post-isolation execution (t_feed_v1-market-engine-v3):                        |
+|    services/dummy_order_service.py        deterministic dummy-order placement  |
+|                                                                                |
+|  Diagnostics:                                                                  |
+|    services/strategy_entry_signal_service.py  SIMULATION-ONLY diagnostic view  |
+|    services/simulation_service.py             POST /admin/simulation/run       |
 |                                                                                |
 |  Order surface (live Upstox orders):                                           |
-|    upstox_services/_sanitise.py            shared redaction                    |  <-- NEW
-|    upstox_services/lot_sizes.py            NIFTY 65, SENSEX 20, …              |  <-- NEW
-|    upstox_services/place_order.py          OrderApiV3 MARKET buy/sell          |  <-- NEW
-|    upstox_services/exit_all_positions.py   OrderApi.exit_positions()           |  <-- NEW
-|    upstox_services/margin_check.py         ChargeApi.post_margin               |  <-- NEW
+|    upstox_services/_sanitise.py           shared redaction                     |
+|    upstox_services/lot_sizes.py           NIFTY 65, SENSEX 20, …               |
+|    upstox_services/place_order.py         OrderApiV3 MARKET buy/sell           |
+|    upstox_services/exit_all_positions.py  OrderApi.exit_positions()            |
+|    upstox_services/margin_check.py        ChargeApi.post_margin                |
 |                                                                                |
 |  Daily backup:                                                                 |
-|    services/daily_backup_service.py       zip folders → MongoDB                |
+|    services/daily_backup_service.py       zip folders -> MongoDB               |
 |                                                                                |
 |  Scheduling:                                                                   |
 |    services/scheduler_service.py          APScheduler singleton                |
@@ -198,9 +262,9 @@ Lifespan:
 |                                                                                |
 |  Upstox:                                                                       |
 |    REST: profile, search, historical, intraday                                 |
-|    REST: MarketHolidaysAndTimingsApi.get_holiday                               |  <-- NEW
-|    REST: OrderApiV3.place_order, OrderApi.exit_positions                       |  <-- NEW
-|    REST: ChargeApi.post_margin                                                 |  <-- NEW
+|    REST: MarketHolidaysAndTimingsApi.get_holiday                               |
+|    REST: OrderApiV3.place_order, OrderApi.exit_positions                       |
+|    REST: ChargeApi.post_margin                                                 |
 |    WebSocket: MarketDataStreamerV3                                             |
 |                                                                                |
 |  Telegram:                                                                     |
@@ -217,7 +281,7 @@ All three refresh triggers use the SAME routine:
   - Daily refresh        -> token_tasks/daily_refresh.py -> _run_full_refresh_sync("daily")
   - Manual hard refresh  -> POST /admin/hard-refresh -> _run_full_refresh_sync("manual")
 
-Holiday gate (NEW, before the unified refresh):
+Holiday gate (before the unified refresh):
   app_lifespan -> _holiday_gate_for_startup()
     +-- market_holiday_service.get_today()
     +-- if is_holiday:
@@ -225,7 +289,7 @@ Holiday gate (NEW, before the unified refresh):
     |     scheduler_service.start()
     |     telegram_token_bot.start()
     |     Telegram "APPLICATION STARTED · HOLIDAY"
-    |     yield   (no refresh, no feed, no strategy pipeline)
+    |     yield   (no refresh, no feed, no pipeline)
     +-- if status="error" (provider down):
           treat as NOT a holiday; continue with the full pipeline
     +-- else:
@@ -268,9 +332,15 @@ asyncio.to_thread(_run_full_refresh_sync, reason, loop)
   |       scans data/ recursively for ema_crosses.json
   |       builds _by_key, _by_triple, _ordered
   |
-  +-- 6b. _ensure_core_and_strategy_indexes_registered()
-  |        pre-registers NSE_INDEX|Nifty 50, BSE_INDEX|SENSEX,
-  |        and every STRATEGY_INDEXES entry as ad-hoc entries
+  +-- 6a. _ensure_core_indexes_registered()
+  |        pre-registers NIFTY / BANKNIFTY / MIDCPNIFTY / SENSEX
+  |        (DEFAULT_CORE_INSTRUMENTS) as ad-hoc entries
+  |
+  +-- 6b. BACKFILL: daily_refresh marker (only on startup)             <-- NEW
+  |        if reason == "startup":
+  |          should, why = _should_backfill_daily_refresh()
+  |          if should: backfill_guard.mark_ran("daily_refresh", ...)
+  |          else:     log "skipped — <why>"
   |
   +-- 7. Wire loop + cross handler
   |       live_broadcast.set_loop(loop)
@@ -280,79 +350,46 @@ asyncio.to_thread(_run_full_refresh_sync, reason, loop)
   |           live_cross_store.save(entry, cross)
   |           live_broadcast.publish_sync("crosses", entry, {"cross": cross})
   |
-  +-- 8. live_cross_store.reset_all()
-  |       clears in-memory state only; disk live_crosses.json remains
+  +-- 8. live_feed_service.start() or restart()
   |
-  +-- 9. live_backfill_service.seed_all()
-  |       for each registry instrument:
-  |         read backup candles.json tail 500
-  |         fetch today's Upstox intraday 1-min candles
-  |         merge by minute
-  |         live_ema_engine.seed(key, merged)
-  |         live_ema_engine.scan_crosses(key, since today 00:00)
-  |       uses ThreadPoolExecutor, max CHART_MAX_BATCH_WORKERS <= 8
+  +-- 8a. BACKFILL: first_candle (only on startup)                     <-- NEW
+  |        if reason == "startup":
+  |          should, why = _should_backfill_first_candle()
+  |          if should: first_candle_service.run(reason="startup_backfill",
+  |                        backfill=True)
+  |          else:     log "skipped — <why>"
+  |        Extended window: 09:16 -> 23:59:59 IST on any weekday
+  |        trading day. `backfill=True` allows post-close runs; the
+  |        intraday API still serves today's 1-min candles after 15:30.
+  |        This is what makes /isolated work when the project starts at
+  |        e.g. 19:08 IST.
   |
-  +-- 10. opening_range_service.calculate_all()
-  |        for each registry instrument:
-  |          get candles from live_ema_engine
-  |          find first candle minute 09:15 IST
-  |          if not in engine:
-  |            fetch today's intraday candles via Upstox REST           <-- NEW
-  |            pick the 09:15 candle from the REST response             <-- NEW
-  |          compute OR levels
-  |          write opening_range.json next to ema_crosses.json
-  |          record candle_source = live_engine | rest_intraday_fallback
+  +-- 8b. Level-instrument filter + SR registration (only on startup)  <-- NEW
+  |        level_instrument_filter_service.run(reason="startup")
+  |        Reads first_candle.json, writes level_instruments.json
+  |        (per-index CE/PE strike list) and registers the filtered
+  |        strikes with live_sr_levels_service.
   |
-  +-- 10b. Strategy 1 · Stage 1 (with OR retry)                       <-- NEW
-  |        _run_stage1_with_or_retry()
-  |          run strategy_selection_service.run()
-  |          if every index skipped with or_unavailable:*:
-  |            opening_range_service.calculate_all()    (full recalc)
-  |            strategy_selection_service.run()         (retry once)
-  |          each _process_index retries its own OR up to
-  |          STRATEGY_STAGE1_OR_RETRY_ATTEMPTS times with
-  |          STRATEGY_STAGE1_OR_RETRY_SLEEP_SECONDS between attempts
+  +-- 8c. LEVEL ISOLATION backfill (only on startup)                   <-- NEW
+  |        level_isolated_instrument_service.run_backfill(reason="startup")
+  |        Replays intraday candles from 09:15 -> now, re-applies the
+  |        touch-arbitration rules, reconstructs the "would-have-
+  |        isolated" instrument. Uses
+  |        LEVEL_ISOLATION_REPLAY_USE_SERIES_OR and
+  |        LEVEL_ISOLATION_OR_SELF_HEAL_VERIFY_HL to guard against
+  |        phantom touches.
   |
-  +-- 10c. Strategy 1 · Stage 2
-  |        if Stage 1 produced 0 contracts:
-  |          skip Stage 2 with reason stage_1_empty                 <-- NEW
-  |        else:
-  |          strategy_isolation_service.run()
+  +-- 9. scheduler_service.start()
   |
-  +-- 10d. Strategy 1 · Stage 3 tracker.start()
+  +-- 10. telegram_token_bot.start()
   |
-  +-- 10e. Strategy 1 · Stage 3 catch-up (if past window and in catch-up)
+  +-- 11. Telegram: "<Reason> Refresh Completed / Finished"
+  |        Includes cleanup / token / backup / registry / first-candle /
+  |        level-filter / level-isolation lines.
   |
-  +-- 10f. Strategy 1 · Stage 4 catch-up (if past 09:18 and in catch-up)
-  |
-  +-- 10g. Strategy 2 · Stage 3 tracker.start()
-  |
-  +-- 10h. Strategy 2 · Stage 3 snapshot
-  |        strategy_2_isolation_service.run()
-  |        (Telegram output for this snapshot is handled by
-  |         token_tasks/strategy_2_isolation_task.py quiet gate; the
-  |         unified refresh itself does not emit a zero-data message)  <-- NEW
-  |
-  +-- 10i. Strategy 2 · Stage 4 order
-  |        only when stage2_contracts > 0 AND an isolated pick exists
-  |
-  +-- 11. live_feed_service.start() or restart()
-  |
-  +-- 12. scheduler_service.start()
-  |        + strategy_2_stage3_recheck now points at _strategy2_recheck()
-  |          which short-circuits when the stage-2 tree has no strike
-  |          folders                                              <-- NEW
-  |
-  +-- 13. telegram_token_bot.start()
-  |
-  +-- 14. Telegram: "<Reason> Refresh Completed / Finished"
-  |        Stage 1 line now carries (OR retry=✓/✗)
-  |        Stage 2 line now carries "skipped — stage_1_empty" when
-  |        that was the outcome                                 <-- NEW
-  |
-  +-- 15. return structured result (includes holiday_gate,
-           strategy_stage1_or_retry, strategy_stage1_contracts,
-           stage2_skip_reason)
+  +-- 12. return structured result (includes market_snapshot,
+           backfill_daily_refresh, first_candle, level_filter,
+           level_isolation)
   |
   v
 main logs "Application startup complete"
@@ -364,8 +401,6 @@ app yields (running)
 shutdown:
   Telegram stopping
   live_feed_service.stop()
-  strategy_live_tracker_service.stop()
-  strategy_2_live_tracker_service.stop()
   telegram_token_bot.stop()
   scheduler_service.shutdown()
   Telegram stopped
@@ -420,6 +455,15 @@ EMA ENGINE INTERNAL FLOW: (unchanged)
     -> finalise previous forming -> append to rolling _candles
     -> _detect_cross -> _compute_cross -> on_cross handler
     -> live_cross_store.save + live_broadcast.publish_sync("crosses")
+
+Consumers of the live candle series (beyond the EMA engine):
+  * live_sr_levels_service  — pivot scan on every finalized candle,
+                              persists live_sr_levels.json per instrument.
+  * level_isolated_instrument_service — subscribes to index ticks to
+                              fire R3/S3 touch checks (2 s throttle).
+  * isolated_sr_tracker_service — hooks live_sr_levels_service's
+                              _append_level to snapshot new pivots on
+                              the isolated instrument only.
 
 
 ================================================================================
@@ -477,11 +521,11 @@ Components:
   token_tasks/telegram_token_bot.py    /save_token, /token_status,
                                        /token_check, /cancel, /help
                                        AND /orders_status, /orders_enable,
-                                       /orders_disable                <-- NEW
+                                       /orders_disable
 
 Token flow: unchanged.
 
-Telegram order-toggle commands (NEW):
+Telegram order-toggle commands:
   /orders_status   -> services.order_runtime_service.status()
   /orders_enable   -> order_runtime_service.enable(source="telegram")
   /orders_disable  -> order_runtime_service.disable(source="telegram")
@@ -495,17 +539,22 @@ Telegram order-toggle commands (NEW):
 
 
 ================================================================================
-8. OPENING RANGE (OR) FLOW
+8. FIRST CANDLE (OR) FLOW
 ================================================================================
 
+(Replaces the former OPENING RANGE flow. opening_range_service has
+been superseded by first_candle_service. The rest-fallback logic was
+carried forward unchanged.)
+
 Trigger:
-  - scheduler job "opening_range_calc" at OPENING_RANGE_HOUR:MINUTE:SECOND
+  - scheduler job "first_candle_calc" at FIRST_CANDLE_HOUR:MINUTE:SECOND
     default 09:17:10 IST
-  - startup / daily refresh / hard refresh also call calculate_all()
+  - startup / daily refresh / hard refresh also call
+    first_candle_service.run(reason=..., backfill=True|False)
 
 Flow:
 
-opening_range_service.calculate_all()
+first_candle_service.run(reason, backfill=False)
   |
   v
 for each instrument_registry.all():
@@ -518,9 +567,9 @@ for each instrument_registry.all():
   find candle where minute == "YYYY-MM-DDT09:15"
     |
     +-- missing:
-    |     if OPENING_RANGE_REST_FALLBACK_ENABLED:                   <-- NEW
-    |       _fetch_first_candle_via_rest(key, target_minute)        <-- NEW
-    |       if found: use it; candle_source = rest_intraday_fallback <-- NEW
+    |     if FIRST_CANDLE_REST_FALLBACK_ENABLED:
+    |       _fetch_first_candle_via_rest(key, target_minute)
+    |       if found: use it; candle_source = rest_intraday_fallback
     |     else:
     |       skipped: first_candle_not_available
     |
@@ -530,21 +579,23 @@ for each instrument_registry.all():
     R3_Threshold, S3_Threshold
     |
     v
-  write opening_range.json next to ema_crosses.json
-    or data/_adhoc/<safe_key>/opening_range.json
-    persist candle_source                                            <-- NEW
+  write first_candle.json next to ema_crosses.json
+    or data/_adhoc/<safe_key>/first_candle.json
+    persist candle_source, date, and OHLC
     |
     v
   return status ok/skipped/error
 
-API:
-  GET  /admin/opening-range
-  GET  /admin/opening-range/{instrument_key}
-  POST /admin/opening-range/recalculate
-  POST /admin/opening-range/recalculate/{instrument_key}
+Backfill policy (2026-11-04 addition):
+  On startup, admin_routes._should_backfill_first_candle() allows the
+  job to run at ANY time between 09:17:00 and 23:59:59 IST on a
+  weekday trading day if today's first_candle.json is missing, dated
+  for an older day, or unparseable. The job is called with
+  backfill=True so it ignores the normal session window. This makes
+  /isolated work when the project is started post-close.
 
-REST fallback policy (NEW):
-  - Timeout: OPENING_RANGE_REST_TIMEOUT_SECONDS (default 15).
+REST fallback policy (unchanged):
+  - Timeout: FIRST_CANDLE_REST_TIMEOUT_SECONDS (default 15).
   - Uses the existing Upstox access token via token_service.
   - Never logs or returns the token.
   - Only fires when the in-memory EMA engine does not yet have the
@@ -552,45 +603,114 @@ REST fallback policy (NEW):
 
 
 ================================================================================
-9. STRATEGY PIPELINE
+9. ISOLATION + EXECUTION PIPELINE
 ================================================================================
 
-Strategy 1 (unchanged stages, plus OR retry in Stage 1):
+Replaces the former Strategy 1 (Stage 1-4) and Strategy 2 (Stage 3-4)
+pipelines. The 2026-11-02 order-strategy rewrite removed Path A / Path
+B branching, Rupee trailing, promotion-based counter-side creation,
+and the MAX_ORDERS_PER_DAY cap. The deterministic t_feed_v1 pipeline
+below is now the single order-placement path.
 
-  Stage 1  strategy_selection_service.run()
-           + per-instrument OR retry before skipping            <-- NEW
-  Stage 2  strategy_isolation_service.run()
-           + skipped with reason="stage_1_empty" when Stage 1
-             produced 0 contracts across all indexes            <-- NEW
-  Stage 3  strategy_live_tracker_service.start() / run_catchup()
-  Stage 4  strategy_order_service.run()
+Stage A — First candle OR + level filter (see §8 for OR)
+─────────────────────────────────────────────────────────
+  first_candle_service.run()          -> first_candle.json per instrument
+  level_instrument_filter_service.run()
+    -> reads data/index/<underlying>/first_candle.json
+    -> emits level_instruments.json containing the CE/PE strikes that
+       map to R1/R2/R3/R3_Threshold and S1/S2/S3/S3_Threshold.
+    -> registers every filtered strike with live_sr_levels_service
+       so SR tracking starts immediately.
 
-Strategy 2 (unchanged stages, plus Telegram quiet gate):
+Stage B — Level isolation (multi-index arbitration)
+───────────────────────────────────────────────────
+  level_isolated_instrument_service
+    - watches STRATEGY_MONITORED_INDICES for R3 / S3 touches
+      (arbitration order in STRATEGY_TOUCH_PRIORITY_ORDER).
+    - on the FIRST winning touch of the day: fixes an isolation
+      record at T_iso, capturing
+        * trigger_index / trigger_side / trigger_level / trigger_ltp
+        * T_iso / trigger_time
+        * bias-side instrument (NEAREST NIFTY ROUND-50 STRIKE to
+          NIFTY spot LTP; CE for R3, PE for S3)
+        * a snapshot of the bias-side instrument's OWN price context
+          (LTP, touch-minute OHLC, own OR levels, own first-candle OHLC).
+    - persisted to data/level_isolated_instrument.json.
+    - run_backfill(reason="startup") replays intraday candles to
+      reconstruct a would-have-isolated instrument when the project
+      starts mid-day.
 
-  Stage 3  strategy_2_isolation_service.run()
-           + live watcher thread runs all day
-           + Telegram output gated on state change              <-- NEW
-           + scheduler recheck self-gates on empty stage-2 tree <-- NEW
-  Stage 4  strategy_2_order_service.run()
-           + only when stage2_contracts > 0 AND an isolated
-             pick exists                                        <-- NEW
+Stage C — Isolated SR tracker
+─────────────────────────────
+  isolated_sr_tracker_service
+    - snapshots live_sr_levels_service's current levels as
+      pre_isolation_levels at T_iso.
+    - thereafter records every NEW pivot confirmation on the SAME
+      instrument as post_isolation_levels.
+    - persists to data/level_isolated_instrument_sr.json.
+    - dedup key: (level_type, price, confirmed_time).
 
-Strategy 2 Telegram quiet gate (NEW):
-  Layer 1  services/scheduler_service._strategy2_recheck()
-           short-circuits when _stage2_tree_has_contracts() is False
-           (no strike folders under STRATEGY_BASE_DIR/STRATEGY_STAGE_2_NAME).
-           No stage-2 contracts -> no recheck at all.
-  Layer 2  token_tasks/strategy_2_isolation_task.run_strategy_2_isolation()
-           - returns early with one INFO log line when
-             stage2_contracts == 0
-           - otherwise sends a completion message only when the
-             isolated pick changed OR a new touch was recorded
-           - errors still send a "Failed" Telegram message at ERROR
-  Config   STRATEGY_2_TELEGRAM_QUIET_WHEN_EMPTY (default True)
+Stage D — Deterministic dummy-order placement
+─────────────────────────────────────────────
+  services/dummy_order_service.run_once(reason="scheduled")
+    The scheduler fires this every DUMMY_ORDER_TRACK_INTERVAL_SECONDS.
+    On each tick, the service:
+
+      1. Short-circuits when
+         sr_backfill_service.is_ready_for_today() is False (the same
+         latch main.py and the scheduler use).
+      2. Reads the isolation record (bias-side instrument + T_iso).
+      3. Waits for the FIRST 15/3 SR level on the bias side with
+         pivot_time > T_iso AND confirmed_time > T_iso.
+      4. Resolves the routing and the traded instrument's OWN OR grid
+         (first_candle.json) using STRATEGY_ORDER_* tunables:
+             Same leg:      Support -> bias side
+                            Resistance -> counter side
+             09:30 reversal: on or before 09:30:00 IST when a pre-T_iso
+                            support was already confirmed and the
+                            current level is a resistance -> SAME leg
+      5. Regime check on the traded instrument's OWN OR grid:
+             P_entry > R2                  -> SKIP
+             P_entry < S2                  -> OR Low / +50 pt gain
+             S2 <= P_entry < R1            -> R2, R3_Threshold, R3
+             R1 <= P_entry <= R2 (Zone 2)  -> R3_Threshold, R3
+      6. Stop-loss = P_entry * (1 - STRATEGY_ORDER_STOP_LOSS_PCT)  [30 %]
+      7. Stage 1: milestone touch OR >= STRATEGY_ORDER_MILESTONE_GAIN_POINTS
+      8. Stage 2: exit at the NEXT 15/3 resistance confirmation close
+      9. Auto-close any surviving OPEN order at
+         DUMMY_ORDER_EOD_HOUR:MINUTE (default 15:35).
+
+    Deterministic-replay guards (2026-11-04):
+        ALLOW_LTP_ENTRY_FALLBACK         (false)  debug-only escape hatch
+        STRICT_DETERMINISTIC_REPLAY      (true)   skip unresolved entries
+        WAIT_FOR_SR_BACKFILL             (true)   gate on backfill
+        WAIT_FOR_SR_BACKFILL_TIMEOUT_SECONDS (120) cap on the gate
+        DISABLE_RUNTIME_PATH_SWITCH      (true)   Path A/B from record only
+        DRIFT_GUARD                      (true)   never overwrite stored
+                                                  entry on catch-up
+
+    Persisted to data/dummy_orders.json. Each order fires exactly TWO
+    Telegram messages (creation, close). SKIPPED records fire a single
+    WARNING.
+
+Stage E — Simulation diagnostics (NOT order placement)
+─────────────────────────────────────────────────────
+  services/strategy_entry_signal_service.compute()
+  services/simulation_service.py
+    These read STRATEGY_ENTRY_* and produce a replay of the two legacy
+    "signal_v2" and "regime" scenarios for POST /admin/simulation/run
+    and GET /admin/level-isolation/strategy-signal. They have NO effect
+    on services/dummy_order_service.py.
+
+  The promotion service
+  (isolated_instrument_promotion_service.apply_promotion) remains
+  DORMANT — no code path calls it after the 2026-11-02 rewrite. The
+  two config keys (STRATEGY_ENTRY_ALLOW_PROMOTION,
+  STRATEGY_ENTRY_ALLOW_RE_PROMOTION) are kept for backward-compat.
 
 
 ================================================================================
-10. MARKET HOLIDAY GATE (NEW)
+10. MARKET HOLIDAY GATE
 ================================================================================
 
 Service:
@@ -628,16 +748,19 @@ Startup gate:
         pipeline skipped
     - the startup result now carries holiday_gate
 
+  Also used by admin_routes._is_trading_holiday_today() to gate the
+  daily_refresh and first_candle startup backfills.
+
 Note:
-  Reuse the gate in scheduled tasks (daily refresh, OR, Stage 1) if
-  you want them to skip holidays too:
+  Reuse the gate in scheduled tasks (daily refresh, first-candle,
+  isolation) if you want them to skip holidays too:
       if market_holiday_service.is_trading_holiday():
           logger.info("<task>: market holiday — skipping")
           return
 
 
 ================================================================================
-11. ORDER SURFACE (NEW)
+11. ORDER SURFACE
 ================================================================================
 
 Runtime toggle:
@@ -652,6 +775,22 @@ Runtime toggle:
   Default: ENABLED at process start. Thread-safe. Resets to ON on
   restart by design so a crash or deploy never leaves the engine
   silently unable to trade.
+
+Dummy orders (t_feed_v1-market-engine-v3, see §9 Stage D):
+  services/dummy_order_service.py
+    The ONLY post-isolation order-placement path.
+    Reads:
+      - isolation record:  data/level_isolated_instrument.json
+      - replay series:     built once at startup by
+                           sr_backfill_service (frozen for the day;
+                           LIVE_SR_REFRESH_FROM_API_* only touches
+                           the live buffer via update_replay=False).
+      - own OR grid:       data/<...>/first_candle.json
+      - tunables:          core/config.py STRATEGY_ORDER_* block
+      - guards:            core/config.py DUMMY_ORDER_* block
+    Gated by order_runtime_service.is_enabled().
+    Every record is labelled "dummy". No real Upstox order is ever
+    placed by this service.
 
 Lot sizes:
   upstox_services/lot_sizes.py
@@ -672,7 +811,7 @@ Lot sizes:
       source in {lot_table, lot_table_inferred, exchange_default,
                  unit_fallback}
 
-Place order:
+Place order (live):
   upstox_services/place_order.py
     place_order(
         instrument_key,          # required
@@ -694,14 +833,14 @@ Place order:
     Token read from services.token_service.
     Token never logged or returned; Upstox error bodies redacted.
 
-Exit all positions:
+Exit all positions (live):
   upstox_services/exit_all_positions.py
     exit_all_positions(dry_run=False) -> dict
     Wraps OrderApi.exit_positions().
     Gated on order_runtime_service.is_enabled().
     CLI: python -m upstox_services.exit_all_positions [--dry-run]
 
-Margin check:
+Margin check (live):
   upstox_services/margin_check.py
     check_margin(
         instrument_key,
@@ -709,7 +848,7 @@ Margin check:
         transaction_type="BUY",
         product="D",
         price=0.0,
-        verbose=False,          # default -> compact response
+        verbose=False,
     ) -> dict
 
     Wraps ChargeApi.post_margin.
@@ -759,7 +898,7 @@ Telegram commands:
   Dispatched by token_tasks/order_toggle_commands.py from
   telegram_token_bot.handle_message() BEFORE the pending-token check.
 
-Security policy (NEW):
+Security policy:
   - No access token appears in any log line or returned dict.
   - No token_masked field is returned.
   - No Authorization header snippet is logged.
@@ -787,26 +926,61 @@ Jobs:
      function: token_tasks.daily_refresh.run_daily_refresh
      delegates to _run_full_refresh_sync("daily")
 
-  3. opening_range_calc
+  3. first_candle_calc
      cron: DAILY_REFRESH_DAYS,
-           OPENING_RANGE_HOUR, OPENING_RANGE_MINUTE, OPENING_RANGE_SECOND
-     function: token_tasks.opening_range_task.run_opening_range_calculation
+           FIRST_CANDLE_HOUR, FIRST_CANDLE_MINUTE, FIRST_CANDLE_SECOND
+     function: token_tasks.first_candle_task.run_first_candle_calculation
+     (Replaces the former opening_range_calc job.)
 
-  4. strategy_selection_calc       (OR + 20s)
-  5. strategy_isolation_calc       (OR + 50s)
-  6. strategy_order_calc           (STRATEGY_ORDER_HOUR:MINUTE)
+  4. readiness_digest                (READINESS_DIGEST_HOUR:MINUTE)
+  5. preflight_recheck               (READINESS_PREFLIGHT_HOUR:MINUTE)
 
-  7. strategy_2_stage3_isolation   (09:18:15)
-  8. strategy_2_stage3_recheck     (every 5 minutes, 9-15h)   <-- CHANGED
-       Now points at _strategy2_recheck(), which short-circuits when
-       the stage-2 tree has no strike folders. No stage-2 contracts
-       -> no recheck at all -> no zero-data Telegram messages.
-  9. strategy_2_stage4_order       (15:25:00)
+  6. level_isolation_recheck         (every 5 min, 9-15h)
+     cron: */5 during 09:00-15:59 IST
+     function: token_tasks.level_isolated_instrument_task
+                 .run_level_isolation_recheck
+     (Replaces strategy_selection_calc / isolation_calc.)
 
- 10. daily_backup                  (DAILY_BACKUP_HOUR:MINUTE)
+  7. daily_backup                    (DAILY_BACKUP_HOUR:MINUTE)
+
+  8. live_sr_refresh_from_api        (every LIVE_SR_REFRESH_FROM_API_MINUTES)
+     interval: LIVE_SR_REFRESH_FROM_API_MINUTES (default 2)
+     function: _refresh_live_sr() -> sr_backfill_service.run(
+                 reason="periodic_refresh",
+                 send_telegram=False,
+                 update_replay=False)                 <-- LIVE BUFFER ONLY
+     The 2026-11-04 change: the periodic refresh updates only the
+     live buffer. The replay series is frozen after the startup
+     backfill so DUMMY_ORDER_DRIFT_GUARD can guarantee existing
+     entries are never recomputed.
+     The service is called with update_replay=False; if the service
+     has not yet been updated to accept that kwarg, a TypeError is
+     caught and the legacy call is used (with a loud warning).
+
+  9. dummy_order_tracker             (every DUMMY_ORDER_TRACK_INTERVAL_SECONDS)
+     interval: DUMMY_ORDER_TRACK_INTERVAL_SECONDS (default 30)
+     function: _dummy_order_tick()                    <-- SHORT-CIRCUITS
+       ready, reason = sr_backfill_ready()             <-- the latch
+       if not ready:
+           log "dummy_order_tracker skipped — <reason>"
+           return
+       dummy_order_service.run_once(reason="scheduled")
+
+     The latch (`sr_backfill_ready()`) is the SAME one main.py uses.
+     Any future tick that reaches dummy_order_service indirectly
+     (e.g. a hypothetical _strategy2_recheck) MUST consult the same
+     latch. The module-level helper sr_backfill_ready() and the
+     singleton method scheduler_service.is_sr_backfill_ready() are
+     both exposed for out-of-file consumers.
 
 start() is idempotent.
 shutdown() stops scheduler if running.
+
+Defensive contract (documented in-file):
+  Any job that invokes dummy_order_service — directly OR indirectly —
+  MUST call sr_backfill_ready() first. Skipping the guard reopens the
+  14:16-on-2026-10-29 class of bug (order placed against a partially-
+  backfilled SR series on a mid-day restart).
 
 
 ================================================================================
@@ -817,8 +991,9 @@ Page / UI:
   GET /                         index.html dashboard
   GET /charts                   instrument search page
   GET /chart/{instrument_key}   chart page
-  GET /dashboard                strategy dashboard
+  GET /isolated                 isolated-instrument page
   GET /isolated-dashboard       redirect to /
+  GET /dashboard                strategy dashboard
   GET /favicon.ico              204
 
 Logs:
@@ -848,6 +1023,11 @@ Live REST:
   GET /live/snapshot
   GET /live/snapshot/{instrument_key}
 
+Live SR calc (on-demand stateless SR):
+  GET  /live-sr/calc
+  GET  /live-sr/calc/{underlying}/{strike}/{type}
+  POST /live-sr/calc/batch
+
 Admin — core:
   POST /admin/hard-refresh
   GET  /admin/backup-status
@@ -859,46 +1039,25 @@ Admin — folders:
   GET /admin/folders/{folder_name}
   GET /admin/folders/{folder_name}/download
 
-Admin — Opening Range:
-  GET  /admin/opening-range
-  GET  /admin/opening-range/{instrument_key}
-  POST /admin/opening-range/recalculate
-  POST /admin/opening-range/recalculate/{instrument_key}
+Admin — Level isolation:
+  GET  /admin/level-isolation
+  GET  /admin/level-isolation/detail
+  GET  /admin/level-isolation/strategy-signal
+  GET  /admin/level-isolation/sr-tracking
+  POST /admin/level-isolation/replay           (replay backfill)
+  POST /admin/level-isolation/refresh-snapshot (snapshot-only backfill)
+  POST /admin/level-isolation/recalculate      (re-run isolation)
 
-Admin — Strategy 1:
-  GET  /admin/strategy
-  GET  /admin/strategy/indexes
-  GET  /admin/strategy/{ticker}
-  GET  /admin/strategy/{ticker}/strikes
-  POST /admin/strategy/recalculate
-  GET  /admin/strategy/isolation
-  GET  /admin/strategy/isolation/{ticker}
-  POST /admin/strategy/isolation/recalculate
-  GET  /admin/strategy/tracker/status
-  POST /admin/strategy/tracker/start
-  POST /admin/strategy/tracker/stop
-  GET  /admin/strategy/stage3
-  GET  /admin/strategy/stage3/{ticker}
-  GET  /admin/strategy/stage4
-  GET  /admin/strategy/stage4/{ticker}
-  POST /admin/strategy/order/run
+Admin — Simulation (diagnostic; NOT order placement):
+  POST /admin/simulation/run
 
-Admin — Strategy 2:
-  GET  /admin/strategy2
-  GET  /admin/strategy2/tracker/status
-  POST /admin/strategy2/tracker/start
-  POST /admin/strategy2/tracker/stop
-  POST /admin/strategy2/stage3/run
-  GET  /admin/strategy2/stage4
-  POST /admin/strategy2/stage4/run
-
-Admin — Market holiday (NEW):
+Admin — Market holiday:
   GET  /admin/market-holiday
   GET  /admin/market-holiday/{date_str}
   GET  /admin/market-holiday/cache-status
   POST /admin/market-holiday/clear-cache
 
-Admin — Orders (NEW):
+Admin — Orders:
   POST /admin/orders/buy
   POST /admin/orders/sell
   POST /admin/orders/exit-all
@@ -906,7 +1065,7 @@ Admin — Orders (NEW):
   POST /admin/orders/runtime-enable
   POST /admin/orders/runtime-disable
 
-Admin — Margin (NEW):
+Admin — Margin:
   POST /admin/orders/margin
   POST /admin/orders/margin/batch
 
@@ -933,7 +1092,7 @@ Project root:
   routes/
   services/
   token_tasks/
-  upstox_services/                <-- NEW
+  upstox_services/
   templates/
   logs/
   logs_text/
@@ -948,19 +1107,24 @@ Runtime data:
       candles.json
       ema_crosses.json
       live_crosses.json
-      opening_range.json
+      first_candle.json                          <-- replaces opening_range.json
+      level_instruments.json                     <-- per-index CE/PE strike list
+      live_sr_levels.json                        <-- pivot-based SR
     nifty/<strike>_<TYPE>/
       candles.json
       ema_crosses.json
       live_crosses.json
-      opening_range.json
+      first_candle.json
+      live_sr_levels.json
     sensex/<strike>_<TYPE>/
-      ...
+      ... (same layout as nifty)
     _adhoc/<safe_key>/
-      opening_range.json
-    strategy/                     Strategy 1 output
-    strategy2/                    Strategy 2 output
-    simulation/                   Simulation replay output
+      first_candle.json
+      live_sr_levels.json
+    level_isolated_instrument.json               <-- isolation record
+    level_isolated_instrument_sr.json            <-- pre/post-isolation SR
+    dummy_orders.json                            <-- t_feed_v1 dummy orders
+    simulation/                                  <-- replay diagnostics
 
 Logs:
   logs/<module>.log              rotating by line count, 1000 lines, 3 backups
@@ -975,11 +1139,19 @@ Important log modules:
   token_store
   upstox_token_client
   telegram_token_bot
-  margin_check                    <-- NEW
-  place_order                     <-- NEW
-  exit_all_positions              <-- NEW
-  order_runtime_service           <-- NEW
-  market_holiday_service          <-- NEW
+  margin_check
+  place_order
+  exit_all_positions
+  order_runtime_service
+  market_holiday_service
+  first_candle_service
+  level_instrument_filter_service
+  level_isolated_instrument_service
+  isolated_sr_tracker_service
+  sr_backfill_service
+  live_sr_levels_service
+  live_sr_calc_service
+  dummy_order_service
 
 Cleanup default:
   remove: data, temp, downloads, output, __pycache__, .pytest_cache,
@@ -1064,61 +1236,134 @@ Cleanup:
   CLEANUP_REMOVE_FOLDERS
   CLEANUP_RESERVED_FOLDERS
 
-Opening Range:
-  OPENING_RANGE_FILENAME
-  OPENING_RANGE_FIRST_MINUTE
-  OPENING_RANGE_HOUR
-  OPENING_RANGE_MINUTE
-  OPENING_RANGE_SECOND
-  OPENING_RANGE_REST_FALLBACK_ENABLED       <-- NEW
-  OPENING_RANGE_REST_TIMEOUT_SECONDS        <-- NEW
+First candle OR:
+  FIRST_CANDLE_ENABLED
+  FIRST_CANDLE_HOUR
+  FIRST_CANDLE_MINUTE
+  FIRST_CANDLE_SECOND
+  FIRST_CANDLE_WORKERS
+  FIRST_CANDLE_REST_FALLBACK_ENABLED
+  FIRST_CANDLE_REST_TIMEOUT_SECONDS
 
-Strategy 1:
-  STRATEGY_ENABLED
-  STRATEGY_BASE_DIR
-  STRATEGY_STAGE_1_NAME
-  STRATEGY_STAGE_2_NAME
-  STRATEGY_STAGE_3_NAME
-  STRATEGY_STAGE_4_NAME
-  STRATEGY_BUFFER_MODE
-  STRATEGY_INDEXES_JSON
-  STRATEGY_FETCH_HISTORY
-  STRATEGY_HISTORY_DAYS
-  STRATEGY_MAX_WORKERS
-  STRATEGY_ISOLATION_ENABLED
-  STRATEGY_ISOLATION_LOOKBACK_MINUTES
-  STRATEGY_ISOLATION_SKIP_UNRESOLVED
-  STRATEGY_TRACKER_ENABLED
-  STRATEGY_TRACKER_WINDOW_START
-  STRATEGY_TRACKER_WINDOW_END
-  STRATEGY_TRACKER_POLL_SECONDS
-  STRATEGY_ORDER_ENABLED
-  STRATEGY_ORDER_NIFTY_PICKS
-  STRATEGY_ORDER_SENSEX_PICKS
-  STRATEGY_ORDER_FINAL_PICKS
-  STRATEGY_ORDER_HOUR
-  STRATEGY_ORDER_MINUTE
-  STRATEGY_ORDER_QTY
-  STRATEGY_TRACKER_INDEX_KEYS
-  STRATEGY_VERBOSE_LOG
-  STRATEGY_STAGE1_OR_RETRY_ATTEMPTS         <-- NEW
-  STRATEGY_STAGE1_OR_RETRY_SLEEP_SECONDS    <-- NEW
-  STRATEGY_STAGE1_GLOBAL_OR_RETRY           <-- NEW
+Level-instrument filter:
+  LEVEL_FILTER_ENABLED
+  LEVEL_FILTER_INDEXES
+  LEVEL_FILTER_STRIKE_STEP_NIFTY
+  LEVEL_FILTER_STRIKE_STEP_SENSEX
+  LEVEL_FILTER_STRIKE_STEP_BANKNIFTY
+  LEVEL_FILTER_STRIKE_STEP_MIDCPNIFTY
+  LEVEL_FILTER_STRIKE_STEPS_JSON
+  LEVEL_FILTER_RANGE_MODE
+  LEVEL_FILTER_INCLUDE_ATM_PLUS_MINUS
+  LEVEL_FILTER_INCLUDE_INDEX_SR
 
-Strategy 2:
-  STRATEGY_2_ENABLED
-  STRATEGY_2_BASE_DIR
-  STRATEGY_2_ISOLATION_LEVEL
-  STRATEGY_2_TICKER_PRIORITY
-  STRATEGY_2_TRACKER_ENABLED
-  STRATEGY_2_TRACKER_WINDOW_START
-  STRATEGY_2_TRACKER_WINDOW_END
-  STRATEGY_2_TRACKER_POLL_SECONDS
-  STRATEGY_2_ORDER_ENABLED
-  STRATEGY_2_ORDER_QTY
-  STRATEGY_2_STAGE_3_NAME
-  STRATEGY_2_STAGE_4_NAME
-  STRATEGY_2_TELEGRAM_QUIET_WHEN_EMPTY      <-- NEW
+Live SR levels:
+  LIVE_SR_ENABLED
+  LIVE_SR_TRACK_ALL_INSTRUMENTS
+  LIVE_SR_LEFT_BARS
+  LIVE_SR_RIGHT_BARS
+  LIVE_SR_MAX_CANDLES
+  LIVE_SR_FILENAME
+  LIVE_SR_PERSIST_EVERY_N_CANDLES
+  LIVE_SR_REFRESH_FROM_API_ENABLED
+  LIVE_SR_REFRESH_FROM_API_MINUTES
+
+SR backfill:
+  SR_BACKFILL_ENABLED
+  SR_BACKFILL_MAX_WORKERS
+  SR_BACKFILL_START_HOUR
+  SR_BACKFILL_START_MINUTE
+  SR_BACKFILL_END_HOUR
+  SR_BACKFILL_END_MINUTE
+  SR_BACKFILL_INCLUDE_HISTORICAL
+
+Multi-index surveillance:
+  STRATEGY_MONITORED_INDICES
+  STRATEGY_TOUCH_PRIORITY_ORDER
+  STRATEGY_ROUTED_EXECUTION_INDEX
+  STRATEGY_INDEX_PRIORITY           (derived)
+
+Level isolation:
+  LEVEL_ISOLATION_ENABLED
+  LEVEL_ISOLATION_FILENAME
+  LEVEL_ISOLATION_CHECK_INTERVAL_SECONDS
+  LEVEL_ISOLATION_NIFTY_TICK_STALE_SECONDS
+  LEVEL_ISOLATION_BACKFILL_WINDOW_START_HOUR
+  LEVEL_ISOLATION_BACKFILL_WINDOW_START_MINUTE
+  LEVEL_ISOLATION_BACKFILL_WINDOW_END_HOUR
+  LEVEL_ISOLATION_BACKFILL_WINDOW_END_MINUTE
+  LEVEL_ISOLATION_TELEGRAM_ENABLED
+  LEVEL_ISOLATION_REPLAY_USE_SERIES_OR
+  LEVEL_ISOLATION_OR_SELF_HEAL_VERIFY_HL
+  STRATEGY_RELATIONAL_R3_BIAS
+  STRATEGY_RELATIONAL_S3_BIAS
+
+Isolated SR tracker:
+  LEVEL_ISOLATION_SR_FILENAME
+  LEVEL_ISOLATION_SR_TELEGRAM_ENABLED
+
+Live SR calc:
+  LIVE_SR_CALC_DEFAULT_LOOKBACK_DAYS
+  LIVE_SR_CALC_MAX_CANDLES
+
+Strategy entry signal — SIMULATION-ONLY (does NOT drive orders):
+  STRATEGY_ENTRY_ENABLED
+  STRATEGY_ENTRY_ALLOW_CROSSOVER
+  STRATEGY_ENTRY_BUFFER_MINUTES
+  STRATEGY_ENTRY_BLOCKED_BY_RESISTANCE
+  STRATEGY_ENTRY_ALLOW_AUTO_REVERSE
+  STRATEGY_ENTRY_PRIORITIZE_SUPPORT
+  STRATEGY_ENTRY_PIVOT_LEFT_BARS
+  STRATEGY_ENTRY_PIVOT_RIGHT_BARS
+  STRATEGY_ENTRY_STOP_LTP_TIERS
+  STRATEGY_ENTRY_STOP_TICK_ROUNDING
+  STRATEGY_MAX_STOP_PCT
+  STRATEGY_ENTRY_ALLOW_PROMOTION     (DORMANT)
+  STRATEGY_ENTRY_ALLOW_RE_PROMOTION  (DORMANT)
+  STRATEGY_ENTRY_REGISTER_COUNTER_SIDE
+  STRATEGY_ENTRY_CANDLE_FALLBACK_ENABLED
+  STRATEGY_ENTRY_TARGET_REQUIRE_POST_ENTRY
+  STRATEGY_ENTRY_FREEZE_ENTRY_ON_PROMOTION
+
+  REMOVED in G1 v4.1 (no reader — safe to delete from .env):
+    STRATEGY_ENTRY_INCLUDE_PRETOUCH
+    STRATEGY_ENTRY_ONLY_ONCE_PER_DAY
+    STRATEGY_ENTRY_FIRST_TO_CONFIRM_WINS
+
+Simulation:
+  SIMULATION_ENABLED
+  SIMULATION_USE_REGIME_TARGETS
+  SIMULATION_STOP_MODE_HIGH
+  SIMULATION_SAME_BAR_STOP_FIRST
+  SIMULATION_TICK_ROUNDING
+
+Dummy orders (t_feed_v1-market-engine-v3):
+  DUMMY_ORDER_ENABLED
+  DUMMY_ORDER_TRACK_INTERVAL_SECONDS
+  DUMMY_ORDER_START_HOUR
+  DUMMY_ORDER_START_MINUTE
+  DUMMY_ORDER_EOD_HOUR
+  DUMMY_ORDER_EOD_MINUTE
+  DUMMY_ORDER_FILENAME
+  DUMMY_ORDER_TELEGRAM_ENABLED
+
+Dummy-order deterministic-replay guards (2026-11-04):       <-- NEW
+  DUMMY_ORDER_ALLOW_LTP_ENTRY_FALLBACK            (false)
+  DUMMY_ORDER_STRICT_DETERMINISTIC_REPLAY         (true)
+  DUMMY_ORDER_WAIT_FOR_SR_BACKFILL                (true)
+  DUMMY_ORDER_WAIT_FOR_SR_BACKFILL_TIMEOUT_SECONDS (120)
+  DUMMY_ORDER_DISABLE_RUNTIME_PATH_SWITCH         (true)
+  DUMMY_ORDER_DRIFT_GUARD                         (true)
+
+Strategy order (t_feed_v1 tunables):
+  STRATEGY_ORDER_STOP_LOSS_PCT                    (0.30)
+  STRATEGY_ORDER_MILESTONE_GAIN_POINTS            (50.0)
+  STRATEGY_ORDER_REVERSAL_CUTOFF_HOUR             (9)
+  STRATEGY_ORDER_REVERSAL_CUTOFF_MINUTE           (30)
+
+EMA calc:
+  EMA_CALC_DEFAULT_LOOKBACK_DAYS
+  EMA_CALC_MAX_CANDLES
 
 Daily backup:
   DAILY_BACKUP_ENABLED
@@ -1132,10 +1377,35 @@ Daily backup:
   DAILY_BACKUP_MAX_BLOB_MB
   DAILY_BACKUP_SOURCE_LABEL
 
-Simulation replay:
-  SIMULATION_ENABLED
-  SIMULATION_BASE_DIR
-  SIMULATION_S2_CROSS_BUFFER_MINUTES
+Readiness:
+  READINESS_DIGEST_ENABLED / HOUR / MINUTE
+  READINESS_PREFLIGHT_ENABLED / HOUR / MINUTE
+  READINESS_CLOCK_DRIFT_MAX_SECONDS
+  READINESS_DISK_FREE_MIN_GB
+  READINESS_REGISTRY_MIN_COUNT
+  READINESS_TOKEN_MAX_AGE_MINUTES
+  READINESS_SMOKE_TEST_ENABLED
+
+Deprecated / ignored:
+  STRATEGY_EXT_PATH_B_ENABLED             (ignored; Path A/B removed)
+  STRATEGY_EXT_TRACKED_UNDERLYINGS        (ignored)
+  STRATEGY_EXT_LOT_SIZE_NIFTY             (ignored)
+  STRATEGY_EXT_LOT_SIZE_SENSEX            (ignored)
+  STRATEGY_EXT_PROFIT_ACTIVATION_RS       (ignored)
+  STRATEGY_EXT_TRAIL_GAP_RS               (ignored)
+  STRATEGY_EXT_TRAIL_FLOOR_RS             (ignored)
+  STRATEGY_EXT_R3_BREAKOUT_ACTIVATION_ENABLED (ignored)
+  STRATEGY_EXT_BEARISH_EXIT_ENABLED       (ignored)
+  STRATEGY_EXT_BEARISH_CANDLES            (ignored)
+  STRATEGY_EXT_LOCKDOWN_ON_TARGET         (ignored)
+  STRATEGY_TOUCH_POLL_INTERVAL_SEC        (ignored)
+  DUMMY_ORDER_CREATE_REGIME_VARIANT       (ignored)
+  DUMMY_ORDER_MAX_ORDERS_PER_DAY          (ignored)
+  DUMMY_ORDER_RECONCILE_MINUTES           (ignored)
+  STRATEGY_STAGE_1_NAME / 2 / 3 / 4       (ignored — Strategy 1 removed)
+  STRATEGY_2_STAGE_3_NAME / 4             (ignored — Strategy 2 removed)
+  STRATEGY_BASE_DIR / STRATEGY_2_BASE_DIR (ignored)
+  STRATEGY_INDEXES_JSON                   (ignored)
 
 
 ================================================================================
@@ -1166,59 +1436,93 @@ Change EMA / cross rules:
   Methods: _compute_cross(), _detect_cross(), _ema_series(), _atr(), _sma()
   Config: EMA_* variables
 
-Change Opening Range formula:
-  File: services/opening_range_service.py
+Change First Candle OR formula:
+  File: services/first_candle_service.py
   Function: compute_levels()
 
-Change Opening Range REST fallback:                            <-- NEW
-  File: services/opening_range_service.py
+Change First Candle REST fallback:
+  File: services/first_candle_service.py
   Function: _fetch_first_candle_via_rest()
-  Config: OPENING_RANGE_REST_FALLBACK_ENABLED,
-          OPENING_RANGE_REST_TIMEOUT_SECONDS
+  Config: FIRST_CANDLE_REST_FALLBACK_ENABLED,
+          FIRST_CANDLE_REST_TIMEOUT_SECONDS
 
-Change Stage-1 OR retry:                                       <-- NEW
+Change the level-instrument filter:
+  File: services/level_instrument_filter_service.py
+  Config: LEVEL_FILTER_*
+
+Change the level-isolation arbitration:
   Files:
-    services/strategy_selection_service.py  (_process_index)
-    routes/admin_routes.py                  (_run_stage1_with_or_retry)
+    services/level_isolated_instrument_service.py
+    core/config.py
   Config:
-    STRATEGY_STAGE1_OR_RETRY_ATTEMPTS
-    STRATEGY_STAGE1_OR_RETRY_SLEEP_SECONDS
-    STRATEGY_STAGE1_GLOBAL_OR_RETRY
+    STRATEGY_MONITORED_INDICES
+    STRATEGY_TOUCH_PRIORITY_ORDER
+    LEVEL_ISOLATION_*
+    STRATEGY_RELATIONAL_R3_BIAS / S3_BIAS
 
-Change Strategy 2 Telegram quiet gate:                         <-- NEW
-  Files:
-    services/scheduler_service.py           (_strategy2_recheck)
-    token_tasks/strategy_2_isolation_task.py
+Change the isolated-SR tracker:
+  File: services/isolated_sr_tracker_service.py
+  Config: LEVEL_ISOLATION_SR_*
+
+Change the post-isolation order placement:
+  File: services/dummy_order_service.py
   Config:
-    STRATEGY_2_TELEGRAM_QUIET_WHEN_EMPTY
+    DUMMY_ORDER_*     (execution cadence, determinism guards)
+    STRATEGY_ORDER_*  (stop, milestone, reversal cutoff)
 
-Change market holiday gate:                                    <-- NEW
+Change the SR backfill:
+  File: services/sr_backfill_service.py
+  Config: SR_BACKFILL_*
+  IMPORTANT: keep update_replay=False for the every-2-minute live
+  refresh (see services/scheduler_service.py::_refresh_live_sr). The
+  startup backfill is the only path that should populate the replay
+  series; otherwise DUMMY_ORDER_DRIFT_GUARD loses its guarantee.
+
+Change the scheduler latch policy:
+  File: services/scheduler_service.py
+  Function: sr_backfill_ready()
+  Any new tick that reaches dummy_order_service MUST call it first.
+
+Change the SIMULATION-only STRATEGY_ENTRY_* diagnostics:
+  File: services/strategy_entry_signal_service.py
+  Config: STRATEGY_ENTRY_*
+  NOTE: these flags do NOT affect order placement. Order placement
+  lives entirely in services/dummy_order_service.py.
+
+Change market holiday gate:
   Files:
     services/market_holiday_service.py
     routes/market_holiday_routes.py
-    main.py                                 (_holiday_gate_for_startup)
+    main.py   (_holiday_gate_for_startup)
   To gate additional scheduled tasks, wrap the task body in:
     if market_holiday_service.is_trading_holiday(): return
 
-Change order runtime toggle:                                   <-- NEW
+Change order runtime toggle:
   File: services/order_runtime_service.py
   Consumers:
     upstox_services/place_order.py
     upstox_services/exit_all_positions.py
+    services/dummy_order_service.py
     routes/order_routes.py
-    routes/margin_routes.py (indirectly via place_order)
+    routes/margin_routes.py
     token_tasks/order_toggle_commands.py
 
-Change lot sizes:                                              <-- NEW
+Change lot sizes:
   File: upstox_services/lot_sizes.py
   Update LOT_SIZES and DEFAULT_LOT_SIZES_BY_EXCHANGE.
-  lot_sizes.py drives both place_order and margin_check.
+  lot_sizes.py drives place_order, margin_check, and dummy_order_service.
 
-Change the security policy:                                    <-- NEW
+Change the security policy:
   File: upstox_services/_sanitise.py
   Update SECRET_KEYS and SECRET_MIN_LEN.
   Every order-side module imports from here, so a single change
   applies everywhere.
+
+Change config validation:
+  File: services/config_validation.py
+  Add new checks for any new pair of conflicting flags, or for any
+  flag whose "unsafe" value reopens a known bug class (see the
+  DUMMY_ORDER_* checks already in place).
 
 Change backup extraction:
   File: services/backup_data_service.py
@@ -1253,7 +1557,7 @@ Change UI:
     templates/instrument_list.html
     templates/chart.html
     templates/show_logs.html
-    templates/strategy_dashboard.html
+    templates/isolated_instrument.html
 
 Change logging:
   File: core/logger.py
@@ -1272,10 +1576,11 @@ Change cleanup:
 17. KNOWN RISKS / GOTCHAS
 ================================================================================
 
-1. README / architecture.md were outdated prior to this revision.
-   This document now reflects the actual code including Strategy 1,
-   Strategy 2, the market holiday gate, and the order / margin
-   surface.
+1. README / architecture.md were outdated before this revision.
+   This document now reflects the code including the 2026-11-02
+   order-strategy rewrite, the 2026-11-04 deterministic-replay
+   guards, the level-isolation pipeline, the market holiday gate,
+   and the order / margin surface.
 
 2. Cleanup removes data/ before backup extraction.
    Startup order is intentional: cleanup -> token -> backup -> registry.
@@ -1312,47 +1617,80 @@ Change cleanup:
 11. Upstox SDK on_close signature:
     Use on_close(*args, **kwargs). Keep it that way.
 
-12. Orphan routes: none known after this revision.
-    /health and /token/status are still not defined; verify before
-    relying on them.
+12. Port of orphan routes from earlier revisions — verify before
+    relying:
+      /health, /token/status — not defined; check before use.
 
-13. OR / Stage-1 race (RESOLVED):
-    Previously, a late 09:15 index candle caused Stage 1 to skip with
-    or_unavailable:not_calculated. Now closed by:
-      - OR REST fallback in opening_range_service
-      - per-instrument OR retry in strategy_selection_service
-      - global OR retry in admin_routes._run_stage1_with_or_retry
+13. First-candle / isolation race (RESOLVED 2026-10-26):
+    A late 09:15 index candle used to leave isolation without an OR.
+    Now closed by:
+      - first_candle REST fallback
+      - extended backfill window (09:17 -> 23:59:59 weekdays)
+      - replay-backed isolation backfill
     If any of those are disabled via env, the old behaviour returns.
 
-14. Strategy 2 Telegram flood (RESOLVED):
-    The 5-minute recheck no longer sends zero-data messages when the
-    stage-2 tree is empty, and the scheduled task only sends a
-    completion message when the isolated pick changed or a new touch
-    was recorded. Set STRATEGY_2_TELEGRAM_QUIET_WHEN_EMPTY=false only
-    if you explicitly want the old behaviour.
+14. Level-isolation phantom touch (RESOLVED 2026-10-29):
+    Mid-day restart could rebuild OR from one series and candles
+    from another, producing a trigger_ltp that contradicted the OR
+    range (trigger_ltp < R3 while OR-H > R3). Now closed by
+    LEVEL_ISOLATION_REPLAY_USE_SERIES_OR and
+    LEVEL_ISOLATION_OR_SELF_HEAL_VERIFY_HL. Leave both true unless
+    you are bisecting a regression.
 
-15. Order runtime toggle resets to ENABLED on restart by design.
+15. Dummy-order non-determinism (RESOLVED 2026-11-04):
+    Before the 2026-11-04 guards the every-2-minute SR refresh
+    reseeded the replay series, so a mid-day restart could produce
+    different entries/stops/targets for the same day. Now closed by:
+      - sr_backfill_service.run(..., update_replay=False) in
+        scheduler_service._refresh_live_sr
+      - DUMMY_ORDER_DRIFT_GUARD=true (never overwrite a stored entry)
+      - DUMMY_ORDER_STRICT_DETERMINISTIC_REPLAY=true
+        (skip unresolved entries; never substitute LTP)
+      - DUMMY_ORDER_WAIT_FOR_SR_BACKFILL=true (gate on backfill)
+      - scheduler _dummy_order_tick short-circuits on
+        sr_backfill_ready()
+    Setting any of these to false reintroduces the class of bug.
+
+16. Order runtime toggle resets to ENABLED on restart by design.
     If you need persistence across restarts, move the flag into
     MongoDB (services/order_runtime_service.py is the only file to
     change).
 
-16. place_order and margin_check never guess the lot size blindly.
+17. place_order and margin_check never guess the lot size blindly.
     The resolution chain (explicit underlying -> registry -> key scan
     -> exchange default -> unit fallback) is deterministic. If a
     future instrument has a new lot size, add it to
     upstox_services/lot_sizes.LOT_SIZES; do not let unit_fallback
     reach Upstox, because Upstox will reject qty=1 for F&O.
 
-17. No token or account identifier appears in any log line or API
+18. No token or account identifier appears in any log line or API
     response. Do not add one — the sanitiser only redacts what it
     recognises; if you introduce a new credential field, add its key
     to upstox_services/_sanitise.SECRET_KEYS.
 
-18. Market holiday gate treats provider errors as "not a holiday".
+19. Market holiday gate treats provider errors as "not a holiday".
     This is intentional: a network outage must never silently skip a
     real trading day. If Upstox is down and you still want to skip,
     do it manually via /admin/hard-refresh controls or by setting
     DAILY_REFRESH_ENABLED=false.
+
+20. STRATEGY_ENTRY_* flags no longer drive order placement.
+    Since the 2026-11-02 rewrite they feed only the diagnostic
+    consumers (POST /admin/simulation/run and GET
+    /admin/level-isolation/strategy-signal). Changing them will not
+    change any real or dummy order. Order placement is driven
+    exclusively by DUMMY_ORDER_* and STRATEGY_ORDER_*.
+
+21. STRATEGY_EXT_PATH_B_ENABLED is DEPRECATED and ignored.
+    Path selection is now derived solely from the isolation record's
+    trigger_index (governed by
+    DUMMY_ORDER_DISABLE_RUNTIME_PATH_SWITCH). Removing the key from
+    .env is safe and recommended.
+
+22. Any future tick that reaches dummy_order_service indirectly MUST
+    consult sr_backfill_ready() first. Skipping this guard reopens
+    the 14:16-on-2026-10-29 class of bug. See the DEFENSIVE CONTRACT
+    block in services/scheduler_service.py.
 
 
 ================================================================================
@@ -1362,23 +1700,35 @@ Change cleanup:
 Startup (holiday gate first):
   Holiday check -> if holiday: scheduler + telegram only
                 -> else: Clean -> token -> backup -> registry ->
-                         wire -> reset crosses -> backfill EMA ->
-                         calculate OR (with REST fallback) ->
-                         Stage 1 (with OR retry) ->
-                         Stage 2 (skipped if Stage 1 empty) ->
-                         Stage 3 tracker -> Stage 3 catch-up ->
-                         Stage 4 catch-up ->
-                         Strategy 2 tracker ->
-                         Strategy 2 Stage 3 snapshot (quiet gate) ->
-                         Strategy 2 Stage 4 (only if isolated) ->
-                         start feed -> scheduler -> telegram.
+                         pre-register core indexes ->
+                         daily_refresh backfill marker ->
+                         wire loop + cross handler ->
+                         start feed ->
+                         first_candle backfill (09:17 -> 23:59) ->
+                         level_instrument_filter (CE/PE per index) ->
+                         level-isolation backfill (replay candles) ->
+                         scheduler -> telegram.
 
 Live:
   Upstox WS -> extract tick -> EMA engine -> finalise candle ->
   detect cross -> save live_crosses.json -> broadcast crosses.
   Every tick also broadcasts feed snapshots.
+  Same finalized candle feeds:
+    live_sr_levels_service (pivot scan, persisted per instrument)
+    level_isolated_instrument_service (R3/S3 touch arbitration)
+    isolated_sr_tracker_service (new post-isolation pivots only)
 
-Order surface:
+Order placement (deterministic t_feed_v1):
+  Scheduler fires _dummy_order_tick every 30 s ->
+    if NOT sr_backfill_ready(): skip
+    else: dummy_order_service.run_once(reason="scheduled")
+      reads isolation record + frozen replay series + own OR grid
+      applies STRATEGY_ORDER_* tunables
+      guarded by DUMMY_ORDER_* determinism flags
+      writes data/dummy_orders.json
+      fires 2 Telegram messages per order (create, close)
+
+Live order surface (separate from dummy orders):
   place_order / exit_all_positions / margin_check all check
   order_runtime_service first, read the token from token_service,
   convert lots via upstox_services.lot_sizes, and sanitise every
@@ -1386,24 +1736,37 @@ Order surface:
 
 APIs:
   UI reads /live/* and /api/upstox/*.
+  Isolated page reads /admin/level-isolation/*.
   Admin triggers /admin/hard-refresh.
   Logs at /logs and /ui/logs/*.
-  OR at /admin/opening-range/*.
+  Live SR at /live-sr/calc/*.
   Holiday at /admin/market-holiday*.
   Orders at /admin/orders/*.
   Margin at /admin/orders/margin*.
-  Strategy at /admin/strategy/* and /admin/strategy2/*.
+  Simulation at /admin/simulation/run.
 
 Persistence:
   MongoDB: token + backup archive + daily backup.
   data/: candles.json, ema_crosses.json, live_crosses.json,
-         opening_range.json, strategy/, strategy2/, simulation/.
+         first_candle.json, level_instruments.json,
+         live_sr_levels.json, level_isolated_instrument.json,
+         level_isolated_instrument_sr.json, dummy_orders.json,
+         simulation/.
   logs/ + logs_text/: runtime logs.
 
 Rule:
   _run_full_refresh_sync is the single source of truth for startup,
   daily refresh, and manual hard refresh.
   Any new lifecycle task should be added there first.
+
+Determinism rule (2026-11-04):
+  same trading day
+  + same isolation record (bias side, T_iso, trigger_index)
+  + same intraday-API response
+  => same dummy orders, regardless of process start time.
+  Enforced by the six DUMMY_ORDER_* guards, by the
+  sr_backfill_ready() latch on every tick, and by the
+  update_replay=False contract on the periodic SR refresh.
 
 Security rule:
   No token, no account identifier, no Authorization header in any

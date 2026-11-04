@@ -1,3 +1,4 @@
+<!-- # templates/isolated_instrument.html -->
 {# templates/isolated_instrument.html #}
 {% extends "base.html" %}
 
@@ -1976,6 +1977,485 @@
             width: 100%;
         }
     }
+
+
+    /* ============================================================
+       GLOBAL RESPONSIVE DESIGN SYSTEM
+       Consistent typography, spacing and component behaviour
+       across desktop, tablet and mobile viewports.
+       ============================================================ */
+    :root {
+        color-scheme: light;
+        --iso-radius-sm: 10px;
+        --iso-radius-md: 14px;
+        --iso-radius-lg: 20px;
+        --iso-page-gutter: clamp(12px, 2.4vw, 32px);
+        --iso-section-gap: clamp(14px, 1.8vw, 22px);
+        --iso-body-size: clamp(0.84rem, 0.25vw + 0.78rem, 0.96rem);
+        --iso-small-size: clamp(0.70rem, 0.2vw + 0.66rem, 0.82rem);
+        --iso-heading-size: clamp(1.15rem, 1.3vw + 0.9rem, 1.55rem);
+    }
+
+    *, *::before, *::after {
+        box-sizing: border-box;
+    }
+
+    html {
+        width: 100%;
+        min-width: 320px;
+        scroll-behavior: smooth;
+        -webkit-text-size-adjust: 100%;
+        text-size-adjust: 100%;
+    }
+
+    body {
+        width: 100%;
+        min-width: 320px;
+        margin: 0;
+        overflow-x: hidden;
+        font-size: var(--iso-body-size);
+        line-height: 1.5;
+        text-rendering: optimizeLegibility;
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+    }
+
+    button, input, select, textarea {
+        font: inherit;
+    }
+
+    button, a {
+        -webkit-tap-highlight-color: transparent;
+    }
+
+    a:focus-visible, button:focus-visible,
+    input:focus-visible, select:focus-visible,
+    textarea:focus-visible {
+        outline: 3px solid rgba(37, 99, 235, 0.35);
+        outline-offset: 3px;
+    }
+
+    .iso-page {
+        width: min(100%, 1480px);
+        max-width: 1480px;
+        padding: clamp(12px, 2.2vw, 30px) var(--iso-page-gutter);
+        margin-inline: auto;
+    }
+
+    .iso-topbar {
+        align-items: center;
+        gap: 12px 18px;
+        margin-bottom: var(--iso-section-gap);
+    }
+
+    .iso-topbar-left, .iso-topbar-right {
+        min-width: 0;
+    }
+
+    .iso-topbar-title {
+        font-size: var(--iso-heading-size);
+        line-height: 1.2;
+        letter-spacing: -0.035em;
+    }
+
+    .iso-day-label, .iso-status-pill {
+        font-size: var(--iso-small-size);
+    }
+
+    .iso-btn {
+        min-height: 40px;
+        justify-content: center;
+        white-space: nowrap;
+        border-radius: var(--iso-radius-sm);
+        padding: 9px 13px;
+    }
+
+    .iso-banner {
+        padding: clamp(14px, 2vw, 22px);
+        gap: 14px;
+        margin-bottom: var(--iso-section-gap);
+    }
+
+    .iso-hero {
+        width: 100%;
+        align-items: stretch;
+        gap: clamp(18px, 2.5vw, 30px);
+        padding: clamp(18px, 2.6vw, 34px);
+        margin-bottom: var(--iso-section-gap);
+        border-radius: var(--iso-radius-lg);
+    }
+
+    .iso-hero-left {
+        flex: 1 1 460px;
+        min-width: min(100%, 280px);
+    }
+
+    .iso-hero-symbol {
+        font-size: clamp(1.35rem, 2.2vw, 2rem);
+        line-height: 1.2;
+        overflow-wrap: anywhere;
+    }
+
+    .iso-hero-key {
+        overflow-wrap: anywhere;
+        font-size: var(--iso-small-size);
+    }
+
+    .iso-hero-meta {
+        grid-template-columns: repeat(auto-fit, minmax(min(100%, 145px), 1fr));
+        gap: 12px 16px;
+    }
+
+    .iso-hero-meta > div {
+        min-width: 0;
+    }
+
+    .iso-hero-meta .meta-value {
+        overflow-wrap: anywhere;
+    }
+
+    .iso-hero-right {
+        flex: 0 1 250px;
+        min-width: min(100%, 220px);
+        align-items: stretch;
+        justify-content: flex-start;
+        gap: 12px;
+    }
+
+    .iso-hero-chart-btn,
+    .iso-hero-layout-btn,
+    .iso-hero-opposite-btn {
+        width: 100%;
+        min-height: 44px;
+        justify-content: center;
+        padding: 11px 14px;
+        border-radius: 12px;
+        text-align: center;
+        font-size: 0.88rem;
+        line-height: 1.25;
+        white-space: normal;
+    }
+
+    .iso-hero-opposite-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        color: #fff;
+        background: #7c3aed;
+        border: 1px solid #7c3aed;
+        text-decoration: none;
+        font-weight: 800;
+        box-shadow: 0 6px 18px rgba(124, 58, 237, 0.25);
+        transition: transform .15s ease, background .15s ease,
+                    box-shadow .15s ease;
+    }
+
+    .iso-hero-opposite-btn:hover {
+        color: #fff;
+        background: #6d28d9;
+        border-color: #6d28d9;
+        transform: translateY(-1px);
+    }
+
+    .iso-hero-opposite-btn.is-hidden {
+        display: none;
+    }
+
+    .iso-hero-price {
+        width: 100%;
+        text-align: inherit;
+        padding: 12px 14px;
+        border: 1px solid rgba(148, 163, 184, .20);
+        border-radius: 12px;
+        background: rgba(255, 255, 255, .045);
+    }
+
+    .iso-hero-price .price-value {
+        font-size: clamp(1.25rem, 2vw, 1.65rem);
+        overflow-wrap: anywhere;
+    }
+
+    .iso-card {
+        margin-bottom: var(--iso-section-gap);
+        border-radius: var(--iso-radius-md);
+    }
+
+    .iso-card-header {
+        gap: 10px;
+        padding: 14px clamp(14px, 1.8vw, 22px);
+        font-size: clamp(.88rem, .25vw + .82rem, .98rem);
+    }
+
+    .iso-card-body {
+        padding: clamp(13px, 1.8vw, 22px);
+    }
+
+    .iso-row {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: var(--iso-section-gap);
+    }
+
+    .live-feed-tiles,
+    .snapshot-tiles,
+    .or-grid,
+    .do-summary-strip {
+        grid-template-columns: repeat(auto-fit, minmax(min(100%, 190px), 1fr));
+        gap: 12px;
+    }
+
+    .live-tile, .snapshot-tile, .or-block,
+    .snapshot-or-block, .do-summary-tile {
+        min-width: 0;
+        border-radius: 12px;
+        padding: clamp(12px, 1.4vw, 18px);
+    }
+
+    .live-tile.live-tile-primary {
+        grid-column: span 2;
+    }
+
+    .live-tile-value {
+        font-size: clamp(1.25rem, 1.4vw, 1.55rem);
+        overflow-wrap: anywhere;
+    }
+
+    .live-tile.live-tile-primary .live-tile-value {
+        font-size: clamp(1.55rem, 2vw, 2rem);
+    }
+
+    .iso-table-wrap {
+        width: 100%;
+        max-width: 100%;
+        overflow-x: auto;
+        overscroll-behavior-x: contain;
+        -webkit-overflow-scrolling: touch;
+        border-radius: 8px;
+    }
+
+    .iso-table {
+        min-width: 620px;
+        font-size: .82rem;
+    }
+
+    .iso-table th, .iso-table td {
+        padding: 10px 12px;
+    }
+
+    .reason-step {
+        gap: 12px;
+        padding: 12px 14px;
+    }
+
+    .entry-candidates {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 14px;
+    }
+
+    .entry-candidate {
+        min-width: 0;
+    }
+
+    .entry-grid {
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        overflow-wrap: anywhere;
+    }
+
+    .sr-header-pills, .sr-legend {
+        margin-left: 0;
+    }
+
+    @media (max-width: 1100px) {
+        .iso-row {
+            grid-template-columns: minmax(0, 1fr);
+        }
+
+        .iso-hero-left {
+            flex-basis: 100%;
+        }
+
+        .iso-hero-right {
+            flex: 1 1 100%;
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            align-items: stretch;
+        }
+
+        .iso-hero-price {
+            text-align: left;
+        }
+    }
+
+    @media (max-width: 700px) {
+        .iso-page {
+            padding: 12px;
+        }
+
+        .iso-topbar {
+            align-items: flex-start;
+            flex-direction: column;
+        }
+
+        .iso-topbar-left {
+            width: 100%;
+            gap: 9px 12px;
+        }
+
+        .iso-topbar-right {
+            width: 100%;
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            align-items: stretch;
+            gap: 8px;
+        }
+
+        .iso-topbar-right .iso-day-label {
+            grid-column: 1 / -1;
+        }
+
+        .iso-topbar-right .iso-btn {
+            width: 100%;
+            min-width: 0;
+            white-space: normal;
+            padding-inline: 8px;
+        }
+
+        .iso-hero {
+            flex-direction: column;
+            padding: 17px;
+            gap: 18px;
+        }
+
+        .iso-hero-left {
+            flex-basis: auto;
+            width: 100%;
+        }
+
+        .iso-hero-right {
+            width: 100%;
+            min-width: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: stretch;
+        }
+
+        .iso-hero-price {
+            text-align: left;
+        }
+
+        .iso-hero-meta {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 11px 12px;
+        }
+
+        .iso-banner {
+            padding: 13px;
+            gap: 11px;
+            border-radius: 12px;
+        }
+
+        .banner-icon {
+            width: 40px;
+            height: 40px;
+            font-size: 1.2rem;
+        }
+
+        .live-feed-tiles,
+        .snapshot-tiles,
+        .or-grid,
+        .do-summary-strip {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .live-tile.live-tile-primary {
+            grid-column: span 2;
+        }
+
+        .entry-candidates {
+            grid-template-columns: minmax(0, 1fr);
+        }
+
+        .iso-card-header {
+            flex-wrap: wrap;
+        }
+
+        .sr-header-pills {
+            width: 100%;
+            flex-wrap: wrap;
+        }
+
+        .sr-legend {
+            width: 100%;
+            margin-left: 0;
+        }
+
+        .sim-run-row {
+            align-items: stretch;
+        }
+
+        .sim-run-row .iso-btn {
+            width: 100%;
+        }
+    }
+
+    @media (max-width: 420px) {
+        .iso-page {
+            padding: 9px;
+        }
+
+        .iso-topbar-title {
+            font-size: 1.12rem;
+        }
+
+        .iso-status-pill {
+            padding: 5px 9px;
+            font-size: .68rem;
+        }
+
+        .iso-hero {
+            padding: 14px;
+        }
+
+        .iso-hero-meta {
+            grid-template-columns: minmax(0, 1fr);
+        }
+
+        .live-feed-tiles,
+        .snapshot-tiles,
+        .or-grid,
+        .do-summary-strip {
+            grid-template-columns: minmax(0, 1fr);
+        }
+
+        .live-tile.live-tile-primary {
+            grid-column: span 1;
+        }
+
+        .entry-grid {
+            grid-template-columns: minmax(0, 1fr);
+        }
+
+        .entry-grid .value {
+            text-align: left;
+        }
+
+        .iso-card-body {
+            padding: 12px;
+        }
+
+        .reason-step {
+            padding: 11px;
+        }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+        *, *::before, *::after {
+            scroll-behavior: auto !important;
+            transition-duration: .01ms !important;
+            animation-duration: .01ms !important;
+            animation-iteration-count: 1 !important;
+        }
+    }
+
 </style>
 {% endblock %}
 
@@ -2042,8 +2522,14 @@
             <div class="iso-hero-meta" id="hero-meta"></div>
         </div>
         <div class="iso-hero-right">
-            <a href="#" class="iso-hero-chart-btn" id="hero-chart-btn">
+            <a href="#" class="iso-hero-chart-btn" id="hero-chart-btn"
+               target="_blank" rel="noopener noreferrer">
                 <i class="bi bi-graph-up-arrow"></i> Open Chart
+            </a>
+            <a href="#" class="iso-hero-opposite-btn is-hidden" id="hero-opposite-chart-btn"
+               target="_blank" rel="noopener noreferrer"
+               title="Open the opposite option side for the same strike and expiry">
+                <i class="bi bi-arrow-left-right"></i> Open Opposite Chart
             </a>
             <a href="#" class="iso-hero-layout-btn is-hidden" id="hero-layout-btn"
                target="_blank" rel="noopener noreferrer"
@@ -3216,6 +3702,83 @@
         btn.style.display = avail.needsRefresh ? "inline-flex" : "none";
     }
 
+    /* ---------- Opposite option chart ---------- */
+    function normalizeExpiry(value) {
+        if (!value) return "";
+        const raw = String(value).trim();
+        const parsed = new Date(raw);
+        return Number.isNaN(parsed.getTime())
+            ? raw.toUpperCase().replace(/[^A-Z0-9]/g, "")
+            : parsed.toISOString().slice(0, 10);
+    }
+
+    async function renderOppositeChartButton(iso) {
+        const btn = document.getElementById("hero-opposite-chart-btn");
+        if (!btn) return;
+
+        btn.classList.add("is-hidden");
+        btn.removeAttribute("href");
+
+        const currentType = String(iso && iso.type || "").toUpperCase();
+        const oppositeType = currentType === "CE" ? "PE"
+            : currentType === "PE" ? "CE" : "";
+        const strike = parseNum(iso && iso.strike);
+
+        if (!iso || !oppositeType || strike === null) return;
+
+        // Search the existing instrument metadata endpoint, then require an
+        // exact strike + opposite option type match before creating the link.
+        const symbol = String(iso.trading_symbol || "");
+        const key = String(iso.instrument_key || "");
+        const underlying = String(
+            iso.underlying || iso.underlying_index || iso.routed_index ||
+            symbol.split(/\\s+/)[0] || ""
+        ).trim();
+        const query = [underlying, String(strike), oppositeType]
+            .filter(Boolean).join(" ");
+
+        try {
+            const response = await fetch(
+                SEARCH_INSTRUMENTS_URL + "?query=" +
+                    encodeURIComponent(query) + "&limit=30"
+            );
+            if (!response.ok) throw new Error("HTTP " + response.status);
+
+            const payload = await response.json();
+            const results = Array.isArray(payload.results) ? payload.results : [];
+            const wantedExpiry = normalizeExpiry(iso.expiry);
+
+            const match = results.find(item => {
+                if (!item || !item.instrument_key) return false;
+                const itemType = String(item.type || "").toUpperCase();
+                const itemStrike = parseNum(item.strike);
+                if (itemType !== oppositeType || itemStrike !== strike) return false;
+
+                const itemExpiry = normalizeExpiry(item.expiry);
+                if (wantedExpiry && (!itemExpiry || wantedExpiry !== itemExpiry)) {
+                    return false;
+                }
+
+                // If the metadata provides an underlying, avoid crossing indices.
+                const itemUnderlying = String(item.underlying || "").trim().toUpperCase();
+                if (underlying && itemUnderlying &&
+                    !itemUnderlying.includes(underlying.toUpperCase())) {
+                    return false;
+                }
+                return true;
+            });
+
+            if (!match) return;
+
+            btn.href = "/chart/" + encodeURIComponent(match.instrument_key);
+            btn.title = "Open opposite " + oppositeType + " chart: " +
+                (match.trading_symbol || match.instrument_key);
+            btn.classList.remove("is-hidden");
+        } catch (error) {
+            console.warn("[isolated-instrument] opposite chart lookup failed:", error);
+        }
+    }
+
     /* ---------- HERO ---------- */
     function renderHero(d) {
         const hero = document.getElementById("iso-hero");
@@ -3334,6 +3897,8 @@
             chartBtn.target = "_blank";
             chartBtn.rel = "noopener noreferrer";
         }
+
+        renderOppositeChartButton(iso);
 
         const layoutBtn = document.getElementById("hero-layout-btn");
         if (layoutBtn) {

@@ -97,6 +97,24 @@ operators are not misled into thinking they do something:
 A fourth flag, ``STRATEGY_ENTRY_BLOCKED_BY_RESISTANCE``, remains
 defined because it **is** read by ``_arm_bias_on_support()`` — it
 gates the fast-window resistance blocker.
+
+Deterministic replay guards (2026-11-04)
+----------------------------------------
+Six new ``DUMMY_ORDER_*`` flags make the post-isolation execution
+pipeline auditable and force deterministic replay when the SR
+backfill is incomplete. They are documented in detail in the DUMMY
+ORDERS block below; all default to the safe deterministic behaviour:
+
+    DUMMY_ORDER_ALLOW_LTP_ENTRY_FALLBACK            (default False)
+    DUMMY_ORDER_STRICT_DETERMINISTIC_REPLAY         (default True)
+    DUMMY_ORDER_WAIT_FOR_SR_BACKFILL                (default True)
+    DUMMY_ORDER_WAIT_FOR_SR_BACKFILL_TIMEOUT_SECONDS (default 120)
+    DUMMY_ORDER_DISABLE_RUNTIME_PATH_SWITCH         (default True)
+    DUMMY_ORDER_DRIFT_GUARD                         (default True)
+
+A ``DEPRECATION NOTICE`` block was also added (DUMMY ORDERS section)
+stating that ``STRATEGY_EXT_PATH_B_ENABLED`` and the ``STRATEGY_ENTRY_*``
+keys are now diagnostics / simulation-only.
 """
 
 import os
@@ -659,6 +677,107 @@ DUMMY_ORDER_FILENAME = _str(
 # messages over its lifetime — one on creation, one on close. SKIPPED
 # records fire a single WARNING message.
 DUMMY_ORDER_TELEGRAM_ENABLED = _bool("DUMMY_ORDER_TELEGRAM_ENABLED", True)
+
+# ---- Deterministic replay / safety guards (2026-11-04) ----------------- #
+# These flags make the post-isolation execution pipeline auditable. All
+# default to the SAFE DETERMINISTIC behaviour — no .env change required.
+#
+#   DUMMY_ORDER_ALLOW_LTP_ENTRY_FALLBACK
+#       When True, the service may fall back to the live LTP when no
+#       deterministic SR-based entry price can be resolved. This
+#       restores the pre-2026-11-04 behaviour and is intended for
+#       DEBUGGING ONLY — it undermines reproducibility.
+#       Default: False.
+#
+#   DUMMY_ORDER_STRICT_DETERMINISTIC_REPLAY
+#       When True, unresolved entries are SKIPPED (never substituted
+#       with LTP). This is the primary "deterministic by default"
+#       switch. If both this flag and
+#       DUMMY_ORDER_ALLOW_LTP_ENTRY_FALLBACK are set, the strict flag
+#       wins (skip-on-unresolved takes precedence).
+#       Default: True.
+#
+#   DUMMY_ORDER_WAIT_FOR_SR_BACKFILL
+#       When True, ``run_once()`` waits for the SR backfill to have
+#       completed before attempting the first post-isolation trigger.
+#       Prevents racing a mid-day restart into an incomplete SR state.
+#       Default: True.
+#
+#   DUMMY_ORDER_WAIT_FOR_SR_BACKFILL_TIMEOUT_SECONDS
+#       Hard cap on the wait above. If the backfill is not complete
+#       within this window the tick is skipped and the next tick
+#       retries. Only meaningful when DUMMY_ORDER_WAIT_FOR_SR_BACKFILL
+#       is True.
+#       Default: 120 seconds.
+#
+#   DUMMY_ORDER_DISABLE_RUNTIME_PATH_SWITCH
+#       When True (recommended), the Path A / Path B code path is
+#       derived SOLELY from the isolation record's ``trigger_index``
+#       (MIDCPNIFTY → Path B, everything else → Path A). The runtime
+#       override (env-driven path switching) is disabled, so replay
+#       is a pure function of the isolation record.
+#       Default: True.
+#
+#   DUMMY_ORDER_DRIFT_GUARD
+#       When True, an existing stored entry must NOT be overwritten by
+#       a later catch-up recomputation. If a mismatch is detected a
+#       WARNING is logged and the original entry is retained. Prevents
+#       silent drift when the service restarts mid-day and re-derives
+#       an entry from a different candle window.
+#       Default: True.
+DUMMY_ORDER_ALLOW_LTP_ENTRY_FALLBACK = _bool(
+    "DUMMY_ORDER_ALLOW_LTP_ENTRY_FALLBACK", False
+)
+DUMMY_ORDER_STRICT_DETERMINISTIC_REPLAY = _bool(
+    "DUMMY_ORDER_STRICT_DETERMINISTIC_REPLAY", True
+)
+DUMMY_ORDER_WAIT_FOR_SR_BACKFILL = _bool(
+    "DUMMY_ORDER_WAIT_FOR_SR_BACKFILL", True
+)
+DUMMY_ORDER_WAIT_FOR_SR_BACKFILL_TIMEOUT_SECONDS = max(
+    1, _int("DUMMY_ORDER_WAIT_FOR_SR_BACKFILL_TIMEOUT_SECONDS", 120)
+)
+DUMMY_ORDER_DISABLE_RUNTIME_PATH_SWITCH = _bool(
+    "DUMMY_ORDER_DISABLE_RUNTIME_PATH_SWITCH", True
+)
+DUMMY_ORDER_DRIFT_GUARD = _bool(
+    "DUMMY_ORDER_DRIFT_GUARD", True
+)
+
+# ---------------------------------------------------------------------------
+# DEPRECATION NOTICE — Path A/B runtime switch and STRATEGY_ENTRY_* flags
+# ---------------------------------------------------------------------------
+# ``STRATEGY_EXT_PATH_B_ENABLED`` is DEPRECATED and is no longer consumed
+# by any service. Path selection is now derived PURELY from the isolation
+# record's ``trigger_index`` (see DUMMY_ORDER_DISABLE_RUNTIME_PATH_SWITCH
+# above). If your .env still sets ``STRATEGY_EXT_PATH_B_ENABLED`` the
+# value is silently ignored.
+#
+# The following ``STRATEGY_ENTRY_*`` / ``STRATEGY_MAX_STOP_PCT`` flags
+# historically drove the order-placement pipeline. After the 2026-11-02
+# rewrite they are DIAGNOSTICS / SIMULATION ONLY — they feed
+# ``services/strategy_entry_signal_service.py`` (used by ``/simulation``
+# and ``GET /admin/level-isolation/strategy-signal``) but DO NOT
+# influence ``services/dummy_order_service.py``:
+#
+#     STRATEGY_ENTRY_ENABLED
+#     STRATEGY_ENTRY_ALLOW_CROSSOVER
+#     STRATEGY_ENTRY_BUFFER_MINUTES
+#     STRATEGY_ENTRY_BLOCKED_BY_RESISTANCE
+#     STRATEGY_ENTRY_ALLOW_AUTO_REVERSE
+#     STRATEGY_ENTRY_PRIORITIZE_SUPPORT
+#     STRATEGY_ENTRY_PIVOT_LEFT_BARS
+#     STRATEGY_ENTRY_PIVOT_RIGHT_BARS
+#     STRATEGY_ENTRY_STOP_LTP_TIERS
+#     STRATEGY_ENTRY_STOP_TICK_ROUNDING
+#     STRATEGY_MAX_STOP_PCT
+#     STRATEGY_ENTRY_REGISTER_COUNTER_SIDE
+#     STRATEGY_ENTRY_CANDLE_FALLBACK_ENABLED
+#     STRATEGY_ENTRY_TARGET_REQUIRE_POST_ENTRY
+#     STRATEGY_ENTRY_FREEZE_ENTRY_ON_PROMOTION
+#
+# Order-placement tunables live exclusively under the ``STRATEGY_ORDER_*``
+# and ``DUMMY_ORDER_*`` blocks in this file.
 
 # The following legacy keys were removed in the 2026-11-02 rewrite
 # because they were ONLY consumed by the removed dummy-order logic:

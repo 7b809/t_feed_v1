@@ -9,6 +9,36 @@ This service is fundamentally different from
     * NEVER writes anything to disk.
     * Every call recomputes from fresh data and returns the result.
 
+G1 v4.1 — DETERMINISM CONTRACT
+------------------------------
+Two new methods exist so that callers (``dummy_order_service`` in
+particular) can compute entry / stop / target against ONE fixed,
+reproducible candle series instead of mixing three mutable sources:
+
+    ``build_series_for_day(instrument_key, lookback_days=None)``
+        → merged historical + intraday series for the day.  This is
+          the *canonical* input for order-entry resolution and candle
+          replay.  Guarantees internal consistency (entry, stop,
+          target all see the same bars).
+
+    ``get_candle_close_at_from_series(series, iso_time)``
+        → pure in-memory lookup against a pre-built series.  No API
+          calls, no disk reads.  Returns ``(price, source)``.
+
+Additionally, two behaviour changes close the "silent fallback to the
+newest available bar" class of bugs:
+
+    * ``get_first_intraday_candle`` now verifies that the API's first
+      candle actually lands on the expected session-open minute (09:15
+      IST by default).  If the intraday window has been truncated
+      (mid-day restart, API glitch, trimmed buffer), the method
+      returns ``None`` instead of silently returning a later bar as
+      if it were the OR candle.
+
+    * ``get_candle_close_at`` continues to return ``None`` for an
+      absent minute (unchanged).  Callers must treat ``None`` as
+      "defer / unresolved", never as "fall through to live LTP".
+
 Opt-in `live_sr` block
 ----------------------
 Setting ``include_live_sr=True`` (default ``False``) asks the service to
@@ -39,10 +69,15 @@ service's candle loaders without duplication:
         → today's intraday candles (list only)
     ``merge_candles(historical, intraday)``
         → merged list (intraday wins on minute collision)
+    ``build_series_for_day(instrument_key, lookback_days=None)``
+        → merged series for the day (historical + intraday) — G1 v4.1
     ``get_candle_close_at(instrument_key, iso_time)``
         → close of the 1-min candle at that minute (or None)
-    ``get_first_intraday_candle(instrument_key)``
-        → first intraday candle (or None)
+    ``get_candle_close_at_from_series(series, iso_time)``
+        → same lookup, against a pre-built series — G1 v4.1
+    ``get_first_intraday_candle(instrument_key, expected_first_minute=None)``
+        → first intraday candle, verified against the expected
+          session-open minute (or None) — G1 v4.1
 
 The first three exist so the periodic refresh job
 (``live_sr_refresh_from_api``, see
@@ -50,10 +85,11 @@ The first three exist so the periodic refresh job
 historical + intraday merge the calc endpoint uses, and feed it into
 ``live_sr_levels_service.seed_candles``.
 
-The last two exist so the entry-signal / isolation engines can resolve
-an historical candle close without re-implementing the minute-bucket
-matching logic (see ``strategy_entry_signal_service._entry_price_for``
-and ``level_isolated_instrument_service._maybe_self_heal``).
+The close-at helpers exist so the entry-signal / isolation engines can
+resolve a historical candle close without re-implementing the
+minute-bucket matching logic (see
+``strategy_entry_signal_service._entry_price_for`` and
+``level_isolated_instrument_service._maybe_self_heal``).
 
 INTRAday by default
 -------------------
@@ -183,7 +219,7 @@ See ``routes/live_sr_calc_routes.py`` for the HTTP surface.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, time as dtime, timezone
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -347,6 +383,17 @@ def _describe_raw(raw: Any) -> dict[str, Any]:
         return {"type": type(raw).__name__}
     except Exception:
         return {"type": "unknown"}
+
+def _default_session_open_time() -> dtime:
+    """Return the configured first-minute for the OR window (default 09:15)."""
+    raw = str(
+        getattr(config, "OPENING_RANGE_FIRST_MINUTE", "09:15")
+    ).strip()
+    try:
+        hh, mm = raw.split(":")
+        return dtime(int(hh), int(mm))
+    except (ValueError, AttributeError):
+        return dtime(9, 15)
 
 # --------------------------------------------------------------------------- #
 # Service                                                                     #
@@ -683,6 +730,71 @@ class LiveSRCalcService:
         return self._merge_by_minute(historical, intraday)
 
     # ------------------------------------------------------------------ #
+    # G1 v4.1 — canonical day series builder                             #
+    # ------------------------------------------------------------------ #
+    def build_series_for_day(
+        self,
+        instrument_key: str,
+        lookback_days: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """Build ONE deterministic candle series for the trading day.
+
+        Merges:
+
+            * the historical backup tail (``lookback_days`` days), from
+              ``data/<...>/candles.json``, and
+            * today's intraday 1-min candles from Upstox,
+
+        in chronological order.  Intraday wins on any minute collision.
+
+        This is the *canonical* input for order-entry resolution and
+        replay (see ``services/dummy_order_service._build_fixed_series``).
+        Using the same series for entry, stop and target computation
+        guarantees internal consistency — the pre-v4.1 code mixed three
+        mutable sources (in-memory buffer, intraday API, live LTP) and
+        therefore produced different entries across restarts.
+
+        Returns an empty list if neither source yields any candles.
+        Never raises.
+
+        Parameters
+        ----------
+        instrument_key : str
+            The full Upstox instrument key (``NSE_FO|53942``,
+            ``NSE_INDEX|Nifty 50``, etc.).
+        lookback_days : int | None
+            Days of historical tail to merge.  ``None`` falls back to
+            ``config.LIVE_SR_CALC_DEFAULT_LOOKBACK_DAYS`` (clamped to
+            1..30).
+        """
+        try:
+            entry = instrument_registry.get(instrument_key)
+            if entry is None:
+                entry = instrument_registry.register_adhoc(instrument_key)
+            if entry is None:
+                logger.warning(
+                    "[live-sr-calc] build_series_for_day: unknown "
+                    "instrument %s", instrument_key,
+                )
+                return []
+
+            lb = lookback_days if lookback_days is not None else (
+                config.LIVE_SR_CALC_DEFAULT_LOOKBACK_DAYS
+            )
+            lb = max(1, min(30, lb))
+
+            historical = self.load_historical_candles_for_entry(entry, lb)
+            intraday = self.fetch_intraday_candles_for_entry(instrument_key)
+            merged = self._merge_by_minute(historical, intraday)
+            return merged
+        except Exception:
+            logger.exception(
+                "[live-sr-calc] build_series_for_day failed for %s",
+                instrument_key,
+            )
+            return []
+
+    # ------------------------------------------------------------------ #
     # Candle-close helpers (used by entry-signal / isolation engines)   #
     # ------------------------------------------------------------------ #
     def get_candle_close_at(
@@ -704,9 +816,17 @@ class LiveSRCalcService:
         registered with the live SR engine.
 
         Returns ``None`` when:
-          * ``iso_time`` cannot be parsed
-          * no intraday candle exists for that minute
-          * the Upstox fetch fails (never raises)
+
+            * ``iso_time`` cannot be parsed,
+            * no intraday candle exists for that minute (i.e. the bar
+              is ABSENT — the method does NOT return the newest
+              available bar),
+            * the Upstox fetch fails (never raises).
+
+        The "absent minute → None" contract is enforced by the exact
+        minute-bucket comparison below.  A caller that wants to retry
+        later or skip the signal should treat ``None`` as "not
+        resolvable right now", NOT as "fall through to live LTP".
         """
         target = _parse_time(iso_time)
         if target is None:
@@ -725,24 +845,117 @@ class LiveSRCalcService:
                     return None
         return None
 
+    def get_candle_close_at_from_series(
+        self,
+        series: list[dict[str, Any]],
+        iso_time: str,
+    ) -> tuple[float | None, str]:
+        """Return ``(close, source)`` for ``iso_time`` from a pre-built
+        series.
+
+        Unlike ``get_candle_close_at`` this method performs NO API calls
+        and NO disk reads — it is a pure in-memory lookup against a
+        series the caller has already built (typically via
+        ``build_series_for_day``).  This is the preferred path for
+        ``services/dummy_order_service`` when resolving entry prices
+        against its fixed per-day snapshot.
+
+        ``source`` is one of:
+
+            * ``"series"``           — close found in the series
+            * ``"absent"``           — the requested minute is not
+                                       in the series (caller should
+                                       defer / skip, never LTP-fall
+                                       through)
+            * ``"bad_close_value"``  — the candle exists but its
+                                       ``close`` field cannot be
+                                       coerced to float
+            * ``"invalid_iso_time"`` — ``iso_time`` could not be parsed
+        """
+        target = _parse_time(iso_time)
+        if target is None:
+            return None, "invalid_iso_time"
+        target_minute = target.replace(second=0, microsecond=0)
+
+        for c in series or []:
+            c_dt = _parse_time(c.get("time"))
+            if c_dt is None:
+                continue
+            if c_dt.replace(second=0, microsecond=0) == target_minute:
+                try:
+                    return float(c["close"]), "series"
+                except (KeyError, TypeError, ValueError):
+                    return None, "bad_close_value"
+        return None, "absent"
+
     def get_first_intraday_candle(
         self,
         instrument_key: str,
+        expected_first_minute: str | None = None,
     ) -> dict[str, Any] | None:
-        """Return the first 1-min intraday candle for ``instrument_key``.
+        """Return the first 1-min intraday candle for ``instrument_key``,
+        verified against the expected session-open minute.
 
         Used by ``level_isolated_instrument_service._maybe_self_heal()``
         to verify that ``first_candle.json`` matches today's real first
-        bar (see G1 v4.1 fix §5.D). The first candle's H / L must agree
+        bar (see G1 v4.1 fix §5.D).  The first candle's H / L must agree
         with the cached OR file — otherwise the cached OR is stale and
         must be recomputed.
 
-        Returns ``None`` when the fetch fails or returns no candles.
+        **Verification:** the API's first candle must land exactly on
+        the expected session-open minute (``09:15`` IST by default, or
+        ``config.OPENING_RANGE_FIRST_MINUTE`` when set).  If the
+        intraday window has been truncated — e.g. a mid-day restart
+        where the API only returns bars from 11:00 onwards, or an
+        Upstox glitch that drops the opening bar — the method returns
+        ``None`` rather than silently handing the caller a later bar
+        as if it were the OR candle.
+
+        Override the expected minute by passing
+        ``expected_first_minute="HH:MM"`` (e.g. ``"09:16"`` for a
+        caller that wants the first bar of a specific window).
+
+        Returns ``None`` when:
+
+            * the fetch returns no candles,
+            * the first candle is earlier than the expected minute
+              (should not happen in practice),
+            * the first candle is LATER than the expected minute
+              (truncated window — logged as WARNING),
+            * the first candle's timestamp cannot be parsed.
         """
         candles = self.fetch_intraday_candles_for_entry(instrument_key)
         if not candles:
             return None
-        return candles[0]
+
+        if expected_first_minute:
+            try:
+                hh, mm = expected_first_minute.split(":")
+                expected_time = dtime(int(hh), int(mm))
+            except (ValueError, AttributeError):
+                expected_time = _default_session_open_time()
+        else:
+            expected_time = _default_session_open_time()
+
+        first = candles[0]
+        first_dt = _parse_time(first.get("time"))
+        if first_dt is None:
+            return None
+
+        first_time = first_dt.time()
+        if first_time == expected_time:
+            return first
+
+        # Session-open bar is absent from the API response.
+        logger.warning(
+            "[live-sr-calc] get_first_intraday_candle: %s first "
+            "intraday bar is at %s (expected %s) — returning None "
+            "(truncated window)",
+            instrument_key,
+            first_time.strftime("%H:%M"),
+            expected_time.strftime("%H:%M"),
+        )
+        return None
 
     # ------------------------------------------------------------------ #
     # Selector resolution                                                #

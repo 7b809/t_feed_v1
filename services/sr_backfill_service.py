@@ -26,6 +26,66 @@ invalidate the cache so a backup re-extract via ``/admin/hard-refresh``
 is picked up on the next manual SR backfill. ``clear_historical_cache()``
 is exposed for direct invocation.
 
+## 2026-11-04 change — readiness latch, snapshot epoch, one-shot policy
+----------------------------------------------------------
+Three additions, all module-level and process-local:
+
+1. **Readiness latch** — ``is_ready()`` returns True once *today's*
+   full backfill has completed in this process. The latch resets
+   automatically when ``_SEEDED_DAY`` no longer matches today's IST
+   date, and can be cleared manually via ``clear_seed_latch()``. A
+   fresh process starts with the latch unset — that is intentional,
+   because a new process has an empty in-memory SR engine even when
+   today's ``live_sr_levels.json`` files already exist, and therefore
+   *needs* to re-seed on feed-start to warm the candle buffer.
+
+2. **Snapshot epoch** — ``snapshot_epoch()`` is a monotonically
+   increasing counter that bumps on every completed seed with at
+   least one instrument seeded. Downstream consumers that pair this
+   with ``live_sr_levels_service.snapshot()`` can cheaply detect
+   "has the SR world changed since I last looked?" by comparing
+   epochs instead of diffing full snapshots.
+
+3. **One-shot-per-day seed policy** — ``run()`` now short-circuits
+   automatic triggers (``feed_start``, scheduler) when
+   ``is_ready()`` is already True for today. Manual triggers
+   (``reason="manual"``) and explicit ``force=True`` always bypass
+   the latch. This stops a mid-session feed restart from paying the
+   full historical + intraday merge cost a second time when the SR
+   engine in this process is already warm, while still allowing a
+   forced re-seed after a backup re-extract or a code push.
+
+Callers can inspect the latch through ``sr_backfill_service.status()``
+(a superset of ``last_status()`` that adds ``ready``, ``seeded_day``,
+``seeded_at``, and ``snapshot_epoch``).
+
+## 2026-11-04 fix — expose ``is_ready_for_today()``
+--------------------------------------------------
+The 2026-11-04 readiness latch was exposed only under the name
+``is_ready()``. Two downstream consumers, however, look up the
+method under the name ``is_ready_for_today()``:
+
+  * ``services/scheduler_service.sr_backfill_ready()``:
+        probe = getattr(sr_backfill_service, "is_ready_for_today", None)
+        if probe is None:
+            return False, "missing_probe"
+  * ``services/dummy_order_service._upstream_ready()``:
+        (gated the same way — currently logs a warning and proceeds
+         without the readiness gate when the probe is absent)
+
+Because the method was named ``is_ready()``, both probes returned
+``None`` and both consumers fell into their "missing probe" branches.
+The scheduler case skipped the entire ``dummy_order_tracker`` every
+30 s from startup onward (visible in the runtime log as
+``dummy_order_tracker skipped — missing_probe``). The dummy-order
+case emitted a WARNING and proceeded without the readiness gate.
+
+``is_ready_for_today()`` is now exposed both as a module-level
+function and as an instance method. Both are thin aliases for
+``is_ready()`` — the semantics are identical, only the name differs.
+The rename preserves backward compatibility (``is_ready()`` still
+works) while satisfying the scheduler/dummy-order contract.
+
 Runs when ALL of the following hold:
   * ``SR_BACKFILL_ENABLED`` is True
   * ``LIVE_SR_ENABLED`` is True
@@ -39,6 +99,9 @@ Called from:
   * ``POST /live-sr/backfill`` — manual trigger.
   * The periodic scheduler job ``live_sr_refresh_from_api`` (every
     ``LIVE_SR_REFRESH_FROM_API_MINUTES`` minutes).
+  * The deferred scheduler job ``replay_seed_at_open`` (09:16 IST,
+    idempotent) — fallback for a pre-09:15 startup where feed-start
+    correctly skipped.
 
 Telegram: sent only on the ``startup`` / ``feed_start`` path. The
 periodic refresh passes ``send_telegram=False`` to avoid flooding.
@@ -74,6 +137,26 @@ _MARKET_TZ = ZoneInfo("Asia/Kolkata")
 _HISTORICAL_CACHE: dict[tuple[str, int], list[dict[str, Any]]] = {}
 _HISTORICAL_CACHE_DAY: str = ""
 _HISTORICAL_CACHE_LOCK = threading.Lock()
+
+# --------------------------------------------------------------------------- #
+# Readiness latch / snapshot epoch (2026-11-04)                               #
+# --------------------------------------------------------------------------- #
+# These are process-local. On process restart they start blank, which is
+# exactly what we want: the in-memory SR engine is also blank after a
+# restart, so a fresh seed on the next feed_start is correct.
+#
+# ``_SEEDED_DAY`` is the IST ISO date for which the full seed last
+# completed. It is compared against ``_today_market_iso()`` on every
+# ``is_ready()`` call, so day rollover resets the latch implicitly
+# without a scheduled task.
+#
+# ``_SNAPSHOT_EPOCH`` bumps once per successful run with at least one
+# instrument seeded. It is monotonic for the life of the process;
+# consumers must not assume persistence across restarts.
+_SEEDED_DAY: str = ""
+_SEEDED_AT: str | None = None
+_SNAPSHOT_EPOCH: int = 0
+_SEED_LOCK = threading.Lock()
 
 
 def _today_market_iso() -> str:
@@ -143,6 +226,10 @@ def clear_historical_cache() -> int:
     Returns the number of entries that were discarded. Safe to call
     from any thread. Used automatically by ``run(reason="manual")`` and
     available for direct invocation after a backup re-extract.
+
+    Note: this does **not** clear the readiness latch. Use
+    ``clear_seed_latch()`` for that — the two are independent concerns
+    (cache vs "did we already seed today").
     """
     global _HISTORICAL_CACHE_DAY
     with _HISTORICAL_CACHE_LOCK:
@@ -150,6 +237,114 @@ def clear_historical_cache() -> int:
         _HISTORICAL_CACHE.clear()
         _HISTORICAL_CACHE_DAY = ""
     return n
+
+
+# --------------------------------------------------------------------------- #
+# Readiness latch / snapshot epoch — public surface (2026-11-04)              #
+# --------------------------------------------------------------------------- #
+# Two names are exposed for the readiness latch:
+#
+#   * ``is_ready()``             — canonical name; used internally by
+#                                  ``run()`` to enforce the one-shot
+#                                  policy, and by ``main.py``.
+#   * ``is_ready_for_today()``   — contractual name consumed by
+#                                  ``scheduler_service.sr_backfill_ready()``
+#                                  and ``dummy_order_service._upstream_ready()``.
+#
+# Both are exact aliases — identical semantics, different name. Adding
+# the second name closes the "missing_probe" bug where the scheduler
+# skipped ``dummy_order_tracker`` on every tick from startup onward
+# because ``getattr(sr_backfill_service, "is_ready_for_today", None)``
+# returned ``None``.
+# --------------------------------------------------------------------------- #
+def is_ready() -> bool:
+    """True when today's full backfill has completed in this process.
+
+    Resets automatically on IST date rollover (``_SEEDED_DAY`` no longer
+    matches today). A fresh process starts unready even if today's
+    ``live_sr_levels.json`` files exist — the in-memory SR engine is
+    empty after a restart, so a seed is required to warm the buffer.
+
+    Safe to call from any thread. O(1).
+    """
+    with _SEED_LOCK:
+        return _SEEDED_DAY == _today_market_iso()
+
+
+def is_ready_for_today() -> bool:
+    """Alias for ``is_ready()`` — contractual name.
+
+    Consumed by:
+      * ``services/scheduler_service.sr_backfill_ready()``
+        (via ``getattr(sr_backfill_service, "is_ready_for_today", None)``)
+      * ``services/dummy_order_service._upstream_ready()``
+
+    Both look the method up by this exact name. Exposing it here means
+    those probes now resolve and the "missing_probe" / "not implemented"
+    fallback branches are no longer taken.
+
+    Semantics are identical to ``is_ready()`` — this is a pure alias.
+    Prefer either name; they cannot diverge.
+    """
+    return is_ready()
+
+
+def snapshot_epoch() -> int:
+    """Monotonically increasing counter, bumped on every successful
+    seed with at least one instrument.
+
+    Consumers that pair this with
+    ``live_sr_levels_service.snapshot(key)`` can detect "has the SR
+    world changed since I last looked?" by comparing epoch values
+    instead of diffing full snapshots.
+
+    Process-local; not persisted across restarts.
+    """
+    with _SEED_LOCK:
+        return _SNAPSHOT_EPOCH
+
+
+def seed_status() -> dict[str, Any]:
+    """Return the current readiness latch + epoch as a dict.
+
+    Useful for status endpoints and tests. Values are a copy —
+    mutating the returned dict does not affect the module state.
+    """
+    with _SEED_LOCK:
+        return {
+            "ready": _SEEDED_DAY == _now_market().date().isoformat(),
+            "seeded_day": _SEEDED_DAY or None,
+            "seeded_at": _SEEDED_AT,
+            "snapshot_epoch": _SNAPSHOT_EPOCH,
+        }
+
+
+def clear_seed_latch() -> None:
+    """Reset the readiness latch and epoch to a fresh-process state.
+
+    Use after a full SR reset (``live_sr_levels_service.reset_state()``)
+    or in tests. Does **not** touch the historical-candle cache — use
+    ``clear_historical_cache()`` for that.
+    """
+    global _SEEDED_DAY, _SEEDED_AT, _SNAPSHOT_EPOCH
+    with _SEED_LOCK:
+        _SEEDED_DAY = ""
+        _SEEDED_AT = None
+        _SNAPSHOT_EPOCH = 0
+
+
+def _mark_seeded() -> int:
+    """Record that today's seed just completed. Returns the new epoch.
+
+    Called at most once per successful ``run()`` (i.e. once per day
+    for automatic triggers, on every successful manual run otherwise).
+    """
+    global _SEEDED_DAY, _SEEDED_AT, _SNAPSHOT_EPOCH
+    with _SEED_LOCK:
+        _SEEDED_DAY = _now_market().date().isoformat()
+        _SEEDED_AT = _now_iso()
+        _SNAPSHOT_EPOCH += 1
+        return _SNAPSHOT_EPOCH
 
 
 # --------------------------------------------------------------------------- #
@@ -321,6 +516,9 @@ class SRBackfillService:
     def __init__(self) -> None:
         self._last_status: dict[str, Any] = {"status": "never"}
 
+    # ------------------------------------------------------------------ #
+    # Gate                                                               #
+    # ------------------------------------------------------------------ #
     def should_run(self) -> tuple[bool, str]:
         if not config.SR_BACKFILL_ENABLED:
             return False, "disabled"
@@ -334,12 +532,39 @@ class SRBackfillService:
             return False, win_reason
         return True, "ok"
 
+    # ------------------------------------------------------------------ #
+    # Run                                                                #
+    # ------------------------------------------------------------------ #
     def run(
         self,
         reason: str = "feed_start",
         entries: list[dict[str, Any]] | None = None,
         send_telegram: bool = True,
+        force: bool = False,
+        update_replay: bool = True,
     ) -> dict[str, Any]:
+        """Seed the SR engine.
+
+        ``force`` bypasses the one-shot-per-day latch but does **not**
+        clear the historical-candle cache — use ``reason="manual"`` for
+        the post-hard-refresh path that needs fresh disk reads.
+
+        ``update_replay`` (2026-11-04): when ``False``, the run updates
+        only the live buffer and **does not** mark the readiness latch.
+        The scheduler's periodic ``_refresh_live_sr`` tick passes
+        ``update_replay=False`` so that (a) it never overwrites the
+        frozen replay series that ``dummy_order_service`` reads, and
+        (b) it never falsely marks ``is_ready_for_today()`` as True
+        when the replay series hasn't actually been seeded. The
+        ``replay_seed_at_open`` scheduler job passes ``update_replay=
+        True`` — it is the only deferred path allowed to seed the
+        replay series.
+
+        Returns a summary dict. When the run is skipped (disabled,
+        outside window, already seeded today), the dict carries
+        ``status="skipped"`` and a ``skip_reason``. When the run
+        completes, ``status`` is ``"ok"`` or ``"partial"``.
+        """
         should, why = self.should_run()
         if not should:
             summary = {
@@ -351,8 +576,37 @@ class SRBackfillService:
                 "candles_total": 0,
                 "pivots_total": 0,
                 "errors": 0,
+                "ready": is_ready(),
+                "snapshot_epoch": snapshot_epoch(),
+                "update_replay": update_replay,
             }
             logger.info("[sr-backfill] skipped — %s", why)
+            self._last_status = summary
+            return summary
+
+        # ---- One-shot-per-day policy ------------------------------- #
+        # Automatic triggers (feed_start, scheduler) are skipped once
+        # today's seed has completed in this process. Manual and
+        # force=True always bypass.
+        if not force and reason != "manual" and is_ready():
+            summary = {
+                "status": "skipped",
+                "reason": reason,
+                "skip_reason": "already_seeded_today",
+                "ran_at": _now_iso(),
+                "instruments": 0,
+                "candles_total": 0,
+                "pivots_total": 0,
+                "errors": 0,
+                "ready": True,
+                "snapshot_epoch": snapshot_epoch(),
+                "update_replay": update_replay,
+            }
+            logger.info(
+                "[sr-backfill] skipped — already_seeded_today "
+                "(reason=%s; pass force=True or reason='manual' to re-run)",
+                reason,
+            )
             self._last_status = summary
             return summary
 
@@ -381,6 +635,9 @@ class SRBackfillService:
                 "candles_total": 0,
                 "pivots_total": 0,
                 "errors": 0,
+                "ready": is_ready(),
+                "snapshot_epoch": snapshot_epoch(),
+                "update_replay": update_replay,
             }
             self._last_status = summary
             return summary
@@ -397,8 +654,9 @@ class SRBackfillService:
         t0 = _now_market()
         logger.info(
             "[sr-backfill] START reason=%s instruments=%d workers=%d "
-            "include_historical=%s lookback_days=%d",
-            reason, len(entries), workers, include_historical, lookback_days,
+            "include_historical=%s lookback_days=%d update_replay=%s",
+            reason, len(entries), workers, include_historical,
+            lookback_days, update_replay,
         )
 
         errors = 0
@@ -458,6 +716,22 @@ class SRBackfillService:
                 pivots_total += p
 
         elapsed = (_now_market() - t0).total_seconds()
+
+        # ---- Readiness latch + snapshot epoch ---------------------- #
+        # The latch only fires when:
+        #   * at least one instrument actually seeded, AND
+        #   * the caller is doing a replay-series update
+        #     (update_replay=True). The every-2-minute live-buffer
+        #     refresh (update_replay=False) MUST NOT mark the latch,
+        #     because it does not touch the replay series that
+        #     dummy_order_service reads.
+        if seeded_instruments > 0 and update_replay:
+            epoch = _mark_seeded()
+            ready = True
+        else:
+            epoch = snapshot_epoch()
+            ready = is_ready()
+
         summary = {
             "status": "ok" if errors == 0 else "partial",
             "reason": reason,
@@ -470,12 +744,15 @@ class SRBackfillService:
             "elapsed_seconds": round(elapsed, 2),
             "include_historical": include_historical,
             "lookback_days": lookback_days,
+            "ready": ready,
+            "snapshot_epoch": epoch,
+            "update_replay": update_replay,
         }
         logger.info(
             "[sr-backfill] COMPLETE — instruments=%d seeded=%d candles=%d "
-            "pivots=%d errors=%d elapsed=%.1fs",
+            "pivots=%d errors=%d elapsed=%.1fs epoch=%d update_replay=%s",
             len(entries), seeded_instruments, candles_total,
-            pivots_total, errors, elapsed,
+            pivots_total, errors, elapsed, epoch, update_replay,
         )
         logger.info(
             "[sr-backfill] historical cache: day=%s entries=%d",
@@ -516,7 +793,66 @@ class SRBackfillService:
         self._last_status = summary
         return summary
 
+    # ------------------------------------------------------------------ #
+    # Readiness / status                                                 #
+    # ------------------------------------------------------------------ #
+    def is_ready(self) -> bool:
+        """True when today's backfill has completed in this process.
+
+        Thin proxy for the module-level ``is_ready()`` so callers that
+        already hold the service singleton do not need to import the
+        free function.
+        """
+        return is_ready()
+
+    def is_ready_for_today(self) -> bool:
+        """Alias for ``is_ready()`` — contractual name.
+
+        This is the exact name looked up by:
+
+          * ``services/scheduler_service.sr_backfill_ready()`` —
+            ``getattr(sr_backfill_service, "is_ready_for_today", None)``
+          * ``services/dummy_order_service._upstream_ready()`` —
+            same pattern
+
+        Before this alias existed, both callers fell into their
+        "missing probe" branch: the scheduler skipped every
+        ``dummy_order_tracker`` tick with ``missing_probe``, and the
+        dummy-order service proceeded without the readiness gate
+        (logged as a WARNING). Both bugs close as soon as this method
+        resolves — the underlying latch (``is_ready()``) was already
+        working; only the name was missing.
+
+        Semantics are identical to ``is_ready()``; both read the same
+        ``_SEEDED_DAY`` module state under the same lock. Prefer either
+        name; they cannot diverge.
+        """
+        return is_ready_for_today()
+
+    def snapshot_epoch(self) -> int:
+        """Current snapshot epoch — see module-level ``snapshot_epoch()``."""
+        return snapshot_epoch()
+
+    def clear_seed_latch(self) -> None:
+        """Reset the readiness latch and epoch — proxy for
+        module-level ``clear_seed_latch()``."""
+        clear_seed_latch()
+
     def last_status(self) -> dict[str, Any]:
+        """Return the most recent ``run()`` summary (copy)."""
         return dict(self._last_status)
+
+    def status(self) -> dict[str, Any]:
+        """Full status: readiness latch + epoch + last-run summary.
+
+        Superset of ``last_status()``. Consumers that only need the
+        last run can keep using ``last_status()``; new callers that
+        want to reason about "is the engine warm?" should read
+        ``ready`` and ``snapshot_epoch`` from here.
+        """
+        return {
+            **seed_status(),
+            "last_run": dict(self._last_status),
+        }
 
 sr_backfill_service = SRBackfillService()

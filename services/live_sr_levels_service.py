@@ -114,6 +114,46 @@ G1 v4.1 additions (2026-10-29)
   API instead of reaching into ``_guard`` / ``_states``. The existing
   direct access continues to work unchanged, so this is additive.
 
+## 2026-11-04 — replay/live separation, snapshot, readiness
+----------------------------------------------------------
+Three changes to make the engine easier to reason about and to
+eliminate re-seed flicker:
+
+1. **Replay series kept separate from the live buffer.**
+   ``state["replay_candles"]`` now records the last authoritative
+   series delivered by ``seed_candles`` / ``refresh_from_api``.
+   ``state["candles"]`` remains the merged canonical series that
+   pivot detection runs against. On seed we **merge** the seed into
+   the existing buffer (seed wins on bucket collision, live-only
+   buckets newer than the seed are preserved) instead of replacing
+   the buffer wholesale. This stops a re-seed from dropping the last
+   few seconds of live ticks that the API hasn't published yet.
+
+2. **``snapshot()`` and ``is_ready()`` public methods.**
+   ``snapshot()`` returns a consistent, read-only dict combining the
+   merged series, the replay series, the current ``forming`` candle,
+   the levels list, and the derived readiness flag — no more reaching
+   into ``_guard`` / ``_states`` from callers or tests.
+   ``is_ready()`` answers "can this instrument produce a pivot right
+   now?" (state is for today AND either has been seeded or has
+   ``left+right+1`` candles). Used by the isolated-SR tracker and the
+   strategy entry signal service to gate decisions.
+
+3. **``_append_level`` is now idempotent across re-seeds.**
+   Dedup key is ``(level_type, price≈, pivot_time)`` OR
+   ``(level_type, price≈, confirmed_time)``. Combined with the
+   seed-preserves-existing-levels behaviour, this means:
+
+     * a pivot confirmed by a live tick at T,
+     * re-derived by a seed at T+2min (or T+4min if the API lagged),
+
+   is appended exactly once. The "flicker" of a live pivot vanishing
+   for one refresh cycle because the API hadn't caught up yet is gone
+   — the preserved level stays, and the seed's idempotent re-add is a
+   no-op. Stale levels from a corrected candle are still retained for
+   the day, which is consistent with the existing "no broken / intact
+   distinction" policy.
+
 Logging policy (unchanged, VERBOSE_LOG-gated)
 ---------------------------------------------
 Per-instrument lines fire only when ``VERBOSE_LOG=true``. Summary
@@ -233,6 +273,30 @@ def _ms_to_iso(ms: int | None) -> str | None:
     except (OSError, OverflowError, ValueError):
         return None
 
+def _merge_candle_series(
+    existing: Iterable[dict[str, Any]] | None,
+    incoming: Iterable[dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    """Merge two candle series by minute bucket.
+
+    ``incoming`` wins on bucket collisions (it represents the
+    authoritative source during a seed). The result is a new list,
+    sorted by ``bucket``. No truncation is applied here — callers cap
+    to ``LIVE_SR_MAX_CANDLES`` as needed.
+    """
+    by_bucket: dict[int, dict[str, Any]] = {}
+    for c in existing or []:
+        try:
+            by_bucket[int(c["bucket"])] = c
+        except (KeyError, TypeError, ValueError):
+            continue
+    for c in incoming or []:
+        try:
+            by_bucket[int(c["bucket"])] = c
+        except (KeyError, TypeError, ValueError):
+            continue
+    return [by_bucket[b] for b in sorted(by_bucket.keys())]
+
 # --------------------------------------------------------------------------- #
 # Service                                                                     #
 # --------------------------------------------------------------------------- #
@@ -314,6 +378,104 @@ class LiveSRLevelsService:
             return sorted(self._registered)
 
     # ------------------------------------------------------------------ #
+    # Readiness                                                          #
+    # ------------------------------------------------------------------ #
+    def is_ready(self, instrument_key: str) -> bool:
+        """Return True when the engine can produce pivots for this
+        instrument right now.
+
+        Conditions:
+
+          * the instrument is tracked,
+          * its state is for today's IST calendar date,
+          * **either** it has been seeded (``state["seeded"]`` True) or
+            its merged candle buffer holds at least
+            ``left_bars + right_bars + 1`` candles.
+
+        Callers (isolated-SR tracker, strategy entry signal service)
+        use this to skip work when the engine is still warming up.
+        """
+        key = str(instrument_key or "").strip()
+        if not key:
+            return False
+        with self._guard:
+            state = self._states.get(key)
+            if state is None:
+                return False
+            if state.get("date") != _today_iso():
+                return False
+            if state.get("seeded"):
+                return True
+            need = (
+                int(state.get("left_bars") or 0)
+                + int(state.get("right_bars") or 0)
+                + 1
+            )
+            return len(state.get("candles") or []) >= need
+
+    # ------------------------------------------------------------------ #
+    # Snapshot                                                           #
+    # ------------------------------------------------------------------ #
+    def snapshot(self, instrument_key: str) -> dict[str, Any] | None:
+        """Return a consistent, read-only snapshot of one instrument.
+
+        Unlike ``get_levels()`` (which reflects the persisted file and
+        may fall back to memory), this always reflects the **live
+        in-memory state** and additionally exposes the replay series,
+        the merged series, the current ``forming`` candle, and the
+        derived ``is_ready`` flag.
+
+        Returns ``None`` when the instrument is not tracked. All
+        nested dicts / lists are copied so callers cannot mutate the
+        engine's state through the returned structure.
+        """
+        key = str(instrument_key or "").strip()
+        if not key:
+            return None
+        with self._guard:
+            state = self._states.get(key)
+            if state is None:
+                return None
+            candles = [dict(c) for c in (state.get("candles") or [])]
+            replay = [dict(c) for c in (state.get("replay_candles") or [])]
+            levels = [dict(lvl) for lvl in (state.get("levels") or [])]
+            forming = (
+                dict(state["forming"]) if state.get("forming") else None
+            )
+            left = int(state.get("left_bars") or 0)
+            right = int(state.get("right_bars") or 0)
+            date_str = state.get("date")
+            seeded = bool(state.get("seeded"))
+            last_seed_at = state.get("last_seed_at")
+            last_checked = state.get("last_checked_index")
+            since_persist = state.get("candles_since_persist")
+            entry = dict(state.get("entry") or {})
+
+        need = left + right + 1
+        ready = bool(
+            date_str == _today_iso()
+            and (seeded or len(candles) >= need)
+        )
+        return {
+            "instrument_key": key,
+            "entry": entry,
+            "date": date_str,
+            "seeded": seeded,
+            "last_seed_at": last_seed_at,
+            "is_ready": ready,
+            "left_bars": left,
+            "right_bars": right,
+            "candle_count": len(candles),
+            "replay_candle_count": len(replay),
+            "forming": forming,
+            "candles": candles,
+            "replay_candles": replay,
+            "levels": levels,
+            "last_checked_index": last_checked,
+            "candles_since_persist": since_persist,
+        }
+
+    # ------------------------------------------------------------------ #
     # Seed / refresh                                                     #
     # ------------------------------------------------------------------ #
     def seed_candles(
@@ -324,20 +486,33 @@ class LiveSRLevelsService:
     ) -> dict[str, Any]:
         """Bulk-seed the SR engine from a list of 1-min candles.
 
-        ## 2026-10-26 change
-        A fresh state dict is built and only swapped into
-        ``self._states`` under ``self._guard`` at the end. Concurrent
-        ticks during the scan write to the (soon-to-be-discarded) old
-        state, so no half-updated state is ever visible. Safe to call
-        while the feed is live.
+        ## 2026-11-04 change
+        The incoming ``candles`` are treated as the **replay series**
+        (``state["replay_candles"]``). They are merged into the existing
+        live buffer (``state["candles"]``) with the seed winning on
+        bucket collisions and live-only buckets newer than the seed
+        preserved. Levels already in memory are preserved — the pivot
+        scan on the merged series re-derives everything and
+        ``_append_level`` is idempotent, so no duplicates and no
+        flicker of live-confirmed pivots while the API catches up.
 
         The seed truncates the incoming candles to ``LIVE_SR_MAX_CANDLES``
         (keeps the LATEST bars). Callers can pass the full historical +
         intraday merge without worrying about buffer overrun.
+
+        ## Thread safety (unchanged)
+        A fresh state dict is built and only swapped into
+        ``self._states`` under ``self._guard`` at the end. Concurrent
+        ticks during the scan write to the (soon-to-be-discarded) old
+        state. Just before the swap, any buckets that arrived in the
+        old state during the scan are merged into the new state, and
+        the pivot scan re-runs so they are not lost. Safe to call
+        while the feed is live.
         """
         result: dict[str, Any] = {
             "instrument_key": instrument_key,
             "candles_seeded": 0,
+            "candles_from_seed": 0,
             "candles_truncated_from": 0,
             "pivots_detected": 0,
             "pivots_today": 0,
@@ -395,12 +570,25 @@ class LiveSRLevelsService:
             result["candles_truncated_from"] = len(ordered)
             ordered = ordered[-max_candles:]
 
+        # ---- Snapshot the current live buffer / levels ------------- #
+        with self._guard:
+            old_candles = list(old_state.get("candles") or [])
+            old_levels = list(old_state.get("levels") or [])
+
+        # ---- Merge seed into live buffer (seed wins on collision) -- #
+        merged = _merge_candle_series(old_candles, ordered)
+        if len(merged) > max_candles:
+            merged = merged[-max_candles:]
+
         # ---- Build the NEW state fresh ----------------------------- #
         new_state = self._init_state(entry, _today_iso())
-        new_state["candles"] = ordered
-        new_state["levels"] = []
+        new_state["replay_candles"] = list(ordered)
+        new_state["candles"] = merged
+        new_state["levels"] = list(old_levels)  # preserved; append is idempotent
         new_state["forming"] = None
         new_state["last_checked_index"] = -1
+        new_state["seeded"] = True
+        new_state["last_seed_at"] = _now_iso()
         new_state["_suppress_persist"] = True
 
         try:
@@ -415,8 +603,46 @@ class LiveSRLevelsService:
             new_state["_suppress_persist"] = False
             new_state["candles_since_persist"] = 0
 
-        # ---- Atomic swap ------------------------------------------- #
+        # ---- Atomic swap (re-merge ticks that arrived during scan) -- #
         with self._guard:
+            current = self._states.get(key)
+            if current is not None and current is not old_state:
+                current_candles = list(current.get("candles") or [])
+                current_levels = list(current.get("levels") or [])
+                if current_candles:
+                    merged_now = _merge_candle_series(
+                        current_candles, new_state["candles"],
+                    )
+                    if len(merged_now) > len(new_state["candles"]):
+                        new_state["candles"] = merged_now[-max_candles:]
+                        # Preserve any levels current managed to add.
+                        existing_keys = {
+                            (
+                                lvl.get("level"),
+                                round(float(lvl.get("price") or 0.0), 6),
+                                lvl.get("pivot_time"),
+                                lvl.get("confirmed_time"),
+                            )
+                            for lvl in new_state["levels"]
+                        }
+                        for lvl in current_levels:
+                            k = (
+                                lvl.get("level"),
+                                round(float(lvl.get("price") or 0.0), 6),
+                                lvl.get("pivot_time"),
+                                lvl.get("confirmed_time"),
+                            )
+                            if k not in existing_keys:
+                                new_state["levels"].append(lvl)
+                                existing_keys.add(k)
+                        # Candle indices shifted; full re-scan (still
+                        # cheap — max_candles is bounded).
+                        new_state["last_checked_index"] = -1
+                        new_state["_suppress_persist"] = True
+                        try:
+                            self._scan_all_pivots(new_state)
+                        finally:
+                            new_state["_suppress_persist"] = False
             self._states[key] = new_state
             self._registered.add(key)
 
@@ -426,15 +652,17 @@ class LiveSRLevelsService:
             logger.exception("[live-sr] seed persist failed for %s", key)
 
         # ---- Stats ------------------------------------------------- #
-        result["candles_seeded"] = len(ordered)
+        result["candles_seeded"] = len(new_state["candles"])
+        result["candles_from_seed"] = len(ordered)
         result["pivots_today"] = len(new_state["levels"])
         result["pivots_detected"] = len(new_state["levels"])
 
         if _verbose():
             logger.info(
-                "[live-sr] seeded %s: candles=%d pivots=%d "
+                "[live-sr] seeded %s: seed=%d merged=%d pivots=%d "
                 "truncated_from=%d",
-                key, len(ordered), len(new_state["levels"]),
+                key, len(ordered), len(new_state["candles"]),
+                len(new_state["levels"]),
                 result["candles_truncated_from"],
             )
         return result
@@ -495,6 +723,9 @@ class LiveSRLevelsService:
 
         return self.seed_candles(instrument_key, entry, merged)
 
+    # ------------------------------------------------------------------ #
+    # Pivot scanning                                                     #
+    # ------------------------------------------------------------------ #
     def _scan_all_pivots(self, state: dict[str, Any]) -> bool:
         candles = state["candles"]
         left = int(state["left_bars"])
@@ -506,35 +737,58 @@ class LiveSRLevelsService:
 
         changed = False
         for candidate_index in range(left, n - right):
-            c = candles[candidate_index]
-            left_ok_res = all(
-                candles[j]["high"] < c["high"]
-                for j in range(candidate_index - left, candidate_index)
-            )
-            right_ok_res = all(
-                candles[j]["high"] < c["high"]
-                for j in range(candidate_index + 1, candidate_index + right + 1)
-            )
-            left_ok_sup = all(
-                candles[j]["low"] > c["low"]
-                for j in range(candidate_index - left, candidate_index)
-            )
-            right_ok_sup = all(
-                candles[j]["low"] > c["low"]
-                for j in range(candidate_index + 1, candidate_index + right + 1)
-            )
-            if left_ok_res and right_ok_res:
-                if self._append_level(
-                    state, "resistance", c, candidate_index, left, right,
-                ):
-                    changed = True
-            if left_ok_sup and right_ok_sup:
-                if self._append_level(
-                    state, "support", c, candidate_index, left, right,
-                ):
-                    changed = True
+            if self._check_pivot_at(state, candidate_index):
+                changed = True
 
         state["last_checked_index"] = n - right - 1
+        return changed
+
+    def _check_pivot_at(
+        self,
+        state: dict[str, Any],
+        candidate_index: int,
+    ) -> bool:
+        """Evaluate one candidate index against the strict-pivot rule.
+
+        Returns True if at least one new level was appended. ``_append_level``
+        is idempotent, so calling this on an already-scanned index is safe.
+        """
+        candles = state["candles"]
+        left = int(state["left_bars"])
+        right = int(state["right_bars"])
+        n = len(candles)
+        if candidate_index < left or candidate_index + right >= n:
+            return False
+
+        c = candles[candidate_index]
+        left_ok_res = all(
+            candles[j]["high"] < c["high"]
+            for j in range(candidate_index - left, candidate_index)
+        )
+        right_ok_res = all(
+            candles[j]["high"] < c["high"]
+            for j in range(candidate_index + 1, candidate_index + right + 1)
+        )
+        left_ok_sup = all(
+            candles[j]["low"] > c["low"]
+            for j in range(candidate_index - left, candidate_index)
+        )
+        right_ok_sup = all(
+            candles[j]["low"] > c["low"]
+            for j in range(candidate_index + 1, candidate_index + right + 1)
+        )
+
+        changed = False
+        if left_ok_res and right_ok_res:
+            if self._append_level(
+                state, "resistance", c, candidate_index, left, right,
+            ):
+                changed = True
+        if left_ok_sup and right_ok_sup:
+            if self._append_level(
+                state, "support", c, candidate_index, left, right,
+            ):
+                changed = True
         return changed
 
     # ------------------------------------------------------------------ #
@@ -751,37 +1005,7 @@ class LiveSRLevelsService:
         if candidate_index <= state["last_checked_index"]:
             return False
         state["last_checked_index"] = candidate_index
-
-        c = candles[candidate_index]
-        left_ok_res = all(
-            candles[j]["high"] < c["high"]
-            for j in range(candidate_index - left, candidate_index)
-        )
-        right_ok_res = all(
-            candles[j]["high"] < c["high"]
-            for j in range(candidate_index + 1, candidate_index + right + 1)
-        )
-        left_ok_sup = all(
-            candles[j]["low"] > c["low"]
-            for j in range(candidate_index - left, candidate_index)
-        )
-        right_ok_sup = all(
-            candles[j]["low"] > c["low"]
-            for j in range(candidate_index + 1, candidate_index + right + 1)
-        )
-
-        changed = False
-        if left_ok_res and right_ok_res:
-            if self._append_level(
-                state, "resistance", c, candidate_index, left, right,
-            ):
-                changed = True
-        if left_ok_sup and right_ok_sup:
-            if self._append_level(
-                state, "support", c, candidate_index, left, right,
-            ):
-                changed = True
-        return changed
+        return self._check_pivot_at(state, candidate_index)
 
     def _append_level(
         self,
@@ -792,6 +1016,15 @@ class LiveSRLevelsService:
         left: int,
         right: int,
     ) -> bool:
+        """Append a confirmed pivot **idempotently**.
+
+        A duplicate is detected when any existing level has the same
+        ``level_type``, an equal ``price`` (to 1e-6), and **either** the
+        same ``pivot_time`` **or** the same ``confirmed_time``. That
+        makes the method safe to call repeatedly on the same pivot —
+        e.g. a live tick confirms a pivot at T, and a periodic seed
+        re-derives the same pivot at T+2min — without duplicating it.
+        """
         confirmed_index = pivot_index + right
         if confirmed_index >= len(state["candles"]):
             return False
@@ -808,13 +1041,21 @@ class LiveSRLevelsService:
         price = float(
             candle["high"] if level_type == "resistance" else candle["low"]
         )
+        pivot_time = candle.get("time")
 
-        # ---- Robust dedup ----------------------------------------- #
+        # ---- Idempotent dedup -------------------------------------- #
         for existing in state["levels"]:
+            if existing.get("level") != level_type:
+                continue
+            try:
+                if abs(float(existing.get("price", 0.0)) - price) >= 1e-6:
+                    continue
+            except (TypeError, ValueError):
+                continue
             if (
-                existing["level"] == level_type
-                and abs(existing["price"] - price) < 1e-6
-                and existing.get("confirmed_time") == confirmed_time_str
+                (pivot_time is not None
+                 and existing.get("pivot_time") == pivot_time)
+                or existing.get("confirmed_time") == confirmed_time_str
             ):
                 return False
 
@@ -828,7 +1069,7 @@ class LiveSRLevelsService:
             "level": level_type,
             "price": price,
             "pivot_bar_index": pivot_index,
-            "pivot_time": candle["time"],
+            "pivot_time": pivot_time,
             "confirmed_bar_index": confirmed_index,
             "confirmed_time": confirmed_time_str,
             "confirmed_time_price": confirmed_time_price,
@@ -887,6 +1128,8 @@ class LiveSRLevelsService:
             "left_bars": state.get("left_bars"),
             "right_bars": state.get("right_bars"),
             "candle_count": len(state.get("candles") or []),
+            "replay_candle_count": len(state.get("replay_candles") or []),
+            "seeded": bool(state.get("seeded")),
             "levels": list(state.get("levels") or []),
             "last_candle": (state["candles"][-1] if state.get("candles") else None),
             "updated_at": _now_iso(),
@@ -925,6 +1168,8 @@ class LiveSRLevelsService:
             return None
 
         state = self._init_state(entry, today)
+        state["seeded"] = bool(payload.get("seeded"))
+        state["last_seed_at"] = payload.get("updated_at")
 
         raw_levels = payload.get("levels") or []
         cleaned: list[dict[str, Any]] = []
@@ -952,12 +1197,15 @@ class LiveSRLevelsService:
             "entry": dict(entry),
             "date": date_str,
             "candles": [],
+            "replay_candles": [],
             "forming": None,
             "levels": [],
             "last_checked_index": -1,
             "candles_since_persist": 0,
             "left_bars": int(config.LIVE_SR_LEFT_BARS),
             "right_bars": int(config.LIVE_SR_RIGHT_BARS),
+            "seeded": False,
+            "last_seed_at": None,
             "_suppress_persist": False,
         }
 
@@ -1039,6 +1287,8 @@ class LiveSRLevelsService:
             "left_bars": state.get("left_bars"),
             "right_bars": state.get("right_bars"),
             "candle_count": len(candles_mem),
+            "replay_candle_count": len(state.get("replay_candles") or []),
+            "seeded": bool(state.get("seeded")),
             "levels": [
                 {
                     k: v
@@ -1107,14 +1357,38 @@ class LiveSRLevelsService:
         return None
 
     def get_candles(self, instrument_key: str) -> list[dict[str, Any]]:
-        """Return a copy of the in-memory 1-min candle series for one
-        instrument. Empty list when the instrument is not tracked."""
+        """Return a copy of the in-memory **merged** 1-min candle series
+        for one instrument. Empty list when the instrument is not
+        tracked.
+
+        Use ``get_replay_candles()`` to get only the authoritative
+        series delivered by the last seed, or ``snapshot()`` for both.
+        """
         key = str(instrument_key or "").strip()
         with self._guard:
             state = self._states.get(key)
             if state is None:
                 return []
             return [dict(c) for c in (state.get("candles") or [])]
+
+    def get_replay_candles(
+        self,
+        instrument_key: str,
+    ) -> list[dict[str, Any]]:
+        """Return a copy of the **replay series** for one instrument —
+        the candle series delivered by the last ``seed_candles()`` /
+        ``refresh_from_api()`` call.
+
+        This is kept separate from ``get_candles()`` (the merged live
+        buffer) so callers can reason about "what the API told us"
+        versus "what the tick stream built".
+        """
+        key = str(instrument_key or "").strip()
+        with self._guard:
+            state = self._states.get(key)
+            if state is None:
+                return []
+            return [dict(c) for c in (state.get("replay_candles") or [])]
 
     def get_latest_candle(
         self,
@@ -1160,13 +1434,31 @@ class LiveSRLevelsService:
             candle_total = sum(
                 len(s.get("candles") or []) for s in self._states.values()
             )
+            replay_total = sum(
+                len(s.get("replay_candles") or [])
+                for s in self._states.values()
+            )
             level_total = sum(
                 len(s.get("levels") or []) for s in self._states.values()
+            )
+            ready_total = sum(
+                1 for s in self._states.values()
+                if s.get("date") == _today_iso()
+                and (
+                    s.get("seeded")
+                    or len(s.get("candles") or []) >= (
+                        int(s.get("left_bars") or 0)
+                        + int(s.get("right_bars") or 0)
+                        + 1
+                    )
+                )
             )
             per_instrument = {
                 k: {
                     "date": s.get("date"),
+                    "seeded": bool(s.get("seeded")),
                     "candles": len(s.get("candles") or []),
+                    "replay_candles": len(s.get("replay_candles") or []),
                     "levels": len(s.get("levels") or []),
                 }
                 for k, s in list(self._states.items())[:100]
@@ -1186,7 +1478,9 @@ class LiveSRLevelsService:
             ),
             "registered": len(self._registered),
             "tracking": tracking,
+            "ready": ready_total,
             "candles_total": candle_total,
+            "replay_candles_total": replay_total,
             "levels_total": level_total,
             "instruments_sample": per_instrument,
             "instruments_sample_size": len(per_instrument),

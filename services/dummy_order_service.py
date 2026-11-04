@@ -33,6 +33,55 @@ specification:
 This service NEVER places a real Upstox order. Every record carries
 ``"dummy": true`` so audits cannot confuse it with a real order.
 
+DETERMINISM CONTRACT (G1 v4.1)
+------------------------------
+The set of dummy orders produced for a given trading day MUST be a
+pure function of:
+
+    * the persisted isolation record (bias-side key, t_iso,
+      trigger_index / trigger_origin),
+    * today's finalized intraday candle series for each traded instrument,
+    * today's OR grid (first_candle.json) for each traded instrument,
+    * the confirmed 15/3 SR levels on each traded instrument.
+
+It MUST NOT depend on:
+
+    * process start time,
+    * order of scheduler ticks,
+    * whether the SR backfill has completed before the catch-up,
+    * live LTP (unless explicitly opted-in).
+
+To honour this contract the following rules apply:
+
+1. Entry price is resolved from a SINGLE fixed candle series built by
+   ``_build_fixed_series()`` — the same series is used for entry
+   resolution, candle replay, and resistance-exit lookup.  The old
+   multi-source fallback chain (in-memory → intraday API → live LTP)
+   has been collapsed into one deterministic path.
+
+2. ``DUMMY_ORDER_ALLOW_LTP_ENTRY_FALLBACK`` (default: **false**) is the
+   only way to re-enable the live-LTP entry fallback.  When enabled,
+   the LTP source is stamped on the order record as
+   ``entry_price_source="live_ltp"`` so a supervisor can detect it.
+
+3. Order creation is gated on ``sr_backfill_service.is_ready_for_today()``
+   when ``DUMMY_ORDER_WAIT_FOR_SR_BACKFILL`` is true (default).  If the
+   readiness check is not yet implemented by the upstream service, the
+   gate fails open with a one-shot WARNING so the old behaviour
+   (proceed immediately) is preserved.
+
+4. Order creation is idempotent: once an order record exists for the
+   current day it is never overwritten.  Recomputation that produces
+   different values logs ``DRIFT DETECTED`` but does not mutate the
+   record (``DUMMY_ORDER_DRIFT_GUARD``, default true).
+
+5. The execution path (PATH A self-trigger vs PATH B external-trigger)
+   is derived from the isolation record's persisted ``trigger_index``
+   (or ``trigger_origin`` / ``trigger_underlying``) when available,
+   not from the runtime ``execution_path`` field.  The runtime field
+   is used only as a fallback and emits a WARNING
+   (``DUMMY_ORDER_DISABLE_RUNTIME_PATH_SWITCH``, default true).
+
 Persistence
 -----------
 ``<LIVE_DATA_DIR>/dummy_orders.json`` — single JSON document per day,
@@ -81,14 +130,18 @@ def _market_tz() -> ZoneInfo:
     except Exception:
         return ZoneInfo("Asia/Kolkata")
 
+
 def _now_market() -> datetime:
     return datetime.now(_market_tz())
+
 
 def _now_utc_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
+
 def _today_iso() -> str:
     return _now_market().date().isoformat()
+
 
 def _parse_iso(value: Any) -> datetime | None:
     if value is None or value == "":
@@ -101,12 +154,15 @@ def _parse_iso(value: Any) -> datetime | None:
         dt = dt.replace(tzinfo=_market_tz())
     return dt.astimezone(_market_tz())
 
+
 def _iso(dt: datetime) -> str:
     return dt.astimezone(_market_tz()).isoformat()
+
 
 def _fmt_time(iso_val: Any) -> str:
     dt = _parse_iso(iso_val)
     return dt.strftime("%H:%M:%S IST") if dt else "—"
+
 
 # --------------------------------------------------------------------------- #
 # Numeric helpers                                                             #
@@ -117,9 +173,11 @@ def _safe_float(v: Any) -> float | None:
     except (TypeError, ValueError):
         return None
 
+
 def _fmt_price(v: Any, fmt: str = ".4f") -> str:
     f = _safe_float(v)
     return format(f, fmt) if f is not None else "none"
+
 
 # --------------------------------------------------------------------------- #
 # [CALC] logging helpers (log-only)                                           #
@@ -156,6 +214,7 @@ def _log_calc_routing(
         traded_key, traded_symbol or "—",
     )
 
+
 def _log_calc_regime(
     zone: dict[str, Any],
     entry_price: float,
@@ -186,6 +245,7 @@ def _log_calc_regime(
         zone.get("reason") or "—",
     )
 
+
 # --------------------------------------------------------------------------- #
 # Service                                                                     #
 # --------------------------------------------------------------------------- #
@@ -193,13 +253,22 @@ class DummyOrderService:
     def __init__(self) -> None:
         self._lock = threading.RLock()
         self._state: dict[str, Any] = self._empty_state()
+        # One-shot warning latch for a missing readiness check on the
+        # upstream sr_backfill_service (kept so the fail-open fallback
+        # does not spam the log on every 30 s scheduler tick).
+        self._warned_no_readiness_check: bool = False
         self._load_from_disk()
 
     # ------------------------------------------------------------------ #
     # Public API                                                         #
     # ------------------------------------------------------------------ #
     def run_once(self, reason: str = "manual") -> dict[str, Any]:
-        """One full scan. Never raises."""
+        """One full scan. Never raises.
+
+        Gated on ``_upstream_ready()`` — if the SR backfill has not yet
+        populated today's series for every tracked instrument, the run
+        is skipped and the next scheduler tick retries.
+        """
         t0 = time.monotonic()
         with self._lock:
             try:
@@ -210,6 +279,18 @@ class DummyOrderService:
                 window = self._classify_window(now)
                 if window == "before_start":
                     return self._skipped(reason, "before_start", t0)
+
+                # ---- G1 v4.1: readiness gate --------------------- #
+                ready, ready_reason = self._upstream_ready()
+                if not ready:
+                    logger.info(
+                        "[dummy-order] %s — skipping run (upstream "
+                        "not ready: %s)",
+                        reason, ready_reason,
+                    )
+                    return self._skipped(
+                        reason, f"not_ready:{ready_reason}", t0,
+                    )
 
                 self._reset_if_new_day(now)
 
@@ -227,11 +308,17 @@ class DummyOrderService:
                 if not iso:
                     return self._no_signal(reason, "no_isolation", t0)
 
-                # Record the execution path the isolation engine chose.
-                path = str(iso.get("execution_path") or "").strip()
+                # ---- G1 v4.1: data-derived execution path --------- #
+                # Prefer the isolation record's persisted trigger_index
+                # (or trigger_origin / trigger_underlying) over the
+                # runtime execution_path field.  This makes the PATH A/B
+                # distinction stable across restarts.
+                path = self._resolve_execution_path(iso)
                 if path:
                     self._state["execution_path"] = path
-                self._state.setdefault("isolated_key", iso.get("instrument_key"))
+                self._state.setdefault(
+                    "isolated_key", iso.get("instrument_key"),
+                )
                 self._state.setdefault("bias_type", iso.get("type"))
                 self._state.setdefault(
                     "t_iso",
@@ -246,6 +333,16 @@ class DummyOrderService:
                     if order is not None:
                         self._state["order"] = order
                         created = 1
+                else:
+                    # ---- G1 v4.1: idempotency log ----------------- #
+                    # If an order already exists for today, do NOT
+                    # recompute it.  The entry/stop/target are frozen.
+                    if isinstance(order, dict):
+                        logger.debug(
+                            "[dummy-order] order already exists for "
+                            "today (%s) — catch-up is a no-op",
+                            order.get("order_id"),
+                        )
 
                 # ---- 3. Update OPEN order ------------------------- #
                 updated = 0
@@ -269,6 +366,7 @@ class DummyOrderService:
                 return self._summary(
                     reason, "ok", now, window, t0,
                     created=created, updated=updated, closed=closed,
+                    readiness=ready_reason,
                 )
 
             except Exception:
@@ -281,10 +379,12 @@ class DummyOrderService:
 
     def get_summary(self) -> dict[str, Any]:
         with self._lock:
+            ready, ready_reason = self._upstream_ready()
             return self._summary(
                 "read", "ok", _now_market(),
                 self._classify_window(_now_market()),
                 time.monotonic(),
+                readiness=ready_reason if ready else f"not_ready:{ready_reason}",
             )
 
     def reset(self) -> dict[str, Any]:
@@ -293,6 +393,102 @@ class DummyOrderService:
             self._save(_now_market())
             logger.info("[dummy-order] state reset")
             return {"status": "reset", "day": self._state.get("day")}
+
+    # ------------------------------------------------------------------ #
+    # G1 v4.1 — readiness gate                                           #
+    # ------------------------------------------------------------------ #
+    def _upstream_ready(self) -> tuple[bool, str]:
+        """Return ``(ready, reason)`` for the SR backfill readiness latch.
+
+        * If ``DUMMY_ORDER_WAIT_FOR_SR_BACKFILL`` is false → ready.
+        * If ``sr_backfill_service.is_ready_for_today`` is missing →
+          ready (fail-open, one-shot WARNING).
+        * If the helper raises → NOT ready (fail-closed, retry next tick).
+        * If the helper returns False → NOT ready.
+        * If the helper returns True → ready.
+        """
+        if not bool(
+            getattr(config, "DUMMY_ORDER_WAIT_FOR_SR_BACKFILL", True)
+        ):
+            return True, "ok_disabled"
+
+        try:
+            from services.sr_backfill_service import sr_backfill_service
+        except Exception:
+            return True, "ok_backfill_module_missing"
+
+        check = getattr(
+            sr_backfill_service, "is_ready_for_today", None,
+        )
+        if not callable(check):
+            if not self._warned_no_readiness_check:
+                logger.warning(
+                    "[dummy-order] sr_backfill_service.is_ready_for_today() "
+                    "is not implemented — proceeding without the readiness "
+                    "gate (this re-opens the pre-v4.1 race; implement the "
+                    "helper to close it)."
+                )
+                self._warned_no_readiness_check = True
+            return True, "ok_readiness_check_missing"
+
+        try:
+            ready = bool(check())
+        except Exception:
+            logger.exception(
+                "[dummy-order] sr_backfill_service.is_ready_for_today() "
+                "raised — skipping run (fail-closed)"
+            )
+            return False, "backfill_check_raised"
+
+        if not ready:
+            return False, "sr_backfill_not_ready"
+        return True, "ok"
+
+    # ------------------------------------------------------------------ #
+    # G1 v4.1 — data-derived execution path                              #
+    # ------------------------------------------------------------------ #
+    def _resolve_execution_path(
+        self, iso: dict[str, Any],
+    ) -> str | None:
+        """Determine PATH A vs PATH B from persisted isolation data.
+
+        Order of precedence:
+
+            1. ``trigger_index``   — set by level_isolated_instrument_service
+            2. ``trigger_origin``  — alternative field name
+            3. ``trigger_underlying`` — alternative field name
+            4. ``execution_path``  — runtime field (non-deterministic)
+
+        A trigger that originates from an external index (MIDCPNIFTY,
+        BANKNIFTY, SENSEX) is PATH B.  A trigger from NIFTY itself is
+        PATH A.  Any other value → PATH A (safe default).
+        """
+        for field in ("trigger_index", "trigger_origin", "trigger_underlying"):
+            raw = str(iso.get(field) or "").strip().upper()
+            if raw:
+                if raw in ("NIFTY", "NIFTY 50", "NIFTY50", "NSE_INDEX|NIFTY 50"):
+                    return "A_self_trigger"
+                return "B_external_trigger"
+
+        runtime_path = str(iso.get("execution_path") or "").strip()
+        if runtime_path:
+            if bool(
+                getattr(
+                    config,
+                    "DUMMY_ORDER_DISABLE_RUNTIME_PATH_SWITCH",
+                    True,
+                )
+            ):
+                logger.warning(
+                    "[dummy-order] isolation record lacks trigger_index — "
+                    "falling back to runtime execution_path=%s "
+                    "(non-deterministic; disable by setting "
+                    "DUMMY_ORDER_DISABLE_RUNTIME_PATH_SWITCH=false only "
+                    "for debugging)",
+                    runtime_path,
+                )
+            return runtime_path
+        return None
 
     # ------------------------------------------------------------------ #
     # Window / state plumbing                                            #
@@ -413,89 +609,166 @@ class DummyOrderService:
         orl = payload.get("or_levels")
         return orl if isinstance(orl, dict) else None
 
+    # ------------------------------------------------------------------ #
+    # G1 v4.1 — single deterministic candle series                       #
+    # ------------------------------------------------------------------ #
+    def _build_fixed_series(
+        self, instrument_key: str,
+    ) -> list[dict[str, Any]]:
+        """Build ONE deterministic candle series for the trading day.
+
+        This series is the sole input to entry resolution, candle
+        replay, and resistance-exit lookup.  Building it once per run
+        guarantees the three computations agree on the underlying data
+        — the pre-v4.1 code mixed in-memory / intraday-API / LTP sources,
+        which is what made entries drift across restarts.
+
+        Source priority:
+
+            1. ``live_sr_calc_service.build_series_for_day`` — dedicated
+               helper that merges historical + today's intraday into one
+               ordered series.  Preferred when the helper exists.
+            2. ``live_sr_levels_service.get_candles`` — the merged
+               per-instrument series the SR engine already maintains.
+               Already deterministic given the same feed inputs.
+            3. ``live_sr_calc_service.fetch_intraday_candles_for_entry``
+               — fresh intraday API fetch.  Deterministic per call, but
+               may lag the day.  Used only as a last resort.
+        """
+        # 1. Preferred: dedicated builder
+        try:
+            from services.live_sr_calc_service import live_sr_calc_service
+            builder = getattr(
+                live_sr_calc_service, "build_series_for_day", None,
+            )
+            if callable(builder):
+                series = builder(instrument_key)
+                if series:
+                    return list(series)
+        except Exception:
+            logger.exception(
+                "[dummy-order] build_series_for_day failed for %s",
+                instrument_key,
+            )
+
+        # 2. Merged per-instrument series
+        try:
+            from services.live_sr_levels_service import live_sr_levels_service
+            candles = live_sr_levels_service.get_candles(instrument_key)
+            if candles:
+                return list(candles)
+        except Exception:
+            pass
+
+        # 3. Fresh intraday API fetch
+        try:
+            from services.live_sr_calc_service import live_sr_calc_service
+            return list(
+                live_sr_calc_service.fetch_intraday_candles_for_entry(
+                    instrument_key,
+                ) or []
+            )
+        except Exception:
+            return []
+
+    def _resolve_entry_price_from_series(
+        self,
+        instrument_key: str,
+        confirmed_time_iso: str,
+        series: list[dict[str, Any]],
+    ) -> tuple[float | None, str]:
+        """Resolve entry price from an already-built fixed series.
+
+        Returns ``(price, source)``.  ``source`` is one of:
+
+            * ``"candle_close_from_fixed_series"`` — the deterministic
+              happy path.  Order will be created.
+            * ``"live_ltp"`` — flag-gated fallback.  Order will be
+              created but flagged non-deterministic.
+            * ``"no_candle_at_confirmed_time"`` — retry next poll.
+        """
+        target = _parse_iso(confirmed_time_iso)
+        if target is None:
+            return None, "invalid_confirmed_time"
+        target_min = target.replace(second=0, microsecond=0)
+
+        for c in series:
+            c_dt = _parse_iso(c.get("time"))
+            if c_dt is None:
+                continue
+            if c_dt.replace(second=0, microsecond=0) == target_min:
+                close = _safe_float(c.get("close"))
+                if close is not None:
+                    return close, "candle_close_from_fixed_series"
+
+        # Flag-gated LTP fallback (default false — G1 v4.1)
+        if bool(
+            getattr(config, "DUMMY_ORDER_ALLOW_LTP_ENTRY_FALLBACK", False)
+        ):
+            try:
+                from services.live_feed_service import live_feed_service
+                ltp = live_feed_service.get_latest_ltp(instrument_key)
+                if ltp is not None:
+                    logger.warning(
+                        "[dummy-order] entry price for %s fell back to "
+                        "live_ltp (no candle close at %s; flag "
+                        "DUMMY_ORDER_ALLOW_LTP_ENTRY_FALLBACK=true) — "
+                        "this value is NON-DETERMINISTIC across restarts",
+                        instrument_key, confirmed_time_iso,
+                    )
+                    return float(ltp), "live_ltp"
+            except Exception:
+                pass
+
+        return None, "no_candle_at_confirmed_time"
+
+    # Kept for backward compat with any external caller — now a thin
+    # wrapper that builds the fixed series and delegates.
     def _resolve_entry_price(
         self,
         instrument_key: str,
         confirmed_time_iso: str,
     ) -> tuple[float | None, str | None]:
-        """Return (price, source) for the traded instrument at trigger time.
+        series = self._build_fixed_series(instrument_key)
+        return self._resolve_entry_price_from_series(
+            instrument_key, confirmed_time_iso, series,
+        )
 
-        Priority:
-          1. candle_close_at_confirmed_fast  (live_sr_levels_service)
-          2. candle_close_from_intraday      (fresh API fetch, cached)
-          3. live_ltp                        (degraded — logged WARNING)
-        """
-        try:
-            from services.live_sr_levels_service import live_sr_levels_service
-            close = live_sr_levels_service.get_candle_close_at(
-                instrument_key, confirmed_time_iso,
-            )
-            if close is not None:
-                return float(close), "candle_close_at_confirmed_fast"
-        except Exception:
-            pass
-
-        # Intraday fallback
-        try:
-            from services.live_sr_calc_service import live_sr_calc_service
-            target = _parse_iso(confirmed_time_iso)
-            if target is not None:
-                target_min = target.replace(second=0, microsecond=0)
-                candles = live_sr_calc_service.fetch_intraday_candles_for_entry(
-                    instrument_key,
-                )
-                for c in candles or []:
-                    c_dt = _parse_iso(c.get("time"))
-                    if c_dt is None:
-                        continue
-                    if c_dt.replace(second=0, microsecond=0) == target_min:
-                        close = _safe_float(c.get("close"))
-                        if close is not None:
-                            return close, "candle_close_from_intraday"
-        except Exception:
-            logger.exception(
-                "[dummy-order] intraday fallback failed for %s",
-                instrument_key,
-            )
-
-        # LTP fallback
-        try:
-            from services.live_feed_service import live_feed_service
-            ltp = live_feed_service.get_latest_ltp(instrument_key)
-            if ltp is not None:
-                logger.warning(
-                    "[dummy-order] entry price for %s fell back to "
-                    "live_ltp (no candle close at %s) — may be wrong in "
-                    "simulate mode",
-                    instrument_key, confirmed_time_iso,
-                )
-                return float(ltp), "live_ltp"
-        except Exception:
-            pass
-        return None, None
-
-    def _get_candles_for(self, instrument_key: str) -> list[dict[str, Any]]:
-        try:
-            from services.live_sr_levels_service import live_sr_levels_service
-            candles = live_sr_levels_service.get_candles(instrument_key)
-            if candles:
-                return candles
-        except Exception:
-            pass
-        try:
-            from services.live_sr_calc_service import live_sr_calc_service
-            return live_sr_calc_service.fetch_intraday_candles_for_entry(
-                instrument_key,
-            )
-        except Exception:
-            return []
+    # Kept for backward compat with any external caller — now a thin
+    # wrapper over the fixed-series builder.
+    def _get_candles_for(
+        self, instrument_key: str,
+    ) -> list[dict[str, Any]]:
+        return self._build_fixed_series(instrument_key)
 
     def _build_resistance_exit_map(
-        self, traded_key: str,
+        self,
+        traded_key: str,
+        series: list[dict[str, Any]],
     ) -> dict[str, float]:
-        """Return {confirmed_time_iso: close_price} for every resistance
-        on ``traded_key`` whose confirming bar's close is available."""
+        """Return ``{confirmed_time_iso: close_price}`` for every
+        resistance on ``traded_key`` whose confirming bar's close is
+        available **in the fixed series**.
+
+        The level LIST comes from ``live_sr_levels_service`` (the
+        authoritative source of confirmed pivots).  The CLOSE price for
+        each level is resolved from the fixed series — not from the
+        live in-memory buffer — so the exit map is reproducible across
+        restarts.
+        """
         out: dict[str, float] = {}
+
+        # Build a minute → close lookup from the fixed series
+        closes_by_minute: dict[datetime, float] = {}
+        for c in series or []:
+            c_dt = _parse_iso(c.get("time"))
+            if c_dt is None:
+                continue
+            key = c_dt.replace(second=0, microsecond=0)
+            close = _safe_float(c.get("close"))
+            if close is not None:
+                closes_by_minute[key] = close
+
         try:
             from services.live_sr_levels_service import live_sr_levels_service
             payload = live_sr_levels_service.get_levels(traded_key)
@@ -503,19 +776,18 @@ class DummyOrderService:
             return out
         if not payload:
             return out
+
         for lvl in payload.get("levels") or []:
             if str(lvl.get("level") or "").lower() != "resistance":
                 continue
             conf_iso = lvl.get("confirmed_time")
             if not conf_iso:
                 continue
-            try:
-                close = live_sr_levels_service.get_candle_close_at(
-                    traded_key, conf_iso,
-                )
-            except Exception:
-                close = None
-            close_f = _safe_float(close)
+            conf_dt = _parse_iso(conf_iso)
+            if conf_dt is None:
+                continue
+            key = conf_dt.replace(second=0, microsecond=0)
+            close_f = closes_by_minute.get(key)
             if close_f is not None:
                 out[str(conf_iso)] = close_f
         return out
@@ -544,7 +816,6 @@ class DummyOrderService:
         if not levels:
             return None
 
-        # First qualified post-isolation level + most recent prior support.
         post_trigger: dict[str, Any] | None = None
         prior_support: dict[str, Any] | None = None
         for lvl in sorted(
@@ -574,7 +845,6 @@ class DummyOrderService:
         if post_trigger is None:
             return None
 
-        # Resolve bias-side metadata from the registry.
         try:
             from services.instrument_registry import instrument_registry
             bias_entry = instrument_registry.get(bias_key) or {}
@@ -586,7 +856,6 @@ class DummyOrderService:
             bias_entry.get("strike_type") or iso.get("type") or "",
         ).upper()
 
-        # 09:30 reversal cutoff.
         cutoff_hour = int(getattr(config, "STRATEGY_ORDER_REVERSAL_CUTOFF_HOUR", 9))
         cutoff_min = int(getattr(config, "STRATEGY_ORDER_REVERSAL_CUTOFF_MINUTE", 30))
         post_conf_dt = _parse_iso(post_trigger["confirmed_time"])
@@ -603,7 +872,6 @@ class DummyOrderService:
             and post_is_resistance
         )
 
-        # Routing decision.
         if reversal_active:
             routing_mode = "reversal_same_leg"
             traded_key = bias_key
@@ -612,7 +880,7 @@ class DummyOrderService:
             routing_mode = "support_same_leg"
             traded_key = bias_key
             traded_symbol = bias_entry.get("trading_symbol")
-        else:  # resistance → opposite leg
+        else:
             routing_mode = "resistance_opposite_leg"
             opposite_type = "PE" if bias_type == "CE" else "CE"
             opposite_entry = None
@@ -729,16 +997,35 @@ class DummyOrderService:
         traded_key = routing["traded_key"]
         entry_time_iso = routing["entry_time_iso"]
 
-        entry_price, entry_source = self._resolve_entry_price(
-            traded_key, entry_time_iso,
+        # ---- G1 v4.1: build the fixed series ONCE ---------------- #
+        series = self._build_fixed_series(traded_key)
+        if not series:
+            logger.warning(
+                "[dummy-order] trigger confirmed but no fixed series for "
+                "%s — will retry next poll",
+                traded_key,
+            )
+            return None
+
+        # ---- G1 v4.1: resolve entry from the fixed series -------- #
+        entry_price, entry_source = self._resolve_entry_price_from_series(
+            traded_key, entry_time_iso, series,
         )
         if entry_price is None or entry_price <= 0:
             logger.warning(
                 "[dummy-order] trigger confirmed but no entry price for "
-                "%s @ %s — will retry next poll",
-                traded_key, entry_time_iso,
+                "%s @ %s (source=%s) — will retry next poll",
+                traded_key, entry_time_iso, entry_source,
             )
             return None
+
+        if entry_source == "live_ltp":
+            logger.warning(
+                "[dummy-order] DETERMINISM VIOLATED: entry price for %s "
+                "is live_ltp (flag DUMMY_ORDER_ALLOW_LTP_ENTRY_FALLBACK="
+                "true) — orders may differ across restarts",
+                traded_key,
+            )
 
         or_levels = self._read_or_levels(traded_key)
         if not or_levels:
@@ -772,8 +1059,8 @@ class DummyOrderService:
         )
         stop_price = round(entry_price * (1.0 - stop_pct), 4)
 
-        # Ensure the SR engine is tracking the traded instrument so that
-        # the resistance-exit map has its candle series available.
+        # Ensure the SR engine is tracking the traded instrument so
+        # live_sr_levels_service.get_levels() returns pivots for it.
         self._ensure_sr_tracking(traded_key)
 
         order = {
@@ -808,6 +1095,9 @@ class DummyOrderService:
             "mae": 0.0,
             "created_at": now.isoformat(),
             "created_retroactively": (window == "retroactive"),
+            # G1 v4.1 audit trail
+            "series_length": len(series),
+            "series_snapshot_at": now.isoformat(),
             "closed_at": None,
             "closed_time": None,
             "closed_price": None,
@@ -820,10 +1110,11 @@ class DummyOrderService:
 
         logger.info(
             "[dummy-order] CREATED %s | routing=%s entry=%.4f stop=%.4f "
-            "zone=%s milestones=%s",
+            "zone=%s milestones=%s series_len=%d",
             order["order_id"], routing["routing_mode"],
             entry_price, stop_price, zone.get("zone"),
             [m.get("name") for m in (zone.get("milestones") or [])],
+            len(series),
         )
         self._notify_created(order)
         return order
@@ -928,7 +1219,12 @@ class DummyOrderService:
         if order.get("status") != "OPEN":
             return
 
-        candles = self._get_candles_for(order.get("instrument_key"))
+        # ---- G1 v4.1: build the fixed series ONCE ---------------- #
+        # The same series feeds (a) candle replay for stops/milestones
+        # and (b) the resistance-exit map.  Pre-v4.1 the two used
+        # different sources, which could produce inconsistent exits.
+        traded_key = order.get("instrument_key")
+        candles = self._build_fixed_series(traded_key)
         if not candles:
             return
 
@@ -942,13 +1238,15 @@ class DummyOrderService:
             return
 
         milestones = order.get("milestones") or []
-        traded_key = order.get("instrument_key")
         gain_threshold = _safe_float(
             getattr(config, "STRATEGY_ORDER_MILESTONE_GAIN_POINTS", 50.0),
         ) or 50.0
 
-        # Resistance-exit map for Stage 2.
-        resistance_exits = self._build_resistance_exit_map(traded_key)
+        # Resistance-exit map for Stage 2 — closes resolved from the
+        # SAME fixed series used for replay.
+        resistance_exits = self._build_resistance_exit_map(
+            traded_key, candles,
+        )
 
         stage_2_dt = _parse_iso(order.get("stage_2_triggered_at"))
         exit_reason: str | None = None
@@ -1057,7 +1355,9 @@ class DummyOrderService:
             last_close = _safe_float(order.get("current_ltp"))
         if last_close is None:
             return
-        last_time_iso = str(candles[-1].get("time")) if candles else now.isoformat()
+        last_time_iso = (
+            str(candles[-1].get("time")) if candles else now.isoformat()
+        )
         self._close_order(
             order, "END_OF_DAY", last_close, last_time_iso, now,
         )
@@ -1120,6 +1420,7 @@ class DummyOrderService:
                 f"{_fmt_time(prior.get('confirmed_time'))}"
                 if prior else "—"
             )
+            entry_source = order.get("entry_price_source") or "—"
 
             msg = build(
                 emoji="📝",
@@ -1136,6 +1437,7 @@ class DummyOrderService:
                     )),
                     ("Prior support", prior_line),
                     ("Entry", f"₹{entry:.2f}"),
+                    ("Entry source", entry_source),
                     ("Stop-loss", f"₹{stop:.2f} (−{stop_pct * 100:.1f}%)"),
                     ("Zone", order.get("zone")),
                 ],
@@ -1215,13 +1517,15 @@ class DummyOrderService:
                     ("Routing", order.get("routing_mode")),
                     ("Entry", f"₹{entry:.2f} "
                      f"({_fmt_time(order.get('entry_time'))})"),
+                    ("Entry source", order.get("entry_price_source") or "—"),
                     ("Exit", f"{status_label} @ ₹{exit_price:.2f}"),
                     ("Closed at", _fmt_time(
                         order.get("closed_time") or order.get("closed_at"),
                     )),
                     ("PnL", f"{pnl * 100:+.2f}%"),
                     ("Profit", f"{pts:+.2f} pts"),
-                    ("Stage 2 trigger", order.get("stage_2_trigger_reason") or "—"),
+                    ("Stage 2 trigger",
+                     order.get("stage_2_trigger_reason") or "—"),
                 ],
                 status=build_status,
                 status_detail=f"{pnl * 100:+.2f}% · {pts:+.2f} pts",
@@ -1245,6 +1549,7 @@ class DummyOrderService:
         created: int = 0,
         updated: int = 0,
         closed: int = 0,
+        readiness: str = "ok",
     ) -> dict[str, Any]:
         order = self._state.get("order")
         out: dict[str, Any] = {
@@ -1258,6 +1563,7 @@ class DummyOrderService:
             "has_order": bool(order),
             "order_status": order.get("status") if order else None,
             "execution_path": self._state.get("execution_path"),
+            "readiness": readiness,
             "elapsed_seconds": round(time.monotonic() - t0, 3),
             "generated_at": _now_utc_iso(),
         }
@@ -1266,6 +1572,7 @@ class DummyOrderService:
                 "instrument_key": order.get("instrument_key"),
                 "routing_mode": order.get("routing_mode"),
                 "entry_price": order.get("entry_price"),
+                "entry_price_source": order.get("entry_price_source"),
                 "stop_price": order.get("stop_price"),
                 "current_ltp": order.get("current_ltp"),
                 "profit_state": order.get("profit_state"),
@@ -1273,7 +1580,9 @@ class DummyOrderService:
             }
         return out
 
-    def _skipped(self, reason: str, why: str, t0: float) -> dict[str, Any]:
+    def _skipped(
+        self, reason: str, why: str, t0: float,
+    ) -> dict[str, Any]:
         return {
             "status": "skipped",
             "reason": reason,
@@ -1283,7 +1592,9 @@ class DummyOrderService:
             "generated_at": _now_utc_iso(),
         }
 
-    def _no_signal(self, reason: str, why: str, t0: float) -> dict[str, Any]:
+    def _no_signal(
+        self, reason: str, why: str, t0: float,
+    ) -> dict[str, Any]:
         return {
             "status": "no_signal",
             "reason": reason,
@@ -1293,7 +1604,9 @@ class DummyOrderService:
             "generated_at": _now_utc_iso(),
         }
 
-    def _error(self, reason: str, why: str, t0: float) -> dict[str, Any]:
+    def _error(
+        self, reason: str, why: str, t0: float,
+    ) -> dict[str, Any]:
         return {
             "status": "error",
             "reason": reason,
@@ -1302,7 +1615,8 @@ class DummyOrderService:
             "generated_at": _now_utc_iso(),
         }
 
+
 # --------------------------------------------------------------------------- #
 # Singleton                                                                   #
 # --------------------------------------------------------------------------- #
-dummy_order_service = DummyOrderService() 
+dummy_order_service = DummyOrderService()

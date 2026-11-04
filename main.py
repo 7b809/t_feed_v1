@@ -21,12 +21,34 @@ Startup task list (infrastructure only):
     9.  Start / restart live feed
     9b. Level-isolation backfill (replays intraday candles to
         reconstruct today's "would-have-isolated" instrument)
-    9c. Dummy-order catch-up (creates any missing dummy orders for
-        today's armed candidates and updates the existing ones)  <-- NEW
+    9c. **Wait for SR backfill readiness (bounded)**, then dummy-order
+        catch-up (creates any missing dummy orders for today's armed
+        candidates and updates the existing ones)                 <-- NEW
     10. Start scheduler (idempotent)
     11. Start Telegram bot (idempotent)
     12. Telegram completion notification
     13. Return structured result
+
+Dummy-order catch-up gating (2026-11-04)
+----------------------------------------
+``_run_full_refresh_sync`` returns as soon as
+``live_feed_service.start()`` has been *scheduled* — the SR backfill
+runs asynchronously inside feed start. Evidence (2026-10-29): level
+isolation completed at 16:10:35, dummy-order catch-up fired at
+16:10:36 while the SR backfill was already re-seeding (16:12:36).
+
+The catch-up is now gated on ``sr_backfill_service.is_ready()`` (or
+``is_ready_for_today()`` if that alias exists) with a bounded wait of
+``DUMMY_ORDER_WAIT_FOR_SR_BACKFILL_TIMEOUT_SECONDS`` (default 120 s).
+If the latch is not set in time, the catch-up is **skipped** — the
+scheduler's next tick will retry — and the skip reason is written into
+the startup result dict so the Telegram summary reflects what actually
+happened. The catch-up is called exactly once per startup.
+
+Config keys referenced (may be added to ``core/config.py`` as needed —
+all read defensively via ``getattr``):
+
+    * ``DUMMY_ORDER_WAIT_FOR_SR_BACKFILL_TIMEOUT_SECONDS``  (default 120)
 
 Admin surfaces mounted by this module:
 
@@ -39,18 +61,20 @@ Admin surfaces mounted by this module:
 """
 
 import asyncio
+import time
 from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from core import config
 from core.logger import get_logger
 from routes.admin_routes import _run_full_refresh_sync
 from routes.admin_routes import router as admin_router
 from routes.daily_backup_routes import router as daily_backup_router
-from routes.dummy_order_routes import router as dummy_order_router  
-from routes.ema_calc_routes import router as ema_calc_router         
+from routes.dummy_order_routes import router as dummy_order_router
+from routes.ema_calc_routes import router as ema_calc_router
 from routes.folder_routes import router as folder_router
 from routes.isolated_instrument_routes import router as isolated_instrument_router
 from routes.layout_routes import router as layout_router
@@ -67,11 +91,11 @@ from routes.live_sr_routes import router as live_sr_router
 from routes.live_sr_calc_routes import router as live_sr_calc_router
 from routes.api_explorer_route import router as api_explorer_router
 
-from upstox_app.apis.expired_instruments_api import (   
+from upstox_app.apis.expired_instruments_api import (
     router as expired_instruments_router,
 )
 
-from routes.expired_chart_routes import router as expired_chart_router  
+from routes.expired_chart_routes import router as expired_chart_router
 
 
 from services.config_validation import validate_config
@@ -89,6 +113,11 @@ logger = get_logger(__file__)
 # --------------------------------------------------------------------------- #
 _DIV = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 _THIN = "────────────────────────────────"
+
+# Poll interval while waiting for the SR backfill readiness latch.
+# Kept small (2 s) so the typical case — backfill already complete by
+# the time ``_run_full_refresh_sync`` returns — costs a single check.
+_DUMMY_ORDER_SR_BACKFILL_POLL_SECONDS = 2.0
 
 
 # --------------------------------------------------------------------------- #
@@ -209,12 +238,111 @@ def _holiday_gate_for_startup() -> dict[str, Any]:
 
 
 # --------------------------------------------------------------------------- #
+# SR backfill readiness wait (2026-11-04)                                     #
+# --------------------------------------------------------------------------- #
+def _sr_backfill_is_ready() -> bool:
+    """Best-effort readiness probe for the SR backfill latch.
+
+    Prefers ``sr_backfill_service.is_ready_for_today()`` when the
+    service exposes that name (the documented gate), and falls back to
+    ``is_ready()`` — which is what the current ``sr_backfill_service``
+    implementation exports. Returns ``False`` if neither method exists
+    (older service build), so the caller's timeout path handles it
+    defensively instead of crashing startup.
+    """
+    try:
+        from services.sr_backfill_service import sr_backfill_service
+    except Exception:
+        logger.exception(
+            "[startup] sr_backfill_service import failed during "
+            "readiness probe"
+        )
+        return False
+
+    for method_name in ("is_ready_for_today", "is_ready"):
+        method = getattr(sr_backfill_service, method_name, None)
+        if callable(method):
+            try:
+                return bool(method())
+            except Exception:
+                logger.exception(
+                    "[startup] sr_backfill_service.%s() raised",
+                    method_name,
+                )
+                return False
+    return False
+
+
+async def _wait_for_sr_backfill_ready(
+    timeout_seconds: float | None = None,
+    poll_seconds: float = _DUMMY_ORDER_SR_BACKFILL_POLL_SECONDS,
+) -> dict[str, Any]:
+    """Await the SR backfill readiness latch, bounded by a timeout.
+
+    Returns a dict with:
+
+        ready            — True iff the latch was set within the timeout
+        elapsed_seconds  — how long we waited
+        timeout_seconds  — configured timeout (for logging / display)
+        reason           — "already_ready" | "became_ready" | "timeout"
+
+    The immediate check is cheap — in the common case where SR backfill
+    has already completed by the time ``_run_full_refresh_sync``
+    returns, this function returns without ever entering the poll loop.
+    """
+    if timeout_seconds is None:
+        timeout_seconds = float(
+            getattr(
+                config,
+                "DUMMY_ORDER_WAIT_FOR_SR_BACKFILL_TIMEOUT_SECONDS",
+                120.0,
+            )
+        )
+
+    # ---- Immediate check (fast path) ----------------------------- #
+    if _sr_backfill_is_ready():
+        return {
+            "ready": True,
+            "elapsed_seconds": 0.0,
+            "timeout_seconds": float(timeout_seconds),
+            "reason": "already_ready",
+        }
+
+    start = time.monotonic()
+    deadline = start + float(timeout_seconds)
+
+    while time.monotonic() < deadline:
+        try:
+            await asyncio.sleep(poll_seconds)
+        except asyncio.CancelledError:
+            raise
+        if _sr_backfill_is_ready():
+            return {
+                "ready": True,
+                "elapsed_seconds": time.monotonic() - start,
+                "timeout_seconds": float(timeout_seconds),
+                "reason": "became_ready",
+            }
+
+    return {
+        "ready": False,
+        "elapsed_seconds": time.monotonic() - start,
+        "timeout_seconds": float(timeout_seconds),
+        "reason": "timeout",
+    }
+
+
+# --------------------------------------------------------------------------- #
 # Dummy-order catch-up                                                         #
 # --------------------------------------------------------------------------- #
 def _dummy_order_catchup() -> dict[str, Any]:
     """Run one dummy-order scan right after startup so today's already-
     armed candidates get their dummy orders created (or reconciled)
     immediately — without waiting for the first scheduler tick.
+
+    **Called exactly once per startup** — the single call site in
+    ``app_lifespan`` gates it on ``_wait_for_sr_backfill_ready()`` and
+    writes the summary (or a skip record) into the startup result dict.
     """
     try:
         from services.dummy_order_service import dummy_order_service
@@ -297,8 +425,47 @@ async def app_lifespan(app: FastAPI):
         )
         result["holiday_gate"] = holiday_gate
 
-        # ---- Dummy-order catch-up (NEW) ------------------------------ #
-        dummy_summary = await asyncio.to_thread(_dummy_order_catchup)
+        # ---- Wait for SR backfill readiness, then dummy-order catch-up #
+        # NOTE: ``_run_full_refresh_sync`` returns as soon as
+        # ``live_feed_service.start()`` has been scheduled — the SR
+        # backfill runs asynchronously inside feed start. Wait for the
+        # readiness latch (bounded by
+        # ``DUMMY_ORDER_WAIT_FOR_SR_BACKFILL_TIMEOUT_SECONDS``) before
+        # running the catch-up so it doesn't fire against a half-built
+        # SR state. If the latch does not set in time, SKIP the
+        # catch-up — the scheduler's next tick will retry — and record
+        # the skip reason in ``result["dummy_orders"]`` so the startup
+        # Telegram summary reflects what actually happened.
+        #
+        # This is the ONLY call site of ``_dummy_order_catchup()`` in
+        # the startup path. It runs exactly once per startup.
+        sr_ready_info = await _wait_for_sr_backfill_ready()
+        if sr_ready_info["ready"]:
+            if sr_ready_info["reason"] != "already_ready":
+                logger.info(
+                    "[startup] SR backfill readiness achieved after "
+                    "%.1fs (%s) — running dummy-order catch-up",
+                    sr_ready_info["elapsed_seconds"],
+                    sr_ready_info["reason"],
+                )
+            dummy_summary = await asyncio.to_thread(_dummy_order_catchup)
+            dummy_summary["sr_backfill_wait"] = sr_ready_info
+        else:
+            dummy_summary = {
+                "status": "skipped",
+                "reason": (
+                    f"sr_backfill_not_ready:{sr_ready_info['reason']}"
+                ),
+                "error": None,
+                "sr_backfill_wait": sr_ready_info,
+            }
+            logger.warning(
+                "[startup] dummy-order catch-up skipped — SR backfill "
+                "readiness not achieved within %.1fs (%s); "
+                "scheduler will retry on next tick",
+                sr_ready_info["elapsed_seconds"],
+                sr_ready_info["reason"],
+            )
         result["dummy_orders"] = dummy_summary
 
         registry_count = (result.get("registry") or {}).get("count", 0)
@@ -311,13 +478,15 @@ async def app_lifespan(app: FastAPI):
         logger.info(
             "Application startup complete. feed_instruments=%d "
             "telegram_polling=%s holiday=%s level_isolation_status=%s "
-            "isolated=%s dummy_orders=%s",
+            "isolated=%s dummy_orders=%s sr_ready=%s sr_wait_s=%.1f",
             registry_count,
             telegram_running,
             holiday_gate.get("is_holiday"),
             isolation_status,
             isolated.get("instrument_key"),
             dummy_summary.get("status"),
+            sr_ready_info["ready"],
+            sr_ready_info["elapsed_seconds"],
         )
 
         # ---- Startup Telegram ------------------------------------------ #
@@ -340,6 +509,25 @@ async def app_lifespan(app: FastAPI):
                 f"🎯 Isolation:     {isolation_status}\n"
             )
 
+        # SR backfill wait line — surfaces the readiness outcome so the
+        # operator can tell at a glance whether the dummy-order catch-up
+        # actually ran or was deferred to the scheduler.
+        if sr_ready_info["ready"]:
+            if sr_ready_info["reason"] == "already_ready":
+                sr_line = "🎯 SR backfill:    ✓ (ready)"
+            else:
+                sr_line = (
+                    f"🎯 SR backfill:    ✓ (waited "
+                    f"{sr_ready_info['elapsed_seconds']:.1f}s)"
+                )
+            sr_line += "\n"
+        else:
+            sr_line = (
+                f"🎯 SR backfill:    ✗ timeout "
+                f"({sr_ready_info['elapsed_seconds']:.0f}s / "
+                f"{sr_ready_info['timeout_seconds']:.0f}s)\n"
+            )
+
         dummy_line = ""
         if dummy_summary.get("status") == "ok":
             dummy_line = (
@@ -349,7 +537,11 @@ async def app_lifespan(app: FastAPI):
                 f"closed={dummy_summary.get('closed_count')}\n"
             )
         elif dummy_summary.get("status") in {"skipped", "no_signal"}:
-            dummy_line = f"📋 Dummy orders:  {dummy_summary.get('status')}\n"
+            skip_reason = str(dummy_summary.get("reason") or "").strip()
+            dummy_line = (
+                f"📋 Dummy orders:  {dummy_summary.get('status')}"
+                f"{f' ({skip_reason})' if skip_reason else ''}\n"
+            )
         else:
             dummy_line = (
                 f"📋 Dummy orders:  {dummy_summary.get('status')} "
@@ -363,6 +555,7 @@ async def app_lifespan(app: FastAPI):
             f"📊 Instruments:     {registry_count}\n"
             f"{holiday_line}"
             f"{isolation_line}"
+            f"{sr_line}"
             f"{dummy_line}"
             f"📡 Live feed:       "
             f"{'✓' if result.get('feed_restarted') else '✗'}\n"
@@ -436,13 +629,13 @@ app.include_router(page_router)
 app.include_router(live_router)
 app.include_router(live_sr_router)
 app.include_router(live_sr_calc_router)
-app.include_router(ema_calc_router)              
+app.include_router(ema_calc_router)
 app.include_router(admin_router)
 app.include_router(folder_router)
 app.include_router(upstox_router)
-app.include_router(expired_instruments_router)   
+app.include_router(expired_instruments_router)
 app.include_router(api_explorer_router)
-app.include_router(expired_chart_router)          
+app.include_router(expired_chart_router)
 app.include_router(log_router)
 app.include_router(market_holiday_router)
 app.include_router(order_router)
@@ -452,4 +645,4 @@ app.include_router(layout_router)
 app.include_router(readiness_router)
 app.include_router(isolated_instrument_router)
 app.include_router(simulation_router)
-app.include_router(dummy_order_router)       
+app.include_router(dummy_order_router)
