@@ -23,7 +23,10 @@ Startup task list (infrastructure only):
         reconstruct today's "would-have-isolated" instrument)
     9c. **Wait for SR backfill readiness (bounded)**, then dummy-order
         catch-up (creates any missing dummy orders for today's armed
-        candidates and updates the existing ones)                 <-- NEW
+        candidates and updates the existing ones)
+    9d. **Register live sandbox executor on dummy_order_service**
+        and run its startup reconciliation (ledger vs positions vs
+        catch-up result)                              <-- NEW (2026-11-04)
     10. Start scheduler (idempotent)
     11. Start Telegram bot (idempotent)
     12. Telegram completion notification
@@ -45,10 +48,38 @@ scheduler's next tick will retry — and the skip reason is written into
 the startup result dict so the Telegram summary reflects what actually
 happened. The catch-up is called exactly once per startup.
 
+Live sandbox execution — registration ordering (2026-11-04)
+-----------------------------------------------------------
+The dummy-order engine is the *signal generator*; ``sandbox_execution_service``
+mirrors its transitions onto real broker orders **only for** the
+scheduled (``reason="scheduled"``) path. Startup catch-up runs with
+``reason="startup"`` and is hard-rejected by the executor's gate chain,
+which is why registration MUST happen **after** ``_dummy_order_catchup()``
+returns — otherwise the catch-up's transitions would be emitted to a
+registered executor that has no way to tell them apart from real events.
+
+Correct order of operations in ``app_lifespan``:
+
+    wait_for_sr_backfill_ready()
+      → _dummy_order_catchup()          (reason="startup"; executor not yet registered)
+      → register_with_dummy_order_service()
+      → sandbox_execution_service.reconcile_startup()
+      → scheduler ticks fire              (reason="scheduled"; executor fires)
+
+The scheduler's ``_dummy_order_tick`` itself started inside
+``_run_full_refresh_sync``, so it *may* have already run its first
+tick by the time we get here — that is safe: (a) on builds without the
+``is_ready_for_today`` probe it short-circuits every tick
+(``missing_probe``), (b) even on builds that do tick, the executor is
+not registered yet, so no real order is placed. Registration then
+closes the window for all subsequent ticks.
+
 Config keys referenced (may be added to ``core/config.py`` as needed —
 all read defensively via ``getattr``):
 
     * ``DUMMY_ORDER_WAIT_FOR_SR_BACKFILL_TIMEOUT_SECONDS``  (default 120)
+    * ``SANDBOX_EXECUTION_ENABLED``                          (default false)
+    * ``SANDBOX_EXECUTION_MODE``                             (default "observe")
 
 Admin surfaces mounted by this module:
 
@@ -57,7 +88,8 @@ Admin surfaces mounted by this module:
     Readiness API          routes/readiness_routes.py
     Level-Isolation API    routes/isolated_instrument_routes.py
     Simulation API         routes/simulation_routes.py
-    Dummy-Orders API       routes/dummy_order_routes.py        <-- NEW
+    Dummy-Orders API       routes/dummy_order_routes.py
+    Sandbox-Orders API     routes/admin_orders.py (sandbox-status)   <-- NEW
 """
 
 import asyncio
@@ -368,6 +400,90 @@ def _dummy_order_catchup() -> dict[str, Any]:
 
 
 # --------------------------------------------------------------------------- #
+# Live sandbox executor — registration + startup reconciliation (2026-11-04)  #
+# --------------------------------------------------------------------------- #
+def _register_and_reconcile_sandbox(
+    dummy_summary: dict[str, Any],
+) -> dict[str, Any]:
+    """Wire the sandbox executor to dummy_order_service and reconcile.
+
+    Order matters:
+
+        1. Catch-up already ran with ``reason="startup"`` (executor not
+           yet registered → no events captured).
+        2. Register the callback — subsequent scheduler ticks emit
+           ``reason="scheduled"`` transitions the executor will act on.
+        3. Reconcile ledger vs positions vs catch-up result, so a
+           restart mid-day does not leave the sandbox in an inconsistent
+           state.
+
+    Always returns a dict for ``result["sandbox_execution"]``. Never
+    raises.
+    """
+    try:
+        from services.sandbox_execution_service import (
+            sandbox_execution_service,
+            register_with_dummy_order_service,
+        )
+    except Exception as exc:
+        logger.exception(
+            "[startup] sandbox_execution_service import failed"
+        )
+        return {
+            "status": "error",
+            "registered": False,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+
+    registered = False
+    try:
+        registered = bool(register_with_dummy_order_service())
+    except Exception as exc:
+        logger.exception(
+            "[startup] sandbox executor registration failed"
+        )
+        return {
+            "status": "error",
+            "registered": False,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+
+    reconcile_summary: dict[str, Any] = {}
+    try:
+        reconcile_summary = sandbox_execution_service.reconcile_startup(
+            dummy_summary=dummy_summary,
+        ) or {}
+    except Exception as exc:
+        logger.exception(
+            "[startup] sandbox reconcile_startup failed"
+        )
+        reconcile_summary = {
+            "status": "error",
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+
+    # Single canonical summary line so the operator can answer
+    # "did the sandbox come up cleanly?" from one grep.
+    logger.info(
+        "[sandbox_exec] startup reconcile entered=%d exited_late=%d "
+        "missed_entry=%d stuck=%d mode=%s enabled=%s registered=%s",
+        int(reconcile_summary.get("entered", 0) or 0),
+        int(reconcile_summary.get("exited_late", 0) or 0),
+        int(reconcile_summary.get("missed_entry", 0) or 0),
+        int(reconcile_summary.get("stuck", 0) or 0),
+        str(reconcile_summary.get("mode", "?")),
+        bool(reconcile_summary.get("execution_enabled", False)),
+        registered,
+    )
+
+    return {
+        "status": "ok" if registered else "warn",
+        "registered": registered,
+        **reconcile_summary,
+    }
+
+
+# --------------------------------------------------------------------------- #
 # Lifespan                                                                     #
 # --------------------------------------------------------------------------- #
 @asynccontextmanager
@@ -425,7 +541,7 @@ async def app_lifespan(app: FastAPI):
         )
         result["holiday_gate"] = holiday_gate
 
-        # ---- Wait for SR backfill readiness, then dummy-order catch-up #
+        # ---- Wait for SR backfill readiness, then dummy-order catch-up # #
         # NOTE: ``_run_full_refresh_sync`` returns as soon as
         # ``live_feed_service.start()`` has been scheduled — the SR
         # backfill runs asynchronously inside feed start. Wait for the
@@ -468,6 +584,15 @@ async def app_lifespan(app: FastAPI):
             )
         result["dummy_orders"] = dummy_summary
 
+        # ---- Live sandbox executor: register + reconcile ------------ #
+        # Runs AFTER the catch-up (which used reason="startup" and is
+        # ignored by the executor) and BEFORE the next scheduled tick
+        # can act on new transitions. See module docstring step 9d.
+        sandbox_summary = await asyncio.to_thread(
+            _register_and_reconcile_sandbox, dummy_summary,
+        )
+        result["sandbox_execution"] = sandbox_summary
+
         registry_count = (result.get("registry") or {}).get("count", 0)
         telegram_running = _telegram_bot_running()
 
@@ -478,7 +603,8 @@ async def app_lifespan(app: FastAPI):
         logger.info(
             "Application startup complete. feed_instruments=%d "
             "telegram_polling=%s holiday=%s level_isolation_status=%s "
-            "isolated=%s dummy_orders=%s sr_ready=%s sr_wait_s=%.1f",
+            "isolated=%s dummy_orders=%s sr_ready=%s sr_wait_s=%.1f "
+            "sandbox_registered=%s sandbox_mode=%s",
             registry_count,
             telegram_running,
             holiday_gate.get("is_holiday"),
@@ -487,6 +613,8 @@ async def app_lifespan(app: FastAPI):
             dummy_summary.get("status"),
             sr_ready_info["ready"],
             sr_ready_info["elapsed_seconds"],
+            sandbox_summary.get("registered"),
+            sandbox_summary.get("mode"),
         )
 
         # ---- Startup Telegram ------------------------------------------ #
@@ -548,6 +676,39 @@ async def app_lifespan(app: FastAPI):
                 f"({dummy_summary.get('error') or dummy_summary.get('detail') or '—'})\n"
             )
 
+        # Sandbox execution line — shows the mode and, when a stale
+        # ledger was reconciled on restart, the counts so the operator
+        # knows the executor is not starting from a clean slate.
+        sandbox_line = ""
+        if sandbox_summary.get("registered"):
+            sandbox_mode = str(sandbox_summary.get("mode") or "?")
+            sandbox_enabled = bool(sandbox_summary.get("execution_enabled"))
+            extra_bits: list[str] = []
+            if sandbox_summary.get("open_position"):
+                extra_bits.append(
+                    f"open={sandbox_summary.get('open_position')}"
+                )
+            if int(sandbox_summary.get("exited_late", 0) or 0) > 0:
+                extra_bits.append(
+                    f"exited_late={sandbox_summary.get('exited_late')}"
+                )
+            if int(sandbox_summary.get("missed_entry", 0) or 0) > 0:
+                extra_bits.append(
+                    f"missed_entry={sandbox_summary.get('missed_entry')}"
+                )
+            if sandbox_summary.get("stuck"):
+                extra_bits.append("STUCK")
+            extra = (" · " + " · ".join(extra_bits)) if extra_bits else ""
+            sandbox_line = (
+                f"🎬 Sandbox exec:  {sandbox_mode} · "
+                f"{'enabled' if sandbox_enabled else 'disabled'}{extra}\n"
+            )
+        else:
+            sandbox_line = (
+                f"🎬 Sandbox exec:  ✗ not registered "
+                f"({sandbox_summary.get('error') or 'unavailable'})\n"
+            )
+
         startup_message = (
             f"{_DIV}\n"
             f"🚀 APPLICATION STARTED\n"
@@ -557,6 +718,7 @@ async def app_lifespan(app: FastAPI):
             f"{isolation_line}"
             f"{sr_line}"
             f"{dummy_line}"
+            f"{sandbox_line}"
             f"📡 Live feed:       "
             f"{'✓' if result.get('feed_restarted') else '✗'}\n"
             f"⏰ Scheduler:       "

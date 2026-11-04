@@ -104,6 +104,38 @@ watermarks, close state, and the two Telegram notification flags.
 
 Never raises. Every failure mode lands in the returned summary dict
 and in the state file.
+
+Transition callback (v1, 2026-11-04)
+------------------------------------
+An external consumer (``services/sandbox_execution_service.py``) can
+register a callback via ``set_transition_callback(fn)``.  The service
+invokes ``fn(transition_type, order_record, reason)`` exactly once per
+actionable transition, AFTER the state file has been written.  Supported
+``transition_type`` values:
+
+    CREATED                    — a new OPEN order was just written
+    STAGE_2_MILESTONE          — profit_state moved Stage 1 → Stage 2
+    STOP_HIT                   — stop-loss triggered, order closed
+    STAGE_2_RESISTANCE_EXIT    — Stage 2 resistance confirmation, order closed
+    NEXT_15_3_RESISTANCE_EXIT  — reserved synonym for the above; not
+                                 produced by the current close path but
+                                 mapped defensively for future use
+    EOD_CLOSE                  — end-of-day close, order closed
+
+``order_record`` is a shallow copy of the order dict at the moment the
+transition was queued.  ``reason`` is the ``run_once(reason=...)``
+argument, passed through unchanged — consumers use it to distinguish
+the scheduled (``"scheduled"``) path from the startup catch-up
+(``"startup"``).
+
+The callback is optional.  Unregistered → no-op.  It must never raise:
+this service wraps the invocation in try/except and logs any exception,
+so a buggy callback cannot break the deterministic order engine.
+
+The callback is invoked synchronously inside the ``_lock``.  Consumers
+that need to do slow I/O (broker calls, fill polling) SHOULD return
+quickly and continue the work on their own worker — otherwise they
+will delay the next scheduler tick.
 """
 
 from __future__ import annotations
@@ -247,6 +279,20 @@ def _log_calc_regime(
 
 
 # --------------------------------------------------------------------------- #
+# Close-reason → transition-type mapping (module-level)                       #
+# --------------------------------------------------------------------------- #
+# Only closes whose `closed_reason` appears in this map are surfaced to
+# the external transition callback.  SKIPPED is deliberately absent — a
+# skipped order is not an actionable event for downstream consumers.
+_CLOSE_REASON_TO_TRANSITION: dict[str, str] = {
+    "STOP_HIT":                 "STOP_HIT",
+    "STAGE_2_RESISTANCE_EXIT":  "STAGE_2_RESISTANCE_EXIT",
+    "NEXT_15_3_RESISTANCE_EXIT": "NEXT_15_3_RESISTANCE_EXIT",
+    "END_OF_DAY":               "EOD_CLOSE",
+}
+
+
+# --------------------------------------------------------------------------- #
 # Service                                                                     #
 # --------------------------------------------------------------------------- #
 class DummyOrderService:
@@ -257,11 +303,39 @@ class DummyOrderService:
         # upstream sr_backfill_service (kept so the fail-open fallback
         # does not spam the log on every 30 s scheduler tick).
         self._warned_no_readiness_check: bool = False
+        # Post-persistence transition callback (optional).
+        # Signature: fn(transition_type, order_record, reason)
+        # Set via set_transition_callback(); see module docstring.
+        self._transition_callback: Any = None
         self._load_from_disk()
 
     # ------------------------------------------------------------------ #
     # Public API                                                         #
     # ------------------------------------------------------------------ #
+    def set_transition_callback(self, fn: Any) -> None:
+        """Register a post-persistence transition callback.
+
+        ``fn`` must be callable with signature
+            fn(transition_type: str, order_record: dict, reason: str)
+        or ``None`` to clear.  The callback fires AFTER the state file
+        is written, synchronously inside ``run_once``'s lock.  It must
+        not block for more than a few hundred milliseconds — slow work
+        (broker I/O, fill polling) must be handed off to a worker.
+        """
+        if fn is not None and not callable(fn):
+            logger.warning(
+                "[dummy-order] set_transition_callback: argument is "
+                "not callable — ignored (type=%s)",
+                type(fn).__name__,
+            )
+            return
+        with self._lock:
+            self._transition_callback = fn
+            logger.info(
+                "[dummy-order] transition callback %s",
+                "registered" if fn else "cleared",
+            )
+
     def run_once(self, reason: str = "manual") -> dict[str, Any]:
         """One full scan. Never raises.
 
@@ -326,13 +400,29 @@ class DummyOrderService:
                 )
 
                 # ---- 2. Ensure order (created at most once) ------- #
+                # pending_transitions is populated during the scan and
+                # flushed AFTER self._save(now) so downstream consumers
+                # only ever observe transitions that are already durable
+                # in dummy_orders.json.
                 created = 0
+                updated = 0
+                closed = 0
+                pending_transitions: list[tuple[str, dict[str, Any]]] = []
+
                 order = self._state.get("order")
                 if order is None:
                     order = self._try_create_order(iso, now, window)
                     if order is not None:
                         self._state["order"] = order
                         created = 1
+                        # Only surface CREATED for actionable OPEN orders.
+                        # SKIPPED orders stay silent — the executor would
+                        # otherwise try to place a real entry for a trade
+                        # that was intentionally rejected by the regime.
+                        if str(order.get("status")) == "OPEN":
+                            pending_transitions.append(
+                                ("CREATED", dict(order)),
+                            )
                 else:
                     # ---- G1 v4.1: idempotency log ----------------- #
                     # If an order already exists for today, do NOT
@@ -345,16 +435,42 @@ class DummyOrderService:
                         )
 
                 # ---- 3. Update OPEN order ------------------------- #
-                updated = 0
-                closed = 0
                 if isinstance(order, dict) and order.get("status") == "OPEN":
                     before_status = order.get("status")
+                    before_stage2 = order.get("stage_2_triggered_at")
                     self._update_order(order, now, window)
                     updated = 1
+                    # Stage 2 arming happened this tick →
+                    # snapshot it before checking for a same-tick close.
+                    if (
+                        before_stage2 is None
+                        and order.get("stage_2_triggered_at") is not None
+                    ):
+                        pending_transitions.append(
+                            ("STAGE_2_MILESTONE", dict(order)),
+                        )
+                    # Close happened this tick → map the closed_reason
+                    # onto one of the transition_type labels.
                     if order.get("status") != before_status:
                         closed = 1
+                        trans = _CLOSE_REASON_TO_TRANSITION.get(
+                            str(order.get("closed_reason") or "").upper(),
+                        )
+                        if trans:
+                            pending_transitions.append(
+                                (trans, dict(order)),
+                            )
 
+                # ---- 4. Persist state BEFORE firing transitions -- #
                 self._save(now)
+
+                # ---- 5. Flush transition callback --------------- #
+                # Fire-and-observe: wrapped by _emit_transition which
+                # can never raise into run_once.
+                for trans_type, order_snapshot in pending_transitions:
+                    self._emit_transition(
+                        trans_type, order_snapshot, reason,
+                    )
 
                 logger.info(
                     "[dummy-order] %s — created=%d updated=%d closed=%d "
@@ -393,6 +509,34 @@ class DummyOrderService:
             self._save(_now_market())
             logger.info("[dummy-order] state reset")
             return {"status": "reset", "day": self._state.get("day")}
+
+    # ------------------------------------------------------------------ #
+    # Transition callback plumbing                                       #
+    # ------------------------------------------------------------------ #
+    def _emit_transition(
+        self,
+        transition_type: str,
+        order_record: dict[str, Any],
+        reason: str,
+    ) -> None:
+        """Fire the registered callback. Never raises into run_once.
+
+        The callback is invoked synchronously inside ``_lock``.  Slow
+        work must be dispatched by the consumer to its own worker.
+        """
+        cb = self._transition_callback
+        if cb is None:
+            return
+        try:
+            cb(transition_type, order_record, reason)
+        except Exception:
+            logger.exception(
+                "[dummy-order] transition callback failed for %s "
+                "(order_id=%s reason=%s)",
+                transition_type,
+                (order_record or {}).get("order_id"),
+                reason,
+            )
 
     # ------------------------------------------------------------------ #
     # G1 v4.1 — readiness gate                                           #

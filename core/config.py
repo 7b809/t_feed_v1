@@ -115,6 +115,37 @@ ORDERS block below; all default to the safe deterministic behaviour:
 A ``DEPRECATION NOTICE`` block was also added (DUMMY ORDERS section)
 stating that ``STRATEGY_EXT_PATH_B_ENABLED`` and the ``STRATEGY_ENTRY_*``
 keys are now diagnostics / simulation-only.
+
+Live sandbox execution (2026-11-04)
+-----------------------------------
+A new ``SANDBOX_*`` block was added at the bottom of this file (after
+STRATEGY ORDER, before EMA CALC) to drive the live sandbox executor
+in ``services/sandbox_execution_service.py``. The executor mirrors
+dummy-order transitions onto real broker orders — but ONLY when all
+of the following hold:
+
+    * ``SANDBOX_EXECUTION_ENABLED`` is True (env; default **False**),
+    * ``SANDBOX_EXECUTION_MODE == "live"`` (env; default **"observe"**),
+    * ``order_runtime_service.status()["enabled"]`` is True
+      (controlled by POST /admin/orders/runtime-enable|disable),
+    * ``sr_backfill_service.is_ready_for_today()`` is True,
+    * current time is between SANDBOX_MARKET_OPEN and SANDBOX_MARKET_CLOSE,
+    * the ledger idempotency key has not yet fired,
+    * the single-position lock is free.
+
+The default deployment ships with the sandbox **inert** — no broker
+call can be made until an operator deliberately flips both the env
+gate and the runtime toggle. See the SANDBOX block itself for the
+per-key documentation.
+
+A parallel scheduler job ``sandbox_eod_exit`` fires at
+``SANDBOX_EOD_HOUR:SANDBOX_EOD_MINUTE`` (default 15:15 IST) so the
+executor owns its own end-of-day exit *before* the broker's ~15:15-15:25
+auto-square-off and *before* the dummy engine's accounting EOD at
+``DUMMY_ORDER_EOD_HOUR:DUMMY_ORDER_EOD_MINUTE`` (default 15:35). The
+later dummy ``EOD_CLOSE`` transition then falls into the executor's
+"already exited" no-op branch and is logged as the expected divergence
+between the two engines.
 """
 
 import os
@@ -841,6 +872,139 @@ STRATEGY_ORDER_REVERSAL_CUTOFF_HOUR = _int(
 STRATEGY_ORDER_REVERSAL_CUTOFF_MINUTE = _int(
     "STRATEGY_ORDER_REVERSAL_CUTOFF_MINUTE", 30
 )
+
+# ===========================================================================
+# SANDBOX EXECUTION — live sandbox order mirror of dummy-order transitions
+# ===========================================================================
+# Driven by ``services/sandbox_execution_service.py`` (2026-11-04).
+#
+# The sandbox executor consumes ``dummy_order_service``'s post-persistence
+# transition callback (see ``dummy_order_service.set_transition_callback``)
+# and mirrors each transition onto a real broker order — but ONLY when
+# EVERY one of the following gates passes:
+#
+#     1. reason == "scheduled"            (startup catch-up is ignored)
+#     2. SANDBOX_EXECUTION_ENABLED        (this block, default False)
+#     3. SANDBOX_EXECUTION_MODE=="live"   (this block, default "observe")
+#     4. order_runtime_service.status()["enabled"] == True
+#        (POST /admin/orders/runtime-enable / runtime-disable)
+#     5. sr_backfill_service.is_ready_for_today() == True
+#     6. current time is inside [SANDBOX_MARKET_OPEN, SANDBOX_MARKET_CLOSE]
+#     7. ledger idempotency key has not already fired
+#     8. single-position lock is free
+#
+# TRANSLATION TABLE:
+#
+#     dummy transition                → sandbox action
+#     --------------------------------→--------------------------------
+#     CREATED                         → place_order(BUY, MARKET, product=D)
+#     STAGE_2_MILESTONE               → log only (no broker action)
+#     STOP_HIT                        → exit_all_positions(dry_run=False)
+#     STAGE_2_RESISTANCE_EXIT         → exit_all_positions(dry_run=False)
+#     NEXT_15_3_RESISTANCE_EXIT       → exit_all_positions(dry_run=False)
+#     EOD_CLOSE                       → exit_all_positions(dry_run=False),
+#                                       unless the sandbox already exited
+#                                       at 15:15 via force_eod_exit()
+#
+# TWO ENGINEERED DIVERGENCES from the dummy engine:
+#
+#   (Bug A) Stop-loss latency.
+#     Dummy STOP_HIT is detected on the 30 s scheduler tick. When the
+#     sandbox mirrors it as an `exit_all` call, the effective stop is a
+#     30 s-latency market exit, not a resting SL order. Accepted for v1;
+#     the executor records `entry/exit_latency_ms` and `fill_slippage_pct`
+#     on every transition so the divergence can be quantified before
+#     deciding whether to add a resting SL-M order later.
+#
+#   (Bug B) EOD ownership.
+#     The dummy engine closes at DUMMY_ORDER_EOD_HOUR:MINUTE (default
+#     15:35). That is TOO LATE for real execution — the broker auto-
+#     squares-off intraday F&O positions ~15:15-15:25 IST. So the
+#     sandbox runs its OWN EOD at SANDBOX_EOD_HOUR:SANDBOX_EOD_MINUTE
+#     (default 15:15) via the `sandbox_eod_exit` scheduler job. The
+#     later 15:35 dummy EOD_CLOSE then falls into the executor's
+#     "already exited" no-op branch and is logged as the expected
+#     divergence between the two engines.
+#
+# DEFAULT DEPLOYMENT IS INERT:
+#     SANDBOX_EXECUTION_ENABLED=false + SANDBOX_EXECUTION_MODE="observe"
+#     means the executor evaluates every gate, logs every decision, and
+#     makes ZERO broker calls. To actually place live orders you must
+#     BOTH flip the env gate (this block) AND call
+#     POST /admin/orders/runtime-enable after startup — one switch
+#     cannot override the other. That is deliberate; see the kill-switch
+#     note in routes/admin_orders.py.
+# ===========================================================================
+
+# Master gate for live sandbox execution.
+# Default FALSE (safety — no broker calls until an operator opts in).
+# For a live-sandbox testing deployment set SANDBOX_EXECUTION_ENABLED=true
+# in .env AND also POST /admin/orders/runtime-enable after startup.
+SANDBOX_EXECUTION_ENABLED = _bool("SANDBOX_EXECUTION_ENABLED", True)
+
+# Execution mode:
+#   "observe" — evaluate every gate, log the decision, place NO orders.
+#   "live"    — place real orders through place_order / exit_all_positions.
+# Any other value is normalised to "observe" by the executor.
+# Default "observe" — a deployment that accidentally sets only
+# SANDBOX_EXECUTION_ENABLED=true will still not place orders until the
+# mode is explicitly flipped.
+SANDBOX_EXECUTION_MODE = _str("SANDBOX_EXECUTION_MODE", "live").lower()
+
+# Number of lots per sandbox entry. The place_order call takes this many
+# lots of the option contract. For test deployments use 1 — you do not
+# want to discover the notional of one MIDCPNIFTY lot with real money.
+SANDBOX_LOTS = max(1, _int("SANDBOX_LOTS", 1))
+
+# Sandbox-owned end-of-day exit (Bug B fix). Must be strictly EARLIER
+# than both:
+#   * the broker's intraday auto-square-off (~15:15-15:25 IST), and
+#   * DUMMY_ORDER_EOD_HOUR:DUMMY_ORDER_EOD_MINUTE (default 15:35).
+# Fired by the `sandbox_eod_exit` job in services/scheduler_service.py.
+SANDBOX_EOD_HOUR = _int("SANDBOX_EOD_HOUR", 15)
+SANDBOX_EOD_MINUTE = _int("SANDBOX_EOD_MINUTE", 15)
+
+# Persistence path for the sandbox ledger. Separate file from
+# data/dummy_orders.json — the dummy state is governed by the
+# determinism contract and DUMMY_ORDER_DRIFT_GUARD, and mixing
+# sandbox state into it would violate both.
+#
+# Accepts a relative path (resolved by the executor via Path(...) which
+# anchors to the process cwd) or an absolute path. Matches the value
+# the executor reads from os.getenv today — kept here for consistency
+# and admin-route visibility.
+SANDBOX_LEDGER_PATH = _str(
+    "SANDBOX_LEDGER_PATH", "data/sandbox_orders.json"
+)
+
+# Retry policy for exit_all failures. On each failure the executor
+# waits SANDBOX_EXIT_RETRY_BACKOFF_SECONDS * attempt (attempt=1,2,...)
+# then retries. After SANDBOX_EXIT_RETRY_ATTEMPTS consecutive failures
+# the executor sets sandbox_exit_stuck=true and blocks all new entries.
+SANDBOX_EXIT_RETRY_ATTEMPTS = max(
+    1, _int("SANDBOX_EXIT_RETRY_ATTEMPTS", 3)
+)
+SANDBOX_EXIT_RETRY_BACKOFF_SECONDS = max(
+    0.0, _float("SANDBOX_EXIT_RETRY_BACKOFF_SECONDS", 1.5)
+)
+
+# Entry-fill confirmation polling. After place_order returns ok, the
+# executor polls get_order_details every SANDBOX_FILL_POLL_SECONDS
+# until filled_quantity > 0 or SANDBOX_FILL_TIMEOUT_SECONDS elapses.
+# The entry is only marked ENTERED after a confirmed fill; timeout →
+# ENTRY_FAILED (no phantom exit will be scheduled).
+SANDBOX_FILL_TIMEOUT_SECONDS = max(
+    1.0, _float("SANDBOX_FILL_TIMEOUT_SECONDS", 15.0)
+)
+SANDBOX_FILL_POLL_SECONDS = max(
+    0.1, _float("SANDBOX_FILL_POLL_SECONDS", 1.0)
+)
+
+# When True, the sandbox executor appends its own Telegram messages on
+# each action (placed / exited / failed / skipped-by-gate). Same channel
+# as DUMMY_ORDER_TELEGRAM_ENABLED so operators see the two engines side
+# by side. Default True for parity with the dummy engine.
+SANDBOX_TELEGRAM_ENABLED = _bool("SANDBOX_TELEGRAM_ENABLED", True)
 
 # ===========================================================================
 # EMA CALC — on-demand stateless EMA-cross calculation

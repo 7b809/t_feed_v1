@@ -16,6 +16,12 @@ Jobs:
     * dummy_order_tracker           — interval, every DUMMY_ORDER_TRACK_INTERVAL_SECONDS
                                       (live-tracks dummy orders; short-circuits
                                        until SR backfill is ready)
+    * sandbox_eod_exit              — cron, 15:15 IST Mon-Fri
+                                      (NEW 2026-11-04: sandbox-owned end-of-day
+                                       exit — must fire before broker's ~15:15-15:25
+                                       auto-square-off and before the dummy's
+                                       15:35 accounting EOD_CLOSE; see Bug B note
+                                       in services/sandbox_execution_service.py)
 
 Deterministic-replay contract (2026-11-04)
 ------------------------------------------
@@ -45,10 +51,33 @@ Three invariants keep the post-isolation execution pipeline reproducible:
    seeded. Without it, a pre-09:15 startup silently disables
    ``dummy_order_tracker`` until the next restart.
 
+Live sandbox execution — EOD ownership (2026-11-04, Bug B fix)
+--------------------------------------------------------------
+The sandbox executor (``services/sandbox_execution_service.py``) owns its
+own end-of-day exit at ``SANDBOX_EOD_HOUR:SANDBOX_EOD_MINUTE`` (default
+15:15 IST). This is deliberately EARLIER than two other events:
+
+    * the broker's automatic intraday square-off (~15:15–15:25 IST),
+    * the dummy order engine's accounting EOD close (15:35 IST default).
+
+The ``sandbox_eod_exit`` job fires at 15:15 and calls
+``sandbox_execution_service.force_eod_exit()``. Because the sandbox is
+flat by 15:15, the later dummy ``EOD_CLOSE`` transition at 15:35 falls
+into the "already exited" no-op branch inside
+``sandbox_execution_service._handle_eod_close`` and is logged as the
+*expected* divergence between the two engines (this is not a bug).
+
+This job deliberately does NOT consult ``sr_backfill_ready()``.
+Safety first: an un-exitable position is strictly worse than an exit
+taken against a partially-built SR series. The service itself is a
+no-op when no open position exists, so an accidental early fire is
+harmless.
+
 See also:
     * ``services/sr_backfill_service.py::is_ready_for_today``  (the latch)
     * ``services/dummy_order_service.py``                      (consumer)
-    * ``core/config.py::DUMMY_ORDER_*``                        (flags)
+    * ``services/sandbox_execution_service.py``                (executor)
+    * ``core/config.py::DUMMY_ORDER_*`` / ``SANDBOX_*``        (flags)
 """
 
 from __future__ import annotations
@@ -492,6 +521,74 @@ class SchedulerService:
                 replace_existing=True, misfire_grace_time=30,
             )
 
+        # -- Sandbox EOD exit (Bug B fix, 2026-11-04) ------------------- #
+        # The sandbox executor owns its own end-of-day exit at
+        # SANDBOX_EOD_HOUR:SANDBOX_EOD_MINUTE (default 15:15 IST).
+        #
+        # Why this is a SEPARATE job from the dummy_order_tracker:
+        #   * The dummy order engine's accounting EOD_CLOSE runs at
+        #     DUMMY_ORDER_EOD_HOUR:DUMMY_ORDER_EOD_MINUTE (default
+        #     15:35). That is TOO LATE for a real exit: NSE intraday
+        #     F&O positions are broker-auto-squared-off around
+        #     15:15–15:25, so by 15:35 the sandbox would already be
+        #     flat and the executor's exit_all call would be a no-op
+        #     or error.
+        #   * Therefore the sandbox must own its exit at 15:15 — before
+        #     both the broker's cut-off and the dummy's accounting tick.
+        #   * When the dummy EOD_CLOSE transition fires at 15:35, the
+        #     executor sees the position is already EXITED and logs
+        #     the divergence as expected (see
+        #     sandbox_execution_service._handle_eod_close).
+        #
+        # Why no sr_backfill_ready() gate here:
+        #   * Safety first. An un-exitable position is strictly worse
+        #     than an exit taken against a partially-built SR series.
+        #     Blocking this job on the readiness latch would risk
+        #     leaving the sandbox long into the broker's auto-square-off
+        #     window. force_eod_exit() itself is idempotent and a no-op
+        #     when no position is open, so an accidental early fire
+        #     (e.g. operator restarts at 15:14) is harmless.
+        #
+        # Gating on SANDBOX_EXECUTION_ENABLED:
+        #   * Default is false. On boxes that have not opted into live
+        #     sandbox execution, no job is registered and the scheduler
+        #     logs remain unchanged from pre-2026-11-04.
+        if getattr(config, "SANDBOX_EXECUTION_ENABLED", False):
+            _sandbox_eod_hour = int(getattr(config, "SANDBOX_EOD_HOUR", 15))
+            _sandbox_eod_minute = int(getattr(config, "SANDBOX_EOD_MINUTE", 15))
+
+            def _sandbox_eod_tick() -> None:
+                try:
+                    from services.sandbox_execution_service import (
+                        sandbox_execution_service,
+                    )
+                    result = sandbox_execution_service.force_eod_exit()
+                    logger.info(
+                        "[scheduler] sandbox_eod_exit — status=%s open=%s",
+                        (result or {}).get("status"),
+                        (result or {}).get("open"),
+                    )
+                except Exception:
+                    logger.exception(
+                        "[scheduler] sandbox_eod_exit failed; the "
+                        "executor's exit-all retries and the later "
+                        "dummy 15:35 EOD_CLOSE no-op path will be "
+                        "the fallback exit"
+                    )
+
+            scheduler.add_job(
+                _sandbox_eod_tick, "cron",
+                day_of_week=config.DAILY_REFRESH_DAYS,
+                hour=_sandbox_eod_hour,
+                minute=_sandbox_eod_minute,
+                id="sandbox_eod_exit",
+                replace_existing=True,
+                # Generous grace window: we would rather fire late
+                # (still inside the broker auto-square-off window)
+                # than not at all.
+                misfire_grace_time=600,
+            )
+
         # ------------------------------------------------------------------ #
         # DEFENSIVE CONTRACT — out-of-file ticks that invoke                 #
         # dummy_order_service (e.g. a future ``_strategy2_recheck``) MUST   #
@@ -514,6 +611,10 @@ class SchedulerService:
         # The corresponding test lives at tests/test_scheduler_service.py  #
         # (or equivalent) and asserts that no tick can reach                #
         # dummy_order_service when sr_backfill_ready() returns False.      #
+        #                                                                   #
+        # NOTE: the sandbox_eod_exit job above is deliberately EXEMPT      #
+        # from this contract — it does not invoke dummy_order_service      #
+        # and safety requires it to fire regardless of SR readiness.       #
         # ------------------------------------------------------------------ #
 
         scheduler.start()
@@ -525,7 +626,8 @@ class SchedulerService:
             "level_isolation_recheck=*/5 (9-15), DailyBackup=%02d:%02d, "
             "live_sr_refresh=%dm (enabled=%s, update_replay=%s), "
             "replay_seed_at_open=%02d:%02d (enabled=%s, gated_by=is_ready_for_today), "
-            "dummy_order_tracker=%ds (enabled=%s, gated_by=sr_backfill_ready)",
+            "dummy_order_tracker=%ds (enabled=%s, gated_by=sr_backfill_ready), "
+            "sandbox_eod_exit=%02d:%02d (enabled=%s, independent_of_dummy_eod)",
             config.DAILY_REFRESH_HOUR, config.DAILY_REFRESH_MINUTE,
             getattr(config, "FIRST_CANDLE_HOUR", 9),
             getattr(config, "FIRST_CANDLE_MINUTE", 16),
@@ -541,6 +643,9 @@ class SchedulerService:
             bool(getattr(config, "SR_BACKFILL_ENABLED", True)),
             int(getattr(config, "DUMMY_ORDER_TRACK_INTERVAL_SECONDS", 30)),
             bool(getattr(config, "DUMMY_ORDER_ENABLED", True)),
+            int(getattr(config, "SANDBOX_EOD_HOUR", 15)),
+            int(getattr(config, "SANDBOX_EOD_MINUTE", 15)),
+            bool(getattr(config, "SANDBOX_EXECUTION_ENABLED", False)),
         )
 
         return scheduler

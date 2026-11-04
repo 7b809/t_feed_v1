@@ -86,6 +86,14 @@ function and as an instance method. Both are thin aliases for
 The rename preserves backward compatibility (``is_ready()`` still
 works) while satisfying the scheduler/dummy-order contract.
 
+A third consumer joined this contract on the same day:
+``services/sandbox_execution_service.SandboxExecutionService._gate()``
+probes the same name (with a fall-back to ``is_ready()``, and a
+final ``sr_readiness_probe_missing`` failure mode if neither method
+resolves). The live sandbox executor relies on this latch to refuse
+to place real orders off a partially-built SR series — same race
+the scheduler and dummy-order services were already guarding against.
+
 Runs when ALL of the following hold:
   * ``SR_BACKFILL_ENABLED`` is True
   * ``LIVE_SR_ENABLED`` is True
@@ -249,7 +257,8 @@ def clear_historical_cache() -> int:
 #                                  policy, and by ``main.py``.
 #   * ``is_ready_for_today()``   — contractual name consumed by
 #                                  ``scheduler_service.sr_backfill_ready()``
-#                                  and ``dummy_order_service._upstream_ready()``.
+#                                  and ``dummy_order_service._upstream_ready()``
+#                                  and ``sandbox_execution_service._gate()``.
 #
 # Both are exact aliases — identical semantics, different name. Adding
 # the second name closes the "missing_probe" bug where the scheduler
@@ -278,10 +287,16 @@ def is_ready_for_today() -> bool:
       * ``services/scheduler_service.sr_backfill_ready()``
         (via ``getattr(sr_backfill_service, "is_ready_for_today", None)``)
       * ``services/dummy_order_service._upstream_ready()``
+        (same pattern)
+      * ``services/sandbox_execution_service.SandboxExecutionService._gate()``
+        (same pattern; falls back to ``is_ready()`` if this method is
+        absent, and raises ``sr_readiness_probe_missing`` only when
+        neither name resolves)
 
-    Both look the method up by this exact name. Exposing it here means
-    those probes now resolve and the "missing_probe" / "not implemented"
-    fallback branches are no longer taken.
+    Both the scheduler and the dummy-order service look the method up
+    by this exact name. Exposing it here means those probes now resolve
+    and the "missing_probe" / "not implemented" fallback branches are
+    no longer taken.
 
     Semantics are identical to ``is_ready()`` — this is a pure alias.
     Prefer either name; they cannot diverge.
@@ -814,14 +829,20 @@ class SRBackfillService:
             ``getattr(sr_backfill_service, "is_ready_for_today", None)``
           * ``services/dummy_order_service._upstream_ready()`` —
             same pattern
+          * ``services/sandbox_execution_service.SandboxExecutionService._gate()``
+            — same pattern, with a fall-back to ``is_ready()`` when
+            this method is absent (so the executor raises
+            ``sr_readiness_probe_missing`` only if BOTH names are
+            missing).
 
-        Before this alias existed, both callers fell into their
-        "missing probe" branch: the scheduler skipped every
-        ``dummy_order_tracker`` tick with ``missing_probe``, and the
-        dummy-order service proceeded without the readiness gate
-        (logged as a WARNING). Both bugs close as soon as this method
-        resolves — the underlying latch (``is_ready()``) was already
-        working; only the name was missing.
+        Before this alias existed, both the scheduler and the
+        dummy-order service fell into their "missing probe" branch:
+        the scheduler skipped every ``dummy_order_tracker`` tick with
+        ``missing_probe``, and the dummy-order service proceeded
+        without the readiness gate (logged as a WARNING). Both bugs
+        close as soon as this method resolves — the underlying latch
+        (``is_ready()``) was already working; only the name was
+        missing.
 
         Semantics are identical to ``is_ready()``; both read the same
         ``_SEEDED_DAY`` module state under the same lock. Prefer either

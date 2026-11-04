@@ -180,7 +180,193 @@
             box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.5);
         }
 
-        /* Mobile Offcanvas Drawer */
+        /* ------------------------------------------------------------- */
+        /* Mobile Floating Action Button (FAB) — bottom-right nav trigger */
+        /* ------------------------------------------------------------- */
+        .mobile-fab-nav {
+            display: none;
+            position: fixed;
+            right: 20px;
+            bottom: 24px;
+            width: 56px;
+            height: 56px;
+            min-width: 56px;
+            padding: 0;
+            border: none;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #2563eb, #7c3aed);
+            color: #ffffff;
+            font-size: 1.5rem;
+            line-height: 1;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            box-shadow:
+                0 6px 20px rgba(37, 99, 235, 0.45),
+                0 2px 8px rgba(0, 0, 0, 0.35);
+            z-index: 1036;
+            transition:
+                transform 0.15s ease,
+                box-shadow 0.2s ease;
+            -webkit-tap-highlight-color: transparent;
+            touch-action: manipulation;
+        }
+
+        .mobile-fab-nav:hover {
+            transform: translateY(-2px);
+            box-shadow:
+                0 8px 24px rgba(37, 99, 235, 0.55),
+                0 3px 10px rgba(0, 0, 0, 0.4);
+        }
+
+        .mobile-fab-nav:active {
+            transform: scale(0.94);
+            box-shadow:
+                0 4px 12px rgba(37, 99, 235, 0.4),
+                0 1px 4px rgba(0, 0, 0, 0.3);
+        }
+
+        .mobile-fab-nav:focus {
+            outline: none;
+            box-shadow:
+                0 0 0 3px rgba(37, 99, 235, 0.4),
+                0 6px 20px rgba(37, 99, 235, 0.45);
+        }
+
+        .mobile-fab-nav i {
+            display: block;
+            line-height: 1;
+            pointer-events: none;
+            transition: transform 0.2s ease;
+        }
+
+        .mobile-fab-nav.is-open i {
+            transform: rotate(90deg);
+        }
+
+        /* ------------------------------------------------------------- */
+        /* Mobile nav pills — horizontal row of icon + label pills        */
+        /* ------------------------------------------------------------- */
+        /* Layout: a horizontal row of pill-shaped items, each showing   */
+        /* a theme-coloured icon badge AND a text label.  The row is     */
+        /* right-aligned above the FAB; when items don't fit the screen  */
+        /* width they wrap upward (flex-wrap: wrap-reverse), so the     */
+        /* container grows up from above the FAB instead of pushing     */
+        /* content sideways.                                            */
+        /*                                                              */
+        /* The FIRST HTML item (Home) lands at the bottom-right —       */
+        /* closest to the FAB and to the user's thumb — and the rest    */
+        /* cascade to the left within the same row, then wrap up.       */
+        /*                                                              */
+        /* Visible only on mobile (≤991px). On desktop this whole       */
+        /* container is display:none so the horizontal nav bar is used. */
+        .mobile-fab-menu {
+            display: none;
+            position: fixed;
+            right: 16px;
+            bottom: 92px; /* 24 FAB offset + 56 FAB height + 12 gap */
+            max-width: calc(100vw - 32px);
+            flex-direction: row;
+            flex-wrap: wrap-reverse;
+            justify-content: flex-end;
+            align-items: center;
+            gap: 8px;
+            z-index: 1035; /* just under the FAB */
+            pointer-events: none;
+            padding: 4px;
+        }
+
+        .mobile-fab-menu.is-open {
+            pointer-events: auto;
+        }
+
+        .mobile-fab-menu-item {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            height: 40px;
+            padding: 0 14px 0 6px;
+            border-radius: 20px;
+            background: rgba(30, 41, 59, 0.98);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid var(--app-border-color);
+            color: var(--app-text-main);
+            text-decoration: none;
+            box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+            white-space: nowrap;
+            flex: 0 0 auto;
+            opacity: 0;
+            transform: translateY(10px) scale(0.92);
+            transition:
+                opacity 0.18s ease,
+                transform 0.18s ease,
+                background 0.15s ease,
+                border-color 0.15s ease;
+            -webkit-tap-highlight-color: transparent;
+            touch-action: manipulation;
+        }
+
+        .mobile-fab-menu.is-open .mobile-fab-menu-item {
+            opacity: 1;
+            transform: translateY(0) scale(1);
+        }
+
+        /* Stagger the pop-in: item closest to the FAB (Home) first,   */
+        /* farthest last.  With wrap-reverse + flex-end, nth-child(1)  */
+        /* (Home) is rightmost in the bottom row, so the visual        */
+        /* effect is a cascade spreading left and up from the FAB.     */
+        .mobile-fab-menu.is-open .mobile-fab-menu-item:nth-child(1) { transition-delay: 0.02s; }
+        .mobile-fab-menu.is-open .mobile-fab-menu-item:nth-child(2) { transition-delay: 0.04s; }
+        .mobile-fab-menu.is-open .mobile-fab-menu-item:nth-child(3) { transition-delay: 0.06s; }
+        .mobile-fab-menu.is-open .mobile-fab-menu-item:nth-child(4) { transition-delay: 0.08s; }
+        .mobile-fab-menu.is-open .mobile-fab-menu-item:nth-child(5) { transition-delay: 0.10s; }
+        .mobile-fab-menu.is-open .mobile-fab-menu-item:nth-child(6) { transition-delay: 0.12s; }
+        .mobile-fab-menu.is-open .mobile-fab-menu-item:nth-child(7) { transition-delay: 0.14s; }
+
+        .mobile-fab-menu-item:hover {
+            background: rgba(255, 255, 255, 0.08);
+            border-color: rgba(255, 255, 255, 0.2);
+        }
+
+        .mobile-fab-menu-item:active {
+            transform: translateY(0) scale(0.96);
+        }
+
+        /* Slightly smaller icon badge inside the pill so the pill
+           stays compact while the icon remains visually prominent. */
+        .mobile-fab-menu-item .nav-icon-badge {
+            width: 28px;
+            height: 28px;
+            min-width: 28px;
+            font-size: 0.88rem;
+            border-radius: 8px;
+        }
+
+        .mobile-fab-menu-label {
+            font-size: 0.82rem;
+            font-weight: 600;
+            color: var(--app-text-main);
+            letter-spacing: -0.1px;
+            line-height: 1;
+        }
+
+        /* Reduced-motion: no transition, items appear instantly. */
+        @media (prefers-reduced-motion: reduce) {
+            .mobile-fab-menu-item,
+            .mobile-fab-menu.is-open .mobile-fab-menu-item {
+                transition: none;
+                transform: none;
+            }
+            .mobile-fab-menu.is-open .mobile-fab-menu-item:nth-child(n) {
+                transition-delay: 0s;
+            }
+            .mobile-fab-nav i {
+                transition: none;
+            }
+        }
+
+        /* Mobile Offcanvas Drawer (kept for the top hamburger) */
         .offcanvas.mobile-drawer {
             background-color: var(--app-bg-dark);
             border-left: 1px solid var(--app-border-color);
@@ -243,6 +429,24 @@
             .mobile-nav-toggle {
                 display: flex;
             }
+
+            /* Reveal the bottom-right FAB on mobile only */
+            .mobile-fab-nav {
+                display: inline-flex;
+            }
+
+            /* Reveal the horizontal pill menu on mobile only */
+            .mobile-fab-menu {
+                display: flex;
+            }
+
+            /* Reserve space at the bottom of every page so the FAB
+               never permanently covers the last interactive element or
+               the last line of content. 88px = FAB height (56) +
+               bottom offset (24) + comfortable tap-target margin (8). */
+            .app-main-content-wrapper {
+                padding-bottom: 88px;
+            }
         }
     </style>
 
@@ -304,14 +508,17 @@
         </a>
     </div>
 
-    <!-- MOBILE HAMBURGER BUTTON -->
+    <!-- MOBILE HAMBURGER BUTTON (top-right) — opens the side offcanvas
+         drawer with LABELS. The FAB below opens the compact horizontal
+         pill menu instead. Both coexist; user picks whichever access
+         pattern they prefer.                                            -->
     <button class="mobile-nav-toggle" type="button" data-bs-toggle="offcanvas" data-bs-target="#mobileNavDrawer" aria-controls="mobileNavDrawer" aria-label="Open Navigation">
         <i class="bi bi-list"></i>
     </button>
 
 </nav>
 
-<!-- MOBILE OFFCANVAS DRAWER -->
+<!-- MOBILE OFFCANVAS DRAWER (triggered by the TOP hamburger) -->
 <div class="offcanvas offcanvas-end mobile-drawer" tabindex="-1" id="mobileNavDrawer" aria-labelledby="mobileNavDrawerLabel">
     <div class="offcanvas-header">
         <div class="app-brand-wrapper">
@@ -364,6 +571,72 @@
     </div>
 </div>
 
+<!-- HORIZONTAL PILL MENU (mobile only, appears above the FAB) -->
+<!--                                                          -->
+<!-- Visible only on mobile (≤991px). Hidden by default via CSS; -->
+<!-- the JS below toggles `.is-open` on it. Items are laid out  -->
+<!-- in a right-aligned horizontal row; if they don't all fit   -->
+<!-- the screen they wrap UPWARD (flex-wrap: wrap-reverse) so   -->
+<!-- the menu grows from above the FAB toward the top-right.    -->
+<!--                                                            -->
+<!-- Each item is a pill (icon badge + text label) so the user  -->
+<!-- can read what the destination is, not just guess an icon.  -->
+<nav
+    class="mobile-fab-menu"
+    id="mobileFabMenu"
+    aria-hidden="true"
+    aria-label="Quick navigation"
+>
+    <a href="/" class="mobile-fab-menu-item {{ 'is-active' if active_path == '/' else '' }}" title="Home" aria-label="Home">
+        <span class="nav-icon-badge home-theme"><i class="bi bi-house-door-fill"></i></span>
+        <span class="mobile-fab-menu-label">Home</span>
+    </a>
+
+    <a href="/isolated" target="_blank" rel="noopener noreferrer" class="mobile-fab-menu-item" title="Isolated" aria-label="Isolated">
+        <span class="nav-icon-badge iso-theme"><i class="bi bi-bullseye"></i></span>
+        <span class="mobile-fab-menu-label">Isolated</span>
+    </a>
+
+    <a href="/charts" class="mobile-fab-menu-item {{ 'is-active' if active_path == '/charts' else '' }}" title="Charts" aria-label="Charts">
+        <span class="nav-icon-badge charts-theme"><i class="bi bi-candlestick-fill"></i></span>
+        <span class="mobile-fab-menu-label">Charts</span>
+    </a>
+
+    <a href="/expired-chart" class="mobile-fab-menu-item {{ 'is-active' if active_path == '/expired-chart' else '' }}" title="Expired" aria-label="Expired">
+        <span class="nav-icon-badge expired-theme"><i class="bi bi-hourglass-split"></i></span>
+        <span class="mobile-fab-menu-label">Expired</span>
+    </a>
+
+    <a href="/layout_1" class="mobile-fab-menu-item {{ 'is-active' if active_path == '/layout_1' else '' }}" title="Layout" aria-label="Layout">
+        <span class="nav-icon-badge layout-theme"><i class="bi bi-grid-3x3-gap-fill"></i></span>
+        <span class="mobile-fab-menu-label">Layout</span>
+    </a>
+
+    <a href="/api-explorer" class="mobile-fab-menu-item {{ 'is-active' if active_path == '/api-explorer' else '' }}" title="API Explorer" aria-label="API Explorer">
+        <span class="nav-icon-badge api-theme"><i class="bi bi-code-square"></i></span>
+        <span class="mobile-fab-menu-label">API</span>
+    </a>
+
+    <a href="/logs" target="_blank" rel="noopener noreferrer" class="mobile-fab-menu-item" title="Logs" aria-label="Logs">
+        <span class="nav-icon-badge logs-theme"><i class="bi bi-file-earmark-text-fill"></i></span>
+        <span class="mobile-fab-menu-label">Logs</span>
+    </a>
+</nav>
+
+<!-- FLOATING ACTION BUTTON (bottom-right, mobile only) -->
+<!-- Toggles the pill menu above. Icon rotates from `list` to `x` -->
+<!-- when open as a visual close affordance.                       -->
+<button
+    class="mobile-fab-nav"
+    id="mobileFabBtn"
+    type="button"
+    aria-controls="mobileFabMenu"
+    aria-label="Open Navigation"
+    aria-expanded="false"
+>
+    <i class="bi bi-list"></i>
+</button>
+
 <!-- MAIN PAGE CONTENT INJECTION -->
 <div class="app-main-content-wrapper">
     {% block content %}{% endblock %}
@@ -373,6 +646,67 @@
 
 <script>
     window.apiHost = window.apiHost || window.location.origin;
+</script>
+
+<!-- Pill menu toggle for the bottom-right FAB. Pure vanilla JS so it -->
+<!-- works even if Bootstrap fails to load. Dismisses on: FAB re-tap,  -->
+<!-- outside tap, ESC, or any nav-item tap. State is mirrored in       -->
+<!-- aria-expanded / aria-hidden for screen readers.                   -->
+<script>
+    (function () {
+        var fabBtn = document.getElementById('mobileFabBtn');
+        var fabMenu = document.getElementById('mobileFabMenu');
+        if (!fabBtn || !fabMenu) return;
+
+        var fabIcon = fabBtn.querySelector('i');
+        var isOpen = false;
+
+        function setOpen(open) {
+            isOpen = !!open;
+            fabMenu.classList.toggle('is-open', isOpen);
+            fabMenu.setAttribute('aria-hidden', isOpen ? 'false' : 'true');
+            fabBtn.classList.toggle('is-open', isOpen);
+            fabBtn.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+            fabBtn.setAttribute(
+                'aria-label',
+                isOpen ? 'Close Navigation' : 'Open Navigation'
+            );
+            if (fabIcon) {
+                fabIcon.className = isOpen ? 'bi bi-x-lg' : 'bi bi-list';
+            }
+        }
+
+        // Toggle on FAB tap. stopPropagation prevents the document-level
+        // outside-tap handler below from immediately re-closing it.
+        fabBtn.addEventListener('click', function (e) {
+            e.stopPropagation();
+            setOpen(!isOpen);
+        });
+
+        // Close when any nav item is activated — the target="_blank"
+        // items (Isolated, Logs) leave the current page in place, so
+        // without this the menu would stay open behind them.
+        fabMenu.addEventListener('click', function (e) {
+            if (e.target.closest('a')) {
+                setOpen(false);
+            }
+        });
+
+        // Close on outside tap.
+        document.addEventListener('click', function (e) {
+            if (!isOpen) return;
+            if (fabBtn.contains(e.target)) return;
+            if (fabMenu.contains(e.target)) return;
+            setOpen(false);
+        });
+
+        // Close on ESC.
+        document.addEventListener('keydown', function (e) {
+            if (isOpen && (e.key === 'Escape' || e.key === 'Esc')) {
+                setOpen(false);
+            }
+        });
+    })();
 </script>
 
 {% block scripts %}{% endblock %}
