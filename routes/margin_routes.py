@@ -1,182 +1,345 @@
-"""Admin margin-check routes.
+# File: routes/margin_routes.py
+"""FastAPI routes for Upstox margin checks.
 
-    POST /admin/orders/margin        -> check margin for one instrument
-    POST /admin/orders/margin/batch  -> check margin for several instruments
+Mounted under ``/margin``.
 
-Request body (single)::
+Endpoints
+---------
+GET  /margin/single      – check one instrument (query params, one input box per field)
+POST /margin/single      – same check via a JSON body (Swagger "Try it out" with a body)
+POST /margin/bulk        – check many instruments in one call
 
-    {
-      "instrument_key": "NSE_FO|47162",   # required
-      "lots": 1,                          # default 1
-      "transaction_type": "BUY",          # default BUY
-      "product": "D",                     # default D (intraday)
-      "price": 0.0,
-      "verbose": false                    # default false
-    }
+Every endpoint takes the same five knobs, and every one has a default::
 
-Request body (batch)::
+    instrument_key    (required)
+    lots              = 1
+    transaction_type  = "BUY"    # BUY | SELL
+    product           = "D"      # D = intraday, I = delivery
+    price             = 0.0
+    verbose           = false
 
-    {
-      "instruments": [
-        {"instrument_key": "NSE_FO|47162", "lots": 1},
-        {"instrument_key": "BSE_FO|SENSEX_KEY", "lots": 2, "transaction_type": "SELL"}
-      ]
-    }
+So ``GET /margin/single?instrument_key=NSE_FO%7C47162`` checks
+**BUY × 1 lot × D** for that key.  For NIFTY the default ``lots=1``
+resolves to the exchange lot size (65 in the current registry — 75
+after the December 2024 revision; whatever ``lots_to_quantity``
+reports is what you get). That resolution happens inside
+``upstox_services.margin_check``; the route only forwards ``lots``.
 
-Each item may also carry its own ``verbose`` flag; the top-level
-``verbose`` (if provided) is used as the default for items that do not
-specify one.
+Why the GET takes its inputs as individual query params
+-------------------------------------------------------
+Swagger UI renders query parameters as **one small input box per
+field** (that is the ``Name / Description`` table you see on the
+historical routes).  A POST body, by contrast, renders as one big
+JSON editor — which is what you *don't* want in Swagger.  So the
+``GET /margin/single`` route here uses plain query parameters and
+``POST /margin/single`` uses a body; use whichever fits your client.
+The ``POST /margin/bulk`` remains a body-based endpoint, because a
+list cannot be expressed cleanly as query params.
 
-Response
---------
-Both endpoints return HTTP 200 with the same shape as the
-``check_margin()`` function:
+HTTP status on ``/margin/single`` (both verbs) follows the
+``status`` field returned by ``check_margin``::
 
-    {
-      "status": "ok",
-      "instrument_key": "...",
-      "underlying": "...",
-      "transaction_type": "BUY",
-      "lots": 1,
-      "lot_size": 65,
-      "lot_source": "exchange_default",
-      "quantity": 65,
-      "product": "D",
-      "required_margin": 1898.0,
-      "final_margin": 1898.0,
-      "error": null,
-      "called_at": "2026-10-19T…"
-    }
+    ok             -> 200
+    invalid_input  -> 400
+    no_token       -> 503
+    error          -> 502
+    anything else  -> 500
 
-When ``verbose: true`` the response additionally carries a **sanitised**
-``response`` dict. A missing ``instrument_key`` returns HTTP 400 so
-callers can distinguish bad input from a provider failure.
+``/margin/bulk`` always returns **200**; each item in the response
+list carries its own ``status`` field.  Items are processed
+sequentially to stay friendly to the Upstox rate limit.
 
-Security
---------
-No access token, no account identifier, and no ``token_masked`` field
-appears in any response. Provider error bodies are passed through
-``upstox_services._sanitise.sanitise_payload`` before they leave the
-service (see ``upstox_services/margin_check.py``).
+Security note
+-------------
+The whole security contract of ``check_margin`` carries through: the
+access token is never in any response or log line, and the verbose
+``response`` payload is already sanitised before it reaches this
+layer.
 """
 
 from __future__ import annotations
 
-import asyncio
-from typing import Any
+from typing import Any, Literal
 
-from fastapi import APIRouter, Body, HTTPException
+from fastapi import APIRouter, Query
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from upstox_services.margin_check import check_margin
 
-router = APIRouter(prefix="/admin/orders", tags=["orders"])
+router = APIRouter(prefix="/margin", tags=["margin"])
 
 
-def _require_instrument_key(payload: dict[str, Any]) -> str:
-    key = str(payload.get("instrument_key") or "").strip()
-    if not key:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": "instrument_key_required",
-                "message": "instrument_key is mandatory.",
-            },
-        )
-    return key
+_STATUS_CODE = {
+    "ok": 200,
+    "invalid_input": 400,
+    "no_token": 503,
+    "error": 502,
+}
 
 
-def _coerce_bool(value: Any, default: bool = False) -> bool:
-    if value is None:
-        return default
-    if isinstance(value, bool):
-        return value
-    text = str(value).strip().lower()
-    if text in {"1", "true", "yes", "on"}:
-        return True
-    if text in {"0", "false", "no", "off"}:
-        return False
-    return default
+# --------------------------------------------------------------------------- #
+# Pydantic models (used for POST bodies and for response typing)              #
+# --------------------------------------------------------------------------- #
+class MarginCheckRequest(BaseModel):
+    """JSON body for ``POST /margin/single``.
+
+    Defaults match the module docstring: BUY × 1 lot × D.
+    """
+
+    instrument_key: str = Field(
+        ...,
+        description='Instrument key, e.g. "NSE_FO|47162".',
+        examples=["NSE_FO|47162"],
+    )
+    lots: int = Field(1, ge=1, description="Number of lots (default 1).")
+    transaction_type: Literal["BUY", "SELL"] = Field(
+        "BUY",
+        description="BUY or SELL (default BUY). Case-insensitive.",
+    )
+    product: Literal["D", "I"] = Field(
+        "D",
+        description="D = intraday, I = delivery (default D). Case-insensitive.",
+    )
+    price: float = Field(0.0, ge=0.0, description="Order price (default 0).")
+    verbose: bool = Field(
+        False,
+        description="Include a sanitised copy of the Upstox response.",
+    )
+
+    @field_validator("instrument_key")
+    @classmethod
+    def _strip_key(cls, v: str) -> str:
+        v = (v or "").strip()
+        if not v:
+            raise ValueError("instrument_key is required")
+        return v
+
+    @field_validator("transaction_type", mode="before")
+    @classmethod
+    def _upper_txn(cls, v: Any) -> Any:
+        return v.upper() if isinstance(v, str) else v
+
+    @field_validator("product", mode="before")
+    @classmethod
+    def _upper_product(cls, v: Any) -> Any:
+        return v.upper() if isinstance(v, str) else v
 
 
-@router.post("/margin")
-async def margin_single(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
-    key = _require_instrument_key(payload)
-    return await asyncio.to_thread(
-        check_margin,
-        key,
-        lots=int(payload.get("lots") or 1),
-        transaction_type=str(payload.get("transaction_type") or "BUY"),
-        product=str(payload.get("product") or "D"),
-        price=float(payload.get("price") or 0.0),
-        verbose=_coerce_bool(payload.get("verbose"), default=False),
+class BulkMarginCheckRequest(BaseModel):
+    """JSON body for ``POST /margin/bulk``."""
+
+    instruments: list[MarginCheckRequest] = Field(
+        ...,
+        min_length=1,
+        description="One entry per instrument to check.",
     )
 
 
-@router.post("/margin/batch")
-async def margin_batch(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
-    items = payload.get("instruments")
-    if not isinstance(items, list) or not items:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": "instruments_required",
-                "message": "Body must contain a non-empty `instruments` list.",
+class MarginCheckResult(BaseModel):
+    """Per-instrument result (mirrors ``check_margin`` exactly)."""
+
+    # ``extra="allow"`` so a future field added to check_margin doesn't
+    # trip response validation, and verbose=True payloads pass through.
+    model_config = ConfigDict(extra="allow")
+
+    status: str
+    instrument_key: str | None = None
+    underlying: str | None = None
+    transaction_type: str | None = None
+    lots: int | None = None
+    lot_size: int | None = None
+    lot_source: str | None = None
+    quantity: int | None = None
+    product: str | None = None
+    required_margin: float | None = None
+    final_margin: float | None = None
+    error: str | None = None
+    called_at: str | None = None
+    response: dict[str, Any] | None = None
+
+
+# --------------------------------------------------------------------------- #
+# Internal helpers                                                            #
+# --------------------------------------------------------------------------- #
+def _run_one(req: MarginCheckRequest) -> dict[str, Any]:
+    """Call ``check_margin`` for one request.
+
+    Defensive catch-all so a single unexpected raise in ``bulk`` does
+    not nuke the whole batch. ``check_margin`` itself already returns
+    structured error dicts; this is purely belt-and-braces.
+    """
+    try:
+        return check_margin(
+            req.instrument_key,
+            lots=req.lots,
+            transaction_type=req.transaction_type,
+            product=req.product,
+            price=req.price,
+            verbose=req.verbose,
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        return {
+            "status": "error",
+            "error": f"internal_error: {type(exc).__name__}",
+            "instrument_key": req.instrument_key,
+            "transaction_type": req.transaction_type,
+            "lots": req.lots,
+            "product": req.product,
+        }
+
+
+def _respond(result: dict[str, Any]) -> JSONResponse:
+    return JSONResponse(
+        content=result,
+        status_code=_STATUS_CODE.get(result.get("status", "error"), 500),
+    )
+
+
+def _from_query(
+    instrument_key: str,
+    lots: int,
+    transaction_type: str,
+    product: str,
+    price: float,
+    verbose: bool,
+) -> MarginCheckRequest:
+    """Build a ``MarginCheckRequest`` from query-param values.
+
+    Validation errors raised by Pydantic are turned into a structured
+    ``invalid_input`` dict and a 400 response by the caller.
+    """
+    return MarginCheckRequest(
+        instrument_key=instrument_key,
+        lots=lots,
+        transaction_type=transaction_type,
+        product=product,
+        price=price,
+        verbose=verbose,
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Routes                                                                      #
+# --------------------------------------------------------------------------- #
+@router.get(
+    "/single",
+    response_model=MarginCheckResult,
+    summary="Check margin for a single instrument (query params)",
+    description=(
+        "Each input is its own Swagger **query input box**. "
+        "Defaults: `lots=1`, `transaction_type=BUY`, `product=D`, "
+        "`price=0`, `verbose=false` — i.e. BUY × 1 lot × D. "
+        "For NIFTY the default `lots=1` resolves to the exchange lot "
+        "size via `lots_to_quantity`."
+    ),
+    responses={
+        400: {"description": "invalid_input"},
+        502: {"description": "upstox_error"},
+        503: {"description": "no_token"},
+    },
+)
+def check_single_get(
+    instrument_key: str = Query(
+        ...,
+        min_length=1,
+        description='Instrument key, e.g. "NSE_FO|47162".',
+        examples=["NSE_FO|47162"],
+    ),
+    lots: int = Query(1, ge=1, description="Number of lots (default 1)."),
+    transaction_type: str = Query(
+        "BUY",
+        description="BUY or SELL (default BUY). Case-insensitive.",
+    ),
+    product: str = Query(
+        "D",
+        description="D = intraday, I = delivery (default D). Case-insensitive.",
+    ),
+    price: float = Query(0.0, ge=0.0, description="Order price (default 0)."),
+    verbose: bool = Query(
+        False,
+        description="Include a sanitised copy of the Upstox response.",
+    ),
+) -> JSONResponse:
+    """Check the Upstox margin for one instrument via query string.
+
+    Example::
+
+        GET /margin/single?instrument_key=NSE_FO%7C47162
+        GET /margin/single?instrument_key=NSE_FO%7C47162&lots=2&transaction_type=SELL
+    """
+    key = (instrument_key or "").strip()
+    if not key:
+        return JSONResponse(
+            content={
+                "status": "invalid_input",
+                "error": "instrument_key is required",
             },
+            status_code=400,
         )
-
-    top_verbose = _coerce_bool(payload.get("verbose"), default=False)
-
-    results: list[dict[str, Any]] = []
-    for item in items:
-        if not isinstance(item, dict):
-            results.append(
-                {
-                    "status": "invalid_input",
-                    "error": "each item must be an object",
-                    "instrument_key": None,
-                }
-            )
-            continue
-        key = str(item.get("instrument_key") or "").strip()
-        if not key:
-            results.append(
-                {
-                    "status": "invalid_input",
-                    "error": "instrument_key is required",
-                    "instrument_key": None,
-                }
-            )
-            continue
-
-        item_verbose = (
-            _coerce_bool(item.get("verbose"), default=False)
-            if "verbose" in item
-            else top_verbose
+    try:
+        req = _from_query(
+            instrument_key=key,
+            lots=lots,
+            transaction_type=transaction_type,
+            product=product,
+            price=price,
+            verbose=verbose,
         )
-
-        try:
-            lots_val = int(item.get("lots") or 1)
-        except (TypeError, ValueError):
-            lots_val = 1
-        try:
-            price_val = float(item.get("price") or 0.0)
-        except (TypeError, ValueError):
-            price_val = 0.0
-
-        results.append(
-            await asyncio.to_thread(
-                check_margin,
-                key,
-                lots=lots_val,
-                transaction_type=str(item.get("transaction_type") or "BUY"),
-                product=str(item.get("product") or "D"),
-                price=price_val,
-                verbose=item_verbose,
-            )
+    except Exception as exc:
+        return JSONResponse(
+            content={"status": "invalid_input", "error": str(exc)},
+            status_code=400,
         )
+    return _respond(_run_one(req))
 
-    return {
-        "count": len(results),
-        "verbose": top_verbose,
-        "results": results,
-    }
+
+@router.post(
+    "/single",
+    response_model=MarginCheckResult,
+    summary="Check margin for a single instrument (JSON body)",
+    description=(
+        "Same check as `GET /margin/single`, but takes a JSON body. "
+        "The body renderer in Swagger is a single editor; the GET "
+        "form uses individual query input boxes."
+    ),
+    responses={
+        400: {"description": "invalid_input"},
+        502: {"description": "upstox_error"},
+        503: {"description": "no_token"},
+    },
+)
+def check_single_post(payload: MarginCheckRequest) -> JSONResponse:
+    """Check the Upstox margin for one instrument via a JSON body."""
+    return _respond(_run_one(payload))
+
+
+@router.post(
+    "/bulk",
+    response_model=list[MarginCheckResult],
+    summary="Check margin for multiple instruments",
+    description=(
+        "One entry per instrument. The response is a list of "
+        "per-instrument results in the **same order** as the request, "
+        "each carrying its own `status` field. HTTP status is always "
+        "200 for the batch; individual failures live in the list "
+        "items. Items are processed sequentially."
+    ),
+)
+def check_bulk(payload: BulkMarginCheckRequest) -> list[dict[str, Any]]:
+    """Check margin for many instruments in one request.
+
+    Body::
+
+        {
+          "instruments": [
+            {"instrument_key": "NSE_FO|47162"},                # BUY × 1 × D
+            {"instrument_key": "NSE_FO|47163", "lots": 2},
+            {"instrument_key": "NSE_FO|47164", "transaction_type": "SELL"},
+            {"instrument_key": "NSE_FO|47165", "verbose": true}
+          ]
+        }
+    """
+    return [_run_one(item) for item in payload.instruments]
+
+

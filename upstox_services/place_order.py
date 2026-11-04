@@ -1,4 +1,4 @@
-# File: upstox_services/place_order.py
+# upstox_services/place_order.py
 """Place a single lot-based Upstox order (buy or sell).
 
 Function signature
@@ -6,15 +6,16 @@ Function signature
     place_order(
         instrument_key,          # required, e.g. "NSE_FO|43919"
         lots=1,                  # number of lots (default 1)
-        transaction_type="SELL", # "BUY" | "SELL" (default SELL)
-        product="D",             # "D" (intraday) | "I" (delivery)
+        transaction_type="BUY",  # "BUY" | "SELL" (default BUY)
+        product="D",             # "D" (intraday) | "I" (delivery) | "MTF"
         order_type="MARKET",     # "MARKET" | "LIMIT" | "SL" | "SL-M"
         price=0.0,
         trigger_price=0.0,
-        validity="DAY",
-        tag="",
+        validity="DAY",          # "DAY" | "IOC"
+        tag="",                  # omitted when empty
         is_amo=False,
         slice=False,
+        market_protection=None,  # optional float percentage
     ) -> dict
 
 Behaviour
@@ -77,6 +78,14 @@ from upstox_services._sanitise import sanitise_payload
 from upstox_services.lot_sizes import lots_to_quantity
 
 logger = get_logger(__file__)
+
+
+# Allowed values mirror the generated ``PlaceOrderV3Request`` model so we
+# fail fast with a clear error instead of relying on the SDK's ValueError.
+_ALLOWED_PRODUCTS = {"I", "D", "MTF"}
+_ALLOWED_VALIDITY = {"DAY", "IOC"}
+_ALLOWED_ORDER_TYPES = {"MARKET", "LIMIT", "SL", "SL-M"}
+_ALLOWED_TXN_TYPES = {"BUY", "SELL"}
 
 
 def _now_iso() -> str:
@@ -142,7 +151,7 @@ def place_order(
     instrument_key: str,
     *,
     lots: int = 1,
-    transaction_type: str = "SELL",
+    transaction_type: str = "BUY",
     product: str = "D",
     order_type: str = "MARKET",
     price: float = 0.0,
@@ -151,6 +160,7 @@ def place_order(
     tag: str = "",
     is_amo: bool = False,
     slice: bool = False,
+    market_protection: float | None = None,
 ) -> dict[str, Any]:
     """Place a lot-based Upstox order.
 
@@ -163,21 +173,78 @@ def place_order(
     """
     called_at = _now_iso()
     key = str(instrument_key or "").strip()
-    txn = str(transaction_type or "SELL").upper()
-    if txn not in {"BUY", "SELL"}:
-        return {
-            "status": "invalid_input",
-            "error": "transaction_type must be BUY or SELL",
-            "called_at": called_at,
-        }
+    txn = str(transaction_type or "BUY").upper()
+    prod = str(product or "D").upper()
+    otype = str(order_type or "MARKET").upper()
+    valid = str(validity or "DAY").upper()
+
+    # ---- 0. Input validation (fail fast, before any token/API work) -- #
     if not key:
         return {
             "status": "invalid_input",
             "error": "instrument_key is required",
             "called_at": called_at,
         }
+    if txn not in _ALLOWED_TXN_TYPES:
+        return {
+            "status": "invalid_input",
+            "error": "transaction_type must be BUY or SELL",
+            "called_at": called_at,
+        }
+    if prod not in _ALLOWED_PRODUCTS:
+        return {
+            "status": "invalid_input",
+            "error": f"product must be one of {sorted(_ALLOWED_PRODUCTS)}",
+            "instrument_key": key,
+            "called_at": called_at,
+        }
+    if otype not in _ALLOWED_ORDER_TYPES:
+        return {
+            "status": "invalid_input",
+            "error": f"order_type must be one of {sorted(_ALLOWED_ORDER_TYPES)}",
+            "instrument_key": key,
+            "called_at": called_at,
+        }
+    if valid not in _ALLOWED_VALIDITY:
+        return {
+            "status": "invalid_input",
+            "error": f"validity must be one of {sorted(_ALLOWED_VALIDITY)}",
+            "instrument_key": key,
+            "called_at": called_at,
+        }
+    if otype in {"SL", "SL-M"} and float(trigger_price or 0.0) <= 0.0:
+        return {
+            "status": "invalid_input",
+            "error": "trigger_price must be > 0 for SL / SL-M orders",
+            "instrument_key": key,
+            "called_at": called_at,
+        }
+    if otype == "LIMIT" and float(price or 0.0) <= 0.0:
+        return {
+            "status": "invalid_input",
+            "error": "price must be > 0 for LIMIT orders",
+            "instrument_key": key,
+            "called_at": called_at,
+        }
+    if market_protection is not None:
+        try:
+            market_protection = float(market_protection)
+        except (TypeError, ValueError):
+            return {
+                "status": "invalid_input",
+                "error": "market_protection must be a number or None",
+                "instrument_key": key,
+                "called_at": called_at,
+            }
+        if market_protection < 0:
+            return {
+                "status": "invalid_input",
+                "error": "market_protection must be >= 0",
+                "instrument_key": key,
+                "called_at": called_at,
+            }
 
-    # ---- 0. Runtime toggle ----------------------------------------- #
+    # ---- 1. Runtime toggle ----------------------------------------- #
     if not order_runtime_service.is_enabled():
         logger.warning(
             "[place-order] disabled by runtime toggle (key=%s txn=%s)",
@@ -191,7 +258,7 @@ def place_order(
             "called_at": called_at,
         }
 
-    # ---- 1. Token -------------------------------------------------- #
+    # ---- 2. Token -------------------------------------------------- #
     # Read once. Held only in this local variable for the duration of
     # the call. Never logged, never returned, never interpolated into
     # an error string.
@@ -214,7 +281,7 @@ def place_order(
             "called_at": called_at,
         }
 
-    # ---- 2. Lots -> quantity -------------------------------------- #
+    # ---- 3. Lots -> quantity -------------------------------------- #
     underlying = _resolve_underlying(key)
     quantity, lot_size, lot_source = lots_to_quantity(
         underlying=underlying,
@@ -222,30 +289,32 @@ def place_order(
         instrument_key=key,
     )
 
-    # SECURITY: no token in this log line. The previous revision
-    # included ``token=<masked>``; that violated the project's
-    # "no token in any log line" policy even in masked form.
+    # SECURITY: no token in this log line.
     logger.info(
         "[place-order] key=%s txn=%s lots=%s qty=%s lot_size=%s "
         "lot_source=%s underlying=%s",
         key, txn, lots, quantity, lot_size, lot_source, underlying,
     )
 
-    # ---- 3. Build the request ------------------------------------- #
+    # ---- 4. Build the request ------------------------------------- #
+    # ``tag`` is omitted when empty because Upstox rejects empty-string
+    # tags. The generated model only assigns ``tag`` when it is not None.
+    tag_value = str(tag).strip() if tag else None
     try:
         body = upstox_client.PlaceOrderV3Request(
             quantity=int(quantity),
-            product=str(product or "D"),
-            validity=str(validity or "DAY"),
+            product=prod,
+            validity=valid,
             price=float(price or 0.0),
-            tag=str(tag or ""),
+            tag=tag_value,
             instrument_token=key,
-            order_type=str(order_type or "MARKET"),
+            order_type=otype,
             transaction_type=txn,
             disclosed_quantity=0,
             trigger_price=float(trigger_price or 0.0),
             is_amo=bool(is_amo),
             slice=bool(slice),
+            market_protection=market_protection,
         )
     except Exception as exc:
         logger.exception("[place-order] PlaceOrderV3Request build failed")
@@ -253,10 +322,13 @@ def place_order(
             "status": "error",
             "error": f"request_build_failed: {type(exc).__name__}: {exc}",
             "instrument_key": key,
+            "transaction_type": txn,
+            "quantity": quantity,
+            "lot_size": lot_size,
             "called_at": called_at,
         }
 
-    # ---- 4. Call -------------------------------------------------- #
+    # ---- 5. Call -------------------------------------------------- #
     try:
         api_client = _build_client(access_token)
         order_api = upstox_client.OrderApiV3(api_client)
@@ -292,6 +364,8 @@ def place_order(
             "error": f"{type(exc).__name__}: {exc}",
             "instrument_key": key,
             "transaction_type": txn,
+            "quantity": quantity,
+            "lot_size": lot_size,
             "called_at": called_at,
         }
 
@@ -299,9 +373,7 @@ def place_order(
         "[place-order] OK — key=%s txn=%s qty=%s lot_size=%s",
         key, txn, quantity, lot_size,
     )
-    # SECURITY: no ``token_masked`` field in the returned dict. The
-    # previous revision included one; callers could persist it in a
-    # Mongo doc, an audit trail, or an API response.
+    # SECURITY: no ``token_masked`` field in the returned dict.
     return {
         "status": "ok",
         "instrument_key": key,
@@ -311,8 +383,8 @@ def place_order(
         "lot_size": lot_size,
         "lot_source": lot_source,
         "quantity": quantity,
-        "order_type": str(order_type or "MARKET"),
-        "product": str(product or "D"),
+        "order_type": otype,
+        "product": prod,
         "response": _summarise_api_response(raw_response),
         "error": None,
         "called_at": called_at,

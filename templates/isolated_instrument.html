@@ -194,6 +194,26 @@
         border-color: var(--iso-blue-border);
         border-left-color: var(--iso-primary);
     }
+    /* nested inside .entry-candidate-symbol */
+.entry-candidate-symbol .ecs-symbol {
+    display: inline;
+    word-break: break-word;
+}
+.entry-candidate-symbol .ecs-key {
+    display: inline-block;
+    margin-left: 8px;
+    padding: 1px 7px;
+    border-radius: 5px;
+    background: #f1f5f9;
+    border: 1px solid var(--iso-border);
+    color: var(--iso-muted);
+    font-size: 0.7rem;
+    font-weight: 600;
+    font-family: "JetBrains Mono", "Fira Code", "Courier New", monospace;
+    letter-spacing: 0;
+    vertical-align: middle;
+    white-space: nowrap;
+}
 
     .iso-banner.is-isolated {
         background: var(--iso-green-bg);
@@ -2922,6 +2942,14 @@
         if (u && LOT_SIZES[u]) return LOT_SIZES[u];
         return 1;
     }
+    function symbolWithKey(tradingSymbol, instrumentKey) {
+    const s = tradingSymbol || instrumentKey || "—";
+    const k = (instrumentKey && instrumentKey !== s) ? instrumentKey : "";
+    return `
+        <span class="ecs-symbol">${esc(s)}</span>
+        ${k ? `<span class="ecs-key">${esc(k)}</span>` : ""}
+    `;
+}
 
     function getLotSizePref() {
         try {
@@ -5536,7 +5564,7 @@
                 return `
                     <div class="entry-candidate is-chosen">
                         <div class="entry-candidate-head">
-                            <div class="entry-candidate-symbol">${esc(sym || "—")}</div>
+                            <div class="entry-candidate-symbol">${symbolWithKey(sym, traded.instrument_key)}</div>
                             <div class="entry-candidate-pills">
                                 <span class="entry-pill ${stateCls}">SKIPPED</span>
                                 <span class="entry-pill bias">${esc(traded.side || "BUY")}</span>
@@ -5562,7 +5590,7 @@
             return `
                 <div class="entry-candidate is-chosen">
                     <div class="entry-candidate-head">
-                        <div class="entry-candidate-symbol">${esc(sym || "—")}</div>
+                        <div class="entry-candidate-symbol">${symbolWithKey(sym, traded.instrument_key)}</div>
                         <div class="entry-candidate-pills">
                             <span class="entry-pill ${stateCls}">${esc(outcome || "—")}</span>
                             <span class="entry-pill bias">${esc(traded.side || "BUY")}</span>
@@ -6076,7 +6104,7 @@
             bodyEl.innerHTML = `
                 <div class="entry-candidate ${isOpen ? "is-chosen" : ""}" style="margin-top:8px;">
                     <div class="entry-candidate-head">
-                        <div class="entry-candidate-symbol">${esc(order.trading_symbol || order.instrument_key || "—")}</div>
+                        <div class="entry-candidate-symbol">${symbolWithKey(order.trading_symbol, order.instrument_key)}</div>
                         <div class="entry-candidate-pills">
                             <span class="entry-pill ${statusCls}">${esc(status.replace(/_/g, " "))}</span>
                             <span class="entry-pill bias">${esc(order.routing_mode || "—")}</span>
