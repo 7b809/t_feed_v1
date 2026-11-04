@@ -1305,4 +1305,4 @@ class DummyOrderService:
 # --------------------------------------------------------------------------- #
 # Singleton                                                                   #
 # --------------------------------------------------------------------------- #
-dummy_order_service = DummyOrderService()
+dummy_order_service = DummyOrderService() 
