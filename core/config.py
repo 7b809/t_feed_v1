@@ -1016,3 +1016,35 @@ EMA_CALC_DEFAULT_LOOKBACK_DAYS = max(1, min(30, _int(
 EMA_CALC_MAX_CANDLES = max(100, min(10000, _int(
     "EMA_CALC_MAX_CANDLES", 3000
 )))
+
+
+# ---------------------------------------------------------------------------
+# Admin / API authentication
+# ---------------------------------------------------------------------------
+# Shared secret for machine clients (curl, CI, internal tools).
+# Send as either:
+#     X-API-Key: <ADMIN_API_KEY>
+#     Authorization: Bearer <ADMIN_API_KEY>
+#
+# Leave EMPTY to disable header auth entirely.
+# Generate one with:
+#     python -c "import secrets; print(secrets.token_urlsafe(48))"
+ADMIN_API_KEY = _str("ADMIN_API_KEY", "")
+
+# HTTP Basic credentials — for humans opening /docs, /logs, /admin in a
+# browser. Leave ADMIN_BASIC_PASSWORD empty to disable Basic auth.
+ADMIN_BASIC_USER = _str("ADMIN_BASIC_USER", "admin")
+ADMIN_BASIC_PASSWORD = _str("ADMIN_BASIC_PASSWORD", "")
+
+# CORS: comma-separated list of allowed origins.
+# Default "*" is only safe for a fully local, isolated box. In production
+# set your real UI origin(s), e.g.:
+#     CORS_ALLOW_ORIGINS=https://ui.example.com,https://admin.example.com
+CORS_ALLOW_ORIGINS = _csv("CORS_ALLOW_ORIGINS", "*")
+
+
+# Cookie-session for browser logins (see core/auth.py)
+ADMIN_SESSION_SECRET = _str("ADMIN_SESSION_SECRET", "")
+ADMIN_SESSION_TTL_SECONDS = max(300, _int("ADMIN_SESSION_TTL_SECONDS", 8 * 3600))
+ADMIN_COOKIE_NAME = _str("ADMIN_COOKIE_NAME", "novag_admin")
+ADMIN_COOKIE_SECURE = _bool("ADMIN_COOKIE_SECURE", True)  # require HTTPS

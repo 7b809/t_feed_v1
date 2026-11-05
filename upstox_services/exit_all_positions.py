@@ -1,4 +1,4 @@
-# File: upstox_services/exit_all_positions.py
+# upstox_services/exit_all_positions.py
 """Exit every open position for the Upstox account.
 
 Gated on ``order_runtime_service.is_enabled()`` — returns
@@ -33,6 +33,18 @@ This revision removes all four:
     in a log line or return dict, so a provider-side error body cannot
     leak an ``Authorization`` header or a bearer token.
 
+Telegram notifications
+----------------------
+Two HTML-formatted Telegram messages are sent around the Upstox call:
+
+  * "Exiting all positions started"
+  * "All positions exited" (with sanitised response) or
+    "Exit all positions failed" (with sanitised error preview)
+
+Dry runs, disabled runtime, and missing-token paths do **not** send
+Telegram notifications (they never call the API). Telegram failures
+are swallowed — they never affect the exit result.
+
 The ``_mask_token`` helper is kept as a module-level function for
 backward compatibility with any external import, but it is no longer
 called from ``exit_all_positions`` — the function no longer has a
@@ -42,6 +54,7 @@ token to mask.
 from __future__ import annotations
 
 import argparse
+import html
 import sys
 from datetime import datetime, timezone
 from typing import Any
@@ -51,6 +64,7 @@ from upstox_client.rest import ApiException
 
 from core.logger import get_logger
 from services.order_runtime_service import order_runtime_service
+from services.telegram_service import telegram_service
 from services.token_service import token_service
 from upstox_services._sanitise import sanitise_payload
 
@@ -97,6 +111,76 @@ def _summarise_api_response(raw: Any) -> dict[str, Any]:
         return {"raw": sanitise_payload(str(raw))}
 
 
+# ---------------------------------------------------------------------------
+# Telegram helpers — all sends are best-effort and never raise.
+# ---------------------------------------------------------------------------
+def _tg_escape(value: Any) -> str:
+    """HTML-escape a value for Telegram's HTML parse_mode."""
+    return html.escape(str(value if value is not None else ""), quote=False)
+
+
+def _format_response_for_tg(response_summary: dict[str, Any]) -> str:
+    """Render the sanitised Upstox response as Telegram HTML lines."""
+    if not response_summary:
+        return "<i>(empty response)</i>"
+
+    lines: list[str] = []
+    for k, v in response_summary.items():
+        if isinstance(v, dict):
+            inner = ", ".join(
+                f"{_tg_escape(ik)}={_tg_escape(iv)}" for ik, iv in v.items()
+            )
+            lines.append(f"• <b>{_tg_escape(k)}</b>: {{{inner}}}")
+        elif isinstance(v, (list, tuple)):
+            inner = ", ".join(_tg_escape(x) for x in v)
+            lines.append(f"• <b>{_tg_escape(k)}</b>: [{inner}]")
+        else:
+            lines.append(f"• <b>{_tg_escape(k)}</b>: {_tg_escape(v)}")
+    return "\n".join(lines) if lines else "<i>(empty response)</i>"
+
+
+def _send_exit_started() -> None:
+    """Send the 'exiting all positions started' Telegram notification (HTML)."""
+    try:
+        title = "⏳ Exit all positions started"
+        body = (
+            "Sending <code>exit_positions()</code> to Upstox for the "
+            "account. This will close <b>every</b> open position."
+        )
+        telegram_service.send_message(title, body, level="WARNING")
+    except Exception:
+        logger.exception("[exit-all] telegram 'started' notify failed")
+
+
+def _send_exit_completed(response_summary: dict[str, Any]) -> None:
+    """Send the 'all positions exited' Telegram notification (HTML)."""
+    try:
+        title = "✅ All positions exited"
+        body = (
+            "<b>Response</b>:\n"
+            f"{_format_response_for_tg(response_summary)}"
+        )
+        telegram_service.send_message(title, body, level="SUCCESS")
+    except Exception:
+        logger.exception("[exit-all] telegram 'completed' notify failed")
+
+
+def _send_exit_failed(error_text: str, http_status: Any = None) -> None:
+    """Send the 'exit all positions failed' Telegram notification (HTML)."""
+    try:
+        title = "❌ Exit all positions failed"
+        header = ""
+        if http_status is not None:
+            header = f"<b>HTTP</b>: {_tg_escape(http_status)}\n"
+        body = (
+            f"{header}"
+            f"<b>Error</b>:\n<pre>{_tg_escape(error_text)}</pre>"
+        )
+        telegram_service.send_message(title, body, level="ERROR")
+    except Exception:
+        logger.exception("[exit-all] telegram 'failed' notify failed")
+
+
 def exit_all_positions(dry_run: bool = False) -> dict[str, Any]:
     """Exit every open position for the Upstox account.
 
@@ -106,6 +190,11 @@ def exit_all_positions(dry_run: bool = False) -> dict[str, Any]:
     Security: the access token never appears in any log line or in
     the returned dict. Provider error bodies are redacted by
     ``sanitise_payload`` before they leave this function.
+
+    Two HTML-formatted Telegram notifications are sent around the
+    Upstox call (started / completed-or-failed) — but only when the
+    call actually happens (not for dry runs, disabled runtime, or
+    missing token). Telegram failures never affect the exit result.
     """
     called_at = _now_iso()
 
@@ -122,7 +211,7 @@ def exit_all_positions(dry_run: bool = False) -> dict[str, Any]:
     # ---- 1. Token -------------------------------------------------- #
     # Read once. Held only in this local variable for the duration of
     # the call. Never logged, never returned, never interpolated into
-    # an error string.
+    # an error string, and never sent to Telegram.
     try:
         access_token = token_service.get_access_token()
     except Exception as exc:
@@ -159,7 +248,10 @@ def exit_all_positions(dry_run: bool = False) -> dict[str, Any]:
             "called_at": called_at,
         }
 
-    # ---- 3. Call -------------------------------------------------- #
+    # ---- 3. Telegram: "exiting started" ---------------------------- #
+    _send_exit_started()
+
+    # ---- 4. Call -------------------------------------------------- #
     try:
         configuration = upstox_client.Configuration()
         configuration.access_token = access_token
@@ -170,13 +262,17 @@ def exit_all_positions(dry_run: bool = False) -> dict[str, Any]:
     except ApiException as exc:
         http_status = getattr(exc, "status", None)
         # Redact any credential-like run in the provider body before
-        # it reaches a log line or the return dict.
+        # it reaches a log line, the return dict, or Telegram.
         body_preview = sanitise_payload(
             str(getattr(exc, "body", None) or exc)
         )[:300]
         logger.warning(
             "[exit-all] ApiException (HTTP %s): %s",
             http_status, body_preview,
+        )
+        _send_exit_failed(
+            error_text=str(body_preview),
+            http_status=http_status,
         )
         return {
             "status": "error",
@@ -190,6 +286,9 @@ def exit_all_positions(dry_run: bool = False) -> dict[str, Any]:
         }
     except Exception as exc:
         logger.exception("[exit-all] unexpected error")
+        _send_exit_failed(
+            error_text=f"{type(exc).__name__}: {exc}",
+        )
         return {
             "status": "error",
             "error": f"{type(exc).__name__}: {exc}",
@@ -198,12 +297,17 @@ def exit_all_positions(dry_run: bool = False) -> dict[str, Any]:
         }
 
     logger.info("[exit-all] OK")
+
+    # ---- 5. Telegram: "exited" (with sanitised response) ----------- #
+    response_summary = _summarise_api_response(raw_response)
+    _send_exit_completed(response_summary=response_summary)
+
     # SECURITY: no ``token_masked`` field. The ``response`` payload is
     # the sanitised summary produced by ``_summarise_api_response``.
     return {
         "status": "ok",
         "dry_run": False,
-        "response": _summarise_api_response(raw_response),
+        "response": response_summary,
         "called_at": called_at,
     }
 
@@ -225,5 +329,5 @@ def main(argv: list[str] | None = None) -> int:
     return 2 if status == "no_token" else 1
 
 
-if __name__ == "__main__":
-    sys.exit(main())
+# if __name__ == "__main__":
+#     sys.exit(main())

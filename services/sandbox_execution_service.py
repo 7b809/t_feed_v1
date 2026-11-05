@@ -20,6 +20,19 @@ v1 design decisions (2026-11-04):
            and BEFORE the dummy's 15:35 accounting EOD_CLOSE. The dummy 15:35
            EOD_CLOSE is therefore a no-op for sandbox state (see _handle_eod_close).
 
+Telegram notifications (HTML)
+-----------------------------
+Only the key lifecycle events are reported — not every transition:
+  - ENTRY started / filled / failed
+  - EXIT started / exited / failed
+  - PAUSED (token expiry etc.)
+  - exit_stuck
+  - force_eod_exit summary
+  - reconcile_startup summary
+  - unhandled exception inside on_dummy_transition
+  - registration failure
+All sends are best-effort and never affect trading or the ledger.
+
 Companion file required:
 - upstox_services/get_order_details.py -> get_order_details(broker_order_id) -> dict
   Must return at least: {"status": str, "filled_quantity": int, "average_price": float}
@@ -35,6 +48,7 @@ Companion dummy_order_service change required:
 
 from __future__ import annotations
 
+import html
 import json
 import logging
 import os
@@ -46,6 +60,7 @@ from typing import Any, Optional
 
 from services.order_runtime_service import order_runtime_service
 from services.sr_backfill_service import sr_backfill_service
+from services.telegram_service import telegram_service
 from upstox_services.exit_all_positions import exit_all_positions
 from upstox_services.get_order_details import get_order_details
 from upstox_services.place_order import place_order
@@ -131,6 +146,162 @@ def _now() -> datetime:
 
 
 # ---------------------------------------------------------------------------
+# Telegram helpers — best-effort, never raise, HTML formatted.
+# ---------------------------------------------------------------------------
+
+def _tg_escape(value: Any) -> str:
+    return html.escape(str(value if value is not None else ""), quote=False)
+
+
+def _format_response_for_tg(response_summary: Any) -> str:
+    """Render a sanitised response dict as Telegram HTML bullet lines."""
+    if not isinstance(response_summary, dict) or not response_summary:
+        return f"<i>{_tg_escape(response_summary)}</i>"
+    lines: list[str] = []
+    for k, v in response_summary.items():
+        if isinstance(v, dict):
+            inner = ", ".join(
+                f"{_tg_escape(ik)}={_tg_escape(iv)}" for ik, iv in v.items()
+            )
+            lines.append(f"• <b>{_tg_escape(k)}</b>: {{{inner}}}")
+        elif isinstance(v, (list, tuple)):
+            inner = ", ".join(_tg_escape(x) for x in v)
+            lines.append(f"• <b>{_tg_escape(k)}</b>: [{inner}]")
+        else:
+            lines.append(f"• <b>{_tg_escape(k)}</b>: {_tg_escape(v)}")
+    return "\n".join(lines) if lines else "<i>(empty)</i>"
+
+
+def _tg(title: str, body: str, level: str = "INFO") -> None:
+    """Best-effort Telegram send. Never raises."""
+    try:
+        telegram_service.send_message(title, body, level=level)
+    except Exception:
+        logger.exception("[sandbox_exec] telegram notify failed title=%s", title)
+
+
+def _tg_entry_started(*, oid: str, instrument_key: str, bias: str,
+                      lots: int, dummy_entry: float, mode: str) -> None:
+    _tg(
+        "🟡 Sandbox · ENTRY started",
+        (
+            f"<b>Order</b>: <code>{_tg_escape(oid)}</code>\n"
+            f"<b>Instrument</b>: <code>{_tg_escape(instrument_key)}</code>\n"
+            f"<b>Bias</b>: {_tg_escape(bias or '-')}\n"
+            f"<b>Lots</b>: {_tg_escape(lots)}\n"
+            f"<b>Dummy entry</b>: {_tg_escape(dummy_entry)}\n"
+            f"<b>Mode</b>: {_tg_escape(mode)}"
+        ),
+        level="INFO",
+    )
+
+
+def _tg_entry_filled(*, oid: str, broker_order_id: str, instrument_key: str,
+                     fill_price: float, dummy_entry: float,
+                     slippage_pct: Any, latency_ms: Any) -> None:
+    _tg(
+        "✅ Sandbox · ENTRY filled",
+        (
+            f"<b>Order</b>: <code>{_tg_escape(oid)}</code>\n"
+            f"<b>Broker</b>: <code>{_tg_escape(broker_order_id)}</code>\n"
+            f"<b>Instrument</b>: <code>{_tg_escape(instrument_key)}</code>\n"
+            f"<b>Fill</b>: {_tg_escape(fill_price)}\n"
+            f"<b>Dummy</b>: {_tg_escape(dummy_entry)}\n"
+            f"<b>Slippage</b>: {_tg_escape(slippage_pct)}%\n"
+            f"<b>Detect→fill</b>: {_tg_escape(latency_ms)} ms"
+        ),
+        level="SUCCESS",
+    )
+
+
+def _tg_entry_failed(*, oid: str, error: str) -> None:
+    _tg(
+        "❌ Sandbox · ENTRY failed",
+        (
+            f"<b>Order</b>: <code>{_tg_escape(oid)}</code>\n"
+            f"<b>Error</b>:\n<pre>{_tg_escape(error)}</pre>"
+        ),
+        level="ERROR",
+    )
+
+
+def _tg_exit_started(*, oid: str, reason: str, instrument_key: str) -> None:
+    _tg(
+        "🟠 Sandbox · EXIT started",
+        (
+            f"<b>Order</b>: <code>{_tg_escape(oid)}</code>\n"
+            f"<b>Reason</b>: {_tg_escape(reason)}\n"
+            f"<b>Instrument</b>: <code>{_tg_escape(instrument_key)}</code>"
+        ),
+        level="WARNING",
+    )
+
+
+def _tg_exited(*, oid: str, reason: str, exit_price: Any, dummy_exit: Any,
+               latency_ms: Any, external: bool = False) -> None:
+    tag = " (external)" if external else ""
+    _tg(
+        f"✅ Sandbox · EXITED{tag}",
+        (
+            f"<b>Order</b>: <code>{_tg_escape(oid)}</code>\n"
+            f"<b>Reason</b>: {_tg_escape(reason)}\n"
+            f"<b>Exit</b>: {_tg_escape(exit_price)}\n"
+            f"<b>Dummy</b>: {_tg_escape(dummy_exit)}\n"
+            f"<b>Detect→exit</b>: {_tg_escape(latency_ms)} ms"
+        ),
+        level="SUCCESS",
+    )
+
+
+def _tg_exit_failed(*, oid: str, error: str) -> None:
+    _tg(
+        "❌ Sandbox · EXIT failed",
+        (
+            f"<b>Order</b>: <code>{_tg_escape(oid)}</code>\n"
+            f"<b>Error</b>:\n<pre>{_tg_escape(error)}</pre>\n"
+            f"<i>sandbox_exit_stuck=true — new entries blocked</i>"
+        ),
+        level="ERROR",
+    )
+
+
+def _tg_paused(*, reason: str) -> None:
+    _tg(
+        "⏸ Sandbox · PAUSED",
+        f"<b>Reason</b>: {_tg_escape(reason)}\n<i>New transitions ignored until resume.</i>",
+        level="ERROR",
+    )
+
+
+def _tg_force_eod_exit(*, processed: int) -> None:
+    _tg(
+        "⏰ Sandbox · EOD force exit",
+        f"<b>Processed</b>: {_tg_escape(processed)} open position(s)",
+        level="WARNING",
+    )
+
+
+def _tg_reconcile_summary(*, summary: dict) -> None:
+    _tg(
+        "🔄 Sandbox · Startup reconcile",
+        _format_response_for_tg(summary),
+        level="INFO",
+    )
+
+
+def _tg_unhandled(*, ttype: str, oid: str, error: str) -> None:
+    _tg(
+        "💥 Sandbox · Unhandled transition error",
+        (
+            f"<b>Transition</b>: {_tg_escape(ttype)}\n"
+            f"<b>Order</b>: <code>{_tg_escape(oid)}</code>\n"
+            f"<b>Error</b>:\n<pre>{_tg_escape(error)}</pre>"
+        ),
+        level="ERROR",
+    )
+
+
+# ---------------------------------------------------------------------------
 # Service
 # ---------------------------------------------------------------------------
 
@@ -182,10 +353,13 @@ class SandboxExecutionService:
             logger.error(f"[sandbox_exec] ledger save failed ({SANDBOX_LEDGER_PATH}): {e}")
 
     def _pause(self, reason: str) -> None:
+        first = not self._paused
         self._paused = True
         self._pause_reason = reason
         self._last_error = f"paused:{reason}"
         logger.warning(f"[sandbox_exec] PAUSED reason={reason}")
+        if first:
+            _tg_paused(reason=reason)
 
     # ------------------------------------------------------------------- gate
 
@@ -383,8 +557,9 @@ class SandboxExecutionService:
 
     def on_dummy_transition(self, transition_type: str, order_record: dict, reason: str) -> None:
         """Callback invoked by dummy_order_service AFTER persistence. Must never raise."""
+        ttype = str(transition_type or "").upper()
+        oid = ""
         try:
-            ttype = str(transition_type or "").upper()
             oid = self._order_id(order_record)
             if not oid:
                 logger.warning(f"[sandbox_exec] {ttype} transition with no order_id — ignored")
@@ -410,6 +585,7 @@ class SandboxExecutionService:
                     logger.debug(f"[sandbox_exec] unhandled transition {ttype} for {oid}")
         except Exception as e:
             logger.error(f"[sandbox_exec] on_dummy_transition crashed: {e}", exc_info=True)
+            _tg_unhandled(ttype=ttype, oid=oid or "-", error=f"{type(e).__name__}: {e}")
 
     # --------------------------------------------------------------- entry
 
@@ -482,6 +658,11 @@ class SandboxExecutionService:
                 f"[sandbox_exec] OBSERVE ENTRY key={oid} instrument={instrument_key} "
                 f"dummy_entry={dummy_entry}"
             )
+            _tg_entry_started(
+                oid=oid, instrument_key=instrument_key,
+                bias=str(order_record.get("bias") or ""),
+                lots=SANDBOX_LOTS, dummy_entry=dummy_entry, mode="observe",
+            )
             return
 
         requested = _now()
@@ -489,6 +670,12 @@ class SandboxExecutionService:
         entry["sandbox_requested_at"] = _iso(requested)
         entry["attempts"] += 1
         self._save()
+
+        _tg_entry_started(
+            oid=oid, instrument_key=instrument_key,
+            bias=str(order_record.get("bias") or ""),
+            lots=SANDBOX_LOTS, dummy_entry=dummy_entry, mode="live",
+        )
 
         try:
             result = place_order(
@@ -556,6 +743,12 @@ class SandboxExecutionService:
             f"fill={fill_price:.4f} dummy={dummy_entry:.4f} slip={entry['fill_slippage_pct']}% "
             f"detect_to_fill={entry['detection_to_fill_ms']}ms"
         )
+        _tg_entry_filled(
+            oid=oid, broker_order_id=broker_order_id, instrument_key=instrument_key,
+            fill_price=fill_price, dummy_entry=dummy_entry,
+            slippage_pct=entry.get("fill_slippage_pct"),
+            latency_ms=entry.get("detection_to_fill_ms"),
+        )
 
     def _entry_failed(self, record: dict, error: str) -> None:
         record["entry"]["state"] = ST_ENTRY_FAILED
@@ -564,6 +757,7 @@ class SandboxExecutionService:
         self._last_error = f"{record['order_id']}:entry:{error}"
         self._save()
         logger.warning(f"[sandbox_exec] ENTRY_FAILED key={record['order_id']} err={error}")
+        _tg_entry_failed(oid=str(record["order_id"]), error=str(error))
 
     # ---------------------------------------------------------------- exit
 
@@ -603,6 +797,14 @@ class SandboxExecutionService:
             logger.info(
                 f"[sandbox_exec] OBSERVE EXIT key={oid} reason={transition_type} dummy_exit={dummy_exit}"
             )
+            _tg_exit_started(
+                oid=oid, reason=transition_type,
+                instrument_key=str(record.get("instrument_key") or ""),
+            )
+            _tg_exited(
+                oid=oid, reason=transition_type, exit_price=dummy_exit,
+                dummy_exit=dummy_exit, latency_ms=0,
+            )
             return
 
         self._execute_exit(record, transition_type)
@@ -615,6 +817,8 @@ class SandboxExecutionService:
         record["exit"]["attempts"] = int(record["exit"].get("attempts") or 0) + 1
         record["updated_at"] = _iso(_now())
         self._save()
+
+        _tg_exit_started(oid=oid, reason=transition_type, instrument_key=instrument_key)
 
         # Pre-check: is the position still open?
         try:
@@ -631,6 +835,11 @@ class SandboxExecutionService:
             record["updated_at"] = _iso(_now())
             self._save()
             logger.info(f"[sandbox_exec] EXITED(external) key={oid} reason={transition_type}")
+            _tg_exited(
+                oid=oid, reason=transition_type, exit_price=None,
+                dummy_exit=record.get("dummy_exit_price"),
+                latency_ms=None, external=True,
+            )
             return
 
         last_err: Optional[str] = None
@@ -669,6 +878,11 @@ class SandboxExecutionService:
                         f"exit={exit_price} dummy={dummy_exit} "
                         f"detect_to_exit={record['exit'].get('detection_to_exit_ms')}ms"
                     )
+                    _tg_exited(
+                        oid=oid, reason=transition_type, exit_price=exit_price,
+                        dummy_exit=dummy_exit,
+                        latency_ms=record["exit"].get("detection_to_exit_ms"),
+                    )
                     return
                 else:
                     last_err = f"result_not_ok:{result}"
@@ -689,6 +903,7 @@ class SandboxExecutionService:
             f"[sandbox_exec] EXIT_FAILED key={oid} err={last_err} "
             f"— sandbox_exit_stuck=true, blocking new entries"
         )
+        _tg_exit_failed(oid=oid, error=str(last_err))
 
     # -------------------------------------------------------------- specials
 
@@ -744,6 +959,7 @@ class SandboxExecutionService:
                     "entry": rec.get("dummy_entry_price"),
                 })
             logger.info(f"[sandbox_exec] force_eod_exit processed {len(open_recs)} open position(s)")
+            _tg_force_eod_exit(processed=len(open_recs))
             return {"status": "ok", "open": len(open_recs)}
 
     def reconcile_startup(self, dummy_summary: Optional[dict] = None) -> dict:
@@ -790,13 +1006,21 @@ class SandboxExecutionService:
                 summary["stuck"] = 1
             self._save()
             logger.info(f"[sandbox_exec] startup reconcile {summary}")
+            _tg_reconcile_summary(summary=summary)
             return summary
 
     def resume(self, source: str = "api") -> dict:
         with self._lock:
+            was_paused = self._paused
             self._paused = False
             self._pause_reason = None
             logger.info(f"[sandbox_exec] resumed from {source}")
+            if was_paused:
+                _tg(
+                    "▶️ Sandbox · RESUMED",
+                    f"<b>Source</b>: {_tg_escape(source)}",
+                    level="INFO",
+                )
             return self.status()
 
     def status(self) -> dict:
@@ -863,10 +1087,32 @@ def register_with_dummy_order_service() -> bool:
                 "[sandbox_exec] dummy_order_service has no set_transition_callback "
                 "— live sandbox cannot receive transitions. Add it."
             )
+            _tg(
+                "❌ Sandbox · Registration failed",
+                "<b>Reason</b>: <code>dummy_order_service</code> has no "
+                "<code>set_transition_callback</code> — live sandbox cannot "
+                "receive transitions.",
+                level="ERROR",
+            )
             return False
         setter(sandbox_execution_service.on_dummy_transition)
         logger.info("[sandbox_exec] transition callback registered on dummy_order_service")
+        _tg(
+            "🔗 Sandbox · Callback registered",
+            (
+                f"<b>Mode</b>: {_tg_escape(SANDBOX_EXECUTION_MODE)}\n"
+                f"<b>Enabled</b>: {_tg_escape(SANDBOX_EXECUTION_ENABLED)}\n"
+                f"<b>Lots</b>: {_tg_escape(SANDBOX_LOTS)}\n"
+                f"<b>EOD</b>: {SANDBOX_EOD_HOUR:02d}:{SANDBOX_EOD_MINUTE:02d}"
+            ),
+            level="SUCCESS",
+        )
         return True
     except Exception as e:
         logger.error(f"[sandbox_exec] registration failed: {e}", exc_info=True)
+        _tg(
+            "❌ Sandbox · Registration failed",
+            f"<b>Error</b>:\n<pre>{_tg_escape(f'{type(e).__name__}: {e}')}</pre>",
+            level="ERROR",
+        )
         return False

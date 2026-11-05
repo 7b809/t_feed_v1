@@ -52,11 +52,6 @@ if errorlevel 1 (
     exit /b 1
 )
 
-echo.
-echo Python:
-where python
-python --version
-echo.
 
 echo ================================================
 echo Starting Market Data Foundation with Uvicorn...

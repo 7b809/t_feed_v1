@@ -64,7 +64,6 @@
             box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
         }
 
-        /* Brand Styling */
         .app-brand-wrapper {
             display: inline-flex;
             align-items: center;
@@ -95,14 +94,12 @@
             white-space: nowrap;
         }
 
-        /* Desktop Nav Item Container */
         .app-nav-item-group {
             display: flex;
             align-items: center;
             gap: 8px;
         }
 
-        /* Standardized Nav Button */
         .app-nav-button {
             display: inline-flex;
             align-items: center;
@@ -132,13 +129,23 @@
             box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1);
         }
 
+        /* Logout button gets a subtle danger tint so it reads as an exit */
+        .app-nav-button.is-logout {
+            border-color: rgba(244, 63, 94, 0.4);
+            background: rgba(244, 63, 94, 0.10);
+        }
+        .app-nav-button.is-logout:hover {
+            background: rgba(244, 63, 94, 0.22);
+            border-color: rgba(244, 63, 94, 0.6);
+            color: #fecaca;
+        }
+
         .app-nav-button .ext-arrow {
             font-size: 0.65rem;
             opacity: 0.6;
             margin-left: -2px;
         }
 
-        /* Consistent Nav Badge Geometry */
         .nav-icon-badge {
             width: 26px;
             height: 26px;
@@ -151,7 +158,6 @@
             flex-shrink: 0;
         }
 
-        /* Theme Color Badges */
         .nav-icon-badge.home-theme     { background: rgba(59, 130, 246, 0.2);  color: #60a5fa; }
         .nav-icon-badge.charts-theme   { background: rgba(34, 197, 94, 0.2);   color: #4ade80; }
         .nav-icon-badge.layout-theme   { background: rgba(6, 182, 212, 0.2);   color: #22d3ee; }
@@ -159,8 +165,9 @@
         .nav-icon-badge.logs-theme     { background: rgba(251, 146, 60, 0.2);  color: #fb923c; }
         .nav-icon-badge.expired-theme  { background: rgba(168, 85, 247, 0.2);  color: #c084fc; }
         .nav-icon-badge.api-theme      { background: rgba(20, 184, 166, 0.2);  color: #2dd4bf; }
+        .nav-icon-badge.auth-theme     { background: rgba(124, 58, 237, 0.22); color: #a78bfa; }
+        .nav-icon-badge.logout-theme   { background: rgba(244, 63, 94, 0.22);  color: #fb7185; }
 
-        /* Mobile Hamburger Toggle */
         .mobile-nav-toggle {
             display: none;
             width: 38px;
@@ -180,9 +187,7 @@
             box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.5);
         }
 
-        /* ------------------------------------------------------------- */
-        /* Mobile Floating Action Button (FAB) — bottom-right nav trigger */
-        /* ------------------------------------------------------------- */
+        /* ---------- Mobile FAB ---------- */
         .mobile-fab-nav {
             display: none;
             position: fixed;
@@ -205,81 +210,57 @@
                 0 6px 20px rgba(37, 99, 235, 0.45),
                 0 2px 8px rgba(0, 0, 0, 0.35);
             z-index: 1036;
-            transition:
-                transform 0.15s ease,
-                box-shadow 0.2s ease;
+            transition: transform 0.15s ease, box-shadow 0.2s ease;
             -webkit-tap-highlight-color: transparent;
             touch-action: manipulation;
         }
-
         .mobile-fab-nav:hover {
             transform: translateY(-2px);
             box-shadow:
                 0 8px 24px rgba(37, 99, 235, 0.55),
                 0 3px 10px rgba(0, 0, 0, 0.4);
         }
-
         .mobile-fab-nav:active {
             transform: scale(0.94);
             box-shadow:
                 0 4px 12px rgba(37, 99, 235, 0.4),
                 0 1px 4px rgba(0, 0, 0, 0.3);
         }
-
         .mobile-fab-nav:focus {
             outline: none;
             box-shadow:
                 0 0 0 3px rgba(37, 99, 235, 0.4),
                 0 6px 20px rgba(37, 99, 235, 0.45);
         }
-
         .mobile-fab-nav i {
             display: block;
             line-height: 1;
             pointer-events: none;
             transition: transform 0.2s ease;
         }
-
         .mobile-fab-nav.is-open i {
             transform: rotate(90deg);
         }
 
-        /* ------------------------------------------------------------- */
-        /* Mobile nav pills — horizontal row of icon + label pills        */
-        /* ------------------------------------------------------------- */
-        /* Layout: a horizontal row of pill-shaped items, each showing   */
-        /* a theme-coloured icon badge AND a text label.  The row is     */
-        /* right-aligned above the FAB; when items don't fit the screen  */
-        /* width they wrap upward (flex-wrap: wrap-reverse), so the     */
-        /* container grows up from above the FAB instead of pushing     */
-        /* content sideways.                                            */
-        /*                                                              */
-        /* The FIRST HTML item (Home) lands at the bottom-right —       */
-        /* closest to the FAB and to the user's thumb — and the rest    */
-        /* cascade to the left within the same row, then wrap up.       */
-        /*                                                              */
-        /* Visible only on mobile (≤991px). On desktop this whole       */
-        /* container is display:none so the horizontal nav bar is used. */
+        /* ---------- Mobile pill menu ---------- */
         .mobile-fab-menu {
             display: none;
             position: fixed;
             right: 16px;
-            bottom: 92px; /* 24 FAB offset + 56 FAB height + 12 gap */
+            bottom: 92px;
             max-width: calc(100vw - 32px);
             flex-direction: row;
             flex-wrap: wrap-reverse;
             justify-content: flex-end;
             align-items: center;
             gap: 8px;
-            z-index: 1035; /* just under the FAB */
+            z-index: 1035;
             pointer-events: none;
             padding: 4px;
         }
-
         .mobile-fab-menu.is-open {
             pointer-events: auto;
         }
-
         .mobile-fab-menu-item {
             display: inline-flex;
             align-items: center;
@@ -306,16 +287,10 @@
             -webkit-tap-highlight-color: transparent;
             touch-action: manipulation;
         }
-
         .mobile-fab-menu.is-open .mobile-fab-menu-item {
             opacity: 1;
             transform: translateY(0) scale(1);
         }
-
-        /* Stagger the pop-in: item closest to the FAB (Home) first,   */
-        /* farthest last.  With wrap-reverse + flex-end, nth-child(1)  */
-        /* (Home) is rightmost in the bottom row, so the visual        */
-        /* effect is a cascade spreading left and up from the FAB.     */
         .mobile-fab-menu.is-open .mobile-fab-menu-item:nth-child(1) { transition-delay: 0.02s; }
         .mobile-fab-menu.is-open .mobile-fab-menu-item:nth-child(2) { transition-delay: 0.04s; }
         .mobile-fab-menu.is-open .mobile-fab-menu-item:nth-child(3) { transition-delay: 0.06s; }
@@ -323,18 +298,14 @@
         .mobile-fab-menu.is-open .mobile-fab-menu-item:nth-child(5) { transition-delay: 0.10s; }
         .mobile-fab-menu.is-open .mobile-fab-menu-item:nth-child(6) { transition-delay: 0.12s; }
         .mobile-fab-menu.is-open .mobile-fab-menu-item:nth-child(7) { transition-delay: 0.14s; }
-
+        .mobile-fab-menu.is-open .mobile-fab-menu-item:nth-child(8) { transition-delay: 0.16s; }
         .mobile-fab-menu-item:hover {
             background: rgba(255, 255, 255, 0.08);
             border-color: rgba(255, 255, 255, 0.2);
         }
-
         .mobile-fab-menu-item:active {
             transform: translateY(0) scale(0.96);
         }
-
-        /* Slightly smaller icon badge inside the pill so the pill
-           stays compact while the icon remains visually prominent. */
         .mobile-fab-menu-item .nav-icon-badge {
             width: 28px;
             height: 28px;
@@ -342,7 +313,6 @@
             font-size: 0.88rem;
             border-radius: 8px;
         }
-
         .mobile-fab-menu-label {
             font-size: 0.82rem;
             font-weight: 600;
@@ -351,7 +321,6 @@
             line-height: 1;
         }
 
-        /* Reduced-motion: no transition, items appear instantly. */
         @media (prefers-reduced-motion: reduce) {
             .mobile-fab-menu-item,
             .mobile-fab-menu.is-open .mobile-fab-menu-item {
@@ -366,18 +335,15 @@
             }
         }
 
-        /* Mobile Offcanvas Drawer (kept for the top hamburger) */
         .offcanvas.mobile-drawer {
             background-color: var(--app-bg-dark);
             border-left: 1px solid var(--app-border-color);
             max-width: 280px;
         }
-
         .offcanvas.mobile-drawer .offcanvas-header {
             border-bottom: 1px solid var(--app-border-color);
             padding: 16px;
         }
-
         .offcanvas.mobile-drawer .btn-close-custom {
             background: none;
             border: none;
@@ -388,14 +354,12 @@
             justify-content: center;
             cursor: pointer;
         }
-
         .mobile-drawer-body {
             display: flex;
             flex-direction: column;
             gap: 10px;
             padding: 16px;
         }
-
         .mobile-drawer-body .app-nav-button {
             width: 100%;
             height: 44px;
@@ -403,12 +367,10 @@
             font-size: 0.92rem;
             justify-content: flex-start;
         }
-
         .mobile-drawer-body .app-nav-button .ext-arrow {
             margin-left: auto;
         }
 
-        /* Main Content Container */
         .app-main-content-wrapper {
             width: 100%;
             min-height: calc(100vh - var(--navbar-height));
@@ -416,34 +378,22 @@
             position: relative;
         }
 
-        /* Mobile Layout Adjustments (Hide horizontal nav, show drawer button) */
         @media (max-width: 991px) {
             .app-header-navbar {
                 padding: 0 14px;
             }
-
             .app-nav-item-group {
                 display: none;
             }
-
             .mobile-nav-toggle {
                 display: flex;
             }
-
-            /* Reveal the bottom-right FAB on mobile only */
             .mobile-fab-nav {
                 display: inline-flex;
             }
-
-            /* Reveal the horizontal pill menu on mobile only */
             .mobile-fab-menu {
                 display: flex;
             }
-
-            /* Reserve space at the bottom of every page so the FAB
-               never permanently covers the last interactive element or
-               the last line of content. 88px = FAB height (56) +
-               bottom offset (24) + comfortable tap-target margin (8). */
             .app-main-content-wrapper {
                 padding-bottom: 88px;
             }
@@ -460,7 +410,6 @@
 <!-- TOP NAVBAR -->
 <nav class="app-header-navbar">
 
-    <!-- BRAND / LOGO -->
     <a href="/" class="app-brand-wrapper">
         <div class="app-brand-icon-box">
             <i class="bi bi-activity"></i>
@@ -468,7 +417,6 @@
         <span class="app-brand-title">T - Dashboard</span>
     </a>
 
-    <!-- DESKTOP NAVIGATION -->
     <div class="app-nav-item-group">
         <a href="/" class="app-nav-button {{ 'is-active' if active_path == '/' else '' }}">
             <span class="nav-icon-badge home-theme"><i class="bi bi-house-door-fill"></i></span>
@@ -506,19 +454,30 @@
             <span>Logs</span>
             <i class="bi bi-box-arrow-up-right ext-arrow"></i>
         </a>
+
+        <!-- Auth entry — hidden until /auth/whoami resolves. On 200 it
+             becomes a red-tinted "Logout" button; on 401 it becomes a
+             standard "Login" button with ?next= set to the current path. -->
+        <a
+            href="/login"
+            id="navAuthLink"
+            class="app-nav-button"
+            style="display:none"
+            title="Sign in"
+            aria-label="Sign in"
+        >
+            <span class="nav-icon-badge auth-theme" id="navAuthIconBadge"><i class="bi bi-shield-lock"></i></span>
+            <span id="navAuthLabel">Login</span>
+        </a>
     </div>
 
-    <!-- MOBILE HAMBURGER BUTTON (top-right) — opens the side offcanvas
-         drawer with LABELS. The FAB below opens the compact horizontal
-         pill menu instead. Both coexist; user picks whichever access
-         pattern they prefer.                                            -->
     <button class="mobile-nav-toggle" type="button" data-bs-toggle="offcanvas" data-bs-target="#mobileNavDrawer" aria-controls="mobileNavDrawer" aria-label="Open Navigation">
         <i class="bi bi-list"></i>
     </button>
 
 </nav>
 
-<!-- MOBILE OFFCANVAS DRAWER (triggered by the TOP hamburger) -->
+<!-- MOBILE OFFCANVAS DRAWER -->
 <div class="offcanvas offcanvas-end mobile-drawer" tabindex="-1" id="mobileNavDrawer" aria-labelledby="mobileNavDrawerLabel">
     <div class="offcanvas-header">
         <div class="app-brand-wrapper">
@@ -536,51 +495,47 @@
             <span class="nav-icon-badge home-theme"><i class="bi bi-house-door-fill"></i></span>
             <span>Home</span>
         </a>
-
         <a href="/isolated" target="_blank" rel="noopener noreferrer" class="app-nav-button">
             <span class="nav-icon-badge iso-theme"><i class="bi bi-bullseye"></i></span>
             <span>Isolated</span>
             <i class="bi bi-box-arrow-up-right ext-arrow"></i>
         </a>
-
         <a href="/charts" class="app-nav-button {{ 'is-active' if active_path == '/charts' else '' }}">
             <span class="nav-icon-badge charts-theme"><i class="bi bi-candlestick-fill"></i></span>
             <span>Charts</span>
         </a>
-
         <a href="/expired-chart" class="app-nav-button {{ 'is-active' if active_path == '/expired-chart' else '' }}">
             <span class="nav-icon-badge expired-theme"><i class="bi bi-hourglass-split"></i></span>
             <span>Expired</span>
         </a>
-
         <a href="/layout_1" class="app-nav-button {{ 'is-active' if active_path == '/layout_1' else '' }}">
             <span class="nav-icon-badge layout-theme"><i class="bi bi-grid-3x3-gap-fill"></i></span>
             <span>Layout</span>
         </a>
-
         <a href="/api-explorer" class="app-nav-button {{ 'is-active' if active_path == '/api-explorer' else '' }}">
             <span class="nav-icon-badge api-theme"><i class="bi bi-code-square"></i></span>
             <span>API Explorer</span>
         </a>
-
         <a href="/logs" target="_blank" rel="noopener noreferrer" class="app-nav-button">
             <span class="nav-icon-badge logs-theme"><i class="bi bi-file-earmark-text-fill"></i></span>
             <span>Logs</span>
             <i class="bi bi-box-arrow-up-right ext-arrow"></i>
         </a>
+        <a
+            href="/login"
+            id="mobileAuthLink"
+            class="app-nav-button"
+            style="display:none"
+            title="Sign in"
+            aria-label="Sign in"
+        >
+            <span class="nav-icon-badge auth-theme" id="mobileAuthIconBadge"><i class="bi bi-shield-lock"></i></span>
+            <span id="mobileAuthLabel">Login</span>
+        </a>
     </div>
 </div>
 
-<!-- HORIZONTAL PILL MENU (mobile only, appears above the FAB) -->
-<!--                                                          -->
-<!-- Visible only on mobile (≤991px). Hidden by default via CSS; -->
-<!-- the JS below toggles `.is-open` on it. Items are laid out  -->
-<!-- in a right-aligned horizontal row; if they don't all fit   -->
-<!-- the screen they wrap UPWARD (flex-wrap: wrap-reverse) so   -->
-<!-- the menu grows from above the FAB toward the top-right.    -->
-<!--                                                            -->
-<!-- Each item is a pill (icon badge + text label) so the user  -->
-<!-- can read what the destination is, not just guess an icon.  -->
+<!-- HORIZONTAL PILL MENU (mobile only) -->
 <nav
     class="mobile-fab-menu"
     id="mobileFabMenu"
@@ -591,41 +546,43 @@
         <span class="nav-icon-badge home-theme"><i class="bi bi-house-door-fill"></i></span>
         <span class="mobile-fab-menu-label">Home</span>
     </a>
-
     <a href="/isolated" target="_blank" rel="noopener noreferrer" class="mobile-fab-menu-item" title="Isolated" aria-label="Isolated">
         <span class="nav-icon-badge iso-theme"><i class="bi bi-bullseye"></i></span>
         <span class="mobile-fab-menu-label">Isolated</span>
     </a>
-
     <a href="/charts" class="mobile-fab-menu-item {{ 'is-active' if active_path == '/charts' else '' }}" title="Charts" aria-label="Charts">
         <span class="nav-icon-badge charts-theme"><i class="bi bi-candlestick-fill"></i></span>
         <span class="mobile-fab-menu-label">Charts</span>
     </a>
-
     <a href="/expired-chart" class="mobile-fab-menu-item {{ 'is-active' if active_path == '/expired-chart' else '' }}" title="Expired" aria-label="Expired">
         <span class="nav-icon-badge expired-theme"><i class="bi bi-hourglass-split"></i></span>
         <span class="mobile-fab-menu-label">Expired</span>
     </a>
-
     <a href="/layout_1" class="mobile-fab-menu-item {{ 'is-active' if active_path == '/layout_1' else '' }}" title="Layout" aria-label="Layout">
         <span class="nav-icon-badge layout-theme"><i class="bi bi-grid-3x3-gap-fill"></i></span>
         <span class="mobile-fab-menu-label">Layout</span>
     </a>
-
     <a href="/api-explorer" class="mobile-fab-menu-item {{ 'is-active' if active_path == '/api-explorer' else '' }}" title="API Explorer" aria-label="API Explorer">
         <span class="nav-icon-badge api-theme"><i class="bi bi-code-square"></i></span>
         <span class="mobile-fab-menu-label">API</span>
     </a>
-
     <a href="/logs" target="_blank" rel="noopener noreferrer" class="mobile-fab-menu-item" title="Logs" aria-label="Logs">
         <span class="nav-icon-badge logs-theme"><i class="bi bi-file-earmark-text-fill"></i></span>
         <span class="mobile-fab-menu-label">Logs</span>
     </a>
+    <a
+        href="/login"
+        id="fabAuthLink"
+        class="mobile-fab-menu-item"
+        style="display:none"
+        title="Sign in"
+        aria-label="Sign in"
+    >
+        <span class="nav-icon-badge auth-theme" id="fabAuthIconBadge"><i class="bi bi-shield-lock"></i></span>
+        <span class="mobile-fab-menu-label" id="fabAuthLabel">Login</span>
+    </a>
 </nav>
 
-<!-- FLOATING ACTION BUTTON (bottom-right, mobile only) -->
-<!-- Toggles the pill menu above. Icon rotates from `list` to `x` -->
-<!-- when open as a visual close affordance.                       -->
 <button
     class="mobile-fab-nav"
     id="mobileFabBtn"
@@ -637,7 +594,6 @@
     <i class="bi bi-list"></i>
 </button>
 
-<!-- MAIN PAGE CONTENT INJECTION -->
 <div class="app-main-content-wrapper">
     {% block content %}{% endblock %}
 </div>
@@ -648,10 +604,52 @@
     window.apiHost = window.apiHost || window.location.origin;
 </script>
 
-<!-- Pill menu toggle for the bottom-right FAB. Pure vanilla JS so it -->
-<!-- works even if Bootstrap fails to load. Dismisses on: FAB re-tap,  -->
-<!-- outside tap, ESC, or any nav-item tap. State is mirrored in       -->
-<!-- aria-expanded / aria-hidden for screen readers.                   -->
+<!-- =============================================================
+     GLOBAL 401 FETCH INTERCEPTOR
+     Every fetch()/XHR that returns 401 is treated as "session
+     expired": we bounce the user to /login with ?next= so they
+     land back where they were after signing in again.
+     The interceptor is installed BEFORE any page-specific script
+     runs (this block is placed right after Bootstrap, which every
+     page loads first), so it wins the race for every fetch call.
+     ============================================================= -->
+<script>
+    (function () {
+        if (window.__iso401Installed) return;
+        window.__iso401Installed = true;
+
+        function isAuthBypassPath(path) {
+            if (!path) return false;
+            return path.startsWith("/login") ||
+                   path.startsWith("/logout") ||
+                   path.startsWith("/auth/whoami");
+        }
+
+        function redirectToLogin() {
+            var here = window.location.pathname + window.location.search;
+            if (isAuthBypassPath(window.location.pathname)) return;
+            window.location.replace(
+                "/login?next=" + encodeURIComponent(here)
+            );
+        }
+
+        var _originalFetch = window.fetch;
+        if (typeof _originalFetch === "function") {
+            window.fetch = function (input, init) {
+                return _originalFetch.apply(this, arguments).then(function (response) {
+                    if (response && response.status === 401) {
+                        // Small grace period so the caller's own .catch()
+                        // can still run and log/notify if it wants to.
+                        setTimeout(redirectToLogin, 50);
+                    }
+                    return response;
+                });
+            };
+        }
+    })();
+</script>
+
+<!-- Pill menu toggle -->
 <script>
     (function () {
         var fabBtn = document.getElementById('mobileFabBtn');
@@ -676,23 +674,17 @@
             }
         }
 
-        // Toggle on FAB tap. stopPropagation prevents the document-level
-        // outside-tap handler below from immediately re-closing it.
         fabBtn.addEventListener('click', function (e) {
             e.stopPropagation();
             setOpen(!isOpen);
         });
 
-        // Close when any nav item is activated — the target="_blank"
-        // items (Isolated, Logs) leave the current page in place, so
-        // without this the menu would stay open behind them.
         fabMenu.addEventListener('click', function (e) {
             if (e.target.closest('a')) {
                 setOpen(false);
             }
         });
 
-        // Close on outside tap.
         document.addEventListener('click', function (e) {
             if (!isOpen) return;
             if (fabBtn.contains(e.target)) return;
@@ -700,11 +692,111 @@
             setOpen(false);
         });
 
-        // Close on ESC.
         document.addEventListener('keydown', function (e) {
             if (isOpen && (e.key === 'Escape' || e.key === 'Esc')) {
                 setOpen(false);
             }
+        });
+    })();
+</script>
+
+<!-- =============================================================
+     AUTH LINK TOGGLE
+     Resolves the session state once per page load AND re-checks
+     whenever the tab becomes visible again (so a user whose cookie
+     expired in the background sees the correct Login/Logout state
+     without needing a hard refresh).
+     ============================================================= -->
+<script>
+    (function () {
+        var desktopLink  = document.getElementById('navAuthLink');
+        var desktopLabel = document.getElementById('navAuthLabel');
+        var desktopIcon  = document.getElementById('navAuthIconBadge');
+        var drawerLink   = document.getElementById('mobileAuthLink');
+        var drawerLabel  = document.getElementById('mobileAuthLabel');
+        var drawerIcon   = document.getElementById('mobileAuthIconBadge');
+        var fabLink      = document.getElementById('fabAuthLink');
+        var fabLabel     = document.getElementById('fabAuthLabel');
+        var fabIcon      = document.getElementById('fabAuthIconBadge');
+
+        function applyAuthState(authed) {
+            var href, label, title, iconClass, badgeClass, isLogout;
+
+            if (authed) {
+                href = '/logout';
+                label = 'Logout';
+                title = 'Sign out';
+                iconClass = 'bi bi-box-arrow-right';
+                badgeClass = 'nav-icon-badge logout-theme';
+                isLogout = true;
+            } else {
+                href = '/login?next=' + encodeURIComponent(
+                    window.location.pathname + window.location.search
+                );
+                label = 'Login';
+                title = 'Sign in';
+                iconClass = 'bi bi-shield-lock';
+                badgeClass = 'nav-icon-badge auth-theme';
+                isLogout = false;
+            }
+
+            var links = [
+                { el: desktopLink, lbl: desktopLabel, icon: desktopIcon },
+                { el: drawerLink,  lbl: drawerLabel,  icon: drawerIcon  },
+                { el: fabLink,     lbl: fabLabel,     icon: fabIcon     }
+            ];
+
+            links.forEach(function (pair) {
+                var el = pair.el;
+                if (!el) return;
+                el.href = href;
+                el.title = title;
+                el.setAttribute('aria-label', title);
+                el.style.display = '';
+                el.classList.toggle('is-logout', isLogout);
+
+                // Badge on the left of the button
+                var badge = pair.icon;
+                if (badge) {
+                    badge.className = badgeClass;
+                    var i = badge.querySelector('i');
+                    if (i) i.className = iconClass;
+                }
+
+                // Some pages use a second badge wrapper (mobile pill).
+                // Keep the label text in sync too.
+                if (pair.lbl) pair.lbl.textContent = label;
+            });
+        }
+
+        function refreshAuthState() {
+            try {
+                fetch('/auth/whoami', {
+                    method: 'GET',
+                    credentials: 'same-origin',
+                    cache: 'no-store',
+                    headers: { 'Accept': 'application/json' }
+                })
+                    .then(function (r) { applyAuthState(r.ok); })
+                    .catch(function () { applyAuthState(false); });
+            } catch (_) {
+                applyAuthState(false);
+            }
+        }
+
+        // Initial resolution
+        refreshAuthState();
+
+        // Re-check whenever the tab regains focus (covers cookie expiry
+        // while the user was on another tab, plus post-login navigation
+        // back to a page that was already open).
+        document.addEventListener('visibilitychange', function () {
+            if (!document.hidden) refreshAuthState();
+        });
+
+        // Also re-check on BFCache restore (browser Back button)
+        window.addEventListener('pageshow', function (event) {
+            if (event.persisted) refreshAuthState();
         });
     })();
 </script>

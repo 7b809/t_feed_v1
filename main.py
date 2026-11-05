@@ -80,6 +80,102 @@ all read defensively via ``getattr``):
     * ``DUMMY_ORDER_WAIT_FOR_SR_BACKFILL_TIMEOUT_SECONDS``  (default 120)
     * ``SANDBOX_EXECUTION_ENABLED``                          (default false)
     * ``SANDBOX_EXECUTION_MODE``                             (default "observe")
+    * ``ADMIN_API_KEY``                                      (default "")
+    * ``ADMIN_BASIC_USER``                                   (default "admin")
+    * ``ADMIN_BASIC_PASSWORD``                               (default "")
+    * ``ADMIN_SESSION_SECRET``                               (default "")
+    * ``ADMIN_SESSION_TTL_SECONDS``                          (default 8h)
+    * ``ADMIN_COOKIE_NAME``                                  (default "novag_admin")
+    * ``ADMIN_COOKIE_SECURE``                                (default true)
+    * ``CORS_ALLOW_ORIGINS``                                 (default "*")
+
+Authentication (2026-11-05)
+---------------------------
+The scanner traffic observed on 2026-11-05 (400+ probes for .env /
+.git / wp-config / terraform.tfstate / etc. from 45.138.12.172 and
+others) proved that this box is directly reachable from the public
+internet. ``/openapi.json`` and ``/docs`` were returning 200, i.e. the
+whole API surface was public.
+
+This module now:
+
+  * disables ``docs_url`` / ``redoc_url`` / ``openapi_url`` entirely
+    unless at least one credential is configured (see
+    ``_DOCS_ENABLED`` below), so the default deployment is closed;
+  * when docs are enabled (because ``ADMIN_API_KEY`` or
+    ``ADMIN_BASIC_PASSWORD`` is set), gates them behind the
+    ``_gate_docs`` HTTP middleware, which requires the same auth as
+    the admin routers;
+  * requires auth (Bearer / X-API-Key / Basic / session-cookie) on
+    every sensitive router: admin, folders, logs, isolated-instrument,
+    simulation, dummy-orders, sandbox, margin, daily-backup,
+    readiness, api-explorer;
+  * replaces the ``allow_origins=["*"] + allow_credentials=True``
+    combination (rejected by browsers, CORS spec violation) with a
+    real allow-list from ``CORS_ALLOW_ORIGINS``.
+
+Global auth guard (2026-11-05)
+------------------------------
+``AuthGuardMiddleware`` (``core/auth_guard.py``) is installed on the
+app as the outermost auth layer. For every request it:
+
+  * lets the auth-bypass paths through (``/login``, ``/logout``,
+    ``/auth/whoami``);
+  * lets the docs paths through (they are on the guard's public
+    whitelist, and the ``_gate_docs`` middleware below performs the
+    actual auth check on them);
+  * lets static asset paths through (``/static/``, ``/assets/``,
+    ``/_health``);
+  * validates the request using ``core.auth.is_authenticated()``,
+    which accepts Bearer / X-API-Key / Basic / session-cookie;
+  * on failure, distinguishes browser navigations (``Accept:
+    text/html``) — which are redirected to ``/login?next=<path>`` —
+    from API / XHR / curl callers, which get a plain JSON 401 with
+    no ``WWW-Authenticate`` challenge (the login page is the intended
+    recovery path).
+
+The previous pair of hand-rolled middlewares
+(``_redirect_html_to_login`` and a docs-only ``_gate_docs`` that
+returned a Basic challenge) has been replaced by this single guard.
+``_gate_docs`` is retained only because docs paths appear on the
+guard's public whitelist and therefore still need a focused auth
+check with the same redirect/401 behaviour as the guard itself.
+
+Browser login flow (2026-11-05)
+-------------------------------
+The header schemes above are designed for machines (curl / CI /
+internal tools). A browser, however, cannot attach ``X-API-Key`` or
+``Authorization`` headers to a plain ``<a href>`` navigation, so
+every click on ``/logs``, ``/admin/...``, ``/isolated`` etc. was
+returning a raw JSON 401. To fix this, two pieces were added:
+
+  * ``routes/auth_routes.py`` (public, NOT behind ``_AUTH``) serves
+    ``GET /login`` / ``POST /login`` / ``GET /logout`` /
+    ``GET /auth/whoami``. A successful login sets an HMAC-signed
+    cookie (name ``ADMIN_COOKIE_NAME``, HttpOnly, Secure, SameSite=Lax,
+    TTL ``ADMIN_SESSION_TTL_SECONDS``).
+  * ``core/auth.py`` accepts that cookie anywhere the header schemes
+    are accepted — ``require_any_auth``, ``docs_request_is_authenticated``,
+    and ``is_authenticated`` (used by ``AuthGuardMiddleware``).
+
+The frontend (``templates/base.html``) additionally:
+
+  * installs a global ``fetch()`` interceptor that redirects to
+    ``/login?next=<path>`` on any 401, so an expired cookie mid-page
+    is caught immediately;
+  * renders a red-tinted "Logout" button in the nav / mobile drawer /
+    FAB pill when ``/auth/whoami`` returns 200, and re-checks on
+    ``visibilitychange`` / ``pageshow`` so a session expiring in the
+    background flips the button state without a hard refresh;
+  * calls ``GET /logout`` (browser navigation path, so the backend
+    returns a 303 to ``/login`` and clears the cookie).
+
+Note on ``WWW-Authenticate``: RFC 7235 §4.1 does not permit combining
+two challenge schemes in one header value. The previous
+``'Basic realm="admin", Bearer'`` was malformed and browsers silently
+ignored it, which is why no Basic prompt ever appeared. The header is
+no longer emitted by the new redirect-based flow — the browser is sent
+to ``/login`` instead, so no challenge prompt is needed.
 
 Admin surfaces mounted by this module:
 
@@ -97,13 +193,17 @@ import time
 from contextlib import asynccontextmanager
 from typing import Any
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, RedirectResponse
 
 from core import config
+from core.auth import docs_request_is_authenticated, require_any_auth
+from core.auth_guard import AuthGuardMiddleware
 from core.logger import get_logger
 from routes.admin_routes import _run_full_refresh_sync
 from routes.admin_routes import router as admin_router
+from routes.auth_routes import router as auth_router
 from routes.daily_backup_routes import router as daily_backup_router
 from routes.dummy_order_routes import router as dummy_order_router
 from routes.ema_calc_routes import router as ema_calc_router
@@ -122,6 +222,7 @@ from routes.upstox_routes import router as upstox_router
 from routes.live_sr_routes import router as live_sr_router
 from routes.live_sr_calc_routes import router as live_sr_calc_router
 from routes.api_explorer_route import router as api_explorer_router
+from routes.sandbox_routes import router as sandbox_router
 
 from upstox_app.apis.expired_instruments_api import (
     router as expired_instruments_router,
@@ -150,6 +251,28 @@ _THIN = "───────────────────────�
 # Kept small (2 s) so the typical case — backfill already complete by
 # the time ``_run_full_refresh_sync`` returns — costs a single check.
 _DUMMY_ORDER_SR_BACKFILL_POLL_SECONDS = 2.0
+
+
+# --------------------------------------------------------------------------- #
+# Auth / docs gating                                                          #
+# --------------------------------------------------------------------------- #
+# Docs are only enabled when at least one credential is configured.
+# On an unconfigured box (no ADMIN_API_KEY, no ADMIN_BASIC_PASSWORD)
+# FastAPI is built with docs_url=None, redoc_url=None, openapi_url=None
+# so /docs, /redoc and /openapi.json all return 404 — the scanner
+# cannot map the API surface.
+_HAVE_HEADER_AUTH = bool((getattr(config, "ADMIN_API_KEY", "") or "").strip())
+_HAVE_BASIC_AUTH = bool(
+    (getattr(config, "ADMIN_BASIC_USER", "") or "").strip()
+    and (getattr(config, "ADMIN_BASIC_PASSWORD", "") or "")
+)
+_DOCS_ENABLED = _HAVE_HEADER_AUTH or _HAVE_BASIC_AUTH
+
+# The three FastAPI-served docs surfaces. All other auth is enforced
+# by ``AuthGuardMiddleware``; these three are on that guard's public
+# whitelist (so the guard passes them through) and are separately
+# gated by ``_gate_docs`` below.
+_DOCS_PATHS = ("/docs", "/redoc", "/openapi.json")
 
 
 # --------------------------------------------------------------------------- #
@@ -604,7 +727,7 @@ async def app_lifespan(app: FastAPI):
             "Application startup complete. feed_instruments=%d "
             "telegram_polling=%s holiday=%s level_isolation_status=%s "
             "isolated=%s dummy_orders=%s sr_ready=%s sr_wait_s=%.1f "
-            "sandbox_registered=%s sandbox_mode=%s",
+            "sandbox_registered=%s sandbox_mode=%s docs_enabled=%s",
             registry_count,
             telegram_running,
             holiday_gate.get("is_holiday"),
@@ -615,6 +738,7 @@ async def app_lifespan(app: FastAPI):
             sr_ready_info["elapsed_seconds"],
             sandbox_summary.get("registered"),
             sandbox_summary.get("mode"),
+            _DOCS_ENABLED,
         )
 
         # ---- Startup Telegram ------------------------------------------ #
@@ -709,6 +833,17 @@ async def app_lifespan(app: FastAPI):
                 f"({sandbox_summary.get('error') or 'unavailable'})\n"
             )
 
+        # Auth line — one-glance confirmation of the security posture.
+        auth_line = (
+            f"🔐 Auth:          "
+            f"{'header' if _HAVE_HEADER_AUTH else ''}"
+            f"{'/' if _HAVE_HEADER_AUTH and _HAVE_BASIC_AUTH else ''}"
+            f"{'basic' if _HAVE_BASIC_AUTH else ''}"
+            f"{' · docs=on' if _DOCS_ENABLED else ' · docs=off'}\n"
+            if (_HAVE_HEADER_AUTH or _HAVE_BASIC_AUTH)
+            else "🔐 Auth:          ⚠️ DISABLED — all admin routes are public\n"
+        )
+
         startup_message = (
             f"{_DIV}\n"
             f"🚀 APPLICATION STARTED\n"
@@ -719,6 +854,7 @@ async def app_lifespan(app: FastAPI):
             f"{sr_line}"
             f"{dummy_line}"
             f"{sandbox_line}"
+            f"{auth_line}"
             f"📡 Live feed:       "
             f"{'✓' if result.get('feed_restarted') else '✗'}\n"
             f"⏰ Scheduler:       "
@@ -777,34 +913,152 @@ async def app_lifespan(app: FastAPI):
 # --------------------------------------------------------------------------- #
 # App                                                                          #
 # --------------------------------------------------------------------------- #
-app = FastAPI(title="Market Data Foundation", lifespan=app_lifespan)
+# Build FastAPI with docs CLOSED by default. When at least one credential
+# is configured (ADMIN_API_KEY or ADMIN_BASIC_PASSWORD), docs are
+# re-enabled — and then protected by ``_gate_docs`` below.
+app = FastAPI(
+    title="Market Data Foundation",
+    lifespan=app_lifespan,
+    docs_url="/docs" if _DOCS_ENABLED else None,
+    redoc_url="/redoc" if _DOCS_ENABLED else None,
+    openapi_url="/openapi.json" if _DOCS_ENABLED else None,
+)
 
+
+# ---- CORS ------------------------------------------------------------------ #
+# ``allow_origins=["*"] + allow_credentials=True`` is rejected by
+# browsers (CORS spec) and was the previous configuration. Use the
+# allow-list from CORS_ALLOW_ORIGINS instead. When the list is exactly
+# ``["*"]`` we set allow_credentials=False so the browser does not
+# silently drop the CORS headers.
+_cors_origins = list(getattr(config, "CORS_ALLOW_ORIGINS", ["*"]) or ["*"])
+_cors_wildcard = _cors_origins == ["*"]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=_cors_origins,
+    allow_credentials=not _cors_wildcard,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+
+# ---- /docs, /redoc, /openapi.json auth gate -------------------------------- #
+# ``AuthGuardMiddleware`` (below) covers every path that is not on its
+# public whitelist — but the docs paths ARE on that whitelist (so the
+# guard passes them through untouched). This middleware performs the
+# actual auth check on those three paths and mirrors the guard's
+# redirect-or-401 behaviour:
+
+#   * browser (Accept: text/html) → 303 to /login?next=<path>
+#   * API / curl / XHR             → 401 JSON with no Basic challenge
+#                                    (the login page is the recovery path)
+#
+# No-op when docs are disabled (the FastAPI app was created with
+# docs_url=None so /docs never resolves anyway).
+@app.middleware("http")
+async def _gate_docs(request: Request, call_next):
+    if not _DOCS_ENABLED:
+        return await call_next(request)
+
+    path = request.url.path
+    is_docs_path = any(
+        path == p or path.startswith(p + "/") for p in _DOCS_PATHS
+    )
+    if not is_docs_path:
+        return await call_next(request)
+
+    if docs_request_is_authenticated(request):
+        return await call_next(request)
+
+    logger.warning(
+        "[auth] rejected docs request path=%s client=%s",
+        path,
+        request.client.host if request.client else "?",
+    )
+
+    accept = (request.headers.get("accept") or "").lower()
+    if "text/html" in accept:
+        return RedirectResponse(
+            f"/login?next={path}",
+            status_code=303,
+        )
+
+    return JSONResponse(
+        {"detail": "Authentication required", "login_url": "/login"},
+        status_code=401,
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+# ---- Global auth guard ----------------------------------------------------- #
+# ``AuthGuardMiddleware`` is the outer auth layer. It is added LAST so it
+# runs FIRST (Starlette middleware stack is LIFO), intercepting every
+# unauth request before it reaches CORS, ``_gate_docs``, or the router.
+#
+# Behaviour (see ``core/auth_guard.py``):
+#   * auth-bypass paths       → pass through (/login, /logout, /auth/whoami)
+#   * docs paths              → pass through (handled by ``_gate_docs`` above)
+#   * static asset paths      → pass through
+#   * authenticated requests  → pass through
+#   * unauth HTML navigation  → 303 redirect to /login?next=<path>
+#   * unauth API / curl / XHR → 401 JSON {detail, login_url}
+#
+# This replaces the previous hand-rolled pair
+# (``_redirect_html_to_login`` + a docs-only ``_gate_docs`` that returned
+# a Basic challenge). One guard, one consistent behaviour, no
+# hand-maintained route prefix list.
+app.add_middleware(AuthGuardMiddleware)
+
+
+# --------------------------------------------------------------------------- #
+# Routers                                                                      #
+# --------------------------------------------------------------------------- #
+# ---- Public surfaces (no auth) -------------------------------------------- #
+# The auth router MUST be public — /login is how a browser obtains the
+# session cookie that the gated routers below will accept. Everything
+# else in this block is the front-end surface: UI pages, live REST,
+# live-SR, EMA-calc, upstox proxy, expired instrument/chart, market
+# holiday, layout. If you decide any of these must be private, add
+# ``dependencies=[Depends(require_any_auth)]`` to the include below.
+#
+# NOTE: AuthGuardMiddleware (above) is the authoritative gate — this
+# block is simply "these routers don't add their own per-route auth".
+# Any path not on the guard's whitelist will still be redirected /
+# 401'd, even if the router itself is mounted here.
+app.include_router(auth_router)          # /login, /logout, /auth/whoami
 app.include_router(page_router)
 app.include_router(live_router)
 app.include_router(live_sr_router)
 app.include_router(live_sr_calc_router)
 app.include_router(ema_calc_router)
-app.include_router(admin_router)
-app.include_router(folder_router)
 app.include_router(upstox_router)
 app.include_router(expired_instruments_router)
-app.include_router(api_explorer_router)
 app.include_router(expired_chart_router)
-app.include_router(log_router)
 app.include_router(market_holiday_router)
-# app.include_router(order_router) # commented this for testing order routes (2026-11-04)
-app.include_router(margin_router)
-app.include_router(daily_backup_router)
 app.include_router(layout_router)
-app.include_router(readiness_router)
-app.include_router(isolated_instrument_router)
-app.include_router(simulation_router)
-app.include_router(dummy_order_router)
+
+
+# ---- Sensitive surfaces (require auth) ----------------------------------- #
+# Admin, folders, logs, isolated-instrument, simulation, dummy-orders,
+# sandbox, margin, daily-backup, readiness, api-explorer.
+#
+# All of these were reachable by the scanner on 2026-11-05. They are now
+# gated on ``require_any_auth`` (Bearer / X-API-Key / Basic / session-
+# cookie). The cookie path is what lets a browser reach these after a
+# successful /login.
+_AUTH = [Depends(require_any_auth)]
+
+app.include_router(admin_router, dependencies=_AUTH)
+app.include_router(folder_router, dependencies=_AUTH)
+app.include_router(log_router, dependencies=_AUTH)
+app.include_router(isolated_instrument_router, dependencies=_AUTH)
+app.include_router(simulation_router, dependencies=_AUTH)
+app.include_router(dummy_order_router, dependencies=_AUTH)
+app.include_router(sandbox_router, dependencies=_AUTH)
+app.include_router(margin_router, dependencies=_AUTH)
+app.include_router(daily_backup_router, dependencies=_AUTH)
+app.include_router(readiness_router, dependencies=_AUTH)
+app.include_router(api_explorer_router, dependencies=_AUTH)
+
+# The order router was already commented out in the original file:
+# app.include_router(order_router)   # commented 2026-11-04 for testing

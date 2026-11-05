@@ -1,0 +1,837 @@
+{# templates/login.html #}
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+
+    <title>Sign in · T - Dashboard</title>
+
+    <link
+        rel="icon"
+        type="image/svg+xml"
+        href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%232563eb'/%3E%3Cstop offset='1' stop-color='%237c3aed'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='64' height='64' rx='14' fill='url(%23g)'/%3E%3Cpath d='M14 42 L24 30 L34 38 L50 18' fill='none' stroke='%23ffffff' stroke-width='5' stroke-linecap='round' stroke-linejoin='round'/%3E%3Ccircle cx='50' cy='18' r='4' fill='%23ffffff'/%3E%3C/svg%3E"
+    />
+
+    <link
+        href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
+        rel="stylesheet"
+    />
+    <link
+        rel="stylesheet"
+        href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css"
+    />
+
+    <style>
+        :root {
+            --app-bg-dark: #0f172a;
+            --app-nav-bg: #1e293b;
+            --app-border-color: #334155;
+            --app-text-main: #f8fafc;
+            --app-text-muted: #94a3b8;
+            --app-accent-blue: #2563eb;
+            --app-accent-violet: #7c3aed;
+            --app-accent-teal: #2dd4bf;
+            --app-success: #4ade80;
+        }
+
+        *, *::before, *::after {
+            box-sizing: border-box;
+        }
+
+        html, body {
+            min-height: 100vh;
+            min-height: 100dvh;
+            margin: 0;
+            padding: 0;
+            background-color: var(--app-bg-dark);
+            color: var(--app-text-main);
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+        }
+
+        /* ============================================================
+           Shell: two-column split (brand/feature panel | form card)
+           ============================================================ */
+        .login-shell {
+            min-height: 100vh;
+            min-height: 100dvh;
+            display: grid;
+            grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
+            background:
+                radial-gradient(circle at 12% 18%, rgba(37, 99, 235, 0.20), transparent 48%),
+                radial-gradient(circle at 88% 82%, rgba(124, 58, 237, 0.20), transparent 48%),
+                var(--app-bg-dark);
+        }
+
+        /* ============================================================
+           Left panel — brand, headline, feature bullets, footer meta
+           ============================================================ */
+        .login-brand-panel {
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            padding: 56px 64px 40px;
+            overflow: hidden;
+        }
+
+        /* Subtle grid overlay so the left panel is not flat. */
+        .login-brand-panel::before {
+            content: "";
+            position: absolute;
+            inset: 0;
+            background-image:
+                linear-gradient(rgba(148, 163, 184, 0.045) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(148, 163, 184, 0.045) 1px, transparent 1px);
+            background-size: 44px 44px;
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        .login-brand-panel > * {
+            position: relative;
+            z-index: 1;
+        }
+
+        .login-brand-hero {
+            display: flex;
+            flex-direction: column;
+            gap: 22px;
+            max-width: 520px;
+        }
+
+        .login-brand {
+            display: inline-flex;
+            align-items: center;
+            gap: 14px;
+            text-decoration: none;
+            user-select: none;
+            width: fit-content;
+        }
+
+        .login-brand-icon {
+            width: 52px;
+            height: 52px;
+            min-width: 52px;
+            border-radius: 14px;
+            background: linear-gradient(135deg, var(--app-accent-blue), var(--app-accent-violet));
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #ffffff;
+            font-size: 1.6rem;
+            box-shadow:
+                0 0 0 1px rgba(255, 255, 255, 0.08),
+                0 8px 26px rgba(37, 99, 235, 0.45);
+        }
+
+        .login-brand-text {
+            display: flex;
+            flex-direction: column;
+            line-height: 1.15;
+        }
+
+        .login-brand-title {
+            color: var(--app-text-main);
+            font-size: 1.2rem;
+            font-weight: 700;
+            letter-spacing: -0.25px;
+        }
+
+        .login-brand-subtitle {
+            color: var(--app-text-muted);
+            font-size: 0.72rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.10em;
+            margin-top: 3px;
+        }
+
+        .login-hero-headline {
+            font-size: clamp(1.85rem, 2.4vw, 2.5rem);
+            font-weight: 800;
+            line-height: 1.15;
+            letter-spacing: -0.035em;
+            margin: 0;
+            color: #ffffff;
+        }
+
+        .login-hero-headline .accent {
+            background: linear-gradient(120deg, var(--app-accent-teal), #93c5fd 55%, #c4b5fd);
+            -webkit-background-clip: text;
+            background-clip: text;
+            color: transparent;
+        }
+
+        .login-hero-sub {
+            font-size: 0.98rem;
+            line-height: 1.6;
+            color: var(--app-text-muted);
+            margin: 0;
+            max-width: 480px;
+        }
+
+        /* Feature list */
+        .login-features {
+            list-style: none;
+            padding: 0;
+            margin: 6px 0 0;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            max-width: 480px;
+        }
+
+        .login-feature {
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+            padding: 12px 14px;
+            border-radius: 12px;
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(148, 163, 184, 0.14);
+            transition: border-color 0.18s ease, background 0.18s ease;
+        }
+
+        .login-feature:hover {
+            border-color: rgba(37, 99, 235, 0.42);
+            background: rgba(37, 99, 235, 0.06);
+        }
+
+        .login-feature-icon {
+            flex: 0 0 auto;
+            width: 34px;
+            height: 34px;
+            border-radius: 9px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.95rem;
+            color: #93c5fd;
+            background: rgba(37, 99, 235, 0.18);
+            border: 1px solid rgba(37, 99, 235, 0.32);
+        }
+
+        .login-feature:nth-child(2) .login-feature-icon {
+            color: #6ee7c2;
+            background: rgba(8, 153, 129, 0.16);
+            border-color: rgba(8, 153, 129, 0.32);
+        }
+
+        .login-feature:nth-child(3) .login-feature-icon {
+            color: #c4b5fd;
+            background: rgba(124, 58, 237, 0.16);
+            border-color: rgba(124, 58, 237, 0.32);
+        }
+
+        .login-feature-body {
+            min-width: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+
+        .login-feature-title {
+            font-size: 0.86rem;
+            font-weight: 700;
+            color: #ffffff;
+            letter-spacing: -0.01em;
+        }
+
+        .login-feature-desc {
+            font-size: 0.78rem;
+            color: var(--app-text-muted);
+            line-height: 1.45;
+        }
+
+        .login-brand-panel-footer {
+            display: flex;
+            align-items: center;
+            gap: 18px;
+            flex-wrap: wrap;
+            font-size: 0.72rem;
+            color: var(--app-text-muted);
+            letter-spacing: 0.03em;
+        }
+
+        .login-brand-panel-footer .footer-dot {
+            width: 4px;
+            height: 4px;
+            border-radius: 50%;
+            background: rgba(148, 163, 184, 0.4);
+        }
+
+        .login-brand-panel-footer .live-dot {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            color: var(--app-success);
+            font-weight: 700;
+        }
+
+        .login-brand-panel-footer .live-dot::before {
+            content: "";
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: var(--app-success);
+            box-shadow: 0 0 8px rgba(74, 222, 128, 0.8);
+            animation: loginPulse 2.2s ease-in-out infinite;
+        }
+
+        @keyframes loginPulse {
+            0%, 100% { opacity: 1; }
+            50%      { opacity: 0.45; }
+        }
+
+        /* ============================================================
+           Right panel — the actual login card
+           ============================================================ */
+        .login-form-panel {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 48px 40px;
+            position: relative;
+        }
+
+        /* Faint vertical divider between the two halves. */
+        .login-form-panel::before {
+            content: "";
+            position: absolute;
+            left: 0;
+            top: 12%;
+            bottom: 12%;
+            width: 1px;
+            background: linear-gradient(
+                to bottom,
+                transparent,
+                rgba(148, 163, 184, 0.22) 20%,
+                rgba(148, 163, 184, 0.22) 80%,
+                transparent
+            );
+        }
+
+        .login-card {
+            width: 100%;
+            max-width: 400px;
+            background: rgba(30, 41, 59, 0.82);
+            backdrop-filter: blur(14px);
+            -webkit-backdrop-filter: blur(14px);
+            border: 1px solid var(--app-border-color);
+            border-radius: 18px;
+            padding: 34px 30px 28px;
+            box-shadow:
+                0 24px 60px rgba(0, 0, 0, 0.55),
+                0 4px 14px rgba(0, 0, 0, 0.35),
+                inset 0 1px 0 rgba(255, 255, 255, 0.04);
+        }
+
+        /* Compact brand shown only on the form card (mobile / narrow). */
+        .login-card-brand {
+            display: none;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 22px;
+            text-decoration: none;
+        }
+
+        .login-card-brand .login-brand-icon {
+            width: 40px;
+            height: 40px;
+            min-width: 40px;
+            border-radius: 11px;
+            font-size: 1.25rem;
+        }
+
+        .login-card-brand .login-brand-title {
+            font-size: 1rem;
+        }
+
+        .login-card-brand .login-brand-subtitle {
+            font-size: 0.65rem;
+        }
+
+        .login-heading {
+            font-size: 1.35rem;
+            font-weight: 800;
+            color: #ffffff;
+            margin: 0 0 6px;
+            letter-spacing: -0.025em;
+        }
+
+        .login-subheading {
+            font-size: 0.86rem;
+            color: var(--app-text-muted);
+            margin: 0 0 24px;
+            line-height: 1.5;
+        }
+
+        .login-error {
+            display: flex;
+            align-items: flex-start;
+            gap: 8px;
+            background: rgba(239, 68, 68, 0.12);
+            border: 1px solid rgba(239, 68, 68, 0.4);
+            color: #fca5a5;
+            border-radius: 10px;
+            padding: 10px 12px;
+            font-size: 0.85rem;
+            margin-bottom: 18px;
+            line-height: 1.4;
+        }
+
+        .login-error i {
+            font-size: 1rem;
+            flex-shrink: 0;
+            margin-top: 1px;
+        }
+
+        .login-field {
+            margin-bottom: 16px;
+        }
+
+        .login-label {
+            display: block;
+            font-size: 0.72rem;
+            font-weight: 700;
+            color: var(--app-text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            margin-bottom: 7px;
+        }
+
+        .login-input-wrap {
+            position: relative;
+            display: flex;
+            align-items: center;
+        }
+
+        .login-input-icon {
+            position: absolute;
+            left: 13px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: rgba(148, 163, 184, 0.7);
+            font-size: 0.95rem;
+            pointer-events: none;
+            transition: color 0.15s ease;
+        }
+
+        .login-input {
+            width: 100%;
+            height: 46px;
+            padding: 0 14px 0 40px;
+            background: rgba(15, 23, 42, 0.6);
+            border: 1px solid var(--app-border-color);
+            border-radius: 10px;
+            color: var(--app-text-main);
+            font-size: 0.95rem;
+            font-family: inherit;
+            transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+            outline: none;
+        }
+
+        .login-input::placeholder {
+            color: rgba(148, 163, 184, 0.45);
+        }
+
+        .login-input:hover:not(:focus) {
+            border-color: rgba(148, 163, 184, 0.4);
+        }
+
+        .login-input:focus {
+            border-color: rgba(37, 99, 235, 0.8);
+            background: rgba(15, 23, 42, 0.85);
+            box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.22);
+        }
+
+        .login-input:focus + .login-input-icon,
+        .login-input-wrap:focus-within .login-input-icon {
+            color: #93c5fd;
+        }
+
+        /* Password visibility toggle */
+        .login-password-toggle {
+            position: absolute;
+            right: 8px;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 32px;
+            height: 32px;
+            border: none;
+            background: transparent;
+            color: rgba(148, 163, 184, 0.7);
+            border-radius: 7px;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.95rem;
+            transition: color 0.15s ease, background 0.15s ease;
+        }
+
+        .login-password-toggle:hover {
+            color: #ffffff;
+            background: rgba(255, 255, 255, 0.06);
+        }
+
+        .login-password-toggle:focus-visible {
+            outline: none;
+            box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.55);
+        }
+
+        .login-submit {
+            width: 100%;
+            height: 46px;
+            margin-top: 8px;
+            border: none;
+            border-radius: 10px;
+            background: linear-gradient(135deg, var(--app-accent-blue), var(--app-accent-violet));
+            color: #ffffff;
+            font-size: 0.96rem;
+            font-weight: 700;
+            font-family: inherit;
+            letter-spacing: 0.02em;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            transition: transform 0.12s ease, box-shadow 0.15s ease, filter 0.15s ease;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        .login-submit:hover {
+            filter: brightness(1.08);
+            box-shadow: 0 8px 24px rgba(37, 99, 235, 0.5);
+            transform: translateY(-1px);
+        }
+
+        .login-submit:active {
+            transform: translateY(0);
+            filter: brightness(0.95);
+        }
+
+        .login-submit:focus-visible {
+            outline: none;
+            box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.45);
+        }
+
+        .login-meta-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            margin-top: 18px;
+            font-size: 0.78rem;
+            color: var(--app-text-muted);
+        }
+
+        .login-meta-row .secure-note {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            color: rgba(148, 163, 184, 0.85);
+        }
+
+        .login-meta-row .secure-note i {
+            color: var(--app-success);
+        }
+
+        .login-meta-row a {
+            color: var(--app-text-muted);
+            text-decoration: none;
+            border-bottom: 1px dotted rgba(148, 163, 184, 0.4);
+            transition: color 0.15s ease, border-color 0.15s ease;
+        }
+
+        .login-meta-row a:hover {
+            color: var(--app-text-main);
+            border-bottom-color: var(--app-text-main);
+        }
+
+        .login-footer {
+            margin-top: 24px;
+            padding-top: 18px;
+            border-top: 1px solid rgba(51, 65, 85, 0.6);
+            text-align: center;
+            font-size: 0.72rem;
+            color: rgba(148, 163, 184, 0.75);
+            line-height: 1.6;
+        }
+
+        .login-footer code {
+            background: rgba(255, 255, 255, 0.06);
+            color: #cbd5e1;
+            padding: 1px 6px;
+            border-radius: 4px;
+            font-size: 0.68rem;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        }
+
+        /* ============================================================
+           Responsive — stack on tablet/phone, hide the marketing panel
+           ============================================================ */
+        @media (max-width: 1024px) {
+            .login-shell {
+                grid-template-columns: minmax(0, 1fr);
+            }
+
+            .login-brand-panel {
+                display: none;
+            }
+
+            .login-form-panel::before {
+                display: none;
+            }
+
+            .login-card-brand {
+                display: inline-flex;
+            }
+
+            .login-form-panel {
+                padding: 32px 20px;
+            }
+        }
+
+        @media (max-width: 420px) {
+            .login-card {
+                padding: 26px 20px 22px;
+                border-radius: 14px;
+            }
+
+            .login-heading {
+                font-size: 1.2rem;
+            }
+
+            .login-meta-row {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 8px;
+            }
+        }
+
+        /* prefers-reduced-motion: disable animation and hover transforms. */
+        @media (prefers-reduced-motion: reduce) {
+            .login-submit,
+            .login-submit:hover,
+            .login-submit:active,
+            .login-input,
+            .login-password-toggle,
+            .login-meta-row a,
+            .login-feature {
+                transition: none;
+                transform: none;
+            }
+
+            .login-brand-panel-footer .live-dot::before {
+                animation: none;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="login-shell">
+
+        <!-- ==================================================== -->
+        <!-- LEFT: brand / hero / features (hidden on narrow screens) -->
+        <!-- ==================================================== -->
+        <aside class="login-brand-panel" aria-hidden="true">
+            <div class="login-brand-hero">
+
+                <a href="/" class="login-brand" aria-label="T - Dashboard home" tabindex="-1">
+                    <div class="login-brand-icon">
+                        <i class="bi bi-activity"></i>
+                    </div>
+                    <div class="login-brand-text">
+                        <span class="login-brand-title">T - Dashboard</span>
+                        <span class="login-brand-subtitle">Market Engine</span>
+                    </div>
+                </a>
+
+                <h2 class="login-hero-headline">
+                    Trade with the<br>
+                    <span class="accent">edge of clarity.</span>
+                </h2>
+
+                <p class="login-hero-sub">
+                    A unified market cockpit for NSE and BSE — live options chains,
+                    pivot-based support &amp; resistance, automated isolation,
+                    and a full API surface for your own tooling.
+                </p>
+
+                <ul class="login-features">
+                    <li class="login-feature">
+                        <span class="login-feature-icon"><i class="bi bi-broadcast-pin"></i></span>
+                        <span class="login-feature-body">
+                            <span class="login-feature-title">Live multi-index feeds</span>
+                            <span class="login-feature-desc">
+                                NIFTY, BANKNIFTY, MIDCPNIFTY and SENSEX streamed together
+                                over a single WebSocket.
+                            </span>
+                        </span>
+                    </li>
+                    <li class="login-feature">
+                        <span class="login-feature-icon"><i class="bi bi-bullseye"></i></span>
+                        <span class="login-feature-body">
+                            <span class="login-feature-title">Level isolation &amp; SR pivots</span>
+                            <span class="login-feature-desc">
+                                First-candle opening ranges, pivot confirmations,
+                                and automated strike isolation for every trading day.
+                            </span>
+                        </span>
+                    </li>
+                    <li class="login-feature">
+                        <span class="login-feature-icon"><i class="bi bi-code-square"></i></span>
+                        <span class="login-feature-body">
+                            <span class="login-feature-title">Built-in API explorer</span>
+                            <span class="login-feature-desc">
+                                Every backend route is documented, browsable,
+                                and callable straight from the dashboard.
+                            </span>
+                        </span>
+                    </li>
+                </ul>
+            </div>
+
+            <div class="login-brand-panel-footer">
+                <span class="live-dot">Live connection</span>
+                <span class="footer-dot"></span>
+                <span>IST · Asia/Kolkata</span>
+                <span class="footer-dot"></span>
+                <span>NSE · BSE · MCX</span>
+            </div>
+        </aside>
+
+        <!-- ==================================================== -->
+        <!-- RIGHT: login form                                    -->
+        <!-- ==================================================== -->
+        <main class="login-form-panel">
+            <div class="login-card" role="main" aria-labelledby="loginHeading">
+
+                <!-- Compact brand shown only when the left panel is hidden -->
+                <a href="/" class="login-card-brand" aria-label="T - Dashboard home">
+                    <div class="login-brand-icon">
+                        <i class="bi bi-activity"></i>
+                    </div>
+                    <div class="login-brand-text">
+                        <span class="login-brand-title">T - Dashboard</span>
+                        <span class="login-brand-subtitle">Admin Console</span>
+                    </div>
+                </a>
+
+                <h1 class="login-heading" id="loginHeading">Sign in</h1>
+                <p class="login-subheading">
+                    Enter your admin credentials to access the dashboard,
+                    logs, and admin surfaces.
+                </p>
+
+                {% if error %}
+                <div class="login-error" role="alert">
+                    <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+                    <span>{{ error }}</span>
+                </div>
+                {% endif %}
+
+                <form method="post" action="/login" autocomplete="on" novalidate>
+                    <!-- Preserve ?next=... through POST so the server can
+                         return the operator to the originally-requested
+                         page. `next` is already sanitised to a same-origin
+                         path by _safe_next() in routes/auth_routes.py. -->
+                    <input type="hidden" name="next" value="{{ next or '/' }}">
+
+                    <div class="login-field">
+                        <label class="login-label" for="loginUsername">Username</label>
+                        <div class="login-input-wrap">
+                            <i class="bi bi-person login-input-icon" aria-hidden="true"></i>
+                            <input
+                                id="loginUsername"
+                                class="login-input"
+                                type="text"
+                                name="username"
+                                placeholder="Enter your username"
+                                autocomplete="username"
+                                autocapitalize="off"
+                                autocorrect="off"
+                                spellcheck="false"
+                                required
+                                autofocus
+                            >
+                        </div>
+                    </div>
+
+                    <div class="login-field">
+                        <label class="login-label" for="loginPassword">Password</label>
+                        <div class="login-input-wrap">
+                            <i class="bi bi-shield-lock login-input-icon" aria-hidden="true"></i>
+                            <input
+                                id="loginPassword"
+                                class="login-input"
+                                type="password"
+                                name="password"
+                                placeholder="••••••••"
+                                autocomplete="current-password"
+                                required
+                            >
+                            <button
+                                type="button"
+                                class="login-password-toggle"
+                                id="passwordToggle"
+                                aria-label="Show password"
+                                aria-pressed="false"
+                                tabindex="-1"
+                            >
+                                <i class="bi bi-eye" id="passwordToggleIcon"></i>
+                            </button>
+                        </div>
+                    </div>
+
+                    <button class="login-submit" type="submit">
+                        <i class="bi bi-box-arrow-in-right" aria-hidden="true"></i>
+                        <span>Sign in</span>
+                    </button>
+                </form>
+
+                <div class="login-meta-row">
+                    <span class="secure-note">
+                        <i class="bi bi-lock-fill"></i>
+                        Session cookie · HttpOnly
+                    </span>
+                    <a href="/">← Back to dashboard</a>
+                </div>
+
+                <div class="login-footer">
+                    Credentials are configured server-side via
+                    <code>ADMIN_BASIC_USER</code> /
+                    <code>ADMIN_BASIC_PASSWORD</code>.
+                </div>
+
+            </div>
+        </main>
+    </div>
+
+    <script>
+        // Password visibility toggle — pure JS, no dependencies.
+        (function () {
+            var btn = document.getElementById('passwordToggle');
+            var input = document.getElementById('loginPassword');
+            var icon = document.getElementById('passwordToggleIcon');
+            if (!btn || !input || !icon) return;
+
+            btn.addEventListener('click', function () {
+                var show = input.type === 'password';
+                input.type = show ? 'text' : 'password';
+                icon.className = show ? 'bi bi-eye-slash' : 'bi bi-eye';
+                btn.setAttribute('aria-label', show ? 'Hide password' : 'Show password');
+                btn.setAttribute('aria-pressed', show ? 'true' : 'false');
+                // Keep focus on the password field for a smooth typing flow.
+                input.focus();
+            });
+        })();
+    </script>
+</body>
+</html>

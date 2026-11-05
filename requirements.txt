@@ -1,5 +1,7 @@
+# requirements.txt
 fastapi
 uvicorn
+python-multipart
 upstox-python-sdk
 pymongo
 python-dotenv
