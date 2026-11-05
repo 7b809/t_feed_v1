@@ -61,9 +61,9 @@ from typing import Any, Optional
 from services.order_runtime_service import order_runtime_service
 from services.sr_backfill_service import sr_backfill_service
 from services.telegram_service import telegram_service
-from upstox_services.exit_all_positions import exit_all_positions
-from upstox_services.get_order_details import get_order_details
-from upstox_services.place_order import place_order
+from upstox_app.services.exit_all_positions import exit_all_positions
+from upstox_app.services.get_order_details import get_order_details
+from upstox_app.services.place_order import place_order
 
 logger = logging.getLogger(__name__)
 

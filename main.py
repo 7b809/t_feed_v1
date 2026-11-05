@@ -109,7 +109,7 @@ This module now:
   * requires auth (Bearer / X-API-Key / Basic / session-cookie) on
     every sensitive router: admin, folders, logs, isolated-instrument,
     simulation, dummy-orders, sandbox, margin, daily-backup,
-    readiness, api-explorer;
+    readiness, api-explorer, position API;
   * replaces the ``allow_origins=["*"] + allow_credentials=True``
     combination (rejected by browsers, CORS spec violation) with a
     real allow-list from ``CORS_ALLOW_ORIGINS``.
@@ -150,8 +150,8 @@ every click on ``/logs``, ``/admin/...``, ``/isolated`` etc. was
 returning a raw JSON 401. To fix this, two pieces were added:
 
   * ``routes/auth_routes.py`` (public, NOT behind ``_AUTH``) serves
-    ``GET /login`` / ``POST /login`` / ``GET /logout`` /
-    ``GET /auth/whoami``. A successful login sets an HMAC-signed
+    ``GET /login`` / ``POST /login`` / ``GET /logout`` / ``GET
+    /auth/whoami``. A successful login sets an HMAC-signed
     cookie (name ``ADMIN_COOKIE_NAME``, HttpOnly, Secure, SameSite=Lax,
     TTL ``ADMIN_SESSION_TTL_SECONDS``).
   * ``core/auth.py`` accepts that cookie anywhere the header schemes
@@ -177,6 +177,28 @@ ignored it, which is why no Basic prompt ever appeared. The header is
 no longer emitted by the new redirect-based flow — the browser is sent
 to ``/login`` instead, so no challenge prompt is needed.
 
+Position surfaces (2026-11-05)
+------------------------------
+The positions UI and its JSON API are mounted as two separate routers:
+
+    Page (public)   routes/page_routes.py            GET /positions
+                                                      → renders positions.html
+                                                      (the shell; JS calls the API)
+
+    API (gated)     upstox_app/apis/position_routes.py
+                                                      /api/positions
+                                                      /api/positions/locks
+                                                      /api/positions/lock
+                                                      /api/positions/unlock
+                                                      /api/positions/locks/clear
+                                                      /api/positions/exit
+
+The page shell is public so the browser can render it (and its JS can
+surface the session-expired state) even before login. Every API call
+the page makes goes through ``require_any_auth`` — a logged-out
+browser hitting ``/api/positions`` gets the usual 401 and the
+``templates/base.html`` fetch interceptor bounces it to ``/login``.
+
 Admin surfaces mounted by this module:
 
     Folder API             routes/folder_routes.py
@@ -185,7 +207,9 @@ Admin surfaces mounted by this module:
     Level-Isolation API    routes/isolated_instrument_routes.py
     Simulation API         routes/simulation_routes.py
     Dummy-Orders API       routes/dummy_order_routes.py
-    Sandbox-Orders API     routes/admin_orders.py (sandbox-status)   <-- NEW
+    Sandbox-Orders API     routes/admin_orders.py (sandbox-status)
+    Position API           upstox_app/apis/position_routes.py
+    Position Page          routes/page_routes.py (GET /positions)
 """
 
 import asyncio
@@ -227,6 +251,12 @@ from routes.sandbox_routes import router as sandbox_router
 from upstox_app.apis.expired_instruments_api import (
     router as expired_instruments_router,
 )
+
+# NOTE: this is the /api/positions JSON router — not a page router.
+# The /positions page shell is served by ``routes/page_routes.py``
+# (imported above as ``page_router``). See module docstring section
+# "Position surfaces (2026-11-05)".
+from upstox_app.apis.position_routes import router as position_api_router
 
 from routes.expired_chart_routes import router as expired_chart_router
 
@@ -948,7 +978,7 @@ app.add_middleware(
 # guard passes them through untouched). This middleware performs the
 # actual auth check on those three paths and mirrors the guard's
 # redirect-or-401 behaviour:
-
+#
 #   * browser (Accept: text/html) → 303 to /login?next=<path>
 #   * API / curl / XHR             → 401 JSON with no Basic challenge
 #                                    (the login page is the recovery path)
@@ -1018,15 +1048,19 @@ app.add_middleware(AuthGuardMiddleware)
 # session cookie that the gated routers below will accept. Everything
 # else in this block is the front-end surface: UI pages, live REST,
 # live-SR, EMA-calc, upstox proxy, expired instrument/chart, market
-# holiday, layout. If you decide any of these must be private, add
-# ``dependencies=[Depends(require_any_auth)]`` to the include below.
+# holiday, layout.
+#
+# The positions page shell (``GET /positions``) is served by
+# ``page_router`` below — see ``routes/page_routes.py``. Its JSON API
+# is ``position_api_router`` and lives in the gated block further down.
 #
 # NOTE: AuthGuardMiddleware (above) is the authoritative gate — this
 # block is simply "these routers don't add their own per-route auth".
 # Any path not on the guard's whitelist will still be redirected /
 # 401'd, even if the router itself is mounted here.
 app.include_router(auth_router)          # /login, /logout, /auth/whoami
-app.include_router(page_router)
+app.include_router(page_router)          # /, /charts, /chart, /isolated,
+                                         # /positions, /favicon.ico
 app.include_router(live_router)
 app.include_router(live_sr_router)
 app.include_router(live_sr_calc_router)
@@ -1040,7 +1074,7 @@ app.include_router(layout_router)
 
 # ---- Sensitive surfaces (require auth) ----------------------------------- #
 # Admin, folders, logs, isolated-instrument, simulation, dummy-orders,
-# sandbox, margin, daily-backup, readiness, api-explorer.
+# sandbox, margin, daily-backup, readiness, api-explorer, position API.
 #
 # All of these were reachable by the scanner on 2026-11-05. They are now
 # gated on ``require_any_auth`` (Bearer / X-API-Key / Basic / session-
@@ -1059,6 +1093,7 @@ app.include_router(margin_router, dependencies=_AUTH)
 app.include_router(daily_backup_router, dependencies=_AUTH)
 app.include_router(readiness_router, dependencies=_AUTH)
 app.include_router(api_explorer_router, dependencies=_AUTH)
+app.include_router(position_api_router, dependencies=_AUTH)  # /api/positions/*
 
 # The order router was already commented out in the original file:
 # app.include_router(order_router)   # commented 2026-11-04 for testing

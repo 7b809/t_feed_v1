@@ -23,11 +23,3 @@ try:
 except ImportError:  # pragma: no cover — optional during migration
     expired_instruments_router = None  # type: ignore[assignment]
 
-
-# ---- margin calc API (new, 2026-11-04) ------------------------------------ #
-try:
-    from upstox_app.apis.margin_calc_api import (
-        router as margin_calc_router,
-    )
-except ImportError:  # pragma: no cover — optional during migration
-    margin_calc_router = None  # type: ignore[assignment]

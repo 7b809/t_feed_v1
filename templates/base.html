@@ -158,15 +158,16 @@
             flex-shrink: 0;
         }
 
-        .nav-icon-badge.home-theme     { background: rgba(59, 130, 246, 0.2);  color: #60a5fa; }
-        .nav-icon-badge.charts-theme   { background: rgba(34, 197, 94, 0.2);   color: #4ade80; }
-        .nav-icon-badge.layout-theme   { background: rgba(6, 182, 212, 0.2);   color: #22d3ee; }
-        .nav-icon-badge.iso-theme      { background: rgba(244, 63, 94, 0.2);   color: #fb7185; }
-        .nav-icon-badge.logs-theme     { background: rgba(251, 146, 60, 0.2);  color: #fb923c; }
-        .nav-icon-badge.expired-theme  { background: rgba(168, 85, 247, 0.2);  color: #c084fc; }
-        .nav-icon-badge.api-theme      { background: rgba(20, 184, 166, 0.2);  color: #2dd4bf; }
-        .nav-icon-badge.auth-theme     { background: rgba(124, 58, 237, 0.22); color: #a78bfa; }
-        .nav-icon-badge.logout-theme   { background: rgba(244, 63, 94, 0.22);  color: #fb7185; }
+        .nav-icon-badge.home-theme      { background: rgba(59, 130, 246, 0.2);  color: #60a5fa; }
+        .nav-icon-badge.positions-theme { background: rgba(245, 158, 11, 0.22); color: #fbbf24; }
+        .nav-icon-badge.charts-theme    { background: rgba(34, 197, 94, 0.2);   color: #4ade80; }
+        .nav-icon-badge.layout-theme    { background: rgba(6, 182, 212, 0.2);   color: #22d3ee; }
+        .nav-icon-badge.iso-theme       { background: rgba(244, 63, 94, 0.2);   color: #fb7185; }
+        .nav-icon-badge.logs-theme      { background: rgba(251, 146, 60, 0.2);  color: #fb923c; }
+        .nav-icon-badge.expired-theme   { background: rgba(168, 85, 247, 0.2);  color: #c084fc; }
+        .nav-icon-badge.api-theme       { background: rgba(20, 184, 166, 0.2);  color: #2dd4bf; }
+        .nav-icon-badge.auth-theme      { background: rgba(124, 58, 237, 0.22); color: #a78bfa; }
+        .nav-icon-badge.logout-theme    { background: rgba(244, 63, 94, 0.22);  color: #fb7185; }
 
         .mobile-nav-toggle {
             display: none;
@@ -299,6 +300,7 @@
         .mobile-fab-menu.is-open .mobile-fab-menu-item:nth-child(6) { transition-delay: 0.12s; }
         .mobile-fab-menu.is-open .mobile-fab-menu-item:nth-child(7) { transition-delay: 0.14s; }
         .mobile-fab-menu.is-open .mobile-fab-menu-item:nth-child(8) { transition-delay: 0.16s; }
+        .mobile-fab-menu.is-open .mobile-fab-menu-item:nth-child(9) { transition-delay: 0.18s; }
         .mobile-fab-menu-item:hover {
             background: rgba(255, 255, 255, 0.08);
             border-color: rgba(255, 255, 255, 0.2);
@@ -423,6 +425,11 @@
             <span>Home</span>
         </a>
 
+        <a href="/positions" class="app-nav-button {{ 'is-active' if active_path == '/positions' else '' }}">
+            <span class="nav-icon-badge positions-theme"><i class="bi bi-briefcase-fill"></i></span>
+            <span>Positions</span>
+        </a>
+
         <a href="/isolated" target="_blank" rel="noopener noreferrer" class="app-nav-button">
             <span class="nav-icon-badge iso-theme"><i class="bi bi-bullseye"></i></span>
             <span>Isolated</span>
@@ -495,6 +502,10 @@
             <span class="nav-icon-badge home-theme"><i class="bi bi-house-door-fill"></i></span>
             <span>Home</span>
         </a>
+        <a href="/positions" class="app-nav-button {{ 'is-active' if active_path == '/positions' else '' }}">
+            <span class="nav-icon-badge positions-theme"><i class="bi bi-briefcase-fill"></i></span>
+            <span>Positions</span>
+        </a>
         <a href="/isolated" target="_blank" rel="noopener noreferrer" class="app-nav-button">
             <span class="nav-icon-badge iso-theme"><i class="bi bi-bullseye"></i></span>
             <span>Isolated</span>
@@ -545,6 +556,10 @@
     <a href="/" class="mobile-fab-menu-item {{ 'is-active' if active_path == '/' else '' }}" title="Home" aria-label="Home">
         <span class="nav-icon-badge home-theme"><i class="bi bi-house-door-fill"></i></span>
         <span class="mobile-fab-menu-label">Home</span>
+    </a>
+    <a href="/positions" class="mobile-fab-menu-item {{ 'is-active' if active_path == '/positions' else '' }}" title="Positions" aria-label="Positions">
+        <span class="nav-icon-badge positions-theme"><i class="bi bi-briefcase-fill"></i></span>
+        <span class="mobile-fab-menu-label">Positions</span>
     </a>
     <a href="/isolated" target="_blank" rel="noopener noreferrer" class="mobile-fab-menu-item" title="Isolated" aria-label="Isolated">
         <span class="nav-icon-badge iso-theme"><i class="bi bi-bullseye"></i></span>

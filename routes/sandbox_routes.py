@@ -40,8 +40,8 @@ from services.sandbox_execution_service import (
     SANDBOX_LOTS,
     sandbox_execution_service,
 )
-from upstox_services.exit_all_positions import exit_all_positions
-from upstox_services.place_order import place_order
+from upstox_app.services.exit_all_positions import exit_all_positions
+from upstox_app.services.place_order import place_order
 
 logger = get_logger(__file__)
 

@@ -65,7 +65,7 @@ from fastapi import APIRouter, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from upstox_services.margin_check import check_margin
+from upstox_app.services.margin_check import check_margin
 
 router = APIRouter(prefix="/margin", tags=["margin"])
 

@@ -8,6 +8,7 @@ Serves the Jinja2-rendered pages that make up the UI:
     GET /chart/{instrument_key}
                               -> chart.html (candles + EMA + OR levels)
     GET /isolated             -> isolated_instrument.html (level-isolation page)
+    GET /positions            -> positions.html (position dashboard)
     GET /favicon.ico          -> 204 No Content
 
 The templates live at <project_root>/templates/. If your project uses a
@@ -16,6 +17,12 @@ different location, change the single ``_TEMPLATES_DIR`` line below.
 Chart data is fetched directly from Upstox by the browser (via the
 ``/api/upstox/*`` proxy), so the chart route only needs to pass the
 instrument metadata + the side-panel instrument list to the template.
+
+The positions page is a pure shell: every action (list / lock /
+unlock / clear / exit) is served by the sibling JSON router
+``upstox_app/apis/position_routes.py`` mounted at ``/api/positions``
+in ``main.py``. The template's JS talks to that API directly, so this
+route does no broker or Mongo work — it just renders the HTML shell.
 """
 
 from __future__ import annotations
@@ -167,6 +174,7 @@ def chart_page(request: Request, instrument_key: str) -> HTMLResponse:
         },
     )
 
+
 @router.get("/isolated", response_class=HTMLResponse)
 def isolated_page(request: Request) -> HTMLResponse:
     """Level-isolation page.
@@ -193,4 +201,23 @@ def isolated_page(request: Request) -> HTMLResponse:
             "app_name": "Market Data Foundation",
             "initial_detail": initial_detail,
         },
+    )
+
+
+@router.get("/positions", response_class=HTMLResponse)
+def positions_page(request: Request) -> HTMLResponse:
+    """Position dashboard shell.
+
+    Renders ``templates/positions.html`` only. Every JSON action
+    (list / lock / unlock / clear / exit) is served by
+    ``upstox_app/apis/position_routes.py`` mounted at ``/api/positions``
+    — the template's JS calls that router directly. Doing no server-
+    side fetch here keeps the page loadable even when Upstox or
+    MongoDB is degraded; the client-side code surfaces those errors
+    in-place rather than via a broken HTTP response.
+    """
+    return templates.TemplateResponse(
+        request=request,
+        name="positions.html",
+        context={"app_name": "Market Data Foundation"},
     )

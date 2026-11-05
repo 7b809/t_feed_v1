@@ -80,8 +80,8 @@ from upstox_client.rest import ApiException
 from core.logger import get_logger
 from services.instrument_registry import instrument_registry
 from services.token_service import token_service
-from upstox_services._sanitise import sanitise_payload
-from upstox_services.lot_sizes import lots_to_quantity
+from upstox_app.services._sanitise import sanitise_payload
+from upstox_app.services.lot_sizes import lots_to_quantity
 
 logger = get_logger(__file__)
 

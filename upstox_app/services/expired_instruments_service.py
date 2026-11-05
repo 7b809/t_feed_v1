@@ -57,7 +57,7 @@ from upstox_client.rest import ApiException
 
 from core.logger import get_logger
 from services.token_service import token_service
-from upstox_services._sanitise import sanitise_payload
+from upstox_app.services._sanitise import sanitise_payload
 
 logger = get_logger(__file__)
 

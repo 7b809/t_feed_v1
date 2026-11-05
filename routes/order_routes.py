@@ -34,8 +34,8 @@ from typing import Any
 from fastapi import APIRouter, Body, HTTPException
 
 from services.order_runtime_service import order_runtime_service
-from upstox_services.exit_all_positions import exit_all_positions
-from upstox_services.place_order import place_order
+from upstox_app.services.exit_all_positions import exit_all_positions
+from upstox_app.services.place_order import place_order
 
 router = APIRouter(prefix="/admin/orders", tags=["orders"])
 
