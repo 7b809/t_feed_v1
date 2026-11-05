@@ -336,7 +336,7 @@ VERBOSE_LOG = _bool("VERBOSE_LOG", False)
 # ---------------------------------------------------------------------------
 CLEANUP_REMOVE_FOLDERS = _csv(
     "CLEANUP_REMOVE_FOLDERS",
-    "data,logs,logs_text,downloads,output,__pycache__,.pytest_cache,htmlcov,test_logs",
+    "data,downloads,output,__pycache__,.pytest_cache,htmlcov,test_logs",
 )
 
 CLEANUP_RESERVED_FOLDERS = _csv(
@@ -875,6 +875,48 @@ STRATEGY_ORDER_REVERSAL_CUTOFF_MINUTE = _int(
 )
 
 # ===========================================================================
+# POST-11:30 AM ISOLATED INSTRUMENT STRATEGY
+# ===========================================================================
+# Companion strategy that only arms AFTER 11:30 IST. It re-uses the
+# same isolated-instrument record produced by LEVEL ISOLATION, but
+# applies a WIDER confirmation window on entry and a NARROWER window
+# on exit, with a straight-line +50 pt target and a fixed 30 % stop.
+#
+#   * Entry confirmation:  15/30 SR (wide right-edge — fewer false
+#                          triggers after the midday chop).
+#   * Exit  confirmation:  15/15 SR (symmetric — fast reaction on the
+#                          post-entry resistance that closes the trade).
+#   * Buffer:              up to 10 minutes before the isolated_time a
+#                          pivot may still be counted as the trigger.
+#   * Target:              +50 points from fill.
+#   * Stop-loss:           30 % below fill (same convention as
+#                          STRATEGY_ORDER_STOP_LOSS_PCT).
+#
+# NOTE: values are intentionally left as plain literals (not env
+# driven) for v1 of this strategy — they will be promoted to
+# ``_int`` / ``_float`` loaders once the replay harness stabilises.
+# ===========================================================================
+
+# Hard cutoff — the strategy is inert before this wall-clock time (IST).
+POST_1130_REGIME_TIME = "11:30:00"
+
+# (left_bars, right_bars) for the ENTRY pivot window.
+POST_1130_ENTRY_SR_CONFIG = (15, 30)
+
+# (left_bars, right_bars) for the EXIT pivot window.
+POST_1130_EXIT_SR_CONFIG = (15, 15)
+
+# Allow a confirmation up to this many minutes PRIOR to isolated_time
+# to still count as the entry trigger.
+POST_1130_BUFFER_MINUTES = 10
+
+# Profit target, in index points, from the fill price.
+POST_1130_TARGET_POINTS = 50.0
+
+# Stop-loss fraction below fill (0.30 = 30 %).
+POST_1130_STOPLOSS_PERCENT = 0.30
+
+# ===========================================================================
 # SANDBOX EXECUTION — live sandbox order mirror of dummy-order transitions
 # ===========================================================================
 # Driven by ``services/sandbox_execution_service.py`` (2026-11-04).
@@ -1018,7 +1060,6 @@ EMA_CALC_MAX_CANDLES = max(100, min(10000, _int(
     "EMA_CALC_MAX_CANDLES", 3000
 )))
 
-
 # ---------------------------------------------------------------------------
 # Admin / API authentication
 # ---------------------------------------------------------------------------
@@ -1043,9 +1084,8 @@ ADMIN_BASIC_PASSWORD = _str("ADMIN_BASIC_PASSWORD", "")
 #     CORS_ALLOW_ORIGINS=https://ui.example.com,https://admin.example.com
 CORS_ALLOW_ORIGINS = _csv("CORS_ALLOW_ORIGINS", "*")
 
-
 # Cookie-session for browser logins (see core/auth.py)
 ADMIN_SESSION_SECRET = _str("ADMIN_SESSION_SECRET", "")
 ADMIN_SESSION_TTL_SECONDS = max(300, _int("ADMIN_SESSION_TTL_SECONDS", 8 * 3600))
 ADMIN_COOKIE_NAME = _str("ADMIN_COOKIE_NAME", "novag_admin")
-ADMIN_COOKIE_SECURE = _bool("ADMIN_COOKIE_SECURE", True)  # require HTTPS# routes/position_page_routes.py
+ADMIN_COOKIE_SECURE = _bool("ADMIN_COOKIE_SECURE", True)  # require HTTPS

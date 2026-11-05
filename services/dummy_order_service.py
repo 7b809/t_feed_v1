@@ -33,6 +33,45 @@ specification:
 This service NEVER places a real Upstox order. Every record carries
 ``"dummy": true`` so audits cannot confuse it with a real order.
 
+POST-1130 branch (2026-11-05)
+-----------------------------
+A second, independent order branch now lives alongside Path A / Path B
+for the POST-11:30 regime:
+
+    * ``strategy_entry_signal_service.compute()`` is called each tick
+      (after the Path A/B logic) to obtain the current signal.
+    * When ``execution_path == "POST_1130"`` AND ``status == "ok"``
+      AND no POST-1130 order exists for today, a POST-1130 dummy order
+      is created on the **isolated instrument itself** (CE for CE
+      isolation, PE for PE isolation).  The order carries
+      ``regime="POST_1130_ISOLATED"`` and
+      ``routing_mode="post_1130_sr_trigger"``.
+    * Entry price / time / stop / target are taken verbatim from the
+      enriched BUY payload returned by ``compute()`` — no re-derivation
+      inside this service.  OR levels, zone and milestones are NOT used
+      by the POST-1130 spec.
+    * The order is registered with ``order_runtime_service`` via
+      ``register_post_1130_trade()`` so exit tracking is active for
+      the (30 % stop / +50 pt target / 15/15 resistance confirmation)
+      exit conditions.
+    * Each subsequent tick calls
+      ``order_runtime_service.check_and_close_post_1130()`` to evaluate
+      those exits, and EOD-closes any surviving OPEN POST-1130 order
+      at ``DUMMY_ORDER_EOD_HOUR:MINUTE`` (15:35) — same as Path A/B.
+    * POST-1130 orders are stored in the state under
+      ``post_1130_order`` (distinct from ``order``) so both branches
+      can coexist on the same day.  ``orders`` (the compat list)
+      contains BOTH the Path A/B order and the POST-1130 order when
+      both exist.
+
+Path A/B and POST-1130 are intentionally independent: ``compute()``
+itself dispatches POST-1130 AFTER the Path B check, so a Path B day
+(``trigger_is_self_nifty == False``) returns ``path_b_mode`` rather
+than ``POST_1130`` — meaning no POST-1130 order is created on a pure
+Path B day.  To exercise the POST-1130 branch on a Path B isolation,
+either disable Path B (``STRATEGY_EXT_PATH_B_ENABLED=false``) or
+re-create the isolation record with a self-NIFTY trigger.
+
 DETERMINISM CONTRACT (G1 v4.1)
 ------------------------------
 The set of dummy orders produced for a given trading day MUST be a
@@ -93,14 +132,20 @@ reset on IST date rollover.  Structure::
       "isolated_key": "NSE_FO|53792",
       "bias_type": "CE",
       "t_iso": "2026-10-29T09:18:00+05:30",
-      "order": { ... } | null,
-      "orders": [ ... ]  # 0- or 1-element compat list
+      "order": { ... } | null,                    # Path A/B
+      "post_1130_order": { ... } | null,          # POST-1130
+      "orders": [ ... ]                           # 0-, 1-, or 2-element compat list
     }
 
 The ``order`` record is self-contained — routing mode, trigger level,
 prior support, traded key, entry price + source, stop, OR levels,
 zone, milestones, profit_state, Stage 2 trigger time/reason, tracking
 watermarks, close state, and the two Telegram notification flags.
+
+The ``post_1130_order`` record carries the same shape but with
+``regime="POST_1130_ISOLATED"``, ``routing_mode="post_1130_sr_trigger"``,
+``target_price``, ``exit_sr_config``, and empty OR-levels / milestones
+(the spec doesn't use them).  ``zone="POST_1130"``.
 
 Never raises. Every failure mode lands in the returned summary dict
 and in the state file.
@@ -121,6 +166,14 @@ actionable transition, AFTER the state file has been written.  Supported
                                  produced by the current close path but
                                  mapped defensively for future use
     EOD_CLOSE                  — end-of-day close, order closed
+
+POST-1130 close reasons are mapped onto the same transition vocabulary
+so the sandbox executor treats them uniformly:
+
+    STOPLOSS_30_PCT_HIT       → STOP_HIT
+    TARGET_50_POINTS_HIT      → STAGE_2_RESISTANCE_EXIT
+    RESISTANCE_15_15_CONFIRMED → STAGE_2_RESISTANCE_EXIT
+    END_OF_DAY                → EOD_CLOSE
 
 ``order_record`` is a shallow copy of the order dict at the moment the
 transition was queued.  ``reason`` is the ``run_once(reason=...)``
@@ -278,17 +331,59 @@ def _log_calc_regime(
     )
 
 
+def _log_calc_post_1130(
+    order: dict[str, Any],
+    reference_type: str | None,
+    reference_price: float | None,
+) -> None:
+    """Informational log line for a POST-1130 order creation."""
+    trigger = order.get("trigger") or {}
+    logger.info(
+        "[CALC][POST_1130] regime=POST_1130_ISOLATED\n"
+        "    REF-TYPE  %s @ ₹%s\n"
+        "    PIVOT     %s\n"
+        "    CONFIRM   %s\n"
+        "    ENTRY     ₹%s (source=%s)\n"
+        "    STOP      ₹%s (−%.1f%%)\n"
+        "    TARGET    ₹%s (+%s pts)\n"
+        "    EXIT-SR   L=%s R=%s",
+        str(reference_type or "—").upper(),
+        _fmt_price(reference_price),
+        _fmt_time(trigger.get("pivot_time")),
+        _fmt_time(trigger.get("confirmed_time")),
+        _fmt_price(order.get("entry_price")),
+        order.get("entry_price_source") or "—",
+        _fmt_price(order.get("stop_price")),
+        float(order.get("stop_pct") or 0.0) * 100.0,
+        _fmt_price(order.get("target_price")),
+        order.get("target_points") if order.get("target_points") is not None else "—",
+        (order.get("exit_sr_config") or [15, 15])[0],
+        (order.get("exit_sr_config") or [15, 15])[1],
+    )
+
+
 # --------------------------------------------------------------------------- #
 # Close-reason → transition-type mapping (module-level)                       #
 # --------------------------------------------------------------------------- #
 # Only closes whose `closed_reason` appears in this map are surfaced to
 # the external transition callback.  SKIPPED is deliberately absent — a
 # skipped order is not an actionable event for downstream consumers.
+#
+# POST-1130 close reasons (2026-11-05) are mapped onto the existing
+# vocabulary so the sandbox executor's translation table treats them
+# uniformly — no sandbox change is required.
 _CLOSE_REASON_TO_TRANSITION: dict[str, str] = {
     "STOP_HIT":                 "STOP_HIT",
     "STAGE_2_RESISTANCE_EXIT":  "STAGE_2_RESISTANCE_EXIT",
     "NEXT_15_3_RESISTANCE_EXIT": "NEXT_15_3_RESISTANCE_EXIT",
     "END_OF_DAY":               "EOD_CLOSE",
+    # ---- POST-1130 exit reasons (2026-11-05) ----------------------- #
+    # Mapped to the closest existing transition label so the sandbox
+    # translation table (CREATED → place, STOP_HIT / *_EXIT / EOD →
+    # exit_all) handles them without further changes.
+    "STOPLOSS_30_PCT_HIT":          "STOP_HIT",
+    "TARGET_50_POINTS_HIT":         "STAGE_2_RESISTANCE_EXIT",
+    "RESISTANCE_15_15_CONFIRMED":   "STAGE_2_RESISTANCE_EXIT",
 }
 
 
@@ -461,6 +556,58 @@ class DummyOrderService:
                                 (trans, dict(order)),
                             )
 
+                # ================================================== #
+                # 2026-11-05 — POST-1130 branch                      #
+                #                                                    #
+                # Runs AFTER the Path A/B logic so both branches can #
+                # coexist on the same day.  Strategy dispatch is      #
+                # performed by strategy_entry_signal_service.compute() #
+                # — this branch only ACTS when compute() returned      #
+                # execution_path="POST_1130" AND status="ok".          #
+                # ================================================== #
+                post_1130_created = 0
+                post_1130_updated = 0
+                post_1130_closed = 0
+                p1130_order = self._state.get("post_1130_order")
+
+                if p1130_order is None:
+                    p1130_order = self._try_create_post_1130_order(
+                        iso, now, window,
+                    )
+                    if p1130_order is not None:
+                        self._state["post_1130_order"] = p1130_order
+                        post_1130_created = 1
+                        if str(p1130_order.get("status")) == "OPEN":
+                            pending_transitions.append(
+                                ("CREATED", dict(p1130_order)),
+                            )
+                else:
+                    if isinstance(p1130_order, dict):
+                        logger.debug(
+                            "[dummy-order] post-1130 order already "
+                            "exists for today (%s) — catch-up is a no-op",
+                            p1130_order.get("order_id"),
+                        )
+
+                if (
+                    isinstance(p1130_order, dict)
+                    and p1130_order.get("status") == "OPEN"
+                ):
+                    before_p1130 = p1130_order.get("status")
+                    self._update_post_1130_order(p1130_order, now, window)
+                    post_1130_updated = 1
+                    if p1130_order.get("status") != before_p1130:
+                        post_1130_closed = 1
+                        trans = _CLOSE_REASON_TO_TRANSITION.get(
+                            str(p1130_order.get("closed_reason") or "").upper(),
+                        )
+                        if trans:
+                            pending_transitions.append(
+                                (trans, dict(p1130_order)),
+                            )
+                    # Re-fetch in case the update created no state change.
+                    p1130_order = self._state.get("post_1130_order") or p1130_order
+
                 # ---- 4. Persist state BEFORE firing transitions -- #
                 self._save(now)
 
@@ -474,14 +621,20 @@ class DummyOrderService:
 
                 logger.info(
                     "[dummy-order] %s — created=%d updated=%d closed=%d "
-                    "order_status=%s mode=%s",
+                    "order_status=%s | post_1130 created=%d updated=%d "
+                    "closed=%d post_1130_status=%s mode=%s",
                     reason, created, updated, closed,
                     (order or {}).get("status") if order else "none",
+                    post_1130_created, post_1130_updated, post_1130_closed,
+                    (p1130_order or {}).get("status") if p1130_order else "none",
                     window,
                 )
                 return self._summary(
                     reason, "ok", now, window, t0,
                     created=created, updated=updated, closed=closed,
+                    post_1130_created=post_1130_created,
+                    post_1130_updated=post_1130_updated,
+                    post_1130_closed=post_1130_closed,
                     readiness=ready_reason,
                 )
 
@@ -666,6 +819,8 @@ class DummyOrderService:
             "bias_type": None,
             "t_iso": None,
             "order": None,
+            # 2026-11-05 — POST-1130 order (independent from Path A/B).
+            "post_1130_order": None,
             "orders": [],
             "created_at": _now_utc_iso(),
             "updated_at": None,
@@ -684,6 +839,8 @@ class DummyOrderService:
             return
         if not isinstance(payload.get("order"), (dict, type(None))):
             payload["order"] = None
+        if not isinstance(payload.get("post_1130_order"), (dict, type(None))):
+            payload["post_1130_order"] = None
         if not isinstance(payload.get("orders"), list):
             payload["orders"] = []
         self._state = payload
@@ -700,10 +857,13 @@ class DummyOrderService:
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             self._state["updated_at"] = _now_utc_iso()
-            self._state["orders"] = (
-                [self._state["order"]]
-                if self._state.get("order") else []
-            )
+            # 2026-11-05 — include BOTH branches in the compat list.
+            orders_list: list[dict[str, Any]] = []
+            if self._state.get("order"):
+                orders_list.append(self._state["order"])
+            if self._state.get("post_1130_order"):
+                orders_list.append(self._state["post_1130_order"])
+            self._state["orders"] = orders_list
             tmp = path.with_suffix(path.suffix + ".tmp")
             tmp.write_text(
                 json.dumps(self._state, indent=2, default=str),
@@ -1125,8 +1285,436 @@ class DummyOrderService:
             "skip": False,
         }
 
+    # ================================================================== #
+    # POST-1130 branch (2026-11-05)                                      #
+    # ================================================================== #
+    def _try_create_post_1130_order(
+        self,
+        iso: dict[str, Any],
+        now: datetime,
+        window: str,
+    ) -> dict[str, Any] | None:
+        """Create a POST-1130 dummy order if the signal is armed.
+
+        Calls ``strategy_entry_signal_service.compute()`` and acts ONLY
+        when the response reports ``execution_path == "POST_1130"`` AND
+        ``status == "ok"``.  In every other case (Path B, Path A
+        waiting, POST-1130 waiting, disabled) this returns ``None`` and
+        the next tick retries.
+
+        The order is written on the **isolated instrument itself** —
+        CE for a CE isolation, PE for a PE isolation.  Entry / stop /
+        target come verbatim from the enriched BUY payload; no
+        re-derivation happens here.
+
+        The order is registered with ``order_runtime_service`` so the
+        (30 % stop / +50 pt target / 15/15 resistance) exit conditions
+        are tracked on subsequent ticks.
+        """
+        try:
+            from services.strategy_entry_signal_service import (
+                strategy_entry_signal_service,
+            )
+            signal = strategy_entry_signal_service.compute()
+        except Exception:
+            logger.exception(
+                "[dummy-order] post-1130 signal lookup failed"
+            )
+            return None
+
+        if not isinstance(signal, dict):
+            return None
+        if signal.get("status") != "ok":
+            return None
+        if signal.get("execution_path") != "POST_1130":
+            return None
+
+        candidates = signal.get("candidates") or []
+        if not isinstance(candidates, list) or not candidates:
+            logger.warning(
+                "[dummy-order] post-1130 signal is ok but carries no "
+                "candidates — will retry next tick"
+            )
+            return None
+        candidate = candidates[0] or {}
+        entry = candidate.get("entry") or {}
+
+        entry_price = _safe_float(entry.get("price"))
+        entry_time_iso = entry.get("time")
+        if entry_price is None or entry_price <= 0 or not entry_time_iso:
+            logger.warning(
+                "[dummy-order] post-1130 signal present but entry "
+                "price/time missing (price=%s time=%s) — will retry "
+                "next tick",
+                entry_price, entry_time_iso,
+            )
+            return None
+
+        traded_key = str(
+            signal.get("chosen_instrument_key")
+            or candidate.get("instrument_key")
+            or ""
+        ).strip()
+        if not traded_key:
+            return None
+        traded_symbol = candidate.get("trading_symbol")
+        side = str(candidate.get("side") or "").upper() or None
+
+        stop_price = _safe_float(entry.get("stop"))
+        target_price = _safe_float(entry.get("target"))
+        stoploss_pct = _safe_float(entry.get("sl_pct")) or float(
+            getattr(config, "POST_1130_STOPLOSS_PERCENT", 0.30)
+        )
+        target_points = _safe_float(entry.get("target_points"))
+        reference_type = entry.get("reference_type")
+        reference_price = _safe_float(entry.get("reference_price"))
+        pivot_time = entry.get("pivot_time")
+        confirmation_time = (
+            entry.get("confirmation_time") or entry_time_iso
+        )
+
+        post_1130 = signal.get("post_1130") or {}
+        exit_cfg_raw = (
+            post_1130.get("exit_sr_config")
+            or getattr(config, "POST_1130_EXIT_SR_CONFIG", (15, 15))
+        )
+        try:
+            exit_cfg = [int(exit_cfg_raw[0]), int(exit_cfg_raw[1])]
+        except (TypeError, ValueError, IndexError):
+            exit_cfg = [15, 15]
+
+        # Make sure the traded instrument is tracked by the SR engine
+        # so future ticks can resolve 15/15 resistance confirmations.
+        self._ensure_sr_tracking(traded_key)
+
+        order_id = f"{traded_key}|POST_1130|{entry_time_iso}"
+        order: dict[str, Any] = {
+            "order_id": order_id,
+            "dummy": True,
+            "regime": "POST_1130_ISOLATED",
+            "status": "OPEN",
+            "instrument_key": traded_key,
+            "trading_symbol": traded_symbol,
+            "side": "BUY",
+            "routing_mode": "post_1130_sr_trigger",
+            "isolated_key": iso.get("instrument_key"),
+            "bias_type": iso.get("type"),
+            "t_iso": iso.get("touched_at") or iso.get("isolated_at"),
+            "trigger": {
+                "level": reference_type,
+                "price": reference_price,
+                "pivot_time": pivot_time,
+                "confirmed_time": confirmation_time,
+            },
+            "prior_support": None,
+            "entry_time": entry_time_iso,
+            "entry_price": round(entry_price, 4),
+            "entry_price_source": entry.get("price_source"),
+            "stop_price": (
+                round(stop_price, 4) if stop_price is not None else None
+            ),
+            "stop_pct": round(stoploss_pct, 4),
+            "target_price": (
+                round(target_price, 4) if target_price is not None else None
+            ),
+            "target_points": (
+                round(target_points, 4) if target_points is not None else None
+            ),
+            # The POST-1130 spec does not use OR-levels, zones or
+            # milestones — kept as empty containers so downstream
+            # consumers that iterate these fields don't need to
+            # special-case POST-1130 orders.
+            "or_levels": {},
+            "zone": "POST_1130",
+            "milestones": [],
+            "exit_sr_config": exit_cfg,
+            "profit_state": "STAGE_1",
+            "stage_2_triggered_at": None,
+            "stage_2_trigger_reason": None,
+            "current_ltp": round(entry_price, 4),
+            "current_ltp_at": now.isoformat(),
+            "max_high_since_entry": round(entry_price, 4),
+            "min_low_since_entry": round(entry_price, 4),
+            "mfe": 0.0,
+            "mae": 0.0,
+            "created_at": now.isoformat(),
+            "created_retroactively": (window == "retroactive"),
+            "closed_at": None,
+            "closed_time": None,
+            "closed_price": None,
+            "closed_pnl_pct": None,
+            "closed_profit_pts": None,
+            "closed_reason": None,
+            "_notified_created": False,
+            "_notified_closed": False,
+        }
+
+        # ---- Register the trade for exit tracking ----------------- #
+        try:
+            from services.order_runtime_service import order_runtime_service
+            order_runtime_service.register_post_1130_trade(
+                order_id=order_id,
+                fill_price=entry_price,
+                entry_time=entry_time_iso,
+                trading_symbol=traded_symbol,
+                instrument_key=traded_key,
+                side=side,
+            )
+        except Exception:
+            logger.exception(
+                "[dummy-order] register_post_1130_trade failed for %s — "
+                "order will be placed but exits will retry registration "
+                "on the next tick",
+                order_id,
+            )
+
+        _log_calc_post_1130(order, reference_type, reference_price)
+
+        logger.info(
+            "[dummy-order] POST-1130 CREATED %s | entry=%.4f stop=%.4f "
+            "target=%.4f ref_type=%s ref_price=%s exit_sr=%s "
+            "retroactive=%s",
+            order_id, entry_price,
+            stop_price if stop_price is not None else 0.0,
+            target_price if target_price is not None else 0.0,
+            reference_type, reference_price, exit_cfg,
+            order["created_retroactively"],
+        )
+        self._notify_created(order)
+        return order
+
+    def _update_post_1130_order(
+        self,
+        order: dict[str, Any],
+        now: datetime,
+        window: str,
+    ) -> None:
+        """Tick-loop update for an OPEN POST-1130 order.
+
+        Responsibilities:
+
+            1. Ensure the trade is registered with
+               ``order_runtime_service`` (idempotent — handles the
+               restart case where the order was loaded from disk but
+               the runtime service lost its in-memory state).
+            2. Refresh the current LTP / watermarks.
+            3. Call ``check_and_close_post_1130`` with the (15, 15) SR
+               levels + current LTP — this is the authoritative exit
+               evaluator (30 % stop / +50 pt target / 15/15 resistance).
+            4. EOD-close any surviving OPEN order at
+               ``DUMMY_ORDER_EOD_HOUR:MINUTE`` (15:35).
+        """
+        if order.get("status") != "OPEN":
+            return
+
+        traded_key = str(order.get("instrument_key") or "").strip()
+        order_id = str(order.get("order_id") or "").strip()
+        if not traded_key or not order_id:
+            return
+
+        # ---- 1. Idempotent re-registration after restart ---------- #
+        self._ensure_post_1130_trade_registered(order)
+
+        # ---- 2. Fetch latest (15, 15) SR levels ------------------- #
+        sr_15_15: list[dict[str, Any]] = []
+        exit_cfg = order.get("exit_sr_config") or [15, 15]
+        try:
+            from services.strategy_entry_signal_service import (
+                _run_pivot_scan_enriched,
+            )
+            left = int(exit_cfg[0])
+            right = int(exit_cfg[1])
+            sr_15_15 = _run_pivot_scan_enriched(traded_key, left, right)
+        except Exception:
+            logger.exception(
+                "[dummy-order] post-1130 SR (15,15) scan failed for %s",
+                traded_key,
+            )
+
+        # ---- 3. Current LTP / current candle ---------------------- #
+        current_ltp: float | None = None
+        current_candle: dict[str, Any] | None = None
+
+        try:
+            from services.live_feed_service import live_feed_service
+            ltp_val = live_feed_service.get_latest_ltp(traded_key)
+            if ltp_val is not None:
+                current_ltp = float(ltp_val)
+        except Exception:
+            pass
+
+        # Fallback: last close of the fixed series.
+        if current_ltp is None:
+            candles = self._build_fixed_series(traded_key)
+            if candles:
+                current_candle = candles[-1]
+                close_f = _safe_float(current_candle.get("close"))
+                if close_f is not None:
+                    current_ltp = close_f
+
+        # ---- 4. Update watermarks (informational) ----------------- #
+        if current_ltp is not None:
+            order["current_ltp"] = round(current_ltp, 4)
+            order["current_ltp_at"] = now.isoformat()
+            entry = _safe_float(order.get("entry_price")) or 0.0
+            if entry > 0:
+                prev_hi = _safe_float(order.get("max_high_since_entry")) or entry
+                prev_lo = _safe_float(order.get("min_low_since_entry")) or entry
+                order["max_high_since_entry"] = round(
+                    max(prev_hi, current_ltp), 4,
+                )
+                order["min_low_since_entry"] = round(
+                    min(prev_lo, current_ltp), 4,
+                )
+                order["mfe"] = round(
+                    order["max_high_since_entry"] - entry, 4,
+                )
+                order["mae"] = round(
+                    order["min_low_since_entry"] - entry, 4,
+                )
+
+        # ---- 5. Exit evaluation ----------------------------------- #
+        exit_result: dict[str, Any] | None = None
+        try:
+            from services.order_runtime_service import order_runtime_service
+            exit_result = order_runtime_service.check_and_close_post_1130(
+                order_id=order_id,
+                current_candle=current_candle,
+                current_ltp=current_ltp,
+                latest_15_15_sr=sr_15_15,
+            )
+        except Exception:
+            logger.exception(
+                "[dummy-order] check_and_close_post_1130 failed for %s",
+                order_id,
+            )
+
+        if exit_result is not None:
+            reason = str(exit_result.get("reason") or "UNKNOWN")
+            exit_price = _safe_float(exit_result.get("exit_price"))
+            if exit_price is None:
+                exit_price = current_ltp
+            if exit_price is None:
+                exit_price = _safe_float(order.get("entry_price")) or 0.0
+
+            self._close_post_1130_order(
+                order, reason, exit_price, now,
+            )
+            return
+
+        # ---- 6. EOD close ----------------------------------------- #
+        eod = dtime(
+            int(getattr(config, "DUMMY_ORDER_EOD_HOUR", 15)),
+            int(getattr(config, "DUMMY_ORDER_EOD_MINUTE", 35)),
+        )
+        if now.time() >= eod:
+            candles = self._build_fixed_series(traded_key)
+            last_close = (
+                _safe_float(candles[-1].get("close")) if candles else None
+            )
+            if last_close is None:
+                last_close = current_ltp
+            if last_close is None:
+                last_close = _safe_float(order.get("entry_price")) or 0.0
+            last_time_iso = (
+                str(candles[-1].get("time")) if candles else now.isoformat()
+            )
+            self._close_post_1130_order(
+                order, "END_OF_DAY", last_close, now,
+                close_time_iso=last_time_iso,
+            )
+
+    def _ensure_post_1130_trade_registered(
+        self, order: dict[str, Any],
+    ) -> None:
+        """Idempotent re-registration with ``order_runtime_service``.
+
+        The runtime service is in-memory only.  After a process
+        restart, an OPEN POST-1130 order loaded from ``dummy_orders
+        .json`` will be missing from the runtime service's trade map —
+        so exits would silently never fire.  This helper detects that
+        case and re-registers the trade.
+
+        For orders already registered, ``register_post_1130_trade`` is
+        a no-op (idempotent per ``order_id``), so this is safe to call
+        on every tick.
+        """
+        order_id = str(order.get("order_id") or "").strip()
+        if not order_id:
+            return
+
+        try:
+            from services.order_runtime_service import order_runtime_service
+        except Exception:
+            return
+
+        existing = None
+        try:
+            existing = order_runtime_service.get_post_1130_trade(order_id)
+        except Exception:
+            existing = None
+        if existing is not None:
+            return  # already registered
+
+        entry = _safe_float(order.get("entry_price")) or 0.0
+        if entry <= 0:
+            return
+
+        try:
+            order_runtime_service.register_post_1130_trade(
+                order_id=order_id,
+                fill_price=entry,
+                entry_time=order.get("entry_time"),
+                trading_symbol=order.get("trading_symbol"),
+                instrument_key=order.get("instrument_key"),
+                side=None,
+            )
+            logger.info(
+                "[dummy-order] re-registered POST-1130 trade after "
+                "restart — %s",
+                order_id,
+            )
+        except Exception:
+            logger.exception(
+                "[dummy-order] re-register_post_1130_trade failed for %s",
+                order_id,
+            )
+
+    def _close_post_1130_order(
+        self,
+        order: dict[str, Any],
+        reason: str,
+        price: float,
+        now: datetime,
+        close_time_iso: str | None = None,
+    ) -> None:
+        """Mark a POST-1130 order CLOSED with the given reason."""
+        entry = _safe_float(order.get("entry_price")) or 0.0
+        if entry <= 0:
+            return
+        pnl_pct = (price - entry) / entry
+        profit_pts = price - entry
+
+        order["status"] = reason
+        order["closed_at"] = now.isoformat()
+        order["closed_time"] = close_time_iso or now.isoformat()
+        order["closed_price"] = round(price, 4)
+        order["closed_pnl_pct"] = round(pnl_pct, 6)
+        order["closed_profit_pts"] = round(profit_pts, 4)
+        order["closed_reason"] = reason
+        order["current_ltp"] = round(price, 4)
+        order["current_ltp_at"] = now.isoformat()
+
+        logger.info(
+            "[dummy-order] POST-1130 CLOSED %s | reason=%s price=%.4f "
+            "pnl=%+.2f%% pts=%+.2f",
+            order.get("order_id"), reason, price,
+            pnl_pct * 100.0, profit_pts,
+        )
+        self._notify_closed(order)
+
     # ------------------------------------------------------------------ #
-    # Order creation                                                     #
+    # Order creation (Path A/B)                                          #
     # ------------------------------------------------------------------ #
     def _try_create_order(
         self,
@@ -1650,6 +2238,10 @@ class DummyOrderService:
                 "STAGE_2_RESISTANCE_EXIT": "SUCCESS",
                 "STOP_HIT": "WARNING",
                 "END_OF_DAY": "INFO",
+                # ---- POST-1130 exit reasons ----------------------- #
+                "STOPLOSS_30_PCT_HIT": "WARNING",
+                "TARGET_50_POINTS_HIT": "SUCCESS",
+                "RESISTANCE_15_15_CONFIRMED": "SUCCESS",
             }.get(status, "INFO")
 
             msg = build(
@@ -1693,19 +2285,33 @@ class DummyOrderService:
         created: int = 0,
         updated: int = 0,
         closed: int = 0,
+        post_1130_created: int = 0,
+        post_1130_updated: int = 0,
+        post_1130_closed: int = 0,
         readiness: str = "ok",
     ) -> dict[str, Any]:
         order = self._state.get("order")
+        post_1130_order = self._state.get("post_1130_order")
         out: dict[str, Any] = {
             "status": status,
             "reason": reason,
             "day": self._state.get("day"),
             "mode": window,
+            # ---- Path A/B counters (unchanged) -------------------- #
             "created": created,
             "updated": updated,
             "closed": closed,
             "has_order": bool(order),
             "order_status": order.get("status") if order else None,
+            # ---- POST-1130 counters (2026-11-05) ------------------ #
+            "post_1130_created": post_1130_created,
+            "post_1130_updated": post_1130_updated,
+            "post_1130_closed": post_1130_closed,
+            "has_post_1130_order": bool(post_1130_order),
+            "post_1130_order_status": (
+                post_1130_order.get("status") if post_1130_order else None
+            ),
+            # ---- shared metadata ---------------------------------- #
             "execution_path": self._state.get("execution_path"),
             "readiness": readiness,
             "elapsed_seconds": round(time.monotonic() - t0, 3),
@@ -1721,6 +2327,23 @@ class DummyOrderService:
                 "current_ltp": order.get("current_ltp"),
                 "profit_state": order.get("profit_state"),
                 "stage_2_triggered_at": order.get("stage_2_triggered_at"),
+            }
+        if (
+            isinstance(post_1130_order, dict)
+            and post_1130_order.get("status") == "OPEN"
+        ):
+            trig = post_1130_order.get("trigger") or {}
+            out["post_1130_open_order"] = {
+                "instrument_key": post_1130_order.get("instrument_key"),
+                "routing_mode": post_1130_order.get("routing_mode"),
+                "entry_price": post_1130_order.get("entry_price"),
+                "entry_price_source": post_1130_order.get("entry_price_source"),
+                "stop_price": post_1130_order.get("stop_price"),
+                "target_price": post_1130_order.get("target_price"),
+                "current_ltp": post_1130_order.get("current_ltp"),
+                "reference_type": trig.get("level"),
+                "reference_price": trig.get("price"),
+                "exit_sr_config": post_1130_order.get("exit_sr_config"),
             }
         return out
 

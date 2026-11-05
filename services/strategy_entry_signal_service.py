@@ -66,6 +66,74 @@ G1 v4.2 changes (2026-10-29)
       falls through to the Path A logic regardless of trigger source
       (i.e. behaves exactly as v4.1).
 
+Post-11:30 regime — 2026-11-05
+------------------------------
+A new **POST-11:30 ISOLATED** regime sits between the Path B check
+and the standard Path A logic.  The dispatch decision is made by
+``evaluate_isolated_entry()`` (module-level function) using
+``isolated_sr_tracker_service.get_active_isolated_state()["isolated_time"]``:
+
+    * ``isolated_time.time() >= POST_1130_REGIME_TIME`` (11:30:00 IST)
+        → the post-11:30 entry rule runs.  Opening-range / first-candle
+          logic and the standard 10-minute post-touch scan are
+          **bypassed entirely**.
+    * otherwise
+        → the existing Path A logic runs verbatim (unchanged).
+
+The post-11:30 rule (``check_post_1130_entry``) applies the spec's
+``(15, 30)`` entry-confirmation window:
+
+    Condition 1: ``pivot_time < isolated_touch_time``
+    Condition 2: ``confirmation_time >= isolated_time - 10 min buffer``
+
+The first confirmed SR level that satisfies BOTH conditions wins.
+When it wins, the response wrapper (``_build_post_1130_buy_response``)
+reports ``execution_path = "POST_1130"`` and includes the standard
+``POST_1130_TARGET_POINTS`` / ``POST_1130_STOPLOSS_PERCENT`` values so
+downstream consumers can pick them up without re-reading config.
+
+Post-11:30 refinements (2026-11-05, second pass)
+------------------------------------------------
+Four content changes close the gaps exposed by the 2026-11-05
+backfill replay (isolated at 12:59, real level `support 99.50 @
+confirmed 13:03`):
+
+  A. **Defensive clamp** — ``_resolve_isolation_timestamps()`` now
+     silently substitutes ``isolated_time = isolated_touch_time``
+     whenever ``isolated_time > isolated_touch_time``, and logs the
+     substitution exactly once per isolation. This makes the
+     POST-1130 branch resilient even if the tracker's own backfill
+     correction is bypassed or a stale state file survives a restart.
+
+  B. **Deterministic ordering** — ``check_post_1130_entry()`` sorts
+     ``sr_levels_15_30`` by ``confirmation_time`` ascending before
+     iterating, so the "first confirmed level after isolation touch"
+     rule is stable regardless of dict insertion order.
+
+  C. **Support-only filter for CE bias** — a CE isolated from an R3
+     touch is a "buy-the-bounce" setup; the meaningful POST-1130
+     trigger is a **support** confirmation, not a resistance. The
+     inverse holds for a PE isolated from an S3 touch (resistance-
+     only). Auto-reverse is explicitly **not** part of the POST-1130
+     spec and never fires here. For today's data this is what makes
+     `support 99.50 @ 13:03` the correct and only match.
+
+  D. **Enriched BUY payload** — ``_build_post_1130_buy_response()``
+     now populates the ``entry`` block with everything the order
+     placer needs without re-reading config:
+
+         entry_price      — close of the confirmation candle
+         entry_time       — ``confirmation_time``
+         stop_price       — entry × (1 − POST_1130_STOPLOSS_PERCENT)
+         target_price     — entry + POST_1130_TARGET_POINTS
+         reference_type   — "support" | "resistance"
+         reference_price  — numeric reference level price
+         pivot_time       — matched level's pivot time
+         confirmation_time — matched level's confirmation time
+
+     and adds ``exit_sr_config = [15, 15]`` to the ``post_1130``
+     block so the exit tracker knows which window to use.
+
 G1 v4.1 flag-wiring fix (2026-10-29)
 ------------------------------------
 Two v4.1 kill switches were defined in ``core/config.py`` but never
@@ -96,13 +164,35 @@ revision reads the exact keys that ``core/config.py`` defines:
     * ``STRATEGY_ENTRY_ALLOW_AUTO_REVERSE``
 
 so operators can actually flip them off via ``.env``.
+
+2026-11-05 dispatch-order fix (third pass)
+------------------------------------------
+``compute()`` now runs the POST-11:30 regime gate **before** the
+Path B check.  The POST-1130 regime is keyed off ``isolated_time``
+— not the trigger source — so a Path B isolation that happens at or
+after 11:30 IST must route through POST-1130, superseding Path A/B.
+
+Previously Path B won for every external-triggered isolation, which
+is why the 2026-11-05 backfill replay never fired the correct CE
+trade: the MIDCPNIFTY-triggered 12:59 isolation returned
+``path_b_mode`` instead of a POST-1130 CE entry on support 99.50
+@ 13:03.  With this reorder:
+
+    * Pre-11:30 external isolation → Path B (unchanged).
+    * Pre-11:30 self-NIFTY isolation → Path A (unchanged).
+    * Post-11:30 isolation (any trigger) → POST_1130.
+    * Post-11:30 external isolation with no matching SR → waits on
+      ``waiting_post_1130`` and does NOT fall back to Path B.
+
+The Path B build helper, the POST-1130 helpers, ``evaluate_isolated_entry``
+and ``check_post_1130_entry`` are all unchanged.
 """
 
 from __future__ import annotations
 
 import json
 import math
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, time as dt_time, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -432,7 +522,7 @@ def _pick_target_resistance(
         config, "STRATEGY_ENTRY_TARGET_REQUIRE_POST_ENTRY", True
     ))
 
-    # ---- Primary: first confirmed-after-entry resistance above price #
+    # ---- Primary: first confirmed-after-entry resistance above price #.
     if require_post_entry and entry_conf_dt is not None:
         time_filtered: list[tuple[datetime, dict[str, Any]]] = []
         for lvl in levels:
@@ -584,6 +674,341 @@ def _run_pivot_scan(
 
     return out
 
+# --------------------------------------------------------------------------- #
+# Post-11:30 regime helpers (2026-11-05)                                      #
+# --------------------------------------------------------------------------- #
+def _regime_cutoff_time() -> dt_time:
+    """Return the post-11:30 cutoff as a ``datetime.time`` (IST).
+
+    Parsed from ``config.POST_1130_REGIME_TIME`` (default ``"11:30:00"``).
+    Falls back to 11:30:00 on any parse failure so the regime gate is
+    never silently disabled by a malformed env override.
+    """
+    raw = str(getattr(config, "POST_1130_REGIME_TIME", "11:30:00")).strip()
+    try:
+        parts = raw.split(":")
+        hh = int(parts[0])
+        mm = int(parts[1]) if len(parts) > 1 else 0
+        ss = int(parts[2]) if len(parts) > 2 else 0
+        return dt_time(hh, mm, ss)
+    except (ValueError, IndexError, AttributeError):
+        return dt_time(11, 30, 0)
+
+def _enrich_level_for_post_1130(level: dict[str, Any]) -> dict[str, Any]:
+    """Return a copy of ``level`` with the post-11:30 spec fields.
+
+    Preserves the historical ``level`` (type string) so existing
+    consumers keep working, and adds:
+
+        ``level_price``        — float numeric price (mirrors ``price``)
+        ``type``               — alias of ``level``
+        ``confirmation_time``  — alias of ``confirmed_time``
+        ``status``             — always ``"confirmed"`` (the pivot
+                                 already passed the ``i + right_bars``
+                                 check inside ``_run_pivot_scan``)
+    """
+    if not isinstance(level, dict):
+        return {}
+    out = dict(level)
+    try:
+        price_val = out.get("price")
+        if price_val is None:
+            price_val = out.get("level_price")
+        out["level_price"] = float(price_val) if price_val is not None else None
+    except (TypeError, ValueError):
+        out["level_price"] = None
+    out["type"] = out.get("type") or out.get("level")
+    out["confirmation_time"] = (
+        out.get("confirmation_time") or out.get("confirmed_time")
+    )
+    out.setdefault("status", "confirmed")
+    return out
+
+def _run_pivot_scan_enriched(
+    instrument_key: str,
+    left_bars: int,
+    right_bars: int,
+) -> list[dict[str, Any]]:
+    """``_run_pivot_scan`` wrapped with post-11:30 enrichment.
+
+    The result is directly consumable by ``check_post_1130_entry``
+    (``pivot_time``, ``confirmation_time``, ``level``, ``level_price``,
+    ``status``).
+    """
+    raw = _run_pivot_scan(instrument_key, left_bars, right_bars)
+    return [_enrich_level_for_post_1130(lvl) for lvl in raw]
+
+def evaluate_isolated_entry(
+    instrument_data: dict[str, Any],
+) -> dict[str, Any]:
+    """Branch on ``isolated_time`` — the post-11:30 dispatcher.
+
+    ``instrument_data`` is expected to carry:
+
+        * ``isolated_time``        — ISO string (promotion timestamp)
+        * ``isolated_touch_time``  — ISO string (may be None)
+        * ``sr_levels_15_30``      — list of enriched level dicts
+        * ``bias_type``            — "CE" / "PE" / None (used by the
+                                     support-only filter)
+        * ``instrument_key``       — for logging / diagnostics
+
+    Returns one of:
+
+        ``{"_branch": "standard"}``
+            — pre-11:30 isolation.  ``StrategyEntrySignalService.compute()``
+              falls through to the existing Path A logic.
+
+        ``{"signal": "BUY", "strategy_regime": "POST_1130_ISOLATED", ...}``
+            — post-11:30 with a matching confirmed SR level.
+
+        ``{"_post_1130_waiting": True, "reason": "<why>"}``
+            — post-11:30 but no matching level yet.  ``compute()``
+              wraps this into a waiting-state response.
+
+    This function has no side effects and can be called safely from
+    any consumer that wants to evaluate the post-11:30 regime
+    independently.
+    """
+    isolated_time_dt = _parse_iso(instrument_data.get("isolated_time"))
+    isolated_touch_time_dt = _parse_iso(instrument_data.get("isolated_touch_time"))
+
+    if isolated_time_dt is None:
+        # No usable isolation timestamp — cannot determine regime.
+        return check_standard_entry(instrument_data)
+
+    cutoff = _regime_cutoff_time()
+    if isolated_time_dt.time() >= cutoff:
+        return check_post_1130_entry(
+            instrument_data, isolated_time_dt, isolated_touch_time_dt,
+        )
+
+    return check_standard_entry(instrument_data)
+
+def check_standard_entry(
+    instrument_data: dict[str, Any],
+) -> dict[str, Any]:
+    """Marker for the standard pre-11:30 path.
+
+    The standard (pre-11:30) entry logic is implemented inline in
+    ``StrategyEntrySignalService.compute()`` — this function exists
+    as a named branch in the spec's ``evaluate_isolated_entry``
+    decision tree.  Returns a marker dict that the caller recognises
+    to mean "fall through to the existing Path A logic".
+    """
+    _ = instrument_data
+    return {"_branch": "standard"}
+
+def _required_type_for_bias(bias_type: str | None) -> str | None:
+    """Return the SR level type required for a POST-11:30 entry.
+
+    CE bias (R3 touch) → ``"support"`` (buy-the-bounce)
+    PE bias (S3 touch) → ``"resistance"``
+    Unknown bias       → ``None`` (no filter)
+
+    Rationale
+    ---------
+    A CE instrument is isolated because the underlying touched its R3
+    — i.e. the underlying was rejected off resistance.  The post-1130
+    entry rule is the confirmed **support** that price formed *before*
+    the touch: a "buy-the-dip" setup on the option premium.
+
+    A PE instrument is the mirror case — isolated on an S3 touch
+    (rejected off support); the entry rule waits for a **resistance**
+    the premium formed before the touch.
+
+    Auto-reverse (resistance → PE inside a CE bias, or vice versa) is
+    **not** part of the post-1130 spec and never fires here — the
+    spec's condition pair (pivot < touch, confirm ≥ min_confirm)
+    already filters out post-touch resistances naturally.
+    """
+    b = str(bias_type or "").strip().upper()
+    if b == "CE":
+        return "support"
+    if b == "PE":
+        return "resistance"
+    return None
+
+def check_post_1130_entry(
+    instrument_data: dict[str, Any],
+    isolated_time: datetime,
+    isolated_touch_time: datetime | None,
+) -> dict[str, Any]:
+    """Post-11:30 condition validator — spec §2.1 + §2.2.
+
+    Iterates the ``(15, 30)``-confirmed SR levels supplied in
+    ``instrument_data["sr_levels_15_30"]`` **sorted by
+    ``confirmation_time`` ascending**, and returns the FIRST level
+    that satisfies ALL of:
+
+        Condition 1: ``pivot_time < isolated_touch_time``
+        Condition 2: ``confirmation_time >= isolated_time - 10 min buffer``
+        Type filter: (2026-11-05, second pass) if ``bias_type`` is
+                     present, require ``support`` for CE and
+                     ``resistance`` for PE.  ``bias_type`` is
+                     resolved from the isolation reason upstream.
+
+    The deterministic ordering (sort by confirmation_time) is what
+    makes the rule stable regardless of dict insertion order — the
+    "first confirmed level after isolation touch" is a well-defined
+    sequence, not an accident of iteration order.
+
+    Returns the signal dict on match; otherwise returns a
+    ``{"_post_1130_waiting": True, ...}`` marker so the caller can
+    distinguish "waiting for a matching level" from a hard block.
+
+    Notes
+    -----
+    * ``POST_1130_BUFFER_MINUTES`` (default 10) is read from config
+      on every call so operators can tune it without restarting the
+      service.
+    * ``POST_1130_TARGET_POINTS`` (default 50.0) and
+      ``POST_1130_STOPLOSS_PERCENT`` (default 0.30) are echoed into
+      the returned signal so downstream consumers do not need to
+      re-read config.
+    * When ``isolated_touch_time`` is None the caller has already
+      fallen back to ``isolated_time`` in ``_build_instrument_data``;
+      if it is still None here, condition 1 cannot be verified and the
+      caller is told via ``reason = "missing_touch_time"``.
+    * When ``bias_type`` is missing/unrecognised the type filter is
+      skipped and a WARNING is logged once — this preserves backward
+      compatibility for callers that haven't yet wired the field.
+    """
+    sr_15_30 = instrument_data.get("sr_levels_15_30") or []
+    if not isinstance(sr_15_30, list):
+        sr_15_30 = []
+
+    if not sr_15_30:
+        return {"_post_1130_waiting": True, "reason": "no_sr_levels_yet"}
+
+    buffer_min = int(getattr(config, "POST_1130_BUFFER_MINUTES", 10))
+    min_confirm_time = isolated_time - timedelta(minutes=buffer_min)
+
+    if isolated_touch_time is None:
+        return {"_post_1130_waiting": True, "reason": "missing_touch_time"}
+
+    # ---- 2026-11-05 (B): deterministic ordering -------------------- #
+    # Sort by confirmation_time ascending so the "first confirmed
+    # level after isolation touch" rule is stable.  Levels whose
+    # confirmation_time cannot be parsed are pushed to the end —
+    # they can never satisfy condition 2 anyway.
+    _tz = _market_tz()
+    _dt_min = datetime.min.replace(tzinfo=_tz)
+    ordered = sorted(
+        (sr for sr in sr_15_30 if isinstance(sr, dict)),
+        key=lambda sr: (
+            _parse_iso(sr.get("confirmation_time") or sr.get("confirmed_time"))
+            or _dt_min
+        ),
+    )
+
+    # ---- 2026-11-05 (C): support-only / resistance-only filter ---- #
+    bias_type = instrument_data.get("bias_type")
+    required_type = _required_type_for_bias(bias_type)
+    if required_type is None:
+        logger.warning(
+            "[strategy-entry] POST-1130 bias_type=%r unrecognised — "
+            "skipping the support-only / resistance-only type filter "
+            "for this evaluation",
+            bias_type,
+        )
+
+    # Diagnostics counters (informational — surfaced via the waiting
+    # response when no match is found so the operator can see WHY).
+    time_valid_count = 0
+    type_filtered_count = 0
+
+    for sr in ordered:
+        if sr.get("status") != "confirmed":
+            continue
+
+        pivot_dt = _parse_iso(sr.get("pivot_time"))
+        confirm_dt = _parse_iso(
+            sr.get("confirmation_time") or sr.get("confirmed_time")
+        )
+        if pivot_dt is None or confirm_dt is None:
+            continue
+
+        # Condition 1 — pivot must be strictly BEFORE the touch.
+        cond_pivot = pivot_dt < isolated_touch_time
+
+        # Condition 2 — confirmation must be inside the buffer window.
+        cond_confirm = confirm_dt >= min_confirm_time
+
+        if not (cond_pivot and cond_confirm):
+            continue
+
+        time_valid_count += 1
+
+        # Type filter — CE → support, PE → resistance.
+        if required_type is not None:
+            level_type = str(sr.get("level") or "").strip().lower()
+            if level_type != required_type:
+                type_filtered_count += 1
+                logger.debug(
+                    "[strategy-entry] POST-1130 skipped level — "
+                    "type=%s (required=%s) pivot=%s confirm=%s",
+                    level_type,
+                    required_type,
+                    sr.get("pivot_time"),
+                    sr.get("confirmation_time") or sr.get("confirmed_time"),
+                )
+                continue
+
+        ref_price = sr.get("level_price")
+        if ref_price is None:
+            ref_price = sr.get("price")
+        logger.info(
+            "[strategy-entry] POST-1130 match — type=%s price=%s "
+            "pivot=%s confirm=%s (buffer=%s min, min_confirm=%s, "
+            "bias=%s required_type=%s)",
+            sr.get("level"),
+            ref_price,
+            sr.get("pivot_time"),
+            sr.get("confirmation_time") or sr.get("confirmed_time"),
+            buffer_min,
+            _iso(min_confirm_time),
+            bias_type,
+            required_type,
+        )
+        return {
+            "signal": "BUY",
+            "strategy_regime": "POST_1130_ISOLATED",
+            "sr_reference_level": sr.get("level"),
+            "sr_reference_price": ref_price,
+            "pivot_time": sr.get("pivot_time"),
+            "confirmation_time": sr.get("confirmation_time")
+            or sr.get("confirmed_time"),
+            "target_points": float(
+                getattr(config, "POST_1130_TARGET_POINTS", 50.0)
+            ),
+            "stoploss_pct": float(
+                getattr(config, "POST_1130_STOPLOSS_PERCENT", 0.30)
+            ),
+            "buffer_minutes": buffer_min,
+            "required_type": required_type,
+            "bias_type": bias_type,
+            "_matched_level": sr,
+        }
+
+    # ---- No match — build a specific waiting reason ---------------- #
+    waiting: dict[str, Any] = {
+        "_post_1130_waiting": True,
+        "reason": "no_matching_sr_level",
+        "time_valid_count": time_valid_count,
+        "type_filtered_count": type_filtered_count,
+        "required_type": required_type,
+        "bias_type": bias_type,
+    }
+    if time_valid_count == 0:
+        waiting["reason"] = "no_matching_sr_level"
+    elif required_type is not None and time_valid_count == type_filtered_count:
+        # All time-valid levels were filtered out by type.
+        waiting["reason"] = "no_matching_sr_level_of_required_type"
+    return waiting
+
+# --------------------------------------------------------------------------- #
+# Derive display confirmed time                                               #
+# --------------------------------------------------------------------------- #
 def _derive_display_confirmed_time(
     instrument_key: str,
     pivot_bar_index: int,
@@ -1042,6 +1467,518 @@ def _trigger_auto_reverse(
 # Service                                                                     #
 # --------------------------------------------------------------------------- #
 class StrategyEntrySignalService:
+    def __init__(self) -> None:
+        # 2026-11-05 (A) — one-shot INFO logging keyed by instrument_key.
+        # Prevents a noisy loop of identical "clamped isolated_time"
+        # log lines every scheduler tick.
+        self._clamped_isolation_keys: set[str] = set()
+
+    # ------------------------------------------------------------------ #
+    # Post-11:30 helpers (2026-11-05)                                    #
+    # ------------------------------------------------------------------ #
+    def _resolve_isolation_timestamps(
+        self,
+        isolated: dict[str, Any],
+    ) -> tuple[Any, Any]:
+        """Return ``(isolated_time, isolated_touch_time)`` for the
+        current isolated instrument.
+
+        Preference order:
+
+            1. ``isolated_sr_tracker_service.get_active_isolated_state()``
+               — the authoritative source once the tracker has taken
+               over the isolation.  Provides BOTH timestamps when
+               available.
+            2. Isolation record's ``isolated_at`` / ``touched_at``
+               — populated by ``level_isolated_instrument_service``
+               and always present.
+            3. Best-effort fallback: touch = isolation (they happen
+               together on the isolation tick).
+
+        **2026-11-05 defensive clamp (A)** — after resolution, if the
+        raw ``isolated_time`` parses and is strictly greater than the
+        raw ``isolated_touch_time``, the function silently substitutes
+        ``isolated_time = isolated_touch_time`` and logs the
+        substitution exactly once per isolation (keyed by
+        ``instrument_key``).
+
+        This is a belt-and-suspenders guard on top of the tracker-side
+        correction: even if the tracker's own backfill fix is
+        bypassed, or a state file written by the buggy build survives
+        a restart, the POST-1130 buffer check still anchors against
+        the real market moment (e.g. 12:59) instead of the process-
+        start timestamp (e.g. 23:27).
+
+        Both values are returned as raw strings (ISO or numeric) — the
+        caller parses them via ``_parse_iso``.  ``None`` is possible
+        only when neither source has a value, in which case the
+        post-11:30 gate is skipped (see ``evaluate_isolated_entry``).
+        """
+        iso_time_raw = None
+        iso_touch_raw = None
+
+        try:
+            from services.isolated_sr_tracker_service import (
+                isolated_sr_tracker_service,
+            )
+            tracker_state = isolated_sr_tracker_service.get_active_isolated_state()
+            if tracker_state and str(
+                tracker_state.get("instrument_key") or ""
+            ) == str(isolated.get("instrument_key") or ""):
+                iso_time_raw = tracker_state.get("isolated_time")
+                iso_touch_raw = tracker_state.get("isolated_touch_time")
+        except Exception:
+            logger.exception(
+                "[strategy-entry] tracker timestamp fetch failed for %s",
+                isolated.get("instrument_key"),
+            )
+
+        if not iso_time_raw:
+            iso_time_raw = (
+                isolated.get("isolated_at") or isolated.get("touched_at")
+            )
+        if not iso_touch_raw:
+            iso_touch_raw = (
+                isolated.get("touched_at") or isolated.get("isolated_at")
+            )
+
+        # ---- 2026-11-05 (A): defensive clamp ---------------------- #
+        # If the raw isolated_time parses and is LATER than the raw
+        # touch time, prefer the touch time as the effective event
+        # moment.  This is the last line of defence against the
+        # backfill-replay pollution bug.
+        if iso_time_raw and iso_touch_raw:
+            iso_dt = _parse_iso(iso_time_raw)
+            touch_dt = _parse_iso(iso_touch_raw)
+            if iso_dt is not None and touch_dt is not None and iso_dt > touch_dt:
+                key = str(isolated.get("instrument_key") or "")
+                if key and key not in self._clamped_isolation_keys:
+                    self._clamped_isolation_keys.add(key)
+                    logger.info(
+                        "[strategy-entry] clamping isolated_time for "
+                        "POST-1130 eval — key=%s stored=%s touch=%s "
+                        "(gap=%.1f min) → using touch as effective "
+                        "isolated_time",
+                        key,
+                        iso_time_raw,
+                        iso_touch_raw,
+                        (iso_dt - touch_dt).total_seconds() / 60.0,
+                    )
+                iso_time_raw = iso_touch_raw
+        # ------------------------------------------------------------- #
+
+        return iso_time_raw, iso_touch_raw
+
+    def _build_instrument_data(
+        self,
+        isolated: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Build the ``instrument_data`` dict for ``evaluate_isolated_entry``.
+
+        Fetches the ``(15, 30)``-configured SR levels via
+        ``_run_pivot_scan_enriched`` so the caller receives
+        post-11:30-spec-shaped level dicts (``level_price``,
+        ``type``, ``confirmation_time``, ``status``) in addition
+        to the historical fields.
+
+        Returns an empty ``sr_levels_15_30`` when the instrument is
+        not yet in the live SR engine's candle state — the caller
+        treats that as "waiting for candles".
+
+        2026-11-05 additions
+        --------------------
+        * ``bias_type`` — "CE" / "PE" / None, derived from the
+          isolation reason.  Consumed by ``check_post_1130_entry``
+          for the support-only / resistance-only filter (change C).
+        * ``isolated_time`` / ``isolated_touch_time`` are the values
+          returned by ``_resolve_isolation_timestamps`` — i.e. already
+          backfill-corrected (change A).
+        """
+        instrument_key = str(isolated.get("instrument_key") or "").strip()
+        iso_time_raw, iso_touch_raw = self._resolve_isolation_timestamps(isolated)
+
+        # Bias side from the isolation reason (R3 → CE, S3 → PE).
+        _touch_side, bias_type = _parse_touch_reason(isolated.get("reason"))
+
+        entry_config = getattr(config, "POST_1130_ENTRY_SR_CONFIG", (15, 30))
+        try:
+            entry_left = max(1, int(entry_config[0]))
+            entry_right = max(1, int(entry_config[1]))
+        except (TypeError, ValueError, IndexError):
+            entry_left, entry_right = 15, 30
+
+        sr_15_30: list[dict[str, Any]] = []
+        if instrument_key:
+            sr_15_30 = _run_pivot_scan_enriched(
+                instrument_key, entry_left, entry_right,
+            )
+
+        return {
+            "instrument_key": instrument_key,
+            "isolated_time": iso_time_raw,
+            "isolated_touch_time": iso_touch_raw,
+            "sr_levels_15_30": sr_15_30,
+            "entry_sr_config": [entry_left, entry_right],
+            "bias_type": bias_type,
+        }
+
+    def _build_post_1130_buy_response(
+        self,
+        branch: dict[str, Any],
+        isolated: dict[str, Any],
+        iso_status: dict[str, Any],
+        instrument_data: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Wrap a post-11:30 ``{"signal": "BUY", ...}`` into the
+        standard response shape so downstream consumers can parse it
+        uniformly.
+
+        Includes a ``post_1130`` block carrying the reference SR
+        level, the ``(15, 30)`` config actually used, the target /
+        stop values, AND (2026-11-05, change D) the ``(15, 15)``
+        exit-SR config that the exit tracker needs.
+
+        The enriched ``entry`` block carries everything the order
+        placer needs without re-reading config:
+
+            entry_price       — close of the confirmation candle
+                                (resolved via ``_entry_price_for``)
+            entry_time        — ``confirmation_time`` of the
+                                matched level
+            stop_price        — entry × (1 − POST_1130_STOPLOSS_PERCENT)
+            target_price      — entry + POST_1130_TARGET_POINTS
+            reference_type    — "support" | "resistance"
+            reference_price   — numeric reference level price
+            pivot_time        — matched level's pivot time
+            confirmation_time — matched level's confirmation time
+
+        The advisory entry / stop / target values are informational
+        only — ``dummy_order_service`` resolves its own fill.  But
+        with the enriched payload, a POST-1130-aware consumer can
+        place the order directly from this response.
+        """
+        instrument_key = str(isolated.get("instrument_key") or "").strip()
+        matched = branch.get("_matched_level") or {}
+
+        ref_price = branch.get("sr_reference_price")
+        try:
+            ref_price_f = float(ref_price) if ref_price is not None else None
+        except (TypeError, ValueError):
+            ref_price_f = None
+
+        stoploss_pct = float(branch.get("stoploss_pct") or 0.0)
+        target_points = float(branch.get("target_points") or 0.0)
+
+        pivot_time_iso = branch.get("pivot_time")
+        confirmation_time_iso = (
+            branch.get("confirmation_time") or matched.get("confirmed_time")
+        )
+
+        # ---- 2026-11-05 (D): resolve the actual entry price --------- #
+        # The spec's fill price is the close of the confirmation
+        # candle — e.g. 113.75 at 13:03 for today's support 99.50
+        # trigger.  Resolution order:
+        #
+        #   1. ``confirmed_time_price`` from the matched level (fastest
+        #      path — the enriched dict may carry it if the upstream
+        #      producer included it).
+        #   2. ``_entry_price_for(key, confirmation_time_iso)`` — the
+        #      standard candle-close resolver used by Path A; walks
+        #      the SR engine buffer, then the intraday API, then LTP.
+        #   3. Reference level price — last-resort fallback.  Wrong as
+        #      a fill, but keeps the response self-consistent when the
+        #      candle series hasn't been populated yet.
+        entry_price: float | None = None
+        entry_price_source: str | None = None
+
+        # (1) Prefer the level's confirmed_time_price when it exists.
+        try:
+            ctp = float(
+                matched.get("confirmed_time_price")
+                if matched.get("confirmed_time_price") is not None
+                else 0.0
+            )
+        except (TypeError, ValueError):
+            ctp = 0.0
+        if ctp > 0:
+            entry_price = ctp
+            entry_price_source = "confirmed_time_price"
+
+        # (2) Standard candle-close resolver.
+        if entry_price is None and instrument_key and confirmation_time_iso:
+            resolved, src = _entry_price_for(
+                instrument_key, str(confirmation_time_iso),
+            )
+            if resolved is not None and resolved > 0:
+                entry_price = float(resolved)
+                entry_price_source = src
+
+        # (3) Last-resort reference price fallback.
+        if entry_price is None:
+            entry_price = ref_price_f
+            entry_price_source = "reference_price_fallback"
+
+        # Advisory stop / target — computed from the resolved entry.
+        stop_price: float | None = None
+        target_price: float | None = None
+        if entry_price is not None and entry_price > 0:
+            stop_price = round(entry_price * (1.0 - stoploss_pct), 4)
+            target_price = round(entry_price + target_points, 4)
+        # ------------------------------------------------------------- #
+
+        # Bias side from the isolation record's reason (CE for R3, PE
+        # for S3).  The chosen instrument is the ISOLATED instrument
+        # itself — the consumer decides direction from
+        # ``sr_reference_level`` + ``bias_type``.
+        _touch_side, bias_type = _parse_touch_reason(isolated.get("reason"))
+
+        # Reference type as the spec expects it (lowercase "support"
+        # / "resistance").  Falls back to the branch's
+        # ``sr_reference_level`` when the matched level was enriched
+        # but its ``level`` field wasn't normalised.
+        reference_type = str(
+            branch.get("sr_reference_level")
+            or matched.get("level")
+            or ""
+        ).strip().lower() or None
+
+        candidate = {
+            "side": bias_type,
+            "instrument_key": instrument_key,
+            "trading_symbol": isolated.get("trading_symbol"),
+            "is_bias_side": True,
+            "state": "armed",
+            "state_note": "post_1130_sr_trigger",
+            "entry_type": "post_1130_sr_trigger",
+            "entry_support": None,
+            "blocking_resistance": None,
+            "reversal_trigger": None,
+            "warning": None,
+            "warning_detail": None,
+            "entry": {
+                # Required spec fields (change D).
+                "price": entry_price,
+                "price_source": entry_price_source,
+                "time": confirmation_time_iso,
+                "stop": stop_price,
+                "sl_pct": stoploss_pct,
+                "stop_source": "post_1130_fixed_pct",
+                "target": target_price,
+                "target_points": target_points,
+                "target_pivot_time": pivot_time_iso,
+                # Reference-level context (change D).
+                "reference_type": reference_type,
+                "reference_price": ref_price_f,
+                "pivot_time": pivot_time_iso,
+                "confirmation_time": confirmation_time_iso,
+            },
+        }
+
+        # ---- 2026-11-05 (D): exit_sr_config echoed into post_1130 --- #
+        exit_cfg_raw = getattr(
+            config, "POST_1130_EXIT_SR_CONFIG", (15, 15)
+        )
+        try:
+            exit_cfg = [int(exit_cfg_raw[0]), int(exit_cfg_raw[1])]
+        except (TypeError, ValueError, IndexError):
+            exit_cfg = [15, 15]
+        # ------------------------------------------------------------- #
+
+        return {
+            "status": "ok",
+            "execution_path": "POST_1130",
+            "strategy_regime": "POST_1130_ISOLATED",
+            "day": iso_status.get("day"),
+            "isolated": {
+                "instrument_key": instrument_key,
+                "trading_symbol": isolated.get("trading_symbol"),
+                "reason": isolated.get("reason"),
+                "source": isolated.get("source"),
+                "trigger_index": isolated.get("trigger_index"),
+                "routed_index": isolated.get("routed_index"),
+                "touched_at": isolated.get("touched_at"),
+                "isolated_at": isolated.get("isolated_at"),
+                "isolated_time": instrument_data.get("isolated_time"),
+                "isolated_touch_time": instrument_data.get("isolated_touch_time"),
+                "trigger_is_self_nifty": isolated.get("trigger_is_self_nifty"),
+            },
+            "post_1130": {
+                "regime": "POST_1130_ISOLATED",
+                "reference_type": reference_type,
+                "reference_price": ref_price_f,
+                "pivot_time": pivot_time_iso,
+                "confirmation_time": confirmation_time_iso,
+                "buffer_minutes": int(branch.get("buffer_minutes") or 0),
+                "target_points": target_points,
+                "stoploss_pct": stoploss_pct,
+                "entry_sr_config": list(
+                    instrument_data.get("entry_sr_config") or [15, 30]
+                ),
+                # 2026-11-05 (D) — the exit tracker reads this.
+                "exit_sr_config": exit_cfg,
+                "bias_type": bias_type,
+                "required_type": branch.get("required_type"),
+            },
+            "candidates": [candidate],
+            "chosen_side": bias_type,
+            "chosen_instrument_key": instrument_key,
+            "chosen_entry_type": "post_1130_sr_trigger",
+            "promotion": {
+                "recommended": False,
+                "already_applied": False,
+                "blockers": ["post_1130_regime_no_promotion"],
+                "current_active_instrument_key": instrument_key,
+                "target_instrument_key": None,
+                "target_trading_symbol": None,
+                "target_side": None,
+                "official_isolated_key": instrument_key,
+                "promotion_allowed": False,
+                "re_promotion_allowed": False,
+            },
+            "active_instrument_key": instrument_key,
+            "warnings": [],
+            "generated_at": _now_utc_iso(),
+        }
+
+    def _build_post_1130_waiting_response(
+        self,
+        branch: dict[str, Any],
+        isolated: dict[str, Any],
+        iso_status: dict[str, Any],
+        instrument_data: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Wrap a post-11:30 waiting marker into the standard response shape.
+
+        ``status`` is ``"waiting_post_1130"`` so the admin UI can
+        display "waiting" rather than "no_isolation".  The
+        ``post_1130.waiting_reason`` field explains WHY we are waiting:
+
+            * ``"no_sr_levels_yet"``                   — no pivots
+                                                          detected yet
+            * ``"missing_touch_time"``                 — cannot verify
+                                                          condition 1
+            * ``"no_matching_sr_level"``               — pivots exist
+                                                          but none
+                                                          satisfy both
+                                                          conditions
+            * ``"no_matching_sr_level_of_required_type"`` — pivots
+                                                          satisfy the
+                                                          time
+                                                          conditions
+                                                          but none are
+                                                          of the
+                                                          bias-side
+                                                          required type
+                                                          (support for
+                                                          CE,
+                                                          resistance
+                                                          for PE)
+        """
+        instrument_key = str(isolated.get("instrument_key") or "").strip()
+        reason = str(branch.get("reason") or "unknown")
+        _touch_side, bias_type = _parse_touch_reason(isolated.get("reason"))
+
+        warnings: list[str] = []
+        if reason == "no_sr_levels_yet":
+            warnings.append(
+                "POST-1130: waiting for the first (15,30) pivot — "
+                "no candles on the bias-side instrument yet."
+            )
+        elif reason == "missing_touch_time":
+            warnings.append(
+                "POST-1130: isolated_touch_time is missing from the "
+                "isolation record and tracker; cannot verify "
+                "condition 1 (pivot_time < touch_time)."
+            )
+        elif reason == "no_matching_sr_level":
+            warnings.append(
+                "POST-1130: pivot(s) exist but none satisfy both "
+                "conditions (pivot < touch AND confirmation within "
+                "the buffer window)."
+            )
+        elif reason == "no_matching_sr_level_of_required_type":
+            req = branch.get("required_type") or "—"
+            warnings.append(
+                f"POST-1130: pivot(s) satisfy the time conditions but "
+                f"none are of the bias-side required type ({req})."
+            )
+
+        exit_cfg_raw = getattr(
+            config, "POST_1130_EXIT_SR_CONFIG", (15, 15)
+        )
+        try:
+            exit_cfg = [int(exit_cfg_raw[0]), int(exit_cfg_raw[1])]
+        except (TypeError, ValueError, IndexError):
+            exit_cfg = [15, 15]
+
+        return {
+            "status": "waiting_post_1130",
+            "execution_path": "POST_1130",
+            "strategy_regime": "POST_1130_ISOLATED",
+            "day": iso_status.get("day"),
+            "isolated": {
+                "instrument_key": instrument_key,
+                "trading_symbol": isolated.get("trading_symbol"),
+                "reason": isolated.get("reason"),
+                "source": isolated.get("source"),
+                "trigger_index": isolated.get("trigger_index"),
+                "routed_index": isolated.get("routed_index"),
+                "touched_at": isolated.get("touched_at"),
+                "isolated_at": isolated.get("isolated_at"),
+                "isolated_time": instrument_data.get("isolated_time"),
+                "isolated_touch_time": instrument_data.get("isolated_touch_time"),
+                "trigger_is_self_nifty": isolated.get("trigger_is_self_nifty"),
+            },
+            "post_1130": {
+                "regime": "POST_1130_ISOLATED",
+                "waiting_reason": reason,
+                "buffer_minutes": int(
+                    getattr(config, "POST_1130_BUFFER_MINUTES", 10)
+                ),
+                "target_points": float(
+                    getattr(config, "POST_1130_TARGET_POINTS", 50.0)
+                ),
+                "stoploss_pct": float(
+                    getattr(config, "POST_1130_STOPLOSS_PERCENT", 0.30)
+                ),
+                "entry_sr_config": list(
+                    instrument_data.get("entry_sr_config") or [15, 30]
+                ),
+                "exit_sr_config": exit_cfg,
+                "sr_levels_considered": len(
+                    instrument_data.get("sr_levels_15_30") or []
+                ),
+                "bias_type": bias_type,
+                "required_type": branch.get("required_type"),
+                "time_valid_count": int(branch.get("time_valid_count") or 0),
+                "type_filtered_count": int(
+                    branch.get("type_filtered_count") or 0
+                ),
+            },
+            "candidates": [],
+            "chosen_side": None,
+            "chosen_instrument_key": None,
+            "chosen_entry_type": None,
+            "promotion": {
+                "recommended": False,
+                "already_applied": False,
+                "blockers": ["post_1130_waiting"],
+                "current_active_instrument_key": instrument_key,
+                "target_instrument_key": None,
+                "target_trading_symbol": None,
+                "target_side": None,
+                "official_isolated_key": instrument_key,
+                "promotion_allowed": False,
+                "re_promotion_allowed": False,
+            },
+            "active_instrument_key": instrument_key,
+            "warnings": warnings,
+            "generated_at": _now_utc_iso(),
+        }
+
+    # ------------------------------------------------------------------ #
+    # Main entry point                                                   #
+    # ------------------------------------------------------------------ #
     def compute(self) -> dict[str, Any]:
         if not getattr(config, "STRATEGY_ENTRY_ENABLED", True):
             return {
@@ -1063,27 +2000,6 @@ class StrategyEntrySignalService:
                 "generated_at": _now_utc_iso(),
             }
 
-        # --------------------------------------------------------------- #
-        # G1 v4.1 — split execution paths by trigger source.
-        #
-        # Path A (trigger_is_self_nifty=True)  : unchanged from v4.0.
-        # Path B (trigger_is_self_nifty=False) : the 10-min scan and
-        #                                        auto-reverse are DISABLED.
-        #                                        The bias-side instrument
-        #                                        stays isolated all day and
-        #                                        the dummy-order service
-        #                                        manages multi-order SR
-        #                                        level execution + Rupee
-        #                                        trailing independently.
-        # --------------------------------------------------------------- #
-        if not bool(getattr(config, "STRATEGY_EXT_PATH_B_ENABLED", True)):
-            # Path B disabled entirely; fall through to Path A logic.
-            pass
-        else:
-            iso = (iso_status or {}).get("isolated") or {}
-            if iso and iso.get("trigger_is_self_nifty") is False:
-                return self._build_path_b_response(iso_status, iso)
-
         isolated = (iso_status or {}).get("isolated") or {}
         if not isolated:
             return {
@@ -1092,6 +2008,65 @@ class StrategyEntrySignalService:
                 "generated_at": _now_utc_iso(),
             }
 
+        # --------------------------------------------------------------- #
+        # 2026-11-05 (third pass) — POST-11:30 regime gate runs FIRST.
+        #
+        # The POST-1130 regime is keyed off ``isolated_time`` — NOT the
+        # trigger source.  A Path B isolation that happens AFTER 11:30
+        # therefore routes through POST-1130, superseding Path A/B.
+        #
+        # This is the fix for the 2026-11-05 backfill replay: the
+        # MIDCPNIFTY-triggered 12:59 isolation now correctly produces
+        # a POST-1130 CE entry (support 99.50 @ 13:03) instead of a
+        # Path B response.
+        #
+        # ``evaluate_isolated_entry()`` returns a branch marker.  When
+        # ``isolated_time.time() >= POST_1130_REGIME_TIME`` (default
+        # 11:30 IST) it hands back either a BUY signal or a waiting
+        # marker — both are wrapped into responses here and returned
+        # WITHOUT running the standard 10-minute scan.
+        #
+        # When the branch is ``{"_branch": "standard"}`` (or the
+        # isolation time is missing / pre-11:30) control falls through
+        # to Path B / Path A logic below.
+        # --------------------------------------------------------------- #
+        instrument_data = self._build_instrument_data(isolated)
+        branch = evaluate_isolated_entry(instrument_data)
+
+        if isinstance(branch, dict):
+            if branch.get("signal") == "BUY":
+                return self._build_post_1130_buy_response(
+                    branch, isolated, iso_status, instrument_data,
+                )
+            if branch.get("_post_1130_waiting"):
+                return self._build_post_1130_waiting_response(
+                    branch, isolated, iso_status, instrument_data,
+                )
+            # _branch == "standard" → pre-11:30; fall through.
+
+        # --------------------------------------------------------------- #
+        # G1 v4.1 — Path B (external-index trigger).
+        #
+        # Reached ONLY when the POST-1130 gate above returned "standard"
+        # (i.e. the isolation occurred BEFORE 11:30 IST).  For these
+        # pre-11:30 isolations the 10-minute scan and auto-reverse are
+        # intentionally disabled: the bias-side instrument stays
+        # isolated all day and the dummy-order service manages
+        # multi-order SR-level execution + Rupee trailing.
+        #
+        # Path B can be disabled entirely via
+        # ``STRATEGY_EXT_PATH_B_ENABLED=false``, in which case control
+        # falls through to Path A regardless of trigger source.
+        # --------------------------------------------------------------- #
+        if (
+            bool(getattr(config, "STRATEGY_EXT_PATH_B_ENABLED", True))
+            and isolated.get("trigger_is_self_nifty") is False
+        ):
+            return self._build_path_b_response(iso_status, isolated)
+
+        # --------------------------------------------------------------- #
+        # Standard Path A — unchanged from here down.
+        # --------------------------------------------------------------- #
         instrument_key = str(isolated.get("instrument_key") or "").strip()
         if not instrument_key:
             return {

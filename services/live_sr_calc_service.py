@@ -9,6 +9,47 @@ This service is fundamentally different from
     * NEVER writes anything to disk.
     * Every call recomputes from fresh data and returns the result.
 
+Per-minute pivot cache (2026-11-05)
+----------------------------------
+An **opt-in** per-minute cache is exposed via
+``calculate_pivots_cached(instrument_key, left, right)`` for callers
+that want to avoid redundant intraday-API fetches on every 30 s
+scheduler tick.
+
+The cache key is ``(instrument_key, left_bars, right_bars)`` and the
+TTL is one minute.  Within a single minute, every call with the same
+key returns **byte-identical** level dicts (``cached=True``); at the
+next minute boundary the entry is invalidated and the pipeline
+recomputes from fresh data.  This gives determinism *within* a minute
+while still refreshing *once per minute*.
+
+The base methods (``calculate``, ``calculate_dual``,
+``build_series_for_day``, ``get_candle_close_at*``) remain fully
+stateless and always recompute from fresh data — only
+``calculate_pivots_cached`` opts into the cache.
+
+When to use it
+~~~~~~~~~~~~~~
+The 2026-11-05 ``dummy_order_service`` tick loop calls the ``(15, 15)``
+pivot scan every 30 s per open POST-1130 order (see
+``_update_post_1130_order``).  **That path currently reads from
+``live_sr_levels_service._states``** (the live engine's in-memory
+buffer, which is already fast and consistent) and therefore does
+**not** need this cache.  The cache exists for callers that would
+otherwise hit the intraday API twice per minute per instrument — e.g.
+a future exit-tracker rewrite that prefers fresh-from-API data.
+
+When to avoid it
+~~~~~~~~~~~~~~~~
+    * **Admin / replay tools** — pass through ``calculate()`` or
+      ``calculate_dual()`` directly; those always compute fresh.
+    * **First-fetch races** — if the very first call in a minute
+      lands before the API has published the current minute's candle,
+      the cache stores the incomplete series for the rest of that
+      minute.  Callers with that risk should use
+      ``force_refresh=True`` or read the in-memory buffer via
+      ``live_sr_levels_service``.
+
 G1 v4.1 — DETERMINISM CONTRACT
 ------------------------------
 Two new methods exist so that callers (``dummy_order_service`` in
@@ -38,6 +79,48 @@ newest available bar" class of bugs:
     * ``get_candle_close_at`` continues to return ``None`` for an
       absent minute (unchanged).  Callers must treat ``None`` as
       "defer / unresolved", never as "fall through to live LTP".
+
+Post-11:30 dual-configuration (2026-11-05)
+------------------------------------------
+The post-11:30 isolated-instrument strategy uses **two different**
+pivot windows against the SAME candle series:
+
+    * ENTRY confirmation window  → ``(15, 30)``  (wide right edge —
+                                    fewer false triggers after midday
+                                    chop)
+    * EXIT  confirmation window  → ``(15, 15)``  (symmetric — fast
+                                    reaction to the post-entry
+                                    resistance that closes the trade)
+
+``calculate_dual()`` builds the merged series ONCE and runs both
+pivot passes in a single call, so entry and exit use byte-identical
+candle input.  This is the recommended path for the post-11:30
+strategy.  The single-config ``calculate()`` remains unchanged so
+existing consumers (routes, dashboards, replay tools) keep working.
+
+Every emitted level dict is now enriched with the strategy-facing
+shape requested by the post-11:30 spec:
+
+    {
+        # ... existing fields (price, level, pivot_time, confirmed_time,
+        #     confirmed_time_price, pivot_bar_index, confirmed_bar_index,
+        #     left_bars, right_bars, is_today) are preserved verbatim so
+        #     no existing consumer breaks ...
+
+        "level_price":       471.65,        # float, numeric price
+        "type":              "resistance",  # "support" | "resistance"
+        "pivot_time":        "<iso>",       # pivot candle timestamp
+        "confirmation_time": "<iso>",       # confirming candle timestamp
+        "status":            "confirmed",   # always "confirmed"
+    }
+
+The historical field named ``level`` intentionally REMAINS the type
+string ("support" / "resistance") — ``_mark_is_today``, the sort
+comparators and the ``nearest`` computation all key on it, so
+changing it to a float would break every consumer.  Use
+``level_price`` when you need the numeric price, or ``price`` (the
+pre-existing name) which is the same value.  ``confirmation_time``
+is an alias of the pre-existing ``confirmed_time``.
 
 Opt-in `live_sr` block
 ----------------------
@@ -78,6 +161,8 @@ service's candle loaders without duplication:
     ``get_first_intraday_candle(instrument_key, expected_first_minute=None)``
         → first intraday candle, verified against the expected
           session-open minute (or None) — G1 v4.1
+    ``calculate_pivots_cached(instrument_key, left, right, ...)``
+        → per-minute-cached pivot scan (opt-in) — 2026-11-05
 
 The first three exist so the periodic refresh job
 (``live_sr_refresh_from_api``, see
@@ -219,6 +304,8 @@ See ``routes/live_sr_calc_routes.py`` for the HTTP surface.
 from __future__ import annotations
 
 import json
+import threading
+import time
 from datetime import datetime, time as dtime, timezone
 from pathlib import Path
 from typing import Any
@@ -244,6 +331,35 @@ _HIGH_FIELDS = ("high", "h")
 _LOW_FIELDS = ("low", "l")
 _CLOSE_FIELDS = ("close", "c")
 _VOLUME_FIELDS = ("volume", "v", "vol", "vtt")
+
+# --------------------------------------------------------------------------- #
+# Post-11:30 dual-configuration defaults (kept as module constants so the     #
+# strategy service and admin routes can reference them without duplicating   #
+# the literals; see ``core.config.POST_1130_ENTRY_SR_CONFIG`` /             #
+# ``POST_1130_EXIT_SR_CONFIG`` for the operator-facing knobs).              #
+# --------------------------------------------------------------------------- #
+_ENTRY_SR_LEFT_BARS = 15
+_ENTRY_SR_RIGHT_BARS = 30
+_EXIT_SR_LEFT_BARS = 15
+_EXIT_SR_RIGHT_BARS = 15
+
+# --------------------------------------------------------------------------- #
+# Per-minute pivot cache (2026-11-05)                                         #
+#                                                                             #
+# Cache key:  (instrument_key, left_bars, right_bars)                         #
+# Value:      {minute_bucket, expires_at (monotonic), cached_at, payload}     #
+#                                                                             #
+# The minute_bucket is derived from wall-clock time (int(now.timestamp() //   #
+# 60)).  Within a single minute, all calls with the same key return the SAME  #
+# cached payload.  At the next minute boundary the bucket changes and the    #
+# payload is recomputed.                                                      #
+#                                                                             #
+# TTL is a second-level safety net for the same-minute case (in case of a     #
+# clock bump or a caller explicitly passing a stale ``minute_bucket``).       #
+# --------------------------------------------------------------------------- #
+_PIVOT_CACHE_TTL_SECONDS = 60.0
+_PIVOT_CACHE_MAX_ENTRIES = 5000       # hard cap — LRU evicts the oldest
+_PIVOT_CACHE_MAX_AGE_BUCKETS = 10     # prune entries older than 10 minutes
 
 # --------------------------------------------------------------------------- #
 # Time / path helpers                                                         #
@@ -396,10 +512,80 @@ def _default_session_open_time() -> dtime:
         return dtime(9, 15)
 
 # --------------------------------------------------------------------------- #
+# Level enrichment (2026-11-05)                                               #
+# --------------------------------------------------------------------------- #
+def _enrich_level(level: dict[str, Any]) -> dict[str, Any]:
+    """Return a shallow copy of ``level`` with the post-11:30 spec fields.
+
+    Existing fields (``price``, ``level`` [type string], ``pivot_time``,
+    ``confirmed_time``, ``confirmed_time_price``, ``pivot_bar_index``,
+    ``confirmed_bar_index``, ``left_bars``, ``right_bars``, ``is_today``)
+    are preserved verbatim so no existing consumer breaks.
+
+    Added fields:
+
+        ``level_price``        — float, numeric price (== ``price``)
+        ``type``               — "support" | "resistance" (== ``level``)
+        ``confirmation_time``  — alias of ``confirmed_time``
+        ``status``             — always ``"confirmed"`` (a level that
+                                 reaches this method has already passed
+                                 the ``i + right_bars`` confirmation
+                                 check inside ``_compute_pivots``)
+    """
+    if not isinstance(level, dict):
+        return {}
+
+    out = dict(level)
+
+    # Numeric price — prefer the existing ``price`` field; fall back to
+    # ``level_price`` if a caller somehow supplied it pre-enriched.
+    try:
+        price_val = out.get("price")
+        if price_val is None:
+            price_val = out.get("level_price")
+        out["level_price"] = float(price_val) if price_val is not None else None
+    except (TypeError, ValueError):
+        out["level_price"] = None
+
+    # Type alias — the historical ``level`` field is the type string.
+    out["type"] = out.get("type") or out.get("level")
+
+    # Confirmation-time alias.
+    out["confirmation_time"] = (
+        out.get("confirmation_time") or out.get("confirmed_time")
+    )
+
+    # Status — any level emitted by ``_compute_pivots`` is confirmed by
+    # construction (the pivot has ``right_bars`` bars after it).
+    out.setdefault("status", "confirmed")
+
+    return out
+
+# --------------------------------------------------------------------------- #
 # Service                                                                     #
 # --------------------------------------------------------------------------- #
 class LiveSRCalcService:
-    """On-demand SR calculator. Stateless and safe to call concurrently."""
+    """On-demand SR calculator. Stateless and safe to call concurrently.
+
+    (2026-11-05) A per-minute pivot cache is available via
+    ``calculate_pivots_cached(...)`` for callers that want to avoid
+    redundant intraday-API fetches on every 30 s tick.  The base
+    ``calculate()`` / ``calculate_dual()`` methods remain fully
+    stateless and always compute from fresh data.
+    """
+
+    def __init__(self) -> None:
+        # Per-minute pivot cache (opt-in via calculate_pivots_cached).
+        #
+        # key   = (instrument_key, left_bars, right_bars)
+        # value = {
+        #     "minute_bucket": int,        # wall-clock minute of the result
+        #     "expires_at":    float,      # time.monotonic() deadline
+        #     "cached_at":     float,      # time.monotonic() write time
+        #     "payload":       dict,       # the returned result dict
+        # }
+        self._pivot_cache_lock = threading.RLock()
+        self._pivot_cache: dict[tuple[str, int, int], dict[str, Any]] = {}
 
     # ------------------------------------------------------------------ #
     # Public entry point                                                 #
@@ -682,6 +868,737 @@ class LiveSRCalcService:
             "candles": merged if include_candles else None,
             "generated_at": _now_iso(),
         }
+
+    # ------------------------------------------------------------------ #
+    # Dual-configuration entry point (post-11:30 strategy)               #
+    # ------------------------------------------------------------------ #
+    def calculate_dual(
+        self,
+        *,
+        instrument_key: str | None = None,
+        underlying: str | None = None,
+        strike: str | int | float | None = None,
+        strike_type: str | None = None,
+        entry_config: tuple[int, int] | None = None,
+        exit_config: tuple[int, int] | None = None,
+        lookback_days: int | None = None,
+        only_today: bool = True,
+        include_candles: bool = False,
+        include_live_sr: bool = False,
+        debug: bool = False,
+    ) -> dict[str, Any]:
+        """Compute SR levels for BOTH entry and exit windows in one pass.
+
+        The merged candle series is built ONCE and reused for both
+        pivot passes, which is the whole point of this method — the
+        post-11:30 strategy needs ``(15, 30)`` for entry and
+        ``(15, 15)`` for exit against byte-identical input.
+
+        Defaults:
+
+            * ``entry_config`` → ``(15, 30)`` — matches
+              ``config.POST_1130_ENTRY_SR_CONFIG``.
+            * ``exit_config``  → ``(15, 15)`` — matches
+              ``config.POST_1130_EXIT_SR_CONFIG``.
+
+        Override either tuple to compute against a custom window.
+        Passing the same tuple for both configs is valid — the two
+        result blocks will then be identical (useful for debugging
+        the shared series).
+
+        Response shape (illustrative)::
+
+            {
+                "status": "ok",
+                "instrument_key": "NSE_FO|53942",
+                "trading_symbol": "...",
+                "mode": "intraday",
+                "today_iso": "2026-11-05",
+                "merged": { ...shared series metadata... },
+                "sources": { "historical": {...}, "intraday": {...} },
+                "entry": {
+                    "params": {"left_bars": 15, "right_bars": 30},
+                    "levels": [ ...enriched level dicts... ],
+                    "counts": {...},
+                    "nearest": {...},
+                },
+                "exit": {
+                    "params": {"left_bars": 15, "right_bars": 15},
+                    "levels": [ ...enriched level dicts... ],
+                    "counts": {...},
+                    "nearest": {...},
+                },
+                "live_sr": null | {...},
+                "warnings": [...],
+                "generated_at": "2026-11-05T...",
+            }
+
+        Every level dict in ``entry.levels`` / ``exit.levels`` carries the
+        post-11:30 spec fields (``level_price``, ``type``, ``pivot_time``,
+        ``confirmation_time``, ``status``) in addition to the historical
+        fields (``price``, ``level``, ``confirmed_time``, ...).
+
+        A level cannot appear in ``entry.levels`` unless it is confirmed
+        within the wider ``(15, 30)`` window; the same level MAY appear
+        in ``exit.levels`` confirmed earlier via the tighter ``(15, 15)``
+        window.  This asymmetry is intentional — the entry filter is
+        deliberately stricter than the exit filter.
+        """
+        # ---- Resolve configs ---------------------------------------- #
+        if entry_config is None:
+            entry_config = (
+                int(getattr(config, "POST_1130_ENTRY_SR_CONFIG", (15, 30))[0]),
+                int(getattr(config, "POST_1130_ENTRY_SR_CONFIG", (15, 30))[1]),
+            )
+        if exit_config is None:
+            exit_config = (
+                int(getattr(config, "POST_1130_EXIT_SR_CONFIG", (15, 15))[0]),
+                int(getattr(config, "POST_1130_EXIT_SR_CONFIG", (15, 15))[1]),
+            )
+
+        entry_left = max(1, min(100, int(entry_config[0])))
+        entry_right = max(1, min(100, int(entry_config[1])))
+        exit_left = max(1, min(100, int(exit_config[0])))
+        exit_right = max(1, min(100, int(exit_config[1])))
+
+        # ---- 1. Resolve entry --------------------------------------- #
+        entry, selector_source = self._resolve_entry(
+            instrument_key, underlying, strike, strike_type,
+        )
+        if entry is None:
+            return {
+                "status": "not_found",
+                "error": "instrument_not_found",
+                "selector": {
+                    "instrument_key": str(instrument_key) if instrument_key else None,
+                    "underlying": normalize_underlying(underlying) or underlying,
+                    "strike": normalize_strike(strike) or strike,
+                    "type": normalize_strike_type(strike_type) or strike_type,
+                },
+                "generated_at": _now_iso(),
+            }
+
+        lb = max(1, min(
+            30,
+            lookback_days if lookback_days is not None
+            else config.LIVE_SR_CALC_DEFAULT_LOOKBACK_DAYS,
+        ))
+
+        # Validate both configs against the max-candles cap.
+        for label, l_bars, r_bars in (
+            ("entry", entry_left, entry_right),
+            ("exit", exit_left, exit_right),
+        ):
+            if l_bars + r_bars + 1 > config.LIVE_SR_MAX_CANDLES:
+                return {
+                    "status": "invalid_params",
+                    "error": (
+                        f"{label}_config left_bars + right_bars + 1 = "
+                        f"{l_bars + r_bars + 1} exceeds "
+                        f"LIVE_SR_MAX_CANDLES ({config.LIVE_SR_MAX_CANDLES})"
+                    ),
+                    "params": {
+                        "entry_config": [entry_left, entry_right],
+                        "exit_config": [exit_left, exit_right],
+                        "max_candles": config.LIVE_SR_MAX_CANDLES,
+                    },
+                    "generated_at": _now_iso(),
+                }
+
+        # ---- 2. Fetch both sources ONCE ----------------------------- #
+        historical, historical_meta = self._load_historical_candles(
+            entry, lb, debug=debug,
+        )
+        intraday, intraday_meta = self._fetch_intraday_candles(entry["instrument_key"])
+
+        merged = self._merge_by_minute(historical, intraday)
+        if not merged:
+            return {
+                "status": "no_data",
+                "error": "no_candles_from_either_source",
+                "instrument_key": entry["instrument_key"],
+                "mode": "intraday" if only_today else "full",
+                "today_iso": _today_iso(),
+                "params": {
+                    "entry_config": [entry_left, entry_right],
+                    "exit_config": [exit_left, exit_right],
+                    "lookback_days": lb,
+                    "only_today": only_today,
+                    "include_candles": include_candles,
+                    "include_live_sr": include_live_sr,
+                    "debug": debug,
+                },
+                "sources": {
+                    "historical": historical_meta,
+                    "intraday": intraday_meta,
+                },
+                "live_sr": (
+                    self._load_live_sr_state(entry)
+                    if include_live_sr else None
+                ),
+                "generated_at": _now_iso(),
+            }
+
+        merged_before_cap = len(merged)
+        max_candles = config.LIVE_SR_CALC_MAX_CANDLES
+        if len(merged) > max_candles:
+            merged = merged[-max_candles:]
+
+        # ---- 3. Compute both pivot passes --------------------------- #
+        entry_levels = self._compute_pivots(merged, entry_left, entry_right)
+        exit_levels = self._compute_pivots(merged, exit_left, exit_right)
+
+        # ---- 4. Mark is_today + filter + sort (both) ---------------- #
+        self._mark_is_today(entry_levels)
+        self._mark_is_today(exit_levels)
+
+        entry_total_before = len(entry_levels)
+        exit_total_before = len(exit_levels)
+
+        if only_today:
+            entry_levels = [l for l in entry_levels if l["is_today"]]
+            exit_levels = [l for l in exit_levels if l["is_today"]]
+
+        entry_levels.sort(key=lambda l: l["price"])
+        exit_levels.sort(key=lambda l: l["price"])
+
+        current_price = merged[-1]["close"] if merged else None
+
+        # ---- 5. Build per-block counts + nearest hints -------------- #
+        def _block(levels_list: list[dict[str, Any]],
+                   total_unfiltered: int,
+                   l_bars: int,
+                   r_bars: int) -> dict[str, Any]:
+            nearest_r = None
+            nearest_s = None
+            if current_price is not None:
+                above = sorted(
+                    (x for x in levels_list
+                     if x["level"] == "resistance" and x["price"] > current_price),
+                    key=lambda x: x["price"],
+                )
+                below = sorted(
+                    (x for x in levels_list
+                     if x["level"] == "support" and x["price"] < current_price),
+                    key=lambda x: x["price"],
+                    reverse=True,
+                )
+                nearest_r = above[0] if above else None
+                nearest_s = below[0] if below else None
+            return {
+                "params": {"left_bars": l_bars, "right_bars": r_bars},
+                "levels": levels_list,
+                "counts": {
+                    "total": len(levels_list),
+                    "total_unfiltered": total_unfiltered,
+                    "resistance": sum(
+                        1 for l in levels_list if l["level"] == "resistance"
+                    ),
+                    "support": sum(
+                        1 for l in levels_list if l["level"] == "support"
+                    ),
+                    "today": sum(1 for l in levels_list if l["is_today"]),
+                },
+                "nearest": {
+                    "resistance_above": nearest_r,
+                    "support_below": nearest_s,
+                },
+            }
+
+        entry_block = _block(
+            entry_levels, entry_total_before, entry_left, entry_right,
+        )
+        exit_block = _block(
+            exit_levels, exit_total_before, exit_left, exit_right,
+        )
+
+        # ---- 6. Optional live_sr block ------------------------------ #
+        live_sr_state: dict[str, Any] | None = None
+        if include_live_sr:
+            live_sr_state = self._load_live_sr_state(entry)
+
+        # ---- 7. Warnings (shared + per-config) ---------------------- #
+        warnings: list[str] = []
+        if historical_meta.get("error"):
+            warnings.append(f"historical: {historical_meta['error']}")
+        if intraday_meta.get("error"):
+            warnings.append(f"intraday: {intraday_meta['error']}")
+        if merged_before_cap > max_candles:
+            warnings.append(
+                f"merged candles capped from {merged_before_cap} to {max_candles}"
+            )
+        if historical_meta.get("count_mismatch"):
+            warnings.append(
+                f"historical: declared_count={historical_meta.get('declared_count')} "
+                f"but file contains {historical_meta.get('candles_raw')} entries"
+            )
+
+        for label, total_unfiltered, kept in (
+            ("entry", entry_total_before, len(entry_levels)),
+            ("exit", exit_total_before, len(exit_levels)),
+        ):
+            if only_today and kept == 0 and total_unfiltered > 0:
+                warnings.append(
+                    f"{label} config: 0 levels confirmed today, "
+                    f"{total_unfiltered} historical level(s) available "
+                    f"(pass only_today=false to include them)"
+                )
+            elif only_today and kept < total_unfiltered:
+                warnings.append(
+                    f"{label} config: filtered out "
+                    f"{total_unfiltered - kept} historical level(s)"
+                )
+
+        if include_live_sr and isinstance(live_sr_state, dict):
+            if live_sr_state.get("error"):
+                warnings.append(f"live_sr: {live_sr_state['error']}")
+            elif not live_sr_state.get("is_today"):
+                warnings.append(
+                    f"live_sr: file is dated {live_sr_state.get('date')} "
+                    f"(not today — {live_sr_state.get('today_iso')})"
+                )
+            elif not config.LIVE_SR_ENABLED:
+                warnings.append(
+                    "live_sr: LIVE_SR_ENABLED is false — file may be stale"
+                )
+
+        # ---- 8. Build response -------------------------------------- #
+        return {
+            "status": "ok",
+            "mode": "intraday" if only_today else "full",
+            "today_iso": _today_iso(),
+            "instrument_key": entry["instrument_key"],
+            "trading_symbol": entry.get("trading_symbol"),
+            "underlying": entry.get("underlying"),
+            "strike": entry.get("strike_price"),
+            "type": entry.get("strike_type"),
+            "expiry": entry.get("expiry"),
+            "is_index": bool(entry.get("is_index")),
+            "selector_source": selector_source,
+            "params": {
+                "entry_config": [entry_left, entry_right],
+                "exit_config": [exit_left, exit_right],
+                "lookback_days": lb,
+                "only_today": only_today,
+                "include_candles": include_candles,
+                "include_live_sr": include_live_sr,
+                "debug": debug,
+                "max_candles": max_candles,
+            },
+            "sources": {
+                "historical": historical_meta,
+                "intraday": intraday_meta,
+            },
+            "merged": {
+                "candle_count": len(merged),
+                "candle_count_before_cap": merged_before_cap,
+                "first_candle": merged[0]["time"] if merged else None,
+                "last_candle": merged[-1]["time"] if merged else None,
+                "current_price": current_price,
+            },
+            "entry": entry_block,
+            "exit": exit_block,
+            "live_sr": live_sr_state,
+            "warnings": warnings,
+            "candles": merged if include_candles else None,
+            "generated_at": _now_iso(),
+        }
+
+    # ------------------------------------------------------------------ #
+    # Per-minute pivot cache (2026-11-05)                                #
+    # ------------------------------------------------------------------ #
+    def calculate_pivots_cached(
+        self,
+        instrument_key: str,
+        left_bars: int,
+        right_bars: int,
+        *,
+        lookback_days: int | None = None,
+        only_today: bool = False,
+        minute_bucket: int | None = None,
+        force_refresh: bool = False,
+    ) -> dict[str, Any]:
+        """Return pivots for ``(instrument_key, left, right)`` with a
+        per-minute cache.
+
+        Intended for the 30 s tick-loop callers that would otherwise
+        hit the intraday API twice per minute per instrument (e.g. the
+        ``(15, 15)`` exit scan during POST-1130 tracking).
+
+        Cache semantics
+        ---------------
+        * **Key**: ``(instrument_key, left_bars, right_bars)``.
+        * **TTL**: one minute (``_PIVOT_CACHE_TTL_SECONDS``), reinforced
+          by a minute-bucket key so a clock bump can't return stale
+          data across the minute boundary.
+        * **Within one minute**, every call with the same key returns
+          **byte-identical** ``levels`` (``cached=True``).  This is
+          what makes ``evaluate_post_1130_exits`` deterministic when
+          it runs twice in the same minute.
+        * **At the minute boundary**, the entry is invalidated and the
+          pipeline recomputes from fresh data.
+        * **Failed results** (``no_data`` / ``insufficient_data`` /
+          ``invalid_params`` / ``not_found``) are **NOT cached** —
+          the next call retries.  This prevents a transient API
+          hiccup from freezing the cache for a whole minute.
+
+        Parameters
+        ----------
+        instrument_key : str
+            Full Upstox instrument key.
+        left_bars, right_bars : int
+            Pivot window.  Clamped to 1..100.
+        lookback_days : int | None
+            Historical tail for the merged series.  ``None`` uses the
+            configured default (clamped to 1..30).
+        only_today : bool
+            When ``True`` (default ``False``), filter the returned
+            ``levels`` list to today's confirmations.  Matches
+            ``calculate_dual``'s default only when explicitly set.
+        minute_bucket : int | None
+            Override the current minute bucket — used for testing /
+            replay.  When ``None`` (default), uses wall-clock time.
+        force_refresh : bool
+            When ``True``, skip the cache lookup and recompute (the
+            result is still written to cache).
+
+        Returns
+        -------
+        ``dict`` with the following keys::
+
+            {
+              "status":        "ok" | "no_data" | "insufficient_data"
+                               | "invalid_params" | "not_found" | "error",
+              "instrument_key": str,
+              "params":        {"left_bars": int, "right_bars": int,
+                                "only_today": bool},
+              "minute_bucket": int,
+              "cached":        bool,       # True when served from cache
+              "cached_age_seconds": float, # 0.0 on miss
+              "levels":        [ ...enriched level dicts... ],
+              "candle_count":  int,
+              "first_candle":  str | None,
+              "last_candle":   str | None,
+              "warnings":      list[str],
+              "error":         str | None,
+              "generated_at":  str,
+            }
+
+        Never raises.
+        """
+        # ---- Sanitise params ---------------------------------------- #
+        key = str(instrument_key or "").strip()
+        if not key:
+            return {
+                "status": "invalid_params",
+                "error": "instrument_key must be a non-empty string",
+                "instrument_key": None,
+                "params": {"left_bars": None, "right_bars": None},
+                "minute_bucket": None,
+                "cached": False,
+                "cached_age_seconds": 0.0,
+                "levels": [],
+                "candle_count": 0,
+                "first_candle": None,
+                "last_candle": None,
+                "warnings": [],
+                "generated_at": _now_iso(),
+            }
+
+        try:
+            left = max(1, min(100, int(left_bars)))
+            right = max(1, min(100, int(right_bars)))
+        except (TypeError, ValueError):
+            return {
+                "status": "invalid_params",
+                "error": "left_bars/right_bars must be integers",
+                "instrument_key": key,
+                "params": {
+                    "left_bars": left_bars, "right_bars": right_bars,
+                },
+                "minute_bucket": None,
+                "cached": False,
+                "cached_age_seconds": 0.0,
+                "levels": [],
+                "candle_count": 0,
+                "first_candle": None,
+                "last_candle": None,
+                "warnings": [],
+                "generated_at": _now_iso(),
+            }
+
+        if left + right + 1 > config.LIVE_SR_MAX_CANDLES:
+            return {
+                "status": "invalid_params",
+                "error": (
+                    f"left_bars + right_bars + 1 = {left + right + 1} "
+                    f"exceeds LIVE_SR_MAX_CANDLES ({config.LIVE_SR_MAX_CANDLES})"
+                ),
+                "instrument_key": key,
+                "params": {"left_bars": left, "right_bars": right},
+                "minute_bucket": None,
+                "cached": False,
+                "cached_age_seconds": 0.0,
+                "levels": [],
+                "candle_count": 0,
+                "first_candle": None,
+                "last_candle": None,
+                "warnings": [],
+                "generated_at": _now_iso(),
+            }
+
+        now = datetime.now(_market_tz())
+        current_bucket = (
+            int(minute_bucket) if minute_bucket is not None
+            else int(now.timestamp() // 60)
+        )
+        cache_key = (key, left, right)
+
+        # ---- Cache lookup ------------------------------------------ #
+        if not force_refresh:
+            with self._pivot_cache_lock:
+                cached = self._pivot_cache.get(cache_key)
+                if cached is not None:
+                    if (
+                        cached.get("minute_bucket") == current_bucket
+                        and time.monotonic() < float(
+                            cached.get("expires_at") or 0.0
+                        )
+                    ):
+                        payload = dict(cached["payload"])
+                        payload["cached"] = True
+                        payload["cached_age_seconds"] = round(
+                            time.monotonic()
+                            - float(cached.get("cached_at") or 0.0),
+                            3,
+                        )
+                        return payload
+
+        # ---- Cache miss (or forced refresh) — compute -------------- #
+        result = self._pivots_for_instrument_minute(
+            key, left, right, lookback_days, only_today,
+        )
+
+        payload = {
+            "status": result.get("status", "ok"),
+            "instrument_key": key,
+            "params": {
+                "left_bars": left,
+                "right_bars": right,
+                "only_today": bool(only_today),
+            },
+            "minute_bucket": current_bucket,
+            "cached": False,
+            "cached_age_seconds": 0.0,
+            "levels": result.get("levels", []) or [],
+            "candle_count": result.get("candle_count", 0),
+            "first_candle": result.get("first_candle"),
+            "last_candle": result.get("last_candle"),
+            "warnings": result.get("warnings", []) or [],
+            "error": result.get("error"),
+            "generated_at": _now_iso(),
+        }
+
+        # Only cache SUCCESSFUL results — a transient API error must
+        # not freeze the cache for a whole minute.
+        if payload["status"] == "ok":
+            with self._pivot_cache_lock:
+                now_mono = time.monotonic()
+                self._pivot_cache[cache_key] = {
+                    "minute_bucket": current_bucket,
+                    "expires_at": now_mono + _PIVOT_CACHE_TTL_SECONDS,
+                    "cached_at": now_mono,
+                    "payload": dict(payload),
+                }
+                self._prune_pivot_cache_locked(current_bucket)
+
+        return payload
+
+    def _pivots_for_instrument_minute(
+        self,
+        instrument_key: str,
+        left_bars: int,
+        right_bars: int,
+        lookback_days: int | None,
+        only_today: bool,
+    ) -> dict[str, Any]:
+        """Internal: build the merged series + compute pivots (no cache).
+
+        This is the compute path behind ``calculate_pivots_cached``.
+        It intentionally does NOT emit the diagnostics / nearest /
+        per-source-meta blocks that ``calculate`` and ``calculate_dual``
+        return — those are for the HTTP surface, not for the 30 s
+        tick-loop.  The level dicts themselves are byte-identical
+        (they go through ``_compute_pivots`` → ``_enrich_level``).
+
+        Never raises.
+        """
+        try:
+            entry = instrument_registry.get(instrument_key)
+            if entry is None:
+                entry = instrument_registry.register_adhoc(instrument_key)
+            if entry is None:
+                return {
+                    "status": "not_found",
+                    "error": "instrument_not_found",
+                    "levels": [],
+                    "candle_count": 0,
+                    "first_candle": None,
+                    "last_candle": None,
+                    "warnings": [],
+                }
+
+            lb = lookback_days if lookback_days is not None else (
+                config.LIVE_SR_CALC_DEFAULT_LOOKBACK_DAYS
+            )
+            lb = max(1, min(30, lb))
+
+            historical, _h_meta = self._load_historical_candles(entry, lb)
+            intraday, _i_meta = self._fetch_intraday_candles(instrument_key)
+            merged = self._merge_by_minute(historical, intraday)
+
+            if not merged:
+                return {
+                    "status": "no_data",
+                    "error": "no_candles_from_either_source",
+                    "levels": [],
+                    "candle_count": 0,
+                    "first_candle": None,
+                    "last_candle": None,
+                    "warnings": [],
+                }
+
+            max_candles = config.LIVE_SR_CALC_MAX_CANDLES
+            if len(merged) > max_candles:
+                merged = merged[-max_candles:]
+
+            if len(merged) < left_bars + right_bars + 1:
+                return {
+                    "status": "insufficient_data",
+                    "error": (
+                        f"not enough candles — need "
+                        f"{left_bars + right_bars + 1}, have {len(merged)}"
+                    ),
+                    "levels": [],
+                    "candle_count": len(merged),
+                    "first_candle": merged[0]["time"] if merged else None,
+                    "last_candle": merged[-1]["time"] if merged else None,
+                    "warnings": [],
+                }
+
+            levels = self._compute_pivots(merged, left_bars, right_bars)
+            self._mark_is_today(levels)
+            levels.sort(key=lambda l: l["price"])
+
+            if only_today:
+                levels = [l for l in levels if l["is_today"]]
+                levels.sort(key=lambda l: l["price"])
+
+            return {
+                "status": "ok",
+                "error": None,
+                "levels": levels,
+                "candle_count": len(merged),
+                "first_candle": merged[0]["time"] if merged else None,
+                "last_candle": merged[-1]["time"] if merged else None,
+                "warnings": [],
+            }
+        except Exception as exc:
+            logger.exception(
+                "[live-sr-calc] _pivots_for_instrument_minute failed for %s",
+                instrument_key,
+            )
+            return {
+                "status": "error",
+                "error": f"{type(exc).__name__}: {exc}",
+                "levels": [],
+                "candle_count": 0,
+                "first_candle": None,
+                "last_candle": None,
+                "warnings": [],
+            }
+
+    def _prune_pivot_cache_locked(self, current_bucket: int) -> None:
+        """Prune stale + excess entries.  Caller must hold the lock."""
+        # 1) Drop entries whose minute bucket is way behind current.
+        stale_keys = [
+            k
+            for k, v in self._pivot_cache.items()
+            if (
+                current_bucket - int(v.get("minute_bucket") or 0)
+                > _PIVOT_CACHE_MAX_AGE_BUCKETS
+            )
+        ]
+        for k in stale_keys:
+            self._pivot_cache.pop(k, None)
+
+        # 2) Hard cap — evict oldest by cached_at (LRU-ish).
+        if len(self._pivot_cache) > _PIVOT_CACHE_MAX_ENTRIES:
+            items = sorted(
+                self._pivot_cache.items(),
+                key=lambda kv: float(kv[1].get("cached_at") or 0.0),
+            )
+            excess = len(items) - _PIVOT_CACHE_MAX_ENTRIES
+            for k, _ in items[:excess]:
+                self._pivot_cache.pop(k, None)
+
+    def clear_pivot_cache(self) -> dict[str, Any]:
+        """Drop every cached pivot result (test / admin helper).
+
+        The base methods do not use the cache, so this is safe to call
+        at any time.  Returns ``{"status": "cleared", "removed": N}``.
+        """
+        with self._pivot_cache_lock:
+            n = len(self._pivot_cache)
+            self._pivot_cache.clear()
+        logger.info(
+            "[live-sr-calc] cleared %d pivot cache entr%s",
+            n, "y" if n == 1 else "ies",
+        )
+        return {"status": "cleared", "removed": n}
+
+    def get_pivot_cache_stats(self) -> dict[str, Any]:
+        """Return a lightweight stats snapshot for admin / ops.
+
+        Fields::
+
+            {
+              "entries":              int,  # current cache size
+              "max_entries":          int,
+              "ttl_seconds":          float,
+              "max_age_buckets":      int,
+              "instruments_tracked":  int,  # distinct instrument keys
+              "configs_tracked":      list[[int, int]],  # distinct
+                                         # (left, right) tuples
+              "oldest_cached_at":     float | None,
+              "newest_cached_at":     float | None,
+            }
+
+        All timestamps are ``time.monotonic()`` — use them only for
+        relative comparisons, not absolute display.
+        """
+        with self._pivot_cache_lock:
+            entries = list(self._pivot_cache.values())
+            keys = list(self._pivot_cache.keys())
+            instruments = {k[0] for k in keys}
+            configs = sorted({(k[1], k[2]) for k in keys})
+            cached_times = [
+                float(v.get("cached_at") or 0.0) for v in entries
+            ]
+            return {
+                "entries": len(entries),
+                "max_entries": _PIVOT_CACHE_MAX_ENTRIES,
+                "ttl_seconds": _PIVOT_CACHE_TTL_SECONDS,
+                "max_age_buckets": _PIVOT_CACHE_MAX_AGE_BUCKETS,
+                "instruments_tracked": len(instruments),
+                "configs_tracked": [[c[0], c[1]] for c in configs],
+                "oldest_cached_at": (
+                    min(cached_times) if cached_times else None
+                ),
+                "newest_cached_at": (
+                    max(cached_times) if cached_times else None
+                ),
+            }
 
     # ------------------------------------------------------------------ #
     # Public loader helpers (used by sr_backfill_service)                #
@@ -1427,6 +2344,20 @@ class LiveSRCalcService:
         left: int,
         right: int,
     ) -> list[dict[str, Any]]:
+        """Return the confirmed pivots for one ``(left, right)`` window.
+
+        Every emitted dict carries BOTH the historical field set
+        (``price``, ``level`` [type], ``pivot_time``, ``confirmed_time``,
+        ``confirmed_time_price``, ``pivot_bar_index``,
+        ``confirmed_bar_index``, ``left_bars``, ``right_bars``,
+        ``is_today``) AND the post-11:30 spec fields added on
+        2026-11-05 (``level_price``, ``type``, ``confirmation_time``,
+        ``status``) via ``_enrich_level``.  Keeping both field sets
+        live in the same dict means existing consumers (``_mark_is_today``,
+        sort comparators, ``nearest`` computation, the dashboard, and
+        the ``/live-sr-calc`` HTTP route) continue to work without
+        modification.
+        """
         levels: list[dict[str, Any]] = []
         n = len(candles)
         if n < left + right + 1:
@@ -1461,7 +2392,7 @@ class LiveSRCalcService:
             )
 
             if left_ok_res and right_ok_res:
-                levels.append({
+                levels.append(_enrich_level({
                     "level": "resistance",
                     "price": float(c["high"]),
                     "pivot_bar_index": i,
@@ -1472,10 +2403,10 @@ class LiveSRCalcService:
                     "left_bars": left,
                     "right_bars": right,
                     "is_today": False,
-                })
+                }))
 
             if left_ok_sup and right_ok_sup:
-                levels.append({
+                levels.append(_enrich_level({
                     "level": "support",
                     "price": float(c["low"]),
                     "pivot_bar_index": i,
@@ -1486,7 +2417,7 @@ class LiveSRCalcService:
                     "left_bars": left,
                     "right_bars": right,
                     "is_today": False,
-                })
+                }))
 
         return levels
 
