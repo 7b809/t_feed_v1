@@ -336,13 +336,13 @@ VERBOSE_LOG = _bool("VERBOSE_LOG", False)
 # ---------------------------------------------------------------------------
 CLEANUP_REMOVE_FOLDERS = _csv(
     "CLEANUP_REMOVE_FOLDERS",
-    "data,downloads,output,__pycache__,.pytest_cache,htmlcov,test_logs",
+    "data,logs,logs_text,downloads,output,__pycache__,.pytest_cache,htmlcov,test_logs",
 )
 
 CLEANUP_RESERVED_FOLDERS = _csv(
     "CLEANUP_RESERVED_FOLDERS",
-    "meta_data,logs,logs_text,.git,.venv,venv,myenv,templates,routes,"
-    "services,core,token_tasks,upstox_services,static,tests",
+    "meta_data,.git,.venv,venv,myenv,templates,routes,"
+    "services,core,token_tasks,upstox_app,static,tests",
 )
 
 # ---------------------------------------------------------------------------
