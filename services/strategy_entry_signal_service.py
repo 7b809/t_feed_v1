@@ -2045,27 +2045,12 @@ class StrategyEntrySignalService:
             # _branch == "standard" → pre-11:30; fall through.
 
         # --------------------------------------------------------------- #
-        # G1 v4.1 — Path B (external-index trigger).
+        # Unified standard Path A (2026-11-06).
         #
-        # Reached ONLY when the POST-1130 gate above returned "standard"
-        # (i.e. the isolation occurred BEFORE 11:30 IST).  For these
-        # pre-11:30 isolations the 10-minute scan and auto-reverse are
-        # intentionally disabled: the bias-side instrument stays
-        # isolated all day and the dummy-order service manages
-        # multi-order SR-level execution + Rupee trailing.
-        #
-        # Path B can be disabled entirely via
-        # ``STRATEGY_EXT_PATH_B_ENABLED=false``, in which case control
-        # falls through to Path A regardless of trigger source.
-        # --------------------------------------------------------------- #
-        if (
-            bool(getattr(config, "STRATEGY_EXT_PATH_B_ENABLED", True))
-            and isolated.get("trigger_is_self_nifty") is False
-        ):
-            return self._build_path_b_response(iso_status, isolated)
-
-        # --------------------------------------------------------------- #
-        # Standard Path A — unchanged from here down.
+        # Trigger source is diagnostic isolation metadata only. Both
+        # NIFTY and external-index isolations run the same standard
+        # confirmation, reversal, candidate and entry-routing rules.
+        # POST-11:30 remains handled by the separate gate above.
         # --------------------------------------------------------------- #
         instrument_key = str(isolated.get("instrument_key") or "").strip()
         if not instrument_key:
@@ -2169,7 +2154,7 @@ class StrategyEntrySignalService:
 
         response: dict[str, Any] = {
             "status": "ok",
-            "execution_path": "A_self_trigger",
+            "execution_path": "PATH_A_UNIFIED",
             "day": iso_status.get("day"),
             "isolated": {
                 "instrument_key": instrument_key,
