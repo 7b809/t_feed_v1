@@ -490,6 +490,98 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
   padding: 7px 8px; font-size: 11px; font-weight: 700;
 }
 .json-export-field input:focus { outline: none; border-color: var(--blue); }
+
+/* SR mode radio group */
+.json-export-radio-group {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 2px 0;
+}
+.json-export-radio-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text);
+  cursor: pointer;
+  text-transform: none;
+  letter-spacing: 0;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+.json-export-field label.json-export-radio-label { font-size: 11px; text-transform: none; letter-spacing: 0; }
+.json-export-radio-label:hover { border-color: var(--blue); }
+.json-export-radio-label input[type="radio"] {
+  accent-color: var(--blue);
+  cursor: pointer;
+  width: 13px;
+  height: 13px;
+  margin: 0;
+}
+.json-export-radio-label:has(input:checked) {
+  background: rgba(41,98,255,0.14);
+  border-color: var(--blue);
+  color: #7ea6ff;
+}
+
+/* SR preset checkbox list */
+.json-export-preset-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 4px 0;
+}
+.json-export-preset-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--text);
+  cursor: pointer;
+  text-transform: none;
+  letter-spacing: 0;
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
+  user-select: none;
+}
+.json-export-field label.json-export-preset-item {
+  font-size: 11.5px;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--text);
+}
+.json-export-preset-item:hover { border-color: var(--blue); }
+.json-export-preset-item input[type="checkbox"] {
+  accent-color: var(--blue);
+  cursor: pointer;
+  width: 13px;
+  height: 13px;
+  margin: 0;
+}
+.json-export-preset-item:has(input:checked) {
+  background: rgba(41,98,255,0.14);
+  border-color: var(--blue);
+  color: #7ea6ff;
+}
+.json-export-preset-hint {
+  font-size: 10px;
+  color: var(--muted);
+  font-weight: 600;
+  margin-top: 2px;
+  text-transform: none;
+  letter-spacing: 0.01em;
+}
+
 .json-export-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 12px; }
 .json-export-button {
   border: 0; border-radius: 8px; background: var(--blue); color: #fff;
@@ -506,6 +598,8 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
   .json-export-body { padding: 10px; }
   .json-export-actions { align-items: stretch; }
   .json-export-button { width: 100%; }
+  .json-export-preset-list { gap: 6px; }
+  .json-export-preset-item { font-size: 10.5px; padding: 4px 8px; }
 }
 
 </style>
@@ -617,7 +711,7 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
         <i class="bi bi-filetype-json"></i>
         <span>
           <span class="json-export-title">Download Chart Data (JSON)</span>
-          <span class="json-export-subtitle d-block">Candles · EMA crosses · Support / Resistance · Instrument metadata</span>
+          <span class="json-export-subtitle d-block">Candles · EMA crosses · SR Levels (manual/presets) · Opening-Range R3/S3 touch analysis · Metadata</span>
         </span>
       </span>
       <i class="bi bi-chevron-down json-export-chevron" aria-hidden="true"></i>
@@ -640,13 +734,55 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
           <label for="jsonExportEmaSlow">EMA slow</label>
           <input type="number" id="jsonExportEmaSlow" min="2" max="1000" step="1" value="21">
         </div>
-        <div class="json-export-field">
+
+        <!-- SR input mode selector -->
+        <div class="json-export-field" style="grid-column: span 2;">
+          <label>SR input mode</label>
+          <div class="json-export-radio-group" role="radiogroup" aria-label="SR input mode">
+            <label class="json-export-radio-label">
+              <input type="radio" name="jsonExportSrMode" value="manual" checked>
+              <span>Manual bars</span>
+            </label>
+            <label class="json-export-radio-label">
+              <input type="radio" name="jsonExportSrMode" value="presets">
+              <span>Presets (multi-select)</span>
+            </label>
+          </div>
+        </div>
+
+        <!-- Manual SR fields -->
+        <div class="json-export-field" data-sr-mode="manual">
           <label for="jsonExportSrLeft">SR left bars</label>
           <input type="number" id="jsonExportSrLeft" min="1" max="200" step="1" value="15">
         </div>
-        <div class="json-export-field">
+        <div class="json-export-field" data-sr-mode="manual">
           <label for="jsonExportSrRight">SR right bars</label>
           <input type="number" id="jsonExportSrRight" min="1" max="200" step="1" value="3">
+        </div>
+
+        <!-- Preset SR fields -->
+        <div class="json-export-field" data-sr-mode="presets"
+             style="display:none; grid-column: 1 / -1;">
+          <label>SR presets — select all that apply (one level-set exported per preset)</label>
+          <div class="json-export-preset-list" role="group" aria-label="SR presets">
+            <label class="json-export-preset-item">
+              <input type="checkbox" class="json-export-sr-preset" value="15/3" checked>
+              <span>15 / 3</span>
+            </label>
+            <label class="json-export-preset-item">
+              <input type="checkbox" class="json-export-sr-preset" value="15/15">
+              <span>15 / 15</span>
+            </label>
+            <label class="json-export-preset-item">
+              <input type="checkbox" class="json-export-sr-preset" value="15/30">
+              <span>15 / 30</span>
+            </label>
+            <label class="json-export-preset-item">
+              <input type="checkbox" class="json-export-sr-preset" value="15/60">
+              <span>15 / 60</span>
+            </label>
+          </div>
+          <span class="json-export-preset-hint">Multi-select is supported — each checked preset produces its own <code>levels_by_preset[&lt;left&gt;/&lt;right&gt;]</code> array in the JSON.</span>
         </div>
       </div>
       <div class="json-export-actions">
@@ -654,7 +790,7 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
           <i class="bi bi-download me-1"></i> Download complete JSON
         </button>
         <span class="json-export-status" id="jsonExportStatus" role="status" aria-live="polite">
-          Default: latest 11 available trading dates · EMA 9/21 · SR 15/3.
+          Default: latest 11 available trading dates · EMA 9/21 · SR manual 15/3 · Opening-range R3/S3 touch analysis per day.
         </span>
       </div>
     </div>
@@ -1540,7 +1676,7 @@ function performFullSRScan(candles) {
 
   for (let i = leftBars; i < candles.length - rightBars; i++) {
     const c = candles[i];
-    
+
     // Only detect / retain pivots within the configured start and end date range (defaults to Today)
     if (!isTimestampInFilterRange(c.time)) continue;
 
@@ -1798,7 +1934,7 @@ function rebuildAllMarkers() {
     const seenTimes = new Set();
     for (const c of crosses) {
       if (seenTimes.has(c.time)) continue;
-      
+
       // Filter EMA crossover markers to specified date window (Today by default)
       if (!isTimestampInFilterRange(c.time)) continue;
 
@@ -3057,6 +3193,8 @@ window.addEventListener("beforeunload", () => {
   const slowInput = document.getElementById("jsonExportEmaSlow");
   const leftInput = document.getElementById("jsonExportSrLeft");
   const rightInput = document.getElementById("jsonExportSrRight");
+  const srModeRadios = document.querySelectorAll('input[name="jsonExportSrMode"]');
+  const presetCheckboxes = document.querySelectorAll('.json-export-sr-preset');
   const downloadButton = document.getElementById("downloadChartJsonBtn");
   const status = document.getElementById("jsonExportStatus");
 
@@ -3074,6 +3212,59 @@ window.addEventListener("beforeunload", () => {
     status.textContent = message;
     status.classList.toggle("error", Boolean(isError));
   }
+
+  function getSelectedSRMode() {
+    for (const r of srModeRadios) {
+      if (r.checked) return r.value;
+    }
+    return "manual";
+  }
+
+  function getSelectedSRPresets() {
+    const result = [];
+    for (const cb of presetCheckboxes) {
+      if (!cb.checked) continue;
+      const parts = String(cb.value || "").split("/").map(Number);
+      if (parts.length !== 2) continue;
+      const [l, r] = parts;
+      if (!Number.isInteger(l) || !Number.isInteger(r)) continue;
+      if (l < 1 || l > 200 || r < 1 || r > 200) continue;
+      result.push({ key: cb.value, left_bars: l, right_bars: r });
+    }
+    return result;
+  }
+
+  function updateSRModeUI() {
+    const mode = getSelectedSRMode();
+    document.querySelectorAll("[data-sr-mode]").forEach(el => {
+      el.style.display = (el.dataset.srMode === mode) ? "" : "none";
+    });
+    if (mode === "presets") {
+      const count = getSelectedSRPresets().length;
+      if (count === 0) {
+        setStatus("Preset mode: select at least one preset before downloading.", true);
+      } else {
+        setStatus(`Preset mode: ${count} preset${count > 1 ? "s" : ""} ready for export.`, false);
+      }
+    } else {
+      setStatus("Manual mode: enter left/right bars for a single SR level-set.", false);
+    }
+  }
+
+  function handlePresetChange() {
+    if (getSelectedSRMode() === "presets") {
+      const count = getSelectedSRPresets().length;
+      if (count === 0) {
+        setStatus("Preset mode: select at least one preset before downloading.", true);
+      } else {
+        setStatus(`Preset mode: ${count} preset${count > 1 ? "s" : ""} ready for export.`, false);
+      }
+    }
+  }
+
+  srModeRadios.forEach(r => r.addEventListener("change", updateSRModeUI));
+  presetCheckboxes.forEach(cb => cb.addEventListener("change", handlePresetChange));
+  updateSRModeUI();
 
   function getChartCandles() {
     if (!candleSeries || typeof candleSeries.data !== "function") return [];
@@ -3111,9 +3302,9 @@ window.addEventListener("beforeunload", () => {
       rangeInitializedFromFallback = false;
       endInput.value = todayKey;
       if (dates.length < 11) {
-        setStatus(`Found ${dates.length} available trading date(s); exporting through today. EMA 9/21 · SR 15/3.`, false);
+        setStatus(`Found ${dates.length} available trading date(s); exporting through today. EMA 9/21 · Opening-range analysis per day.`, false);
       } else {
-        setStatus("Default range: latest 11 available trading dates · EMA 9/21 · SR 15/3.", false);
+        setStatus("Default range: latest 11 available trading dates · EMA 9/21 · Opening-range analysis per day.", false);
       }
     } else {
       // Fallback until candle history has finished loading. Re-evaluate this
@@ -3264,6 +3455,160 @@ window.addEventListener("beforeunload", () => {
     return levels.sort((a, b) => a.pivot_bar_index - b.pivot_bar_index);
   }
 
+  // ------------------------------------------------------------------
+  // Opening-range analysis (mandatory per selected date)
+  //
+  // For each trading date in the export range:
+  //   - Compute the opening-range levels from the first candle of the day
+  //     (same method used by the on-chart opening-range overlay).
+  //   - Detect the FIRST touch of R3 (high >= r3) and the FIRST touch of S3
+  //     (low <= s3) that occurs on that day, excluding the opening candle.
+  //   - Record the time, level value, actual candle high/low, and bar index
+  //     (both day-local and export-global) for each touch.
+  //   - Report which of R3 / S3 was touched first (or "same_bar" if both
+  //     are first breached on the same candle), plus a `both_touched` flag.
+  // ------------------------------------------------------------------
+  function buildOpeningRangeAnalysis(selectedCandles, startDate, endDate) {
+    const result = {};
+    if (!Array.isArray(selectedCandles) || selectedCandles.length === 0) return result;
+
+    // Global bar-index lookup for cross-referencing with the exported candles array.
+    const globalIndexMap = new Map();
+    selectedCandles.forEach((c, i) => globalIndexMap.set(Number(c.time), i));
+
+    // Group the selected candles by IST trading date.
+    const grouped = {};
+    selectedCandles.forEach(c => {
+      const key = getDateKeyForExport(c.time);
+      if (!key) return;
+      if (!grouped[key]) grouped[key] = [];
+      grouped[key].push(c);
+    });
+
+    Object.keys(grouped).sort().forEach(date => {
+      if (startDate && date < startDate) return;
+      if (endDate && date > endDate) return;
+
+      const dayCandles = grouped[date].slice().sort((a, b) => Number(a.time) - Number(b.time));
+      if (dayCandles.length === 0) return;
+
+      const first = dayCandles[0];
+      const open  = Number(first.open);
+      const high  = Number(first.high);
+      const low   = Number(first.low);
+      const close = Number(first.close);
+      if (!Number.isFinite(open) || !Number.isFinite(high) || !Number.isFinite(low) || !Number.isFinite(close)) return;
+
+      // Opening range & derived pivot levels (matches calculateOpeningRangeForDay).
+      const average = (high + low) / 2;
+      const r1Diff = high - average;
+      const s1Diff = average - low;
+      const r1 = high;
+      const s1 = low;
+      const r2 = high + r1Diff;
+      const r3 = r2 + r1Diff;
+      const s2 = low - s1Diff;
+      const s3 = s2 - s1Diff;
+
+      // Scan the rest of the day for the FIRST R3 touch and FIRST S3 touch.
+      let r3Touch = null;
+      let s3Touch = null;
+
+      for (let i = 1; i < dayCandles.length; i++) {
+        const c = dayCandles[i];
+        const cHigh = Number(c.high);
+        const cLow  = Number(c.low);
+        const globalIdx = globalIndexMap.has(Number(c.time)) ? globalIndexMap.get(Number(c.time)) : null;
+
+        if (!r3Touch && Number.isFinite(cHigh) && cHigh >= r3) {
+          r3Touch = {
+            time: toISTTimestamp(c.time),
+            timestamp: Number(c.time),
+            level_price: Number(r3.toFixed(4)),
+            candle_high: Number(cHigh.toFixed(4)),
+            bar_index: globalIdx,
+            bar_index_in_day: i
+          };
+        }
+        if (!s3Touch && Number.isFinite(cLow) && cLow <= s3) {
+          s3Touch = {
+            time: toISTTimestamp(c.time),
+            timestamp: Number(c.time),
+            level_price: Number(s3.toFixed(4)),
+            candle_low: Number(cLow.toFixed(4)),
+            bar_index: globalIdx,
+            bar_index_in_day: i
+          };
+        }
+        if (r3Touch && s3Touch) break;
+      }
+
+      let firstTouched = null;
+      if (r3Touch && s3Touch) {
+        if (r3Touch.bar_index_in_day < s3Touch.bar_index_in_day) firstTouched = "r3";
+        else if (s3Touch.bar_index_in_day < r3Touch.bar_index_in_day) firstTouched = "s3";
+        else firstTouched = "same_bar";
+      } else if (r3Touch) {
+        firstTouched = "r3";
+      } else if (s3Touch) {
+        firstTouched = "s3";
+      }
+
+      result[date] = {
+        date,
+        opening_range: {
+          open: Number(open.toFixed(4)),
+          high: Number(high.toFixed(4)),
+          low: Number(low.toFixed(4)),
+          close: Number(close.toFixed(4)),
+          average: Number(average.toFixed(4)),
+          levels: {
+            r1: Number(r1.toFixed(4)),
+            r2: Number(r2.toFixed(4)),
+            r3: Number(r3.toFixed(4)),
+            s1: Number(s1.toFixed(4)),
+            s2: Number(s2.toFixed(4)),
+            s3: Number(s3.toFixed(4))
+          }
+        },
+        candle_count: dayCandles.length,
+        r3_touched: r3Touch,
+        s3_touched: s3Touch,
+        first_touched: firstTouched,
+        both_touched: Boolean(r3Touch && s3Touch)
+      };
+    });
+
+    return result;
+  }
+
+  // Small summary for quick inspection at the top of the JSON.
+  function summarizeOpeningRangeAnalysis(analysis) {
+    const summary = {
+      date_count: 0,
+      days_with_r3_touch: 0,
+      days_with_s3_touch: 0,
+      days_with_both_touches: 0,
+      days_with_no_touch: 0,
+      days_with_first_r3: 0,
+      days_with_first_s3: 0,
+      days_with_same_bar_both: 0
+    };
+    Object.values(analysis || {}).forEach(day => {
+      summary.date_count++;
+      const hasR3 = Boolean(day.r3_touched);
+      const hasS3 = Boolean(day.s3_touched);
+      if (hasR3) summary.days_with_r3_touch++;
+      if (hasS3) summary.days_with_s3_touch++;
+      if (hasR3 && hasS3) summary.days_with_both_touches++;
+      if (!hasR3 && !hasS3) summary.days_with_no_touch++;
+      if (day.first_touched === "r3") summary.days_with_first_r3++;
+      else if (day.first_touched === "s3") summary.days_with_first_s3++;
+      else if (day.first_touched === "same_bar") summary.days_with_same_bar_both++;
+    });
+    return summary;
+  }
+
   function getInstrumentMetadata() {
     const node = document.getElementById("instrument-metadata-data");
     let raw = {};
@@ -3307,14 +3652,26 @@ window.addEventListener("beforeunload", () => {
       if (!defaultRangeInitialized || (rangeInitializedFromFallback && !userChangedExportDates)) initializeDefaultRange(true);
       const fastPeriod = parseInteger(fastInput, "EMA fast", 1, 500);
       const slowPeriod = parseInteger(slowInput, "EMA slow", 2, 1000);
-      const leftBars = parseInteger(leftInput, "SR left bars", 1, 200);
-      const rightBars = parseInteger(rightInput, "SR right bars", 1, 200);
       if (fastPeriod >= slowPeriod) throw new Error("EMA fast must be smaller than EMA slow.");
 
       const startDate = startInput.value || null;
       const endDate = endInput.value || null;
       if (startDate && endDate && startDate > endDate) {
         throw new Error("Start date must be on or before end date.");
+      }
+
+      // ---- Resolve SR configuration (manual vs presets) ----
+      const srMode = getSelectedSRMode();
+      let srConfigs = [];
+      if (srMode === "manual") {
+        const leftBars = parseInteger(leftInput, "SR left bars", 1, 200);
+        const rightBars = parseInteger(rightInput, "SR right bars", 1, 200);
+        srConfigs = [{ key: `${leftBars}/${rightBars}`, left_bars: leftBars, right_bars: rightBars }];
+      } else {
+        srConfigs = getSelectedSRPresets();
+        if (srConfigs.length === 0) {
+          throw new Error("Select at least one SR preset checkbox before downloading.");
+        }
       }
 
       const allCandles = getChartCandles()
@@ -3335,12 +3692,45 @@ window.addEventListener("beforeunload", () => {
 
       // Calculate EMA on the full loaded history, then select cross events in range.
       const crosses = buildCrosses(allCandles, startDate, endDate, fastPeriod, slowPeriod);
-      const levels = buildSupportResistance(
-        allCandles, selectedCandles, startDate, endDate, leftBars, rightBars
-      );
+
+      // Calculate SR levels for each selected config. Manual mode always yields
+      // exactly one config, so this is a single pass. Preset mode may yield
+      // multiple and we emit a level-set per preset.
+      const levelsByPreset = {};
+      const levelCountsByPreset = {};
+      srConfigs.forEach(cfg => {
+        const levels = buildSupportResistance(
+          allCandles, selectedCandles, startDate, endDate, cfg.left_bars, cfg.right_bars
+        );
+        levelsByPreset[cfg.key] = levels;
+        levelCountsByPreset[cfg.key] = levels.length;
+      });
+
+      // ---- Mandatory per-date opening-range analysis ----
+      const openingRangeAnalysis = buildOpeningRangeAnalysis(selectedCandles, startDate, endDate);
+      const openingRangeSummary = summarizeOpeningRangeAnalysis(openingRangeAnalysis);
+
       const instrument = getInstrumentMetadata();
       const exportTime = new Date().toISOString();
+      const totalLevelCount = Object.values(levelCountsByPreset).reduce((a, b) => a + b, 0);
 
+      // ---- Build config block ----
+      const config = {
+        ema: { fast_period: fastPeriod, slow_period: slowPeriod },
+        sr_mode: srMode
+      };
+      if (srMode === "manual") {
+        const only = srConfigs[0];
+        config.sr = { left_bars: only.left_bars, right_bars: only.right_bars };
+      } else {
+        config.sr_presets = srConfigs.map(c => ({
+          key: c.key,
+          left_bars: c.left_bars,
+          right_bars: c.right_bars
+        }));
+      }
+
+      // ---- Build payload ----
       const payload = {
         metadata: {
           instrument_key: instrument.instrument_key,
@@ -3354,12 +3744,17 @@ window.addEventListener("beforeunload", () => {
           exported_at: exportTime,
           candle_count: selectedCandles.length,
           ema_cross_count: crosses.length,
-          sr_level_count: levels.length
+          sr_mode: srMode,
+          ...(srMode === "manual"
+            ? { sr_level_count: totalLevelCount }
+            : {
+                sr_preset_count: srConfigs.length,
+                sr_level_count_by_preset: levelCountsByPreset
+              }),
+          opening_range_date_count: openingRangeSummary.date_count,
+          opening_range_summary: openingRangeSummary
         },
-        config: {
-          ema: { fast_period: fastPeriod, slow_period: slowPeriod },
-          sr: { left_bars: leftBars, right_bars: rightBars }
-        },
+        config,
         candles: selectedCandles.map(c => ({
           timestamp: toISTTimestamp(c.time),
           open: Number(c.open),
@@ -3370,16 +3765,34 @@ window.addEventListener("beforeunload", () => {
           oi: Number(c.oi || 0)
         })),
         crosses,
-        levels
+        ...(srMode === "manual"
+          ? { levels: levelsByPreset[srConfigs[0].key] }
+          : { levels_by_preset: levelsByPreset }),
+        // Always included — mandatory per selected date range:
+        opening_range_analysis: openingRangeAnalysis
       };
 
       const safeSymbol = String(instrument.trading_symbol || "instrument")
         .replace(/[^a-z0-9_-]+/gi, "_").replace(/^_+|_+$/g, "") || "instrument";
       downloadJsonFile(payload, `${safeSymbol}_${startDate || "all"}_${endDate || "all"}_chart_data.json`);
-      setStatus(
-        `Downloaded ${selectedCandles.length} candles · ${crosses.length} EMA crosses · ${levels.length} SR levels.`,
-        false
-      );
+
+      const orSummaryTail = openingRangeSummary.date_count
+        ? ` · ${openingRangeSummary.date_count} opening-range day(s) analyzed ` +
+          `(R3 touched ${openingRangeSummary.days_with_r3_touch} · S3 touched ${openingRangeSummary.days_with_s3_touch} · both ${openingRangeSummary.days_with_both_touches})`
+        : " · opening-range analysis unavailable (no candles in range)";
+
+      if (srMode === "manual") {
+        const only = srConfigs[0];
+        setStatus(
+          `Downloaded ${selectedCandles.length} candles · ${crosses.length} EMA crosses · ${totalLevelCount} SR levels (${only.left_bars}/${only.right_bars})${orSummaryTail}.`,
+          false
+        );
+      } else {
+        setStatus(
+          `Downloaded ${selectedCandles.length} candles · ${crosses.length} EMA crosses · ${totalLevelCount} total SR levels across ${srConfigs.length} preset(s)${orSummaryTail}.`,
+          false
+        );
+      }
     } catch (error) {
       console.error("[json-export] Download failed:", error);
       setStatus(error && error.message ? error.message : "Unable to generate JSON file.", true);
