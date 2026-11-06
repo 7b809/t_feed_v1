@@ -1780,6 +1780,7 @@ class LevelIsolatedInstrumentService:
             isolation_dt is not None
             and isolation_dt.time() < dtime(10, 30)
             and isolation_price_f is not None
+            and isolation_price_f > 0.0
             and (isolation_price_f > 250.0 or isolation_price_f < 100.0)
         )
         isolated = {
