@@ -990,6 +990,13 @@ class DummyOrderService:
         ) if post_conf_dt is not None else None
 
         post_is_resistance = post_trigger["level"] == "resistance"
+        # The isolation service pins this mode once using the official
+        # isolation timestamp and isolated option price. Never recompute it
+        # from a later pivot, confirmation, or current market price.
+        early_extreme_reversal = bool(
+            iso.get("early_extreme_reversal")
+            or iso.get("standard_execution_mode") == "EARLY_EXTREME_REVERSAL"
+        )
         reversal_active = (
             cutoff_dt is not None
             and post_conf_dt is not None
@@ -998,16 +1005,25 @@ class DummyOrderService:
             and post_is_resistance
         )
 
-        if reversal_active:
+        if early_extreme_reversal and post_is_resistance:
+            # Reversal mode: Resistance buys the isolated (same) leg.
+            routing_mode = "early_extreme_resistance_same_leg"
+            traded_key = bias_key
+            traded_symbol = bias_entry.get("trading_symbol")
+        elif reversal_active:
             routing_mode = "reversal_same_leg"
             traded_key = bias_key
             traded_symbol = bias_entry.get("trading_symbol")
-        elif post_trigger["level"] == "support":
+        elif post_trigger["level"] == "support" and not early_extreme_reversal:
             routing_mode = "support_same_leg"
             traded_key = bias_key
             traded_symbol = bias_entry.get("trading_symbol")
         else:
-            routing_mode = "resistance_opposite_leg"
+            # Normal Resistance OR reversal-mode Support buys the opposite leg.
+            routing_mode = (
+                "early_extreme_support_opposite_leg"
+                if early_extreme_reversal else "resistance_opposite_leg"
+            )
             opposite_type = "PE" if bias_type == "CE" else "CE"
             opposite_entry = None
             if underlying and strike is not None:
@@ -1042,6 +1058,12 @@ class DummyOrderService:
             "traded_key": traded_key,
             "traded_symbol": traded_symbol,
             "prior_support": prior_support,
+            "early_extreme_reversal": early_extreme_reversal,
+            "standard_execution_mode": (
+                "EARLY_EXTREME_REVERSAL" if early_extreme_reversal else "STANDARD"
+            ),
+            "execution_mode_price": _safe_float(iso.get("execution_mode_price") or iso.get("instrument_ltp")),
+            "execution_mode_decided_at": iso.get("execution_mode_decided_at") or iso.get("touched_at") or iso.get("isolated_at"),
             "entry_time_iso": post_trigger["confirmed_time"],
         }
 
@@ -1624,6 +1646,10 @@ class DummyOrderService:
             "trading_symbol": routing["traded_symbol"],
             "side": "BUY",
             "routing_mode": routing["routing_mode"],
+            "standard_execution_mode": routing["standard_execution_mode"],
+            "early_extreme_reversal": routing["early_extreme_reversal"],
+            "execution_mode_price": routing["execution_mode_price"],
+            "execution_mode_decided_at": routing["execution_mode_decided_at"],
             "isolated_key": iso.get("instrument_key"),
             "bias_type": iso.get("type"),
             "t_iso": iso.get("touched_at") or iso.get("isolated_at"),
@@ -1706,6 +1732,10 @@ class DummyOrderService:
             "trading_symbol": routing["traded_symbol"],
             "side": "BUY",
             "routing_mode": routing["routing_mode"],
+            "standard_execution_mode": routing.get("standard_execution_mode", "STANDARD"),
+            "early_extreme_reversal": routing.get("early_extreme_reversal", False),
+            "execution_mode_price": routing.get("execution_mode_price"),
+            "execution_mode_decided_at": routing.get("execution_mode_decided_at"),
             "isolated_key": iso.get("instrument_key"),
             "bias_type": iso.get("type"),
             "t_iso": iso.get("touched_at") or iso.get("isolated_at"),
