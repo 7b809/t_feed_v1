@@ -32,6 +32,28 @@ Startup task list (infrastructure only):
     12. Telegram completion notification
     13. Return structured result
 
+Production mode (PROD_MODE)
+---------------------------
+Every auth / docs gate in this module is driven by one config flag:
+
+    * ``PROD_MODE = True``   → full security posture:
+                                 - docs disabled unless a credential is
+                                   configured (and gated when enabled),
+                                 - ``AuthGuardMiddleware`` installed,
+                                 - sensitive routers require auth.
+    * ``PROD_MODE = False``  → developer mode:
+                                 - docs public (``/docs``, ``/redoc``,
+                                   ``/openapi.json`` always on),
+                                 - ``AuthGuardMiddleware`` **not**
+                                   installed,
+                                 - sensitive routers mounted with **no**
+                                   auth dependency (fully public).
+                                 **Never expose this build to the internet.**
+
+``PROD_MODE`` is read defensively via ``getattr(config, "PROD_MODE",
+False)`` — an unconfigured box defaults to dev mode. Production
+deployments MUST set ``PROD_MODE = True`` in ``core/config.py``.
+
 Dummy-order catch-up gating (2026-11-04)
 ----------------------------------------
 ``_run_full_refresh_sync`` returns as soon as
@@ -77,6 +99,7 @@ closes the window for all subsequent ticks.
 Config keys referenced (may be added to ``core/config.py`` as needed —
 all read defensively via ``getattr``):
 
+    * ``PROD_MODE``                                          (default false)
     * ``DUMMY_ORDER_WAIT_FOR_SR_BACKFILL_TIMEOUT_SECONDS``  (default 120)
     * ``SANDBOX_EXECUTION_ENABLED``                          (default false)
     * ``SANDBOX_EXECUTION_MODE``                             (default "observe")
@@ -97,7 +120,7 @@ others) proved that this box is directly reachable from the public
 internet. ``/openapi.json`` and ``/docs`` were returning 200, i.e. the
 whole API surface was public.
 
-This module now:
+When ``PROD_MODE = True`` this module:
 
   * disables ``docs_url`` / ``redoc_url`` / ``openapi_url`` entirely
     unless at least one credential is configured (see
@@ -114,10 +137,15 @@ This module now:
     combination (rejected by browsers, CORS spec violation) with a
     real allow-list from ``CORS_ALLOW_ORIGINS``.
 
+When ``PROD_MODE = False`` none of the above applies — docs are public,
+no auth guard is installed, sensitive routers are mounted without an
+auth dependency. This is intentional for local development.
+
 Global auth guard (2026-11-05)
 ------------------------------
 ``AuthGuardMiddleware`` (``core/auth_guard.py``) is installed on the
-app as the outermost auth layer. For every request it:
+app as the outermost auth layer **only when** ``PROD_MODE = True``.
+For every request it:
 
   * lets the auth-bypass paths through (``/login``, ``/logout``,
     ``/auth/whoami``);
@@ -133,13 +161,6 @@ app as the outermost auth layer. For every request it:
     from API / XHR / curl callers, which get a plain JSON 401 with
     no ``WWW-Authenticate`` challenge (the login page is the intended
     recovery path).
-
-The previous pair of hand-rolled middlewares
-(``_redirect_html_to_login`` and a docs-only ``_gate_docs`` that
-returned a Basic challenge) has been replaced by this single guard.
-``_gate_docs`` is retained only because docs paths appear on the
-guard's public whitelist and therefore still need a focused auth
-check with the same redirect/401 behaviour as the guard itself.
 
 Browser login flow (2026-11-05)
 -------------------------------
@@ -194,10 +215,11 @@ The positions UI and its JSON API are mounted as two separate routers:
                                                       /api/positions/exit
 
 The page shell is public so the browser can render it (and its JS can
-surface the session-expired state) even before login. Every API call
-the page makes goes through ``require_any_auth`` — a logged-out
-browser hitting ``/api/positions`` gets the usual 401 and the
-``templates/base.html`` fetch interceptor bounces it to ``/login``.
+surface the session-expired state) even before login. In
+``PROD_MODE = True`` every API call the page makes goes through
+``require_any_auth`` — a logged-out browser hitting ``/api/positions``
+gets the usual 401 and the ``templates/base.html`` fetch interceptor
+bounces it to ``/login``. In dev mode the API is public.
 
 Admin surfaces mounted by this module:
 
@@ -286,25 +308,53 @@ _DUMMY_ORDER_SR_BACKFILL_POLL_SECONDS = 2.0
 
 
 # --------------------------------------------------------------------------- #
-# Auth / docs gating                                                          #
+# Prod-mode / auth / docs gating                                              #
 # --------------------------------------------------------------------------- #
-# Docs are only enabled when at least one credential is configured.
-# On an unconfigured box (no ADMIN_API_KEY, no ADMIN_BASIC_PASSWORD)
-# FastAPI is built with docs_url=None, redoc_url=None, openapi_url=None
-# so /docs, /redoc and /openapi.json all return 404 — the scanner
-# cannot map the API surface.
+# ``PROD_MODE`` is the single switch that controls every auth and docs
+# gate in this module. It is read defensively so an unconfigured box
+# falls back to dev mode (see module docstring section "Production mode
+# (PROD_MODE)").
+#
+#   PROD_MODE = True  →  docs closed unless a credential is configured,
+#                        AuthGuardMiddleware installed,
+#                        sensitive routers gated with ``_AUTH``.
+#   PROD_MODE = False →  docs public, no auth guard, routers public.
+_PROD_MODE = bool(getattr(config, "PROD_MODE", True))
+
 _HAVE_HEADER_AUTH = bool((getattr(config, "ADMIN_API_KEY", "") or "").strip())
 _HAVE_BASIC_AUTH = bool(
     (getattr(config, "ADMIN_BASIC_USER", "") or "").strip()
     and (getattr(config, "ADMIN_BASIC_PASSWORD", "") or "")
 )
-_DOCS_ENABLED = _HAVE_HEADER_AUTH or _HAVE_BASIC_AUTH
+
+# Docs are enabled when:
+#   * we are in dev mode (always on, public), OR
+#   * we are in prod mode AND at least one credential is configured.
+# In prod mode with no credentials, docs are hard-disabled (404).
+_DOCS_ENABLED = (
+    (not _PROD_MODE) or _HAVE_HEADER_AUTH or _HAVE_BASIC_AUTH
+)
 
 # The three FastAPI-served docs surfaces. All other auth is enforced
-# by ``AuthGuardMiddleware``; these three are on that guard's public
-# whitelist (so the guard passes them through) and are separately
-# gated by ``_gate_docs`` below.
+# by ``AuthGuardMiddleware`` (prod mode only); these three are handled
+# by ``_gate_docs`` below.
 _DOCS_PATHS = ("/docs", "/redoc", "/openapi.json")
+
+
+# One loud line at import time so the operator immediately sees which
+# security posture this build is running in.
+if _PROD_MODE:
+    logger.info(
+        "PROD_MODE=True — auth enabled (header=%s basic=%s) · docs=%s",
+        _HAVE_HEADER_AUTH,
+        _HAVE_BASIC_AUTH,
+        "gated" if _DOCS_ENABLED else "closed",
+    )
+else:
+    logger.warning(
+        "PROD_MODE=False (dev) — authentication DISABLED · docs public · "
+        "sensitive routers public. Do NOT expose this build to the internet."
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -756,10 +806,11 @@ async def app_lifespan(app: FastAPI):
         isolation_status = isolation_summary.get("status")
 
         logger.info(
-            "Application startup complete. feed_instruments=%d "
+            "Application startup complete. prod_mode=%s feed_instruments=%d "
             "telegram_polling=%s holiday=%s level_isolation_status=%s "
             "isolated=%s dummy_orders=%s sr_ready=%s sr_wait_s=%.1f "
             "sandbox_registered=%s sandbox_mode=%s docs_enabled=%s",
+            _PROD_MODE,
             registry_count,
             telegram_running,
             holiday_gate.get("is_holiday"),
@@ -866,15 +917,25 @@ async def app_lifespan(app: FastAPI):
             )
 
         # Auth line — one-glance confirmation of the security posture.
-        auth_line = (
-            f"🔐 Auth:          "
-            f"{'header' if _HAVE_HEADER_AUTH else ''}"
-            f"{'/' if _HAVE_HEADER_AUTH and _HAVE_BASIC_AUTH else ''}"
-            f"{'basic' if _HAVE_BASIC_AUTH else ''}"
-            f"{' · docs=on' if _DOCS_ENABLED else ' · docs=off'}\n"
-            if (_HAVE_HEADER_AUTH or _HAVE_BASIC_AUTH)
-            else "🔐 Auth:          ⚠️ DISABLED — all admin routes are public\n"
-        )
+        # Dev mode (PROD_MODE=False) is loud and red on purpose: this
+        # build must never be exposed to the internet.
+        if not _PROD_MODE:
+            auth_line = (
+                f"🔐 Auth:          ⚠️ DISABLED · prod_mode=False (dev) · "
+                f"docs={'public' if _DOCS_ENABLED else 'off'}\n"
+            )
+        elif _HAVE_HEADER_AUTH or _HAVE_BASIC_AUTH:
+            auth_line = (
+                f"🔐 Auth:          "
+                f"{'header' if _HAVE_HEADER_AUTH else ''}"
+                f"{'/' if _HAVE_HEADER_AUTH and _HAVE_BASIC_AUTH else ''}"
+                f"{'basic' if _HAVE_BASIC_AUTH else ''}"
+                f"{' · docs=on' if _DOCS_ENABLED else ' · docs=off'}\n"
+            )
+        else:
+            auth_line = (
+                "🔐 Auth:          ⚠️ DISABLED — all admin routes are public\n"
+            )
 
         startup_message = (
             f"{_DIV}\n"
@@ -945,9 +1006,11 @@ async def app_lifespan(app: FastAPI):
 # --------------------------------------------------------------------------- #
 # App                                                                          #
 # --------------------------------------------------------------------------- #
-# Build FastAPI with docs CLOSED by default. When at least one credential
-# is configured (ADMIN_API_KEY or ADMIN_BASIC_PASSWORD), docs are
-# re-enabled — and then protected by ``_gate_docs`` below.
+# Build FastAPI with docs CLOSED by default *in prod mode*. When at
+# least one credential is configured (ADMIN_API_KEY or
+# ADMIN_BASIC_PASSWORD), prod docs are re-enabled — and then protected
+# by ``_gate_docs`` below. In dev mode (PROD_MODE=False) docs are
+# always enabled and public.
 app = FastAPI(
     title="Market Data Foundation",
     lifespan=app_lifespan,
@@ -975,21 +1038,22 @@ app.add_middleware(
 
 
 # ---- /docs, /redoc, /openapi.json auth gate -------------------------------- #
-# ``AuthGuardMiddleware`` (below) covers every path that is not on its
-# public whitelist — but the docs paths ARE on that whitelist (so the
-# guard passes them through untouched). This middleware performs the
-# actual auth check on those three paths and mirrors the guard's
-# redirect-or-401 behaviour:
+# This middleware only enforces auth when BOTH:
+#   * we are in prod mode (``_PROD_MODE`` is True), and
+#   * docs are actually enabled (``_DOCS_ENABLED`` is True — i.e. at
+#     least one credential is configured).
+# In dev mode docs are public by design, and in prod mode with no
+# credentials ``docs_url`` is None so /docs never resolves — nothing
+# to gate in either case.
+#
+# When gating applies it mirrors the guard's redirect-or-401 behaviour:
 #
 #   * browser (Accept: text/html) → 303 to /login?next=<path>
 #   * API / curl / XHR             → 401 JSON with no Basic challenge
 #                                    (the login page is the recovery path)
-#
-# No-op when docs are disabled (the FastAPI app was created with
-# docs_url=None so /docs never resolves anyway).
 @app.middleware("http")
 async def _gate_docs(request: Request, call_next):
-    if not _DOCS_ENABLED:
+    if not _PROD_MODE or not _DOCS_ENABLED:
         return await call_next(request)
 
     path = request.url.path
@@ -1022,7 +1086,7 @@ async def _gate_docs(request: Request, call_next):
     )
 
 
-# ---- Global auth guard ----------------------------------------------------- #
+# ---- Global auth guard (PROD_MODE only) ----------------------------------- #
 # ``AuthGuardMiddleware`` is the outer auth layer. It is added LAST so it
 # runs FIRST (Starlette middleware stack is LIFO), intercepting every
 # unauth request before it reaches CORS, ``_gate_docs``, or the router.
@@ -1035,31 +1099,38 @@ async def _gate_docs(request: Request, call_next):
 #   * unauth HTML navigation  → 303 redirect to /login?next=<path>
 #   * unauth API / curl / XHR → 401 JSON {detail, login_url}
 #
-# This replaces the previous hand-rolled pair
-# (``_redirect_html_to_login`` + a docs-only ``_gate_docs`` that returned
-# a Basic challenge). One guard, one consistent behaviour, no
-# hand-maintained route prefix list.
-app.add_middleware(AuthGuardMiddleware)
+# In dev mode (``PROD_MODE=False``) the guard is **not** installed —
+# every route is public. This is intentional for local development;
+# never expose such a build to the internet.
+if _PROD_MODE:
+    app.add_middleware(AuthGuardMiddleware)
+    logger.info("AuthGuardMiddleware installed (PROD_MODE=True)")
+else:
+    logger.warning(
+        "AuthGuardMiddleware NOT installed (PROD_MODE=False) — "
+        "every route is public; do not expose this build to the internet"
+    )
 
 
 # --------------------------------------------------------------------------- #
 # Routers                                                                      #
 # --------------------------------------------------------------------------- #
 # ---- Public surfaces (no auth) -------------------------------------------- #
-# The auth router MUST be public — /login is how a browser obtains the
-# session cookie that the gated routers below will accept. Everything
-# else in this block is the front-end surface: UI pages, live REST,
-# live-SR, EMA-calc, upstox proxy, expired instrument/chart, market
-# holiday, layout.
+# The auth router is always public — /login is how a browser obtains
+# the session cookie that the gated routers below will accept. In
+# dev mode it is still mounted but effectively unused (no guard
+# redirects traffic there). Everything else in this block is the
+# front-end surface: UI pages, live REST, live-SR, EMA-calc, upstox
+# proxy, expired instrument/chart, market holiday, layout.
 #
 # The positions page shell (``GET /positions``) is served by
 # ``page_router`` below — see ``routes/page_routes.py``. Its JSON API
 # is ``position_api_router`` and lives in the gated block further down.
 #
-# NOTE: AuthGuardMiddleware (above) is the authoritative gate — this
-# block is simply "these routers don't add their own per-route auth".
-# Any path not on the guard's whitelist will still be redirected /
-# 401'd, even if the router itself is mounted here.
+# NOTE: In prod mode AuthGuardMiddleware (above) is the authoritative
+# gate — this block is simply "these routers don't add their own
+# per-route auth". Any path not on the guard's whitelist will still
+# be redirected / 401'd, even if the router itself is mounted here.
 app.include_router(auth_router)          # /login, /logout, /auth/whoami
 app.include_router(page_router)          # /, /charts, /chart, /isolated,
                                          # /positions, /favicon.ico
@@ -1074,16 +1145,15 @@ app.include_router(market_holiday_router)
 app.include_router(layout_router)
 
 
-# ---- Sensitive surfaces (require auth) ----------------------------------- #
+# ---- Sensitive surfaces --------------------------------------------------- #
 # Admin, folders, logs, isolated-instrument, simulation, dummy-orders,
 # sandbox, margin, daily-backup, readiness, api-explorer, position API,
 # option-contracts.
 #
-# All of these were reachable by the scanner on 2026-11-05. They are now
-# gated on ``require_any_auth`` (Bearer / X-API-Key / Basic / session-
-# cookie). The cookie path is what lets a browser reach these after a
-# successful /login.
-_AUTH = [Depends(require_any_auth)]
+# In prod mode these require auth (``_AUTH``); in dev mode ``_AUTH``
+# is an empty dependency list so the routers are mounted with no
+# additional auth at all.
+_AUTH = [Depends(require_any_auth)] if _PROD_MODE else []
 
 app.include_router(admin_router, dependencies=_AUTH)
 app.include_router(folder_router, dependencies=_AUTH)

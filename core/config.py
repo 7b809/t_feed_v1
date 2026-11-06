@@ -977,3 +977,4 @@ ADMIN_SESSION_SECRET = _str("ADMIN_SESSION_SECRET", "")
 ADMIN_SESSION_TTL_SECONDS = max(300, _int("ADMIN_SESSION_TTL_SECONDS", 8 * 3600))
 ADMIN_COOKIE_NAME = _str("ADMIN_COOKIE_NAME", "novag_admin")
 ADMIN_COOKIE_SECURE = _bool("ADMIN_COOKIE_SECURE", True)  # require HTTPS
+PROD_MODE = _bool("PROD_MODE", True)  # disable debug / reload / dev-only features
