@@ -1033,18 +1033,7 @@ class IsolatedInstrumentPromotionService:
                 "generated_at": _now_utc_iso(),
             }
 
-        # ---- G1 v4.1 — Path B never triggers promotion ------------- #
-        # When the session was isolated by an EXTERNAL index
-        # (MIDCPNIFTY / BANKNIFTY / SENSEX), the bias-side instrument
-        # stays active for the whole day. The frozen entry must not be
-        # refreshed either — refreshing would imply we are backfilling
-        # an entry block that should not exist for this session.
-        if _is_path_b_active():
-            return {
-                "status": "blocked",
-                "reason": "path_b_external_trigger",
-                "generated_at": _now_utc_iso(),
-            }
+        # Unified standard Path A: no isolation-source promotion guard.
 
         if not isinstance(signal, dict) or signal.get("status") != "ok":
             return {
@@ -1288,17 +1277,7 @@ class IsolatedInstrumentPromotionService:
                 "generated_at": _now_utc_iso(),
             }
 
-        # ---- G1 v4.1 — Path B never triggers promotion ------------- #
-        # When the session was isolated by an EXTERNAL index
-        # (MIDCPNIFTY / BANKNIFTY / SENSEX), the bias-side instrument
-        # stays active for the whole day. Promotion is only valid for
-        # Path A (NIFTY self-trigger).
-        if _is_path_b_active():
-            return {
-                "promoted": False,
-                "reason": "path_b_external_trigger",
-                "generated_at": _now_utc_iso(),
-            }
+        # Unified standard Path A: no isolation-source promotion guard.
 
         if not isinstance(signal, dict) or signal.get("status") != "ok":
             return {
