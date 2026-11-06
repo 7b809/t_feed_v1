@@ -191,6 +191,7 @@ def _log_calc_post_1130(
 # uniformly — no sandbox change is required.
 _CLOSE_REASON_TO_TRANSITION: dict[str, str] = {
     "STOP_HIT":                 "STOP_HIT",
+    "TARGET_TRAIL_STOP_HIT":    "STOP_HIT",
     "STAGE_2_RESISTANCE_EXIT":  "STAGE_2_RESISTANCE_EXIT",
     "TARGET_MILESTONE_RESISTANCE_EXIT": "STAGE_2_RESISTANCE_EXIT",
     "NEXT_15_3_RESISTANCE_EXIT": "NEXT_15_3_RESISTANCE_EXIT",
@@ -1527,9 +1528,17 @@ class DummyOrderService:
             "entry_price": round(entry_price, 4),
             "entry_price_source": entry_source,
             "stop_price": stop_price,
+            "initial_stop_price": stop_price,
+            "active_stop_price": stop_price,
             "stop_pct": stop_pct,
             "target_price": target_price,
+            "initial_target_price": target_price,
+            "active_target_price": target_price,
             "target_divisor": target_divisor,
+            "target_ladder_enabled": bool(routing["early_extreme_reversal"]),
+            "target_ladder_active": False,
+            "target_ladder_stage": 0,
+            "target_ladder_history": [],
             "target_milestone_met": False,
             "target_milestone_at": None,
             "target_milestone_price": None,
@@ -1675,6 +1684,136 @@ class DummyOrderService:
     # ------------------------------------------------------------------ #
     # Order update (bar replay + dynamic target / Resistance exit)                           #
     # ------------------------------------------------------------------ #
+    def _update_early_extreme_target_ladder(
+        self,
+        order: dict[str, Any],
+        candles: list[dict[str, Any]],
+        entry_dt: datetime,
+        entry_price: float,
+        now: datetime,
+    ) -> None:
+        """Replay Early Extreme Reversal candles using the 15% target lock.
+
+        Before Target 1, the original configured stop remains active.
+        After each target is touched, lock the achieved target's 85% as
+        the protective stop and raise the next target by 30%. The newly
+        calculated stop becomes active from the next candle; OHLC data
+        cannot establish the intrabar order of a target and its new stop.
+        """
+        initial_stop = _safe_float(
+            order.get("initial_stop_price", order.get("stop_price")),
+        )
+        initial_target = _safe_float(
+            order.get("initial_target_price", order.get("target_price")),
+        )
+        if initial_stop is None or initial_target is None:
+            return
+        if initial_stop <= 0 or initial_target <= 0:
+            return
+
+        active_stop = initial_stop
+        active_target = initial_target
+        target_stage = 0
+        ladder_history: list[dict[str, Any]] = []
+        exit_reason: str | None = None
+        exit_price: float | None = None
+        exit_time_iso: str | None = None
+        max_high = entry_price
+        min_low = entry_price
+
+        for candle in candles:
+            candle_dt = _parse_iso(candle.get("time"))
+            if candle_dt is None or candle_dt <= entry_dt:
+                continue
+
+            high = _safe_float(candle.get("high"))
+            low = _safe_float(candle.get("low"))
+            if high is None or low is None:
+                continue
+
+            max_high = max(max_high, high)
+            min_low = min(min_low, low)
+
+            # Existing active stop is evaluated before this candle's
+            # target touches. This is the conservative OHLC assumption.
+            if low <= active_stop:
+                exit_reason = (
+                    "TARGET_TRAIL_STOP_HIT"
+                    if target_stage > 0 else "STOP_HIT"
+                )
+                exit_price = active_stop
+                exit_time_iso = str(candle.get("time"))
+                break
+
+            # A candle high can pass more than one target. Each crossed
+            # target is recorded in order; the final achieved target
+            # determines the protective stop and next active target.
+            while high >= active_target:
+                achieved_target = active_target
+                target_stage += 1
+                active_stop = round(achieved_target * 0.85, 4)
+                next_target = round(achieved_target * 1.30, 4)
+                ladder_history.append({
+                    "stage": target_stage,
+                    "target_price": round(achieved_target, 4),
+                    "hit_at": _iso(candle_dt),
+                    "protective_stop_price": active_stop,
+                    "next_target_price": next_target,
+                })
+                active_target = next_target
+
+        order["initial_stop_price"] = round(initial_stop, 4)
+        order["initial_target_price"] = round(initial_target, 4)
+        order["target_ladder_enabled"] = True
+        order["target_ladder_stage"] = target_stage
+        order["target_ladder_active"] = target_stage > 0
+        order["target_ladder_history"] = ladder_history
+        order["active_stop_price"] = round(active_stop, 4)
+        order["active_target_price"] = round(active_target, 4)
+        # Keep the established fields aligned with the currently active
+        # stop and next target so existing API/UI consumers stay useful.
+        order["stop_price"] = round(active_stop, 4)
+        order["target_price"] = round(active_target, 4)
+        order["target_milestone_met"] = target_stage > 0
+        if ladder_history:
+            first_hit = ladder_history[0]
+            latest_hit = ladder_history[-1]
+            order["target_milestone_at"] = first_hit["hit_at"]
+            order["target_milestone_price"] = first_hit["target_price"]
+            order["latest_target_hit_at"] = latest_hit["hit_at"]
+            order["latest_target_hit_price"] = latest_hit["target_price"]
+            order["stage_2_triggered_at"] = first_hit["hit_at"]
+            order["stage_2_trigger_reason"] = "DYNAMIC_TARGET_MILESTONE"
+            order["profit_state"] = "STAGE_2"
+        else:
+            order["target_milestone_at"] = None
+            order["target_milestone_price"] = None
+            order["latest_target_hit_at"] = None
+            order["latest_target_hit_price"] = None
+            order["stage_2_triggered_at"] = None
+            order["stage_2_trigger_reason"] = None
+            order["profit_state"] = "STAGE_1"
+
+        order["max_high_since_entry"] = round(max_high, 4)
+        order["min_low_since_entry"] = round(min_low, 4)
+        order["mfe"] = round(max_high - entry_price, 4)
+        order["mae"] = round(min_low - entry_price, 4)
+        last_close = _safe_float(candles[-1].get("close"))
+        order["current_ltp"] = round(
+            last_close if last_close is not None else entry_price, 4,
+        )
+        order["current_ltp_at"] = now.isoformat()
+
+        if exit_reason:
+            self._close_order(
+                order, exit_reason, exit_price, exit_time_iso, now,
+            )
+            return
+
+        # No S/R Resistance exit is used by Early Extreme Reversal after
+        # entry; the target-protection ladder or EOD is its exit mechanism.
+        self._maybe_eod_close(order, now, candles)
+
     def _update_order(
         self,
         order: dict[str, Any],
@@ -1700,6 +1839,17 @@ class DummyOrderService:
         entry_price = _safe_float(order.get("entry_price")) or 0.0
         stop_price = _safe_float(order.get("stop_price")) or 0.0
         if entry_price <= 0 or stop_price <= 0:
+            return
+
+        if bool(
+            order.get("early_extreme_reversal")
+            or order.get("standard_execution_mode") == "EARLY_EXTREME_REVERSAL"
+        ):
+            # Early Extreme Reversal uses the repeating target/15% lock
+            # ladder. Its post-target exit is not driven by S/R resistance.
+            self._update_early_extreme_target_ladder(
+                order, candles, entry_dt, entry_price, now,
+            )
             return
 
         # The entry-price target is the only Stage 1 profit milestone.
