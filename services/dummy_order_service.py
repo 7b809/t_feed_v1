@@ -1,4 +1,26 @@
-# services/dummy_order_service.py
+"""Post-isolation dummy order execution engine — unified standard Path A.
+
+Standard-session execution uses one isolation-source-independent engine:
+post-isolation 15/3 S/R confirmation, same/opposite-leg routing, existing
+traded-instrument OR validation and configured stop-loss.
+
+Standard Path A target:
+    * entry <= 100: entry + entry / 3
+    * entry <= 200: entry + entry / 4
+    * entry > 200: entry + entry / 5
+
+The target is a milestone, not an immediate exit. Stop-loss remains active
+while the engine waits for a NEW 15/3 Resistance confirmation strictly
+after the milestone, then exits at that confirmation candle's 1-minute close.
+EOD exit is unchanged.
+
+This service never places a real Upstox order. Every record carries
+"dummy": true; optional broker execution consumes persisted transitions
+through sandbox_execution_service.
+
+POST-11:30 remains a separate strategy with its existing entry, target,
+stop-loss and 15/15 exit behavior. Regime selection uses isolation time,
+not the index that caused isolation.
 """Post-isolation dummy order execution engine — t_feed_v1-market-engine-v3.
 
 Implements the *Isolated Instrument Order Strategy & Execution Engine*
@@ -194,6 +216,7 @@ will delay the next scheduler tick.
 from __future__ import annotations
 
 import json
+import math
 import threading
 import time
 from datetime import datetime, time as dtime, timezone
@@ -258,6 +281,19 @@ def _safe_float(v: Any) -> float | None:
     except (TypeError, ValueError):
         return None
 
+
+def _dynamic_target_for_entry(entry_price: float) -> tuple[float, int]:
+    """Return the unified Path A target for the entry-price band.
+
+    0 < entry <= 100: entry + entry / 3
+    100 < entry <= 200: entry + entry / 4
+    entry > 200: entry + entry / 5
+    """
+    price = float(entry_price)
+    if not math.isfinite(price) or price <= 0:
+        raise ValueError(f"entry_price must be finite and positive: {entry_price!r}")
+    divisor = 3 if price <= 100.0 else 4 if price <= 200.0 else 5
+    return round(price + price / divisor, 4), divisor
 
 def _fmt_price(v: Any, fmt: str = ".4f") -> str:
     f = _safe_float(v)
@@ -1066,7 +1102,13 @@ class DummyOrderService:
             close_f = closes_by_minute.get(key)
             if close_f is not None:
                 out[str(conf_iso)] = close_f
-        return out
+        return dict(sorted(
+            out.items(),
+            key=lambda item: (
+                _parse_iso(item[0]).timestamp()
+                if _parse_iso(item[0]) is not None else float("inf")
+            ),
+        ))
 
     # ------------------------------------------------------------------ #
     # Trigger + routing                                                  #
@@ -1762,12 +1804,7 @@ class DummyOrderService:
             getattr(config, "STRATEGY_ORDER_STOP_LOSS_PCT", 0.30),
         )
         stop_price = round(entry_price * (1.0 - stop_pct), 4)
-        target_divisor = (
-            3 if entry_price <= 100.0
-            else 4 if entry_price <= 200.0
-            else 5
-        )
-        target_price = round(entry_price + (entry_price / target_divisor), 4)
+        target_price, target_divisor = _dynamic_target_for_entry(entry_price)
 
         # Ensure the SR engine is tracking the traded instrument so
         # live_sr_levels_service.get_levels() returns pivots for it.
@@ -1799,7 +1836,11 @@ class DummyOrderService:
             "resistance_exit_confirmation_at": None,
             "or_levels": or_levels,
             "zone": zone.get("zone"),
-            "milestones": zone.get("milestones") or [],
+            "milestones": [{
+                "name": "DYNAMIC_TARGET",
+                "price": target_price,
+                "divisor": target_divisor,
+            }],
             "profit_state": "STAGE_1",
             "stage_2_triggered_at": None,
             "stage_2_trigger_reason": None,
@@ -1825,12 +1866,12 @@ class DummyOrderService:
         }
 
         logger.info(
-            "[dummy-order] CREATED %s | routing=%s entry=%.4f stop=%.4f "
-            "zone=%s milestones=%s series_len=%d",
+            "[dummy-order] CREATED %s | execution=PATH_A_UNIFIED "
+            "routing=%s entry=%.4f stop=%.4f target=%.4f divisor=%d "
+            "zone=%s series_len=%d",
             order["order_id"], routing["routing_mode"],
-            entry_price, stop_price, zone.get("zone"),
-            [m.get("name") for m in (zone.get("milestones") or [])],
-            len(series),
+            entry_price, stop_price, target_price, target_divisor,
+            zone.get("zone"), len(series),
         )
         self._notify_created(order)
         return order
@@ -1958,12 +1999,9 @@ class DummyOrderService:
         # standard Path A. Stop-loss is evaluated in both stages.
         target_price = _safe_float(order.get("target_price"))
         if target_price is None:
-            target_divisor = (
-                3 if entry_price <= 100.0
-                else 4 if entry_price <= 200.0
-                else 5
-            )
-            target_price = round(entry_price + entry_price / target_divisor, 4)
+            target_price, target_divisor = _dynamic_target_for_entry(entry_price)
+            order["target_price"] = target_price
+            order["target_divisor"] = target_divisor
             order["target_price"] = target_price
             order["target_divisor"] = target_divisor
 
@@ -1974,6 +2012,24 @@ class DummyOrderService:
         )
 
         stage_2_dt = _parse_iso(order.get("stage_2_triggered_at"))
+        # An open order may carry a Stage-2 marker from the former OR-grid
+        # or +50pt rules. Reset it so the new price-band target is replayed.
+        if (
+            stage_2_dt is not None
+            and order.get("stage_2_trigger_reason") != "DYNAMIC_TARGET_MILESTONE"
+        ):
+            logger.info(
+                "[dummy-order] resetting legacy Stage-2 marker for %s; "
+                "replaying the dynamic target milestone",
+                order.get("order_id"),
+            )
+            stage_2_dt = None
+            order["stage_2_triggered_at"] = None
+            order["stage_2_trigger_reason"] = None
+            order["profit_state"] = "STAGE_1"
+            order["target_milestone_met"] = False
+            order["target_milestone_at"] = None
+            order["target_milestone_price"] = None
         exit_reason: str | None = None
         exit_price: float | None = None
         exit_time_iso: str | None = None
