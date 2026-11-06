@@ -559,11 +559,11 @@ SIMULATION_TICK_ROUNDING = _str(
 #   1. Fetches the isolation record (bias-side instrument + T_iso).
 #   2. Waits for the FIRST 15/3 SR level on the bias-side with
 #      pivot_time > T_iso AND confirmed_time > T_iso.
-#   3. Resolves the routing (same leg / opposite leg / 09:30 reversal)
-#      and the traded instrument's OWN OR grid (first_candle.json).
-#   4. Creates EXACTLY ONE order per day (or a SKIPPED record if the
-#      regime rejects: P_entry > R2, or missing OR levels).
-#   5. Applies the 30 % stop-loss and the two-stage milestone engine.
+#   3. Resolves routing (same leg / opposite leg / 09:30 reversal)
+#      from the actual post-isolation 15/3 S/R confirmation.
+#   4. Creates the order without OR-grid price eligibility filters.
+#   5. Applies the configured stop-loss, dynamic target milestone,
+#      and post-target 15/3 Resistance exit engine.
 #   6. Auto-closes any surviving OPEN order at
 #      DUMMY_ORDER_EOD_HOUR:MINUTE.
 #
@@ -740,8 +740,8 @@ DUMMY_ORDER_DRIFT_GUARD = _bool(
 #   * Exit: first new 15/3 Resistance confirmation after the milestone.
 #   * Reversal cutoff: 09:30 IST backup-routing rule remains unchanged.
 #
-# The structural OR grid remains a pre-order validation; its old profit
-# milestones and the former +50-point Stage 2 trigger are not used.
+# OR-grid levels are not consulted for entry eligibility, stop-loss,
+# target, or exit calculations.
 # ===========================================================================
 
 # Fixed risk cap: stop = P_entry × (1 − STRATEGY_ORDER_STOP_LOSS_PCT).
