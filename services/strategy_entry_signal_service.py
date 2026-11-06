@@ -2045,6 +2045,14 @@ class StrategyEntrySignalService:
             # _branch == "standard" → pre-11:30; fall through.
 
         # --------------------------------------------------------------- #
+        # Unified standard Path A — reuse the former Path B execution
+        # mode for EVERY pre-11:30 isolation, regardless of trigger index.
+        # The trigger source is retained for diagnostics only.
+        # POST-11:30 was evaluated above and remains a separate regime.
+        # --------------------------------------------------------------- #
+        return self._build_unified_path_a_response(iso_status, isolated)
+
+        # --------------------------------------------------------------- #
         # Unified standard Path A (2026-11-06).
         #
         # Trigger source is diagnostic isolation metadata only. Both
@@ -2253,17 +2261,18 @@ class StrategyEntrySignalService:
 
         return response
 
-    def _build_path_b_response(
+    def _build_unified_path_a_response(
         self,
         iso_status: dict[str, Any],
         isolated: dict[str, Any],
     ) -> dict[str, Any]:
-        """Return the signal payload for Path B (external-index trigger).
+        """Describe the single standard Path A execution mode.
 
-        The 10-minute scan and auto-reverse are intentionally NOT run.
-        The bias-side instrument stays isolated for the full session,
-        and the dummy-order service handles multi-order SR-level
-        execution + Rupee trailing.
+        This is the former Path B-style standard-session mode: the
+        isolation-selected bias instrument stays active and the dummy
+        order engine manages post-isolation S/R routing and trade exits.
+        It applies equally to NIFTY and external-index isolation triggers.
+        POST-11:30 is handled separately before this method is called.
         """
         instrument_key = str(isolated.get("instrument_key") or "").strip()
         underlying = ""
@@ -2285,8 +2294,8 @@ class StrategyEntrySignalService:
             bias_type = str(isolated.get("type") or "").upper() or None
 
         return {
-            "status": "path_b_mode",
-            "execution_path": "B_external_trigger",
+            "status": "path_a_unified_mode",
+            "execution_path": "PATH_A_UNIFIED",
             "day": iso_status.get("day"),
             "isolated": {
                 "instrument_key": instrument_key,
@@ -2300,17 +2309,16 @@ class StrategyEntrySignalService:
                 "touched_at": isolated.get("touched_at"),
                 "trigger_level": isolated.get("trigger_level") or isolated.get("trigger_side"),
                 "trigger_level_value": isolated.get("trigger_level_value"),
-                "trigger_is_self_nifty": False,
+                "trigger_index": isolated.get("trigger_index"),
+                "trigger_is_self_nifty": isolated.get("trigger_is_self_nifty"),
             },
-            "path_b": {
-                "enabled": True,
-                "tracked_underlyings": list(
-                    getattr(config, "STRATEGY_EXT_TRACKED_UNDERLYINGS", ["NIFTY", "SENSEX"])
-                ),
+            "path_a": {
+                "mode": "unified_standard_sr_execution",
+                "trigger_index": isolated.get("trigger_index"),
                 "message": (
-                    "Path B — external trigger. 10-minute scan and "
-                    "auto-reverse are disabled; multi-order SR watch active "
-                    "on the bias-side instrument."
+                    "Unified Path A — all isolation sources use the same "
+                    "post-isolation S/R entry and exit engine. The selected "
+                    "bias-side instrument remains active."
                 ),
                 "bias_side": bias_type,
                 "bias_instrument_key": instrument_key,
@@ -2322,7 +2330,7 @@ class StrategyEntrySignalService:
             "promotion": {
                 "recommended": False,
                 "already_applied": False,
-                "blockers": ["path_b_external_trigger"],
+                "blockers": ["unified_standard_path_no_promotion"],
                 "current_active_instrument_key": instrument_key,
                 "target_instrument_key": None,
                 "target_trading_symbol": None,
@@ -2333,7 +2341,7 @@ class StrategyEntrySignalService:
             },
             "active_instrument_key": instrument_key,
             "warnings": [
-                "Path B: auto-reverse and 10-minute fast scan intentionally disabled."
+                "Unified Path A standard mode: trigger source does not alter execution."
             ],
             "generated_at": _now_utc_iso(),
         }
