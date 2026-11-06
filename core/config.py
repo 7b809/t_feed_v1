@@ -721,22 +721,16 @@ DUMMY_ORDER_DRIFT_GUARD = _bool(
 # (the ``os.getenv`` default is used for anything still referenced).
 
 # ===========================================================================
-# STRATEGY ORDER — t_feed_v1-market-engine-v3
+# STRATEGY ORDER — unified Path A
 # ===========================================================================
-# These are the tunables consumed by ``services/dummy_order_service.py``.
-# Read from .env if present, otherwise the defaults match the spec:
+# Standard-session tunables consumed by services/dummy_order_service.py:
+#   * Stop-loss: configured percentage below entry (default 30%).
+#   * Target milestone: fixed entry-price-band formula described above.
+#   * Exit: first new 15/3 Resistance confirmation after the milestone.
+#   * Reversal cutoff: 09:30 IST backup-routing rule remains unchanged.
 #
-#   * Stop-loss:        30 % below fill price.
-#   * Stage 2 trigger:  +50 pt net gain (in addition to any structural
-#                       milestone defined by the OR grid).
-#   * Reversal cutoff:  09:30:00 IST — post-isolation confirmations on
-#                       or before this time can revert to the SAME leg
-#                       when a prior support was already confirmed and
-#                       the current level is a resistance.
-#
-# Note: the trigger window itself is 15/3 and is governed by
-# LIVE_SR_LEFT_BARS / LIVE_SR_RIGHT_BARS (both default to 15 / 3, which
-# already matches the spec).
+# The structural OR grid remains a pre-order validation; its old profit
+# milestones and the former +50-point Stage 2 trigger are not used.
 # ===========================================================================
 
 # Fixed risk cap: stop = P_entry × (1 − STRATEGY_ORDER_STOP_LOSS_PCT).
