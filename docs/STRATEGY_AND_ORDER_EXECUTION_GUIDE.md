@@ -64,24 +64,24 @@ The opening candle is the 09:15 one-minute candle. Its high and low define the f
 
 Let:
 
-- (H) = first candle high
-- (L) = first candle low
-- (D = H-L)
-- (A = (H+L)/2)
+- `H` = first candle high
+- `L` = first candle low
+- `D = H - L`
+- `A = (H + L) / 2`
 
 The current OR level calculation is:
 
 | Level | Calculation |
 |---|---|
-| R1 | (H) |
-| S1 | (L) |
-| A | ((H+L)/2) |
-| R2 | (H + D/2) |
-| R3 | (H + D) |
-| R3 threshold | ((R2+R3)/2) |
-| S2 | (L - D/2) |
-| S3 | (L - D) |
-| S3 threshold | ((S2+S3)/2) |
+| R1 | `H` |
+| S1 | `L` |
+| A | `(H + L) / 2` |
+| R2 | `H + D/2` |
+| R3 | `H + D` |
+| R3 threshold | `(R2 + R3) / 2` |
+| S2 | `L - D/2` |
+| S3 | `L - D` |
+| S3 threshold | `(S2 + S3) / 2` |
 
 The OR grid is used by the **index isolation trigger**. It is not used as an entry eligibility filter or as a target/stop grid for the current unified standard order engine. An option entry is not rejected simply because its price is above R2, below S2, or outside a former OR zone.
 
@@ -338,9 +338,7 @@ Assume:
 
 Because entry is greater than ₹200:
 
-[
-Target_1 = 294.30 + (294.30/5) = 353.16
-]
+`Target_1 = 294.30 + (294.30 / 5) = 353.16`
 
 [
 SL_0 = 294.30 \times 0.70 = 206.01
