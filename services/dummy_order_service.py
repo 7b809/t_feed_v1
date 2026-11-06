@@ -375,6 +375,7 @@ def _log_calc_post_1130(
 _CLOSE_REASON_TO_TRANSITION: dict[str, str] = {
     "STOP_HIT":                 "STOP_HIT",
     "STAGE_2_RESISTANCE_EXIT":  "STAGE_2_RESISTANCE_EXIT",
+    "TARGET_MILESTONE_RESISTANCE_EXIT": "STAGE_2_RESISTANCE_EXIT",
     "NEXT_15_3_RESISTANCE_EXIT": "NEXT_15_3_RESISTANCE_EXIT",
     "END_OF_DAY":               "EOD_CLOSE",
     # ---- POST-1130 exit reasons (2026-11-05) ----------------------- #
@@ -747,45 +748,16 @@ class DummyOrderService:
     def _resolve_execution_path(
         self, iso: dict[str, Any],
     ) -> str | None:
-        """Determine PATH A vs PATH B from persisted isolation data.
+        """Return the one standard execution path.
 
-        Order of precedence:
-
-            1. ``trigger_index``   — set by level_isolated_instrument_service
-            2. ``trigger_origin``  — alternative field name
-            3. ``trigger_underlying`` — alternative field name
-            4. ``execution_path``  — runtime field (non-deterministic)
-
-        A trigger that originates from an external index (MIDCPNIFTY,
-        BANKNIFTY, SENSEX) is PATH B.  A trigger from NIFTY itself is
-        PATH A.  Any other value → PATH A (safe default).
+        Trigger index remains available in the isolation metadata for
+        diagnostics. It never selects a different standard-session
+        execution strategy. POST-11:30 is dispatched separately by
+        strategy_entry_signal_service.
         """
-        for field in ("trigger_index", "trigger_origin", "trigger_underlying"):
-            raw = str(iso.get(field) or "").strip().upper()
-            if raw:
-                if raw in ("NIFTY", "NIFTY 50", "NIFTY50", "NSE_INDEX|NIFTY 50"):
-                    return "A_self_trigger"
-                return "B_external_trigger"
-
-        runtime_path = str(iso.get("execution_path") or "").strip()
-        if runtime_path:
-            if bool(
-                getattr(
-                    config,
-                    "DUMMY_ORDER_DISABLE_RUNTIME_PATH_SWITCH",
-                    True,
-                )
-            ):
-                logger.warning(
-                    "[dummy-order] isolation record lacks trigger_index — "
-                    "falling back to runtime execution_path=%s "
-                    "(non-deterministic; disable by setting "
-                    "DUMMY_ORDER_DISABLE_RUNTIME_PATH_SWITCH=false only "
-                    "for debugging)",
-                    runtime_path,
-                )
-            return runtime_path
-        return None
+        if not isinstance(iso, dict) or not iso:
+            return None
+        return "PATH_A_UNIFIED"
 
     # ------------------------------------------------------------------ #
     # Window / state plumbing                                            #
@@ -1790,6 +1762,12 @@ class DummyOrderService:
             getattr(config, "STRATEGY_ORDER_STOP_LOSS_PCT", 0.30),
         )
         stop_price = round(entry_price * (1.0 - stop_pct), 4)
+        target_divisor = (
+            3 if entry_price <= 100.0
+            else 4 if entry_price <= 200.0
+            else 5
+        )
+        target_price = round(entry_price + (entry_price / target_divisor), 4)
 
         # Ensure the SR engine is tracking the traded instrument so
         # live_sr_levels_service.get_levels() returns pivots for it.
@@ -1813,6 +1791,12 @@ class DummyOrderService:
             "entry_price_source": entry_source,
             "stop_price": stop_price,
             "stop_pct": stop_pct,
+            "target_price": target_price,
+            "target_divisor": target_divisor,
+            "target_milestone_met": False,
+            "target_milestone_at": None,
+            "target_milestone_price": None,
+            "resistance_exit_confirmation_at": None,
             "or_levels": or_levels,
             "zone": zone.get("zone"),
             "milestones": zone.get("milestones") or [],
@@ -1969,10 +1953,19 @@ class DummyOrderService:
         if entry_price <= 0 or stop_price <= 0:
             return
 
-        milestones = order.get("milestones") or []
-        gain_threshold = _safe_float(
-            getattr(config, "STRATEGY_ORDER_MILESTONE_GAIN_POINTS", 50.0),
-        ) or 50.0
+        # Dynamic price-band target is the sole Stage 1 profit milestone.
+        # Legacy OR-grid / +50-point triggers are not used on unified
+        # standard Path A. Stop-loss is evaluated in both stages.
+        target_price = _safe_float(order.get("target_price"))
+        if target_price is None:
+            target_divisor = (
+                3 if entry_price <= 100.0
+                else 4 if entry_price <= 200.0
+                else 5
+            )
+            target_price = round(entry_price + entry_price / target_divisor, 4)
+            order["target_price"] = target_price
+            order["target_divisor"] = target_divisor
 
         # Resistance-exit map for Stage 2 — closes resolved from the
         # SAME fixed series used for replay.
@@ -2010,25 +2003,18 @@ class DummyOrderService:
 
             # ---- Stage 1 → Stage 2 -------------------------------- #
             if stage_2_dt is None and order.get("profit_state") == "STAGE_1":
-                triggered_name: str | None = None
-                for m in milestones:
-                    m_price = _safe_float(m.get("price"))
-                    if m_price is not None and hi >= m_price:
-                        triggered_name = f"MILESTONE_{m.get('name')}"
-                        break
-                if triggered_name is None:
-                    gain = hi - entry_price
-                    if gain >= gain_threshold:
-                        triggered_name = f"GAIN_{gain:.2f}PT"
-                if triggered_name is not None:
+                if hi >= target_price:
                     stage_2_dt = c_dt
                     order["stage_2_triggered_at"] = _iso(c_dt)
-                    order["stage_2_trigger_reason"] = triggered_name
+                    order["stage_2_trigger_reason"] = "DYNAMIC_TARGET_MILESTONE"
+                    order["target_milestone_met"] = True
+                    order["target_milestone_at"] = _iso(c_dt)
+                    order["target_milestone_price"] = round(target_price, 4)
                     logger.info(
-                        "[dummy-order] Stage 2 ARMED %s | %s @ %s",
-                        order.get("order_id"),
-                        triggered_name,
-                        _fmt_time(_iso(c_dt)),
+                        "[dummy-order] TARGET MILESTONE MET %s | entry=%.4f "
+                        "target=%.4f divisor=%s at=%s; waiting for NEW resistance",
+                        order.get("order_id"), entry_price, target_price,
+                        order.get("target_divisor"), _fmt_time(_iso(c_dt)),
                     )
 
             # ---- Stage 2 exit ------------------------------------- #
@@ -2040,9 +2026,10 @@ class DummyOrderService:
                     if conf_dt <= stage_2_dt:
                         continue
                     if conf_dt <= c_dt:
-                        exit_reason = "STAGE_2_RESISTANCE_EXIT"
+                        exit_reason = "TARGET_MILESTONE_RESISTANCE_EXIT"
                         exit_price = conf_close
                         exit_time_iso = conf_iso
+                        order["resistance_exit_confirmation_at"] = conf_iso
                         break
                 if exit_reason:
                     break
