@@ -1,5 +1,15 @@
-# services/strategy_entry_signal_service.py
-"""G1 v4.1 — Dual-sided fast pivot + auto-reverse entry signal.
+"""Standard entry-signal dispatch for the isolated-instrument engine.
+
+All pre-11:30 isolations use one standard execution mode named Path A.
+It reuses the former Path B-style execution mechanics: the isolation-selected
+bias instrument remains active and the dummy-order engine handles
+post-isolation S/R routing and trade management. The index that triggered
+isolation remains diagnostic metadata and does not select the execution path.
+
+POST-11:30 remains a separate time-based regime. Its existing entry, target,
+stop-loss and 15/15 Resistance exit behavior is preserved.
+"""
+G1 v4.1 — Dual-sided fast pivot + auto-reverse entry signal.
 
 For the isolated NIFTY strike, this service:
 
