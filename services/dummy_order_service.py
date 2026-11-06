@@ -325,11 +325,9 @@ class DummyOrderService:
                 if not iso:
                     return self._no_signal(reason, "no_isolation", t0)
 
-                # ---- G1 v4.1: data-derived execution path --------- #
-                # Prefer the isolation record's persisted trigger_index
-                # (or trigger_origin / trigger_underlying) over the
-                # runtime execution_path field.  This makes the PATH A/B
-                # distinction stable across restarts.
+                # ---- Unified standard Path A ---------------------- #
+                # The trigger index is diagnostic metadata only; every
+                # pre-11:30 isolation uses PATH_A_UNIFIED.
                 path = self._resolve_execution_path(iso)
                 if path:
                     self._state["execution_path"] = path
@@ -407,8 +405,8 @@ class DummyOrderService:
                 # ================================================== #
                 # 2026-11-05 — POST-1130 branch                      #
                 #                                                    #
-                # Runs AFTER the Path A/B logic so both branches can #
-                # coexist on the same day.  Strategy dispatch is      #
+                # Runs alongside unified standard Path A so the      #
+                # standard and POST-11:30 branches can coexist.       #
                 # performed by strategy_entry_signal_service.compute() #
                 # — this branch only ACTS when compute() returned      #
                 # execution_path="POST_1130" AND status="ok".          #
@@ -637,7 +635,7 @@ class DummyOrderService:
             "bias_type": None,
             "t_iso": None,
             "order": None,
-            # 2026-11-05 — POST-1130 order (independent from Path A/B).
+            # POST-11:30 order (separate from unified standard Path A).
             "post_1130_order": None,
             "orders": [],
             "created_at": _now_utc_iso(),
@@ -1120,11 +1118,9 @@ class DummyOrderService:
     ) -> dict[str, Any] | None:
         """Create a POST-1130 dummy order if the signal is armed.
 
-        Calls ``strategy_entry_signal_service.compute()`` and acts ONLY
-        when the response reports ``execution_path == "POST_1130"`` AND
-        ``status == "ok"``.  In every other case (Path B, Path A
-        waiting, POST-1130 waiting, disabled) this returns ``None`` and
-        the next tick retries.
+        Calls strategy_entry_signal_service.compute() and acts only when
+        execution_path is POST_1130 and status is ok. Unified standard Path A,
+        POST-11:30 waiting, and disabled states return None; the next tick retries.
 
         The order is written on the **isolated instrument itself** —
         CE for a CE isolation, PE for a PE isolation.  Entry / stop /
@@ -2148,7 +2144,7 @@ class DummyOrderService:
             "reason": reason,
             "day": self._state.get("day"),
             "mode": window,
-            # ---- Path A/B counters (unchanged) -------------------- #
+            # ---- Unified standard Path A counters ----------------- #
             "created": created,
             "updated": updated,
             "closed": closed,
