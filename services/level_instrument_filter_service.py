@@ -11,13 +11,45 @@ The isolation engine routes ALL touches to NIFTY strikes, so only
 NIFTY's level_instruments.json is used for execution. The other three
 are still generated because first_candle.json must exist for them
 (each index needs its own R3/S3 for touch detection).
+
+Windows atomic-write fix (2026-11-06)
+-------------------------------------
+``level_instruments.json`` is now written via ``_atomic_write_json()``,
+which retries the ``os.replace()`` step on ``PermissionError``
+(Windows ``WinError 5``).
+
+Failure observed on 2026-11-06 at 15:23:35:
+
+    PermissionError: [WinError 5] Access is denied:
+        '...\data\index\nifty\level_instruments.json.tmp'
+      → '...\data\index\nifty\level_instruments.json'
+
+Cause: two concurrent ``run()`` calls are correctly serialized by the
+instance lock, but a *third party* —
+``level_isolated_instrument_service._check_touches`` — was reading the
+same ``level_instruments.json`` in the very same second. On Windows,
+``os.replace()`` requires that every handle to the target file is
+closed before the rename can proceed; the reader's handle was not yet
+released even though the read itself had finished, so the rename
+raised ``WinError 5``.
+
+Effect was cosmetic (NIFTY's level_instruments.json stayed on the
+previous successful snapshot, which the isolation service had already
+consumed) but the log entry was noisy and one caller of the filter
+service got ``status=error`` for NIFTY.
+
+Fix: retry ``os.replace()`` up to 20 times at 50 ms intervals. The
+reader typically releases the handle within 1-2 attempts (~100 ms), so
+the extra latency is negligible.
 """
 
 from __future__ import annotations
 
 import json
 import math
+import os
 import threading
+import time
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -27,6 +59,85 @@ from core.logger import get_logger
 from services.instrument_registry import instrument_registry
 
 logger = get_logger(__file__)
+
+# --------------------------------------------------------------------------- #
+# Atomic write helper with Windows retry                                      #
+# --------------------------------------------------------------------------- #
+_ATOMIC_WRITE_RETRY_ATTEMPTS = 20
+_ATOMIC_WRITE_RETRY_DELAY_SECONDS = 0.05
+
+
+def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
+    """Write JSON to ``path`` atomically, retrying ``os.replace()`` on
+    Windows ``PermissionError`` (WinError 5).
+
+    The failure mode this retries against:
+
+      * On Windows, ``os.replace(src, dst)`` requires that *every* handle
+        to ``dst`` is closed before the rename can proceed. A concurrent
+        reader — e.g. ``level_isolated_instrument_service`` reading
+        ``level_instruments.json`` in the same second — keeps the target
+        file handle open for the duration of its read, and occasionally
+        for a few milliseconds *after* the read returns (buffered
+        close + AV scan on some setups).
+
+    Retrying with a short sleep (50 ms × 20 attempts = 1 s max) lets the
+    reader finish. If all retries fail, the tmp file is cleaned up and
+    the last ``PermissionError`` is re-raised so the caller's logging
+    captures it.
+
+    The payload is written to a ``.tmp`` sibling once (not on every
+    retry) — only the rename is retried.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(
+        json.dumps(payload, indent=2, default=str),
+        encoding="utf-8",
+    )
+
+    last_exc: PermissionError | None = None
+    for attempt in range(_ATOMIC_WRITE_RETRY_ATTEMPTS):
+        try:
+            os.replace(tmp, path)
+            if attempt > 0:
+                logger.info(
+                    "[level-filter] atomic write succeeded after %d "
+                    "retry(ies) for %s",
+                    attempt, path,
+                )
+            return
+        except PermissionError as exc:
+            last_exc = exc
+            if attempt == 0:
+                logger.warning(
+                    "[level-filter] os.replace() hit PermissionError for "
+                    "%s (likely a concurrent reader); retrying up to %d "
+                    "times at %d ms intervals",
+                    path,
+                    _ATOMIC_WRITE_RETRY_ATTEMPTS - 1,
+                    int(_ATOMIC_WRITE_RETRY_DELAY_SECONDS * 1000),
+                )
+            if attempt == _ATOMIC_WRITE_RETRY_ATTEMPTS - 1:
+                break
+            time.sleep(_ATOMIC_WRITE_RETRY_DELAY_SECONDS)
+
+    # All retries exhausted — clean up the tmp file, then re-raise.
+    try:
+        tmp.unlink()
+    except Exception:
+        logger.debug(
+            "[level-filter] could not remove tmp file %s after failed "
+            "atomic write",
+            tmp,
+            exc_info=True,
+        )
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError(
+        f"atomic write failed for {path} with no captured exception"
+    )
+
 
 # --------------------------------------------------------------------------- #
 # Index metadata                                                              #
@@ -323,13 +434,7 @@ class LevelInstrumentFilterService:
         }
 
         out_path = folder / "level_instruments.json"
-        folder.mkdir(parents=True, exist_ok=True)
-        tmp = out_path.with_suffix(out_path.suffix + ".tmp")
-        tmp.write_text(
-            json.dumps(payload, indent=2, default=str),
-            encoding="utf-8",
-        )
-        tmp.replace(out_path)
+        _atomic_write_json(out_path, payload)
         logger.info(
             "[level-filter] %s -> %s (CE=%d, PE=%d, step=%d, range=%s)",
             underlying, out_path, len(ce_instruments), len(pe_instruments),
