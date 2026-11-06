@@ -5,6 +5,38 @@
 
 ---
 
+## Current implementation — unified Path A (2026-11-06)
+
+This section supersedes the older Path A/Path B split and the Stage 1 OR-grid / +50-point target rules described in earlier revisions.
+
+### Standard session (pre-11:30 IST)
+
+1. Isolation detection is unchanged. The index that caused the isolation is retained as metadata only.
+2. Every standard-session isolation uses one execution mode named **Path A**. It uses the former Path B-style standard mechanics: keep the selected bias-side instrument isolated and route entries using its post-isolation 15/3 Support/Resistance confirmations.
+3. The existing 09:30 backup reversal and same-leg/opposite-leg routing rules remain unchanged.
+4. Existing traded-instrument OR validation remains unchanged, including skipping an entry above R2. The OR grid no longer supplies profit-stage milestones.
+5. Stop-loss calculation remains the existing configured percentage (default 30% below entry).
+6. One target milestone is calculated from entry price:
+   - 0 < entry <= 100: target = entry + entry / 3
+   - 100 < entry <= 200: target = entry + entry / 4
+   - entry > 200: target = entry + entry / 5
+7. Reaching the target only marks the milestone. Stop-loss stays active. The system ignores Resistance confirmations at or before the milestone timestamp and exits at the 1-minute candle close of the first newly confirmed 15/3 Resistance strictly after the milestone.
+8. If neither stop-loss nor the post-target Resistance exit occurs, the existing EOD close remains active.
+
+### POST-11:30 IST
+
+POST-11:30 remains a separate time-based strategy. Its existing entry confirmation, fixed target, stop-loss, 15/15 Resistance exit and EOD behavior are not changed by the standard Path A update.
+
+### Execution and safety
+
+Dummy orders remain the signal/order-state source. The optional sandbox executor continues to consume persisted create/close transitions; the new standard Resistance exit maps to the existing Stage 2 Resistance exit transition so its exit-pending/idempotency handling is reused. No broker execution flag is enabled by this change.
+
+---
+
+## Historical strategy specification (pre-unified Path A)
+
+Sections below retain the earlier OR-grid milestone and simulation examples for historical reference. They are not the current standard-session target or exit rules.
+
 ## 1. Core Architecture & Opening Range (OR) Formulas
 
 All dynamic price structural boundaries are resolved directly from the first minute bar of the session ($09:15:00$ IST):
