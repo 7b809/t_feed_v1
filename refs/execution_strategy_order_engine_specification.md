@@ -13,15 +13,24 @@ This section supersedes the older Path A/Path B split and the Stage 1 OR-grid / 
 
 1. Isolation detection is unchanged. The index that caused the isolation is retained as metadata only.
 2. Every standard-session isolation uses one execution mode named **Path A**. It uses the former Path B-style standard mechanics: keep the selected bias-side instrument isolated and route entries using its post-isolation 15/3 Support/Resistance confirmations.
-3. The existing 09:30 backup reversal and same-leg/opposite-leg routing rules remain unchanged.
-4. Existing traded-instrument OR validation remains unchanged, including skipping an entry above R2. The OR grid no longer supplies profit-stage milestones.
-5. Stop-loss calculation remains the existing configured percentage (default 30% below entry).
-6. One target milestone is calculated from entry price:
+3. **Early-session extreme-price reversal mode is pinned at isolation.** It activates only when BOTH conditions hold at the official isolation timestamp (the persisted touch/isolation time used by Path A):
+   - isolation time is strictly before 10:30:00 IST; and
+   - the isolated option price snapshot is strictly greater than ₹250 or strictly less than ₹100.
+   The decision and its source price/timestamp are persisted in the isolation record as `standard_execution_mode`, `early_extreme_reversal`, `execution_mode_price`, and `execution_mode_decided_at`. It is not recalculated from later pivots, confirmation prices, or live LTP. Existing isolation records without these fields default to `STANDARD`.
+4. In `EARLY_EXTREME_REVERSAL`, every subsequent standard-session S/R confirmation uses inverted routing for the lifetime of that isolation:
+   - Support confirmation → buy the opposite option leg.
+   - Resistance confirmation → buy the isolated (same-side) option leg.
+   This overrides the normal 09:30 backup routing behavior while the pinned mode is active.
+5. Boundary values are strict: exactly ₹100, exactly ₹250, or exactly 10:30:00 IST do not activate reversal mode. All three cases use `STANDARD` routing.
+6. If the mode is `STANDARD`, the existing 09:30 backup reversal and same-leg/opposite-leg routing rules remain unchanged.
+7. Existing traded-instrument OR validation remains unchanged, including skipping an entry above R2. The OR grid no longer supplies profit-stage milestones.
+8. Stop-loss calculation remains the existing configured percentage (default 30% below entry).
+9. One target milestone is calculated from entry price:
    - 0 < entry <= 100: target = entry + entry / 3
    - 100 < entry <= 200: target = entry + entry / 4
    - entry > 200: target = entry + entry / 5
-7. Reaching the target only marks the milestone. Stop-loss stays active. The system ignores Resistance confirmations at or before the milestone timestamp and exits at the 1-minute candle close of the first newly confirmed 15/3 Resistance strictly after the milestone.
-8. If neither stop-loss nor the post-target Resistance exit occurs, the existing EOD close remains active.
+10. Reaching the target only marks the milestone. Stop-loss stays active. The system ignores Resistance confirmations at or before the milestone timestamp and exits at the 1-minute candle close of the first newly confirmed 15/3 Resistance strictly after the milestone.
+11. If neither stop-loss nor the post-target Resistance exit occurs, the existing EOD close remains active.
 
 ### POST-11:30 IST
 
