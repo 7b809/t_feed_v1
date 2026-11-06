@@ -7,7 +7,7 @@
 
 ## Current implementation — unified Path A (2026-11-06)
 
-This section supersedes the older Path A/Path B split and the Stage 1 OR-grid / +50-point target rules described in earlier revisions.
+This section supersedes the older Path A/Path B split, OR-grid entry eligibility rules, and Stage 1 OR-grid / +50-point target rules described in earlier revisions.
 
 ### Standard session (pre-11:30 IST)
 
@@ -23,7 +23,7 @@ This section supersedes the older Path A/Path B split and the Stage 1 OR-grid / 
    This overrides the normal 09:30 backup routing behavior while the pinned mode is active.
 5. Boundary values are strict: exactly ₹100, exactly ₹250, or exactly 10:30:00 IST do not activate reversal mode. All three cases use `STANDARD` routing.
 6. If the mode is `STANDARD`, the existing 09:30 backup reversal and same-leg/opposite-leg routing rules remain unchanged.
-7. Existing traded-instrument OR validation remains unchanged, including skipping an entry above R2. The OR grid no longer supplies profit-stage milestones.
+7. **No OR-grid entry eligibility filter applies.** Entry is created from the first qualified post-isolation 15/3 S/R confirmation and its routed instrument's confirmation-candle close. Do not read or require `first_candle.json` OR levels to decide whether an entry is eligible. Prices above R2, below S2, or outside any OR zone are not rejected. OR-grid levels do not participate in stop-loss, target, milestone, or exit calculations.
 8. Stop-loss calculation remains the existing configured percentage (default 30% below entry).
 9. One target milestone is calculated from entry price:
    - 0 < entry <= 100: target = entry + entry / 3
@@ -51,7 +51,7 @@ Dummy orders remain the signal/order-state source. The optional sandbox executor
 
 ## Historical strategy specification (pre-unified Path A)
 
-Sections below retain the earlier OR-grid milestone and simulation examples for historical reference. They are not the current standard-session target or exit rules.
+Sections below retain the earlier OR-grid entry rejection, milestone and simulation examples for historical reference only. They are obsolete and MUST NOT be used by the current execution engine. Current live and retroactive execution do not read OR-grid levels or reject an entry based on S2/R2 boundaries.
 
 ## 1. Core Architecture & Opening Range (OR) Formulas
 
