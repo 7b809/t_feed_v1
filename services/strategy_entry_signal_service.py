@@ -46,8 +46,8 @@ Fixes the three bugs surfaced by the 2026-10-29 SIMULATE-mode replay:
 
 G1 v4.2 changes (2026-10-29)
 ----------------------------
-    * ``StrategyEntrySignalService.compute()`` now branches on
-      ``execution_path`` at the very top:
+    * The standard session now uses one unified Path A execution mode,
+      independent of whether NIFTY or an external index caused isolation:
 
         - Path A (``trigger_is_self_nifty == True``) — the trigger index
           was NIFTY itself; behaviour is **unchanged** from v4.1: the
@@ -60,11 +60,9 @@ G1 v4.2 changes (2026-10-29)
           dummy-order service independently manages multi-order SR
           level execution + Rupee trailing on the bias-side instrument.
 
-      The new ``_build_path_b_response()`` helper returns the Path B
-      payload. Path B can be disabled entirely by setting
-      ``STRATEGY_EXT_PATH_B_ENABLED=false``, in which case the service
-      falls through to the Path A logic regardless of trigger source
-      (i.e. behaves exactly as v4.1).
+      The ``_build_unified_path_a_response()`` helper returns the common
+      standard response. The POST-11:30 regime remains a separate
+      dispatch evaluated before standard-session handling.
 
 Post-11:30 regime — 2026-11-05
 ------------------------------
@@ -184,7 +182,7 @@ trade: the MIDCPNIFTY-triggered 12:59 isolation returned
     * Post-11:30 external isolation with no matching SR → waits on
       ``waiting_post_1130`` and does NOT fall back to Path B.
 
-The Path B build helper, the POST-1130 helpers, ``evaluate_isolated_entry``
+The unified Path A response helper, the POST-1130 helpers, ``evaluate_isolated_entry``
 and ``check_post_1130_entry`` are all unchanged.
 """
 
@@ -2028,7 +2026,7 @@ class StrategyEntrySignalService:
         #
         # When the branch is ``{"_branch": "standard"}`` (or the
         # isolation time is missing / pre-11:30) control falls through
-        # to Path B / Path A logic below.
+        # to unified standard Path A handling below.
         # --------------------------------------------------------------- #
         instrument_data = self._build_instrument_data(isolated)
         branch = evaluate_isolated_entry(instrument_data)
@@ -2051,215 +2049,6 @@ class StrategyEntrySignalService:
         # POST-11:30 was evaluated above and remains a separate regime.
         # --------------------------------------------------------------- #
         return self._build_unified_path_a_response(iso_status, isolated)
-
-        # --------------------------------------------------------------- #
-        # Unified standard Path A (2026-11-06).
-        #
-        # Trigger source is diagnostic isolation metadata only. Both
-        # NIFTY and external-index isolations run the same standard
-        # confirmation, reversal, candidate and entry-routing rules.
-        # POST-11:30 remains handled by the separate gate above.
-        # --------------------------------------------------------------- #
-        instrument_key = str(isolated.get("instrument_key") or "").strip()
-        if not instrument_key:
-            return {
-                "status": "no_isolation",
-                "note": "Isolation record has no instrument_key.",
-                "generated_at": _now_utc_iso(),
-            }
-
-        touch_time_iso = isolated.get("touched_at") or isolated.get("isolated_at")
-        touch_dt = _parse_iso(touch_time_iso)
-        if touch_dt is None:
-            return {
-                "status": "no_touch_time",
-                "note": "Isolation record has no touched_at / isolated_at.",
-                "instrument_key": instrument_key,
-                "generated_at": _now_utc_iso(),
-            }
-
-        touch_side, bias_type = _parse_touch_reason(isolated.get("reason"))
-        if touch_side is None or bias_type is None:
-            return {
-                "status": "no_touch_side",
-                "note": "Isolation reason does not encode R3 or S3.",
-                "instrument_key": instrument_key,
-                "reason": isolated.get("reason"),
-                "generated_at": _now_utc_iso(),
-            }
-
-        try:
-            from services.instrument_registry import instrument_registry
-            iso_entry = instrument_registry.get(instrument_key)
-        except Exception:
-            iso_entry = None
-
-        if iso_entry is None:
-            return {
-                "status": "no_registry_entry",
-                "note": "Isolated instrument not in the registry.",
-                "instrument_key": instrument_key,
-                "generated_at": _now_utc_iso(),
-            }
-
-        underlying = str(iso_entry.get("underlying") or "").strip()
-        strike = iso_entry.get("strike_price")
-        if not underlying or strike is None:
-            return {
-                "status": "incomplete_registry_entry",
-                "note": "Registry entry missing underlying / strike_price.",
-                "instrument_key": instrument_key,
-                "generated_at": _now_utc_iso(),
-            }
-
-        ce_entry, pe_entry = _both_sides(underlying, strike)
-        if bias_type == "CE":
-            bias_entry, counter_entry = ce_entry, pe_entry
-        else:
-            bias_entry, counter_entry = pe_entry, ce_entry
-
-        now = _now_market()
-        window_end = touch_dt + timedelta(
-            minutes=int(getattr(config, "STRATEGY_ENTRY_BUFFER_MINUTES", 10))
-        )
-
-        # Run the bias-side dual scan.
-        bias_cand = _compute_candidate(
-            side=bias_type,
-            entry=bias_entry,
-            is_bias_side=True,
-            touch_dt=touch_dt,
-            window_end=window_end,
-            now=now,
-            counter_entry=counter_entry,
-        )
-
-        candidates: list[dict[str, Any]] = [bias_cand]
-
-        # If auto-reverse fired, add the counter side as an armed entry.
-        if bias_cand.get("entry_type") == "auto_reverse_on_rejection":
-            armed_key = str(bias_cand.get("armed_instrument_key") or "")
-            armed_side = str(bias_cand.get("armed_side") or "")
-            armed_symbol = bias_cand.get("armed_trading_symbol")
-            counter_cand = _empty_candidate(
-                armed_side, armed_key, armed_symbol, False,
-            )
-            counter_cand["state"] = "armed"
-            counter_cand["state_note"] = "auto_reverse_counter_side"
-            counter_cand["entry_type"] = "auto_reverse_on_rejection"
-            counter_cand["entry"] = bias_cand.get("entry")
-            counter_cand["reversal_trigger"] = bias_cand.get("reversal_trigger")
-            counter_cand["chosen"] = True
-            candidates.append(counter_cand)
-            bias_cand["state"] = "discarded"
-            bias_cand["state_note"] = "rejected_and_reversed"
-            bias_cand["chosen"] = False
-            chosen: dict[str, Any] | None = counter_cand
-        else:
-            # First-to-confirm tiebreak (only when bias side armed).
-            armed = [c for c in candidates if c.get("state") == "armed"]
-            chosen = armed[0] if armed else None
-
-        response: dict[str, Any] = {
-            "status": "ok",
-            "execution_path": "PATH_A_UNIFIED",
-            "day": iso_status.get("day"),
-            "isolated": {
-                "instrument_key": instrument_key,
-                "trading_symbol": isolated.get("trading_symbol"),
-                "underlying": underlying,
-                "strike": strike,
-                "reason": isolated.get("reason"),
-                "source": isolated.get("source"),
-                "trigger_index": isolated.get("trigger_index"),
-                "routed_index": isolated.get("routed_index"),
-                "touched_at": touch_time_iso,
-                "trigger_level": (
-                    isolated.get("trigger_level")
-                    or isolated.get("trigger_side")
-                ),
-                "trigger_level_value": isolated.get("trigger_level_value"),
-                "trigger_is_self_nifty": isolated.get("trigger_is_self_nifty"),
-            },
-            "touch": {
-                "time": _iso(touch_dt),
-                "side": touch_side,
-                "bias_type": bias_type,
-                "buffer_minutes": int(
-                    getattr(config, "STRATEGY_ENTRY_BUFFER_MINUTES", 10)
-                ),
-                "window_start": _iso(touch_dt),
-                "window_end": _iso(window_end),
-            },
-            "candidates": candidates,
-            "chosen_side": (
-                chosen.get("side") if chosen else None
-            ),
-            "chosen_instrument_key": (
-                chosen.get("instrument_key") if chosen else None
-            ),
-            "chosen_entry_type": (
-                chosen.get("entry_type") if chosen else None
-            ),
-            "warnings": self._warnings(candidates, touch_dt, now),
-            "generated_at": _now_utc_iso(),
-        }
-
-        # Promotion block (unchanged behaviour — reads whether the
-        # chosen key differs from the official isolation key).
-        try:
-            from services.isolated_instrument_promotion_service import (
-                isolated_instrument_promotion_service,
-            )
-            active_state = isolated_instrument_promotion_service.read_active()
-        except Exception:
-            active_state = None
-
-        chosen_key = response.get("chosen_instrument_key")
-        active_key = (
-            active_state.get("to_instrument_key") if active_state else None
-        )
-        already_applied = (
-            active_key is not None
-            and chosen_key is not None
-            and str(active_key) == str(chosen_key)
-        )
-        allow_promotion = bool(getattr(
-            config, "STRATEGY_ENTRY_ALLOW_PROMOTION", True
-        ))
-        allow_re_promotion = bool(getattr(
-            config, "STRATEGY_ENTRY_ALLOW_RE_PROMOTION", False
-        ))
-
-        blockers: list[str] = []
-        if not allow_promotion:
-            blockers.append("disabled")
-        if chosen_key is None:
-            blockers.append("no_armed_candidate")
-        elif chosen_key == instrument_key:
-            blockers.append("chosen_is_bias_side")
-        elif already_applied:
-            blockers.append("already_applied")
-        elif active_state is not None and not allow_re_promotion:
-            blockers.append("already_promoted_today")
-
-        response["promotion"] = {
-            "recommended": len(blockers) == 0,
-            "already_applied": already_applied,
-            "blockers": blockers,
-            "current_active_instrument_key": active_key,
-            "target_instrument_key": chosen_key,
-            "target_trading_symbol": (
-                chosen.get("trading_symbol") if chosen else None
-            ),
-            "target_side": response.get("chosen_side"),
-            "official_isolated_key": instrument_key,
-            "promotion_allowed": allow_promotion,
-            "re_promotion_allowed": allow_re_promotion,
-        }
-        response["active_instrument_key"] = active_key or instrument_key
-
-        return response
 
     def _build_unified_path_a_response(
         self,
@@ -2285,7 +2074,7 @@ class StrategyEntrySignalService:
                 strike = entry.get("strike_price")
         except Exception:
             logger.exception(
-                "[strategy-entry] path B registry lookup failed for %s",
+                "[strategy-entry] unified Path A registry lookup failed for %s",
                 instrument_key,
             )
 
@@ -2309,7 +2098,6 @@ class StrategyEntrySignalService:
                 "touched_at": isolated.get("touched_at"),
                 "trigger_level": isolated.get("trigger_level") or isolated.get("trigger_side"),
                 "trigger_level_value": isolated.get("trigger_level_value"),
-                "trigger_index": isolated.get("trigger_index"),
                 "trigger_is_self_nifty": isolated.get("trigger_is_self_nifty"),
             },
             "path_a": {
