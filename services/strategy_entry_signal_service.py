@@ -1836,8 +1836,8 @@ class StrategyEntrySignalService:
         # 2026-11-05 (third pass) — POST-11:30 regime gate runs FIRST.
         #
         # The POST-1130 regime is keyed off ``isolated_time`` — NOT the
-        # trigger source.  A Path B isolation that happens AFTER 11:30
-        # therefore routes through POST-1130, superseding Path A/B.
+        # trigger source. An external-index isolation after 11:30
+        # therefore routes through POST-1130, superseding standard Path A.
         #
         # This is the fix for the 2026-11-05 backfill replay: the
         # MIDCPNIFTY-triggered 12:59 isolation now correctly produces
@@ -1852,7 +1852,7 @@ class StrategyEntrySignalService:
         #
         # When the branch is ``{"_branch": "standard"}`` (or the
         # isolation time is missing / pre-11:30) control falls through
-        # to Path B / Path A logic below.
+        # to unified standard Path A handling below.
         # --------------------------------------------------------------- #
         instrument_data = self._build_instrument_data(isolated)
         branch = evaluate_isolated_entry(instrument_data)
