@@ -871,10 +871,14 @@ STRATEGY_ORDER_STOP_LOSS_PCT = _float(
     "STRATEGY_ORDER_STOP_LOSS_PCT", 0.30
 )
 
-# Stage 1 → Stage 2 activation when net gain ≥ N points.
-# Default 50.0 = spec's "+50 pt gain".
-STRATEGY_ORDER_MILESTONE_GAIN_POINTS = _float(
-    "STRATEGY_ORDER_MILESTONE_GAIN_POINTS", 50.0
+# Standard unified Path A dynamic target milestone:
+#   entry <= 100: entry + entry / 3
+#   entry <= 200: entry + entry / 4
+#   entry >  200: entry + entry / 5
+# The target only arms Stage 2; exit requires a NEW Resistance
+# confirmed after the milestone. Stop-loss remains active throughout.
+STRATEGY_ORDER_DYNAMIC_TARGET_ENABLED = _bool(
+    "STRATEGY_ORDER_DYNAMIC_TARGET_ENABLED", True
 )
 
 # 09:30 IST backup-reversal cutoff (spec §2.2).
