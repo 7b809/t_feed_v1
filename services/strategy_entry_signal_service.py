@@ -1,200 +1,16 @@
+# services/strategy_entry_signal_service.py
 """Standard entry-signal dispatch for the isolated-instrument engine.
 
 All pre-11:30 isolations use one standard execution mode named Path A.
 It reuses the former Path B-style execution mechanics: the isolation-selected
-bias instrument remains active and the dummy-order engine handles
-post-isolation S/R routing and trade management. The index that triggered
-isolation remains diagnostic metadata and does not select the execution path.
+bias instrument remains active, while the dummy-order engine handles
+post-isolation S/R routing and trade management. Isolation trigger source
+is retained as metadata and does not select a different execution path.
 
-POST-11:30 remains a separate time-based regime. Its existing entry, target,
-stop-loss and 15/15 Resistance exit behavior is preserved.
+POST-11:30 remains a separate time-based regime with its existing entry,
+target, stop-loss and 15/15 Resistance exit behavior.
 """
-G1 v4.1 — Dual-sided fast pivot + auto-reverse entry signal.
 
-For the isolated NIFTY strike, this service:
-
-1. Runs a fast pivot scan (left=15, right=3) on the bias side's
-   candle series.
-2. Decision tree:
-     * Fast SUPPORT exists on bias side → ARM BIAS SIDE.
-     * Fast RESISTANCE exists on bias side with NO support → TRIGGER
-       AUTO-REVERSE to the counter side at the counter instrument's
-       candle close at rejection time (or, as a last resort, its
-       live LTP).
-     * Nothing confirms inside the buffer window → HARD BLOCK
-       "all_candidates_in_window_blocked".
-3. Applies the LTP-tier stop-loss (unchanged from G1 v2).
-4. First-to-confirm tiebreak uses `confirmed_time_fast`.
-
-G1 v4.1 changes (2026-10-29)
-----------------------------
-Fixes the three bugs surfaced by the 2026-10-29 SIMULATE-mode replay:
-
-  1. **Entry price source** — ``_entry_price_for()`` now falls back to
-     a fresh ``HistoryV3Api.get_intra_day_candle_data`` fetch BEFORE
-     falling back to the live LTP. This closes the "entry price is the
-     15:31 wall-clock LTP instead of the 09:23 candle close" bug that
-     appeared when the counter-side instrument was not yet registered
-     with the SR engine (see ``level_isolated_instrument_service
-     ._register_isolated_pair_with_sr``).
-
-  2. **Auto-reverse price priority** — ``_trigger_auto_reverse()`` now
-     uses ``_entry_price_for()``, so it prefers the counter-side candle
-     close at ``bias_resistance_confirmed_time_fast`` over the live LTP.
-     A degraded live-LTP fallback is still permitted (logged at WARNING)
-     so a genuine "confirming bar not yet in the series" race in live
-     mode does not hard-block the trade.
-
-  3. **Target selection** — new ``_pick_target_resistance()`` helper
-     returns the **first resistance confirmed strictly AFTER** the
-     entry confirmation, among those priced above entry. Falls back to
-     the lowest-above-entry resistance only when no time-ordered
-     candidate exists. This replaces the previous "lowest price above
-     entry" selection, which on a day-long down trend picked a
-     resistance that only formed hours AFTER entry (e.g. 63.00 @ 15:24
-     for a 09:23 entry, instead of the correct 110.65 @ 10:56).
-
-G1 v4.2 changes (2026-10-29)
-----------------------------
-    * The standard session now uses one unified Path A execution mode,
-      independent of whether NIFTY or an external index caused isolation:
-
-        - Path A (``trigger_is_self_nifty == True``) — the trigger index
-          was NIFTY itself; behaviour is **unchanged** from v4.1: the
-          10-minute post-touch scan and auto-reverse both run.
-
-        - Path B (``trigger_is_self_nifty == False``) — the trigger
-          index was MIDCPNIFTY / BANKNIFTY / SENSEX. The 10-minute scan
-          and auto-reverse are **intentionally disabled**. The
-          bias-side instrument stays isolated all day, and the
-          dummy-order service independently manages multi-order SR
-          level execution + Rupee trailing on the bias-side instrument.
-
-      The ``_build_unified_path_a_response()`` helper returns the common
-      standard response. The POST-11:30 regime remains a separate
-      dispatch evaluated before standard-session handling.
-
-Post-11:30 regime — 2026-11-05
-------------------------------
-A new **POST-11:30 ISOLATED** regime sits between the Path B check
-and the standard Path A logic.  The dispatch decision is made by
-``evaluate_isolated_entry()`` (module-level function) using
-``isolated_sr_tracker_service.get_active_isolated_state()["isolated_time"]``:
-
-    * ``isolated_time.time() >= POST_1130_REGIME_TIME`` (11:30:00 IST)
-        → the post-11:30 entry rule runs.  Opening-range / first-candle
-          logic and the standard 10-minute post-touch scan are
-          **bypassed entirely**.
-    * otherwise
-        → the existing Path A logic runs verbatim (unchanged).
-
-The post-11:30 rule (``check_post_1130_entry``) applies the spec's
-``(15, 30)`` entry-confirmation window:
-
-    Condition 1: ``pivot_time < isolated_touch_time``
-    Condition 2: ``confirmation_time >= isolated_time - 10 min buffer``
-
-The first confirmed SR level that satisfies BOTH conditions wins.
-When it wins, the response wrapper (``_build_post_1130_buy_response``)
-reports ``execution_path = "POST_1130"`` and includes the standard
-``POST_1130_TARGET_POINTS`` / ``POST_1130_STOPLOSS_PERCENT`` values so
-downstream consumers can pick them up without re-reading config.
-
-Post-11:30 refinements (2026-11-05, second pass)
-------------------------------------------------
-Four content changes close the gaps exposed by the 2026-11-05
-backfill replay (isolated at 12:59, real level `support 99.50 @
-confirmed 13:03`):
-
-  A. **Defensive clamp** — ``_resolve_isolation_timestamps()`` now
-     silently substitutes ``isolated_time = isolated_touch_time``
-     whenever ``isolated_time > isolated_touch_time``, and logs the
-     substitution exactly once per isolation. This makes the
-     POST-1130 branch resilient even if the tracker's own backfill
-     correction is bypassed or a stale state file survives a restart.
-
-  B. **Deterministic ordering** — ``check_post_1130_entry()`` sorts
-     ``sr_levels_15_30`` by ``confirmation_time`` ascending before
-     iterating, so the "first confirmed level after isolation touch"
-     rule is stable regardless of dict insertion order.
-
-  C. **Support-only filter for CE bias** — a CE isolated from an R3
-     touch is a "buy-the-bounce" setup; the meaningful POST-1130
-     trigger is a **support** confirmation, not a resistance. The
-     inverse holds for a PE isolated from an S3 touch (resistance-
-     only). Auto-reverse is explicitly **not** part of the POST-1130
-     spec and never fires here. For today's data this is what makes
-     `support 99.50 @ 13:03` the correct and only match.
-
-  D. **Enriched BUY payload** — ``_build_post_1130_buy_response()``
-     now populates the ``entry`` block with everything the order
-     placer needs without re-reading config:
-
-         entry_price      — close of the confirmation candle
-         entry_time       — ``confirmation_time``
-         stop_price       — entry × (1 − POST_1130_STOPLOSS_PERCENT)
-         target_price     — entry + POST_1130_TARGET_POINTS
-         reference_type   — "support" | "resistance"
-         reference_price  — numeric reference level price
-         pivot_time       — matched level's pivot time
-         confirmation_time — matched level's confirmation time
-
-     and adds ``exit_sr_config = [15, 15]`` to the ``post_1130``
-     block so the exit tracker knows which window to use.
-
-G1 v4.1 flag-wiring fix (2026-10-29)
-------------------------------------
-Two v4.1 kill switches were defined in ``core/config.py`` but never
-read by this service, so setting them to ``false`` in ``.env`` had no
-effect. Both are now wired:
-
-    * ``STRATEGY_ENTRY_CANDLE_FALLBACK_ENABLED`` (§5.B)
-        ``_entry_price_for()`` now wraps the intraday-API fallback in
-        this flag. When false, resolution falls straight through from
-        the SR-engine candle buffer to live LTP, reproducing pre-v4.1
-        behaviour for bisecting entry-price regressions.
-
-    * ``STRATEGY_ENTRY_TARGET_REQUIRE_POST_ENTRY`` (§5.C)
-        ``_pick_target_resistance()`` now gates its "confirmed strictly
-        AFTER entry" filter on this flag. When false, the pre-v4.1
-        "lowest price above entry" selection is restored.
-
-Two additional flag **name** mismatches are corrected here as well.
-The previous revision read:
-
-    * ``STRATEGY_PRIORITIZE_SUPPORT_OVER_RESISTANCE``  (not in config.py)
-    * ``STRATEGY_ALLOW_OPPOSITE_REVERSAL_ON_RESISTANCE``  (not in config.py)
-
-which silently fell through the ``getattr(..., True)`` defaults. This
-revision reads the exact keys that ``core/config.py`` defines:
-
-    * ``STRATEGY_ENTRY_PRIORITIZE_SUPPORT``
-    * ``STRATEGY_ENTRY_ALLOW_AUTO_REVERSE``
-
-so operators can actually flip them off via ``.env``.
-
-2026-11-05 dispatch-order fix (third pass)
-------------------------------------------
-``compute()`` now runs the POST-11:30 regime gate **before** the
-Path B check.  The POST-1130 regime is keyed off ``isolated_time``
-— not the trigger source — so a Path B isolation that happens at or
-after 11:30 IST must route through POST-1130, superseding Path A/B.
-
-Previously Path B won for every external-triggered isolation, which
-is why the 2026-11-05 backfill replay never fired the correct CE
-trade: the MIDCPNIFTY-triggered 12:59 isolation returned
-``path_b_mode`` instead of a POST-1130 CE entry on support 99.50
-@ 13:03.  With this reorder:
-
-    * Pre-11:30 external isolation → Path B (unchanged).
-    * Pre-11:30 self-NIFTY isolation → Path A (unchanged).
-    * Post-11:30 isolation (any trigger) → POST_1130.
-    * Post-11:30 external isolation with no matching SR → waits on
-      ``waiting_post_1130`` and does NOT fall back to Path B.
-
-The unified Path A response helper, the POST-1130 helpers, ``evaluate_isolated_entry``
-and ``check_post_1130_entry`` are all unchanged.
-"""
 
 from __future__ import annotations
 
@@ -2036,7 +1852,7 @@ class StrategyEntrySignalService:
         #
         # When the branch is ``{"_branch": "standard"}`` (or the
         # isolation time is missing / pre-11:30) control falls through
-        # to unified standard Path A handling below.
+        # to Path B / Path A logic below.
         # --------------------------------------------------------------- #
         instrument_data = self._build_instrument_data(isolated)
         branch = evaluate_isolated_entry(instrument_data)
@@ -2052,12 +1868,9 @@ class StrategyEntrySignalService:
                 )
             # _branch == "standard" → pre-11:30; fall through.
 
-        # --------------------------------------------------------------- #
-        # Unified standard Path A — reuse the former Path B execution
-        # mode for EVERY pre-11:30 isolation, regardless of trigger index.
-        # The trigger source is retained for diagnostics only.
-        # POST-11:30 was evaluated above and remains a separate regime.
-        # --------------------------------------------------------------- #
+        # All standard/pre-11:30 isolations use the same former Path B-style
+        # mechanics, named unified Path A. Trigger origin is metadata only.
+        # POST-11:30 has already been handled by the separate time-based gate.
         return self._build_unified_path_a_response(iso_status, isolated)
 
     def _build_unified_path_a_response(
@@ -2065,13 +1878,10 @@ class StrategyEntrySignalService:
         iso_status: dict[str, Any],
         isolated: dict[str, Any],
     ) -> dict[str, Any]:
-        """Describe the single standard Path A execution mode.
+        """Return the common standard-session Path A mode for any trigger source.
 
-        This is the former Path B-style standard-session mode: the
-        isolation-selected bias instrument stays active and the dummy
-        order engine manages post-isolation S/R routing and trade exits.
-        It applies equally to NIFTY and external-index isolation triggers.
-        POST-11:30 is handled separately before this method is called.
+        The isolation-selected bias-side instrument remains active and the
+        dummy-order engine handles post-isolation S/R routing and execution.
         """
         instrument_key = str(isolated.get("instrument_key") or "").strip()
         underlying = ""
@@ -2139,7 +1949,7 @@ class StrategyEntrySignalService:
             },
             "active_instrument_key": instrument_key,
             "warnings": [
-                "Unified Path A standard mode: trigger source does not alter execution."
+                "Unified Path A: trigger source does not alter standard execution."
             ],
             "generated_at": _now_utc_iso(),
         }
