@@ -871,15 +871,9 @@ STRATEGY_ORDER_STOP_LOSS_PCT = _float(
     "STRATEGY_ORDER_STOP_LOSS_PCT", 0.30
 )
 
-# Standard unified Path A dynamic target milestone:
-#   entry <= 100: entry + entry / 3
-#   entry <= 200: entry + entry / 4
-#   entry >  200: entry + entry / 5
-# The target only arms Stage 2; exit requires a NEW Resistance
-# confirmed after the milestone. Stop-loss remains active throughout.
-STRATEGY_ORDER_DYNAMIC_TARGET_ENABLED = _bool(
-    "STRATEGY_ORDER_DYNAMIC_TARGET_ENABLED", True
-)
+# Standard unified Path A dynamic target is a fixed rule implemented
+# in services/dummy_order_service.py; the entry-price band calculation
+# is intentionally not controlled by an environment flag.
 
 # 09:30 IST backup-reversal cutoff (spec §2.2).
 STRATEGY_ORDER_REVERSAL_CUTOFF_HOUR = _int(
