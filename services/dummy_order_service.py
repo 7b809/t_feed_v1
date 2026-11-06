@@ -611,14 +611,14 @@ class DummyOrderService:
             int(getattr(config, "DUMMY_ORDER_START_HOUR", 9)),
             int(getattr(config, "DUMMY_ORDER_START_MINUTE", 15)),
         )
-        eod = dtime(
-            int(getattr(config, "DUMMY_ORDER_EOD_HOUR", 15)),
-            int(getattr(config, "DUMMY_ORDER_EOD_MINUTE", 35)),
+        retroactive_start = dtime(
+            int(getattr(config, "DUMMY_ORDER_RETROACTIVE_START_HOUR", 15)),
+            int(getattr(config, "DUMMY_ORDER_RETROACTIVE_START_MINUTE", 30)),
         )
         t = now.time()
         if t < start:
             return "before_start"
-        if t < eod:
+        if t < retroactive_start:
             return "live"
         return "retroactive"
 
