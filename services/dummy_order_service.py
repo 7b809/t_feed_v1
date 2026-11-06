@@ -296,8 +296,9 @@ class DummyOrderService:
                         existing_order.get("zone"),
                     )).lower()
                     if any(marker in legacy_reason for marker in (
-                        "r2", "s2", "or_level", "or grid",
-                        "missing_or", "incomplete_or",
+                        "above_r2", "below_s2", " > r2", "below s2",
+                        "missing_or_levels", "incomplete_or_levels",
+                        "or grid",
                     )):
                         logger.warning(
                             "[dummy-order] reopening legacy OR-grid-only "
@@ -354,9 +355,8 @@ class DummyOrderService:
                         self._state["order"] = order
                         created = 1
                         # Only surface CREATED for actionable OPEN orders.
-                        # SKIPPED orders stay silent — the executor would
-                        # otherwise try to place a real entry for a trade
-                        # that was intentionally rejected by the regime.
+                        # Non-entry SKIPPED records remain silent to downstream
+                        # execution consumers.
                         if str(order.get("status")) == "OPEN":
                             pending_transitions.append(
                                 ("CREATED", dict(order)),
