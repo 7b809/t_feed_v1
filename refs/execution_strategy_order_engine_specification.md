@@ -25,12 +25,13 @@ This section supersedes the older Path A/Path B split, OR-grid entry eligibility
 6. If the mode is `STANDARD`, the existing 09:30 backup reversal and same-leg/opposite-leg routing rules remain unchanged.
 7. **No OR-grid entry eligibility filter applies.** Entry is created from the first qualified post-isolation 15/3 S/R confirmation and its routed instrument's confirmation-candle close. Do not read or require `first_candle.json` OR levels to decide whether an entry is eligible. Prices above R2, below S2, or outside any OR zone are not rejected. OR-grid levels do not participate in stop-loss, target, milestone, or exit calculations.
 8. Stop-loss calculation remains the existing configured percentage (default 30% below entry).
-9. One target milestone is calculated from entry price:
+9. One initial target is calculated from entry price:
    - 0 < entry <= 100: target = entry + entry / 3
    - 100 < entry <= 200: target = entry + entry / 4
    - entry > 200: target = entry + entry / 5
-10. Reaching the target only marks the milestone. Stop-loss stays active. The system ignores Resistance confirmations at or before the milestone timestamp and exits at the 1-minute candle close of the first newly confirmed 15/3 Resistance strictly after the milestone.
-11. If neither stop-loss nor the post-target Resistance exit occurs, the existing EOD close remains active.
+10. For STANDARD orders, reaching the target only marks the milestone. Stop-loss stays active. The system ignores Resistance confirmations at or before the milestone timestamp and exits at the 1-minute candle close of the first newly confirmed 15/3 Resistance strictly after the milestone.
+11. For EARLY_EXTREME_REVERSAL orders, use the separate 15% target-protection ladder described below; do not use the post-target Resistance exit.
+12. If neither the applicable stop nor strategy exit occurs, the existing EOD close remains active.
 
 ### After-market startup replay (IST)
 
