@@ -32,6 +32,13 @@ This section supersedes the older Path A/Path B split and the Stage 1 OR-grid / 
 10. Reaching the target only marks the milestone. Stop-loss stays active. The system ignores Resistance confirmations at or before the milestone timestamp and exits at the 1-minute candle close of the first newly confirmed 15/3 Resistance strictly after the milestone.
 11. If neither stop-loss nor the post-target Resistance exit occurs, the existing EOD close remains active.
 
+### After-market startup replay (IST)
+
+1. The dummy-order service switches from `live` to `retroactive` at **15:30 IST**, the official market close. The threshold is independently configurable through `DUMMY_ORDER_RETROACTIVE_START_HOUR` and `DUMMY_ORDER_RETROACTIVE_START_MINUTE` (defaults: 15 and 30).
+2. When the application starts at or after 15:30 and before midnight on the same trading date, the existing startup catch-up runs after SR backfill readiness. It uses the same dummy-order engine and persisted state file (`data/dummy_orders.json)); records created by this path are marked `created_retroactively`.
+3. Retroactive classification does **not** move the order EOD cutoff. The existing `DUMMY_ORDER_EOD_HOUR:MINUTE` remains **15:35 IST**; any surviving OPEN order is closed using the final available candle close.
+4. The isolated-instrument page continues to read the same dummy-order state/API. No separate simulation database or actual broker order is introduced by this replay path.
+
 ### POST-11:30 IST
 
 POST-11:30 remains a separate time-based strategy. Its existing entry confirmation, fixed target, stop-loss, 15/15 Resistance exit and EOD behavior are not changed by the standard Path A update.
