@@ -40,7 +40,7 @@ This section supersedes the older Path A/Path B split, OR-grid entry eligibility
 3. Retroactive classification does **not** move the order EOD cutoff. The existing `DUMMY_ORDER_EOD_HOUR:MINUTE` remains **15:35 IST**; any surviving OPEN order is closed using the final available candle close.
 4. The isolated-instrument page continues to read the same dummy-order state/API. No separate simulation database or actual broker order is introduced by this replay path.
 
-### Early Extreme Reversal — target ladder and 15% protection (2026-11-06)
+### Early Extreme Reversal — repeating 30% target ladder (2026-11-06)
 
 This exit protocol applies ONLY when the isolation record is pinned as
 `EARLY_EXTREME_REVERSAL`. Entry routing remains:
@@ -53,20 +53,21 @@ Risk/exit sequence:
 1. At entry, retain the configured initial stop (default 30% below entry)
    and the existing dynamic Target 1 calculated from entry.
 2. Before Target 1 is reached, the initial stop remains active.
-3. When a candle high first reaches the active target, lock protection at
-   85% of that achieved target (a 15% pullback from target). Calculate the
-   next target as 130% of the achieved target.
-4. Repeat for every subsequent target: protective stop = achieved target ×
-   0.85; next target = achieved target × 1.30.
-5. The newly calculated stop is active from the next candle. With OHLC-only
+3. When Target 1 is reached, move the protective stop to the entry price.
+   Calculate Target 2 as Target 1 × 1.30.
+4. When Target 2 is reached, move the protective stop to Target 1.
+   Calculate Target 3 as Target 2 × 1.30.
+5. Repeat: after Target n is reached (n >= 2), set the protective stop
+   to Target n-1 and calculate Target n+1 as Target n × 1.30.
+6. The newly calculated stop is active from the next candle. With OHLC-only
    data, the engine checks the stop active at the start of each candle before
    processing that candle's target high. It does not assume an intrabar path.
-6. Exit when candle low is at or below the active stop, at the active stop
-   price under the existing candle-based fill assumption, or at the configured
-   EOD close if no stop is reached.
-7. The post-target 15/3 Resistance-confirmation exit is disabled for Early
+7. Exit when candle low is at or below the active stop, at the active stop
+   price under the candle-based fill assumption, or at the configured EOD
+   close if no stop is reached.
+8. The post-target 15/3 Resistance-confirmation exit is disabled for Early
    Extreme Reversal. It remains unchanged for other standard Path A orders.
-8. The ladder state is persisted in the normal dummy order record:
+9. The ladder state is persisted in the normal dummy order record:
    `initial_stop_price`, `initial_target_price`, `active_stop_price`,
    `active_target_price`, `target_ladder_stage`,
    `target_ladder_history`, and `target_ladder_enabled`.
