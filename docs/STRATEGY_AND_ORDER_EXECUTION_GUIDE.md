@@ -397,21 +397,16 @@ This ladder applies **only** when the order carries the pinned Early Extreme Rev
    - Calculate Target 4 as Target 3 × 1.30.
 6. Continue the same pattern for every further target.
 
-For target stage (n\ge 1):
+For target stage `n >= 1`:
 
-[
-T_{n+1}=T_n\times1.30
-]
+```text
+next_target = current_target * 1.30
 
-Protective stop after target (T_n) is reached:
-
-[
-SL_n =
-\begin{cases}
-Entry, & n=1 \\
-T_{n-1}, & n\ge2
-\end{cases}
-]
+if stage == 1:
+    protective_stop = entry_price
+else:
+    protective_stop = previous_target
+```
 
 This means the stop moves to breakeven after Target 1 and then locks the previous target level after each later target. It is **not** a fixed 15% trailing stop.
 
@@ -533,17 +528,11 @@ The state contains the standard `order` and the separate `post_1130_order`; a co
 
 For a BUY order:
 
-[
-P\&L_{points}=ExitPrice-EntryPrice
-]
-
-[
-P\&L_{gross}=P\&L_{points}\times Quantity
-]
-
-[
-Return\% = \frac{ExitPrice-EntryPrice}{EntryPrice}\times100
-]
+```text
+pnl_points = exit_price - entry_price
+gross_pnl = pnl_points * quantity
+return_pct = ((exit_price - entry_price) / entry_price) * 100
+```
 
 Example: entry ₹294.30, exit ₹353.16, quantity 65:
 
