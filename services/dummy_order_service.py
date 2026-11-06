@@ -1692,13 +1692,14 @@ class DummyOrderService:
         entry_price: float,
         now: datetime,
     ) -> None:
-        """Replay Early Extreme Reversal candles using the 15% target lock.
+        """Replay Early Extreme Reversal candles using the prior-target stop ladder.
 
         Before Target 1, the original configured stop remains active.
-        After each target is touched, lock the achieved target's 85% as
-        the protective stop and raise the next target by 30%. The newly
-        calculated stop becomes active from the next candle; OHLC data
-        cannot establish the intrabar order of a target and its new stop.
+        After Target 1, move the stop to entry. After each later target,
+        move the stop to the target just achieved previously. Raise the
+        next target by 30% of the target just reached. A new stop becomes
+        active from the next candle; OHLC data cannot establish intrabar
+        ordering between a target and its newly calculated stop.
         """
         initial_stop = _safe_float(
             order.get("initial_stop_price", order.get("stop_price")),
@@ -1751,7 +1752,11 @@ class DummyOrderService:
             while high >= active_target:
                 achieved_target = active_target
                 target_stage += 1
-                active_stop = round(achieved_target * 0.85, 4)
+                active_stop = (
+                    round(entry_price, 4)
+                    if target_stage == 1
+                    else round(ladder_history[-1]["target_price"], 4)
+                )
                 next_target = round(achieved_target * 1.30, 4)
                 ladder_history.append({
                     "stage": target_stage,
