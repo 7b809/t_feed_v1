@@ -583,8 +583,19 @@ DUMMY_ORDER_TRACK_INTERVAL_SECONDS = max(
 DUMMY_ORDER_START_HOUR = _int("DUMMY_ORDER_START_HOUR", 9)
 DUMMY_ORDER_START_MINUTE = _int("DUMMY_ORDER_START_MINUTE", 15)
 
-# After DUMMY_ORDER_EOD_HOUR:MINUTE the service falls into "retroactive"
-# mode and force-closes any surviving OPEN order at the last bar close.
+# After the official 15:30 IST market close, startup/tick catch-up
+# enters "retroactive" mode and reconstructs today's dummy-order lifecycle
+# from the persisted candle/SR series. This is intentionally separate from
+# the 15:35 order EOD processing cutoff below.
+DUMMY_ORDER_RETROACTIVE_START_HOUR = _int(
+    "DUMMY_ORDER_RETROACTIVE_START_HOUR", 15
+)
+DUMMY_ORDER_RETROACTIVE_START_MINUTE = _int(
+    "DUMMY_ORDER_RETROACTIVE_START_MINUTE", 30
+)
+
+# At/after this time, any surviving OPEN dummy order is force-closed at
+# the final available candle close. Keep this at 15:35 IST.
 DUMMY_ORDER_EOD_HOUR = _int("DUMMY_ORDER_EOD_HOUR", 15)
 DUMMY_ORDER_EOD_MINUTE = _int("DUMMY_ORDER_EOD_MINUTE", 35)
 
