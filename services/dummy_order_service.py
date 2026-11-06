@@ -2022,7 +2022,7 @@ class DummyOrderService:
                 ],
                 sections=[
                     ("Milestones (Stage 1)", "🎯",
-                     milestones or ["+50 pt gain"]),
+                     milestones or ["dynamic target milestone"]),
                 ],
                 status="info",
             )
