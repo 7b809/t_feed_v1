@@ -298,15 +298,12 @@ The service builds a fixed candle series for the traded instrument and resolves 
 
 For standard Path A orders, the default configured stop percentage is 30% below entry:
 
-[
-SL_0 = Entry \times (1 - StopPct)
-]
+```text
+initial_stop = entry_price * (1 - stop_pct)
 
-With the default (StopPct=0.30):
-
-[
-SL_0 = Entry \times 0.70
-]
+# Default stop_pct = 0.30
+initial_stop = entry_price * 0.70
+```
 
 The configured value is read from `STRATEGY_ORDER_STOP_LOSS_PCT`.
 
@@ -314,14 +311,14 @@ The configured value is read from `STRATEGY_ORDER_STOP_LOSS_PCT`.
 
 The initial target depends on the entry-price band:
 
-[
-Target_1 =
-\begin{cases}
-Entry + Entry/3, & 0 < Entry \le 100 \\
-Entry + Entry/4, & 100 < Entry \le 200 \\
-Entry + Entry/5, & Entry > 200
-\end{cases}
-]
+```text
+if 0 < entry_price <= 100:
+    target_1 = entry_price + entry_price / 3
+elif 100 < entry_price <= 200:
+    target_1 = entry_price + entry_price / 4
+elif entry_price > 200:
+    target_1 = entry_price + entry_price / 5
+```
 
 The order stores the target divisor used for the calculation. This is the initial target for both STANDARD and EARLY_EXTREME_REVERSAL orders; the exit handling diverges after this point.
 
