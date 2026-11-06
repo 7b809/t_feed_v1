@@ -3,8 +3,9 @@
 
 All pre-11:30 isolation sources use the same standard execution strategy.
 The selected isolated bias-side instrument is monitored for post-isolation
-15/3 S/R confirmation and existing same/opposite-leg routing. The traded
-instrument's own OR validation and configured stop-loss are preserved.
+15/3 S/R confirmation and existing same/opposite-leg routing. OR-grid price
+eligibility is not part of entry execution. Configured stop-loss and the
+dynamic target / post-target Resistance exit are preserved.
 
 Standard Path A dynamic target milestone:
     * 0 < entry <= 100: entry + entry / 3
@@ -147,37 +148,6 @@ def _log_calc_routing(
     )
 
 
-def _log_calc_regime(
-    zone: dict[str, Any],
-    entry_price: float,
-    or_levels: dict[str, Any],
-) -> None:
-    logger.info(
-        "[CALC][REGIME] zone=%s entry=%.4f\n"
-        "    OR  H=%s L=%s A=%s\n"
-        "    R   R1=%s R2=%s R3=%s R3T=%s\n"
-        "    S   S1=%s S2=%s S3=%s S3T=%s\n"
-        "    MILESTONES %s\n"
-        "    SKIP %s (%s)",
-        zone.get("zone"), entry_price,
-        _fmt_price(or_levels.get("H")),
-        _fmt_price(or_levels.get("L")),
-        _fmt_price(or_levels.get("A")),
-        _fmt_price(or_levels.get("R1")),
-        _fmt_price(or_levels.get("R2")),
-        _fmt_price(or_levels.get("R3")),
-        _fmt_price(or_levels.get("R3_Threshold")),
-        _fmt_price(or_levels.get("S1")),
-        _fmt_price(or_levels.get("S2")),
-        _fmt_price(or_levels.get("S3")),
-        _fmt_price(or_levels.get("S3_Threshold")),
-        [f"{m['name']}={_fmt_price(m['price'])}"
-         for m in (zone.get("milestones") or [])],
-        zone.get("skip"),
-        zone.get("reason") or "—",
-    )
-
-
 def _log_calc_post_1130(
     order: dict[str, Any],
     reference_type: str | None,
@@ -310,6 +280,33 @@ class DummyOrderService:
                     )
 
                 self._reset_if_new_day(now)
+
+                # Old releases persisted SKIPPED orders solely because
+                # the entry price was outside the OR grid or OR levels
+                # were unavailable. Those filters are retired. Re-open
+                # only these legacy OR-only skips so today's confirmed
+                # signal can be evaluated by the current shared engine.
+                existing_order = self._state.get("order")
+                if (
+                    isinstance(existing_order, dict)
+                    and str(existing_order.get("status") or "").upper() == "SKIPPED"
+                ):
+                    legacy_reason = " ".join(str(value or "") for value in (
+                        existing_order.get("skip_reason"),
+                        existing_order.get("zone"),
+                    )).lower()
+                    if any(marker in legacy_reason for marker in (
+                        "r2", "s2", "or_level", "or grid",
+                        "missing_or", "incomplete_or",
+                    )):
+                        logger.warning(
+                            "[dummy-order] reopening legacy OR-grid-only "
+                            "SKIPPED order %s (reason=%s); evaluating with "
+                            "unrestricted entry eligibility",
+                            existing_order.get("order_id"),
+                            existing_order.get("skip_reason"),
+                        )
+                        self._state["order"] = None
 
                 # ---- 1. Fetch isolation record -------------------- #
                 try:
@@ -690,46 +687,6 @@ class DummyOrderService:
             logger.exception("[dummy-order] save failed")
 
     # ------------------------------------------------------------------ #
-    # OR-level / candle access                                           #
-    # ------------------------------------------------------------------ #
-    def _read_or_levels(self, instrument_key: str) -> dict[str, Any] | None:
-        try:
-            from services.instrument_registry import instrument_registry
-            entry = instrument_registry.get(instrument_key)
-        except Exception:
-            return None
-        if not entry:
-            return None
-        underlying = str(entry.get("underlying") or "").strip().lower()
-        strike = entry.get("strike_price")
-        strike_type = str(entry.get("strike_type") or "").upper()
-        if not underlying or strike is None or not strike_type:
-            return None
-        try:
-            strike_int = int(float(strike))
-        except (TypeError, ValueError):
-            return None
-        path = (
-            Path(config.LIVE_DATA_DIR)
-            / underlying
-            / f"{strike_int}_{strike_type}"
-            / "first_candle.json"
-        )
-        if not path.exists():
-            return None
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            logger.exception("[dummy-order] unreadable %s", path)
-            return None
-        if not isinstance(payload, dict):
-            return None
-        if str(payload.get("date") or "") != _today_iso():
-            return None
-        orl = payload.get("or_levels")
-        return orl if isinstance(orl, dict) else None
-
-    # ------------------------------------------------------------------ #
     # G1 v4.1 — single deterministic candle series                       #
     # ------------------------------------------------------------------ #
     def _build_fixed_series(
@@ -1065,68 +1022,6 @@ class DummyOrderService:
             "execution_mode_price": _safe_float(iso.get("execution_mode_price") or iso.get("instrument_ltp")),
             "execution_mode_decided_at": iso.get("execution_mode_decided_at") or iso.get("touched_at") or iso.get("isolated_at"),
             "entry_time_iso": post_trigger["confirmed_time"],
-        }
-
-    # ------------------------------------------------------------------ #
-    # Regime classification                                              #
-    # ------------------------------------------------------------------ #
-    def _classify_zone(
-        self,
-        entry_price: float,
-        or_levels: dict[str, Any],
-    ) -> dict[str, Any]:
-        R1 = _safe_float(or_levels.get("R1"))
-        R2 = _safe_float(or_levels.get("R2"))
-        R3 = _safe_float(or_levels.get("R3"))
-        R3T = _safe_float(or_levels.get("R3_Threshold"))
-        L = _safe_float(or_levels.get("L"))
-        S1 = _safe_float(or_levels.get("S1"))
-        S2 = _safe_float(or_levels.get("S2"))
-
-        if None in (R1, R2, R3, R3T, L, S1, S2):
-            return {
-                "zone": "UNCLASSIFIABLE",
-                "milestones": [],
-                "skip": True,
-                "reason": "incomplete_or_levels",
-            }
-
-        if entry_price > R2:
-            return {
-                "zone": "ABOVE_R2",
-                "milestones": [],
-                "skip": True,
-                "reason": (
-                    f"entry {entry_price:.4f} > R2 {R2:.4f} — no valid "
-                    f"logic present above R2 level"
-                ),
-            }
-
-        if entry_price < S2:
-            return {
-                "zone": "BELOW_S2",
-                "milestones": [{"name": "OR_LOW", "price": L}],
-                "skip": False,
-            }
-
-        if entry_price < R1:
-            return {
-                "zone": "BELOW_R1",
-                "milestones": [
-                    {"name": "R2", "price": R2},
-                    {"name": "R3_Threshold", "price": R3T},
-                    {"name": "R3", "price": R3},
-                ],
-                "skip": False,
-            }
-
-        return {
-            "zone": "ZONE_2",
-            "milestones": [
-                {"name": "R3_Threshold", "price": R3T},
-                {"name": "R3", "price": R3},
-            ],
-            "skip": False,
         }
 
     # ================================================================== #
@@ -1601,33 +1496,6 @@ class DummyOrderService:
                 traded_key,
             )
 
-        or_levels = self._read_or_levels(traded_key)
-        if not or_levels:
-            logger.warning(
-                "[dummy-order] no OR levels for traded instrument %s — "
-                "cannot evaluate regime",
-                traded_key,
-            )
-            return self._skipped_order(
-                iso, routing, entry_time_iso, entry_price, entry_source,
-                now, reason="missing_or_levels",
-            )
-
-        zone = self._classify_zone(entry_price, or_levels)
-        _log_calc_regime(zone, entry_price, or_levels)
-
-        if zone.get("skip"):
-            logger.warning(
-                "[dummy-order] SKIP order — %s (entry=%.4f, zone=%s, "
-                "instrument=%s)",
-                zone.get("reason"), entry_price, zone.get("zone"),
-                traded_key,
-            )
-            return self._skipped_order(
-                iso, routing, entry_time_iso, entry_price, entry_source,
-                now, zone=zone, or_levels=or_levels,
-            )
-
         stop_pct = float(
             getattr(config, "STRATEGY_ORDER_STOP_LOSS_PCT", 0.30),
         )
@@ -1668,8 +1536,10 @@ class DummyOrderService:
             "resistance_exit_confirmation_at": None,
             "execution_path": "PATH_A_UNIFIED",
             "isolation_trigger_index": iso.get("trigger_index"),
-            "or_levels": or_levels,
-            "zone": zone.get("zone"),
+            # Compatibility fields only; OR-grid levels/zones are not
+            # consulted by the entry, risk, target, or exit calculations.
+            "or_levels": {},
+            "zone": "UNRESTRICTED",
             "milestones": [{
                 "name": "DYNAMIC_TARGET",
                 "price": target_price,
@@ -1702,10 +1572,10 @@ class DummyOrderService:
         logger.info(
             "[dummy-order] CREATED %s | execution=PATH_A_UNIFIED "
             "routing=%s entry=%.4f stop=%.4f target=%.4f divisor=%d "
-            "zone=%s series_len=%d",
+            "entry_eligibility=UNRESTRICTED series_len=%d",
             order["order_id"], routing["routing_mode"],
             entry_price, stop_price, target_price, target_divisor,
-            zone.get("zone"), len(series),
+            len(series),
         )
         self._notify_created(order)
         return order
@@ -1833,8 +1703,7 @@ class DummyOrderService:
             return
 
         # The entry-price target is the only Stage 1 profit milestone.
-        # OR-grid validation remains, but its old profit milestones and
-        # the former +50-point threshold no longer arm Stage 2.
+        # OR-grid levels are not used for entry eligibility or exits.
         target_price = _safe_float(order.get("target_price"))
         if target_price is None:
             target_price, target_divisor = _dynamic_target_for_entry(entry_price)
