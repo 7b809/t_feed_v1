@@ -94,6 +94,114 @@ resolves). The live sandbox executor relies on this latch to refuse
 to place real orders off a partially-built SR series — same race
 the scheduler and dummy-order services were already guarding against.
 
+## 2026-11-06 change — pluggable historical source + ad-hoc backfill
+-------------------------------------------------------------------
+Two independent additions, both driven by the isolated-instrument
+pipeline.
+
+**(A) ``SR_BACKFILL_HISTORICAL_SOURCE`` — pluggable historical source.**
+
+Historical candles used to be read *only* from the on-disk backup
+tree (``candles.json``). That works for the daily-refresh flow but is
+not the only possible source — some deployments ship a codebase whose
+intraday API (``HistoryV3Api.get_intra_day_candle_data``) is the
+canonical, always-available source, and the disk copy can lag behind
+or be absent entirely (e.g. an option instrument that was just listed
+today has no backup entry yet).
+
+``_fetch_merged_candles()`` now consults ``SR_BACKFILL_HISTORICAL_SOURCE``:
+
+    * ``"api"`` / ``"intraday"`` / ``"intraday_api"``
+        Pure-API mode. BOTH the "historical" and "intraday" roles are
+        served by ``HistoryV3Api.get_intra_day_candle_data(key, "minutes", "1")``.
+        No disk reads at all. Use this in deployments where the disk
+        backup is not authoritative and every instrument must be
+        backfilled from the live API.
+
+    * ``"disk"`` / ``"legacy"``
+        Legacy behaviour. Historical from the in-process day cache
+        over ``candles.json``; intraday from the API.
+
+    * ``"merge"`` / ``"auto"`` / ``"both"`` (default)
+        Historical tries disk first; when the disk read yields
+        nothing, falls back to the API. Intraday always from the API.
+        This is the safest default — it preserves the existing
+        disk-first behaviour for instruments with backup files while
+        transparently unblocking the "just-listed option" case.
+
+The API call itself is ``_fetch_via_intraday_api()`` — a thin,
+documented alias for ``_fetch_intraday_candles()`` (the canonical
+``HistoryV3Api.get_intra_day_candle_data`` invocation) so the flag
+wiring is explicit at every call site.
+
+**(B) ``backfill_instruments()`` — ad-hoc mid-session backfill.**
+
+``run()`` is the full-pipeline entry point: it consults
+``should_run()``, honours the one-shot-per-day latch, iterates the
+full instrument registry, and (by default) marks the readiness latch
+via ``_mark_seeded()``. That is exactly right for the startup and
+periodic flows, but wrong for the isolated-instrument pipeline:
+
+    * When ``isolated_instrument_promotion_service`` registers a
+      newly-active isolated/opposite pair mid-session, only **two**
+      instruments need seeding — not 170.
+    * The seed must NOT flip the readiness latch: the frozen replay
+      series used by ``dummy_order_service`` is already built and
+      must remain stable for the day.
+    * The seed must NOT touch the frozen replay series: the isolated
+      pair only needs the live buffer warmed so subsequent ticks see
+      the candle tails.
+
+``backfill_instruments()`` is that path:
+
+    * accepts a mixed list of registry entry dicts and/or bare
+      ``instrument_key`` strings;
+    * resolves/``register_adhoc``-s any missing keys in
+      ``instrument_registry``;
+    * reuses the same ``_seed_one_instrument()`` helper as ``run()``
+      so candle fetch, pivot detection, and buffer seeding are
+      byte-identical;
+    * by default ``update_replay=False``, so the readiness latch and
+      ``snapshot_epoch`` stay untouched;
+    * never calls ``should_run()`` and never consults
+      ``is_ready()`` — partial mid-session seeds are the whole point.
+
+``register_and_backfill(keys, reason=...)`` is a convenience wrapper
+for the common "single key or list of keys, resolve via registry,
+seed" case — used by the promotion service's
+``on_isolation_triggered`` and by
+``isolated_instrument_promotion_service._prepare_isolation_pair``.
+
+## 2026-11-06 fix — ``bucket``/``ts_ms`` on API-derived candles
+---------------------------------------------------------------
+Runtime traceback observed on 2026-11-06 10:46:12::
+
+    File "services/sr_backfill_service.py", line 654, in _seed_one_instrument
+      candles = _fetch_merged_candles(entry, lookback_days)
+    File "services/sr_backfill_service.py", line 625, in _fetch_merged_candles
+      return live_sr_calc_service.merge_candles(historical, intraday)
+    File "services/live_sr_calc_service.py", line 2333, in _merge_by_minute
+      by_bucket[c["bucket"]] = c
+    KeyError: 'bucket'
+
+Root cause: ``_fetch_intraday_candles()`` hand-built candle dicts with
+only ``{time, open, high, low, close, volume}``. Those dicts lack the
+``bucket`` (and ``ts_ms``) fields that
+``live_sr_calc_service._merge_by_minute()`` requires for dedupe.
+The bug only surfaced when the disk-based historical read yielded
+empty (log: ``historical fallback source=api candles=90 (disk empty)``)
+and the API-derived candles were fed straight into ``merge_candles()``.
+
+Fix: ``_fetch_intraday_candles()`` now normalises via
+``live_sr_calc_service._normalise_candle()`` — the same normaliser the
+calc endpoint uses — so API-derived candles carry the exact
+``{time, ts_ms, bucket, open, high, low, close, volume}`` shape. A
+belt-and-braces manual-bucket fallback runs if the import is
+unavailable (e.g. during early startup where the calc service module
+hasn't loaded yet). ``_fetch_merged_candles()`` additionally filters
+out any legacy-shaped candles immediately before merge, so a future
+producer regression can never re-introduce the same crash.
+
 Runs when ALL of the following hold:
   * ``SR_BACKFILL_ENABLED`` is True
   * ``LIVE_SR_ENABLED`` is True
@@ -110,6 +218,9 @@ Called from:
   * The deferred scheduler job ``replay_seed_at_open`` (09:16 IST,
     idempotent) — fallback for a pre-09:15 startup where feed-start
     correctly skipped.
+  * (2026-11-06) ``isolated_instrument_promotion_service.apply_promotion()``
+    and ``on_isolation_triggered()`` — via ``backfill_instruments()``
+    for the newly-active isolated/opposite pair.
 
 Telegram: sent only on the ``startup`` / ``feed_start`` path. The
 periodic refresh passes ``send_telegram=False`` to avoid flooding.
@@ -396,14 +507,104 @@ def _coerce_dict(raw: Any) -> dict[str, Any] | None:
         return data_attr
     return None
 
+
+def _normalise_candle_via_calc_service(
+    raw: Any,
+) -> dict[str, Any] | None:
+    """Normalise one raw Upstox candle via the calc service's normaliser.
+
+    ``live_sr_calc_service._normalise_candle()`` produces the canonical
+    ``{time, ts_ms, bucket, open, high, low, close, volume}`` shape that
+    ``live_sr_calc_service.merge_candles()`` requires.
+
+    Returns ``None`` when the calc service is unavailable or the raw
+    entry cannot be normalised. Never raises.
+    """
+    try:
+        from services.live_sr_calc_service import _normalise_candle
+    except Exception:
+        return None
+    try:
+        return _normalise_candle(raw)
+    except Exception:
+        return None
+
+
+def _normalise_candle_fallback(
+    raw: Any,
+) -> dict[str, Any] | None:
+    """Hand-build a candle with ``bucket``/``ts_ms`` fields.
+
+    Used only when the calc-service normaliser is unavailable. Mirrors
+    the shape produced by ``live_sr_calc_service._normalise_candle``
+    for the list-of-lists Upstox form. Never raises.
+    """
+    if not isinstance(raw, list) or len(raw) < 5:
+        return None
+    try:
+        ts_str = str(raw[0])
+        o = float(raw[1])
+        h = float(raw[2])
+        l = float(raw[3])
+        c_val = float(raw[4])
+        v = float(raw[5]) if len(raw) > 5 and raw[5] is not None else 0.0
+
+        dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=_MARKET_TZ)
+        ts_epoch = dt.timestamp()
+        return {
+            "time": dt.isoformat(),
+            "ts_ms": int(ts_epoch * 1000),
+            "bucket": int(ts_epoch // 60),
+            "open": o,
+            "high": h,
+            "low": l,
+            "close": c_val,
+            "volume": v,
+        }
+    except (ValueError, TypeError, IndexError):
+        return None
+
+
 def _fetch_intraday_candles(
     instrument_key: str,
 ) -> list[dict[str, Any]]:
+    """Fetch intraday 1-min candles via HistoryV3Api.get_intra_day_candle_data.
+
+    Returns candles in the canonical
+    ``{time, ts_ms, bucket, open, high, low, close, volume}`` shape so
+    they can be merged by ``live_sr_calc_service.merge_candles()``.
+
+    2026-11-06 fix: the previous implementation hand-built candle dicts
+    lacking ``bucket`` / ``ts_ms``. When the historical half was empty
+    (disk miss) and the API candles flowed straight into
+    ``_merge_by_minute()``, this produced ``KeyError: 'bucket'``. The
+    fetcher now delegates to
+    ``live_sr_calc_service._normalise_candle()`` (with a manual-bucket
+    fallback if that import is unavailable).
+
+    Returns ``[]`` on any failure; never raises.
+    """
     sdk = _load_sdk()
     if sdk is None:
         return []
+
     try:
         cfg = sdk.Configuration()
+        # Token setup — previously missing. The calc service sets the
+        # access_token from token_service; mirror that here so the API
+        # call is authenticated on the same code path.
+        try:
+            from services.token_service import token_service
+            token = token_service.get_access_token()
+            if token:
+                cfg.access_token = token
+        except Exception:
+            # Token service failure is non-fatal — Upstox client may
+            # fall back to env-var / default credentials.
+            pass
+
         api = sdk.HistoryV3Api(sdk.ApiClient(cfg))
         response = api.get_intra_day_candle_data(
             instrument_key, "minutes", "1",
@@ -424,34 +625,95 @@ def _fetch_intraday_candles(
 
     out: list[dict[str, Any]] = []
     for raw in raw_candles:
-        if not isinstance(raw, list) or len(raw) < 5:
-            continue
-        try:
-            out.append({
-                "time": str(raw[0]),
-                "open": float(raw[1]),
-                "high": float(raw[2]),
-                "low": float(raw[3]),
-                "close": float(raw[4]),
-                "volume": float(raw[5]) if len(raw) > 5 else 0.0,
-            })
-        except (ValueError, TypeError, IndexError):
-            continue
+        c = _normalise_candle_via_calc_service(raw)
+        if c is None:
+            # Fallback — hand-build with bucket / ts_ms.
+            c = _normalise_candle_fallback(raw)
+        if c is not None:
+            out.append(c)
     return out
+
+
+def _fetch_via_intraday_api(
+    instrument_key: str,
+) -> list[dict[str, Any]]:
+    """Fetch 1-min candles via ``HistoryV3Api.get_intra_day_candle_data``.
+
+    Documented alias for ``_fetch_intraday_candles()`` used by the
+    ``SR_BACKFILL_HISTORICAL_SOURCE == "api"`` branch of
+    ``_fetch_merged_candles``. Named distinctly so the historical-source
+    flag wiring is explicit at each call site — the same API call now
+    serves both the "historical" and "intraday" roles when the flag is
+    set to ``"api"``.
+
+    Returns ``[]`` on any failure; never raises.
+    """
+    return _fetch_intraday_candles(instrument_key)
+
+
+def _is_bucket_shaped(c: Any) -> bool:
+    """Return True when ``c`` carries a ``bucket`` key suitable for merge."""
+    return (
+        isinstance(c, dict)
+        and isinstance(c.get("bucket"), int)
+        and c.get("bucket") is not None
+    )
+
 
 def _fetch_merged_candles(
     entry: dict[str, Any],
     lookback_days: int,
 ) -> list[dict[str, Any]]:
-    """Fetch historical + intraday merged candles for one instrument.
+    """Fetch historical + intraday candles per ``SR_BACKFILL_HISTORICAL_SOURCE``.
 
-    Uses the shared loader / merger from ``live_sr_calc_service`` so the
-    backfill path and the calc endpoint stay in lockstep. Historical
-    candles go through ``_load_historical_cached`` (per-day in-process
-    cache); intraday candles are fetched fresh on every call. Never
-    raises — a failure on either source returns whatever the other
-    produced.
+    Source modes (config flag, case-insensitive):
+
+      * ``"api"`` / ``"intraday"`` / ``"intraday_api"``
+            Pure-API mode. BOTH the historical and intraday roles are
+            served by ``HistoryV3Api.get_intra_day_candle_data(key,
+            "minutes", "1")``. No disk reads. Use this in deployments
+            where the disk backup is not authoritative and every
+            instrument must be backfilled from the live API.
+
+      * ``"disk"`` / ``"legacy"``
+            Legacy behaviour. Historical from the in-process day cache
+            over ``candles.json``; intraday from the API.
+
+      * ``"merge"`` / ``"auto"`` / ``"both"`` (default)
+            Historical tries disk first; when the disk read yields
+            nothing, falls back to the API. Intraday always from the
+            API. Preserves the existing disk-first behaviour for
+            instruments with backup files while transparently
+            unblocking the "just-listed option" case.
+
+    Never raises. A failed source returns ``[]`` for that half; the
+    other half still seeds what it can.
+
+    2026-11-06 fix: before merging, both halves are defensively
+    filtered to candles carrying the ``bucket`` field. This guards
+    against any future producer regression that re-introduces the
+    hand-built candle shape; the primary fix lives in
+    ``_fetch_intraday_candles()``.
     """
+    source = str(
+        getattr(config, "SR_BACKFILL_HISTORICAL_SOURCE", "auto")
+    ).strip().lower()
+
+    key = str(entry.get("instrument_key") or "").strip()
+    if not key:
+        return []
+
+    # ---- Pure-API mode --------------------------------------------- #
+    if source in ("api", "intraday", "intraday_api"):
+        candles = _fetch_via_intraday_api(key)
+        candles = [c for c in candles if _is_bucket_shaped(c)]
+        logger.info(
+            "[sr-backfill] %s fetch source=api candles=%d",
+            key, len(candles),
+        )
+        return candles
+
+    # ---- Disk-first modes (legacy / auto) -------------------------- #
     try:
         from services.live_sr_calc_service import live_sr_calc_service
     except Exception:
@@ -459,14 +721,20 @@ def _fetch_merged_candles(
             "[sr-backfill] live_sr_calc_service import failed; "
             "falling back to intraday-only"
         )
-        return _fetch_intraday_candles(entry.get("instrument_key") or "")
+        candles = _fetch_intraday_candles(key)
+        return [c for c in candles if _is_bucket_shaped(c)]
 
-    key = str(entry.get("instrument_key") or "").strip()
-    if not key:
-        return []
-
-    # Cached — see _load_historical_cached docstring.
     historical = _load_historical_cached(entry, lookback_days)
+    if not historical and source in ("merge", "auto", "both", "fallback"):
+        # Disk read yielded nothing (brand-new option, absent backup
+        # file, post-hard-refresh missed entry). Fall back to the API
+        # for the historical half so the merged series still seeds.
+        historical = _fetch_via_intraday_api(key)
+        logger.info(
+            "[sr-backfill] %s historical fallback source=api candles=%d "
+            "(disk empty)",
+            key, len(historical),
+        )
 
     try:
         intraday = live_sr_calc_service.fetch_intraday_candles_for_entry(key)
@@ -476,9 +744,69 @@ def _fetch_merged_candles(
         )
         intraday = []
 
+    # Defensive filter — protects _merge_by_minute from legacy-shaped
+    # candles regardless of which source produced them.
+    historical = [c for c in (historical or []) if _is_bucket_shaped(c)]
+    intraday = [c for c in (intraday or []) if _is_bucket_shaped(c)]
+
     if historical and intraday:
         return live_sr_calc_service.merge_candles(historical, intraday)
     return historical or intraday
+
+
+# --------------------------------------------------------------------------- #
+# Shared per-instrument seed helper                                           #
+# --------------------------------------------------------------------------- #
+def _seed_one_instrument(
+    entry: dict[str, Any],
+    include_historical: bool,
+    lookback_days: int,
+) -> dict[str, Any]:
+    """Seed one instrument into ``live_sr_levels_service``.
+
+    Shared by ``run()`` and ``backfill_instruments()`` so the candle
+    fetch, pivot scan, and buffer seeding are byte-identical between
+    the full-pipeline and ad-hoc paths.
+
+    Returns ``{"key", "candles", "pivots", "error"}``. Never raises —
+    all failures are captured in ``error``.
+    """
+    from services.live_sr_levels_service import live_sr_levels_service
+
+    key = str(entry.get("instrument_key") or "").strip()
+    if not key:
+        return {"key": None, "candles": 0, "pivots": 0, "error": "missing_key"}
+
+    try:
+        if include_historical:
+            candles = _fetch_merged_candles(entry, lookback_days)
+        else:
+            candles = _fetch_intraday_candles(key)
+    except Exception as exc:
+        logger.exception("[sr-backfill] candle fetch failed for %s", key)
+        return {
+            "key": key, "candles": 0, "pivots": 0,
+            "error": f"fetch_failed:{type(exc).__name__}",
+        }
+
+    if not candles:
+        return {"key": key, "candles": 0, "pivots": 0, "error": None}
+
+    try:
+        result = live_sr_levels_service.seed_candles(key, entry, candles)
+        return {
+            "key": key,
+            "candles": int(result.get("candles_seeded") or 0),
+            "pivots": int(result.get("pivots_detected") or 0),
+            "error": result.get("error"),
+        }
+    except Exception as exc:
+        logger.exception("[sr-backfill] seed failed for %s", key)
+        return {
+            "key": key, "candles": 0, "pivots": 0,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+
 
 # --------------------------------------------------------------------------- #
 # Gate helpers                                                                #
@@ -657,8 +985,6 @@ class SRBackfillService:
             self._last_status = summary
             return summary
 
-        from services.live_sr_levels_service import live_sr_levels_service
-
         include_historical = bool(
             getattr(config, "SR_BACKFILL_INCLUDE_HISTORICAL", True)
         )
@@ -669,9 +995,11 @@ class SRBackfillService:
         t0 = _now_market()
         logger.info(
             "[sr-backfill] START reason=%s instruments=%d workers=%d "
-            "include_historical=%s lookback_days=%d update_replay=%s",
+            "include_historical=%s lookback_days=%d update_replay=%s "
+            "historical_source=%s",
             reason, len(entries), workers, include_historical,
             lookback_days, update_replay,
+            str(getattr(config, "SR_BACKFILL_HISTORICAL_SOURCE", "auto")),
         )
 
         errors = 0
@@ -679,42 +1007,13 @@ class SRBackfillService:
         pivots_total = 0
         seeded_instruments = 0
 
-        def _one(entry: dict[str, Any]) -> dict[str, Any]:
-            key = str(entry.get("instrument_key") or "").strip()
-            if not key:
-                return {"error": "missing_key"}
-
-            if include_historical:
-                candles = _fetch_merged_candles(entry, lookback_days)
-            else:
-                candles = _fetch_intraday_candles(key)
-
-            if not candles:
-                return {"key": key, "candles": 0, "pivots": 0, "error": None}
-
-            try:
-                result = live_sr_levels_service.seed_candles(
-                    key, entry, candles,
-                )
-                return {
-                    "key": key,
-                    "candles": int(result.get("candles_seeded") or 0),
-                    "pivots": int(result.get("pivots_detected") or 0),
-                    "error": result.get("error"),
-                }
-            except Exception as exc:
-                logger.exception(
-                    "[sr-backfill] seed failed for %s", key,
-                )
-                return {
-                    "key": key,
-                    "candles": 0,
-                    "pivots": 0,
-                    "error": f"{type(exc).__name__}: {exc}",
-                }
-
         with ThreadPoolExecutor(max_workers=workers) as pool:
-            futures = [pool.submit(_one, e) for e in entries]
+            futures = [
+                pool.submit(
+                    _seed_one_instrument, e, include_historical, lookback_days,
+                )
+                for e in entries
+            ]
             for fut in as_completed(futures):
                 try:
                     r = fut.result()
@@ -809,6 +1108,246 @@ class SRBackfillService:
         return summary
 
     # ------------------------------------------------------------------ #
+    # Ad-hoc mid-session backfill (2026-11-06)                            #
+    # ------------------------------------------------------------------ #
+    def backfill_instruments(
+        self,
+        entries_or_keys: list[dict[str, Any] | str],
+        *,
+        reason: str = "adhoc",
+        include_historical: bool | None = None,
+        lookback_days: int | None = None,
+        update_replay: bool = False,
+        send_telegram: bool = False,
+    ) -> dict[str, Any]:
+        """Seed the SR engine for a **specific set** of instruments.
+
+        Unlike ``run()`` this method:
+
+          * does **not** consult ``should_run()`` — it is intended to
+            be invoked mid-session for instruments that just became
+            active (e.g. the newly-isolated opposite side);
+          * does **not** consult ``is_ready()`` — partial mid-session
+            seeds are the point;
+          * does **not** mark the readiness latch (``update_replay=
+            False`` by default), because the frozen replay series
+            consumed by ``dummy_order_service`` is already built and
+            must remain stable for the day;
+          * accepts a mix of registry-entry dicts and bare
+            ``instrument_key`` strings;
+          * resolves bare keys through
+            ``instrument_registry.get()``, and registers unknowns via
+            ``instrument_registry.register_adhoc()`` before fetching.
+
+        Uses the same ``_seed_one_instrument()`` helper as ``run()``,
+        so candle fetch, pivot scan, and buffer seeding are
+        byte-identical between the full-pipeline and ad-hoc paths.
+
+        Parameters
+        ----------
+        entries_or_keys : list[dict | str]
+            Registry entry dicts and/or instrument key strings.
+        reason : str
+            Free-form tag logged with the call and stored in
+            ``last_status()``. Default ``"adhoc"``.
+        include_historical : bool | None
+            ``None`` → ``SR_BACKFILL_INCLUDE_HISTORICAL``.
+        lookback_days : int | None
+            ``None`` → ``LIVE_SR_CALC_DEFAULT_LOOKBACK_DAYS``.
+        update_replay : bool
+            Default ``False`` (do not touch the frozen replay series
+            and do not bump the readiness latch).
+        send_telegram : bool
+            Default ``False``. Ad-hoc typically runs dozens of times
+            per session — Telegram would flood.
+
+        Never raises. Returns a summary dict shaped like ``run()``'s
+        (status / instruments_total / instruments_seeded / candles_total
+        / pivots_total / errors / elapsed_seconds / ready /
+        snapshot_epoch / update_replay).
+        """
+        from services.instrument_registry import instrument_registry
+
+        if include_historical is None:
+            include_historical = bool(
+                getattr(config, "SR_BACKFILL_INCLUDE_HISTORICAL", True)
+            )
+        if lookback_days is None:
+            lookback_days = int(
+                getattr(config, "LIVE_SR_CALC_DEFAULT_LOOKBACK_DAYS", 5)
+            )
+        workers = max(1, int(getattr(config, "SR_BACKFILL_MAX_WORKERS", 8)))
+
+        # ---- Resolve inputs to registry-entry dicts ---------------- #
+        entries: list[dict[str, Any]] = []
+        for item in entries_or_keys or []:
+            if isinstance(item, dict):
+                entries.append(item)
+                continue
+            key = str(item or "").strip()
+            if not key:
+                continue
+            entry = instrument_registry.get(key)
+            if entry is None:
+                try:
+                    entry = instrument_registry.register_adhoc(key)
+                except Exception:
+                    logger.exception(
+                        "[sr-backfill] register_adhoc failed for %s", key,
+                    )
+                    entry = None
+            if entry:
+                entries.append(entry)
+
+        if not entries:
+            return {
+                "status": "no_resolvable_instruments",
+                "reason": reason,
+                "ran_at": _now_iso(),
+                "instruments_total": len(entries_or_keys or []),
+                "instruments_seeded": 0,
+                "candles_total": 0,
+                "pivots_total": 0,
+                "errors": 0,
+                "ready": is_ready(),
+                "snapshot_epoch": snapshot_epoch(),
+                "update_replay": update_replay,
+            }
+
+        t0 = _now_market()
+        logger.info(
+            "[sr-backfill] ADHOC START reason=%s instruments=%d "
+            "workers=%d include_historical=%s lookback_days=%d "
+            "update_replay=%s historical_source=%s",
+            reason, len(entries), workers, include_historical,
+            lookback_days, update_replay,
+            str(getattr(config, "SR_BACKFILL_HISTORICAL_SOURCE", "auto")),
+        )
+
+        errors = 0
+        candles_total = 0
+        pivots_total = 0
+        seeded_instruments = 0
+
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = [
+                pool.submit(
+                    _seed_one_instrument, e, include_historical, lookback_days,
+                )
+                for e in entries
+            ]
+            for fut in as_completed(futures):
+                try:
+                    r = fut.result()
+                except Exception:
+                    errors += 1
+                    continue
+                c = int(r.get("candles") or 0)
+                p = int(r.get("pivots") or 0)
+                if r.get("error"):
+                    errors += 1
+                if c > 0:
+                    seeded_instruments += 1
+                candles_total += c
+                pivots_total += p
+
+        elapsed = (_now_market() - t0).total_seconds()
+
+        # ---- Readiness latch: NEVER touched unless explicitly asked -- #
+        if seeded_instruments > 0 and update_replay:
+            epoch = _mark_seeded()
+            ready = True
+        else:
+            epoch = snapshot_epoch()
+            ready = is_ready()
+
+        summary = {
+            "status": "ok" if errors == 0 else "partial",
+            "reason": reason,
+            "ran_at": _now_iso(),
+            "instruments_total": len(entries),
+            "instruments_seeded": seeded_instruments,
+            "candles_total": candles_total,
+            "pivots_total": pivots_total,
+            "errors": errors,
+            "elapsed_seconds": round(elapsed, 2),
+            "include_historical": include_historical,
+            "lookback_days": lookback_days,
+            "ready": ready,
+            "snapshot_epoch": epoch,
+            "update_replay": update_replay,
+        }
+        logger.info(
+            "[sr-backfill] ADHOC COMPLETE — instruments=%d seeded=%d "
+            "candles=%d pivots=%d errors=%d elapsed=%.1fs epoch=%d",
+            len(entries), seeded_instruments, candles_total,
+            pivots_total, errors, elapsed, epoch,
+        )
+
+        if send_telegram:
+            try:
+                from services.telegram_service import telegram_service
+                _DIV = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                _THIN = "────────────────────────────────"
+                msg = (
+                    f"{_DIV}\n"
+                    f"🎯 SR ADHOC BACKFILL · {reason.upper()}\n"
+                    f"{_DIV}\n"
+                    f"🕒 Time:           {_now_market().strftime('%H:%M:%S IST')}\n"
+                    f"📊 Instruments:    {len(entries)}\n"
+                    f"✅ Seeded:         {seeded_instruments}\n"
+                    f"🕯️ Candles:        {candles_total}\n"
+                    f"📐 Pivots:         {pivots_total}\n"
+                    f"❌ Errors:         {errors}\n"
+                    f"⏱️ Elapsed:        {round(elapsed, 1)}s\n"
+                )
+                level = "SUCCESS" if errors == 0 else "WARNING"
+                telegram_service.send_message(
+                    "SR Adhoc Backfill Completed", msg, level=level,
+                )
+            except Exception:
+                logger.exception(
+                    "[sr-backfill] Telegram notification failed"
+                )
+
+        self._last_status = summary
+        return summary
+
+    def register_and_backfill(
+        self,
+        keys: list[str] | str,
+        *,
+        reason: str = "adhoc",
+        include_historical: bool | None = None,
+        lookback_days: int | None = None,
+    ) -> dict[str, Any]:
+        """Convenience wrapper: register ad-hoc keys and seed them.
+
+        Accepts a single instrument key or a list of keys. Missing keys
+        are registered via ``instrument_registry.register_adhoc()`` by
+        ``backfill_instruments()``. Uses ``update_replay=False`` (the
+        frozen replay series is untouched), matching the isolated-
+        instrument pipeline's expectations.
+
+        Used by:
+          * ``isolated_instrument_promotion_service.on_isolation_triggered()``
+          * ``isolated_instrument_promotion_service._prepare_isolation_pair()``
+
+        Never raises.
+        """
+        if isinstance(keys, str):
+            keys = [keys]
+        keys = [str(k).strip() for k in (keys or []) if k]
+        return self.backfill_instruments(
+            keys,
+            reason=reason,
+            include_historical=include_historical,
+            lookback_days=lookback_days,
+            update_replay=False,
+            send_telegram=False,
+        )
+
+    # ------------------------------------------------------------------ #
     # Readiness / status                                                 #
     # ------------------------------------------------------------------ #
     def is_ready(self) -> bool:
@@ -860,7 +1399,8 @@ class SRBackfillService:
         clear_seed_latch()
 
     def last_status(self) -> dict[str, Any]:
-        """Return the most recent ``run()`` summary (copy)."""
+        """Return the most recent ``run()`` / ``backfill_instruments()``
+        summary (copy)."""
         return dict(self._last_status)
 
     def status(self) -> dict[str, Any]:
@@ -875,5 +1415,6 @@ class SRBackfillService:
             **seed_status(),
             "last_run": dict(self._last_status),
         }
+
 
 sr_backfill_service = SRBackfillService()

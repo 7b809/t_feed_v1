@@ -1,3 +1,4 @@
+# templates/isolated_instrument.html
 <!-- # templates/isolated_instrument.html -->
 {# templates/isolated_instrument.html #}
 {% extends "base.html" %}
@@ -1998,6 +1999,20 @@
         }
     }
 
+    /* Pair row: entry/stop/exit time+price display */
+    .entry-grid .value .pair-time {
+        color: var(--iso-text);
+        font-weight: 700;
+    }
+    .entry-grid .value .pair-price {
+        color: var(--iso-text);
+        font-weight: 700;
+    }
+    .entry-grid .value .pair-empty {
+        color: var(--iso-muted);
+        font-weight: 500;
+    }
+
 
     /* ============================================================
        GLOBAL RESPONSIVE DESIGN SYSTEM
@@ -3016,6 +3031,7 @@
         return { lotSize, underlying, lotCount, qty, pts, perLotRs, totalRs, cls };
     }
 
+    /* Render lot rows WITHOUT Total Qty (per 2026-11-06 request). */
     function renderLotGridRows(pnl) {
         const cls = pnl.cls === "up" ? "pnl-up" : pnl.cls === "down" ? "pnl-down" : "";
         const und = pnl.underlying ? ` · ${pnl.underlying}` : "";
@@ -3024,13 +3040,22 @@
             <div class="value">${pnl.lotSize} qty${und}</div>
             <div class="label">Lots</div>
             <div class="value">${pnl.lotCount}</div>
-            <div class="label">Total Qty</div>
-            <div class="value">${pnl.qty.toLocaleString("en-IN")}</div>
             <div class="label">P&amp;L / lot</div>
             <div class="value ${cls}">${fmtMoney(pnl.perLotRs)}</div>
             <div class="label">Total P&amp;L</div>
             <div class="value ${cls}">${fmtMoney(pnl.totalRs)}</div>
         `;
+    }
+
+    /* Compact "time / price" pair renderer.
+       Empty side renders as "—". */
+    function timePricePair(timeStr, priceStr, extraSmall) {
+        const t = timeStr && String(timeStr).trim() ? timeStr : "—";
+        const p = priceStr && String(priceStr).trim() ? priceStr : "—";
+        const tCls = t === "—" ? "pair-empty" : "pair-time";
+        const pCls = p === "—" ? "pair-empty" : "pair-price";
+        return `<span class="${tCls}">${t}</span> / <span class="${pCls}">${p}</span>` +
+            (extraSmall ? ' ' + extraSmall : '');
     }
 
     const state = {
@@ -4121,6 +4146,21 @@
         return "";
     }
 
+    /* ------------------------------------------------------------------
+       2026-11-06 update
+       ------------------------------------------------------------------
+       Entry-signal grid now displays the armed entry as:
+           Entry      : <time> / <price> (<source>)  [📌 pinned]
+           Stop-loss  : — / <price> (<source>) (<pct>)
+           Target     : <price>
+       paired time+price, with `—` placeholder for fields that do not
+       apply yet (e.g. stop-loss has no separate hit time on the signal;
+       exit is not relevant to an entry signal — the "Exit" row is
+       deliberately omitted here and only appears on the Simulation and
+       Dummy Orders cards where an actual order exists).
+       The previous stop_pct "Stop risk" row is folded into the
+       Stop-loss value as `(−X.X%)`.
+       ------------------------------------------------------------------ */
     function entryCandidateGrid(c) {
         if (c.state !== "armed" || !c.entry) {
             if (c.entry_support) {
@@ -4146,29 +4186,46 @@
         const rt = c.reversal_trigger || {};
         const isFrozen = !!e._frozen;
 
-        const priceRowValue =
-            fmt(e.price) +
-            ' <small>(' + esc(quoteSourceLabel(e.price_source)) + ')</small>' +
-            (isFrozen
-                ? ' <small class="entry-frozen-mark" title="Frozen at arming time">📌 pinned</small>'
+        const sourceSmall = e.price_source
+            ? ' <small>(' + esc(quoteSourceLabel(e.price_source)) + ')</small>'
+            : '';
+
+        const frozenMark = isFrozen
+            ? ' <small class="entry-frozen-mark" title="Frozen at arming time">📌 pinned</small>'
+            : '';
+
+        // Entry: time / price (source)  [pinned]
+        const entryPair = timePricePair(
+            formatTime(e.time),
+            '₹' + fmt(e.price),
+            sourceSmall + frozenMark
+        );
+
+        // Stop-loss: — / price (source) (pct)
+        // There is no "stop hit time" on an entry signal — the stop is a
+        // proposed level, not a triggered exit. Show `—` for time.
+        const stopPrice = Number.isFinite(Number(e.stop))
+            ? '₹' + fmt(e.stop)
+            : '—';
+        const stopExtra =
+            (e.stop_source ? ' <small>(' + esc(e.stop_source) + ')</small>' : '') +
+            (e.stop_pct != null
+                ? ' <small>(−' + (e.stop_pct * 100).toFixed(1) + '%)</small>'
                 : '');
+        const stopPair = timePricePair('—', stopPrice, stopExtra);
+
+        // Target: price only (no time attached)
+        const targetValue = e.target != null
+            ? '₹' + fmt(e.target)
+            : '—';
 
         const commonRows = [
-            '<div class="label">Entry price</div>',
-            '<div class="value">' + priceRowValue + '</div>',
-            '<div class="label">Entry time</div>',
-            '<div class="value">' + formatTime(e.time) + '</div>',
+            '<div class="label">Entry</div>',
+            '<div class="value">' + entryPair + '</div>',
             '<div class="label">Stop-loss</div>',
-            '<div class="value">' + fmt(e.stop) +
-                (e.stop_source ? ' <small>(' + esc(e.stop_source) + ')</small>' : '') + '</div>',
-            '<div class="label">Stop risk</div>',
-            '<div class="value">' +
-                (e.stop_pct != null ? (e.stop_pct * 100).toFixed(1) + '%' : "—") +
-            '</div>',
+            '<div class="value">' + stopPair + '</div>',
             '<div class="label">Target</div>',
-            '<div class="value">' +
-                (e.target != null ? fmt(e.target) : "—") +
-            '</div>',
+            '<div class="value">' + targetValue + '</div>',
         ];
 
         let extraRows = '';
@@ -5522,6 +5579,15 @@
             return mode || "—";
         }
 
+        /* ------------------------------------------------------------------
+           2026-11-06 update
+           ------------------------------------------------------------------
+           Entry / stop-loss / exit are now rendered as paired
+           `<time> / <price>` rows. MFE, MAE and Total Qty have been
+           removed. If a stop-loss has not been hit yet, its time shows
+           `—`; if the order has not exited yet, both exit time and
+           exit price show `—`.
+           ------------------------------------------------------------------ */
         function renderSingleOrderCard(data) {
             const order = data.order || {};
             const replay = data.replay || {};
@@ -5547,6 +5613,18 @@
             const rMult = Number(replay.r_multiple);
             const pnlCls = Number.isFinite(pnl) ? (pnl >= 0 ? "up" : "down") : "";
 
+            const exitReasonRaw = String(replay.exit_reason || "");
+            const exitReasonUpper = exitReasonRaw.toUpperCase();
+            const hasExit =
+                Number.isFinite(exitPrice) &&
+                Number.isFinite(pnl) &&
+                !!replay.exit_time;
+            const stopHit =
+                hasExit && (
+                    exitReasonUpper.includes("STOP") ||
+                    exitReasonUpper.includes("SL_HIT")
+                );
+
             const milestones = (zone.milestones || [])
                 .map(m => `${esc(m.name)}=₹${fmt(m.price)}`)
                 .join(", ") || "—";
@@ -5560,6 +5638,28 @@
                 profitPoints: Number.isFinite(pnlPts) ? pnlPts : null,
             });
 
+            // -------- paired time / price rows -------- //
+            const entryTimeStr = order.entry_time ? fmtTime(order.entry_time) : "—";
+            const entryPriceStr = Number.isFinite(entry)
+                ? `₹${fmt(entry)} <small>(${esc(quoteSourceLabel(order.entry_price_source))})</small>`
+                : "—";
+            const entryPair = timePricePair(entryTimeStr, entryPriceStr);
+
+            const stopTimeStr = stopHit && replay.exit_time
+                ? fmtTime(replay.exit_time)
+                : "—";
+            const stopPriceStr = Number.isFinite(stop)
+                ? `₹${fmt(stop)}${Number.isFinite(stopPct) ? ` <small>(−${(stopPct * 100).toFixed(1)}%)</small>` : ""}`
+                : "—";
+            const stopPair = timePricePair(stopTimeStr, stopPriceStr);
+
+            const exitTimeStr = hasExit ? fmtTime(replay.exit_time) : "—";
+            const exitPriceStr = hasExit ? `₹${fmt(exitPrice)}` : "—";
+            const exitReasonSmall = (hasExit && exitReasonRaw)
+                ? ` <small>(${esc(exitReasonRaw)})</small>`
+                : "";
+            const exitPair = timePricePair(exitTimeStr, exitPriceStr, exitReasonSmall);
+
             if (isSkip) {
                 return `
                     <div class="entry-candidate is-chosen">
@@ -5571,10 +5671,12 @@
                             </div>
                         </div>
                         <div class="entry-grid">
-                            <div class="label">Entry price</div>
-                            <div class="value">₹${fmt(entry)} <small>(${esc(quoteSourceLabel(order.entry_price_source))})</small></div>
-                            <div class="label">Entry time</div>
-                            <div class="value">${esc(fmtDateTime(order.entry_time))}</div>
+                            <div class="label">Entry</div>
+                            <div class="value">${entryPair}</div>
+                            <div class="label">Stop-loss</div>
+                            <div class="value">${stopPair}</div>
+                            <div class="label">Exit</div>
+                            <div class="value">${exitPair}</div>
                             <div class="label">Zone</div>
                             <div class="value">${esc(zone.zone || "—")}</div>
                             <div class="label">Milestones</div>
@@ -5587,6 +5689,10 @@
                 `;
             }
 
+            const pnlPtsDisplay = Number.isFinite(pnlPts)
+                ? `${pnlPts >= 0 ? "+" : ""}${pnlPts.toFixed(2)} pts`
+                : "—";
+
             return `
                 <div class="entry-candidate is-chosen">
                     <div class="entry-candidate-head">
@@ -5597,41 +5703,26 @@
                         </div>
                     </div>
                     <div class="entry-grid">
-                        <div class="label">Entry price</div>
-                        <div class="value">₹${fmt(entry)} <small>(${esc(quoteSourceLabel(order.entry_price_source))})</small></div>
-
-                        <div class="label">Entry time</div>
-                        <div class="value">${esc(fmtDateTime(order.entry_time))}</div>
+                        <div class="label">Entry</div>
+                        <div class="value">${entryPair}</div>
 
                         <div class="label">Stop-loss</div>
-                        <div class="value">₹${fmt(stop)} ${Number.isFinite(stopPct) ? `(−${(stopPct * 100).toFixed(1)}%)` : ""}</div>
+                        <div class="value">${stopPair}</div>
+
+                        <div class="label">Exit</div>
+                        <div class="value">${exitPair}</div>
 
                         <div class="label">Zone</div>
                         <div class="value">${esc(zone.zone || "—")}</div>
-
-                        <div class="label">Exit reason</div>
-                        <div class="value">${esc(replay.exit_reason || "—")}</div>
-
-                        <div class="label">Exit price</div>
-                        <div class="value">₹${fmt(exitPrice)}</div>
-
-                        <div class="label">Exit time</div>
-                        <div class="value"><small>${esc(fmtDateTime(replay.exit_time))}</small></div>
 
                         <div class="label">PnL</div>
                         <div class="value ${pnlCls}">${Number.isFinite(pnl) ? fmtPct(pnl) : "—"}</div>
 
                         <div class="label">Profit points</div>
-                        <div class="value ${pnlCls}">${Number.isFinite(pnlPts) ? `${pnlPts >= 0 ? "+" : ""}${pnlPts.toFixed(2)} pts` : "—"}</div>
+                        <div class="value ${pnlCls}">${pnlPtsDisplay}</div>
 
                         <div class="label">R-multiple</div>
                         <div class="value ${pnlCls}">${Number.isFinite(rMult) ? fmtR(rMult) : "—"}</div>
-
-                        <div class="label">MFE</div>
-                        <div class="value">₹${fmt(replay.mfe)}</div>
-
-                        <div class="label">MAE</div>
-                        <div class="value">₹${fmt(replay.mae)}</div>
 
                         <div class="label">Candles scanned</div>
                         <div class="value">${replay.candles_scanned != null ? replay.candles_scanned : "—"}</div>
@@ -5640,7 +5731,7 @@
                     </div>
                     ${replay.stage_2_triggered_at
                         ? `<div class="entry-reversal" style="margin-top:12px;">
-                            🎯 <strong>Stage 2 armed</strong> at ${esc(fmtDateTime(replay.stage_2_triggered_at))}
+                            🎯 <strong>Stage 2 armed</strong> at ${esc(fmtTime(replay.stage_2_triggered_at))}
                             — ${esc(replay.stage_2_trigger_reason || "milestone")}
                         </div>`
                         : ""}
@@ -5972,7 +6063,6 @@
 
             const pnlLot = computeOrderLotPnl(o);
             const lotSizeVal = pnlLot ? pnlLot.lotSize : detectLotSize(o.trading_symbol, o.instrument_key);
-            const qtyVal = pnlLot ? pnlLot.qty : (lotSizeVal * getLotSizePref());
             const lotCount = pnlLot ? pnlLot.lotCount : getLotSizePref();
             const totalRs = pnlLot ? pnlLot.totalRs : null;
             const totalCls = pnlLot ? pnlLot.cls : "";
@@ -5999,7 +6089,7 @@
                 <div class="do-summary-tile">
                     <div class="do-label">Lots × Qty</div>
                     <div class="do-value" style="font-size:0.9rem;">
-                        ${lotCount} × ${qtyVal.toLocaleString("en-IN")}
+                        ${lotCount} × ${lotSizeVal}
                     </div>
                 </div>
                 <div class="do-summary-tile">
@@ -6025,6 +6115,15 @@
             `;
         }
 
+        /* ------------------------------------------------------------------
+           2026-11-06 update
+           ------------------------------------------------------------------
+           Dummy-order grid uses the same paired `<time> / <price>` layout
+           as the simulation card. MFE, MAE and Total Qty are removed.
+           The `Exit` row displays `— / —` while the order is still OPEN;
+           the `Stop-loss` row displays `— / <stop_price>` until the stop
+           is actually hit (then it shows the hit time).
+           ------------------------------------------------------------------ */
         function renderOrder(state, order) {
             if (!order) {
                 bodyEl.innerHTML = `
@@ -6056,6 +6155,15 @@
                     ? "state-blocked"
                     : (pnlPct >= 0 ? "state-armed" : "state-blocked");
 
+            const exitReasonRaw = String(order.closed_reason || "");
+            const exitReasonUpper = exitReasonRaw.toUpperCase();
+            const hasExit = !isOpen && !isSkip && Number.isFinite(exitPrice);
+            const stopHit =
+                hasExit && (
+                    exitReasonUpper.includes("STOP") ||
+                    exitReasonUpper.includes("SL_HIT")
+                );
+
             const milestones = (order.milestones || [])
                 .map(m => `${esc(m.name)}=₹${fmt(m.price)}`)
                 .join(", ") || "—";
@@ -6067,27 +6175,41 @@
                 `
                 : "";
 
-            const exitRows = (!isOpen && !isSkip) ? `
-                <div class="label">Exit reason</div>
-                <div class="value">${esc(order.closed_reason || "—")}</div>
+            // -------- paired time / price rows -------- //
+            const entryTimeStr = order.entry_time ? fmtTime(order.entry_time) : "—";
+            const entryPriceStr = Number.isFinite(entry)
+                ? `₹${fmt(entry)} <small>(${esc(quoteSourceLabel(order.entry_price_source))})</small>`
+                : "—";
+            const entryPair = timePricePair(entryTimeStr, entryPriceStr);
 
-                <div class="label">Exit price</div>
-                <div class="value">₹${fmt(exitPrice)}</div>
+            const stopTimeStr = stopHit
+                ? (order.closed_time ? fmtTime(order.closed_time) : (order.closed_at ? fmtTime(order.closed_at) : "—"))
+                : "—";
+            const stopPriceStr = Number.isFinite(stop)
+                ? `₹${fmt(stop)}${Number.isFinite(stopPct) ? ` <small>(−${(stopPct * 100).toFixed(1)}%)</small>` : ""}`
+                : "—";
+            const stopPair = timePricePair(stopTimeStr, stopPriceStr);
 
-                <div class="label">Exit time</div>
-                <div class="value"><small>${esc(fmtDateTime(order.closed_time || order.closed_at))}</small></div>
+            const exitTimeStr = hasExit
+                ? (order.closed_time ? fmtTime(order.closed_time) : (order.closed_at ? fmtTime(order.closed_at) : "—"))
+                : "—";
+            const exitPriceStr = hasExit ? `₹${fmt(exitPrice)}` : "—";
+            const exitReasonSmall = (hasExit && exitReasonRaw)
+                ? ` <small>(${esc(exitReasonRaw)})</small>`
+                : "";
+            const exitPair = timePricePair(exitTimeStr, exitPriceStr, exitReasonSmall);
 
-                <div class="label">PnL</div>
-                <div class="value ${pnlCls}">${Number.isFinite(pnlPct) ? fmtPct(pnlPct) : "—"}</div>
-
-                <div class="label">Profit pts</div>
-                <div class="value ${pnlCls}">${Number.isFinite(pts) ? `${pts >= 0 ? "+" : ""}${pts.toFixed(2)}` : "—"}</div>
-            ` : "";
+            const pnlPctDisplay = (!isOpen && !isSkip && Number.isFinite(pnlPct))
+                ? fmtPct(pnlPct)
+                : "—";
+            const pnlPtsDisplay = (!isOpen && !isSkip && Number.isFinite(pts))
+                ? `${pts >= 0 ? "+" : ""}${pts.toFixed(2)}`
+                : "—";
 
             const stage2Row = order.stage_2_triggered_at ? `
                 <div class="entry-reversal" style="margin-top:12px;">
                     🎯 <strong>Stage 2 armed</strong> at
-                    ${esc(fmtDateTime(order.stage_2_triggered_at))}
+                    ${esc(fmtTime(order.stage_2_triggered_at))}
                     — ${esc(order.stage_2_trigger_reason || "milestone")}
                 </div>
             ` : "";
@@ -6113,13 +6235,13 @@
                     </div>
                     <div class="entry-grid">
                         <div class="label">Entry</div>
-                        <div class="value">₹${fmt(entry)} <small>(${esc(quoteSourceLabel(order.entry_price_source))})</small></div>
-
-                        <div class="label">Entry time</div>
-                        <div class="value">${esc(fmtDateTime(order.entry_time))}</div>
+                        <div class="value">${entryPair}</div>
 
                         <div class="label">Stop-loss</div>
-                        <div class="value">₹${fmt(stop)} ${Number.isFinite(stopPct) ? `(−${(stopPct * 100).toFixed(1)}%)` : ""}</div>
+                        <div class="value">${stopPair}</div>
+
+                        <div class="label">Exit</div>
+                        <div class="value">${exitPair}</div>
 
                         <div class="label">Zone</div>
                         <div class="value">${esc(order.zone || "—")}</div>
@@ -6128,20 +6250,19 @@
                         <div class="value">${esc(String(trigger.level || "").toUpperCase())} @ ₹${fmt(trigger.price)}</div>
 
                         <div class="label">Trigger time</div>
-                        <div class="value"><small>${esc(fmtDateTime(trigger.confirmed_time))}</small></div>
+                        <div class="value"><small>${esc(fmtTime(trigger.confirmed_time))}</small></div>
 
                         ${priorSupportRow}
 
                         <div class="label">Current LTP</div>
                         <div class="value">₹${fmt(order.current_ltp)}</div>
 
-                        <div class="label">MFE</div>
-                        <div class="value">₹${fmt(order.mfe)}</div>
+                        <div class="label">PnL</div>
+                        <div class="value ${pnlCls}">${pnlPctDisplay}</div>
 
-                        <div class="label">MAE</div>
-                        <div class="value">₹${fmt(order.mae)}</div>
+                        <div class="label">Profit pts</div>
+                        <div class="value ${pnlCls}">${pnlPtsDisplay}</div>
 
-                        ${exitRows}
                         ${lotRows}
                     </div>
 

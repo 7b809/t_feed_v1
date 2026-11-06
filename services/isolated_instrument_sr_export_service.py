@@ -54,9 +54,19 @@ Early-session SR check (both modes)
   (earliest pivot_time, then earliest confirmed_time).
 
 Both modes write:
-    data/isolation/isolated_instrument.json
-    data/isolation/opposite_instrument.json
-    data/isolation/isolated_instrument_sr_check.json
+    <LIVE_DATA_DIR>/isolation/isolated_instrument.json
+    <LIVE_DATA_DIR>/isolation/opposite_instrument.json
+    <LIVE_DATA_DIR>/isolation/isolated_instrument_sr_check.json
+
+    Per-instrument SR snapshots (2026-11-06):
+    <LIVE_DATA_DIR>/isolation/{isolated_trading_symbol}_live_sr.json
+    <LIVE_DATA_DIR>/isolation/{opposite_trading_symbol}_live_sr.json
+      — atomic, thread-safe writes (tmp + os.replace); filenames
+        sanitized via _safe_filename_for_sr() so the promotion
+        service's backfill
+        (isolated_instrument_promotion_service._backfill_isolation_sr_baseline)
+        and this export service land on identical paths for the same
+        instrument.
 
 Public API:
     run(instrument_key, expired=None, end_date=None, check_date=None) -> dict
@@ -70,9 +80,12 @@ Public API:
 from __future__ import annotations
 
 import json
+import os
 import threading
 from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
+
 from core import config
 from core.config import PROJECT_ROOT
 from core.logger import get_logger
@@ -93,7 +106,28 @@ RIGHT_BARS: int = config.LIVE_SR_RIGHT_BARS if hasattr(config, "LIVE_SR_RIGHT_BA
 IST = timezone(timedelta(hours=5, minutes=30))
 
 ALL_INSTRUMENTS_PATH = PROJECT_ROOT / "data" / "all_instruments.json"
-ISOLATION_DIR = PROJECT_ROOT / "data" / "isolation"
+
+# --------------------------------------------------------------------------- #
+# Isolation directory resolution                                              #
+# --------------------------------------------------------------------------- #
+# The promotion service writes its per-instrument SR baseline to
+# <LIVE_DATA_DIR>/isolation/<safe>_live_sr.json. Prefer
+# config.LIVE_DATA_DIR here so the export service lands on the same
+# physical path; fall back to PROJECT_ROOT/data (the historical
+# default) when the attribute is absent.
+try:
+    _LIVE_DATA_DIR_PATH: Path = Path(config.LIVE_DATA_DIR)
+except Exception:
+    _LIVE_DATA_DIR_PATH = PROJECT_ROOT / "data"
+
+ISOLATION_DIR: Path = _LIVE_DATA_DIR_PATH / "isolation"
+
+# 2026-11-06 — per-instrument `_live_sr.json` snapshots.
+# Alias of ISOLATION_DIR: same physical directory, so the export
+# service and the promotion service's backfill
+# (_backfill_isolation_sr_baseline) always write to the same path.
+ISOLATION_SR_DIR: Path = ISOLATION_DIR
+
 ISOLATED_FILENAME = "isolated_instrument.json"
 OPPOSITE_FILENAME = "opposite_instrument.json"
 EARLY_CHECK_FILENAME = "isolated_instrument_sr_check.json"
@@ -122,6 +156,151 @@ class IsolatedInstrumentSRExportService:
         # so we never serve stale data across separate invocations.
         self._expired_meta_cache: dict[str, dict | None] = {}
         self._expired_contracts_cache: dict[tuple[str, str], list] = {}
+
+    # ================================================================== #
+    # ATOMIC PER-INSTRUMENT LIVE-SR SNAPSHOTS (2026-11-06)                #
+    # ================================================================== #
+    @staticmethod
+    def _safe_filename_for_sr(trading_symbol: Any) -> str:
+        """Return a filesystem-safe version of ``trading_symbol``.
+
+        Mirrors ``isolated_instrument_promotion_service._safe_filename()``
+        exactly so the export service and the promotion backfill produce
+        identical filenames for the same instrument. Any character that
+        is not alphanumeric or one of ``._-`` is replaced with ``_``.
+        """
+        raw = str(trading_symbol or "").strip() or "unknown"
+        safe = "".join(
+            ch if (ch.isalnum() or ch in "._-") else "_" for ch in raw
+        )
+        return safe.strip("_") or "unknown"
+
+    @classmethod
+    def _live_sr_path(cls, trading_symbol: Any) -> Path:
+        """Return ``<ISOLATION_SR_DIR>/<safe>_live_sr.json``.
+
+        Same physical path the promotion service's
+        ``_backfill_isolation_sr_baseline()`` writes to, so dashboards
+        and other consumers see one canonical file per instrument.
+        """
+        return (
+            ISOLATION_SR_DIR
+            / f"{cls._safe_filename_for_sr(trading_symbol)}_live_sr.json"
+        )
+
+    @staticmethod
+    def _atomic_write_json(path: Path, payload: Any) -> None:
+        """Write ``payload`` to ``path`` atomically.
+
+        Writes to ``<path>.tmp`` and then ``os.replace()``s it over the
+        target. Concurrent readers therefore see either the previous
+        complete file or the new complete file — never a partial write.
+
+        ``os.replace()`` is atomic on POSIX and on Windows when the
+        source and destination share a volume, which is always true
+        here (both live in the same parent directory).
+
+        ``fsync`` is best-effort: some filesystems (e.g. overlayfs in
+        containers) raise ``OSError`` on ``fileno()`` fsync and we
+        deliberately swallow that so the write still succeeds.
+        """
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2, default=str)
+            f.flush()
+            try:
+                os.fsync(f.fileno())
+            except OSError:
+                pass
+        os.replace(tmp, path)
+
+    def _build_live_sr_payload(self, instrument_payload: dict) -> dict:
+        """Build the per-instrument ``_live_sr.json`` content.
+
+        Deliberately excludes the full candle series (that lives in
+        ``isolated_instrument.json`` / ``opposite_instrument.json``) so
+        the per-instrument snapshot stays small for dashboards. Counts
+        and candle timestamps are included so consumers can detect
+        staleness without loading the candle arrays.
+        """
+        md = instrument_payload.get("metadata") or {}
+        params = instrument_payload.get("params") or {}
+        candles = instrument_payload.get("candles") or []
+        levels = instrument_payload.get("sr_levels") or []
+
+        return {
+            "instrument_key": md.get("instrument_key"),
+            "trading_symbol": md.get("trading_symbol"),
+            "underlying": md.get("underlying"),
+            "strike_price": md.get("strike_price"),
+            "strike_type": md.get("strike_type"),
+            "expiry": md.get("expiry"),
+            "relative_path": md.get("relative_path"),
+            "role": md.get("role"),
+            "is_expired": bool(md.get("is_expired", False)),
+            "base_instrument_key": md.get("base_instrument_key"),
+            "expired_instrument_key": md.get("expired_instrument_key"),
+            "expiry_suffix": md.get("expiry_suffix"),
+            "generated_at": instrument_payload.get("generated_at"),
+            "params": params,
+            "candle_count": instrument_payload.get(
+                "candles_count", len(candles),
+            ),
+            "first_candle": candles[0]["time"] if candles else None,
+            "last_candle": candles[-1]["time"] if candles else None,
+            "level_count": instrument_payload.get(
+                "sr_levels_count", len(levels),
+            ),
+            "counts": {
+                "resistance": sum(
+                    1 for l in levels if l.get("level") == "resistance"
+                ),
+                "support": sum(
+                    1 for l in levels if l.get("level") == "support"
+                ),
+            },
+            "levels": levels,
+            "source": "isolated_instrument_sr_export_service",
+        }
+
+    def _write_live_sr_snapshot(self, instrument_payload: dict) -> dict:
+        """Write one per-instrument ``_live_sr.json`` atomically.
+
+        Never raises. Returns ``{"path": str | None, "error": str | None}``.
+        A failed write does **not** abort the overall ``run()`` — the
+        canonical ``isolated_instrument.json`` / ``opposite_instrument.json``
+        files are still produced and the error is surfaced in the
+        response payload for the caller to act on.
+        """
+        try:
+            trading_symbol = (
+                (instrument_payload.get("metadata") or {})
+                .get("trading_symbol")
+            )
+            path = self._live_sr_path(trading_symbol)
+            payload = self._build_live_sr_payload(instrument_payload)
+            self._atomic_write_json(path, payload)
+            logger.info(
+                "[sr-export] wrote live_sr snapshot %s "
+                "(instrument=%s levels=%d candles=%d)",
+                path,
+                payload.get("instrument_key"),
+                payload.get("level_count", 0),
+                payload.get("candle_count", 0),
+            )
+            return {"path": str(path), "error": None}
+        except Exception as exc:
+            logger.exception(
+                "[sr-export] live_sr snapshot write failed for %s",
+                (instrument_payload.get("metadata") or {}).get(
+                    "instrument_key"
+                ),
+            )
+            return {
+                "path": None,
+                "error": f"{type(exc).__name__}: {exc}",
+            }
 
     # ================================================================== #
     # TOKEN RESOLUTION                                                   #
@@ -1395,6 +1574,10 @@ class IsolatedInstrumentSRExportService:
 
         with self._lock:
             ISOLATION_DIR.mkdir(parents=True, exist_ok=True)
+            # Defensive: keep ISOLATION_SR_DIR alive even if an operator
+            # aliases it to a distinct directory in future.
+            if str(ISOLATION_SR_DIR) != str(ISOLATION_DIR):
+                ISOLATION_SR_DIR.mkdir(parents=True, exist_ok=True)
 
             # Reset per-run caches — fresh resolution each invocation
             self._expired_meta_cache = {}
@@ -1471,13 +1654,13 @@ class IsolatedInstrumentSRExportService:
                     else None
                 )
 
-            # -------- WRITE ISOLATED -------- #
+            # -------- WRITE ISOLATED (canonical) -------- #
             isolated_path = ISOLATION_DIR / ISOLATED_FILENAME
             with open(isolated_path, "w", encoding="utf-8") as f:
                 json.dump(isolated_payload, f, indent=2)
             logger.info("[sr-export] wrote %s", isolated_path)
 
-            # -------- WRITE OPPOSITE -------- #
+            # -------- WRITE OPPOSITE (canonical) -------- #
             opposite_path: str | None = None
             if opposite_payload is not None:
                 op_path = ISOLATION_DIR / OPPOSITE_FILENAME
@@ -1485,6 +1668,21 @@ class IsolatedInstrumentSRExportService:
                     json.dump(opposite_payload, f, indent=2)
                 opposite_path = str(op_path)
                 logger.info("[sr-export] wrote %s", op_path)
+
+            # -------- WRITE PER-INSTRUMENT LIVE SR SNAPSHOTS -------- #
+            # 2026-11-06 — atomic, thread-safe. Filenames match the
+            # promotion service's _backfill_isolation_sr_baseline(), so
+            # a promotion-triggered backfill and an export-triggered
+            # snapshot overwrite each other cleanly for the same
+            # instrument, and consumers only ever see a complete file.
+            isolated_sr_write = self._write_live_sr_snapshot(
+                isolated_payload
+            )
+            opposite_sr_write = (
+                self._write_live_sr_snapshot(opposite_payload)
+                if opposite_payload is not None
+                else {"path": None, "error": None}
+            )
 
             # -------- EARLY 09:15-09:30 SR CHECK -------- #
             # Read back from disk so the check always reflects exactly
@@ -1526,6 +1724,8 @@ class IsolatedInstrumentSRExportService:
                 },
                 "isolated": {
                     "path": str(isolated_path),
+                    "live_sr_path": isolated_sr_write["path"],
+                    "live_sr_error": isolated_sr_write["error"],
                     "instrument_key": isolated_payload["metadata"].get(
                         "instrument_key"
                     ),
@@ -1547,6 +1747,8 @@ class IsolatedInstrumentSRExportService:
                     if opposite_payload is None
                     else {
                         "path": opposite_path,
+                        "live_sr_path": opposite_sr_write["path"],
+                        "live_sr_error": opposite_sr_write["error"],
                         "instrument_key": opposite_payload[
                             "metadata"
                         ].get("instrument_key"),

@@ -22,6 +22,18 @@ Jobs:
                                        auto-square-off and before the dummy's
                                        15:35 accounting EOD_CLOSE; see Bug B note
                                        in services/sandbox_execution_service.py)
+    * isolated_pair_sr_minute_tick  — cron, every minute at :10, Mon-Fri,
+                                      09:00–15:59 registered, internally
+                                      gated to 09:17:10 → 15:30:10 IST
+                                      (NEW 2026-11-06: per-minute SR refresh
+                                       for the isolated strike pair — reads
+                                       LEVEL_FILTER_INDEXES + dynamically
+                                       registered isolated/opposite
+                                       instruments, recomputes pivots, and
+                                       atomically rewrites
+                                       isolation/{symbol}_live_sr.json so
+                                       dashboards and downstream consumers
+                                       always see fresh, complete files)
 
 Deterministic-replay contract (2026-11-04)
 ------------------------------------------
@@ -73,14 +85,75 @@ taken against a partially-built SR series. The service itself is a
 no-op when no open position exists, so an accidental early fire is
 harmless.
 
+Isolated-pair SR per-minute refresh (2026-11-06)
+------------------------------------------------
+``isolated_pair_sr_minute_tick`` closes the "stale baseline" gap left
+by the event-driven ``on_isolation_triggered`` / ``apply_promotion``
+backfills (see ``isolated_instrument_promotion_service``) and the
+per-export snapshots written by ``isolated_instrument_sr_export_service``.
+Those write a baseline once at isolation/export time; between events,
+levels on ``isolation/{symbol}_live_sr.json`` would otherwise sit at
+their isolation-time state while the live buffer advances.
+
+The tick:
+
+    * fires every minute at ``:10`` seconds, Mon-Fri, cron
+      ``hour="9-15"`` (window enforced *inside* the tick: 09:17:10
+      through 15:30:10 IST inclusive);
+    * collects its instrument set from
+      ``config.LEVEL_FILTER_INDEXES`` **plus**
+      ``live_sr_calc_service.active_sr_instruments`` (the set populated
+      by ``isolated_instrument_promotion_service`` when an instrument
+      qualifies for isolation);
+    * for each key, calls
+      ``live_sr_calc_service.calculate_pivots_cached(key, ..., force_refresh=True)``
+      — which internally invokes
+      ``upstox_client.HistoryV3Api.get_intra_day_candle_data(key, "minutes", "1")``,
+      merges the historical tail, runs the strict TradingView pivot
+      scan, filters to today's confirmed levels, and **updates the
+      in-memory pivot cache** as a side-effect of the forced
+      recompute;
+    * atomically persists the resulting level set to
+      ``<LIVE_DATA_DIR>/isolation/{safe_trading_symbol}_live_sr.json``
+      via
+      ``isolated_instrument_sr_export_service._atomic_write_json()``
+      (``.tmp`` write → ``os.replace()``), so concurrent readers
+      never see a half-written JSON.
+
+The filename sanitization
+(``IsolatedInstrumentSRExportService._safe_filename_for_sr``) is
+deliberately identical to
+``isolated_instrument_promotion_service._safe_filename``, so all three
+writers (promotion backfill, export, minute tick) land on the **same**
+file per instrument and simply overwrite each other — there is never
+a stale or duplicated path.
+
+Config flags:
+    * ``ISOLATED_PAIR_SR_MINUTE_ENABLED`` (default ``True``) — register
+      the job at all. Set to ``False`` to disable without code changes.
+    * ``LIVE_SR_LEFT_BARS`` / ``LIVE_SR_RIGHT_BARS`` — the pivot window.
+
+The job deliberately does NOT consult ``sr_backfill_ready()``:
+this is a *refresh* of an already-established baseline, not a
+first-order-creating tick. Adding the gate would freeze the baseline
+on days where the SR backfill service is itself unhealthy — which is
+exactly when operators most need the isolation files to stay
+current.
+
 See also:
     * ``services/sr_backfill_service.py::is_ready_for_today``  (the latch)
     * ``services/dummy_order_service.py``                      (consumer)
     * ``services/sandbox_execution_service.py``                (executor)
+    * ``services/isolated_instrument_promotion_service.py``    (registration)
+    * ``services/isolated_instrument_sr_export_service.py``    (atomic writer)
     * ``core/config.py::DUMMY_ORDER_*`` / ``SANDBOX_*``        (flags)
 """
 
 from __future__ import annotations
+
+from datetime import datetime
+from typing import Any
+from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.background import BackgroundScheduler
 
@@ -168,6 +241,485 @@ _LIVE_SR_REFRESH_UPDATE_REPLAY = False
 _REPLAY_SEED_HOUR = 9
 _REPLAY_SEED_MINUTE = 16
 _REPLAY_SEED_MISFIRE_GRACE_SECONDS = 600
+
+
+# --------------------------------------------------------------------------- #
+# Isolated-pair SR per-minute refresh constants (2026-11-06)                  #
+# --------------------------------------------------------------------------- #
+# Live window: 09:17:10 IST → 15:30:10 IST inclusive.
+#   * 09:17:10 — two minutes after open gives HistoryV3Api time to publish
+#     the 09:16 closed candle; the strict pivot window (15 left / 15 right)
+#     needs those bars to form the first intramural levels of the day.
+#   * 15:30:10 — half an hour before the NSE equity close, guaranteeing
+#     the snapshot captures the last confirmed intramural pivot before the
+#     15:15–15:25 broker auto-square-off window begins.
+# The cron expression registers 9:00–15:59 but the tick is a no-op outside
+# the window — this keeps the registration simple and lets a brief
+# scheduler pause (misfire_grace_time=30) recover into the correct minute.
+_ISOLATED_SR_WINDOW_START_HOUR = 9
+_ISOLATED_SR_WINDOW_START_MINUTE = 17
+_ISOLATED_SR_WINDOW_START_SECOND = 10
+_ISOLATED_SR_WINDOW_END_HOUR = 15
+_ISOLATED_SR_WINDOW_END_MINUTE = 30
+_ISOLATED_SR_WINDOW_END_SECOND = 10
+_ISOLATED_SR_CRON_SECOND = 10
+
+
+# --------------------------------------------------------------------------- #
+# 2026-11-06 fix — resolve LEVEL_FILTER_INDEXES labels to real Upstox keys    #
+# --------------------------------------------------------------------------- #
+# ``config.LEVEL_FILTER_INDEXES`` carries short labels like ``"BANKNIFTY"``,
+# ``"NIFTY"``, ``"MIDCPNIFTY"``, ``"SENSEX"``. These are NOT Upstox
+# instrument keys — they are folder names used by ``data/index/<label>/``.
+#
+# The minute tick previously fed them straight to
+# ``calculate_pivots_cached()``, which:
+#   1. registered a bogus ad-hoc entry ``{"instrument_key": "BANKNIFTY",
+#      "underlying": "BANKNIFTY", "is_index": True}``,
+#   2. loaded only the historical tail from ``data/index/banknifty/
+#      candles.json`` (Nov 2–4 in the 2026-11-06 incident), because
+#      ``HistoryV3Api.get_intra_day_candle_data("BANKNIFTY", ...)``
+#      returns an error for the label (invalid Upstox key) and the
+#      intraday fetcher silently returned ``[]``,
+#   3. filtered every pivot out via ``_mark_is_today`` (all confirmed
+#      on Nov 2–4, not today),
+#   4. persisted an EMPTY snapshot to
+#      ``isolation/BANKNIFTY_live_sr.json``.
+#
+# ``_resolve_label_to_index_key()`` maps the label to the real key so
+# the intraday fetch succeeds and the persisted snapshot contains
+# today's levels.
+# --------------------------------------------------------------------------- #
+_INDEX_LABEL_FALLBACK_MAP: dict[str, str] = {
+    "NIFTY":       "NSE_INDEX|Nifty 50",
+    "BANKNIFTY":   "NSE_INDEX|Nifty Bank",
+    "MIDCPNIFTY":  "NSE_INDEX|NIFTY MID SELECT",
+    "FINNIFTY":    "NSE_INDEX|NIFTY FIN SERVICE",
+    "SENSEX":      "BSE_INDEX|SENSEX",
+}
+
+
+def _resolve_label_to_index_key(label: str) -> str | None:
+    """Resolve a ``LEVEL_FILTER_INDEXES`` label to its real Upstox key.
+
+    Order of resolution:
+
+      1. ``config.INDEX_LABEL_TO_KEY_MAP`` (operator override, if present).
+      2. ``instrument_registry`` scan for a proper entry with
+         ``underlying == label AND is_index == True``. Only entries
+         whose ``instrument_key`` contains ``"|"`` are accepted —
+         this deliberately skips the bogus ad-hoc entries that a
+         previous buggy tick may have created (``instrument_key ==
+         label``).
+      3. ``_INDEX_LABEL_FALLBACK_MAP`` — hardcoded defaults for the
+         common NSE/BSE indexes.
+
+    Returns ``None`` when nothing resolves. Never raises.
+    """
+    label_upper = str(label or "").strip().upper()
+    if not label_upper:
+        return None
+
+    # ---- 1. Operator override -------------------------------------- #
+    try:
+        override = getattr(config, "INDEX_LABEL_TO_KEY_MAP", None)
+        if isinstance(override, dict):
+            v = override.get(label_upper) or override.get(label)
+            if v:
+                return str(v)
+    except Exception:
+        logger.exception(
+            "[scheduler] config.INDEX_LABEL_TO_KEY_MAP lookup raised"
+        )
+
+    # ---- 2. Registry scan (skip bogus ad-hoc entries) -------------- #
+    try:
+        from services.instrument_registry import instrument_registry
+        for entry in instrument_registry.all():
+            if not isinstance(entry, dict):
+                continue
+            if not entry.get("is_index"):
+                continue
+            u = str(entry.get("underlying") or "").strip().upper()
+            k = str(entry.get("instrument_key") or "")
+            # Require a real Upstox key shape ("SEGMENT|Name"). This
+            # filters out the bogus ``BANKNIFTY`` ad-hoc entries a
+            # previous buggy tick may have created.
+            if u == label_upper and "|" in k:
+                return k
+    except Exception:
+        logger.exception(
+            "[scheduler] registry scan failed resolving label %r",
+            label,
+        )
+
+    # ---- 3. Hardcoded fallback map --------------------------------- #
+    fb = _INDEX_LABEL_FALLBACK_MAP.get(label_upper)
+    if fb:
+        return fb
+
+    return None
+
+
+def _parse_iso_datetime(value: Any) -> datetime | None:
+    """Parse an ISO-8601 string to a tz-aware datetime, or ``None``.
+
+    Used by the freshness gate in ``_isolated_pair_sr_minute_tick`` to
+    reject snapshots whose ``last_candle`` is not from today.
+    """
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except Exception:
+        return None
+    if dt.tzinfo is None:
+        try:
+            dt = dt.replace(tzinfo=_market_tz())
+        except Exception:
+            return None
+    return dt
+
+
+def _market_tz() -> ZoneInfo:
+    """Return the configured market timezone (Asia/Kolkata fallback)."""
+    try:
+        return ZoneInfo(config.MARKET_TIMEZONE)
+    except Exception:
+        return ZoneInfo("Asia/Kolkata")
+
+
+def _is_in_live_sr_window(now: datetime) -> bool:
+    """Return True when ``now`` falls in 09:17:10 → 15:30:10 IST inclusive.
+
+    Compares wall-clock (year/month/day/hour/minute/second) via a
+    datetime comparison against the window endpoints on the same date.
+    Never raises — returns False on any structural issue with ``now``.
+    """
+    try:
+        start = now.replace(
+            hour=_ISOLATED_SR_WINDOW_START_HOUR,
+            minute=_ISOLATED_SR_WINDOW_START_MINUTE,
+            second=_ISOLATED_SR_WINDOW_START_SECOND,
+            microsecond=0,
+        )
+        end = now.replace(
+            hour=_ISOLATED_SR_WINDOW_END_HOUR,
+            minute=_ISOLATED_SR_WINDOW_END_MINUTE,
+            second=_ISOLATED_SR_WINDOW_END_SECOND,
+            microsecond=0,
+        )
+        return start <= now <= end
+    except Exception:
+        return False
+
+
+def _get_active_sr_instrument_keys() -> list[str]:
+    """Return the union of statically-configured and dynamically-tracked
+    instrument keys, **resolved to real Upstox keys**.
+
+    2026-11-06 fix: ``config.LEVEL_FILTER_INDEXES`` entries are folder
+    labels (``"BANKNIFTY"``), not Upstox keys. They are now resolved via
+    ``_resolve_label_to_index_key()`` before being returned. Items that
+    already contain ``"|"`` are used directly. Items that cannot be
+    resolved are logged and skipped — never passed through as raw
+    labels (that was the previous bug that produced bogus
+    ``isolation/BANKNIFTY_live_sr.json`` files with stale data).
+
+    Also filters ``active_sr_instruments`` to entries containing ``"|"``
+    so a stray label can never leak in from a downstream consumer.
+    """
+    keys: set[str] = set()
+
+    # ---- 1. config.LEVEL_FILTER_INDEXES (resolve labels → keys) ---- #
+    lfi = getattr(config, "LEVEL_FILTER_INDEXES", None)
+    raw_items: list[str] = []
+    if isinstance(lfi, str):
+        raw_items = [s.strip() for s in lfi.split(",") if s.strip()]
+    elif isinstance(lfi, (list, tuple, set, frozenset)):
+        raw_items = [str(x).strip() for x in lfi if x]
+
+    for item in raw_items:
+        if not item:
+            continue
+        if "|" in item:
+            # Already a real key — use as-is.
+            keys.add(item)
+            continue
+        resolved = _resolve_label_to_index_key(item)
+        if resolved:
+            keys.add(resolved)
+        else:
+            logger.warning(
+                "[scheduler] isolated_pair_sr_minute_tick: cannot resolve "
+                "LEVEL_FILTER_INDEXES label %r to an Upstox key — "
+                "skipping. Add it to config.INDEX_LABEL_TO_KEY_MAP or "
+                "to _INDEX_LABEL_FALLBACK_MAP to include it.",
+                item,
+            )
+
+    # ---- 2. dynamically-registered active_sr_instruments ----------- #
+    try:
+        from services.live_sr_calc_service import live_sr_calc_service
+        active = getattr(live_sr_calc_service, "active_sr_instruments", None)
+        if active is not None:
+            for k in active:
+                if not k:
+                    continue
+                sk = str(k).strip()
+                if sk and "|" in sk:
+                    keys.add(sk)
+                elif sk:
+                    logger.warning(
+                        "[scheduler] active_sr_instruments contains a "
+                        "non-key entry %r — skipping (expected "
+                        "'SEGMENT|Name' shape)", sk,
+                    )
+    except Exception:
+        logger.warning(
+            "[scheduler] isolated_pair_sr_minute_tick: could not read "
+            "live_sr_calc_service.active_sr_instruments",
+            exc_info=True,
+        )
+
+    return sorted(keys)
+
+
+def _trading_symbol_for_key(instrument_key: str) -> str:
+    """Return the trading symbol for ``instrument_key``, or the key itself.
+
+    Never raises. A failed registry lookup falls back to the raw key
+    so the per-instrument file name is still deterministic.
+    """
+    try:
+        from services.instrument_registry import instrument_registry
+        entry = instrument_registry.get(instrument_key)
+        if entry is None:
+            entry = instrument_registry.register_adhoc(instrument_key)
+        if entry:
+            sym = entry.get("trading_symbol")
+            if sym:
+                return str(sym)
+    except Exception:
+        logger.debug(
+            "[scheduler] isolated_pair_sr_minute_tick: trading_symbol "
+            "lookup failed for %s",
+            instrument_key,
+            exc_info=True,
+        )
+    return str(instrument_key)
+
+
+def _persist_live_sr_snapshot(
+    instrument_key: str,
+    result: dict,
+    trading_symbol: str,
+) -> str | None:
+    """Atomically persist the SR snapshot to ``isolation/{symbol}_live_sr.json``.
+
+    Uses ``IsolatedInstrumentSRExportService._atomic_write_json()``
+    (tmp + ``os.replace()``) so readers never see a half-written JSON.
+    The filename is produced by the same sanitizer the promotion and
+    export services use, so all three writers target one canonical
+    file per instrument.
+
+    Never raises. Returns the written path on success, ``None`` on
+    failure (logged).
+    """
+    try:
+        from services.isolated_instrument_sr_export_service import (
+            IsolatedInstrumentSRExportService,
+        )
+    except Exception:
+        logger.exception(
+            "[scheduler] isolated_pair_sr_minute_tick: cannot import "
+            "IsolatedInstrumentSRExportService — skipping persist for %s",
+            instrument_key,
+        )
+        return None
+
+    try:
+        levels = result.get("levels") or []
+        params = result.get("params") or {}
+        path = IsolatedInstrumentSRExportService._live_sr_path(
+            trading_symbol
+        )
+
+        # Look up optional enrichment fields from the registry.
+        underlying = None
+        strike_price = None
+        strike_type = None
+        expiry = None
+        try:
+            from services.instrument_registry import instrument_registry
+            entry = instrument_registry.get(instrument_key) or {}
+            underlying = entry.get("underlying")
+            strike_price = entry.get("strike_price")
+            strike_type = entry.get("strike_type")
+            expiry = entry.get("expiry")
+        except Exception:
+            pass
+
+        payload = {
+            "instrument_key": instrument_key,
+            "trading_symbol": trading_symbol,
+            "underlying": underlying,
+            "strike_price": strike_price,
+            "strike_type": strike_type,
+            "expiry": expiry,
+            "day": datetime.now(_market_tz()).date().isoformat(),
+            "refreshed_at": datetime.now(_market_tz()).isoformat(),
+            "minute_bucket": result.get("minute_bucket"),
+            "generated_at": result.get("generated_at"),
+            "params": {
+                "left_bars": params.get("left_bars"),
+                "right_bars": params.get("right_bars"),
+                "only_today": params.get("only_today", True),
+            },
+            "candle_count": result.get("candle_count", 0),
+            "first_candle": result.get("first_candle"),
+            "last_candle": result.get("last_candle"),
+            "level_count": len(levels),
+            "counts": {
+                "resistance": sum(
+                    1 for l in levels if l.get("level") == "resistance"
+                ),
+                "support": sum(
+                    1 for l in levels if l.get("level") == "support"
+                ),
+            },
+            "levels": levels,
+            "source": "scheduler_isolated_pair_sr_minute_tick",
+        }
+
+        IsolatedInstrumentSRExportService._atomic_write_json(path, payload)
+        return str(path)
+    except Exception:
+        logger.exception(
+            "[scheduler] isolated_pair_sr_minute_tick: persist failed for "
+            "%s (symbol=%s)",
+            instrument_key,
+            trading_symbol,
+        )
+        return None
+
+
+def _isolated_pair_sr_minute_tick() -> None:
+    """Per-minute SR refresh for the isolated strike pair.
+
+    Fires at :10 seconds each minute. The cron registration covers
+    9:00–15:59 IST; the actual time window (09:17:10 → 15:30:10 IST
+    inclusive) is enforced here so a misfire outside that window is a
+    cheap no-op.
+
+    For each key returned by ``_get_active_sr_instrument_keys()``:
+
+      1. ``live_sr_calc_service.calculate_pivots_cached(force_refresh=True)``
+         — recomputes from fresh intraday candles (HistoryV3Api),
+         runs the strict pivot scan, filters to today, and updates
+         the in-memory pivot cache.
+      2. ``_persist_live_sr_snapshot()`` — atomically rewrites
+         ``isolation/{symbol}_live_sr.json``.
+
+    Never raises. Per-key errors are logged and the loop continues.
+    """
+    try:
+        now = datetime.now(_market_tz())
+    except Exception:
+        logger.exception(
+            "[scheduler] isolated_pair_sr_minute_tick: cannot resolve "
+            "market timezone — skipping tick"
+        )
+        return
+
+    if not _is_in_live_sr_window(now):
+        # Cheap no-op outside the window — no API calls, no disk writes.
+        return
+
+    try:
+        from services.live_sr_calc_service import live_sr_calc_service
+    except Exception:
+        logger.exception(
+            "[scheduler] isolated_pair_sr_minute_tick: "
+            "live_sr_calc_service import failed"
+        )
+        return
+
+    left = max(1, min(100, int(getattr(config, "LIVE_SR_LEFT_BARS", 15))))
+    right = max(1, min(100, int(getattr(config, "LIVE_SR_RIGHT_BARS", 15))))
+    today = now.date()  # NEW — used by the freshness gate below
+
+    keys = _get_active_sr_instrument_keys()
+    if not keys:
+        return
+
+    ok_count = 0
+    err_count = 0
+    skipped_stale = 0
+    for key in keys:
+        try:
+            result = live_sr_calc_service.calculate_pivots_cached(
+                key,
+                left_bars=left,
+                right_bars=right,
+                only_today=True,
+                force_refresh=True,
+            )
+        except Exception:
+            err_count += 1
+            logger.exception(
+                "[scheduler] isolated_pair_sr_minute_tick: "
+                "calculate_pivots_cached raised for %s",
+                key,
+            )
+            continue
+
+        status = str(result.get("status") or "")
+        if status != "ok":
+            logger.debug(
+                "[scheduler] isolated_pair_sr_minute_tick: %s status=%s "
+                "err=%s",
+                key, status, result.get("error"),
+            )
+            continue
+
+        # ---- Freshness gate ------------------------------------- #
+        # Only persist when the last candle is from TODAY. This
+        # protects against three failure modes:
+        #   1. Intraday fetch failed silently (invalid key, API
+        #      hiccup) → merged = historical only → last_candle
+        #      is yesterday or older.
+        #   2. Pre-market startup (before 09:15) → no candles for
+        #      today yet.
+        #   3. Any future regression that hands us non-today data.
+        # Re-running the tick cannot fix these — the file stays
+        # whatever the last successful write was, which is correct.
+        last_candle_str = result.get("last_candle") or ""
+        last_dt = _parse_iso_datetime(last_candle_str)
+        if last_dt is None or last_dt.date() != today:
+            skipped_stale += 1
+            logger.info(
+                "[scheduler] isolated_pair_sr_minute_tick: %s "
+                "last_candle=%s is not from today (%s) — "
+                "skipping persist. Intraday fetch may have failed; "
+                "check Upstox token and instrument_key=%r.",
+                key, last_candle_str, today.isoformat(), key,
+            )
+            continue
+
+        trading_symbol = _trading_symbol_for_key(key)
+        written = _persist_live_sr_snapshot(key, result, trading_symbol)
+        if written:
+            ok_count += 1
+        else:
+            err_count += 1
+
+    if ok_count or err_count or skipped_stale:
+        logger.info(
+            "[scheduler] isolated_pair_sr_minute_tick — "
+            "keys=%d ok=%d err=%d stale_skipped=%d (left=%d, right=%d)",
+            len(keys), ok_count, err_count, skipped_stale, left, right,
+        )
 
 
 class SchedulerService:
@@ -461,6 +1013,37 @@ class SchedulerService:
                 misfire_grace_time=_REPLAY_SEED_MISFIRE_GRACE_SECONDS,
             )
 
+        # -- Isolated-pair SR per-minute refresh (2026-11-06) ---------- #
+        # Every minute at :10 seconds, Mon-Fri. The cron hour="9-15"
+        # covers 9:00–15:59; the tick itself gates the window to
+        # 09:17:10 → 15:30:10 IST inclusive. Runs for every key in
+        # config.LEVEL_FILTER_INDEXES plus every dynamically
+        # registered isolated/opposite instrument in
+        # live_sr_calc_service.active_sr_instruments.
+        #
+        # See the module docstring "Isolated-pair SR per-minute
+        # refresh (2026-11-06)" section for the full rationale and
+        # the cooperative contract with the promotion / export
+        # services (same filename sanitizer, same atomic writer).
+        if getattr(config, "ISOLATED_PAIR_SR_MINUTE_ENABLED", True):
+            scheduler.add_job(
+                _isolated_pair_sr_minute_tick, "cron",
+                day_of_week=config.DAILY_REFRESH_DAYS,
+                hour="9-15",
+                minute="*",
+                second=_ISOLATED_SR_CRON_SECOND,
+                id="isolated_pair_sr_minute_tick",
+                replace_existing=True,
+                # 30s grace absorbs a brief scheduler pause (e.g. a slow
+                # previous job finishing at :15) and still fires the
+                # current minute's tick. Coalesce collapses any backlog
+                # into one run; max_instances=1 prevents overlap if a
+                # tick runs longer than 60s.
+                misfire_grace_time=30,
+                max_instances=1,
+                coalesce=True,
+            )
+
         # -- Dummy order live tracker ----------------------------------- #
         # Every DUMMY_ORDER_TRACK_INTERVAL_SECONDS (default 30 s) the
         # service polls the entry signal, creates any missing dummy
@@ -612,9 +1195,14 @@ class SchedulerService:
         # (or equivalent) and asserts that no tick can reach                #
         # dummy_order_service when sr_backfill_ready() returns False.      #
         #                                                                   #
-        # NOTE: the sandbox_eod_exit job above is deliberately EXEMPT      #
-        # from this contract — it does not invoke dummy_order_service      #
-        # and safety requires it to fire regardless of SR readiness.       #
+        # NOTE: the sandbox_eod_exit and isolated_pair_sr_minute_tick      #
+        # jobs above are deliberately EXEMPT from this contract:           #
+        #   * sandbox_eod_exit does not invoke dummy_order_service and     #
+        #     safety requires it to fire regardless of SR readiness.       #
+        #   * isolated_pair_sr_minute_tick is a per-minute refresh of     #
+        #     an already-established baseline; freezing it on a stale     #
+        #     SR-backfill latch is exactly the wrong failure mode when    #
+        #     the backfill service is itself unhealthy.                   #
         # ------------------------------------------------------------------ #
 
         scheduler.start()
@@ -626,6 +1214,8 @@ class SchedulerService:
             "level_isolation_recheck=*/5 (9-15), DailyBackup=%02d:%02d, "
             "live_sr_refresh=%dm (enabled=%s, update_replay=%s), "
             "replay_seed_at_open=%02d:%02d (enabled=%s, gated_by=is_ready_for_today), "
+            "isolated_pair_sr_minute_tick=*:*:%02d (enabled=%s, "
+            "window=%02d:%02d:%02d-%02d:%02d:%02d), "
             "dummy_order_tracker=%ds (enabled=%s, gated_by=sr_backfill_ready), "
             "sandbox_eod_exit=%02d:%02d (enabled=%s, independent_of_dummy_eod)",
             config.DAILY_REFRESH_HOUR, config.DAILY_REFRESH_MINUTE,
@@ -641,6 +1231,14 @@ class SchedulerService:
             _REPLAY_SEED_HOUR,
             _REPLAY_SEED_MINUTE,
             bool(getattr(config, "SR_BACKFILL_ENABLED", True)),
+            _ISOLATED_SR_CRON_SECOND,
+            bool(getattr(config, "ISOLATED_PAIR_SR_MINUTE_ENABLED", True)),
+            _ISOLATED_SR_WINDOW_START_HOUR,
+            _ISOLATED_SR_WINDOW_START_MINUTE,
+            _ISOLATED_SR_WINDOW_START_SECOND,
+            _ISOLATED_SR_WINDOW_END_HOUR,
+            _ISOLATED_SR_WINDOW_END_MINUTE,
+            _ISOLATED_SR_WINDOW_END_SECOND,
             int(getattr(config, "DUMMY_ORDER_TRACK_INTERVAL_SECONDS", 30)),
             bool(getattr(config, "DUMMY_ORDER_ENABLED", True)),
             int(getattr(config, "SANDBOX_EOD_HOUR", 15)),

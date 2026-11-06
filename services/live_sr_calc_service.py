@@ -1774,7 +1774,7 @@ class LiveSRCalcService:
         and NO disk reads — it is a pure in-memory lookup against a
         series the caller has already built (typically via
         ``build_series_for_day``).  This is the preferred path for
-        ``services/dummy_order_service`` when resolving entry prices
+        ``services.dummy_order_service`` when resolving entry prices
         against its fixed per-day snapshot.
 
         ``source`` is one of:

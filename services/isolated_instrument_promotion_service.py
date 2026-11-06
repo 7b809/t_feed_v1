@@ -190,9 +190,48 @@ Verified against the 2026-11-02 order-strategy rewrite and the
     the operator can act (``clear-promotion`` + re-trigger) once the
     upstream data recovers.
 
+2026-11-06 — isolation-pair SR baseline backfill
+------------------------------------------------
+When an instrument qualifies for isolation, the SR engine must begin
+tracking BOTH sides of the isolated strike (bias side + counter side)
+and a baseline of today's confirmed SR levels must exist on disk for
+each, established from the open (09:15) up to the isolation timestamp.
+
+Three new pieces cooperate:
+
+  * ``_derive_opposite_instrument_key()`` — resolves the CE↔PE
+    counterpart at the same underlying/strike via
+    ``instrument_registry.resolve()``.
+
+  * ``_register_active_sr_instrument()`` — adds the key to
+    ``live_sr_calc_service.active_sr_instruments`` (lazily creates
+    the container as a ``set`` if the attribute is absent, so this
+    works whether or not live_sr_calc_service has been taught about
+    the field yet).
+
+  * ``_backfill_isolation_sr_baseline()`` — fetches intraday 1-min
+    candles from 09:15 → cutoff, merges the historical tail, replays
+    the strict TradingView pivot rule (``_compute_pivots``), keeps
+    today's confirmed levels only, and writes
+    ``<LIVE_DATA_DIR>/isolation/<trading_symbol>_live_sr.json``.
+
+These are orchestrated by:
+
+  * ``on_isolation_triggered(isolated_entry_or_key, cutoff_time_iso)``
+    — public hook for ``level_isolated_instrument_service`` to call
+    directly (covers Path B / no-promotion-recommended cases).
+
+  * ``_prepare_isolation_pair(...)`` — internal helper, invoked by
+    ``on_isolation_triggered()`` **and** automatically from
+    ``apply_promotion()`` immediately after the sidecar is written.
+
 Sidecar file (unchanged path)
 -----------------------------
 ``<LIVE_DATA_DIR>/level_isolated_instrument_promotion.json``
+
+Isolation-baseline files (new, 2026-11-06)
+------------------------------------------
+``<LIVE_DATA_DIR>/isolation/<trading_symbol>_live_sr.json``
 
 Public API
 ----------
@@ -201,6 +240,7 @@ Public API
     isolated_instrument_promotion_service.get_frozen_entry() -> dict | None
     isolated_instrument_promotion_service.refresh_frozen_entry(signal) -> dict
     isolated_instrument_promotion_service.apply_promotion(signal) -> dict
+    isolated_instrument_promotion_service.on_isolation_triggered(...) -> dict
     isolated_instrument_promotion_service.clear() -> dict
 """
 
@@ -424,6 +464,335 @@ def _is_path_b_active() -> bool:
     if iso and iso.get("trigger_is_self_nifty") is False:
         return True
     return False
+
+# --------------------------------------------------------------------------- #
+# 2026-11-06 — isolation-pair SR baseline backfill helpers                    #
+# --------------------------------------------------------------------------- #
+def _safe_filename(sym: Any) -> str:
+    """Return a filesystem-safe version of ``sym``.
+
+    Trading symbols like ``NIFTY 22750 PE 03 NOV 26`` contain spaces
+    and other characters that are legal-but-awkward in filenames.
+    Collapse all non-alnum / non-``._-`` characters to ``_``.
+    """
+    raw = str(sym or "").strip() or "unknown"
+    safe = "".join(ch if (ch.isalnum() or ch in "._-") else "_" for ch in raw)
+    safe = safe.strip("_") or "unknown"
+    return safe
+
+def _isolation_baseline_path(trading_symbol: Any) -> Path:
+    """Return ``<LIVE_DATA_DIR>/isolation/<safe>_live_sr.json``."""
+    return (
+        Path(config.LIVE_DATA_DIR)
+        / "isolation"
+        / f"{_safe_filename(trading_symbol)}_live_sr.json"
+    )
+
+def _derive_opposite_instrument_key(instrument_key: str) -> str | None:
+    """Derive the opposite-side (CE ↔ PE) instrument key at the same
+    underlying/strike.
+
+    Returns ``None`` when:
+      * the registry has no entry for ``instrument_key``,
+      * the entry has no usable underlying/strike/strike_type,
+      * the counterpart cannot be resolved via
+        ``instrument_registry.resolve()``.
+
+    Never raises.
+    """
+    try:
+        from services.instrument_registry import instrument_registry
+        from services.normalization import (
+            normalize_strike,
+            normalize_strike_type,
+            normalize_underlying,
+        )
+
+        entry = instrument_registry.get(instrument_key)
+        if not entry:
+            return None
+
+        underlying = entry.get("underlying")
+        strike = entry.get("strike_price")
+        side = str(entry.get("strike_type") or "").strip().upper()
+        expiry = entry.get("expiry")
+        if not underlying or strike is None or side not in {"CE", "PE"}:
+            return None
+
+        opposite_side = "PE" if side == "CE" else "CE"
+        u = normalize_underlying(underlying)
+        s = normalize_strike(strike)
+        t = normalize_strike_type(opposite_side)
+        if not (u and s and t):
+            return None
+
+        opp_entry = instrument_registry.resolve(u, s, t)
+        if not opp_entry:
+            logger.warning(
+                "[promotion] could not derive opposite instrument for "
+                "%s (underlying=%s strike=%s opposite_side=%s)",
+                instrument_key, underlying, strike, opposite_side,
+            )
+            return None
+
+        opp_key = opp_entry.get("instrument_key")
+        opp_expiry = opp_entry.get("expiry")
+        if expiry and opp_expiry and str(expiry) != str(opp_expiry):
+            logger.warning(
+                "[promotion] opposite instrument expiry mismatch for %s: "
+                "expected=%s got=%s (key=%s) — using resolved key anyway",
+                instrument_key, expiry, opp_expiry, opp_key,
+            )
+        return opp_key
+    except Exception:
+        logger.exception(
+            "[promotion] _derive_opposite_instrument_key failed for %s",
+            instrument_key,
+        )
+        return None
+
+def _register_active_sr_instrument(instrument_key: str) -> bool:
+    """Register ``instrument_key`` in
+    ``live_sr_calc_service.active_sr_instruments``.
+
+    The container is created lazily as a ``set`` if the attribute is
+    absent on ``live_sr_calc_service`` — this keeps the registration
+    working even before ``live_sr_calc_service`` has been taught about
+    the field. Adding to a ``set`` is atomic in CPython under the GIL,
+    so no extra lock is needed for the common case.
+
+    Returns ``True`` on success, ``False`` on failure. Never raises.
+    """
+    try:
+        from services.live_sr_calc_service import live_sr_calc_service
+    except Exception:
+        logger.exception(
+            "[promotion] cannot import live_sr_calc_service for "
+            "active_sr_instruments registration",
+        )
+        return False
+
+    try:
+        container = getattr(live_sr_calc_service, "active_sr_instruments", None)
+        if container is None:
+            container = set()
+            try:
+                setattr(live_sr_calc_service, "active_sr_instruments", container)
+            except Exception:
+                logger.exception(
+                    "[promotion] could not create "
+                    "live_sr_calc_service.active_sr_instruments",
+                )
+                return False
+
+        # set-like container (preferred) ------------------------------ #
+        if hasattr(container, "add"):
+            container.add(instrument_key)
+            return True
+
+        # dict-like container ----------------------------------------- #
+        if isinstance(container, dict):
+            container[instrument_key] = True
+            return True
+
+        # list-like container ----------------------------------------- #
+        if hasattr(container, "append"):
+            try:
+                if instrument_key not in container:
+                    container.append(instrument_key)
+                return True
+            except Exception:
+                pass
+
+        logger.warning(
+            "[promotion] active_sr_instruments has unsupported type %s "
+            "— cannot register %s",
+            type(container).__name__, instrument_key,
+        )
+        return False
+    except Exception:
+        logger.exception(
+            "[promotion] _register_active_sr_instrument failed for %s",
+            instrument_key,
+        )
+        return False
+
+def _backfill_isolation_sr_baseline(
+    instrument_key: str,
+    cutoff_time_iso: str | None = None,
+    lookback_days: int | None = None,
+) -> dict[str, Any]:
+    """Backfill today's SR levels from 09:15 → ``cutoff_time_iso``.
+
+    Fetches the intraday 1-min candle series (via
+    ``live_sr_calc_service.fetch_intraday_candles_for_entry``),
+    filters it to today's candles up to ``cutoff_time_iso``, merges the
+    historical tail (so pivots near the open have ``left_bars`` of
+    yesterday's context), and replays the strict TradingView pivot
+    rule via ``live_sr_calc_service._compute_pivots``.
+
+    The resulting today-only confirmed levels are persisted to
+    ``<LIVE_DATA_DIR>/isolation/<trading_symbol>_live_sr.json``.
+
+    Never raises. Returns a small status dict::
+
+        {
+          "status":       "ok" | "no_entry" | "no_candles"
+                          | "error",
+          "instrument_key": str,
+          "path":         str | None,
+          "candle_count": int,
+          "level_count":  int,
+          "error":        str | None,
+        }
+    """
+    result: dict[str, Any] = {
+        "status": "error",
+        "instrument_key": instrument_key,
+        "path": None,
+        "candle_count": 0,
+        "level_count": 0,
+        "error": None,
+    }
+
+    try:
+        from services.live_sr_calc_service import live_sr_calc_service
+        from services.instrument_registry import instrument_registry
+    except Exception as exc:
+        result["error"] = f"import_failed: {type(exc).__name__}"
+        logger.exception(
+            "[promotion] backfill import failed for %s", instrument_key,
+        )
+        return result
+
+    try:
+        entry = instrument_registry.get(instrument_key)
+        if entry is None:
+            entry = instrument_registry.register_adhoc(instrument_key)
+        if entry is None:
+            result["status"] = "no_entry"
+            result["error"] = "instrument_not_found"
+            return result
+
+        # ---- Resolve lookback ------------------------------------- #
+        if lookback_days is not None:
+            lb = int(lookback_days)
+        else:
+            lb = int(getattr(
+                config, "LIVE_SR_CALC_DEFAULT_LOOKBACK_DAYS", 5,
+            ))
+        lb = max(1, min(30, lb))
+
+        # ---- Fetch candles ---------------------------------------- #
+        historical = live_sr_calc_service.load_historical_candles_for_entry(
+            entry, lb,
+        ) or []
+        intraday_raw = (
+            live_sr_calc_service.fetch_intraday_candles_for_entry(
+                instrument_key,
+            ) or []
+        )
+
+        # Keep only TODAY's intraday candles, up to cutoff.
+        today = _today_iso()
+        cutoff_dt = _parse_iso_datetime(cutoff_time_iso) if cutoff_time_iso else None
+        intraday: list[dict[str, Any]] = []
+        for c in intraday_raw:
+            c_dt = _parse_iso_datetime(c.get("time"))
+            if c_dt is None:
+                continue
+            if c_dt.date().isoformat() != today:
+                continue
+            if cutoff_dt is not None and c_dt > cutoff_dt:
+                continue
+            intraday.append(c)
+
+        merged = live_sr_calc_service.merge_candles(historical, intraday)
+        if not merged:
+            result["status"] = "no_candles"
+            result["error"] = "no_candles_from_either_source"
+            return result
+
+        # ---- Replay pivot scan ------------------------------------ #
+        left = int(getattr(config, "LIVE_SR_LEFT_BARS", 15))
+        right = int(getattr(config, "LIVE_SR_RIGHT_BARS", 15))
+        left = max(1, min(100, left))
+        right = max(1, min(100, right))
+
+        # Call the private helper directly — this avoids a second API
+        # fetch, which is the whole point of backfilling from a fresh
+        # merged series.
+        levels_all = live_sr_calc_service._compute_pivots(  # noqa: SLF001
+            merged, left, right,
+        )
+        live_sr_calc_service._mark_is_today(levels_all)  # noqa: SLF001
+        levels_today = [l for l in levels_all if l.get("is_today")]
+        levels_today.sort(key=lambda l: l.get("price", 0.0))
+
+        # ---- Persist baseline ------------------------------------- #
+        trading_symbol = entry.get("trading_symbol") or instrument_key
+        out_path = _isolation_baseline_path(trading_symbol)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+
+        payload = {
+            "instrument_key": instrument_key,
+            "trading_symbol": trading_symbol,
+            "underlying": entry.get("underlying"),
+            "strike": entry.get("strike_price"),
+            "type": entry.get("strike_type"),
+            "expiry": entry.get("expiry"),
+            "day": today,
+            "backfilled_at": _now_market_iso(),
+            "cutoff_time": cutoff_time_iso,
+            "lookback_days": lb,
+            "left_bars": left,
+            "right_bars": right,
+            "historical_candle_count": len(historical),
+            "intraday_candle_count": len(intraday),
+            "candle_count": len(merged),
+            "first_candle": merged[0]["time"] if merged else None,
+            "last_candle": merged[-1]["time"] if merged else None,
+            "level_count": len(levels_today),
+            "counts": {
+                "resistance": sum(
+                    1 for l in levels_today if l.get("level") == "resistance"
+                ),
+                "support": sum(
+                    1 for l in levels_today if l.get("level") == "support"
+                ),
+            },
+            "levels": levels_today,
+        }
+
+        tmp = out_path.with_suffix(out_path.suffix + ".tmp")
+        tmp.write_text(
+            json.dumps(payload, indent=2, default=str),
+            encoding="utf-8",
+        )
+        tmp.replace(out_path)
+
+        logger.info(
+            "[promotion] SR baseline backfilled for %s: "
+            "candles=%d (hist=%d, intraday=%d) levels=%d -> %s",
+            instrument_key,
+            len(merged), len(historical), len(intraday),
+            len(levels_today), out_path,
+        )
+
+        result["status"] = "ok"
+        result["path"] = str(out_path)
+        result["candle_count"] = len(merged)
+        result["level_count"] = len(levels_today)
+        return result
+    except Exception as exc:
+        logger.exception(
+            "[promotion] _backfill_isolation_sr_baseline failed for %s",
+            instrument_key,
+        )
+        result["status"] = "error"
+        result["error"] = f"{type(exc).__name__}: {exc}"
+        return result
+
 
 # --------------------------------------------------------------------------- #
 # Frozen-entry extraction                                                     #
@@ -760,6 +1129,149 @@ class IsolatedInstrumentPromotionService:
             }
 
     # ------------------------------------------------------------------ #
+    # 2026-11-06 — isolation-pair registration + SR baseline backfill     #
+    # ------------------------------------------------------------------ #
+    def _prepare_isolation_pair(
+        self,
+        isolated_key: str,
+        opposite_key: str | None = None,
+        cutoff_time_iso: str | None = None,
+    ) -> dict[str, Any]:
+        """Register BOTH instruments and backfill SR baselines for each.
+
+        Called by ``on_isolation_triggered()`` (public hook) and by
+        ``apply_promotion()`` right after the sidecar is written. The
+        two entry points are intentionally separate because:
+
+          * Path A with a promoted counter side → both keys are known
+            up-front (``apply_promotion`` calls us directly);
+          * Path B or Path A with bias side armed → the caller
+            (``level_isolated_instrument_service``) only knows the
+            isolated key and invokes ``on_isolation_triggered``,
+            which lets this helper derive the opposite side.
+
+        Never raises. Returns::
+
+            {
+              "isolated": { <backfill result>, "registered": bool },
+              "opposite": { <backfill result>, "registered": bool,
+                            "instrument_key": str } | None,
+              "opposite_key": str | None,
+            }
+        """
+        out: dict[str, Any] = {
+            "isolated": None,
+            "opposite": None,
+            "opposite_key": opposite_key,
+        }
+
+        if not isolated_key:
+            return out
+
+        # ---- Isolated side ---------------------------------------- #
+        iso_registered = _register_active_sr_instrument(isolated_key)
+        iso_backfill = _backfill_isolation_sr_baseline(
+            isolated_key, cutoff_time_iso=cutoff_time_iso,
+        )
+        out["isolated"] = {
+            "registered": iso_registered,
+            **iso_backfill,
+        }
+
+        # ---- Opposite side ---------------------------------------- #
+        if not opposite_key:
+            opposite_key = _derive_opposite_instrument_key(isolated_key)
+            out["opposite_key"] = opposite_key
+
+        if opposite_key:
+            opp_registered = _register_active_sr_instrument(opposite_key)
+            opp_backfill = _backfill_isolation_sr_baseline(
+                opposite_key, cutoff_time_iso=cutoff_time_iso,
+            )
+            out["opposite"] = {
+                "instrument_key": opposite_key,
+                "registered": opp_registered,
+                **opp_backfill,
+            }
+
+        logger.info(
+            "[promotion] isolation pair prepared: "
+            "isolated=%s registered=%s levels=%d | "
+            "opposite=%s registered=%s levels=%d | cutoff=%s",
+            isolated_key, iso_registered,
+            (iso_backfill or {}).get("level_count", 0),
+            opposite_key,
+            (out.get("opposite") or {}).get("registered"),
+            (out.get("opposite") or {}).get("level_count", 0),
+            cutoff_time_iso,
+        )
+        return out
+
+    def on_isolation_triggered(
+        self,
+        isolated_entry_or_key: dict[str, Any] | str,
+        cutoff_time_iso: str | None = None,
+        opposite_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Public hook for ``level_isolated_instrument_service`` to call
+        the moment an instrument qualifies for isolation.
+
+        Registers both sides in ``live_sr_calc_service.active_sr_instruments``
+        and backfills today's SR baseline (09:15 → ``cutoff_time_iso``)
+        into ``<LIVE_DATA_DIR>/isolation/<trading_symbol>_live_sr.json``
+        for each.
+
+        Parameters
+        ----------
+        isolated_entry_or_key : dict | str
+            Either the registry entry dict for the isolated (bias-side)
+            instrument, or its ``instrument_key`` string. If a dict is
+            passed, ``instrument_key`` is extracted from it.
+        cutoff_time_iso : str | None
+            The isolation-trigger timestamp (ISO-8601). The backfill
+            keeps candles up to and including this minute. When
+            ``None``, the backfill proceeds up to the *current* minute
+            — which is only correct for manual replay.
+        opposite_key : str | None
+            Optional explicit opposite-side key. When ``None``, the
+            opposite side is derived via
+            ``_derive_opposite_instrument_key()``.
+
+        Never raises. Returns ``_prepare_isolation_pair()``'s dict
+        (possibly with ``"status": "error"`` if the input was unusable).
+        """
+        try:
+            if isinstance(isolated_entry_or_key, dict):
+                iso_key = str(
+                    isolated_entry_or_key.get("instrument_key") or ""
+                ).strip()
+            else:
+                iso_key = str(isolated_entry_or_key or "").strip()
+
+            if not iso_key:
+                return {
+                    "status": "error",
+                    "error": "missing_isolated_instrument_key",
+                    "generated_at": _now_utc_iso(),
+                }
+
+            with self._lock:
+                return self._prepare_isolation_pair(
+                    isolated_key=iso_key,
+                    opposite_key=opposite_key,
+                    cutoff_time_iso=cutoff_time_iso,
+                )
+        except Exception as exc:
+            logger.exception(
+                "[promotion] on_isolation_triggered failed",
+            )
+            return {
+                "status": "error",
+                "error": f"{type(exc).__name__}: {exc}",
+                "generated_at": _now_utc_iso(),
+            }
+
+    # ------------------------------------------------------------------ #
     # Apply promotion                                                     #
     # ------------------------------------------------------------------ #
     def apply_promotion(self, signal: dict[str, Any]) -> dict[str, Any]:
@@ -1069,6 +1581,63 @@ class IsolatedInstrumentPromotionService:
                     "reason": f"write_failed: {type(exc).__name__}",
                     "generated_at": _now_utc_iso(),
                 }
+
+            # ---- 2026-11-06: register BOTH sides + backfill SR ----- #
+            # The promoted instrument (counter side) and the isolated
+            # instrument (bias side) both need their intraday SR
+            # baselines established from 09:15 → the isolation trigger
+            # minute, and both need to be in
+            # ``live_sr_calc_service.active_sr_instruments`` so the
+            # periodic SR refresh job keeps them warm.
+            #
+            # Wrapped in its own try/except so a backfill failure
+            # cannot undo a successful promotion (the sidecar is
+            # already on disk and the tracker switch below is
+            # independent).
+            try:
+                cutoff_iso = (
+                    trigger_info.get("time")
+                    or isolated_block.get("touched_at")
+                    or _now_market_iso()
+                )
+                iso_key = (
+                    isolated_block.get("instrument_key")
+                    or payload.get("from_instrument_key")
+                    or target_key
+                )
+                if iso_key and target_key and iso_key != target_key:
+                    pair_result = self._prepare_isolation_pair(
+                        isolated_key=str(iso_key),
+                        opposite_key=target_key,
+                        cutoff_time_iso=str(cutoff_iso) if cutoff_iso else None,
+                    )
+                else:
+                    # Only one distinct key known — derive the opposite
+                    # side from the registry.
+                    pair_result = self._prepare_isolation_pair(
+                        isolated_key=str(target_key),
+                        opposite_key=None,
+                        cutoff_time_iso=str(cutoff_iso) if cutoff_iso else None,
+                    )
+                logger.info(
+                    "[promotion] isolation-pair backfill result for "
+                    "promotion %s -> %s: %s",
+                    payload["from_instrument_key"],
+                    payload["to_instrument_key"],
+                    {
+                        k: (v or {}).get("status")
+                        if isinstance(v, dict) else v
+                        for k, v in pair_result.items()
+                        if k in ("isolated", "opposite")
+                    },
+                )
+            except Exception:
+                logger.exception(
+                    "[promotion] isolation-pair register+backfill failed "
+                    "for promotion %s -> %s — promotion is still active",
+                    payload.get("from_instrument_key"),
+                    payload.get("to_instrument_key"),
+                )
 
             # ---- Switch the SR tracker to the promoted instrument -- #
             try:

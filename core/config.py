@@ -393,6 +393,17 @@ LEVEL_FILTER_INDEXES = _csv(
     "NIFTY,BANKNIFTY,MIDCPNIFTY,SENSEX",
 )
 
+LIVE_SR_INTRADAY_UNIT = "minutes"
+LIVE_SR_INTRADAY_INTERVAL = "1"
+LIVE_SR_CALC_DELAY_SECONDS = 10
+
+# Base data directory definition in core/config.py
+BASE_DIR = Path(__file__).resolve().parent.parent
+DATA_DIR = BASE_DIR / "data"
+
+# Isolation output directory: data/isolation
+ISOLATION_SR_DIR = DATA_DIR / "isolation"
+ISOLATION_SR_DIR.mkdir(parents=True, exist_ok=True)
 LEVEL_FILTER_STRIKE_STEP_NIFTY = max(1, _int("LEVEL_FILTER_STRIKE_STEP_NIFTY", 50))
 LEVEL_FILTER_STRIKE_STEP_SENSEX = max(1, _int("LEVEL_FILTER_STRIKE_STEP_SENSEX", 100))
 LEVEL_FILTER_STRIKE_STEP_BANKNIFTY = max(1, _int("LEVEL_FILTER_STRIKE_STEP_BANKNIFTY", 100))

@@ -6,19 +6,62 @@
     GET  /live-sr/summary                      -> all configured indexes at once
     POST /live-sr/backfill                     -> manual SR backfill (gated)
 
-The manual backfill endpoint respects the same trading-day /
-time-window gate as the automatic backfill:
+2026-11-06 — isolation-store-first reads
+----------------------------------------
+Route handlers now prefer the **isolation store** (``<LIVE_DATA_DIR>/isolation``)
+over the legacy canonical tree when both contain SR data for an
+instrument. The isolation store is the freshest source:
+
+  * ``isolation/{symbol}_live_sr.json`` — rewritten **atomically** every
+    minute by ``scheduler_service._isolated_pair_sr_minute_tick`` and on
+    every ``isolated_instrument_sr_export_service.run()``.
+  * ``isolation/isolated_instrument.json`` / ``opposite_instrument.json``
+    — the full merged candle series + SR levels written by the export
+    service at isolation time.
+  * ``isolation/isolated_instrument_sr_check.json`` — the early-session
+    (09:15–09:30) SR verdict.
+  * ``level_isolated_instrument_promotion.json`` — the promotion sidecar
+    (frozen entry, promotion metadata).
+
+Reading from these files instead of recomputing SR from candles (or
+walking the entire ``all_instruments.json`` registry) is dramatically
+cheaper and semantically equivalent: the scheduler tick recomputes from
+fresh intraday candles every minute, so the store is at most 60s stale.
+
+The canonical tree (``data/<underlying>/<strike>_<TYPE>/live_sr_levels.json``)
+is retained as a fallback — it's what the live SR engine persists and
+remains correct for indexes/options that have not been promoted to
+isolation. Every instrument row carries ``sr_source`` =
+``"isolation" | "canonical" | "none"`` so dashboards can display which
+source served the data.
+
+New endpoints
+-------------
+    GET  /live-sr/active                       -> current active tracked set
+    GET  /live-sr/isolation                    -> isolation store contents
+    GET  /live-sr/isolation/{trading_symbol}   -> one instrument's snapshot
+
+``/live-sr/active`` aggregates three sources:
+
+  1. ``config.LEVEL_FILTER_INDEXES`` — statically-configured indexes
+  2. ``live_sr_calc_service.active_sr_instruments`` — dynamically
+     registered keys (isolated + opposite pairs, added by
+     ``isolated_instrument_promotion_service``)
+  3. Isolation-store metadata (isolated/opposite/promoted instrument
+     keys + trading symbols)
+
+``/live-sr/isolation`` returns the full isolation store (candles
+stripped from the payload to keep it small), so an operator can see
+exactly what the sched/export/promotion services have written.
+
+The manual backfill endpoint (unchanged) respects the same
+trading-day / time-window gate as the automatic backfill:
 
     * SR_BACKFILL_ENABLED must be True
     * LIVE_SR_ENABLED must be True
     * current time must be in [09:15, 23:59] IST
     * today must be Mon–Fri
     * today must NOT be a trading holiday
-
-Outside that window, ``sr_backfill_service.run()`` returns a summary
-with ``status="skipped"`` and ``skip_reason`` set. This endpoint
-surfaces the same summary, plus an ``allowed`` boolean so callers
-can distinguish "skipped" from "ran but produced no candles".
 """
 
 from __future__ import annotations
@@ -39,6 +82,8 @@ logger = get_logger(__file__)
 router = APIRouter(prefix="/live-sr", tags=["live-sr"])
 
 _MARKET_TZ = ZoneInfo("Asia/Kolkata")
+
+_ISOLATION_LIVE_SR_SUFFIX = "_live_sr.json"
 
 
 # --------------------------------------------------------------------------- #
@@ -146,6 +191,213 @@ def _trading_status() -> dict[str, Any]:
 
 
 # --------------------------------------------------------------------------- #
+# Isolation store helpers (2026-11-06)                                        #
+# --------------------------------------------------------------------------- #
+# The isolation store is the canonical location for the isolated /
+# opposite pair's fresh SR data. Files are written atomically (tmp +
+# os.replace) by the scheduler minute tick and by the export service, so
+# reading a partial file is impossible.
+#
+# Filename sanitization is identical to
+#   * IsolatedInstrumentSRExportService._safe_filename_for_sr()
+#   * isolated_instrument_promotion_service._safe_filename()
+# so all three writers/readers land on the same physical file per
+# instrument.
+# --------------------------------------------------------------------------- #
+def _isolation_dir() -> Path:
+    try:
+        return Path(config.LIVE_DATA_DIR) / "isolation"
+    except Exception:
+        return Path(__file__).resolve().parent.parent / "data" / "isolation"
+
+
+def _safe_filename_for_sr(trading_symbol: Any) -> str:
+    raw = str(trading_symbol or "").strip() or "unknown"
+    safe = "".join(
+        ch if (ch.isalnum() or ch in "._-") else "_" for ch in raw
+    )
+    return safe.strip("_") or "unknown"
+
+
+def _isolation_live_sr_path(trading_symbol: Any) -> Path:
+    return _isolation_dir() / (
+        f"{_safe_filename_for_sr(trading_symbol)}{_ISOLATION_LIVE_SR_SUFFIX}"
+    )
+
+
+def _read_isolation_live_sr(trading_symbol: Any) -> dict[str, Any] | None:
+    if not trading_symbol:
+        return None
+    return _read_json(_isolation_live_sr_path(trading_symbol))
+
+
+def _read_promotion_sidecar() -> dict[str, Any] | None:
+    try:
+        path = Path(config.LIVE_DATA_DIR) / (
+            "level_isolated_instrument_promotion.json"
+        )
+    except Exception:
+        return None
+    return _read_json(path)
+
+
+def _strip_candles(payload: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(payload, dict):
+        return payload
+    return {k: v for k, v in payload.items() if k != "candles"}
+
+
+def _isolation_state_for_underlying(underlying_upper: str) -> dict[str, Any]:
+    """Return the isolation store state restricted to one underlying.
+
+    Used by ``/index/{underlying}`` so the dashboard can surface the
+    isolated/opposite pair inline.
+    """
+    iso_dir = _isolation_dir()
+    isolated = _read_json(iso_dir / "isolated_instrument.json")
+    opposite = _read_json(iso_dir / "opposite_instrument.json")
+    early_check = _read_json(
+        iso_dir / "isolated_instrument_sr_check.json"
+    )
+    promotion = _read_promotion_sidecar()
+
+    iso_meta = (isolated or {}).get("metadata") or {}
+    opp_meta = (opposite or {}).get("metadata") or {}
+
+    iso_underlying = str(iso_meta.get("underlying") or "").strip().upper()
+    opp_underlying = str(opp_meta.get("underlying") or "").strip().upper()
+
+    same_underlying = (
+        iso_underlying == underlying_upper
+        or opp_underlying == underlying_upper
+    )
+    if not same_underlying:
+        return {
+            "active": False,
+            "isolated": None,
+            "opposite": None,
+            "promotion": None,
+            "early_check": None,
+        }
+
+    def _summ(meta: dict[str, Any], payload: dict[str, Any] | None) -> dict[str, Any] | None:
+        if not meta:
+            return None
+        return {
+            "instrument_key": meta.get("instrument_key"),
+            "trading_symbol": meta.get("trading_symbol"),
+            "strike_price": meta.get("strike_price"),
+            "strike_type": meta.get("strike_type"),
+            "expiry": meta.get("expiry"),
+            "role": meta.get("role"),
+            "candle_count": (payload or {}).get("candles_count"),
+            "level_count": (payload or {}).get("sr_levels_count"),
+        }
+
+    return {
+        "active": True,
+        "isolated": _summ(iso_meta, isolated),
+        "opposite": _summ(opp_meta, opposite),
+        "promotion": promotion,
+        "early_check": early_check,
+    }
+
+
+def _get_active_tracked_set() -> dict[str, Any]:
+    """Return the union of statically-configured and dynamically-tracked keys.
+
+    Sources:
+      1. ``config.LEVEL_FILTER_INDEXES`` — statically-configured indexes.
+      2. ``live_sr_calc_service.active_sr_instruments`` — dynamically
+         registered keys (isolated + opposite pairs, added by
+         ``isolated_instrument_promotion_service``).
+      3. Isolation store metadata (``isolated_instrument.json`` /
+         ``opposite_instrument.json``) and the promotion sidecar.
+    """
+    config_indexes: list[str] = []
+    try:
+        raw = getattr(config, "LEVEL_FILTER_INDEXES", None)
+        if isinstance(raw, str):
+            config_indexes = [s.strip() for s in raw.split(",") if s.strip()]
+        elif isinstance(raw, (list, tuple, set, frozenset)):
+            config_indexes = sorted({str(x).strip() for x in raw if x})
+    except Exception:
+        logger.exception(
+            "[live-sr-routes] could not parse config.LEVEL_FILTER_INDEXES"
+        )
+
+    dynamic_active: list[str] = []
+    try:
+        from services.live_sr_calc_service import live_sr_calc_service
+        active = getattr(live_sr_calc_service, "active_sr_instruments", None)
+        if active is not None:
+            dynamic_active = sorted({str(k).strip() for k in active if k})
+    except Exception:
+        logger.warning(
+            "[live-sr-routes] could not read "
+            "live_sr_calc_service.active_sr_instruments",
+            exc_info=True,
+        )
+
+    iso_dir = _isolation_dir()
+    isolated_payload = _read_json(iso_dir / "isolated_instrument.json")
+    opposite_payload = _read_json(iso_dir / "opposite_instrument.json")
+    early_check = _read_json(iso_dir / "isolated_instrument_sr_check.json")
+    promotion = _read_promotion_sidecar()
+
+    iso_meta = (isolated_payload or {}).get("metadata") or {}
+    opp_meta = (opposite_payload or {}).get("metadata") or {}
+    iso_key = iso_meta.get("instrument_key")
+    opp_key = opp_meta.get("instrument_key")
+
+    union = sorted({
+        k for k in [
+            *config_indexes,
+            *dynamic_active,
+            iso_key,
+            opp_key,
+            (promotion or {}).get("to_instrument_key"),
+        ] if k
+    })
+
+    per_instrument_snapshots: list[dict[str, Any]] = []
+    if iso_dir.exists():
+        for f in sorted(iso_dir.glob(f"*{_ISOLATION_LIVE_SR_SUFFIX}")):
+            data = _read_json(f)
+            if data is None:
+                continue
+            per_instrument_snapshots.append({
+                "path": str(f),
+                "trading_symbol": data.get("trading_symbol"),
+                "instrument_key": data.get("instrument_key"),
+                "level_count": data.get("level_count", 0),
+                "candle_count": data.get("candle_count", 0),
+                "counts": data.get("counts"),
+                "last_candle": data.get("last_candle"),
+                "refreshed_at": data.get("refreshed_at")
+                                or data.get("generated_at"),
+                "source": data.get("source"),
+            })
+
+    return {
+        "config_indexes": config_indexes,
+        "dynamic_active": dynamic_active,
+        "isolated_instrument_key": iso_key,
+        "isolated_trading_symbol": iso_meta.get("trading_symbol"),
+        "opposite_instrument_key": opp_key,
+        "opposite_trading_symbol": opp_meta.get("trading_symbol"),
+        "promoted_instrument_key": (promotion or {}).get("to_instrument_key"),
+        "promoted_trading_symbol": (promotion or {}).get("to_trading_symbol"),
+        "union_keys": union,
+        "per_instrument_snapshots": per_instrument_snapshots,
+        "promotion": promotion,
+        "early_check": early_check,
+        "isolated_meta": iso_meta or None,
+        "opposite_meta": opp_meta or None,
+    }
+
+
+# --------------------------------------------------------------------------- #
 # Filesystem helpers                                                          #
 # --------------------------------------------------------------------------- #
 def _index_folder(underlying: str) -> Path:
@@ -174,11 +426,20 @@ def _build_instrument_row(
     underlying: str,
     or_levels: dict[str, Any],
 ) -> dict[str, Any]:
+    """Build one instrument row for the dashboard.
+
+    2026-11-06: the SR payload is now read from the **isolation store**
+    first (``isolation/{trading_symbol}_live_sr.json`` — refreshed
+    every minute by the scheduler tick), falling back to the canonical
+    tree (``data/.../live_sr_levels.json``). The ``sr_source`` field on
+    the row tells the dashboard which source served the data.
+    """
     key = str(inst.get("instrument_key") or "").strip()
     strike = inst.get("strike")
     strike_type = str(inst.get("type") or "").upper()
     levels = list(inst.get("levels") or [])
     reasons = list(inst.get("reasons") or [])
+    trading_symbol = inst.get("trading_symbol")
 
     level_price = None
     for name in levels:
@@ -190,7 +451,24 @@ def _build_instrument_row(
             except (TypeError, ValueError):
                 pass
 
-    sr_payload = _read_json(_option_sr_path(underlying, strike, strike_type))
+    # ---- Isolation store first (fresh minute-tick data) ------------- #
+    sr_source = "none"
+    sr_payload: dict[str, Any] | None = None
+    if trading_symbol:
+        iso_payload = _read_isolation_live_sr(trading_symbol)
+        if iso_payload is not None:
+            sr_payload = iso_payload
+            sr_source = "isolation"
+
+    # ---- Fall back to canonical tree -------------------------------- #
+    if sr_payload is None:
+        canonical = _read_json(
+            _option_sr_path(underlying, strike, strike_type)
+        )
+        if canonical is not None:
+            sr_payload = canonical
+            sr_source = "canonical"
+
     sr_levels = (sr_payload or {}).get("levels") or []
     sr_count = len(sr_levels)
     sr_latest = None
@@ -203,7 +481,9 @@ def _build_instrument_row(
             sr_latest = None
         if last_lvl.get("confirmed_time_price") is not None:
             try:
-                sr_latest_confirmed_price = float(last_lvl["confirmed_time_price"])
+                sr_latest_confirmed_price = float(
+                    last_lvl["confirmed_time_price"]
+                )
             except (TypeError, ValueError):
                 sr_latest_confirmed_price = None
 
@@ -216,7 +496,7 @@ def _build_instrument_row(
 
     return {
         "instrument_key": key,
-        "trading_symbol": inst.get("trading_symbol"),
+        "trading_symbol": trading_symbol,
         "strike": strike,
         "type": strike_type,
         "expiry": inst.get("expiry"),
@@ -227,6 +507,12 @@ def _build_instrument_row(
         "sr_latest_level": sr_latest,
         "sr_latest_confirmed_price": sr_latest_confirmed_price,
         "sr_available": bool(sr_payload),
+        "sr_source": sr_source,
+        "sr_last_refreshed": (
+            (sr_payload or {}).get("refreshed_at")
+            or (sr_payload or {}).get("updated_at")
+            or (sr_payload or {}).get("generated_at")
+        ),
         "ltp_server_snapshot": ltp_snapshot,
         "chart_url": f"/chart/{key.replace('|', '%7C').replace(' ', '%20')}",
     }
@@ -253,6 +539,7 @@ def _build_index_payload(underlying: str) -> dict[str, Any]:
                 "level_instruments.json not yet written for today. "
                 "POST /admin/ops/level-instruments/recalc to force."
             ),
+            "isolation": _isolation_state_for_underlying(u),
             "generated_at": _now_iso(),
         }
 
@@ -292,6 +579,7 @@ def _build_index_payload(underlying: str) -> dict[str, Any]:
         "index_ltp": index_ltp,
         "ce_instruments": ce,
         "pe_instruments": pe,
+        "isolation": _isolation_state_for_underlying(u),
         "generated_at": _now_iso(),
     }
 
@@ -314,14 +602,24 @@ def index_sr(underlying: str) -> dict[str, Any]:
     """Return the level-filtered CE/PE instruments for one index.
 
     Each instrument row carries its OR level(s), the raw level price,
-    the count of live SR levels detected so far, and a chart URL.
+    the count of live SR levels detected so far, the ``sr_source``
+    (``"isolation"`` or ``"canonical"``), and a chart URL.
+
+    The response also carries an ``isolation`` block describing any
+    isolated/opposite pair active today for this underlying.
     """
     return _build_index_payload(underlying)
 
 
 @router.get("/summary")
 def summary() -> dict[str, Any]:
-    """Return the market status + every configured index's payload."""
+    """Return the market status + every configured index's payload.
+
+    2026-11-06: the response now also carries the full
+    ``active_tracked_set`` block (config indexes + dynamically
+    registered isolated/opposite pairs) so a dashboard can render
+    the complete SR universe from one call.
+    """
     status = _trading_status()
     indexes: dict[str, Any] = {}
     for u in config.LEVEL_FILTER_INDEXES:
@@ -341,6 +639,7 @@ def summary() -> dict[str, Any]:
     return {
         "market_status": status,
         "indexes": indexes,
+        "active_tracked_set": _get_active_tracked_set(),
         "generated_at": _now_iso(),
     }
 
@@ -393,3 +692,113 @@ def trigger_backfill(send_telegram: bool = False) -> dict[str, Any]:
         f"{int(config.SR_BACKFILL_END_MINUTE):02d}"
     )
     return result
+
+
+# --------------------------------------------------------------------------- #
+# Active tracked set + isolation store inspection (2026-11-06)                #
+# --------------------------------------------------------------------------- #
+@router.get("/active")
+def active_tracked_set() -> dict[str, Any]:
+    """Return the current active tracked SR universe.
+
+    Aggregates:
+
+      * ``config.LEVEL_FILTER_INDEXES`` — statically-configured indexes.
+      * ``live_sr_calc_service.active_sr_instruments`` — dynamically
+        registered keys (isolated + opposite pairs, added by
+        ``isolated_instrument_promotion_service``).
+      * Isolation store metadata (``isolated_instrument.json`` /
+        ``opposite_instrument.json``) and the promotion sidecar
+        (``level_isolated_instrument_promotion.json``).
+
+    Also returns ``per_instrument_snapshots`` — one entry per
+    ``isolation/*_live_sr.json`` file currently on disk — so a caller
+    can see exactly which instruments have a fresh (≤60s-old) SR
+    snapshot and how many levels each has.
+    """
+    return {
+        "status": "ok",
+        **_get_active_tracked_set(),
+        "generated_at": _now_iso(),
+    }
+
+
+@router.get("/isolation")
+def isolation_snapshot() -> dict[str, Any]:
+    """Return the full contents of the isolation store.
+
+    Candle arrays are stripped from the top-level ``isolated`` /
+    ``opposite`` blocks to keep the payload small — a caller that needs
+    the full candle series should read
+    ``isolation/isolated_instrument.json`` directly. The
+    ``per_instrument_snapshots`` array summarises every
+    ``*_live_sr.json`` file in the directory.
+    """
+    iso_dir = _isolation_dir()
+    isolated = _read_json(iso_dir / "isolated_instrument.json")
+    opposite = _read_json(iso_dir / "opposite_instrument.json")
+    early_check = _read_json(iso_dir / "isolated_instrument_sr_check.json")
+    promotion = _read_promotion_sidecar()
+
+    per_instrument: list[dict[str, Any]] = []
+    if iso_dir.exists():
+        for f in sorted(iso_dir.glob(f"*{_ISOLATION_LIVE_SR_SUFFIX}")):
+            data = _read_json(f)
+            if data is None:
+                continue
+            per_instrument.append({
+                "path": str(f),
+                "trading_symbol": data.get("trading_symbol"),
+                "instrument_key": data.get("instrument_key"),
+                "level_count": data.get("level_count", 0),
+                "candle_count": data.get("candle_count", 0),
+                "counts": data.get("counts"),
+                "first_candle": data.get("first_candle"),
+                "last_candle": data.get("last_candle"),
+                "refreshed_at": data.get("refreshed_at")
+                                or data.get("generated_at"),
+                "source": data.get("source"),
+            })
+
+    return {
+        "status": "ok",
+        "isolation_dir": str(iso_dir),
+        "isolated": _strip_candles(isolated),
+        "opposite": _strip_candles(opposite),
+        "early_check": early_check,
+        "promotion": promotion,
+        "per_instrument_snapshots": per_instrument,
+        "generated_at": _now_iso(),
+    }
+
+
+@router.get("/isolation/{trading_symbol}")
+def isolation_instrument_snapshot(trading_symbol: str) -> dict[str, Any]:
+    """Return the full per-instrument isolation snapshot.
+
+    Reads ``isolation/{safe(trading_symbol)}_live_sr.json`` — the file
+    refreshed every minute by the scheduler tick and on every export.
+    Returns the full snapshot including the level list (candles are
+    not present in this file — see ``/isolation`` for the full merged
+    series).
+    """
+    path = _isolation_live_sr_path(trading_symbol)
+    if not path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": "not_found",
+                "trading_symbol": trading_symbol,
+                "resolved_path": str(path),
+            },
+        )
+    data = _read_json(path)
+    if data is None:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "unreadable",
+                "resolved_path": str(path),
+            },
+        )
+    return data
