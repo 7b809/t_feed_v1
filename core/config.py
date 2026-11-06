@@ -1,152 +1,29 @@
 # core/config.py
 """Configuration for the foundational market-data application.
 
-Order strategy rewrite (2026-11-02)
------------------------------------
-The previous dummy-order placement logic (G1 v4.1 — Path A / Path B,
-Rupee-trailing, promotion-based counter-side order creation) has been
-**completely removed**. ``services/dummy_order_service.py`` now
-implements the ``t_feed_v1-market-engine-v3`` spec:
+Order execution strategy (2026-11-06)
+-------------------------------------
+All standard/pre-11:30 instrument isolations use one execution mode:
+unified Path A. The isolation trigger index is recorded for diagnostics
+but does not switch the execution strategy. Standard Path A uses the
+post-isolation 15/3 S/R routing and dummy-order engine.
 
-    1. First post-isolation 15/3 SR confirmation on the bias-side
-       instrument triggers the order (``pivot_time > T_iso`` AND
-       ``confirmed_time > T_iso``).
-    2. 09:30 IST backup reversal — if a pre-``T_iso`` support was
-       already confirmed AND the current post-isolation level is a
-       resistance on or before 09:30, buy the same isolated leg.
-       Otherwise Support → same leg, Resistance → opposite leg.
-    3. Regime validation via the traded instrument's OWN OR grid:
-           P_entry > R2                       → SKIP
-           P_entry < S2                       → OR Low / +50 pt gain
-           S2 ≤ P_entry < R1                  → R2, R3_Threshold, R3
-           R1 ≤ P_entry ≤ R2 (Zone 2)         → R3_Threshold, R3
-    4. Stop-loss = P_entry × (1 − 0.30) — fixed 30 % below fill.
-    5. Stage 1: milestone touch OR ≥50 pt gain.
-       Stage 2: exit at the NEXT 15/3 resistance confirmation close.
+Stop-loss remains controlled by STRATEGY_ORDER_STOP_LOSS_PCT.
+The standard target milestone is fixed by entry-price band:
+    0 < entry <= 100: entry + entry / 3
+    100 < entry <= 200: entry + entry / 4
+    entry > 200: entry + entry / 5
+After the target milestone, stop-loss remains active and the engine
+waits for a new 15/3 Resistance confirmation before exiting at its
+confirmation candle close.
 
-All the ``STRATEGY_EXT_*`` keys (Path B, Rupee trailing, R3-breakout
-activation, bearish exit, lockdown-on-target, lot-size map, tracked
-underlyings, polling cadence) that were only consumed by the removed
-logic have been deleted. The replacement section (``STRATEGY_ORDER_*``
-and the reduced ``DUMMY_ORDER_*`` set) is at the bottom of this file.
+POST-11:30 remains a separate time-based strategy with its existing
+entry, target, stop-loss and 15/15 Resistance exit conditions.
 
-The promotion service (``services/isolated_instrument_promotion_service
-.py``) is now **dormant** — no code path calls ``apply_promotion()``.
-Its two config keys (``STRATEGY_ENTRY_ALLOW_PROMOTION``,
-``STRATEGY_ENTRY_ALLOW_RE_PROMOTION``) are kept for backward-compat in
-case an admin route still references the module, but they are inert.
-
-G1 v3.2 additions (2026-10-28)
-------------------------------
-* Multi-index boundary surveillance — STRATEGY_MONITORED_INDICES,
-  STRATEGY_TOUCH_PRIORITY_ORDER, STRATEGY_ROUTED_EXECUTION_INDEX.
-* Auto-reverse on bias-side rejection — STRATEGY_ENTRY_ALLOW_AUTO_REVERSE,
-  STRATEGY_ENTRY_PRIORITIZE_SUPPORT.
-* LEVEL_FILTER_INDEXES now defaults to all four monitored indices
-  (NIFTY, BANKNIFTY, MIDCPNIFTY, SENSEX) so that OR levels exist for
-  every index the touch engine watches.
-* LEVEL_FILTER_STRIKE_STEP_{BANKNIFTY,MIDCPNIFTY} added so the filter
-  resolves strikes for those underlyings too (informational only;
-  execution always routes to NIFTY).
-* LEVEL_ISOLATION_BACKFILL_WINDOW opens at 09:15 (instead of 09:16) so
-  the 09:15 candle that opens the OR window is included in the replay.
-
-G1 v4.1 additions (2026-10-29)
-------------------------------
-Six new opt-out flags, each tied to one fix from the ``/isolated`` page
-analysis. All default to ``True`` — the fixes are enabled out of the
-box and no ``.env`` change is required.
-
-    STRATEGY_ENTRY_REGISTER_COUNTER_SIDE        -> §5.A
-    STRATEGY_ENTRY_CANDLE_FALLBACK_ENABLED      -> §5.B
-    STRATEGY_ENTRY_TARGET_REQUIRE_POST_ENTRY    -> §5.C
-    LEVEL_ISOLATION_REPLAY_USE_SERIES_OR        -> §5.D (replay)
-    LEVEL_ISOLATION_OR_SELF_HEAL_VERIFY_HL      -> §5.D (self-heal)
-    STRATEGY_ENTRY_FREEZE_ENTRY_ON_PROMOTION    -> §5.E
-
-G1 v4.1 hotfix (2026-10-29)
----------------------------
-``STRATEGY_RELATIONAL_R3_BIAS`` and ``STRATEGY_RELATIONAL_S3_BIAS`` are
-read by ``level_isolated_instrument_service._process_winning_touch`` but
-were missing from this file — the startup backfill crashed with::
-
-    AttributeError: module 'core.config' has no attribute
-    'STRATEGY_RELATIONAL_R3_BIAS'
-
-Both are restored below under LEVEL ISOLATION.
-
-G1 v4.1 dead-flag removal (2026-10-29)
---------------------------------------
-Three constants were defined here but **never read by any service** —
-they were documented as behaviour switches but silently fell through
-their ``getattr(..., True)`` defaults (or were hard-coded by
-construction) in the consuming code. All three have been removed so
-operators are not misled into thinking they do something:
-
-    STRATEGY_ENTRY_ONLY_ONCE_PER_DAY       (no reader — enforced by
-                                            the closed 10-min buffer
-                                            window)
-    STRATEGY_ENTRY_FIRST_TO_CONFIRM_WINS   (no reader — bias side
-                                            wins by iteration order,
-                                            not by confirmed_time)
-    STRATEGY_ENTRY_INCLUDE_PRETOUCH        (no reader — pre-touch
-                                            pivots are excluded
-                                            unconditionally in
-                                            _compute_candidate())
-
-A fourth flag, ``STRATEGY_ENTRY_BLOCKED_BY_RESISTANCE``, remains
-defined because it **is** read by ``_arm_bias_on_support()`` — it
-gates the fast-window resistance blocker.
-
-Deterministic replay guards (2026-11-04)
-----------------------------------------
-Six new ``DUMMY_ORDER_*`` flags make the post-isolation execution
-pipeline auditable and force deterministic replay when the SR
-backfill is incomplete. They are documented in detail in the DUMMY
-ORDERS block below; all default to the safe deterministic behaviour:
-
-    DUMMY_ORDER_ALLOW_LTP_ENTRY_FALLBACK            (default False)
-    DUMMY_ORDER_STRICT_DETERMINISTIC_REPLAY         (default True)
-    DUMMY_ORDER_WAIT_FOR_SR_BACKFILL                (default True)
-    DUMMY_ORDER_WAIT_FOR_SR_BACKFILL_TIMEOUT_SECONDS (default 120)
-    DUMMY_ORDER_DISABLE_RUNTIME_PATH_SWITCH         (default True)
-    DUMMY_ORDER_DRIFT_GUARD                         (default True)
-
-A ``DEPRECATION NOTICE`` block was also added (DUMMY ORDERS section)
-stating that ``STRATEGY_EXT_PATH_B_ENABLED`` and the ``STRATEGY_ENTRY_*``
-keys are now diagnostics / simulation-only.
-
-Live sandbox execution (2026-11-04)
------------------------------------
-A new ``SANDBOX_*`` block was added at the bottom of this file (after
-STRATEGY ORDER, before EMA CALC) to drive the live sandbox executor
-in ``services/sandbox_execution_service.py``. The executor mirrors
-dummy-order transitions onto real broker orders — but ONLY when all
-of the following hold:
-
-    * ``SANDBOX_EXECUTION_ENABLED`` is True (env; default **False**),
-    * ``SANDBOX_EXECUTION_MODE == "live"`` (env; default **"observe"**),
-    * ``order_runtime_service.status()["enabled"]`` is True
-      (controlled by POST /admin/orders/runtime-enable|disable),
-    * ``sr_backfill_service.is_ready_for_today()`` is True,
-    * current time is between SANDBOX_MARKET_OPEN and SANDBOX_MARKET_CLOSE,
-    * the ledger idempotency key has not yet fired,
-    * the single-position lock is free.
-
-The default deployment ships with the sandbox **inert** — no broker
-call can be made until an operator deliberately flips both the env
-gate and the runtime toggle. See the SANDBOX block itself for the
-per-key documentation.
-
-A parallel scheduler job ``sandbox_eod_exit`` fires at
-``SANDBOX_EOD_HOUR:SANDBOX_EOD_MINUTE`` (default 15:15 IST) so the
-executor owns its own end-of-day exit *before* the broker's ~15:15-15:25
-auto-square-off and *before* the dummy engine's accounting EOD at
-``DUMMY_ORDER_EOD_HOUR:DUMMY_ORDER_EOD_MINUTE`` (default 15:35). The
-later dummy ``EOD_CLOSE`` transition then falls into the executor's
-"already exited" no-op branch and is logged as the expected divergence
-between the two engines.
+The old Path A/Path B strategy-entry scan and promotion dispatch is no
+longer used by the standard execution flow.
 """
+
 
 import os
 from pathlib import Path
@@ -754,11 +631,9 @@ DUMMY_ORDER_TELEGRAM_ENABLED = _bool("DUMMY_ORDER_TELEGRAM_ENABLED", True)
 #       Default: 120 seconds.
 #
 #   DUMMY_ORDER_DISABLE_RUNTIME_PATH_SWITCH
-#       When True (recommended), the Path A / Path B code path is
-#       derived SOLELY from the isolation record's ``trigger_index``
-#       (MIDCPNIFTY → Path B, everything else → Path A). The runtime
-#       override (env-driven path switching) is disabled, so replay
-#       is a pure function of the isolation record.
+#       Retained for backward compatibility. Standard path selection is
+#       now fixed: all pre-11:30 isolations use PATH_A_UNIFIED regardless
+#       of trigger_index. This flag no longer changes execution behavior.
 #       Default: True.
 #
 #   DUMMY_ORDER_DRIFT_GUARD
@@ -790,11 +665,10 @@ DUMMY_ORDER_DRIFT_GUARD = _bool(
 # ---------------------------------------------------------------------------
 # DEPRECATION NOTICE — Path A/B runtime switch and STRATEGY_ENTRY_* flags
 # ---------------------------------------------------------------------------
-# ``STRATEGY_EXT_PATH_B_ENABLED`` is DEPRECATED and is no longer consumed
-# by any service. Path selection is now derived PURELY from the isolation
-# record's ``trigger_index`` (see DUMMY_ORDER_DISABLE_RUNTIME_PATH_SWITCH
-# above). If your .env still sets ``STRATEGY_EXT_PATH_B_ENABLED`` the
-# value is silently ignored.
+# ``STRATEGY_EXT_PATH_B_ENABLED`` is DEPRECATED and is no longer consumed.
+# All pre-11:30 isolations use unified standard Path A regardless of the
+# isolation record's ``trigger_index``. If .env still sets this variable,
+# its value is silently ignored.
 #
 # The following ``STRATEGY_ENTRY_*`` / ``STRATEGY_MAX_STOP_PCT`` flags
 # historically drove the order-placement pipeline. After the 2026-11-02
