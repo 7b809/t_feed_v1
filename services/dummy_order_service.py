@@ -1,199 +1,33 @@
 # services/dummy_order_service.py
-"""Post-isolation dummy order execution engine — t_feed_v1-market-engine-v3.
+"""Post-isolation dummy order execution engine — unified standard Path A.
 
-Implements the *Isolated Instrument Order Strategy & Execution Engine*
-specification:
+All pre-11:30 isolation sources use the same standard execution strategy.
+The selected isolated bias-side instrument is monitored for post-isolation
+15/3 S/R confirmation and existing same/opposite-leg routing. The traded
+instrument's own OR validation and configured stop-loss are preserved.
 
-    1. Once an instrument is ISOLATED at ``T_iso`` (bias-side CE for R3
-       or PE for S3 touch), watch its 15/3 SR levels.
-    2. Trigger = first SR level on the bias-side with
-       ``pivot_time > T_iso`` AND ``confirmed_time > T_iso``.
-    3. Routing (with 09:30 IST backup reversal):
-         * 09:30 reversal — post-isolation confirmation is on or before
-           09:30 IST, AND a prior Support was confirmed before T_iso,
-           AND the current post-isolation level is Resistance
-           → buy the SAME isolated instrument.
-         * Post-isolation Support → buy SAME isolated instrument.
-         * Post-isolation Resistance → buy OPPOSITE leg instrument
-           (CE ↔ PE at the same strike).
-    4. Regime validation using the traded instrument's OWN OR grid
-       (option ``first_candle.json`` → ``or_levels``):
-         * P_entry > R2                    → SKIP (no valid logic above R2)
-         * P_entry < S2                    → milestones: OR Low,
-                                              +50 pt gain
-         * S2 ≤ P_entry < R1               → milestones: R2, R3_Threshold, R3
-         * R1 ≤ P_entry ≤ R2 (Zone 2)      → milestones: R3_Threshold, R3
-    5. Stop-loss = P_entry × (1 − 0.30) — fixed 30 % below fill.
-    6. Stage 1: price touches any armed milestone OR net gain ≥ 50 pts.
-       Stage 2: exit at the NEXT 15/3 resistance confirmation close on
-       the traded instrument (strictly after the Stage 2 trigger time).
-    7. EOD: auto-close any surviving OPEN order at the last available
-       bar close.
+Standard Path A dynamic target milestone:
+    * 0 < entry <= 100: entry + entry / 3
+    * 100 < entry <= 200: entry + entry / 4
+    * entry > 200: entry + entry / 5
 
-This service NEVER places a real Upstox order. Every record carries
-``"dummy": true`` so audits cannot confuse it with a real order.
+The target is not an immediate exit. Stop-loss remains active while the
+engine waits for a NEW 15/3 Resistance confirmation strictly after the
+milestone, then exits at that confirmation candle's 1-minute close.
+EOD handling is unchanged.
 
-POST-1130 branch (2026-11-05)
------------------------------
-A second, independent order branch now lives alongside Path A / Path B
-for the POST-11:30 regime:
+This service creates dummy orders only. Optional broker execution consumes
+persisted order transitions through sandbox_execution_service.
 
-    * ``strategy_entry_signal_service.compute()`` is called each tick
-      (after the Path A/B logic) to obtain the current signal.
-    * When ``execution_path == "POST_1130"`` AND ``status == "ok"``
-      AND no POST-1130 order exists for today, a POST-1130 dummy order
-      is created on the **isolated instrument itself** (CE for CE
-      isolation, PE for PE isolation).  The order carries
-      ``regime="POST_1130_ISOLATED"`` and
-      ``routing_mode="post_1130_sr_trigger"``.
-    * Entry price / time / stop / target are taken verbatim from the
-      enriched BUY payload returned by ``compute()`` — no re-derivation
-      inside this service.  OR levels, zone and milestones are NOT used
-      by the POST-1130 spec.
-    * The order is registered with ``order_runtime_service`` via
-      ``register_post_1130_trade()`` so exit tracking is active for
-      the (30 % stop / +50 pt target / 15/15 resistance confirmation)
-      exit conditions.
-    * Each subsequent tick calls
-      ``order_runtime_service.check_and_close_post_1130()`` to evaluate
-      those exits, and EOD-closes any surviving OPEN POST-1130 order
-      at ``DUMMY_ORDER_EOD_HOUR:MINUTE`` (15:35) — same as Path A/B.
-    * POST-1130 orders are stored in the state under
-      ``post_1130_order`` (distinct from ``order``) so both branches
-      can coexist on the same day.  ``orders`` (the compat list)
-      contains BOTH the Path A/B order and the POST-1130 order when
-      both exist.
-
-Path A/B and POST-1130 are intentionally independent: ``compute()``
-itself dispatches POST-1130 AFTER the Path B check, so a Path B day
-(``trigger_is_self_nifty == False``) returns ``path_b_mode`` rather
-than ``POST_1130`` — meaning no POST-1130 order is created on a pure
-Path B day.  To exercise the POST-1130 branch on a Path B isolation,
-either disable Path B (``STRATEGY_EXT_PATH_B_ENABLED=false``) or
-re-create the isolation record with a self-NIFTY trigger.
-
-DETERMINISM CONTRACT (G1 v4.1)
-------------------------------
-The set of dummy orders produced for a given trading day MUST be a
-pure function of:
-
-    * the persisted isolation record (bias-side key, t_iso,
-      trigger_index / trigger_origin),
-    * today's finalized intraday candle series for each traded instrument,
-    * today's OR grid (first_candle.json) for each traded instrument,
-    * the confirmed 15/3 SR levels on each traded instrument.
-
-It MUST NOT depend on:
-
-    * process start time,
-    * order of scheduler ticks,
-    * whether the SR backfill has completed before the catch-up,
-    * live LTP (unless explicitly opted-in).
-
-To honour this contract the following rules apply:
-
-1. Entry price is resolved from a SINGLE fixed candle series built by
-   ``_build_fixed_series()`` — the same series is used for entry
-   resolution, candle replay, and resistance-exit lookup.  The old
-   multi-source fallback chain (in-memory → intraday API → live LTP)
-   has been collapsed into one deterministic path.
-
-2. ``DUMMY_ORDER_ALLOW_LTP_ENTRY_FALLBACK`` (default: **false**) is the
-   only way to re-enable the live-LTP entry fallback.  When enabled,
-   the LTP source is stamped on the order record as
-   ``entry_price_source="live_ltp"`` so a supervisor can detect it.
-
-3. Order creation is gated on ``sr_backfill_service.is_ready_for_today()``
-   when ``DUMMY_ORDER_WAIT_FOR_SR_BACKFILL`` is true (default).  If the
-   readiness check is not yet implemented by the upstream service, the
-   gate fails open with a one-shot WARNING so the old behaviour
-   (proceed immediately) is preserved.
-
-4. Order creation is idempotent: once an order record exists for the
-   current day it is never overwritten.  Recomputation that produces
-   different values logs ``DRIFT DETECTED`` but does not mutate the
-   record (``DUMMY_ORDER_DRIFT_GUARD``, default true).
-
-5. The execution path (PATH A self-trigger vs PATH B external-trigger)
-   is derived from the isolation record's persisted ``trigger_index``
-   (or ``trigger_origin`` / ``trigger_underlying``) when available,
-   not from the runtime ``execution_path`` field.  The runtime field
-   is used only as a fallback and emits a WARNING
-   (``DUMMY_ORDER_DISABLE_RUNTIME_PATH_SWITCH``, default true).
-
-Persistence
------------
-``<LIVE_DATA_DIR>/dummy_orders.json`` — single JSON document per day,
-reset on IST date rollover.  Structure::
-
-    {
-      "day": "2026-10-29",
-      "execution_path": "A_self_trigger" | "B_external_trigger",
-      "isolated_key": "NSE_FO|53792",
-      "bias_type": "CE",
-      "t_iso": "2026-10-29T09:18:00+05:30",
-      "order": { ... } | null,                    # Path A/B
-      "post_1130_order": { ... } | null,          # POST-1130
-      "orders": [ ... ]                           # 0-, 1-, or 2-element compat list
-    }
-
-The ``order`` record is self-contained — routing mode, trigger level,
-prior support, traded key, entry price + source, stop, OR levels,
-zone, milestones, profit_state, Stage 2 trigger time/reason, tracking
-watermarks, close state, and the two Telegram notification flags.
-
-The ``post_1130_order`` record carries the same shape but with
-``regime="POST_1130_ISOLATED"``, ``routing_mode="post_1130_sr_trigger"``,
-``target_price``, ``exit_sr_config``, and empty OR-levels / milestones
-(the spec doesn't use them).  ``zone="POST_1130"``.
-
-Never raises. Every failure mode lands in the returned summary dict
-and in the state file.
-
-Transition callback (v1, 2026-11-04)
-------------------------------------
-An external consumer (``services/sandbox_execution_service.py``) can
-register a callback via ``set_transition_callback(fn)``.  The service
-invokes ``fn(transition_type, order_record, reason)`` exactly once per
-actionable transition, AFTER the state file has been written.  Supported
-``transition_type`` values:
-
-    CREATED                    — a new OPEN order was just written
-    STAGE_2_MILESTONE          — profit_state moved Stage 1 → Stage 2
-    STOP_HIT                   — stop-loss triggered, order closed
-    STAGE_2_RESISTANCE_EXIT    — Stage 2 resistance confirmation, order closed
-    NEXT_15_3_RESISTANCE_EXIT  — reserved synonym for the above; not
-                                 produced by the current close path but
-                                 mapped defensively for future use
-    EOD_CLOSE                  — end-of-day close, order closed
-
-POST-1130 close reasons are mapped onto the same transition vocabulary
-so the sandbox executor treats them uniformly:
-
-    STOPLOSS_30_PCT_HIT       → STOP_HIT
-    TARGET_50_POINTS_HIT      → STAGE_2_RESISTANCE_EXIT
-    RESISTANCE_15_15_CONFIRMED → STAGE_2_RESISTANCE_EXIT
-    END_OF_DAY                → EOD_CLOSE
-
-``order_record`` is a shallow copy of the order dict at the moment the
-transition was queued.  ``reason`` is the ``run_once(reason=...)``
-argument, passed through unchanged — consumers use it to distinguish
-the scheduled (``"scheduled"``) path from the startup catch-up
-(``"startup"``).
-
-The callback is optional.  Unregistered → no-op.  It must never raise:
-this service wraps the invocation in try/except and logs any exception,
-so a buggy callback cannot break the deterministic order engine.
-
-The callback is invoked synchronously inside the ``_lock``.  Consumers
-that need to do slow I/O (broker calls, fill polling) SHOULD return
-quickly and continue the work on their own worker — otherwise they
-will delay the next scheduler tick.
+POST-11:30 remains a separate time-based strategy with its existing entry,
+target, stop-loss and 15/15 Resistance exit behavior.
 """
+
 
 from __future__ import annotations
 
 import json
+import math
 import threading
 import time
 from datetime import datetime, time as dtime, timezone
@@ -258,6 +92,19 @@ def _safe_float(v: Any) -> float | None:
     except (TypeError, ValueError):
         return None
 
+
+def _dynamic_target_for_entry(entry_price: float) -> tuple[float, int]:
+    """Return the fixed Path A target and divisor for a positive entry price.
+
+    0 < entry <= 100: entry + entry / 3
+    100 < entry <= 200: entry + entry / 4
+    entry > 200: entry + entry / 5
+    """
+    price = float(entry_price)
+    if not math.isfinite(price) or price <= 0:
+        raise ValueError(f"entry_price must be finite and positive: {entry_price!r}")
+    divisor = 3 if price <= 100.0 else 4 if price <= 200.0 else 5
+    return round(price + price / divisor, 4), divisor
 
 def _fmt_price(v: Any, fmt: str = ".4f") -> str:
     f = _safe_float(v)
@@ -375,6 +222,7 @@ def _log_calc_post_1130(
 _CLOSE_REASON_TO_TRANSITION: dict[str, str] = {
     "STOP_HIT":                 "STOP_HIT",
     "STAGE_2_RESISTANCE_EXIT":  "STAGE_2_RESISTANCE_EXIT",
+    "TARGET_MILESTONE_RESISTANCE_EXIT": "STAGE_2_RESISTANCE_EXIT",
     "NEXT_15_3_RESISTANCE_EXIT": "NEXT_15_3_RESISTANCE_EXIT",
     "END_OF_DAY":               "EOD_CLOSE",
     # ---- POST-1130 exit reasons (2026-11-05) ----------------------- #
@@ -747,45 +595,15 @@ class DummyOrderService:
     def _resolve_execution_path(
         self, iso: dict[str, Any],
     ) -> str | None:
-        """Determine PATH A vs PATH B from persisted isolation data.
+        """Return the only standard execution path: unified Path A.
 
-        Order of precedence:
-
-            1. ``trigger_index``   — set by level_isolated_instrument_service
-            2. ``trigger_origin``  — alternative field name
-            3. ``trigger_underlying`` — alternative field name
-            4. ``execution_path``  — runtime field (non-deterministic)
-
-        A trigger that originates from an external index (MIDCPNIFTY,
-        BANKNIFTY, SENSEX) is PATH B.  A trigger from NIFTY itself is
-        PATH A.  Any other value → PATH A (safe default).
+        The isolation trigger index remains in the record for diagnostics
+        but never selects a different standard-session execution strategy.
+        POST-11:30 is dispatched separately by strategy_entry_signal_service.
         """
-        for field in ("trigger_index", "trigger_origin", "trigger_underlying"):
-            raw = str(iso.get(field) or "").strip().upper()
-            if raw:
-                if raw in ("NIFTY", "NIFTY 50", "NIFTY50", "NSE_INDEX|NIFTY 50"):
-                    return "A_self_trigger"
-                return "B_external_trigger"
-
-        runtime_path = str(iso.get("execution_path") or "").strip()
-        if runtime_path:
-            if bool(
-                getattr(
-                    config,
-                    "DUMMY_ORDER_DISABLE_RUNTIME_PATH_SWITCH",
-                    True,
-                )
-            ):
-                logger.warning(
-                    "[dummy-order] isolation record lacks trigger_index — "
-                    "falling back to runtime execution_path=%s "
-                    "(non-deterministic; disable by setting "
-                    "DUMMY_ORDER_DISABLE_RUNTIME_PATH_SWITCH=false only "
-                    "for debugging)",
-                    runtime_path,
-                )
-            return runtime_path
-        return None
+        if not isinstance(iso, dict) or not iso:
+            return None
+        return "PATH_A_UNIFIED"
 
     # ------------------------------------------------------------------ #
     # Window / state plumbing                                            #
@@ -1094,7 +912,13 @@ class DummyOrderService:
             close_f = closes_by_minute.get(key)
             if close_f is not None:
                 out[str(conf_iso)] = close_f
-        return out
+        return dict(sorted(
+            out.items(),
+            key=lambda item: (
+                _parse_iso(item[0]).timestamp()
+                if _parse_iso(item[0]) is not None else float("inf")
+            ),
+        ))
 
     # ------------------------------------------------------------------ #
     # Trigger + routing                                                  #
@@ -1714,7 +1538,7 @@ class DummyOrderService:
         self._notify_closed(order)
 
     # ------------------------------------------------------------------ #
-    # Order creation (Path A/B)                                          #
+    # Order creation (unified standard Path A)                                          #
     # ------------------------------------------------------------------ #
     def _try_create_order(
         self,
@@ -1790,6 +1614,7 @@ class DummyOrderService:
             getattr(config, "STRATEGY_ORDER_STOP_LOSS_PCT", 0.30),
         )
         stop_price = round(entry_price * (1.0 - stop_pct), 4)
+        target_price, target_divisor = _dynamic_target_for_entry(entry_price)
 
         # Ensure the SR engine is tracking the traded instrument so
         # live_sr_levels_service.get_levels() returns pivots for it.
@@ -1813,9 +1638,21 @@ class DummyOrderService:
             "entry_price_source": entry_source,
             "stop_price": stop_price,
             "stop_pct": stop_pct,
+            "target_price": target_price,
+            "target_divisor": target_divisor,
+            "target_milestone_met": False,
+            "target_milestone_at": None,
+            "target_milestone_price": None,
+            "resistance_exit_confirmation_at": None,
+            "execution_path": "PATH_A_UNIFIED",
+            "isolation_trigger_index": iso.get("trigger_index"),
             "or_levels": or_levels,
             "zone": zone.get("zone"),
-            "milestones": zone.get("milestones") or [],
+            "milestones": [{
+                "name": "DYNAMIC_TARGET",
+                "price": target_price,
+                "divisor": target_divisor,
+            }],
             "profit_state": "STAGE_1",
             "stage_2_triggered_at": None,
             "stage_2_trigger_reason": None,
@@ -1841,12 +1678,12 @@ class DummyOrderService:
         }
 
         logger.info(
-            "[dummy-order] CREATED %s | routing=%s entry=%.4f stop=%.4f "
-            "zone=%s milestones=%s series_len=%d",
+            "[dummy-order] CREATED %s | execution=PATH_A_UNIFIED "
+            "routing=%s entry=%.4f stop=%.4f target=%.4f divisor=%d "
+            "zone=%s series_len=%d",
             order["order_id"], routing["routing_mode"],
-            entry_price, stop_price, zone.get("zone"),
-            [m.get("name") for m in (zone.get("milestones") or [])],
-            len(series),
+            entry_price, stop_price, target_price, target_divisor,
+            zone.get("zone"), len(series),
         )
         self._notify_created(order)
         return order
@@ -1940,7 +1777,7 @@ class DummyOrderService:
             )
 
     # ------------------------------------------------------------------ #
-    # Order update (bar replay + Stage 2 exit)                           #
+    # Order update (bar replay + dynamic target / Resistance exit)                           #
     # ------------------------------------------------------------------ #
     def _update_order(
         self,
@@ -1969,10 +1806,14 @@ class DummyOrderService:
         if entry_price <= 0 or stop_price <= 0:
             return
 
-        milestones = order.get("milestones") or []
-        gain_threshold = _safe_float(
-            getattr(config, "STRATEGY_ORDER_MILESTONE_GAIN_POINTS", 50.0),
-        ) or 50.0
+        # The entry-price target is the only Stage 1 profit milestone.
+        # OR-grid validation remains, but its old profit milestones and
+        # the former +50-point threshold no longer arm Stage 2.
+        target_price = _safe_float(order.get("target_price"))
+        if target_price is None:
+            target_price, target_divisor = _dynamic_target_for_entry(entry_price)
+            order["target_price"] = target_price
+            order["target_divisor"] = target_divisor
 
         # Resistance-exit map for Stage 2 — closes resolved from the
         # SAME fixed series used for replay.
@@ -1981,6 +1822,22 @@ class DummyOrderService:
         )
 
         stage_2_dt = _parse_iso(order.get("stage_2_triggered_at"))
+        if (
+            stage_2_dt is not None
+            and order.get("stage_2_trigger_reason") != "DYNAMIC_TARGET_MILESTONE"
+        ):
+            logger.info(
+                "[dummy-order] resetting legacy Stage-2 marker for %s; "
+                "replaying the dynamic target milestone",
+                order.get("order_id"),
+            )
+            stage_2_dt = None
+            order["stage_2_triggered_at"] = None
+            order["stage_2_trigger_reason"] = None
+            order["profit_state"] = "STAGE_1"
+            order["target_milestone_met"] = False
+            order["target_milestone_at"] = None
+            order["target_milestone_price"] = None
         exit_reason: str | None = None
         exit_price: float | None = None
         exit_time_iso: str | None = None
@@ -2010,25 +1867,18 @@ class DummyOrderService:
 
             # ---- Stage 1 → Stage 2 -------------------------------- #
             if stage_2_dt is None and order.get("profit_state") == "STAGE_1":
-                triggered_name: str | None = None
-                for m in milestones:
-                    m_price = _safe_float(m.get("price"))
-                    if m_price is not None and hi >= m_price:
-                        triggered_name = f"MILESTONE_{m.get('name')}"
-                        break
-                if triggered_name is None:
-                    gain = hi - entry_price
-                    if gain >= gain_threshold:
-                        triggered_name = f"GAIN_{gain:.2f}PT"
-                if triggered_name is not None:
+                if hi >= target_price:
                     stage_2_dt = c_dt
                     order["stage_2_triggered_at"] = _iso(c_dt)
-                    order["stage_2_trigger_reason"] = triggered_name
+                    order["stage_2_trigger_reason"] = "DYNAMIC_TARGET_MILESTONE"
+                    order["target_milestone_met"] = True
+                    order["target_milestone_at"] = _iso(c_dt)
+                    order["target_milestone_price"] = round(target_price, 4)
                     logger.info(
-                        "[dummy-order] Stage 2 ARMED %s | %s @ %s",
-                        order.get("order_id"),
-                        triggered_name,
-                        _fmt_time(_iso(c_dt)),
+                        "[dummy-order] TARGET MILESTONE MET %s | entry=%.4f "
+                        "target=%.4f divisor=%d at=%s; waiting for NEW resistance",
+                        order.get("order_id"), entry_price, target_price,
+                        order.get("target_divisor"), _fmt_time(_iso(c_dt)),
                     )
 
             # ---- Stage 2 exit ------------------------------------- #
@@ -2040,9 +1890,10 @@ class DummyOrderService:
                     if conf_dt <= stage_2_dt:
                         continue
                     if conf_dt <= c_dt:
-                        exit_reason = "STAGE_2_RESISTANCE_EXIT"
+                        exit_reason = "TARGET_MILESTONE_RESISTANCE_EXIT"
                         exit_price = conf_close
                         exit_time_iso = conf_iso
+                        order["resistance_exit_confirmation_at"] = conf_iso
                         break
                 if exit_reason:
                     break
