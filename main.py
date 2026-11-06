@@ -109,7 +109,7 @@ This module now:
   * requires auth (Bearer / X-API-Key / Basic / session-cookie) on
     every sensitive router: admin, folders, logs, isolated-instrument,
     simulation, dummy-orders, sandbox, margin, daily-backup,
-    readiness, api-explorer, position API;
+    readiness, api-explorer, position API, option-contracts;
   * replaces the ``allow_origins=["*"] + allow_credentials=True``
     combination (rejected by browsers, CORS spec violation) with a
     real allow-list from ``CORS_ALLOW_ORIGINS``.
@@ -210,6 +210,7 @@ Admin surfaces mounted by this module:
     Sandbox-Orders API     routes/admin_orders.py (sandbox-status)
     Position API           upstox_app/apis/position_routes.py
     Position Page          routes/page_routes.py (GET /positions)
+    Option-Contracts API   routes/option_contracts_routes.py  <-- NEW (2026-11-06)
 """
 
 import asyncio
@@ -247,6 +248,7 @@ from routes.live_sr_routes import router as live_sr_router
 from routes.live_sr_calc_routes import router as live_sr_calc_router
 from routes.api_explorer_route import router as api_explorer_router
 from routes.sandbox_routes import router as sandbox_router
+from routes.option_contracts_routes import router as option_contracts_router
 
 from upstox_app.apis.expired_instruments_api import (
     router as expired_instruments_router,
@@ -1074,7 +1076,8 @@ app.include_router(layout_router)
 
 # ---- Sensitive surfaces (require auth) ----------------------------------- #
 # Admin, folders, logs, isolated-instrument, simulation, dummy-orders,
-# sandbox, margin, daily-backup, readiness, api-explorer, position API.
+# sandbox, margin, daily-backup, readiness, api-explorer, position API,
+# option-contracts.
 #
 # All of these were reachable by the scanner on 2026-11-05. They are now
 # gated on ``require_any_auth`` (Bearer / X-API-Key / Basic / session-
@@ -1094,6 +1097,7 @@ app.include_router(daily_backup_router, dependencies=_AUTH)
 app.include_router(readiness_router, dependencies=_AUTH)
 app.include_router(api_explorer_router, dependencies=_AUTH)
 app.include_router(position_api_router, dependencies=_AUTH)  # /api/positions/*
+app.include_router(option_contracts_router, dependencies=_AUTH)  # /admin/option-contracts/*
 
 # The order router was already commented out in the original file:
 # app.include_router(order_router)   # commented 2026-11-04 for testing
