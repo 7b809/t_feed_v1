@@ -211,79 +211,7 @@ The callback is invoked synchronously inside the ``_lock``.  Consumers
 that need to do slow I/O (broker calls, fill polling) SHOULD return
 quickly and continue the work on their own worker — otherwise they
 will delay the next scheduler tick.
-"""
-
-from __future__ import annotations
-
-import json
-import math
-import threading
-import time
-from datetime import datetime, time as dtime, timezone
-from pathlib import Path
-from typing import Any
-from zoneinfo import ZoneInfo
-
-from core import config
-from core.logger import get_logger
-
-logger = get_logger(__file__)
-
-# --------------------------------------------------------------------------- #
-# Time helpers                                                                #
-# --------------------------------------------------------------------------- #
-def _market_tz() -> ZoneInfo:
-    try:
-        return ZoneInfo(config.MARKET_TIMEZONE)
-    except Exception:
-        return ZoneInfo("Asia/Kolkata")
-
-
-def _now_market() -> datetime:
-    return datetime.now(_market_tz())
-
-
-def _now_utc_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
-def _today_iso() -> str:
-    return _now_market().date().isoformat()
-
-
-def _parse_iso(value: Any) -> datetime | None:
-    if value is None or value == "":
-        return None
-    try:
-        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-    except Exception:
-        return None
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=_market_tz())
-    return dt.astimezone(_market_tz())
-
-
-def _iso(dt: datetime) -> str:
-    return dt.astimezone(_market_tz()).isoformat()
-
-
-def _fmt_time(iso_val: Any) -> str:
-    dt = _parse_iso(iso_val)
-    return dt.strftime("%H:%M:%S IST") if dt else "—"
-
-
-# --------------------------------------------------------------------------- #
-# Numeric helpers                                                             #
-# --------------------------------------------------------------------------- #
-def _safe_float(v: Any) -> float | None:
-    try:
-        return float(v)
-    except (TypeError, ValueError):
-        return None
-
-
-def _dynamic_target_for_entry(entry_price: float) -> tuple[float, int]:
-    """Return the unified Path A target for the entry-price band.
+Return the unified Path A target for the entry-price band.
 
     0 < entry <= 100: entry + entry / 3
     100 < entry <= 200: entry + entry / 4
@@ -294,6 +222,7 @@ def _dynamic_target_for_entry(entry_price: float) -> tuple[float, int]:
         raise ValueError(f"entry_price must be finite and positive: {entry_price!r}")
     divisor = 3 if price <= 100.0 else 4 if price <= 200.0 else 5
     return round(price + price / divisor, 4), divisor
+
 
 def _fmt_price(v: Any, fmt: str = ".4f") -> str:
     f = _safe_float(v)
@@ -2000,8 +1929,6 @@ class DummyOrderService:
         target_price = _safe_float(order.get("target_price"))
         if target_price is None:
             target_price, target_divisor = _dynamic_target_for_entry(entry_price)
-            order["target_price"] = target_price
-            order["target_divisor"] = target_divisor
             order["target_price"] = target_price
             order["target_divisor"] = target_divisor
 
