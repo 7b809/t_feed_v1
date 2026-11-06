@@ -175,6 +175,7 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
 .label-toggle-btn[data-indicator="emaCross"].active { background: linear-gradient(90deg, #089981 0%, #f23645 100%); border-color: transparent; }
 .label-toggle-btn[data-indicator="srLevels"].active { background: linear-gradient(90deg, #FF0000 0%, #233dee 100%); border-color: transparent; }
 .label-toggle-btn[data-indicator="srLabels"].active { background: linear-gradient(90deg, #f5c451 0%, #a855f7 100%); border-color: transparent; color: #111; }
+.label-toggle-btn:disabled { opacity: 0.55; cursor: wait; }
 
 /* ---------- SR Params & Date Filter card ---------- */
 .sr-param-field {
@@ -234,6 +235,13 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
 }
 .sr-param-hint.visible { opacity: 1; }
 .sr-param-hint.error { color: var(--red); }
+.sr-divider {
+  display: inline-block;
+  width: 1px;
+  height: 18px;
+  background: var(--border);
+  margin: 0 2px;
+}
 
 .scroll-nav { position: fixed; right: 20px; bottom: 24px; z-index: 300; display: flex; flex-direction: column; gap: 8px; }
 .scroll-nav-btn { width: 42px; height: 42px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--border); border-radius: 50%; background: var(--surface-2); color: var(--text); box-shadow: var(--shadow); cursor: pointer; transition: all 0.15s ease; font-size: 16px; }
@@ -701,6 +709,16 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
             title="Reset to default: Today date only and default pivot bars">
       <i class="bi bi-calendar-event me-1"></i>Today Only
     </button>
+    <span class="sr-divider" aria-hidden="true"></span>
+    <label class="sr-param-field" for="plotDaysInput" title="Number of days of candles to fetch on next reload (1–365)">
+      Days
+      <input type="number" id="plotDaysInput" class="sr-param-input"
+             min="1" max="365" step="1" value="{{ 15 }}" inputmode="numeric">
+    </label>
+    <button type="button" id="reloadDaysBtn" class="label-toggle-btn"
+            title="Re-fetch and re-plot candles for the entered number of days">
+      <i class="bi bi-arrow-clockwise me-1"></i>Reload
+    </button>
     <span id="srParamsHint" class="sr-param-hint" aria-live="polite"></span>
   </div>
 
@@ -784,13 +802,45 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
           </div>
           <span class="json-export-preset-hint">Multi-select is supported — each checked preset produces its own <code>levels_by_preset[&lt;left&gt;/&lt;right&gt;]</code> array in the JSON.</span>
         </div>
+
+        <!-- Export section toggles — all checked by default; uncheck to exclude -->
+        <div class="json-export-field" style="grid-column: 1 / -1;">
+          <label>Include in export (all checked by default — uncheck any to exclude)</label>
+          <div class="json-export-preset-list" role="group" aria-label="Export sections">
+            <label class="json-export-preset-item">
+              <input type="checkbox" class="json-export-section" value="metadata" checked>
+              <span>Metadata</span>
+            </label>
+            <label class="json-export-preset-item">
+              <input type="checkbox" class="json-export-section" value="config" checked>
+              <span>Config</span>
+            </label>
+            <label class="json-export-preset-item">
+              <input type="checkbox" class="json-export-section" value="candles" checked>
+              <span>Candles</span>
+            </label>
+            <label class="json-export-preset-item">
+              <input type="checkbox" class="json-export-section" value="crosses" checked>
+              <span>EMA Crosses</span>
+            </label>
+            <label class="json-export-preset-item">
+              <input type="checkbox" class="json-export-section" value="levels" checked>
+              <span>SR Levels</span>
+            </label>
+            <label class="json-export-preset-item">
+              <input type="checkbox" class="json-export-section" value="opening_range_analysis" checked>
+              <span>Opening-Range Analysis</span>
+            </label>
+          </div>
+          <span class="json-export-preset-hint">Every section is included by default (matches previous behaviour). Uncheck any to omit it from the downloaded JSON. Tip: SR-level <code>bar_index</code> references point into the exported candles array — keep Candles included if you plan to use those indices.</span>
+        </div>
       </div>
       <div class="json-export-actions">
         <button type="button" class="json-export-button" id="downloadChartJsonBtn">
           <i class="bi bi-download me-1"></i> Download complete JSON
         </button>
         <span class="json-export-status" id="jsonExportStatus" role="status" aria-live="polite">
-          Default: latest 11 available trading dates · EMA 9/21 · SR manual 15/3 · Opening-range R3/S3 touch analysis per day.
+          Default: latest 11 available trading dates · EMA 9/21 · SR manual 15/3 · All sections included — uncheck any to exclude.
         </span>
       </div>
     </div>
@@ -935,7 +985,37 @@ const MARKET_CLOSE_MIN_IST   = 30;
 const MARKET_TZ              = "Asia/Kolkata";
 const IST_UTC_OFFSET_MIN     = 330;
 
-const DEFAULT_DAYS_CANDLES = 15;
+// ---- Number of days of candles to fetch / re-plot (user-configurable via UI) ----
+const PLOT_DAYS_KEY = "chart.plot.days";
+const PLOT_DAYS_MIN = 1;
+const PLOT_DAYS_MAX = 365;
+let DEFAULT_DAYS_CANDLES = 15;
+
+(function restorePlotDaysFromStorage() {
+  try {
+    const saved = Number(localStorage.getItem(PLOT_DAYS_KEY));
+    if (Number.isInteger(saved) && saved >= PLOT_DAYS_MIN && saved <= PLOT_DAYS_MAX) {
+      DEFAULT_DAYS_CANDLES = saved;
+    }
+  } catch (e) {}
+})();
+
+// ============================================================
+// Shared hint helper for the SR & Plot Dates card
+// ============================================================
+let __srParamsHintTimer = null;
+function showSRParamsHint(text, isError) {
+  const hintEl = document.getElementById("srParamsHint");
+  if (!hintEl) return;
+  hintEl.textContent = text || "";
+  hintEl.classList.toggle("error", !!isError);
+  hintEl.classList.add("visible");
+  if (__srParamsHintTimer) clearTimeout(__srParamsHintTimer);
+  __srParamsHintTimer = setTimeout(() => {
+    hintEl.classList.remove("visible");
+    hintEl.classList.remove("error");
+  }, 3200);
+}
 
 function getISTParts(date = new Date()) {
   try {
@@ -1126,6 +1206,8 @@ const globalSearchInput = document.getElementById("globalSearchInput");
 const searchResults = document.getElementById("searchResults");
 const swapOptionBtn = document.getElementById("swapOptionBtn");
 const swapOptionLabel = document.getElementById("swapOptionLabel");
+const plotDaysInput = document.getElementById("plotDaysInput");
+const reloadDaysBtn = document.getElementById("reloadDaysBtn");
 
 // ============================================================
 // STATE
@@ -1141,6 +1223,7 @@ let reconnectAttempts = 0;
 let pageClosing = false;
 let isLoadingHistory = false;
 let hasMoreHistory = true;
+let isReloadingDays = false;
 const reconnectMaximumDelay = 15000;
 const INDICATOR_PREFS_KEY = "chart.indicators.prefs";
 const SR_PARAMS_KEY = "chart.sr.params";
@@ -2030,7 +2113,6 @@ document.querySelectorAll("#indicatorToggleBar .label-toggle-btn[data-indicator]
   const endInput    = document.getElementById("filterEndDate");
   const applyBtn    = document.getElementById("srApplyBtn");
   const resetBtn    = document.getElementById("srResetTodayBtn");
-  const hintEl      = document.getElementById("srParamsHint");
   if (!leftInput || !rightInput || !applyBtn || !resetBtn) return;
 
   leftInput.value  = String(indicatorState.srLevels.leftBars);
@@ -2040,19 +2122,6 @@ document.querySelectorAll("#indicatorToggleBar .label-toggle-btn[data-indicator]
   const todayKey = getTodayDateKeyIST();
   if (startInput) startInput.value = todayKey;
   if (endInput)   endInput.value   = todayKey;
-
-  let hintTimer = null;
-  function showHint(text, isError) {
-    if (!hintEl) return;
-    hintEl.textContent = text || "";
-    hintEl.classList.toggle("error", !!isError);
-    hintEl.classList.add("visible");
-    if (hintTimer) clearTimeout(hintTimer);
-    hintTimer = setTimeout(() => {
-      hintEl.classList.remove("visible");
-      hintEl.classList.remove("error");
-    }, 3200);
-  }
 
   function clampInt(raw, min, max) {
     const n = Number(raw);
@@ -2065,13 +2134,13 @@ document.querySelectorAll("#indicatorToggleBar .label-toggle-btn[data-indicator]
   function applyParams() {
     const lb = clampInt(leftInput.value, 1, 200);
     const rb = clampInt(rightInput.value, 1, 200);
-    if (lb === null) { showHint("Left bars must be 1–200", true); return; }
-    if (rb === null) { showHint("Right bars must be 1–200", true); return; }
+    if (lb === null) { showSRParamsHint("Left bars must be 1–200", true); return; }
+    if (rb === null) { showSRParamsHint("Right bars must be 1–200", true); return; }
 
     const sDate = startInput ? startInput.value : "";
     const eDate = endInput   ? endInput.value   : "";
     if (sDate && eDate && sDate > eDate) {
-      showHint("Start date must be <= End date", true);
+      showSRParamsHint("Start date must be <= End date", true);
       return;
     }
 
@@ -2097,7 +2166,7 @@ document.querySelectorAll("#indicatorToggleBar .label-toggle-btn[data-indicator]
 
     const pivots = indicatorState.srLevels.detectedPivots || [];
     const dateLabel = (sDate === eDate && sDate) ? sDate : `${sDate || 'all'} to ${eDate || 'all'}`;
-    showHint(`✓ Applied (${lb}/${rb}) · Dates: ${dateLabel} · ${pivots.length} pivots`, false);
+    showSRParamsHint(`✓ Applied (${lb}/${rb}) · Dates: ${dateLabel} · ${pivots.length} pivots`, false);
   }
 
   function resetToToday() {
@@ -2117,6 +2186,108 @@ document.querySelectorAll("#indicatorToggleBar .label-toggle-btn[data-indicator]
     inp.addEventListener("keydown", e => {
       if (e.key === "Enter") { e.preventDefault(); applyParams(); }
     });
+  });
+})();
+
+// ============================================================
+// PLOT DAYS CARD — UI for DEFAULT_DAYS_CANDLES + Reload button
+// ============================================================
+async function reloadChartWithDays(newDays) {
+  if (isReloadingDays) return;
+  if (!Number.isInteger(newDays) || newDays < PLOT_DAYS_MIN || newDays > PLOT_DAYS_MAX) {
+    showSRParamsHint(`Days must be ${PLOT_DAYS_MIN}–${PLOT_DAYS_MAX}`, true);
+    return;
+  }
+  if (!currentInstrumentKey) {
+    showSRParamsHint("Instrument not ready yet", true);
+    return;
+  }
+  if (!chart || !candleSeries) {
+    // Chart not built yet — just update the default so the initial bootstrap uses it.
+    DEFAULT_DAYS_CANDLES = newDays;
+    try { localStorage.setItem(PLOT_DAYS_KEY, String(newDays)); } catch (e) {}
+    showSRParamsHint(`✓ Will load ${newDays} days on next chart build`, false);
+    return;
+  }
+  if (isLoadingHistory) {
+    showSRParamsHint("A history load is in progress, please wait…", true);
+    return;
+  }
+
+  isReloadingDays = true;
+  if (reloadDaysBtn) {
+    reloadDaysBtn.disabled = true;
+    reloadDaysBtn.classList.add("active");
+  }
+  LoadingOverlay.showBuffering(`Re-plotting last ${newDays} days…`);
+
+  try {
+    DEFAULT_DAYS_CANDLES = newDays;
+    try { localStorage.setItem(PLOT_DAYS_KEY, String(newDays)); } catch (e) {}
+
+    const freshCandles = await fetchCandlesFromUpstox(currentInstrumentKey);
+    if (!freshCandles || freshCandles.length === 0) {
+      showSRParamsHint("No candles returned for this range.", true);
+      return;
+    }
+
+    // Wipe caches so EMAs / markers / pivots are rebuilt from fresh data
+    invalidateEMACache();
+
+    candleSeries.setData(freshCandles);
+    lastCandle = freshCandles[freshCandles.length - 1];
+    oldestCandleTime = freshCandles[0].time;
+    hasMoreHistory = true;
+
+    rebuildAndRenderOpeningRanges(freshCandles);
+    refreshIndicators(freshCandles);
+    if (totalCandlesValue) totalCandlesValue.textContent = String(freshCandles.length);
+
+    if (priceScaleAuto) applyAutoFitPriceScale();
+    updateDynamicPriceScale();
+    scheduleLevelLabelUpdate();
+    scheduleSRLabelUpdate();
+    chart.timeScale().fitContent();
+
+    showSRParamsHint(`✓ Re-plot complete · ${freshCandles.length} candles · ${newDays} day(s)`, false);
+  } catch (err) {
+    console.error("[reload-days] failed:", err);
+    showSRParamsHint("Reload failed: " + (err && err.message ? err.message : String(err)), true);
+  } finally {
+    isLoadingHistory = false;
+    isReloadingDays = false;
+    LoadingOverlay.hideBuffering();
+    if (reloadDaysBtn) {
+      reloadDaysBtn.disabled = false;
+      reloadDaysBtn.classList.remove("active");
+    }
+  }
+}
+
+(function initPlotDaysCard() {
+  if (!plotDaysInput || !reloadDaysBtn) return;
+
+  // Reflect current effective value (may have been restored from localStorage)
+  plotDaysInput.value = String(DEFAULT_DAYS_CANDLES);
+
+  async function handleReload() {
+    const raw = Number(plotDaysInput.value);
+    if (!Number.isFinite(raw)) {
+      showSRParamsHint("Enter a valid number of days", true);
+      return;
+    }
+    const n = Math.round(raw);
+    if (n < PLOT_DAYS_MIN || n > PLOT_DAYS_MAX) {
+      showSRParamsHint(`Days must be ${PLOT_DAYS_MIN}–${PLOT_DAYS_MAX}`, true);
+      return;
+    }
+    plotDaysInput.value = String(n);
+    await reloadChartWithDays(n);
+  }
+
+  reloadDaysBtn.addEventListener("click", handleReload);
+  plotDaysInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); handleReload(); }
   });
 })();
 
@@ -3184,6 +3355,12 @@ window.addEventListener("beforeunload", () => {
 // COMPLETE CHART DATA JSON EXPORT
 // This code is inside the page's existing inline script. The disclosure
 // itself is native HTML <details>, so it opens even if JS is unavailable.
+//
+// Every section (metadata / config / candles / crosses / levels /
+// opening_range_analysis) is included by default — matching the previous
+// behaviour — but the user may uncheck any section to exclude it from the
+// downloaded JSON. Section checkboxes live in the export card markup under
+// .json-export-section.
 // ============================================================
 (function initChartJSONExport() {
   const card = document.getElementById("jsonExportCard");
@@ -3195,6 +3372,7 @@ window.addEventListener("beforeunload", () => {
   const rightInput = document.getElementById("jsonExportSrRight");
   const srModeRadios = document.querySelectorAll('input[name="jsonExportSrMode"]');
   const presetCheckboxes = document.querySelectorAll('.json-export-sr-preset');
+  const sectionCheckboxes = document.querySelectorAll('.json-export-section');
   const downloadButton = document.getElementById("downloadChartJsonBtn");
   const status = document.getElementById("jsonExportStatus");
 
@@ -3234,6 +3412,13 @@ window.addEventListener("beforeunload", () => {
     return result;
   }
 
+  // ---- Collect the set of sections the user wants to export ----
+  function getSelectedSections() {
+    const result = new Set();
+    sectionCheckboxes.forEach(cb => { if (cb.checked) result.add(cb.value); });
+    return result;
+  }
+
   function updateSRModeUI() {
     const mode = getSelectedSRMode();
     document.querySelectorAll("[data-sr-mode]").forEach(el => {
@@ -3262,8 +3447,18 @@ window.addEventListener("beforeunload", () => {
     }
   }
 
+  function handleSectionChange() {
+    const chosen = getSelectedSections();
+    if (chosen.size === 0) {
+      setStatus("At least one export section must be checked before downloading.", true);
+    } else {
+      setStatus(`${chosen.size} section(s) selected for export. Uncheck any to exclude.`, false);
+    }
+  }
+
   srModeRadios.forEach(r => r.addEventListener("change", updateSRModeUI));
   presetCheckboxes.forEach(cb => cb.addEventListener("change", handlePresetChange));
+  sectionCheckboxes.forEach(cb => cb.addEventListener("change", handleSectionChange));
   updateSRModeUI();
 
   function getChartCandles() {
@@ -3660,7 +3855,16 @@ window.addEventListener("beforeunload", () => {
         throw new Error("Start date must be on or before end date.");
       }
 
+      // ---- Resolve which sections to include (all checked by default) ----
+      const includeSections = getSelectedSections();
+      if (includeSections.size === 0) {
+        throw new Error("Select at least one export section (Metadata / Config / Candles / Crosses / Levels / Opening-Range Analysis).");
+      }
+
       // ---- Resolve SR configuration (manual vs presets) ----
+      // SR mode is always resolved so that SR-related sections and metadata
+      // counters are consistent when Levels are included. If Levels are
+      // excluded, the values are still computed for metadata but not exported.
       const srMode = getSelectedSRMode();
       let srConfigs = [];
       if (srMode === "manual") {
@@ -3730,9 +3934,11 @@ window.addEventListener("beforeunload", () => {
         }));
       }
 
-      // ---- Build payload ----
-      const payload = {
-        metadata: {
+      // ---- Build payload, including only the sections the user has kept checked ----
+      const payload = {};
+
+      if (includeSections.has("metadata")) {
+        payload.metadata = {
           instrument_key: instrument.instrument_key,
           trading_symbol: instrument.trading_symbol,
           instrument,
@@ -3742,6 +3948,7 @@ window.addEventListener("beforeunload", () => {
             timezone: "Asia/Kolkata"
           },
           exported_at: exportTime,
+          included_sections: Array.from(includeSections),
           candle_count: selectedCandles.length,
           ema_cross_count: crosses.length,
           sr_mode: srMode,
@@ -3753,9 +3960,15 @@ window.addEventListener("beforeunload", () => {
               }),
           opening_range_date_count: openingRangeSummary.date_count,
           opening_range_summary: openingRangeSummary
-        },
-        config,
-        candles: selectedCandles.map(c => ({
+        };
+      }
+
+      if (includeSections.has("config")) {
+        payload.config = config;
+      }
+
+      if (includeSections.has("candles")) {
+        payload.candles = selectedCandles.map(c => ({
           timestamp: toISTTimestamp(c.time),
           open: Number(c.open),
           high: Number(c.high),
@@ -3763,36 +3976,55 @@ window.addEventListener("beforeunload", () => {
           close: Number(c.close),
           volume: Number(c.volume || 0),
           oi: Number(c.oi || 0)
-        })),
-        crosses,
-        ...(srMode === "manual"
-          ? { levels: levelsByPreset[srConfigs[0].key] }
-          : { levels_by_preset: levelsByPreset }),
-        // Always included — mandatory per selected date range:
-        opening_range_analysis: openingRangeAnalysis
-      };
+        }));
+      }
+
+      if (includeSections.has("crosses")) {
+        payload.crosses = crosses;
+      }
+
+      if (includeSections.has("levels")) {
+        if (srMode === "manual") {
+          payload.levels = levelsByPreset[srConfigs[0].key];
+        } else {
+          payload.levels_by_preset = levelsByPreset;
+        }
+      }
+
+      if (includeSections.has("opening_range_analysis")) {
+        payload.opening_range_analysis = openingRangeAnalysis;
+      }
 
       const safeSymbol = String(instrument.trading_symbol || "instrument")
         .replace(/[^a-z0-9_-]+/gi, "_").replace(/^_+|_+$/g, "") || "instrument";
       downloadJsonFile(payload, `${safeSymbol}_${startDate || "all"}_${endDate || "all"}_chart_data.json`);
 
-      const orSummaryTail = openingRangeSummary.date_count
-        ? ` · ${openingRangeSummary.date_count} opening-range day(s) analyzed ` +
-          `(R3 touched ${openingRangeSummary.days_with_r3_touch} · S3 touched ${openingRangeSummary.days_with_s3_touch} · both ${openingRangeSummary.days_with_both_touches})`
-        : " · opening-range analysis unavailable (no candles in range)";
-
-      if (srMode === "manual") {
-        const only = srConfigs[0];
-        setStatus(
-          `Downloaded ${selectedCandles.length} candles · ${crosses.length} EMA crosses · ${totalLevelCount} SR levels (${only.left_bars}/${only.right_bars})${orSummaryTail}.`,
-          false
-        );
-      } else {
-        setStatus(
-          `Downloaded ${selectedCandles.length} candles · ${crosses.length} EMA crosses · ${totalLevelCount} total SR levels across ${srConfigs.length} preset(s)${orSummaryTail}.`,
-          false
-        );
+      // Build a dynamic status message that reflects what was actually exported.
+      const summaryParts = [];
+      summaryParts.push(`${includeSections.size} section(s)`);
+      if (includeSections.has("candles")) summaryParts.push(`${selectedCandles.length} candles`);
+      if (includeSections.has("crosses")) summaryParts.push(`${crosses.length} EMA crosses`);
+      if (includeSections.has("levels")) {
+        if (srMode === "manual") {
+          const only = srConfigs[0];
+          summaryParts.push(`${totalLevelCount} SR levels (${only.left_bars}/${only.right_bars})`);
+        } else {
+          summaryParts.push(`${totalLevelCount} SR levels across ${srConfigs.length} preset(s)`);
+        }
       }
+      if (includeSections.has("opening_range_analysis")) {
+        if (openingRangeSummary.date_count) {
+          summaryParts.push(
+            `Opening-range: ${openingRangeSummary.date_count} day(s)` +
+            ` (R3 ${openingRangeSummary.days_with_r3_touch}` +
+            ` · S3 ${openingRangeSummary.days_with_s3_touch}` +
+            ` · both ${openingRangeSummary.days_with_both_touches})`
+          );
+        } else {
+          summaryParts.push("Opening-range: no candles in range");
+        }
+      }
+      setStatus(`Downloaded: ${summaryParts.join(" · ")}.`, false);
     } catch (error) {
       console.error("[json-export] Download failed:", error);
       setStatus(error && error.message ? error.message : "Unable to generate JSON file.", true);
