@@ -1629,13 +1629,7 @@ class DummyOrderService:
             premium_max = float(getattr(
                 config, "STRATEGY_ORDER_EER_SAME_LEG_PREMIUM_MAX", 100.0,
             ))
-            if premium_min > premium_max:
-                logger.error(
-                    "[dummy-order] invalid EER premium band: min %.4f > max %.4f; "
-                    "filter disabled for this entry",
-                    premium_min, premium_max,
-                )
-            elif not (premium_min <= entry_price <= premium_max):
+            if not (premium_min <= entry_price <= premium_max):
                 filter_reason = (
                     "CANCEL_FILTERED: EARLY_EXTREME_REVERSAL same-leg entry "
                     f"₹{entry_price:.2f} is outside inclusive premium band "
