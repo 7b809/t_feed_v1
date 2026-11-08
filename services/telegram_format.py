@@ -1,23 +1,25 @@
 # services/telegram_format.py
-"""Telegram message formatter.
+"""Telegram message builders and the global notification layout.
 
-This module now supports **two** output styles simultaneously:
+Builder compatibility
+---------------------
+The existing ``build()`` entry point retains both historical call styles:
 
-1. **Plain-Unicode (legacy)** — original helpers: ``DIVIDER``, ``THIN``,
-   ``STATUS_ICON``, ``status_icon``, ``header``, ``divider``, ``line``,
-   ``section``, ``bullet``, ``footer``, and the *old* ``build(emoji, title, ...)``
-   signature. These return plain Unicode text with ``*bold*`` markers and are
-   safe with no ``parse_mode``.
+- Legacy ``build(emoji, title, ...)`` returns plain Unicode with the
+  original helper functions and formatting markers.
+- HTML ``build(title=..., emoji=..., ...)`` returns Telegram HTML.
 
-2. **HTML (new)** — ``escape``, ``code``, ``bold``, ``italic``, ``kv_line``,
-   ``build(title=..., emoji=..., ...)``, plus domain builders
-   ``format_order_alert``, ``format_stage_tracker``, ``format_token_status``.
-   These return HTML and require ``parse_mode="HTML"`` on the wire (the
-   companion ``TelegramService.send_message`` auto-detects and sets it).
+Global delivery layout
+----------------------
+All outbound notifications are normalized by ``format_notification()``
+inside ``TelegramService.send_message()``. Legacy text is escaped,
+decorative dividers and excessive blank lines are removed, bullet key/value
+labels are standardized, and HTML builder output is preserved. The Telegram
+token bot uses ``format_bot_reply()`` for command responses.
 
-The single ``build()`` entry point dispatches between the two styles based on
-the arguments supplied, so existing call sites importing ``build, divider, THIN``
-from this module keep working unchanged.
+Telegram does not expose responsive font sizing in message text. The shared
+layout uses short headings, consistent spacing and natural wrapping so the
+same content remains readable on desktop and mobile clients.
 """
 
 from __future__ import annotations
