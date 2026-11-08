@@ -1,4 +1,4 @@
-{# templates/chart.html — single-instrument candle chart with CE↔PE swap FAB, pivot SR levels, date filters, and EMA crosses #}
+{# templates/chart.html — single-instrument candle chart with timeframe selector, CE↔PE swap FAB, pivot SR levels, PREV-DAY-AVG indicator, date filters, and EMA crosses #}
 {% extends "base.html" %}
 {% block title %}{{ instrument_name or instrument_key }} - Trading Dashboard{% endblock %}
 {% block head %}
@@ -175,7 +175,65 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
 .label-toggle-btn[data-indicator="emaCross"].active { background: linear-gradient(90deg, #089981 0%, #f23645 100%); border-color: transparent; }
 .label-toggle-btn[data-indicator="srLevels"].active { background: linear-gradient(90deg, #FF0000 0%, #233dee 100%); border-color: transparent; }
 .label-toggle-btn[data-indicator="srLabels"].active { background: linear-gradient(90deg, #f5c451 0%, #a855f7 100%); border-color: transparent; color: #111; }
+<<<<<<< HEAD
+/* NEW: Prev-Day-AVG indicator active state (pink→violet gradient) */
+.label-toggle-btn[data-indicator="dayAvg"].active {
+  background: linear-gradient(90deg, #ec4899 0%, #8b5cf6 100%);
+  border-color: transparent;
+  color: #ffffff;
+  box-shadow: 0 2px 8px rgba(236,72,153,0.4);
+}
+
+/* ---------- Timeframe / Interval Selector ---------- */
+.tf-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.tf-presets .label-toggle-btn {
+  min-width: 40px;
+  text-align: center;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  padding: 5px 10px;
+}
+.tf-presets .label-toggle-btn.active {
+  background: linear-gradient(90deg, #2962ff 0%, #089981 100%);
+  border-color: transparent;
+  color: #fff;
+  box-shadow: 0 2px 8px rgba(41,98,255,0.35);
+}
+.tf-divider {
+  width: 1px; height: 22px; background: var(--border); margin: 0 6px;
+  flex-shrink: 0;
+}
+.tf-current-badge {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 4px 10px;
+  border-radius: 20px;
+  background: rgba(41,98,255,0.12);
+  border: 1px solid rgba(41,98,255,0.4);
+  color: #7ea6ff;
+  font-size: 10.5px; font-weight: 800;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.tf-current-badge .tf-badge-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: #089981;
+  box-shadow: 0 0 6px rgba(8,153,129,0.9);
+  animation: tfDotPulse 1.6s ease-in-out infinite;
+}
+@keyframes tfDotPulse {
+  0%,100% { opacity: 0.6; transform: scale(0.9); }
+  50% { opacity: 1; transform: scale(1.15); }
+}
+=======
 .label-toggle-btn:disabled { opacity: 0.55; cursor: wait; }
+>>>>>>> 13fd48fb716509218952fe20dfd570626fe46446
 
 /* ---------- SR Params & Date Filter card ---------- */
 .sr-param-field {
@@ -258,9 +316,27 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
 .level-label-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; overflow: hidden; pointer-events: none; z-index: 5; }
 .level-line-label { position: absolute; display: none; transform: translateY(-50%); padding: 1px 5px; font-size: 10px; font-weight: 700; line-height: 1.2; font-family: inherit; letter-spacing: 0.02em; color: #ffffff; border-radius: 3px; white-space: nowrap; pointer-events: none; z-index: 6; box-shadow: 0 1px 2px rgba(0,0,0,0.25); }
 
-/* ============================================================
-   SR LABELS LAYER (pivot confirmation labels)
-   ============================================================ */
+/* ---------- NEW: Prev-Day-AVG label (distinct pink→violet design) ---------- */
+.day-avg-label {
+  position: absolute;
+  display: none;
+  transform: translateY(-50%);
+  padding: 3px 9px;
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1.25;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  letter-spacing: 0.04em;
+  color: #ffffff;
+  border-radius: 4px;
+  background: linear-gradient(90deg, #ec4899 0%, #8b5cf6 100%);
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 7;
+  box-shadow: 0 2px 8px rgba(236,72,153,0.55), 0 0 0 1px rgba(255,255,255,0.15) inset;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.35);
+}
+
 .sr-label-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; overflow: hidden; pointer-events: none; z-index: 4; }
 .sr-label {
   position: absolute;
@@ -363,6 +439,7 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
   .chart-toggles-card { padding: 7px 10px; gap: 6px; margin-top: 10px; }
   .label-toggle-btn { padding: 3px 9px; font-size: 9.5px; }
   .chart-toggles-title { font-size: 9.5px; }
+  .tf-presets .label-toggle-btn { min-width: 36px; font-size: 10px; padding: 4px 8px; }
   .sr-param-input { width: 48px; font-size: 10.5px; padding: 3px 6px; }
   .sr-date-input { width: 110px; font-size: 9.5px; padding: 2px 4px; }
   .sr-param-field { font-size: 9.5px; gap: 4px; }
@@ -384,6 +461,7 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
   .subscribe-banner { flex-direction: column; align-items: flex-start; }
   .sr-label { font-size: 9px; padding: 3px 6px; min-width: 120px; }
   .sr-label .sr-label-row { font-size: 8.5px; }
+  .day-avg-label { font-size: 9px; padding: 2px 7px; }
 }
 @media (max-width: 420px) {
   .global-search { min-width: 80px; }
@@ -396,7 +474,9 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
   .instrument-info-body { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .chart-toggles-card { gap: 5px; padding: 6px 8px; }
   .label-toggle-btn { padding: 3px 8px; font-size: 9px; }
+  .tf-presets .label-toggle-btn { min-width: 34px; font-size: 9.5px; padding: 3px 6px; }
   .sr-label { font-size: 8.5px; padding: 2px 5px; min-width: 110px; }
+  .day-avg-label { font-size: 8.5px; padding: 2px 6px; }
 }
 @media (min-width: 1600px) {
   .instrument-info-body { grid-template-columns: repeat(6, minmax(0, 1fr)); }
@@ -499,7 +579,6 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
 }
 .json-export-field input:focus { outline: none; border-color: var(--blue); }
 
-/* SR mode radio group */
 .json-export-radio-group {
   display: flex;
   gap: 8px;
@@ -538,7 +617,6 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
   color: #7ea6ff;
 }
 
-/* SR preset checkbox list */
 .json-export-preset-list {
   display: flex;
   flex-wrap: wrap;
@@ -659,6 +737,30 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
     </button>
   </div>
 
+  <!-- ============================================================
+       TIMEFRAME / INTERVAL SELECTOR (TradingView-style)
+       ============================================================ -->
+  <div class="chart-toggles-card" id="timeframeBar">
+    <div class="chart-toggles-title"><i class="bi bi-clock-history me-1"></i>Timeframe</div>
+    <div class="tf-presets" id="tfPresets">
+      <!-- Populated dynamically by JS from INTERVAL_PRESETS -->
+    </div>
+    <div class="tf-divider"></div>
+    <label class="sr-param-field" for="customIntervalInput">
+      Custom
+      <input type="number" id="customIntervalInput" class="sr-param-input"
+             min="1" max="1440" step="1" value="1" inputmode="numeric" placeholder="min">
+      min
+    </label>
+    <button type="button" id="applyCustomIntervalBtn" class="label-toggle-btn active"
+            title="Apply custom interval (minutes)">
+      <i class="bi bi-check2-circle me-1"></i>Apply
+    </button>
+    <span class="tf-current-badge" id="currentIntervalBadge">
+      <span class="tf-badge-dot"></span><span id="currentIntervalBadgeText">1m</span>
+    </span>
+  </div>
+
   <div class="chart-toggles-card" id="labelToggleBar">
     <div class="chart-toggles-title"><i class="bi bi-tags me-1"></i>Labels</div>
     <button type="button" class="label-toggle-btn" data-toggle="r2s2" title="Show / hide R2 and S2 labels (lines stay)">R2 / S2</button>
@@ -677,6 +779,11 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
     </button>
     <button type="button" class="label-toggle-btn" data-indicator="srLabels" title="Show / hide pivot confirmation labels (Resistance / Support with pivot price/time + confirmed price/time)">
       <i class="bi bi-tag me-1"></i>SR Labels
+    </button>
+    <!-- Prev-Day-AVG indicator -->
+    <button type="button" class="label-toggle-btn" data-indicator="dayAvg"
+            title="Plot the PREVIOUS trading day's average — (prevDayHigh + prevDayLow) / 2 — as a dashed pink line inside the current day's session">
+      <i class="bi bi-activity me-1"></i>Prev Day AVG
     </button>
   </div>
 
@@ -722,7 +829,6 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
     <span id="srParamsHint" class="sr-param-hint" aria-live="polite"></span>
   </div>
 
-  <!-- Native <details> is used deliberately: opening/closing does not depend on JS. -->
   <details class="json-export-card" id="jsonExportCard">
     <summary id="jsonExportSummary">
       <span class="json-export-heading">
@@ -984,6 +1090,7 @@ const MARKET_CLOSE_HOUR_IST  = 15;
 const MARKET_CLOSE_MIN_IST   = 30;
 const MARKET_TZ              = "Asia/Kolkata";
 const IST_UTC_OFFSET_MIN     = 330;
+const SESSION_START_OFFSET_SECONDS = 13500; // 09:15 IST in unix seconds (5:30 offset already handled)
 
 // ---- Number of days of candles to fetch / re-plot (user-configurable via UI) ----
 const PLOT_DAYS_KEY = "chart.plot.days";
@@ -1016,6 +1123,24 @@ function showSRParamsHint(text, isError) {
     hintEl.classList.remove("error");
   }, 3200);
 }
+
+// ============================================================
+// TIMEFRAME / INTERVAL CONFIG
+// ============================================================
+const INTERVAL_PRESETS = [
+  { label: "1m",  minutes: 1   },
+  { label: "3m",  minutes: 3   },
+  { label: "5m",  minutes: 5   },
+  { label: "10m", minutes: 10  },
+  { label: "15m", minutes: 15  },
+  { label: "30m", minutes: 30  },
+  { label: "1h",  minutes: 60  },
+  { label: "2h",  minutes: 120 },
+  { label: "4h",  minutes: 240 },
+  { label: "1D",  minutes: 375 },
+];
+const DAILY_THRESHOLD_MINUTES = 375;
+const MAX_CUSTOM_INTERVAL_MINUTES = 1440;
 
 function getISTParts(date = new Date()) {
   try {
@@ -1206,8 +1331,16 @@ const globalSearchInput = document.getElementById("globalSearchInput");
 const searchResults = document.getElementById("searchResults");
 const swapOptionBtn = document.getElementById("swapOptionBtn");
 const swapOptionLabel = document.getElementById("swapOptionLabel");
+<<<<<<< HEAD
+const tfPresetsContainer = document.getElementById("tfPresets");
+const customIntervalInput = document.getElementById("customIntervalInput");
+const applyCustomIntervalBtn = document.getElementById("applyCustomIntervalBtn");
+const currentIntervalBadge = document.getElementById("currentIntervalBadge");
+const currentIntervalBadgeText = document.getElementById("currentIntervalBadgeText");
+=======
 const plotDaysInput = document.getElementById("plotDaysInput");
 const reloadDaysBtn = document.getElementById("reloadDaysBtn");
+>>>>>>> 13fd48fb716509218952fe20dfd570626fe46446
 
 // ============================================================
 // STATE
@@ -1227,6 +1360,10 @@ let isReloadingDays = false;
 const reconnectMaximumDelay = 15000;
 const INDICATOR_PREFS_KEY = "chart.indicators.prefs";
 const SR_PARAMS_KEY = "chart.sr.params";
+const TIMEFRAME_PREFS_KEY = "chart.timeframe.prefs";
+
+let rawCandles = [];
+let currentIntervalMin = 1;
 
 let marketStatusIntervalId = null;
 let lastMarketOpenState = null;
@@ -1253,7 +1390,6 @@ let levelLabelUpdateScheduled = false;
 let chartTooltip = null;
 let currentRenderedDate = null;
 
-// Date filtering state: defaults to today's date only
 const plotDateFilter = {
   startDate: getTodayDateKeyIST(),
   endDate: getTodayDateKeyIST(),
@@ -1276,6 +1412,13 @@ const indicatorState = {
     elements: [],
     layer: null,
   },
+  // Prev-Day-AVG indicator state
+  dayAvg: {
+    enabled: false,
+    lines: [],
+    labels: [],
+    data: {},   // "prevDate → { prevDate, todayDate, avg, prevHigh, prevLow, startTime, endTime, series, labelElement }"
+  },
 };
 
 (function loadSRParams() {
@@ -1285,6 +1428,14 @@ const indicatorState = {
     const rb = Number(saved.rightBars);
     if (Number.isInteger(lb) && lb >= 1 && lb <= 200) indicatorState.srLevels.leftBars = lb;
     if (Number.isInteger(rb) && rb >= 1 && rb <= 200) indicatorState.srLevels.rightBars = rb;
+  } catch (e) {}
+})();
+
+(function loadTimeframePrefs() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(TIMEFRAME_PREFS_KEY) || "{}");
+    const v = Number(saved.intervalMin);
+    if (Number.isInteger(v) && v >= 1 && v <= MAX_CUSTOM_INTERVAL_MINUTES) currentIntervalMin = v;
   } catch (e) {}
 })();
 
@@ -1311,6 +1462,240 @@ const dynamicPriceScale = {
     console.warn("Unable to read instrument tick size:", err);
   }
 })();
+
+// ============================================================
+// TIMEFRAME AGGREGATION HELPERS
+// ============================================================
+function aggregateCandles(candles, intervalMin) {
+  if (!Array.isArray(candles) || candles.length === 0) return [];
+  const interval = Math.max(1, Math.round(Number(intervalMin) || 1));
+  if (interval === 1) return candles.slice();
+
+  const isDaily = interval >= DAILY_THRESHOLD_MINUTES;
+  const intervalSecs = interval * 60;
+  const buckets = new Map();
+
+  for (const c of candles) {
+    if (!c || !Number.isFinite(c.time)) continue;
+
+    let bucketKey;
+    if (isDaily) {
+      bucketKey = getDateKeyIST(c.time);
+    } else {
+      bucketKey = Math.floor((c.time - SESSION_START_OFFSET_SECONDS) / intervalSecs) * intervalSecs
+                  + SESSION_START_OFFSET_SECONDS;
+    }
+    if (bucketKey === null || bucketKey === undefined) continue;
+
+    const existing = buckets.get(bucketKey);
+    if (!existing) {
+      buckets.set(bucketKey, {
+        time: isDaily ? c.time : bucketKey,
+        open: c.open,
+        high: c.high,
+        low: c.low,
+        close: c.close,
+        volume: Number(c.volume) || 0,
+        _isDailyBucket: isDaily,
+      });
+    } else {
+      if (Number(c.high) > existing.high) existing.high = Number(c.high);
+      if (Number(c.low)  < existing.low)  existing.low  = Number(c.low);
+      existing.close = c.close;
+      existing.volume = (Number(existing.volume) || 0) + (Number(c.volume) || 0);
+    }
+  }
+
+  return Array.from(buckets.values())
+    .map(({ _isDailyBucket, ...rest }) => rest)
+    .sort((a, b) => a.time - b.time);
+}
+
+function getLastAggregatedBucket(candles, intervalMin) {
+  if (!Array.isArray(candles) || candles.length === 0) return null;
+  const interval = Math.max(1, Math.round(Number(intervalMin) || 1));
+  if (interval === 1) return candles[candles.length - 1];
+
+  const isDaily = interval >= DAILY_THRESHOLD_MINUTES;
+  const intervalSecs = interval * 60;
+  const lastRaw = candles[candles.length - 1];
+
+  let targetKey, targetTime;
+  if (isDaily) {
+    targetKey = getDateKeyIST(lastRaw.time);
+    targetTime = null;
+  } else {
+    targetKey = Math.floor((lastRaw.time - SESSION_START_OFFSET_SECONDS) / intervalSecs) * intervalSecs
+                + SESSION_START_OFFSET_SECONDS;
+    targetTime = targetKey;
+  }
+
+  const bucket = [];
+  for (let i = candles.length - 1; i >= 0; i--) {
+    const c = candles[i];
+    const key = isDaily
+      ? getDateKeyIST(c.time)
+      : Math.floor((c.time - SESSION_START_OFFSET_SECONDS) / intervalSecs) * intervalSecs
+        + SESSION_START_OFFSET_SECONDS;
+    if (key === targetKey) {
+      bucket.unshift(c);
+    } else if (key < targetKey) {
+      break;
+    }
+  }
+  if (bucket.length === 0) return null;
+
+  const first = bucket[0];
+  let high = -Infinity, low = Infinity, vol = 0;
+  for (const c of bucket) {
+    if (Number(c.high) > high) high = Number(c.high);
+    if (Number(c.low)  < low)  low  = Number(c.low);
+    vol += Number(c.volume) || 0;
+  }
+
+  return {
+    time: isDaily ? first.time : targetTime,
+    open: Number(first.open),
+    high,
+    low,
+    close: Number(bucket[bucket.length - 1].close),
+    volume: vol,
+  };
+}
+
+function intervalLabel(minutes) {
+  const m = Math.max(1, Math.round(Number(minutes) || 1));
+  const preset = INTERVAL_PRESETS.find(p => p.minutes === m);
+  if (preset) return preset.label;
+  if (m >= DAILY_THRESHOLD_MINUTES) {
+    const days = Math.max(1, Math.round(m / DAILY_THRESHOLD_MINUTES));
+    return days === 1 ? "1D" : `${days}D`;
+  }
+  if (m % 60 === 0) return `${m / 60}h`;
+  return `${m}m`;
+}
+
+// ============================================================
+// TIMEFRAME UI
+// ============================================================
+function buildTimeframeButtons() {
+  if (!tfPresetsContainer) return;
+  tfPresetsContainer.innerHTML = INTERVAL_PRESETS.map(p => {
+    const active = p.minutes === currentIntervalMin ? " active" : "";
+    return `<button type="button" class="label-toggle-btn${active}" data-interval="${p.minutes}" title="Switch to ${p.label} candles">${p.label}</button>`;
+  }).join("");
+
+  tfPresetsContainer.querySelectorAll("[data-interval]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const minutes = Number(btn.dataset.interval);
+      if (!Number.isFinite(minutes)) return;
+      applyTimeframe(minutes);
+    });
+  });
+}
+
+function updateTimeframeUI() {
+  if (tfPresetsContainer) {
+    tfPresetsContainer.querySelectorAll("[data-interval]").forEach(btn => {
+      const m = Number(btn.dataset.interval);
+      btn.classList.toggle("active", m === currentIntervalMin);
+    });
+  }
+  const isPreset = INTERVAL_PRESETS.some(p => p.minutes === currentIntervalMin);
+  if (customIntervalInput && !isPreset) {
+    customIntervalInput.value = String(currentIntervalMin);
+  }
+  if (currentIntervalBadgeText) currentIntervalBadgeText.textContent = intervalLabel(currentIntervalMin);
+  if (currentIntervalBadge) {
+    currentIntervalBadge.title = `Chart interval: ${intervalLabel(currentIntervalMin)} (${currentIntervalMin} min)`;
+  }
+  try {
+    localStorage.setItem(TIMEFRAME_PREFS_KEY, JSON.stringify({ intervalMin: currentIntervalMin }));
+  } catch (e) {}
+}
+
+function applyTimeframe(intervalMin) {
+  const iv = Math.round(Number(intervalMin));
+  if (!Number.isFinite(iv) || iv < 1 || iv > MAX_CUSTOM_INTERVAL_MINUTES) {
+    showTimeframeHint("Interval must be 1–1440 minutes", true);
+    return;
+  }
+  if (iv === currentIntervalMin && candleSeries) return;
+
+  currentIntervalMin = iv;
+  updateTimeframeUI();
+
+  if (!candleSeries || !rawCandles || rawCandles.length === 0) return;
+
+  const aggregated = aggregateCandles(rawCandles, currentIntervalMin);
+
+  invalidateEMACache();
+  try { removeOpeningRangeLevels(); } catch (e) {}
+  try { clearSRLabels(); } catch (e) {}
+  try { removeSRLines(); } catch (e) {}
+  try { removeDayAvgLines(); } catch (e) {}
+  try { applyMarkersToCandleSeries([]); } catch (e) {}
+
+  candleSeries.setData(aggregated);
+
+  lastCandle = aggregated.length > 0 ? aggregated[aggregated.length - 1] : null;
+  oldestCandleTime = aggregated.length > 0 ? aggregated[0].time : null;
+  currentRenderedDate = lastCandle ? getDateKeyIST(lastCandle.time) : null;
+
+  if (totalCandlesValue) totalCandlesValue.textContent = String(aggregated.length);
+
+  rebuildAndRenderOpeningRanges(aggregated);
+  refreshIndicators(aggregated);
+
+  try { chart.timeScale().fitContent(); } catch (e) {}
+  if (priceScaleAuto) applyAutoFitPriceScale();
+
+  showTimeframeHint(`✓ Switched to ${intervalLabel(currentIntervalMin)} (${aggregated.length} candles)`, false);
+}
+
+let timeframeHintTimer = null;
+function showTimeframeHint(text, isError) {
+  if (!currentIntervalBadge) return;
+  const badge = currentIntervalBadge;
+  if (timeframeHintTimer) clearTimeout(timeframeHintTimer);
+  badge.classList.toggle("error", !!isError);
+  badge.style.borderColor = isError ? "var(--red)" : "rgba(41,98,255,0.4)";
+  badge.title = text || "";
+  const srHint = document.getElementById("srParamsHint");
+  if (srHint) {
+    srHint.textContent = text || "";
+    srHint.classList.toggle("error", !!isError);
+    srHint.classList.add("visible");
+    timeframeHintTimer = setTimeout(() => {
+      srHint.classList.remove("visible");
+      srHint.classList.remove("error");
+    }, 2600);
+  }
+}
+
+function initTimeframeUI() {
+  buildTimeframeButtons();
+  updateTimeframeUI();
+
+  if (applyCustomIntervalBtn) {
+    applyCustomIntervalBtn.addEventListener("click", () => {
+      const v = Math.round(Number(customIntervalInput ? customIntervalInput.value : NaN));
+      if (!Number.isFinite(v) || v < 1 || v > MAX_CUSTOM_INTERVAL_MINUTES) {
+        showTimeframeHint("Custom interval must be 1–1440 minutes", true);
+        return;
+      }
+      applyTimeframe(v);
+    });
+  }
+  if (customIntervalInput) {
+    customIntervalInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        applyCustomIntervalBtn && applyCustomIntervalBtn.click();
+      }
+    });
+  }
+}
 
 // ============================================================
 // DATE RANGE FILTER HELPER
@@ -1760,7 +2145,6 @@ function performFullSRScan(candles) {
   for (let i = leftBars; i < candles.length - rightBars; i++) {
     const c = candles[i];
 
-    // Only detect / retain pivots within the configured start and end date range (defaults to Today)
     if (!isTimestampInFilterRange(c.time)) continue;
 
     const cHigh = Number(c.high);
@@ -2002,9 +2386,287 @@ function refreshSRLevels(candles) {
   else clearSRLabels();
 }
 
+// ============================================================
+// PREV-DAY-AVG INDICATOR
+// For the LATEST date inside the SR & Plot Dates filter:
+//   - find the most recent PRIOR trading date with candles
+//   - compute prevHigh = max(high), prevLow = min(low) for that prior date
+//   - prevAvg = (prevHigh + prevLow) / 2
+//   - draw ONE dashed pink line at prevAvg spanning TODAY's session
+//   - add a pink→violet gradient label: "PREV DAY AVG · <prevDate> · ₹value"
+// ============================================================
+function computePrevDayAvgInfo(prevDateKey, prevCandles, todayCandles) {
+  if (!Array.isArray(prevCandles) || prevCandles.length === 0) return null;
+  let prevHigh = -Infinity, prevLow = Infinity;
+  for (const c of prevCandles) {
+    const h = Number(c.high);
+    const l = Number(c.low);
+    if (Number.isFinite(h) && h > prevHigh) prevHigh = h;
+    if (Number.isFinite(l) && l < prevLow)  prevLow  = l;
+  }
+  if (!Number.isFinite(prevHigh) || !Number.isFinite(prevLow)) return null;
+  if (prevHigh <= prevLow) return null;
+  const avg = (prevHigh + prevLow) / 2;
+
+  // Line spans TODAY's session if today has candles; otherwise fall back
+  // to the previous day's session so nothing "dangles" into empty space.
+  const spanCandles = (Array.isArray(todayCandles) && todayCandles.length > 0)
+    ? todayCandles
+    : prevCandles;
+
+  return {
+    prevDate: prevDateKey,
+    todayDate: (Array.isArray(todayCandles) && todayCandles.length > 0)
+      ? getDateKeyIST(todayCandles[0].time)
+      : null,
+    avg,
+    prevHigh,
+    prevLow,
+    startTime: spanCandles[0].time,
+    endTime: spanCandles[spanCandles.length - 1].time,
+    usedFallbackSpan: !(Array.isArray(todayCandles) && todayCandles.length > 0),
+  };
+}
+
+function ensureDayAvgLabelLayer() {
+  return ensureLevelLabelLayer();
+}
+
+function drawDayAvgLine(info) {
+  if (!chart || !info) return;
+  const color = "#ec4899";
+  const series = addLineSeriesSafe({
+    color,
+    lineWidth: 2,
+    lineStyle: LightweightCharts.LineStyle.Dashed,
+    priceLineVisible: false,
+    lastValueVisible: false,
+    crosshairMarkerVisible: false,
+    autoscaleInfoProvider: () => null,
+  });
+  if (!series) return;
+
+  const data = [{ time: info.startTime, value: info.avg }];
+  if (info.endTime !== info.startTime) {
+    data.push({ time: info.endTime, value: info.avg });
+  }
+
+  try {
+    series.setData(data);
+    indicatorState.dayAvg.lines.push(series);
+    info.series = series;
+  } catch (err) {
+    console.warn("[prev-day-avg] setData failed:", err);
+    try { chart.removeSeries(series); } catch (e) {}
+    return;
+  }
+
+  const layer = ensureDayAvgLabelLayer();
+  if (!layer) return;
+  const el = document.createElement("div");
+  el.className = "day-avg-label";
+  el.textContent = `PREV DAY AVG · ${info.prevDate} · ₹${info.avg.toFixed(2)}`;
+  el.style.display = "none";
+  layer.appendChild(el);
+  info.labelElement = el;
+
+  indicatorState.dayAvg.labels.push({
+    element: el,
+    meta: { startTime: info.startTime, avg: info.avg, prevDate: info.prevDate },
+  });
+}
+
+function removeDayAvgForDate(key) {
+  const info = indicatorState.dayAvg.data[key];
+  if (!info) return;
+
+  if (info.series) {
+    try { chart.removeSeries(info.series); } catch (e) {}
+    const idx = indicatorState.dayAvg.lines.indexOf(info.series);
+    if (idx >= 0) indicatorState.dayAvg.lines.splice(idx, 1);
+  }
+  if (info.labelElement) {
+    try { if (info.labelElement.parentNode) info.labelElement.parentNode.removeChild(info.labelElement); } catch (e) {}
+    const idx = indicatorState.dayAvg.labels.findIndex(l => l.element === info.labelElement);
+    if (idx >= 0) indicatorState.dayAvg.labels.splice(idx, 1);
+  }
+  delete indicatorState.dayAvg.data[key];
+}
+
+function removeDayAvgLines() {
+  if (chart) {
+    indicatorState.dayAvg.lines.forEach(series => {
+      try { chart.removeSeries(series); } catch (e) {}
+    });
+  }
+  indicatorState.dayAvg.lines = [];
+  indicatorState.dayAvg.labels.forEach(entry => {
+    try { if (entry.element && entry.element.parentNode) entry.element.parentNode.removeChild(entry.element); } catch (e) {}
+  });
+  indicatorState.dayAvg.labels = [];
+  indicatorState.dayAvg.data = {};
+}
+
 /**
- * Rebuild series markers for EMA Cross, respecting the current date filter
+ * Rebuild the Prev-Day-AVG line.
+ * Only ONE line is drawn — for the latest date inside the filter,
+ * using the PREVIOUS trading date's (high+low)/2.
  */
+function refreshDayAvgLines(candles) {
+  removeDayAvgLines();
+  if (!indicatorState.dayAvg.enabled) return;
+  if (!chart || !candleSeries) return;
+  if (!Array.isArray(candles) || candles.length === 0) return;
+
+  // Bucket ALL candles by IST date (unfiltered — we need the previous day
+  // even if it falls slightly outside the filter).
+  const byDate = {};
+  for (const c of candles) {
+    const key = getDateKeyIST(c.time);
+    if (!key) continue;
+    if (!byDate[key]) byDate[key] = [];
+    byDate[key].push(c);
+  }
+  const sortedDates = Object.keys(byDate).sort();
+  if (sortedDates.length < 1) return;
+
+  // "Today" = latest date inside the SR filter that has candles.
+  const inFilterDates = sortedDates.filter(d => {
+    if (plotDateFilter.startDate && d < plotDateFilter.startDate) return false;
+    if (plotDateFilter.endDate   && d > plotDateFilter.endDate)   return false;
+    return true;
+  });
+  if (inFilterDates.length === 0) return;
+  const todayKey = inFilterDates[inFilterDates.length - 1];
+
+  // "Prev day" = most recent date STRICTLY BEFORE today that has candles.
+  const prevDates = sortedDates.filter(d => d < todayKey);
+  if (prevDates.length === 0) return; // no previous day available
+  const prevKey = prevDates[prevDates.length - 1];
+
+  const prevCandles  = byDate[prevKey].slice().sort((a, b) => a.time - b.time);
+  const todayCandles = byDate[todayKey].slice().sort((a, b) => a.time - b.time);
+
+  const info = computePrevDayAvgInfo(prevKey, prevCandles, todayCandles);
+  if (!info) return;
+
+  indicatorState.dayAvg.data[prevKey] = info;
+  drawDayAvgLine(info);
+
+  try { updateDayAvgLabelPositions(); } catch (e) {}
+}
+
+/**
+ * Incremental update — the prev-day AVG value never changes intraday,
+ * but today's session end-point does. Also handles a day rollover
+ * (a brand-new date → today's prev-day should now become the OLD today).
+ */
+function updateLastDayAvgLine(candles) {
+  if (!indicatorState.dayAvg.enabled) return;
+  if (!chart || !candleSeries) return;
+  if (!Array.isArray(candles) || candles.length === 0) return;
+
+  // Cheap check: any existing entry whose `prevDate` is no longer the
+  // most recent prior date of the latest in-filter date → full rebuild.
+  const byDate = {};
+  for (const c of candles) {
+    const key = getDateKeyIST(c.time);
+    if (!key) continue;
+    if (!byDate[key]) byDate[key] = [];
+    byDate[key].push(c);
+  }
+  const sortedDates = Object.keys(byDate).sort();
+  if (sortedDates.length < 1) return;
+
+  const inFilterDates = sortedDates.filter(d => {
+    if (plotDateFilter.startDate && d < plotDateFilter.startDate) return false;
+    if (plotDateFilter.endDate   && d > plotDateFilter.endDate)   return false;
+    return true;
+  });
+  if (inFilterDates.length === 0) {
+    removeDayAvgLines();
+    return;
+  }
+  const todayKey = inFilterDates[inFilterDates.length - 1];
+
+  const prevDates = sortedDates.filter(d => d < todayKey);
+  const expectedPrevKey = prevDates.length > 0 ? prevDates[prevDates.length - 1] : null;
+
+  const existingKeys = Object.keys(indicatorState.dayAvg.data);
+  const stale = existingKeys.length !== 1 || existingKeys[0] !== expectedPrevKey;
+  if (stale || expectedPrevKey === null) {
+    // Day-rollover or filter change → full rebuild (cheap; 1 series).
+    refreshDayAvgLines(candles);
+    return;
+  }
+
+  const info = indicatorState.dayAvg.data[expectedPrevKey];
+  if (!info) { refreshDayAvgLines(candles); return; }
+
+  const todayCandles = byDate[todayKey].slice().sort((a, b) => a.time - b.time);
+  if (todayCandles.length === 0) return;
+
+  const newStart = todayCandles[0].time;
+  const newEnd   = todayCandles[todayCandles.length - 1].time;
+  if (info.startTime === newStart && info.endTime === newEnd) {
+    return; // nothing to redraw
+  }
+
+  // Same avg, but the today-session span changed → re-draw the line.
+  removeDayAvgForDate(expectedPrevKey);
+  info.startTime = newStart;
+  info.endTime   = newEnd;
+  indicatorState.dayAvg.data[expectedPrevKey] = info;
+  drawDayAvgLine(info);
+  scheduleDayAvgLabelUpdate();
+}
+
+let dayAvgLabelUpdateScheduled = false;
+function scheduleDayAvgLabelUpdate() {
+  if (dayAvgLabelUpdateScheduled) return;
+  dayAvgLabelUpdateScheduled = true;
+  requestAnimationFrame(() => {
+    dayAvgLabelUpdateScheduled = false;
+    try { updateDayAvgLabelPositions(); } catch (err) { console.warn("Day-AVG label position error:", err); }
+  });
+}
+
+function updateDayAvgLabelPositions() {
+  if (!chart || !candleSeries) return;
+  if (!indicatorState.dayAvg.enabled) return;
+  const entries = indicatorState.dayAvg.labels || [];
+  if (entries.length === 0) return;
+
+  const timeScale = chart.timeScale();
+  const containerWidth = chartContainer.clientWidth;
+  const paneHeight = getPaneHeight();
+
+  entries.forEach(entry => {
+    const el = entry.element;
+    const meta = entry.meta;
+    if (!el || !meta) return;
+
+    const x = timeScale.timeToCoordinate(meta.startTime);
+    const y = candleSeries.priceToCoordinate(meta.avg);
+
+    if (x === null || y === null || !Number.isFinite(x) || !Number.isFinite(y)) {
+      el.style.display = "none";
+      return;
+    }
+    if (y < -8 || y > paneHeight + 8 || x < -200 || x > containerWidth + 200) {
+      el.style.display = "none";
+      return;
+    }
+
+    el.style.display = "block";
+    el.style.left = Math.round(x + 4) + "px";
+    el.style.top  = Math.round(y) + "px";
+  });
+}
+
+// ============================================================
+// MARKERS / INDICATOR REFRESH
+// ============================================================
 function rebuildAllMarkers() {
   if (!candleSeries) return;
   const data = candleSeries.data();
@@ -2017,10 +2679,7 @@ function rebuildAllMarkers() {
     const seenTimes = new Set();
     for (const c of crosses) {
       if (seenTimes.has(c.time)) continue;
-
-      // Filter EMA crossover markers to specified date window (Today by default)
       if (!isTimestampInFilterRange(c.time)) continue;
-
       seenTimes.add(c.time);
       const isBull = c.type === "bull";
       allMarkers.push({
@@ -2046,6 +2705,7 @@ function refreshIndicators(candles) {
     renderEMALines(data);
     refreshSRLevels(data);
     rebuildAllMarkers();
+    refreshDayAvgLines(data);   // Prev-Day-AVG — full rebuild
   } catch (err) { console.warn("refreshIndicators error (swallowed):", err); }
 }
 
@@ -2075,6 +2735,10 @@ function scheduleIncrementalEMARefresh() {
           }
           rebuildAllMarkers();
         }
+      }
+      // Prev-Day-AVG incremental refresh (extend today's line, handle rollover)
+      if (indicatorState.dayAvg.enabled) {
+        try { updateLastDayAvgLine(data); } catch (err) { console.warn("day-avg incremental refresh:", err); }
       }
     } catch (err) { console.warn("incremental EMA refresh error (swallowed):", err); }
   });
@@ -2118,7 +2782,6 @@ document.querySelectorAll("#indicatorToggleBar .label-toggle-btn[data-indicator]
   leftInput.value  = String(indicatorState.srLevels.leftBars);
   rightInput.value = String(indicatorState.srLevels.rightBars);
 
-  // Initialize date inputs with today's date
   const todayKey = getTodayDateKeyIST();
   if (startInput) startInput.value = todayKey;
   if (endInput)   endInput.value   = todayKey;
@@ -2144,10 +2807,10 @@ document.querySelectorAll("#indicatorToggleBar .label-toggle-btn[data-indicator]
       return;
     }
 
-    // Erase prior plots smoothly before recalculating
     removeSRLines();
     clearSRLabels();
     applyMarkersToCandleSeries([]);
+    removeDayAvgLines();
 
     indicatorState.srLevels.leftBars  = lb;
     indicatorState.srLevels.rightBars = rb;
@@ -2160,7 +2823,6 @@ document.querySelectorAll("#indicatorToggleBar .label-toggle-btn[data-indicator]
       localStorage.setItem(SR_PARAMS_KEY, JSON.stringify({ leftBars: lb, rightBars: rb }));
     } catch (e) {}
 
-    // Invalidate and repaint indicators
     invalidateEMACache();
     refreshIndicators();
 
@@ -2325,14 +2987,54 @@ if (toggleInfoCardBtn) {
 }
 
 // ============================================================
-// SCROLL NAV
+// SCROLL NAV — buttons + keyboard shortcut (Ctrl + ↑ / ↓)
 // ============================================================
-function smoothScrollBy(amount) {
+const SCROLL_PAGE_FRACTION = 0.8;
+
+function scrollPageUp() {
   if (!contentScroll) return;
-  contentScroll.scrollBy({ top: amount, behavior: "smooth" });
+  contentScroll.scrollBy({
+    top: -Math.round(contentScroll.clientHeight * SCROLL_PAGE_FRACTION),
+    behavior: "smooth",
+  });
 }
-if (scrollUpBtn) scrollUpBtn.addEventListener("click", () => smoothScrollBy(-Math.round(contentScroll.clientHeight * 0.8)));
-if (scrollDownBtn) scrollDownBtn.addEventListener("click", () => smoothScrollBy(Math.round(contentScroll.clientHeight * 0.8)));
+
+function scrollPageDown() {
+  if (!contentScroll) return;
+  contentScroll.scrollBy({
+    top: Math.round(contentScroll.clientHeight * SCROLL_PAGE_FRACTION),
+    behavior: "smooth",
+  });
+}
+
+if (scrollUpBtn)   scrollUpBtn.addEventListener("click", scrollPageUp);
+if (scrollDownBtn) scrollDownBtn.addEventListener("click", scrollPageDown);
+
+if (scrollUpBtn)   scrollUpBtn.title   = "Scroll up (Ctrl+↑)";
+if (scrollDownBtn) scrollDownBtn.title = "Scroll down (Ctrl+↓)";
+
+(function initScrollKeyboardShortcuts() {
+  function isEditableTarget(el) {
+    if (!el) return false;
+    const tag = String(el.tagName || "").toLowerCase();
+    if (tag === "input" || tag === "textarea" || tag === "select") return true;
+    if (el.isContentEditable) return true;
+    return false;
+  }
+
+  window.addEventListener("keydown", (event) => {
+    if (event.defaultPrevented) return;
+    if (!event.ctrlKey) return;
+    if (event.shiftKey || event.altKey || event.metaKey) return;
+    if (isEditableTarget(event.target)) return;
+
+    if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+
+    event.preventDefault();
+    if (event.key === "ArrowUp") scrollPageUp();
+    else                         scrollPageDown();
+  }, { passive: false });
+})();
 
 // ============================================================
 // CONNECTION STATUS
@@ -2380,6 +3082,7 @@ function formatTimeLabel(time, tickMarkType) {
   if (!date) return "";
   const TickMarkType = LightweightCharts.TickMarkType || {};
   if (tickMarkType === TickMarkType.Year || tickMarkType === TickMarkType.Month || tickMarkType === TickMarkType.DayOfMonth) return formatChartDate(date);
+  if (currentIntervalMin >= DAILY_THRESHOLD_MINUTES) return formatChartDate(date);
   return formatChartTime(date);
 }
 function formatFullDate(time) {
@@ -2457,41 +3160,76 @@ function updateLivePrice(ltp) {
 // ============================================================
 // CANDLE UPDATE
 // ============================================================
-function updateCandle(candle) {
-  if (!candleSeries || !candle) return;
-  if (lastCandle && candle.time < lastCandle.time) return;
-  const isNewMinute = !lastCandle || candle.time > lastCandle.time;
+function updateCandleOnChart(displayCandle) {
+  if (!candleSeries || !displayCandle) return;
+  if (lastCandle && displayCandle.time < lastCandle.time) return;
+  const isNewBucket = !lastCandle || displayCandle.time > lastCandle.time;
 
-  candleSeries.update(candle);
-  lastCandle = candle;
-  updateLivePrice(candle.close);
-  if (indicatorState.ema9.enabled || indicatorState.ema21.enabled || indicatorState.emaCross.enabled || indicatorState.srLevels.enabled || indicatorState.srLabels.enabled) {
+  candleSeries.update(displayCandle);
+  lastCandle = displayCandle;
+  updateLivePrice(displayCandle.close);
+
+  if (indicatorState.ema9.enabled || indicatorState.ema21.enabled || indicatorState.emaCross.enabled ||
+      indicatorState.srLevels.enabled || indicatorState.srLabels.enabled || indicatorState.dayAvg.enabled) {
     scheduleIncrementalEMARefresh();
   }
-  if ((indicatorState.srLevels.enabled || indicatorState.srLabels.enabled) && isNewMinute) {
+  if ((indicatorState.srLevels.enabled || indicatorState.srLabels.enabled) && isNewBucket) {
     try { refreshSRLevels(); } catch (err) { console.warn("SR live refresh failed:", err); }
   }
   const prevDate = currentRenderedDate;
-  const newDate = getDateKeyIST(candle.time);
+  const newDate = getDateKeyIST(displayCandle.time);
   if (newDate && newDate !== prevDate) {
     currentRenderedDate = newDate;
     renderOpeningRangeLines();
   }
 }
+
+function upsertLiveCandle(rawCandle1m) {
+  if (!rawCandle1m || !Number.isFinite(rawCandle1m.time)) return;
+
+  if (rawCandles.length === 0) {
+    rawCandles.push(rawCandle1m);
+  } else {
+    const lastRaw = rawCandles[rawCandles.length - 1];
+    if (rawCandle1m.time > lastRaw.time) {
+      rawCandles.push(rawCandle1m);
+    } else if (rawCandle1m.time === lastRaw.time) {
+      rawCandles[rawCandles.length - 1] = rawCandle1m;
+    } else {
+      let idx = rawCandles.length - 1;
+      while (idx >= 0 && rawCandles[idx].time > rawCandle1m.time) idx--;
+      if (idx >= 0 && rawCandles[idx].time === rawCandle1m.time) rawCandles[idx] = rawCandle1m;
+      else rawCandles.splice(idx + 1, 0, rawCandle1m);
+    }
+  }
+
+  let displayCandle;
+  if (currentIntervalMin === 1) {
+    displayCandle = rawCandle1m;
+  } else {
+    displayCandle = getLastAggregatedBucket(rawCandles, currentIntervalMin);
+    if (!displayCandle) return;
+  }
+
+  updateCandleOnChart(displayCandle);
+}
+
 function updateCandleFromLtp(ltp, timestamp, volume) {
   if (!Number.isFinite(ltp) || !candleSeries) return;
   updateLivePrice(ltp);
   const minuteTimestamp = Math.floor((timestamp || Math.floor(Date.now() / 1000)) / 60) * 60;
   const vol = Number.isFinite(volume) ? Number(volume) : 0;
-  if (!lastCandle || minuteTimestamp > lastCandle.time) {
-    updateCandle({ time: minuteTimestamp, open: ltp, high: ltp, low: ltp, close: ltp, volume: vol });
+  const lastRaw = rawCandles.length > 0 ? rawCandles[rawCandles.length - 1] : null;
+
+  if (!lastRaw || minuteTimestamp > lastRaw.time) {
+    upsertLiveCandle({ time: minuteTimestamp, open: ltp, high: ltp, low: ltp, close: ltp, volume: vol });
     return;
   }
-  if (minuteTimestamp < lastCandle.time) return;
-  updateCandle({
-    time: lastCandle.time, open: lastCandle.open,
-    high: Math.max(lastCandle.high, ltp), low: Math.min(lastCandle.low, ltp),
-    close: ltp, volume: Math.max(lastCandle.volume || 0, vol),
+  if (minuteTimestamp < lastRaw.time) return;
+  upsertLiveCandle({
+    time: lastRaw.time, open: lastRaw.open,
+    high: Math.max(lastRaw.high, ltp), low: Math.min(lastRaw.low, ltp),
+    close: ltp, volume: Math.max(lastRaw.volume || 0, vol),
   });
 }
 
@@ -2544,18 +3282,21 @@ async function loadOlderHistoricalData() {
     const olderCandles = arr.map(normalizeCandle).filter(c => c !== null);
 
     if (olderCandles.length > 0) {
-      const currentData = candleSeries.data();
-      const mergedMap = new Map();
-      olderCandles.forEach(c => mergedMap.set(c.time, c));
-      currentData.forEach(c => mergedMap.set(c.time, c));
-      const combinedData = Array.from(mergedMap.values()).sort((a, b) => a.time - b.time);
+      const rawMap = new Map();
+      olderCandles.forEach(c => rawMap.set(c.time, c));
+      rawCandles.forEach(c => rawMap.set(c.time, c));
+      rawCandles = Array.from(rawMap.values()).sort((a, b) => a.time - b.time);
 
+      const aggregated = aggregateCandles(rawCandles, currentIntervalMin);
       invalidateEMACache();
-      candleSeries.setData(combinedData);
-      oldestCandleTime = combinedData[0].time;
-      rebuildAndRenderOpeningRanges(combinedData);
-      refreshIndicators(combinedData);
-      if (totalCandlesValue) totalCandlesValue.textContent = String(combinedData.length);
+      candleSeries.setData(aggregated);
+
+      lastCandle = aggregated.length > 0 ? aggregated[aggregated.length - 1] : null;
+      oldestCandleTime = aggregated.length > 0 ? aggregated[0].time : null;
+      currentRenderedDate = lastCandle ? getDateKeyIST(lastCandle.time) : null;
+      rebuildAndRenderOpeningRanges(aggregated);
+      refreshIndicators(aggregated);
+      if (totalCandlesValue) totalCandlesValue.textContent = String(aggregated.length);
 
       if (olderCandles.length < 50) hasMoreHistory = false;
 
@@ -2642,7 +3383,7 @@ function processWebSocketMessage(event) {
   const payloadInstrumentKey = getPayloadInstrumentKey(payload);
   if (!payloadInstrumentKey || payloadInstrumentKey !== currentInstrumentKey) return;
   const candle = getPayloadCandle(payload);
-  if (candle) { updateCandle(candle); return; }
+  if (candle) { upsertLiveCandle(candle); return; }
   const ltp = getPayloadLtp(payload);
   if (ltp === null) return;
   const volume = getPayloadVolume(payload);
@@ -3022,7 +3763,11 @@ function createLevelLabel(levelName, startTime, value, color) {
 function scheduleLevelLabelUpdate() {
   if (levelLabelUpdateScheduled) return;
   levelLabelUpdateScheduled = true;
-  requestAnimationFrame(() => { levelLabelUpdateScheduled = false; updateLevelLabelPositions(); });
+  requestAnimationFrame(() => {
+    levelLabelUpdateScheduled = false;
+    updateLevelLabelPositions();
+    updateDayAvgLabelPositions();
+  });
 }
 function updateLevelLabelPositions() {
   if (!chart || !candleSeries || !levelLabels.length) return;
@@ -3156,7 +3901,7 @@ function handleCrosshairMove(param) {
   chartTooltip.style.top  = Math.max(5, top) + "px";
 }
 
-function createChart(candles) {
+function createChart(displayCandles) {
   chart = LightweightCharts.createChart(
     chartContainer,
     {
@@ -3215,14 +3960,14 @@ function createChart(candles) {
   else if (typeof chart.addCandlestickSeries === "function") candleSeries = chart.addCandlestickSeries(candleOptions);
   if (!candleSeries) throw new Error("Unable to create the candlestick series.");
 
-  if (candles.length > 0) {
-    candleSeries.setData(candles);
-    lastCandle = candles[candles.length - 1];
-    oldestCandleTime = candles[0].time;
+  if (displayCandles.length > 0) {
+    candleSeries.setData(displayCandles);
+    lastCandle = displayCandles[displayCandles.length - 1];
+    oldestCandleTime = displayCandles[0].time;
     updateLivePrice(lastCandle.close);
     chart.timeScale().fitContent();
     currentRenderedDate = getDateKeyIST(lastCandle.time);
-    if (totalCandlesValue) totalCandlesValue.textContent = String(candles.length);
+    if (totalCandlesValue) totalCandlesValue.textContent = String(displayCandles.length);
   }
 
   ensureLevelLabelLayer();
@@ -3233,10 +3978,12 @@ function createChart(candles) {
   chart.timeScale().subscribeVisibleTimeRangeChange(() => {
     scheduleLevelLabelUpdate();
     scheduleSRLabelUpdate();
+    scheduleDayAvgLabelUpdate();
   });
   chart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
     scheduleLevelLabelUpdate();
     scheduleSRLabelUpdate();
+    scheduleDayAvgLabelUpdate();
     updateDynamicPriceScale();
     if (!range || isLoadingHistory || !hasMoreHistory) return;
     historyLoadBanner.style.display = range.from < 5 ? "flex" : "none";
@@ -3247,6 +3994,7 @@ function createChart(candles) {
     chart.applyOptions({ width: chartContainer.clientWidth, height: chartContainer.clientHeight });
     scheduleLevelLabelUpdate();
     scheduleSRLabelUpdate();
+    scheduleDayAvgLabelUpdate();
     updateDynamicPriceScale();
   };
   window.addEventListener("resize", resizeChart);
@@ -3256,9 +4004,9 @@ function createChart(candles) {
     resizeObserver.observe(chartCard);
   }
 
-  calculatedOpeningRanges = buildOpeningRangesFromCandles(candles);
+  calculatedOpeningRanges = buildOpeningRangesFromCandles(displayCandles);
   renderOpeningRangeLines();
-  refreshIndicators(candles);
+  refreshIndicators(displayCandles);
 
   updateDynamicPriceScale();
   startPriceScaleWatcher();
@@ -3283,6 +4031,8 @@ if (freezePriceScaleBtn) {
 // ============================================================
 async function bootstrapChart() {
   try {
+    initTimeframeUI();
+
     LoadingOverlay.reset();
     LoadingOverlay.setProgress(6);
     LoadingOverlay.setStatus("Fetching candles from Upstox…", "Loading Chart");
@@ -3290,21 +4040,25 @@ async function bootstrapChart() {
 
     LoadingOverlay.setProgress(24);
     LoadingOverlay.setStatus("Fetching intraday + historical candles…");
-    const candles = await fetchCandlesFromUpstox(currentInstrumentKey);
+    const fetched = await fetchCandlesFromUpstox(currentInstrumentKey);
 
-    if (!candles || candles.length === 0) {
+    if (!fetched || fetched.length === 0) {
       LoadingOverlay.setStatus("No candle data available for this instrument.", "Empty");
       LoadingOverlay.hide(1200);
       await checkSubscriptionStatus();
       return;
     }
 
+    rawCandles = fetched.slice();
+
     LoadingOverlay.setProgress(64);
-    LoadingOverlay.setStatus(`Loaded ${candles.length} candles — building chart…`);
+    LoadingOverlay.setStatus(`Loaded ${fetched.length} candles — building chart…`);
     await new Promise(r => requestAnimationFrame(r));
 
+    const displayCandles = aggregateCandles(rawCandles, currentIntervalMin);
+
     try {
-      createChart(candles);
+      createChart(displayCandles);
     } catch (err) {
       console.error("Chart init failed:", err);
       LoadingOverlay.setStatus("Chart failed to render", "Error");
@@ -3353,6 +4107,8 @@ window.addEventListener("beforeunload", () => {
 
 // ============================================================
 // COMPLETE CHART DATA JSON EXPORT
+<<<<<<< HEAD
+=======
 // This code is inside the page's existing inline script. The disclosure
 // itself is native HTML <details>, so it opens even if JS is unavailable.
 //
@@ -3361,6 +4117,7 @@ window.addEventListener("beforeunload", () => {
 // behaviour — but the user may uncheck any section to exclude it from the
 // downloaded JSON. Section checkboxes live in the export card markup under
 // .json-export-section.
+>>>>>>> 13fd48fb716509218952fe20dfd570626fe46446
 // ============================================================
 (function initChartJSONExport() {
   const card = document.getElementById("jsonExportCard");
@@ -3502,8 +4259,6 @@ window.addEventListener("beforeunload", () => {
         setStatus("Default range: latest 11 available trading dates · EMA 9/21 · Opening-range analysis per day.", false);
       }
     } else {
-      // Fallback until candle history has finished loading. Re-evaluate this
-      // fallback when the card is opened after history has arrived.
       rangeInitializedFromFallback = true;
       const now = new Date();
       const ist = new Date(now.getTime() + 330 * 60000);
@@ -3618,8 +4373,6 @@ window.addEventListener("beforeunload", () => {
       const pivotExportIndex = selectedIndex.get(Number(pivot.time));
       const confirmedExportIndex = selectedIndex.get(Number(confirmation.time));
 
-      // Keep the output self-contained: both pivot and confirmation bars
-      // must exist in the exported candles array so the indices are meaningful.
       if (pivotExportIndex === undefined || confirmedExportIndex === undefined) continue;
 
       if (isResistance) {
@@ -3650,28 +4403,13 @@ window.addEventListener("beforeunload", () => {
     return levels.sort((a, b) => a.pivot_bar_index - b.pivot_bar_index);
   }
 
-  // ------------------------------------------------------------------
-  // Opening-range analysis (mandatory per selected date)
-  //
-  // For each trading date in the export range:
-  //   - Compute the opening-range levels from the first candle of the day
-  //     (same method used by the on-chart opening-range overlay).
-  //   - Detect the FIRST touch of R3 (high >= r3) and the FIRST touch of S3
-  //     (low <= s3) that occurs on that day, excluding the opening candle.
-  //   - Record the time, level value, actual candle high/low, and bar index
-  //     (both day-local and export-global) for each touch.
-  //   - Report which of R3 / S3 was touched first (or "same_bar" if both
-  //     are first breached on the same candle), plus a `both_touched` flag.
-  // ------------------------------------------------------------------
   function buildOpeningRangeAnalysis(selectedCandles, startDate, endDate) {
     const result = {};
     if (!Array.isArray(selectedCandles) || selectedCandles.length === 0) return result;
 
-    // Global bar-index lookup for cross-referencing with the exported candles array.
     const globalIndexMap = new Map();
     selectedCandles.forEach((c, i) => globalIndexMap.set(Number(c.time), i));
 
-    // Group the selected candles by IST trading date.
     const grouped = {};
     selectedCandles.forEach(c => {
       const key = getDateKeyForExport(c.time);
@@ -3694,7 +4432,6 @@ window.addEventListener("beforeunload", () => {
       const close = Number(first.close);
       if (!Number.isFinite(open) || !Number.isFinite(high) || !Number.isFinite(low) || !Number.isFinite(close)) return;
 
-      // Opening range & derived pivot levels (matches calculateOpeningRangeForDay).
       const average = (high + low) / 2;
       const r1Diff = high - average;
       const s1Diff = average - low;
@@ -3705,7 +4442,6 @@ window.addEventListener("beforeunload", () => {
       const s2 = low - s1Diff;
       const s3 = s2 - s1Diff;
 
-      // Scan the rest of the day for the FIRST R3 touch and FIRST S3 touch.
       let r3Touch = null;
       let s3Touch = null;
 
@@ -3777,7 +4513,6 @@ window.addEventListener("beforeunload", () => {
     return result;
   }
 
-  // Small summary for quick inspection at the top of the JSON.
   function summarizeOpeningRangeAnalysis(analysis) {
     const summary = {
       date_count: 0,
@@ -3834,7 +4569,6 @@ window.addEventListener("beforeunload", () => {
     document.body.appendChild(link);
     link.click();
     link.remove();
-    // Do not revoke synchronously: some browsers cancel the download.
     window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1500);
   }
 
@@ -3855,6 +4589,8 @@ window.addEventListener("beforeunload", () => {
         throw new Error("Start date must be on or before end date.");
       }
 
+<<<<<<< HEAD
+=======
       // ---- Resolve which sections to include (all checked by default) ----
       const includeSections = getSelectedSections();
       if (includeSections.size === 0) {
@@ -3865,6 +4601,7 @@ window.addEventListener("beforeunload", () => {
       // SR mode is always resolved so that SR-related sections and metadata
       // counters are consistent when Levels are included. If Levels are
       // excluded, the values are still computed for metadata but not exported.
+>>>>>>> 13fd48fb716509218952fe20dfd570626fe46446
       const srMode = getSelectedSRMode();
       let srConfigs = [];
       if (srMode === "manual") {
@@ -3894,12 +4631,8 @@ window.addEventListener("beforeunload", () => {
         throw new Error(`No valid candles found between ${startDate || "beginning"} and ${endDate || "latest"}.`);
       }
 
-      // Calculate EMA on the full loaded history, then select cross events in range.
       const crosses = buildCrosses(allCandles, startDate, endDate, fastPeriod, slowPeriod);
 
-      // Calculate SR levels for each selected config. Manual mode always yields
-      // exactly one config, so this is a single pass. Preset mode may yield
-      // multiple and we emit a level-set per preset.
       const levelsByPreset = {};
       const levelCountsByPreset = {};
       srConfigs.forEach(cfg => {
@@ -3910,7 +4643,6 @@ window.addEventListener("beforeunload", () => {
         levelCountsByPreset[cfg.key] = levels.length;
       });
 
-      // ---- Mandatory per-date opening-range analysis ----
       const openingRangeAnalysis = buildOpeningRangeAnalysis(selectedCandles, startDate, endDate);
       const openingRangeSummary = summarizeOpeningRangeAnalysis(openingRangeAnalysis);
 
@@ -3918,10 +4650,11 @@ window.addEventListener("beforeunload", () => {
       const exportTime = new Date().toISOString();
       const totalLevelCount = Object.values(levelCountsByPreset).reduce((a, b) => a + b, 0);
 
-      // ---- Build config block ----
       const config = {
         ema: { fast_period: fastPeriod, slow_period: slowPeriod },
-        sr_mode: srMode
+        sr_mode: srMode,
+        timeframe_minutes: currentIntervalMin,
+        timeframe_label: intervalLabel(currentIntervalMin)
       };
       if (srMode === "manual") {
         const only = srConfigs[0];
@@ -3934,11 +4667,16 @@ window.addEventListener("beforeunload", () => {
         }));
       }
 
+<<<<<<< HEAD
+      const payload = {
+        metadata: {
+=======
       // ---- Build payload, including only the sections the user has kept checked ----
       const payload = {};
 
       if (includeSections.has("metadata")) {
         payload.metadata = {
+>>>>>>> 13fd48fb716509218952fe20dfd570626fe46446
           instrument_key: instrument.instrument_key,
           trading_symbol: instrument.trading_symbol,
           instrument,
@@ -3946,6 +4684,10 @@ window.addEventListener("beforeunload", () => {
             start_date: startDate,
             end_date: endDate,
             timezone: "Asia/Kolkata"
+          },
+          timeframe: {
+            interval_minutes: currentIntervalMin,
+            interval_label: intervalLabel(currentIntervalMin)
           },
           exported_at: exportTime,
           included_sections: Array.from(includeSections),
@@ -3976,6 +4718,15 @@ window.addEventListener("beforeunload", () => {
           close: Number(c.close),
           volume: Number(c.volume || 0),
           oi: Number(c.oi || 0)
+<<<<<<< HEAD
+        })),
+        crosses,
+        ...(srMode === "manual"
+          ? { levels: levelsByPreset[srConfigs[0].key] }
+          : { levels_by_preset: levelsByPreset }),
+        opening_range_analysis: openingRangeAnalysis
+      };
+=======
         }));
       }
 
@@ -3994,11 +4745,30 @@ window.addEventListener("beforeunload", () => {
       if (includeSections.has("opening_range_analysis")) {
         payload.opening_range_analysis = openingRangeAnalysis;
       }
+>>>>>>> 13fd48fb716509218952fe20dfd570626fe46446
 
       const safeSymbol = String(instrument.trading_symbol || "instrument")
         .replace(/[^a-z0-9_-]+/gi, "_").replace(/^_+|_+$/g, "") || "instrument";
-      downloadJsonFile(payload, `${safeSymbol}_${startDate || "all"}_${endDate || "all"}_chart_data.json`);
+      downloadJsonFile(payload, `${safeSymbol}_${intervalLabel(currentIntervalMin)}_${startDate || "all"}_${endDate || "all"}_chart_data.json`);
 
+<<<<<<< HEAD
+      const orSummaryTail = openingRangeSummary.date_count
+        ? ` · ${openingRangeSummary.date_count} opening-range day(s) analyzed ` +
+          `(R3 touched ${openingRangeSummary.days_with_r3_touch} · S3 touched ${openingRangeSummary.days_with_s3_touch} · both ${openingRangeSummary.days_with_both_touches})`
+        : " · opening-range analysis unavailable (no candles in range)";
+
+      if (srMode === "manual") {
+        const only = srConfigs[0];
+        setStatus(
+          `Downloaded ${selectedCandles.length} ${intervalLabel(currentIntervalMin)} candles · ${crosses.length} EMA crosses · ${totalLevelCount} SR levels (${only.left_bars}/${only.right_bars})${orSummaryTail}.`,
+          false
+        );
+      } else {
+        setStatus(
+          `Downloaded ${selectedCandles.length} ${intervalLabel(currentIntervalMin)} candles · ${crosses.length} EMA crosses · ${totalLevelCount} total SR levels across ${srConfigs.length} preset(s)${orSummaryTail}.`,
+          false
+        );
+=======
       // Build a dynamic status message that reflects what was actually exported.
       const summaryParts = [];
       summaryParts.push(`${includeSections.size} section(s)`);
@@ -4011,6 +4781,7 @@ window.addEventListener("beforeunload", () => {
         } else {
           summaryParts.push(`${totalLevelCount} SR levels across ${srConfigs.length} preset(s)`);
         }
+>>>>>>> 13fd48fb716509218952fe20dfd570626fe46446
       }
       if (includeSections.has("opening_range_analysis")) {
         if (openingRangeSummary.date_count) {
@@ -4034,8 +4805,6 @@ window.addEventListener("beforeunload", () => {
     }
   });
 
-  // Initialize when the DOM is ready; refresh defaults on opening if chart data
-  // was not available during initial page execution.
   initializeDefaultRange(false);
 })();
 
