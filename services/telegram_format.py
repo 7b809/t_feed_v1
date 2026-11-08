@@ -181,6 +181,11 @@ def format_notification(
     title_text = str(title or "").strip()
     if _looks_like_html_fragment(title_text):
         return f"<i>{icon} {label}</i>\\n\\n{title_text}"
+    if "\\n" in title_text:
+        # Legacy build(...) callers pass a complete multi-line plain-text
+        # message as the title positional argument. Treat it as a body.
+        body = _legacy_markup_to_html(title_text)
+        return f"<i>{icon} {label}</i>\\n\\n{body}" if body else heading
     return heading
 
 
