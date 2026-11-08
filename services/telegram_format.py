@@ -137,20 +137,28 @@ _LEVEL_STYLE: Dict[str, Tuple[str, str]] = {
 def _clean_body_lines(value: str) -> str:
     """Remove legacy decorative rules and excessive blank lines."""
     lines: List[str] = []
-    for raw_line in str(value or "").replace("\\r\\n", "\\n").replace("\\r", "\\n").split("\\n"):
+    for raw_line in str(value or "").replace("\r\n", "\n").replace("\r", "\n").split("\n"):
         line_value = raw_line.rstrip()
         compact = line_value.strip()
         if compact and all(ch in "━─—_ " for ch in compact):
             continue
         lines.append(line_value)
-    cleaned = "\\n".join(lines).strip()
-    return re.sub(r"\\n{3,}", "\\n\\n", cleaned)
+    cleaned = "\n".join(lines).strip()
+    return re.sub(r"\n{3,}", "\n\n", cleaned)
 
 
 def _legacy_markup_to_html(value: str) -> str:
     """Convert the legacy *bold* convention after HTML escaping."""
     escaped = escape(_clean_body_lines(value))
-    return re.sub(r"\\*([^*\\n]+)\\*", r"<b>\\1</b>", escaped)
+    return re.sub(r"\*([^*\n]+)\*", r"<b>\1</b>", escaped)
+
+
+def _looks_like_html_fragment(value: str) -> bool:
+    return bool(re.search(
+        r"</?(?:b|strong|i|em|u|s|code|pre|blockquote|a|tg-spoiler)\b",
+        value or "",
+        re.IGNORECASE,
+    ))
 
 
 def format_notification(
@@ -166,42 +174,36 @@ def format_notification(
     """
     normalized_level = str(level or "INFO").strip().upper()
     icon, label = _LEVEL_STYLE.get(normalized_level, _LEVEL_STYLE["INFO"])
-    heading = f"{icon} <b>{escape(title)}</b>"
+    title_text = str(title or "").strip()
 
     if message:
+        heading = f"{icon} <b>{escape(title_text)}</b>"
         body_text = _clean_body_lines(message)
         if _looks_like_html_fragment(body_text):
             body = body_text
         else:
             body = _legacy_markup_to_html(body_text)
-        return heading if not body else f"{heading}\\n\\n{body}"
+        return heading if not body else f"{heading}\n\n{body}"
 
-    # A preformatted builder payload is retained as a body, but receives the
-    # same severity strip used by all other outbound notifications.
-    title_text = str(title or "").strip()
+    # A preformatted HTML builder payload is retained as a body, but receives
+    # the same severity strip used by every other outbound notification.
     if _looks_like_html_fragment(title_text):
-        return f"<i>{icon} {label}</i>\\n\\n{title_text}"
-    if "\\n" in title_text:
-        # Legacy build(...) callers pass a complete multi-line plain-text
-        # message as the title positional argument. Treat it as a body.
+        return f"<i>{icon} {label}</i>\n\n{title_text}"
+
+    # Legacy build(...) callers pass complete multi-line plain-text messages
+    # as the title positional argument. Treat them as a body, not a headline.
+    if "\n" in title_text:
         body = _legacy_markup_to_html(title_text)
-        return f"<i>{icon} {label}</i>\\n\\n{body}" if body else heading
-    return heading
+        return f"<i>{icon} {label}</i>\n\n{body}" if body else f"{icon} <b>MARKET ENGINE</b>"
+
+    return f"{icon} <b>{escape(title_text)}</b>"
 
 
 def format_bot_reply(message: str) -> str:
     """Apply the shared compact layout to Telegram command responses."""
     body = _legacy_markup_to_html(str(message or ""))
     heading = "🤖 <b>MARKET ENGINE</b>"
-    return heading if not body else f"{heading}\\n\\n{body}"
-
-
-def _looks_like_html_fragment(value: str) -> bool:
-    return bool(re.search(
-        r"</?(?:b|strong|i|em|u|s|code|pre|blockquote|a|tg-spoiler)\\b",
-        value or "",
-        re.IGNORECASE,
-    ))
+    return heading if not body else f"{heading}\n\n{body}"
 
 
 # =============================================================================
