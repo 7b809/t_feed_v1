@@ -96,7 +96,7 @@ class TelegramService:
         # Plain text is escaped by the formatter; trusted formatter HTML is
         # retained. Telegram wraps lines naturally on narrow mobile screens.
         text = format_notification(title, message, level)
-        parse_mode = parse_mode or "HTML"
+        parse_mode = "HTML"
 
         payload = {"chat_id": self.chat_id, "text": text}
         if parse_mode:
