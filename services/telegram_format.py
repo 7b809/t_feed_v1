@@ -150,7 +150,13 @@ def _clean_body_lines(value: str) -> str:
 def _legacy_markup_to_html(value: str) -> str:
     """Convert the legacy *bold* convention after HTML escaping."""
     escaped = escape(_clean_body_lines(value))
-    return re.sub(r"\*([^*\n]+)\*", r"<b>\1</b>", escaped)
+    escaped = re.sub(r"\*([^*\n]+)\*", r"<b>\1</b>", escaped)
+    # Normalize legacy bullet key/value rows to the same bold-label layout.
+    return re.sub(
+        r"(?m)^(\s*[•◦▪]\s*)([^:\n]{1,40}:)(\s*)",
+        r"\1<b>\2</b>\3",
+        escaped,
+    )
 
 
 def _looks_like_html_fragment(value: str) -> bool:
