@@ -49,10 +49,9 @@ class TelegramService:
                      that pass a single pre-formatted string as ``title``
                      still work (Strategy 2 pattern).
         level      : severity prefix (INFO / SUCCESS / WARNING / ERROR / STARTUP)
-        parse_mode : optional Telegram parse_mode ("HTML" / "MarkdownV2").
-                     When omitted, HTML is auto-detected from ``title``/``message``
-                     and enabled automatically. Plain-text callers are
-                     unaffected.
+        parse_mode : retained for backwards compatibility. The shared
+                     formatter always emits HTML, so the wire parse mode is
+                     consistently "HTML".
 
         Returns
         -------
