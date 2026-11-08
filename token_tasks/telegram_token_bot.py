@@ -73,6 +73,7 @@ from threading import Event, Lock, Thread
 import requests
 
 from core import config
+from services.telegram_format import format_bot_reply
 from core.logger import get_logger
 from token_tasks.order_toggle_commands import handle_order_toggle_command
 from token_tasks.token_monitor import check_upstox_token_validity
@@ -309,7 +310,15 @@ class TelegramTokenBot:
         if not self.enabled or not target:
             return False
         try:
-            self._request("sendMessage", payload={"chat_id": target, "text": str(text)})
+            formatted = format_bot_reply(str(text))
+            self._request(
+                "sendMessage",
+                payload={
+                    "chat_id": target,
+                    "text": formatted,
+                    "parse_mode": "HTML",
+                },
+            )
             return True
         except Exception as exc:
             logger.warning("Telegram message send failed (%s).", type(exc).__name__)
