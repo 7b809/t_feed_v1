@@ -126,7 +126,15 @@ def _ema_slope_positive(
     for candle in candles:
         candle_dt = _parse_iso(candle.get("time") or candle.get("timestamp"))
         close = _safe_float(candle.get("close"))
-        if candle_dt is None or close is None or candle_dt > up_to:
+        # The simulator input contains the isolated instrument's
+        # current-session candles only. Keep the live EMA seed/window
+        # identical even if a fallback series includes prior sessions.
+        if (
+            candle_dt is None
+            or close is None
+            or candle_dt.date() != up_to.date()
+            or candle_dt > up_to
+        ):
             continue
         eligible.append((candle_dt, close))
 
