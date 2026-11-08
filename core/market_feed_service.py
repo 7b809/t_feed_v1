@@ -9,7 +9,7 @@ default. Valid values are ``ltpc``, ``full``, ``full_d30`` and
 The active mode is written to the logs at three points so you can
 always tell which feed the process is subscribed to:
 
-  * ``connect()``   -> "Market feed starting (mode=full, ...)"
+  * ``connect()``   -> "Market feed thread started (mode=full, ...)"
   * ``_on_open()``  -> "Market feed connected (mode=full) ..."
   * every health summary header -> "[HEALTH] feed summary (..., mode=full)"
 
@@ -20,6 +20,14 @@ after the first batch, then every ``FEED_HEALTH_INTERVAL_SECONDS``
 
 Set ``LOG_RAW_FEED=true`` to restore the old per-message DEBUG dump
 for troubleshooting (not recommended in production).
+
+Dynamic subscription
+--------------------
+The isolation service calls ``subscribe([instrument_key])`` at isolation
+time to add the isolated option leg (and, if available, the counter-side
+leg) to the live feed. ``subscribe()`` is idempotent, thread-safe, and
+never raises — a failed subscription is logged and the isolation flow
+continues with ``isolated_option_ltp_source = "unavailable"``.
 """
 
 from __future__ import annotations
@@ -78,6 +86,10 @@ class MarketFeedService:
         self._health_thread = None
         self._stop_event = threading.Event()
         self._running = False
+
+        # Guards ``instrument_keys`` and ``_ltp_cache`` mutation across
+        # the feed thread, the health thread, and ``subscribe()`` callers.
+        self._lock = threading.RLock()
 
         # Per-instrument cache:
         # {key: {ltp, ltt, cp, recv_ts, recv_iso, count}}
@@ -145,21 +157,27 @@ class MarketFeedService:
         now = time.time()
         now_iso = datetime.now().isoformat(timespec="seconds")
 
-        for key, payload in feeds.items():
-            ltpc = self._extract_ltpc(payload)
-            if not ltpc:
-                continue
-            entry = self._ltp_cache.setdefault(key, {"count": 0})
-            entry["ltp"] = ltpc.get("ltp")
-            entry["ltt"] = ltpc.get("ltt")
-            entry["cp"] = ltpc.get("cp")
-            entry["recv_ts"] = now
-            entry["recv_iso"] = now_iso
-            entry["count"] = entry.get("count", 0) + 1
+        with self._lock:
+            for key, payload in feeds.items():
+                ltpc = self._extract_ltpc(payload)
+                if not ltpc:
+                    continue
+                entry = self._ltp_cache.setdefault(key, {"count": 0})
+                entry["ltp"] = ltpc.get("ltp")
+                entry["ltt"] = ltpc.get("ltt")
+                entry["cp"] = ltpc.get("cp")
+                entry["recv_ts"] = now
+                entry["recv_iso"] = now_iso
+                entry["count"] = entry.get("count", 0) + 1
 
-        # Log health once, immediately after the first real batch arrives.
-        if self._ltp_cache and not self._first_batch_logged:
-            self._first_batch_logged = True
+            # Log health once, immediately after the first real batch arrives.
+            if self._ltp_cache and not self._first_batch_logged:
+                self._first_batch_logged = True
+                should_log = True
+            else:
+                should_log = False
+
+        if should_log:
             self._log_health(reason="first_batch")
 
     @staticmethod
@@ -194,11 +212,31 @@ class MarketFeedService:
 
         return None
 
-    def _on_error(self, error):
-        logger.error("Market feed error (mode=%s): %s", self.mode, error)
+    # ------------------------------------------------------------------ #
+    # SDK event handlers                                                 #
+    #                                                                    #
+    # The Upstox SDK dispatches error / close handlers with additional   #
+    # positional arguments (observed in production logs as              #
+    # "TypeError: _on_close() takes 1 positional argument but 3 were      #
+    # given"). Accept *args / **kwargs so future SDK additions don't     #
+    # break the handlers.                                                #
+    # ------------------------------------------------------------------ #
+    def _on_error(self, *args, **kwargs):
+        err = args[0] if args else kwargs.get("error")
+        extra = args[1:] if len(args) > 1 else ()
+        logger.error(
+            "Market feed error (mode=%s): %s%s",
+            self.mode,
+            err,
+            f" extra={extra}" if extra else "",
+        )
 
-    def _on_close(self):
-        logger.info("Market feed connection closed (mode=%s).", self.mode)
+    def _on_close(self, *args, **kwargs):
+        logger.info(
+            "Market feed connection closed (mode=%s)%s.",
+            self.mode,
+            f" args={args}" if args else "",
+        )
 
     # ------------------------------------------------------------------ #
     # Health logging                                                     #
@@ -206,15 +244,22 @@ class MarketFeedService:
     def _log_health(self, reason: str = "interval"):
         now = time.time()
         uptime = (now - self._connect_ts) if self._connect_ts else 0.0
+
+        with self._lock:
+            instrument_keys = list(self.instrument_keys)
+            cache_snapshot = {
+                k: dict(v) for k, v in self._ltp_cache.items()
+            }
+
         logger.info(
             "[HEALTH] feed summary (reason=%s, mode=%s, uptime=%.0fs, instruments=%d)",
             reason,
             self.mode,
             uptime,
-            len(self.instrument_keys),
+            len(instrument_keys),
         )
-        for key in self.instrument_keys:
-            entry = self._ltp_cache.get(key)
+        for key in instrument_keys:
+            entry = cache_snapshot.get(key)
             if not entry:
                 logger.info("[HEALTH] %s | no data yet", key)
                 continue
@@ -292,12 +337,119 @@ class MarketFeedService:
         except Exception:
             logger.exception("Final health log failed.")
 
+    def subscribe(self, instrument_keys: list[str]) -> list[str]:
+        """Subscribe to additional instrument keys (idempotent).
+
+        Used by the isolation service to add the isolated option leg
+        (and, if available, the counter-side leg) to the live feed
+        after a touch has been detected.
+
+        Returns the list of keys that were actually **newly** subscribed.
+        Never raises — subscription failures are logged and skipped so
+        the caller can continue with a degraded snapshot.
+        """
+        if not instrument_keys:
+            return []
+
+        if not self.streamer or not self._running:
+            logger.warning(
+                "subscribe() called before feed is connected; skipping %s",
+                instrument_keys,
+            )
+            return []
+
+        with self._lock:
+            new_keys = [
+                k for k in instrument_keys
+                if k and k not in self.instrument_keys
+            ]
+
+        if not new_keys:
+            logger.debug(
+                "subscribe(): no new keys (already subscribed) — requested=%s",
+                instrument_keys,
+            )
+            return []
+
+        try:
+            self.streamer.subscribe(new_keys, self.mode)
+        except Exception:
+            logger.exception(
+                "Feed subscribe failed for %s (mode=%s)",
+                new_keys, self.mode,
+            )
+            return []
+
+        with self._lock:
+            for key in new_keys:
+                if key not in self.instrument_keys:
+                    self.instrument_keys.append(key)
+                self._ltp_cache.setdefault(key, {"count": 0})
+
+        logger.info(
+            "Subscribed to %d new instrument(s): %s",
+            len(new_keys), new_keys,
+        )
+        return new_keys
+
+    def unsubscribe(self, instrument_keys: list[str]) -> list[str]:
+        """Unsubscribe from instrument keys (idempotent). Never raises."""
+        if not instrument_keys or not self.streamer:
+            return []
+
+        with self._lock:
+            targets = [k for k in instrument_keys if k in self.instrument_keys]
+
+        if not targets:
+            return []
+
+        try:
+            self.streamer.unsubscribe(targets)
+        except Exception:
+            logger.exception(
+                "Feed unsubscribe failed for %s (mode=%s)", targets, self.mode,
+            )
+            return []
+
+        with self._lock:
+            for key in targets:
+                try:
+                    self.instrument_keys.remove(key)
+                except ValueError:
+                    pass
+                self._ltp_cache.pop(key, None)
+
+        logger.info(
+            "Unsubscribed from %d instrument(s): %s", len(targets), targets,
+        )
+        return targets
+
+    def get_ltp(self, instrument_key: str) -> float | None:
+        """Return the latest LTP for a single instrument, or ``None``.
+
+        Convenience wrapper around ``get_health()`` used by the isolation
+        service during the option-LTP snapshot loop.
+        """
+        with self._lock:
+            entry = self._ltp_cache.get(instrument_key)
+            if not entry:
+                return None
+            ltp = entry.get("ltp")
+            return float(ltp) if ltp is not None and ltp > 0 else None
+
     def get_health(self) -> dict:
         """Return a JSON-friendly health snapshot (for the /status API)."""
         now = time.time()
+
+        with self._lock:
+            instrument_keys = list(self.instrument_keys)
+            cache_snapshot = {
+                k: dict(v) for k, v in self._ltp_cache.items()
+            }
+
         instruments = {}
-        for key in self.instrument_keys:
-            entry = self._ltp_cache.get(key)
+        for key in instrument_keys:
+            entry = cache_snapshot.get(key)
             if not entry:
                 instruments[key] = {"status": "no_data"}
                 continue
@@ -311,6 +463,7 @@ class MarketFeedService:
                 "stale": age > FEED_STALE_AFTER_SECONDS,
                 "message_count": entry.get("count", 0),
             }
+
         return {
             "running": self._running,
             "mode": self.mode,
