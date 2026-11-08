@@ -5,6 +5,12 @@ on:
     branches:
       - market-engine-v4-unified-path-a
   pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+      - edited
     branches:
       - market-engine-v4
   workflow_dispatch:
