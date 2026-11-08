@@ -107,6 +107,43 @@ def _dynamic_target_for_entry(entry_price: float) -> tuple[float, int]:
     divisor = 3 if price <= 100.0 else 4 if price <= 200.0 else 5
     return round(price + price / divisor, 4), divisor
 
+def _ema_slope_positive(
+    candles: list[dict[str, Any]],
+    up_to: datetime,
+    period: int,
+    lookback: int,
+) -> bool | None:
+    """Return whether EMA(period) rose over lookback bars at/before up_to.
+
+    EMA is seeded with the first available close. Returns None when there
+    are too few eligible candles; callers deliberately treat that as a
+    pass-through, matching the offline simulator.
+    """
+    if period < 1 or lookback < 1:
+        raise ValueError("EMA period and slope lookback must be >= 1")
+
+    eligible: list[tuple[datetime, float]] = []
+    for candle in candles:
+        candle_dt = _parse_iso(candle.get("time") or candle.get("timestamp"))
+        close = _safe_float(candle.get("close"))
+        if candle_dt is None or close is None or candle_dt > up_to:
+            continue
+        eligible.append((candle_dt, close))
+
+    eligible.sort(key=lambda item: item[0])
+    if len(eligible) < lookback + 1:
+        return None
+
+    alpha = 2.0 / (period + 1.0)
+    ema_values: list[float] = []
+    ema: float | None = None
+    for _, close in eligible:
+        ema = close if ema is None else close * alpha + ema * (1.0 - alpha)
+        ema_values.append(ema)
+
+    return ema_values[-1] > ema_values[-(lookback + 1)]
+
+
 def _fmt_price(v: Any, fmt: str = ".4f") -> str:
     f = _safe_float(v)
     return format(f, fmt) if f is not None else "none"
@@ -1016,6 +1053,8 @@ class DummyOrderService:
             "traded_key": traded_key,
             "traded_symbol": traded_symbol,
             "prior_support": prior_support,
+            "backup_reversal": bool(reversal_active and not early_extreme_reversal),
+            "bias_type": bias_type,
             "early_extreme_reversal": early_extreme_reversal,
             "standard_execution_mode": (
                 "EARLY_EXTREME_REVERSAL" if early_extreme_reversal else "STANDARD"
@@ -1497,6 +1536,120 @@ class DummyOrderService:
                 traded_key,
             )
 
+        # Modified simulator rules are enforced here in the live order
+        # creation path, after the actual routed-contract entry is known.
+        # A filtered signal is persisted as SKIPPED so it is not reconsidered
+        # on every 30-second scan or emitted to the sandbox executor.
+        filter_reason: str | None = None
+        bias_type = str(routing.get("bias_type") or iso.get("type") or "").upper()
+
+        if (
+            routing.get("standard_execution_mode") == "STANDARD"
+            and bool(routing.get("backup_reversal"))
+        ):
+            if (
+                bias_type == "PE"
+                and bool(getattr(config, "STRATEGY_ORDER_BACKUP_PE_SUPPRESS", True))
+            ):
+                filter_reason = (
+                    "CANCEL_FILTERED: STANDARD 09:30 backup reversal on PE bias "
+                    "is suppressed by the configured safe-mode filter."
+                )
+                logger.warning("[dummy-order] %s", filter_reason)
+            elif (
+                bias_type == "CE"
+                and bool(getattr(
+                    config,
+                    "STRATEGY_ORDER_BACKUP_CE_REQUIRE_POSITIVE_EMA_SLOPE",
+                    True,
+                ))
+            ):
+                ema_period = max(1, int(getattr(
+                    config, "STRATEGY_ORDER_BACKUP_CE_EMA_PERIOD", 9,
+                )))
+                ema_lookback = max(1, int(getattr(
+                    config, "STRATEGY_ORDER_BACKUP_CE_EMA_SLOPE_LOOKBACK", 2,
+                )))
+                isolated_key = str(iso.get("instrument_key") or "")
+                isolated_series = self._build_fixed_series(isolated_key)
+                entry_dt_for_filter = _parse_iso(entry_time_iso)
+                slope_positive = (
+                    _ema_slope_positive(
+                        isolated_series,
+                        entry_dt_for_filter,
+                        ema_period,
+                        ema_lookback,
+                    )
+                    if entry_dt_for_filter is not None and isolated_series
+                    else None
+                )
+                if slope_positive is False:
+                    filter_reason = (
+                        "CANCEL_FILTERED: STANDARD 09:30 backup reversal on CE "
+                        f"bias requires EMA{ema_period} slope positive over "
+                        f"{ema_lookback} bars; observed non-positive slope."
+                    )
+                    logger.warning(
+                        "[dummy-order] %s | isolated_key=%s entry_time=%s",
+                        filter_reason, isolated_key, entry_time_iso,
+                    )
+                elif slope_positive is None:
+                    logger.info(
+                        "[dummy-order] backup CE EMA filter pass-through: "
+                        "insufficient isolated-leg candles for EMA%d/%d "
+                        "at %s",
+                        ema_period, ema_lookback, entry_time_iso,
+                    )
+                else:
+                    logger.info(
+                        "[dummy-order] backup CE EMA filter passed: "
+                        "EMA%d rose over %d bars at %s",
+                        ema_period, ema_lookback, entry_time_iso,
+                    )
+
+        if (
+            filter_reason is None
+            and bool(routing.get("early_extreme_reversal"))
+            and routing.get("routing_mode") == "early_extreme_resistance_same_leg"
+            and bool(getattr(
+                config, "STRATEGY_ORDER_EER_SAME_LEG_PREMIUM_BAND_ENABLED", True,
+            ))
+        ):
+            premium_min = float(getattr(
+                config, "STRATEGY_ORDER_EER_SAME_LEG_PREMIUM_MIN", 80.0,
+            ))
+            premium_max = float(getattr(
+                config, "STRATEGY_ORDER_EER_SAME_LEG_PREMIUM_MAX", 100.0,
+            ))
+            if premium_min > premium_max:
+                logger.error(
+                    "[dummy-order] invalid EER premium band: min %.4f > max %.4f; "
+                    "filter disabled for this entry",
+                    premium_min, premium_max,
+                )
+            elif not (premium_min <= entry_price <= premium_max):
+                filter_reason = (
+                    "CANCEL_FILTERED: EARLY_EXTREME_REVERSAL same-leg entry "
+                    f"₹{entry_price:.2f} is outside inclusive premium band "
+                    f"[₹{premium_min:.2f}, ₹{premium_max:.2f}]."
+                )
+                logger.warning(
+                    "[dummy-order] %s | traded_key=%s",
+                    filter_reason, traded_key,
+                )
+
+        if filter_reason is not None:
+            return self._skipped_order(
+                iso,
+                routing,
+                entry_time_iso,
+                entry_price,
+                entry_source,
+                now,
+                zone={"zone": "FILTERED", "reason": filter_reason},
+                reason=filter_reason,
+            )
+
         stop_pct = float(
             getattr(config, "STRATEGY_ORDER_STOP_LOSS_PCT", 0.30),
         )
@@ -1850,8 +2003,8 @@ class DummyOrderService:
             order.get("early_extreme_reversal")
             or order.get("standard_execution_mode") == "EARLY_EXTREME_REVERSAL"
         ):
-            # Early Extreme Reversal uses the repeating target/15% lock
-            # ladder. Its post-target exit is not driven by S/R resistance.
+            # Early Extreme Reversal uses the repeating 30% target /
+            # entry-then-prior-target protective-stop ladder. Its post-target exit is not driven by S/R resistance.
             self._update_early_extreme_target_ladder(
                 order, candles, entry_dt, entry_price, now,
             )
