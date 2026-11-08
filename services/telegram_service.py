@@ -39,6 +39,7 @@ import requests
 
 from core import config
 from core.logger import get_logger
+from services.telegram_format import format_notification
 
 logger = get_logger(__file__)
 
@@ -91,14 +92,11 @@ class TelegramService:
         if not (self.enabled and self.bot_token and self.chat_id):
             return False
 
-        if message:
-            text = f"[{level}] {title}\n\n{message}"
-        else:
-            text = f"[{level}] {title}"
-
-        # Auto-detect HTML if caller didn't specify an explicit parse_mode
-        if parse_mode is None and _looks_like_html(text):
-            parse_mode = "HTML"
+        # Every outbound notification uses the same compact HTML layout.
+        # Plain text is escaped by the formatter; trusted formatter HTML is
+        # retained. Telegram wraps lines naturally on narrow mobile screens.
+        text = format_notification(title, message, level)
+        parse_mode = parse_mode or "HTML"
 
         payload = {"chat_id": self.chat_id, "text": text}
         if parse_mode:
