@@ -17,6 +17,13 @@ After the target milestone, stop-loss remains active and the engine
 waits for a new 15/3 Resistance confirmation before exiting at its
 confirmation candle close.
 
+Additional live-entry filters:
+    * STANDARD 09:30 backup reversal: suppress PE bias by default.
+    * STANDARD 09:30 backup reversal: CE bias requires a positive
+      isolated-leg EMA slope (default EMA9, two-bar lookback).
+    * EARLY_EXTREME_REVERSAL same-leg Resistance entries require an
+      inclusive ₹80–₹100 confirmation-candle entry premium by default.
+
 POST-11:30 remains a separate time-based strategy with its existing
 entry, target, stop-loss and 15/15 Resistance exit conditions.
 
