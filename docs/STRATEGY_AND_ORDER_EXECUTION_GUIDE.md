@@ -260,6 +260,13 @@ For STANDARD mode, the existing backup reversal rule remains available:
 
 This backup rule does not override the pinned Early Extreme Reversal routing matrix.
 
+The live order-creation path applies two additional backup-reversal filters:
+
+- **PE bias:** suppress the STANDARD 09:30 backup-reversal entry by default.
+- **CE bias:** require the isolated CE's own-session EMA(9) to be rising versus two eligible bars earlier. EMA is seeded from the first close of the isolated leg's current-session candle series. If fewer than three eligible closes exist at the entry confirmation timestamp, the filter passes through, matching the simulator's insufficient-data behaviour.
+
+These defaults are configurable through `STRATEGY_ORDER_BACKUP_PE_SUPPRESS`, `STRATEGY_ORDER_BACKUP_CE_REQUIRE_POSITIVE_EMA_SLOPE`, `STRATEGY_ORDER_BACKUP_CE_EMA_PERIOD` and `STRATEGY_ORDER_BACKUP_CE_EMA_SLOPE_LOOKBACK`.
+
 ### 8.3 Routing examples
 
 Assume the isolated instrument is NIFTY 24400 CE:
@@ -272,6 +279,18 @@ Assume the isolated instrument is NIFTY 24400 CE:
 | EARLY_EXTREME_REVERSAL | Resistance | NIFTY 24400 CE |
 
 These examples assume the same-strike opposite contract exists and is resolvable in the instrument registry.
+
+### 8.4 Early Extreme same-leg premium filter
+
+For EARLY_EXTREME_REVERSAL, the Resistance trigger routes to the isolated (same) leg. The live order engine accepts that same-leg order only when the routed instrument's confirmation-minute entry close is inside the inclusive premium band:
+
+```text
+80.00 <= entry_price <= 100.00
+```
+
+The default bounds are configurable through `STRATEGY_ORDER_EER_SAME_LEG_PREMIUM_MIN` and `STRATEGY_ORDER_EER_SAME_LEG_PREMIUM_MAX`; the filter can be toggled with `STRATEGY_ORDER_EER_SAME_LEG_PREMIUM_BAND_ENABLED`. The EER Support route buys the opposite leg and is not subject to this same-leg premium filter.
+
+A rejected entry is persisted as `SKIPPED` with a `FILTERED` zone and is not emitted as a `CREATED` transition to the sandbox executor.
 
 ---
 
