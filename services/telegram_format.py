@@ -1,28 +1,31 @@
 # services/telegram_format.py
-"""Telegram message formatter.
+"""Telegram message builders and the global notification layout.
 
-This module now supports **two** output styles simultaneously:
+Builder compatibility
+---------------------
+The existing ``build()`` entry point retains both historical call styles:
 
-1. **Plain-Unicode (legacy)** — original helpers: ``DIVIDER``, ``THIN``,
-   ``STATUS_ICON``, ``status_icon``, ``header``, ``divider``, ``line``,
-   ``section``, ``bullet``, ``footer``, and the *old* ``build(emoji, title, ...)``
-   signature. These return plain Unicode text with ``*bold*`` markers and are
-   safe with no ``parse_mode``.
+- Legacy ``build(emoji, title, ...)`` returns plain Unicode with the
+  original helper functions and formatting markers.
+- HTML ``build(title=..., emoji=..., ...)`` returns Telegram HTML.
 
-2. **HTML (new)** — ``escape``, ``code``, ``bold``, ``italic``, ``kv_line``,
-   ``build(title=..., emoji=..., ...)``, plus domain builders
-   ``format_order_alert``, ``format_stage_tracker``, ``format_token_status``.
-   These return HTML and require ``parse_mode="HTML"`` on the wire (the
-   companion ``TelegramService.send_message`` auto-detects and sets it).
+Global delivery layout
+----------------------
+All outbound notifications are normalized by ``format_notification()``
+inside ``TelegramService.send_message()``. Legacy text is escaped,
+decorative dividers and excessive blank lines are removed, bullet key/value
+labels are standardized, and HTML builder output is preserved. The Telegram
+token bot uses ``format_bot_reply()`` for command responses.
 
-The single ``build()`` entry point dispatches between the two styles based on
-the arguments supplied, so existing call sites importing ``build, divider, THIN``
-from this module keep working unchanged.
+Telegram does not expose responsive font sizing in message text. The shared
+layout uses short headings, consistent spacing and natural wrapping so the
+same content remains readable on desktop and mobile clients.
 """
 
 from __future__ import annotations
 
 import html
+import re
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 
@@ -117,6 +120,98 @@ def kv_line(label: str, value: Any, mono: bool = True) -> str:
     """Render a single key-value row optimized for narrow mobile widths."""
     formatted_val = code(value) if mono else escape(value)
     return f"• <b>{escape(label)}:</b> {formatted_val}"
+
+
+# =============================================================================
+# Global notification layout
+# =============================================================================
+
+_LEVEL_STYLE: Dict[str, Tuple[str, str]] = {
+    "SUCCESS": ("✅", "SUCCESS"),
+    "WARNING": ("⚠️", "WARNING"),
+    "ERROR": ("❌", "ERROR"),
+    "CRITICAL": ("🚨", "CRITICAL"),
+    "STARTUP": ("🚀", "STARTUP"),
+    "INFO": ("ℹ️", "INFO"),
+}
+
+
+def _clean_body_lines(value: str) -> str:
+    """Remove legacy decorative rules and excessive blank lines."""
+    lines: List[str] = []
+    for raw_line in str(value or "").replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        line_value = raw_line.rstrip()
+        compact = line_value.strip()
+        if compact and all(ch in "━─—_ " for ch in compact):
+            continue
+        lines.append(line_value)
+    cleaned = "\n".join(lines).strip()
+    return re.sub(r"\n{3,}", "\n\n", cleaned)
+
+
+def _legacy_markup_to_html(value: str) -> str:
+    """Convert the legacy *bold* convention after HTML escaping."""
+    escaped = escape(_clean_body_lines(value))
+    escaped = re.sub(r"\*([^*\n]+)\*", r"<b>\1</b>", escaped)
+    # Normalize legacy bullet key/value rows to the same bold-label layout.
+    return re.sub(
+        r"(?m)^(\s*[•◦▪]\s*)([^:\n]{1,40}:)(\s*)",
+        r"\1<b>\2</b>\3",
+        escaped,
+    )
+
+
+def _looks_like_html_fragment(value: str) -> bool:
+    return bool(re.search(
+        r"</?(?:b|strong|i|em|u|s|code|pre|blockquote|a|tg-spoiler)\b",
+        value or "",
+        re.IGNORECASE,
+    ))
+
+
+def format_notification(
+    title: str,
+    message: str = "",
+    level: str = "INFO",
+) -> str:
+    """Build every outbound notification with one compact Telegram HTML layout.
+
+    Telegram has no responsive font-size controls. This layout therefore uses
+    a consistent short heading, compact line spacing and readable key/value
+    rows that wrap naturally on narrow phone screens.
+    """
+    normalized_level = str(level or "INFO").strip().upper()
+    icon, label = _LEVEL_STYLE.get(normalized_level, _LEVEL_STYLE["INFO"])
+    title_text = str(title or "").strip()
+
+    if message:
+        heading = f"{icon} <b>{escape(title_text)}</b>"
+        body_text = _clean_body_lines(message)
+        if _looks_like_html_fragment(body_text):
+            body = body_text
+        else:
+            body = _legacy_markup_to_html(body_text)
+        return heading if not body else f"{heading}\n\n{body}"
+
+    # A preformatted HTML builder payload is retained as a body, but receives
+    # the same severity strip used by every other outbound notification.
+    if _looks_like_html_fragment(title_text):
+        return f"<i>{icon} {label}</i>\n\n{title_text}"
+
+    # Legacy build(...) callers pass complete multi-line plain-text messages
+    # as the title positional argument. Treat them as a body, not a headline.
+    if "\n" in title_text:
+        body = _legacy_markup_to_html(title_text)
+        return f"<i>{icon} {label}</i>\n\n{body}" if body else f"{icon} <b>MARKET ENGINE</b>"
+
+    return f"{icon} <b>{escape(title_text)}</b>"
+
+
+def format_bot_reply(message: str) -> str:
+    """Apply the shared compact layout to Telegram command responses."""
+    body = _legacy_markup_to_html(str(message or ""))
+    heading = "🤖 <b>MARKET ENGINE</b>"
+    return heading if not body else f"{heading}\n\n{body}"
 
 
 # =============================================================================

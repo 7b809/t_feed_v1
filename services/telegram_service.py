@@ -1,58 +1,30 @@
 # services/telegram_service.py
-"""Small Telegram notification client used by token lifecycle monitoring.
+"""Shared Telegram notification transport.
 
-Signature note
---------------
-``send_message`` accepts ``message`` as an optional keyword with default
-``""``. This lets callers use either style:
+All outbound notifications are normalized by
+``services.telegram_format.format_notification`` and sent with Telegram
+HTML parse mode. Existing callers may continue using either
+``send_message(title, message, level=...)`` or a single preformatted
+message as ``send_message(message)``.
 
-    # Style A — title + body (used by Strategy 1, token monitor, etc.)
-    telegram_service.send_message(
-        "Application Started",
-        "Instruments loaded: 174",
-        level="SUCCESS",
-    )
+The formatter preserves trusted HTML produced by project builders, escapes
+plain text, removes legacy decorative separators, and uses one compact
+layout that wraps naturally on desktop and mobile clients. Telegram does not
+support custom responsive font sizes in message text.
 
-    # Style B — one pre-formatted string (used by Strategy 2 tasks and
-    # the S2 live tracker, which pass the output of
-    # ``telegram_format.build(...)`` as the single payload)
-    telegram_service.send_message(
-        build(emoji="🎯", title="Strategy 2 · Stage 3 Tracker · Started", ...),
-        level="INFO",
-    )
-
-Both styles produce the same wire payload to the Telegram API.
-
-HTML support
-------------
-If the outgoing text contains Telegram HTML tags (``<b>``, ``<i>``,
-``<code>``, ``<blockquote>``, etc.) and the caller did **not** pass an
-explicit ``parse_mode``, we automatically set ``parse_mode="HTML"`` so the
-new ``telegram_format.build(...)`` HTML output renders correctly. Legacy
-plain-Unicode callers are unaffected (no tags → no parse_mode).
+The optional ``parse_mode`` argument remains accepted for call-site
+compatibility; standardized output is always HTML.
 """
 
-import re
 from typing import Optional
 
 import requests
 
 from core import config
 from core.logger import get_logger
+from services.telegram_format import format_notification
 
 logger = get_logger(__file__)
-
-
-# Tags that Telegram's HTML parse_mode understands. If we see any of these,
-# assume the caller wants HTML rendering unless they explicitly said otherwise.
-_HTML_TAG_RE = re.compile(
-    r"<(b|strong|i|em|u|s|code|pre|blockquote|a|tg-spoiler)\b",
-    re.IGNORECASE,
-)
-
-
-def _looks_like_html(text: str) -> bool:
-    return bool(_HTML_TAG_RE.search(text or ""))
 
 
 class TelegramService:
@@ -77,10 +49,9 @@ class TelegramService:
                      that pass a single pre-formatted string as ``title``
                      still work (Strategy 2 pattern).
         level      : severity prefix (INFO / SUCCESS / WARNING / ERROR / STARTUP)
-        parse_mode : optional Telegram parse_mode ("HTML" / "MarkdownV2").
-                     When omitted, HTML is auto-detected from ``title``/``message``
-                     and enabled automatically. Plain-text callers are
-                     unaffected.
+        parse_mode : retained for backwards compatibility. The shared
+                     formatter always emits HTML, so the wire parse mode is
+                     consistently "HTML".
 
         Returns
         -------
@@ -91,14 +62,11 @@ class TelegramService:
         if not (self.enabled and self.bot_token and self.chat_id):
             return False
 
-        if message:
-            text = f"[{level}] {title}\n\n{message}"
-        else:
-            text = f"[{level}] {title}"
-
-        # Auto-detect HTML if caller didn't specify an explicit parse_mode
-        if parse_mode is None and _looks_like_html(text):
-            parse_mode = "HTML"
+        # Every outbound notification uses the same compact HTML layout.
+        # Plain text is escaped by the formatter; trusted formatter HTML is
+        # retained. Telegram wraps lines naturally on narrow mobile screens.
+        text = format_notification(title, message, level)
+        parse_mode = "HTML"
 
         payload = {"chat_id": self.chat_id, "text": text}
         if parse_mode:

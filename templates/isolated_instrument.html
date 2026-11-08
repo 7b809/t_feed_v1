@@ -1380,7 +1380,7 @@
         margin-top: 4px;
     }
 
-    /* ---- Entry Signal card ---- */
+    /* ---- Entry candidates grid (kept — used by Simulation + Dummy Orders) ---- */
     .entry-touch-strip {
         display: flex;
         gap: 16px;
@@ -1519,13 +1519,6 @@
         color: var(--iso-red);
     }
 
-    .entry-note {
-        font-size: 0.78rem;
-        color: var(--iso-muted);
-        line-height: 1.55;
-        margin: 8px 0 6px 0;
-    }
-
     .entry-grid {
         display: grid;
         grid-template-columns: 1fr 1fr;
@@ -1577,91 +1570,6 @@
         font-size: 0.78rem;
         margin-top: 12px;
         line-height: 1.5;
-    }
-
-    .entry-warnings-list {
-        background: var(--iso-amber-bg);
-        border-left: 4px solid var(--iso-amber);
-        color: var(--iso-amber);
-        padding: 10px 14px;
-        border-radius: 8px;
-        font-size: 0.8rem;
-        margin-top: 12px;
-        line-height: 1.55;
-    }
-
-    .entry-warnings-list ul {
-        margin: 6px 0 0 0;
-        padding-left: 20px;
-    }
-
-    .entry-warnings-list li {
-        margin-bottom: 4px;
-    }
-
-    .entry-empty {
-        grid-column: 1 / -1;
-        padding: 20px;
-        text-align: center;
-        color: var(--iso-muted);
-        font-size: 0.88rem;
-        background: #f8fafc;
-        border: 1px dashed var(--iso-border);
-        border-radius: 10px;
-    }
-
-    .entry-empty i {
-        display: block;
-        font-size: 1.6rem;
-        margin-bottom: 8px;
-        opacity: 0.4;
-    }
-
-    .entry-error {
-        grid-column: 1 / -1;
-        padding: 20px;
-        text-align: center;
-        color: var(--iso-red);
-        font-size: 0.88rem;
-        background: var(--iso-red-bg);
-        border: 1px solid #fecaca;
-        border-radius: 10px;
-    }
-
-    .entry-promotion-banner {
-        display: flex;
-        align-items: flex-start;
-        gap: 12px;
-        padding: 12px 16px;
-        background: var(--iso-purple-bg);
-        border: 1px solid var(--iso-purple-border);
-        border-left: 4px solid var(--iso-purple);
-        border-radius: 10px;
-        color: var(--iso-text);
-        font-size: 0.85rem;
-        line-height: 1.5;
-        margin-bottom: 14px;
-    }
-
-    .entry-promotion-banner i {
-        color: var(--iso-purple);
-        font-size: 1.2rem;
-        flex-shrink: 0;
-        margin-top: 1px;
-    }
-
-    .entry-promotion-banner strong {
-        color: var(--iso-purple);
-    }
-
-    .entry-promotion-banner .promo-pending {
-        background: rgba(124, 58, 237, 0.08);
-        padding: 2px 8px;
-        border-radius: 6px;
-        font-weight: 700;
-        font-size: 0.78rem;
-        margin-left: 6px;
-        white-space: nowrap;
     }
 
     /* ---- Candidate side chips (Candidates table) ---- */
@@ -2600,40 +2508,6 @@
         </div>
     </div>
 
-    <!-- Entry Signal card -->
-    <div class="iso-card" id="iso-entry-signal" style="display: none;">
-        <div class="iso-card-header">
-            <i class="bi bi-bullseye text-primary"></i>
-            <span>Entry Signal</span>
-            <div class="sr-header-pills">
-                <span class="sr-count-pill" id="entry-chosen-pill">Waiting</span>
-            </div>
-        </div>
-        <div class="iso-card-body">
-            <div class="entry-promotion-banner" id="entry-path-b-banner" style="display:none;">
-                <i class="bi bi-signpost-split-fill"></i>
-                <div>
-                    <strong>Path B · External-index trigger.</strong>
-                    The 10-minute fast scan and auto-reverse are
-                    intentionally <em>disabled</em> for this session.
-                    The bias-side instrument stays isolated all day; the
-                    order engine watches for the first post-isolation 15/3
-                    SR level and places a single dummy order (same leg for
-                    support / reversal, opposite leg for resistance).
-                </div>
-            </div>
-            <div class="entry-promotion-banner" id="entry-promotion-banner" style="display: none;"></div>
-            <div class="entry-touch-strip" id="entry-touch-strip"></div>
-            <div class="entry-candidates" id="entry-candidates">
-                <div class="entry-empty">
-                    <i class="bi bi-hourglass-split"></i>
-                    Loading entry signal…
-                </div>
-            </div>
-            <div class="entry-warnings-list" id="entry-warnings" style="display: none;"></div>
-        </div>
-    </div>
-
     <!-- SR Tracking card -->
     <div class="iso-card" id="iso-sr-tracking" style="display: none;">
         <div class="iso-card-header">
@@ -2892,9 +2766,7 @@
     const SEARCH_INSTRUMENTS_URL = "/admin/level-isolation/search-instruments";
     const INSTRUMENT_SR_URL = (key) =>
         "/admin/level-isolation/instrument-sr/" + encodeURIComponent(key);
-    const ENTRY_SIGNAL_URL = "/admin/level-isolation/strategy-signal";
     const POLL_MS = 10000;
-    const ENTRY_POLL_MS = 10000;
 
     const INDEX_KEYS = {
         MIDCPNIFTY:  "NSE_INDEX|NIFTY MID SELECT",
@@ -2929,6 +2801,49 @@
         return `${base}?instruments=${encodeURIComponent(keys.join(","))}`;
     };
     const LIVE_RECONNECT_MS = 4000;
+
+    /* ============================================================
+       Market-hours gating for the live feed
+       ============================================================
+       Upstox only streams index / option ticks Mon–Fri, 09:00–15:30
+       IST. Outside that window the WS either rejects the subscription
+       or silently delivers nothing, and it wastes a persistent
+       connection. So we only open the socket during market hours and
+       close it once the window is done.
+
+       A 60-second tick re-evaluates the window so a page left open
+       across 09:00 / 15:30 transitions connects / disconnects
+       automatically without a manual refresh.
+       ============================================================ */
+    const MARKET_OPEN_MIN = 9 * 60;      // 09:00 IST
+    const MARKET_CLOSE_MIN = 15 * 60 + 30; // 15:30 IST
+
+    function _isLiveFeedWindow(now) {
+        const d = now instanceof Date ? now : new Date();
+        let parts;
+        try {
+            parts = new Intl.DateTimeFormat("en-US", {
+                timeZone: "Asia/Kolkata",
+                weekday: "short",
+                hour: "2-digit",
+                minute: "2-digit",
+                hour12: false,
+            }).formatToParts(d);
+        } catch (_) {
+            return false;
+        }
+        const get = (t) => {
+            const p = parts.find(x => x.type === t);
+            return p ? p.value : "";
+        };
+        const weekday = get("weekday");
+        if (weekday === "Sat" || weekday === "Sun") return false;
+        const hh = parseInt(get("hour"), 10);
+        const mm = parseInt(get("minute"), 10);
+        if (!Number.isFinite(hh) || !Number.isFinite(mm)) return false;
+        const totalMin = hh * 60 + mm;
+        return totalMin >= MARKET_OPEN_MIN && totalMin <= MARKET_CLOSE_MIN;
+    }
 
     /* ============================================================
        Lot-size configuration + persistence
@@ -3061,7 +2976,6 @@
     const state = {
         detail: null,
         pollTimer: null,
-        entryPollTimer: null,
         seenAllKeys: new Set(),
     };
 
@@ -3081,6 +2995,7 @@
         ws: null,
         connected: false,
         reconnectTimer: null,
+        windowTimer: null,
         subscribedKeys: new Set(),
         ticks: {},
         activeInstrumentKey: null,
@@ -3302,6 +3217,11 @@
             pill.className = "sr-count-pill";
             pill.style.background = "";
             pill.style.color = "";
+        } else if (st === "closed") {
+            pill.textContent = "Market closed";
+            pill.className = "sr-count-pill";
+            pill.style.background = "var(--iso-amber-bg)";
+            pill.style.color = "var(--iso-amber)";
         } else {
             pill.textContent = "Disconnected";
             pill.className = "sr-count-pill";
@@ -3336,6 +3256,12 @@
     }
 
     function connectLiveFeed() {
+        // Market-hours gate — do not even attempt to open the socket
+        // outside Mon–Fri 09:00–15:30 IST.
+        if (!_isLiveFeedWindow()) {
+            setLiveFeedStatus("closed");
+            return;
+        }
         if (liveFeedState.ws &&
             (liveFeedState.ws.readyState === WebSocket.OPEN ||
              liveFeedState.ws.readyState === WebSocket.CONNECTING)) {
@@ -3374,6 +3300,14 @@
         ws.onclose = () => {
             liveFeedState.connected = false;
             liveFeedState.ws = null;
+            // If we closed because the market window ended, do not
+            // schedule a reconnect — the window tick will revive it
+            // when the market reopens.
+            if (!_isLiveFeedWindow()) {
+                setLiveFeedStatus("closed");
+                renderLiveFeed();
+                return;
+            }
             setLiveFeedStatus("disconnected");
             scheduleLiveFeedReconnect();
         };
@@ -3389,6 +3323,36 @@
         }, LIVE_RECONNECT_MS);
     }
 
+    /* 60 s window monitor — auto-connect when the market opens and
+       auto-close when it closes, without requiring a page refresh. */
+    function startLiveFeedWindowMonitor() {
+        if (liveFeedState.windowTimer) return;
+        liveFeedState.windowTimer = setInterval(_liveFeedWindowTick, 60 * 1000);
+    }
+
+    function _liveFeedWindowTick() {
+        const inWindow = _isLiveFeedWindow();
+        if (inWindow) {
+            if (!liveFeedState.ws ||
+                liveFeedState.ws.readyState === WebSocket.CLOSED) {
+                connectLiveFeed();
+            }
+            return;
+        }
+        // Outside market hours — close any open socket, clear state.
+        if (liveFeedState.ws &&
+            (liveFeedState.ws.readyState === WebSocket.OPEN ||
+             liveFeedState.ws.readyState === WebSocket.CONNECTING)) {
+            try { liveFeedState.ws.close(); } catch (_) {}
+            liveFeedState.ws = null;
+        }
+        liveFeedState.connected = false;
+        liveFeedState.subscribedKeys = new Set();
+        updateLiveSubCountPill();
+        setLiveFeedStatus("closed");
+        renderLiveFeed();
+    }
+
     function syncLiveSubscriptions() {
         const d = state.detail;
         const card = document.getElementById("iso-live-feed");
@@ -3397,6 +3361,22 @@
 
         if (!d) {
             card.style.display = "none";
+            return;
+        }
+
+        card.style.display = "block";
+
+        // Outside market hours: show the card but explicitly mark it
+        // as paused. Do not attempt any subscription.
+        if (!_isLiveFeedWindow()) {
+            setLiveFeedStatus("closed");
+            if (titleEl) {
+                const symLabel = d.isolated
+                    ? (d.isolated.trading_symbol || d.isolated.instrument_key)
+                    : "Watching 4 indices";
+                titleEl.textContent = `Live Feed · ${symLabel} · paused (market closed)`;
+            }
+            renderLiveFeed();
             return;
         }
 
@@ -3424,7 +3404,6 @@
             sendLiveSubscriptionSet(Array.from(wanted));
         }
 
-        card.style.display = "block";
         if (titleEl) {
             if (d.isolated) {
                 const simulateSuffix = isSimulateMode(d) ? " · SIMULATE" : "";
@@ -3534,6 +3513,7 @@
 
         const d = state.detail;
         const hasIsolation = !!(d && d.isolated);
+        const inWindow = _isLiveFeedWindow();
 
         let html = "";
 
@@ -3553,7 +3533,7 @@
                 valueClass: valueCls,
                 sub: change !== null
                     ? `${changePrefix}${fmt(change)}${changePct !== null ? ` (${fmt(changePct)}%)` : ""}`
-                    : "waiting for tick…",
+                    : (inWindow ? "waiting for tick…" : "market closed"),
                 subClass: valueCls,
                 primary: true,
             });
@@ -3597,7 +3577,7 @@
                 valueClass: valueCls,
                 sub: change !== null
                     ? `${changePrefix}${fmt(change)}${changePct !== null ? ` (${fmt(changePct)}%)` : ""}`
-                    : "waiting for tick…",
+                    : (inWindow ? "waiting for tick…" : "market closed"),
                 subClass: valueCls,
                 trigger: isTrigger,
             });
@@ -3606,7 +3586,10 @@
         tilesEl.innerHTML = html;
 
         if (metaEl) {
-            if (hasIsolation && liveFeedState.activeInstrumentKey) {
+            if (!inWindow) {
+                metaEl.textContent =
+                    "Live feed paused — outside market hours (09:00–15:30 IST, Mon–Fri).";
+            } else if (hasIsolation && liveFeedState.activeInstrumentKey) {
                 const primary = liveFeedState.ticks[liveFeedState.activeInstrumentKey];
                 if (primary && primary.timestamp) {
                     metaEl.textContent =
@@ -3989,467 +3972,6 @@
             ev.index && ev.side
                 ? `${ev.index} · ${ev.side}`
                 : "—";
-    }
-
-    /* ---------- Entry Signal ---------- */
-    function renderEntryTouchStrip(payload) {
-        const el = document.getElementById("entry-touch-strip");
-        if (!el) return;
-        const t = payload.touch || {};
-        const iso = payload.isolated || {};
-        const simulate = iso.source === "backfill";
-
-        const srcTag = simulate
-            ? ' <strong style="color:var(--iso-simulate)">· SIMULATE</strong>'
-            : "";
-
-        el.innerHTML =
-            '<span>Trigger: <strong>' +
-                esc(iso.trigger_index || "—") + " " + esc(t.side || "—") +
-                srcTag +
-            '</strong></span>' +
-            '<span>Bias: <strong>' + esc(t.bias_type || "—") + '</strong></span>' +
-            '<span>Routed to: <strong>' +
-                esc(iso.routed_index || "NIFTY") +
-                (iso.routed_nifty_ltp != null
-                    ? " @ " + fmt(iso.routed_nifty_ltp) : "") +
-            '</strong></span>' +
-            '<span>Touch: <strong>' + esc(formatTime(t.time)) + '</strong></span>' +
-            '<span>Window: <strong>' +
-                esc(formatTime(t.window_start)) + ' → ' +
-                esc(formatTime(t.window_end)) +
-            '</strong> (' + esc(t.buffer_minutes != null ? t.buffer_minutes : "—") +
-            'm)</span>';
-    }
-
-    function renderPromotionBanner(payload) {
-        const banner = document.getElementById("entry-promotion-banner");
-        if (!banner) return;
-
-        const promo = (payload && payload.promotion) || {};
-        const already = !!promo.already_applied;
-        const recommended = !!promo.recommended;
-        const targetKey = promo.target_instrument_key;
-        const targetSym = promo.target_trading_symbol || targetKey;
-
-        if (!already && !recommended) {
-            banner.style.display = "none";
-            banner.innerHTML = "";
-            return;
-        }
-
-        banner.style.display = "flex";
-        if (already) {
-            banner.innerHTML =
-                '<i class="bi bi-check-circle-fill"></i>' +
-                '<div><strong>Instrument promoted.</strong> ' +
-                'This <span class="promo-pending">' +
-                esc(payload.chosen_side || "") +
-                '</span> is now the <strong>active</strong> isolated instrument ' +
-                '(' + esc(targetSym || "") + ').</div>';
-        } else {
-            banner.innerHTML =
-                '<i class="bi bi-info-circle-fill"></i>' +
-                '<div><strong>Promotion is dormant.</strong> ' +
-                'The counter-side signal armed on ' +
-                '<span class="promo-pending">' +
-                esc(payload.chosen_side || "") +
-                '</span> (' + esc(targetSym || "") + '), ' +
-                'but the current order engine trades the isolated instrument ' +
-                'directly — promotion is informational only.</div>';
-        }
-    }
-
-    function entryCandidateNote(c) {
-        if (c.state === "waiting") {
-            if (c.state_note === "no_support_pivot_in_window") {
-                return "No support pivot inside the post-touch buffer yet.";
-            }
-            if (c.state_note === "no_sr_levels") {
-                return "No live SR levels persisted yet for this instrument.";
-            }
-            return "";
-        }
-        if (c.state === "waiting_confirmation") {
-            const es = c.entry_support || {};
-            const br = c.blocking_resistance || {};
-            if (es.price) {
-                let note = "Support at " + fmt(es.price) +
-                    " (pivot " + formatTime(es.pivot_time) + "). " +
-                    "Fast confirms at " +
-                    formatTime(es.confirmed_time_fast || es.confirmed_time) + ".";
-                if (c.seconds_until_confirmation != null) {
-                    const mins = Math.max(0, Math.round(c.seconds_until_confirmation / 60));
-                    note += " (~" + mins + "m)";
-                }
-                return note;
-            }
-            if (br.price) {
-                let note = "Resistance at " + fmt(br.price) +
-                    " (pivot " + formatTime(br.pivot_time) + "). " +
-                    "Fast confirms at " + formatTime(br.confirmed_time) + ".";
-                if (c.seconds_until_confirmation != null) {
-                    const mins = Math.max(0, Math.round(c.seconds_until_confirmation / 60));
-                    note += " " + (c.state_note && c.state_note.includes("auto_reverse")
-                        ? "(awaiting auto-reverse, ~" + mins + "m)"
-                        : "(~" + mins + "m)");
-                }
-                return note;
-            }
-            return "";
-        }
-        if (c.state === "blocked") {
-            const b = c.blocking_resistance || {};
-            const n = c.state_note || "";
-            if (n === "all_candidates_in_window_blocked") {
-                return "Buffer window expired with no tradeable confirmation.";
-            }
-            if (n === "entry_below_support") {
-                return "Entry price broke the support during confirmation wait.";
-            }
-            if (n === "invalid_entry_price") {
-                return "Invalid entry price (≤0) — bad tick or dead instrument.";
-            }
-            if (n === "no_entry_price") {
-                return "No entry price available (candle close and LTP both missing).";
-            }
-            if (n === "invalid_counter_price") {
-                return "Auto-reverse failed — counter-side LTP unavailable.";
-            }
-            if (b.price) {
-                return "Blocked by resistance " + fmt(b.price) +
-                    " (confirmed " + formatTime(b.confirmed_time) + ").";
-            }
-            return n || "Blocked.";
-        }
-        if (c.state === "discarded") {
-            const rt = c.reversal_trigger || {};
-            if (c.state_note === "rejected_and_reversed" && rt.bias_resistance_price != null) {
-                const rejSide = c.side || "?";
-                const armSide = rejSide === "CE" ? "PE" : "CE";
-                return "Bias " + rejSide + " rejected at ₹" +
-                    fmt(rt.bias_resistance_price) +
-                    " (confirmed " + formatTime(rt.bias_resistance_confirmed_time_fast) + ")" +
-                    " — auto-reversed to " + armSide + ".";
-            }
-            return "Another side confirmed first — entry discarded for the day.";
-        }
-        if (c.state === "armed") {
-            if (c.entry_type === "auto_reverse_on_rejection") {
-                return "Auto-reverse fired: bias side rejected → counter side armed.";
-            }
-            return "Entry support confirmed.";
-        }
-        if (c.state === "error") {
-            return c.state_note || "Computation error.";
-        }
-        return "";
-    }
-
-    /* ------------------------------------------------------------------
-       2026-11-06 update
-       ------------------------------------------------------------------
-       Entry-signal grid now displays the armed entry as:
-           Entry      : <time> / <price> (<source>)  [📌 pinned]
-           Stop-loss  : — / <price> (<source>) (<pct>)
-           Target     : <price>
-       paired time+price, with `—` placeholder for fields that do not
-       apply yet (e.g. stop-loss has no separate hit time on the signal;
-       exit is not relevant to an entry signal — the "Exit" row is
-       deliberately omitted here and only appears on the Simulation and
-       Dummy Orders cards where an actual order exists).
-       The previous stop_pct "Stop risk" row is folded into the
-       Stop-loss value as `(−X.X%)`.
-       ------------------------------------------------------------------ */
-    function entryCandidateGrid(c) {
-        if (c.state !== "armed" || !c.entry) {
-            if (c.entry_support) {
-                const es = c.entry_support;
-                return (
-                    '<div class="entry-grid">' +
-                        '<div class="label">Support price</div>' +
-                        '<div class="value">' + fmt(es.price) + '</div>' +
-                        '<div class="label">Pivot time</div>' +
-                        '<div class="value">' + formatTime(es.pivot_time) + '</div>' +
-                        '<div class="label">Fast confirm</div>' +
-                        '<div class="value">' + formatTime(es.confirmed_time_fast || es.confirmed_time) + '</div>' +
-                        '<div class="label">Display confirm</div>' +
-                        '<div class="value">' + formatTime(es.confirmed_time) + '</div>' +
-                    '</div>'
-                );
-            }
-            return "";
-        }
-
-        const e = c.entry;
-        const isReversal = c.entry_type === "auto_reverse_on_rejection";
-        const rt = c.reversal_trigger || {};
-        const isFrozen = !!e._frozen;
-
-        const sourceSmall = e.price_source
-            ? ' <small>(' + esc(quoteSourceLabel(e.price_source)) + ')</small>'
-            : '';
-
-        const frozenMark = isFrozen
-            ? ' <small class="entry-frozen-mark" title="Frozen at arming time">📌 pinned</small>'
-            : '';
-
-        // Entry: time / price (source)  [pinned]
-        const entryPair = timePricePair(
-            formatTime(e.time),
-            '₹' + fmt(e.price),
-            sourceSmall + frozenMark
-        );
-
-        // Stop-loss: — / price (source) (pct)
-        // There is no "stop hit time" on an entry signal — the stop is a
-        // proposed level, not a triggered exit. Show `—` for time.
-        const stopPrice = Number.isFinite(Number(e.stop))
-            ? '₹' + fmt(e.stop)
-            : '—';
-        const stopExtra =
-            (e.stop_source ? ' <small>(' + esc(e.stop_source) + ')</small>' : '') +
-            (e.stop_pct != null
-                ? ' <small>(−' + (e.stop_pct * 100).toFixed(1) + '%)</small>'
-                : '');
-        const stopPair = timePricePair('—', stopPrice, stopExtra);
-
-        // Target: price only (no time attached)
-        const targetValue = e.target != null
-            ? '₹' + fmt(e.target)
-            : '—';
-
-        const commonRows = [
-            '<div class="label">Entry</div>',
-            '<div class="value">' + entryPair + '</div>',
-            '<div class="label">Stop-loss</div>',
-            '<div class="value">' + stopPair + '</div>',
-            '<div class="label">Target</div>',
-            '<div class="value">' + targetValue + '</div>',
-        ];
-
-        let extraRows = '';
-        if (isReversal) {
-            extraRows =
-                '<div class="label">Rejected side</div>' +
-                '<div class="value">' + esc(rt.rejected_side || "—") + '</div>' +
-                '<div class="label">Rejected at</div>' +
-                '<div class="value">₹' + fmt(rt.bias_resistance_price) + '</div>' +
-                '<div class="label">Rejection time</div>' +
-                '<div class="value">' + formatTime(rt.bias_resistance_confirmed_time_fast) + '</div>' +
-                '<div class="label">Entry type</div>' +
-                '<div class="value">auto-reverse</div>';
-        } else if (c.entry_support) {
-            const es = c.entry_support;
-            extraRows =
-                '<div class="label">Support price</div>' +
-                '<div class="value">' + fmt(es.price) + '</div>' +
-                '<div class="label">Support pivot</div>' +
-                '<div class="value">' + formatTime(es.pivot_time) + '</div>' +
-                '<div class="label">Fast confirm</div>' +
-                '<div class="value">' + formatTime(es.confirmed_time_fast || es.confirmed_time) + '</div>' +
-                '<div class="label">Display confirm</div>' +
-                '<div class="value">' + formatTime(es.confirmed_time) + '</div>';
-        }
-
-        return '<div class="entry-grid">' + commonRows.join('') + extraRows + '</div>';
-    }
-
-    function renderEntryCandidate(c) {
-        const side = c.side || "—";
-        const typeCls = side === "CE" ? "type-ce" : "type-pe";
-        const stateVal = c.state || "waiting";
-        const stateCls = "state-" + stateVal;
-        const isChosen = !!c.chosen;
-        const isBias = !!c.is_bias_side;
-        const isReversal = c.entry_type === "auto_reverse_on_rejection";
-        const isFrozen = !!(c.entry && c.entry._frozen);
-
-        const pills = [
-            '<span class="entry-pill ' + typeCls + '">' + esc(side) + '</span>',
-            isBias ? '<span class="entry-pill bias">BIAS</span>' : '',
-            isFrozen ? '<span class="entry-pill frozen">📌 PINNED</span>' : '',
-            isReversal ? '<span class="entry-pill auto-reverse">↺ AUTO-REV</span>' : '',
-            '<span class="entry-pill ' + stateCls + '">' +
-                esc(stateVal.replace(/_/g, " ")) + '</span>',
-        ].filter(Boolean).join("");
-
-        const sym = c.trading_symbol || c.instrument_key || "—";
-        const note = entryCandidateNote(c);
-        const grid = entryCandidateGrid(c);
-
-        let extraHtml = '';
-        if (c.warning && c.warning_detail) {
-            extraHtml += '<div class="entry-warning">⚠️ ' + esc(c.warning_detail) + '</div>';
-        }
-        if (isReversal && c.state === "discarded" && c.reversal_trigger) {
-            const rt = c.reversal_trigger;
-            extraHtml +=
-                '<div class="entry-reversal">' +
-                    '↺ <strong>Auto-reverse fired</strong> — ' +
-                    esc(rt.rejected_side || side) + ' rejected at ₹' +
-                    fmt(rt.bias_resistance_price) +
-                    ' (confirmed ' + formatTime(rt.bias_resistance_confirmed_time_fast) + ').' +
-                '</div>';
-        }
-
-        return (
-            '<div class="entry-candidate' +
-                (isChosen ? ' is-chosen' : '') +
-                (isBias ? ' is-bias-side' : '') +
-                (isReversal ? ' is-auto-reverse' : '') + '">' +
-                '<div class="entry-candidate-head">' +
-                    '<div class="entry-candidate-symbol">' + esc(sym) + '</div>' +
-                    '<div class="entry-candidate-pills">' + pills + '</div>' +
-                '</div>' +
-                '<div class="entry-note">' + esc(note) + '</div>' +
-                grid +
-                extraHtml +
-            '</div>'
-        );
-    }
-
-    function renderEntrySignal(payload) {
-        const card = document.getElementById("iso-entry-signal");
-        const candidatesEl = document.getElementById("entry-candidates");
-        const warningsEl = document.getElementById("entry-warnings");
-        const chosenPill = document.getElementById("entry-chosen-pill");
-        const touchStripEl = document.getElementById("entry-touch-strip");
-        if (!card || !candidatesEl) return;
-
-        if (!payload || payload.status === "disabled" || payload.status === "no_isolation") {
-            card.style.display = "none";
-            return;
-        }
-
-        card.style.display = "block";
-
-        const pathBBanner = document.getElementById("entry-path-b-banner");
-        if (payload.status === "path_b_mode") {
-            card.style.display = "block";
-            if (pathBBanner) pathBBanner.style.display = "flex";
-            if (chosenPill) {
-                chosenPill.textContent = "Path B · External trigger";
-                chosenPill.className = "sr-count-pill chosen";
-            }
-            if (touchStripEl) {
-                const iso = payload.isolated || {};
-                touchStripEl.innerHTML =
-                    '<span>Trigger: <strong>' +
-                        esc(iso.trigger_index || "—") + " " +
-                        esc(iso.trigger_level || "—") +
-                    '</strong></span>' +
-                    '<span>Bias: <strong>' +
-                        esc((payload.path_b || {}).bias_side || "—") +
-                    '</strong></span>' +
-                    '<span>Routed: <strong>' +
-                        esc(iso.routed_index || "NIFTY") +
-                    '</strong></span>' +
-                    '<span>Mode: <strong>Path B · external trigger</strong></span>';
-            }
-            if (candidatesEl) {
-                candidatesEl.innerHTML =
-                    '<div class="entry-empty">' +
-                    '<i class="bi bi-signpost-split"></i>' +
-                    'Path B: no single-trade candidate. See the Dummy Orders card below.' +
-                    '</div>';
-            }
-            if (warningsEl) {
-                warningsEl.style.display = "none";
-                warningsEl.innerHTML = "";
-            }
-            return;
-        } else {
-            if (pathBBanner) pathBBanner.style.display = "none";
-        }
-
-        if (payload.status !== "ok") {
-            if (chosenPill) {
-                chosenPill.textContent = "Error";
-                chosenPill.className = "sr-count-pill";
-            }
-            if (touchStripEl) touchStripEl.innerHTML = "";
-            candidatesEl.innerHTML =
-                '<div class="entry-error">' +
-                '<i class="bi bi-exclamation-triangle"></i> ' +
-                esc(payload.note || payload.error || payload.status) +
-                '</div>';
-            if (warningsEl) {
-                warningsEl.style.display = "none";
-                warningsEl.innerHTML = "";
-            }
-            const promoBanner = document.getElementById("entry-promotion-banner");
-            if (promoBanner) {
-                promoBanner.style.display = "none";
-                promoBanner.innerHTML = "";
-            }
-            return;
-        }
-
-        renderPromotionBanner(payload);
-        // NOTE: auto-POST to /admin/level-isolation/apply-promotion has been
-        // intentionally removed — the promotion service is dormant after the
-        // order-strategy rewrite (no backend task calls apply_promotion()).
-
-        if (chosenPill) {
-            const chosen = payload.chosen_side;
-            const already = !!(payload.promotion || {}).already_applied;
-            const entryType = payload.chosen_entry_type;
-            if (chosen) {
-                let label = already
-                    ? `Promoted: ${chosen}`
-                    : `Chosen: ${chosen}`;
-                if (entryType === "auto_reverse_on_rejection") {
-                    label += " ↺";
-                }
-                chosenPill.textContent = label;
-                chosenPill.className = "sr-count-pill chosen";
-            } else {
-                chosenPill.textContent = "Waiting";
-                chosenPill.className = "sr-count-pill";
-            }
-        }
-
-        renderEntryTouchStrip(payload);
-
-        const list = (payload.candidates || []).slice();
-        if (!list.length) {
-            candidatesEl.innerHTML =
-                '<div class="entry-empty">' +
-                '<i class="bi bi-info-circle"></i>' +
-                'No candidate instruments resolved at this strike.' +
-                '</div>';
-        } else {
-            candidatesEl.innerHTML = list.map(renderEntryCandidate).join("");
-        }
-
-        const warns = (payload.warnings || []).slice();
-        if (warningsEl) {
-            if (warns.length) {
-                warningsEl.style.display = "block";
-                warningsEl.innerHTML =
-                    '<strong>⚠️ Warnings</strong>' +
-                    '<ul>' +
-                    warns.map(w => '<li>' + esc(w) + '</li>').join("") +
-                    '</ul>';
-            } else {
-                warningsEl.style.display = "none";
-                warningsEl.innerHTML = "";
-            }
-        }
-    }
-
-    async function loadEntrySignal() {
-        try {
-            const res = await fetch(ENTRY_SIGNAL_URL, {
-                headers: { Accept: "application/json" },
-            });
-            if (!res.ok) throw new Error("HTTP " + res.status);
-            const data = await res.json();
-            renderEntrySignal(data);
-        } catch (e) {
-            console.warn("[entry-signal] load failed:", e);
-        }
     }
 
     /* ---------- SR Tracking ---------- */
@@ -5384,7 +4906,6 @@
             const res = await fetch(BACKFILL_URL, { method: "POST" });
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             await loadDetail();
-            await loadEntrySignal();
         } catch (err) {
             console.error("[isolated] backfill failed:", err);
         } finally {
@@ -5403,7 +4924,6 @@
             const res = await fetch(REFRESH_SNAPSHOT_URL, { method: "POST" });
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             await loadDetail();
-            await loadEntrySignal();
         } catch (err) {
             console.error("[isolated] refresh-snapshot failed:", err);
         } finally {
@@ -5451,16 +4971,16 @@
         loadDetail();
         state.pollTimer = setInterval(loadDetail, POLL_MS);
 
-        loadEntrySignal();
-        state.entryPollTimer = setInterval(loadEntrySignal, ENTRY_POLL_MS);
-
+        // Live feed — only connects during market hours (Mon–Fri,
+        // 09:00–15:30 IST). The 60 s window monitor re-checks so the
+        // connection opens / closes at the boundary automatically.
         connectLiveFeed();
+        startLiveFeedWindowMonitor();
 
         const refreshBtn = document.getElementById("refresh-btn");
         if (refreshBtn) {
             refreshBtn.addEventListener("click", () => {
                 loadDetail();
-                loadEntrySignal();
             });
         }
 
@@ -5481,18 +5001,27 @@
     });
 
     document.addEventListener("visibilitychange", () => {
-        if (!document.hidden &&
-            (!liveFeedState.ws ||
-             liveFeedState.ws.readyState === WebSocket.CLOSED)) {
+        if (document.hidden) return;
+        if (!_isLiveFeedWindow()) {
+            if (liveFeedState.ws) {
+                try { liveFeedState.ws.close(); } catch (_) {}
+                liveFeedState.ws = null;
+            }
+            liveFeedState.connected = false;
+            setLiveFeedStatus("closed");
+            return;
+        }
+        if (!liveFeedState.ws ||
+            liveFeedState.ws.readyState === WebSocket.CLOSED) {
             connectLiveFeed();
         }
     });
 
     window.addEventListener("beforeunload", () => {
         if (state.pollTimer) clearInterval(state.pollTimer);
-        if (state.entryPollTimer) clearInterval(state.entryPollTimer);
         if (compareState.searchTimer) clearTimeout(compareState.searchTimer);
         if (liveFeedState.reconnectTimer) clearTimeout(liveFeedState.reconnectTimer);
+        if (liveFeedState.windowTimer) clearInterval(liveFeedState.windowTimer);
         if (liveFeedState.ws) {
             try { liveFeedState.ws.close(); } catch (_) {}
         }

@@ -1755,6 +1755,34 @@ class LevelIsolatedInstrumentService:
             allow_rest=is_backfill,
         )
 
+        # Pin the standard-session execution mode at the official isolation
+        # moment. The option price is the isolation snapshot, not a later S/R
+        # pivot or confirmation price. `touched_at` is the strategy timestamp
+        # used by the standard Path A router.
+        isolation_time_raw = event.get("touched_at") or _now_market().isoformat()
+        isolation_dt = None
+        try:
+            isolation_dt = datetime.fromisoformat(
+                str(isolation_time_raw).replace("Z", "+00:00"),
+            )
+            if isolation_dt.tzinfo is None:
+                isolation_dt = isolation_dt.replace(tzinfo=_MARKET_TZ)
+            else:
+                isolation_dt = isolation_dt.astimezone(_MARKET_TZ)
+        except (TypeError, ValueError):
+            isolation_dt = None
+        isolation_price = snapshot.get("instrument_ltp")
+        try:
+            isolation_price_f = float(isolation_price)
+        except (TypeError, ValueError):
+            isolation_price_f = None
+        early_extreme_reversal = bool(
+            isolation_dt is not None
+            and isolation_dt.time() < dtime(10, 30)
+            and isolation_price_f is not None
+            and isolation_price_f > 0.0
+            and (isolation_price_f > 250.0 or isolation_price_f < 100.0)
+        )
         isolated = {
             "instrument_key": candidate.get("instrument_key"),
             "trading_symbol": candidate.get("trading_symbol"),
@@ -1787,6 +1815,15 @@ class LevelIsolatedInstrumentService:
             "instrument_first_candle": snapshot.get("instrument_first_candle"),
             "instrument_or_levels": snapshot.get("instrument_or_levels"),
             "instrument_quote_source": snapshot.get("instrument_quote_source"),
+            # Immutable execution-mode snapshot for this isolation.
+            "standard_execution_mode": (
+                "EARLY_EXTREME_REVERSAL" if early_extreme_reversal else "STANDARD"
+            ),
+            "early_extreme_reversal": early_extreme_reversal,
+            "execution_mode_decided_at": (
+                isolation_dt.isoformat() if isolation_dt is not None else None
+            ),
+            "execution_mode_price": isolation_price_f,
         }
 
         # G1 v4.3: `trigger_is_self_nifty` and `execution_path` are
