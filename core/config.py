@@ -750,6 +750,34 @@ STRATEGY_ORDER_STOP_LOSS_PCT = _float(
     "STRATEGY_ORDER_STOP_LOSS_PCT", 0.30
 )
 
+# Live-entry filters kept in parity with backtest_order_strategy.py.
+# STANDARD 09:30 backup reversal: PE bias is suppressed by default;
+# CE bias requires a rising isolated-leg EMA over the configured lookback.
+STRATEGY_ORDER_BACKUP_PE_SUPPRESS = _bool(
+    "STRATEGY_ORDER_BACKUP_PE_SUPPRESS", True
+)
+STRATEGY_ORDER_BACKUP_CE_REQUIRE_POSITIVE_EMA_SLOPE = _bool(
+    "STRATEGY_ORDER_BACKUP_CE_REQUIRE_POSITIVE_EMA_SLOPE", True
+)
+STRATEGY_ORDER_BACKUP_CE_EMA_PERIOD = max(
+    1, _int("STRATEGY_ORDER_BACKUP_CE_EMA_PERIOD", 9)
+)
+STRATEGY_ORDER_BACKUP_CE_EMA_SLOPE_LOOKBACK = max(
+    1, _int("STRATEGY_ORDER_BACKUP_CE_EMA_SLOPE_LOOKBACK", 2)
+)
+
+# EARLY_EXTREME_REVERSAL same-leg (Resistance -> isolated leg) premium gate.
+# Inclusive bounds: ₹80 <= routed entry premium <= ₹100 by default.
+STRATEGY_ORDER_EER_SAME_LEG_PREMIUM_BAND_ENABLED = _bool(
+    "STRATEGY_ORDER_EER_SAME_LEG_PREMIUM_BAND_ENABLED", True
+)
+STRATEGY_ORDER_EER_SAME_LEG_PREMIUM_MIN = _float(
+    "STRATEGY_ORDER_EER_SAME_LEG_PREMIUM_MIN", 80.0
+)
+STRATEGY_ORDER_EER_SAME_LEG_PREMIUM_MAX = _float(
+    "STRATEGY_ORDER_EER_SAME_LEG_PREMIUM_MAX", 100.0
+)
+
 # Standard unified Path A dynamic target is a fixed rule implemented
 # in services/dummy_order_service.py; the entry-price band calculation
 # is intentionally not controlled by an environment flag.
