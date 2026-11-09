@@ -173,130 +173,21 @@ logger = get_logger(__file__)
 # it without going through ``scheduler_service``.                           #
 # --------------------------------------------------------------------------- #
 def sr_backfill_ready() -> tuple[bool, str]:
-    """Return ``(ready, reason)`` for today's SR backfill latch.
-
-    This is the **same latch** used by ``main.py`` at startup. If it
-    returns ``False`` the caller MUST NOT invoke ``dummy_order_service``
-    — the SR series for today has not completed its backfill and any
-    order created against it would be derived from partial data.
-
-    Failure to *query* the latch is treated as NOT ready (fail-safe).
-    We would rather skip a 30-second tick than create an order against
-    a series we cannot verify. The warning is loud so the operator
-    notices and fixes the probe.
-    """
+    """Gate dummy-order processing on fresh EMA V2 S/R for active isolation."""
     try:
-        from services.sr_backfill_service import sr_backfill_service
+        from services.level_isolated_instrument_service import level_isolated_instrument_service
+        from services.external_sr_websocket_service import external_sr_websocket_service
+        detail = level_isolated_instrument_service.get_detail() or {}
+        isolated = detail.get("isolated_instrument") or detail.get("isolated") or {}
+        key = str(isolated.get("instrument_key") or "").strip() if isinstance(isolated, dict) else ""
+        if not key:
+            return True, "no_active_isolation"
+        if not external_sr_websocket_service.is_ready(key, "15/3"):
+            return False, "external_sr_15_3_not_ready"
+        return True, "external_sr_ready"
     except Exception as exc:
-        logger.warning(
-            "[scheduler] SR backfill latch unavailable — treating as "
-            "NOT ready: %s: %s",
-            type(exc).__name__, exc,
-        )
-        return False, f"import_error:{type(exc).__name__}"
-
-    probe = getattr(sr_backfill_service, "is_ready_for_today", None)
-    if probe is None:
-        logger.warning(
-            "[scheduler] sr_backfill_service has no is_ready_for_today() "
-            "probe — treating as NOT ready. Update the service to expose "
-            "the latch consumed by main.py.",
-        )
-        return False, "missing_probe"
-
-    try:
-        ready = bool(probe())
-    except Exception as exc:
-        logger.exception("[scheduler] SR backfill readiness probe raised")
-        return False, f"probe_error:{type(exc).__name__}"
-
-    return ready, "ready" if ready else "sr_backfill_not_ready_today"
-
-
-# --------------------------------------------------------------------------- #
-# Replay-series immutability flag for the periodic live-buffer refresh        #
-# --------------------------------------------------------------------------- #
-# Option (a) from the 2026-11-04 brief: the every-2-minute refresh updates
-# only the live buffer. The replay series used by the startup catch-up is
-# built once at startup and then frozen for the day, so that
-# DUMMY_ORDER_DRIFT_GUARD can guarantee existing orders are never
-# recomputed against a shifting snapshot. Changing this to True would
-# re-enable option (b) and require dummy_order_service to tag every new
-# order with its snapshot_epoch; that is NOT the current design.
-_LIVE_SR_REFRESH_UPDATE_REPLAY = False
-
-
-# --------------------------------------------------------------------------- #
-# Replay-seed-at-open constants                                              #
-# --------------------------------------------------------------------------- #
-# 09:16 IST (one minute after the market opens). Rationale for the offset:
-#   * 09:15:00 — the intraday API may not yet serve the opening candle;
-#     seeding zero candles would still flip is_ready_for_today()=True,
-#     which is a worse outcome than skipping.
-#   * 09:16:00 — the opening 1-min candle is reliably available from
-#     Upstox, so the seed populates a usable replay.
-#   * misfire_grace_time=600 — if the scheduler is briefly paused around
-#     09:16, the job still fires (up to 09:26). Beyond that, the operator
-#     can trigger the seed manually via POST /admin/hard-refresh.
-_REPLAY_SEED_HOUR = 9
-_REPLAY_SEED_MINUTE = 16
-_REPLAY_SEED_MISFIRE_GRACE_SECONDS = 600
-
-
-# --------------------------------------------------------------------------- #
-# Isolated-pair SR per-minute refresh constants (2026-11-06)                  #
-# --------------------------------------------------------------------------- #
-# Live window: 09:17:10 IST → 15:30:10 IST inclusive.
-#   * 09:17:10 — two minutes after open gives HistoryV3Api time to publish
-#     the 09:16 closed candle; the strict pivot window (15 left / 15 right)
-#     needs those bars to form the first intramural levels of the day.
-#   * 15:30:10 — half an hour before the NSE equity close, guaranteeing
-#     the snapshot captures the last confirmed intramural pivot before the
-#     15:15–15:25 broker auto-square-off window begins.
-# The cron expression registers 9:00–15:59 but the tick is a no-op outside
-# the window — this keeps the registration simple and lets a brief
-# scheduler pause (misfire_grace_time=30) recover into the correct minute.
-_ISOLATED_SR_WINDOW_START_HOUR = 9
-_ISOLATED_SR_WINDOW_START_MINUTE = 17
-_ISOLATED_SR_WINDOW_START_SECOND = 10
-_ISOLATED_SR_WINDOW_END_HOUR = 15
-_ISOLATED_SR_WINDOW_END_MINUTE = 30
-_ISOLATED_SR_WINDOW_END_SECOND = 10
-_ISOLATED_SR_CRON_SECOND = 10
-
-
-# --------------------------------------------------------------------------- #
-# 2026-11-06 fix — resolve LEVEL_FILTER_INDEXES labels to real Upstox keys    #
-# --------------------------------------------------------------------------- #
-# ``config.LEVEL_FILTER_INDEXES`` carries short labels like ``"BANKNIFTY"``,
-# ``"NIFTY"``, ``"MIDCPNIFTY"``, ``"SENSEX"``. These are NOT Upstox
-# instrument keys — they are folder names used by ``data/index/<label>/``.
-#
-# The minute tick previously fed them straight to
-# ``calculate_pivots_cached()``, which:
-#   1. registered a bogus ad-hoc entry ``{"instrument_key": "BANKNIFTY",
-#      "underlying": "BANKNIFTY", "is_index": True}``,
-#   2. loaded only the historical tail from ``data/index/banknifty/
-#      candles.json`` (Nov 2–4 in the 2026-11-06 incident), because
-#      ``HistoryV3Api.get_intra_day_candle_data("BANKNIFTY", ...)``
-#      returns an error for the label (invalid Upstox key) and the
-#      intraday fetcher silently returned ``[]``,
-#   3. filtered every pivot out via ``_mark_is_today`` (all confirmed
-#      on Nov 2–4, not today),
-#   4. persisted an EMPTY snapshot to
-#      ``isolation/BANKNIFTY_live_sr.json``.
-#
-# ``_resolve_label_to_index_key()`` maps the label to the real key so
-# the intraday fetch succeeds and the persisted snapshot contains
-# today's levels.
-# --------------------------------------------------------------------------- #
-_INDEX_LABEL_FALLBACK_MAP: dict[str, str] = {
-    "NIFTY":       "NSE_INDEX|Nifty 50",
-    "BANKNIFTY":   "NSE_INDEX|Nifty Bank",
-    "MIDCPNIFTY":  "NSE_INDEX|NIFTY MID SELECT",
-    "FINNIFTY":    "NSE_INDEX|NIFTY FIN SERVICE",
-    "SENSEX":      "BSE_INDEX|SENSEX",
-}
+        logger.exception("[scheduler] external SR readiness probe failed")
+        return False, f"external_sr_probe_error:{type(exc).__name__}"
 
 
 def _resolve_label_to_index_key(label: str) -> str | None:
