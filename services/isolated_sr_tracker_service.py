@@ -552,15 +552,15 @@ class IsolatedSRTrackerService:
     def _snapshot_current_levels(self, instrument_key: str) -> list[dict[str, Any]]:
         """Return the live SR engine's current levels for ``instrument_key``."""
         try:
-            from services.live_sr_levels_service import live_sr_levels_service
-            payload = live_sr_levels_service.get_levels(instrument_key)
-            if isinstance(payload, dict):
+            from services.external_sr_websocket_service import external_sr_websocket_service
+            payload = external_sr_websocket_service.get_levels(instrument_key, "15/3")
+            if isinstance(payload, dict) and payload.get("is_ready"):
                 levels = payload.get("levels") or []
                 if isinstance(levels, list):
                     return [dict(x) for x in levels if isinstance(x, dict)]
         except Exception:
             logger.exception(
-                "[isolated-sr] snapshot current levels failed for %s",
+                "[isolated-sr] external SR snapshot failed for %s",
                 instrument_key,
             )
         return []
@@ -573,7 +573,7 @@ class IsolatedSRTrackerService:
         instrument_key: str,
         level: dict[str, Any],
     ) -> None:
-        """Called by ``live_sr_levels_service._append_level``."""
+        """Called by the external EMA V2 WebSocket on confirmed SR updates."""
         with self._lock:
             self._ensure_today()
 
