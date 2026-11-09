@@ -589,6 +589,19 @@ class IsolatedSRTrackerService:
             self._seen_keys.add(dedup)
 
             record = _strip_legacy_fields(level)
+            confirmed_dt = _parse_iso(level.get("confirmed_time"))
+            isolated_dt = _parse_iso(
+                self._state.get("isolated_at")
+                or self._state.get("isolated_time")
+            )
+            # EMA V2 sends the complete current level arrays on every update.
+            # Do not misclassify pre-isolation pivots as post-isolation events.
+            if confirmed_dt is not None and isolated_dt is not None and confirmed_dt <= isolated_dt:
+                record["_phase"] = "pre_isolation"
+                self._state["pre_isolation_levels"].append(record)
+                self._save_state()
+                return
+
             record["_phase"] = "post_isolation"
             self._state["post_isolation_levels"].append(record)
 
