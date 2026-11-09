@@ -1386,43 +1386,23 @@ class LevelIsolatedInstrumentService:
         bias_candidate: dict[str, Any],
         counter_candidate: dict[str, Any] | None,
     ) -> None:
-        """Register the bias-side **and** counter-side instruments with
-        the SR engine, seeding both with today's intraday candles.
+        """Subscribe the isolated CE/PE pair to the external EMA V2 S/R feed.
 
-        Why this exists
-        ---------------
-        ``strategy_entry_signal_service._entry_price_for()`` looks up the
-        confirming candle's close via ``_candle_close_at()`` which reads
-        from ``live_sr_levels_service._states[key]["candles"]``. If the
-        counter-side option was never registered with the SR engine,
-        that lookup returns ``None`` and the entry price silently falls
-        back to ``_live_ltp()`` — which during a **simulate-mode replay**
-        means the *current* wall-clock price (~₹61) instead of the
-        *touch-time* candle close (~₹186). That produced both the wrong
-        entry price on ``/isolated`` and the wrong stop / target / R
-        multiple on the dummy order.
-
-        Seeding the counter side here, immediately after isolation (and
-        therefore before any entry-signal computation), closes that hole.
-
-        Also registers the same instrument with the live feed (best
-        effort) so that on a live day the counter-side SR state keeps
-        growing and does not go stale before the promotion runs.
-
-        Never raises. Every failure path logs and continues — a failure
-        to register the counter side must not break the isolation itself.
+        The external service owns pivot calculation. We only ensure each
+        isolated leg has registry metadata, market-data subscription, and
+        external S/R subscriptions. No local S/R candle seeding occurs here.
         """
         try:
-            from services.live_sr_levels_service import live_sr_levels_service
             from services.instrument_registry import instrument_registry
-        except Exception:
-            logger.exception(
-                "[level-isolation] SR/registry import failed during "
-                "counter-side registration"
+            from services.external_sr_websocket_service import (
+                external_sr_websocket_service,
             )
+            from services.live_feed_service import live_feed_service
+        except Exception:
+            logger.exception("[level-isolation] external SR dependencies unavailable")
             return
 
-        candidates: list[dict[str, Any]] = [bias_candidate]
+        candidates = [bias_candidate]
         if counter_candidate:
             candidates.append(counter_candidate)
 
@@ -1430,41 +1410,31 @@ class LevelIsolatedInstrumentService:
             key = str(candidate.get("instrument_key") or "").strip()
             if not key:
                 continue
-
             try:
                 entry = instrument_registry.get(key)
                 if entry is None:
                     entry = instrument_registry.register_adhoc(key)
                 if entry is None:
+                    logger.warning("[level-isolation] missing registry metadata for %s", key)
                     continue
 
-                already_tracking = live_sr_levels_service.is_tracking(key)
-
-                # Register (idempotent — no-op if already present today)
-                live_sr_levels_service.register_instrument(entry)
-
-                # Seed today's candles when this is the first time we are
-                # tracking this instrument. Critical for the backfill /
-                # simulate path where the SR engine was populated by the
-                # feed-start backfill but the counter side was not yet a
-                # registered instrument.
-                if not already_tracking:
-                    self._seed_candles_for_instrument(key, entry)
-
-                # Best-effort feed subscription so live ticks continue
-                # updating the counter-side SR state after isolation.
+                # Retain the Upstox option tick subscription for LTP/stop
+                # management; S/R levels arrive independently via EMA V2.
                 try:
-                    from services.live_feed_service import live_feed_service
                     if not live_feed_service.is_subscribed(key):
                         live_feed_service.subscribe_instrument(key)
                 except Exception:
-                    logger.exception(
-                        "[level-isolation] feed subscribe failed for %s", key,
-                    )
-            except Exception:
-                logger.exception(
-                    "[level-isolation] SR registration failed for %s", key,
+                    logger.exception("[level-isolation] market feed subscribe failed for %s", key)
+
+                result = external_sr_websocket_service.subscribe(
+                    key, configs=("15/3", "15/15", "15/30"),
                 )
+                logger.info(
+                    "[level-isolation] external SR subscribe key=%s symbol=%s result=%s",
+                    key, entry.get("trading_symbol"), result,
+                )
+            except Exception:
+                logger.exception("[level-isolation] external SR subscribe failed for %s", key)
 
     def _seed_candles_for_instrument(
         self,
