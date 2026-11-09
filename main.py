@@ -478,36 +478,17 @@ def _holiday_gate_for_startup() -> dict[str, Any]:
 # SR backfill readiness wait (2026-11-04)                                     #
 # --------------------------------------------------------------------------- #
 def _sr_backfill_is_ready() -> bool:
-    """Best-effort readiness probe for the SR backfill latch.
-
-    Prefers ``sr_backfill_service.is_ready_for_today()`` when the
-    service exposes that name (the documented gate), and falls back to
-    ``is_ready()`` — which is what the current ``sr_backfill_service``
-    implementation exports. Returns ``False`` if neither method exists
-    (older service build), so the caller's timeout path handles it
-    defensively instead of crashing startup.
-    """
+    """Compatibility name: readiness now means fresh external EMA V2 15/3 data."""
     try:
-        from services.sr_backfill_service import sr_backfill_service
+        from services.level_isolated_instrument_service import level_isolated_instrument_service
+        from services.external_sr_websocket_service import external_sr_websocket_service
+        detail = level_isolated_instrument_service.get_detail() or {}
+        isolated = detail.get("isolated") or {}
+        key = str(isolated.get("instrument_key") or "").strip() if isinstance(isolated, dict) else ""
+        return True if not key else external_sr_websocket_service.is_ready(key, "15/3")
     except Exception:
-        logger.exception(
-            "[startup] sr_backfill_service import failed during "
-            "readiness probe"
-        )
+        logger.exception("[startup] external SR readiness probe failed")
         return False
-
-    for method_name in ("is_ready_for_today", "is_ready"):
-        method = getattr(sr_backfill_service, method_name, None)
-        if callable(method):
-            try:
-                return bool(method())
-            except Exception:
-                logger.exception(
-                    "[startup] sr_backfill_service.%s() raised",
-                    method_name,
-                )
-                return False
-    return False
 
 
 async def _wait_for_sr_backfill_ready(
