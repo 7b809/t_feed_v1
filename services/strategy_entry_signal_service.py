@@ -393,114 +393,44 @@ def _run_pivot_scan(
     left_bars: int,
     right_bars: int,
 ) -> list[dict[str, Any]]:
-    try:
-        from services.live_sr_levels_service import live_sr_levels_service
-        with live_sr_levels_service._guard:  # type: ignore[attr-defined]
-            state = live_sr_levels_service._states.get(instrument_key)  # type: ignore[attr-defined]
-            if state is None:
-                return []
-            candles = list(state.get("candles") or [])
-    except Exception:
-        logger.exception(
-            "[strategy-entry] fast scan failed to read candle series for %s",
-            instrument_key,
+    """Read confirmed pivots from EMA V2; never calculate pivots locally."""
+    config_by_window = {(15, 3): "15/3", (15, 15): "15/15", (15, 30): "15/30"}
+    external_config = config_by_window.get((int(left_bars), int(right_bars)))
+    if external_config is None:
+        logger.warning(
+            "[strategy-entry] unsupported external SR window %s/%s for %s",
+            left_bars, right_bars, instrument_key,
         )
         return []
-
-    if not candles:
+    try:
+        from services.external_sr_websocket_service import external_sr_websocket_service
+        payload = external_sr_websocket_service.get_levels(instrument_key, external_config)
+    except Exception:
+        logger.exception("[strategy-entry] external SR lookup failed for %s", instrument_key)
         return []
-    if len(candles) < left_bars + right_bars + 1:
+    if not payload or not payload.get("is_ready"):
         return []
 
     out: list[dict[str, Any]] = []
-    n = len(candles)
-
-    for i in range(left_bars, n - right_bars):
-        c = candles[i]
-        try:
-            c_high = float(c["high"])
-            c_low = float(c["low"])
-            c_time = c["time"]
-        except (KeyError, TypeError, ValueError):
+    for raw in payload.get("levels") or []:
+        if not isinstance(raw, dict):
             continue
-
-        is_support = True
-        for j in range(i - left_bars, i):
-            try:
-                if float(candles[j]["low"]) <= c_low:
-                    is_support = False
-                    break
-            except (KeyError, TypeError, ValueError):
-                is_support = False
-                break
-        if is_support:
-            for j in range(i + 1, i + right_bars + 1):
-                try:
-                    if float(candles[j]["low"]) <= c_low:
-                        is_support = False
-                        break
-                except (KeyError, TypeError, ValueError):
-                    is_support = False
-                    break
-
-        if is_support:
-            confirm_idx = i + right_bars
-            try:
-                confirmed_time = candles[confirm_idx]["time"]
-            except (IndexError, KeyError, TypeError):
-                continue
-            out.append({
-                "level": "support",
-                "price": c_low,
-                "pivot_bar_index": i,
-                "pivot_time": c_time,
-                "confirmed_bar_index": confirm_idx,
-                "confirmed_time": confirmed_time,
-                "left_bars": left_bars,
-                "right_bars": right_bars,
-            })
-
-        is_resistance = True
-        for j in range(i - left_bars, i):
-            try:
-                if float(candles[j]["high"]) >= c_high:
-                    is_resistance = False
-                    break
-            except (KeyError, TypeError, ValueError):
-                is_resistance = False
-                break
-        if is_resistance:
-            for j in range(i + 1, i + right_bars + 1):
-                try:
-                    if float(candles[j]["high"]) >= c_high:
-                        is_resistance = False
-                        break
-                except (KeyError, TypeError, ValueError):
-                    is_resistance = False
-                    break
-
-        if is_resistance:
-            confirm_idx = i + right_bars
-            try:
-                confirmed_time = candles[confirm_idx]["time"]
-            except (IndexError, KeyError, TypeError):
-                continue
-            out.append({
-                "level": "resistance",
-                "price": c_high,
-                "pivot_bar_index": i,
-                "pivot_time": c_time,
-                "confirmed_bar_index": confirm_idx,
-                "confirmed_time": confirmed_time,
-                "left_bars": left_bars,
-                "right_bars": right_bars,
-            })
-
+        level_type = str(raw.get("level") or "").lower()
+        if level_type not in {"support", "resistance"}:
+            continue
+        if raw.get("confirmed_time") is None:
+            continue
+        item = dict(raw)
+        item.setdefault("left_bars", left_bars)
+        item.setdefault("right_bars", right_bars)
+        item["confirmation_time"] = item.get("confirmed_time")
+        item["level_price"] = item.get("price")
+        item["type"] = level_type
+        item["status"] = "confirmed"
+        out.append(item)
+    out.sort(key=lambda x: str(x.get("confirmed_time") or ""))
     return out
 
-# --------------------------------------------------------------------------- #
-# Post-11:30 regime helpers (2026-11-05)                                      #
-# --------------------------------------------------------------------------- #
 def _regime_cutoff_time() -> dt_time:
     """Return the post-11:30 cutoff as a ``datetime.time`` (IST).
 
