@@ -10,10 +10,14 @@ import asyncio
 import json
 import logging
 import os
+import re
 import threading
 import time
+from datetime import datetime
+from pathlib import Path
 from typing import Any
 from urllib.parse import quote
+from zoneinfo import ZoneInfo
 
 import websockets
 from websockets.exceptions import ConnectionClosed
@@ -32,6 +36,19 @@ class ExternalSRWebSocketService:
             self.base_url = "ws://" + self.base_url[7:]
         self.enabled = os.getenv("EXTERNAL_SR_WS_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
         self.stale_seconds = max(60, int(os.getenv("EXTERNAL_SR_STALE_SECONDS", "180")))
+        try:
+            from core import config
+            configured_log_dir = getattr(config, "EXTERNAL_SR_LOG_DIR", "data/live_sr")
+            project_root = Path(getattr(config, "PROJECT_ROOT", Path(__file__).resolve().parents[1]))
+        except Exception:
+            configured_log_dir = os.getenv("EXTERNAL_SR_LOG_DIR", "data/live_sr")
+            project_root = Path(__file__).resolve().parents[1]
+        self.log_dir = Path(configured_log_dir)
+        if not self.log_dir.is_absolute():
+            self.log_dir = project_root / self.log_dir
+        self.log_dir = self.log_dir.resolve()
+        self._market_tz = ZoneInfo(os.getenv("MARKET_TIMEZONE", "Asia/Kolkata"))
+        self._log_lock = threading.Lock()
         self._lock = threading.RLock()
         self._states: dict[tuple[str, str], dict[str, Any]] = {}
         self._wanted: set[tuple[str, str]] = set()
@@ -96,6 +113,51 @@ class ExternalSRWebSocketService:
                 asyncio.run_coroutine_threadsafe(self._ensure_task(key, cfg), loop)
         return {"status": "subscribing", "instrument_key": key, "configs": accepted}
 
+    def subscribe_core_indexes(self) -> dict[str, Any]:
+        """Subscribe all four monitored cash indexes to external EMA V2 S/R.
+
+        This is deliberately independent of option isolation, so index
+        snapshots and updates are always collected when the service is enabled.
+        """
+        keys = (
+            "NSE_INDEX|NIFTY MID SELECT",
+            "NSE_INDEX|Nifty Bank",
+            "NSE_INDEX|Nifty 50",
+            "BSE_INDEX|SENSEX",
+        )
+        results = {key: self.subscribe(key) for key in keys}
+        logger.info(
+            "[external-sr] core index subscriptions requested count=%d keys=%s",
+            len(results), list(results),
+        )
+        return {"status": "subscribing", "count": len(results), "results": results}
+
+    def _log_path_for(self, key: str, cfg: str) -> Path:
+        safe_key = re.sub(r"[^A-Za-z0-9._-]+", "_", key).strip("._-") or "instrument"
+        safe_cfg = re.sub(r"[^A-Za-z0-9._-]+", "-", cfg).strip("._-") or "config"
+        return self.log_dir / f"{safe_key}__{safe_cfg}.jsonl"
+
+    def _persist_event(self, key: str, cfg: str, message: dict[str, Any], received_at: float) -> None:
+        """Append every accepted EMA V2 event to a per-instrument JSONL log."""
+        try:
+            self.log_dir.mkdir(parents=True, exist_ok=True)
+            record = {
+                "received_at": datetime.fromtimestamp(received_at, self._market_tz).isoformat(),
+                "instrument_key": key,
+                "config": cfg,
+                "event": str(message.get("event") or ""),
+                "payload": message,
+            }
+            line = json.dumps(record, ensure_ascii=False, separators=(",", ":"), default=str)
+            path = self._log_path_for(key, cfg)
+            with self._log_lock:
+                with path.open("a", encoding="utf-8") as handle:
+                    handle.write(line + "\\n")
+                    handle.flush()
+        except Exception:
+            # Logging is best-effort and must never interrupt live S/R consumption.
+            logger.exception("[external-sr] failed to persist event key=%s config=%s", key, cfg)
+
     async def _ensure_task(self, key: str, cfg: str) -> None:
         token = (key, cfg)
         task = self._tasks.get(token)
@@ -147,6 +209,7 @@ class ExternalSRWebSocketService:
             logger.debug("[external-sr] ignored event=%s key=%s", event, key)
             return
         now = time.time()
+        self._persist_event(key, cfg, message, now)
         token = (key, cfg)
         callback_levels: list[dict[str, Any]] = []
         with self._lock:
