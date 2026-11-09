@@ -13,6 +13,17 @@ reaching the router. Behaviour:
 This complements (and can replace) the older `_redirect_html_to_login`
 middleware in main.py — the difference is that this one ALSO covers API
 routes, WebSocket handshakes, and any route not explicitly whitelisted.
+
+Incoming isolation notifications
+--------------------------------
+`/api/isolation` (and everything under it) is whitelisted so the
+isolation service can POST its document without a browser session.
+Auth on that endpoint is enforced *inside the route handler* by
+`routes/isolation_receiver_routes.py`, which validates the shared
+secret header (`X-Isolation-Key` by default) against
+`ISOLATION_RECEIVER_KEY`. Whitelisting here does NOT make the endpoint
+public — it only lets the request reach the handler that will perform
+the actual auth check.
 """
 
 from __future__ import annotations
@@ -45,6 +56,13 @@ PUBLIC_PREFIXES = (
     "/docs",           # FastAPI Swagger UI (drop these two if you want docs behind auth)
     "/openapi.json",
     "/redoc",
+    # Incoming isolation notifications from the isolation service.
+    # Covers POST /api/isolation, GET /api/isolation/received,
+    # GET /api/isolation/received/{date}/{filename}.
+    # Route-level auth is enforced by the shared-secret header check in
+    # routes/isolation_receiver_routes.py — do NOT rely on this entry
+    # alone as the endpoint's only protection.
+    "/api/isolation",
 )
 
 

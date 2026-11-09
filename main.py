@@ -255,6 +255,7 @@ from routes.dummy_order_routes import router as dummy_order_router
 from routes.ema_calc_routes import router as ema_calc_router
 from routes.folder_routes import router as folder_router
 from routes.isolated_instrument_routes import router as isolated_instrument_router
+from routes.isolation_receiver_routes import router as isolation_receiver_router
 from routes.layout_routes import router as layout_router
 from routes.live_routes import router as live_router
 from routes.log_routes import router as log_router
@@ -1119,7 +1120,7 @@ app.include_router(expired_instruments_router)
 app.include_router(expired_chart_router)
 app.include_router(market_holiday_router)
 app.include_router(layout_router)
-
+app.include_router(isolation_receiver_router)
 
 # ---- Sensitive surfaces --------------------------------------------------- #
 # Admin, folders, logs, isolated-instrument, simulation, dummy-orders,
