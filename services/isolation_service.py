@@ -46,6 +46,7 @@ from repositories.isolation_repository import IsolationRepository
 from services.execution_mode_service import pin_execution_mode
 from services.index_touch_detector import IndexTouchDetector
 from services.touch_arbitration_service import arbitrate_touches
+from services.isolation_notification_service import notify_isolation_clients
 
 logger = get_logger(__file__)
 
@@ -192,6 +193,9 @@ class IsolationService:
             logger.exception("Instrument search failed (bias=%s)", bias)
             return None
 
+        # --- 4a. Resolve the exact opposite option leg (same strike/expiry) ---
+        opposite_leg = self._find_opposite_leg(instrument)
+
         # --- 5. Option LTP snapshot ---
         if option_ltp_override is not None:
             snapshot_ltp = option_ltp_override
@@ -219,15 +223,90 @@ class IsolationService:
             mode_payload=mode_payload,
             touch_time=touch_time,
             backfilled=backfilled,
+            opposite_leg=opposite_leg,
         )
         self.repo.upsert_current(record)
         self.repo.append_history(record)
+        # Best-effort notification starts only after Mongo persistence.
+        # Worker threads do not block this isolation flow waiting for clients.
+        notify_isolation_clients(record)
         logger.info(
             "Isolation persisted: %s | mode=%s | bias=%s | backfilled=%s",
             record["trading_symbol"], record["standard_execution_mode"],
             bias, backfilled,
         )
         return record
+
+    # ------------------------------------------------------------------ #
+    def _find_opposite_leg(self, instrument: dict) -> dict | None:
+        """Resolve the opposite CE/PE contract at the identical strike/expiry."""
+        option_type = (instrument.get("instrument_type") or "").upper()
+        opposite_type = "PE" if option_type == "CE" else "CE" if option_type == "PE" else None
+        strike = instrument.get("strike_price")
+        expiry = instrument.get("expiry")
+        if not opposite_type or strike is None or not expiry:
+            logger.warning(
+                "Cannot resolve opposite leg: option_type=%s strike=%s expiry=%s",
+                option_type, strike, expiry,
+            )
+            return None
+
+        try:
+            candidates = self.search.search_nifty_option_at_strike_all(
+                option_type=opposite_type,
+                strike=int(float(strike)),
+                expiry=str(expiry),
+                exchanges=instrument.get("exchange") or None,
+                segments="FO",
+                max_records=30,
+            )
+        except Exception:
+            logger.exception(
+                "Opposite-leg search failed for %s %s %s",
+                strike, opposite_type, expiry,
+            )
+            return None
+
+        # Do not accept a different expiry/strike even if the search endpoint
+        # returns a broad fallback result.
+        for candidate in candidates:
+            try:
+                same_strike = abs(
+                    float(candidate.get("strike_price")) - float(strike)
+                ) < 1e-6
+            except (TypeError, ValueError):
+                same_strike = False
+            if (
+                same_strike
+                and (candidate.get("instrument_type") or "").upper() == opposite_type
+                and str(candidate.get("expiry")) == str(expiry)
+                and candidate.get("instrument_key")
+            ):
+                return {
+                    "instrument_key": candidate.get("instrument_key"),
+                    "exchange_token": candidate.get("exchange_token"),
+                    "trading_symbol": candidate.get("trading_symbol"),
+                    "short_name": candidate.get("short_name"),
+                    "name": candidate.get("name"),
+                    "strike": candidate.get("strike_price"),
+                    "option_type": candidate.get("instrument_type"),
+                    "expiry": candidate.get("expiry"),
+                    "lot_size": candidate.get("lot_size"),
+                    "tick_size": candidate.get("tick_size"),
+                    "segment": candidate.get("segment"),
+                    "exchange": candidate.get("exchange"),
+                    "underlying": (
+                        candidate.get("underlying_symbol")
+                        or instrument.get("underlying_symbol")
+                        or "NIFTY"
+                    ),
+                }
+
+        logger.warning(
+            "No exact opposite leg found: strike=%s expiry=%s type=%s",
+            strike, expiry, opposite_type,
+        )
+        return None
 
     # ------------------------------------------------------------------ #
     def _snapshot_option_ltp(
@@ -269,6 +348,7 @@ class IsolationService:
         mode_payload: dict,
         touch_time: str,
         backfilled: bool,
+        opposite_leg: dict | None = None,
     ) -> dict:
         now = datetime.now(ZoneInfo(TIMEZONE)).isoformat()
         record = {
@@ -324,6 +404,7 @@ class IsolationService:
             "status": "ACTIVE",
             "source": "isolation_service",
             "isolation_backfilled": backfilled,
+            "opposite_leg": opposite_leg,
         }
         if backfilled:
             record["backfilled_at"] = now
