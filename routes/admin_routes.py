@@ -313,10 +313,13 @@ def _remove_tree_preserving(path: Path, protected_paths: list[Path]) -> bool:
             removed_any = True
             continue
         child_resolved = child.resolve()
-        if any(
-            protected == child_resolved or child_resolved in protected.parents
-            for protected in protected_paths
-        ):
+        if any(protected == child_resolved for protected in protected_paths):
+            # This is the protected directory itself: leave it and all
+            # descendants untouched.
+            continue
+        if any(child_resolved in protected.parents for protected in protected_paths):
+            # This directory contains a protected subtree; clean only
+            # its unprotected siblings and descendants.
             if child.is_dir(follow_symlinks=False):
                 removed_any = _remove_tree_preserving(child, protected_paths) or removed_any
             continue
