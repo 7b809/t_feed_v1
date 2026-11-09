@@ -1775,37 +1775,17 @@ class DummyOrderService:
         return order
 
     def _ensure_sr_tracking(self, instrument_key: str) -> None:
-        """Make sure ``instrument_key`` has a candle series in the SR
-        engine so the resistance-exit map and stop replay work."""
+        """Ensure the option remains subscribed to external SR and market LTP."""
         try:
-            from services.live_sr_levels_service import live_sr_levels_service
-            if live_sr_levels_service.is_tracking(instrument_key):
-                return
-            from services.instrument_registry import instrument_registry
-            entry = instrument_registry.get(instrument_key)
-            if entry is None:
-                entry = instrument_registry.register_adhoc(instrument_key)
-            if entry is None:
-                return
-            live_sr_levels_service.register_instrument(entry)
-            try:
-                from services.live_sr_calc_service import live_sr_calc_service
-                candles = live_sr_calc_service.fetch_intraday_candles_for_entry(
-                    instrument_key,
-                )
-                if candles:
-                    live_sr_levels_service.seed_candles(
-                        instrument_key, entry, candles,
-                    )
-            except Exception:
-                logger.exception(
-                    "[dummy-order] seed failed for %s", instrument_key,
-                )
-        except Exception:
-            logger.exception(
-                "[dummy-order] ensure_sr_tracking failed for %s",
-                instrument_key,
+            from services.external_sr_websocket_service import external_sr_websocket_service
+            from services.live_feed_service import live_feed_service
+            external_sr_websocket_service.subscribe(
+                instrument_key, configs=("15/3", "15/15", "15/30"),
             )
+            if not live_feed_service.is_subscribed(instrument_key):
+                live_feed_service.subscribe_instrument(instrument_key)
+        except Exception:
+            logger.exception("[dummy-order] external SR subscribe failed for %s", instrument_key)
 
     # ------------------------------------------------------------------ #
     # Order update (bar replay + dynamic target / Resistance exit)                           #
