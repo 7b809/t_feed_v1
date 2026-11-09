@@ -1897,11 +1897,9 @@ class LevelIsolatedInstrumentService:
         # Threaded (daemon) because the export service performs
         # synchronous Upstox historical + intraday HTTP fetches per
         # instrument (typically 1-3 s). Blocking here would stall the
-        # tick handler / replay loop that triggered the isolation.
-        self._fire_live_sr_export(
-            isolated.get("instrument_key"),
-            source=str(isolated.get("source") or ""),
-        )
+        # S/R export is intentionally not triggered here. EMA V2 owns
+        # all pivot calculation and publishes the isolated option levels
+        # through external_sr_websocket_service.
 
         # G1 v4.3: use getattr so a missing config attribute does not
         # abort the backfill after the isolation has been persisted.
