@@ -54,6 +54,10 @@ class ExternalSRWebSocketService:
         loop = asyncio.new_event_loop()
         self._loop = loop
         asyncio.set_event_loop(loop)
+        with self._lock:
+            wanted = list(self._wanted)
+        for key, cfg in wanted:
+            loop.create_task(self._ensure_task(key, cfg))
         try:
             loop.run_forever()
         finally:
