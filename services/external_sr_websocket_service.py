@@ -108,9 +108,13 @@ class ExternalSRWebSocketService:
                 accepted.append(cfg)
         self.start()
         loop = self._loop
-        if loop and loop.is_running():
+        if loop and not loop.is_closed():
             for cfg in accepted:
-                asyncio.run_coroutine_threadsafe(self._ensure_task(key, cfg), loop)
+                loop.call_soon_threadsafe(
+                    lambda selected_cfg=cfg: asyncio.create_task(
+                        self._ensure_task(key, selected_cfg)
+                    )
+                )
         return {"status": "subscribing", "instrument_key": key, "configs": accepted}
 
     def subscribe_core_indexes(self) -> dict[str, Any]:
@@ -291,9 +295,13 @@ class ExternalSRWebSocketService:
             tokens = [(key, cfg) for cfg in selected if (key, cfg) in self._wanted]
             for token in tokens:
                 self._wanted.discard(token)
-        if loop and loop.is_running():
+        if loop and not loop.is_closed():
             for token in tokens:
-                asyncio.run_coroutine_threadsafe(self._cancel_task(token), loop)
+                loop.call_soon_threadsafe(
+                    lambda selected_token=token: asyncio.create_task(
+                        self._cancel_task(selected_token)
+                    )
+                )
 
     async def _cancel_task(self, token: tuple[str, str]) -> None:
         task = self._tasks.pop(token, None)
