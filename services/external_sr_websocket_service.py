@@ -50,7 +50,10 @@ class ExternalSRWebSocketService:
         self._market_tz = ZoneInfo(os.getenv("MARKET_TIMEZONE", "Asia/Kolkata"))
         self._log_lock = threading.Lock()
         self._lock = threading.RLock()
-        self._states: dict[tuple[str, str], dict[str, Any]] = {}
+        # Last S/R shape written per instrument/config. Heartbeats and
+        # repeated updates with unchanged pivot levels are not persisted.
+        self._last_logged_sr_signature: dict[tuple[str, str], tuple[Any, ...]] = {}
+        self._states: dict[tuple[str, str], dict[str, Any]] = {};
         self._wanted: set[tuple[str, str]] = set()
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
@@ -142,7 +145,7 @@ class ExternalSRWebSocketService:
         return self.log_dir / f"{safe_key}__{safe_cfg}.jsonl"
 
     def _persist_event(self, key: str, cfg: str, message: dict[str, Any], received_at: float) -> None:
-        """Append every accepted EMA V2 event to a per-instrument JSONL log."""
+        """Append one meaningful S/R state to its per-instrument JSONL log."""
         try:
             self.log_dir.mkdir(parents=True, exist_ok=True)
             record = {
@@ -213,9 +216,9 @@ class ExternalSRWebSocketService:
             logger.debug("[external-sr] ignored event=%s key=%s", event, key)
             return
         now = time.time()
-        self._persist_event(key, cfg, message, now)
         token = (key, cfg)
         callback_levels: list[dict[str, Any]] = []
+        should_persist = False
         with self._lock:
             state = self._states.setdefault(token, {
                 "instrument_key": key, "config": cfg, "resistances": [],
@@ -225,6 +228,27 @@ class ExternalSRWebSocketService:
                 resistances = [dict(x) for x in (message.get("resistances") or []) if isinstance(x, dict)]
                 supports = [dict(x) for x in (message.get("supports") or []) if isinstance(x, dict)]
                 levels = resistances + supports
+
+                # Compare actual pivot identity/price, not rolling candle
+                # indexes or cycle counters which change every minute.
+                signature = tuple(sorted(
+                    (
+                        str(level.get("level") or ""),
+                        float(level.get("price") or 0),
+                        str(level.get("pivot_time") or ""),
+                    )
+                    for level in levels
+                ))
+                previous_signature = self._last_logged_sr_signature.get(token)
+                if event == "snapshot":
+                    # Keep one baseline snapshot after each fresh connection.
+                    should_persist = True
+                elif signature != previous_signature:
+                    # Persist only when the actual S/R set changes.
+                    should_persist = True
+                if should_persist:
+                    self._last_logged_sr_signature[token] = signature
+
                 state.update({
                     "resistances": resistances, "supports": supports, "levels": levels,
                     "ready": True, "event": event,
@@ -243,6 +267,10 @@ class ExternalSRWebSocketService:
                 "nearest_support": message.get("nearest_support"),
                 "meta": message.get("meta") or state.get("meta") or {},
             })
+        # Do not write heartbeats or unchanged S/R updates. They still
+        # refresh in-memory freshness/readiness above.
+        if should_persist:
+            self._persist_event(key, cfg, message, now)
         if callback_levels:
             try:
                 from services.isolated_sr_tracker_service import isolated_sr_tracker_service
