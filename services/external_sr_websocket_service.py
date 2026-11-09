@@ -144,8 +144,8 @@ class ExternalSRWebSocketService:
         safe_cfg = re.sub(r"[^A-Za-z0-9._-]+", "-", cfg).strip("._-") or "config"
         return self.log_dir / f"{safe_key}__{safe_cfg}.jsonl"
 
-    def _persist_event(self, key: str, cfg: str, message: dict[str, Any], received_at: float) -> None:
-        """Append one meaningful S/R state to its per-instrument JSONL log."""
+    def _persist_event(self, key: str, cfg: str, message: dict[str, Any], received_at: float) -> bool:
+        """Append one meaningful S/R state; return whether it reached disk."""
         try:
             self.log_dir.mkdir(parents=True, exist_ok=True)
             record = {
@@ -153,6 +153,7 @@ class ExternalSRWebSocketService:
                 "instrument_key": key,
                 "config": cfg,
                 "event": str(message.get("event") or ""),
+                # Preserve the complete upstream payload without reshaping it.
                 "payload": message,
             }
             line = json.dumps(record, ensure_ascii=False, separators=(",", ":"), default=str)
@@ -161,9 +162,11 @@ class ExternalSRWebSocketService:
                 with path.open("a", encoding="utf-8") as handle:
                     handle.write(line + "\n")
                     handle.flush()
+            return True
         except Exception:
             # Logging is best-effort and must never interrupt live S/R consumption.
             logger.exception("[external-sr] failed to persist event key=%s config=%s", key, cfg)
+            return False
 
     async def _ensure_task(self, key: str, cfg: str) -> None:
         token = (key, cfg)
@@ -183,12 +186,18 @@ class ExternalSRWebSocketService:
                     backoff = 1.0
                     async for raw in ws:
                         try:
+                            # websockets may deliver either str or bytes depending
+                            # on the negotiated frame and library version.
+                            if isinstance(raw, bytes):
+                                raw = raw.decode("utf-8")
                             message = json.loads(raw)
-                        except (TypeError, json.JSONDecodeError):
-                            logger.warning("[external-sr] invalid JSON key=%s cfg=%s", key, cfg)
+                        except (TypeError, UnicodeDecodeError, json.JSONDecodeError):
+                            logger.warning("[external-sr] invalid JSON frame key=%s cfg=%s", key, cfg)
                             continue
                         if isinstance(message, dict):
                             self._handle_event(key, cfg, message)
+                        else:
+                            logger.warning("[external-sr] ignored non-object JSON frame key=%s cfg=%s", key, cfg)
             except asyncio.CancelledError:
                 raise
             except ConnectionClosed as exc:
@@ -210,8 +219,34 @@ class ExternalSRWebSocketService:
             })
             state.update(values)
 
+    @staticmethod
+    def _sr_signature(resistances: list[dict[str, Any]], supports: list[dict[str, Any]]) -> tuple[Any, ...]:
+        """Build a stable signature from pivot identity, ignoring rolling bar indexes."""
+        signature: list[tuple[str, str, str, str]] = []
+        for side, levels in (("resistance", resistances), ("support", supports)):
+            for level in levels:
+                raw_price = level.get("price")
+                try:
+                    price = format(float(raw_price), ".10g") if raw_price is not None else ""
+                except (TypeError, ValueError, OverflowError):
+                    price = str(raw_price or "").strip()
+                pivot_time = (
+                    level.get("pivot_time")
+                    or level.get("confirmed_time")
+                    or level.get("timestamp")
+                    or level.get("time")
+                    or ""
+                )
+                signature.append((
+                    side,
+                    str(level.get("level") or "").strip(),
+                    price,
+                    str(pivot_time).strip(),
+                ))
+        return tuple(sorted(signature))
+
     def _handle_event(self, key: str, cfg: str, message: dict[str, Any]) -> None:
-        event = str(message.get("event") or "")
+        event = str(message.get("event") or "").strip().lower()
         if event not in {"snapshot", "sr_update", "heartbeat"}:
             logger.debug("[external-sr] ignored event=%s key=%s", event, key)
             return
@@ -219,58 +254,65 @@ class ExternalSRWebSocketService:
         token = (key, cfg)
         callback_levels: list[dict[str, Any]] = []
         should_persist = False
+        signature: tuple[Any, ...] | None = None
         with self._lock:
             state = self._states.setdefault(token, {
                 "instrument_key": key, "config": cfg, "resistances": [],
                 "supports": [], "levels": [], "ready": False,
             })
             if event in {"snapshot", "sr_update"}:
-                resistances = [dict(x) for x in (message.get("resistances") or []) if isinstance(x, dict)]
-                supports = [dict(x) for x in (message.get("supports") or []) if isinstance(x, dict)]
+                raw_resistances = message.get("resistances")
+                raw_supports = message.get("supports")
+                resistances = [
+                    dict(x) for x in (raw_resistances if isinstance(raw_resistances, list) else [])
+                    if isinstance(x, dict)
+                ]
+                supports = [
+                    dict(x) for x in (raw_supports if isinstance(raw_supports, list) else [])
+                    if isinstance(x, dict)
+                ]
                 levels = resistances + supports
 
-                # Compare actual pivot identity/price, not rolling candle
-                # indexes or cycle counters which change every minute.
-                signature = tuple(sorted(
-                    (
-                        str(level.get("level") or ""),
-                        float(level.get("price") or 0),
-                        str(level.get("pivot_time") or ""),
-                    )
-                    for level in levels
-                ))
+                signature = self._sr_signature(resistances, supports)
                 previous_signature = self._last_logged_sr_signature.get(token)
-                if event == "snapshot":
-                    # Keep one baseline snapshot after each fresh connection.
-                    should_persist = True
-                elif signature != previous_signature:
-                    # Persist only when the actual S/R set changes.
-                    should_persist = True
-                if should_persist:
-                    self._last_logged_sr_signature[token] = signature
+                # A snapshot is the baseline for a new connection. Subsequent
+                # updates are saved only when pivot identity/price actually changes.
+                should_persist = event == "snapshot" or signature != previous_signature
 
                 state.update({
-                    "resistances": resistances, "supports": supports, "levels": levels,
-                    "ready": True, "event": event,
+                    "resistances": resistances,
+                    "supports": supports,
+                    "levels": levels,
+                    "ready": True,
+                    "event": event,
                     "candle_count": message.get("candle_count"),
                     "cycle_number": message.get("cycle_number"),
                 })
                 if event == "sr_update":
                     callback_levels = levels
+
+            # Heartbeats also refresh freshness and status, but are never written.
             state.update({
-                "connected": True, "status": message.get("status") or "ok",
+                "connected": True,
+                "status": message.get("status") or "ok",
                 "current_price": message.get("current_price", state.get("current_price")),
                 "last_ts": message.get("last_ts", state.get("last_ts")),
-                "last_event": event, "last_event_at": now,
+                "last_event": event,
+                "last_event_at": now,
                 "cycle_time": message.get("cycle_time"),
                 "nearest_resistance": message.get("nearest_resistance"),
                 "nearest_support": message.get("nearest_support"),
                 "meta": message.get("meta") or state.get("meta") or {},
             })
-        # Do not write heartbeats or unchanged S/R updates. They still
-        # refresh in-memory freshness/readiness above.
+
+        # Persist outside the state lock. Mark the signature only after a
+        # successful write so a later identical update can retry a failed write.
         if should_persist:
-            self._persist_event(key, cfg, message, now)
+            saved = self._persist_event(key, cfg, message, now)
+            if saved and signature is not None:
+                with self._lock:
+                    self._last_logged_sr_signature[token] = signature
+
         if callback_levels:
             try:
                 from services.isolated_sr_tracker_service import isolated_sr_tracker_service
