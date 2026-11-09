@@ -795,6 +795,20 @@ class DummyOrderService:
                 if close is not None:
                     return close, "candle_close_from_fixed_series"
 
+        # EMA V2 provides the close of the right-bars confirmation candle.
+        # Use it when the local candle cache does not contain that minute.
+        try:
+            from services.external_sr_websocket_service import external_sr_websocket_service
+            external = external_sr_websocket_service.get_levels(instrument_key, "15/3")
+            for level in (external or {}).get("levels") or []:
+                confirmed = _parse_iso(level.get("confirmed_time"))
+                if confirmed and confirmed.replace(second=0, microsecond=0) == target_min:
+                    confirmed_close = _safe_float(level.get("confirmed_time_price"))
+                    if confirmed_close is not None:
+                        return confirmed_close, "external_sr_confirmed_time_price"
+        except Exception:
+            logger.exception("[dummy-order] external confirmation close lookup failed for %s", instrument_key)
+
         # Flag-gated LTP fallback (default false — G1 v4.1)
         if bool(
             getattr(config, "DUMMY_ORDER_ALLOW_LTP_ENTRY_FALLBACK", False)
