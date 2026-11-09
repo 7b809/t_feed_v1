@@ -21,9 +21,9 @@ Startup task list (infrastructure only):
     9.  Start / restart live feed
     9b. Level-isolation backfill (replays intraday candles to
         reconstruct today's "would-have-isolated" instrument)
-    9c. **Wait for SR backfill readiness (bounded)**, then dummy-order
-        catch-up (creates any missing dummy orders for today's armed
-        candidates and updates the existing ones)
+    9c. **Wait for fresh external EMA V2 S/R (bounded)**, then
+        dummy-order catch-up (creates any missing dummy orders for
+        today's armed candidates and updates the existing ones)
     9d. **Register live sandbox executor on dummy_order_service**
         and run its startup reconciliation (ledger vs positions vs
         catch-up result)                              <-- NEW (2026-11-04)
@@ -54,21 +54,20 @@ Every auth / docs gate in this module is driven by one config flag:
 False)`` — an unconfigured box defaults to dev mode. Production
 deployments MUST set ``PROD_MODE = True`` in ``core/config.py``.
 
-Dummy-order catch-up gating (2026-11-04)
-----------------------------------------
-``_run_full_refresh_sync`` returns as soon as
-``live_feed_service.start()`` has been *scheduled* — the SR backfill
-runs asynchronously inside feed start. Evidence (2026-10-29): level
-isolation completed at 16:10:35, dummy-order catch-up fired at
-16:10:36 while the SR backfill was already re-seeding (16:12:36).
+Dummy-order catch-up gating (external EMA V2 S/R)
+-------------------------------------------------
+``_run_full_refresh_sync`` performs the feed and level-isolation
+startup work. Isolation requests subscriptions to the external EMA V2
+S/R WebSocket; the first fresh 15/3 snapshot may arrive asynchronously
+after that request.
 
-The catch-up is now gated on ``sr_backfill_service.is_ready()`` (or
-``is_ready_for_today()`` if that alias exists) with a bounded wait of
-``DUMMY_ORDER_WAIT_FOR_SR_BACKFILL_TIMEOUT_SECONDS`` (default 120 s).
-If the latch is not set in time, the catch-up is **skipped** — the
-scheduler's next tick will retry — and the skip reason is written into
-the startup result dict so the Telegram summary reflects what actually
-happened. The catch-up is called exactly once per startup.
+The one-time dummy-order catch-up therefore waits, with a bounded
+timeout, for a fresh external EMA V2 15/3 snapshot for the active
+isolated instrument. The legacy environment setting
+``DUMMY_ORDER_WAIT_FOR_SR_BACKFILL_TIMEOUT_SECONDS`` remains supported
+to avoid requiring deployment changes. If the external snapshot does
+not become ready in time, catch-up is **skipped** and the scheduler's
+next tick retries after the same external readiness gate passes.
 
 Live sandbox execution — registration ordering (2026-11-04)
 -----------------------------------------------------------
@@ -82,7 +81,7 @@ registered executor that has no way to tell them apart from real events.
 
 Correct order of operations in ``app_lifespan``:
 
-    wait_for_sr_backfill_ready()
+    wait_for_external_sr_ready()
       → _dummy_order_catchup()          (reason="startup"; executor not yet registered)
       → register_with_dummy_order_service()
       → sandbox_execution_service.reconcile_startup()
@@ -100,7 +99,7 @@ Config keys referenced (may be added to ``core/config.py`` as needed —
 all read defensively via ``getattr``):
 
     * ``PROD_MODE``                                          (default false)
-    * ``DUMMY_ORDER_WAIT_FOR_SR_BACKFILL_TIMEOUT_SECONDS``  (default 120)
+    * ``DUMMY_ORDER_WAIT_FOR_SR_BACKFILL_TIMEOUT_SECONDS``  (legacy name; default 120)
     * ``SANDBOX_EXECUTION_ENABLED``                          (default false)
     * ``SANDBOX_EXECUTION_MODE``                             (default "observe")
     * ``ADMIN_API_KEY``                                      (default "")
@@ -301,9 +300,9 @@ logger = get_logger(__file__)
 _DIV = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 _THIN = "────────────────────────────────"
 
-# Poll interval while waiting for the SR backfill readiness latch.
-# Kept small (2 s) so the typical case — backfill already complete by
-# the time ``_run_full_refresh_sync`` returns — costs a single check.
+# Poll interval while waiting for fresh external EMA V2 S/R.
+# Kept small (2 s) so the common case — the WebSocket snapshot arrives
+# shortly after isolation subscribes — is detected promptly.
 _DUMMY_ORDER_SR_BACKFILL_POLL_SECONDS = 2.0
 
 
@@ -475,10 +474,10 @@ def _holiday_gate_for_startup() -> dict[str, Any]:
 
 
 # --------------------------------------------------------------------------- #
-# SR backfill readiness wait (2026-11-04)                                     #
+# External EMA V2 S/R readiness wait                                           #
 # --------------------------------------------------------------------------- #
 def _sr_backfill_is_ready() -> bool:
-    """Compatibility name: readiness now means fresh external EMA V2 15/3 data."""
+    """Return True when the active isolated instrument has fresh EMA V2 15/3 data."""
     try:
         from services.level_isolated_instrument_service import level_isolated_instrument_service
         from services.external_sr_websocket_service import external_sr_websocket_service
@@ -495,7 +494,7 @@ async def _wait_for_sr_backfill_ready(
     timeout_seconds: float | None = None,
     poll_seconds: float = _DUMMY_ORDER_SR_BACKFILL_POLL_SECONDS,
 ) -> dict[str, Any]:
-    """Await the SR backfill readiness latch, bounded by a timeout.
+    """Await fresh external EMA V2 15/3 data, bounded by a timeout.
 
     Returns a dict with:
 
@@ -504,9 +503,9 @@ async def _wait_for_sr_backfill_ready(
         timeout_seconds  — configured timeout (for logging / display)
         reason           — "already_ready" | "became_ready" | "timeout"
 
-    The immediate check is cheap — in the common case where SR backfill
-    has already completed by the time ``_run_full_refresh_sync``
-    returns, this function returns without ever entering the poll loop.
+    The immediate check is cheap — when the external WebSocket has
+    already delivered its first fresh snapshot, this returns without
+    entering the poll loop.
     """
     if timeout_seconds is None:
         timeout_seconds = float(
@@ -727,17 +726,13 @@ async def app_lifespan(app: FastAPI):
         )
         result["holiday_gate"] = holiday_gate
 
-        # ---- Wait for SR backfill readiness, then dummy-order catch-up # #
-        # NOTE: ``_run_full_refresh_sync`` returns as soon as
-        # ``live_feed_service.start()`` has been scheduled — the SR
-        # backfill runs asynchronously inside feed start. Wait for the
-        # readiness latch (bounded by
-        # ``DUMMY_ORDER_WAIT_FOR_SR_BACKFILL_TIMEOUT_SECONDS``) before
-        # running the catch-up so it doesn't fire against a half-built
-        # SR state. If the latch does not set in time, SKIP the
-        # catch-up — the scheduler's next tick will retry — and record
-        # the skip reason in ``result["dummy_orders"]`` so the startup
-        # Telegram summary reflects what actually happened.
+        # ---- Wait for external EMA V2 S/R, then dummy-order catch-up --- #
+        # Isolation has requested the external EMA V2 subscriptions,
+        # but the first 15/3 snapshot may still be arriving. Wait for
+        # fresh external data (bounded by the legacy-compatible
+        # DUMMY_ORDER_WAIT_FOR_SR_BACKFILL_TIMEOUT_SECONDS setting)
+        # before catch-up. If it is not ready in time, skip catch-up;
+        # the scheduler retries after its own external-readiness gate.
         #
         # This is the ONLY call site of ``_dummy_order_catchup()`` in
         # the startup path. It runs exactly once per startup.
@@ -745,7 +740,7 @@ async def app_lifespan(app: FastAPI):
         if sr_ready_info["ready"]:
             if sr_ready_info["reason"] != "already_ready":
                 logger.info(
-                    "[startup] SR backfill readiness achieved after "
+                    "[startup] external EMA V2 S/R became ready after "
                     "%.1fs (%s) — running dummy-order catch-up",
                     sr_ready_info["elapsed_seconds"],
                     sr_ready_info["reason"],
@@ -756,14 +751,14 @@ async def app_lifespan(app: FastAPI):
             dummy_summary = {
                 "status": "skipped",
                 "reason": (
-                    f"sr_backfill_not_ready:{sr_ready_info['reason']}"
+                    f"external_sr_not_ready:{sr_ready_info['reason']}"
                 ),
                 "error": None,
                 "sr_backfill_wait": sr_ready_info,
             }
             logger.warning(
-                "[startup] dummy-order catch-up skipped — SR backfill "
-                "readiness not achieved within %.1fs (%s); "
+                "[startup] dummy-order catch-up skipped — external EMA V2 "
+                "S/R not ready within %.1fs (%s); "
                 "scheduler will retry on next tick",
                 sr_ready_info["elapsed_seconds"],
                 sr_ready_info["reason"],
@@ -825,21 +820,20 @@ async def app_lifespan(app: FastAPI):
                 f"🎯 Isolation:     {isolation_status}\n"
             )
 
-        # SR backfill wait line — surfaces the readiness outcome so the
-        # operator can tell at a glance whether the dummy-order catch-up
-        # actually ran or was deferred to the scheduler.
+        # External S/R readiness line — surfaces whether the dummy-order
+        # catch-up ran or was deferred until the WebSocket snapshot arrives.
         if sr_ready_info["ready"]:
             if sr_ready_info["reason"] == "already_ready":
-                sr_line = "🎯 SR backfill:    ✓ (ready)"
+                sr_line = "🎯 External S/R:   ✓ (ready)"
             else:
                 sr_line = (
-                    f"🎯 SR backfill:    ✓ (waited "
+                    f"🎯 External S/R:   ✓ (waited "
                     f"{sr_ready_info['elapsed_seconds']:.1f}s)"
                 )
             sr_line += "\n"
         else:
             sr_line = (
-                f"🎯 SR backfill:    ✗ timeout "
+                f"🎯 External S/R:   ✗ timeout "
                 f"({sr_ready_info['elapsed_seconds']:.0f}s / "
                 f"{sr_ready_info['timeout_seconds']:.0f}s)\n"
             )
