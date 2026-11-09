@@ -303,6 +303,31 @@ def _resolve_cleanup_path(name: str) -> Path:
     return p
 
 
+def _remove_tree_preserving(path: Path, protected_paths: list[Path]) -> bool:
+    """Remove unprotected directory contents without traversing symlinks."""
+    removed_any = False
+    for item in os.scandir(path):
+        child = Path(item.path)
+        if child.is_symlink():
+            os.remove(str(child))
+            removed_any = True
+            continue
+        child_resolved = child.resolve()
+        if any(
+            protected == child_resolved or child_resolved in protected.parents
+            for protected in protected_paths
+        ):
+            if child.is_dir(follow_symlinks=False):
+                removed_any = _remove_tree_preserving(child, protected_paths) or removed_any
+            continue
+        if child.is_dir(follow_symlinks=False):
+            shutil.rmtree(str(child))
+        else:
+            os.remove(str(child))
+        removed_any = True
+    return removed_any
+
+
 def _run_cleanup_with_os_shutil(reason: str = "manual") -> dict[str, Any]:
     """Remove configured transient folders / files using shutil + os.
 
@@ -339,6 +364,15 @@ def _run_cleanup_with_os_shutil(reason: str = "manual") -> dict[str, Any]:
         if s:
             reserved_set.add(s)
 
+    # ---- Protected live S/R logs ---------------------------------- #
+    # The default cleanup target includes data/. Preserve the live S/R
+    # event history across startup and hard refresh operations.
+    try:
+        from services.external_sr_websocket_service import external_sr_websocket_service
+        protected_paths = [external_sr_websocket_service.log_dir.resolve()]
+    except Exception:
+        protected_paths = [(_project_root() / "data" / "live_sr").resolve()]
+
     # ---- Target list ---------------------------------------------- #
     targets: list[str] = []
     for raw in (getattr(config, "CLEANUP_REMOVE_FOLDERS", None) or []):
@@ -368,10 +402,14 @@ def _run_cleanup_with_os_shutil(reason: str = "manual") -> dict[str, Any]:
                 removed.append(name)
             elif path.exists():
                 if path.is_dir():
-                    shutil.rmtree(str(path))
+                    preserved = _remove_tree_preserving(path, protected_paths)
+                    if preserved:
+                        removed.append(f"{name} (except protected live S/R logs)")
+                    else:
+                        skipped.append(name)
                 else:
                     os.remove(str(path))
-                removed.append(name)
+                    removed.append(name)
             else:
                 skipped.append(name)
         except FileNotFoundError:
@@ -685,6 +723,23 @@ def _run_full_refresh_sync(
     except Exception:
         logger.exception("[%s] live feed start/restart failed", reason)
 
+    # ---- 6a. External EMA V2 S/R for the four core indexes ----------- #
+    # Independent of option isolation: always maintain index S/R streams.
+    core_index_sr_summary: dict[str, Any] | None = None
+    try:
+        from services.external_sr_websocket_service import external_sr_websocket_service
+        core_index_sr_summary = external_sr_websocket_service.subscribe_core_indexes()
+        logger.info(
+            "[%s] external core-index S/R subscriptions requested count=%s",
+            reason, core_index_sr_summary.get("count", 0),
+        )
+    except Exception as exc:
+        logger.exception("[%s] external core-index S/R subscription failed", reason)
+        core_index_sr_summary = {
+            "status": "error",
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+
     # ---- 6b. BACKFILL: first_candle (only on startup) ---------------- #
     first_candle_summary: dict[str, Any] | None = None
     if reason == "startup":
@@ -809,6 +864,7 @@ def _run_full_refresh_sync(
         "level_filter": level_filter_summary,
         "level_isolation": level_isolation_summary,
         "feed_restarted": feed_ok,
+        "core_index_sr": core_index_sr_summary,
         "scheduler_started": scheduler_ok,
         "telegram_started": telegram_ok,
     }
