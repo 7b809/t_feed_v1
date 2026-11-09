@@ -25,6 +25,10 @@ GET  /api/v1/isolation/history              recent isolation history
 POST /api/v1/isolation/trigger              manual isolation scan
 POST /api/v1/isolation/backfill             manual startup backfill
 
+POST /api/isolation-test                    send a static dummy isolation
+                                            payload to each client URL and
+                                            return per-URL HTTP result
+
 GET  /api/v1/search/instrument              first match at a given strike
 GET  /api/v1/search/instrument/all          all matches at a given strike
 GET  /api/v1/search/instrument/atm          ATM lookup from NIFTY LTP
@@ -45,7 +49,10 @@ from zoneinfo import ZoneInfo
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import PlainTextResponse
 
-from api.routes.isolation import router as isolation_router
+from api.routes.isolation import (
+    router as isolation_router,
+    test_router as isolation_test_router,
+)
 from api.routes.search import router as search_router
 from scheduler import start_scheduler
 from jobs.daily_refresh import (
@@ -74,7 +81,6 @@ logger = get_logger(__file__)
 _scheduler = None                       # populated in lifespan
 _startup_mode: str = "unknown"          # "immediate" | "deferred" | "test"
 _startup_cutoff_iso: str | None = None  # populated in deferred mode
-
 
 # --------------------------------------------------------------------------- #
 # Lifespan                                                                    #
@@ -200,7 +206,6 @@ async def lifespan(app: FastAPI):
 
     send_telegram_message("🛑 Project stopped.")
 
-
 # --------------------------------------------------------------------------- #
 # App                                                                         #
 # --------------------------------------------------------------------------- #
@@ -209,15 +214,16 @@ app = FastAPI(
     description=(
         "OR-level auto-compute, Upstox feed, index-isolation pipeline "
         "with NIFTY-trend bias, deferred startup gate, startup backfill, "
-        "isolation API, instrument search API and log inspection API."
+        "isolation API, instrument search API, log inspection API, and "
+        "synchronous client-notification test endpoint."
     ),
-    version="0.7.0",
+    version="0.7.1",
     lifespan=lifespan,
 )
 
 app.include_router(isolation_router)
+app.include_router(isolation_test_router)
 app.include_router(search_router)
-
 
 # --------------------------------------------------------------------------- #
 # Health / status                                                             #
@@ -225,7 +231,6 @@ app.include_router(search_router)
 @app.get("/health")
 def health():
     return {"status": "ok"}
-
 
 @app.get("/status")
 def status():
@@ -241,7 +246,6 @@ def status():
             )
     return {"scheduler_running": _scheduler is not None, "jobs": jobs}
 
-
 @app.get("/startup-state")
 def startup_state():
     """Report startup gate state — useful during deferred mode."""
@@ -253,7 +257,6 @@ def startup_state():
         "deferred_cutoff_iso": _startup_cutoff_iso,
         "last_daily_refresh_date": get_last_daily_refresh_date(),
     }
-
 
 # --------------------------------------------------------------------------- #
 # Manual daily refresh                                                        #
@@ -279,7 +282,6 @@ def trigger_refresh(
         logger.exception("Manual refresh failed.")
         raise HTTPException(status_code=500, detail=str(exc))
 
-
 # --------------------------------------------------------------------------- #
 # Log inspection                                                              #
 # --------------------------------------------------------------------------- #
@@ -291,7 +293,6 @@ def api_list_logs():
         logger.exception("Failed to list log files.")
         raise HTTPException(status_code=500, detail=str(exc))
     return {"count": len(files), "files": files}
-
 
 @app.get("/api/v1/logs/{category}/{filename}")
 def api_get_log(
@@ -312,7 +313,6 @@ def api_get_log(
     except OSError as exc:
         logger.exception("Failed to read log file %s/%s", category, filename)
         raise HTTPException(status_code=500, detail=str(exc))
-
 
 @app.get(
     "/api/v1/logs/{category}/{filename}/download",

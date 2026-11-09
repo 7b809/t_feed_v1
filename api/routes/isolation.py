@@ -1,5 +1,12 @@
 # api/routes/isolation.py
-"""Isolation API: current, history, manual scan trigger, backfill trigger."""
+"""Isolation API: current, history, manual scan trigger, backfill trigger,
+and a synchronous client-notification test endpoint.
+
+Routers
+-------
+``router``       prefix ``/api/v1/isolation``  (production isolation API)
+``test_router``  prefix ``/api``               (``POST /api/isolation-test``)
+"""
 
 from __future__ import annotations
 
@@ -14,11 +21,19 @@ from jobs.daily_refresh import get_feed_service
 from jobs.isolation_scan import (
     get_isolation_service, run_startup_backfill,
 )
+from services.isolation_notification_service import (
+    send_isolation_test_notification,
+)
 
 logger = get_logger(__file__)
+
 router = APIRouter(prefix="/api/v1/isolation", tags=["isolation"])
+test_router = APIRouter(prefix="/api", tags=["isolation-test"])
 
 
+# --------------------------------------------------------------------------- #
+# Production isolation API                                                    #
+# --------------------------------------------------------------------------- #
 @router.get("/current")
 def get_current_isolation():
     try:
@@ -93,3 +108,74 @@ def trigger_backfill():
         "backfilled": bool(doc.get("isolation_backfilled")),
         "record": doc,
     }
+
+
+# --------------------------------------------------------------------------- #
+# POST /api/isolation-test                                                    #
+# --------------------------------------------------------------------------- #
+class IsolationTestRequest(BaseModel):
+    urls: list[str] | None = None
+    key: str | None = None
+    include_payload: bool = False
+
+
+@test_router.post("/isolation-test")
+def isolation_test(body: IsolationTestRequest = IsolationTestRequest()):
+    """Synchronously POST a static dummy isolation document to client URLs.
+
+    Validates end-to-end:
+      * network reachability from this service to each receiver
+      * shared-secret authentication (``X-Isolation-Key`` by default)
+      * the exact JSON shape that a real isolation produces
+
+    The payload is a complete isolation-shaped document built from a
+    static fake instrument, tagged ``is_test=true`` and
+    ``source="isolation_test_endpoint"`` so receivers can never confuse
+    it with a real isolation event. It is **not persisted to Mongo**.
+
+    Request body (all optional)::
+
+        {
+          "urls": ["https://client-a.example/api/isolation"],
+          "key":  "override-shared-secret",
+          "include_payload": true
+        }
+
+    - ``urls`` overrides ``ISOLATION_NOTIFY_CLIENT_URLS`` for this call.
+    - ``key`` overrides ``ISOLATION_NOTIFY_CLIENT_KEY`` for this call.
+      Pass ``""`` to force-send without a key header.
+    - ``include_payload`` echoes the full test payload in the response.
+
+    Response::
+
+        {
+          "sent": true,
+          "key_header": "X-Isolation-Key",
+          "key_configured": true,
+          "payload_summary": {
+            "trading_symbol": "NIFTY 25000 CE 09 NOV 26",
+            "standard_execution_mode": "STANDARD",
+            "is_test": true,
+            "is_dummy": true,
+            "source": "isolation_test_endpoint"
+          },
+          "results": [
+            {
+              "url": "https://client-a.example/api/isolation",
+              "ok": true,
+              "http_status": 200,
+              "response_body_preview": "{\"ok\":true}",
+              "error": null
+            }
+          ]
+        }
+    """
+    try:
+        return send_isolation_test_notification(
+            urls=body.urls,
+            key=body.key,
+            include_payload=body.include_payload,
+        )
+    except Exception as exc:
+        logger.exception("isolation-test failed")
+        raise HTTPException(status_code=500, detail=str(exc))

@@ -214,7 +214,6 @@ PIVOT_CHECK_MINUTE = int(os.getenv("PIVOT_CHECK_MINUTE", "18"))
 DISCONNECT_HOUR = int(os.getenv("DISCONNECT_HOUR", "15"))
 DISCONNECT_MINUTE = int(os.getenv("DISCONNECT_MINUTE", "45"))
 
-
 # ---------------------------------------------------------------------------
 # Isolation client notifications (fire-and-forget)
 # ---------------------------------------------------------------------------
@@ -228,6 +227,21 @@ ISOLATION_NOTIFY_CLIENT_URLS = [
     for url in os.getenv("ISOLATION_NOTIFY_CLIENT_URLS", "").split(",")
     if url.strip()
 ]
+
+# Shared secret. Both this service (sender) and each client (receiver)
+# must configure the SAME value; the sender transmits it under
+# ISOLATION_NOTIFY_CLIENT_KEY_HEADER. Empty means "send without a key".
+ISOLATION_NOTIFY_CLIENT_KEY = (
+    os.getenv("ISOLATION_NOTIFY_CLIENT_KEY", "").strip()
+)
+
+# Header name under which the shared key is sent. Defaults to
+# "X-Isolation-Key". Change to "X-API-Key" / "Authorization" / etc. if
+# the client expects something else.
+ISOLATION_NOTIFY_CLIENT_KEY_HEADER = (
+    os.getenv("ISOLATION_NOTIFY_CLIENT_KEY_HEADER", "X-Isolation-Key").strip()
+    or "X-Isolation-Key"
+)
 
 ISOLATION_NOTIFY_TIMEOUT_SECONDS = float(
     os.getenv("ISOLATION_NOTIFY_TIMEOUT_SECONDS", "5")
