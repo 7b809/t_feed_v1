@@ -152,7 +152,7 @@ class ExternalSRWebSocketService:
             path = self._log_path_for(key, cfg)
             with self._log_lock:
                 with path.open("a", encoding="utf-8") as handle:
-                    handle.write(line + "\\n")
+                    handle.write(line + "\n")
                     handle.flush()
         except Exception:
             # Logging is best-effort and must never interrupt live S/R consumption.
