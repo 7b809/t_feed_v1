@@ -584,51 +584,22 @@ class DummyOrderService:
     # G1 v4.1 — readiness gate                                           #
     # ------------------------------------------------------------------ #
     def _upstream_ready(self) -> tuple[bool, str]:
-        """Return ``(ready, reason)`` for the SR backfill readiness latch.
-
-        * If ``DUMMY_ORDER_WAIT_FOR_SR_BACKFILL`` is false → ready.
-        * If ``sr_backfill_service.is_ready_for_today`` is missing →
-          ready (fail-open, one-shot WARNING).
-        * If the helper raises → NOT ready (fail-closed, retry next tick).
-        * If the helper returns False → NOT ready.
-        * If the helper returns True → ready.
-        """
-        if not bool(
-            getattr(config, "DUMMY_ORDER_WAIT_FOR_SR_BACKFILL", True)
-        ):
-            return True, "ok_disabled"
-
+        """Fail closed until the isolated instrument has a fresh external 15/3 feed."""
         try:
-            from services.sr_backfill_service import sr_backfill_service
+            from services.level_isolated_instrument_service import level_isolated_instrument_service
+            from services.external_sr_websocket_service import external_sr_websocket_service
+            detail = level_isolated_instrument_service.get_detail() or {}
+            isolated = detail.get("isolated") or detail.get("instrument") or {}
+            key = str(isolated.get("instrument_key") or "").strip()
+            if not key:
+                # No isolation yet means there is no candidate to execute.
+                return True, "no_active_isolation"
+            if not external_sr_websocket_service.is_ready(key, "15/3"):
+                return False, "external_sr_15_3_not_ready"
+            return True, "ok_external_sr"
         except Exception:
-            return True, "ok_backfill_module_missing"
-
-        check = getattr(
-            sr_backfill_service, "is_ready_for_today", None,
-        )
-        if not callable(check):
-            if not self._warned_no_readiness_check:
-                logger.warning(
-                    "[dummy-order] sr_backfill_service.is_ready_for_today() "
-                    "is not implemented — proceeding without the readiness "
-                    "gate (this re-opens the pre-v4.1 race; implement the "
-                    "helper to close it)."
-                )
-                self._warned_no_readiness_check = True
-            return True, "ok_readiness_check_missing"
-
-        try:
-            ready = bool(check())
-        except Exception:
-            logger.exception(
-                "[dummy-order] sr_backfill_service.is_ready_for_today() "
-                "raised — skipping run (fail-closed)"
-            )
-            return False, "backfill_check_raised"
-
-        if not ready:
-            return False, "sr_backfill_not_ready"
-        return True, "ok"
+            logger.exception("[dummy-order] external SR readiness check failed")
+            return False, "external_sr_readiness_error"
 
     # ------------------------------------------------------------------ #
     # G1 v4.1 — data-derived execution path                              #
@@ -893,8 +864,8 @@ class DummyOrderService:
                 closes_by_minute[key] = close
 
         try:
-            from services.live_sr_levels_service import live_sr_levels_service
-            payload = live_sr_levels_service.get_levels(traded_key)
+            from services.external_sr_websocket_service import external_sr_websocket_service
+            payload = external_sr_websocket_service.get_levels(traded_key, "15/3")
         except Exception:
             return out
         if not payload:
@@ -934,8 +905,8 @@ class DummyOrderService:
             return None
 
         try:
-            from services.live_sr_levels_service import live_sr_levels_service
-            payload = live_sr_levels_service.get_levels(bias_key)
+            from services.external_sr_websocket_service import external_sr_websocket_service
+            payload = external_sr_websocket_service.get_levels(bias_key, "15/3")
         except Exception:
             logger.exception("[dummy-order] SR levels lookup failed")
             return None
