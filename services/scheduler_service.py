@@ -234,14 +234,13 @@ class SchedulerService:
         #     the divergence as expected (see
         #     sandbox_execution_service._handle_eod_close).
         #
-        # Why no sr_backfill_ready() gate here:
-        #   * Safety first. An un-exitable position is strictly worse
-        #     than an exit taken against a partially-built SR series.
-        #     Blocking this job on the readiness latch would risk
-        #     leaving the sandbox long into the broker's auto-square-off
-        #     window. force_eod_exit() itself is idempotent and a no-op
-        #     when no position is open, so an accidental early fire
-        #     (e.g. operator restarts at 15:14) is harmless.
+        # Why no external S/R readiness gate here:
+        #   * Safety first. An un-exited position is strictly worse than
+        #     an exit taken while the S/R WebSocket is disconnected.
+        #     Blocking this job on market-data readiness could leave the
+        #     sandbox long into the broker's auto-square-off window.
+        #     force_eod_exit() is idempotent and a no-op when no position
+        #     is open, so an accidental early fire is harmless.
         #
         # Gating on SANDBOX_EXECUTION_ENABLED:
         #   * Default is false. On boxes that have not opted into live
