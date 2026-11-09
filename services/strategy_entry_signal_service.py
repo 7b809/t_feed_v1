@@ -188,29 +188,24 @@ def _compute_ltp_tier_stop(
 # Candle lookup + LTP                                                         #
 # --------------------------------------------------------------------------- #
 def _candle_close_at(instrument_key: str, iso_time: str) -> float | None:
-    """Return the close of the 1-min candle at ``iso_time`` from the
-    SR engine's in-memory state (per-instrument ``_states`` dict)."""
+    """Resolve the confirmation candle close from EMA V2's confirmed level."""
     target = _parse_iso(iso_time)
     if target is None:
         return None
     target_minute = target.replace(second=0, microsecond=0)
     try:
-        from services.live_sr_levels_service import live_sr_levels_service
-        with live_sr_levels_service._guard:  # type: ignore[attr-defined]
-            state = live_sr_levels_service._states.get(instrument_key)  # type: ignore[attr-defined]
+        from services.external_sr_websocket_service import external_sr_websocket_service
+        for cfg in ("15/3", "15/15", "15/30"):
+            payload = external_sr_websocket_service.get_levels(instrument_key, cfg)
+            for level in (payload or {}).get("levels") or []:
+                confirmed = _parse_iso(level.get("confirmed_time"))
+                if confirmed and confirmed.replace(second=0, microsecond=0) == target_minute:
+                    try:
+                        return float(level.get("confirmed_time_price"))
+                    except (TypeError, ValueError):
+                        continue
     except Exception:
-        return None
-    if not state:
-        return None
-    for candle in state.get("candles") or []:
-        c_dt = _parse_iso(candle.get("time"))
-        if c_dt is None:
-            continue
-        if c_dt.replace(second=0, microsecond=0) == target_minute:
-            try:
-                return float(candle["close"])
-            except (KeyError, TypeError, ValueError):
-                return None
+        logger.exception("[strategy-entry] external confirmation close lookup failed for %s", instrument_key)
     return None
 
 def _candle_close_from_intraday(
@@ -997,9 +992,8 @@ def _arm_bias_on_support(
             cand["state_note"] = "all_supports_blocked_so_far"
             continue
 
-        display_confirmed_iso = _derive_display_confirmed_time(
-            key, s["pivot_bar_index"] or -1,
-        )
+        # EMA V2 already supplies the authoritative confirmation time.
+        display_confirmed_iso = s.get("confirmed_time")
         entry_support = {
             "price": s["price"],
             "pivot_time": s["pivot_time"],
