@@ -275,9 +275,9 @@ class ExternalSRWebSocketService:
 
                 signature = self._sr_signature(resistances, supports)
                 previous_signature = self._last_logged_sr_signature.get(token)
-                # A snapshot is the baseline for a new connection. Subsequent
-                # updates are saved only when pivot identity/price actually changes.
-                should_persist = event == "snapshot" or signature != previous_signature
+                # Persist the first observed S/R state and every genuinely
+                # changed state. An identical reconnect snapshot is not a new state.
+                should_persist = signature != previous_signature
 
                 state.update({
                     "resistances": resistances,
