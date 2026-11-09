@@ -961,6 +961,7 @@ async def app_lifespan(app: FastAPI):
 
         stop_targets = [
             ("Live feed", live_feed_service.stop),
+            ("External SR WebSocket", __import__("services.external_sr_websocket_service", fromlist=["external_sr_websocket_service"]).external_sr_websocket_service.stop),
             ("Telegram token bot", telegram_token_bot.stop),
             ("Scheduler", scheduler_service.shutdown),
         ]
