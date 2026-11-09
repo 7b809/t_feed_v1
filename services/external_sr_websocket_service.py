@@ -195,7 +195,7 @@ class ExternalSRWebSocketService:
             result["resistances"] = [dict(x) for x in state.get("resistances") or []]
             result["supports"] = [dict(x) for x in state.get("supports") or []]
             result["levels"] = [dict(x) for x in state.get("levels") or []]
-        result["is_ready"] = bool(result.get("ready") and result.get("last_event_at") and time.time() - result["last_event_at"] <= self.stale_seconds)
+        result["is_ready"] = bool(result.get("ready") and result.get("connected") and result.get("last_event_at") and time.time() - result["last_event_at"] <= self.stale_seconds)
         result["fresh"] = result["is_ready"]
         return result
 
@@ -213,7 +213,7 @@ class ExternalSRWebSocketService:
                 age = time.time() - state["last_event_at"] if state.get("last_event_at") else None
                 rows.append({
                     "instrument_key": key, "config": cfg, "connected": state.get("connected"),
-                    "ready": state.get("ready"), "fresh": age is not None and age <= self.stale_seconds,
+                    "ready": state.get("ready"), "fresh": bool(state.get("connected") and age is not None and age <= self.stale_seconds),
                     "age_seconds": round(age, 1) if age is not None else None,
                     "last_event": state.get("last_event"), "status": state.get("status"),
                     "level_count": len(state.get("levels") or []),
