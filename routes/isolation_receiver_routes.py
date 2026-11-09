@@ -11,11 +11,23 @@ endpoint after persisting it to Mongo. This module:
         data/isolation/<YYYY-MM-DD>/<HHMMSS_ffffff>__<kind>__<symbol>.json
     via FastAPI BackgroundTasks (runs *after* the response is sent)
   * updates data/isolation/latest__<kind>.json as a rolling pointer
+  * appends an audit line to data/isolation/overwrite_log.jsonl
   * sends a Telegram notification summarising all three stages
     (received → saved → notified)
 
-The whole 3-stage message is a single short-lines layout that renders
-identically on Telegram desktop and mobile — no ASCII columns, no
+Three kinds of requests are distinguished:
+
+  * ``dummy``  — direct call with ``?testing=true`` on this endpoint.
+                 Uses a static dummy payload (any provided body merges
+                 over the defaults, but ``is_test``/``is_dummy``/``source``
+                 are force-set). Saved under ``latest__dummy.json`` and
+                 tagged ``DUMMY TEST`` in Telegram.
+  * ``test``   — real sender call from the isolation service's
+                 ``POST /api/isolation-test`` (payload has ``is_test=true``).
+  * ``live``   — everything else (real isolation from the scheduler).
+
+The whole 3-stage Telegram message is a single short-lines layout that
+renders identically on desktop and mobile — no ASCII columns, no
 markdown tables, no monospace alignment.
 
 Failure isolation (why this never stalls the app)
@@ -23,25 +35,30 @@ Failure isolation (why this never stalls the app)
 The background task runs every stage inside its own try/except and
 ALWAYS attempts the Telegram notification, even when the save step
 failed or threw unexpectedly. The Telegram send itself is bounded by
-a hard timeout (`ISOLATION_RECEIVER_TELEGRAM_TIMEOUT_SECONDS`,
+a hard timeout (``ISOLATION_RECEIVER_TELEGRAM_TIMEOUT_SECONDS``,
 default 10s) so a hung network call cannot hold a FastAPI background
-worker — the worker is freed as soon as the timeout fires and the
-HTTP response has already gone out long before.
+worker.
 
-A final `DONE` summary log line is emitted for every request with the
-per-stage outcomes, so `grep req_id=<id>` yields the complete story in
-one shot.
+A final ``DONE`` summary log line is emitted for every request with the
+per-stage outcomes, so ``grep req_id=<id>`` yields the complete story
+in one shot.
 
 Endpoints
 ---------
-POST /api/isolation
+POST /api/isolation[?testing=true]
     Receive a notification. Auth via header (X-Isolation-Key).
+    ``?testing=true`` uses a static dummy payload for self-contained
+    receiver testing (no sender required).
 
 GET  /api/isolation/received
     List recently saved JSON files (newest first).
 
 GET  /api/isolation/received/{date}/{filename}
     Read a single saved JSON file (path-traversal safe).
+
+GET  /api/isolation/overwrite-log?limit=&kind=
+    Read the append-only overwrite audit log (newest last in the file,
+    returned newest-first). ``kind`` filters to ``dummy``/``test``/``live``.
 
 Auth
 ----
@@ -51,6 +68,9 @@ to the SAME value.
 
 If ISOLATION_RECEIVER_KEY is empty, the receiver runs in NO-AUTH mode
 and logs a one-time warning. Do not run this way in production.
+
+Testing mode (``?testing=true``) does NOT bypass auth. The key is
+verified identically; the flag only changes which payload is processed.
 
 PROD_MODE interaction
 ---------------------
@@ -119,6 +139,9 @@ _TELEGRAM_TIMEOUT_SECONDS = _env_float(
     "ISOLATION_RECEIVER_TELEGRAM_TIMEOUT_SECONDS", 10.0
 )
 
+_OVERWRITE_LOG_NAME = "overwrite_log.jsonl"
+_OVERWRITE_LOG_LOCK = threading.Lock()
+
 _KEY_WARNING_LOGGED = False
 
 
@@ -148,7 +171,20 @@ def _safe_token(value: str, max_len: int = 80) -> str:
     return out[:max_len]
 
 
-def _build_save_path(payload: dict) -> Path:
+def _resolve_kind(payload: dict, *, forced_kind: str | None = None) -> str:
+    """Resolve the file kind for a payload.
+
+    Precedence:
+      1) explicit ``forced_kind`` (used by ``?testing=true`` → "dummy")
+      2) ``payload.is_test == True`` → "test"  (sender's /api/isolation-test)
+      3) otherwise → "live"
+    """
+    if forced_kind in ("dummy", "test", "live"):
+        return forced_kind
+    return "test" if payload.get("is_test") else "live"
+
+
+def _build_save_path(payload: dict, *, kind: str) -> Path:
     """Return the target path for a received payload."""
     now = datetime.now(ZoneInfo(_TZ))
     trade_date = _safe_token(
@@ -156,7 +192,6 @@ def _build_save_path(payload: dict) -> Path:
         max_len=32,
     )
     symbol = _safe_token(str(payload.get("trading_symbol") or "unknown"), max_len=80)
-    kind = "test" if payload.get("is_test") else "live"
     ts = now.strftime("%Y%m%d_%H%M%S_%f")
     filename = f"{ts}__{kind}__{symbol}.json"
     return _DATA_DIR / trade_date / filename
@@ -178,6 +213,61 @@ def _atomic_write_json(path: Path, payload: dict) -> None:
         except OSError:
             pass
         raise
+
+
+def _read_pointer_source(latest_path: Path) -> str | None:
+    """Read the ``_meta.source_file`` of an existing pointer, if any.
+
+    Used to record what a pointer overwrite replaced — makes the
+    audit log entry semantically meaningful (``prev`` field) instead of
+    just saying "a pointer file was touched".
+    """
+    try:
+        if not latest_path.is_file():
+            return None
+        with open(latest_path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        meta = data.get("_meta") or {}
+        src = meta.get("source_file")
+        return str(src) if src else None
+    except Exception:
+        return None
+
+
+# --------------------------------------------------------------------------- #
+# Overwrite audit log (append-only JSONL)                                     #
+# --------------------------------------------------------------------------- #
+def _overwrite_log_path() -> Path:
+    return _DATA_DIR / _OVERWRITE_LOG_NAME
+
+
+def _append_overwrite_log(entry: dict) -> None:
+    """Append one JSON line to the overwrite log.
+
+    Uses an in-process lock to serialize writes. Single ``write()`` of
+    one line + newline under the lock is atomic on POSIX (< PIPE_BUF)
+    and FILE_APPEND_DATA on Windows for the same small size, so a
+    concurrent reader never sees a torn line.
+
+    Best-effort: never raises. A log-write failure must not fail the
+    save/notify pipeline.
+    """
+    log_path = _overwrite_log_path()
+    try:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        line = json.dumps(entry, default=str, ensure_ascii=False) + "\n"
+        with _OVERWRITE_LOG_LOCK:
+            with open(log_path, "a", encoding="utf-8") as fh:
+                fh.write(line)
+    except Exception:
+        logger.exception(
+            "[isolation-receiver] overwrite_log append failed entry=%r",
+            entry,
+        )
+
+
+def _now_iso() -> str:
+    return datetime.now(ZoneInfo(_TZ)).isoformat()
 
 
 # --------------------------------------------------------------------------- #
@@ -225,11 +315,77 @@ def _run_with_timeout(
 
 
 # --------------------------------------------------------------------------- #
+# Static dummy payload (for ?testing=true)                                    #
+# --------------------------------------------------------------------------- #
+def _build_dummy_payload() -> dict:
+    """Return a static dummy isolation payload for ``?testing=true``.
+
+    Shaped like a real isolation document so it exercises the same
+    save/notify path. Marked with ``is_test``, ``is_dummy``, and a
+    distinctive ``source`` so it can never be confused with a live
+    isolation by a downstream consumer.
+    """
+    now = datetime.now(ZoneInfo(_TZ))
+    trade_date = now.date().isoformat()
+    touch_time = now.replace(hour=9, minute=30, second=0, microsecond=0)
+    return {
+        "_id": "instrument_isolation",
+        "trade_date_ist": trade_date,
+        "instrument_key": "NSE_FO|DUMMY0001",
+        "exchange_token": "DUMMY0001",
+        "trading_symbol": "NIFTY 25000 CE 09 NOV 26",
+        "short_name": None,
+        "name": "NIFTY",
+        "strike": 25000.0,
+        "option_type": "CE",
+        "expiry": trade_date,
+        "lot_size": 65,
+        "tick_size": 5.0,
+        "segment": "NSE_FO",
+        "exchange": "NSE",
+        "underlying": "NIFTY",
+        "bias": "CE",
+        "strike_computed": 25000,
+        "nifty_ltp_at_isolation": 25010.5,
+        "nifty_ltp_source": "dummy_receiver_test",
+        "trigger_index": "NSE_INDEX|Nifty 50",
+        "trigger_index_canonical": "NIFTY",
+        "trigger_side": "R3",
+        "trigger_level": 24985.5,
+        "trigger_level_name": "R3_Threshold",
+        "trigger_value": 25010.5,
+        "trigger_priority": 0,
+        "simultaneous_touches": [],
+        "routed_index": "NIFTY",
+        "routed_ltp": 25010.5,
+        "isolation_touch_time": touch_time.isoformat(),
+        "isolation_created_at": now.isoformat(),
+        "isolated_option_ltp": 150.0,
+        "isolated_option_ltp_source": "dummy_param",
+        "standard_execution_mode": "STANDARD",
+        "early_extreme_reversal": False,
+        "execution_mode_price": 150.0,
+        "execution_mode_decided_at": touch_time.isoformat(),
+        "execution_mode_reason": "price 150.00 inside [100.0, 250.0]",
+        "status": "ACTIVE",
+        "source": "isolation_receiver_dummy_test",
+        "isolation_backfilled": False,
+        "is_dummy": True,
+        "is_test": True,
+    }
+
+
+# --------------------------------------------------------------------------- #
 # Telegram message                                                            #
 # --------------------------------------------------------------------------- #
+_KIND_EMOJI = {"dummy": "🧪", "test": "🧪", "live": "📥"}
+_KIND_LABEL = {"dummy": "DUMMY TEST", "test": "TEST", "live": "LIVE"}
+
+
 def _build_telegram_message(
     *,
     payload: dict,
+    kind: str,
     save_path: Path,
     save_ok: bool,
     save_error: str | None,
@@ -251,8 +407,8 @@ def _build_telegram_message(
       * stage block first so the phone's ~3-line preview alone tells the
         operator what happened; details below the fold
     """
-    is_test = bool(payload.get("is_test"))
-    kind_upper = "TEST" if is_test else "LIVE"
+    emoji = _KIND_EMOJI.get(kind, "📥")
+    kind_upper = _KIND_LABEL.get(kind, kind.upper())
 
     try:
         rel_path = save_path.relative_to(_DATA_DIR).as_posix()
@@ -282,7 +438,7 @@ def _build_telegram_message(
     level = "SUCCESS" if save_ok else "ERROR"
 
     lines = [
-        f"📥 Isolation received · {kind_upper}",
+        f"{emoji} Isolation received · {kind_upper}",
         "",
         stage1,
         stage2,
@@ -304,6 +460,7 @@ def _build_telegram_message(
 def _send_telegram_sync(
     *,
     payload: dict,
+    kind: str,
     save_path: Path,
     save_ok: bool,
     save_error: str | None,
@@ -337,6 +494,7 @@ def _send_telegram_sync(
     try:
         title, body, level = _build_telegram_message(
             payload=payload,
+            kind=kind,
             save_path=save_path,
             save_ok=save_ok,
             save_error=save_error,
@@ -359,8 +517,8 @@ def _send_telegram_sync(
 
     if ok:
         logger.info(
-            "[isolation-receiver] Telegram notified req_id=%s level=%s",
-            request_id, level,
+            "[isolation-receiver] Telegram notified req_id=%s kind=%s level=%s",
+            request_id, kind, level,
         )
         return True, None
 
@@ -372,15 +530,16 @@ def _send_telegram_sync(
 
 
 # --------------------------------------------------------------------------- #
-# Background task — save + notify                                             #
+# Background task — save + pointer + audit log + notify                       #
 # --------------------------------------------------------------------------- #
 def _save_then_notify_sync(
     payload: dict,
     save_path: Path,
+    kind: str,
     request_id: str,
     client_host: str,
 ) -> None:
-    """Background worker: save, write pointer, notify — each stage isolated.
+    """Background worker: save, pointer, log, notify — each stage isolated.
 
     Runs *after* the HTTP response has been sent to the caller, so a slow
     disk or slow Telegram API never delays the ack. Every stage is wrapped
@@ -389,11 +548,10 @@ def _save_then_notify_sync(
     failed or threw unexpectedly — the operator must see an outcome for
     every request.
 
-    Nothing in this function raises. Any failure is logged and reflected in
-    the final ``DONE`` summary line, which lets a single
+    Nothing in this function raises. Any failure is logged and reflected
+    in the final ``DONE`` summary line, which lets a single
     ``grep req_id=<id>`` yield the whole story for a request.
     """
-    kind = "test" if payload.get("is_test") else "live"
     save_ok = False
     save_error: str | None = None
     pointer_ok: bool | None = None
@@ -414,6 +572,18 @@ def _save_then_notify_sync(
                 payload.get("standard_execution_mode"),
                 save_path,
             )
+            try:
+                rel = save_path.relative_to(_DATA_DIR).as_posix()
+            except Exception:
+                rel = str(save_path)
+            _append_overwrite_log({
+                "ts": _now_iso(),
+                "kind": kind,
+                "action": "payload_saved",
+                "path": rel,
+                "req": request_id,
+                "prev": None,
+            })
         except Exception as exc:
             save_error = f"{type(exc).__name__}: {exc}"
             logger.exception(
@@ -427,16 +597,26 @@ def _save_then_notify_sync(
         # durable — the pointer is only a convenience alias.
         if save_ok:
             latest_path = _DATA_DIR / f"latest__{kind}.json"
+            prev_source = _read_pointer_source(latest_path)
             try:
                 _atomic_write_json(latest_path, {
                     "_meta": {
                         "source_file": str(save_path),
                         "request_id": request_id,
-                        "written_at": datetime.now(ZoneInfo(_TZ)).isoformat(),
+                        "kind": kind,
+                        "written_at": _now_iso(),
                     },
                     "payload": payload,
                 })
                 pointer_ok = True
+                _append_overwrite_log({
+                    "ts": _now_iso(),
+                    "kind": kind,
+                    "action": "pointer_overwritten",
+                    "path": f"latest__{kind}.json",
+                    "req": request_id,
+                    "prev": prev_source,
+                })
             except Exception as exc:
                 pointer_ok = False
                 pointer_error = f"{type(exc).__name__}: {exc}"
@@ -445,14 +625,21 @@ def _save_then_notify_sync(
                     "req_id=%s (non-fatal)",
                     request_id,
                 )
+                _append_overwrite_log({
+                    "ts": _now_iso(),
+                    "kind": kind,
+                    "action": "pointer_write_failed",
+                    "path": f"latest__{kind}.json",
+                    "req": request_id,
+                    "prev": prev_source,
+                    "error": pointer_error,
+                })
 
         # ---- Stage 3: Telegram (ALWAYS attempted) ----------------------
-        # Even if save failed we still notify so the operator sees the
-        # failure. This is the whole point of running these stages in the
-        # same background task.
         try:
             tg_ok, tg_error = _send_telegram_sync(
                 payload=payload,
+                kind=kind,
                 save_path=save_path,
                 save_ok=save_ok,
                 save_error=save_error,
@@ -469,10 +656,6 @@ def _save_then_notify_sync(
             )
     except Exception as exc:
         # ---- Absolute safety net ---------------------------------------
-        # If anything above raised in a way we did not expect, still try
-        # one last Telegram attempt so the operator sees *something* for
-        # this request. Never re-raise — the response already went out,
-        # and stalling a background worker here would only hurt the app.
         logger.exception(
             "[isolation-receiver] UNHANDLED error in background task "
             "req_id=%s",
@@ -481,6 +664,7 @@ def _save_then_notify_sync(
         try:
             _send_telegram_sync(
                 payload=payload,
+                kind=kind,
                 save_path=save_path,
                 save_ok=save_ok,
                 save_error=(
@@ -499,12 +683,10 @@ def _save_then_notify_sync(
             )
     finally:
         # ---- Final summary ---------------------------------------------
-        # One grep finds everything about this request:
-        #   grep "req_id=<id>" logs/isolated_instrument_routes.log
         logger.info(
-            "[isolation-receiver] DONE req_id=%s save_ok=%s "
+            "[isolation-receiver] DONE req_id=%s kind=%s save_ok=%s "
             "pointer_ok=%s tg_ok=%s tg_error=%s",
-            request_id, save_ok, pointer_ok, tg_ok, tg_error,
+            request_id, kind, save_ok, pointer_ok, tg_ok, tg_error,
         )
 
 
@@ -518,15 +700,34 @@ router = APIRouter(prefix="/api/isolation", tags=["isolation-receiver"])
 async def receive_isolation(request: Request, background_tasks: BackgroundTasks):
     """Receive an isolation document and return immediately.
 
-    Authentication: header ISOLATION_RECEIVER_KEY_HEADER (default
-    X-Isolation-Key) must equal ISOLATION_RECEIVER_KEY. If the key is
-    unset, the endpoint runs in no-auth mode (logs a warning once).
+    Query parameters
+    ----------------
+    testing : bool, default ``false``
+        When ``true``, use a static dummy payload instead of the request
+        body. Any body provided is merged over the defaults, but
+        ``is_test``, ``is_dummy``, and ``source`` are force-set so the
+        record is always clearly marked as a dummy. The file is saved
+        with the ``dummy`` kind (``latest__dummy.json``) and Telegram
+        reports it as ``DUMMY TEST``. Auth is NOT bypassed.
 
+        Use this to validate the receiver pipeline end-to-end without
+        the isolation service:
+            curl -X POST 'http://<host>/api/isolation?testing=true' \\
+                 -H 'X-Isolation-Key: <key>'
+
+    Authentication
+    --------------
+    Header ISOLATION_RECEIVER_KEY_HEADER (default ``X-Isolation-Key``)
+    must equal ISOLATION_RECEIVER_KEY. If the key is unset, the endpoint
+    runs in no-auth mode (logs a warning once).
+
+    Response semantics
+    ------------------
     The response is returned BEFORE the payload is written to disk and
-    BEFORE the Telegram message is sent. Save and notify happen in a
-    single background task that is fully isolated per stage — see
-    ``_save_then_notify_sync`` — so nothing that happens after this
-    response can stall the app.
+    BEFORE the Telegram message is sent. Save + pointer + audit log +
+    notify all run in a single background task that is fully isolated
+    per stage — see ``_save_then_notify_sync`` — so nothing that happens
+    after this response can stall the app.
 
     Use the returned ``saved_to`` path (or poll
     ``GET /api/isolation/received``) to confirm the file landed.
@@ -550,22 +751,55 @@ async def receive_isolation(request: Request, background_tasks: BackgroundTasks)
     else:
         _warn_missing_key_once()
 
-    # ---- 2. Parse JSON ---------------------------------------------------
-    try:
-        payload = await request.json()
-    except Exception as exc:
-        logger.warning(
-            "[isolation-receiver] BAD-JSON req_id=%s client=%s error=%s",
-            request_id, client_host, exc,
-        )
-        raise HTTPException(status_code=400, detail=f"invalid JSON: {exc}")
+    # ---- 2. Parse query flag + payload ----------------------------------
+    testing_raw = (request.query_params.get("testing", "") or "").strip().lower()
+    testing = testing_raw in ("true", "1", "yes", "on")
 
-    if not isinstance(payload, dict):
-        raise HTTPException(status_code=400, detail="payload must be a JSON object")
+    # Parse optional body once. In testing mode the body is *optional*;
+    # in normal mode it is required.
+    body: dict = {}
+    body_error: str | None = None
+    try:
+        raw_body = await request.body()
+        if raw_body:
+            parsed = json.loads(raw_body)
+            if not isinstance(parsed, dict):
+                body_error = "payload must be a JSON object"
+            else:
+                body = parsed
+    except Exception as exc:
+        body_error = f"invalid JSON: {exc}"
+
+    if testing:
+        # ---- Testing mode -------------------------------------------
+        payload = _build_dummy_payload()
+        if body:
+            payload.update(body)  # user-supplied fields win, except markers
+        # Force markers regardless of what the caller sent — a "testing"
+        # record must always be unambiguously distinguishable from live.
+        payload["is_test"] = True
+        payload["is_dummy"] = True
+        payload["source"] = "isolation_receiver_dummy_test"
+        payload.setdefault("trade_date_ist", datetime.now(ZoneInfo(_TZ)).date().isoformat())
+        payload.setdefault("trading_symbol", "NIFTY 25000 CE 09 NOV 26")
+        payload.setdefault("standard_execution_mode", "STANDARD")
+        kind = "dummy"
+    else:
+        # ---- Normal mode --------------------------------------------
+        if body_error:
+            logger.warning(
+                "[isolation-receiver] BAD-JSON req_id=%s client=%s error=%s",
+                request_id, client_host, body_error,
+            )
+            raise HTTPException(status_code=400, detail=body_error)
+        if not body:
+            raise HTTPException(status_code=400, detail="empty payload body")
+        payload = body
+        kind = _resolve_kind(payload)
 
     # ---- 3. Compute save path -------------------------------------------
     try:
-        save_path = _build_save_path(payload)
+        save_path = _build_save_path(payload, kind=kind)
     except Exception as exc:
         logger.exception(
             "[isolation-receiver] path build failed req_id=%s", request_id,
@@ -573,38 +807,37 @@ async def receive_isolation(request: Request, background_tasks: BackgroundTasks)
         raise HTTPException(status_code=500, detail=f"save path error: {exc}")
 
     # ---- 4. Schedule background save + notify ---------------------------
-    # One task does both so the Telegram message is built *after* the
-    # save outcome is known — that is what makes the "Stage 2/3" line
-    # in the message truthful rather than assumed.
     background_tasks.add_task(
         _save_then_notify_sync,
         payload,
         save_path,
+        kind,
         request_id,
         client_host,
     )
 
     # ---- 5. Immediate response ------------------------------------------
-    is_test = bool(payload.get("is_test"))
     logger.info(
         "[isolation-receiver] RECEIVED req_id=%s client=%s kind=%s "
-        "symbol=%s mode=%s (save + notify scheduled)",
-        request_id, client_host,
-        "test" if is_test else "live",
+        "symbol=%s mode=%s testing=%s (save + notify scheduled)",
+        request_id, client_host, kind,
         payload.get("trading_symbol"),
         payload.get("standard_execution_mode"),
+        testing,
     )
     return {
         "ok": True,
         "status": "received",
+        "mode": "testing" if testing else kind,
+        "kind": kind,
         "message": "Request received, processing in background",
         "request_id": request_id,
         "saved_to": str(save_path),
-        "received_at": datetime.now(ZoneInfo(_TZ)).isoformat(),
+        "received_at": _now_iso(),
         "payload_summary": {
             "trading_symbol": payload.get("trading_symbol"),
             "standard_execution_mode": payload.get("standard_execution_mode"),
-            "is_test": is_test,
+            "is_test": bool(payload.get("is_test")),
             "is_dummy": bool(payload.get("is_dummy")),
             "source": payload.get("source"),
             "trade_date_ist": payload.get("trade_date_ist"),
@@ -614,7 +847,11 @@ async def receive_isolation(request: Request, background_tasks: BackgroundTasks)
 
 @router.get("/received")
 def list_received(limit: int = 50):
-    """List recently saved isolation JSON files (newest first)."""
+    """List recently saved isolation JSON files (newest first).
+
+    Excludes the rolling ``latest__*.json`` pointers and the
+    ``overwrite_log.jsonl`` audit file — those are separate surfaces.
+    """
     if limit < 1 or limit > 500:
         limit = 50
     data_root = _DATA_DIR
@@ -626,6 +863,9 @@ def list_received(limit: int = 50):
         }
     files = []
     for p in data_root.rglob("*.json"):
+        name = p.name
+        if name.startswith("latest__"):
+            continue
         try:
             stat = p.stat()
             files.append({
@@ -680,3 +920,72 @@ def read_received(date: str, filename: str):
         return json.loads(content)
     except json.JSONDecodeError:
         return {"raw_content": content}
+
+
+@router.get("/overwrite-log")
+def read_overwrite_log(limit: int = 100, kind: str | None = None):
+    """Return the most recent entries from ``overwrite_log.jsonl``.
+
+    Query parameters
+    ----------------
+    limit : int, default 100, max 1000
+        Number of entries to return (newest first).
+    kind : str, optional
+        Filter to ``dummy`` / ``test`` / ``live``. Omit to include all.
+
+    Each entry shape::
+
+        {
+          "ts":     "2026-11-10T14:23:45.123456+05:30",
+          "kind":   "dummy" | "test" | "live",
+          "action": "payload_saved" | "pointer_overwritten"
+                    | "pointer_write_failed",
+          "path":   "<relative path>",
+          "req":    "<request_id>",
+          "prev":   "<previous pointer source, or null>"
+        }
+
+    The endpoint reads the whole file into memory and slices — the file
+    is one line per request, so this is bounded and safe.
+    """
+    if limit < 1 or limit > 1000:
+        limit = 100
+
+    log_path = _overwrite_log_path()
+    if not log_path.is_file():
+        return {
+            "count": 0,
+            "total_in_file": 0,
+            "file_path": str(log_path),
+            "kind_filter": kind,
+            "entries": [],
+        }
+
+    entries: list[dict] = []
+    try:
+        with open(log_path, "r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if kind and entry.get("kind") != kind:
+                    continue
+                entries.append(entry)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"read failed: {exc}")
+
+    total = len(entries)
+    tail = entries[-limit:] if limit < total else entries
+    tail.reverse()  # newest first
+
+    return {
+        "count": len(tail),
+        "total_in_file": total,
+        "file_path": str(log_path),
+        "kind_filter": kind,
+        "entries": tail,
+    }
