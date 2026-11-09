@@ -56,7 +56,6 @@ echo [OK] Found %PYVER%
 :: 2. Virtual env exists? (create only if missing)
 :: ------------------------------------------------------------
 if exist "%VENV_PY%" (
-    echo [OK] Virtual env present: %VENV_DIR%
     goto :activate
 )
 

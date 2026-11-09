@@ -13,13 +13,11 @@ from dotenv import load_dotenv
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(PROJECT_ROOT / ".env")
 
-
 def _bool(name: str, default: bool) -> bool:
     value = os.getenv(name)
     if value is None:
         return default
     return value.strip().lower() in {"1", "true", "yes", "on"}
-
 
 def _int(name: str, default: int) -> int:
     try:
@@ -27,13 +25,11 @@ def _int(name: str, default: int) -> int:
     except ValueError as exc:
         raise ValueError(f"{name} must be an integer") from exc
 
-
 def _float(name: str, default: float) -> float:
     try:
         return float(os.getenv(name, str(default)))
     except ValueError as exc:
         raise ValueError(f"{name} must be a number") from exc
-
 
 # ---------- Strategy index priority (env-overridable) ----------
 _DEFAULT_STRATEGY_INDEX_PRIORITY: dict[str, int] = {
@@ -43,7 +39,6 @@ _DEFAULT_STRATEGY_INDEX_PRIORITY: dict[str, int] = {
     "SENSEX": 4,
 }
 
-
 def _load_strategy_index_priority() -> dict[str, int]:
     result: dict[str, int] = {}
     for name, default in _DEFAULT_STRATEGY_INDEX_PRIORITY.items():
@@ -51,9 +46,7 @@ def _load_strategy_index_priority() -> dict[str, int]:
         result[name] = _int(env_key, default)
     return result
 
-
 STRATEGY_INDEX_PRIORITY: dict[str, int] = _load_strategy_index_priority()
-
 
 # ---------- Canonical 4-index catalog ----------
 INDEX_METADATA: dict[str, dict[str, Any]] = {
@@ -102,7 +95,6 @@ INDEX_METADATA: dict[str, dict[str, Any]] = {
         "priority": int(STRATEGY_INDEX_PRIORITY.get("SENSEX", 4)),
     },
 }
-
 
 @dataclass(frozen=True)
 class Settings:
@@ -162,6 +154,20 @@ class Settings:
         os.getenv("EMA_INSTRUMENTS_FILE", "./storage/mega/all_instruments.json")
     )
 
+    # ---------- Job 4: SR levels (NEW) ----------
+    sr_enabled: bool = _bool("SR_ENABLED", True)
+    # Comma-separated list of "<lookback>/<strength>" configs.
+    # Canonical defaults: 15/3, 15/15, 15/30.
+    sr_default_configs: str = os.getenv("SR_DEFAULT_CONFIGS", "15/3,15/15,15/30")
+    sr_poll_seconds: int = _int("SR_POLL_SECONDS", 60)
+    sr_heartbeat_cycles: int = _int("SR_HEARTBEAT_CYCLES", 1)
+    sr_history_days: int = _int("SR_HISTORY_DAYS", 10)
+    sr_history_bars: int = _int("SR_HISTORY_BARS", 1000)
+    sr_max_workers: int = _int("SR_MAX_WORKERS", 3)
+    sr_fetch_timeout_seconds: float = _float("SR_FETCH_TIMEOUT_SECONDS", 30.0)
+    sr_max_levels_per_side: int = _int("SR_MAX_LEVELS_PER_SIDE", 5)
+    sr_cycle_log_every: int = _int("SR_CYCLE_LOG_EVERY", 100)
+
     # ---------- Job 3: Pivot levels ----------
     levels_enabled: bool = _bool("LEVELS_ENABLED", True)
     levels_compute_hour: int = _int("LEVELS_COMPUTE_HOUR", 9)
@@ -175,15 +181,10 @@ class Settings:
     levels_first_candle_window_minutes: int = _int("LEVELS_FIRST_CANDLE_WINDOW_MINUTES", 1)
 
     # --- Job 3 — post-compute: batch retries + MongoDB persistence ---
-    # Number of ADDITIONAL batch attempts (on top of the initial one) when
-    # the scheduled 09:17 compute does not succeed for all indexes.
     levels_scheduled_retries: int = _int("LEVELS_SCHEDULED_RETRIES", 3)
-    # Gap between batch retries (seconds).
     levels_scheduled_retry_gap_seconds: float = _float(
         "LEVELS_SCHEDULED_RETRY_GAP_SECONDS", 60.0
     )
-    # MongoDB collection + fixed document _id used to persist today's levels.
-    # Daily scheduled runs overwrite the same _id — no new docs accumulate.
     levels_project_info_collection: str = os.getenv(
         "LEVELS_PROJECT_INFO_COLLECTION", "project_info"
     )
@@ -228,6 +229,32 @@ class Settings:
         if self.ema_fetch_timeout_seconds <= 0:
             raise ValueError("EMA_FETCH_TIMEOUT_SECONDS must be > 0")
 
+        # Job 4 (SR)
+        if self.sr_poll_seconds < 5:
+            raise ValueError("SR_POLL_SECONDS must be >= 5")
+        if self.sr_heartbeat_cycles < 0:
+            raise ValueError("SR_HEARTBEAT_CYCLES must be >= 0 (0 disables)")
+        if self.sr_max_workers < 1:
+            raise ValueError("SR_MAX_WORKERS must be >= 1")
+        if self.sr_fetch_timeout_seconds <= 0:
+            raise ValueError("SR_FETCH_TIMEOUT_SECONDS must be > 0")
+        if self.sr_max_levels_per_side < 1:
+            raise ValueError("SR_MAX_LEVELS_PER_SIDE must be >= 1")
+        if self.sr_history_bars < 50:
+            raise ValueError("SR_HISTORY_BARS must be >= 50")
+        if self.sr_cycle_log_every < 1:
+            raise ValueError("SR_CYCLE_LOG_EVERY must be >= 1")
+        for raw in self.sr_default_configs_list:
+            try:
+                parts = raw.split("/")
+                if len(parts) != 2:
+                    raise ValueError
+                int(parts[0]); int(parts[1])
+            except (ValueError, TypeError) as exc:
+                raise ValueError(
+                    f"SR_DEFAULT_CONFIGS entry {raw!r} must be '<lookback>/<strength>'"
+                ) from exc
+
         if not (0 <= self.levels_compute_hour < 24 and 0 <= self.levels_compute_minute < 60):
             raise ValueError("Invalid LEVELS_COMPUTE_HOUR/MINUTE")
         if not (
@@ -248,7 +275,6 @@ class Settings:
         if self.levels_first_candle_window_minutes < 1:
             raise ValueError("LEVELS_FIRST_CANDLE_WINDOW_MINUTES must be >= 1")
 
-        # Job 3 — post-compute
         if self.levels_scheduled_retries < 0:
             raise ValueError("LEVELS_SCHEDULED_RETRIES must be >= 0")
         if self.levels_scheduled_retry_gap_seconds <= 0:
@@ -284,6 +310,10 @@ class Settings:
         return [k.strip() for k in self.ema_index_instruments.split(",") if k.strip()]
 
     @property
+    def sr_default_configs_list(self) -> list[str]:
+        return [c.strip() for c in (self.sr_default_configs or "").split(",") if c.strip()]
+
+    @property
     def cleanup_dirs_list(self) -> list[Path]:
         raw = (self.cleanup_dirs or "").strip()
         if not raw:
@@ -307,6 +337,5 @@ class Settings:
     @property
     def extracted_limit_bytes(self) -> int:
         return self.max_extracted_size_mb * 1024 * 1024
-
 
 settings = Settings()

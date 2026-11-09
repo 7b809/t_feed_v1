@@ -6,6 +6,7 @@ Sends rich HTML messages to a Telegram chat for:
   * project startup / shutdown
   * startup / scheduled / manual refresh lifecycle
   * EMA feed bootstrap and live-loop lifecycle
+  * SR (support/resistance) feed bootstrap and live-loop lifecycle
   * pivot-levels success / failure
   * unhandled exceptions
 
@@ -19,6 +20,16 @@ Config (see .env.example):
 Every ``notify_*`` method is synchronous so it can be called from worker
 threads (APScheduler, asyncio.to_thread, FastAPI's lifespan). For async
 call sites use ``asyncio.to_thread(notifier.notify_*, ...)``.
+
+Token-safety
+------------
+The Bot API embeds the token in the request URL
+(``https://api.telegram.org/bot<TOKEN>/sendMessage``). httpx / httpcore
+exception messages include the full URL, so we must redact before any
+log call in this module. The ``_redact()`` helper applied to every
+``logger.warning`` / ``logger.debug`` call is the belt; the
+``RedactingFormatter`` and ``SensitiveDataRedactionFilter`` installed by
+``app.logging_config`` are the braces.
 """
 
 from __future__ import annotations
@@ -26,6 +37,7 @@ from __future__ import annotations
 import asyncio
 import html
 import logging
+import re
 import threading
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -38,14 +50,21 @@ logger = logging.getLogger(__name__)
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
+# Telegram bot tokens: ``<bot_id>:<base64ish>``.
+_BOT_TOKEN_RE = re.compile(r"\d{6,12}:[A-Za-z0-9_-]{25,}")
+_REDACTED = "<REDACTED>"
+
+
+def _redact(value: Any) -> str:
+    """Strip Telegram bot tokens from a value before logging it."""
+    return _BOT_TOKEN_RE.sub(_REDACTED, str(value))
+
 
 def _ist_now() -> str:
     return datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S IST")
 
-
 def _esc(value: Any) -> str:
     return html.escape(str(value)) if value is not None else "—"
-
 
 def _num(value: Any) -> str:
     if value is None:
@@ -54,7 +73,6 @@ def _num(value: Any) -> str:
         return f"{float(value):.2f}"
     except (TypeError, ValueError):
         return "—"
-
 
 # ---------------------------------------------------------------------------
 # Low-level Telegram client
@@ -106,19 +124,20 @@ class TelegramService:
             response = self._client_or_create().post(url, json=payload)
             if response.status_code >= 400:
                 logger.warning(
-                    "Telegram send failed: %s %s",
+                    "Telegram send failed: status=%s body=%s",
                     response.status_code,
-                    response.text[:200],
+                    _redact(response.text[:200]),
                 )
                 return False
             return True
         except Exception as exc:  # noqa: BLE001
-            logger.warning("Telegram send error: %s", exc)
+            # httpx / httpcore exceptions embed the full request URL — which
+            # contains the bot token. Redact before logging.
+            logger.warning("Telegram send error: %s", _redact(exc))
             return False
 
     async def send_async(self, text: str, *, silent: bool = False) -> bool:
         return await asyncio.to_thread(self.send, text, silent=silent)
-
 
 # ---------------------------------------------------------------------------
 # High-level notifier

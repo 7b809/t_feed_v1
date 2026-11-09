@@ -15,6 +15,7 @@ from app.api.ema import router as ema_router
 from app.api.health import router as health_router
 from app.api.levels import router as levels_router
 from app.api.mega_archive import router as mega_router
+from app.api.sr import router as sr_router
 from app.api.ws_catalog import router as ws_catalog_router
 from app.config import PROJECT_ROOT, settings
 from app.logging_config import configure_logging
@@ -29,6 +30,8 @@ from app.services.levels_state_store import LevelsStateStore
 from app.services.mega_archive_service import MegaArchiveService
 from app.services.mongodb_service import MongoDocumentService
 from app.services.project_info_service import ProjectInfoService
+from app.services.sr_feed_service import SrFeedService
+from app.services.sr_state_store import SrStateStore
 from app.services.telegram_service import ProjectNotifier
 from app.services.upstox_client_service import UpstoxService
 
@@ -40,13 +43,13 @@ logger = logging.getLogger(__name__)
 
 TEMPLATES_DIR = PROJECT_ROOT / "templates"
 
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     mongo = None
     scheduler = None
     ema_service = None
     levels_service = None
+    sr_service = None
     notifier = ProjectNotifier(settings)
     app.state.notifier = notifier
 
@@ -84,10 +87,10 @@ async def lifespan(app: FastAPI):
         app.state.project_info_service = project_info
 
         # ------------------------------------------------------------------
-        # 2. Startup refresh — SEQUENTIAL, must complete before EMA bootstrap.
+        # 2. Startup refresh — SEQUENTIAL, must complete before EMA/SR bootstrap.
         # ------------------------------------------------------------------
         if settings.refresh_on_startup:
-            logger.info("Startup refresh running (blocking) before EMA bootstrap")
+            logger.info("Startup refresh running (blocking) before EMA/SR bootstrap")
             try:
                 await asyncio.to_thread(_startup_refresh, archive_service)
             except Exception as exc:  # noqa: BLE001
@@ -99,7 +102,7 @@ async def lifespan(app: FastAPI):
                 )
 
         # ------------------------------------------------------------------
-        # 3. Shared Upstox client + Job 2 (EMA) + Job 3 (Levels).
+        # 3. Shared Upstox client + Job 2 (EMA) + Job 3 (Levels) + Job 4 (SR).
         # ------------------------------------------------------------------
         instruments = InstrumentStore(settings.instruments_file)
         upstox = UpstoxService(settings)
@@ -129,6 +132,18 @@ async def lifespan(app: FastAPI):
         )
         app.state.levels_service = levels_service
 
+        # -------- Job 4 (SR) --------
+        sr_store = SrStateStore(settings)
+        sr_service = SrFeedService(
+            settings,
+            broadcaster,
+            instruments,
+            upstox,
+            sr_store,
+            notifier=notifier,
+        )
+        app.state.sr_feed_service = sr_service
+
         # ------------------------------------------------------------------
         # 4. EMA bootstrap.
         # ------------------------------------------------------------------
@@ -143,7 +158,20 @@ async def lifespan(app: FastAPI):
             )
 
         # ------------------------------------------------------------------
-        # 5. Levels bootstrap.
+        # 5. SR bootstrap (independent of EMA; shares Upstox + broadcaster).
+        # ------------------------------------------------------------------
+        try:
+            await sr_service.bootstrap()
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("SR bootstrap failed; service will keep running")
+            await asyncio.to_thread(
+                notifier.notify_exception,
+                where="lifespan.sr_bootstrap",
+                exc=exc,
+            )
+
+        # ------------------------------------------------------------------
+        # 6. Levels bootstrap.
         # ------------------------------------------------------------------
         try:
             await levels_service.bootstrap()
@@ -156,7 +184,7 @@ async def lifespan(app: FastAPI):
             )
 
         # ------------------------------------------------------------------
-        # 6. Scheduler last.
+        # 7. Scheduler last.
         # ------------------------------------------------------------------
         scheduler = SchedulerService(
             settings,
@@ -196,6 +224,8 @@ async def lifespan(app: FastAPI):
         except Exception:  # noqa: BLE001
             pass
 
+        if sr_service is not None:
+            await sr_service.shutdown()
         if ema_service is not None:
             await ema_service.shutdown()
         if scheduler is not None:
@@ -204,21 +234,19 @@ async def lifespan(app: FastAPI):
             mongo.close()
         notifier.close()
 
-
 def _startup_refresh(service: MegaArchiveService) -> None:
     try:
         service.refresh("startup")
     except Exception:
         logger.exception("Startup refresh failed")
 
-
-app = FastAPI(title=settings.app_name, version="1.5.0", lifespan=lifespan)
+app = FastAPI(title=settings.app_name, version="1.6.0", lifespan=lifespan)
 app.include_router(health_router)
 app.include_router(mega_router)
 app.include_router(ema_router)
+app.include_router(sr_router)
 app.include_router(levels_router)
 app.include_router(ws_catalog_router)
-
 
 @app.get("/", include_in_schema=False)
 def dashboard():
@@ -238,7 +266,6 @@ def dashboard():
         headers={"Cache-Control": "no-store"},
     )
 
-
 @app.get("/api/v1/info")
 def info():
     return {
@@ -246,20 +273,22 @@ def info():
         "scope": (
             "Job 1: MongoDB -> MEGA ZIP -> safe extraction | "
             "Job 2: EMA crosses live feed | "
-            "Job 3: First-candle pivot levels (Telegram + MongoDB persistence)"
+            "Job 3: First-candle pivot levels | "
+            "Job 4: Live SR levels (per-instrument, per-config)"
         ),
         "docs": "/docs",
         "health": "/health",
         "dashboard": "/",
         "ema_status": "/api/v1/ema/status",
         "ema_channels": "/api/v1/ema/channels",
+        "sr_status": "/api/v1/sr/status",
+        "sr_configs": "/api/v1/sr/configs",
         "ws_catalog": "/api/v1/ws/catalog",
         "ws_catalog_lookup": "/api/v1/ws/catalog/{instrument_key}",
         "levels_all": "/api/v1/levels",
         "levels_db": "/api/v1/levels/db",
         "levels_refresh": "/api/v1/levels/refresh",
     }
-
 
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):

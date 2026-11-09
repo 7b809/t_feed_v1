@@ -4,7 +4,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>EMA Live Dashboard · mega_archive_service</title>
+<title>EMA + SR Live Dashboard · mega_archive_service</title>
 <link
   href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
   rel="stylesheet"
@@ -40,6 +40,7 @@
     --amber: #B45309;
     --blue: #1A73E8;
     --purple: #7C3AED;
+    --indigo: #4F46E5;
     --header-bg: #1A1D20;
   }
 
@@ -129,6 +130,7 @@
   .summary-sub { font-size: 0.7rem; color: var(--muted); margin-top: 5px; }
   .summary-value.text-info    { color: var(--blue) !important; }
   .summary-value.text-success { color: var(--green) !important; }
+  .summary-value.text-indigo  { color: var(--indigo) !important; }
 
   /* ---------------- Section headers ---------------- */
   .section-head {
@@ -177,11 +179,18 @@
     border-color: rgba(124,58,237,0.25);
     color: var(--purple);
   }
-  .section-head h3 .bi-fire { color: var(--amber) !important; }
+  .section-head.sr-head { border-bottom-color: rgba(79,70,229,0.25); }
+  .section-head.sr-head h3 .count {
+    background: rgba(79,70,229,0.08);
+    border-color: rgba(79,70,229,0.25);
+    color: var(--indigo);
+  }
+  .section-head h3 .bi-fire       { color: var(--amber) !important; }
   .section-head h3 .bi-collection { color: var(--blue) !important; }
-  .section-head h3 .bi-rulers { color: var(--purple) !important; }
+  .section-head h3 .bi-rulers     { color: var(--purple) !important; }
+  .section-head h3 .bi-bounding-box { color: var(--indigo) !important; }
 
-  .scroll-controls { display: flex; gap: 6px; }
+  .scroll-controls { display: flex; gap: 6px; align-items: center; }
   .scroll-btn {
     background: #FFFFFF;
     color: var(--text);
@@ -255,6 +264,33 @@
     color: var(--purple);
     border-color: rgba(124,58,237,0.25);
   }
+
+  /* SR cards: wider, indigo accent */
+  .sr-card {
+    flex: 0 0 300px;
+    width: 300px;
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    overflow: hidden;
+    box-shadow: 0 1px 2px rgba(16,24,40,0.04);
+    transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+    display: flex; flex-direction: column;
+  }
+  .sr-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 10px 30px -10px rgba(79,70,229,0.22);
+    border-color: var(--indigo);
+  }
+  .sr-card .card-head {
+    background: linear-gradient(135deg, rgba(79,70,229,0.06), rgba(255,255,255,0));
+  }
+  .sr-card .kind-badge {
+    background: rgba(79,70,229,0.08);
+    color: var(--indigo);
+    border-color: rgba(79,70,229,0.25);
+  }
+
   .levels-table { width: 100%; border-collapse: collapse; }
   .levels-table td {
     padding: 5px 14px;
@@ -497,6 +533,10 @@
     background: transparent;
     border-bottom-color: var(--blue);
   }
+  .nav-tabs .nav-link.sr-tab.active {
+    color: var(--indigo);
+    border-bottom-color: var(--indigo);
+  }
 
   .instrument-chip {
     background: #FFFFFF;
@@ -579,6 +619,7 @@
   @media (max-width: 576px) {
     .instrument-card { flex: 0 0 290px; width: 290px; }
     .levels-card     { flex: 0 0 240px; width: 240px; }
+    .sr-card         { flex: 0 0 260px; width: 260px; }
     .price { font-size: 1.5rem; }
   }
 </style>
@@ -589,7 +630,7 @@
   <div class="container-fluid px-4">
     <span class="navbar-brand">
       <i class="bi bi-graph-up-arrow text-primary me-2"></i>
-      EMA Live Dashboard
+      EMA + SR Live Dashboard
     </span>
     <div class="d-flex align-items-center gap-3">
       <span class="text-muted small"><span class="live-dot"></span>Live</span>
@@ -607,38 +648,52 @@
 <div class="container-fluid px-4 py-4">
   <!-- Summary tiles -->
   <div class="row g-3">
-    <div class="col-6 col-md-3 col-xl-2">
+    <div class="col-6 col-md-3 col-xl-3">
       <div class="summary-card">
-        <div class="summary-label">Instruments</div>
+        <div class="summary-label">EMA Instruments</div>
         <div class="summary-value text-info" id="sum-count">0</div>
       </div>
     </div>
-    <div class="col-6 col-md-3 col-xl-2">
+    <div class="col-6 col-md-3 col-xl-3">
       <div class="summary-card">
         <div class="summary-label">WS Channels</div>
         <div class="summary-value text-success" id="sum-channels">0</div>
       </div>
     </div>
-    <div class="col-6 col-md-3 col-xl-2">
+    <div class="col-6 col-md-3 col-xl-3">
       <div class="summary-card">
         <div class="summary-label">Total Candles</div>
         <div class="summary-value" id="sum-candles">0</div>
       </div>
     </div>
-    <div class="col-6 col-md-3 col-xl-2">
+    <div class="col-6 col-md-3 col-xl-3">
       <div class="summary-card">
         <div class="summary-label">Crosses Today</div>
         <div class="summary-value" style="color: var(--purple);" id="sum-crosses">0</div>
         <div class="summary-sub" id="sum-crosses-total">Total: 0</div>
       </div>
     </div>
-    <div class="col-6 col-md-3 col-xl-2">
+    <div class="col-6 col-md-3 col-xl-3">
+      <div class="summary-card">
+        <div class="summary-label">SR Subs</div>
+        <div class="summary-value text-indigo" id="sum-sr-subs">0</div>
+        <div class="summary-sub" id="sum-sr-subs-hint">per (instrument, config)</div>
+      </div>
+    </div>
+    <div class="col-6 col-md-3 col-xl-3">
+      <div class="summary-card">
+        <div class="summary-label">SR Instruments</div>
+        <div class="summary-value text-indigo" id="sum-sr-instr">0</div>
+        <div class="summary-sub" id="sum-sr-instr-hint">with live levels</div>
+      </div>
+    </div>
+    <div class="col-6 col-md-3 col-xl-3">
       <div class="summary-card">
         <div class="summary-label">Last Cycle</div>
         <div class="summary-value" id="sum-cycle">0</div>
       </div>
     </div>
-    <div class="col-6 col-md-3 col-xl-2">
+    <div class="col-6 col-md-3 col-xl-3">
       <div class="summary-card">
         <div class="summary-label">Cycle Time (IST)</div>
         <div class="summary-value" style="font-size: 1rem; color: var(--amber);" id="sum-cycle-time">—</div>
@@ -665,6 +720,40 @@
     </div>
   </div>
   <div id="levels-panel" class="instrument-row">
+    <div class="text-muted small">Loading…</div>
+  </div>
+
+  <!-- ============================================================= -->
+  <!-- SR Levels (Job 4)                                             -->
+  <!-- ============================================================= -->
+  <div class="section-head sr-head">
+    <h3>
+      <i class="bi bi-bounding-box"></i>
+      SR Levels
+      <span class="tag-sub">live · fractal pivots</span>
+      <span class="count" id="sr-count">0</span>
+    </h3>
+    <div class="scroll-controls">
+      <select class="form-select form-select-sm" id="sr-config-select"
+              style="width:auto;min-width:140px;" title="Filter by config (left_bars / right_bars)">
+        <option value="all">All configs</option>
+        <option value="15/3">15/3 · reactive</option>
+        <option value="15/15">15/15 · balanced</option>
+        <option value="15/30">15/30 · strong</option>
+      </select>
+      <button class="scroll-btn" data-target="sr-panel" data-dir="left" title="Scroll left">
+        <i class="bi bi-chevron-left"></i>
+      </button>
+      <button class="scroll-btn" data-target="sr-panel" data-dir="right" title="Scroll right">
+        <i class="bi bi-chevron-right"></i>
+      </button>
+      <button class="btn btn-sm btn-outline-primary" id="sr-refresh-btn"
+              title="Refresh SR data now">
+        <i class="bi bi-arrow-clockwise"></i>
+      </button>
+    </div>
+  </div>
+  <div id="sr-panel" class="instrument-row">
     <div class="text-muted small">Loading…</div>
   </div>
 
@@ -711,13 +800,19 @@
               <i class="bi bi-keyboard me-1"></i>Raw Key
             </button>
           </li>
+          <li class="nav-item" role="presentation">
+            <button class="nav-link sr-tab" id="tab-sr-btn" data-bs-toggle="tab"
+                    data-bs-target="#tab-sr" type="button" role="tab">
+              <i class="bi bi-bounding-box me-1"></i>SR Live
+            </button>
+          </li>
         </ul>
 
         <div class="tab-content pt-3">
           <!-- ---------- Index tab ---------- -->
           <div class="tab-pane fade show active" id="tab-index" role="tabpanel">
             <p class="text-muted small mb-3">
-              Indexes currently in <code>all_instruments.json</code> and not yet subscribed.
+              Indexes currently in <code>all_instruments.json</code> and not yet subscribed (EMA).
               Click one to subscribe immediately.
             </p>
             <div id="index-list" class="d-flex flex-wrap gap-2">
@@ -765,7 +860,7 @@
           <!-- ---------- Raw key tab ---------- -->
           <div class="tab-pane fade" id="tab-raw" role="tabpanel">
             <p class="text-muted small mb-3">
-              Paste an exact <code>instrument_key</code> from the archive. The instrument must
+              Paste an exact <code>instrument_key</code> from the archive (EMA). The instrument must
               exist in <code>all_instruments.json</code>.
             </p>
             <label class="form-label small mb-1">Instrument Key</label>
@@ -779,6 +874,53 @@
             <div class="form-text mt-2">
               URL-encoding is handled automatically. Use this when you already know
               the key and don't want to browse the catalog.
+            </div>
+          </div>
+
+          <!-- ---------- SR Live tab ---------- -->
+          <div class="tab-pane fade" id="tab-sr" role="tabpanel">
+            <p class="text-muted small mb-3">
+              Subscribe live support/resistance levels for an instrument and config.
+              <br />
+              <span class="text-muted">
+                Config format: <code>&lt;left_bars&gt;/&lt;right_bars&gt;</code> —
+                <code>left_bars</code> = bars to the LEFT of the pivot,
+                <code>right_bars</code> = bars to the RIGHT to confirm it
+                (<code>3</code> = reactive, <code>15</code> = balanced, <code>30</code> = strong).
+              </span>
+            </p>
+            <div class="row g-2 align-items-end">
+              <div class="col-12 col-md-6">
+                <label class="form-label small mb-1">Instrument key or index alias</label>
+                <input type="text" class="form-control form-control-sm" id="sr-instrument-input"
+                       placeholder="e.g. nifty, NSE_INDEX|Nifty 50, NSE_FO|51330" />
+                <div class="form-text small">
+                  Index aliases: <code>nifty</code>, <code>banknifty</code>,
+                  <code>midcpnifty</code>, <code>sensex</code>.
+                </div>
+              </div>
+              <div class="col-12 col-md-3">
+                <label class="form-label small mb-1">Config (left / right bars)</label>
+                <select class="form-select form-select-sm" id="sr-config-input">
+                  <option value="15/3">15/3 · reactive</option>
+                  <option value="15/15">15/15 · balanced</option>
+                  <option value="15/30">15/30 · strong</option>
+                  <option value="all">All three</option>
+                </select>
+              </div>
+              <div class="col-12 col-md-3">
+                <button class="btn btn-primary w-100" id="sr-subscribe-btn">
+                  <i class="bi bi-plus-lg me-1"></i>Subscribe SR
+                </button>
+              </div>
+            </div>
+            <div id="sr-subscribe-status" class="small text-muted mt-3">—</div>
+
+            <hr class="my-4" />
+
+            <div class="text-muted small mb-2">Currently subscribed SR pairs:</div>
+            <div id="sr-subscribed-list" class="d-flex flex-wrap gap-2">
+              <div class="text-muted small">Loading…</div>
             </div>
           </div>
         </div>
@@ -796,6 +938,7 @@
 
   const REFRESH_MS = 5000;
   const LEVELS_REFRESH_MS = 60000;
+  const SR_REFRESH_MS = 60000;
   const OPTIONS_PAGE_SIZE = 50;
 
   const sectionsEl        = document.getElementById('sections');
@@ -806,6 +949,8 @@
   const sumCandlesEl      = document.getElementById('sum-candles');
   const sumCrossesEl      = document.getElementById('sum-crosses');
   const sumCrossesTotalEl = document.getElementById('sum-crosses-total');
+  const sumSrSubsEl       = document.getElementById('sum-sr-subs');
+  const sumSrInstrEl      = document.getElementById('sum-sr-instr');
   const sumCycleEl        = document.getElementById('sum-cycle');
   const sumCycleTimeEl    = document.getElementById('sum-cycle-time');
   const refreshBtn        = document.getElementById('refresh-btn');
@@ -815,6 +960,12 @@
   const levelsPanelEl     = document.getElementById('levels-panel');
   const levelsRefreshBtn  = document.getElementById('levels-refresh-btn');
   const levelsCountEl     = document.getElementById('levels-count');
+
+  const srPanelEl         = document.getElementById('sr-panel');
+  const srCountEl         = document.getElementById('sr-count');
+  const srConfigSelect    = document.getElementById('sr-config-select');
+  const srRefreshBtn      = document.getElementById('sr-refresh-btn');
+  const srSubscribedListEl = document.getElementById('sr-subscribed-list');
 
   // ===============================================================
   // Formatters
@@ -953,7 +1104,6 @@
     const A = classify(a.payload);
     const B = classify(b.payload);
     if (isIndexGroup) {
-      // Prefer priority (from INDEX_METADATA) → canonical → underlying.
       const pa = Number((a.payload.meta || {}).priority || 999);
       const pb = Number((b.payload.meta || {}).priority || 999);
       if (pa !== pb) return pa - pb;
@@ -967,7 +1117,7 @@
   }
 
   // ===============================================================
-  // Card helpers
+  // Card helpers (EMA)
   // ===============================================================
   function badgeText(meta) {
     const st = (meta.strike_type || '').toUpperCase();
@@ -1202,6 +1352,9 @@
       .join('');
 
     document.querySelectorAll('.scroll-btn').forEach(function (btn) {
+      // Skip if already wired (SR buttons get wired separately below).
+      if (btn.dataset.wired === '1') return;
+      btn.dataset.wired = '1';
       btn.addEventListener('click', function () {
         const row = document.getElementById(btn.dataset.target);
         if (!row) return;
@@ -1328,7 +1481,6 @@
       const v = e[1];
       return v && v.status === 'ok';
     });
-    // Sort by priority (server-provided), then canonical, then key.
     entries.sort(function (a, b) {
       const pa = Number((a[1].priority) || 999);
       const pb = Number((b[1].priority) || 999);
@@ -1414,6 +1566,286 @@
   levelsRefreshBtn.addEventListener('click', refreshLevels);
 
   // ===============================================================
+  // SR Levels (Job 4)
+  // ===============================================================
+
+  // Common config list; server is authoritative but we render a picker.
+  // Format: "<left_bars>/<right_bars>".
+  const SR_CONFIGS = ['15/3', '15/15', '15/30'];
+
+  // Track which (key, config) pairs are on the dashboard so we can render
+  // a lightweight "currently subscribed" list in the modal tab.
+  let lastSrStatus = { subscriptions: {}, instrument_count: 0, subscription_count: 0 };
+
+  function srConfigLabel(cfg) {
+    return String(cfg).replace('/', ' / ');
+  }
+
+  // Build the rich hover text for one SR level using the new schema:
+  //   level, price, pivot_bar_index, pivot_time,
+  //   confirmed_bar_index, confirmed_time, confirmed_time_price,
+  //   left_bars, right_bars
+  function srLevelTooltip(level) {
+    const lvl   = level.level || level.type || '?';
+    const pivT  = level.pivot_time ? fmtCandleTime(level.pivot_time) : '—';
+    const confT = level.confirmed_time ? fmtCandleTime(level.confirmed_time) : '—';
+    const lb    = level.left_bars != null ? level.left_bars : '?';
+    const rb    = level.right_bars != null ? level.right_bars : '?';
+    const pbi   = level.pivot_bar_index != null ? level.pivot_bar_index : '?';
+    const cbi   = level.confirmed_bar_index != null ? level.confirmed_bar_index : '?';
+    const ctp   = level.confirmed_time_price;
+    const ctpStr = ctp == null ? '' : ' · close@confirm ' + fmtNum(ctp, 2);
+    return (
+      lvl +
+      ' · pivot #' + pbi + ' ' + pivT +
+      ' → confirmed #' + cbi + ' ' + confT +
+      ' · bars ' + lb + '/' + rb +
+      ctpStr
+    );
+  }
+
+  // One ladder row. Distance is computed client-side from current_price
+  // because the new wire format intentionally omits it (the field can be
+  // derived and stays in sync if we compute it here).
+  function srLevelRow(level, currentPrice, cls) {
+    const priceNum  = Number(level.price);
+    const currentNum = Number(currentPrice);
+    const distance =
+      (isNaN(priceNum) || isNaN(currentNum))
+        ? null
+        : Math.abs(priceNum - currentNum);
+    return `
+      <tr class="${cls}" title="${esc(srLevelTooltip(level))}">
+        <td>${fmtNum(level.price, 2)}</td>
+        <td class="text-end">${distance == null ? '—' : fmtNum(distance, 2)}</td>
+      </tr>
+    `;
+  }
+
+  function buildSrCard(key, snap) {
+    const meta = snap.meta || {};
+    const cfg = snap.config || '';
+    const symbol = meta.trading_symbol || meta.canonical || key;
+
+    // Resistances: backend returns ascending (nearest first). Reverse so
+    // the highest level sits at the top of the ladder.
+    const res = (snap.resistances || []).slice().reverse();
+    // Supports: backend returns descending (nearest first). Keep as-is so
+    // the nearest support sits just below the spot row.
+    const sup = snap.supports || [];
+    const px = snap.current_price;
+
+    const resRows = res.length
+      ? res.map(function (lvl) { return srLevelRow(lvl, px, 'lvl-R'); }).join('')
+      : '<tr class="lvl-R"><td colspan="2" class="text-muted small">no resistance</td></tr>';
+    const supRows = sup.length
+      ? sup.map(function (lvl) { return srLevelRow(lvl, px, 'lvl-S'); }).join('')
+      : '<tr class="lvl-S"><td colspan="2" class="text-muted small">no support</td></tr>';
+
+    return `
+      <div class="sr-card">
+        <div class="card-head">
+          <div style="min-width:0;">
+            <div class="symbol" title="${esc(symbol)}">${esc(symbol)}</div>
+            <div class="symbol-key" title="${esc(key)}">${esc(key)}</div>
+          </div>
+          <span class="kind-badge" title="left_bars / right_bars">${esc(srConfigLabel(cfg))}</span>
+        </div>
+
+        <div class="price-block" style="padding-bottom: 6px;">
+          <div class="price-main">
+            <div class="price">${fmtNum(px, 2)}</div>
+          </div>
+          <div class="price-sub">Updated ${esc(fmtCandleTime(snap.last_ts))}</div>
+        </div>
+
+        <table class="levels-table">
+          <thead>
+            <tr>
+              <th style="color:var(--muted);font-weight:700;">Level</th>
+              <th class="text-end" style="color:var(--muted);font-weight:700;">Dist</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${resRows}
+            <tr class="lvl-A"><td>spot</td><td class="text-end">${fmtNum(px, 2)}</td></tr>
+            ${supRows}
+          </tbody>
+        </table>
+
+        <div class="levels-foot">
+          <span><i class="bi bi-arrow-up-circle me-1"></i>${res.length} R</span>
+          <span><i class="bi bi-arrow-down-circle me-1"></i>${sup.length} S</span>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderSrList(items) {
+    if (!items.length) {
+      srPanelEl.innerHTML =
+        '<div class="text-muted small">' +
+        'No SR subscriptions yet — open the <strong>SR Live</strong> tab in ' +
+        '<strong>Add</strong> or POST ' +
+        '<code>/api/v1/sr/subscribe/{instrument}?config=15/3</code>.' +
+        '</div>';
+      srCountEl.textContent = '0';
+      return;
+    }
+    srCountEl.textContent = String(items.length);
+
+    // Sort: priority (meta) → key → numeric left_bars → numeric right_bars.
+    items.sort(function (a, b) {
+      const pa = Number((a.payload.meta || {}).priority || 999);
+      const pb = Number((b.payload.meta || {}).priority || 999);
+      if (pa !== pb) return pa - pb;
+
+      const ka = String(a.key).toLowerCase();
+      const kb = String(b.key).toLowerCase();
+      if (ka !== kb) return ka.localeCompare(kb);
+
+      const [la, ra] = String(a.config).split('/').map(Number);
+      const [lb, rb] = String(b.config).split('/').map(Number);
+      if (la !== lb) return (la || 0) - (lb || 0);
+      return (ra || 0) - (rb || 0);
+    });
+
+    srPanelEl.innerHTML = items
+      .map(function (it) { return buildSrCard(it.key, it.payload); })
+      .join('');
+  }
+
+  function updateSrSummary(status) {
+    if (!status) status = { subscription_count: 0, instrument_count: 0 };
+    sumSrSubsEl.textContent  = fmtNum(status.subscription_count || 0, 0);
+    sumSrInstrEl.textContent = fmtNum(status.instrument_count || 0, 0);
+  }
+
+  function renderSrSubscribedList(status) {
+    if (!srSubscribedListEl) return;
+    const subs = (status && status.subscriptions) || {};
+    const entries = Object.entries(subs);
+    if (!entries.length) {
+      srSubscribedListEl.innerHTML = '<div class="text-muted small">None yet.</div>';
+      return;
+    }
+    let html = '';
+    entries.forEach(function (kv) {
+      const key = kv[0];
+      const cfgs = kv[1] || [];
+      cfgs.forEach(function (cfg) {
+        html += `
+          <span class="badge rounded-pill text-bg-light border"
+                style="font-weight:600;color:var(--indigo);">
+            <i class="bi bi-bounding-box me-1"></i>
+            <span title="${esc(key)}">${esc(key)}</span>
+            <span class="text-muted ms-1">${esc(cfg)}</span>
+          </span>
+        `;
+      });
+    });
+    srSubscribedListEl.innerHTML = html;
+  }
+
+  async function loadSr() {
+    try {
+      // 1) Ask the server what's currently subscribed.
+      const statusRes = await fetch('/api/v1/sr/status', { cache: 'no-store' });
+      if (!statusRes.ok) {
+        throw new Error('status HTTP ' + statusRes.status);
+      }
+      const status = await statusRes.json();
+      lastSrStatus = status;
+      updateSrSummary(status);
+      renderSrSubscribedList(status);
+
+      const subs = status.subscriptions || {};
+      const configFilter = (srConfigSelect.value || 'all').trim();
+
+      // 2) Per instrument, fetch all its config snapshots in one call.
+      const instrumentKeys = Object.keys(subs);
+      if (!instrumentKeys.length) {
+        renderSrList([]);
+        return;
+      }
+
+      const fetches = instrumentKeys.map(function (key) {
+        const url = '/api/v1/sr/' + encodeURIComponent(key) + '/latest?config=all';
+        return fetch(url, { cache: 'no-store' })
+          .then(function (r) { return r.ok ? r.json() : null; })
+          .catch(function () { return null; });
+      });
+
+      const results = await Promise.all(fetches);
+      const items = [];
+      results.forEach(function (data, i) {
+        if (!data) return;
+        const key = data.instrument_key || instrumentKeys[i];
+        const cfgs = data.configs || {};
+        Object.keys(cfgs).forEach(function (cfg) {
+          if (configFilter !== 'all' && cfg !== configFilter) return;
+          items.push({ key: key, config: cfg, payload: cfgs[cfg] });
+        });
+      });
+
+      renderSrList(items);
+    } catch (err) {
+      srPanelEl.innerHTML =
+        '<div class="text-danger small">Failed to load SR: ' + esc(err.message) + '</div>';
+    }
+  }
+
+  async function subscribeSr(instrumentInput, configValue) {
+    const key = (instrumentInput || '').trim();
+    if (!key) {
+      toast('<i class="bi bi-exclamation-circle text-warning me-1"></i> Enter an instrument key first', 'error');
+      return false;
+    }
+    const cfg = (configValue || '').trim();
+    if (!cfg) {
+      toast('<i class="bi bi-exclamation-circle text-warning me-1"></i> Pick a config first', 'error');
+      return false;
+    }
+    try {
+      const encodedKey = encodeURIComponent(key);
+      const url = '/api/v1/sr/subscribe/' + encodedKey +
+                  '?config=' + encodeURIComponent(cfg);
+      const res = await fetch(url, { method: 'POST' });
+      if (!res.ok) {
+        let detail = 'HTTP ' + res.status;
+        try {
+          const err = await res.json();
+          if (err && err.detail) {
+            detail = typeof err.detail === 'string'
+              ? err.detail
+              : JSON.stringify(err.detail);
+          }
+        } catch (_e) { /* ignore */ }
+        throw new Error(detail);
+      }
+      const data = await res.json();
+      toast(
+        '<i class="bi bi-check2-circle text-success me-1"></i> ' +
+        'SR subscribed <code>' + esc(key) + '</code> · ' + esc(cfg),
+        'success'
+      );
+      // Refresh both panel and modal list.
+      await loadSr();
+      return { ok: true, data: data };
+    } catch (e) {
+      toast(
+        '<i class="bi bi-x-circle text-danger me-1"></i> SR subscribe failed: ' +
+        esc(e.message || 'unknown error'),
+        'error'
+      );
+      return { ok: false, error: String(e.message || e) };
+    }
+  }
+
+  srConfigSelect.addEventListener('change', loadSr);
+  srRefreshBtn.addEventListener('click', loadSr);
+
+  // ===============================================================
   // Add-Instrument modal state & logic
   // ===============================================================
   const addModalEl = document.getElementById('addModal');
@@ -1435,6 +1867,12 @@
   const rawKeyInput       = document.getElementById('raw-key');
   const rawSubscribeBtn   = document.getElementById('raw-subscribe-btn');
 
+  // SR modal tab elements
+  const srInstrumentInput = document.getElementById('sr-instrument-input');
+  const srConfigInput     = document.getElementById('sr-config-input');
+  const srSubscribeBtn    = document.getElementById('sr-subscribe-btn');
+  const srSubscribeStatus = document.getElementById('sr-subscribe-status');
+
   async function refreshSubscribedCache() {
     try {
       const res  = await fetch('/api/v1/ema/status', { cache: 'no-store' });
@@ -1445,7 +1883,7 @@
     }
   }
 
-  // ---------- Index tab ----------
+  // ---------- Index tab (EMA) ----------
   async function loadIndexTab() {
     indexListEl.innerHTML = '<div class="text-muted small">Loading…</div>';
     try {
@@ -1468,7 +1906,6 @@
 
       let html = '';
 
-      // Already subscribed — show as disabled chips
       for (const s of subscribed) {
         html += `
           <button class="instrument-chip chip-disabled" type="button" disabled
@@ -1482,7 +1919,6 @@
         `;
       }
 
-      // Available — clickable
       for (const it of available) {
         html += `
           <button class="instrument-chip add-instrument-btn" type="button"
@@ -1504,7 +1940,7 @@
     }
   }
 
-  // ---------- Options tab ----------
+  // ---------- Options tab (EMA) ----------
   async function loadOptionsPage(reset) {
     if (optionsLoading) return;
     optionsLoading = true;
@@ -1622,7 +2058,7 @@
     optionsListEl.innerHTML = html;
   }
 
-  // ---------- Subscribe ----------
+  // ---------- Subscribe (EMA) ----------
   async function subscribeInstrument(key) {
     if (!key) return false;
     try {
@@ -1654,7 +2090,7 @@
     }
   }
 
-  // Event delegation — Add buttons in Index tab and Options table
+  // Event delegation — Add buttons in Index tab and Options table (EMA)
   document.addEventListener('click', async function (e) {
     const btn = e.target.closest('.add-instrument-btn');
     if (!btn) return;
@@ -1700,14 +2136,49 @@
     if (e.key === 'Enter') rawSubscribeBtn.click();
   });
 
+  // ---------- SR Live tab ----------
+  srSubscribeBtn.addEventListener('click', async function () {
+    const key = srInstrumentInput.value.trim();
+    const cfg = srConfigInput.value;
+    if (!key) {
+      toast('<i class="bi bi-exclamation-circle text-warning me-1"></i> Enter an instrument key or index alias', 'error');
+      return;
+    }
+    srSubscribeBtn.disabled = true;
+    const originalHtml = srSubscribeBtn.innerHTML;
+    srSubscribeBtn.innerHTML = '<i class="bi bi-hourglass-split"></i> …';
+    srSubscribeStatus.textContent = 'Subscribing…';
+
+    const res = await subscribeSr(key, cfg);
+
+    srSubscribeBtn.disabled = false;
+    srSubscribeBtn.innerHTML = originalHtml;
+
+    if (res && res.ok) {
+      srSubscribeStatus.innerHTML =
+        '<span class="text-success"><i class="bi bi-check2-circle me-1"></i>' +
+        'Subscribed <code>' + esc(key) + '</code> · ' + esc(cfg) + '</span>';
+      srInstrumentInput.value = '';
+    } else {
+      srSubscribeStatus.innerHTML =
+        '<span class="text-danger"><i class="bi bi-x-circle me-1"></i>' +
+        esc((res && res.error) || 'Subscribe failed') + '</span>';
+    }
+  });
+
+  srInstrumentInput.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') srSubscribeBtn.click();
+  });
+
   // ---------- Modal lifecycle ----------
   addBtn.addEventListener('click', function () { addModal.show(); });
 
   addModalEl.addEventListener('shown.bs.modal', async function () {
     await refreshSubscribedCache();
     loadIndexTab();
-    // Auto-load first options page for the prefilled underlying
     loadOptionsPage(true);
+    // Refresh SR tab content (subscribed list + summary)
+    loadSr();
   });
 
   // ===============================================================
@@ -1716,12 +2187,15 @@
   refreshBtn.addEventListener('click', function () {
     load();
     loadLevels();
+    loadSr();
   });
 
   load();
   loadLevels();
+  loadSr();
   setInterval(load, REFRESH_MS);
   setInterval(loadLevels, LEVELS_REFRESH_MS);
+  setInterval(loadSr, SR_REFRESH_MS);
 })();
 </script>
 </body>

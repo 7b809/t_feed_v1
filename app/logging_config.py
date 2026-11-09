@@ -22,6 +22,36 @@
 #   Cycle-complete records are identified by ``extra={"cycle_complete": True,
 #   "cycle_number": N}`` on the log call site (see ema_feed_service.py).
 #   All other records pass through unchanged.
+#
+# Sensitive data redaction:
+#   Telegram bot tokens (and any other bearer-token-shaped secret) must
+#   never reach the log files. ``httpx`` logs every request URL at INFO
+#   level, and the Telegram Bot API embeds the token in the URL path — so
+#   without intervention, every Telegram send leaks the token.
+#
+#   Three independent layers prevent this:
+#
+#     * ``httpx`` / ``httpcore`` / ``h11`` loggers are pinned to WARNING,
+#       so the primary "HTTP Request: POST ..." INFO line is never
+#       emitted at all. This is the most direct fix.
+#
+#     * ``SensitiveDataRedactionFilter`` rewrites ``record.msg`` in place
+#       before every handler formats it. This catches any string that
+#       still happens to reach a handler (e.g. an explicit
+#       ``logger.warning("... %s", exc)`` whose exception message embeds
+#       the URL).
+#
+#     * ``RedactingFormatter`` runs the same regex over the FULL rendered
+#       output (message + traceback). This covers ``logger.exception()``
+#       and any formatting the previous layer might have missed.
+#
+#   Together, layers 2 and 3 guarantee the token never appears even when
+#   ``LOG_LEVEL=DEBUG`` is set by a future deployer.
+#
+# The redaction pattern ``\d{6,12}:[A-Za-z0-9_-]{25,}`` matches the
+# Telegram bot token shape (e.g. ``123456789:ABC-DEF...``). It is
+# intentionally narrow so it will not false-positive on ordinary log
+# content such as timestamps or ISO offsets.
 
 from __future__ import annotations
 
@@ -31,6 +61,14 @@ import re
 import threading
 from pathlib import Path
 
+# ---------------------------------------------------------------------------
+# Sensitive-data pattern
+# ---------------------------------------------------------------------------
+# Telegram bot tokens are ``<bot_id>:<base64ish>``, e.g.
+#   123456789:ABC-DEF1234ghIkl-zyx57W2v1u123ew11
+# The bot_id is 6–12 digits; the secret half is 25+ chars of [A-Za-z0-9_-].
+_BOT_TOKEN_RE = re.compile(r"\d{6,12}:[A-Za-z0-9_-]{25,}")
+_REDACTED = "<REDACTED>"
 
 # ---------------------------------------------------------------------------
 # Filter: MEGA SDK byte-progress → percentage
@@ -61,7 +99,6 @@ class MegaDownloadPercentFilter(logging.Filter):
         record.args = ()
         return True
 
-
 # ---------------------------------------------------------------------------
 # Filter: throttle "Cycle N complete" on the combined file only
 # ---------------------------------------------------------------------------
@@ -85,6 +122,49 @@ class CycleCompleteThrottleFilter(logging.Filter):
             return True
         return int(cycle) % self.every == 0
 
+# ---------------------------------------------------------------------------
+# Filter: redact Telegram bot tokens from record.msg
+# ---------------------------------------------------------------------------
+class SensitiveDataRedactionFilter(logging.Filter):
+    """
+    Redact bearer-token-shaped secrets (Telegram bot token) from the
+    record message before any handler renders it.
+
+    Mutates ``record.msg`` in place and clears ``record.args`` so every
+    downstream handler (console, combined file, per-module file) sees the
+    already-redacted message.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            message = record.getMessage()
+        except Exception:  # noqa: BLE001
+            return True
+        redacted = _BOT_TOKEN_RE.sub(_REDACTED, message)
+        if redacted != message:
+            record.msg = redacted
+            record.args = ()
+        return True
+
+# ---------------------------------------------------------------------------
+# Formatter: redact the FULL rendered output (message + traceback)
+# ---------------------------------------------------------------------------
+class RedactingFormatter(logging.Formatter):
+    """
+    A ``logging.Formatter`` that redacts secrets after formatting.
+
+    This is the last line of defence: even a traceback that embeds the
+    full Telegram URL (from an ``httpx`` request exception propagated
+    through ``logger.exception``) is sanitised before being written.
+    """
+
+    def format(self, record: logging.LogRecord) -> str:
+        try:
+            rendered = super().format(record)
+        except Exception:  # noqa: BLE001
+            # Never crash logging; fall back to a minimal line.
+            rendered = f"{record.levelname} {record.name} {record.msg}"
+        return _BOT_TOKEN_RE.sub(_REDACTED, rendered)
 
 # ---------------------------------------------------------------------------
 # Handler: one file per logger name
@@ -118,7 +198,6 @@ class PerLoggerFileHandler(logging.Handler):
         except Exception:  # noqa: BLE001
             self.handleError(record)
 
-
 # ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
@@ -132,6 +211,9 @@ def configure_logging(
     ``cycle_log_every`` controls how often the ``Cycle N complete`` line is
     written to the COMBINED file. Per-module files and the console always
     see every cycle. See module docstring for details.
+
+    Every handler has both ``SensitiveDataRedactionFilter`` and
+    ``RedactingFormatter`` applied, so a secret can never reach any sink.
     """
     level_name = os.getenv("LOG_LEVEL", "INFO").upper()
     level = getattr(logging, level_name, logging.INFO)
@@ -141,17 +223,19 @@ def configure_logging(
         logs_dir = project_root / os.getenv("LOGS_DIR", "logs")
     logs_dir.mkdir(parents=True, exist_ok=True)
 
-    formatter = logging.Formatter(
+    formatter = RedactingFormatter(
         fmt="%(asctime)s %(levelname)s %(name)s %(message)s"
     )
 
     percent_filter = MegaDownloadPercentFilter()
     cycle_throttle = CycleCompleteThrottleFilter(every=cycle_log_every)
+    redaction_filter = SensitiveDataRedactionFilter()
 
     # Console — every record.
     stream_handler = logging.StreamHandler()
     stream_handler.setFormatter(formatter)
     stream_handler.addFilter(percent_filter)
+    stream_handler.addFilter(redaction_filter)
 
     # Combined project log — cycle-complete throttled to every Nth cycle.
     combined_handler = logging.FileHandler(
@@ -160,11 +244,13 @@ def configure_logging(
     combined_handler.setFormatter(formatter)
     combined_handler.addFilter(percent_filter)
     combined_handler.addFilter(cycle_throttle)
+    combined_handler.addFilter(redaction_filter)
 
     # Per-module log files — every record, unthrottled.
     per_logger_handler = PerLoggerFileHandler(logs_dir)
     per_logger_handler.setFormatter(formatter)
     per_logger_handler.addFilter(percent_filter)
+    per_logger_handler.addFilter(redaction_filter)
 
     root = logging.getLogger()
     for handler in list(root.handlers):
@@ -176,3 +262,13 @@ def configure_logging(
 
     logging.getLogger("apscheduler").setLevel(max(level, logging.INFO))
     logging.getLogger("uvicorn.access").setLevel(max(level, logging.INFO))
+
+    # Silence HTTP client libraries at their default level. httpx logs
+    # every request URL at INFO — this is the primary path by which the
+    # Telegram bot token used to leak into the log files. WARNING keeps
+    # httpx / httpcore / h11 out of the log while still surfacing real
+    # transport errors. Layers 2 and 3 above ensure the token remains
+    # redacted even if some future deployer raises these loggers back
+    # to INFO/DEBUG.
+    for noisy in ("httpx", "httpcore", "h11"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
