@@ -1,4 +1,3 @@
-{# templates/chart.html — single-instrument candle chart with timeframe selector, CE↔PE swap FAB, pivot SR levels, PREV-DAY-AVG indicator, date filters, and EMA crosses #}
 {% extends "base.html" %}
 {% block title %}{{ instrument_name or instrument_key }} - Trading Dashboard{% endblock %}
 {% block head %}
@@ -2423,14 +2422,28 @@ function removeDayAvgLines() {
  * Only ONE line is drawn — for the latest date inside the filter,
  * using the PREVIOUS trading date's (high+low)/2.
  */
+/**
+ * Rebuild the Prev-Day-AVG lines — ONE line per day on the chart.
+ *
+ * For each day D (starting from the second day of candle data):
+ *   - find the most recent PRIOR trading date (D-1) that has candles
+ *   - prevHigh = max(high) of D-1, prevLow = min(low) of D-1
+ *   - prevAvg  = (prevHigh + prevLow) / 2
+ *   - draw ONE dashed pink line at prevAvg spanning day D's session
+ *     (from D's first candle to D's last candle)
+ *   - attach a pink→violet gradient label:
+ *       "PREV DAY AVG · <prevDate> · ₹<avg>"
+ *
+ * The data map is keyed by the *today* date (the day the line spans).
+ * Every day on the chart (that has a previous day) gets its own line.
+ */
 function refreshDayAvgLines(candles) {
   removeDayAvgLines();
   if (!indicatorState.dayAvg.enabled) return;
   if (!chart || !candleSeries) return;
   if (!Array.isArray(candles) || candles.length === 0) return;
 
-  // Bucket ALL candles by IST date (unfiltered — we need the previous day
-  // even if it falls slightly outside the filter).
+  // Bucket ALL candles by IST date.
   const byDate = {};
   for (const c of candles) {
     const key = getDateKeyIST(c.time);
@@ -2439,30 +2452,23 @@ function refreshDayAvgLines(candles) {
     byDate[key].push(c);
   }
   const sortedDates = Object.keys(byDate).sort();
-  if (sortedDates.length < 1) return;
+  if (sortedDates.length < 2) return; // need at least one (prev, today) pair
 
-  // "Today" = latest date inside the SR filter that has candles.
-  const inFilterDates = sortedDates.filter(d => {
-    if (plotDateFilter.startDate && d < plotDateFilter.startDate) return false;
-    if (plotDateFilter.endDate   && d > plotDateFilter.endDate)   return false;
-    return true;
-  });
-  if (inFilterDates.length === 0) return;
-  const todayKey = inFilterDates[inFilterDates.length - 1];
+  // For every day D that has a prior day D-1, draw one line spanning D.
+  for (let i = 1; i < sortedDates.length; i++) {
+    const todayKey = sortedDates[i];
+    const prevKey  = sortedDates[i - 1];
 
-  // "Prev day" = most recent date STRICTLY BEFORE today that has candles.
-  const prevDates = sortedDates.filter(d => d < todayKey);
-  if (prevDates.length === 0) return; // no previous day available
-  const prevKey = prevDates[prevDates.length - 1];
+    const prevCandles  = byDate[prevKey].slice().sort((a, b) => a.time - b.time);
+    const todayCandles = byDate[todayKey].slice().sort((a, b) => a.time - b.time);
+    if (todayCandles.length === 0) continue;
 
-  const prevCandles  = byDate[prevKey].slice().sort((a, b) => a.time - b.time);
-  const todayCandles = byDate[todayKey].slice().sort((a, b) => a.time - b.time);
+    const info = computePrevDayAvgInfo(prevKey, prevCandles, todayCandles);
+    if (!info) continue;
 
-  const info = computePrevDayAvgInfo(prevKey, prevCandles, todayCandles);
-  if (!info) return;
-
-  indicatorState.dayAvg.data[prevKey] = info;
-  drawDayAvgLine(info);
+    indicatorState.dayAvg.data[todayKey] = info;
+    drawDayAvgLine(info);
+  }
 
   try { updateDayAvgLabelPositions(); } catch (e) {}
 }
@@ -2472,13 +2478,20 @@ function refreshDayAvgLines(candles) {
  * but today's session end-point does. Also handles a day rollover
  * (a brand-new date → today's prev-day should now become the OLD today).
  */
+/**
+ * Incremental update — the prev-day AVG value for a given (prev, today) pair
+ * never changes intraday, but today's session end-point does. Handles:
+ *   - day rollover: a brand-new date appears → rebuild all (a new line needs
+ *     to be added for the new day, using the OLD today as its prev-day)
+ *   - filter/param change: stale keys present → rebuild all
+ *   - normal tick: only the LAST day's line span is redrawn (cheap)
+ */
 function updateLastDayAvgLine(candles) {
   if (!indicatorState.dayAvg.enabled) return;
   if (!chart || !candleSeries) return;
   if (!Array.isArray(candles) || candles.length === 0) return;
 
-  // Cheap check: any existing entry whose `prevDate` is no longer the
-  // most recent prior date of the latest in-filter date → full rebuild.
+  // Bucket candles by date.
   const byDate = {};
   for (const c of candles) {
     const key = getDateKeyIST(c.time);
@@ -2487,48 +2500,45 @@ function updateLastDayAvgLine(candles) {
     byDate[key].push(c);
   }
   const sortedDates = Object.keys(byDate).sort();
-  if (sortedDates.length < 1) return;
 
-  const inFilterDates = sortedDates.filter(d => {
-    if (plotDateFilter.startDate && d < plotDateFilter.startDate) return false;
-    if (plotDateFilter.endDate   && d > plotDateFilter.endDate)   return false;
-    return true;
-  });
-  if (inFilterDates.length === 0) {
+  if (sortedDates.length < 2) {
     removeDayAvgLines();
     return;
   }
-  const todayKey = inFilterDates[inFilterDates.length - 1];
 
-  const prevDates = sortedDates.filter(d => d < todayKey);
-  const expectedPrevKey = prevDates.length > 0 ? prevDates[prevDates.length - 1] : null;
-
+  // Expected keys = every day except the very first one.
+  const expectedTodayKeys = sortedDates.slice(1);
   const existingKeys = Object.keys(indicatorState.dayAvg.data);
-  const stale = existingKeys.length !== 1 || existingKeys[0] !== expectedPrevKey;
-  if (stale || expectedPrevKey === null) {
-    // Day-rollover or filter change → full rebuild (cheap; 1 series).
+
+  const hasAllExpected  = expectedTodayKeys.every(k => existingKeys.includes(k));
+  const hasOnlyExpected = existingKeys.every(k => expectedTodayKeys.includes(k));
+
+  if (!hasAllExpected || !hasOnlyExpected) {
+    // New day rolled over, or a stale key is present → full rebuild.
     refreshDayAvgLines(candles);
     return;
   }
 
-  const info = indicatorState.dayAvg.data[expectedPrevKey];
-  if (!info) { refreshDayAvgLines(candles); return; }
+  // Update only the LAST day's session span (its endpoint extends intraday).
+  const lastTodayKey = sortedDates[sortedDates.length - 1];
+  const lastInfo = indicatorState.dayAvg.data[lastTodayKey];
+  if (!lastInfo) { refreshDayAvgLines(candles); return; }
 
-  const todayCandles = byDate[todayKey].slice().sort((a, b) => a.time - b.time);
+  const todayCandles = byDate[lastTodayKey].slice().sort((a, b) => a.time - b.time);
   if (todayCandles.length === 0) return;
 
   const newStart = todayCandles[0].time;
   const newEnd   = todayCandles[todayCandles.length - 1].time;
-  if (info.startTime === newStart && info.endTime === newEnd) {
+  if (lastInfo.startTime === newStart && lastInfo.endTime === newEnd) {
     return; // nothing to redraw
   }
 
-  // Same avg, but the today-session span changed → re-draw the line.
-  removeDayAvgForDate(expectedPrevKey);
-  info.startTime = newStart;
-  info.endTime   = newEnd;
-  indicatorState.dayAvg.data[expectedPrevKey] = info;
-  drawDayAvgLine(info);
+  // Remove only the stale last line, then redraw it with the new span.
+  removeDayAvgForDate(lastTodayKey);
+  lastInfo.startTime = newStart;
+  lastInfo.endTime   = newEnd;
+  indicatorState.dayAvg.data[lastTodayKey] = lastInfo;
+  drawDayAvgLine(lastInfo);
   scheduleDayAvgLabelUpdate();
 }
 

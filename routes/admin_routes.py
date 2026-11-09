@@ -52,6 +52,23 @@ Behaviour notes:
       removed, skipped, errors}`` shape the rest of this module
       (``_completion_message`` / ``_cleanup_summary_log``) expects —
       no downstream code changed.
+
+2026-11-09 — DirEntry-based recursion in ``_remove_tree_preserving``
+-------------------------------------------------------------------
+``pathlib.Path.is_dir()`` does **not** accept a ``follow_symlinks``
+kwarg (only ``os.DirEntry.is_dir()`` does). The previous implementation
+called ``child.is_dir(follow_symlinks=False)`` — where ``child`` was a
+``Path`` — so any target that contained at least one sub-directory
+(``data/``, ``__pycache__/``, ...) raised:
+
+    TypeError: Path.is_dir() got an unexpected keyword argument 'follow_symlinks'
+
+…which got swallowed into ``errors=[...]`` and the sub-directories were
+never actually removed. ``_remove_tree_preserving`` now recurses on the
+``os.DirEntry`` returned by ``os.scandir()`` (which is what supports the
+``follow_symlinks`` kwarg) and closes the iterator with a context
+manager. Net result: symlink-safety is unchanged and ``data/`` /
+``__pycache__/`` are cleaned as intended.
 """
 
 from __future__ import annotations
@@ -304,30 +321,62 @@ def _resolve_cleanup_path(name: str) -> Path:
 
 
 def _remove_tree_preserving(path: Path, protected_paths: list[Path]) -> bool:
-    """Remove unprotected directory contents without traversing symlinks."""
+    """Remove unprotected directory contents without traversing symlinks.
+
+    2026-11-09 fix
+    --------------
+    ``pathlib.Path.is_dir()`` does **not** accept a ``follow_symlinks``
+    kwarg — only ``os.DirEntry.is_dir()`` (from ``os.scandir``) does.
+    The previous version called ``child.is_dir(follow_symlinks=False)``
+    on a ``Path``, which raised ``TypeError`` for any directory that
+    contained a sub-directory (``data/``, ``__pycache__/``, ...).
+
+    This version drives the recursion off the ``os.DirEntry`` objects
+    returned by ``os.scandir`` — which *do* support ``follow_symlinks``
+    — so symlink-safety is preserved exactly and the ``data/`` /
+    ``__pycache__/`` TypeError disappears.
+    """
     removed_any = False
-    for item in os.scandir(path):
-        child = Path(item.path)
-        if child.is_symlink():
-            os.remove(str(child))
-            removed_any = True
-            continue
-        child_resolved = child.resolve()
-        if any(protected == child_resolved for protected in protected_paths):
+    # Close the scandir iterator deterministically (avoids ResourceWarning
+    # on long-running servers).
+    with os.scandir(path) as it:
+        for item in it:
+            child = Path(item.path)
+
+            # Symlink: unlink it (never follow it), then move on.
+            # DirEntry.is_symlink() takes no kwarg — that's fine.
+            if item.is_symlink():
+                try:
+                    os.remove(str(child))
+                except FileNotFoundError:
+                    # Race with another process — treat as removed.
+                    pass
+                removed_any = True
+                continue
+
+            child_resolved = child.resolve()
+
             # This is the protected directory itself: leave it and all
             # descendants untouched.
-            continue
-        if any(child_resolved in protected.parents for protected in protected_paths):
+            if any(protected == child_resolved for protected in protected_paths):
+                continue
+
             # This directory contains a protected subtree; clean only
             # its unprotected siblings and descendants.
-            if child.is_dir(follow_symlinks=False):
-                removed_any = _remove_tree_preserving(child, protected_paths) or removed_any
-            continue
-        if child.is_dir(follow_symlinks=False):
-            shutil.rmtree(str(child))
-        else:
-            os.remove(str(child))
-        removed_any = True
+            if any(child_resolved in protected.parents for protected in protected_paths):
+                if item.is_dir(follow_symlinks=False):
+                    removed_any = (
+                        _remove_tree_preserving(child, protected_paths)
+                        or removed_any
+                    )
+                continue
+
+            # Regular (already-symlink-checked) file / directory.
+            if item.is_dir(follow_symlinks=False):
+                shutil.rmtree(str(child))
+            else:
+                os.remove(str(child))
+            removed_any = True
     return removed_any
 
 

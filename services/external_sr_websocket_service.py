@@ -1,8 +1,16 @@
+# services/external_sr_websocket_service.py
 """External EMA V2 S/R WebSocket consumer.
 
 The project is a consumer only: pivot detection and S/R calculation live in
 EMA V2. This service owns connection lifecycle, snapshots, freshness/readiness,
 and a read-compatible levels API for the existing strategy/order services.
+
+Market-hours gate
+-----------------
+Connections are only *initiated* Mon-Fri, 09:15-15:40 IST. Existing
+connections are also gracefully closed if the window ends mid-stream.
+Set ``TEST_EMA=true`` (or ``EXTERNAL_SR_TEST_EMA=true``) to bypass the gate
+for off-hours testing / smoke runs. Default is **false**.
 """
 from __future__ import annotations
 
@@ -10,10 +18,11 @@ import asyncio
 import json
 import logging
 import os
+import random
 import re
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -28,6 +37,18 @@ logger = logging.getLogger(__name__)
 class ExternalSRWebSocketService:
     CONFIGS = ("15/3", "15/15", "15/30")
 
+    # Market window (IST). Connections are only attempted inside this window
+    # unless ``self.test_ema`` is True (see __init__).
+    MARKET_OPEN_HOUR = 9
+    MARKET_OPEN_MIN = 15
+    MARKET_CLOSE_HOUR = 15
+    MARKET_CLOSE_MIN = 40
+
+    # How often a quiet live connection re-checks the market window via
+    # ``asyncio.wait_for`` around ``ws.recv()``. Lower = more responsive
+    # close at 15:40, higher = fewer wake-ups on a silent feed.
+    RECV_WINDOW_CHECK_SECONDS = 60.0
+
     def __init__(self) -> None:
         self.base_url = os.getenv("EXTERNAL_SR_WS_URL", "wss://ema.novag7.in").strip().rstrip("/")
         if self.base_url.startswith("https://"):
@@ -35,6 +56,16 @@ class ExternalSRWebSocketService:
         elif self.base_url.startswith("http://"):
             self.base_url = "ws://" + self.base_url[7:]
         self.enabled = os.getenv("EXTERNAL_SR_WS_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
+
+        # TEST_EMA: bypass the market-hours gate. Prefer the namespaced env
+        # var, fall back to bare TEST_EMA for convenience. Default = false.
+        _test_ema_raw = (
+            os.getenv("EXTERNAL_SR_TEST_EMA")
+            or os.getenv("TEST_EMA")
+            or "false"
+        )
+        self.test_ema = _test_ema_raw.strip().lower() in {"1", "true", "yes", "on"}
+
         self.stale_seconds = max(60, int(os.getenv("EXTERNAL_SR_STALE_SECONDS", "180")))
         try:
             from core import config
@@ -53,13 +84,69 @@ class ExternalSRWebSocketService:
         # Last S/R shape written per instrument/config. Heartbeats and
         # repeated updates with unchanged pivot levels are not persisted.
         self._last_logged_sr_signature: dict[tuple[str, str], tuple[Any, ...]] = {}
-        self._states: dict[tuple[str, str], dict[str, Any]] = {};
+        self._states: dict[tuple[str, str], dict[str, Any]] = {}
         self._wanted: set[tuple[str, str]] = set()
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
         self._tasks: dict[tuple[str, str], asyncio.Task] = {}
         self._stop = threading.Event()
 
+    # ------------------------------------------------------------------
+    # Market-hours gate helpers
+    # ------------------------------------------------------------------
+    def _within_market_window(self, at: datetime | None = None) -> bool:
+        """True iff connections are allowed at ``at`` (defaults to now IST).
+
+        ``TEST_EMA`` short-circuits this and always returns True.
+        """
+        if self.test_ema:
+            return True
+        now = at or datetime.now(self._market_tz)
+        if now.weekday() >= 5:  # Sat / Sun
+            return False
+        start = now.replace(
+            hour=self.MARKET_OPEN_HOUR,
+            minute=self.MARKET_OPEN_MIN,
+            second=0, microsecond=0,
+        )
+        end = now.replace(
+            hour=self.MARKET_CLOSE_HOUR,
+            minute=self.MARKET_CLOSE_MIN,
+            second=0, microsecond=0,
+        )
+        return start <= now < end
+
+    def _seconds_until_next_window(self) -> float:
+        """Seconds until the next Mon-Fri 09:15 IST (0 if already inside)."""
+        now = datetime.now(self._market_tz)
+        if self._within_market_window(now):
+            return 0.0
+        today_start = now.replace(
+            hour=self.MARKET_OPEN_HOUR,
+            minute=self.MARKET_OPEN_MIN,
+            second=0, microsecond=0,
+        )
+        if now < today_start:
+            candidate = today_start
+        else:
+            candidate = today_start + timedelta(days=1)
+        while candidate.weekday() >= 5:
+            candidate += timedelta(days=1)
+        return max(1.0, (candidate - now).total_seconds())
+
+    async def _wait_for_market_window(self) -> None:
+        """Sleep until the market window opens; interruptible via cancellation."""
+        while not self._stop.is_set() and not self._within_market_window():
+            wait = self._seconds_until_next_window()
+            # Cap at 1h so a system clock jump can't strand us for days.
+            wait = max(1.0, min(wait, 3600.0))
+            # Small jitter so ~700 tasks don't all handshake at 09:15:00.000.
+            jitter = random.uniform(0.0, 3.0)
+            await asyncio.sleep(wait + jitter)
+
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
     def start(self) -> None:
         if not self.enabled:
             logger.warning("[external-sr] disabled by EXTERNAL_SR_WS_ENABLED")
@@ -139,6 +226,9 @@ class ExternalSRWebSocketService:
         )
         return {"status": "subscribing", "count": len(results), "results": results}
 
+    # ------------------------------------------------------------------
+    # Persistence
+    # ------------------------------------------------------------------
     def _log_path_for(self, key: str, cfg: str) -> Path:
         safe_key = re.sub(r"[^A-Za-z0-9._-]+", "_", key).strip("._-") or "instrument"
         safe_cfg = re.sub(r"[^A-Za-z0-9._-]+", "-", cfg).strip("._-") or "config"
@@ -168,6 +258,9 @@ class ExternalSRWebSocketService:
             logger.exception("[external-sr] failed to persist event key=%s config=%s", key, cfg)
             return False
 
+    # ------------------------------------------------------------------
+    # Consume loop (gated by market hours)
+    # ------------------------------------------------------------------
     async def _ensure_task(self, key: str, cfg: str) -> None:
         token = (key, cfg)
         task = self._tasks.get(token)
@@ -179,12 +272,36 @@ class ExternalSRWebSocketService:
         url = f"{self.base_url}{path}?config={quote(cfg, safe='/')}"
         backoff = 1.0
         while not self._stop.is_set():
+            # ---- Market-hours gate: only *initiate* connections in-window ----
+            if not self._within_market_window():
+                logger.debug(
+                    "[external-sr] outside market window; deferring key=%s cfg=%s next_open_in=%.1fs",
+                    key, cfg, self._seconds_until_next_window(),
+                )
+                await self._wait_for_market_window()
+                backoff = 1.0
+                continue
+
             try:
                 logger.info("[external-sr] connecting key=%s config=%s", key, cfg)
                 async with websockets.connect(url, ping_interval=20, ping_timeout=20, close_timeout=5) as ws:
                     self._patch((key, cfg), {"connected": True, "status": "connected"})
                     backoff = 1.0
-                    async for raw in ws:
+                    while not self._stop.is_set():
+                        # ---- Graceful close if window ends mid-stream ----
+                        if not self._within_market_window():
+                            logger.info(
+                                "[external-sr] market window ended; closing key=%s cfg=%s",
+                                key, cfg,
+                            )
+                            break
+                        try:
+                            raw = await asyncio.wait_for(
+                                ws.recv(), timeout=self.RECV_WINDOW_CHECK_SECONDS,
+                            )
+                        except asyncio.TimeoutError:
+                            # Silent feed → re-check window and go again.
+                            continue
                         try:
                             # websockets may deliver either str or bytes depending
                             # on the negotiated frame and library version.
@@ -207,7 +324,18 @@ class ExternalSRWebSocketService:
                     return
             except Exception:
                 logger.exception("[external-sr] connection failed key=%s cfg=%s", key, cfg)
+
+            if self._stop.is_set():
+                self._patch((key, cfg), {"connected": False, "status": "stopped"})
+                return
+
             self._patch((key, cfg), {"connected": False, "status": "reconnecting"})
+
+            # Don't burn backoff off-hours — just wait for the next window.
+            if not self._within_market_window():
+                backoff = 1.0
+                continue
+
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, 30.0)
 
@@ -322,6 +450,9 @@ class ExternalSRWebSocketService:
             except Exception:
                 logger.exception("[external-sr] isolated tracker callback failed for %s", key)
 
+    # ------------------------------------------------------------------
+    # Read API
+    # ------------------------------------------------------------------
     def get_levels(self, instrument_key: str, config: str = "15/3") -> dict[str, Any] | None:
         token = (str(instrument_key or "").strip(), config)
         with self._lock:
@@ -355,7 +486,14 @@ class ExternalSRWebSocketService:
                     "last_event": state.get("last_event"), "status": state.get("status"),
                     "level_count": len(state.get("levels") or []),
                 })
-        return {"enabled": self.enabled, "base_url": self.base_url, "subscriptions": rows}
+        return {
+            "enabled": self.enabled,
+            "test_ema": self.test_ema,
+            "market_window_open": self._within_market_window(),
+            "market_window": "09:15-15:40 IST (Mon-Fri); bypassed when TEST_EMA=true",
+            "base_url": self.base_url,
+            "subscriptions": rows,
+        }
 
     def unsubscribe(self, instrument_key: str, configs: tuple[str, ...] | list[str] | None = None) -> None:
         key = str(instrument_key or "").strip()

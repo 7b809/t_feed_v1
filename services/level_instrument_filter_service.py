@@ -435,11 +435,7 @@ class LevelInstrumentFilterService:
 
         out_path = folder / "level_instruments.json"
         _atomic_write_json(out_path, payload)
-        logger.info(
-            "[level-filter] %s -> %s (CE=%d, PE=%d, step=%d, range=%s)",
-            underlying, out_path, len(ce_instruments), len(pe_instruments),
-            step, range_mode,
-        )
+      
 
         if config.LIVE_SR_ENABLED:
             self._register_with_sr(index_key, ce_instruments, pe_instruments)
@@ -541,7 +537,7 @@ class LevelInstrumentFilterService:
             entry = self._find_listed_instrument(
                 underlying, strike, strike_type, step, direction,
             )
-            if entry is None:
+            if entry is None and config.VERBOSE_LOG:
                 logger.warning(
                     "[level-filter] no listed %s strike near %s for %s",
                     strike_type, strike, underlying,

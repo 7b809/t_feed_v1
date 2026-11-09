@@ -189,7 +189,7 @@ class SchedulerService:
                     summary = dummy_order_service.run_once(
                         reason="scheduled",
                     )
-                    if summary.get("status") not in {"skipped"}:
+                    if summary.get("status") not in {"skipped"} and config.VERBOSE_LOG:
                         logger.info(
                             "[scheduler] dummy_order_tracker — "
                             "status=%s created=%s updated=%s closed=%s "
