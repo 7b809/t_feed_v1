@@ -214,6 +214,25 @@ PIVOT_CHECK_MINUTE = int(os.getenv("PIVOT_CHECK_MINUTE", "18"))
 DISCONNECT_HOUR = int(os.getenv("DISCONNECT_HOUR", "15"))
 DISCONNECT_MINUTE = int(os.getenv("DISCONNECT_MINUTE", "45"))
 
+
+# ---------------------------------------------------------------------------
+# Isolation client notifications (fire-and-forget)
+# ---------------------------------------------------------------------------
+ISOLATION_NOTIFY_ENABLED = (
+    os.getenv("ISOLATION_NOTIFY_ENABLED", "false").strip().lower() == "true"
+)
+
+# Comma-separated URLs, e.g. https://client-a.example/api/isolation,https://client-b.example/api/isolation
+ISOLATION_NOTIFY_CLIENT_URLS = [
+    url.strip()
+    for url in os.getenv("ISOLATION_NOTIFY_CLIENT_URLS", "").split(",")
+    if url.strip()
+]
+
+ISOLATION_NOTIFY_TIMEOUT_SECONDS = float(
+    os.getenv("ISOLATION_NOTIFY_TIMEOUT_SECONDS", "5")
+)
+
 # ---------------------------------------------------------------------------
 # API
 # ---------------------------------------------------------------------------
