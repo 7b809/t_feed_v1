@@ -329,7 +329,7 @@ LIVE_SR_PERSIST_EVERY_N_CANDLES = max(0, _int("LIVE_SR_PERSIST_EVERY_N_CANDLES",
 # ===========================================================================
 # Mid-day startup backfill via intraday API
 # ===========================================================================
-SR_BACKFILL_ENABLED = _bool("SR_BACKFILL_ENABLED", True)
+SR_BACKFILL_ENABLED = False  # local pivot backfill removed; EMA V2 supplies S/R
 SR_BACKFILL_MAX_WORKERS = max(1, min(16, _int("SR_BACKFILL_MAX_WORKERS", 4)))
 SR_BACKFILL_START_HOUR = _int("SR_BACKFILL_START_HOUR", 9)
 SR_BACKFILL_START_MINUTE = _int("SR_BACKFILL_START_MINUTE", 15)
