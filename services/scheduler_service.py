@@ -178,7 +178,7 @@ def sr_backfill_ready() -> tuple[bool, str]:
         from services.level_isolated_instrument_service import level_isolated_instrument_service
         from services.external_sr_websocket_service import external_sr_websocket_service
         detail = level_isolated_instrument_service.get_detail() or {}
-        isolated = detail.get("isolated_instrument") or detail.get("isolated") or {}
+        isolated = detail.get("isolated") or {}
         key = str(isolated.get("instrument_key") or "").strip() if isinstance(isolated, dict) else ""
         if not key:
             return True, "no_active_isolation"
