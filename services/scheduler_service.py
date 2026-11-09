@@ -52,16 +52,15 @@ class SchedulerService:
         return self._scheduler
 
     # ------------------------------------------------------------------ #
-    # Public latch accessor — used by external ticks (e.g. a future      #
-    # _strategy2_recheck) that need to honour the same SR-backfill      #
-    # gate as the in-file dummy_order_tracker.                          #
+    # Compatibility accessor for any existing external scheduler ticks. #
+    # The readiness result now reflects EMA V2 WebSocket S/R, not a      #
+    # local backfill or replay-series latch.                              #
     # ------------------------------------------------------------------ #
     def is_sr_backfill_ready(self) -> tuple[bool, str]:
-        """Public accessor mirroring the module-level ``sr_backfill_ready``.
+        """Return the external EMA V2 S/R readiness state.
 
-        Exposed on the singleton so out-of-file ticks can call
-        ``scheduler_service.is_sr_backfill_ready()`` without importing
-        the module-level helper directly.
+        The legacy method name is retained for compatibility with
+        existing callers.
         """
         return sr_backfill_ready()
 
@@ -165,13 +164,10 @@ class SchedulerService:
         # orders for armed candidates, updates open orders from live
         # LTP + periodic bar reconcile, and auto-closes at EOD.
         #
-        # 2026-11-04: this tick now SHORT-CIRCUITS while the SR backfill
-        # latch for today is not ready. The same latch is consulted by
-        # main.py; here it prevents a mid-day restart (e.g. 14:16 on
-        # 2026-10-29) from creating an order against a partially-built
-        # SR series during the backfill window. It also gates against
-        # the pre-09:15-startup gap covered by replay_seed_at_open
-        # above — the tracker simply skips until that seed completes.
+        # The tick short-circuits until the external EMA V2 15/3
+        # WebSocket has delivered a fresh snapshot for the active
+        # isolated instrument. main.py uses the same readiness check
+        # before its one-time startup catch-up.
         #
         # The service is a no-op outside the DUMMY_ORDER window, so it
         # is safe to schedule all day.
@@ -288,36 +284,11 @@ class SchedulerService:
             )
 
         # ------------------------------------------------------------------ #
-        # DEFENSIVE CONTRACT — out-of-file ticks that invoke                 #
-        # dummy_order_service (e.g. a future ``_strategy2_recheck``) MUST   #
-        # call ``sr_backfill_ready()`` (module-level helper above) or the  #
-        # singleton method ``scheduler_service.is_sr_backfill_ready()``    #
-        # before calling into the service. Skipping this guard reopens the #
-        # 14:16-on-2026-10-29 class of bug.                                #
-        #                                                                   #
-        # If you add a new job that indirectly reaches dummy_order_service,#
-        # wrap it as:                                                       #
-        #                                                                   #
-        #     def _my_tick() -> None:                                       #
-        #         ready, reason = sr_backfill_ready()                       #
-        #         if not ready:                                             #
-        #             logger.info("[scheduler] %s skipped — %s",            #
-        #                         "_my_tick", reason)                       #
-        #             return                                                #
-        #         ...   # safe to invoke dummy_order_service here           #
-        #                                                                   #
-        # The corresponding test lives at tests/test_scheduler_service.py  #
-        # (or equivalent) and asserts that no tick can reach                #
-        # dummy_order_service when sr_backfill_ready() returns False.      #
-        #                                                                   #
-        # NOTE: the sandbox_eod_exit and isolated_pair_sr_minute_tick      #
-        # jobs above are deliberately EXEMPT from this contract:           #
-        #   * sandbox_eod_exit does not invoke dummy_order_service and     #
-        #     safety requires it to fire regardless of SR readiness.       #
-        #   * isolated_pair_sr_minute_tick is a per-minute refresh of     #
-        #     an already-established baseline; freezing it on a stale     #
-        #     SR-backfill latch is exactly the wrong failure mode when    #
-        #     the backfill service is itself unhealthy.                   #
+        # DEFENSIVE CONTRACT — any additional scheduler job that invokes   #
+        # dummy_order_service MUST call sr_backfill_ready() first. This    #
+        # checks external EMA V2 15/3 freshness for the active instrument. #
+        # The sandbox_eod_exit is intentionally exempt: it is a safety-    #
+        # critical position exit and must run independently of S/R state.  #
         # ------------------------------------------------------------------ #
 
         scheduler.start()
