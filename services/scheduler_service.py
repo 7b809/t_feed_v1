@@ -294,15 +294,8 @@ class SchedulerService:
         self._scheduler = scheduler
 
         logger.info(
-            "Scheduler started — jobs=%s, dummy_order_tracker=%s "
-            "(interval=%ss, gate=external_ema_v2_15/3), "
-            "sandbox_eod_exit=%s (%02d:%02d)",
+            "Scheduler started — registered_jobs=%s",
             [job.id for job in scheduler.get_jobs()],
-            bool(getattr(config, "DUMMY_ORDER_ENABLED", True)),
-            int(getattr(config, "DUMMY_ORDER_TRACK_INTERVAL_SECONDS", 30)),
-            bool(getattr(config, "SANDBOX_EXECUTION_ENABLED", False)),
-            int(getattr(config, "SANDBOX_EOD_HOUR", 15)),
-            int(getattr(config, "SANDBOX_EOD_MINUTE", 15)),
         )
 
         return scheduler
