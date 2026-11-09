@@ -2521,136 +2521,71 @@ class LevelIsolatedInstrumentService:
         source: dict[str, Any],
         reference_dt: datetime | None,
     ) -> dict[str, Any]:
+        """Build the isolated SR card from the external EMA V2 WebSocket cache."""
         result: dict[str, Any] = {
-            "available": False,
-            "path": None,
-            "candle_count": 0,
-            "total_levels": 0,
-            "before_count": 0,
-            "after_count": 0,
+            "available": False, "path": "EMA V2 WebSocket",
+            "candle_count": 0, "total_levels": 0,
+            "before_count": 0, "after_count": 0,
             "touched_at": source.get("touched_at") if isinstance(source, dict) else None,
             "reference_at": reference_dt.isoformat() if reference_dt else None,
-            "levels": [],
-            "error": None,
+            "levels": [], "error": None, "source": "external_ema_v2",
         }
-
         if not isinstance(source, dict):
             result["error"] = "no_source"
             return result
-
         key = str(source.get("instrument_key") or "").strip()
         if not key:
             result["error"] = "missing_instrument_key"
             return result
-
-        underlying = ""
-        if source.get("underlying"):
-            underlying = str(source["underlying"]).strip().lower()
-        if not underlying:
-            try:
-                from services.instrument_registry import instrument_registry
-                entry = instrument_registry.get(key)
-                if entry and entry.get("underlying"):
-                    underlying = str(entry["underlying"]).strip().lower()
-            except Exception:
-                pass
-        if not underlying:
-            symbol = str(source.get("trading_symbol") or "").strip()
-            if symbol:
-                underlying = symbol.split()[0].lower()
-        if not underlying and source.get("trigger_index"):
-            underlying = str(source["trigger_index"]).strip().lower()
-
-        strike = source.get("strike")
-        if strike is None:
-            strike = source.get("strike_price")
-        strike_type = str(
-            source.get("type") or source.get("strike_type") or ""
-        ).upper()
-
-        if not underlying or strike is None or not strike_type:
-            result["error"] = "cannot_resolve_path"
-            return result
-
         try:
-            strike_int = int(float(strike))
-        except (TypeError, ValueError):
-            result["error"] = "invalid_strike"
-            return result
-
-        folder = (
-            Path(config.LIVE_DATA_DIR)
-            / underlying
-            / f"{strike_int}_{strike_type}"
-        )
-        path = folder / config.LIVE_SR_FILENAME
-        result["path"] = str(path)
-
-        if not path.exists():
-            result["error"] = "file_missing"
-            return result
-
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
+            from services.external_sr_websocket_service import external_sr_websocket_service
+            payload = external_sr_websocket_service.get_levels(key, "15/3")
         except Exception as exc:
-            result["error"] = f"unreadable: {type(exc).__name__}"
+            result["error"] = f"external_sr_error:{type(exc).__name__}"
             return result
-
-        if not isinstance(payload, dict):
-            result["error"] = "not_a_dict"
+        if not payload:
+            result["error"] = "waiting_for_external_snapshot"
             return result
-
-        result["available"] = True
-        try:
-            result["candle_count"] = int(payload.get("candle_count") or 0)
-        except (TypeError, ValueError):
-            result["candle_count"] = 0
+        if not payload.get("is_ready"):
+            result["error"] = "external_sr_stale_or_disconnected"
+            return result
 
         raw_levels = payload.get("levels") or []
-        if not isinstance(raw_levels, list):
-            raw_levels = []
-
         cleaned: list[dict[str, Any]] = []
-        before_count = 0
-        after_count = 0
-
-        for lvl in raw_levels:
-            if not isinstance(lvl, dict):
+        for raw in raw_levels:
+            if not isinstance(raw, dict):
                 continue
-            copy = dict(lvl)
-            copy.pop("broken", None)
-            copy.pop("broken_at", None)
-            copy.pop("broken_price", None)
-            copy.pop("broken_bar_index", None)
-
-            after = False
-            confirmed_str = str(copy.get("confirmed_time") or "")
-            if reference_dt is not None and confirmed_str:
-                try:
-                    confirmed_dt = datetime.fromisoformat(
-                        confirmed_str.replace("Z", "+00:00")
-                    )
-                    if confirmed_dt.tzinfo is None:
-                        confirmed_dt = confirmed_dt.replace(tzinfo=_MARKET_TZ)
-                    after = confirmed_dt >= reference_dt
-                except Exception:
-                    after = False
-
-            copy["_after_isolation"] = bool(after)
+            level = dict(raw)
+            confirmed = None
+            try:
+                confirmed = datetime.fromisoformat(
+                    str(level.get("confirmed_time") or "").replace("Z", "+00:00")
+                )
+                if confirmed.tzinfo is None:
+                    confirmed = confirmed.replace(tzinfo=_MARKET_TZ)
+                else:
+                    confirmed = confirmed.astimezone(_MARKET_TZ)
+            except (TypeError, ValueError):
+                confirmed = None
+            after = bool(reference_dt is not None and confirmed is not None and confirmed >= reference_dt)
+            level["_after_isolation"] = after
+            cleaned.append(level)
             if after:
-                after_count += 1
+                result["after_count"] += 1
             else:
-                before_count += 1
+                result["before_count"] += 1
 
-            cleaned.append(copy)
-
-        cleaned.sort(key=lambda l: str(l.get("confirmed_time") or ""))
-
-        result["levels"] = cleaned
-        result["total_levels"] = len(cleaned)
-        result["before_count"] = before_count
-        result["after_count"] = after_count
-
+        cleaned.sort(key=lambda item: str(item.get("confirmed_time") or ""))
+        result.update({
+            "available": True,
+            "candle_count": payload.get("candle_count") or 0,
+            "total_levels": len(cleaned),
+            "levels": cleaned,
+            "current_price": payload.get("current_price"),
+            "last_ts": payload.get("last_ts"),
+            "last_event_at": payload.get("last_event_at"),
+            "config": "15/3",
+        })
         return result
 
     def _load_live_sr_levels_for_isolated(
