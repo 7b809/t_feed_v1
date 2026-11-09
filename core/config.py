@@ -310,7 +310,14 @@ LEVEL_FILTER_INCLUDE_INDEX_SR = _bool("LEVEL_FILTER_INCLUDE_INDEX_SR", True)
 # (chart, /isolated SR Tracking card, Telegram). Default 15/3 matches
 # the ``t_feed_v1-market-engine-v3`` trigger window.
 # ===========================================================================
-LIVE_SR_ENABLED = _bool("LIVE_SR_ENABLED", True)
+# S/R levels are calculated by the external EMA V2 service. This project
+# consumes the push feed and does not run its own pivot detector.
+LIVE_SR_ENABLED = False
+SR_BACKFILL_ENABLED = False
+LIVE_SR_REFRESH_FROM_API_ENABLED = False
+EXTERNAL_SR_WS_ENABLED = _bool("EXTERNAL_SR_WS_ENABLED", True)
+EXTERNAL_SR_WS_URL = _str("EXTERNAL_SR_WS_URL", "wss://ema.novag7.in")
+EXTERNAL_SR_STALE_SECONDS = max(60, _int("EXTERNAL_SR_STALE_SECONDS", 180))
 LIVE_SR_TRACK_ALL_INSTRUMENTS = _bool("LIVE_SR_TRACK_ALL_INSTRUMENTS", True)
 LIVE_SR_LEFT_BARS = max(1, _int("LIVE_SR_LEFT_BARS", 15))
 LIVE_SR_RIGHT_BARS = max(1, _int("LIVE_SR_RIGHT_BARS", 3))
