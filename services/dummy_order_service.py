@@ -896,6 +896,8 @@ class DummyOrderService:
                 continue
             key = conf_dt.replace(second=0, microsecond=0)
             close_f = closes_by_minute.get(key)
+            if close_f is None:
+                close_f = _safe_float(lvl.get("confirmed_time_price"))
             if close_f is not None:
                 out[str(conf_iso)] = close_f
         return dict(sorted(
