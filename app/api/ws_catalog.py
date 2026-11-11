@@ -28,6 +28,14 @@ Canonical defaults: 15/3, 15/15, 15/30 (see SR_DEFAULT_CONFIGS). The SR
 service can be queried for its canonical list at runtime; if it is not
 registered (e.g. SR_ENABLED=false) the response falls back to the static
 canonical list so documentation is always complete.
+
+Today-only SR policy
+--------------------
+Every SR WebSocket connection begins with a ``connection_ack`` frame,
+followed by one ``snapshot`` per config. All SR payloads (snapshot,
+sr_update, heartbeat) carry only pivots whose ``pivot_time`` is today
+(IST), tagged with ``"data_scope": "today_only"``. Clients that cache
+SR data should drop anything tagged differently.
 """
 
 from __future__ import annotations
@@ -51,6 +59,7 @@ IST = timezone(timedelta(hours=5, minutes=30))
 # app/services/sr_calculator.DEFAULT_CONFIGS.
 SR_DEFAULT_CONFIGS_FALLBACK: tuple[str, ...] = ("15/3", "15/15", "15/30")
 
+SR_SCOPE_NOTE = "For further reference, only today's SR levels are used"
 
 # --------------------------------------------------------------------------- #
 # EMA channel patterns (unchanged contract)
@@ -113,7 +122,8 @@ SR_CHANNEL_PATTERNS: dict[str, dict[str, Any]] = {
         "url_template": "/ws/sr/{instrument_key}?config={left_bars}/{right_bars}",
         "description": (
             "Live SR (support/resistance) levels for one instrument and one "
-            "config. Config format: '<left_bars>/<right_bars>'."
+            "config. Config format: '<left_bars>/<right_bars>'. "
+            "Data is TODAY-ONLY (IST)."
         ),
         "example_path": "/ws/sr/NSE_INDEX%7CNifty%2050?config=15/3",
         "config_format": "<left_bars>/<right_bars>  e.g. 15/3, 15/15, 15/30",
@@ -134,12 +144,19 @@ SR_CHANNEL_PATTERNS: dict[str, dict[str, Any]] = {
             "If neither the instrument nor an index alias resolves, the "
             "socket is closed with code 4404."
         ),
+        "data_scope": "today_only",
+        "scope_note": SR_SCOPE_NOTE,
+        "initial_handshake": [
+            "connection_ack  (once, before any snapshot)",
+            "snapshot        (one frame per config, today-only)",
+            "heartbeat / sr_update (live, today-only)",
+        ],
     },
     "sr_index": {
         "url_template": "/ws/sr/index/{underlying}?config={left_bars}/{right_bars}",
         "description": (
             "Index alias for the SR WebSocket. Underlying is lowercased "
-            "(nifty / banknifty / midcpnifty / sensex)."
+            "(nifty / banknifty / midcpnifty / sensex). Data is today-only."
         ),
         "example_path": "/ws/sr/index/nifty?config=15/3",
         "known_values": {
@@ -150,7 +167,6 @@ SR_CHANNEL_PATTERNS: dict[str, dict[str, Any]] = {
         },
     },
 }
-
 
 # --------------------------------------------------------------------------- #
 # EMA event types
@@ -271,7 +287,8 @@ SR_LEVEL_SCHEMA: dict[str, Any] = {
     "description": (
         "Every entry in `resistances` and `supports` (and every element of "
         "`sr_current_snapshots[cfg].resistances / .supports` from "
-        "/api/v1/ws/catalog) carries this shape."
+        "/api/v1/ws/catalog) carries this shape. Note: only levels whose "
+        "`pivot_time` is today (IST) are returned."
     ),
     "fields": {
         "level": "'support' or 'resistance'",
@@ -297,15 +314,32 @@ SR_LEVEL_SCHEMA: dict[str, Any] = {
     },
 }
 
-
 # --------------------------------------------------------------------------- #
 # SR event types
 # --------------------------------------------------------------------------- #
 SR_EVENT_TYPES: dict[str, dict[str, Any]] = {
+    "connection_ack": {
+        "description": (
+            "Emitted ONCE per WebSocket connection, immediately after the "
+            "socket is accepted and BEFORE any snapshot. Confirms the feed "
+            "is live and declares the today-only SR policy."
+        ),
+        "when": "once per connection, first frame",
+        "sample": {
+            "event": "connection_ack",
+            "status": "connected",
+            "message": "Feed connected successfully",
+            "instrument_key": "NSE_INDEX|Nifty 50",
+            "configs": ["15/3", "15/15", "15/30"],
+            "data_scope": "today_only",
+            "scope_note": SR_SCOPE_NOTE,
+        },
+    },
     "sr_snapshot": {
         "description": (
             "Initial SR levels for one (instrument, config). One frame per "
-            "config on connect. Every entry in `resistances` and `supports` "
+            "config on connect. Contains ONLY pivots whose pivot_time is "
+            "today (IST). Every entry in `resistances` and `supports` "
             "follows the SR level schema."
         ),
         "when": "once per connection per config",
@@ -321,6 +355,12 @@ SR_EVENT_TYPES: dict[str, dict[str, Any]] = {
             "cycle_number": 42,
             "cycle_time": "2026-11-09T15:29:10+05:30",
             "candle_count": 3375,
+            # ---- today-only markers ----
+            "feed_status": "connected",
+            "feed_message": "Feed connected successfully",
+            "data_scope": "today_only",
+            "today_ist_date": "2026-11-09",
+            "scope_note": SR_SCOPE_NOTE,
             "resistances": [
                 {
                     "level": "resistance",
@@ -353,20 +393,20 @@ SR_EVENT_TYPES: dict[str, dict[str, Any]] = {
         "description": (
             "SR levels changed for one (instrument, config) — at least one "
             "resistance or support identity (level / price / pivot_bar_index) "
-            "differs from the previous cycle. Every entry follows the SR "
-            "level schema."
+            "differs from the previous cycle. Only today's pivots are "
+            "included. Every entry follows the SR level schema."
         ),
-        "when": "on any change to the resistance/support lists",
+        "when": "on any change to the today-only resistance/support lists",
         "level_schema": "sr_level_schema",
         "sample": {
             "event": "sr_update",
             "instrument_key": "NSE_INDEX|Nifty 50",
             "trading_symbol": "NIFTY",
             "config": "15/3",
-            "left_bars": 15,
-            "right_bars": 3,
             "current_price": 22512.6,
             "last_ts": "2026-11-09T15:29:00+05:30",
+            "data_scope": "today_only",
+            "today_ist_date": "2026-11-09",
             "resistances": [
                 {
                     "level": "resistance",
@@ -396,7 +436,10 @@ SR_EVENT_TYPES: dict[str, dict[str, Any]] = {
         },
     },
     "sr_heartbeat": {
-        "description": "Per-cycle SR heartbeat for one (instrument, config).",
+        "description": (
+            "Per-cycle SR heartbeat for one (instrument, config). Counts and "
+            "nearest levels are derived from today's pivots only."
+        ),
         "when": "every SR_HEARTBEAT_CYCLES cycles per config",
         "sample": {
             "event": "heartbeat",
@@ -410,10 +453,10 @@ SR_EVENT_TYPES: dict[str, dict[str, Any]] = {
             "nearest_resistance": 22540.0,
             "nearest_support": 22480.5,
             "status": "ok",
+            "data_scope": "today_only",
         },
     },
 }
-
 
 CLOSE_CODES: dict[int, dict[str, str]] = {
     1000: {"name": "Normal Closure", "reason": "Client disconnected normally."},
@@ -447,9 +490,19 @@ CLIENT_BEHAVIOUR: dict[str, Any] = {
         "live: heartbeat / cross / no_cross",
     ],
     "sr_message_sequence": [
-        "snapshot (one frame per config)",
-        "live: heartbeat / sr_update (per config, tagged with 'config')",
+        "connection_ack (always, first frame)",
+        "snapshot (one frame per config, today-only)",
+        "live: heartbeat / sr_update (per config, today-only)",
     ],
+    "sr_data_scope": {
+        "description": (
+            "Every SR payload (snapshot / sr_update / heartbeat) carries "
+            "`data_scope: \"today_only\"` and only includes pivots whose "
+            "pivot_time is today (IST). Clients should drop any SR cache "
+            "entry whose today_ist_date is not the current IST date."
+        ),
+        "scope_note": SR_SCOPE_NOTE,
+    },
 }
 
 CLIENT_EXAMPLES: dict[str, str] = {
@@ -538,13 +591,11 @@ SR_REST_ENDPOINTS: dict[str, str] = {
     "unsubscribe": "POST /api/v1/sr/unsubscribe/{instrument_key}?config=15/3  (or ?config=all)",
 }
 
-
 # --------------------------------------------------------------------------- #
 # Service accessors
 # --------------------------------------------------------------------------- #
 def _now_ist_iso() -> str:
     return datetime.now(IST).isoformat()
-
 
 def _service(request: Request):
     svc = getattr(request.app.state, "ema_feed_service", None)
@@ -552,11 +603,9 @@ def _service(request: Request):
         raise HTTPException(status_code=503, detail="EMA service unavailable")
     return svc
 
-
 def _sr_service(request: Request):
     """Return the SR service if registered, otherwise None (SR_ENABLED=false)."""
     return getattr(request.app.state, "sr_feed_service", None)
-
 
 def _sr_default_configs(request: Request) -> list[str]:
     svc = _sr_service(request)
@@ -569,7 +618,6 @@ def _sr_default_configs(request: Request) -> list[str]:
             logger.debug("SR default_configs() raised; using fallback", exc_info=True)
     return list(SR_DEFAULT_CONFIGS_FALLBACK)
 
-
 def _resolve_proto_host(request: Request) -> tuple[str, str]:
     proto = (
         request.headers.get("x-forwarded-proto") or request.url.scheme
@@ -579,18 +627,15 @@ def _resolve_proto_host(request: Request) -> tuple[str, str]:
     ).split(",")[0].strip()
     return proto, host
 
-
 def _ws_base(request: Request) -> str:
     proto, host = _resolve_proto_host(request)
     scheme = "wss" if proto == "https" else "ws"
     return f"{scheme}://{host}"
 
-
 def _http_base(request: Request) -> str:
     proto, host = _resolve_proto_host(request)
     scheme = "https" if proto == "https" else "http"
     return f"{scheme}://{host}"
-
 
 def _format_strike(strike: Any) -> str:
     try:
@@ -601,7 +646,6 @@ def _format_strike(strike: Any) -> str:
         return str(int(n))
     return str(n)
 
-
 def _index_tag(meta: dict[str, Any]) -> str:
     """Folder → canonical → underlying.lower() for index URLs / channels."""
     tag = (
@@ -610,7 +654,6 @@ def _index_tag(meta: dict[str, Any]) -> str:
         or (meta.get("underlying") or "")
     )
     return (tag or "").strip().lower()
-
 
 # --------------------------------------------------------------------------- #
 # EMA URL / channel builders
@@ -637,7 +680,6 @@ def _ws_urls_for(meta: dict[str, Any], base: str) -> dict[str, str]:
             )
     return urls
 
-
 def _channels_for(meta: dict[str, Any]) -> list[str]:
     key = meta.get("instrument_key") or ""
     underlying = (meta.get("underlying") or "").lower()
@@ -656,7 +698,6 @@ def _channels_for(meta: dict[str, Any]) -> list[str]:
         )
     return channels
 
-
 def _compact_state(snapshot: dict[str, Any]) -> dict[str, Any]:
     return {
         "ema9": snapshot.get("ema_fast"),
@@ -668,7 +709,6 @@ def _compact_state(snapshot: dict[str, Any]) -> dict[str, Any]:
         "cycle_number": snapshot.get("cycle_number"),
     }
 
-
 def _best_url(urls: dict[str, str]) -> str:
     return (
         urls.get("options")
@@ -676,7 +716,6 @@ def _best_url(urls: dict[str, str]) -> str:
         or urls.get("instrument")
         or ""
     )
-
 
 # --------------------------------------------------------------------------- #
 # SR URL / channel builders
@@ -687,7 +726,6 @@ def _sr_url_for(meta: dict[str, Any], base: str, config: str) -> str:
         return ""
     # Keep '/' in the query value readable (servers accept it unencoded).
     return f"{base}/ws/sr/{quote(key, safe='')}?config={config}"
-
 
 def _sr_urls_for(
     meta: dict[str, Any],
@@ -705,19 +743,16 @@ def _sr_urls_for(
         urls["all"] = f"{base}/ws/sr/{quote(key, safe='')}?config=all"
     return urls
 
-
 def _sr_channels_for(meta: dict[str, Any], configs: list[str]) -> list[str]:
     key = meta.get("instrument_key") or ""
     if not key:
         return []
     return [f"sr:{key}:{cfg}" for cfg in configs]
 
-
 def _best_sr_url(meta: dict[str, Any], base: str, configs: list[str]) -> str:
     if not configs:
         return ""
     return _sr_url_for(meta, base, configs[0])
-
 
 def _sr_compact_state(snapshot: dict[str, Any]) -> dict[str, Any]:
     res = snapshot.get("resistances") or []
@@ -729,8 +764,9 @@ def _sr_compact_state(snapshot: dict[str, Any]) -> dict[str, Any]:
         "nearest_support": sup[0]["price"] if sup else None,
         "resistance_count": len(res),
         "support_count": len(sup),
+        "data_scope": snapshot.get("data_scope", "today_only"),
+        "today_ist_date": snapshot.get("today_ist_date"),
     }
-
 
 def _sr_current_snapshots(
     request: Request,
@@ -754,7 +790,6 @@ def _sr_current_snapshots(
             out[cfg] = _sr_compact_state(snap)
     return out
 
-
 def _sr_status_safe(request: Request) -> dict[str, Any]:
     svc = _sr_service(request)
     if svc is None:
@@ -765,7 +800,6 @@ def _sr_status_safe(request: Request) -> dict[str, Any]:
     except Exception:  # noqa: BLE001
         logger.exception("SR status() failed")
         return {"available": False, "error": "status() raised"}
-
 
 # --------------------------------------------------------------------------- #
 # GET /api/v1/ws/catalog
@@ -833,6 +867,7 @@ def ws_catalog(
                 "sr_current_snapshots": _sr_current_snapshots(
                     request, meta, sr_configs
                 ),
+                "sr_data_scope": "today_only",
             }
         )
 
@@ -990,10 +1025,12 @@ def ws_catalog(
         },
         "step_3_verify": {
             "description": (
-                "First message is a snapshot. EMA then emits "
-                "heartbeat / cross / no_cross; SR then emits "
-                "heartbeat / sr_update per config. Every SR level in the "
-                "snapshot / sr_update payloads follows sr_level_schema."
+                "EMA: first message is a snapshot; then heartbeat / cross / "
+                "no_cross. SR: first message is connection_ack, then one "
+                "snapshot per config (today-only SR levels), then "
+                "heartbeat / sr_update. Every SR level in the snapshot / "
+                "sr_update payloads follows sr_level_schema and carries "
+                "data_scope=\"today_only\"."
             ),
         },
         "if_not_in_catalog": {
@@ -1040,7 +1077,6 @@ def ws_catalog(
             "note": "URL-encode '|' as %7C and spaces as %20.",
         },
     }
-
 
 # --------------------------------------------------------------------------- #
 # GET /api/v1/ws/catalog/{instrument_key}
@@ -1110,6 +1146,8 @@ def ws_catalog_instrument(
         },
         "sr_default_configs": list(sr_configs),
         "sr_service_available": sr_svc is not None,
+        "sr_data_scope": "today_only",
+        "sr_scope_note": SR_SCOPE_NOTE,
     }
 
     if is_subscribed and snap is not None:
@@ -1150,7 +1188,8 @@ def ws_catalog_instrument(
         else:
             response["sr_how_to_connect"] = (
                 f"Open a WebSocket to {best_sr_url}. The endpoint will "
-                f"auto-subscribe this instrument for the requested config."
+                f"auto-subscribe this instrument for the requested config. "
+                f"Data is today-only."
             )
 
     response["connect_request"] = {
@@ -1174,6 +1213,7 @@ def ws_catalog_instrument(
                 "Sec-WebSocket-Version": "13",
             },
             "auth": "none",
+            "initial_frames": ["connection_ack", "snapshot"],
         }
         for cfg in sr_configs
         if sr_urls.get(f"config:{cfg}")
@@ -1189,6 +1229,7 @@ def ws_catalog_instrument(
             },
             "auth": "none",
             "note": "Subscribes every default config; one snapshot per config.",
+            "initial_frames": ["connection_ack"] + ["snapshot"] * len(sr_configs),
         }
 
     # Preserve the existing EMA event contract exactly.

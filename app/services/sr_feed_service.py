@@ -14,6 +14,41 @@ Config format: "<left_bars>/<right_bars>" (see sr_calculator.py).
 
 Broadcast channel per (instrument, config):
     sr:<instrument_key>:<left_bars>/<right_bars>
+
+Today-only policy
+-----------------
+Per the product requirement, SR data exposed to WebSocket clients is
+filtered to levels whose pivot bar was formed **today (IST)**. The
+underlying calculation still uses the merged (historical + intraday)
+candle set so pivots are detected accurately, but `_today_only_result`
+drops any pivot whose `pivot_time` is not today before the payload is
+emitted. Every snapshot / sr_update / heartbeat payload therefore
+carries:
+
+    "data_scope":  "today_only"
+    "today_ist_date": "YYYY-MM-DD"
+
+The initial WebSocket snapshot additionally carries:
+
+    "feed_status":  "connected"
+    "feed_message": "Feed connected successfully"
+    "scope_note":   "For further reference, only today's SR levels are used"
+
+Full-pivot view (``levels``)
+----------------------------
+Alongside the side-filtered + capped ``resistances`` / ``supports``
+views, every snapshot and sr_update also carries a ``levels`` array
+containing **every** today pivot, chronological by ``pivot_bar_index``
+— i.e. exactly what a manual export of today's SR pivots would contain.
+This lets consumers (dashboards, the ``today_sr.json`` writer, external
+tools) see the full today-only SR picture without having to infer the
+side-filtered subset back to the original pivot list.
+
+``levels`` is the today-only projection of ``compute_sr()``'s
+``all_pivots`` field. ``sr_level_count`` equals ``len(levels)``.
+
+See app/api/sr.py for the `connection_ack` frame that precedes the
+first snapshot on every new WebSocket connection.
 """
 
 from __future__ import annotations
@@ -24,6 +59,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, TYPE_CHECKING
 
 from app.config import INDEX_METADATA, Settings
+from app.services.ema_calculator import parse_ts
 from app.services.feed_broadcaster import FeedBroadcaster
 from app.services.instrument_store import InstrumentStore, InstrumentStoreError
 from app.services.sr_calculator import (
@@ -44,14 +80,11 @@ logger = logging.getLogger(__name__)
 IST = timezone(timedelta(hours=5, minutes=30))
 CYCLE_OFFSET_SECONDS = 10
 
-
 class SrFeedError(RuntimeError):
     pass
 
-
 def _now_ist() -> datetime:
     return datetime.now(tz=IST)
-
 
 def _level_signature(p: dict) -> tuple:
     """
@@ -73,7 +106,6 @@ def _level_signature(p: dict) -> tuple:
         p.get("pivot_bar_index"),
     )
 
-
 def _levels_equal(a: dict | None, b: dict | None) -> bool:
     """True if both snapshots carry the same resistance/support identities."""
     if a is None and b is None:
@@ -91,7 +123,6 @@ def _levels_equal(a: dict | None, b: dict | None) -> bool:
             if _level_signature(x) != _level_signature(y):
                 return False
     return True
-
 
 class SrFeedService:
     def __init__(
@@ -114,7 +145,8 @@ class SrFeedService:
         self._semaphore = asyncio.Semaphore(max(1, config.sr_max_workers))
 
         # instrument_key -> {"meta": {...},
-        #                    "configs": {cfg: {"last": ..., "candle_count": N}},
+        #                    "configs": {cfg: {"last": ..., "last_filtered": ...,
+        #                                      "candle_count": N}},
         #                    "_history": [...]}
         self._runtime: dict[str, dict[str, Any]] = {}
         self._subscribed: set[tuple[str, str]] = set()
@@ -144,6 +176,82 @@ class SrFeedService:
 
     def default_configs(self) -> list[str]:
         return list(self.config.sr_default_configs_list or DEFAULT_CONFIGS)
+
+    # ------------------------------------------------------------------
+    # Today-only filtering
+    # ------------------------------------------------------------------
+    def _filter_pivots_today(
+        self, pivots: list[dict], today_ist
+    ) -> list[dict]:
+        """
+        Keep only pivots whose ``pivot_time`` falls on ``today_ist`` (IST).
+
+        Pivots with an unparseable / missing timestamp are dropped — we
+        never want to leak yesterday's levels into a today-only payload.
+        Order is preserved (find_pivots returns chronological by
+        ``pivot_bar_index``).
+        """
+        filtered: list[dict] = []
+        today_iso = today_ist.isoformat()
+        for p in pivots:
+            if not isinstance(p, dict):
+                continue
+            ts = parse_ts(p.get("pivot_time"))
+            if ts is None:
+                continue
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=IST)
+            try:
+                if ts.astimezone(IST).date().isoformat() == today_iso:
+                    filtered.append(p)
+            except (ValueError, OSError):
+                continue
+        return filtered
+
+    def _today_only_result(
+        self, result: dict[str, Any] | None, today_ist
+    ) -> dict[str, Any]:
+        """
+        Return a copy of ``result`` with:
+
+          * ``resistances`` / ``supports`` filtered to today's pivots
+            (side-filtered + capped subsets, unchanged semantics);
+          * ``levels`` — the FULL today-pivot list, chronological by
+            ``pivot_bar_index`` (mirrors a manual export of today's SR
+            pivots). Same shape as every other level entry;
+          * ``sr_level_count`` — ``len(levels)`` for convenience;
+          * ``data_scope`` / ``today_ist_date`` markers.
+        """
+        if not isinstance(result, dict):
+            return {
+                "resistances": [],
+                "supports": [],
+                "levels": [],
+                "sr_level_count": 0,
+                "current_price": None,
+                "last_ts": None,
+                "config": None,
+                "left_bars": None,
+                "right_bars": None,
+                "data_scope": "today_only",
+                "today_ist_date": today_ist.isoformat(),
+            }
+        out = dict(result)
+        out.pop("all_pivots", None)  # avoid leaking the raw key; use ``levels``
+        out["resistances"] = self._filter_pivots_today(
+            result.get("resistances") or [], today_ist
+        )
+        out["supports"] = self._filter_pivots_today(
+            result.get("supports") or [], today_ist
+        )
+        levels = self._filter_pivots_today(
+            result.get("all_pivots") or [], today_ist
+        )
+        out["levels"] = levels
+        out["sr_level_count"] = len(levels)
+        out["data_scope"] = "today_only"
+        out["today_ist_date"] = today_ist.isoformat()
+        return out
 
     # ------------------------------------------------------------------
     # Bootstrap
@@ -213,8 +321,12 @@ class SrFeedService:
             )
             return
 
+        today_ist = _now_ist().date()
         runtime["configs"].setdefault(config, {})
         runtime["configs"][config]["last"] = result
+        runtime["configs"][config]["last_filtered"] = self._today_only_result(
+            result, today_ist
+        )
         runtime["configs"][config]["candle_count"] = len(merged)
         try:
             self.state_store.save(instrument_key, meta, config, result)
@@ -248,8 +360,13 @@ class SrFeedService:
 
             if canonical_cfg not in runtime["configs"]:
                 persisted = self.state_store.load(canonical_key, meta, canonical_cfg)
+                last_result = (persisted or {}).get("last") or persisted
                 runtime["configs"][canonical_cfg] = {
-                    "last": (persisted or {}).get("last") or persisted,
+                    "last": last_result,
+                    "last_filtered": (
+                        self._today_only_result(last_result, _now_ist().date())
+                        if last_result else None
+                    ),
                     "candle_count": int((persisted or {}).get("candle_count") or 0),
                 }
 
@@ -419,6 +536,7 @@ class SrFeedService:
         emissions: list[tuple[str, dict]] = []
         heartbeats: list[tuple[str, dict]] = []
         meta = runtime["meta"]
+        today_ist = _now_ist().date()
 
         for cfg in configs:
             try:
@@ -431,22 +549,33 @@ class SrFeedService:
                 )
                 continue
 
-            slot = runtime["configs"].setdefault(cfg, {"last": None, "candle_count": 0})
-            changed = not _levels_equal(slot.get("last"), result)
-            slot["last"] = result
+            # Today-only projection — this is what clients actually see.
+            filtered = self._today_only_result(result, today_ist)
+
+            slot = runtime["configs"].setdefault(
+                cfg, {"last": None, "last_filtered": None, "candle_count": 0}
+            )
+            # Change detection runs on the FILTERED payload so historical
+            # pivots appearing/disappearing do not force redundant updates.
+            changed = not _levels_equal(slot.get("last_filtered"), filtered)
+
+            slot["last"] = result            # full result kept in memory
+            slot["last_filtered"] = filtered # today-only view for change detection
             slot["candle_count"] = len(merged)
 
             try:
+                # Persist the full result — snapshot() re-applies the
+                # today-only filter at read time so restarts stay consistent.
                 self.state_store.save(instrument_key, meta, cfg, result)
             except Exception:  # noqa: BLE001
                 logger.exception("SR persist failed for %s / %s", instrument_key, cfg)
 
             if changed:
                 emissions.append(
-                    (cfg, self._build_update_event(instrument_key, meta, result))
+                    (cfg, self._build_update_event(instrument_key, meta, filtered))
                 )
             heartbeats.append(
-                (cfg, self._build_heartbeat(instrument_key, meta, result))
+                (cfg, self._build_heartbeat(instrument_key, meta, filtered))
             )
 
         return {"emissions": emissions, "heartbeats": heartbeats}
@@ -466,6 +595,10 @@ class SrFeedService:
         cfg = runtime["configs"].get(canonical_cfg)
         if not cfg or not cfg.get("last"):
             return None
+
+        today_ist = _now_ist().date()
+        filtered = self._today_only_result(cfg["last"], today_ist)
+
         return {
             "instrument_key": canonical_key,
             "meta": runtime["meta"],
@@ -475,7 +608,12 @@ class SrFeedService:
                 self._last_cycle_start.isoformat()
                 if self._last_cycle_start else None
             ),
-            **cfg["last"],
+            # ---- Initial-feed markers ----
+            "feed_status": "connected",
+            "feed_message": "Feed connected successfully",
+            "scope_note": "For further reference, only today's SR levels are used",
+            # ---- Today-only data (includes ``levels`` and ``sr_level_count``)
+            **filtered,
         }
 
     def status(self) -> dict[str, Any]:
@@ -492,6 +630,8 @@ class SrFeedService:
             "subscription_count": len(self._subscribed),
             "subscriptions": by_instrument,
             "channels": self.broadcaster.channel_counts(),
+            "data_scope": "today_only",
+            "scope_note": "For further reference, only today's SR levels are used",
         }
 
     def subscribed_pairs(self) -> list[tuple[str, str]]:
@@ -528,39 +668,46 @@ class SrFeedService:
         runtime["_history"] = candles[-limit:]
 
     def _build_update_event(
-        self, instrument_key: str, meta: dict, result: dict
+        self, instrument_key: str, meta: dict, filtered_result: dict
     ) -> dict[str, Any]:
         return {
             "event": "sr_update",
             "instrument_key": instrument_key,
             "trading_symbol": meta.get("trading_symbol"),
-            "config": result.get("config"),
-            "current_price": result.get("current_price"),
-            "last_ts": result.get("last_ts"),
-            "resistances": result.get("resistances"),
-            "supports": result.get("supports"),
+            "config": filtered_result.get("config"),
+            "current_price": filtered_result.get("current_price"),
+            "last_ts": filtered_result.get("last_ts"),
+            "resistances": filtered_result.get("resistances"),
+            "supports": filtered_result.get("supports"),
+            # Full today-pivot view (same shape as a manual export).
+            "levels": filtered_result.get("levels"),
+            "sr_level_count": filtered_result.get("sr_level_count"),
+            "data_scope": "today_only",
+            "today_ist_date": filtered_result.get("today_ist_date"),
         }
 
     def _build_heartbeat(
-        self, instrument_key: str, meta: dict, result: dict
+        self, instrument_key: str, meta: dict, filtered_result: dict
     ) -> dict[str, Any]:
-        res = result.get("resistances") or []
-        sup = result.get("supports") or []
+        res = filtered_result.get("resistances") or []
+        sup = filtered_result.get("supports") or []
         return {
             "event": "heartbeat",
             "instrument_key": instrument_key,
             "trading_symbol": meta.get("trading_symbol"),
-            "config": result.get("config"),
+            "config": filtered_result.get("config"),
             "cycle": self._cycle_number,
             "cycle_time": (
                 self._last_cycle_start.isoformat()
                 if self._last_cycle_start else None
             ),
-            "current_price": result.get("current_price"),
-            "last_ts": result.get("last_ts"),
+            "current_price": filtered_result.get("current_price"),
+            "last_ts": filtered_result.get("last_ts"),
             "nearest_resistance": res[0]["price"] if res else None,
             "nearest_support": sup[0]["price"] if sup else None,
+            "sr_level_count": filtered_result.get("sr_level_count"),
             "status": "ok",
+            "data_scope": "today_only",
         }
 
     @staticmethod

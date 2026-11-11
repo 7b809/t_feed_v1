@@ -14,11 +14,46 @@ REST
 WebSocket
   /ws/sr/{instrument_key}?config=15/3      (or config=all for the 3 defaults)
   /ws/sr/index/{underlying}?config=15/3    (underlying alias)
+
+Connection handshake (WebSocket)
+--------------------------------
+On every new WebSocket connection the server sends, in this order:
+
+  1.  ``event: "connection_ack"``
+        Confirms the socket is live and tells the client that the feed
+        operates in *today-only* SR mode:
+
+            {
+              "event":          "connection_ack",
+              "status":         "connected",
+              "message":        "Feed connected successfully",
+              "data_scope":     "today_only",
+              "today_ist_date": "YYYY-MM-DD",   <-- current IST date
+              "scope_note":     "For further reference, only today's SR levels are used",
+              "instrument_key": "<key>",
+              "configs":        ["15/3", ...]
+            }
+
+        ``today_ist_date`` is present on the very first frame so a
+        well-behaved client can verify the today-only scope immediately
+        — it does not have to wait for the first ``snapshot``.
+
+  2.  One ``event: "snapshot"`` frame per config, carrying only levels
+      whose pivot bar was formed today (IST). Snapshot also embeds the
+      same ``feed_status`` / ``feed_message`` / ``data_scope`` /
+      ``today_ist_date`` / ``scope_note`` fields so a stateless client
+      that missed the connection_ack still sees the policy.
+
+  3.  Live frames (``heartbeat`` every SR_HEARTBEAT_CYCLES cycles,
+      ``sr_update`` whenever the today-only level set changes) — all
+      tagged with ``"data_scope": "today_only"`` and
+      ``"today_ist_date": "YYYY-MM-DD"``.
 """
 
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import (
@@ -41,7 +76,14 @@ from app.services.sr_feed_service import SrFeedError
 
 logger = logging.getLogger(__name__)
 
+IST = timezone(timedelta(hours=5, minutes=30))
+
 router = APIRouter(tags=["sr"])
+
+
+def _now_ist_date_iso() -> str:
+    """Current IST date as 'YYYY-MM-DD' — used for the today-only scope marker."""
+    return datetime.now(IST).date().isoformat()
 
 
 def _service(request: Request):
@@ -83,6 +125,9 @@ def sr_configs(request: Request) -> dict[str, Any]:
         "canonical": list(DEFAULT_CONFIGS),
         "format": "<left_bars>/<right_bars>",
         "examples": ["15/3", "15/15", "15/30"],
+        "data_scope": "today_only",
+        "today_ist_date": _now_ist_date_iso(),
+        "scope_note": "For further reference, only today's SR levels are used",
         "notes": {
             "left_bars": "bars to the LEFT of the pivot to compare against",
             "right_bars": (
@@ -108,7 +153,13 @@ def sr_latest(
     canonical_key = svc.canonical_key(instrument_key)
 
     if config.strip().lower() == "all":
-        result: dict[str, Any] = {"instrument_key": canonical_key, "configs": {}}
+        result: dict[str, Any] = {
+            "instrument_key": canonical_key,
+            "data_scope": "today_only",
+            "today_ist_date": _now_ist_date_iso(),
+            "scope_note": "For further reference, only today's SR levels are used",
+            "configs": {},
+        }
         for cfg in svc.default_configs():
             snap = svc.snapshot(canonical_key, cfg)
             if snap is not None:
@@ -144,7 +195,12 @@ async def sr_subscribe(
                 results.append(await svc.subscribe(instrument_key, cfg))
             except SrFeedError as exc:
                 results.append({"config": cfg, "error": str(exc)})
-        return {"instrument_key": svc.canonical_key(instrument_key), "results": results}
+        return {
+            "instrument_key": svc.canonical_key(instrument_key),
+            "data_scope": "today_only",
+            "today_ist_date": _now_ist_date_iso(),
+            "results": results,
+        }
 
     canonical_cfg = _normalize_config_or_400(config)
     try:
@@ -217,6 +273,27 @@ async def _serve_sr_ws(
     for ch in channels:
         await svc.broadcaster.register(ch, websocket)
 
+    # ------------------------------------------------------------------ #
+    # 1) Connection acknowledgement  (sent ONCE, before any snapshot)
+    #
+    #    Carries today_ist_date so a well-behaved client can verify the
+    #    today-only scope on the very first frame — it does not have to
+    #    wait for the snapshot.
+    # ------------------------------------------------------------------ #
+    await websocket.send_json({
+        "event": "connection_ack",
+        "status": "connected",
+        "message": "Feed connected successfully",
+        "instrument_key": canonical_key,
+        "configs": subscribed,
+        "data_scope": "today_only",
+        "today_ist_date": _now_ist_date_iso(),
+        "scope_note": "For further reference, only today's SR levels are used",
+    })
+
+    # ------------------------------------------------------------------ #
+    # 2) Today-only snapshot, one frame per config
+    # ------------------------------------------------------------------ #
     for cfg in subscribed:
         snap = svc.snapshot(canonical_key, cfg)
         if snap is not None:

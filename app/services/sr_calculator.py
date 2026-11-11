@@ -39,6 +39,14 @@ Each returned level carries:
 Sides returned are split against the latest close:
   * resistances — pivot highs >= current price, sorted ascending (nearest first)
   * supports    — pivot lows  <= current price, sorted descending (nearest first)
+
+Additionally, the full UNFILTERED pivot list is returned under the key
+``all_pivots`` — every confirmed pivot (both highs and lows, regardless
+of the current price), sorted chronologically by ``pivot_bar_index``.
+This exists so downstream consumers (e.g. the dashboard, the today-only
+SR file written by scripts/sr_ws_client_nifty_15_3.py) can reproduce the
+same set of levels as a manual export without the side-split or the
+``max_per_side`` cap.
 """
 
 from __future__ import annotations
@@ -50,10 +58,8 @@ DEFAULT_CONFIGS: tuple[str, ...] = ("15/3", "15/15", "15/30")
 
 _CONFIG_RE = re.compile(r"^\s*(\d+)\s*[/_\-]\s*(\d+)\s*$")
 
-
 class SrCalculationError(ValueError):
     """Raised on invalid config or impossible input."""
-
 
 # --------------------------------------------------------------------------- #
 # Config parsing
@@ -76,18 +82,15 @@ def parse_config(config: str) -> tuple[int, int]:
         raise SrCalculationError("right_bars must be in 1..500")
     return left_bars, right_bars
 
-
 def config_slug(config: str) -> str:
     """Canonical '15/3' form used in storage keys and channel tags."""
     left_bars, right_bars = parse_config(config)
     return f"{left_bars}/{right_bars}"
 
-
 def config_token(config: str) -> str:
     """URL-safe form for path segments: '15/3' -> '15_3'."""
     left_bars, right_bars = parse_config(config)
     return f"{left_bars}_{right_bars}"
-
 
 # --------------------------------------------------------------------------- #
 # Pivot detection
@@ -103,6 +106,9 @@ def find_pivots(
     A pivot at index ``i`` is confirmed at index ``i + right_bars``. Only
     bars that have at least ``right_bars`` following bars are candidates
     (the most recent ``right_bars`` bars cannot be pivots yet).
+
+    The returned list is sorted chronologically by ``pivot_bar_index``
+    (ascending) because the loop appends in increasing ``i`` order.
     """
     if left_bars < 1 or right_bars < 1:
         return []
@@ -181,7 +187,6 @@ def find_pivots(
 
     return pivots
 
-
 # --------------------------------------------------------------------------- #
 # Compute
 # --------------------------------------------------------------------------- #
@@ -202,8 +207,11 @@ def compute_sr(
           "current_price": 22500.0,
           "last_ts": "2026-11-09T15:29:00+05:30",
           "candle_count": 3375,
+          # Side-filtered + capped views (backwards-compatible):
           "resistances": [<level>, ...],   # ascending (nearest first)
-          "supports":    [<level>, ...]    # descending (nearest first)
+          "supports":    [<level>, ...],   # descending (nearest first)
+          # NEW: ALL pivots (no side split, no cap), chronological:
+          "all_pivots":  [<level>, ...],
         }
 
     Each <level> is:
@@ -243,9 +251,16 @@ def compute_sr(
         if p["level"] == "support" and p["price"] <= current_price
     ]
 
-    # Nearest-first ordering.
+    # Nearest-first ordering for the side-filtered views.
     resistances.sort(key=lambda p: p["price"])        # closest above first
     supports.sort(key=lambda p: -p["price"])          # closest below first
+
+    # ALL pivots, chronological (find_pivots already returns ascending by
+    # pivot_bar_index, but we sort defensively here so a future change to
+    # find_pivots cannot accidentally break consumers).
+    all_pivots = sorted(
+        pivots, key=lambda p: int(p.get("pivot_bar_index") or 0)
+    )
 
     return {
         "config": f"{left_bars}/{right_bars}",
@@ -256,4 +271,5 @@ def compute_sr(
         "candle_count": len(candles),
         "resistances": resistances[:max_per_side],
         "supports": supports[:max_per_side],
+        "all_pivots": all_pivots,
     }
