@@ -1,47 +1,4 @@
 # services/level_instrument_filter_service.py
-"""Level-instrument filter — G1 v3.2 multi-index variant.
-
-Per-index OR level processing:
-    * NIFTY      -> filtered CE/PE strike list (execution universe)
-    * SENSEX     -> filtered CE/PE strike list (info only)
-    * BANKNIFTY  -> filtered CE/PE strike list (info only)
-    * MIDCPNIFTY -> filtered CE/PE strike list (info only)
-
-The isolation engine routes ALL touches to NIFTY strikes, so only
-NIFTY's level_instruments.json is used for execution. The other three
-are still generated because first_candle.json must exist for them
-(each index needs its own R3/S3 for touch detection).
-
-Windows atomic-write fix (2026-11-06)
--------------------------------------
-``level_instruments.json`` is now written via ``_atomic_write_json()``,
-which retries the ``os.replace()`` step on ``PermissionError``
-(Windows ``WinError 5``).
-
-Failure observed on 2026-11-06 at 15:23:35:
-
-    PermissionError: [WinError 5] Access is denied:
-        '...\data\index\nifty\level_instruments.json.tmp'
-      → '...\data\index\nifty\level_instruments.json'
-
-Cause: two concurrent ``run()`` calls are correctly serialized by the
-instance lock, but a *third party* —
-``level_isolated_instrument_service._check_touches`` — was reading the
-same ``level_instruments.json`` in the very same second. On Windows,
-``os.replace()`` requires that every handle to the target file is
-closed before the rename can proceed; the reader's handle was not yet
-released even though the read itself had finished, so the rename
-raised ``WinError 5``.
-
-Effect was cosmetic (NIFTY's level_instruments.json stayed on the
-previous successful snapshot, which the isolation service had already
-consumed) but the log entry was noisy and one caller of the filter
-service got ``status=error`` for NIFTY.
-
-Fix: retry ``os.replace()`` up to 20 times at 50 ms intervals. The
-reader typically releases the handle within 1-2 attempts (~100 ms), so
-the extra latency is negligible.
-"""
 
 from __future__ import annotations
 
@@ -435,7 +392,6 @@ class LevelInstrumentFilterService:
 
         out_path = folder / "level_instruments.json"
         _atomic_write_json(out_path, payload)
-      
 
         if config.LIVE_SR_ENABLED:
             self._register_with_sr(index_key, ce_instruments, pe_instruments)
@@ -537,11 +493,19 @@ class LevelInstrumentFilterService:
             entry = self._find_listed_instrument(
                 underlying, strike, strike_type, step, direction,
             )
-            if entry is None and config.VERBOSE_LOG:
-                logger.warning(
-                    "[level-filter] no listed %s strike near %s for %s",
-                    strike_type, strike, underlying,
-                )
+
+            # 2026-11-11 fix: the `continue` MUST run whenever `entry`
+            # is None — it was previously nested inside the
+            # `VERBOSE_LOG` guard, so a default-config run fell
+            # straight through to `_entry_strike(None)` and crashed
+            # with AttributeError. The warning stays gated on
+            # VERBOSE_LOG; the skip does not.
+            if entry is None:
+                if config.VERBOSE_LOG:
+                    logger.warning(
+                        "[level-filter] no listed %s strike near %s for %s",
+                        strike_type, strike, underlying,
+                    )
                 continue
 
             resolved_strike = self._entry_strike(entry)
@@ -577,7 +541,16 @@ class LevelInstrumentFilterService:
         return out
 
     @staticmethod
-    def _entry_strike(entry: dict[str, Any]) -> int | None:
+    def _entry_strike(entry: dict[str, Any] | None) -> int | None:
+        """Return ``entry["strike_price"]`` as an int, or ``None``.
+
+        Accepts ``None`` and non-dict inputs and returns ``None``
+        instead of raising — belt-and-suspenders against a future
+        caller passing ``None`` directly. Behaviour for valid entries
+        is unchanged.
+        """
+        if not isinstance(entry, dict):
+            return None
         try:
             return int(float(entry.get("strike_price")))
         except (TypeError, ValueError):
