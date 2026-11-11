@@ -1,23 +1,12 @@
 #!/bin/bash
 
-APP_NAME="isolation_service"
-PORT=8001
+APP_NAME="isolation_consumer_service"
+PORT=8004
 
 PID_FILE="${APP_NAME}.pid"
 LOG_DIR="logs"
 VENV_DIR="myenv"
 REQUIREMENTS_FILE="requirements.txt"
-
-# --------------------------------------------------
-# IP binding feature flag
-# --------------------------------------------------
-# Set ENABLE_IP_BINDING=true to bind Uvicorn to a specific IP (BIND_IP).
-# Set ENABLE_IP_BINDING=false (default) to bind to 0.0.0.0 (all interfaces).
-#
-# Can be overridden from the shell, e.g.:
-#   ENABLE_IP_BINDING=true BIND_IP=192.168.1.50 ./start.sh
-ENABLE_IP_BINDING="${ENABLE_IP_BINDING:-false}"
-BIND_IP="${BIND_IP:-127.0.0.1}"
 
 echo "=========================================="
 echo "  Market Data Foundation"
@@ -27,36 +16,6 @@ echo "Starting FastAPI application..."
 echo
 
 mkdir -p "$LOG_DIR"
-
-# --------------------------------------------------
-# Resolve bind host based on feature flag
-# --------------------------------------------------
-
-if [ "$ENABLE_IP_BINDING" = "true" ]; then
-    HOST="$BIND_IP"
-
-    # Basic IPv4 sanity check
-    if ! [[ "$HOST" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
-        echo "ERROR: Invalid BIND_IP '$HOST'. Expected IPv4 like 192.168.1.50."
-        exit 1
-    fi
-
-    # Warn if the IP is not assigned to any local interface
-    if command -v ip >/dev/null 2>&1; then
-        if ! ip -o addr show 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | grep -qx "$HOST"; then
-            echo "WARNING: $HOST is not configured on any local interface."
-            echo "Uvicorn may fail to bind. Continuing anyway..."
-            echo
-        fi
-    fi
-
-    echo "IP binding ENABLED. Binding to $HOST"
-else
-    HOST="0.0.0.0"
-    echo "IP binding DISABLED. Binding to $HOST (all interfaces)"
-fi
-
-echo
 
 # --------------------------------------------------
 # Check if application is already running
@@ -183,7 +142,7 @@ echo "upstox_client: OK"
 
 echo
 echo "Starting FastAPI..."
-echo "Host: $HOST"
+echo "Host: 0.0.0.0"
 echo "Port: $PORT"
 echo "Python: $PYTHON"
 echo
@@ -191,8 +150,8 @@ echo
 # Keep startup errors in a dedicated log instead of /dev/null.
 STARTUP_LOG="$LOG_DIR/fastapi_startup.log"
 
-nohup "$PYTHON" -m uvicorn main:app \
-    --host "$HOST" \
+nohup "$PYTHON" -m uvicorn app.main:app \
+    --host 0.0.0.0 \
     --port "$PORT" \
     >"$STARTUP_LOG" 2>&1 &
 
@@ -212,7 +171,6 @@ if kill -0 "$PID" 2>/dev/null; then
     echo "Application started successfully."
     echo "=========================================="
     echo "PID:    $PID"
-    echo "Host:   $HOST"
     echo "Port:   $PORT"
     echo "Python: $PYTHON"
     echo "Venv:   $VENV_DIR"

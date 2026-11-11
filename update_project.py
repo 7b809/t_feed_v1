@@ -1,74 +1,13 @@
-# update_project.py
-"""Project update flow: backup logs, stop, git pull, restart.
-
-Also sends Telegram notifications during the update IF
-``UPDATE_DEBUG_MODE=true`` (default false — otherwise every update
-spams the operator channel). Notifications go through the project's
-existing ``core.telegram_notifier`` module, so they obey the same
-TELEGRAM_ENABLED / TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID gating as the
-running application.
-
-Usage
------
-    python3 update_project.py
-
-    # or, more reliably, with the project venv:
-    myenv/bin/python update_project.py
-
-    # to enable Telegram notifications for this run only:
-    UPDATE_DEBUG_MODE=true python3 update_project.py
-"""
-
 import os
 import subprocess
 import sys
 import shutil
+import asyncio
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-
-# --------------------------------------------------------------------------- #
-# Import core.telegram_notifier — with a graceful re-exec into myenv if the  #
-# active Python is missing the project's dependencies (dotenv / requests).   #
-# --------------------------------------------------------------------------- #
-try:
-    from core.telegram_notifier import (
-        is_enabled as telegram_is_enabled,
-        send_telegram_message,
-    )
-except ImportError as _import_err:
-    _project_dir = os.path.dirname(os.path.abspath(__file__))
-    _venv_python = os.path.join(_project_dir, "myenv", "bin", "python")
-    _already_reexeced = os.environ.get("_UPDATE_REEXEC_DONE") == "1"
-
-    # If we're running with system Python and a venv exists, re-exec into it
-    # so subsequent imports resolve. Guarded against infinite re-exec.
-    if (
-        not _already_reexeced
-        and os.path.isfile(_venv_python)
-        and sys.executable != _venv_python
-    ):
-        os.environ["_UPDATE_REEXEC_DONE"] = "1"
-        os.execv(_venv_python, [_venv_python, *sys.argv])
-
-    print(
-        f"ERROR: {_import_err}\n"
-        "\n"
-        "This usually means the active Python interpreter is missing the\n"
-        "project's dependencies (python-dotenv, requests, pymongo, ...).\n"
-        "\n"
-        f"  current Python:  {sys.executable}\n"
-        f"  project venv:    {_venv_python}\n"
-        "\n"
-        "Try running with the project venv:\n"
-        f"  {_venv_python} update_project.py\n"
-        "\n"
-        "Or activate the venv first:\n"
-        "  source myenv/bin/activate && python update_project.py",
-        file=sys.stderr,
-    )
-    sys.exit(1)
-
+from app.config import Settings
+from app.services.telegram_service import TelegramService
 
 PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -80,25 +19,20 @@ META_DATA_DIR = os.path.join(PROJECT_DIR, "meta_data")
 
 TIMEZONE = "Asia/Kolkata"
 
-# Local gate for update-time notifications. Default False so routine
-# updates do not spam the operator channel. Set UPDATE_DEBUG_MODE=true
-# in the shell (or in .env) when you want to see the full audit trail
-# of a specific update.
-DEBUG_MODE = (
-    os.getenv("UPDATE_DEBUG_MODE", "false").strip().lower() == "true"
-)
+DEBUG_MODE = False
+
+# ---------------------------------------------------------------------------
+# Telegram service — lazy singleton using the new async TelegramService
+# ---------------------------------------------------------------------------
+_telegram_service: TelegramService | None = None
 
 
-# --------------------------------------------------------------------------- #
-# Telegram helper                                                             #
-# --------------------------------------------------------------------------- #
-_LEVEL_EMOJI = {
-    "INFO": "ℹ️",
-    "WARNING": "⚠️",
-    "ERROR": "❌",
-    "SUCCESS": "✅",
-    "STARTUP": "🚀",
-}
+def _get_telegram_service() -> TelegramService:
+    """Lazily build the TelegramService singleton from env-backed Settings."""
+    global _telegram_service
+    if _telegram_service is None:
+        _telegram_service = TelegramService(Settings())
+    return _telegram_service
 
 
 def send_telegram(
@@ -106,36 +40,28 @@ def send_telegram(
     message: str,
     level: str = "INFO",
 ) -> None:
-    """Send a Telegram notification through ``core.telegram_notifier``.
+    """
+    Send a Telegram notification without interrupting
+    the update process if Telegram fails.
 
-    Silently no-ops when:
-
-      * ``DEBUG_MODE`` is False (default — routine updates stay quiet)
-      * Telegram is not enabled or not configured (``is_enabled()`` is
-        False, so no HTTP call is attempted)
-
-    A failure to send never interrupts the update flow. ``send_telegram_message``
-    is contractually non-raising; the ``try/except`` below only guards the
-    string-formatting path against unexpected ``title``/``message`` types.
+    Notifications are only sent when DEBUG_MODE is True.
+    Uses the new async TelegramService under the hood.
     """
     if not DEBUG_MODE:
         return
 
-    if not telegram_is_enabled():
-        return
-
-    emoji = _LEVEL_EMOJI.get(level.upper(), "ℹ️")
-    text = f"{emoji} {title}\n{message}"
-
     try:
-        send_telegram_message(text)
-    except Exception as error:  # pragma: no cover - defensive
+        asyncio.run(
+            _get_telegram_service().send_message(
+                title=title,
+                message=message,
+                level=level,
+            )
+        )
+    except Exception as error:
         print(f"WARNING: Telegram notification failed: {error}")
 
 
-# --------------------------------------------------------------------------- #
-# Shell helper                                                                #
-# --------------------------------------------------------------------------- #
 def run_command(
     command: list[str],
     step_name: str,
@@ -151,10 +77,7 @@ def run_command(
         )
 
         if result.returncode != 0:
-            error_message = (
-                f"{step_name} failed.\n"
-                f"Exit code: {result.returncode}"
-            )
+            error_message = f"{step_name} failed.\n" f"Exit code: {result.returncode}"
 
             print(f"\nERROR: {error_message}")
 
@@ -193,9 +116,6 @@ def run_command(
             sys.exit(1)
 
 
-# --------------------------------------------------------------------------- #
-# Log backup                                                                  #
-# --------------------------------------------------------------------------- #
 def backup_logs() -> None:
     print("\n==========================================")
     print("  Creating Logs Backup")
@@ -227,9 +147,7 @@ def backup_logs() -> None:
     try:
         os.makedirs(META_DATA_DIR, exist_ok=True)
 
-        current_datetime = datetime.now(ZoneInfo(TIMEZONE)).strftime(
-            "%Y%m%d_%H%M%S"
-        )
+        current_datetime = datetime.now(ZoneInfo(TIMEZONE)).strftime("%Y%m%d_%H%M%S")
 
         archive_base_name = os.path.join(
             META_DATA_DIR,
@@ -260,8 +178,7 @@ def backup_logs() -> None:
 
     except Exception as error:
         error_message = (
-            "Failed to create logs backup.\n"
-            f"Error: {type(error).__name__}: {error}"
+            "Failed to create logs backup.\n" f"Error: {type(error).__name__}: {error}"
         )
 
         print(f"\nERROR: {error_message}")
@@ -275,9 +192,6 @@ def backup_logs() -> None:
         sys.exit(1)
 
 
-# --------------------------------------------------------------------------- #
-# Main                                                                        #
-# --------------------------------------------------------------------------- #
 def main() -> None:
     print("==========================================")
     print("  Market Data Foundation")
@@ -286,17 +200,6 @@ def main() -> None:
 
     print("\nProject directory:")
     print(PROJECT_DIR)
-
-    telegram_state = (
-        "ENABLED"
-        if DEBUG_MODE and telegram_is_enabled()
-        else "DISABLED"
-    )
-    print(f"\nTelegram (update flow): {telegram_state}")
-    if not DEBUG_MODE:
-        print(
-            "  (set UPDATE_DEBUG_MODE=true to enable update notifications)"
-        )
 
     send_telegram(
         title="Project Update Started",
@@ -312,7 +215,10 @@ def main() -> None:
         backup_logs()
 
         # 2. Stop application
-        stop_script = os.path.join(PROJECT_DIR, STOP_SCRIPT)
+        stop_script = os.path.join(
+            PROJECT_DIR,
+            STOP_SCRIPT,
+        )
 
         if os.path.exists(stop_script):
             print("\nStopping application...")
@@ -330,7 +236,7 @@ def main() -> None:
             )
 
         else:
-            message = f"{STOP_SCRIPT} not found. Skipping application stop."
+            message = f"{STOP_SCRIPT} not found. " "Skipping application stop."
 
             print(f"\nWARNING: {message}")
 
@@ -357,13 +263,17 @@ def main() -> None:
         )
 
         # 5. Remove untracked files and directories
-        # Exclude meta_data so that log backups are preserved. .env and
-        # data/ are gitignored, so `git clean -fd` (which honours
-        # .gitignore) will not touch them.
-        print("\nRemoving untracked files and directories except meta_data...")
+        # Exclude meta_data so that log backups are preserved
+        print("\nRemoving untracked files and directories " "except meta_data...")
 
         run_command(
-            ["git", "clean", "-fd", "-e", "meta_data/"],
+            [
+                "git",
+                "clean",
+                "-fd",
+                "-e",
+                "meta_data/",
+            ],
             step_name="Git Clean",
         )
 
@@ -384,13 +294,22 @@ def main() -> None:
             level="INFO",
         )
 
-        start_script = os.path.join(PROJECT_DIR, START_SCRIPT)
+        start_script = os.path.join(
+            PROJECT_DIR,
+            START_SCRIPT,
+        )
+
+        stop_script = os.path.join(
+            PROJECT_DIR,
+            STOP_SCRIPT,
+        )
 
         if os.path.exists(start_script):
             run_command(
                 ["chmod", "+x", START_SCRIPT],
                 step_name="Start Script Permission Update",
             )
+
         else:
             message = f"{START_SCRIPT} not found."
 
@@ -407,6 +326,7 @@ def main() -> None:
                 ["chmod", "+x", STOP_SCRIPT],
                 step_name="Stop Script Permission Update",
             )
+
         else:
             message = f"{STOP_SCRIPT} not found."
 
@@ -440,10 +360,9 @@ def main() -> None:
                 ["bash", START_SCRIPT],
                 step_name="Application Start",
             )
+
         else:
-            message = (
-                f"{START_SCRIPT} not found. Application was not started."
-            )
+            message = f"{START_SCRIPT} not found. " "Application was not started."
 
             print(f"\nWARNING: {message}")
 

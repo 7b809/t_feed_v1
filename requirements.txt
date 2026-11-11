@@ -1,7 +1,9 @@
-upstox-python-sdk
-pymongo
-requests
-apscheduler
-python-dotenv
-uvicorn[standard]
 fastapi
+uvicorn[standard]
+websockets
+pymongo
+python-dotenv
+APScheduler
+httpx
+pytest
+pyperclip

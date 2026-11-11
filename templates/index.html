@@ -1,0 +1,75 @@
+<!-- templates/index.html -->
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>isolation_consumer_service</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body { font-family: ui-sans-serif, system-ui, sans-serif; background:#0b0f14; color:#e6e6e6; margin:0; padding:24px; }
+    h1 { font-size:20px; margin:0 0 16px; }
+    .muted { color:#8a97a8; font-size:12px; }
+    table { border-collapse: collapse; width:100%; margin-top:12px; font-size:13px; }
+    th, td { text-align:left; padding:8px 10px; border-bottom:1px solid #1f2733; }
+    th { color:#8a97a8; font-weight:500; font-size:12px; text-transform:uppercase; letter-spacing:.05em; }
+    .ok   { color:#42d392; }
+    .warn { color:#ffb84d; }
+    .bad  { color:#ff5c5c; }
+    code { background:#141b23; padding:2px 6px; border-radius:4px; }
+    .card { background:#0f141b; border:1px solid #1f2733; border-radius:8px; padding:16px; margin-top:16px; }
+  </style>
+</head>
+<body>
+  <h1>isolation_consumer_service</h1>
+  <div class="muted">Auto-refresh every 5s · <span id="ts"></span></div>
+
+  <div class="card">
+    <div><strong>Overall</strong> <span class="muted" id="overall-raw"></span></div>
+    <div class="muted" style="margin-top:6px;">
+      isolations: <span id="iso-count">–</span> ·
+      active legs: <span id="legs-count">–</span>
+    </div>
+    <table>
+      <thead>
+        <tr><th>instrument</th><th>leg</th><th>state</th><th>last frame</th></tr>
+      </thead>
+      <tbody id="conns"><tr><td colspan="4" class="muted">loading…</td></tr></tbody>
+    </table>
+  </div>
+
+<script>
+async function refresh() {
+  try {
+    const r = await fetch('/api/v1/status', { cache: 'no-store' });
+    const s = await r.json();
+    document.getElementById('iso-count').textContent  = s.isolation_count;
+    document.getElementById('legs-count').textContent = s.active_legs;
+    document.getElementById('overall-raw').textContent = s.running ? 'running' : 'not running';
+
+    const tbody = document.getElementById('conns');
+    if (!s.connections || s.connections.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="4" class="muted">no active connections</td></tr>';
+    } else {
+      tbody.innerHTML = s.connections.map(c => {
+        const cls = c.ws_state === 'connected' ? 'ok'
+                  : c.ws_state === 'failed'   ? 'bad'
+                  : c.ws_state === 'reconnecting' ? 'warn' : 'muted';
+        return `<tr>
+          <td><code>${c.instrument_key}</code></td>
+          <td>${c.leg}</td>
+          <td class="${cls}">${c.ws_state}</td>
+          <td class="muted">${c.last_frame_at || '—'}</td>
+        </tr>`;
+      }).join('');
+    }
+    document.getElementById('ts').textContent = new Date().toLocaleTimeString();
+  } catch (e) {
+    document.getElementById('conns').innerHTML =
+      `<tr><td colspan="4" class="bad">fetch error: ${e.message}</td></tr>`;
+  }
+}
+refresh();
+setInterval(refresh, 5000);
+</script>
+</body>
+</html>

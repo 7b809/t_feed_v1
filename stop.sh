@@ -1,6 +1,6 @@
 #!/bin/bash
 
-APP_NAME="isolation_service"
+APP_NAME="isolation_consumer_service"
 PID_FILE="${APP_NAME}.pid"
 
 echo "=========================================="

@@ -47,16 +47,23 @@ echo.
 echo Activating virtual environment...
 call "%VENV_PATH%\Scripts\activate.bat"
 
+
 if errorlevel 1 (
     echo.
     echo ERROR: Failed to activate virtual environment.
     pause
     exit /b 1
+) else (
+    echo Virtual environment activated successfully.
+    pip install -r requirements.txt
+    echo requirements installed successfully.
+    echo.
 )
 
+cls
 
 echo ================================================
-echo Starting Market Data Foundation with Uvicorn...
+echo Starting isolation_consumer_service with Uvicorn...
 echo ================================================
 echo.
 
@@ -71,4 +78,5 @@ echo Cleanup directories cleared: %DIRS_DISPLAY%
 echo ================================================
 echo.
 
-python -m uvicorn main:app --host 0.0.0.0 --port 8001
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8004
+

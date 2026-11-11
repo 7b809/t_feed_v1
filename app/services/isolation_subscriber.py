@@ -1,0 +1,206 @@
+# app/services/isolation_subscriber.py
+from __future__ import annotations
+
+import asyncio
+import logging
+from typing import Any, Dict, List, Optional
+
+from ..config import Settings
+from .isolation_store import IsolationStore
+from .sr_state_store import SrStateStore
+from .sr_ws_client_service import SrWsClientService
+
+logger = logging.getLogger(__name__)
+
+
+class IsolationSubscriber:
+    """Orchestrates the two WS clients (isolated + opposite) per isolation."""
+
+    def __init__(
+        self,
+        config: Settings,
+        isolation_store: IsolationStore,
+        state_store: SrStateStore,
+    ) -> None:
+        self._config = config
+        self._isolation_store = isolation_store
+        self._state_store = state_store
+
+        self._clients: Dict[str, SrWsClientService] = {}
+        self._isolation_legs: Dict[str, Dict[str, str]] = {}
+        self._lock = asyncio.Lock()
+
+    # ------------------------------------------------------------ lookups
+    def get_client(self, instrument_key: str) -> Optional[SrWsClientService]:
+        return self._clients.get(instrument_key)
+
+    def list_clients(self) -> List[SrWsClientService]:
+        return list(self._clients.values())
+
+    def list_isolation_ids(self) -> List[str]:
+        return list(self._isolation_legs.keys())
+
+    # ------------------------------------------------------------ subscribe
+    async def subscribe_isolation(
+        self,
+        payload: Dict[str, Any],
+        isolation_id: str,
+        overwrite: bool = False,
+    ) -> Dict[str, Any]:
+        """Start (or refresh) the two WS clients for an isolation.
+
+        * ``overwrite=False``: idempotent — existing clients are reused.
+        * ``overwrite=True``: existing clients for this isolation are torn
+          down and ``sr_state`` for both legs is purged before restarting.
+        """
+        status = payload.get("status")
+
+        async with self._lock:
+            # -------------------------------------------------- overwrite path
+            if overwrite:
+                logger.info(
+                    "overwrite=true for %s — tearing down existing clients",
+                    isolation_id,
+                )
+                await self._teardown_isolation(isolation_id)
+
+                # Purge any sr_state left behind by the old subscription
+                legs = self._legs_from_payload(payload)
+                keys = [k for k in legs.values() if k]
+                if keys:
+                    await asyncio.to_thread(
+                        self._state_store.delete_for_instrument_keys, keys
+                    )
+
+            # -------------------------------------------------- non-ACTIVE
+            if status != "ACTIVE":
+                if not overwrite:
+                    await self._teardown_isolation(isolation_id)
+                try:
+                    self._isolation_store.set_status(isolation_id, "closed", [])
+                except Exception:
+                    logger.exception("set_status(closed) failed")
+                return {
+                    "subscribed": [],
+                    "rejected_legs": [],
+                    "web_socket_sessions": {},
+                }
+
+            iso_key = payload["instrument_key"]
+            opp_key = (payload.get("opposite_leg") or {}).get("instrument_key")
+            if not opp_key:
+                return {
+                    "subscribed": [],
+                    "rejected_legs": ["opposite"],
+                    "web_socket_sessions": {},
+                }
+
+            new_legs = {"isolated": iso_key, "opposite": opp_key}
+
+            # If the same isolation previously had different legs → tear down
+            old_legs = self._isolation_legs.get(isolation_id) or {}
+            for role in ("isolated", "opposite"):
+                old_key = old_legs.get(role)
+                new_key = new_legs[role]
+                if old_key and old_key != new_key:
+                    existing = self._clients.get(old_key)
+                    if existing is not None:
+                        logger.warning(
+                            "leg changed for %s: %s %s → %s; stopping old client",
+                            isolation_id,
+                            role,
+                            old_key,
+                            new_key,
+                        )
+                        await existing.stop()
+                        self._clients.pop(old_key, None)
+
+            subscribed: List[str] = []
+            sessions: Dict[str, Dict[str, str]] = {}
+
+            for role, key in new_legs.items():
+                existing = self._clients.get(key)
+                if existing is not None:
+                    sessions[key] = {"state": "already_running"}
+                    subscribed.append(role)
+                    continue
+
+                client = SrWsClientService(
+                    config=self._config,
+                    state_store=self._state_store,
+                    isolation_id=isolation_id,
+                    instrument_key=key,
+                    leg_role=role,
+                )
+                self._clients[key] = client
+                await client.start()
+                sessions[key] = {"state": "connecting"}
+                subscribed.append(role)
+
+            self._isolation_legs[isolation_id] = new_legs
+
+            try:
+                self._isolation_store.set_status(
+                    isolation_id, "subscribing", subscribed
+                )
+            except Exception:
+                logger.exception("set_status(subscribing) failed")
+
+            return {
+                "subscribed": subscribed,
+                "rejected_legs": [],
+                "web_socket_sessions": sessions,
+            }
+
+    # ------------------------------------------------------------ helpers
+    @staticmethod
+    def _legs_from_payload(payload: Dict[str, Any]) -> Dict[str, str]:
+        iso_key = payload.get("instrument_key") or ""
+        opp_key = (payload.get("opposite_leg") or {}).get("instrument_key") or ""
+        return {"isolated": iso_key, "opposite": opp_key}
+
+    async def _teardown_isolation(self, isolation_id: str) -> None:
+        legs = self._isolation_legs.pop(isolation_id, None)
+        if not legs:
+            return
+        for key in legs.values():
+            client = self._clients.pop(key, None)
+            if client is not None:
+                await client.stop()
+
+    async def stop_all(self) -> None:
+        async with self._lock:
+            clients = list(self._clients.values())
+            self._clients.clear()
+            self._isolation_legs.clear()
+        results = await asyncio.gather(
+            *(c.stop() for c in clients), return_exceptions=True
+        )
+        for r in results:
+            if isinstance(r, Exception):
+                logger.warning("stop_all client error: %s", r)
+
+    # ------------------------------------------------------------ watchdog
+    async def restart_dead_clients(self) -> None:
+        for client in list(self._clients.values()):
+            state = client.status()["ws_state"]
+            if client.is_running():
+                continue
+            if state == "failed":
+                logger.warning(
+                    "watchdog: %s leg=%s still failed (no retry)",
+                    client.instrument_key,
+                    client.leg_role,
+                )
+                continue
+            logger.warning(
+                "watchdog: restarting dead client %s leg=%s",
+                client.instrument_key,
+                client.leg_role,
+            )
+            try:
+                await client.start()
+            except Exception:
+                logger.exception(
+                    "watchdog restart failed for %s", client.instrument_key
+                )
