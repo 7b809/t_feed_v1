@@ -3,6 +3,11 @@
    - Fixed "Object is disposed" resize and RAF errors during chart reloads.
    - Added Target End Date input with automatic 11-day lookback calculation.
    - Robust cleanup and safe ascending candle plotting.
+   - PORTED from chart.html:
+     * TradingView-style timeframe selector (1m → 1D + custom minutes)
+     * Prev-Day-AVG indicator (dashed pink line + pink→violet gradient label)
+     * SR & Plot Dates card (bars + date filter, Apply / All Loaded)
+     * Revamped JSON export (SR manual/presets mode + opening-range R3/S3 analysis)
 #}
 {% extends "base.html" %}
 {% block title %}{{ instrument_key or 'Expired / Active Chart' }} - Trading Dashboard{% endblock %}
@@ -116,34 +121,66 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
 .label-toggle-btn[data-indicator="emaCross"].active { background: linear-gradient(90deg, #089981 0%, #f23645 100%); border-color: transparent; }
 .label-toggle-btn[data-indicator="srLevels"].active { background: linear-gradient(90deg, #FF0000 0%, #233dee 100%); border-color: transparent; }
 .label-toggle-btn[data-indicator="srLabels"].active { background: linear-gradient(90deg, #f5c451 0%, #a855f7 100%); border-color: transparent; color: #111; }
+/* Prev-Day-AVG indicator active state (pink→violet gradient) */
+.label-toggle-btn[data-indicator="dayAvg"].active {
+  background: linear-gradient(90deg, #ec4899 0%, #8b5cf6 100%);
+  border-color: transparent;
+  color: #ffffff;
+  box-shadow: 0 2px 8px rgba(236,72,153,0.4);
+}
 
+/* ---------- Timeframe / Interval Selector ---------- */
+.tf-presets { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.tf-presets .label-toggle-btn {
+  min-width: 40px; text-align: center;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px; padding: 5px 10px;
+}
+.tf-presets .label-toggle-btn.active {
+  background: linear-gradient(90deg, #2962ff 0%, #089981 100%);
+  border-color: transparent; color: #fff;
+  box-shadow: 0 2px 8px rgba(41,98,255,0.35);
+}
+.tf-divider { width: 1px; height: 22px; background: var(--border); margin: 0 6px; flex-shrink: 0; }
+.tf-current-badge {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 4px 10px; border-radius: 20px;
+  background: rgba(41,98,255,0.12);
+  border: 1px solid rgba(41,98,255,0.4);
+  color: #7ea6ff; font-size: 10.5px; font-weight: 800;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  letter-spacing: 0.03em; white-space: nowrap; flex-shrink: 0;
+}
+.tf-current-badge .tf-badge-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: #089981;
+  box-shadow: 0 0 6px rgba(8,153,129,0.9);
+  animation: tfDotPulse 1.6s ease-in-out infinite;
+}
+@keyframes tfDotPulse {
+  0%,100% { opacity: 0.6; transform: scale(0.9); }
+  50% { opacity: 1; transform: scale(1.15); }
+}
+
+/* ---------- SR params & date filter inputs ---------- */
 .sr-param-field { display: inline-flex; align-items: center; gap: 6px; font-size: 10px; font-weight: 800; color: var(--muted); letter-spacing: 0.05em; text-transform: uppercase; flex-shrink: 0; }
 .sr-param-input { width: 58px; background: var(--bg); border: 1px solid var(--border); color: var(--text); border-radius: 6px; padding: 4px 8px; font-size: 11px; font-weight: 700; text-align: center; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .sr-param-input:focus { outline: none; border-color: var(--blue); box-shadow: 0 0 0 2px rgba(41,98,255,0.22); }
+.sr-date-input { width: 126px; background: var(--bg); border: 1px solid var(--border); color: var(--text); border-radius: 6px; padding: 3px 6px; font-size: 10.5px; font-weight: 700; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.sr-date-input:focus { outline: none; border-color: var(--blue); box-shadow: 0 0 0 2px rgba(41,98,255,0.22); }
 .sr-param-hint { font-size: 10.5px; color: var(--green); font-weight: 700; margin-left: 4px; opacity: 0; transition: opacity 0.25s ease; }
 .sr-param-hint.visible { opacity: 1; }
 .sr-param-hint.error { color: var(--red); }
 
-/* ---------- Date range bar & Target End Date input ---------- */
+/* ---------- Date range bar (API fetch) ---------- */
 .date-range-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 12px; padding: 8px 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; }
 .date-range-bar label { font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
 .date-range-bar input[type="date"] { background: var(--bg); border: 1px solid var(--border); color: var(--text); border-radius: 6px; padding: 4px 8px; font-size: 11px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .date-range-bar input[type="date"]:focus { outline: none; border-color: var(--blue); }
-.date-range-bar .form-control-target-date {
-  width: 145px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  color: #fff;
-  border-radius: 6px;
-  padding: 4px 8px;
-  font-size: 11px;
-  font-weight: 700;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-}
+.date-range-bar .form-control-target-date { width: 145px; background: var(--bg); border: 1px solid var(--border); color: #fff; border-radius: 6px; padding: 4px 8px; font-size: 11px; font-weight: 700; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .date-range-bar .form-control-target-date:focus { outline: none; border-color: var(--blue); box-shadow: 0 0 0 2px rgba(41,98,255,0.22); }
-.date-range-bar .btn-apply-dates { border: 1px solid var(--blue); background: var(--blue); color: #fff; border-radius: 14px; padding: 4px 12px; font-size: 10px; font-weight: 800; cursor: pointer; transition: all 0.15s ease; }
+.date-range-bar .btn-apply-dates { border: 1px solid var(--blue); background: var(--blue); color: #fff; border-radius: 14px; padding: 4px 12px; font-size: 10px; font-weight: 800; cursor: pointer; }
 .date-range-bar .btn-apply-dates:hover { background: #1c4ce0; }
-.date-range-bar .target-hint { font-size: 9.5px; color: var(--yellow); margin-left: 2px; }
 
 .scroll-nav { position: fixed; right: 20px; bottom: 24px; z-index: 300; display: flex; flex-direction: column; gap: 8px; }
 .scroll-nav-btn { width: 42px; height: 42px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--border); border-radius: 50%; background: var(--surface-2); color: var(--text); box-shadow: var(--shadow); cursor: pointer; font-size: 16px; }
@@ -161,6 +198,18 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
 
 .level-label-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; overflow: hidden; pointer-events: none; z-index: 5; }
 .level-line-label { position: absolute; display: none; transform: translateY(-50%); padding: 1px 5px; font-size: 10px; font-weight: 700; line-height: 1.2; color: #ffffff; border-radius: 3px; white-space: nowrap; pointer-events: none; z-index: 6; box-shadow: 0 1px 2px rgba(0,0,0,0.25); }
+
+/* Prev-Day-AVG label — pink→violet gradient */
+.day-avg-label {
+  position: absolute; display: none; transform: translateY(-50%);
+  padding: 3px 9px; font-size: 10px; font-weight: 800; line-height: 1.25;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  letter-spacing: 0.04em; color: #ffffff; border-radius: 4px;
+  background: linear-gradient(90deg, #ec4899 0%, #8b5cf6 100%);
+  white-space: nowrap; pointer-events: none; z-index: 7;
+  box-shadow: 0 2px 8px rgba(236,72,153,0.55), 0 0 0 1px rgba(255,255,255,0.15) inset;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.35);
+}
 
 .sr-label-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; overflow: hidden; pointer-events: none; z-index: 4; }
 .sr-label { position: absolute; display: none; padding: 4px 8px; font-size: 10px; line-height: 1.35; font-weight: 600; color: #ffffff; border-radius: 4px; white-space: pre; pointer-events: none; box-shadow: 0 2px 6px rgba(0,0,0,0.45); border: 1px solid rgba(255,255,255,0.18); min-width: 145px; }
@@ -212,7 +261,9 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
   .chart-card { height: clamp(300px, calc(100dvh - 130px), 640px); min-height: 300px; }
   .chart-toggles-card { padding: 7px 10px; gap: 6px; margin-top: 10px; }
   .label-toggle-btn { padding: 3px 9px; font-size: 9.5px; }
+  .tf-presets .label-toggle-btn { min-width: 36px; font-size: 10px; padding: 4px 8px; }
   .sr-param-input { width: 48px; font-size: 10.5px; padding: 3px 6px; }
+  .sr-date-input { width: 110px; font-size: 9.5px; }
   .sr-param-field { font-size: 9.5px; }
   .level-status-bar { top: 8px; left: 8px; right: 8px; max-width: none; padding: 5px 8px; transform: none; }
   .chart-controls { right: 10px; bottom: 10px; }
@@ -222,6 +273,11 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
   .instrument-info-body { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .info-tile.wide { grid-column: span 2; }
   .date-range-bar .form-control-target-date { width: 120px; }
+  .day-avg-label { font-size: 9px; padding: 2px 7px; }
+}
+@media (max-width: 420px) {
+  .tf-presets .label-toggle-btn { min-width: 34px; font-size: 9.5px; padding: 3px 6px; }
+  .day-avg-label { font-size: 8.5px; padding: 2px 6px; }
 }
 
 .swap-option-fab { position: fixed; left: 20px; bottom: 24px; z-index: 350; display: inline-flex; align-items: center; gap: 8px; padding: 10px 16px; border: 1px solid var(--border); border-radius: 30px; background: var(--surface-2); color: var(--text); box-shadow: var(--shadow); cursor: pointer; font-size: 12px; font-weight: 700; transition: all 0.15s ease; }
@@ -262,15 +318,8 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
 .contract-list-empty { padding: 24px; text-align: center; color: var(--muted); font-size: 12px; }
 
 /* ---------- Full JSON export card ---------- */
-.json-export-card {
-  margin-top: 12px; width: 100%; background: var(--surface);
-  border: 1px solid var(--border); border-radius: 10px; overflow: hidden;
-  box-shadow: var(--shadow);
-}
-.json-export-card > summary {
-  display: flex; align-items: center; justify-content: space-between;
-  gap: 12px; padding: 12px 15px; cursor: pointer; list-style: none;
-}
+.json-export-card { margin-top: 12px; width: 100%; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; box-shadow: var(--shadow); }
+.json-export-card > summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 15px; cursor: pointer; list-style: none; }
 .json-export-card > summary::-webkit-details-marker { display: none; }
 .json-export-card > summary:hover { background: var(--surface-2); }
 .json-export-heading { display: flex; align-items: center; gap: 10px; min-width: 0; }
@@ -283,35 +332,34 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
 .json-export-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; }
 .json-export-field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
 .json-export-field label { color: var(--muted); font-size: 9px; font-weight: 800; text-transform: uppercase; letter-spacing: .05em; }
-.json-export-field input {
-  width: 100%; min-width: 0; background: var(--bg); color: var(--text);
-  border: 1px solid var(--border); border-radius: 6px; padding: 7px 8px; font-size: 11px;
-}
+.json-export-field input { width: 100%; min-width: 0; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 7px 8px; font-size: 11px; font-weight: 700; }
 .json-export-field input:focus { outline: none; border-color: var(--blue); }
+.json-export-radio-group { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 2px 0; }
+.json-export-radio-label { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 700; color: var(--text); cursor: pointer; text-transform: none; letter-spacing: 0; padding: 4px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease; }
+.json-export-field label.json-export-radio-label { font-size: 11px; text-transform: none; letter-spacing: 0; }
+.json-export-radio-label:hover { border-color: var(--blue); }
+.json-export-radio-label input[type="radio"] { accent-color: var(--blue); cursor: pointer; width: 13px; height: 13px; margin: 0; }
+.json-export-radio-label:has(input:checked) { background: rgba(41,98,255,0.14); border-color: var(--blue); color: #7ea6ff; }
+.json-export-preset-list { display: flex; flex-wrap: wrap; gap: 8px; padding: 4px 0; }
+.json-export-preset-item { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 700; color: var(--text); cursor: pointer; text-transform: none; letter-spacing: 0; padding: 5px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease; user-select: none; }
+.json-export-field label.json-export-preset-item { font-size: 11.5px; text-transform: none; letter-spacing: 0; color: var(--text); }
+.json-export-preset-item:hover { border-color: var(--blue); }
+.json-export-preset-item input[type="checkbox"] { accent-color: var(--blue); cursor: pointer; width: 13px; height: 13px; margin: 0; }
+.json-export-preset-item:has(input:checked) { background: rgba(41,98,255,0.14); border-color: var(--blue); color: #7ea6ff; }
+.json-export-preset-hint { font-size: 10px; color: var(--muted); font-weight: 600; margin-top: 2px; text-transform: none; letter-spacing: 0.01em; }
 .json-export-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 12px; }
-.json-export-button {
-  border: 0; border-radius: 8px; background: var(--blue); color: #fff;
-  padding: 9px 15px; font-size: 11px; font-weight: 800; cursor: pointer;
-}
+.json-export-button { border: 0; border-radius: 8px; background: var(--blue); color: #fff; padding: 9px 15px; font-size: 11px; font-weight: 800; cursor: pointer; }
 .json-export-button:hover { filter: brightness(1.12); }
 .json-export-button:disabled { opacity: .55; cursor: wait; }
 .json-export-status { color: var(--muted); font-size: 10px; }
 .json-export-status.error { color: var(--red); }
-.key-end-date-wrap { display: flex; align-items: center; gap: 5px; flex-shrink: 0; }
-.key-end-date-wrap label { color: var(--muted); font-size: 9px; font-weight: 800; white-space: nowrap; }
-.key-end-date-wrap input {
-  width: 128px; min-width: 0; background: var(--bg); color: var(--text);
-  border: 1px solid var(--border); border-radius: 7px; padding: 6px 7px; font-size: 10px;
-}
+
 @media (max-width: 900px) { .json-export-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 @media (max-width: 720px) {
   .json-export-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .json-export-body { padding: 10px; }
   .json-export-actions { align-items: stretch; }
   .json-export-button { width: 100%; }
-  .key-end-date-wrap { gap: 3px; }
-  .key-end-date-wrap label { display: none; }
-  .key-end-date-wrap input { width: 112px; padding: 5px; font-size: 9px; }
 }
 
 </style>
@@ -368,15 +416,38 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
   <div id="chartWrapper" {% if not instrument_key %}style="display:none;"{% endif %}>
 
     <div class="date-range-bar">
-      <!-- Target End Date input with automatic 11-day lookback calculation -->
-<label for="targetEndDateInput">End Date (11d back)</label>
-<input type="date" id="targetEndDateInput" class="form-control-target-date" placeholder="YYYY-MM-DD" title="Select specific end date to plot up to that date with past 11 days candles">
+      <label for="targetEndDateInput">End Date (11d back)</label>
+      <input type="date" id="targetEndDateInput" class="form-control-target-date" placeholder="YYYY-MM-DD" title="Load the 11 latest trading dates up to this date">
       <label for="fromDateInput">From</label>
       <input type="date" id="fromDateInput">
       <label for="toDateInput">To</label>
       <input type="date" id="toDateInput">
-      <button type="button" class="btn-apply-dates" id="applyDatesBtn">Apply dates</button>
+      <button type="button" class="btn-apply-dates" id="applyDatesBtn">Load data</button>
       <span style="margin-left:auto;font-size:10px;color:var(--muted);" id="modeIndicator"></span>
+    </div>
+
+    <!-- ============================================================
+         TIMEFRAME / INTERVAL SELECTOR
+         ============================================================ -->
+    <div class="chart-toggles-card" id="timeframeBar">
+      <div class="chart-toggles-title"><i class="bi bi-clock-history me-1"></i>Timeframe</div>
+      <div class="tf-presets" id="tfPresets">
+        <!-- Populated dynamically by JS from INTERVAL_PRESETS -->
+      </div>
+      <div class="tf-divider"></div>
+      <label class="sr-param-field" for="customIntervalInput">
+        Custom
+        <input type="number" id="customIntervalInput" class="sr-param-input"
+               min="1" max="1440" step="1" value="1" inputmode="numeric" placeholder="min">
+        min
+      </label>
+      <button type="button" id="applyCustomIntervalBtn" class="label-toggle-btn active"
+              title="Apply custom interval (minutes)">
+        <i class="bi bi-check2-circle me-1"></i>Apply
+      </button>
+      <span class="tf-current-badge" id="currentIntervalBadge">
+        <span class="tf-badge-dot"></span><span id="currentIntervalBadgeText">1m</span>
+      </span>
     </div>
 
     <details class="json-export-card" id="jsonExportCard">
@@ -385,7 +456,7 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
           <i class="bi bi-filetype-json"></i>
           <span>
             <span class="json-export-title">Download Complete Chart Data (JSON)</span>
-            <span class="json-export-subtitle">Instrument metadata · Candles · EMA crosses · Support / Resistance levels</span>
+            <span class="json-export-subtitle">Instrument metadata · Candles · EMA crosses · SR Levels (manual / presets) · Opening-range R3/S3 touch analysis</span>
           </span>
         </span>
         <i class="bi bi-chevron-down json-export-chevron" aria-hidden="true"></i>
@@ -396,43 +467,89 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
           <div class="json-export-field"><label for="exportEndDate">End date (IST)</label><input type="date" id="exportEndDate"></div>
           <div class="json-export-field"><label for="exportEmaFast">EMA fast</label><input type="number" id="exportEmaFast" min="1" max="500" value="9"></div>
           <div class="json-export-field"><label for="exportEmaSlow">EMA slow</label><input type="number" id="exportEmaSlow" min="2" max="1000" value="21"></div>
-          <div class="json-export-field"><label for="exportSrLeft">SR left bars</label><input type="number" id="exportSrLeft" min="1" max="200" value="15"></div>
-          <div class="json-export-field"><label for="exportSrRight">SR right bars</label><input type="number" id="exportSrRight" min="1" max="200" value="3"></div>
+
+          <div class="json-export-field" style="grid-column: span 2;">
+            <label>SR input mode</label>
+            <div class="json-export-radio-group" role="radiogroup" aria-label="SR input mode">
+              <label class="json-export-radio-label">
+                <input type="radio" name="jsonExportSrMode" value="manual" checked>
+                <span>Manual bars</span>
+              </label>
+              <label class="json-export-radio-label">
+                <input type="radio" name="jsonExportSrMode" value="presets">
+                <span>Presets (multi-select)</span>
+              </label>
+            </div>
+          </div>
+
+          <div class="json-export-field" data-sr-mode="manual">
+            <label for="exportSrLeft">SR left bars</label>
+            <input type="number" id="exportSrLeft" min="1" max="200" value="15">
+          </div>
+          <div class="json-export-field" data-sr-mode="manual">
+            <label for="exportSrRight">SR right bars</label>
+            <input type="number" id="exportSrRight" min="1" max="200" value="3">
+          </div>
+
+          <div class="json-export-field" data-sr-mode="presets" style="display:none; grid-column: 1 / -1;">
+            <label>SR presets — select all that apply (one level-set exported per preset)</label>
+            <div class="json-export-preset-list" role="group" aria-label="SR presets">
+              <label class="json-export-preset-item"><input type="checkbox" class="json-export-sr-preset" value="15/3" checked><span>15 / 3</span></label>
+              <label class="json-export-preset-item"><input type="checkbox" class="json-export-sr-preset" value="15/15"><span>15 / 15</span></label>
+              <label class="json-export-preset-item"><input type="checkbox" class="json-export-sr-preset" value="15/30"><span>15 / 30</span></label>
+              <label class="json-export-preset-item"><input type="checkbox" class="json-export-sr-preset" value="15/60"><span>15 / 60</span></label>
+            </div>
+            <span class="json-export-preset-hint">Each checked preset produces its own <code>levels_by_preset[&lt;left&gt;/&lt;right&gt;]</code> array.</span>
+          </div>
         </div>
         <div class="json-export-actions">
-          <button type="button" class="json-export-button" id="downloadChartJsonBtn"><i class="bi bi-download me-1"></i>Download one JSON file</button>
-          <span class="json-export-status" id="jsonExportStatus" role="status" aria-live="polite">Defaults: latest 11 loaded trading dates · EMA 9/21 · SR 15/3.</span>
+          <button type="button" class="json-export-button" id="downloadChartJsonBtn"><i class="bi bi-download me-1"></i>Download JSON</button>
+          <span class="json-export-status" id="jsonExportStatus" role="status" aria-live="polite">Defaults: latest 11 loaded trading dates · EMA 9/21 · SR 15/3 · Opening-range analysis per day.</span>
         </div>
       </div>
     </details>
 
     <div class="chart-toggles-card" id="labelToggleBar">
       <div class="chart-toggles-title"><i class="bi bi-tags me-1"></i>Labels</div>
-      <button type="button" class="label-toggle-btn" data-toggle="r2s2">R2 / S2</button>
-      <button type="button" class="label-toggle-btn active" data-toggle="r3s3">R3 / S3</button>
-      <button type="button" class="label-toggle-btn active" data-toggle="highLow">HIGH / LOW</button>
-      <button type="button" class="label-toggle-btn avg-btn" disabled>AVG <i class="bi bi-lock-fill ms-1" style="font-size:8px;"></i></button>
+      <button type="button" class="label-toggle-btn" data-toggle="r2s2" title="Show/hide R2 & S2 (lines stay)">R2 / S2</button>
+      <button type="button" class="label-toggle-btn active" data-toggle="r3s3" title="Show/hide R3 & S3 (lines stay)">R3 / S3</button>
+      <button type="button" class="label-toggle-btn active" data-toggle="highLow" title="Show/hide HIGH & LOW (lines stay)">HIGH / LOW</button>
+      <button type="button" class="label-toggle-btn avg-btn" disabled title="AVG label is always shown">AVG <i class="bi bi-lock-fill ms-1" style="font-size:8px;"></i></button>
     </div>
 
     <div class="chart-toggles-card" id="indicatorToggleBar">
       <div class="chart-toggles-title"><i class="bi bi-graph-up-arrow me-1"></i>Indicators</div>
-      <button type="button" class="label-toggle-btn" data-indicator="ema9">EMA 9</button>
-      <button type="button" class="label-toggle-btn" data-indicator="ema21">EMA 21</button>
-      <button type="button" class="label-toggle-btn active" data-indicator="emaCross"><i class="bi bi-arrow-left-right me-1"></i>EMA Cross</button>
-      <button type="button" class="label-toggle-btn" data-indicator="srLevels"><i class="bi bi-hr me-1"></i>SR Levels</button>
-      <button type="button" class="label-toggle-btn" data-indicator="srLabels"><i class="bi bi-tag me-1"></i>SR Labels</button>
+      <button type="button" class="label-toggle-btn" data-indicator="ema9" title="Show/hide EMA 9 line">EMA 9</button>
+      <button type="button" class="label-toggle-btn" data-indicator="ema21" title="Show/hide EMA 21 line">EMA 21</button>
+      <button type="button" class="label-toggle-btn active" data-indicator="emaCross" title="Show/hide EMA 9/21 crossover BUY / SELL markers"><i class="bi bi-arrow-left-right me-1"></i>EMA Cross</button>
+      <button type="button" class="label-toggle-btn" data-indicator="srLevels" title="Show/hide pivot S/R lines"><i class="bi bi-hr me-1"></i>SR Levels</button>
+      <button type="button" class="label-toggle-btn" data-indicator="srLabels" title="Show/hide pivot confirmation labels"><i class="bi bi-tag me-1"></i>SR Labels</button>
+      <button type="button" class="label-toggle-btn" data-indicator="dayAvg"
+              title="Plot the PREVIOUS trading day's average — (prevHigh + prevLow) / 2 — as a dashed pink line across the current day">
+        <i class="bi bi-activity me-1"></i>Prev Day AVG
+      </button>
     </div>
 
     <div class="chart-toggles-card" id="srParamsCard">
-      <div class="chart-toggles-title"><i class="bi bi-sliders me-1"></i>SR Params</div>
+      <div class="chart-toggles-title"><i class="bi bi-sliders me-1"></i>SR &amp; Plot Dates</div>
       <label class="sr-param-field" for="srLeftBarsInput">Left
         <input type="number" id="srLeftBarsInput" class="sr-param-input" min="1" max="200" step="1" value="15" inputmode="numeric">
       </label>
       <label class="sr-param-field" for="srRightBarsInput">Right
         <input type="number" id="srRightBarsInput" class="sr-param-input" min="1" max="200" step="1" value="3" inputmode="numeric">
       </label>
-      <button type="button" id="srApplyBtn" class="label-toggle-btn active"><i class="bi bi-check2-circle me-1"></i>Apply</button>
-      <button type="button" id="srResetBtn" class="label-toggle-btn"><i class="bi bi-arrow-counterclockwise me-1"></i>Reset</button>
+      <label class="sr-param-field ms-1" for="filterStartDate">Start
+        <input type="date" id="filterStartDate" class="sr-date-input">
+      </label>
+      <label class="sr-param-field" for="filterEndDate">End
+        <input type="date" id="filterEndDate" class="sr-date-input">
+      </label>
+      <button type="button" id="srApplyBtn" class="label-toggle-btn active" title="Apply SR bars + plot date filter">
+        <i class="bi bi-check2-circle me-1"></i>Apply
+      </button>
+      <button type="button" id="srResetBtn" class="label-toggle-btn" title="Clear plot date filter (show all loaded dates) and reset SR bars">
+        <i class="bi bi-calendar-range me-1"></i>All Loaded
+      </button>
       <span id="srParamsHint" class="sr-param-hint" aria-live="polite"></span>
     </div>
 
@@ -560,7 +677,6 @@ const API_EXPIRED_EXPIRIES    = "/api/chart2/expired/expiries";
 const API_EXPIRED_CONTRACTS   = "/api/chart2/expired/contracts";
 const CHART_PAGE_BASE         = "/expired-chart";
 
-
 // ============================================================
 // Market status (pill only — no live feed)
 // ============================================================
@@ -570,8 +686,23 @@ const MARKET_CLOSE_HOUR_IST  = 15;
 const MARKET_CLOSE_MIN_IST   = 30;
 const MARKET_TZ              = "Asia/Kolkata";
 
-const DEFAULT_TRADING_DAYS     = 15;   // how many trading dates to keep/plot
+const DEFAULT_TRADING_DAYS       = 15;
+const SESSION_START_OFFSET_SECONDS = 13500; // 09:15 IST (unix seconds base)
+const DAILY_THRESHOLD_MINUTES    = 375;
+const MAX_CUSTOM_INTERVAL_MINUTES = 1440;
 
+const INTERVAL_PRESETS = [
+  { label: "1m",  minutes: 1   },
+  { label: "3m",  minutes: 3   },
+  { label: "5m",  minutes: 5   },
+  { label: "10m", minutes: 10  },
+  { label: "15m", minutes: 15  },
+  { label: "30m", minutes: 30  },
+  { label: "1h",  minutes: 60  },
+  { label: "2h",  minutes: 120 },
+  { label: "4h",  minutes: 240 },
+  { label: "1D",  minutes: 375 },
+];
 
 function getISTParts(date = new Date()) {
   try {
@@ -683,6 +814,13 @@ const expIndexSelect     = document.getElementById("expIndexSelect");
 const expExpirySelect    = document.getElementById("expExpirySelect");
 const contractList       = document.getElementById("contractList");
 
+// Timeframe UI
+const tfPresetsContainer       = document.getElementById("tfPresets");
+const customIntervalInput      = document.getElementById("customIntervalInput");
+const applyCustomIntervalBtn   = document.getElementById("applyCustomIntervalBtn");
+const currentIntervalBadge     = document.getElementById("currentIntervalBadge");
+const currentIntervalBadgeText = document.getElementById("currentIntervalBadgeText");
+
 // ============================================================
 // State
 // ============================================================
@@ -695,8 +833,12 @@ let lastCandle = null;
 let pageClosing = false;
 let resizeHandlerAttached = false;
 
+let rawCandles = [];              // raw 1m candles for current instrument/load
+let currentIntervalMin = 1;       // display interval (aggregated from rawCandles)
+
 const INDICATOR_PREFS_KEY = "chart.indicators.prefs";
 const SR_PARAMS_KEY       = "chart.sr.params";
+const TIMEFRAME_PREFS_KEY = "chart.timeframe.prefs";
 
 let priceScaleAuto = true;
 const PRICE_HEADROOM_PCT = 0.20;
@@ -731,6 +873,9 @@ const indicatorState = {
   srLabels: {
     enabled: false, elements: [], layer: null,
   },
+  dayAvg: {
+    enabled: false, lines: [], labels: [], data: {}
+  },
 };
 
 (function loadSRParams() {
@@ -743,17 +888,40 @@ const indicatorState = {
   } catch (e) {}
 })();
 
+(function loadTimeframePrefs() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(TIMEFRAME_PREFS_KEY) || "{}");
+    const v = Number(saved.intervalMin);
+    if (Number.isInteger(v) && v >= 1 && v <= MAX_CUSTOM_INTERVAL_MINUTES) currentIntervalMin = v;
+  } catch (e) {}
+})();
+
 const emaCache = new Map();
 let emaCrossCache = { crosses: null, lastTime: null };
 let markersPrimitive = null;
 let lastMarkerRebuildTime = null;
 let srLabelUpdateScheduled = false;
+let dayAvgLabelUpdateScheduled = false;
 
 const dynamicPriceScale = {
   currentUnit: null, currentPrecision: null, currentMinMove: null,
   tickSize: null, lastTopPrice: null, lastBottomPrice: null,
   rafId: null, lastCheckTs: 0, checkIntervalMs: 90,
 };
+
+// Plot date filter (client-side; affects SR, EMA-cross markers, Prev-Day-AVG)
+const plotDateFilter = {
+  startDate: null,   // null = no lower bound
+  endDate:   null,   // null = no upper bound
+};
+function isTimestampInFilterRange(unixSeconds) {
+  if (!unixSeconds) return false;
+  const dateStr = getDateKeyIST(unixSeconds);
+  if (!dateStr) return false;
+  if (plotDateFilter.startDate && dateStr < plotDateFilter.startDate) return false;
+  if (plotDateFilter.endDate   && dateStr > plotDateFilter.endDate)   return false;
+  return true;
+}
 
 // ============================================================
 // LWC DATA SAFETY HELPERS
@@ -806,12 +974,13 @@ function setLineDataSafe(series, data) {
 }
 
 // ============================================================
-// Safe Chart Destroy Helper (Prevents "Object is disposed" error)
+// Safe Chart Destroy
 // ============================================================
 function destroyCurrentChart() {
   stopPriceScaleWatcher();
   levelLabelUpdateScheduled = false;
   srLabelUpdateScheduled = false;
+  dayAvgLabelUpdateScheduled = false;
 
   if (markersPrimitive && typeof markersPrimitive.detach === "function") {
     try { markersPrimitive.detach(); } catch (e) {}
@@ -821,6 +990,7 @@ function destroyCurrentChart() {
   removeOpeningRangeLevels();
   removeSRLines();
   clearSRLabels();
+  removeDayAvgLines();
 
   if (indicatorState.ema9.series) {
     try { if (chart && !chart._isDisposed) chart.removeSeries(indicatorState.ema9.series); } catch (e) {}
@@ -849,7 +1019,7 @@ function destroyCurrentChart() {
 }
 
 // ============================================================
-// Basic helpers & Date parsing
+// Date / timestamp helpers
 // ============================================================
 function parseTimestamp(value) {
   if (value === null || value === undefined || value === "") return null;
@@ -891,41 +1061,6 @@ function normalizeCandle(rawCandle) {
   return null;
 }
 
-/**
- * Normalizes user entered dates into standard YYYY-MM-DD format.
- * Supports: DD-MM-YYYY, DD/MM/YYYY, YYYY-MM-DD.
- */
-function parseUserDateToISO(input) {
-  if (!input) return null;
-  const s = String(input).trim();
-  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
-  const parts = s.split(/[-/]/);
-  if (parts.length === 3) {
-    if (parts[0].length === 2 && parts[2].length === 4) {
-      const d = parts[0].padStart(2, "0");
-      const m = parts[1].padStart(2, "0");
-      const y = parts[2];
-      return `${y}-${m}-${d}`;
-    }
-  }
-  const parsed = new Date(s);
-  if (!Number.isNaN(parsed.getTime())) {
-    return parsed.toISOString().slice(0, 10);
-  }
-  return null;
-}
-
-/**
- * Calculates start date as 11 calendar days before the given end date.
- */
-function computeElevenDaysPriorISO(endDateISO) {
-  if (!endDateISO) return null;
-  const [y, m, d] = endDateISO.split("-").map(Number);
-  const end = new Date(Date.UTC(y, m - 1, d));
-  const start = new Date(end.getTime() - DEFAULT_TRADING_DAYS * 86400 * 1000);
-  return start.toISOString().slice(0, 10);
-}
-
 function getDateKeyIST(unixSeconds) {
   if (!Number.isFinite(unixSeconds)) return null;
   const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date(unixSeconds * 1000));
@@ -941,6 +1076,7 @@ function formatTimeLabel(time, tickMarkType) {
   if (!date) return "";
   const TT = LightweightCharts.TickMarkType || {};
   if (tickMarkType === TT.Year || tickMarkType === TT.Month || tickMarkType === TT.DayOfMonth) return formatChartDate(date);
+  if (currentIntervalMin >= DAILY_THRESHOLD_MINUTES) return formatChartDate(date);
   return formatChartTime(date);
 }
 function formatFullDate(time) {
@@ -964,6 +1100,172 @@ function formatTooltipTime(time) {
   return new Intl.DateTimeFormat("en-IN", { timeZone: "Asia/Kolkata", year: "numeric", month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }).format(date);
 }
 function formatPrice(v) { const n = Number(v); return Number.isFinite(n) ? n.toFixed(2) : "—"; }
+
+// ============================================================
+// TIMEFRAME AGGREGATION
+// ============================================================
+function aggregateCandles(candles, intervalMin) {
+  if (!Array.isArray(candles) || candles.length === 0) return [];
+  const interval = Math.max(1, Math.round(Number(intervalMin) || 1));
+  if (interval === 1) return candles.slice();
+
+  const isDaily = interval >= DAILY_THRESHOLD_MINUTES;
+  const intervalSecs = interval * 60;
+  const buckets = new Map();
+
+  for (const c of candles) {
+    if (!c || !Number.isFinite(c.time)) continue;
+
+    let bucketKey;
+    if (isDaily) {
+      bucketKey = getDateKeyIST(c.time);
+    } else {
+      bucketKey = Math.floor((c.time - SESSION_START_OFFSET_SECONDS) / intervalSecs) * intervalSecs
+                  + SESSION_START_OFFSET_SECONDS;
+    }
+    if (bucketKey === null || bucketKey === undefined) continue;
+
+    const existing = buckets.get(bucketKey);
+    if (!existing) {
+      buckets.set(bucketKey, {
+        time: isDaily ? c.time : bucketKey,
+        open: c.open, high: c.high, low: c.low, close: c.close,
+        volume: Number(c.volume) || 0,
+      });
+    } else {
+      if (Number(c.high) > existing.high) existing.high = Number(c.high);
+      if (Number(c.low)  < existing.low)  existing.low  = Number(c.low);
+      existing.close = c.close;
+      existing.volume = (Number(existing.volume) || 0) + (Number(c.volume) || 0);
+    }
+  }
+  return Array.from(buckets.values()).sort((a, b) => a.time - b.time);
+}
+
+function intervalLabel(minutes) {
+  const m = Math.max(1, Math.round(Number(minutes) || 1));
+  const preset = INTERVAL_PRESETS.find(p => p.minutes === m);
+  if (preset) return preset.label;
+  if (m >= DAILY_THRESHOLD_MINUTES) {
+    const days = Math.max(1, Math.round(m / DAILY_THRESHOLD_MINUTES));
+    return days === 1 ? "1D" : `${days}D`;
+  }
+  if (m % 60 === 0) return `${m / 60}h`;
+  return `${m}m`;
+}
+
+// ============================================================
+// TIMEFRAME UI
+// ============================================================
+function buildTimeframeButtons() {
+  if (!tfPresetsContainer) return;
+  tfPresetsContainer.innerHTML = INTERVAL_PRESETS.map(p => {
+    const active = p.minutes === currentIntervalMin ? " active" : "";
+    return `<button type="button" class="label-toggle-btn${active}" data-interval="${p.minutes}" title="Switch to ${p.label} candles">${p.label}</button>`;
+  }).join("");
+
+  tfPresetsContainer.querySelectorAll("[data-interval]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const minutes = Number(btn.dataset.interval);
+      if (!Number.isFinite(minutes)) return;
+      applyTimeframe(minutes);
+    });
+  });
+}
+
+function updateTimeframeUI() {
+  if (tfPresetsContainer) {
+    tfPresetsContainer.querySelectorAll("[data-interval]").forEach(btn => {
+      const m = Number(btn.dataset.interval);
+      btn.classList.toggle("active", m === currentIntervalMin);
+    });
+  }
+  const isPreset = INTERVAL_PRESETS.some(p => p.minutes === currentIntervalMin);
+  if (customIntervalInput && !isPreset) {
+    customIntervalInput.value = String(currentIntervalMin);
+  }
+  if (currentIntervalBadgeText) currentIntervalBadgeText.textContent = intervalLabel(currentIntervalMin);
+  if (currentIntervalBadge) {
+    currentIntervalBadge.title = `Chart interval: ${intervalLabel(currentIntervalMin)} (${currentIntervalMin} min)`;
+  }
+  try {
+    localStorage.setItem(TIMEFRAME_PREFS_KEY, JSON.stringify({ intervalMin: currentIntervalMin }));
+  } catch (e) {}
+}
+
+function showTimeframeHint(text, isError) {
+  const hintEl = document.getElementById("srParamsHint");
+  if (!hintEl) return;
+  hintEl.textContent = text || "";
+  hintEl.classList.toggle("error", !!isError);
+  hintEl.classList.add("visible");
+  setTimeout(() => {
+    hintEl.classList.remove("visible");
+    hintEl.classList.remove("error");
+  }, 2600);
+}
+
+function applyTimeframe(intervalMin) {
+  const iv = Math.round(Number(intervalMin));
+  if (!Number.isFinite(iv) || iv < 1 || iv > MAX_CUSTOM_INTERVAL_MINUTES) {
+    showTimeframeHint("Interval must be 1–1440 minutes", true);
+    return;
+  }
+  if (iv === currentIntervalMin && candleSeries) return;
+
+  currentIntervalMin = iv;
+  updateTimeframeUI();
+
+  if (!candleSeries || !rawCandles || rawCandles.length === 0) return;
+
+  const aggregated = aggregateCandles(rawCandles, currentIntervalMin);
+
+  invalidateEMACache();
+  try { removeOpeningRangeLevels(); } catch (e) {}
+  try { clearSRLabels(); } catch (e) {}
+  try { removeSRLines(); } catch (e) {}
+  try { removeDayAvgLines(); } catch (e) {}
+  try { applyMarkersToCandleSeries([]); } catch (e) {}
+
+  candleSeries.setData(aggregated);
+
+  lastCandle = aggregated.length > 0 ? aggregated[aggregated.length - 1] : null;
+  currentRenderedDate = lastCandle ? getDateKeyIST(lastCandle.time) : null;
+
+  if (totalCandlesValue) totalCandlesValue.textContent = String(aggregated.length);
+
+  rebuildAndRenderOpeningRanges(aggregated);
+  refreshIndicators(aggregated);
+
+  try { chart.timeScale().fitContent(); } catch (e) {}
+  if (priceScaleAuto) applyAutoFitPriceScale();
+
+  showTimeframeHint(`✓ Switched to ${intervalLabel(currentIntervalMin)} (${aggregated.length} candles)`, false);
+}
+
+function initTimeframeUI() {
+  buildTimeframeButtons();
+  updateTimeframeUI();
+
+  if (applyCustomIntervalBtn) {
+    applyCustomIntervalBtn.addEventListener("click", () => {
+      const v = Math.round(Number(customIntervalInput ? customIntervalInput.value : NaN));
+      if (!Number.isFinite(v) || v < 1 || v > MAX_CUSTOM_INTERVAL_MINUTES) {
+        showTimeframeHint("Custom interval must be 1–1440 minutes", true);
+        return;
+      }
+      applyTimeframe(v);
+    });
+  }
+  if (customIntervalInput) {
+    customIntervalInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        applyCustomIntervalBtn && applyCustomIntervalBtn.click();
+      }
+    });
+  }
+}
 
 // ============================================================
 // Price scale helpers
@@ -1040,6 +1342,7 @@ function updateDynamicPriceScale() {
     dynamicPriceScale.lastBottomPrice = rangeInfo.maxPrice;
     scheduleLevelLabelUpdate();
     scheduleSRLabelUpdate();
+    scheduleDayAvgLabelUpdate();
   }
   const unit = getDynamicPriceUnit(rangeInfo.minPrice, rangeInfo.maxPrice, getPaneHeight());
   if (unit === null) return;
@@ -1055,6 +1358,7 @@ function updateDynamicPriceScale() {
   dynamicPriceScale.currentMinMove = effectiveMinMove;
   scheduleLevelLabelUpdate();
   scheduleSRLabelUpdate();
+  scheduleDayAvgLabelUpdate();
 }
 function startPriceScaleWatcher() {
   if (dynamicPriceScale.rafId !== null) return;
@@ -1140,7 +1444,7 @@ function getLevelColor(levelName) { return levelName.startsWith("r") ? "#f23645"
 function getRangeLevelColor(k) { return k === "high" ? "#fd7e14" : k === "low" ? "#20c997" : "#2962ff"; }
 
 // ============================================================
-// OR level labels
+// Level labels (OR)
 // ============================================================
 function ensureLevelLabelLayer() {
   if (levelLabelLayer) return levelLabelLayer;
@@ -1166,7 +1470,10 @@ function scheduleLevelLabelUpdate() {
   levelLabelUpdateScheduled = true;
   requestAnimationFrame(() => {
     levelLabelUpdateScheduled = false;
-    if (chart && !chart._isDisposed) updateLevelLabelPositions();
+    if (chart && !chart._isDisposed) {
+      updateLevelLabelPositions();
+      updateDayAvgLabelPositions();
+    }
   });
 }
 function updateLevelLabelPositions() {
@@ -1284,6 +1591,10 @@ function getOrComputeEMA(length, candles) {
   emaCache.set(length, { data: fresh, lastTime: fresh.length ? fresh[fresh.length - 1].time : null, length: fresh.length });
   return fresh;
 }
+function invalidateEMACache() {
+  emaCache.clear();
+  emaCrossCache = { crosses: null, lastTime: null };
+}
 function getOrComputeEMACrosses(candles) {
   const source = candles || (candleSeries ? candleSeries.data() : []);
   if (!source || !source.length) return [];
@@ -1388,6 +1699,7 @@ function performFullSRScan(candles) {
   if (candles.length < leftBars + rightBars + 1) return;
   for (let i = leftBars; i < candles.length - rightBars; i++) {
     const c = candles[i];
+    if (!isTimestampInFilterRange(c.time)) continue;
     const cH = Number(c.high), cL = Number(c.low);
     if (!Number.isFinite(cH) || !Number.isFinite(cL)) continue;
     let isH = true, isL = true;
@@ -1509,26 +1821,235 @@ function refreshSRLevels(candles) {
   if (linesOn) renderSRLines(); else removeSRLines();
   if (labelsOn) renderSRLabels(indicatorState.srLevels.detectedPivots); else clearSRLabels();
 }
+
+// ============================================================
+// PREV-DAY-AVG INDICATOR (ported from chart.html)
+// ============================================================
+function computePrevDayAvgInfo(prevDateKey, prevCandles, todayCandles) {
+  if (!Array.isArray(prevCandles) || prevCandles.length === 0) return null;
+  let prevHigh = -Infinity, prevLow = Infinity;
+  for (const c of prevCandles) {
+    const h = Number(c.high);
+    const l = Number(c.low);
+    if (Number.isFinite(h) && h > prevHigh) prevHigh = h;
+    if (Number.isFinite(l) && l < prevLow)  prevLow  = l;
+  }
+  if (!Number.isFinite(prevHigh) || !Number.isFinite(prevLow)) return null;
+  if (prevHigh <= prevLow) return null;
+  const avg = (prevHigh + prevLow) / 2;
+
+  const spanCandles = (Array.isArray(todayCandles) && todayCandles.length > 0)
+    ? todayCandles
+    : prevCandles;
+
+  return {
+    prevDate: prevDateKey,
+    todayDate: (Array.isArray(todayCandles) && todayCandles.length > 0)
+      ? getDateKeyIST(todayCandles[0].time)
+      : null,
+    avg,
+    prevHigh,
+    prevLow,
+    startTime: spanCandles[0].time,
+    endTime: spanCandles[spanCandles.length - 1].time,
+    usedFallbackSpan: !(Array.isArray(todayCandles) && todayCandles.length > 0),
+  };
+}
+
+function ensureDayAvgLabelLayer() {
+  return ensureLevelLabelLayer();
+}
+
+function drawDayAvgLine(info) {
+  if (!chart || !info) return;
+  const color = "#ec4899";
+  const series = addLineSeriesSafe({
+    color,
+    lineWidth: 2,
+    lineStyle: LightweightCharts.LineStyle.Dashed,
+    priceLineVisible: false,
+    lastValueVisible: false,
+    crosshairMarkerVisible: false,
+    autoscaleInfoProvider: () => null,
+  });
+  if (!series) return;
+
+  const data = [{ time: info.startTime, value: info.avg }];
+  if (info.endTime !== info.startTime) {
+    data.push({ time: info.endTime, value: info.avg });
+  }
+
+  try {
+    series.setData(data);
+    indicatorState.dayAvg.lines.push(series);
+    info.series = series;
+  } catch (err) {
+    console.warn("[prev-day-avg] setData failed:", err);
+    try { chart.removeSeries(series); } catch (e) {}
+    return;
+  }
+
+  const layer = ensureDayAvgLabelLayer();
+  if (!layer) return;
+  const el = document.createElement("div");
+  el.className = "day-avg-label";
+  el.textContent = `PREV DAY AVG · ${info.prevDate} · ₹${info.avg.toFixed(2)}`;
+  el.style.display = "none";
+  layer.appendChild(el);
+  info.labelElement = el;
+
+  indicatorState.dayAvg.labels.push({
+    element: el,
+    meta: { startTime: info.startTime, avg: info.avg, prevDate: info.prevDate },
+  });
+}
+
+function removeDayAvgForDate(key) {
+  const info = indicatorState.dayAvg.data[key];
+  if (!info) return;
+  if (info.series) {
+    try { chart.removeSeries(info.series); } catch (e) {}
+    const idx = indicatorState.dayAvg.lines.indexOf(info.series);
+    if (idx >= 0) indicatorState.dayAvg.lines.splice(idx, 1);
+  }
+  if (info.labelElement) {
+    try { if (info.labelElement.parentNode) info.labelElement.parentNode.removeChild(info.labelElement); } catch (e) {}
+    const idx = indicatorState.dayAvg.labels.findIndex(l => l.element === info.labelElement);
+    if (idx >= 0) indicatorState.dayAvg.labels.splice(idx, 1);
+  }
+  delete indicatorState.dayAvg.data[key];
+}
+
+function removeDayAvgLines() {
+  if (chart) {
+    indicatorState.dayAvg.lines.forEach(series => {
+      try { chart.removeSeries(series); } catch (e) {}
+    });
+  }
+  indicatorState.dayAvg.lines = [];
+  indicatorState.dayAvg.labels.forEach(entry => {
+    try { if (entry.element && entry.element.parentNode) entry.element.parentNode.removeChild(entry.element); } catch (e) {}
+  });
+  indicatorState.dayAvg.labels = [];
+  indicatorState.dayAvg.data = {};
+}
+
+function refreshDayAvgLines(candles) {
+  removeDayAvgLines();
+  if (!indicatorState.dayAvg.enabled) return;
+  if (!chart || chart._isDisposed || !candleSeries) return;
+  if (!Array.isArray(candles) || candles.length === 0) return;
+
+  const byDate = {};
+  for (const c of candles) {
+    const key = getDateKeyIST(c.time);
+    if (!key) continue;
+    if (!byDate[key]) byDate[key] = [];
+    byDate[key].push(c);
+  }
+  const sortedDates = Object.keys(byDate).sort();
+  if (sortedDates.length < 2) return;
+
+  for (let i = 1; i < sortedDates.length; i++) {
+    const todayKey = sortedDates[i];
+    const prevKey  = sortedDates[i - 1];
+
+    const prevCandles  = byDate[prevKey].slice().sort((a, b) => a.time - b.time);
+    const todayCandles = byDate[todayKey].slice().sort((a, b) => a.time - b.time);
+    if (todayCandles.length === 0) continue;
+
+    const info = computePrevDayAvgInfo(prevKey, prevCandles, todayCandles);
+    if (!info) continue;
+
+    indicatorState.dayAvg.data[todayKey] = info;
+    drawDayAvgLine(info);
+  }
+
+  try { updateDayAvgLabelPositions(); } catch (e) {}
+}
+
+function scheduleDayAvgLabelUpdate() {
+  if (dayAvgLabelUpdateScheduled) return;
+  dayAvgLabelUpdateScheduled = true;
+  requestAnimationFrame(() => {
+    dayAvgLabelUpdateScheduled = false;
+    try { updateDayAvgLabelPositions(); } catch (err) {}
+  });
+}
+
+function updateDayAvgLabelPositions() {
+  if (!chart || chart._isDisposed || !candleSeries) return;
+  if (!indicatorState.dayAvg.enabled) return;
+  const entries = indicatorState.dayAvg.labels || [];
+  if (entries.length === 0) return;
+
+  const timeScale = chart.timeScale();
+  const containerWidth = chartContainer.clientWidth;
+  const paneHeight = getPaneHeight();
+
+  entries.forEach(entry => {
+    const el = entry.element;
+    const meta = entry.meta;
+    if (!el || !meta) return;
+
+    const x = timeScale.timeToCoordinate(meta.startTime);
+    const y = candleSeries.priceToCoordinate(meta.avg);
+
+    if (x === null || y === null || !Number.isFinite(x) || !Number.isFinite(y)) {
+      el.style.display = "none";
+      return;
+    }
+    if (y < -8 || y > paneHeight + 8 || x < -200 || x > containerWidth + 200) {
+      el.style.display = "none";
+      return;
+    }
+
+    el.style.display = "block";
+    el.style.left = Math.round(x + 4) + "px";
+    el.style.top  = Math.round(y) + "px";
+  });
+}
+
+// ============================================================
+// MARKERS + INDICATORS REFRESH
+// ============================================================
+function rebuildAllMarkers() {
+  if (!candleSeries) return;
+  const data = candleSeries.data();
+  if (!data || data.length === 0) { applyMarkersToCandleSeries([]); return; }
+
+  const allMarkers = [];
+  if (indicatorState.emaCross.enabled) {
+    const crosses = getOrComputeEMACrosses(data);
+    const seenTimes = new Set();
+    for (const c of crosses) {
+      if (seenTimes.has(c.time)) continue;
+      if (!isTimestampInFilterRange(c.time)) continue;
+      seenTimes.add(c.time);
+      const isBull = c.type === "bull";
+      allMarkers.push({
+        time: c.time,
+        position: isBull ? "belowBar" : "aboveBar",
+        color: isBull ? "#089981" : "#f23645",
+        shape: isBull ? "arrowUp" : "arrowDown",
+        text: isBull ? "BUY" : "SELL",
+        size: 2,
+      });
+    }
+  }
+  allMarkers.sort((a, b) => a.time - b.time);
+  applyMarkersToCandleSeries(allMarkers);
+  lastMarkerRebuildTime = data[data.length - 1].time;
+}
+
 function refreshIndicators(candles) {
   try {
     const data = candles || (candleSeries ? candleSeries.data() : []);
     if (!data.length) return;
     renderEMALines(data);
     refreshSRLevels(data);
-    const markers = [];
-    if (indicatorState.emaCross.enabled) {
-      const crosses = getOrComputeEMACrosses(data);
-      const seen = new Set();
-      for (const c of crosses) {
-        if (seen.has(c.time)) continue;
-        seen.add(c.time);
-        const isBull = c.type === "bull";
-        markers.push({ time: c.time, position: isBull ? "belowBar" : "aboveBar", color: isBull ? "#089981" : "#f23645", shape: isBull ? "arrowUp" : "arrowDown", text: isBull ? "BUY" : "SELL", size: 2 });
-      }
-    }
-    markers.sort((a, b) => a.time - b.time);
-    applyMarkersToCandleSeries(markers);
-    lastMarkerRebuildTime = data[data.length - 1].time;
+    rebuildAllMarkers();
+    refreshDayAvgLines(data);   // full rebuild each time
   } catch (err) { console.warn("[indicators] refresh failed:", err); }
 }
 
@@ -1567,17 +2088,21 @@ document.querySelectorAll("#indicatorToggleBar .label-toggle-btn[data-indicator]
 });
 
 // ============================================================
-// SR params card
+// SR params + Plot Dates
 // ============================================================
 (function initSRParamsCard() {
-  const leftInput  = document.getElementById("srLeftBarsInput");
-  const rightInput = document.getElementById("srRightBarsInput");
-  const applyBtn   = document.getElementById("srApplyBtn");
-  const resetBtn   = document.getElementById("srResetBtn");
-  const hintEl     = document.getElementById("srParamsHint");
+  const leftInput   = document.getElementById("srLeftBarsInput");
+  const rightInput  = document.getElementById("srRightBarsInput");
+  const startInput  = document.getElementById("filterStartDate");
+  const endInput    = document.getElementById("filterEndDate");
+  const applyBtn    = document.getElementById("srApplyBtn");
+  const resetBtn    = document.getElementById("srResetBtn");
+  const hintEl      = document.getElementById("srParamsHint");
   if (!leftInput || !rightInput || !applyBtn || !resetBtn) return;
+
   leftInput.value  = String(indicatorState.srLevels.leftBars);
   rightInput.value = String(indicatorState.srLevels.rightBars);
+
   let hintTimer = null;
   function showHint(text, isErr) {
     if (!hintEl) return;
@@ -1585,7 +2110,7 @@ document.querySelectorAll("#indicatorToggleBar .label-toggle-btn[data-indicator]
     hintEl.classList.toggle("error", !!isErr);
     hintEl.classList.add("visible");
     if (hintTimer) clearTimeout(hintTimer);
-    hintTimer = setTimeout(() => { hintEl.classList.remove("visible"); hintEl.classList.remove("error"); }, 3000);
+    hintTimer = setTimeout(() => { hintEl.classList.remove("visible"); hintEl.classList.remove("error"); }, 3200);
   }
   function clampInt(raw, min, max) {
     const n = Number(raw);
@@ -1593,34 +2118,53 @@ document.querySelectorAll("#indicatorToggleBar .label-toggle-btn[data-indicator]
     const i = Math.round(n);
     return (i < min || i > max) ? null : i;
   }
+
   function applyParams() {
     const lb = clampInt(leftInput.value, 1, 200);
     const rb = clampInt(rightInput.value, 1, 200);
     if (lb === null) { showHint("Left bars must be 1–200", true); return; }
     if (rb === null) { showHint("Right bars must be 1–200", true); return; }
+
+    const sDate = startInput ? startInput.value : "";
+    const eDate = endInput   ? endInput.value   : "";
+    if (sDate && eDate && sDate > eDate) { showHint("Start date must be <= End date", true); return; }
+
     removeSRLines();
     clearSRLabels();
-    indicatorState.srLevels.leftBars = lb;
+    applyMarkersToCandleSeries([]);
+    removeDayAvgLines();
+
+    indicatorState.srLevels.leftBars  = lb;
     indicatorState.srLevels.rightBars = rb;
+
+    plotDateFilter.startDate = sDate || null;
+    plotDateFilter.endDate   = eDate || null;
+
     try { localStorage.setItem(SR_PARAMS_KEY, JSON.stringify({ leftBars: lb, rightBars: rb })); } catch (e) {}
-    refreshSRLevels();
+
+    invalidateEMACache();
+    refreshIndicators();
+
     const pivots = indicatorState.srLevels.detectedPivots || [];
-    const r = pivots.filter(p => p.type === "resistance").length;
-    const s = pivots.filter(p => p.type === "support").length;
-    const suffix = (indicatorState.srLevels.enabled || indicatorState.srLabels.enabled) ? "" : " · enable SR to see";
-    showHint(`✓ ${lb}/${rb} · ${pivots.length} pivots (${r}R / ${s}S)${suffix}`, false);
+    const dateLabel = (sDate === eDate && sDate) ? sDate : `${sDate || 'all'} to ${eDate || 'all'}`;
+    showHint(`✓ Applied (${lb}/${rb}) · Dates: ${dateLabel} · ${pivots.length} pivots`, false);
   }
-  function resetParams() { leftInput.value = "15"; rightInput.value = "3"; applyParams(); }
+
+  function resetToAllLoaded() {
+    if (startInput) startInput.value = "";
+    if (endInput)   endInput.value   = "";
+    leftInput.value  = "15";
+    rightInput.value = "3";
+    applyParams();
+  }
+
   applyBtn.addEventListener("click", applyParams);
-  resetBtn.addEventListener("click", resetParams);
-  [leftInput, rightInput].forEach(inp => {
+  resetBtn.addEventListener("click", resetToAllLoaded);
+
+  [leftInput, rightInput, startInput, endInput].forEach(inp => {
+    if (!inp) return;
     inp.addEventListener("keydown", e => {
       if (e.key === "Enter") { e.preventDefault(); applyParams(); }
-      if (e.key === "Escape") {
-        leftInput.value = String(indicatorState.srLevels.leftBars);
-        rightInput.value = String(indicatorState.srLevels.rightBars);
-        inp.blur();
-      }
     });
   });
 })();
@@ -1679,7 +2223,7 @@ function handleCrosshairMove(param) {
 }
 
 // ============================================================
-// Create chart (with disposal checks)
+// Create chart
 // ============================================================
 function createChart(rawCandles) {
   const candles = safeCandleData(rawCandles);
@@ -1740,8 +2284,8 @@ function createChart(rawCandles) {
   ensureSRLabelLayer();
   createChartTooltip();
   chart.subscribeCrosshairMove(handleCrosshairMove);
-  chart.timeScale().subscribeVisibleTimeRangeChange(() => { scheduleLevelLabelUpdate(); scheduleSRLabelUpdate(); });
-  chart.timeScale().subscribeVisibleLogicalRangeChange(() => { scheduleLevelLabelUpdate(); scheduleSRLabelUpdate(); updateDynamicPriceScale(); });
+  chart.timeScale().subscribeVisibleTimeRangeChange(() => { scheduleLevelLabelUpdate(); scheduleSRLabelUpdate(); scheduleDayAvgLabelUpdate(); });
+  chart.timeScale().subscribeVisibleLogicalRangeChange(() => { scheduleLevelLabelUpdate(); scheduleSRLabelUpdate(); scheduleDayAvgLabelUpdate(); updateDynamicPriceScale(); });
 
   if (!resizeHandlerAttached) {
     const onResize = () => {
@@ -1750,10 +2294,9 @@ function createChart(rawCandles) {
         chart.applyOptions({ width: chartContainer.clientWidth, height: chartContainer.clientHeight });
         scheduleLevelLabelUpdate();
         scheduleSRLabelUpdate();
+        scheduleDayAvgLabelUpdate();
         updateDynamicPriceScale();
-      } catch (e) {
-        console.warn("Resize error ignored:", e);
-      }
+      } catch (e) { console.warn("Resize error ignored:", e); }
     };
     window.addEventListener("resize", onResize);
     window.addEventListener("orientationchange", () => setTimeout(onResize, 200));
@@ -1853,26 +2396,10 @@ function populateInfoCard(meta, mode, key, fromDate, toDate) {
       : "HistoryV3Api (" + (fromDate || "") + " → " + (toDate || "") + ")";
   }
 
-  // Update top header directly from API metadata
-const displaySymbol =
-    meta.trading_symbol ||
-    meta.underlying_symbol ||
-    key ||
-    "Unknown Instrument";
-
-const displayKey =
-    meta.instrument_key ||
-    key ||
-    "Unknown Key";
-
-if (topSymbolName) {
-    topSymbolName.textContent = displaySymbol;
-}
-
-if (topSymbolKey) {
-    topSymbolKey.textContent = displayKey;
-}
-
+  const displaySymbol = meta.trading_symbol || meta.underlying_symbol || key || "Unknown Instrument";
+  const displayKey    = meta.instrument_key || key || "Unknown Key";
+  if (topSymbolName) topSymbolName.textContent = displaySymbol;
+  if (topSymbolKey)  topSymbolKey.textContent  = displayKey;
 }
 
 // ============================================================
@@ -1918,7 +2445,6 @@ async function loadChart(instrumentKey, fromDate, toDate, options = {}) {
       result.candles = selected.candles;
       result.fromDate = selected.dates[0] || requestFrom;
       result.toDate = toDate;
-      result.requestedEndDate = toDate;
       if (!result.candles.length) {
         throw new Error(`No candles found on or before ${toDate}.`);
       }
@@ -1928,12 +2454,8 @@ async function loadChart(instrumentKey, fromDate, toDate, options = {}) {
     currentMeta = result.meta || {};
     currentMode = result.mode || "";
 
-    // Use the canonical instrument key returned by API metadata
-const resolvedInstrumentKey =
-    currentMeta.instrument_key || instrumentKey;
-
-currentInstrumentKey = resolvedInstrumentKey;
-
+    const resolvedInstrumentKey = currentMeta.instrument_key || instrumentKey;
+    currentInstrumentKey = resolvedInstrumentKey;
 
     modeIndicator.textContent = currentMode === "expired" ? "⌛ Expired instrument" : "• Active instrument";
     modeIndicator.style.color = currentMode === "expired" ? "var(--yellow)" : "#7ea6ff";
@@ -1941,13 +2463,8 @@ currentInstrumentKey = resolvedInstrumentKey;
     fromDateInput.value = result.fromDate || "";
     toDateInput.value = result.toDate || "";
 
-populateInfoCard(
-    currentMeta,
-    currentMode,
-    resolvedInstrumentKey,
-    result.fromDate,
-    result.toDate
-);
+    populateInfoCard(currentMeta, currentMode, resolvedInstrumentKey, result.fromDate, result.toDate);
+
     if (!result.candles.length) {
       LoadingOverlay.setStatus("No candles returned for this window.", "Empty");
       LoadingOverlay.hide(1000);
@@ -1956,12 +2473,26 @@ populateInfoCard(
       return;
     }
 
+    // Store raw 1m candles for aggregation
+    rawCandles = result.candles.slice().sort((a, b) => a.time - b.time);
+
     LoadingOverlay.setProgress(64);
-    LoadingOverlay.setStatus(`Loaded ${result.candles.length} candles`);
+    LoadingOverlay.setStatus(`Loaded ${rawCandles.length} 1m candles`);
+
+    // Default plot-date filter → show ALL loaded dates
+    plotDateFilter.startDate = null;
+    plotDateFilter.endDate   = null;
+    const filterStartInput = document.getElementById("filterStartDate");
+    const filterEndInput   = document.getElementById("filterEndDate");
+    if (filterStartInput) filterStartInput.value = "";
+    if (filterEndInput)   filterEndInput.value   = "";
+
+    // Aggregate by current timeframe
+    const displayCandles = aggregateCandles(rawCandles, currentIntervalMin);
 
     let ok = false;
     try {
-      ok = createChart(result.candles);
+      ok = createChart(displayCandles);
     } catch (err) {
       console.error("[chart] createChart failed:", err);
       LoadingOverlay.setStatus("Chart render failed: " + (err.message || err), "Error");
@@ -1979,7 +2510,7 @@ populateInfoCard(
     LoadingOverlay.setStatus("Ready");
     LoadingOverlay.hide(260);
 
-    initSwapOptionButton(currentMeta, currentMode, instrumentKey);
+    initSwapOptionButton(currentMeta, currentMode, resolvedInstrumentKey);
 
   } catch (e) {
     console.error("loadChart failed:", e);
@@ -2085,16 +2616,13 @@ async function doSwapOption() {
 if (swapOptionBtn) swapOptionBtn.addEventListener("click", doSwapOption);
 
 // ============================================================
-// Key input + Load button + Search-on-submit
+// Key input + Load button + Search
 // ============================================================
 function looksLikeKey(v) { return String(v || "").includes("|"); }
 
 async function runOneShotSearch(q) {
   if (!q) { searchResults.classList.remove("visible"); return; }
-  if (looksLikeKey(q)) {
-    window.location.href = buildChartUrl(q);
-    return;
-  }
+  if (looksLikeKey(q)) { window.location.href = buildChartUrl(q); return; }
   searchResults.innerHTML = `<div class="search-result-empty">Searching…</div>`;
   searchResults.classList.add("visible");
   try {
@@ -2154,264 +2682,449 @@ document.addEventListener("click", (e) => {
   if (!e.target.closest(".key-input-bar")) searchResults.classList.remove("visible");
 });
 
-// Apply dates button logic with automatic Target End Date fallback
+// Apply dates button → fetch new data
 function handleApplyDates() {
   if (!currentInstrumentKey) return;
 
   const targetDateRaw = (targetEndDateInput && targetEndDateInput.value) ? targetEndDateInput.value.trim() : "";
   if (targetDateRaw) {
-    const targetISO = parseUserDateToISO(targetDateRaw);
-    if (!targetISO) {
-      alert("Invalid End Date format. Please use DD-MM-YYYY or YYYY-MM-DD (e.g. 22-10-2026)");
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(targetDateRaw)) {
+      alert("Invalid End Date format. Please use YYYY-MM-DD.");
       return;
     }
-    if (keyEndDateInput) keyEndDateInput.value = targetISO;
-    toDateInput.value = targetISO;
-    loadChart(currentInstrumentKey, null, targetISO, { endDateOnly: true });
+    if (keyEndDateInput) keyEndDateInput.value = targetDateRaw;
+    toDateInput.value = targetDateRaw;
+    loadChart(currentInstrumentKey, null, targetDateRaw, { endDateOnly: true });
     return;
   }
-
-  // If target end date is not given, continue with the current manual date inputs
   loadChart(currentInstrumentKey, fromDateInput.value, toDateInput.value);
 }
 
 applyDatesBtn.addEventListener("click", handleApplyDates);
 if (targetEndDateInput) {
   targetEndDateInput.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      handleApplyDates();
-    }
+    if (e.key === "Enter") { e.preventDefault(); handleApplyDates(); }
   });
 }
 
 // ============================================================
-// Complete JSON export: metadata + candles + EMA crosses + SR pivots
+// COMPLETE JSON EXPORT (ported from chart.html)
 // ============================================================
-(function initCompleteJSONExport() {
-  const card = document.getElementById("jsonExportCard");
-  const startInput = document.getElementById("exportStartDate");
-  const endInput = document.getElementById("exportEndDate");
-  const fastInput = document.getElementById("exportEmaFast");
-  const slowInput = document.getElementById("exportEmaSlow");
-  const leftInput = document.getElementById("exportSrLeft");
-  const rightInput = document.getElementById("exportSrRight");
-  const button = document.getElementById("downloadChartJsonBtn");
-  const status = document.getElementById("jsonExportStatus");
-  if (!card || !startInput || !endInput || !fastInput || !slowInput ||
-      !leftInput || !rightInput || !button || !status) return;
+(function initChartJSONExport() {
+  const card         = document.getElementById("jsonExportCard");
+  const startInput   = document.getElementById("exportStartDate");
+  const endInput     = document.getElementById("exportEndDate");
+  const fastInput    = document.getElementById("exportEmaFast");
+  const slowInput    = document.getElementById("exportEmaSlow");
+  const leftInput    = document.getElementById("exportSrLeft");
+  const rightInput   = document.getElementById("exportSrRight");
+  const srModeRadios = document.querySelectorAll('input[name="jsonExportSrMode"]');
+  const presetCheckboxes = document.querySelectorAll('.json-export-sr-preset');
+  const downloadButton   = document.getElementById("downloadChartJsonBtn");
+  const status           = document.getElementById("jsonExportStatus");
 
-  let datesInitialized = false;
-  function setStatus(message, error = false) {
+  if (!card || !startInput || !endInput || !fastInput || !slowInput ||
+      !leftInput || !rightInput || !downloadButton || !status) return;
+
+  let defaultRangeInitialized = false;
+  let userChangedExportDates  = false;
+
+  function setStatus(message, isError) {
     status.textContent = message;
-    status.classList.toggle("error", !!error);
+    status.classList.toggle("error", Boolean(isError));
   }
-  function getLoadedCandles() {
+
+  function getSelectedSRMode() {
+    for (const r of srModeRadios) { if (r.checked) return r.value; }
+    return "manual";
+  }
+  function getSelectedSRPresets() {
+    const result = [];
+    for (const cb of presetCheckboxes) {
+      if (!cb.checked) continue;
+      const parts = String(cb.value || "").split("/").map(Number);
+      if (parts.length !== 2) continue;
+      const [l, r] = parts;
+      if (!Number.isInteger(l) || !Number.isInteger(r)) continue;
+      if (l < 1 || l > 200 || r < 1 || r > 200) continue;
+      result.push({ key: cb.value, left_bars: l, right_bars: r });
+    }
+    return result;
+  }
+  function updateSRModeUI() {
+    const mode = getSelectedSRMode();
+    document.querySelectorAll("[data-sr-mode]").forEach(el => {
+      el.style.display = (el.dataset.srMode === mode) ? "" : "none";
+    });
+    if (mode === "presets") {
+      const count = getSelectedSRPresets().length;
+      if (count === 0) setStatus("Preset mode: select at least one preset before downloading.", true);
+      else setStatus(`Preset mode: ${count} preset${count > 1 ? "s" : ""} ready for export.`, false);
+    } else {
+      setStatus("Manual mode: enter left/right bars for a single SR level-set.", false);
+    }
+  }
+  function handlePresetChange() {
+    if (getSelectedSRMode() === "presets") {
+      const count = getSelectedSRPresets().length;
+      if (count === 0) setStatus("Preset mode: select at least one preset before downloading.", true);
+      else setStatus(`Preset mode: ${count} preset${count > 1 ? "s" : ""} ready for export.`, false);
+    }
+  }
+  srModeRadios.forEach(r => r.addEventListener("change", updateSRModeUI));
+  presetCheckboxes.forEach(cb => cb.addEventListener("change", handlePresetChange));
+  updateSRModeUI();
+
+  function getChartCandles() {
     if (!candleSeries || typeof candleSeries.data !== "function") return [];
     return safeCandleData(candleSeries.data());
   }
-  function initializeDates(force = false) {
-    if (datesInitialized && !force) return;
-    const candles = getLoadedCandles();
-    const dates = [...new Set(candles.map(c => getDateKeyIST(c.time)).filter(Boolean))].sort();
-    if (dates.length) {
-      startInput.value = dates[Math.max(0, dates.length - DEFAULT_TRADING_DAYS)];
-      endInput.value = dates[dates.length - 1];
-      setStatus(`Default range: ${Math.min(DEFAULT_TRADING_DAYS, dates.length)} trading dates in loaded candles.`, false);
-    } else {
-      setStatus("Load an instrument before exporting chart data.", false);
-    }
-    datesInitialized = true;
+  function getDateKeyForExport(unixSeconds) {
+    if (typeof getDateKeyIST === "function") return getDateKeyIST(Number(unixSeconds));
+    const d = new Date(Number(unixSeconds) * 1000);
+    return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" }).format(d);
   }
-  card.addEventListener("toggle", () => { if (card.open) initializeDates(); });
-
-  function validInt(input, label, min, max) {
-    const n = Number(input.value);
-    if (!Number.isInteger(n) || n < min || n > max) {
-      throw new Error(`${label} must be a whole number between ${min} and ${max}.`);
-    }
-    return n;
+  function isValidExportCandle(c) {
+    if (!c || !Number.isFinite(Number(c.time))) return false;
+    return ["open", "high", "low", "close"].every(k => Number.isFinite(Number(c[k])) && Number(c[k]) > 0);
   }
-  function toISTISO(time) {
-    const d = new Date(Number(time) * 1000);
-    if (!Number.isFinite(d.getTime())) throw new Error("Invalid candle timestamp found.");
+  function toISTTimestamp(unixSeconds) {
+    const d = new Date(Number(unixSeconds) * 1000);
+    if (!Number.isFinite(d.getTime())) throw new Error("Invalid candle timestamp.");
     const shifted = new Date(d.getTime() + 330 * 60000);
     return shifted.toISOString().replace("Z", "+05:30");
   }
-  function calculateExportEMA(candles, period) {
-    const k = 2 / (period + 1);
-    let previous = null;
+
+  function initializeDefaultRange(force) {
+    if (defaultRangeInitialized && !force) return;
+    const candles = getChartCandles();
+    const dates = [...new Set(candles.filter(isValidExportCandle).map(c => getDateKeyForExport(c.time)).filter(Boolean))].sort();
+    if (dates.length) {
+      startInput.value = dates[Math.max(0, dates.length - 11)];
+      endInput.value   = dates[dates.length - 1];
+      setStatus("Default: latest 11 loaded trading dates · EMA 9/21 · Opening-range analysis per day.", false);
+    } else {
+      const now = new Date();
+      const ist = new Date(now.getTime() + 330 * 60000);
+      const start = new Date(Date.UTC(ist.getUTCFullYear(), ist.getUTCMonth(), ist.getUTCDate() - 10));
+      startInput.value = start.toISOString().slice(0, 10);
+      endInput.value = ist.toISOString().slice(0, 10);
+      setStatus("Waiting for candles; default date range is the latest 11 calendar dates.", false);
+    }
+    defaultRangeInitialized = true;
+  }
+
+  [startInput, endInput].forEach(i => i.addEventListener("change", () => { userChangedExportDates = true; }));
+  card.addEventListener("toggle", () => {
+    if (card.open && !defaultRangeInitialized) initializeDefaultRange(true);
+  });
+  initializeDefaultRange(false);
+
+  function parseInteger(input, label, min, max) {
+    const value = Number(input.value);
+    if (!Number.isInteger(value) || value < min || value > max) {
+      throw new Error(`${label} must be a whole number between ${min} and ${max}.`);
+    }
+    return value;
+  }
+  function calculateEMAForExport(candles, period) {
+    const m = 2 / (period + 1);
+    let prev = null;
     return candles.map(c => {
       const close = Number(c.close);
-      previous = previous === null ? close : close * k + previous * (1 - k);
-      return previous;
+      prev = prev === null ? close : close * m + prev * (1 - m);
+      return prev;
     });
   }
-  function buildExportCrosses(allCandles, selectedTimes, startDate, endDate, fastPeriod, slowPeriod) {
-    const fast = calculateExportEMA(allCandles, fastPeriod);
-    const slow = calculateExportEMA(allCandles, slowPeriod);
-    const output = [];
-    for (let i = 1; i < allCandles.length; i++) {
+  function buildCrosses(candles, startDate, endDate, fastPeriod, slowPeriod) {
+    const fast = calculateEMAForExport(candles, fastPeriod);
+    const slow = calculateEMAForExport(candles, slowPeriod);
+    const result = [];
+    for (let i = 1; i < candles.length; i++) {
       const prevDiff = fast[i - 1] - slow[i - 1];
-      const currDiff = fast[i] - slow[i];
+      const currDiff = fast[i]     - slow[i];
       let type = null;
       if (prevDiff <= 0 && currDiff > 0) type = "bullish";
       else if (prevDiff >= 0 && currDiff < 0) type = "bearish";
       if (!type) continue;
-      const c = allCandles[i];
-      const date = getDateKeyIST(c.time);
-      if ((startDate && date < startDate) || (endDate && date > endDate)) continue;
-      if (!selectedTimes.has(c.time)) continue;
-      const volume = Number(c.volume || 0);
-      const previousVolume = Number(allCandles[i - 1].volume || 0);
-      output.push({
-        timestamp: toISTISO(c.time),
+      const candle = candles[i];
+      const dateKey = getDateKeyForExport(candle.time);
+      if ((startDate && dateKey < startDate) || (endDate && dateKey > endDate)) continue;
+      const prevVolume = Number(candles[i - 1].volume || 0);
+      const volume = Number(candle.volume || 0);
+      result.push({
+        timestamp: toISTTimestamp(candle.time),
         type,
-        fast_ema: Number(fast[i].toFixed(4)),
-        slow_ema: Number(slow[i].toFixed(4)),
-        volume: Number(volume.toFixed(4)),
-        volume_diff: Number((volume - previousVolume).toFixed(4)),
-        ema_diff: Number((fast[i] - slow[i]).toFixed(4)),
-        // The source template currently detects EMA direction changes only;
-        // it has no signal scoring/filter engine to calculate these values.
-        score: null,
-        max_score: null,
-        valid: null,
-        filters: {}
+        fast_ema: Number(fast[i].toFixed(6)),
+        slow_ema: Number(slow[i].toFixed(6)),
+        volume,
+        volume_diff: Number((volume - prevVolume).toFixed(6)),
+        ema_diff: Number((fast[i] - slow[i]).toFixed(6)),
       });
     }
-    return output;
+    return result;
   }
-  function buildExportLevels(allCandles, selectedCandles, startDate, endDate, leftBars, rightBars) {
-    const selectedIndex = new Map(selectedCandles.map((c, i) => [c.time, i]));
-    const output = [];
-    if (allCandles.length < leftBars + rightBars + 1) return output;
-
+  function buildSupportResistance(allCandles, selectedCandles, startDate, endDate, leftBars, rightBars) {
+    const selectedIndex = new Map(selectedCandles.map((c, i) => [Number(c.time), i]));
+    const levels = [];
+    if (allCandles.length < leftBars + rightBars + 1) return levels;
     for (let i = leftBars; i < allCandles.length - rightBars; i++) {
       const pivot = allCandles[i];
-      const pivotDate = getDateKeyIST(pivot.time);
+      const pivotDate = getDateKeyForExport(pivot.time);
       if ((startDate && pivotDate < startDate) || (endDate && pivotDate > endDate)) continue;
 
-      const high = Number(pivot.high), low = Number(pivot.low);
-      let isResistance = true, isSupport = true;
+      const pHigh = Number(pivot.high);
+      const pLow  = Number(pivot.low);
+      let isRes = true, isSup = true;
       for (let j = i - leftBars; j < i; j++) {
-        if (Number(allCandles[j].high) >= high) isResistance = false;
-        if (Number(allCandles[j].low) <= low) isSupport = false;
-        if (!isResistance && !isSupport) break;
+        if (pHigh <= Number(allCandles[j].high)) isRes = false;
+        if (pLow  >= Number(allCandles[j].low))  isSup = false;
+        if (!isRes && !isSup) break;
       }
-      if (isResistance || isSupport) {
-        for (let j = i + 1; j <= i + rightBars; j++) {
-          if (Number(allCandles[j].high) >= high) isResistance = false;
-          if (Number(allCandles[j].low) <= low) isSupport = false;
-          if (!isResistance && !isSupport) break;
-        }
+      for (let j = i + 1; j <= i + rightBars && (isRes || isSup); j++) {
+        if (pHigh <= Number(allCandles[j].high)) isRes = false;
+        if (pLow  >= Number(allCandles[j].low))  isSup = false;
       }
-
       const confirmation = allCandles[i + rightBars];
-      const pivotIndex = selectedIndex.get(pivot.time);
-      const confirmedIndex = selectedIndex.get(confirmation.time);
-      // Indices are relative to the exported candles array, so both bars must be present.
-      if (pivotIndex === undefined || confirmedIndex === undefined) continue;
-      if (isResistance) output.push({
-        level: "resistance", price: high,
-        pivot_bar_index: pivotIndex, pivot_time: toISTISO(pivot.time),
-        confirmed_bar_index: confirmedIndex, confirmed_time: toISTISO(confirmation.time),
-        left_bars: leftBars, right_bars: rightBars
+      const pIdx = selectedIndex.get(Number(pivot.time));
+      const cIdx = selectedIndex.get(Number(confirmation.time));
+      if (pIdx === undefined || cIdx === undefined) continue;
+
+      if (isRes) levels.push({
+        level: "resistance", price: pHigh,
+        pivot_bar_index: pIdx, pivot_time: toISTTimestamp(pivot.time),
+        confirmed_bar_index: cIdx, confirmed_time: toISTTimestamp(confirmation.time),
+        left_bars: leftBars, right_bars: rightBars,
       });
-      if (isSupport) output.push({
-        level: "support", price: low,
-        pivot_bar_index: pivotIndex, pivot_time: toISTISO(pivot.time),
-        confirmed_bar_index: confirmedIndex, confirmed_time: toISTISO(confirmation.time),
-        left_bars: leftBars, right_bars: rightBars
+      if (isSup) levels.push({
+        level: "support", price: pLow,
+        pivot_bar_index: pIdx, pivot_time: toISTTimestamp(pivot.time),
+        confirmed_bar_index: cIdx, confirmed_time: toISTTimestamp(confirmation.time),
+        left_bars: leftBars, right_bars: rightBars,
       });
     }
-    return output.sort((a, b) => a.pivot_bar_index - b.pivot_bar_index);
+    return levels.sort((a, b) => a.pivot_bar_index - b.pivot_bar_index);
   }
-  function downloadPayload(payload, fileName) {
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json;charset=utf-8" });
-    const objectUrl = URL.createObjectURL(blob);
-    const anchor = document.createElement("a");
-    anchor.href = objectUrl;
-    anchor.download = fileName;
-    anchor.style.display = "none";
-    document.body.appendChild(anchor);
-    anchor.click();
-    anchor.remove();
-    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 2000);
+  function buildOpeningRangeAnalysis(selectedCandles, startDate, endDate) {
+    const result = {};
+    if (!Array.isArray(selectedCandles) || !selectedCandles.length) return result;
+
+    const globalIndexMap = new Map();
+    selectedCandles.forEach((c, i) => globalIndexMap.set(Number(c.time), i));
+
+    const grouped = {};
+    selectedCandles.forEach(c => {
+      const key = getDateKeyForExport(c.time);
+      if (!key) return;
+      (grouped[key] = grouped[key] || []).push(c);
+    });
+
+    Object.keys(grouped).sort().forEach(date => {
+      if (startDate && date < startDate) return;
+      if (endDate && date > endDate) return;
+
+      const dayCandles = grouped[date].slice().sort((a, b) => Number(a.time) - Number(b.time));
+      if (!dayCandles.length) return;
+
+      const first = dayCandles[0];
+      const open  = Number(first.open);
+      const high  = Number(first.high);
+      const low   = Number(first.low);
+      const close = Number(first.close);
+      if (![open, high, low, close].every(Number.isFinite)) return;
+
+      const average = (high + low) / 2;
+      const r1Diff = high - average;
+      const s1Diff = average - low;
+      const r3 = high + r1Diff * 2;
+      const s3 = low  - s1Diff * 2;
+
+      let r3Touch = null, s3Touch = null;
+      for (let i = 1; i < dayCandles.length; i++) {
+        const c = dayCandles[i];
+        const cH = Number(c.high);
+        const cL = Number(c.low);
+        const gIdx = globalIndexMap.has(Number(c.time)) ? globalIndexMap.get(Number(c.time)) : null;
+        if (!r3Touch && Number.isFinite(cH) && cH >= r3) {
+          r3Touch = { time: toISTTimestamp(c.time), timestamp: Number(c.time), level_price: Number(r3.toFixed(4)), candle_high: Number(cH.toFixed(4)), bar_index: gIdx, bar_index_in_day: i };
+        }
+        if (!s3Touch && Number.isFinite(cL) && cL <= s3) {
+          s3Touch = { time: toISTTimestamp(c.time), timestamp: Number(c.time), level_price: Number(s3.toFixed(4)), candle_low: Number(cL.toFixed(4)), bar_index: gIdx, bar_index_in_day: i };
+        }
+        if (r3Touch && s3Touch) break;
+      }
+      let firstTouched = null;
+      if (r3Touch && s3Touch) {
+        if (r3Touch.bar_index_in_day < s3Touch.bar_index_in_day) firstTouched = "r3";
+        else if (s3Touch.bar_index_in_day < r3Touch.bar_index_in_day) firstTouched = "s3";
+        else firstTouched = "same_bar";
+      } else if (r3Touch) firstTouched = "r3";
+      else if (s3Touch) firstTouched = "s3";
+
+      result[date] = {
+        date,
+        opening_range: {
+          open: Number(open.toFixed(4)), high: Number(high.toFixed(4)),
+          low: Number(low.toFixed(4)),   close: Number(close.toFixed(4)),
+          average: Number(average.toFixed(4)),
+          levels: {
+            r1: Number(high.toFixed(4)),
+            r2: Number((high + r1Diff).toFixed(4)),
+            r3: Number(r3.toFixed(4)),
+            s1: Number(low.toFixed(4)),
+            s2: Number((low - s1Diff).toFixed(4)),
+            s3: Number(s3.toFixed(4)),
+          },
+        },
+        candle_count: dayCandles.length,
+        r3_touched: r3Touch,
+        s3_touched: s3Touch,
+        first_touched: firstTouched,
+        both_touched: Boolean(r3Touch && s3Touch),
+      };
+    });
+    return result;
+  }
+  function summarizeOpeningRangeAnalysis(analysis) {
+    const s = {
+      date_count: 0, days_with_r3_touch: 0, days_with_s3_touch: 0,
+      days_with_both_touches: 0, days_with_no_touch: 0,
+      days_with_first_r3: 0, days_with_first_s3: 0, days_with_same_bar_both: 0,
+    };
+    Object.values(analysis || {}).forEach(day => {
+      s.date_count++;
+      const hR = Boolean(day.r3_touched), hS = Boolean(day.s3_touched);
+      if (hR) s.days_with_r3_touch++;
+      if (hS) s.days_with_s3_touch++;
+      if (hR && hS) s.days_with_both_touches++;
+      if (!hR && !hS) s.days_with_no_touch++;
+      if (day.first_touched === "r3") s.days_with_first_r3++;
+      else if (day.first_touched === "s3") s.days_with_first_s3++;
+      else if (day.first_touched === "same_bar") s.days_with_same_bar_both++;
+    });
+    return s;
+  }
+  function downloadJsonFile(payload, fileName) {
+    const json = JSON.stringify(payload, null, 2);
+    const blob = new Blob([json], { type: "application/json;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url; link.download = fileName;
+    link.style.display = "none";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1500);
   }
 
-  button.addEventListener("click", () => {
-    const oldHTML = button.innerHTML;
-    button.disabled = true;
-    button.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Preparing JSON…';
+  downloadButton.addEventListener("click", () => {
+    downloadButton.disabled = true;
+    const oldLabel = downloadButton.innerHTML;
+    downloadButton.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Preparing JSON…';
+
     try {
-      initializeDates();
-      if (!currentInstrumentKey) throw new Error("Load an instrument before exporting.");
-      const fastPeriod = validInt(fastInput, "EMA fast", 1, 500);
-      const slowPeriod = validInt(slowInput, "EMA slow", 2, 1000);
-      const leftBars = validInt(leftInput, "SR left bars", 1, 200);
-      const rightBars = validInt(rightInput, "SR right bars", 1, 200);
+      if (!defaultRangeInitialized) initializeDefaultRange(true);
+      const fastPeriod = parseInteger(fastInput, "EMA fast", 1, 500);
+      const slowPeriod = parseInteger(slowInput, "EMA slow", 2, 1000);
       if (fastPeriod >= slowPeriod) throw new Error("EMA fast must be smaller than EMA slow.");
 
       const startDate = startInput.value || null;
-      const endDate = endInput.value || null;
+      const endDate   = endInput.value || null;
       if (startDate && endDate && startDate > endDate) throw new Error("Start date must be on or before end date.");
 
-      const allCandles = getLoadedCandles();
-      if (!allCandles.length) throw new Error("No candles are loaded. Load the chart and retry.");
+      const srMode = getSelectedSRMode();
+      let srConfigs = [];
+      if (srMode === "manual") {
+        const lb = parseInteger(leftInput, "SR left bars", 1, 200);
+        const rb = parseInteger(rightInput, "SR right bars", 1, 200);
+        srConfigs = [{ key: `${lb}/${rb}`, left_bars: lb, right_bars: rb }];
+      } else {
+        srConfigs = getSelectedSRPresets();
+        if (srConfigs.length === 0) throw new Error("Select at least one SR preset before downloading.");
+      }
+
+      const allCandles = getChartCandles().filter(isValidExportCandle).sort((a, b) => a.time - b.time);
+      if (!allCandles.length) throw new Error("No candle data loaded. Load a chart first, then retry.");
 
       const selectedCandles = allCandles.filter(c => {
-        const date = getDateKeyIST(c.time);
-        return (!startDate || date >= startDate) && (!endDate || date <= endDate);
+        const dateKey = getDateKeyForExport(c.time);
+        return (!startDate || dateKey >= startDate) && (!endDate || dateKey <= endDate);
       });
-      if (!selectedCandles.length) throw new Error("No candles exist in the selected export date range.");
+      if (!selectedCandles.length) throw new Error(`No valid candles between ${startDate || "beginning"} and ${endDate || "latest"}.`);
 
-      const selectedTimes = new Set(selectedCandles.map(c => c.time));
-      const crosses = buildExportCrosses(allCandles, selectedTimes, startDate, endDate, fastPeriod, slowPeriod);
-      const levels = buildExportLevels(allCandles, selectedCandles, startDate, endDate, leftBars, rightBars);
+      const crosses = buildCrosses(allCandles, startDate, endDate, fastPeriod, slowPeriod);
+      const levelsByPreset = {};
+      const levelCountsByPreset = {};
+      srConfigs.forEach(cfg => {
+        const levels = buildSupportResistance(allCandles, selectedCandles, startDate, endDate, cfg.left_bars, cfg.right_bars);
+        levelsByPreset[cfg.key] = levels;
+        levelCountsByPreset[cfg.key] = levels.length;
+      });
+      const openingRangeAnalysis = buildOpeningRangeAnalysis(selectedCandles, startDate, endDate);
+      const openingRangeSummary  = summarizeOpeningRangeAnalysis(openingRangeAnalysis);
+
       const instrument = currentMeta || {};
-      const tradingSymbol = instrument.trading_symbol || instrument.tradingsymbol ||
-        (topSymbolName ? topSymbolName.textContent.trim() : "") || currentInstrumentKey;
-      const exportEndDate = endDate || getDateKeyIST(selectedCandles[selectedCandles.length - 1].time);
-      const exportStartDate = startDate || getDateKeyIST(selectedCandles[0].time);
+      const tradingSymbol = instrument.trading_symbol || topSymbolName?.textContent?.trim() || currentInstrumentKey;
+      const totalLevelCount = Object.values(levelCountsByPreset).reduce((a, b) => a + b, 0);
+
+      const config = {
+        ema: { fast_period: fastPeriod, slow_period: slowPeriod },
+        sr_mode: srMode,
+        timeframe_minutes: currentIntervalMin,
+        timeframe_label: intervalLabel(currentIntervalMin),
+      };
+      if (srMode === "manual") config.sr = { left_bars: srConfigs[0].left_bars, right_bars: srConfigs[0].right_bars };
+      else config.sr_presets = srConfigs.map(c => ({ key: c.key, left_bars: c.left_bars, right_bars: c.right_bars }));
 
       const payload = {
-        instrument_key: currentInstrumentKey,
-        trading_symbol: tradingSymbol,
-        start_date: exportStartDate,
-        end_date: exportEndDate,
-        timezone: "Asia/Kolkata",
-        exported_at: new Date().toISOString(),
-        instrument_metadata: instrument,
-        config: {
-          ema: { fast_period: fastPeriod, slow_period: slowPeriod },
-          sr: { left_bars: leftBars, right_bars: rightBars },
-          signal_scoring: {
-            available: false,
-            note: "The supplied template detects EMA direction crossovers but does not contain score, validity, or filter evaluation rules."
-          }
+        metadata: {
+          instrument_key: currentInstrumentKey,
+          trading_symbol: tradingSymbol,
+          instrument,
+          mode: currentMode,
+          date_range: { start_date: startDate, end_date: endDate, timezone: "Asia/Kolkata" },
+          timeframe: { interval_minutes: currentIntervalMin, interval_label: intervalLabel(currentIntervalMin) },
+          exported_at: new Date().toISOString(),
+          candle_count: selectedCandles.length,
+          ema_cross_count: crosses.length,
+          sr_mode: srMode,
+          ...(srMode === "manual"
+            ? { sr_level_count: totalLevelCount }
+            : { sr_preset_count: srConfigs.length, sr_level_count_by_preset: levelCountsByPreset }),
+          opening_range_date_count: openingRangeSummary.date_count,
+          opening_range_summary: openingRangeSummary,
         },
+        config,
         candles: selectedCandles.map(c => ({
-          timestamp: toISTISO(c.time),
+          timestamp: toISTTimestamp(c.time),
           open: Number(c.open), high: Number(c.high), low: Number(c.low), close: Number(c.close),
-          volume: Number(c.volume || 0), oi: Number(c.oi || 0)
+          volume: Number(c.volume || 0), oi: Number(c.oi || 0),
         })),
         crosses,
-        levels
+        ...(srMode === "manual"
+          ? { levels: levelsByPreset[srConfigs[0].key] }
+          : { levels_by_preset: levelsByPreset }),
+        opening_range_analysis: openingRangeAnalysis,
       };
 
-      const safeSymbol = String(tradingSymbol).replace(/[^a-z0-9_-]+/gi, "_").replace(/^_+|_+$/g, "") || "instrument";
-      downloadPayload(payload, `${safeSymbol}_${exportStartDate}_${exportEndDate}_chart_data.json`);
-      setStatus(`Downloaded ${selectedCandles.length} candles · ${crosses.length} EMA crosses · ${levels.length} SR levels.`, false);
+      const safeSymbol = String(tradingSymbol || "instrument").replace(/[^a-z0-9_-]+/gi, "_").replace(/^_+|_+$/g, "") || "instrument";
+      downloadJsonFile(payload, `${safeSymbol}_${intervalLabel(currentIntervalMin)}_${startDate || "all"}_${endDate || "all"}_chart_data.json`);
+
+      const orTail = openingRangeSummary.date_count
+        ? ` · ${openingRangeSummary.date_count} opening-range day(s) (R3 ${openingRangeSummary.days_with_r3_touch} · S3 ${openingRangeSummary.days_with_s3_touch} · both ${openingRangeSummary.days_with_both_touches})`
+        : " · opening-range analysis unavailable";
+      setStatus(
+        `Downloaded ${selectedCandles.length} ${intervalLabel(currentIntervalMin)} candles · ${crosses.length} EMA crosses · ${totalLevelCount} SR levels${srMode === "presets" ? ` (${srConfigs.length} presets)` : ""}${orTail}.`,
+        false
+      );
     } catch (error) {
       console.error("[json-export] failed:", error);
-      setStatus(error.message || "JSON export failed.", true);
+      setStatus(error && error.message ? error.message : "Unable to generate JSON file.", true);
     } finally {
-      button.disabled = false;
-      button.innerHTML = oldHTML;
+      downloadButton.disabled = false;
+      downloadButton.innerHTML = oldLabel;
     }
   });
-  initializeDates();
 })();
 
 // ============================================================
@@ -2506,6 +3219,8 @@ const initialKey = (function () {
   try { return JSON.parse(document.getElementById("instrument-key-data").textContent) || ""; }
   catch (e) { return ""; }
 })();
+
+initTimeframeUI();
 
 if (initialKey) {
   instrumentKeyInput.value = initialKey;
