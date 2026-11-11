@@ -7,3 +7,4 @@ APScheduler
 httpx
 pytest
 pyperclip
+requests
