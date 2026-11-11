@@ -16,6 +16,9 @@ pipeline needs.
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
+
 import requests
 
 from core.config import (
@@ -29,6 +32,8 @@ from core.config import (
 from core.logger import get_logger
 
 logger = get_logger(__file__)
+
+_IST = ZoneInfo("Asia/Kolkata")
 
 
 class InstrumentSearchError(RuntimeError):
@@ -64,75 +69,129 @@ class InstrumentSearchService:
         option_type: str,
         strike: int | None = None,
     ) -> dict:
-        """Search for the option at the given explicit strike (first match)."""
+        """Search for the option at the given explicit strike (first match).
+
+        Resolution order (first success wins):
+
+          1. Explicit query ``NIFTY <TYPE> <STRIKE>`` for each expiry
+             candidate (configured ``NIFTY_SEARCH_EXPIRY`` → next Thursday
+             → the Thursday after → ``current_month``).
+          2. Broad query ``NIFTY`` filtered client-side by strike + type,
+             again across every expiry candidate.
+          3. Server-side ATM lookup (``atm_offset=0``) across every expiry
+             candidate.
+
+        The configured keyword ``current_week`` is tried first, but on an
+        expiry day, or if the provider has already rolled the weekly
+        contract, an explicit query for that keyword can return nothing.
+        The fallback chain keeps isolation creation alive in that window
+        instead of dropping the touch entirely.
+        """
         option_type = option_type.upper()
         _validate_type(option_type)
         if strike is None:
             strike = compute_atm_strike(nifty_ltp)
 
-        params = {
-            "query": f"NIFTY {option_type} {strike}",
+        expiries = self._expiry_candidates()
+
+        base = {
             "exchanges": NIFTY_SEARCH_EXCHANGE,
             "segments": NIFTY_SEARCH_SEGMENT,
             "instrument_types": option_type,
-            "expiry": NIFTY_SEARCH_EXPIRY,
             "page_number": 1,
             "records": 30,
         }
+
         logger.info(
-            "Search (explicit strike): strike=%d, type=%s, nifty_ltp=%.2f",
-            strike, option_type, nifty_ltp,
+            "Search (explicit strike): strike=%d, type=%s, nifty_ltp=%.2f, "
+            "expiry_candidates=%s",
+            strike, option_type, nifty_ltp, expiries,
         )
 
-        try:
-            data = self._do_request(params)
-        except InstrumentSearchError:
-            data = []
+        # ---- Pass 1 & 2: explicit-then-broad query across expiries ------
+        for expiry_value in expiries:
+            for query in (f"NIFTY {option_type} {strike}", "NIFTY"):
+                params = {**base, "query": query, "expiry": expiry_value}
+                try:
+                    data = self._do_request(params)
+                except InstrumentSearchError as exc:
+                    logger.warning(
+                        "Search attempt failed (expiry=%s query=%r): %s",
+                        expiry_value, query, exc,
+                    )
+                    continue
 
-        filtered = [
-            d for d in data
-            if _float_eq(d.get("strike_price"), strike)
-            and (d.get("instrument_type") or "").upper() == option_type
-        ]
-        if filtered:
-            return self._log_and_return(filtered[0], "explicit_query")
+                filtered = [
+                    d for d in data
+                    if _float_eq(d.get("strike_price"), strike)
+                    and (d.get("instrument_type") or "").upper() == option_type
+                ]
+                if filtered:
+                    source = (
+                        "explicit_query"
+                        if query.startswith("NIFTY ")
+                        else "broad_query+strike_filter"
+                    )
+                    return self._log_and_return(
+                        filtered[0],
+                        f"{source}(expiry={expiry_value})",
+                    )
 
-        # Fallback 1: broader query without strike
-        fallback = {
-            "query": "NIFTY",
-            "exchanges": NIFTY_SEARCH_EXCHANGE,
-            "segments": NIFTY_SEARCH_SEGMENT,
-            "instrument_types": option_type,
-            "expiry": NIFTY_SEARCH_EXPIRY,
-            "page_number": 1,
-            "records": 30,
-        }
-        try:
-            data = self._do_request(fallback)
-        except InstrumentSearchError:
-            data = []
+        # ---- Pass 3: server-side ATM lookup across expiries -------------
+        for expiry_value in expiries:
+            params = {
+                **base,
+                "query": "NIFTY",
+                "expiry": expiry_value,
+                "atm_offset": 0,
+            }
+            try:
+                return self._request_and_take_first(
+                    params,
+                    source=f"atm_offset_fallback(expiry={expiry_value})",
+                )
+            except InstrumentSearchError as exc:
+                logger.warning(
+                    "ATM fallback failed (expiry=%s): %s",
+                    expiry_value, exc,
+                )
 
-        filtered = [
-            d for d in data
-            if _float_eq(d.get("strike_price"), strike)
-            and (d.get("instrument_type") or "").upper() == option_type
-        ]
-        if filtered:
-            return self._log_and_return(
-                filtered[0], "broad_query+strike_filter"
-            )
+        raise InstrumentSearchError(
+            f"No instrument found for strike={strike}, "
+            f"option_type={option_type}. "
+            f"Tried expiries={expiries}. "
+            "Check the 'Upstox search status=' log lines above for the "
+            "provider's actual error."
+        )
 
-        # Fallback 2: atm_offset=0 (server-side ATM)
-        try:
-            return self._request_and_take_first(
-                self._build_atm_params(option_type),
-                source="atm_offset_fallback",
-            )
-        except InstrumentSearchError:
-            raise InstrumentSearchError(
-                f"No instrument found for strike={strike}, "
-                f"option_type={option_type}"
-            )
+    def _expiry_candidates(self) -> list[str]:
+        """Ordered list of expiry values to try in ``search_nifty_option_at_strike``.
+
+        First entry is whatever is configured (``NIFTY_SEARCH_EXPIRY``,
+        default ``current_week``). Remaining entries are concrete
+        ``YYYY-MM-DD`` dates plus ``current_month`` — so if the configured
+        keyword stops resolving (e.g. on expiry day, or after a weekly
+        roll) the search still has a chance to find the live contract.
+
+        NIFTY weekly options expire on Thursday. Two Thursdays are
+        included to cover the roll window around expiry day.
+        """
+        candidates: list[str] = [NIFTY_SEARCH_EXPIRY]
+
+        today = datetime.now(_IST).date()
+        # 3 == Thursday in Python's weekday() (Mon=0)
+        days_until_thu = (3 - today.weekday()) % 7
+        if days_until_thu == 0:
+            # Today is Thursday — the *current* weekly may already have
+            # expired by the time this runs. Start with next week.
+            days_until_thu = 7
+        next_thu = today + timedelta(days=days_until_thu)
+        candidates.append(next_thu.isoformat())
+        candidates.append((next_thu + timedelta(days=7)).isoformat())
+        candidates.append("current_month")
+
+        # Deduplicate while preserving order.
+        return list(dict.fromkeys(c for c in candidates if c))
 
     # ------------------------------------------------------------------ #
     # NEW — for /api/v1/search/* routes                                  #
@@ -152,6 +211,11 @@ class InstrumentSearchService:
         the first match). Used by ``GET /api/v1/search/instrument/all`` so
         operators can inspect every contract at a strike — e.g. to confirm
         only one expiry is live, or to see the full list before picking.
+
+        Note: unlike the first-match path, this does **not** iterate across
+        expiry candidates — the operator (or caller) is expected to have
+        passed an explicit ``expiry`` if they care. If ``expiry`` is
+        omitted, ``NIFTY_SEARCH_EXPIRY`` is used as-is.
 
         Returns ``[]`` on empty response (never raises on empty).
         """
@@ -260,13 +324,11 @@ class InstrumentSearchService:
             )
         return self._log_and_return(data[0], source)
 
+
     def _do_request(self, params: dict) -> list[dict]:
         try:
             resp = requests.get(
-                UPSTOX_SEARCH_URL,
-                headers=self._headers(),
-                params=params,
-                timeout=10,
+                UPSTOX_SEARCH_URL, headers=self._headers(), params=params, timeout=10,
             )
             resp.raise_for_status()
             body = resp.json()
@@ -277,7 +339,39 @@ class InstrumentSearchService:
             ) from exc
         except Exception as exc:
             raise InstrumentSearchError(f"Search failed: {exc}") from exc
-        return body.get("data") or []
+
+        # Surface API-level errors that come back as 200.
+        status = (body.get("status") or "").lower()
+        if status and status != "success":
+            errors = body.get("errors") or []
+            error_summary = "; ".join(
+                f"{e.get('errorCode','?')}: {e.get('message','?')}" for e in errors
+            ) or str(body)[:300]
+            logger.error(
+                "Upstox search status=%s for params=%s: %s",
+                status, params, error_summary,
+            )
+            raise InstrumentSearchError(
+                f"Upstox API status={status}: {error_summary}"
+            )
+
+        data = body.get("data")
+        if data is None:
+            logger.warning(
+                "Upstox search: no 'data' key. params=%s body=%s",
+                params, str(body)[:500],
+            )
+            raise InstrumentSearchError(f"No 'data' in response: {str(body)[:200]}")
+
+        if not isinstance(data, list):
+            logger.warning(
+                "Upstox search: 'data' is %s not list. params=%s body=%s",
+                type(data).__name__, params, str(body)[:500],
+            )
+            return []
+
+        return data
+
 
     def _log_and_return(self, first: dict, source: str) -> dict:
         logger.info(

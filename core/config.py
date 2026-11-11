@@ -1,5 +1,56 @@
 # core/config.py
-"""Central configuration for the Instrument Isolation Service."""
+"""Central configuration for the Instrument Isolation Service.
+
+All values are read from environment variables (usually via a ``.env``
+file loaded by :func:`dotenv.load_dotenv`) at **import time**. Every
+module that needs a knob imports it from here; nothing re-reads the
+environment after this module loads, so a live edit to ``.env``
+requires a process restart to take effect.
+
+Notes on specific knobs
+-----------------------
+``DEFERRED_STARTUP_MINUTE``
+    Defaults to **18**. Values below 17 cause the deferred OR-levels
+    compute to run before the 09:15 opening candle exists, producing a
+    structurally-wrong ``pivot_levels`` document (yesterday's candles
+    tagged with today's ``trade_date_ist``). 18 matches the recommended
+    value from ``.env.example`` and the ``PIVOT_CHECK_MINUTE`` the
+    scheduler uses for its 09:18 recheck.
+
+``ISOLATION_SCAN_START_HOUR`` / ``ISOLATION_SCAN_START_MINUTE``
+    These are configurable **independently** of ``MARKET_OPEN_HOUR`` /
+    ``MARKET_OPEN_MINUTE`` via the ``ISOLATION_SCAN_START_*`` env vars.
+    If those are absent, the values fall back to ``MARKET_OPEN_*`` —
+    preserving the original behaviour where the scan window began at
+    market open. Reading from ``ISOLATION_SCAN_START_*`` first lets a
+    deployment delay the scan start (e.g. to 09:18) without having to
+    also move the market-open boundary used elsewhere.
+
+``NIFTY_SEARCH_EXPIRY``
+    The **primary** expiry keyword tried by
+    :class:`core.instrument_search_service.InstrumentSearchService`.
+    Default ``current_week``. On expiry day, or once the weekly roll
+    has occurred at the provider, this keyword can resolve to nothing
+    for the current ATM strike. ``InstrumentSearchService`` therefore
+    also tries concrete ``YYYY-MM-DD`` dates for the next two Thursdays
+    and ``current_month`` as fallbacks — see
+    ``InstrumentSearchService._expiry_candidates``. Do **not** remove
+    the ``current_week`` default: it is the only value that works when
+    the provider is consistent, and the fallback chain costs nothing
+    when it succeeds first try.
+
+``NIFTY_SEARCH_USE_ATM_OFFSET``
+    Legacy flag from an earlier iteration. Currently unused by any
+    code path in this project. Kept only for backward compatibility
+    with any external scripts that may import it. Do not rely on it.
+
+``BACKFILL_WINDOW_*``
+    The window in which the startup backfill will attempt to
+    reconstruct a missed isolation. Defaults to Mon–Fri 09:15–23:59
+    IST — deliberately extends past market close (15:30) so a process
+    that crashes mid-session and is restarted in the evening can still
+    recover the missing isolation record for the day.
+"""
 
 import os
 from dotenv import load_dotenv
@@ -107,8 +158,23 @@ ISOLATION_OPTION_LTP_WAIT_SECONDS = int(
     os.getenv("ISOLATION_OPTION_LTP_WAIT_SECONDS", "5")
 )
 
-ISOLATION_SCAN_START_HOUR = int(os.getenv("MARKET_OPEN_HOUR", "9"))
-ISOLATION_SCAN_START_MINUTE = int(os.getenv("MARKET_OPEN_MINUTE", "15"))
+# Scan-window bounds. The start reads ISOLATION_SCAN_START_* first so a
+# deployment can delay the scan start (e.g. until 09:18, when OR levels
+# are actually ready) without moving MARKET_OPEN_*. Falls back to
+# MARKET_OPEN_* when ISOLATION_SCAN_START_* is not set, preserving the
+# original behaviour. See module docstring.
+ISOLATION_SCAN_START_HOUR = int(
+    os.getenv(
+        "ISOLATION_SCAN_START_HOUR",
+        os.getenv("MARKET_OPEN_HOUR", "9"),
+    )
+)
+ISOLATION_SCAN_START_MINUTE = int(
+    os.getenv(
+        "ISOLATION_SCAN_START_MINUTE",
+        os.getenv("MARKET_OPEN_MINUTE", "15"),
+    )
+)
 ISOLATION_SCAN_END_HOUR = int(os.getenv("ISOLATION_SCAN_END_HOUR", "15"))
 ISOLATION_SCAN_END_MINUTE = int(os.getenv("ISOLATION_SCAN_END_MINUTE", "40"))
 
@@ -118,7 +184,17 @@ ISOLATION_SCAN_END_MINUTE = int(os.getenv("ISOLATION_SCAN_END_MINUTE", "40"))
 NIFTY_STRIKE_STEP = int(os.getenv("NIFTY_STRIKE_STEP", "50"))
 NIFTY_SEARCH_EXCHANGE = os.getenv("NIFTY_SEARCH_EXCHANGE", "NSE")
 NIFTY_SEARCH_SEGMENT = os.getenv("NIFTY_SEARCH_SEGMENT", "FO")
+
+# Primary expiry keyword. Tried first; on empty result, the search
+# service falls back to concrete Thursday dates and ``current_month``.
+# See module docstring ("NIFTY_SEARCH_EXPIRY") and
+# ``InstrumentSearchService._expiry_candidates``.
 NIFTY_SEARCH_EXPIRY = os.getenv("NIFTY_SEARCH_EXPIRY", "current_week")
+
+# Legacy: previously toggled whether the search used server-side
+# ``atm_offset`` instead of an explicit strike. No longer consulted by
+# any code path in this project. Kept for backward compatibility with
+# external scripts that may import it.
 NIFTY_SEARCH_USE_ATM_OFFSET = (
     os.getenv("NIFTY_SEARCH_USE_ATM_OFFSET", "false").strip().lower() == "true"
 )
@@ -151,6 +227,10 @@ OR_LEVELS_LOCAL_PATH = os.getenv(
 
 # ---------------------------------------------------------------------------
 # Startup backfill
+#
+# Window bounds default to Mon–Fri 09:15–23:59 IST. The late end-time is
+# deliberate: a process that crashes mid-session and is restarted in the
+# evening can still reconstruct the missed isolation record for the day.
 # ---------------------------------------------------------------------------
 BACKFILL_ENABLED = (
     os.getenv("BACKFILL_ENABLED", "true").strip().lower() == "true"
@@ -168,19 +248,23 @@ BACKFILL_WINDOW_END_MINUTE = int(
 
 # ---------------------------------------------------------------------------
 # Deferred startup gate
-# ---------------------------------------------------------------------------
-# When TEST_FLAG=false and process starts before the cutoff, go fully
-# idle until the cutoff, then run the startup sequence (daily refresh →
-# backfill → scheduler already running).
+#
+# When TEST_FLAG=false and the process starts before the cutoff, go
+# fully idle until the cutoff, then run the startup sequence
+# (daily refresh → backfill) via the scheduler.
 #
 # When TEST_FLAG=true, run the startup sequence immediately regardless
 # of the current time.
+#
+# DEFERRED_STARTUP_MINUTE defaults to 18 — see module docstring
+# ("DEFERRED_STARTUP_MINUTE") for why values < 17 are unsafe.
+# ---------------------------------------------------------------------------
 TEST_FLAG = (
     os.getenv("TEST_FLAG", "false").strip().lower() == "true"
 )
 
 DEFERRED_STARTUP_HOUR = int(os.getenv("DEFERRED_STARTUP_HOUR", "9"))
-DEFERRED_STARTUP_MINUTE = int(os.getenv("DEFERRED_STARTUP_MINUTE", "0"))
+DEFERRED_STARTUP_MINUTE = int(os.getenv("DEFERRED_STARTUP_MINUTE", "18"))
 
 # ---------------------------------------------------------------------------
 # Market feed
@@ -246,7 +330,7 @@ ISOLATION_NOTIFY_CLIENT_KEY_HEADER = (
 ISOLATION_NOTIFY_TIMEOUT_SECONDS = float(
     os.getenv("ISOLATION_NOTIFY_TIMEOUT_SECONDS", "5")
 )
-
+TOKEN_CACHE_TTL_SECONDS = int(os.getenv("TOKEN_CACHE_TTL_SECONDS", "1800"))
 # ---------------------------------------------------------------------------
 # API
 # ---------------------------------------------------------------------------

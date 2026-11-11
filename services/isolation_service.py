@@ -11,6 +11,21 @@ Flow (v2):
   7. Snapshot option LTP from feed.
   8. Pin execution mode (services/execution_mode_service).
   9. Persist record with a detailed `explanation` sub-document.
+
+Touch lifecycle
+---------------
+A touch that produces a successful isolation is added to
+``_processed_touches`` and never re-attempted for the rest of the day
+(moot anyway once ``_already_isolated_today()`` returns True, but it
+keeps the state machine explicit).
+
+A touch that **fails** to produce an isolation (search returns nothing,
+NIFTY LTP unavailable, transient provider error, …) is **not** marked as
+processed. Instead its key is placed in ``_retry_cooldown`` with a
+``_FAILED_TOUCH_RETRY_SECONDS`` back-off so the next scan tick does not
+hammer the same search endpoint. After the cooldown expires the touch
+is retried on the normal 30 s scan cadence. This keeps a transient
+failure from permanently suppressing an otherwise-valid isolation.
 """
 
 from __future__ import annotations
@@ -52,6 +67,13 @@ logger = get_logger(__file__)
 
 NIFTY_INDEX_KEY = "NSE_INDEX|Nifty 50"
 
+# Back-off applied to a touch whose isolation attempt failed (search
+# returned nothing, NIFTY LTP unavailable, transient provider error, …).
+# Keeps the 30 s scan tick from hammering the search API while a
+# temporary failure exists, without permanently suppressing the touch.
+# 300 s = 5 minutes.
+_FAILED_TOUCH_RETRY_SECONDS = 300
+
 
 class IsolationService:
     def __init__(self, access_token: str):
@@ -60,10 +82,25 @@ class IsolationService:
         self.search = InstrumentSearchService(access_token)
         self.trend = NiftyTrendService(access_token)
         self.repo = IsolationRepository()
+
+        # Touches that have produced a successful isolation. Never
+        # re-attempted.
         self._processed_touches: set[str] = set()
+
+        # Touches whose isolation attempt failed, mapped to the epoch
+        # second at which they become eligible for retry. A touch is
+        # blocked from re-attempt until ``time.time() >= retry_after``.
+        self._retry_cooldown: dict[str, float] = {}
 
     # ------------------------------------------------------------------ #
     def scan_once(self, feed: MarketFeedService) -> Optional[dict]:
+        """One scan tick.
+
+        Returns the newly-created isolation record on success, ``None``
+        otherwise. On failure, the touches that were attempted are placed
+        in a retry cooldown so subsequent ticks do not immediately retry
+        them — but they are **not** permanently suppressed.
+        """
         if self._already_isolated_today():
             return None
         if not feed or not feed.get_health().get("running"):
@@ -76,20 +113,63 @@ class IsolationService:
 
         health = feed.get_health()
         touches = self._detect_touches(pivot_levels, health)
-        new_touches = [
-            t for t in touches
-            if f"{t['canonical']}_{t['side']}" not in self._processed_touches
-        ]
+        if not touches:
+            return None
+
+        now_ts = time.time()
+        new_touches: list[dict] = []
+        for t in touches:
+            key = f"{t['canonical']}_{t['side']}"
+            if key in self._processed_touches:
+                continue
+            retry_after = self._retry_cooldown.get(key, 0.0)
+            if now_ts < retry_after:
+                continue
+            new_touches.append(t)
+
         if not new_touches:
             return None
 
+        # Log only the touches we are actually about to act on. Logging
+        # every detected touch on every tick (as the old code did inside
+        # `_detect_touches`) flooded the log with dozens of duplicate
+        # lines per touch per minute.
         for t in new_touches:
-            self._processed_touches.add(f"{t['canonical']}_{t['side']}")
+            logger.info(
+                "Touch detected: %s/%s at %s (LTP=%.2f vs level=%.2f)",
+                t["canonical"], t["side"], t["trigger_level_name"],
+                t["index_ltp_at_touch"], t["trigger_level"],
+            )
 
         winner = arbitrate_touches(new_touches)
         if winner is None:
+            # Defensive: arbitrate_touches returns None only on empty
+            # input, which we already excluded above.
             return None
-        return self._create_isolation(winner, feed, backfilled=False)
+
+        record = self._create_isolation(winner, feed, backfilled=False)
+
+        if record is not None:
+            # Success — mark the touch set as permanently consumed.
+            for t in new_touches:
+                key = f"{t['canonical']}_{t['side']}"
+                self._processed_touches.add(key)
+                self._retry_cooldown.pop(key, None)
+        else:
+            # Failure — schedule a retry, do NOT mark as processed.
+            retry_at = now_ts + _FAILED_TOUCH_RETRY_SECONDS
+            for t in new_touches:
+                key = f"{t['canonical']}_{t['side']}"
+                self._retry_cooldown[key] = retry_at
+            logger.warning(
+                "Isolation creation FAILED for winner %s/%s; touches NOT "
+                "marked processed. Retrying in %ds. Touches in cooldown: %s",
+                winner["canonical"], winner["side"],
+                _FAILED_TOUCH_RETRY_SECONDS,
+                sorted(self._retry_cooldown.keys()),
+            )
+
+        return record
 
     # ------------------------------------------------------------------ #
     def _already_isolated_today(self) -> bool:
@@ -111,6 +191,13 @@ class IsolationService:
         return doc.get("indexes") or {}
 
     def _detect_touches(self, pivot_levels: dict, health: dict) -> list[dict]:
+        """Return every touch detected against the current feed snapshot.
+
+        This method intentionally does **not** log each touch — it is
+        called on every 30 s scan tick and would otherwise emit a
+        duplicate INFO line per active touch per tick. Actionable
+        touches are logged by ``scan_once`` after the cooldown filter.
+        """
         touches: list[dict] = []
         inst_ltp = health.get("instruments") or {}
         for index_key, payload in pivot_levels.items():
@@ -126,11 +213,6 @@ class IsolationService:
                 touch["first_candle"] = payload.get("first_candle")
                 touch["or_levels_at_touch"] = levels
                 touches.append(touch)
-                logger.info(
-                    "Touch detected: %s/%s at %s (LTP=%.2f vs level=%.2f)",
-                    canonical, touch["side"], touch["trigger_level_name"],
-                    ltp, touch["trigger_level"],
-                )
         return touches
 
     # ------------------------------------------------------------------ #

@@ -1,5 +1,40 @@
 # core/token_service.py
-"""Fetch and validate the Upstox access token from MongoDB."""
+"""Fetch and validate the Upstox access token from MongoDB.
+
+Logging rationale
+-----------------
+``fetch_access_token`` is called on **every** isolation scan tick —
+every 30 s while the market is open — by
+``jobs/isolation_scan.py::run_isolation_scan``. The original code
+emitted ``Access token fetched (updated_at=...)`` at **INFO** level on
+every one of those calls, producing ~120 lines per hour of identical
+output (the ``updated_at`` value never changes once the upstream app
+has rotated the token for the day). That noise buried the actually
+useful log lines in ``logs/local_project.log``.
+
+The log line in ``fetch_access_token`` has been downgraded to DEBUG:
+
+  * The real "token fetched" **milestone** — one per day — is already
+    emitted by ``jobs/daily_refresh.run_daily_refresh`` via
+    ``tasks["Token fetched"]`` in its ``Daily refresh completed:``
+    summary. Nothing useful is lost.
+  * ``logging.getLogger(...).setLevel(logging.DEBUG)`` is the project
+    default (see ``core/logger.py::get_logger``), so the DEBUG line is
+    still written to the file handlers. It just stops flooding the
+    **console** and the **combined log** with repeated identical lines.
+    Operators who need it can still grep ``logs_text/token_service.txt``.
+
+No behavioural change to callers. The function still:
+
+  * reads from ``app_tokens._id = "upstox_access_token"``,
+  * raises ``RuntimeError`` if the document or ``access_token`` field
+    is missing,
+  * returns the raw token string on success.
+
+``validate_access_token`` is unchanged — it is called at most once per
+day by ``run_daily_refresh``, so its INFO output stays at the level
+operators expect.
+"""
 
 import upstox_client
 from upstox_client.rest import ApiException
@@ -14,7 +49,12 @@ TOKEN_DOC_ID = "upstox_access_token"
 
 
 def fetch_access_token() -> str:
-    """Fetch the access token document from MongoDB."""
+    """Fetch the access token document from MongoDB.
+
+    Called by every isolation scan tick (30 s cadence while the market
+    is open) as well as by ``run_daily_refresh``. Logs at **DEBUG**;
+    see module docstring for the rationale.
+    """
     db = get_mongo_db()
     doc = db[APP_TOKENS_COLLECTION].find_one({"_id": TOKEN_DOC_ID})
     if not doc:
@@ -22,7 +62,7 @@ def fetch_access_token() -> str:
     token = doc.get("access_token")
     if not token:
         raise RuntimeError("access_token field is missing.")
-    logger.info("Access token fetched (updated_at=%s)", doc.get("updated_at"))
+    logger.debug("Access token fetched (updated_at=%s)", doc.get("updated_at"))
     return token
 
 

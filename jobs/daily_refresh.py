@@ -45,6 +45,33 @@ attempt a full run.
 Callers that legitimately need a second run (manual testing via
 ``POST /trigger/refresh?force=true``) pass ``force=True`` to bypass.
 
+Concurrency
+-----------
+The idempotency check and the pipeline body are both wrapped in a
+process-wide ``threading.Lock`` (``_daily_refresh_lock``). This is the
+crucial detail: without the lock, two simultaneous callers (the
+``deferred_startup`` one-shot and the ``daily_refresh @ 09:00`` cron
+both firing at 09:18:00) can **both** observe ``_last_daily_refresh_date
+!= today`` before either has a chance to set it. Both would then run
+the full pipeline — two feed connects, two ``MarketFeedService``
+threads, doubled ``[HEALTH]`` output every 300 s, doubled Telegram
+summaries, and three parallel ``MongoClient`` initialisations from the
+``get_mongo_db()`` race.
+
+With the lock, the second caller blocks on ``acquire()`` until the
+first has finished; by the time it proceeds, ``_last_daily_refresh_date``
+is set to today and the guard immediately returns. Feed thread count
+stays at 1.
+
+Locking is also correct for ``force=True``: a manual force call after
+the guard has been set will wait for any in-flight refresh to finish,
+then re-run the pipeline. That matches operator expectations.
+
+The lock is a plain ``threading.Lock`` (not reentrant). No code path
+re-enters ``run_daily_refresh`` from within the pipeline, so this is
+safe. If a future change introduces that pattern, switch to
+``threading.RLock``.
+
 Backward-compatibility shim
 ---------------------------
 ``is_pivot_levels_updated_today`` and ``load_pivot_levels_to_local``
@@ -57,6 +84,7 @@ is_pivot_levels_updated_today``). They are NOT used by
 
 from __future__ import annotations
 
+import threading
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
@@ -86,6 +114,14 @@ _feed_service: MarketFeedService | None = None
 # Guards ``run_daily_refresh`` to at most one full run per day (per
 # process). Cleared implicitly on process restart (module reload).
 _last_daily_refresh_date: str | None = None
+
+# Process-wide serialisation for ``run_daily_refresh``. See the module
+# docstring ("Concurrency" section) for why this is required: without
+# it, the ``deferred_startup`` one-shot and the ``daily_refresh`` cron
+# can both pass the per-day idempotency guard simultaneously and run
+# the entire pipeline twice — doubling feed threads, health logs, and
+# Telegram summaries.
+_daily_refresh_lock = threading.Lock()
 
 
 # --------------------------------------------------------------------------- #
@@ -209,67 +245,76 @@ def run_daily_refresh(force: bool = False) -> None:
     ``daily_refresh @ 09:00`` cron. The guard ensures only the first
     actually runs the pipeline.
 
+    The idempotency check **and** the full pipeline body run under
+    ``_daily_refresh_lock`` so two callers that fire at the same instant
+    cannot both pass the guard before either sets it. Without the lock,
+    both would race through the check and the pipeline would run twice.
+
     :param force: when ``True``, bypass the per-day idempotency guard.
                   Used by ``POST /trigger/refresh?force=true``.
     """
     global _feed_service, _last_daily_refresh_date
 
-    # --- Idempotency guard ---
-    today = date.today().isoformat()
-    if not force and _last_daily_refresh_date == today:
-        logger.info(
-            "run_daily_refresh: already ran today (%s); skipping duplicate "
-            "invocation (use force=True to override).",
-            today,
-        )
-        return
+    # Serialize check + run. The lock is held for the entire pipeline;
+    # callers that arrive while a refresh is in flight simply block
+    # until it completes, then observe the updated guard and return.
+    with _daily_refresh_lock:
+        # --- Idempotency guard ---
+        today = date.today().isoformat()
+        if not force and _last_daily_refresh_date == today:
+            logger.info(
+                "run_daily_refresh: already ran today (%s); skipping duplicate "
+                "invocation (use force=True to override).",
+                today,
+            )
+            return
 
-    tasks: dict = {}
+        tasks: dict = {}
 
-    # 1. Fetch token
-    try:
-        token = fetch_access_token()
-        tasks["Token fetched"] = True
-    except Exception:
-        logger.exception("Token fetch failed.")
-        tasks["Token fetched"] = False
-        send_telegram_message(build_daily_refresh_summary(tasks))
-        # Guard is NOT set on token-fetch failure, so a later call can
-        # retry (e.g. manual /trigger/refresh, or the deferred startup
-        # sequence running after a transient Mongo hiccup).
-        return
+        # 1. Fetch token
+        try:
+            token = fetch_access_token()
+            tasks["Token fetched"] = True
+        except Exception:
+            logger.exception("Token fetch failed.")
+            tasks["Token fetched"] = False
+            send_telegram_message(build_daily_refresh_summary(tasks))
+            # Guard is NOT set on token-fetch failure, so a later call can
+            # retry (e.g. manual /trigger/refresh, or the deferred startup
+            # sequence running after a transient Mongo hiccup).
+            return
 
-    # 2. Validate token
-    valid = validate_access_token(token)
-    tasks["Token valid"] = valid
-    if not valid:
-        send_telegram_message(build_daily_refresh_summary(tasks))
-        # Guard is NOT set on validation failure — same rationale as
-        # above. An operator can re-validate after the upstream app
-        # refreshes the token.
-        return
+        # 2. Validate token
+        valid = validate_access_token(token)
+        tasks["Token valid"] = valid
+        if not valid:
+            send_telegram_message(build_daily_refresh_summary(tasks))
+            # Guard is NOT set on validation failure — same rationale as
+            # above. An operator can re-validate after the upstream app
+            # refreshes the token.
+            return
 
-    # 3. Connect to feed
-    try:
-        _feed_service = MarketFeedService(token)
-        _feed_service.connect()
-        tasks["Feed connected"] = True
-    except Exception:
-        logger.exception("Feed connection failed.")
-        tasks["Feed connected"] = False
+        # 3. Connect to feed
+        try:
+            _feed_service = MarketFeedService(token)
+            _feed_service.connect()
+            tasks["Feed connected"] = True
+        except Exception:
+            logger.exception("Feed connection failed.")
+            tasks["Feed connected"] = False
 
-    # 4. Prepare OR levels
-    #    (Mongo → if fresh today use it; else compute from intraday candles)
-    _prepare_or_levels(token, tasks)
+        # 4. Prepare OR levels
+        #    (Mongo → if fresh today use it; else compute from intraday candles)
+        _prepare_or_levels(token, tasks)
 
-    # 5. Send single summary message
-    summary = build_daily_refresh_summary(tasks)
-    send_telegram_message(summary)
-    logger.info("Daily refresh completed: %s", tasks)
+        # 5. Send single summary message
+        summary = build_daily_refresh_summary(tasks)
+        send_telegram_message(summary)
+        logger.info("Daily refresh completed: %s", tasks)
 
-    # --- Mark the guard only now, after the pipeline fully ran ---
-    _last_daily_refresh_date = today
-    logger.info("run_daily_refresh: marked complete for %s", today)
+        # --- Mark the guard only now, after the pipeline fully ran ---
+        _last_daily_refresh_date = today
+        logger.info("run_daily_refresh: marked complete for %s", today)
 
 
 def disconnect_feed() -> None:

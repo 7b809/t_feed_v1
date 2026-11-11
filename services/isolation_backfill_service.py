@@ -18,11 +18,47 @@ Algorithm
      - delegate to IsolationService._create_isolation() with
        backfilled=True and overrides
 7. Persist. Log loudly (Telegram not required).
+
+Diagnostic outcome attributes
+-----------------------------
+``backfill_if_needed()`` can return ``None`` for two very different
+reasons, and callers (``jobs/isolation_scan.py::run_startup_backfill``)
+need to distinguish them:
+
+  A. No qualifying touch was found in today's candles — nothing to
+     reconstruct. Normal, expected.
+  B. A qualifying touch WAS found but reconstruction failed (search
+     returned nothing, NIFTY close unavailable at that minute,
+     ``_create_isolation`` returned None, …). Isolation for today is
+     MISSING. This is a real failure and should be logged loudly.
+
+To expose the distinction, this class sets the following attributes
+on ``self`` during ``backfill_if_needed()``:
+
+  * ``last_touch_found``  — True once a qualifying touch has been
+                            identified. Set right after the
+                            "RECONSTRUCTING isolation" warning.
+  * ``last_touch_minute`` — ISO timestamp of that touch minute, for
+                            logging. Set alongside ``last_touch_found``.
+  * ``last_error``        — short human-readable reason reconstruction
+                            failed, if it did. ``None`` on success or
+                            when no touch was found.
+
+All three are reset to their initial values at the **start** of every
+``backfill_if_needed()`` call, so a long-lived instance reused across
+days reports fresh state per call. (In practice
+``run_startup_backfill`` constructs a fresh instance per invocation,
+but resetting is cheap and removes a class of stale-state bugs.)
+
+Callers should use ``getattr(backfill, "last_touch_found", False)``
+rather than direct attribute access — the ``jobs/isolation_scan.py``
+gate uses that form for forward/backward compatibility, so this file
+can be deployed independently of the caller change.
 """
 
 from __future__ import annotations
 
-from datetime import datetime, time as dtime
+from datetime import date, datetime, time as dtime
 from typing import Optional
 from zoneinfo import ZoneInfo
 
@@ -36,6 +72,8 @@ from core.config import (
     INSTRUMENT_KEYS,
     PIVOT_DOC_ID,
     PROJECT_INFO_COLLECTION,
+    STRATEGY_RELATIONAL_R3_BIAS,
+    STRATEGY_RELATIONAL_S3_BIAS,
     TIMEZONE,
 )
 from core.instrument_search_service import (
@@ -46,6 +84,7 @@ from core.logger import get_logger
 from core.mongo_client import get_mongo_db
 
 from services.isolation_service import IsolationService
+from services.touch_arbitration_service import arbitrate_touches
 
 logger = get_logger(__file__)
 
@@ -58,8 +97,18 @@ class IsolationBackfillService:
         self.fetcher = CandleFetcher(access_token)
         self.iso = isolation_service
 
+        # --- Diagnostic outcome attributes (see module docstring) ---
+        self.last_touch_found: bool = False
+        self.last_touch_minute: str | None = None
+        self.last_error: str | None = None
+
     # ------------------------------------------------------------------ #
     def backfill_if_needed(self) -> Optional[dict]:
+        # Reset per-call diagnostic state. See module docstring.
+        self.last_touch_found = False
+        self.last_touch_minute = None
+        self.last_error = None
+
         if not BACKFILL_ENABLED:
             logger.info("Backfill disabled (BACKFILL_ENABLED=false)")
             return None
@@ -82,11 +131,13 @@ class IsolationBackfillService:
 
         pivot_levels = self._load_pivot_levels()
         if not pivot_levels:
+            self.last_error = "OR levels unavailable"
             logger.error("Backfill: OR levels unavailable")
             return None
 
         index_candles = self._fetch_all_index_candles()
         if not index_candles:
+            self.last_error = "no index candles available"
             logger.error("Backfill: no index candles available")
             return None
 
@@ -96,6 +147,13 @@ class IsolationBackfillService:
                 "Backfill: no historical touch found in today's session"
             )
             return None
+
+        # From this point forward, a qualifying touch definitely exists.
+        # If any step below fails, the caller must be told so — returning
+        # None without setting these flags would misclassify the failure
+        # as "nothing to reconstruct".
+        self.last_touch_found = True
+        self.last_touch_minute = first_touch["minute"]
 
         logger.warning(
             "Backfill: RECONSTRUCTING isolation — %s/%s touched at %s "
@@ -111,8 +169,13 @@ class IsolationBackfillService:
         nifty_candles = index_candles.get(NIFTY_INDEX_KEY) or []
         nifty_ltp_at_minute = self._close_at(nifty_candles, first_touch["minute"])
         if nifty_ltp_at_minute is None:
-            logger.error("Backfill: NIFTY close unavailable at %s",
-                         first_touch["minute"])
+            self.last_error = (
+                f"NIFTY close unavailable at {first_touch['minute']}"
+            )
+            logger.error(
+                "Backfill: NIFTY close unavailable at %s",
+                first_touch["minute"],
+            )
             return None
 
         # Pre-search the instrument so we can try its candle close too
@@ -122,7 +185,11 @@ class IsolationBackfillService:
             instrument = self.iso.search.search_nifty_option_at_strike(
                 nifty_ltp_at_minute, bias, strike=strike,
             )
-        except InstrumentSearchError:
+        except InstrumentSearchError as exc:
+            self.last_error = (
+                f"InstrumentSearchError for bias={bias} strike={strike}: "
+                f"{exc}"
+            )
             logger.exception(
                 "Backfill: search failed for bias=%s strike=%d", bias, strike
             )
@@ -170,6 +237,13 @@ class IsolationBackfillService:
                 record["standard_execution_mode"],
                 record["strike"],
             )
+        else:
+            # _create_isolation returned None — record the reason for
+            # the caller. The touch was real; the reconstruction was not.
+            self.last_error = (
+                "_create_isolation returned None (search succeeded but "
+                "record creation failed — see isolation_service logs above)"
+            )
         return record
 
     # ------------------------------------------------------------------ #
@@ -191,7 +265,6 @@ class IsolationBackfillService:
             return False
         if not doc:
             return False
-        from datetime import date
         return doc.get("trade_date_ist") == date.today().isoformat()
 
     def _load_pivot_levels(self) -> dict:
@@ -238,11 +311,6 @@ class IsolationBackfillService:
                     touch["or_levels_at_touch"] = levels
                     candidates.append(touch)
             if candidates:
-                winner = self.iso.arbitrate(candidates) if hasattr(
-                    self.iso, "arbitrate"
-                ) else None
-                # Use the module-level arbitrate function directly
-                from services.touch_arbitration_service import arbitrate_touches
                 winner = arbitrate_touches(candidates)
                 if winner:
                     return {"minute": minute, "winner": winner}
@@ -257,9 +325,6 @@ class IsolationBackfillService:
         return None
 
     def _bias_from_side(self, side: str) -> str:
-        from core.config import (
-            STRATEGY_RELATIONAL_R3_BIAS, STRATEGY_RELATIONAL_S3_BIAS,
-        )
         return (
             STRATEGY_RELATIONAL_R3_BIAS if side == "R3"
             else STRATEGY_RELATIONAL_S3_BIAS
