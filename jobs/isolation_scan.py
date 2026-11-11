@@ -22,22 +22,19 @@ client. We cache the token for ``_TOKEN_CACHE_TTL_SECONDS`` seconds
 
 The TTL is intentionally long:
 
-  * Upstox access tokens are **daily** — they are set once in the
-    morning by the upstream app and remain valid until end-of-session
-    (or explicit rotation). Caching for 30 min is well inside that
-    window.
+  * Upstox access tokens are **daily** — set once in the morning by the
+    upstream app and valid until end-of-session (or explicit rotation).
+    Caching for 30 min is well inside that window.
   * The token is re-validated at least once per day by
     ``run_daily_refresh`` (which calls ``validate_access_token``
     directly, bypassing this cache).
-  * If the upstream app rotates the token mid-day, the stale token
-    will cause a visible ``Upstox API status=error: ...`` line on the
-    first search after rotation; the next fetch (≤30 min later, or
-    immediately after a process restart) picks up the new token.
+  * If the upstream app rotates the token mid-day, the stale token will
+    cause a visible ``Upstox API status=error: ...`` line on the first
+    search after rotation; the next fetch (≤30 min later, or immediately
+    after a process restart) picks up the new token.
 
-Override the TTL via ``TOKEN_CACHE_TTL_SECONDS`` in ``.env`` if needed
-— e.g. lower it to 300 during a debugging window where you expect
-frequent token rotations. Setting it to ``0`` disables caching entirely
-(every call fetches fresh).
+Override via ``TOKEN_CACHE_TTL_SECONDS`` in ``.env``. Setting it to ``0``
+disables caching entirely (every call fetches fresh).
 
 Backfill outcome
 ----------------
@@ -51,11 +48,9 @@ for two very different reasons:
      unavailable at that minute, …). Isolation for today is MISSING
      — this is a real failure and should be loud.
 
-The backfill service now exposes ``last_touch_found`` /
+The backfill service exposes ``last_touch_found`` /
 ``last_touch_minute`` / ``last_error`` attributes to distinguish these.
-``run_startup_backfill`` below logs an ERROR for case 2 — which fires
-correctly for the 10:19:28 ``BANKNIFTY/R3 @ 09:37 search failed`` case
-that the original code misreported as ``nothing to reconstruct``.
+``run_startup_backfill`` below logs an ERROR for case 2.
 """
 
 from __future__ import annotations
@@ -77,16 +72,53 @@ from core.token_service import fetch_access_token
 from jobs.daily_refresh import get_feed_service
 from services.isolation_service import IsolationService
 from services.isolation_backfill_service import IsolationBackfillService
-from core import config
+
 logger = get_logger(__file__)
 
-# How long a fetched token is reused before re-reading from Mongo.
-# See module docstring ("Token handling") for the rationale. Override
-# via ``TOKEN_CACHE_TTL_SECONDS`` in ``.env`` if a shorter/longer
-# window is needed. Setting to 0 disables caching (fetches every call).
-_TOKEN_CACHE_TTL_SECONDS = int(
-    config.TOKEN_CACHE_TTL_SECONDS,1800
-)
+
+# ---------------------------------------------------------------------------
+# Token cache TTL
+# ---------------------------------------------------------------------------
+# Read once at import time from TOKEN_CACHE_TTL_SECONDS (default 1800 s =
+# 30 min). Wrapped in a helper so a bad value in .env cannot crash the
+# process at import — we log and fall back to 1800 instead.
+#
+# NOTE FOR MAINTAINERS:
+#   The default ("1800") MUST be inside the os.getenv(...) call, not
+#   outside. Writing
+#       int(os.getenv("TOKEN_CACHE_TTL_SECONDS"), "1800")   # WRONG
+#   makes Python treat "1800" as the base argument to int(), producing
+#   the cryptic runtime error
+#       ValueError: int() base must be >= 2 and <= 36, or 0
+#   The correct shape is
+#       int(os.getenv("TOKEN_CACHE_TTL_SECONDS", "1800"))    # RIGHT
+# ---------------------------------------------------------------------------
+def _read_token_cache_ttl() -> int:
+    """Return the configured token-cache TTL in seconds, robustly.
+
+    Falls back to 1800 on any parse failure so the process always boots.
+    """
+    raw = os.getenv("TOKEN_CACHE_TTL_SECONDS", "1800")
+    try:
+        ttl = int(raw)
+    except (TypeError, ValueError) as exc:
+        logger.error(
+            "TOKEN_CACHE_TTL_SECONDS=%r is not a valid integer (%s); "
+            "falling back to 1800.",
+            raw, exc,
+        )
+        return 1800
+    if ttl < 0:
+        logger.error(
+            "TOKEN_CACHE_TTL_SECONDS=%r is negative; "
+            "falling back to 1800.",
+            raw,
+        )
+        return 1800
+    return ttl
+
+
+_TOKEN_CACHE_TTL_SECONDS = _read_token_cache_ttl()
 
 # (token, fetched_at_epoch). Cleared implicitly on process restart.
 # Tuple assignment is atomic in CPython, so no lock is required for the
