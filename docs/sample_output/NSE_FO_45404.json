@@ -1,1 +1,87 @@
-{"type": "market_data", "mode": "full", "instrument_key": "NSE_FO|45404", "data": {"fullFeed": {"marketFF": {"ltpc": {"ltp": 157.9, "ltt": "1794478199852", "ltq": "65", "cp": 163.6}, "marketLevel": {"bidAskQuote": [{"bidQ": "975", "bidP": 156.4, "askQ": "455", "askP": 157.75}, {"bidQ": "1820", "bidP": 156.2, "askQ": "65", "askP": 157.8}, {"bidQ": "845", "bidP": 156.0, "askQ": "65", "askP": 157.95}, {"bidQ": "65", "bidP": 155.85, "askQ": "3510", "askP": 158.0}, {"bidQ": "65", "bidP": 155.8, "askQ": "65", "askP": 158.05}]}, "optionGreeks": {"delta": 0.4646, "theta": -17.7826, "gamma": 0.0009, "vega": 11.7613, "rho": 1.5866}, "marketOHLC": {"ohlc": [{"interval": "1d", "open": 155.2, "high": 232.2, "low": 126.25, "close": 157.9, "vol": "87680450", "ts": "1794421800000"}, {"interval": "I1", "open": 155.5, "high": 157.9, "low": 155.15, "close": 157.9, "vol": "211835", "ts": "1794478140000"}]}, "atp": 183.47, "vtt": "87680450", "oi": 4797780.0, "iv": 0.1509857177734375, "tbq": 117910.0, "tsq": 618605.0}}, "requestMode": "full_d5"}}
+{
+    "type": "market_data",
+    "mode": "full",
+    "instrument_key": "NSE_FO|45404",
+    "data": {
+        "fullFeed": {
+            "marketFF": {
+                "ltpc": {
+                    "ltp": 157.9,
+                    "ltt": "1794478199852",
+                    "ltq": "65",
+                    "cp": 163.6
+                },
+                "marketLevel": {
+                    "bidAskQuote": [
+                        {
+                            "bidQ": "975",
+                            "bidP": 156.4,
+                            "askQ": "455",
+                            "askP": 157.75
+                        },
+                        {
+                            "bidQ": "1820",
+                            "bidP": 156.2,
+                            "askQ": "65",
+                            "askP": 157.8
+                        },
+                        {
+                            "bidQ": "845",
+                            "bidP": 156.0,
+                            "askQ": "65",
+                            "askP": 157.95
+                        },
+                        {
+                            "bidQ": "65",
+                            "bidP": 155.85,
+                            "askQ": "3510",
+                            "askP": 158.0
+                        },
+                        {
+                            "bidQ": "65",
+                            "bidP": 155.8,
+                            "askQ": "65",
+                            "askP": 158.05
+                        }
+                    ]
+                },
+                "optionGreeks": {
+                    "delta": 0.4646,
+                    "theta": -17.7826,
+                    "gamma": 0.0009,
+                    "vega": 11.7613,
+                    "rho": 1.5866
+                },
+                "marketOHLC": {
+                    "ohlc": [
+                        {
+                            "interval": "1d",
+                            "open": 155.2,
+                            "high": 232.2,
+                            "low": 126.25,
+                            "close": 157.9,
+                            "vol": "87680450",
+                            "ts": "1794421800000"
+                        },
+                        {
+                            "interval": "I1",
+                            "open": 155.5,
+                            "high": 157.9,
+                            "low": 155.15,
+                            "close": 157.9,
+                            "vol": "211835",
+                            "ts": "1794478140000"
+                        }
+                    ]
+                },
+                "atp": 183.47,
+                "vtt": "87680450",
+                "oi": 4797780.0,
+                "iv": 0.1509857177734375,
+                "tbq": 117910.0,
+                "tsq": 618605.0
+            }
+        },
+        "requestMode": "full_d5"
+    }
+}
