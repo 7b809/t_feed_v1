@@ -170,7 +170,7 @@ class LiveFeedWsClientService:
     def _build_url(self, keys: list[str]) -> str:
         query = urlencode(
             {"instrument_keys": ",".join(keys), "mode": self._config.live_feed_mode},
-            safe="|,",
+            safe=",",
         )
         return f"{self._config.live_feed_ws_url_effective}/ws/market?{query}"
 
