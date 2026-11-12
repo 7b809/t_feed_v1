@@ -11,6 +11,8 @@ from .sr_state_store import SrStateStore
 from .sr_ws_client_service import SrWsClientService
 from .supertrend_state_store import SupertrendStateStore
 from .supertrend_ws_client_service import SupertrendWsClientService
+from .live_feed_state_store import LiveFeedStateStore
+from .live_feed_ws_client_service import LiveFeedWsClientService
 
 logger = logging.getLogger(__name__)
 
@@ -24,11 +26,13 @@ class IsolationSubscriber:
         isolation_store: IsolationStore,
         state_store: SrStateStore,
         supertrend_state_store: SupertrendStateStore,
+        live_feed_state_store: LiveFeedStateStore,
     ) -> None:
         self._config = config
         self._isolation_store = isolation_store
         self._state_store = state_store
         self._supertrend_state_store = supertrend_state_store
+        self._live_feed_client = LiveFeedWsClientService(config, live_feed_state_store)
 
         self._clients: Dict[str, SrWsClientService] = {}
         self._supertrend_clients: Dict[str, SupertrendWsClientService] = {}
@@ -47,6 +51,9 @@ class IsolationSubscriber:
 
     def list_supertrend_clients(self) -> List[SupertrendWsClientService]:
         return list(self._supertrend_clients.values())
+
+    def get_live_feed_client(self) -> LiveFeedWsClientService:
+        return self._live_feed_client
 
     def list_isolation_ids(self) -> List[str]:
         return list(self._isolation_legs.keys())
@@ -178,6 +185,16 @@ class IsolationSubscriber:
 
             self._isolation_legs[isolation_id] = new_legs
 
+            # Register both option legs with the shared local market-feed
+            # client. It adds NIFTY 50 once and de-duplicates shared keys.
+            if self._config.live_feed_enabled:
+                try:
+                    await self._live_feed_client.register_isolation(isolation_id, new_legs)
+                    for key in new_legs.values():
+                        sessions.setdefault(key, {})["live_feed_state"] = "registered"
+                except Exception:
+                    logger.exception("Live-feed registration failed for %s", isolation_id)
+
             try:
                 self._isolation_store.set_status(
                     isolation_id, "subscribing", subscribed
@@ -202,6 +219,7 @@ class IsolationSubscriber:
         legs = self._isolation_legs.pop(isolation_id, None)
         if not legs:
             return
+        await self._live_feed_client.unregister_isolation(isolation_id)
         for key in legs.values():
             client = self._clients.pop(key, None)
             if client is not None:
@@ -217,6 +235,7 @@ class IsolationSubscriber:
             supertrend_clients = list(self._supertrend_clients.values())
             self._supertrend_clients.clear()
             self._isolation_legs.clear()
+        await self._live_feed_client.stop()
         results = await asyncio.gather(
             *(c.stop() for c in clients + supertrend_clients), return_exceptions=True
         )
@@ -226,6 +245,7 @@ class IsolationSubscriber:
 
     # ------------------------------------------------------------ watchdog
     async def restart_dead_clients(self) -> None:
+        await self._live_feed_client.ensure_running()
         for client in list(self._clients.values()) + list(self._supertrend_clients.values()):
             state = client.status()["ws_state"]
             if client.is_running():
