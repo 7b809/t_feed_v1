@@ -1,0 +1,4 @@
+{"event": "connect_request", "url": "ws://127.0.0.1:8001/ws/market?instrument_keys=NSE_FO%7C45404,NSE_FO%7C45405", "instruments": ["NSE_FO|45404", "NSE_FO|45405"], "mode": "(default, not specified)", "started_at": "2026-11-12T16:00:39"}
+{"event": "connected", "ts": 1794479439.4528246}
+{"event": "subscribed", "ts": 1794479439.468126, "mode": "full", "instrument_keys": ["NSE_FO|45404", "NSE_FO|45405"], "message": "Live market data stream ready"}
+{"event": "summary", "ts": 1794479486.1371653, "counts": {"NSE_FO|45404": 1, "NSE_FO|45405": 1}, "last_msg_ts": {"NSE_FO|45404": 1794479439.4906242, "NSE_FO|45405": 1794479439.50022}}
