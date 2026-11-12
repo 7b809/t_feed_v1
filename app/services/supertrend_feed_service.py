@@ -206,10 +206,19 @@ class SupertrendFeedService:
         try:
             while True:
                 now = _now_ist()
-                interval = max(5, self.config.supertrend_poll_seconds)
-                target_epoch = (int(now.timestamp() // interval) + 1) * interval + CYCLE_OFFSET_SECONDS
-                target = datetime.fromtimestamp(target_epoch, tz=IST)
-                await asyncio.sleep(max(0.05, (target-now).total_seconds()))
+                if self._last_cycle_start is None:
+                    target = now
+                else:
+                    interval = max(5, self.config.supertrend_poll_seconds)
+                    min_gap = max(5, interval // 2)
+                    target_epoch = self._last_cycle_start.timestamp() + min_gap
+                    target_epoch = (
+                        (target_epoch // interval) * interval + CYCLE_OFFSET_SECONDS
+                    )
+                    while target_epoch <= now.timestamp():
+                        target_epoch += interval
+                    target = datetime.fromtimestamp(target_epoch, tz=IST)
+                await asyncio.sleep(max(0.0, (target-now).total_seconds()))
                 try:
                     await self._run_cycle()
                 except Exception:
