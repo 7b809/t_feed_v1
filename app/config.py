@@ -55,6 +55,19 @@ class Settings:
     supertrend_enabled: bool
     supertrend_state_dir: str
 
+    # Local isolation live-feed consumer (app1 /ws/market)
+    live_feed_enabled: bool
+    live_feed_ws_url: str
+    live_feed_port: int
+    live_feed_mode: str
+    live_feed_state_dir: str
+    live_feed_start_hour: int
+    live_feed_start_minute: int
+    live_feed_end_hour: int
+    live_feed_end_minute: int
+    live_feed_reconnect_max_backoff_seconds: int
+    nifty_instrument_key: str
+
     # Inbound auth
     isolation_notify_client_key: str
     isolation_notify_client_key_header: str
@@ -74,6 +87,13 @@ class Settings:
     # Logging
     log_level: str
     logs_dir: str
+
+    @property
+    def live_feed_ws_url_effective(self) -> str:
+        base = (self.live_feed_ws_url or "").strip()
+        if base:
+            return base.rstrip("/")
+        return f"ws://127.0.0.1:{self.live_feed_port}"
 
     @property
     def supertrend_ws_base_url_effective(self) -> str:
@@ -110,6 +130,17 @@ def load_settings() -> Settings:
         sr_store_heartbeats=_env_bool("SR_STORE_HEARTBEATS", False),
         supertrend_enabled=_env_bool("SUPERTREND_ENABLED", True),
         supertrend_state_dir=os.getenv("SUPERTREND_STATE_DIR", "./data/supertrend_state"),
+        live_feed_enabled=_env_bool("LIVE_FEED_ENABLED", True),
+        live_feed_ws_url=os.getenv("LIVE_FEED_WS_URL", ""),
+        live_feed_port=_env_int("LIVE_FEED_PORT", 8001),
+        live_feed_mode=os.getenv("LIVE_FEED_MODE", "full").strip().lower(),
+        live_feed_state_dir=os.getenv("LIVE_FEED_STATE_DIR", "./data/live_feed"),
+        live_feed_start_hour=_env_int("LIVE_FEED_START_HOUR", 9),
+        live_feed_start_minute=_env_int("LIVE_FEED_START_MINUTE", 0),
+        live_feed_end_hour=_env_int("LIVE_FEED_END_HOUR", 16),
+        live_feed_end_minute=_env_int("LIVE_FEED_END_MINUTE", 0),
+        live_feed_reconnect_max_backoff_seconds=_env_int("LIVE_FEED_RECONNECT_MAX_BACKOFF_SECONDS", 30),
+        nifty_instrument_key=os.getenv("NIFTY_INSTRUMENT_KEY", "NSE_INDEX|Nifty 50"),
         data_dir=os.getenv("DATA_DIR", "./data"),
         sr_ws_base_url=os.getenv("SR_WS_BASE_URL", "wss://ema.novag7.in"),
         sr_ws_base_url_local=os.getenv("SR_WS_BASE_URL_LOCAL", ""),
