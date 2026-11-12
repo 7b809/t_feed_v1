@@ -25,9 +25,11 @@ On every boot the service does the following, in order:
    - `trade_date_ist == today's IST date (YYYY-MM-DD)`.
    Also adopts app1's singleton doc (`_id = "instrument_isolation"`) if
    it is for today and `status == "ACTIVE"`.
-3. **If any exist** → for each isolation it spawns the two WS clients
-   (isolated + opposite) using `?config=all` — which subscribes to all
-   three configs (`15/3`, `15/15`, `15/30`) in a single connection.
+3. **If any exist** → for each isolation it starts the two SR clients
+   (isolated + opposite) using `?config=all`, plus two corresponding
+   Supertrend clients. The option keys are also registered with one shared
+   local live-feed WebSocket, which adds NIFTY 50 once and handles dynamic
+   subscriptions for all active isolations.
 4. **If none exist** → it logs
    `no active isolations for today (<date>); waiting for API POST`
    and keeps running normally.
@@ -101,8 +103,16 @@ required.
   "subscribed": ["isolated", "opposite"],
   "rejected_legs": [],
   "web_socket_sessions": {
-    "NSE_FO|45406": { "state": "connecting" },
-    "NSE_FO|45407": { "state": "connecting" }
+    "NSE_FO|45406": {
+      "state": "connecting",
+      "supertrend_state": "connecting",
+      "live_feed_state": "registered"
+    },
+    "NSE_FO|45407": {
+      "state": "connecting",
+      "supertrend_state": "connecting",
+      "live_feed_state": "registered"
+    }
   }
 }
 ```
