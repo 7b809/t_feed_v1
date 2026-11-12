@@ -91,6 +91,10 @@ class Settings:
     def __post_init__(self) -> None:
         if not 1 <= self.live_feed_port <= 65535:
             raise ValueError("LIVE_FEED_PORT must be between 1 and 65535")
+        if self.app_port == self.live_feed_port and not self.live_feed_ws_url.strip():
+            raise ValueError(
+                "APP_PORT and LIVE_FEED_PORT cannot be the same when using the local live-feed URL"
+            )
         if self.live_feed_mode not in {"ltpc", "full", "full_d30", "option_greeks"}:
             raise ValueError("LIVE_FEED_MODE must be ltpc, full, full_d30, or option_greeks")
         if not (0 <= self.live_feed_start_hour < 24 and 0 <= self.live_feed_end_hour < 24):
