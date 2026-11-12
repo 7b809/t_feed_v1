@@ -54,6 +54,7 @@ from api.routes.isolation import (
     test_router as isolation_test_router,
 )
 from api.routes.search import router as search_router
+from api.routes.market_feed import router as market_feed_router, shutdown_websocket_feeds
 from scheduler import start_scheduler
 from jobs.daily_refresh import (
     run_daily_refresh,
@@ -194,6 +195,11 @@ async def lifespan(app: FastAPI):
     logger.info("Shutting down…")
 
     try:
+        shutdown_websocket_feeds()
+    except Exception:
+        logger.exception("External WebSocket feed shutdown failed.")
+
+    try:
         disconnect_feed()
     except Exception:
         logger.exception("Feed disconnect failed during shutdown.")
@@ -224,6 +230,7 @@ app = FastAPI(
 app.include_router(isolation_router)
 app.include_router(isolation_test_router)
 app.include_router(search_router)
+app.include_router(market_feed_router)
 
 # --------------------------------------------------------------------------- #
 # Health / status                                                             #

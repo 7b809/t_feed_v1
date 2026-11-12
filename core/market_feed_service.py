@@ -78,7 +78,7 @@ class MarketFeedService:
 
     def __init__(self, access_token: str, instrument_keys=None, mode: str | None = None):
         self.access_token = access_token
-        self.instrument_keys = list(instrument_keys or INSTRUMENT_KEYS)
+        self.instrument_keys = list(INSTRUMENT_KEYS if instrument_keys is None else instrument_keys)
         self.mode = _resolve_mode(mode)
 
         self.streamer = None
@@ -97,6 +97,7 @@ class MarketFeedService:
         self._first_batch_logged = False
         self._market_status_logged = False
         self._connect_ts: float | None = None
+        self._message_listeners: set = set()
 
     # ------------------------------------------------------------------ #
     # Streamer setup                                                     #
@@ -179,6 +180,24 @@ class MarketFeedService:
 
         if should_log:
             self._log_health(reason="first_batch")
+
+        with self._lock:
+            listeners = list(self._message_listeners)
+        for listener in listeners:
+            try:
+                listener(dict(feeds))
+            except Exception:
+                logger.exception("Market-feed message listener failed.")
+
+    def add_message_listener(self, callback) -> None:
+        """Register a thread-safe consumer of raw instrument feed payloads."""
+        with self._lock:
+            self._message_listeners.add(callback)
+
+    def remove_message_listener(self, callback) -> None:
+        """Remove a previously registered feed consumer."""
+        with self._lock:
+            self._message_listeners.discard(callback)
 
     @staticmethod
     def _extract_ltpc(payload: dict) -> dict | None:
