@@ -3,11 +3,13 @@
 # isolation_consumer_service
 
 Downstream consumer of the isolation documents produced by `ema_v1` (app1).
-Receives an isolation POST, persists it, and immediately opens two SR
-WebSocket connections on app1's feed — one for the isolated option leg
-and one for the opposite option leg. Persists every `snapshot`,
-`sr_update`, and `heartbeat` frame; exposes read APIs; re-subscribes on
-restart.
+Receives and persists isolation documents, then opens independent SR and
+Supertrend WebSocket connections for the isolated and opposite option legs.
+It also maintains one shared local `isolation_v1` market-feed WebSocket for
+all active isolation option legs plus `NSE_INDEX|Nifty 50`, only from
+09:00 to 16:00 Asia/Kolkata. Raw market payloads are stored per instrument;
+read APIs expose feed state and connection status; active isolations are
+re-subscribed on restart.
 
 > Scope: **SR + Supertrend + raw live-market feed consumption**. EMA calculations and broker order execution are out of scope.
 
@@ -277,7 +279,9 @@ appears as soon as the first `sr_update` lands.
 | `GET  /api/v1/isolation/history?limit=20` | list desc |
 | `GET  /api/v1/sr/{instrument_key}/latest?config=15/3` | one config (freshest file) |
 | `GET  /api/v1/sr/{instrument_key}/latest?config=all` | `{ "configs": {...} }` |
-| `GET  /api/v1/sr/{instrument_key}/status` | live WS state |
+| `GET  /api/v1/sr/{instrument_key}/status` | SR WS state |
+| `GET  /api/v1/live-feed/status` | shared local market-feed connection and storage status |
+| `GET  /api/v1/live-feed/{instrument_key}/latest` | latest saved raw market payload |
 | `GET  /api/v1/status` | overall health |
 | `GET  /health` | liveness |
 
@@ -314,7 +318,10 @@ Key `.env` fields:
 - `SR_STATE_DIR` — filesystem folder for SR state (default `./data/sr_state`)
 - `SR_STORE_HEARTBEATS` — opt-in local JSONL heartbeat log
 - `DATA_DIR` — isolation JSON mirror (empty = disabled)
-- `SR_WS_BASE_URL` / `SR_WS_BASE_URL_LOCAL` — upstream feed
+- `SR_WS_BASE_URL` / `SR_WS_BASE_URL_LOCAL` — upstream SR/Supertrend feed
+- `LIVE_FEED_PORT` / `LIVE_FEED_WS_URL` — local app1 market-feed WebSocket
+- `LIVE_FEED_START_*` / `LIVE_FEED_END_*` — IST live-feed connection window
+- `LIVE_FEED_STATE_DIR` — raw market-feed JSONL/latest storage
 - `ISOLATION_NOTIFY_CLIENT_KEY` — shared secret with app1
 - `REQUIRE_TODAY_ONLY_SCOPE` — default `true`
 - `VERBOSE` — flips per-frame logs from DEBUG to INFO
