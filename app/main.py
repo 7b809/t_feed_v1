@@ -10,7 +10,7 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse, JSONResponse
 
 from .api import health as health_api
-from .api import isolation_incoming, isolation_query, sr_query, supertrend_query
+from .api import isolation_incoming, isolation_query, sr_query, supertrend_query, live_feed_query
 from .config import load_settings
 from .logging_config import setup_logging
 from .scheduler.scheduler_service import SchedulerService
@@ -189,6 +189,7 @@ app.include_router(isolation_incoming.router, prefix="/api/v1", tags=["isolation
 app.include_router(isolation_query.router, prefix="/api/v1", tags=["isolation"])
 app.include_router(sr_query.router, prefix="/api/v1", tags=["sr"])
 app.include_router(supertrend_query.router, prefix="/api/v1", tags=["supertrend"])
+app.include_router(live_feed_query.router, prefix="/api/v1", tags=["live-feed"])
 
 
 # ---- optional dashboard
