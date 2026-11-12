@@ -89,6 +89,6 @@ echo.
 if not defined APP_PORT if exist ".env" (
     for /f "tokens=1,* delims==" %%A in ('findstr /B /C:"APP_PORT=" ".env"') do set "APP_PORT=%%B"
 )
-if not defined APP_PORT set "APP_PORT=8003"
+if not defined APP_PORT set "APP_PORT=8004"
 python -m uvicorn app.main:app --host 0.0.0.0 --port %APP_PORT%
 
