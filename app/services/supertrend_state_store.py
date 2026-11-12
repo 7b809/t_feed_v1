@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import shutil
 import tempfile
@@ -102,7 +103,7 @@ class SupertrendStateStore:
         path.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=str(path.parent))
         try:
-            with open(fd, "w", encoding="utf-8", closefd=True) as stream:
+            with os.fdopen(fd, "w", encoding="utf-8") as stream:
                 json.dump(payload, stream, indent=2, ensure_ascii=False, default=str)
             Path(tmp).replace(path)
         except Exception:
