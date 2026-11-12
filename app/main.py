@@ -10,7 +10,7 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse, JSONResponse
 
 from .api import health as health_api
-from .api import isolation_incoming, isolation_query, sr_query
+from .api import isolation_incoming, isolation_query, sr_query, supertrend_query
 from .config import load_settings
 from .logging_config import setup_logging
 from .scheduler.scheduler_service import SchedulerService
@@ -18,6 +18,7 @@ from .services.isolation_store import IsolationStore, today_ist_date
 from .services.isolation_subscriber import IsolationSubscriber
 from .services.mongodb_service import MongoDbService
 from .services.sr_state_store import SrStateStore
+from .services.supertrend_state_store import SupertrendStateStore
 from .services.telegram_service import TelegramService
 
 logger = logging.getLogger(__name__)
@@ -34,7 +35,10 @@ async def lifespan(app: FastAPI):
 
     isolation_store = IsolationStore(mongo, config)
     sr_state_store = SrStateStore(config)
-    subscriber = IsolationSubscriber(config, isolation_store, sr_state_store)
+    supertrend_state_store = SupertrendStateStore(config)
+    subscriber = IsolationSubscriber(
+        config, isolation_store, sr_state_store, supertrend_state_store
+    )
 
     # -------- startup: today-only re-subscription
     today_ist = today_ist_date()
@@ -139,6 +143,7 @@ async def lifespan(app: FastAPI):
     app.state.mongo = mongo
     app.state.isolation_store = isolation_store
     app.state.sr_state_store = sr_state_store
+    app.state.supertrend_state_store = supertrend_state_store
     app.state.subscriber = subscriber
     app.state.scheduler = scheduler
     app.state.telegram = telegram
@@ -179,6 +184,7 @@ app.include_router(health_api.router)
 app.include_router(isolation_incoming.router, prefix="/api/v1", tags=["isolation"])
 app.include_router(isolation_query.router, prefix="/api/v1", tags=["isolation"])
 app.include_router(sr_query.router, prefix="/api/v1", tags=["sr"])
+app.include_router(supertrend_query.router, prefix="/api/v1", tags=["supertrend"])
 
 
 # ---- optional dashboard
