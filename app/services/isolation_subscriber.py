@@ -9,6 +9,8 @@ from ..config import Settings
 from .isolation_store import IsolationStore
 from .sr_state_store import SrStateStore
 from .sr_ws_client_service import SrWsClientService
+from .supertrend_state_store import SupertrendStateStore
+from .supertrend_ws_client_service import SupertrendWsClientService
 
 logger = logging.getLogger(__name__)
 
@@ -21,12 +23,15 @@ class IsolationSubscriber:
         config: Settings,
         isolation_store: IsolationStore,
         state_store: SrStateStore,
+        supertrend_state_store: SupertrendStateStore,
     ) -> None:
         self._config = config
         self._isolation_store = isolation_store
         self._state_store = state_store
+        self._supertrend_state_store = supertrend_state_store
 
         self._clients: Dict[str, SrWsClientService] = {}
+        self._supertrend_clients: Dict[str, SupertrendWsClientService] = {}
         self._isolation_legs: Dict[str, Dict[str, str]] = {}
         self._lock = asyncio.Lock()
 
@@ -36,6 +41,12 @@ class IsolationSubscriber:
 
     def list_clients(self) -> List[SrWsClientService]:
         return list(self._clients.values())
+
+    def get_supertrend_client(self, instrument_key: str) -> Optional[SupertrendWsClientService]:
+        return self._supertrend_clients.get(instrument_key)
+
+    def list_supertrend_clients(self) -> List[SupertrendWsClientService]:
+        return list(self._supertrend_clients.values())
 
     def list_isolation_ids(self) -> List[str]:
         return list(self._isolation_legs.keys())
@@ -70,6 +81,9 @@ class IsolationSubscriber:
                 if keys:
                     await asyncio.to_thread(
                         self._state_store.delete_for_instrument_keys, keys
+                    )
+                    await asyncio.to_thread(
+                        self._supertrend_state_store.delete_for_instrument_keys, keys
                     )
 
             # -------------------------------------------------- non-ACTIVE
@@ -137,6 +151,28 @@ class IsolationSubscriber:
                 sessions[key] = {"state": "connecting"}
                 subscribed.append(role)
 
+            # Start an independent Supertrend connection for both legs.
+            # SR and Supertrend failures are isolated: one indicator must not
+            # prevent the other indicator or the isolation POST from working.
+            if self._config.supertrend_enabled:
+                for role, key in new_legs.items():
+                    existing_st = self._supertrend_clients.get(key)
+                    if existing_st is not None:
+                        sessions.setdefault(key, {})["supertrend_state"] = "already_running"
+                        continue
+                    st_client = SupertrendWsClientService(
+                        config=self._config,
+                        state_store=self._supertrend_state_store,
+                        isolation_id=isolation_id,
+                        instrument_key=key,
+                        leg_role=role,
+                    )
+                    self._supertrend_clients[key] = st_client
+                    await st_client.start()
+                    sessions.setdefault(key, {})["supertrend_state"] = "connecting"
+            else:
+                logger.info("Supertrend WS disabled; skipping both legs for %s", isolation_id)
+
             self._isolation_legs[isolation_id] = new_legs
 
             try:
@@ -167,14 +203,19 @@ class IsolationSubscriber:
             client = self._clients.pop(key, None)
             if client is not None:
                 await client.stop()
+            st_client = self._supertrend_clients.pop(key, None)
+            if st_client is not None:
+                await st_client.stop()
 
     async def stop_all(self) -> None:
         async with self._lock:
             clients = list(self._clients.values())
             self._clients.clear()
+            supertrend_clients = list(self._supertrend_clients.values())
+            self._supertrend_clients.clear()
             self._isolation_legs.clear()
         results = await asyncio.gather(
-            *(c.stop() for c in clients), return_exceptions=True
+            *(c.stop() for c in clients + supertrend_clients), return_exceptions=True
         )
         for r in results:
             if isinstance(r, Exception):
@@ -182,7 +223,7 @@ class IsolationSubscriber:
 
     # ------------------------------------------------------------ watchdog
     async def restart_dead_clients(self) -> None:
-        for client in list(self._clients.values()):
+        for client in list(self._clients.values()) + list(self._supertrend_clients.values()):
             state = client.status()["ws_state"]
             if client.is_running():
                 continue
