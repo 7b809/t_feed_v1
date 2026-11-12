@@ -1,7 +1,7 @@
 #!/bin/bash
 
 APP_NAME="isolation_consumer_service"
-PORT="${APP_PORT:-8003}"
+PORT=8003
 
 
 PID_FILE="${APP_NAME}.pid"
@@ -124,6 +124,12 @@ echo "Virtual environment activated."
 
 PYTHON="$VENV_DIR/bin/python"
 PIP="$VENV_DIR/bin/pip"
+
+# Keep the consumer API listener separate from LIVE_FEED_PORT.
+if [ -z "${APP_PORT:-}" ] && [ -f ".env" ]; then
+    APP_PORT="$("$PYTHON" -c 'from dotenv import dotenv_values; print(dotenv_values(".env").get("APP_PORT") or "8003")')"
+fi
+PORT="${APP_PORT:-8003}"
 
 if [ ! -x "$PYTHON" ]; then
     echo
