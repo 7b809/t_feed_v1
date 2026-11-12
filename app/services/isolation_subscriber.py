@@ -13,6 +13,7 @@ from .supertrend_state_store import SupertrendStateStore
 from .supertrend_ws_client_service import SupertrendWsClientService
 from .live_feed_state_store import LiveFeedStateStore
 from .live_feed_ws_client_service import LiveFeedWsClientService
+from .dummy_order_engine import DummyOrderEngine
 
 logger = logging.getLogger(__name__)
 
@@ -27,12 +28,14 @@ class IsolationSubscriber:
         state_store: SrStateStore,
         supertrend_state_store: SupertrendStateStore,
         live_feed_state_store: LiveFeedStateStore,
+        dummy_order_engine: DummyOrderEngine | None = None,
     ) -> None:
         self._config = config
         self._isolation_store = isolation_store
         self._state_store = state_store
         self._supertrend_state_store = supertrend_state_store
         self._live_feed_client = LiveFeedWsClientService(config, live_feed_state_store)
+        self._dummy_order_engine = dummy_order_engine
 
         self._clients: Dict[str, SrWsClientService] = {}
         self._supertrend_clients: Dict[str, SupertrendWsClientService] = {}
@@ -97,6 +100,8 @@ class IsolationSubscriber:
             if status != "ACTIVE":
                 if not overwrite:
                     await self._teardown_isolation(isolation_id)
+                if self._dummy_order_engine is not None:
+                    await self._dummy_order_engine.mark_closed(isolation_id)
                 try:
                     self._isolation_store.set_status(isolation_id, "closed", [])
                 except Exception:
@@ -117,6 +122,10 @@ class IsolationSubscriber:
                 }
 
             new_legs = {"isolated": iso_key, "opposite": opp_key}
+            if self._dummy_order_engine is not None:
+                await self._dummy_order_engine.register_isolation(
+                    isolation_id, payload, new_legs, overwrite=overwrite
+                )
 
             # If the same isolation previously had different legs → tear down
             old_legs = self._isolation_legs.get(isolation_id) or {}
@@ -155,6 +164,7 @@ class IsolationSubscriber:
                     isolation_id=isolation_id,
                     instrument_key=key,
                     leg_role=role,
+                    order_engine=self._dummy_order_engine,
                 )
                 self._clients[key] = client
                 await client.start()
@@ -176,6 +186,7 @@ class IsolationSubscriber:
                         isolation_id=isolation_id,
                         instrument_key=key,
                         leg_role=role,
+                        order_engine=self._dummy_order_engine,
                     )
                     self._supertrend_clients[key] = st_client
                     await st_client.start()

@@ -11,7 +11,7 @@ all active isolation option legs plus `NSE_INDEX|Nifty 50`, only from
 read APIs expose feed state and connection status; active isolations are
 re-subscribed on restart.
 
-> Scope: **SR + Supertrend + raw live-market feed consumption**. EMA calculations and broker order execution are out of scope.
+> Scope: **SR + Supertrend + raw live-market feed consumption + local dummy-entry simulation**. EMA calculations and broker order execution remain out of scope. Dummy entries are local records only.
 
 ---
 
@@ -295,6 +295,9 @@ appears as soon as the first `sr_update` lands.
 | `GET  /api/v1/sr/{instrument_key}/status` | SR WS state |
 | `GET  /api/v1/live-feed/status` | shared local market-feed connection and storage status |
 | `GET  /api/v1/live-feed/{instrument_key}/latest` | latest saved raw market payload |
+| `GET  /api/v1/dummy-orders/status` | dummy engine status and counts |
+| `GET  /api/v1/dummy-orders` | all local dummy-order states |
+| `GET  /api/v1/dummy-orders/{isolation_id}` | one isolation's dummy entries |
 | `GET  /api/v1/status` | overall health |
 | `GET  /health` | liveness |
 
@@ -577,3 +580,36 @@ Supported modes are `ltpc`, `full`, `full_d30`, and `option_greeks`.
 The combined `GET /api/v1/status` response includes a `live_feed` status
 object. This iteration only receives and persists raw market feed data; it
 does not derive LTP/Greeks or execute orders.
+
+
+---
+
+## 14 · First-signal dummy entry engine
+
+The first SR confirmation and first Supertrend signal are evaluated
+independently for each isolation. A signal must have a confirmation time
+strictly later than the isolation time.
+
+- SR RESISTANCE on the isolated leg → record BUY on the opposite leg.
+- SR SUPPORT on the isolated leg → record BUY on the isolated leg.
+- Supertrend BULLISH → record BUY on the isolated leg.
+- Supertrend BEARISH → record BUY on the opposite leg.
+
+Each indicator can create at most one entry per isolation. The two
+indicators are independent, so an isolation can have up to two entries.
+Local state survives restarts; overwrite=true resets that isolation's
+dummy-order state.
+
+The engine captures the latest locally persisted target-leg market quote
+when available. The quote receive timestamp is stored separately; it is
+not represented as an exact historical fill at the signal candle time.
+If no quote exists, the signal is recorded with a null entry price.
+
+No broker SDK is called and no real order is submitted.
+
+Configuration:
+```env
+DUMMY_ORDERS_ENABLED=true
+DUMMY_ORDER_QUANTITY=1
+DUMMY_ORDER_STATE_DIR=./data/dummy_orders
+```

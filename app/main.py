@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse, JSONResponse
 
 from .api import health as health_api
+from .api import dummy_orders_query
 from .api import isolation_incoming, isolation_query, sr_query, supertrend_query, live_feed_query
 from .config import load_settings
 from .logging_config import setup_logging
@@ -21,6 +22,8 @@ from .services.mongodb_service import MongoDbService
 from .services.sr_state_store import SrStateStore
 from .services.supertrend_state_store import SupertrendStateStore
 from .services.telegram_service import TelegramService
+from .services.dummy_order_store import DummyOrderStore
+from .services.dummy_order_engine import DummyOrderEngine
 
 logger = logging.getLogger(__name__)
 
@@ -38,9 +41,12 @@ async def lifespan(app: FastAPI):
     sr_state_store = SrStateStore(config)
     supertrend_state_store = SupertrendStateStore(config)
     live_feed_state_store = LiveFeedStateStore(config)
+    telegram = TelegramService(config)
+    dummy_order_store = DummyOrderStore(config)
+    dummy_order_engine = DummyOrderEngine(config, dummy_order_store, live_feed_state_store, telegram)
     subscriber = IsolationSubscriber(
         config, isolation_store, sr_state_store, supertrend_state_store,
-        live_feed_state_store,
+        live_feed_state_store, dummy_order_engine,
     )
 
     # -------- startup: today-only re-subscription
@@ -135,7 +141,6 @@ async def lifespan(app: FastAPI):
     scheduler.start()
 
     # -------- telegram (best-effort)
-    telegram = TelegramService(config)
     try:
         await telegram.notify_startup(config.app_name)
     except Exception:
@@ -151,6 +156,8 @@ async def lifespan(app: FastAPI):
     app.state.subscriber = subscriber
     app.state.scheduler = scheduler
     app.state.telegram = telegram
+    app.state.dummy_order_store = dummy_order_store
+    app.state.dummy_order_engine = dummy_order_engine
 
     logger.info("startup complete")
 
@@ -190,6 +197,7 @@ app.include_router(isolation_query.router, prefix="/api/v1", tags=["isolation"])
 app.include_router(sr_query.router, prefix="/api/v1", tags=["sr"])
 app.include_router(supertrend_query.router, prefix="/api/v1", tags=["supertrend"])
 app.include_router(live_feed_query.router, prefix="/api/v1", tags=["live-feed"])
+app.include_router(dummy_orders_query.router, prefix="/api/v1", tags=["dummy-orders"])
 
 
 # ---- optional dashboard

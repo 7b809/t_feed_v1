@@ -14,6 +14,7 @@ from websockets.exceptions import ConnectionClosed
 
 from ..config import Settings
 from .sr_state_store import SrStateStore
+from .dummy_order_engine import DummyOrderEngine
 
 logger = logging.getLogger(__name__)
 
@@ -54,12 +55,14 @@ class SrWsClientService:
         isolation_id: str,
         instrument_key: str,
         leg_role: str,
+        order_engine: Optional[DummyOrderEngine] = None,
     ) -> None:
         self._config = config
         self._state_store = state_store
         self._isolation_id = isolation_id
         self._instrument_key = instrument_key
         self._leg_role = leg_role
+        self._order_engine = order_engine
 
         self._task: Optional[asyncio.Task] = None
         self._ws = None
@@ -264,6 +267,8 @@ class SrWsClientService:
                 self._isolation_id,
                 "snapshot",
             )
+            if self._order_engine is not None:
+                await self._order_engine.on_sr_frame(payload, self._instrument_key, self._leg_role, self._isolation_id)
             self._log_frame(
                 "snapshot leg=%s key=%s config=%s levels=%s",
                 self._leg_role,
@@ -280,6 +285,8 @@ class SrWsClientService:
                 self._isolation_id,
                 "sr_update",
             )
+            if self._order_engine is not None:
+                await self._order_engine.on_sr_frame(payload, self._instrument_key, self._leg_role, self._isolation_id)
             self._log_frame(
                 "sr_update leg=%s key=%s config=%s levels=%s",
                 self._leg_role,

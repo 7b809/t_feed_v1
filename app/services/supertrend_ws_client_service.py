@@ -15,6 +15,7 @@ from websockets.exceptions import ConnectionClosed
 
 from ..config import Settings
 from .supertrend_state_store import SupertrendStateStore
+from .dummy_order_engine import DummyOrderEngine
 
 logger = logging.getLogger(__name__)
 IST = ZoneInfo("Asia/Kolkata")
@@ -39,9 +40,11 @@ class SupertrendWsClientService:
     """One Supertrend WebSocket connection per (instrument_key, leg_role)."""
 
     def __init__(self, config: Settings, state_store: SupertrendStateStore,
-                 isolation_id: str, instrument_key: str, leg_role: str) -> None:
+                 isolation_id: str, instrument_key: str, leg_role: str,
+                 order_engine: Optional[DummyOrderEngine] = None) -> None:
         self._config, self._state_store = config, state_store
         self._isolation_id, self._instrument_key, self._leg_role = isolation_id, instrument_key, leg_role
+        self._order_engine = order_engine
         self._task: Optional[asyncio.Task] = None
         self._stopped = False
         self._ws = None
@@ -178,12 +181,16 @@ class SupertrendWsClientService:
         elif event == "snapshot":
             await asyncio.to_thread(self._state_store.save_snapshot, payload,
                                     self._instrument_key, self._leg_role, self._isolation_id)
+            if self._order_engine is not None:
+                await self._order_engine.on_supertrend_frame(payload, self._instrument_key, self._leg_role, self._isolation_id)
             logger.info("Supertrend snapshot received leg=%s key=%s signals=%s trend=%s",
                         self._leg_role, self._instrument_key,
                         payload.get("signal_count"), payload.get("trend"))
         elif event == "supertrend_signal":
             await asyncio.to_thread(self._state_store.save_signal, payload,
                                     self._instrument_key, self._leg_role, self._isolation_id)
+            if self._order_engine is not None:
+                await self._order_engine.on_supertrend_frame(payload, self._instrument_key, self._leg_role, self._isolation_id)
             logger.info("Supertrend confirmed signal leg=%s key=%s signal=%s time=%s price=%s",
                         self._leg_role, self._instrument_key, payload.get("signal"),
                         payload.get("confirmed_time"), payload.get("price"))

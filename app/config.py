@@ -69,6 +69,11 @@ class Settings:
     live_feed_reconnect_max_backoff_seconds: int
     nifty_instrument_key: str
 
+    # Dummy order simulation (local filesystem only; no broker execution)
+    dummy_orders_enabled: bool
+    dummy_order_quantity: int
+    dummy_order_state_dir: str
+
     # Inbound auth
     isolation_notify_client_key: str
     isolation_notify_client_key_header: str
@@ -113,6 +118,8 @@ class Settings:
             raise ValueError("Live-feed end time must be after start time on the same day")
         if self.live_feed_reconnect_max_backoff_seconds < 1:
             raise ValueError("LIVE_FEED_RECONNECT_MAX_BACKOFF_SECONDS must be >= 1")
+        if self.dummy_order_quantity < 1:
+            raise ValueError("DUMMY_ORDER_QUANTITY must be >= 1")
 
     @property
     def live_feed_ws_url_effective(self) -> str:
@@ -175,6 +182,9 @@ def load_settings() -> Settings:
         sr_ws_reconnect_max_backoff_seconds=_env_int(
             "SR_WS_RECONNECT_MAX_BACKOFF_SECONDS", 30
         ),
+        dummy_orders_enabled=_env_bool("DUMMY_ORDERS_ENABLED", True),
+        dummy_order_quantity=_env_int("DUMMY_ORDER_QUANTITY", 1),
+        dummy_order_state_dir=os.getenv("DUMMY_ORDER_STATE_DIR", "./data/dummy_orders"),
         isolation_notify_client_key=os.getenv("ISOLATION_NOTIFY_CLIENT_KEY", ""),
         isolation_notify_client_key_header=os.getenv(
             "ISOLATION_NOTIFY_CLIENT_KEY_HEADER", "X-Isolation-Key"
