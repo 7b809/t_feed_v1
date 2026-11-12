@@ -168,6 +168,16 @@ class Settings:
     sr_max_levels_per_side: int = _int("SR_MAX_LEVELS_PER_SIDE", 5)
     sr_cycle_log_every: int = _int("SR_CYCLE_LOG_EVERY", 100)
 
+    # ---------- Job 5: Supertrend ----------
+    supertrend_enabled: bool = _bool("SUPERTREND_ENABLED", True)
+    supertrend_period: int = _int("SUPERTREND_PERIOD", 10)
+    supertrend_multiplier: float = _float("SUPERTREND_MULTIPLIER", 3.0)
+    supertrend_change_atr: bool = _bool("SUPERTREND_CHANGE_ATR", True)
+    supertrend_history_days: int = _int("SUPERTREND_HISTORY_DAYS", 10)
+    supertrend_poll_seconds: int = _int("SUPERTREND_POLL_SECONDS", 60)
+    supertrend_max_workers: int = _int("SUPERTREND_MAX_WORKERS", 3)
+    supertrend_fetch_timeout_seconds: float = _float("SUPERTREND_FETCH_TIMEOUT_SECONDS", 30.0)
+
     # ---------- Job 3: Pivot levels ----------
     levels_enabled: bool = _bool("LEVELS_ENABLED", True)
     levels_compute_hour: int = _int("LEVELS_COMPUTE_HOUR", 9)
@@ -244,6 +254,20 @@ class Settings:
             raise ValueError("SR_HISTORY_BARS must be >= 50")
         if self.sr_cycle_log_every < 1:
             raise ValueError("SR_CYCLE_LOG_EVERY must be >= 1")
+
+        # Job 5 (Supertrend)
+        if self.supertrend_period < 1:
+            raise ValueError("SUPERTREND_PERIOD must be >= 1")
+        if self.supertrend_multiplier <= 0:
+            raise ValueError("SUPERTREND_MULTIPLIER must be > 0")
+        if self.supertrend_history_days < 1:
+            raise ValueError("SUPERTREND_HISTORY_DAYS must be >= 1")
+        if self.supertrend_poll_seconds < 5:
+            raise ValueError("SUPERTREND_POLL_SECONDS must be >= 5")
+        if self.supertrend_max_workers < 1:
+            raise ValueError("SUPERTREND_MAX_WORKERS must be >= 1")
+        if self.supertrend_fetch_timeout_seconds <= 0:
+            raise ValueError("SUPERTREND_FETCH_TIMEOUT_SECONDS must be > 0")
         for raw in self.sr_default_configs_list:
             try:
                 parts = raw.split("/")

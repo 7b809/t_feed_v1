@@ -16,6 +16,7 @@ from app.api.health import router as health_router
 from app.api.levels import router as levels_router
 from app.api.mega_archive import router as mega_router
 from app.api.sr import router as sr_router
+from app.api.supertrend import router as supertrend_router
 from app.api.ws_catalog import router as ws_catalog_router
 from app.config import PROJECT_ROOT, settings
 from app.logging_config import configure_logging
@@ -32,6 +33,8 @@ from app.services.mongodb_service import MongoDocumentService
 from app.services.project_info_service import ProjectInfoService
 from app.services.sr_feed_service import SrFeedService
 from app.services.sr_state_store import SrStateStore
+from app.services.supertrend_feed_service import SupertrendFeedService
+from app.services.supertrend_state_store import SupertrendStateStore
 from app.services.telegram_service import ProjectNotifier
 from app.services.upstox_client_service import UpstoxService
 
@@ -50,6 +53,7 @@ async def lifespan(app: FastAPI):
     ema_service = None
     levels_service = None
     sr_service = None
+    supertrend_service = None
     notifier = ProjectNotifier(settings)
     app.state.notifier = notifier
 
@@ -144,6 +148,13 @@ async def lifespan(app: FastAPI):
         )
         app.state.sr_feed_service = sr_service
 
+        # -------- Job 5 (Supertrend) --------
+        supertrend_store = SupertrendStateStore(settings)
+        supertrend_service = SupertrendFeedService(
+            settings, broadcaster, instruments, upstox, supertrend_store
+        )
+        app.state.supertrend_feed_service = supertrend_service
+
         # ------------------------------------------------------------------
         # 4. EMA bootstrap.
         # ------------------------------------------------------------------
@@ -167,6 +178,19 @@ async def lifespan(app: FastAPI):
             await asyncio.to_thread(
                 notifier.notify_exception,
                 where="lifespan.sr_bootstrap",
+                exc=exc,
+            )
+
+        # ------------------------------------------------------------------
+        # 5A. Supertrend bootstrap.
+        # ------------------------------------------------------------------
+        try:
+            await supertrend_service.bootstrap()
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Supertrend bootstrap failed; service will keep running")
+            await asyncio.to_thread(
+                notifier.notify_exception,
+                where="lifespan.supertrend_bootstrap",
                 exc=exc,
             )
 
@@ -224,6 +248,8 @@ async def lifespan(app: FastAPI):
         except Exception:  # noqa: BLE001
             pass
 
+        if supertrend_service is not None:
+            await supertrend_service.shutdown()
         if sr_service is not None:
             await sr_service.shutdown()
         if ema_service is not None:
@@ -245,6 +271,7 @@ app.include_router(health_router)
 app.include_router(mega_router)
 app.include_router(ema_router)
 app.include_router(sr_router)
+app.include_router(supertrend_router)
 app.include_router(levels_router)
 app.include_router(ws_catalog_router)
 
@@ -274,7 +301,8 @@ def info():
             "Job 1: MongoDB -> MEGA ZIP -> safe extraction | "
             "Job 2: EMA crosses live feed | "
             "Job 3: First-candle pivot levels | "
-            "Job 4: Live SR levels (per-instrument, per-config)"
+            "Job 4: Live SR levels (per-instrument, per-config) | "
+            "Job 5: Confirmed Supertrend signals (today-only snapshots + live WebSocket)"
         ),
         "docs": "/docs",
         "health": "/health",
@@ -282,6 +310,8 @@ def info():
         "ema_status": "/api/v1/ema/status",
         "ema_channels": "/api/v1/ema/channels",
         "sr_status": "/api/v1/sr/status",
+        "supertrend_status": "/api/v1/supertrend/status",
+        "supertrend_ws": "/ws/supertrend/{instrument_key}",
         "sr_configs": "/api/v1/sr/configs",
         "ws_catalog": "/api/v1/ws/catalog",
         "ws_catalog_lookup": "/api/v1/ws/catalog/{instrument_key}",

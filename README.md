@@ -461,3 +461,132 @@ text
 - **Quickstart** — a five-step discover → subscribe → connect → log → browse
   path that ties all the endpoints (`/ws/catalog`, `/api/v1/ema/subscribe`,
   the WS URLs, `/ui/logs`) together.
+
+---
+
+## 12. Supertrend live WebSocket (today-only confirmed signals)
+
+The Supertrend service implements the supplied TradingView Pine Script v5
+logic with these defaults:
+
+| Input | Default |
+|---|---:|
+| ATR Period | 10 |
+| Source | HL2 |
+| ATR Multiplier | 3.0 |
+| Change ATR Calculation Method | true (Wilder RMA / `ta.atr`) |
+
+When `SUPERTREND_CHANGE_ATR=false`, the service uses SMA(True Range), matching
+the Pine Script's alternate ATR calculation. Only completed one-minute
+candles are evaluated; an unfinished candle cannot create a confirmed label.
+
+### WebSocket URLs
+
+| Instrument | URL |
+|---|---|
+| Index alias | `wss://ema.novag7.in/ws/supertrend/index/nifty` |
+| Raw instrument | `wss://ema.novag7.in/ws/supertrend/NSE_FO%7C51330` |
+
+No authentication headers or token are required. The instrument is
+auto-subscribed if needed. The server sends a connection acknowledgement and
+then the current-day snapshot before waiting for live updates.
+
+### Snapshot — today's confirmed labels
+
+The snapshot is built from historical + intraday candle backfill. A client
+connecting later in the session receives the already-confirmed BUY/SELL
+labels for today in IST.
+
+```json
+{
+  "event": "snapshot",
+  "indicator": "supertrend",
+  "instrument_key": "NSE_FO|51330",
+  "data_scope": "today_only",
+  "today_ist_date": "2026-11-11",
+  "trend": "down",
+  "signals": [
+    {
+      "signal": "sell",
+      "price": 214.6,
+      "confirmed_time": "2026-11-11T12:53:00+05:30",
+      "confirmed_time_price": 204.15
+    }
+  ],
+  "signal_count": 1
+}
+```
+
+Each signal object contains only these four fields:
+
+- `signal`: `buy` or `sell`, only when a completed candle changes direction.
+- `price`: plotted Supertrend band value at the signal candle (up-band for
+  BUY, down-band for SELL).
+- `confirmed_time`: timestamp of the completed one-minute candle.
+- `confirmed_time_price`: that candle's close price (the Pine label's
+  `Price:` value).
+
+### Live events
+
+Every newly confirmed label is emitted as one `supertrend_signal` frame.
+The four signal fields are at the top level alongside event metadata:
+
+```json
+{
+  "event": "supertrend_signal",
+  "instrument_key": "NSE_FO|51330",
+  "trading_symbol": "NIFTY 22500 CE",
+  "signal": "sell",
+  "price": 214.6,
+  "confirmed_time": "2026-11-11T12:53:00+05:30",
+  "confirmed_time_price": 204.15,
+  "confirmed": true,
+  "data_scope": "today_only",
+  "today_ist_date": "2026-11-11"
+}
+```
+
+A `heartbeat` frame follows each processing cycle and contains the current
+trend, Supertrend line, ATR, last completed candle and today's signal count.
+Populate existing labels from the initial snapshot, then append incoming
+`supertrend_signal` events.
+
+### REST endpoints
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| GET | `/api/v1/supertrend/status` | Service and subscription status |
+| GET | `/api/v1/supertrend/{instrument_key}/latest` | Current today-only snapshot |
+| POST | `/api/v1/supertrend/subscribe/{instrument_key}` | Subscribe / backfill an instrument |
+| POST | `/api/v1/supertrend/unsubscribe/{instrument_key}` | Remove an instrument subscription |
+
+### Backfill persistence
+
+The service fetches the configured historical window and today's intraday
+candles, merges and de-duplicates them, excludes the currently-forming minute,
+then calculates Supertrend across the candle sequence. Signals are filtered
+to today's IST date and atomically saved using the same instrument-directory
+layout as SR:
+
+- Index: `storage/mega/index/{folder}/supertrend.json`
+- Option: `storage/mega/{underlying}/{strike}_{CE|PE}/supertrend.json`
+
+The file stores indicator parameters, today's signal objects, latest trend
+state, instrument metadata and the date marker. The WebSocket sends this
+today-only snapshot immediately after connection.
+
+### Environment settings
+
+```dotenv
+SUPERTREND_ENABLED=true
+SUPERTREND_PERIOD=10
+SUPERTREND_MULTIPLIER=3.0
+SUPERTREND_CHANGE_ATR=true
+SUPERTREND_HISTORY_DAYS=10
+SUPERTREND_POLL_SECONDS=60
+SUPERTREND_MAX_WORKERS=3
+SUPERTREND_FETCH_TIMEOUT_SECONDS=30
+```
+
+Use `/ws/supertrend/{instrument_key}` for raw keys (encode `|` as `%7C`),
+or `/ws/supertrend/index/{underlying}` for an index alias such as `nifty`.
