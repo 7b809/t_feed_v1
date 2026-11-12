@@ -490,6 +490,11 @@ Default local URL:
 ws://127.0.0.1:8004/ws/market
 ```
 
+The orderflow FastAPI application itself defaults to `APP_PORT=8003`.
+Keep that API port separate from the local live-feed gateway port
+(`LIVE_FEED_PORT=8004` by default); the Windows and Linux launch scripts
+now use the 8003 consumer default so both local services can run together.
+
 The URL can be overridden with `LIVE_FEED_WS_URL`; otherwise the host is
 `127.0.0.1` and the port is read from `LIVE_FEED_PORT`.
 
