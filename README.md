@@ -9,7 +9,7 @@ and one for the opposite option leg. Persists every `snapshot`,
 `sr_update`, and `heartbeat` frame; exposes read APIs; re-subscribes on
 restart.
 
-> Scope: **SR + Supertrend feed consumption**. EMA feed and broker order execution are out of scope.
+> Scope: **SR + Supertrend + raw live-market feed consumption**. EMA calculations and broker order execution are out of scope.
 
 ---
 
@@ -464,3 +464,91 @@ SUPERTREND_STATE_DIR=./data/supertrend_state
 Supertrend client connection status is separate from SR status. Both
 connections are started only for ACTIVE isolations and are stopped when
 the isolation is closed or overwritten.
+
+
+---
+
+## 13 · Local live-market feed consumption
+
+For active isolation documents, the consumer also connects to the local
+`isolation_v1` market-feed gateway. This is **one shared WebSocket session**
+for all active isolations, not one session per option leg.
+
+Default local URL:
+
+```
+ws://127.0.0.1:8004/ws/market
+```
+
+The URL can be overridden with `LIVE_FEED_WS_URL`; otherwise the host is
+`127.0.0.1` and the port is read from `LIVE_FEED_PORT`.
+
+The initial connection uses the gateway's multi-instrument query contract:
+
+```
+/ws/market?instrument_keys=NSE_FO%7C...,...,NSE_INDEX%7CNifty%2050&mode=full
+```
+
+The subscribed instruments are the isolated option, opposite option, and
+`NSE_INDEX|Nifty 50`. When another isolation arrives, newly required option
+keys are sent with a dynamic `{"action":"subscribe","instrument_keys":[...]}`
+message. Keys are de-duplicated; NIFTY 50 is shared. When an isolation is
+closed, keys no longer used by any active isolation are unsubscribed.
+
+### Connection time window
+
+Only the live-market feed is gated by the configured Asia/Kolkata window.
+Defaults are **09:00 inclusive to 16:00 exclusive**. At 16:00 the socket
+closes; the supervisor waits until 09:00 on the next day before reconnecting.
+SR and Supertrend clients are not controlled by this time-window gate and
+continue to operate according to their own lifecycle.
+
+### Raw feed persistence
+
+The original `market_data.data` object is saved without indicator
+calculation or normalization. Data is partitioned by instrument:
+
+```text
+data/live_feed/
+├── NSE_FO_.../
+│   ├── YYYY-MM-DD.jsonl
+│   └── latest.json
+└── NSE_INDEX_Nifty_50/
+    ├── YYYY-MM-DD.jsonl
+    └── latest.json
+```
+
+Each JSONL record contains the instrument key, mode, receive timestamp,
+associated isolation IDs/roles, and original provider payload. The latest
+message for each instrument is also atomically written to `latest.json`.
+
+### Live-feed configuration
+
+```env
+LIVE_FEED_ENABLED=true
+LIVE_FEED_WS_URL=
+LIVE_FEED_PORT=8004
+LIVE_FEED_MODE=full
+LIVE_FEED_STATE_DIR=./data/live_feed
+LIVE_FEED_START_HOUR=9
+LIVE_FEED_START_MINUTE=0
+LIVE_FEED_END_HOUR=16
+LIVE_FEED_END_MINUTE=0
+LIVE_FEED_RECONNECT_MAX_BACKOFF_SECONDS=30
+NIFTY_INSTRUMENT_KEY=NSE_INDEX|Nifty 50
+```
+
+`LIVE_FEED_WS_URL` is an optional WebSocket base URL (for example
+`ws://127.0.0.1:8004`); when empty, `LIVE_FEED_PORT` builds the local URL.
+Supported modes are `ltpc`, `full`, `full_d30`, and `option_greeks`.
+
+### Live-feed REST APIs
+
+| Endpoint | Description |
+|---|---|
+| `GET /api/v1/live-feed/status` | Shared connection, desired subscriptions, and storage summary |
+| `GET /api/v1/live-feed/{instrument_key}/latest` | Latest raw feed record for one instrument |
+
+The combined `GET /api/v1/status` response includes a `live_feed` status
+object. This iteration only receives and persists raw market feed data; it
+does not derive LTP/Greeks or execute orders.
