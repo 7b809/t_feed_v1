@@ -8,8 +8,8 @@ echo ================================================
 echo.
 
 set "VENV_PATH="
-set DIRS_TO_CLEAR=data logs logs_text
-set DIRS_DISPLAY=data, logs, logs_text
+set DIRS_TO_CLEAR=logs logs_text
+set DIRS_DISPLAY=logs, logs_text
 
 if exist "myenv\Scripts\python.exe" (
     set "VENV_PATH=%CD%\myenv"
@@ -73,8 +73,16 @@ for %%d in (%DIRS_TO_CLEAR%) do (
     if exist "%%d" rmdir /s /q "%%d"
 )
 
+rem Preserve data/live_feed because it contains the requested raw market history.
+rem Rebuild today's indicator state and isolation mirror on startup.
+if exist "data\\sr_state" rmdir /s /q "data\\sr_state"
+if exist "data\\supertrend_state" rmdir /s /q "data\\supertrend_state"
+if exist "data\\instrument_isolation.json" del /q "data\\instrument_isolation.json"
+if not exist "data" mkdir "data"
+
 echo ================================================
 echo Cleanup directories cleared: %DIRS_DISPLAY%
+echo SR and Supertrend state cleared; data\\live_feed preserved.
 echo ================================================
 echo.
 
