@@ -223,7 +223,15 @@ class DummyOrderEngine:
                 logger.warning("Dummy order target role %s missing for %s", role, isolation_id)
                 return
             quote = await asyncio.to_thread(self._live_feed.latest, target_key)
-            entry = _price((quote or {}).get("data") or {})
+            quote_received_at = (quote or {}).get("received_at")
+            quote_time = _dt(quote_received_at)
+            trade_date = state.get("trade_date_ist") or isolation_id.split("__", 1)[0]
+            # latest.json survives restarts; never use a previous-session
+            # quote as today's simulated entry reference.
+            quote_is_today = bool(
+                quote_time and quote_time.strftime("%Y-%m-%d") == trade_date
+            )
+            entry = _price((quote or {}).get("data") or {}) if quote_is_today else None
             if entry is None and target_key == source_key:
                 fallback = trigger.get("signal_price", payload.get("current_price"))
                 if isinstance(fallback, (int, float)) and fallback > 0:
@@ -237,7 +245,8 @@ class DummyOrderEngine:
                 "entry_price": entry,
                 "price_source": ("latest_local_market_feed" if quote and entry is not None else
                                  "indicator_payload_fallback" if entry is not None else None),
-                "quote_received_at": (quote or {}).get("received_at"),
+                "quote_received_at": quote_received_at if quote_is_today else None,
+                "quote_age_seconds": round((_now() - quote_time).total_seconds(), 3) if quote_is_today else None,
                 "trigger": trigger, "placed_at": _now().isoformat(),
                 "status": "DUMMY_PLACED" if entry is not None else "DUMMY_SIGNAL_RECORDED_NO_QUOTE",
                 "broker_order_id": None, "real_order_submitted": False,
