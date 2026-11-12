@@ -65,3 +65,24 @@ def test_pre_isolation_signal_is_ignored(tmp_path):
             "confirmed_time":"2026-11-12T09:39:00+05:30","price":110},"CE","isolated","iso")
         assert store.load("iso")["orders"]["supertrend"] is None
     asyncio.run(run())
+
+def test_supertrend_bearish_routes_opposite(tmp_path):
+    async def run():
+        engine, store = build(tmp_path)
+        await engine.register_isolation("iso", {"isolation_time":"2026-11-12T09:30:00+05:30"},
+                                        {"isolated":"CE","opposite":"PE"})
+        await engine.on_supertrend_frame({"event":"supertrend_signal","signal":"BEARISH",
+            "confirmed_time":"2026-11-12T09:40:00+05:30","price":110},"CE","isolated","iso")
+        assert store.load("iso")["orders"]["supertrend"]["target_instrument_key"] == "PE"
+    asyncio.run(run())
+
+def test_signals_from_opposite_leg_are_ignored(tmp_path):
+    async def run():
+        engine, store = build(tmp_path)
+        await engine.register_isolation("iso", {"isolation_time":"2026-11-12T09:30:00+05:30"},
+                                        {"isolated":"CE","opposite":"PE"})
+        await engine.on_sr_frame({"event":"sr_update","supports":[
+            {"price":100,"confirmed_at":"2026-11-12T09:35:00+05:30"}]},
+            "PE","opposite","iso")
+        assert store.load("iso")["orders"]["sr"] is None
+    asyncio.run(run())
