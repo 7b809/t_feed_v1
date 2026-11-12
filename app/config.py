@@ -88,6 +88,22 @@ class Settings:
     log_level: str
     logs_dir: str
 
+    def __post_init__(self) -> None:
+        if not 1 <= self.live_feed_port <= 65535:
+            raise ValueError("LIVE_FEED_PORT must be between 1 and 65535")
+        if self.live_feed_mode not in {"ltpc", "full", "full_d30", "option_greeks"}:
+            raise ValueError("LIVE_FEED_MODE must be ltpc, full, full_d30, or option_greeks")
+        if not (0 <= self.live_feed_start_hour < 24 and 0 <= self.live_feed_end_hour < 24):
+            raise ValueError("LIVE_FEED_START_HOUR and LIVE_FEED_END_HOUR must be 0..23")
+        if not (0 <= self.live_feed_start_minute < 60 and 0 <= self.live_feed_end_minute < 60):
+            raise ValueError("LIVE_FEED_START_MINUTE and LIVE_FEED_END_MINUTE must be 0..59")
+        start = self.live_feed_start_hour * 60 + self.live_feed_start_minute
+        end = self.live_feed_end_hour * 60 + self.live_feed_end_minute
+        if start >= end:
+            raise ValueError("Live-feed end time must be after start time on the same day")
+        if self.live_feed_reconnect_max_backoff_seconds < 1:
+            raise ValueError("LIVE_FEED_RECONNECT_MAX_BACKOFF_SECONDS must be >= 1")
+
     @property
     def live_feed_ws_url_effective(self) -> str:
         base = (self.live_feed_ws_url or "").strip()
@@ -132,7 +148,7 @@ def load_settings() -> Settings:
         supertrend_state_dir=os.getenv("SUPERTREND_STATE_DIR", "./data/supertrend_state"),
         live_feed_enabled=_env_bool("LIVE_FEED_ENABLED", True),
         live_feed_ws_url=os.getenv("LIVE_FEED_WS_URL", ""),
-        live_feed_port=_env_int("LIVE_FEED_PORT", 8001),
+        live_feed_port=_env_int("LIVE_FEED_PORT", 8004),
         live_feed_mode=os.getenv("LIVE_FEED_MODE", "full").strip().lower(),
         live_feed_state_dir=os.getenv("LIVE_FEED_STATE_DIR", "./data/live_feed"),
         live_feed_start_hour=_env_int("LIVE_FEED_START_HOUR", 9),
