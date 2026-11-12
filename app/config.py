@@ -51,7 +51,8 @@ class Settings:
     sr_ws_keepalive_seconds: int
     sr_ws_reconnect_max_backoff_seconds: int
 
-    # Local Supertrend state (filesystem, parallel to SR state)
+    # Supertrend feed and local state (parallel to SR feed)
+    supertrend_enabled: bool
     supertrend_state_dir: str
 
     # Inbound auth
@@ -107,6 +108,7 @@ def load_settings() -> Settings:
         ),
         sr_state_dir=os.getenv("SR_STATE_DIR", "./data/sr_state"),
         sr_store_heartbeats=_env_bool("SR_STORE_HEARTBEATS", False),
+        supertrend_enabled=_env_bool("SUPERTREND_ENABLED", True),
         supertrend_state_dir=os.getenv("SUPERTREND_STATE_DIR", "./data/supertrend_state"),
         data_dir=os.getenv("DATA_DIR", "./data"),
         sr_ws_base_url=os.getenv("SR_WS_BASE_URL", "wss://ema.novag7.in"),
