@@ -229,6 +229,67 @@ class TelegramService:
         emoji = self._EMOJI.get(str(level).upper(), "ℹ️")
         return self._send_sync(f"{emoji} {title}\n\n{message}")
 
+
+    async def send_document(self, file_path: str, caption: str = "") -> bool:
+        """Upload one document to Telegram without blocking the event loop.
+
+        Uses a dedicated multipart request: the shared JSON session header
+        used by sendMessage must not be applied to multipart/form-data.
+        This method is best-effort and never raises to the caller.
+        """
+        if not self._enabled:
+            logger.warning("telegram document upload skipped: Telegram is disabled or not configured")
+            return False
+
+        path = str(file_path)
+        url = (
+            "https://api.telegram.org/bot"
+            f"{self._config.telegram_bot_token}/sendDocument"
+        )
+
+        def _upload() -> bool:
+            try:
+                with open(path, "rb") as document:
+                    response = requests.post(
+                        url,
+                        data={
+                            "chat_id": self._config.telegram_chat_id,
+                            "caption": self._truncate(caption) if caption else "",
+                        },
+                        files={"document": (path.split("/")[-1], document, "application/octet-stream")},
+                        timeout=(10, 180),
+                    )
+                if response.status_code >= 400:
+                    self._report_failure(
+                        f"document http {response.status_code}",
+                        caption or path,
+                        body=response.text,
+                    )
+                    return False
+                try:
+                    body = response.json()
+                    if body.get("ok") is False:
+                        self._report_failure("document API rejected upload", caption or path,
+                                             body=str(body))
+                        return False
+                except ValueError:
+                    self._report_failure("document invalid response", caption or path,
+                                         body=response.text)
+                    return False
+                return True
+            except requests.exceptions.RequestException as exc:
+                self._report_failure("document request error", caption or path, exc=exc)
+                return False
+            except Exception as exc:
+                self._report_failure("document unexpected error", caption or path, exc=exc)
+                return False
+
+        try:
+            return await asyncio.to_thread(_upload)
+        except Exception as exc:
+            self._report_failure("document thread dispatch error", caption or path, exc=exc)
+            return False
+
     def close(self) -> None:
         session = getattr(self._local, "session", None)
         if session is not None:

@@ -24,6 +24,7 @@ from .services.supertrend_state_store import SupertrendStateStore
 from .services.telegram_service import TelegramService
 from .services.dummy_order_store import DummyOrderStore
 from .services.dummy_order_engine import DummyOrderEngine
+from .services.daily_data_backup_service import DailyDataBackupService
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +45,7 @@ async def lifespan(app: FastAPI):
     telegram = TelegramService(config)
     dummy_order_store = DummyOrderStore(config)
     dummy_order_engine = DummyOrderEngine(config, dummy_order_store, live_feed_state_store, telegram)
+    daily_backup_service = DailyDataBackupService(config, telegram)
     subscriber = IsolationSubscriber(
         config, isolation_store, sr_state_store, supertrend_state_store,
         live_feed_state_store, dummy_order_engine,
@@ -137,7 +139,7 @@ async def lifespan(app: FastAPI):
             logger.exception("failed to refresh isolation mirror on startup")
 
     # -------- scheduler
-    scheduler = SchedulerService(config, subscriber, isolation_store)
+    scheduler = SchedulerService(config, subscriber, isolation_store, daily_backup_service)
     scheduler.start()
 
     # -------- telegram (best-effort)
@@ -158,6 +160,7 @@ async def lifespan(app: FastAPI):
     app.state.telegram = telegram
     app.state.dummy_order_store = dummy_order_store
     app.state.dummy_order_engine = dummy_order_engine
+    app.state.daily_backup_service = daily_backup_service
 
     logger.info("startup complete")
 

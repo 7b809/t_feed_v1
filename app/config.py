@@ -74,6 +74,10 @@ class Settings:
     dummy_order_quantity: int
     dummy_order_state_dir: str
 
+    # Daily project data backup (Telegram document delivery)
+    daily_data_backup_enabled: bool
+    daily_data_backup_dir: str
+
     # Inbound auth
     isolation_notify_client_key: str
     isolation_notify_client_key_header: str
@@ -184,7 +188,9 @@ def load_settings() -> Settings:
         ),
         dummy_orders_enabled=_env_bool("DUMMY_ORDERS_ENABLED", True),
         dummy_order_quantity=_env_int("DUMMY_ORDER_QUANTITY", 1),
-        dummy_order_state_dir=os.getenv("DUMMY_ORDER_STATE_DIR", "./data/dummy_orders"),
+dummy_order_state_dir=os.getenv("DUMMY_ORDER_STATE_DIR", "./data/dummy_orders"),
+        daily_data_backup_enabled=_env_bool("DAILY_DATA_BACKUP_ENABLED", False),
+        daily_data_backup_dir=os.getenv("DAILY_DATA_BACKUP_DIR", "./backups"),
         isolation_notify_client_key=os.getenv("ISOLATION_NOTIFY_CLIENT_KEY", ""),
         isolation_notify_client_key_header=os.getenv(
             "ISOLATION_NOTIFY_CLIENT_KEY_HEADER", "X-Isolation-Key"
