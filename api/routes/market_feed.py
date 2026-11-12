@@ -121,6 +121,9 @@ class WebSocketFeedManager:
                          queue: asyncio.Queue) -> None:
         async with self._lock:
             feed = await asyncio.to_thread(self._get_or_create_feed, mode)
+            connected = await asyncio.to_thread(feed.wait_until_connected, 10.0)
+            if not connected:
+                raise RuntimeError(f"Upstream {mode} feed did not connect within 10 seconds")
             counts = self._refcounts[mode]
             to_add = [key for key in keys if counts.get(key, 0) == 0]
             if to_add:

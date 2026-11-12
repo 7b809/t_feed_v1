@@ -86,6 +86,7 @@ class MarketFeedService:
         self._health_thread = None
         self._stop_event = threading.Event()
         self._running = False
+        self._connected_event = threading.Event()
 
         # Guards ``instrument_keys`` and ``_ltp_cache`` mutation across
         # the feed thread, the health thread, and ``subscribe()`` callers.
@@ -118,6 +119,7 @@ class MarketFeedService:
 
     def _on_open(self):
         self._connect_ts = time.time()
+        self._connected_event.set()
         logger.info(
             "Market feed connected (mode=%s). Subscribed to: %s",
             self.mode,
@@ -251,6 +253,7 @@ class MarketFeedService:
         )
 
     def _on_close(self, *args, **kwargs):
+        self._connected_event.clear()
         logger.info(
             "Market feed connection closed (mode=%s)%s.",
             self.mode,
@@ -338,10 +341,16 @@ class MarketFeedService:
         except Exception:
             logger.exception("Market feed connection failed (mode=%s).", self.mode)
             self._running = False
+            self._connected_event.clear()
+
+    def wait_until_connected(self, timeout: float = 10.0) -> bool:
+        """Wait until Upstox emits its open event, bounded by timeout."""
+        return self._connected_event.wait(timeout=max(0.0, timeout))
 
     def disconnect(self):
         """Disconnect the feed and stop the health thread."""
         self._running = False
+        self._connected_event.clear()
         self._stop_event.set()
 
         if self.streamer:
