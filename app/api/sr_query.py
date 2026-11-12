@@ -93,9 +93,13 @@ async def overall_status(request: Request) -> dict:
                 "last_frame_at": st["last_frame_at"],
             }
         )
+    supertrend_clients = subscriber.list_supertrend_clients()
+    supertrend_connections = [client.status() for client in supertrend_clients]
     return {
         "running": True,
         "isolation_count": len(subscriber.list_isolation_ids()),
         "active_legs": len(clients),
         "connections": connections,
+        "supertrend_active_connections": len(supertrend_clients),
+        "supertrend_connections": supertrend_connections,
     }
