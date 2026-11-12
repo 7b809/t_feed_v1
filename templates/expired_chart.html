@@ -8,6 +8,8 @@
      * Prev-Day-AVG indicator (dashed pink line + pink→violet gradient label)
      * SR & Plot Dates card (bars + date filter, Apply / All Loaded)
      * Revamped JSON export (SR manual/presets mode + opening-range R3/S3 analysis)
+     * NEW: Supertrend indicator — BUY/SELL text labels only (no line plots)
+            with ATR period + multiplier settings card and JSON export integration.
 #}
 {% extends "base.html" %}
 {% block title %}{{ instrument_key or 'Expired / Active Chart' }} - Trading Dashboard{% endblock %}
@@ -121,6 +123,13 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
 .label-toggle-btn[data-indicator="emaCross"].active { background: linear-gradient(90deg, #089981 0%, #f23645 100%); border-color: transparent; }
 .label-toggle-btn[data-indicator="srLevels"].active { background: linear-gradient(90deg, #FF0000 0%, #233dee 100%); border-color: transparent; }
 .label-toggle-btn[data-indicator="srLabels"].active { background: linear-gradient(90deg, #f5c451 0%, #a855f7 100%); border-color: transparent; color: #111; }
+/* Supertrend toggle active state (green→red gradient) */
+.label-toggle-btn[data-indicator="supertrend"].active {
+  background: linear-gradient(90deg, #089981 0%, #f23645 100%);
+  border-color: transparent;
+  color: #ffffff;
+  box-shadow: 0 2px 8px rgba(8,153,129,0.4);
+}
 /* Prev-Day-AVG indicator active state (pink→violet gradient) */
 .label-toggle-btn[data-indicator="dayAvg"].active {
   background: linear-gradient(90deg, #ec4899 0%, #8b5cf6 100%);
@@ -209,6 +218,80 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
   white-space: nowrap; pointer-events: none; z-index: 7;
   box-shadow: 0 2px 8px rgba(236,72,153,0.55), 0 0 0 1px rgba(255,255,255,0.15) inset;
   text-shadow: 0 1px 2px rgba(0,0,0,0.35);
+}
+
+/* ============================================================
+   SUPERTREND BUY/SELL LABELS (bubble labels only — no lines)
+   ============================================================ */
+.st-label-layer {
+  position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+  overflow: hidden; pointer-events: none; z-index: 8;
+}
+.st-label {
+  position: absolute;
+  display: none;
+  padding: 5px 9px;
+  border-radius: 6px;
+  color: #ffffff;
+  font-size: 9.5px;
+  font-weight: 600;
+  line-height: 1.35;
+  white-space: pre;
+  pointer-events: none;
+  box-shadow: 0 3px 10px rgba(0,0,0,0.55);
+  border: 1px solid rgba(255,255,255,0.22);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  letter-spacing: 0.02em;
+  z-index: 9;
+}
+.st-label.buy {
+  background: rgba(8,153,129,0.96);
+  transform: translate(-50%, -100%);
+  margin-top: -10px;
+}
+.st-label.sell {
+  background: rgba(242,54,69,0.96);
+  transform: translate(-50%, 0);
+  margin-top: 10px;
+}
+.st-label .st-label-title {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  margin-bottom: 3px;
+  padding-bottom: 3px;
+  border-bottom: 1px solid rgba(255,255,255,0.28);
+}
+.st-label .st-label-row { font-size: 9px; opacity: 0.95; white-space: nowrap; }
+.st-label .st-label-row strong { font-weight: 800; opacity: 1; }
+/* Pointer triangle — points down toward the signal level for BUY */
+.st-label.buy::after {
+  content: "";
+  position: absolute;
+  bottom: -6px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 0; height: 0;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-top: 6px solid rgba(8,153,129,0.96);
+}
+/* Pointer triangle — points up toward the signal level for SELL */
+.st-label.sell::after {
+  content: "";
+  position: absolute;
+  top: -6px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 0; height: 0;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-bottom: 6px solid rgba(242,54,69,0.96);
+}
+@media (max-width: 720px) {
+  .st-label { font-size: 8.5px; padding: 4px 7px; }
+  .st-label .st-label-title { font-size: 9.5px; }
+  .st-label .st-label-row { font-size: 8px; }
 }
 
 .sr-label-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; overflow: hidden; pointer-events: none; z-index: 4; }
@@ -456,7 +539,7 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
           <i class="bi bi-filetype-json"></i>
           <span>
             <span class="json-export-title">Download Complete Chart Data (JSON)</span>
-            <span class="json-export-subtitle">Instrument metadata · Candles · EMA crosses · SR Levels (manual / presets) · Opening-range R3/S3 touch analysis</span>
+            <span class="json-export-subtitle">Instrument metadata · Candles · EMA crosses · Supertrend BUY/SELL signals · SR Levels (manual / presets) · Opening-range R3/S3 touch analysis</span>
           </span>
         </span>
         <i class="bi bi-chevron-down json-export-chevron" aria-hidden="true"></i>
@@ -467,6 +550,8 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
           <div class="json-export-field"><label for="exportEndDate">End date (IST)</label><input type="date" id="exportEndDate"></div>
           <div class="json-export-field"><label for="exportEmaFast">EMA fast</label><input type="number" id="exportEmaFast" min="1" max="500" value="9"></div>
           <div class="json-export-field"><label for="exportEmaSlow">EMA slow</label><input type="number" id="exportEmaSlow" min="2" max="1000" value="21"></div>
+          <div class="json-export-field"><label for="exportStPeriod">ST ATR period</label><input type="number" id="exportStPeriod" min="1" max="200" value="10"></div>
+          <div class="json-export-field"><label for="exportStMultiplier">ST multiplier</label><input type="number" id="exportStMultiplier" min="0.1" max="20" step="0.1" value="3.0"></div>
 
           <div class="json-export-field" style="grid-column: span 2;">
             <label>SR input mode</label>
@@ -504,7 +589,7 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
         </div>
         <div class="json-export-actions">
           <button type="button" class="json-export-button" id="downloadChartJsonBtn"><i class="bi bi-download me-1"></i>Download JSON</button>
-          <span class="json-export-status" id="jsonExportStatus" role="status" aria-live="polite">Defaults: latest 11 loaded trading dates · EMA 9/21 · SR 15/3 · Opening-range analysis per day.</span>
+          <span class="json-export-status" id="jsonExportStatus" role="status" aria-live="polite">Defaults: latest 11 loaded trading dates · EMA 9/21 · Supertrend ATR 10×3 · SR 15/3 · Opening-range analysis per day.</span>
         </div>
       </div>
     </details>
@@ -524,10 +609,42 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
       <button type="button" class="label-toggle-btn active" data-indicator="emaCross" title="Show/hide EMA 9/21 crossover BUY / SELL markers"><i class="bi bi-arrow-left-right me-1"></i>EMA Cross</button>
       <button type="button" class="label-toggle-btn" data-indicator="srLevels" title="Show/hide pivot S/R lines"><i class="bi bi-hr me-1"></i>SR Levels</button>
       <button type="button" class="label-toggle-btn" data-indicator="srLabels" title="Show/hide pivot confirmation labels"><i class="bi bi-tag me-1"></i>SR Labels</button>
+      <!-- NEW: Supertrend BUY / SELL labels toggle -->
+      <button type="button" class="label-toggle-btn" data-indicator="supertrend"
+              title="Show/hide Supertrend BUY / SELL text labels (labels only — no line plots)">
+        <i class="bi bi-shuffle me-1"></i>Supertrend
+      </button>
       <button type="button" class="label-toggle-btn" data-indicator="dayAvg"
               title="Plot the PREVIOUS trading day's average — (prevHigh + prevLow) / 2 — as a dashed pink line across the current day">
         <i class="bi bi-activity me-1"></i>Prev Day AVG
       </button>
+    </div>
+
+    <!-- ============================================================
+         SUPERTREND SETTINGS CARD
+         ============================================================ -->
+    <div class="chart-toggles-card" id="supertrendParamsCard">
+      <div class="chart-toggles-title"><i class="bi bi-shuffle me-1"></i>Supertrend</div>
+      <label class="sr-param-field" for="stPeriodInput">
+        ATR Period
+        <input type="number" id="stPeriodInput" class="sr-param-input"
+               min="1" max="200" step="1" value="10" inputmode="numeric">
+      </label>
+      <label class="sr-param-field" for="stMultiplierInput">
+        Multiplier
+        <input type="number" id="stMultiplierInput" class="sr-param-input"
+               min="0.1" max="20" step="0.1" value="3.0" inputmode="decimal"
+               style="width:64px;">
+      </label>
+      <button type="button" id="stApplyBtn" class="label-toggle-btn active"
+              title="Apply ATR period & multiplier — recalculates and re-renders BUY/SELL labels">
+        <i class="bi bi-check2-circle me-1"></i>Apply
+      </button>
+      <button type="button" id="stResetBtn" class="label-toggle-btn"
+              title="Reset to ATR 10 / Multiplier 3.0">
+        <i class="bi bi-arrow-counterclockwise me-1"></i>Reset
+      </button>
+      <span id="stParamsHint" class="sr-param-hint" aria-live="polite"></span>
     </div>
 
     <div class="chart-toggles-card" id="srParamsCard">
@@ -833,12 +950,13 @@ let lastCandle = null;
 let pageClosing = false;
 let resizeHandlerAttached = false;
 
-let rawCandles = [];              // raw 1m candles for current instrument/load
-let currentIntervalMin = 1;       // display interval (aggregated from rawCandles)
+let rawCandles = [];
+let currentIntervalMin = 1;
 
-const INDICATOR_PREFS_KEY = "chart.indicators.prefs";
-const SR_PARAMS_KEY       = "chart.sr.params";
-const TIMEFRAME_PREFS_KEY = "chart.timeframe.prefs";
+const INDICATOR_PREFS_KEY  = "chart.indicators.prefs";
+const SR_PARAMS_KEY        = "chart.sr.params";
+const TIMEFRAME_PREFS_KEY  = "chart.timeframe.prefs";
+const SUPERTREND_PARAMS_KEY = "chart.supertrend.params";   // NEW
 
 let priceScaleAuto = true;
 const PRICE_HEADROOM_PCT = 0.20;
@@ -876,6 +994,17 @@ const indicatorState = {
   dayAvg: {
     enabled: false, lines: [], labels: [], data: {}
   },
+  // ── Supertrend — LABELS ONLY (no line plots, no markers) ──
+  supertrend: {
+    enabled: false,
+    period: 10,
+    multiplier: 3.0,
+    useATR: true,
+    labels: [],       // [{ element, meta:{ time, y, type } }]
+    layer: null,
+    computed: [],
+    lastCandleTime: null,
+  },
 };
 
 (function loadSRParams() {
@@ -896,12 +1025,26 @@ const indicatorState = {
   } catch (e) {}
 })();
 
+// ── restore Supertrend period & multiplier from localStorage ──
+(function loadSupertrendPrefs() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(SUPERTREND_PARAMS_KEY) || "{}");
+    const p = Number(saved.period);
+    const m = Number(saved.multiplier);
+    const u = saved.useATR;
+    if (Number.isInteger(p) && p >= 1 && p <= 200)   indicatorState.supertrend.period = p;
+    if (Number.isFinite(m) && m > 0 && m <= 20)      indicatorState.supertrend.multiplier = m;
+    if (typeof u === "boolean")                      indicatorState.supertrend.useATR = u;
+  } catch (e) {}
+})();
+
 const emaCache = new Map();
 let emaCrossCache = { crosses: null, lastTime: null };
 let markersPrimitive = null;
 let lastMarkerRebuildTime = null;
 let srLabelUpdateScheduled = false;
 let dayAvgLabelUpdateScheduled = false;
+let stLabelUpdateScheduled = false;   // NEW
 
 const dynamicPriceScale = {
   currentUnit: null, currentPrecision: null, currentMinMove: null,
@@ -909,10 +1052,10 @@ const dynamicPriceScale = {
   rafId: null, lastCheckTs: 0, checkIntervalMs: 90,
 };
 
-// Plot date filter (client-side; affects SR, EMA-cross markers, Prev-Day-AVG)
+// Plot date filter (client-side; affects SR, EMA-cross markers, Prev-Day-AVG, Supertrend)
 const plotDateFilter = {
-  startDate: null,   // null = no lower bound
-  endDate:   null,   // null = no upper bound
+  startDate: null,
+  endDate:   null,
 };
 function isTimestampInFilterRange(unixSeconds) {
   if (!unixSeconds) return false;
@@ -981,6 +1124,7 @@ function destroyCurrentChart() {
   levelLabelUpdateScheduled = false;
   srLabelUpdateScheduled = false;
   dayAvgLabelUpdateScheduled = false;
+  stLabelUpdateScheduled = false;   // NEW
 
   if (markersPrimitive && typeof markersPrimitive.detach === "function") {
     try { markersPrimitive.detach(); } catch (e) {}
@@ -991,6 +1135,12 @@ function destroyCurrentChart() {
   removeSRLines();
   clearSRLabels();
   removeDayAvgLines();
+  clearSupertrendLabels();   // NEW
+
+  if (indicatorState.supertrend.layer) {
+    try { indicatorState.supertrend.layer.remove(); } catch (e) {}
+    indicatorState.supertrend.layer = null;
+  }
 
   if (indicatorState.ema9.series) {
     try { if (chart && !chart._isDisposed) chart.removeSeries(indicatorState.ema9.series); } catch (e) {}
@@ -1100,6 +1250,24 @@ function formatTooltipTime(time) {
   return new Intl.DateTimeFormat("en-IN", { timeZone: "Asia/Kolkata", year: "numeric", month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }).format(date);
 }
 function formatPrice(v) { const n = Number(v); return Number.isFinite(n) ? n.toFixed(2) : "—"; }
+
+// Supertrend-specific time formatting
+function formatSignalTime(unixSeconds) {
+  if (!Number.isFinite(unixSeconds)) return "—";
+  const date = new Date(unixSeconds * 1000);
+  if (Number.isNaN(date.getTime())) return "—";
+  try {
+    const d = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit"
+    }).format(date);
+    const t = new Intl.DateTimeFormat("en-GB", {
+      timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", hour12: false
+    }).format(date);
+    return `${d} ${t}`;
+  } catch (e) {
+    return "—";
+  }
+}
 
 // ============================================================
 // TIMEFRAME AGGREGATION
@@ -1225,6 +1393,7 @@ function applyTimeframe(intervalMin) {
   try { clearSRLabels(); } catch (e) {}
   try { removeSRLines(); } catch (e) {}
   try { removeDayAvgLines(); } catch (e) {}
+  try { clearSupertrendLabels(); } catch (e) {}   // NEW
   try { applyMarkersToCandleSeries([]); } catch (e) {}
 
   candleSeries.setData(aggregated);
@@ -1343,6 +1512,7 @@ function updateDynamicPriceScale() {
     scheduleLevelLabelUpdate();
     scheduleSRLabelUpdate();
     scheduleDayAvgLabelUpdate();
+    scheduleSupertrendLabelUpdate();
   }
   const unit = getDynamicPriceUnit(rangeInfo.minPrice, rangeInfo.maxPrice, getPaneHeight());
   if (unit === null) return;
@@ -1359,6 +1529,7 @@ function updateDynamicPriceScale() {
   scheduleLevelLabelUpdate();
   scheduleSRLabelUpdate();
   scheduleDayAvgLabelUpdate();
+  scheduleSupertrendLabelUpdate();
 }
 function startPriceScaleWatcher() {
   if (dynamicPriceScale.rafId !== null) return;
@@ -1473,6 +1644,7 @@ function scheduleLevelLabelUpdate() {
     if (chart && !chart._isDisposed) {
       updateLevelLabelPositions();
       updateDayAvgLabelPositions();
+      try { positionSupertrendLabels(); } catch (e) {}   // NEW
     }
   });
 }
@@ -1823,7 +1995,7 @@ function refreshSRLevels(candles) {
 }
 
 // ============================================================
-// PREV-DAY-AVG INDICATOR (ported from chart.html)
+// PREV-DAY-AVG INDICATOR
 // ============================================================
 function computePrevDayAvgInfo(prevDateKey, prevCandles, todayCandles) {
   if (!Array.isArray(prevCandles) || prevCandles.length === 0) return null;
@@ -2011,6 +2183,317 @@ function updateDayAvgLabelPositions() {
 }
 
 // ============================================================
+// ★ SUPERTREND — LABELS ONLY (no plots, no markers)
+//    Faithful port of the Pine @version=5 script logic.
+//    Emits one HTML bubble per trend-flip bar.
+// ============================================================
+function calculateSupertrend(candles, period, multiplier, useATR) {
+  if (!Array.isArray(candles) || candles.length === 0) return [];
+  const len  = Math.max(1, Math.round(Number(period) || 10));
+  const mult = Number.isFinite(Number(multiplier)) ? Number(multiplier) : 3.0;
+  const n    = candles.length;
+
+  // 1) True Range
+  const tr = new Array(n);
+  for (let i = 0; i < n; i++) {
+    const c = candles[i];
+    const h = Number(c.high);
+    const l = Number(c.low);
+    if (!Number.isFinite(h) || !Number.isFinite(l)) { tr[i] = NaN; continue; }
+    if (i === 0) {
+      tr[i] = h - l;
+    } else {
+      const prevClose = Number(candles[i - 1].close);
+      tr[i] = Number.isFinite(prevClose)
+        ? Math.max(h - l, Math.abs(h - prevClose), Math.abs(l - prevClose))
+        : (h - l);
+    }
+  }
+
+  // 2) ATR — Wilder's RMA (default) or simple SMA when useATR = false
+  const atr = new Array(n).fill(NaN);
+  if (useATR) {
+    let sum = 0;
+    for (let i = 0; i < n; i++) {
+      if (i < len) {
+        if (Number.isFinite(tr[i])) sum += tr[i];
+        if (i === len - 1 && Number.isFinite(tr[i])) atr[i] = sum / len;
+      } else if (Number.isFinite(tr[i]) && Number.isFinite(atr[i - 1])) {
+        atr[i] = ((atr[i - 1] * (len - 1)) + tr[i]) / len;
+      }
+    }
+  } else {
+    for (let i = len - 1; i < n; i++) {
+      let s = 0, ok = true;
+      for (let j = i - len + 1; j <= i; j++) {
+        if (!Number.isFinite(tr[j])) { ok = false; break; }
+        s += tr[j];
+      }
+      if (ok) atr[i] = s / len;
+    }
+  }
+
+  // 3) Supertrend loop (hl2 source + ratchet + trend flip)
+  const result = [];
+  let prevUp = null, prevDn = null, trend = 1;
+
+  for (let i = 0; i < n; i++) {
+    if (!Number.isFinite(atr[i])) continue;
+
+    const c = candles[i];
+    const h = Number(c.high);
+    const l = Number(c.low);
+    const close = Number(c.close);
+    if (!Number.isFinite(h) || !Number.isFinite(l) || !Number.isFinite(close)) continue;
+
+    const prevClose = i > 0 ? Number(candles[i - 1].close) : close;
+    const src  = (h + l) / 2;                   // hl2
+    const band = mult * atr[i];
+
+    // Pine: up  := close[1] > up1 ? max(up, up1) : up
+    let newUp = src - band;
+    if (prevUp !== null && Number.isFinite(prevClose) && prevClose > prevUp) {
+      newUp = Math.max(newUp, prevUp);
+    }
+    // Pine: dn  := close[1] < dn1 ? min(dn, dn1) : dn
+    let newDn = src + band;
+    if (prevDn !== null && Number.isFinite(prevClose) && prevClose < prevDn) {
+      newDn = Math.min(newDn, prevDn);
+    }
+
+    // Pine: up1 = nz(up[1], up) / dn1 = nz(dn[1], dn)
+    const up1 = prevUp !== null ? prevUp : newUp;
+    const dn1 = prevDn !== null ? prevDn : newDn;
+
+    // Pine: trend := trend == -1 and close > dn1 ? 1 : trend == 1 and close < up1 ? -1 : trend
+    let newTrend = trend;
+    if (trend === -1 && close > dn1) newTrend = 1;
+    else if (trend === 1 && close < up1) newTrend = -1;
+
+    const buySignal  = (newTrend ===  1 && trend === -1);
+    const sellSignal = (newTrend === -1 && trend ===  1);
+
+    result.push({
+      time: c.time,
+      open: Number(c.open),
+      high: h,
+      low: l,
+      close: close,
+      up: newUp,
+      dn: newDn,
+      atr: atr[i],
+      trend: newTrend,
+      buySignal,
+      sellSignal,
+    });
+
+    prevUp = newUp;
+    prevDn = newDn;
+    trend  = newTrend;
+  }
+
+  return result;
+}
+
+function ensureSupertrendLabelLayer() {
+  const st = indicatorState.supertrend;
+  if (st.layer) return st.layer;
+  if (!chartContainer) return null;
+  if (getComputedStyle(chartContainer).position === "static") {
+    chartContainer.style.position = "relative";
+  }
+  const layer = document.createElement("div");
+  layer.className = "st-label-layer";
+  chartContainer.appendChild(layer);
+  st.layer = layer;
+  return layer;
+}
+
+function clearSupertrendLabels() {
+  const st = indicatorState.supertrend;
+  (st.labels || []).forEach(item => {
+    try { if (item.element && item.element.parentNode) item.element.parentNode.removeChild(item.element); } catch (e) {}
+  });
+  st.labels = [];
+}
+
+function renderSupertrendLabels(candles) {
+  const st = indicatorState.supertrend;
+
+  if (!st.enabled) {
+    clearSupertrendLabels();
+    st.computed = [];
+    st.lastCandleTime = null;
+    return;
+  }
+  if (!chart || chart._isDisposed || !candleSeries) return;
+
+  const source = candles || candleSeries.data();
+  if (!Array.isArray(source) || source.length === 0) {
+    clearSupertrendLabels();
+    st.computed = [];
+    return;
+  }
+
+  const computed = calculateSupertrend(source, st.period, st.multiplier, st.useATR);
+  st.computed = computed;
+  st.lastCandleTime = source[source.length - 1].time;
+
+  // Filter to flip bars inside the plot-date-filter range
+  const signals = [];
+  for (const d of computed) {
+    if (!d.buySignal && !d.sellSignal) continue;
+    if (!isTimestampInFilterRange(d.time)) continue;
+    signals.push(d);
+  }
+
+  clearSupertrendLabels();
+
+  const layer = ensureSupertrendLabelLayer();
+  if (!layer) return;
+  if (signals.length === 0) return;
+
+  signals.forEach(d => {
+    const isBuy = !!d.buySignal;
+    const el = document.createElement("div");
+    el.className = `st-label ${isBuy ? "buy" : "sell"}`;
+    el.style.display = "none";
+
+    const timeStr  = formatSignalTime(d.time);
+    const priceStr = Number(d.close).toFixed(2);
+    const title    = isBuy ? "BUY" : "SELL";
+
+    el.innerHTML =
+      `<div class="st-label-title">${title}</div>` +
+      `<div class="st-label-row">${timeStr}</div>` +
+      `<div class="st-label-row">Price: <strong>${priceStr}</strong></div>`;
+
+    // Pine anchors BUY at `up` and SELL at `dn` — reproduce that.
+    const anchorPrice = isBuy ? d.up : d.dn;
+
+    el._stMeta = {
+      time: d.time,
+      price: anchorPrice,
+      type: isBuy ? "buy" : "sell",
+    };
+
+    layer.appendChild(el);
+    st.labels.push({ element: el, meta: el._stMeta });
+  });
+
+  positionSupertrendLabels();
+}
+
+function positionSupertrendLabels() {
+  const st = indicatorState.supertrend;
+  if (!chart || chart._isDisposed || !candleSeries) return;
+  const items = st.labels || [];
+  if (items.length === 0) return;
+
+  const timeScale = chart.timeScale();
+  const containerWidth  = chartContainer.clientWidth;
+  const containerHeight = chartContainer.clientHeight;
+
+  items.forEach(item => {
+    const el = item.element;
+    const meta = item.meta || el._stMeta;
+    if (!el || !meta) { if (el) el.style.display = "none"; return; }
+
+    const x = timeScale.timeToCoordinate(meta.time);
+    const y = candleSeries.priceToCoordinate(meta.price);
+
+    if (x === null || y === null || !Number.isFinite(x) || !Number.isFinite(y)) {
+      el.style.display = "none";
+      return;
+    }
+    if (x < -240 || x > containerWidth + 240 || y < -240 || y > containerHeight + 240) {
+      el.style.display = "none";
+      return;
+    }
+
+    el.style.display = "block";
+    el.style.left = Math.round(x) + "px";
+    el.style.top  = Math.round(y) + "px";
+  });
+}
+
+function scheduleSupertrendLabelUpdate() {
+  if (stLabelUpdateScheduled) return;
+  stLabelUpdateScheduled = true;
+  requestAnimationFrame(() => {
+    stLabelUpdateScheduled = false;
+    try { positionSupertrendLabels(); } catch (err) { console.warn("ST label position error:", err); }
+  });
+}
+
+// ============================================================
+// SUPERTREND SETTINGS CARD — Apply / Reset / Persist
+// ============================================================
+(function initSupertrendSettings() {
+  const periodInput = document.getElementById("stPeriodInput");
+  const multInput   = document.getElementById("stMultiplierInput");
+  const applyBtn    = document.getElementById("stApplyBtn");
+  const resetBtn    = document.getElementById("stResetBtn");
+  const hintEl      = document.getElementById("stParamsHint");
+
+  if (periodInput) periodInput.value = String(indicatorState.supertrend.period);
+  if (multInput)   multInput.value   = String(indicatorState.supertrend.multiplier);
+
+  let hintTimer = null;
+  function showHint(text, isError) {
+    if (!hintEl) return;
+    hintEl.textContent = text || "";
+    hintEl.classList.toggle("error", !!isError);
+    hintEl.classList.add("visible");
+    if (hintTimer) clearTimeout(hintTimer);
+    hintTimer = setTimeout(() => {
+      hintEl.classList.remove("visible");
+      hintEl.classList.remove("error");
+    }, 3000);
+  }
+
+  function apply() {
+    if (!periodInput || !multInput) return;
+    const p = Number(periodInput.value);
+    const m = Number(multInput.value);
+    if (!Number.isInteger(p) || p < 1 || p > 200) {
+      showHint("ATR period must be 1–200", true); return;
+    }
+    if (!Number.isFinite(m) || m <= 0 || m > 20) {
+      showHint("Multiplier must be > 0 and ≤ 20", true); return;
+    }
+    indicatorState.supertrend.period = p;
+    indicatorState.supertrend.multiplier = m;
+    try {
+      localStorage.setItem(SUPERTREND_PARAMS_KEY, JSON.stringify({
+        period: p, multiplier: m, useATR: indicatorState.supertrend.useATR
+      }));
+    } catch (e) {}
+
+    if (indicatorState.supertrend.enabled && candleSeries) {
+      renderSupertrendLabels(candleSeries.data());
+    }
+    showHint(`✓ Supertrend · ATR ${p} × ${m}`, false);
+  }
+
+  function reset() {
+    if (periodInput) periodInput.value = "10";
+    if (multInput)   multInput.value   = "3.0";
+    apply();
+  }
+
+  if (applyBtn) applyBtn.addEventListener("click", apply);
+  if (resetBtn) resetBtn.addEventListener("click", reset);
+
+  [periodInput, multInput].forEach(inp => {
+    if (!inp) return;
+    inp.addEventListener("keydown", e => {
+      if (e.key === "Enter") { e.preventDefault(); apply(); }
+    });
+  });
+})();
+
+// ============================================================
 // MARKERS + INDICATORS REFRESH
 // ============================================================
 function rebuildAllMarkers() {
@@ -2049,7 +2532,8 @@ function refreshIndicators(candles) {
     renderEMALines(data);
     refreshSRLevels(data);
     rebuildAllMarkers();
-    refreshDayAvgLines(data);   // full rebuild each time
+    refreshDayAvgLines(data);       // full rebuild each time
+    renderSupertrendLabels(data);   // NEW — Supertrend BUY/SELL labels
   } catch (err) { console.warn("[indicators] refresh failed:", err); }
 }
 
@@ -2133,6 +2617,7 @@ document.querySelectorAll("#indicatorToggleBar .label-toggle-btn[data-indicator]
     clearSRLabels();
     applyMarkersToCandleSeries([]);
     removeDayAvgLines();
+    clearSupertrendLabels();   // NEW
 
     indicatorState.srLevels.leftBars  = lb;
     indicatorState.srLevels.rightBars = rb;
@@ -2159,7 +2644,9 @@ document.querySelectorAll("#indicatorToggleBar .label-toggle-btn[data-indicator]
   }
 
   applyBtn.addEventListener("click", applyParams);
-  resetBtn.addEventListener("click", resetToAllLoaded);
+  resetBtn.addEventListener("click", resetAllLoaded);
+
+  function resetAllLoaded() { resetToAllLoaded(); }
 
   [leftInput, rightInput, startInput, endInput].forEach(inp => {
     if (!inp) return;
@@ -2282,10 +2769,22 @@ function createChart(rawCandles) {
 
   ensureLevelLabelLayer();
   ensureSRLabelLayer();
+  ensureSupertrendLabelLayer();   // NEW
   createChartTooltip();
   chart.subscribeCrosshairMove(handleCrosshairMove);
-  chart.timeScale().subscribeVisibleTimeRangeChange(() => { scheduleLevelLabelUpdate(); scheduleSRLabelUpdate(); scheduleDayAvgLabelUpdate(); });
-  chart.timeScale().subscribeVisibleLogicalRangeChange(() => { scheduleLevelLabelUpdate(); scheduleSRLabelUpdate(); scheduleDayAvgLabelUpdate(); updateDynamicPriceScale(); });
+  chart.timeScale().subscribeVisibleTimeRangeChange(() => {
+    scheduleLevelLabelUpdate();
+    scheduleSRLabelUpdate();
+    scheduleDayAvgLabelUpdate();
+    scheduleSupertrendLabelUpdate();   // NEW
+  });
+  chart.timeScale().subscribeVisibleLogicalRangeChange(() => {
+    scheduleLevelLabelUpdate();
+    scheduleSRLabelUpdate();
+    scheduleDayAvgLabelUpdate();
+    scheduleSupertrendLabelUpdate();   // NEW
+    updateDynamicPriceScale();
+  });
 
   if (!resizeHandlerAttached) {
     const onResize = () => {
@@ -2295,6 +2794,7 @@ function createChart(rawCandles) {
         scheduleLevelLabelUpdate();
         scheduleSRLabelUpdate();
         scheduleDayAvgLabelUpdate();
+        scheduleSupertrendLabelUpdate();   // NEW
         updateDynamicPriceScale();
       } catch (e) { console.warn("Resize error ignored:", e); }
     };
@@ -2708,7 +3208,7 @@ if (targetEndDateInput) {
 }
 
 // ============================================================
-// COMPLETE JSON EXPORT (ported from chart.html)
+// COMPLETE JSON EXPORT (with Supertrend integration)
 // ============================================================
 (function initChartJSONExport() {
   const card         = document.getElementById("jsonExportCard");
@@ -2716,6 +3216,8 @@ if (targetEndDateInput) {
   const endInput     = document.getElementById("exportEndDate");
   const fastInput    = document.getElementById("exportEmaFast");
   const slowInput    = document.getElementById("exportEmaSlow");
+  const stPeriodInput     = document.getElementById("exportStPeriod");
+  const stMultiplierInput = document.getElementById("exportStMultiplier");
   const leftInput    = document.getElementById("exportSrLeft");
   const rightInput   = document.getElementById("exportSrRight");
   const srModeRadios = document.querySelectorAll('input[name="jsonExportSrMode"]');
@@ -2725,6 +3227,10 @@ if (targetEndDateInput) {
 
   if (!card || !startInput || !endInput || !fastInput || !slowInput ||
       !leftInput || !rightInput || !downloadButton || !status) return;
+
+  // Initialize Supertrend export inputs from current chart settings
+  if (stPeriodInput) stPeriodInput.value = String(indicatorState.supertrend.period);
+  if (stMultiplierInput) stMultiplierInput.value = String(indicatorState.supertrend.multiplier);
 
   let defaultRangeInitialized = false;
   let userChangedExportDates  = false;
@@ -2802,7 +3308,7 @@ if (targetEndDateInput) {
     if (dates.length) {
       startInput.value = dates[Math.max(0, dates.length - 11)];
       endInput.value   = dates[dates.length - 1];
-      setStatus("Default: latest 11 loaded trading dates · EMA 9/21 · Opening-range analysis per day.", false);
+      setStatus("Default: latest 11 loaded trading dates · EMA 9/21 · Supertrend ATR 10×3 · Opening-range analysis per day.", false);
     } else {
       const now = new Date();
       const ist = new Date(now.getTime() + 330 * 60000);
@@ -2824,6 +3330,13 @@ if (targetEndDateInput) {
     const value = Number(input.value);
     if (!Number.isInteger(value) || value < min || value > max) {
       throw new Error(`${label} must be a whole number between ${min} and ${max}.`);
+    }
+    return value;
+  }
+  function parseFloatNumber(input, label, min, max) {
+    const value = Number(input.value);
+    if (!Number.isFinite(value) || value < min || value > max) {
+      throw new Error(`${label} must be a number between ${min} and ${max}.`);
     }
     return value;
   }
@@ -2864,6 +3377,39 @@ if (targetEndDateInput) {
     }
     return result;
   }
+
+  // ── Supertrend signal list for JSON export ──────────────
+  function buildSupertrendExport(allCandles, startDate, endDate, period, multiplier, useATR) {
+    const computed = calculateSupertrend(allCandles, period, multiplier, useATR);
+    const signals = [];
+    let buyCount = 0, sellCount = 0;
+    for (const d of computed) {
+      if (!d.buySignal && !d.sellSignal) continue;
+      const dateKey = getDateKeyForExport(d.time);
+      if ((startDate && dateKey < startDate) || (endDate && dateKey > endDate)) continue;
+      const type = d.buySignal ? "buy" : "sell";
+      if (type === "buy") buyCount++; else sellCount++;
+      signals.push({
+        timestamp: toISTTimestamp(d.time),
+        type,
+        close_price: Number(d.close.toFixed(4)),
+        anchor_price: Number((type === "buy" ? d.up : d.dn).toFixed(4)),
+        up: Number(d.up.toFixed(4)),
+        dn: Number(d.dn.toFixed(4)),
+        atr: Number(d.atr.toFixed(4)),
+        trend: d.trend === 1 ? "up" : "down",
+      });
+    }
+    return {
+      signals,
+      summary: {
+        total_signals: signals.length,
+        buy_count: buyCount,
+        sell_count: sellCount,
+      },
+    };
+  }
+
   function buildSupportResistance(allCandles, selectedCandles, startDate, endDate, leftBars, rightBars) {
     const selectedIndex = new Map(selectedCandles.map((c, i) => [Number(c.time), i]));
     const levels = [];
@@ -3028,6 +3574,14 @@ if (targetEndDateInput) {
       const slowPeriod = parseInteger(slowInput, "EMA slow", 2, 1000);
       if (fastPeriod >= slowPeriod) throw new Error("EMA fast must be smaller than EMA slow.");
 
+      // Supertrend export parameters
+      const stPeriod = stPeriodInput
+        ? parseInteger(stPeriodInput, "Supertrend ATR period", 1, 200)
+        : indicatorState.supertrend.period;
+      const stMultiplier = stMultiplierInput
+        ? parseFloatNumber(stMultiplierInput, "Supertrend multiplier", 0.1, 20)
+        : indicatorState.supertrend.multiplier;
+
       const startDate = startInput.value || null;
       const endDate   = endInput.value || null;
       if (startDate && endDate && startDate > endDate) throw new Error("Start date must be on or before end date.");
@@ -3063,12 +3617,24 @@ if (targetEndDateInput) {
       const openingRangeAnalysis = buildOpeningRangeAnalysis(selectedCandles, startDate, endDate);
       const openingRangeSummary  = summarizeOpeningRangeAnalysis(openingRangeAnalysis);
 
+      // Supertrend signals
+      const supertrendExport = buildSupertrendExport(
+        allCandles, startDate, endDate, stPeriod, stMultiplier, indicatorState.supertrend.useATR
+      );
+
       const instrument = currentMeta || {};
       const tradingSymbol = instrument.trading_symbol || topSymbolName?.textContent?.trim() || currentInstrumentKey;
       const totalLevelCount = Object.values(levelCountsByPreset).reduce((a, b) => a + b, 0);
 
       const config = {
         ema: { fast_period: fastPeriod, slow_period: slowPeriod },
+        supertrend: {
+          atr_period: stPeriod,
+          multiplier: stMultiplier,
+          use_atr: indicatorState.supertrend.useATR,
+          source: "hl2",
+          display_mode: "labels_only",
+        },
         sr_mode: srMode,
         timeframe_minutes: currentIntervalMin,
         timeframe_label: intervalLabel(currentIntervalMin),
@@ -3087,6 +3653,8 @@ if (targetEndDateInput) {
           exported_at: new Date().toISOString(),
           candle_count: selectedCandles.length,
           ema_cross_count: crosses.length,
+          supertrend_signal_count: supertrendExport.summary.total_signals,
+          supertrend_summary: supertrendExport.summary,
           sr_mode: srMode,
           ...(srMode === "manual"
             ? { sr_level_count: totalLevelCount }
@@ -3101,6 +3669,8 @@ if (targetEndDateInput) {
           volume: Number(c.volume || 0), oi: Number(c.oi || 0),
         })),
         crosses,
+        supertrend_signals: supertrendExport.signals,
+        supertrend_summary: supertrendExport.summary,
         ...(srMode === "manual"
           ? { levels: levelsByPreset[srConfigs[0].key] }
           : { levels_by_preset: levelsByPreset }),
@@ -3113,8 +3683,9 @@ if (targetEndDateInput) {
       const orTail = openingRangeSummary.date_count
         ? ` · ${openingRangeSummary.date_count} opening-range day(s) (R3 ${openingRangeSummary.days_with_r3_touch} · S3 ${openingRangeSummary.days_with_s3_touch} · both ${openingRangeSummary.days_with_both_touches})`
         : " · opening-range analysis unavailable";
+      const stTail = ` · Supertrend ${stPeriod}×${stMultiplier}: ${supertrendExport.summary.buy_count} BUY / ${supertrendExport.summary.sell_count} SELL`;
       setStatus(
-        `Downloaded ${selectedCandles.length} ${intervalLabel(currentIntervalMin)} candles · ${crosses.length} EMA crosses · ${totalLevelCount} SR levels${srMode === "presets" ? ` (${srConfigs.length} presets)` : ""}${orTail}.`,
+        `Downloaded ${selectedCandles.length} ${intervalLabel(currentIntervalMin)} candles · ${crosses.length} EMA crosses · ${totalLevelCount} SR levels${srMode === "presets" ? ` (${srConfigs.length} presets)` : ""}${stTail}${orTail}.`,
         false
       );
     } catch (error) {
