@@ -135,27 +135,14 @@ The complete set of strategy and scheduling options is documented in `.env.examp
 | `LOG_RAW_FEED` | `false` | Enable verbose raw feed logging |
 | `FEED_HEALTH_INTERVAL_SECONDS` | `300` | Feed health log interval |
 | `FEED_STALE_AFTER_SECONDS` | `120` | Stale-data threshold |
-| `MARKET_FEED_WS_API_KEY` | empty | Optional downstream WebSocket shared key |
 | `TIMEZONE` | `Asia/Kolkata` | Application timezone |
 | `TEST_FLAG` | `false` | Immediate/deferred startup control |
 | `DEFERRED_STARTUP_HOUR` | `9` | Deferred startup hour |
 | `DEFERRED_STARTUP_MINUTE` | `18` | Deferred startup minute |
 
-### Optional WebSocket key
-
-To require a shared key on WebSocket connections:
-
-```dotenv
-MARKET_FEED_WS_API_KEY=replace-with-a-long-random-secret
-```
-
-Restart the application after changing `.env`. The current WebSocket implementation accepts the key as the `api_key` query parameter. If this variable is empty, this optional key check is disabled.
-
-This is not the Upstox token. Never expose the Upstox access token to downstream clients.
-
 ## MongoDB and Upstox token
 
-The application reads the Upstox access token from MongoDB:
+The application reads the Upstox access token from MongoDB. Downstream WebSocket clients do not receive or provide this token; the server uses it for the upstream Upstox connection:
 
 - Database: `MONGO_DB_NAME` (default `UPSTOX_APP_V2`)
 - Collection: `app_tokens`
@@ -291,6 +278,8 @@ Use category and filename values returned by the log-list API.
 
 ## Live WebSocket API
 
+**Public access:** downstream WebSocket connections require no API key, JWT, login, or Upstox token. Connect directly with the instrument key. The server retrieves and uses its own Upstox access token internally.
+
 ### Endpoint
 
 ```text
@@ -306,7 +295,6 @@ Use `wss://` through HTTPS in production and `ws://` for local/insecure developm
 | `instrument_key` | One instrument parameter is required | One instrument key; may be repeated |
 | `instrument_keys` | One instrument parameter is required | Comma-separated instrument keys |
 | `mode` | No | Upstox feed mode; defaults to `full` |
-| `api_key` | Conditional | Required only when `MARKET_FEED_WS_API_KEY` is configured |
 
 Instrument keys contain a pipe character (`|`). URL-encode it as `%7C` when building a URL. Multiple instrument keys may be separated by commas.
 
@@ -335,14 +323,6 @@ ws://localhost:8001/ws/market?instrument_key=NSE_FO%7C45405&mode=ltpc
 ```
 
 Supported modes: `ltpc`, `full`, `full_d30`, `option_greeks`.
-
-### Optional API key
-
-```text
-wss://your-domain.example/ws/market?instrument_key=NSE_FO%7C45405&api_key=YOUR_SHARED_KEY
-```
-
-Avoid putting secrets in URLs where possible: URLs may be retained in proxy/access logs and browser history. Use TLS and restrict access at the reverse proxy/network layer as well.
 
 ### Connection acknowledgement
 
@@ -633,10 +613,10 @@ The public WebSocket URL then uses `wss://feed.example.com/ws/market?...`. Ensur
 Check:
 
 1. At least one `instrument_key` or `instrument_keys` parameter was supplied.
+2. Instrument keys are URL-encoded correctly; encode `|1. At least one `instrument_key` or `instrument_keys` parameter was supplied.
 2. Instrument keys are URL-encoded correctly; encode `|` as `%7C`.
 3. Mode is one of `ltpc`, `full`, `full_d30`, or `option_greeks`.
-4. If an API key is configured, the correct `api_key` is supplied.
-5. Nginx forwards WebSocket upgrade headers.
+4. Nginx forwards WebSocket upgrade headers.
 
 ### Upstream feed does not connect
 
@@ -670,13 +650,12 @@ Check:
 ### Security recommendations
 
 1. Use HTTPS/WSS for every public deployment.
-2. Set a long, random `MARKET_FEED_WS_API_KEY` when the endpoint should not be public.
-3. Restrict access using firewall/security-group rules and reverse-proxy controls.
+2. This WebSocket endpoint is intentionally public and does not authenticate downstream clients. Anyone who knows the URL and a valid instrument key can connect.
+3. Apply firewall/security-group rules, reverse-proxy rate limits, connection limits, and subscription caps if public usage needs to be controlled.
 4. Do not expose MongoDB publicly.
 5. Never return or log the Upstox access token to downstream clients.
 6. Do not commit `.env`, credentials, tokens, or production API keys.
 7. Monitor client counts, upstream connection counts, subscription totals, and provider limits.
-8. Before offering the endpoint to untrusted public clients, consider per-client subscription caps, origin restrictions, rate limits, and a non-query-string authentication mechanism.
 
 ## Project structure
 
