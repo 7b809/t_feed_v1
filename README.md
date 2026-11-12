@@ -9,7 +9,7 @@ and one for the opposite option leg. Persists every `snapshot`,
 `sr_update`, and `heartbeat` frame; exposes read APIs; re-subscribes on
 restart.
 
-> Scope for this iteration: **SR only**. EMA feed is out of scope.
+> Scope: **SR + Supertrend feed consumption**. EMA feed and broker order execution are out of scope.
 
 ---
 
@@ -385,3 +385,82 @@ pytest -q
 - Order execution.
 - Historical SR backfill.
 - Per-`sr_update` Telegram notifications.
+
+---
+
+## 12 · Supertrend WebSocket consumption
+
+For every ACTIVE isolation, the consumer opens **two additional independent
+connections** to app1's Supertrend feed, one for each leg:
+
+```
+wss://ema.novag7.in/ws/supertrend/{url_encoded_instrument_key}
+```
+
+The SR and Supertrend connections are managed independently. A failure in
+one indicator client does not stop the other indicator connection.
+
+Supertrend frames consumed:
+
+- `connection_ack` — records connection state.
+- `snapshot` — persists the opening, today-only Supertrend state and the
+  list of confirmed signals received in the initial snapshot.
+- `supertrend_signal` — appends a deduplicated confirmed BUY/SELL signal.
+- `heartbeat` — updates trend/ATR/last-candle health metadata without
+  changing the signal list.
+
+The client enforces `data_scope=today_only` when
+`REQUIRE_TODAY_ONLY_SCOPE=true`, uses WebSocket ping/pong plus the
+configured text keepalive, reconnects with exponential backoff, and does
+not retry permanent close codes 4400/4404. The existing 30-second watchdog
+checks both SR and Supertrend client tasks.
+
+### Supertrend storage
+
+Supertrend is stored separately from SR under `SUPERTREND_STATE_DIR`
+(default `./data/supertrend_state`):
+
+```text
+data/
+├── sr_state/
+│   ├── isolated__25400_ce_NSE_FO_45406/...
+│   └── opposite__25400_pe_NSE_FO_45407/...
+└── supertrend_state/
+    ├── isolated__25400_ce_NSE_FO_45406/
+    │   ├── today_snapshot.json
+    │   └── today_live_supertrend.json
+    └── opposite__25400_pe_NSE_FO_45407/
+        ├── today_snapshot.json
+        └── today_live_supertrend.json
+```
+
+- `today_snapshot.json` is the frozen snapshot from the WebSocket
+  connection, including today's confirmed signal list.
+- `today_live_supertrend.json` contains the current confirmed signal
+  list and most recent signal; heartbeat metadata is refreshed in place.
+- Each signal is stored with the four fields supplied by app1:
+  `signal`, `price`, `confirmed_time`, `confirmed_time_price`.
+- Signals are deduplicated by `(signal, confirmed_time)`.
+- `overwrite=true` purges both legs from both the SR and Supertrend
+  state directories before fresh subscriptions start.
+
+### Supertrend REST APIs
+
+| Endpoint | Description |
+|---|---|
+| `GET /api/v1/supertrend/status` | All Supertrend client connection states |
+| `GET /api/v1/supertrend/{instrument_key}/latest` | Latest saved Supertrend state |
+| `GET /api/v1/supertrend/{instrument_key}/status` | One instrument's Supertrend connection state |
+
+The combined `GET /api/v1/status` response also includes
+`supertrend_active_connections` and `supertrend_connections`.
+
+Configure the state directory:
+
+```env
+SUPERTREND_STATE_DIR=./data/supertrend_state
+```
+
+Supertrend client connection status is separate from SR status. Both
+connections are started only for ACTIVE isolations and are stopped when
+the isolation is closed or overwritten.
