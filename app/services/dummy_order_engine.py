@@ -166,6 +166,8 @@ class DummyOrderEngine:
                           leg_role: str, isolation_id: str) -> None:
         if not self._config.dummy_orders_enabled or payload.get("event") not in {"snapshot", "sr_update"}:
             return
+        if leg_role != "isolated":
+            return
         try:
             await self._process("sr", payload, instrument_key, leg_role, isolation_id)
         except Exception:
@@ -174,6 +176,8 @@ class DummyOrderEngine:
     async def on_supertrend_frame(self, payload: dict, instrument_key: str,
                                   leg_role: str, isolation_id: str) -> None:
         if not self._config.dummy_orders_enabled or payload.get("event") not in {"snapshot", "supertrend_signal"}:
+            return
+        if leg_role != "isolated":
             return
         try:
             await self._process("supertrend", payload, instrument_key, leg_role, isolation_id)
