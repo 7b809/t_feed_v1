@@ -1,7 +1,7 @@
 #!/bin/bash
 
 APP_NAME="isolation_consumer_service"
-PORT=8004
+PORT="${APP_PORT:-8003}"
 
 
 PID_FILE="${APP_NAME}.pid"
