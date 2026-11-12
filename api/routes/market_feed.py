@@ -14,9 +14,7 @@ mode share one upstream stream and reference-count instrument subscriptions.
 from __future__ import annotations
 
 import asyncio
-import hmac
 import json
-import os
 import threading
 import uuid
 from urllib.parse import unquote
@@ -232,12 +230,6 @@ async def market_feed_websocket(websocket: WebSocket):
     query = websocket.query_params
     keys = _parse_keys(query.getlist("instrument_key") + query.getlist("instrument_keys"))
     mode = (query.get("mode") or "full").strip().lower()
-    expected_key = os.getenv("MARKET_FEED_WS_API_KEY", "").strip()
-    supplied_key = query.get("api_key", "")
-
-    if expected_key and not hmac.compare_digest(expected_key, supplied_key):
-        await websocket.close(code=1008, reason="Unauthorized")
-        return
     if not keys:
         await websocket.close(code=1008, reason="Provide instrument_key or instrument_keys")
         return
