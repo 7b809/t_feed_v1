@@ -191,7 +191,11 @@ class LiveFeedWsClientService:
                 desired = await self._desired_context_snapshot()
                 if not desired:
                     self._ws_state = "idle"
-                    await self._wait_for_signal()
+                    self._sync_event.clear()
+                    # Recheck after clearing: a registration racing with this
+                    # transition cannot be lost and leave the supervisor asleep.
+                    if not await self._desired_context_snapshot():
+                        await self._sync_event.wait()
                     continue
                 if not self._inside_window():
                     self._ws_state = "outside_window"
@@ -279,7 +283,8 @@ class LiveFeedWsClientService:
 
     async def _synchronize_subscriptions(self, ws, active_keys: set[str]) -> None:
         while True:
-            await self._sync_event.wait()
+            # Clear before reading desired subscriptions. A concurrent
+            # registration after clear leaves the event set for the next wait.
             self._sync_event.clear()
             desired_context = await self._desired_context_snapshot()
             desired_keys = set(desired_context)
@@ -299,6 +304,7 @@ class LiveFeedWsClientService:
                 logger.info("Live feed dynamic unsubscribe instruments=%s", removals)
             if not desired_keys:
                 return
+            await self._sync_event.wait()
 
     async def _receive_loop(self, ws) -> None:
         async for raw in ws:
