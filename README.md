@@ -254,8 +254,11 @@ Delete once before deploy:
 rm -rf data/sr_state/*
 ```
 
-On Windows, `run.bat` already wipes `data/` on every start — auto-clean.
-SR state is rebuilt from fresh WS snapshots in ~1 s after re-subscribe.
+On Windows, `run.bat` clears `data/sr_state/`, `data/supertrend_state/`,
+and the isolation mirror before startup, but deliberately preserves
+`data/live_feed/` so the raw market-feed history survives restarts.
+SR and Supertrend state are rebuilt from fresh WebSocket snapshots after
+re-subscribe. The Linux `start.sh` does not clear the data directory.
 
 ### Overwrite behaviour
 
