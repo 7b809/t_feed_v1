@@ -86,5 +86,6 @@ echo SR and Supertrend state cleared; data\live_feed preserved.
 echo ================================================
 echo.
 
-python -m uvicorn app.main:app --host 0.0.0.0 --port 8004
+if not defined APP_PORT set "APP_PORT=8003"
+python -m uvicorn app.main:app --host 0.0.0.0 --port %APP_PORT%
 
