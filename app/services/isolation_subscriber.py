@@ -128,6 +128,9 @@ class IsolationSubscriber:
                         )
                         await existing.stop()
                         self._clients.pop(old_key, None)
+                    old_supertrend = self._supertrend_clients.pop(old_key, None)
+                    if old_supertrend is not None:
+                        await old_supertrend.stop()
 
             subscribed: List[str] = []
             sessions: Dict[str, Dict[str, str]] = {}
