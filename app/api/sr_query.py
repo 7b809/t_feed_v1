@@ -102,4 +102,5 @@ async def overall_status(request: Request) -> dict:
         "connections": connections,
         "supertrend_active_connections": len(supertrend_clients),
         "supertrend_connections": supertrend_connections,
+        "live_feed": subscriber.get_live_feed_client().status(),
     }
