@@ -51,6 +51,9 @@ class Settings:
     sr_ws_keepalive_seconds: int
     sr_ws_reconnect_max_backoff_seconds: int
 
+    # Local Supertrend state (filesystem, parallel to SR state)
+    supertrend_state_dir: str
+
     # Inbound auth
     isolation_notify_client_key: str
     isolation_notify_client_key_header: str
@@ -70,6 +73,10 @@ class Settings:
     # Logging
     log_level: str
     logs_dir: str
+
+    @property
+    def supertrend_ws_base_url_effective(self) -> str:
+        return self.sr_ws_base_url_effective
 
     @property
     def is_production(self) -> bool:
@@ -100,6 +107,7 @@ def load_settings() -> Settings:
         ),
         sr_state_dir=os.getenv("SR_STATE_DIR", "./data/sr_state"),
         sr_store_heartbeats=_env_bool("SR_STORE_HEARTBEATS", False),
+        supertrend_state_dir=os.getenv("SUPERTREND_STATE_DIR", "./data/supertrend_state"),
         data_dir=os.getenv("DATA_DIR", "./data"),
         sr_ws_base_url=os.getenv("SR_WS_BASE_URL", "wss://ema.novag7.in"),
         sr_ws_base_url_local=os.getenv("SR_WS_BASE_URL_LOCAL", ""),
