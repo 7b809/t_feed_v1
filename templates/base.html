@@ -734,6 +734,8 @@
     var adminOnlyNavLinks = Array.prototype.slice.call(
         document.querySelectorAll(".admin-only-nav")
     );
+    var memberSessionSeen = false;
+    var securityRedirecting = false;
 
     function apply(role) {
         var authenticated = role === "member" || role === "admin";
@@ -771,11 +773,25 @@
             if (!response.ok) { apply(null); return null; }
             return response.json();
         }).then(function (data) {
-            if (data) apply(data.role || null);
-        }).catch(function () { apply(null); });
+            if (!data) return;
+            var role = data.role || null;
+            if (role === "member") memberSessionSeen = true;
+            if (
+                memberSessionSeen &&
+                role === null &&
+                data.security_logout === true &&
+                !securityRedirecting
+            ) {
+                securityRedirecting = true;
+                window.location.replace("/user/login?security_logout=1");
+                return;
+            }
+            apply(role);
+        }).catch(function () {});
     }
 
     refresh();
+    window.setInterval(refresh, 5000);
     document.addEventListener("visibilitychange", function () { if (!document.hidden) refresh(); });
     window.addEventListener("pageshow", function (event) { if (event.persisted) refresh(); });
 })();
