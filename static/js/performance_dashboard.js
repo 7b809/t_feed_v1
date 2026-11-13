@@ -46,12 +46,11 @@
 
   function collectOrders(data){
     if(!data || typeof data!=="object") return [];
-    var list=[];
-    if(Array.isArray(data.orders) && data.orders.length) list=data.orders.slice();
-    else {
-      if(data.order && typeof data.order==="object") list.push(data.order);
-      if(data.post_1130_order && typeof data.post_1130_order==="object") list.push(data.post_1130_order);
-    }
+    var list=Array.isArray(data.orders) ? data.orders.slice() : [];
+    // Include the canonical slots too; deduplication below keeps the
+    // compatibility list and its source order objects from double-counting.
+    if(data.order && typeof data.order==="object") list.push(data.order);
+    if(data.post_1130_order && typeof data.post_1130_order==="object") list.push(data.post_1130_order);
     var seen={};
     return list.filter(function(order){
       var key=String(order.order_id || order.instrument_key || JSON.stringify(order));
