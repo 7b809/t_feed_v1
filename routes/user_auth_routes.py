@@ -190,7 +190,7 @@ def member_login_page(
     # The "next" value is rendered into the template so a hidden form field
     # can carry it through to the POST. Existing templates that ignore
     # {"next"} are unaffected.
-    return _templates().TemplateResponse(
+    response = _templates().TemplateResponse(
         request=request,
         name="user_login.html",
         context={
@@ -200,6 +200,17 @@ def member_login_page(
             "security_logout": security_logout == "1",
         },
     )
+    if security_logout == "1":
+        from core import config
+        response.delete_cookie(
+            _cookie_name(),
+            path="/",
+            httponly=True,
+            secure=bool(config.ADMIN_COOKIE_SECURE),
+            samesite="lax",
+        )
+        response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 @router.post("/user/login", response_class=HTMLResponse)
