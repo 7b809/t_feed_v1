@@ -128,11 +128,11 @@ MARKET_TIME_FORMAT = _str("MARKET_TIME_FORMAT", "%Y-%m-%d %H:%M:%S %Z")
 # ---------------------------------------------------------------------------
 # Telegram — disabled in the V5 professional platform profile
 # ---------------------------------------------------------------------------
-TELEGRAM_ENABLED = False
+TELEGRAM_ENABLED = os.getenv("TELEGRAM_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
 TELEGRAM_BOT_TOKEN = _str("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = _str("TELEGRAM_CHAT_ID")
 TELEGRAM_TIMEOUT_SECONDS = max(1, _int("TELEGRAM_TIMEOUT_SECONDS", 10))
-TELEGRAM_TOKEN_BOT_ENABLED = False
+TELEGRAM_TOKEN_BOT_ENABLED = os.getenv("TELEGRAM_TOKEN_BOT_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
 TELEGRAM_TOKEN_BOT_POLL_SECONDS = max(1, _int("TELEGRAM_TOKEN_BOT_POLL_SECONDS", 3))
 TELEGRAM_TOKEN_BOT_LONG_POLL_TIMEOUT = max(1, _int("TELEGRAM_TOKEN_BOT_LONG_POLL_TIMEOUT", 20))
 TELEGRAM_TOKEN_BOT_RESTRICT_TO_CHAT = _bool("TELEGRAM_TOKEN_BOT_RESTRICT_TO_CHAT", True)
