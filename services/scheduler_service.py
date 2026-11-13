@@ -65,7 +65,6 @@ class SchedulerService:
         return sr_backfill_ready()
 
     def start(self) -> BackgroundScheduler:
-        from token_tasks.daily_backup_task import run_daily_backup
         from token_tasks.daily_refresh import run_daily_refresh
         from token_tasks.first_candle_task import run_first_candle_calculation
         from token_tasks.level_isolated_instrument_task import (
@@ -147,16 +146,7 @@ class SchedulerService:
                 replace_existing=True, misfire_grace_time=120,
             )
 
-        # -- Daily backup ----------------------------------------------- #
-        if config.DAILY_BACKUP_ENABLED:
-            scheduler.add_job(
-                run_daily_backup, "cron",
-                day_of_week=config.DAILY_BACKUP_DAYS,
-                hour=config.DAILY_BACKUP_HOUR,
-                minute=config.DAILY_BACKUP_MINUTE,
-                id="daily_backup",
-                replace_existing=True, misfire_grace_time=1800,
-            )
+        # V5 intentionally has no scheduled archive/MEGA backup job.
 
         # -- Dummy order live tracker ----------------------------------- #
         # Every DUMMY_ORDER_TRACK_INTERVAL_SECONDS (default 30 s) the

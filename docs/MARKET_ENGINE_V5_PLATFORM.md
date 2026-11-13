@@ -46,3 +46,14 @@ The `/admin/users` endpoints are protected by the existing V4 administrator auth
 Member sessions are allow-listed for the home and charts pages, chart pages, live read-only market endpoints and chart WebSockets. All other routes are denied with HTTP 403. The existing administrator authentication path retains V4 access.
 
 This is a first platform-access layer, not a complete public SaaS launch checklist. Before opening public registration broadly, add email verification, rate limiting / abuse controls, CSRF protection for cookie-authenticated state-changing forms, password-reset flow, privacy/retention policy, backup/restore for the identity database, and monitoring/alerting. WebSocket and every newly added route must remain covered by an explicit role policy. Do not expose admin credentials or session secrets to users.
+
+
+## V5 platform operating profile
+
+V5 focuses on live market charts, live feed, instrument isolation, external EMA V2 S/R, strategy signals, dummy-order lifecycle and the sandbox/order-placement interface.
+
+V5 disables all outbound Telegram messages (including isolation, SR confirmations, dummy-order, sandbox, startup/shutdown and readiness notifications), the Telegram token-management polling bot, scheduled MEGA archive backups, and the daily-backup admin API.
+
+V5 retains MongoDB historical-candle extraction used by the existing startup market-data pipeline, daily market-data refresh, first-candle calculation, level-isolation recovery, live feed, external SR WebSocket, isolation and order-processing logic. These are operational inputs for chart history and strategy processing, not the daily archive/upload feature.
+
+Logging defaults to application lifecycle INFO from `main.py`, plus WARNING/ERROR/CRITICAL from every module. Set `V5_QUIET_LOGS=false` temporarily for detailed troubleshooting.

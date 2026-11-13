@@ -107,6 +107,26 @@ PER_MODULE_BACKUP_COUNT = int(os.getenv("PER_MODULE_BACKUP_COUNT", "3"))
 # --------------------------------------------------------------------------- #
 ENABLE_COMBINED_LOG = os.name != "nt"
 
+# V5 suppresses routine service INFO/DEBUG chatter by default. The
+# application lifecycle logger (main.py) remains visible, and all
+# WARNING/ERROR/CRITICAL records from every module are retained.
+# Set V5_QUIET_LOGS=false temporarily for detailed troubleshooting.
+V5_QUIET_LOGS = os.getenv("V5_QUIET_LOGS", "true").strip().lower() in {
+    "1", "true", "yes", "on",
+}
+
+
+class V5LifecycleLogFilter(logging.Filter):
+    """Keep lifecycle logs and all diagnostics; drop routine service chatter."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if not V5_QUIET_LOGS:
+            return True
+        if record.levelno >= logging.WARNING:
+            return True
+        return record.name == "main"
+
+
 
 # --------------------------------------------------------------------------- #
 # Handlers                                                                    #
@@ -281,6 +301,7 @@ def _ensure_combined_handlers() -> tuple[
         backupCount=COMBINED_BACKUP_COUNT,
         encoding="utf-8",
     )
+    combined_log_handler.addFilter(V5LifecycleLogFilter())
     combined_log_handler.setLevel(logging.DEBUG)
     combined_log_handler.setFormatter(formatter)
 
@@ -291,6 +312,7 @@ def _ensure_combined_handlers() -> tuple[
         combined_text_path,
         encoding="utf-8",
     )
+    combined_text_handler.addFilter(V5LifecycleLogFilter())
     combined_text_handler.setLevel(logging.DEBUG)
     combined_text_handler.setFormatter(formatter)
 
@@ -359,6 +381,7 @@ def get_logger(filename: str, log_level=logging.DEBUG) -> logging.Logger:
     # 1. Console handler                                                  #
     # ------------------------------------------------------------------ #
     console_handler = logging.StreamHandler()
+    console_handler.addFilter(V5LifecycleLogFilter())
     console_handler.setLevel(log_level)
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
@@ -374,6 +397,7 @@ def get_logger(filename: str, log_level=logging.DEBUG) -> logging.Logger:
         backupCount=PER_MODULE_BACKUP_COUNT,
         encoding="utf-8",
     )
+    file_handler.addFilter(V5LifecycleLogFilter())
     file_handler.setLevel(log_level)
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
@@ -387,6 +411,7 @@ def get_logger(filename: str, log_level=logging.DEBUG) -> logging.Logger:
         text_file_path,
         encoding="utf-8",
     )
+    text_handler.addFilter(V5LifecycleLogFilter())
     text_handler.setLevel(log_level)
     text_handler.setFormatter(formatter)
     logger.addHandler(text_handler)

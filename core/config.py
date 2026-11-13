@@ -121,13 +121,13 @@ MARKET_TIMEZONE = _str("MARKET_TIMEZONE", "Asia/Kolkata")
 MARKET_TIME_FORMAT = _str("MARKET_TIME_FORMAT", "%Y-%m-%d %H:%M:%S %Z")
 
 # ---------------------------------------------------------------------------
-# Telegram
+# Telegram — disabled in the V5 professional platform profile
 # ---------------------------------------------------------------------------
-TELEGRAM_ENABLED = _bool("TELEGRAM_ENABLED", False)
+TELEGRAM_ENABLED = False
 TELEGRAM_BOT_TOKEN = _str("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = _str("TELEGRAM_CHAT_ID")
 TELEGRAM_TIMEOUT_SECONDS = max(1, _int("TELEGRAM_TIMEOUT_SECONDS", 10))
-TELEGRAM_TOKEN_BOT_ENABLED = _bool("TELEGRAM_TOKEN_BOT_ENABLED", True)
+TELEGRAM_TOKEN_BOT_ENABLED = False
 TELEGRAM_TOKEN_BOT_POLL_SECONDS = max(1, _int("TELEGRAM_TOKEN_BOT_POLL_SECONDS", 3))
 TELEGRAM_TOKEN_BOT_LONG_POLL_TIMEOUT = max(1, _int("TELEGRAM_TOKEN_BOT_LONG_POLL_TIMEOUT", 20))
 TELEGRAM_TOKEN_BOT_RESTRICT_TO_CHAT = _bool("TELEGRAM_TOKEN_BOT_RESTRICT_TO_CHAT", True)
@@ -237,7 +237,7 @@ LIVE_RESOLVE_ON_MISS = _bool("LIVE_RESOLVE_ON_MISS", True)
 # ===========================================================================
 # DAILY BACKUP — zip configured folders, upload to MEGA, track state in Mongo
 # ===========================================================================
-DAILY_BACKUP_ENABLED = _bool("DAILY_BACKUP_ENABLED", True)
+DAILY_BACKUP_ENABLED = False
 DAILY_BACKUP_HOUR = _int("DAILY_BACKUP_HOUR", 16)
 DAILY_BACKUP_MINUTE = _int("DAILY_BACKUP_MINUTE", 0)
 DAILY_BACKUP_DAYS = _str("DAILY_BACKUP_DAYS", "mon,tue,wed,thu,fri,sat,sun")
@@ -246,7 +246,7 @@ DAILY_BACKUP_SOURCE_LABEL = _str(
     "DAILY_BACKUP_SOURCE_LABEL", PROJECT_ROOT.name
 )
 
-MEGA_ENABLED = _bool("MEGA_ENABLED", True)
+MEGA_ENABLED = False
 MEGA_EMAIL = _str("MEGA_EMAIL")
 MEGA_PASSWORD = _str("MEGA_PASSWORD")
 MEGA_BACKUP_ROOT = _str("MEGA_BACKUP_ROOT", "market_engine_backup")
@@ -404,7 +404,7 @@ LEVEL_ISOLATION_BACKFILL_WINDOW_END_MINUTE = _int(
     "LEVEL_ISOLATION_BACKFILL_WINDOW_END_MINUTE", 59
 )
 
-LEVEL_ISOLATION_TELEGRAM_ENABLED = _bool("LEVEL_ISOLATION_TELEGRAM_ENABLED", True)
+LEVEL_ISOLATION_TELEGRAM_ENABLED = False
 
 # ---- G1 v4.1 — Replay / self-heal integrity (§5.D) --------------------- #
 LEVEL_ISOLATION_REPLAY_USE_SERIES_OR = _bool(
@@ -421,9 +421,7 @@ LEVEL_ISOLATION_SR_FILENAME = _str(
     "LEVEL_ISOLATION_SR_FILENAME", "level_isolated_instrument_sr.json"
 )
 
-LEVEL_ISOLATION_SR_TELEGRAM_ENABLED = _bool(
-    "LEVEL_ISOLATION_SR_TELEGRAM_ENABLED", True
-)
+LEVEL_ISOLATION_SR_TELEGRAM_ENABLED = False
 
 # ===========================================================================
 # LIVE SR CALC — on-demand stateless SR computation
@@ -623,7 +621,7 @@ DUMMY_ORDER_FILENAME = _str(
 # When True (default), each dummy order fires exactly TWO Telegram
 # messages over its lifetime — one on creation, one on close. SKIPPED
 # records fire a single WARNING message.
-DUMMY_ORDER_TELEGRAM_ENABLED = _bool("DUMMY_ORDER_TELEGRAM_ENABLED", True)
+DUMMY_ORDER_TELEGRAM_ENABLED = False
 
 # ---- Deterministic replay / safety guards (2026-11-04) ----------------- #
 # These flags make the post-isolation execution pipeline auditable. All
@@ -979,7 +977,7 @@ SANDBOX_FILL_POLL_SECONDS = max(
 # each action (placed / exited / failed / skipped-by-gate). Same channel
 # as DUMMY_ORDER_TELEGRAM_ENABLED so operators see the two engines side
 # by side. Default True for parity with the dummy engine.
-SANDBOX_TELEGRAM_ENABLED = _bool("SANDBOX_TELEGRAM_ENABLED", True)
+SANDBOX_TELEGRAM_ENABLED = False
 
 # ===========================================================================
 # EMA CALC — on-demand stateless EMA-cross calculation

@@ -251,7 +251,6 @@ from routes.admin_routes import _run_full_refresh_sync
 from routes.admin_routes import router as admin_router
 from routes.auth_routes import router as auth_router
 from routes.user_auth_routes import router as user_auth_router
-from routes.daily_backup_routes import router as daily_backup_router
 from routes.dummy_order_routes import router as dummy_order_router
 from routes.ema_calc_routes import router as ema_calc_router
 from routes.folder_routes import router as folder_router
@@ -1142,7 +1141,6 @@ app.include_router(simulation_router, dependencies=_AUTH)
 app.include_router(dummy_order_router, dependencies=_AUTH)
 app.include_router(sandbox_router, dependencies=_AUTH)
 app.include_router(margin_router, dependencies=_AUTH)
-app.include_router(daily_backup_router, dependencies=_AUTH)
 app.include_router(readiness_router, dependencies=_AUTH)
 app.include_router(api_explorer_router, dependencies=_AUTH)
 app.include_router(position_api_router, dependencies=_AUTH)  # /api/positions/*
