@@ -195,29 +195,12 @@ def isolated_page(request: Request) -> HTMLResponse:
 
 @router.get("/positions", response_class=HTMLResponse)
 def positions_page(request: Request) -> HTMLResponse:
-    """Position dashboard shell.
-
-    Renders ``templates/positions.html`` only. Every JSON action
-    (list / lock / unlock / clear / exit) is served by
-    ``upstox_app/apis/position_routes.py`` mounted at ``/api/positions``
-    — the template's JS calls that router directly. Doing no server-
-    side fetch here keeps the page loadable even when Upstox or
-    MongoDB is degraded; the client-side code surfaces those errors
-    in-place rather than via a broken HTTP response.
-    """
-    is_member = bool(getattr(request.state, "member", None))
-    if is_member:
-        return templates.TemplateResponse(
-            request=request,
-            name="coming_soon.html",
-            context={
-                "app_name": "NG7",
-                "feature_name": "Positions",
-                "feature_description": "The member positions workspace is being prepared. Position monitoring and order actions will be introduced in a future release.",
-            },
-        )
+    """Read-only orders workspace backed by the upstream daily snapshots."""
     return templates.TemplateResponse(
         request=request,
         name="positions.html",
-        context={"app_name": "NG7"},
+        context={
+            "app_name": "NG7",
+            "is_member": bool(getattr(request.state, "member", None)),
+        },
     )
