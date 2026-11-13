@@ -44,7 +44,8 @@
    if(u.status==='pending')a.push('<button class="btn good" data-action="approve" data-id="'+id+'">Approve</button>');
    if(u.status!=='suspended'&&u.status!=='rejected')a.push('<button class="btn" data-action="suspend" data-id="'+id+'">Suspend</button>');
    if(u.status==='suspended'||u.status==='rejected')a.push('<button class="btn good" data-action="approve" data-id="'+id+'">Reactivate</button>');
-   if(isLocked||manualOff)a.push('<button class="btn good" data-action="resume" data-id="'+id+'">Resume login</button>');
+   if(isLocked||manualOff)a.push('<button class="btn good" data-action="resume" data-id="'+id+'">Resume login</button>');else a.push('<button class="btn" data-action="disable-login" data-id="'+id+'">Disable login</button>');
+   a.push('<button class="btn" data-action="edit" data-id="'+id+'">Edit</button>');
    if(u.status!=='rejected')a.push('<button class="btn" data-action="reject" data-id="'+id+'">Reject</button>');
    a.push('<button class="btn" data-action="revoke" data-id="'+id+'">Revoke sessions</button>');
    a.push('<button class="btn danger" data-action="delete" data-id="'+id+'">Delete</button>');
@@ -52,9 +53,10 @@
   }).join('');
  }
  async function action(action,id){
-  const labels={approve:'Approve/reactivate this account?',suspend:'Suspend this account?',reject:'Reject this registration?',resume:'Clear the login lock and enable login?',revoke:'Revoke all active sessions?',delete:'Permanently delete this account? This cannot be undone.'};
+  const labels={approve:'Approve/reactivate this account?',suspend:'Suspend this account?',reject:'Reject this registration?',resume:'Clear the login lock and enable login?', 'disable-login':'Manually disable member login?',revoke:'Revoke all active sessions?',delete:'Permanently delete this account? This cannot be undone.'};
+  if(action==='edit'){const u=users.find(x=>x.user_id===id);if(!u)return;const name=prompt('Member name:',u.name||'');if(name===null)return;const email=prompt('Member email:',u.email||'');if(email===null)return;try{await fetch('/admin/users/'+id+'/profile',{method:'PATCH',credentials:'same-origin',headers:{'Content-Type':'application/json','Accept':'application/json'},body:JSON.stringify({name:name,email:email})}).then(async r=>{const d=await r.json();if(!r.ok)throw new Error(d.detail||'Update failed');return d});notice('Profile updated.');await load()}catch(e){notice(e.message,true)}return;}
   if(!confirm(labels[action]))return;
-  const endpoints={approve:'/admin/users/'+id+'/approve',suspend:'/admin/users/'+id+'/suspend',reject:'/admin/users/'+id+'/reject',resume:'/admin/users/'+id+'/login-enable',revoke:'/admin/users/'+id+'/revoke-sessions',delete:'/admin/users/'+id};
+  const endpoints={approve:'/admin/users/'+id+'/approve',suspend:'/admin/users/'+id+'/suspend',reject:'/admin/users/'+id+'/reject',resume:'/admin/users/'+id+'/login-enable','disable-login':'/admin/users/'+id+'/login-disable',revoke:'/admin/users/'+id+'/revoke-sessions',delete:'/admin/users/'+id};
   try{await api(endpoints[action],action==='delete'?'DELETE':'POST');notice('Account action completed.');await load()}catch(e){notice(e.message,true)}
  }
  body.addEventListener('click',function(e){const b=e.target.closest('button[data-action]');if(b)action(b.dataset.action,b.dataset.id)});
