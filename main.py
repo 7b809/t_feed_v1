@@ -977,6 +977,33 @@ async def app_lifespan(app: FastAPI):
             except Exception:
                 logger.exception("%s stop failed", name)
 
+        # All snapshot producers (feed and scheduler) are stopped now.
+        # Retry the final combined JSON snapshot before closing MongoDB.
+        try:
+            from services.live_order_snapshot_service import (
+                live_order_snapshot_service,
+            )
+            snapshot_stopped = live_order_snapshot_service.shutdown(
+                timeout_seconds=float(getattr(
+                    config,
+                    "LIVE_ORDER_SNAPSHOT_SHUTDOWN_TIMEOUT_SECONDS",
+                    20.0,
+                )),
+            )
+            if snapshot_stopped:
+                logger.info(
+                    "[shutdown] live order MongoDB snapshot flushed and stopped"
+                )
+            else:
+                logger.error(
+                    "[shutdown] live order MongoDB final snapshot was not "
+                    "confirmed; local JSON files remain available for recovery"
+                )
+        except Exception:
+            logger.exception(
+                "[shutdown] live order MongoDB snapshot shutdown failed"
+            )
+
         telegram_service.send_message(
             "Application Stopped",
             (
