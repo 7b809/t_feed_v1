@@ -1,6 +1,6 @@
 (function () {
 "use strict";
-var API="/live/performance", view="today", todayOrders=[], page=1, pageSize=20, totalPages=0, total=0, search="", loading=false, refreshTimer=null;
+var API="/live/performance", view="today", todayOrders=[], page=1, pageSize=20, totalPages=0, total=0, search="", loading=false, requestSeq=0, refreshTimer=null;
 function el(id){return document.getElementById(id);}
 function esc(v){return String(v===null||v===undefined||v===""?"—":v).replace(/[&<>"']/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];});}
 function value(o,keys){for(var i=0;i<keys.length;i++){if(o[keys[i]]!==undefined&&o[keys[i]]!==null&&o[keys[i]]!=="")return o[keys[i]];}return null;}
@@ -68,9 +68,10 @@ if(!r.ok)throw new Error(data.detail||data.error||("HTTP "+r.status));
 return data;
 }
 async function loadToday(){
-if(loading)return;loading=true;el("ow-refresh").disabled=true;
+var requestId=++requestSeq;loading=true;el("ow-refresh").disabled=true;
 try{
 var data=await getJson(API+"/today-orders");
+if(requestId!==requestSeq)return;
 el("ow-date").textContent=(data.date||"—")+(data.market&&data.market.label?" · "+data.market.label:"");
 if(data.status==="found"){
 todayOrders=(data.orders||[]).map(function(o){return {trading_date:data.date,order:o};});
@@ -91,15 +92,16 @@ el("ow-note-title").textContent="Today's orders could not be loaded";
 el("ow-note-text").textContent=data.error||"Check MongoDB connectivity and the snapshot reader configuration.";
 showEmpty("Today's orders unavailable",data.error||"Please retry in a moment.");
 }
-}catch(e){setStatus("Unable to load orders","err");el("ow-note-title").textContent="Could not load today's orders";el("ow-note-text").textContent=e.message;showEmpty("Connection problem",e.message);}
-finally{loading=false;el("ow-refresh").disabled=false;}
+}catch(e){if(requestId===requestSeq){setStatus("Unable to load orders","err");el("ow-note-title").textContent="Could not load today's orders";el("ow-note-text").textContent=e.message;showEmpty("Connection problem",e.message);}}
+finally{if(requestId===requestSeq){loading=false;el("ow-refresh").disabled=false;}}
 }
 async function loadHistory(){
-if(loading)return;loading=true;el("ow-refresh").disabled=true;
+var requestId=++requestSeq;loading=true;el("ow-refresh").disabled=true;
 try{
 var params=new URLSearchParams({page:String(page),page_size:String(pageSize)});
 if(search)params.set("search",search);
 var data=await getJson(API+"/order-history?"+params.toString());
+if(requestId!==requestSeq)return;
 if(data.status!=="ok")throw new Error(data.error||"Order history unavailable");
 total=Number(data.total||0);totalPages=Number(data.total_pages||0);
 setStatus("History loaded","ok");
@@ -107,8 +109,8 @@ el("ow-date").textContent="All saved dates";
 el("ow-note-title").textContent="Historical order archive";
 el("ow-note-text").textContent="Orders are read from daily MongoDB documents, newest trading date first. Pagination and search are processed on the server.";
 render(data.items||[],{server:true});
-}catch(e){setStatus("History unavailable","err");showEmpty("Unable to load order history",e.message);}
-finally{loading=false;el("ow-refresh").disabled=false;}
+}catch(e){if(requestId===requestSeq){setStatus("History unavailable","err");showEmpty("Unable to load order history",e.message);}}
+finally{if(requestId===requestSeq){loading=false;el("ow-refresh").disabled=false;}}
 }
 function setView(next){
 view=next;page=1;
