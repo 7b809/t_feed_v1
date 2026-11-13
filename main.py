@@ -263,6 +263,7 @@ from routes.margin_routes import router as margin_router
 from routes.market_holiday_routes import router as market_holiday_router
 from routes.order_routes import router as order_router
 from routes.page_routes import router as page_router
+from routes.performance_routes import router as performance_router
 from routes.readiness_routes import router as readiness_router
 from routes.simulation_routes import router as simulation_router
 from routes.upstox_routes import router as upstox_router
@@ -1147,6 +1148,7 @@ else:
 app.include_router(auth_router)          # legacy administrator login
 app.include_router(user_auth_router)     # member registration, login and account administration
 app.include_router(page_router)          # /, /charts, /chart, /isolated,
+app.include_router(performance_router)    # read-only upstream daily snapshot
                                          # /positions, /favicon.ico
 app.include_router(live_router)
 app.include_router(live_sr_router)
