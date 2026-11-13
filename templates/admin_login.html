@@ -1,16 +1,236 @@
 {% extends "auth_base.html" %}
-{% block title %}Administrator sign in · Market Engine{% endblock %}
+{% block title %}Administrator sign in · NG7{% endblock %}
+
+{% block styles %}
+<style>
+  /* ============================================================
+     Page-scoped additions only. The base already provides:
+     .field, .input-wrap, .submit, .notice, .form-links,
+     .form-footnote, .secure-line, .form-kicker/title/subtitle,
+     input[aria-invalid] styling, and reduced-motion handling.
+     ============================================================ */
+
+  /* Room for the password visibility toggle */
+  .input-wrap.has-toggle > input { padding-right: 3rem; }
+
+  .pw-toggle {
+    position: absolute;
+    right: 6px;
+    top: 50%;
+    transform: translateY(-50%);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 38px;
+    height: 38px;
+    padding: 0;
+    font-size: 1rem;
+    color: #8293aa;
+    background: none;
+    border: 0;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: color .15s ease, background-color .15s ease;
+  }
+  .pw-toggle:hover {
+    color: #cbd5e1;
+    background: rgba(255, 255, 255, .06);
+  }
+  .pw-toggle:focus-visible {
+    outline: 2px solid #93c5fd;
+    outline-offset: 2px;
+    color: #cbd5e1;
+  }
+
+  /* Per-field error text (the base styles inputs, not these labels) */
+  .field-error {
+    display: block;
+    margin-top: 7px;
+    font-size: .76rem;
+    line-height: 1.5;
+    color: #fca5a5;
+  }
+  .field-error:empty { display: none; }
+
+  /* Two secondary links read better centered than pushed to opposite edges */
+  .form-links { justify-content: center; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .pw-toggle { transition: none; }
+  }
+</style>
+{% endblock %}
+
 {% block content %}
-<div class="form-kicker">Restricted administrator access</div>
-<h1 class="form-title" id="authTitle">Administrator sign in</h1>
-<p class="form-subtitle">Use the administrator credentials configured for this Market Engine instance.</p>
-{% if error %}<div class="notice error" role="alert"><i class="bi bi-exclamation-triangle-fill"></i><span>{{ error }}</span></div>{% endif %}
-<form method="post" action="{{ form_action or '/login' }}" autocomplete="on">
-  <input type="hidden" name="next" value="{{ next or '/' }}">
-  <div class="field"><label for="adminUsername">Username</label><div class="input-wrap"><i class="bi bi-person-badge"></i><input id="adminUsername" name="username" type="text" placeholder="Administrator username" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" required autofocus></div></div>
-  <div class="field"><label for="adminPassword">Password</label><div class="input-wrap"><i class="bi bi-shield-lock"></i><input id="adminPassword" name="password" type="password" placeholder="Enter administrator password" autocomplete="current-password" required></div></div>
-  <button class="submit" type="submit"><i class="bi bi-shield-lock-fill"></i>Sign in as administrator</button>
-</form>
-<div class="form-links"><a href="/user/login">Member sign in</a><a href="/register">Member registration</a></div>
-<div class="form-footnote">Administrator credentials are configured server-side. Member accounts cannot be used to access administrator routes.</div>
+  <p class="form-kicker">Restricted administrator access</p>
+  <h1 class="form-title" id="authTitle">Administrator sign in</h1>
+  <p class="form-subtitle">
+    Use the administrator credentials configured for this NG7 instance.
+  </p>
+
+  {# Persistent live region so server-side errors are announced when they appear. #}
+  <div id="authAlert" aria-live="polite" aria-atomic="true">
+    {% if error %}
+    <div class="notice error" role="alert">
+      <i class="bi bi-exclamation-triangle-fill" aria-hidden="true"></i>
+      <span>{{ error }}</span>
+    </div>
+    {% endif %}
+  </div>
+
+  <form method="post"
+        action="{{ form_action or '/login' }}"
+        autocomplete="on"
+        data-auth-form>
+    <input type="hidden" name="next" value="{{ next or '/' }}">
+    {# Add your CSRF token here if your framework provides one, e.g.
+       <input type="hidden" name="csrf_token" value="{{ csrf_token }}"> #}
+
+    <div class="field">
+      <label for="adminUsername">Username</label>
+      <div class="input-wrap">
+        <i class="bi bi-person-badge" aria-hidden="true"></i>
+        <input id="adminUsername"
+               name="username"
+               type="text"
+               placeholder="Administrator username"
+               autocomplete="username"
+               autocapitalize="none"
+               autocorrect="off"
+               spellcheck="false"
+               enterkeyhint="next"
+               maxlength="150"
+               aria-describedby="adminUsername-error"
+               {% if error %}aria-invalid="true"{% endif %}
+               required
+               {% if not error %}autofocus{% endif %}>
+      </div>
+      <small class="field-error" id="adminUsername-error" role="alert"></small>
+    </div>
+
+    <div class="field">
+      <label for="adminPassword">Password</label>
+      <div class="input-wrap has-toggle">
+        <i class="bi bi-shield-lock" aria-hidden="true"></i>
+        <input id="adminPassword"
+               name="password"
+               type="password"
+               placeholder="Enter administrator password"
+               autocomplete="current-password"
+               enterkeyhint="go"
+               aria-describedby="adminPassword-error"
+               {% if error %}aria-invalid="true"{% endif %}
+               required>
+        <button type="button"
+                class="pw-toggle"
+                data-pw-toggle="adminPassword"
+                aria-label="Show password"
+                aria-pressed="false">
+          <i class="bi bi-eye" aria-hidden="true" data-pw-icon></i>
+        </button>
+      </div>
+      <small class="field-error" id="adminPassword-error" role="alert"></small>
+    </div>
+
+    <button class="submit" type="submit" data-submit>
+      <i class="bi bi-shield-lock-fill" aria-hidden="true"></i>
+      <span data-submit-label>Sign in as administrator</span>
+    </button>
+  </form>
+
+  <nav class="form-links" aria-label="Other account options">
+    <a href="/user/login">Member sign in</a>
+    <a href="/register">Member registration</a>
+  </nav>
+
+  <p class="form-footnote">
+    Administrator credentials are configured server-side.
+    Member accounts cannot be used to access administrator routes.
+  </p>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  'use strict';
+
+  var form = document.querySelector('[data-auth-form]');
+  if (!form) return;
+
+  /* ---- Password visibility toggle ---- */
+  form.querySelectorAll('[data-pw-toggle]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var input = document.getElementById(btn.getAttribute('data-pw-toggle'));
+      if (!input) return;
+
+      var show = input.type === 'password';
+      input.type = show ? 'text' : 'password';
+      btn.setAttribute('aria-pressed', String(show));
+      btn.setAttribute('aria-label', show ? 'Hide password' : 'Show password');
+
+      var icon = btn.querySelector('[data-pw-icon]');
+      if (icon) {
+        icon.classList.toggle('bi-eye', !show);
+        icon.classList.toggle('bi-eye-slash', show);
+      }
+
+      input.focus({ preventScroll: true });
+      try {
+        var len = input.value.length;
+        input.setSelectionRange(len, len);
+      } catch (e) { /* setSelectionRange not supported on some types */ }
+    });
+  });
+
+  /* ---- Client-side pre-check ---- */
+  form.addEventListener('submit', function (e) {
+    var firstInvalid = null;
+
+    form.querySelectorAll('input[required]').forEach(function (input) {
+      var errEl = document.getElementById(input.id + '-error');
+      var value = (input.value || '').trim();
+      var msg = '';
+
+      if (!value) {
+        msg = input.name === 'password'
+          ? 'Enter your administrator password.'
+          : 'Enter your administrator username.';
+      }
+
+      if (errEl) errEl.textContent = msg;
+      if (msg) {
+        input.setAttribute('aria-invalid', 'true');
+        if (!firstInvalid) firstInvalid = input;
+      } else {
+        input.removeAttribute('aria-invalid');
+      }
+    });
+
+    if (firstInvalid) {
+      e.preventDefault();
+      firstInvalid.focus();
+      return;
+    }
+
+    var btn = form.querySelector('[data-submit]');
+    if (btn) {
+      btn.disabled = true;
+      var label = btn.querySelector('[data-submit-label]');
+      if (label) label.textContent = 'Signing in…';
+    }
+  });
+
+  /* ---- Clear a field's error once the user corrects it ---- */
+  form.querySelectorAll('input').forEach(function (input) {
+    input.addEventListener('input', function () {
+      if (!input.hasAttribute('aria-invalid')) return;
+      if ((input.value || '').trim()) {
+        input.removeAttribute('aria-invalid');
+        var errEl = document.getElementById(input.id + '-error');
+        if (errEl) errEl.textContent = '';
+      }
+    });
+  });
+})();
+</script>
 {% endblock %}

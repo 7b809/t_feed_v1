@@ -332,7 +332,7 @@
   color:var(--pv-ink);font-variant-numeric:tabular-nums;
 }
 
-/* ---------- Levels ---------- */
+/* ---------- Levels (base tile style) ---------- */
 .pv-levels{display:flex;flex-wrap:wrap;gap:9px}
 .pv-level{
   padding:10px 13px;border-radius:12px;min-width:82px;
@@ -354,6 +354,83 @@
 .pv-level:nth-child(4n+3){background:linear-gradient(180deg,#ecfdf5,#d1fae5);border-color:#a7f3d0}
 .pv-level:nth-child(4n+4){background:linear-gradient(180deg,#fffbeb,#fef3c7);border-color:#fde68a}
 
+/* ============================================================
+   Collapsible, row-grouped opening-range levels
+   ============================================================ */
+#pv-levels-section .pv-section-head{
+  cursor:pointer;user-select:none;transition:background .2s;
+}
+#pv-levels-section .pv-section-head:hover{
+  background:linear-gradient(180deg,#eef4fc 0%,#f8fafd 100%);
+}
+#pv-levels-section .pv-section-head:focus-visible{
+  outline:2px solid var(--pv-blue);outline-offset:-2px;
+}
+.pv-levels-right{
+  display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+  justify-content:flex-end;margin-left:auto;
+}
+.pv-levels-chevron{
+  display:inline-flex;align-items:center;justify-content:center;
+  width:28px;height:28px;border-radius:8px;
+  background:#eef2f7;color:#475569;font-size:.72rem;
+  transition:transform .28s ease, background .2s;
+  flex-shrink:0;
+}
+#pv-levels-section.pv-levels-collapsed .pv-levels-chevron{transform:rotate(0deg)}
+#pv-levels-section:not(.pv-levels-collapsed) .pv-levels-chevron{transform:rotate(180deg)}
+#pv-levels-section .pv-section-head:hover .pv-levels-chevron{background:#e0e7ef}
+
+.pv-levels-summary{display:none;gap:6px;flex-wrap:wrap;align-items:center}
+#pv-levels-section.pv-levels-collapsed .pv-levels-summary{display:inline-flex}
+.pv-levels-summary-item{
+  display:inline-flex;align-items:baseline;gap:4px;
+  padding:5px 9px;border-radius:8px;
+  background:#ffffff;border:1px solid #e2e8f0;
+  font-size:.64rem;font-weight:850;color:var(--pv-muted);
+  letter-spacing:.04em;text-transform:uppercase;
+  box-shadow:0 1px 3px rgba(15,23,42,.04);
+}
+.pv-levels-summary-item strong{
+  color:var(--pv-ink);font-size:.78rem;font-weight:850;
+  font-variant-numeric:tabular-nums;letter-spacing:0;
+}
+
+#pv-levels-body{
+  display:grid;grid-template-rows:1fr;
+  transition:grid-template-rows .28s ease, padding .28s ease;
+}
+#pv-levels-section.pv-levels-collapsed #pv-levels-body{
+  grid-template-rows:0fr;padding-top:0;padding-bottom:0;
+}
+#pv-levels-body > #pv-levels{overflow:hidden;min-height:0}
+
+.pv-levels{display:flex;flex-direction:column;gap:10px}
+.pv-level-row{
+  display:flex;flex-direction:column;gap:7px;
+  padding:11px 13px;border-radius:13px;
+  border:1px solid var(--pv-line);
+  background:linear-gradient(180deg,#fbfcfe,#f3f6fb);
+}
+.pv-level-row:nth-child(1){background:linear-gradient(180deg,#eff6ff,#dbeafe);border-color:#bfdbfe}
+.pv-level-row:nth-child(2){background:linear-gradient(180deg,#ecfdf5,#d1fae5);border-color:#a7f3d0}
+.pv-level-row:nth-child(3){background:linear-gradient(180deg,#fef2f2,#fee2e2);border-color:#fecaca}
+.pv-level-row:nth-child(4){background:linear-gradient(180deg,#fffbeb,#fef3c7);border-color:#fde68a}
+.pv-level-row:nth-child(n+5){background:linear-gradient(180deg,#f5f3ff,#ede9fe);border-color:#ddd6fe}
+
+.pv-level-row-label{
+  font-size:.6rem;font-weight:850;text-transform:uppercase;
+  letter-spacing:.1em;color:#475569;
+}
+.pv-level-row-items{display:flex;flex-wrap:wrap;gap:7px}
+
+.pv-levels .pv-level-row-items .pv-level{
+  background:#ffffff;border-color:rgba(15,23,42,.08);
+  flex:0 1 auto;min-width:72px;
+  overflow-wrap:anywhere;word-break:break-word;
+  box-shadow:0 1px 3px rgba(15,23,42,.04);
+}
+
 /* ---------- Events timeline ---------- */
 .pv-event{
   position:relative;padding:16px 18px 16px 22px;margin:0 0 14px;
@@ -373,7 +450,7 @@
   display:block;color:var(--pv-muted);font-size:.73rem;margin-top:6px;line-height:1.5;
 }
 
-/* ---------- Orders card (highlighted) ---------- */
+/* ---------- Orders card ---------- */
 .pv-orders-card{
   border:2px solid #a7f3d0;
   background:linear-gradient(180deg,#ffffff 0%,#f0fdf4 100%);
@@ -384,18 +461,15 @@
   border-bottom:1px solid #a7f3d0;
 }
 
-/* ---------- Profit banner inside orders ---------- */
+/* ---------- Profit banner ---------- */
 .pv-profit-banner{
   display:grid;
   grid-template-columns:minmax(150px, auto) minmax(120px, 1fr) minmax(200px, 1.6fr);
-  gap:18px;
-  padding:20px 22px;
+  gap:18px;padding:20px 22px;
   background:
     radial-gradient(400px 200px at 100% -30%,rgba(255,255,255,.22),transparent 60%),
     linear-gradient(135deg,#065f46,#059669 55%,#10b981);
-  color:#fff;
-  align-items:center;
-  border-bottom:1px solid #047857;
+  color:#fff;align-items:center;border-bottom:1px solid #047857;
 }
 .pv-profit-control{display:flex;flex-direction:column;gap:6px}
 .pv-profit-control label{
@@ -412,18 +486,13 @@
   transition:all .15s;
 }
 .pv-profit-control input:focus{
-  outline:none;
-  background:rgba(255,255,255,.28);
-  border-color:#fff;
-  box-shadow:0 0 0 3px rgba(16,185,129,.35);
+  outline:none;background:rgba(255,255,255,.28);
+  border-color:#fff;box-shadow:0 0 0 3px rgba(16,185,129,.35);
 }
-.pv-profit-control-hint{
-  font-size:.63rem;color:#a7f3d0;line-height:1.4;
-}
+.pv-profit-control-hint{font-size:.63rem;color:#a7f3d0;line-height:1.4}
 .pv-profit-stat-label{
   font-size:.66rem;text-transform:uppercase;
-  letter-spacing:.1em;font-weight:850;color:#a7f3d0;
-  margin-bottom:8px;
+  letter-spacing:.1em;font-weight:850;color:#a7f3d0;margin-bottom:8px;
 }
 .pv-profit-stat-value{
   font-size:1.4rem;font-weight:850;
@@ -432,26 +501,18 @@
 }
 .pv-profit-highlight .pv-profit-stat-value{
   font-size:clamp(1.6rem, 3vw, 2.1rem);
-  color:#ecfdf5;
-  text-shadow:0 4px 18px rgba(0,0,0,.25);
+  color:#ecfdf5;text-shadow:0 4px 18px rgba(0,0,0,.25);
 }
 
-/* Per-row INR subcell inside P&L pts column */
 .pv-row-inr{
-  font-size:.7rem !important;
-  font-weight:800 !important;
-  margin-top:4px !important;
-  display:block;
-  color:#047857;
-  font-variant-numeric:tabular-nums;
-  letter-spacing:.02em;
+  font-size:.7rem !important;font-weight:800 !important;
+  margin-top:4px !important;display:block;color:#047857;
+  font-variant-numeric:tabular-nums;letter-spacing:.02em;
 }
 
 /* ---------- Table ---------- */
 .pv-table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
-.pv-table{
-  width:100%;border-collapse:collapse;min-width:860px;font-size:.79rem;
-}
+.pv-table{width:100%;border-collapse:collapse;min-width:860px;font-size:.79rem}
 .pv-table th{
   background:linear-gradient(180deg,#f8fafc,#eef2f7);
   color:#475569;text-transform:uppercase;letter-spacing:.06em;
@@ -473,14 +534,172 @@
 .pv-pill{
   display:inline-flex;align-items:center;padding:5px 9px;border-radius:8px;
   font-size:.62rem;font-weight:850;text-transform:uppercase;letter-spacing:.03em;
-  background:#edf2f7;color:#526174;white-space:nowrap;
-  line-height:1.3;
+  background:#edf2f7;color:#526174;white-space:nowrap;line-height:1.3;
 }
 .pv-pill.open  {background:linear-gradient(135deg,#dbeafe,#bfdbfe);color:#1d4ed8}
 .pv-pill.closed{background:linear-gradient(135deg,#d1fae5,#a7f3d0);color:#047857}
 .pv-pill.loss  {background:linear-gradient(135deg,#fee2e2,#fecaca);color:#b91c1c}
 .pv-pill.skip  {background:linear-gradient(135deg,#fef3c7,#fde68a);color:#92400e}
 .pv-empty{text-align:center;padding:30px;color:var(--pv-muted);font-size:.85rem}
+
+/* ============================================================
+   MOBILE / TABLET  →  Today's Orders become scroll-free flex cards
+   No grid, no absolute positioning → no overlap on any device
+   ============================================================ */
+@media (max-width:900px){
+  .pv-orders-card .pv-table-wrap{
+    overflow:visible;
+    -webkit-overflow-scrolling:auto;
+    padding:14px 16px 16px;
+  }
+
+  .pv-table{
+    display:block;width:100%;min-width:0;
+    border-collapse:separate;border-spacing:0;font-size:.8rem;
+  }
+  .pv-table thead{display:none}
+  .pv-table tbody{display:block}
+
+  /* --- each row is a flex-wrap container --- */
+  .pv-table tbody tr{
+    position:relative;
+    display:flex;
+    flex-wrap:wrap;
+    gap:8px 10px;
+    margin:0 0 14px;
+    padding:14px 14px 14px 20px;
+    border:1px solid var(--pv-line);
+    border-radius:16px;
+    background:linear-gradient(180deg,#ffffff 0%,#f7fafc 100%);
+    box-shadow:var(--pv-shadow-sm);
+    overflow:hidden;
+  }
+  .pv-table tbody tr:last-child{margin-bottom:0}
+  .pv-table tbody tr:hover{background:linear-gradient(180deg,#ffffff 0%,#f7fafc 100%)}
+  .pv-table tbody tr::before{
+    content:"";position:absolute;left:0;top:0;bottom:0;width:4px;
+    background:linear-gradient(180deg,#2563eb,#7c3aed);
+    pointer-events:none;
+  }
+
+  /* --- base cell --- */
+  .pv-table td,
+  .pv-table td.num{
+    display:flex;
+    flex-direction:column;
+    align-items:flex-start;
+    gap:5px;
+    min-width:0;
+    padding:8px 10px;
+    border-top:none;
+    border-radius:10px;
+    text-align:left;
+    white-space:normal;
+    font-variant-numeric:tabular-nums;
+    color:var(--pv-ink);
+    overflow-wrap:anywhere;
+    word-break:break-word;
+  }
+
+  /* --- labels above values --- */
+  .pv-table td::before{
+    font-size:.56rem;font-weight:850;letter-spacing:.1em;
+    text-transform:uppercase;line-height:1;
+    color:currentColor;opacity:.62;
+  }
+  .pv-table td:nth-child(1)::before,
+  .pv-table td:nth-child(2)::before{content:none}
+
+  .pv-table td:nth-child(3)::before{content:"Entry time"}
+  .pv-table td:nth-child(4)::before{content:"Entry"}
+  .pv-table td:nth-child(5)::before{content:"Stop"}
+  .pv-table td:nth-child(6)::before{content:"Target"}
+  .pv-table td:nth-child(7)::before{content:"Exit time"}
+  .pv-table td:nth-child(8)::before{content:"Exit"}
+  .pv-table td:nth-child(9)::before{content:"P&L points"}
+  .pv-table td:nth-child(10)::before{content:"P&L %"}
+
+  /* ---------- header line: instrument (grow) + state (fixed) ---------- */
+  .pv-table td:nth-child(1){
+    flex: 1 1 0;
+    padding:0 0 12px 0;
+    border-radius:0;
+    font-size:1rem;
+    font-weight:850;
+    line-height:1.25;
+    gap:3px;
+    overflow-wrap:anywhere;
+    word-break:break-word;
+  }
+  .pv-table td:nth-child(1) strong{
+    display:block;overflow-wrap:anywhere;word-break:break-word;
+  }
+  .pv-table td:nth-child(2){
+    flex: 0 1 auto;
+    max-width: 60%;
+    padding:0 0 12px 0;
+    border-radius:0;
+    align-items:flex-end;
+    justify-content:flex-start;
+  }
+  .pv-table td:nth-child(2) .pv-pill{
+    font-size:.6rem;
+    padding:6px 10px;
+    border-radius:8px;
+    max-width:100%;
+    overflow:hidden;
+    text-overflow:ellipsis;
+  }
+
+  /* ---------- data cells: 2 per row ---------- */
+  .pv-table td:nth-child(n+3){
+    flex: 1 1 calc(50% - 5px);
+  }
+
+  /* --- highlighted values --- */
+  .pv-table td:nth-child(3),
+  .pv-table td:nth-child(7){
+    background:linear-gradient(180deg,#f8fafc,#eef2f7);
+    color:#334155;
+    font-size:.86rem;
+    font-weight:800;
+    letter-spacing:.01em;
+  }
+  .pv-table td:nth-child(4){
+    background:linear-gradient(180deg,#eff6ff,#dbeafe);
+    border:1px solid #bfdbfe;
+    color:#1d4ed8;
+    font-size:1.06rem;font-weight:850;
+  }
+  .pv-table td:nth-child(5){
+    background:linear-gradient(180deg,#fef2f2,#fee2e2);
+    border:1px solid #fecaca;
+    color:#b91c1c;
+    font-size:1.02rem;font-weight:850;
+  }
+  .pv-table td:nth-child(6){
+    background:linear-gradient(180deg,#ecfdf5,#d1fae5);
+    border:1px solid #a7f3d0;
+    color:#047857;
+    font-size:1.02rem;font-weight:850;
+  }
+  .pv-table td:nth-child(8){
+    background:linear-gradient(180deg,#f5f3ff,#ede9fe);
+    border:1px solid #ddd6fe;
+    color:#5b21b6;
+    font-size:1.06rem;font-weight:850;
+  }
+  .pv-table td:nth-child(9),
+  .pv-table td:nth-child(10){
+    background:linear-gradient(180deg,#f8fafc,#eef2f7);
+    border:1px solid #e2e8f0;
+    font-size:1.02rem;font-weight:850;
+  }
+  .pv-table td:nth-child(9) .pv-row-inr{
+    font-size:.68rem !important;
+    margin-top:2px !important;
+  }
+}
 
 /* ---------- Footer ---------- */
 .pv-footer{
@@ -511,10 +730,42 @@
   .pv-detail-list{grid-template-columns:1fr;gap:8px}
   .pv-meta-grid{grid-template-columns:1fr}
   .pv-level{min-width:72px;padding:9px 11px}
+  .pv-orders-card .pv-table-wrap{padding:12px 12px 14px}
+  .pv-table tbody tr{padding:12px 12px 12px 18px;gap:7px 8px}
+  .pv-table td{padding:7px 9px}
+  .pv-table td:nth-child(1){padding:0 0 12px 0;font-size:.94rem}
+  .pv-table td:nth-child(2){padding:0 0 12px 0}
+
+  /* grouped levels — mobile flow */
+  .pv-levels .pv-level-row-items .pv-level{
+    flex:1 1 calc(33.333% - 5px);
+    min-width:0;padding:8px 9px;
+    font-size:.6rem;letter-spacing:.02em;
+  }
+  .pv-levels .pv-level strong{font-size:.82rem}
+  .pv-level-row{padding:9px 11px;gap:6px;border-radius:11px}
+  .pv-level-row-label{font-size:.58rem}
+  .pv-levels-summary-item{padding:4px 7px;font-size:.58rem}
+  .pv-levels-summary-item strong{font-size:.72rem}
+  .pv-levels-chevron{width:26px;height:26px}
 }
 @media(max-width:480px){
   .pv-profit-banner{grid-template-columns:1fr;padding:14px 16px}
   .pv-profit-control input{max-width:none}
+  .pv-orders-card .pv-table-wrap{padding:10px 10px 12px}
+  .pv-table tbody tr{padding:12px 10px 12px 16px;border-radius:14px;gap:7px}
+  .pv-table td{padding:7px 8px}
+  .pv-table td:nth-child(1){padding:0 0 10px 0;font-size:.9rem}
+  .pv-table td:nth-child(2){padding:0 0 10px 0;max-width:55%}
+  .pv-table td:nth-child(4),
+  .pv-table td:nth-child(8){font-size:1rem}
+  .pv-table td:nth-child(n+3){flex:1 1 calc(50% - 4px)}
+
+  /* grouped levels — 2 per row on very small screens */
+  .pv-levels .pv-level-row-items .pv-level{
+    flex:1 1 calc(50% - 4px);
+    font-size:.6rem;
+  }
 }
 </style>
 {% endblock %}
@@ -547,7 +798,6 @@
       <span class="pv-hint" id="pv-orders-updated">—</span>
     </div>
 
-    <!-- Profit summary banner with lot control -->
     <div class="pv-profit-banner" id="pv-profit-banner">
       <div class="pv-profit-control">
         <label for="pv-lot-input">Lot Size</label>
@@ -680,12 +930,20 @@
     </article>
   </section>
 
-  <!-- ============ LEVELS ============ -->
-  <section class="pv-card pv-section" id="pv-levels-section" hidden>
-    <div class="pv-section-head">
+  <!-- ============ LEVELS (collapsible, grouped) ============ -->
+  <section class="pv-card pv-section pv-levels-collapsed" id="pv-levels-section" hidden>
+    <div class="pv-section-head" id="pv-levels-head"
+         role="button" tabindex="0"
+         aria-expanded="false" aria-controls="pv-levels-body">
       <h2 class="pv-section-title"><i class="bi bi-bar-chart-line"></i> Instrument opening-range levels</h2>
+      <div class="pv-levels-right">
+        <div class="pv-levels-summary" id="pv-levels-summary"></div>
+        <span class="pv-levels-chevron" aria-hidden="true">
+          <i class="bi bi-chevron-down"></i>
+        </span>
+      </div>
     </div>
-    <div class="pv-section-body">
+    <div class="pv-section-body" id="pv-levels-body">
       <div class="pv-levels" id="pv-levels"></div>
     </div>
   </section>
@@ -715,7 +973,6 @@
 (function () {
   "use strict";
 
-  /* qty per lot, matched from the instrument trading symbol */
   var QTY_RULES = [
     { re: /BANKNIFTY/i,            qty: 35  },
     { re: /MIDCPNIFTY|MIDCAP/i,    qty: 120 },
@@ -743,10 +1000,10 @@
     return sign + Math.abs(n).toFixed(2);
   }
 
-  var lotInput  = document.getElementById("pv-lot-input");
+  var lotInput   = document.getElementById("pv-lot-input");
   var ordersBody = document.getElementById("pv-orders-body");
-  var ptsEl     = document.getElementById("pv-profit-pts");
-  var inrEl     = document.getElementById("pv-profit-inr");
+  var ptsEl      = document.getElementById("pv-profit-pts");
+  var inrEl      = document.getElementById("pv-profit-inr");
 
   if (!ordersBody) return;
 
@@ -775,6 +1032,17 @@
       totalPts += pts;
       totalInr += inr;
 
+      if (pts > 0) {
+        ptsCell.classList.add("pv-positive");
+        ptsCell.classList.remove("pv-negative");
+      } else if (pts < 0) {
+        ptsCell.classList.add("pv-negative");
+        ptsCell.classList.remove("pv-positive");
+      } else {
+        ptsCell.classList.remove("pv-positive");
+        ptsCell.classList.remove("pv-negative");
+      }
+
       var sub = priorSub;
       if (!sub) {
         sub = document.createElement("span");
@@ -793,7 +1061,6 @@
     }
   }
 
-  /* Watch for table re-renders by performance_dashboard.js */
   if (typeof MutationObserver !== "undefined") {
     var observer = new MutationObserver(recalc);
     observer.observe(ordersBody, { childList: true, subtree: true });
@@ -807,6 +1074,155 @@
   recalc();
   setTimeout(recalc, 100);
   setTimeout(recalc, 500);
+})();
+</script>
+
+<!-- ============================================================
+     Collapsible + grouped opening-range levels
+     ============================================================ -->
+<script>
+(function () {
+  "use strict";
+
+  var section  = document.getElementById("pv-levels-section");
+  var head     = document.getElementById("pv-levels-head");
+  var levelsEl = document.getElementById("pv-levels");
+  var summary  = document.getElementById("pv-levels-summary");
+  if (!section || !head || !levelsEl) return;
+
+  function setCollapsed(collapsed) {
+    section.classList.toggle("pv-levels-collapsed", collapsed);
+    head.setAttribute("aria-expanded", collapsed ? "false" : "true");
+  }
+  function toggle() {
+    setCollapsed(!section.classList.contains("pv-levels-collapsed"));
+  }
+
+  head.addEventListener("click", toggle);
+  head.addEventListener("keydown", function (e) {
+    if (e.key === "Enter" || e.key === " " || e.key === "Spacebar") {
+      e.preventDefault();
+      toggle();
+    }
+  });
+
+  var GROUP_DEFS = [
+    { label: "Range",      keys: ["H", "L", "A", "D_H", "D_L"] },
+    { label: "Support",    keys: ["S1", "S2", "S3"] },
+    { label: "Resistance", keys: ["R1", "R2", "R3"] },
+    { label: "Thresholds", keys: ["R3_Threshold", "S3_Threshold"] }
+  ];
+
+  function labelOf(el) {
+    var clone = el.cloneNode(true);
+    var strong = clone.querySelector("strong");
+    if (strong) strong.parentNode.removeChild(strong);
+    return clone.textContent.trim();
+  }
+
+  function hasDirectLevelChildren() {
+    for (var i = 0; i < levelsEl.children.length; i++) {
+      if (levelsEl.children[i].classList.contains("pv-level")) return true;
+    }
+    return false;
+  }
+
+  function buildSummary() {
+    if (!summary) return;
+    var map = {};
+    var tiles = levelsEl.querySelectorAll(".pv-level");
+    for (var i = 0; i < tiles.length; i++) {
+      var strong = tiles[i].querySelector("strong");
+      map[labelOf(tiles[i])] = strong ? strong.textContent.trim() : "";
+    }
+    summary.innerHTML = "";
+    ["H", "L", "A"].forEach(function (k) {
+      if (!map[k]) return;
+      var chip = document.createElement("span");
+      chip.className = "pv-levels-summary-item";
+      chip.appendChild(document.createTextNode(k + " "));
+      var b = document.createElement("strong");
+      b.textContent = map[k];
+      chip.appendChild(b);
+      summary.appendChild(chip);
+    });
+  }
+
+  function regroup() {
+    if (!levelsEl.querySelector(".pv-level")) return;
+    if (!hasDirectLevelChildren()) { buildSummary(); return; }
+
+    var items = Array.prototype.slice.call(levelsEl.querySelectorAll(".pv-level"));
+    var byLabel = {};
+    items.forEach(function (el) {
+      var k = labelOf(el);
+      if (!(k in byLabel)) byLabel[k] = el;
+    });
+
+    var used = {};
+    var rows = [];
+
+    GROUP_DEFS.forEach(function (g) {
+      var present = g.keys.filter(function (k) {
+        return byLabel[k] && !used[k];
+      });
+      if (!present.length) return;
+      present.forEach(function (k) { used[k] = true; });
+
+      var row = document.createElement("div");
+      row.className = "pv-level-row";
+
+      var lbl = document.createElement("div");
+      lbl.className = "pv-level-row-label";
+      lbl.textContent = g.label;
+      row.appendChild(lbl);
+
+      var wrap = document.createElement("div");
+      wrap.className = "pv-level-row-items";
+      present.forEach(function (k) { wrap.appendChild(byLabel[k]); });
+      row.appendChild(wrap);
+
+      rows.push(row);
+    });
+
+    var rest = items.filter(function (el) {
+      return !used[labelOf(el)];
+    });
+    if (rest.length) {
+      var row = document.createElement("div");
+      row.className = "pv-level-row";
+      var lbl = document.createElement("div");
+      lbl.className = "pv-level-row-label";
+      lbl.textContent = "Other";
+      row.appendChild(lbl);
+      var wrap = document.createElement("div");
+      wrap.className = "pv-level-row-items";
+      rest.forEach(function (el) { wrap.appendChild(el); });
+      row.appendChild(wrap);
+      rows.push(row);
+    }
+
+    while (levelsEl.firstChild) levelsEl.removeChild(levelsEl.firstChild);
+    rows.forEach(function (r) { levelsEl.appendChild(r); });
+
+    buildSummary();
+  }
+
+  var pending = false;
+  function schedule() {
+    if (pending) return;
+    pending = true;
+    setTimeout(function () {
+      pending = false;
+      regroup();
+    }, 0);
+  }
+
+  if (typeof MutationObserver !== "undefined") {
+    new MutationObserver(schedule).observe(levelsEl, { childList: true });
+  }
+
+  schedule();
 })();
 </script>
 {% endblock %}

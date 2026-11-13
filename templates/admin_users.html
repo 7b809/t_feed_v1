@@ -4,9 +4,8 @@
 {% block head %}
 <style>
 /* ============================================================
-   Admin Panel — Executive Slate Theme (integrated with base.html)
-   Light card sits on base.html's dark body for visual depth.
-   All classes prefixed "adm-" to avoid Bootstrap collisions.
+   Admin Panel — Executive Slate Theme
+   Light card on base.html's dark body. All classes "adm-".
    ============================================================ */
 :root {
     --adm-panel: #f9fbfd;
@@ -17,12 +16,20 @@
     --adm-heading: #172b45;
     --adm-muted: #68788c;
     --adm-blue: #315f9f;
+    --adm-blue-strong: #274d82;
     --adm-success: #176b4d;
     --adm-danger: #a33648;
     --adm-warn: #875a13;
 }
 
-/* Shell: light gradient content area under the dark navbar */
+/* Screen-reader only */
+.adm-sr-only {
+    position: absolute; width: 1px; height: 1px;
+    padding: 0; margin: -1px; overflow: hidden;
+    clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+}
+
+/* Shell */
 .adm-shell {
     padding: 24px 20px 32px;
     min-height: calc(100vh - var(--navbar-height));
@@ -30,8 +37,6 @@
     background: linear-gradient(135deg, #e9eef4 0%, #f3f5f8 54%, #e8edf3 100%);
     box-sizing: border-box;
 }
-
-/* Main panel card */
 .adm-wrap {
     width: min(1240px, 100%);
     margin: 0 auto;
@@ -61,23 +66,16 @@
     font-weight: 800;
     letter-spacing: -0.01em;
 }
-.adm-head p {
-    margin: 0;
-    color: var(--adm-muted);
-    font-size: 0.86rem;
-}
+.adm-head p { margin: 0; color: var(--adm-muted); font-size: 0.86rem; line-height: 1.5; }
 .adm-kicker {
     color: #476b9a;
     font-size: 0.72rem;
     font-weight: 800;
     text-transform: uppercase;
     letter-spacing: 0.08em;
+    margin: 0;
 }
-.adm-head-actions {
-    display: flex;
-    gap: 7px;
-    flex-wrap: wrap;
-}
+.adm-head-actions { display: flex; gap: 7px; flex-wrap: wrap; }
 
 /* ---- Buttons ---- */
 .adm-btn {
@@ -95,33 +93,65 @@
     cursor: pointer;
     text-decoration: none;
     font-family: inherit;
-    transition: filter 0.15s ease, box-shadow 0.15s ease, transform 0.1s ease;
+    transition: filter 0.15s ease, box-shadow 0.15s ease, transform 0.1s ease, background-color 0.15s ease;
     white-space: nowrap;
 }
-.adm-btn:hover {
-    background: #e8eef5;
-    color: #29415e;
-    border-color: #cbd6e2;
+.adm-btn:hover:not(:disabled) {
     filter: brightness(0.97);
     box-shadow: 0 2px 7px rgba(31, 52, 76, 0.1);
 }
-.adm-btn:active { transform: scale(0.98); }
+.adm-btn:active:not(:disabled) { transform: scale(0.98); }
+.adm-btn:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 3px rgba(49, 95, 159, 0.35);
+}
+.adm-btn:disabled { opacity: 0.6; cursor: not-allowed; }
 .adm-btn.primary {
     background: linear-gradient(135deg, #315f9f, #476f9e);
     color: #ffffff;
     border: 0;
     box-shadow: 0 3px 10px rgba(49, 95, 159, 0.28);
 }
-.adm-btn.good {
-    background: #e1f2eb;
-    border-color: #b9dfce;
-    color: var(--adm-success);
+.adm-btn.primary:hover:not(:disabled) { filter: brightness(1.05); }
+.adm-btn.good   { background: #e1f2eb; border-color: #b9dfce; color: var(--adm-success); }
+.adm-btn.danger { background: #fae9eb; border-color: #efc8ce; color: var(--adm-danger); }
+
+/* ---- Alert (announced via aria-live; visually collapses when empty) ---- */
+.adm-alert {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 0;
+    margin: 0;
+    max-height: 0;
+    border: 0;
+    overflow: hidden;
+    opacity: 0;
+    border-radius: 9px;
+    font-size: 0.84rem;
+    transition: max-height .25s ease, padding .25s ease, margin .25s ease,
+                opacity .2s ease, border-color .2s ease;
 }
-.adm-btn.danger {
-    background: #fae9eb;
-    border-color: #efc8ce;
-    color: var(--adm-danger);
+.adm-alert.show {
+    padding: 12px 14px;
+    margin: 0 0 16px;
+    max-height: 200px;
+    opacity: 1;
+    border: 1px solid transparent;
 }
+.adm-alert.show:not(.error) { background: #e1f2eb; color: var(--adm-success); border-color: #c1e2d2; }
+.adm-alert.show.error       { background: #fae9eb; color: var(--adm-danger); border-color: #efc8ce; }
+.adm-alert-msg { flex: 1 1 auto; min-width: 0; }
+.adm-alert-close {
+    flex: 0 0 auto;
+    width: 24px; height: 24px;
+    display: inline-flex; align-items: center; justify-content: center;
+    padding: 0; border: 0; background: transparent;
+    color: inherit; font-size: 1.1rem; line-height: 1;
+    border-radius: 6px; cursor: pointer; opacity: 0.6;
+}
+.adm-alert-close:hover { opacity: 1; background: rgba(0,0,0,0.06); }
+.adm-alert-close:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; opacity: 1; }
 
 /* ---- Stats ---- */
 .adm-stats {
@@ -160,6 +190,7 @@
     gap: 10px;
     flex-wrap: wrap;
     margin: 16px 0;
+    align-items: center;
 }
 .adm-toolbar input,
 .adm-toolbar select {
@@ -180,8 +211,10 @@
     border-color: var(--adm-blue);
     box-shadow: 0 0 0 3px rgba(49, 95, 159, 0.15);
 }
-.adm-toolbar input { flex: 1; min-width: 200px; }
+.adm-toolbar input[type="search"] { flex: 1 1 220px; min-width: 200px; }
 .adm-toolbar input::placeholder { color: #8795a7; }
+.adm-toolbar .adm-btn { min-height: 42px; }
+.adm-toolbar .adm-btn:disabled { opacity: 0.45; }
 
 /* ---- Table ---- */
 .adm-table-wrap {
@@ -217,15 +250,24 @@
     z-index: 1;
     border-bottom: 1px solid #d2dce7;
 }
+.adm-table th[data-sort] { cursor: pointer; user-select: none; }
+.adm-table th[data-sort]:hover { background: #dde6f0; }
+.adm-table th[data-sort]:focus-visible { outline: 2px solid var(--adm-blue); outline-offset: -2px; }
+.adm-table th[data-sort]::after {
+    content: '↕';
+    opacity: 0.35;
+    margin-left: 6px;
+    font-weight: 400;
+    display: inline-block;
+}
+.adm-table th[aria-sort="ascending"]::after  { content: '▲'; opacity: 1; }
+.adm-table th[aria-sort="descending"]::after { content: '▼'; opacity: 1; }
 .adm-table td { color: #26384d; }
 .adm-table tbody tr:nth-child(even) { background: #f7f9fb; }
 .adm-table tbody tr:hover { background: #eef4fa; }
 .adm-table tbody tr:last-child td { border-bottom: none; }
 
-.adm-muted {
-    color: var(--adm-muted);
-    font-size: 0.74rem;
-}
+.adm-muted { color: var(--adm-muted); font-size: 0.74rem; line-height: 1.5; }
 
 /* ---- Pills ---- */
 .adm-pill {
@@ -252,342 +294,704 @@
     display: flex;
     gap: 6px;
     flex-wrap: wrap;
+    align-items: center;
 }
-.adm-actions .adm-btn {
-    padding: 6px 9px;
-    font-size: 0.7rem;
+.adm-actions .adm-btn { padding: 6px 9px; font-size: 0.7rem; }
+.adm-actions .adm-actions-sep {
+    display: inline-block;
+    width: 1px; height: 20px;
+    background: #d5dee8;
+    margin: 0 2px;
 }
 
-/* ---- Alerts & loading ---- */
-.adm-alert {
-    padding: 12px 14px;
-    border-radius: 9px;
-    margin: 12px 0;
-    background: #e1f2eb;
-    color: var(--adm-success);
-    border: 1px solid #c1e2d2;
-    font-size: 0.84rem;
-    display: none;
-}
-.adm-alert.error {
-    background: #fae9eb;
-    color: var(--adm-danger);
-    border: 1px solid #efc8ce;
-}
+/* ---- Loading / empty ---- */
 .adm-empty,
 .adm-loading {
     text-align: center;
-    padding: 32px;
+    padding: 32px 16px;
     color: #738399;
+    font-size: 0.85rem;
 }
-
 .adm-result-meta {
     margin-top: 12px;
     color: var(--adm-muted);
     font-size: 0.74rem;
 }
 
+/* ---- Sticky header only matters when the table can scroll ---- */
+@media (min-width: 761px) {
+    .adm-table-wrap { max-height: min(72vh, 760px); }
+}
+
+/* ---- Dialogs ---- */
+.adm-dialog {
+    border: 0;
+    border-radius: 14px;
+    padding: 0;
+    max-width: min(440px, calc(100vw - 32px));
+    width: 100%;
+    box-shadow: 0 24px 60px rgba(15, 23, 42, 0.35);
+    color: var(--adm-text);
+    background: #fff;
+}
+.adm-dialog::backdrop {
+    background: rgba(15, 23, 42, 0.45);
+    -webkit-backdrop-filter: blur(2px);
+    backdrop-filter: blur(2px);
+}
+.adm-dialog form { padding: clamp(18px, 4vw, 24px); }
+.adm-dialog h2 {
+    margin: 0 0 4px;
+    font-size: 1.1rem;
+    color: var(--adm-heading);
+    font-weight: 800;
+}
+.adm-dialog p { margin: 0 0 16px; color: var(--adm-muted); font-size: 0.9rem; line-height: 1.5; }
+.adm-dialog-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 20px;
+    flex-wrap: wrap;
+}
+.adm-dialog-actions .adm-btn { min-height: 40px; padding: 8px 16px; font-size: 0.82rem; }
+.adm-dialog-actions .adm-btn.primary {
+    background: linear-gradient(135deg, #315f9f, #476f9e);
+    color: #fff; border: 0;
+}
+.adm-dialog-actions .adm-btn.danger {
+    background: #a33648; color: #fff; border: 0;
+}
+.adm-field { margin-bottom: 14px; }
+.adm-field label {
+    display: block;
+    font-size: 0.8rem;
+    font-weight: 700;
+    color: #334963;
+    margin-bottom: 6px;
+}
+.adm-field input {
+    width: 100%;
+    min-height: 42px;
+    padding: 8px 12px;
+    font: inherit;
+    font-size: 0.9rem;
+    border: 1px solid #cbd6e2;
+    border-radius: 9px;
+    background: #fff;
+    color: #23364d;
+    transition: border-color .15s, box-shadow .15s;
+    box-sizing: border-box;
+}
+.adm-field input:focus {
+    outline: none;
+    border-color: var(--adm-blue);
+    box-shadow: 0 0 0 3px rgba(49, 95, 159, 0.15);
+}
+.adm-field input[aria-invalid="true"] { border-color: var(--adm-danger); }
+.adm-field-error {
+    display: block;
+    margin-top: 4px;
+    color: var(--adm-danger);
+    font-size: 0.76rem;
+    min-height: 1em;
+}
+
 /* ---- Responsive ---- */
 @media (max-width: 991px) {
-    .adm-shell {
-        padding: 16px 12px 20px;
-        min-height: auto;
-    }
-    .adm-wrap { padding: 16px; border-radius: 14px; }
+    .adm-shell { padding: 16px 12px 20px; min-height: auto; }
+    .adm-wrap  { padding: 16px; border-radius: 14px; }
+    .adm-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 
 @media (max-width: 760px) {
-    .adm-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-    .adm-stat:last-child { grid-column: span 2; }
+    /* Toolbar stacks */
+    .adm-toolbar > * { width: 100%; }
+    .adm-toolbar input[type="search"] { min-width: 0; flex: 1 1 auto; }
+    /* iOS zoom prevention: 16px minimum */
+    .adm-toolbar input,
+    .adm-toolbar select,
+    .adm-field input { font-size: 1rem; }
+    /* Header stacks */
     .adm-head { display: block; }
     .adm-head-actions { margin-top: 14px; }
-    .adm-toolbar > * { width: 100%; }
-    .adm-toolbar input { min-width: 0; }
-    .adm-wrap { padding: 14px; }
+    .adm-head-actions .adm-btn { flex: 1 1 auto; justify-content: center; }
     .adm-head h1 { font-size: 1.35rem; }
+    /* Stats */
+    .adm-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+    .adm-stat:last-child { grid-column: span 2; }
     .adm-stat strong { font-size: 1.35rem; }
+
+    /* Table → cards */
+    .adm-table-wrap {
+        border: 0; background: transparent;
+        box-shadow: none; overflow: visible; max-height: none;
+        border-radius: 0;
+    }
+    .adm-table { min-width: 0; background: transparent; display: block; }
+    .adm-table thead { display: none; }
+    .adm-table tbody,
+    .adm-table tr,
+    .adm-table td { display: block; width: 100%; }
+    .adm-table tr {
+        background: #fff;
+        border: 1px solid var(--adm-border);
+        border-radius: 12px;
+        margin-bottom: 10px;
+        box-shadow: 0 3px 10px rgba(31, 52, 76, 0.04);
+        overflow: hidden;
+    }
+    .adm-table tbody tr:nth-child(even) { background: #fff; }
+    .adm-table tbody tr:hover { background: #fff; }
+    .adm-table td {
+        border-bottom: 1px solid var(--adm-border-soft);
+        padding: 10px 14px;
+        display: block;
+        overflow-wrap: anywhere;
+    }
+    .adm-table td:last-child { border-bottom: none; }
+    .adm-table td::before {
+        content: attr(data-label);
+        display: block;
+        font-size: 0.65rem;
+        font-weight: 800;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: #566c86;
+        margin-bottom: 4px;
+    }
+    .adm-table td[data-label=""] { padding-top: 10px; }
+    .adm-actions { gap: 8px; }
+    .adm-actions .adm-btn { flex: 1 1 auto; justify-content: center; min-height: 40px; padding: 8px 12px; }
+    .adm-actions .adm-actions-sep { display: none; }
+
+    .adm-dialog { max-width: calc(100vw - 24px); }
+    .adm-dialog-actions .adm-btn { flex: 1 1 auto; justify-content: center; }
+}
+
+/* ---- Reduced motion ---- */
+@media (prefers-reduced-motion: reduce) {
+    .adm-btn, .adm-alert, .adm-toolbar input, .adm-toolbar select,
+    .adm-field input, .adm-dialog { transition: none !important; }
+    .adm-btn:active:not(:disabled) { transform: none; }
 }
 </style>
 {% endblock %}
 
 {% block content %}
-<div class="adm-shell">
+<main class="adm-shell">
     <div class="adm-wrap">
 
-        <!-- Header -->
-        <div class="adm-head">
+        <header class="adm-head">
             <div>
-                <div class="adm-kicker">Platform administration</div>
-                <h1 id="authTitle">Member management</h1>
+                <p class="adm-kicker">Platform administration</p>
+                <h1>Member management</h1>
                 <p>Review registrations, manage access and investigate suspicious login activity.</p>
             </div>
-            <div class="adm-head-actions">
+            <nav class="adm-head-actions" aria-label="Administration actions">
                 <a class="adm-btn" href="/">
-                    <i class="bi bi-speedometer2"></i> Dashboard
+                    <i class="bi bi-speedometer2" aria-hidden="true"></i> Dashboard
                 </a>
                 <button class="adm-btn primary" id="refreshBtn" type="button">
-                    <i class="bi bi-arrow-clockwise"></i> Refresh
+                    <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh
                 </button>
                 <a class="adm-btn danger" href="/logout">
-                    <i class="bi bi-box-arrow-right"></i> Admin logout
+                    <i class="bi bi-box-arrow-right" aria-hidden="true"></i> Admin logout
                 </a>
-            </div>
-        </div>
+            </nav>
+        </header>
 
-        <!-- Alert -->
-        <div id="alert" class="adm-alert" role="status"></div>
+        <div id="alert" class="adm-alert" role="status" aria-live="polite" aria-atomic="true"></div>
 
-        <!-- Stats -->
-        <div class="adm-stats">
+        <section class="adm-stats" aria-label="Account statistics">
             <div class="adm-stat"><small>Total accounts</small><strong id="totalCount">—</strong></div>
             <div class="adm-stat"><small>Pending approval</small><strong id="pendingCount">—</strong></div>
             <div class="adm-stat"><small>Active</small><strong id="activeCount">—</strong></div>
             <div class="adm-stat"><small>Suspended / rejected</small><strong id="disabledCount">—</strong></div>
             <div class="adm-stat"><small>Locked / suspicious</small><strong id="riskCount">—</strong></div>
-        </div>
+        </section>
 
-        <!-- Toolbar -->
-        <div class="adm-toolbar">
-            <input id="searchBox" type="search" placeholder="Search name or email…" aria-label="Search users">
-            <select id="statusFilter" aria-label="Filter status">
+        <section class="adm-toolbar" aria-label="Filter members">
+            <label class="adm-sr-only" for="searchBox">Search members by name or email</label>
+            <input id="searchBox" type="search" placeholder="Search name or email…"
+                   aria-label="Search members" enterkeyhint="search" autocomplete="off">
+            <select id="statusFilter" aria-label="Filter by account status">
                 <option value="">All account statuses</option>
                 <option value="pending">Pending</option>
                 <option value="active">Active</option>
                 <option value="suspended">Suspended</option>
                 <option value="rejected">Rejected</option>
             </select>
-            <select id="riskFilter" aria-label="Filter risk">
+            <select id="riskFilter" aria-label="Filter by risk state">
                 <option value="">All risk states</option>
                 <option value="risk">Locked / suspicious only</option>
             </select>
-        </div>
+            <button class="adm-btn" id="resetFilters" type="button" disabled>
+                <i class="bi bi-x-circle" aria-hidden="true"></i> Clear filters
+            </button>
+        </section>
 
-        <!-- Table -->
-        <div class="adm-table-wrap">
+        <section class="adm-table-wrap" id="tableWrap" aria-label="Member list">
             <table class="adm-table">
+                <caption class="adm-sr-only">Registered member accounts</caption>
                 <thead>
                     <tr>
-                        <th>Member</th>
-                        <th>Account</th>
-                        <th>Login security</th>
-                        <th>Registered</th>
-                        <th>Last login</th>
-                        <th>Admin actions</th>
+                        <th scope="col" data-sort="name">Member</th>
+                        <th scope="col" data-sort="status">Account</th>
+                        <th scope="col">Login security</th>
+                        <th scope="col" data-sort="created_at">Registered</th>
+                        <th scope="col" data-sort="last_login_at">Last login</th>
+                        <th scope="col">Admin actions</th>
                     </tr>
                 </thead>
                 <tbody id="usersBody">
-                    <tr><td colspan="6" class="adm-loading">Loading accounts…</td></tr>
+                    <tr><td colspan="6" class="adm-loading" data-label="">Loading accounts…</td></tr>
                 </tbody>
             </table>
-        </div>
+        </section>
 
-        <p class="adm-result-meta" id="resultMeta">
+        <p class="adm-result-meta" id="resultMeta" aria-live="polite">
             Account data is loaded from the member identity database.
         </p>
     </div>
-</div>
+</main>
+
+<!-- Edit profile dialog -->
+<dialog id="editDialog" class="adm-dialog" aria-labelledby="editDialogTitle">
+    <form id="editForm" novalidate>
+        <h2 id="editDialogTitle">Edit member profile</h2>
+        <p>Changes are saved immediately to the member record.</p>
+
+        <div class="adm-field">
+            <label for="editName">Name</label>
+            <input id="editName" name="name" type="text" autocomplete="name"
+                   maxlength="150" required>
+            <small class="adm-field-error" id="editNameErr" role="alert"></small>
+        </div>
+        <div class="adm-field">
+            <label for="editEmail">Email</label>
+            <input id="editEmail" name="email" type="email" autocomplete="email"
+                   inputmode="email" autocapitalize="none" spellcheck="false"
+                   maxlength="254" required>
+            <small class="adm-field-error" id="editEmailErr" role="alert"></small>
+        </div>
+
+        <div class="adm-dialog-actions">
+            <button type="button" class="adm-btn" data-close-dialog>Cancel</button>
+            <button type="submit" class="adm-btn primary" id="editSaveBtn">Save changes</button>
+        </div>
+    </form>
+</dialog>
+
+<!-- Confirm dialog -->
+<dialog id="confirmDialog" class="adm-dialog" aria-labelledby="confirmTitle">
+    <form method="dialog">
+        <h2 id="confirmTitle">Please confirm</h2>
+        <p id="confirmMessage"></p>
+        <div class="adm-dialog-actions">
+            <button type="submit" value="cancel" class="adm-btn">Cancel</button>
+            <button type="submit" value="ok" class="adm-btn primary" id="confirmOkBtn">Confirm</button>
+        </div>
+    </form>
+</dialog>
 {% endblock %}
 
 {% block scripts %}
 <script>
 (function () {
-    const body = document.getElementById('usersBody');
-    const alertBox = document.getElementById('alert');
-    let users = [];
+    'use strict';
 
-    const esc = function (s) {
+    var body       = document.getElementById('usersBody');
+    var alertBox   = document.getElementById('alert');
+    var tableWrap  = document.getElementById('tableWrap');
+    var editDialog = document.getElementById('editDialog');
+    var confirmDlg = document.getElementById('confirmDialog');
+    var users      = [];
+    var sortKey    = '';
+    var sortDir    = 1;
+    var alertTimer = null;
+    var editingId  = null;
+
+    var esc = function (s) {
         return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
             return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
         });
     };
-    const date = function (v) {
+    var enc = encodeURIComponent;
+    var date = function (v) {
         if (!v) return '—';
-        const d = new Date(v);
+        var d = new Date(v);
         return isNaN(d.getTime()) ? '—' : d.toLocaleString();
     };
-    const locked = function (u) {
+    var locked = function (u) {
         return !!(u.temporarily_locked || (u.lock_until && new Date(u.lock_until) > new Date()));
     };
+
+    /* ---- Alert ---- */
     function notice(msg, error) {
-        alertBox.textContent = msg;
+        alertBox.innerHTML = '<span class="adm-alert-msg"></span>' +
+            '<button type="button" class="adm-alert-close" aria-label="Dismiss notification">×</button>';
+        alertBox.querySelector('.adm-alert-msg').textContent = msg;
         alertBox.classList.toggle('error', !!error);
-        alertBox.style.display = 'block';
-        setTimeout(function () { alertBox.style.display = 'none'; }, 5000);
+        alertBox.classList.add('show');
+        clearTimeout(alertTimer);
+        alertTimer = setTimeout(hideNotice, 6000);
     }
+    function hideNotice() {
+        alertBox.classList.remove('show');
+        clearTimeout(alertTimer);
+    }
+    alertBox.addEventListener('click', function (e) {
+        if (e.target.closest('.adm-alert-close')) hideNotice();
+    });
+
+    /* ---- API helper ---- */
     async function api(url, method) {
-        const r = await fetch(url, {
+        var r = await fetch(url, {
             method: method || 'GET',
             credentials: 'same-origin',
             headers: { 'Accept': 'application/json' }
         });
-        let d = {};
-        try { d = await r.json(); } catch (e) {}
+        var d = {};
+        try { d = await r.json(); } catch (e) { /* no body */ }
         if (!r.ok) throw new Error(d.detail || ('Request failed: ' + r.status));
         return d;
     }
 
+    /* ---- Load ---- */
     async function load() {
-        body.innerHTML = '<tr><td colspan="6" class="adm-loading">Loading accounts…</td></tr>';
+        body.innerHTML = '<tr><td colspan="6" class="adm-loading" data-label="">Loading accounts…</td></tr>';
+        tableWrap.setAttribute('aria-busy', 'true');
         try {
-            const d = await api('/admin/users?limit=500');
+            var d = await api('/admin/users?limit=500');
             users = d.users || [];
             render();
         } catch (e) {
-            body.innerHTML = '<tr><td colspan="6" class="adm-empty">' + esc(e.message) + '</td></tr>';
+            body.innerHTML = '<tr><td colspan="6" class="adm-empty" data-label="">' + esc(e.message) + '</td></tr>';
             notice(e.message, true);
+        } finally {
+            tableWrap.removeAttribute('aria-busy');
         }
     }
 
+    /* ---- Sorting ---- */
+    function applySort(arr) {
+        if (!sortKey) return arr;
+        return arr.slice().sort(function (a, b) {
+            var va = a[sortKey], vb = b[sortKey];
+            if (sortKey === 'created_at' || sortKey === 'last_login_at') {
+                va = va ? new Date(va).getTime() : 0;
+                vb = vb ? new Date(vb).getTime() : 0;
+            } else {
+                va = String(va || '').toLowerCase();
+                vb = String(vb || '').toLowerCase();
+            }
+            if (va < vb) return -1 * sortDir;
+            if (va > vb) return  1 * sortDir;
+            return 0;
+        });
+    }
+    function bindSortHeaders() {
+        document.querySelectorAll('.adm-table th[data-sort]').forEach(function (th) {
+            if (th.dataset.sortBound) return;
+            th.dataset.sortBound = '1';
+            th.setAttribute('tabindex', '0');
+            th.setAttribute('role', 'button');
+            var activate = function () {
+                var key = th.dataset.sort;
+                if (sortKey === key) {
+                    sortDir = -sortDir;
+                } else {
+                    sortKey = key;
+                    sortDir = 1;
+                }
+                document.querySelectorAll('.adm-table th[data-sort]').forEach(function (h) {
+                    h.removeAttribute('aria-sort');
+                });
+                th.setAttribute('aria-sort', sortDir === 1 ? 'ascending' : 'descending');
+                render();
+            };
+            th.addEventListener('click', activate);
+            th.addEventListener('keydown', function (e) {
+                if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); activate(); }
+            });
+        });
+    }
+
+    /* ---- Render ---- */
     function render() {
-        const pending = users.filter(u => u.status === 'pending').length;
-        const active = users.filter(u => u.status === 'active').length;
-        const disabled = users.filter(u => ['suspended', 'rejected'].includes(u.status)).length;
-        const risk = users.filter(u => u.suspicious || locked(u) || u.login_enabled === false).length;
+        var pending  = users.filter(function (u) { return u.status === 'pending'; }).length;
+        var active   = users.filter(function (u) { return u.status === 'active'; }).length;
+        var disabled = users.filter(function (u) { return ['suspended', 'rejected'].indexOf(u.status) !== -1; }).length;
+        var risk     = users.filter(function (u) { return u.suspicious || locked(u) || u.login_enabled === false; }).length;
 
-        document.getElementById('totalCount').textContent = users.length;
-        document.getElementById('pendingCount').textContent = pending;
-        document.getElementById('activeCount').textContent = active;
+        document.getElementById('totalCount').textContent    = users.length;
+        document.getElementById('pendingCount').textContent  = pending;
+        document.getElementById('activeCount').textContent   = active;
         document.getElementById('disabledCount').textContent = disabled;
-        document.getElementById('riskCount').textContent = risk;
+        document.getElementById('riskCount').textContent     = risk;
 
-        const q = document.getElementById('searchBox').value.toLowerCase();
-        const s = document.getElementById('statusFilter').value;
-        const riskOnly = document.getElementById('riskFilter').value === 'risk';
+        var q         = document.getElementById('searchBox').value.toLowerCase().trim();
+        var s         = document.getElementById('statusFilter').value;
+        var riskOnly  = document.getElementById('riskFilter').value === 'risk';
 
-        const shown = users.filter(u =>
-            (!s || u.status === s) &&
-            (!riskOnly || u.suspicious || locked(u) || u.login_enabled === false) &&
-            (!q || (String(u.name) + ' ' + String(u.email)).toLowerCase().includes(q))
-        );
+        var shown = users.filter(function (u) {
+            if (s && u.status !== s) return false;
+            if (riskOnly && !(u.suspicious || locked(u) || u.login_enabled === false)) return false;
+            if (q && (String(u.name) + ' ' + String(u.email)).toLowerCase().indexOf(q) === -1) return false;
+            return true;
+        });
+        shown = applySort(shown);
 
         document.getElementById('resultMeta').textContent =
             'Showing ' + shown.length + ' of ' + users.length + ' accounts';
 
+        // Enable/disable the reset button
+        var hasFilters = !!(q || s || riskOnly);
+        document.getElementById('resetFilters').disabled = !hasFilters;
+
         if (!shown.length) {
-            body.innerHTML = '<tr><td colspan="6" class="adm-empty">No accounts match these filters.</td></tr>';
+            body.innerHTML = '<tr><td colspan="6" class="adm-empty" data-label="">No accounts match these filters.</td></tr>';
             return;
         }
 
         body.innerHTML = shown.map(function (u) {
-            const isLocked = locked(u);
-            const manualOff = u.login_enabled === false;
-            const flag = u.suspicious || isLocked || manualOff;
-            const status = u.status || 'unknown';
-            const lockText = u.security_flagged
+            var isLocked  = locked(u);
+            var manualOff = u.login_enabled === false;
+            var flag      = !!(u.suspicious || isLocked || manualOff);
+            var status    = u.status || 'unknown';
+            var rawId     = String(u.user_id);
+            var id        = esc(rawId);
+            var nm        = esc(u.name || u.email || 'member');
+
+            var lockText = u.security_flagged
                 ? 'Security incident: ' + (u.last_security_incident_reason || 'suspicious browser activity')
                 : isLocked
                     ? 'Locked until ' + date(u.lock_until)
                     : manualOff
                         ? 'Admin disabled'
                         : Number(u.failed_login_attempts || 0) + ' failed attempts';
-            const id = esc(u.user_id);
-            const a = [];
 
-            if (u.status === 'pending')
-                a.push('<button class="adm-btn good" data-action="approve" data-id="' + id + '">Approve</button>');
-            if (u.status !== 'suspended' && u.status !== 'rejected')
-                a.push('<button class="adm-btn" data-action="suspend" data-id="' + id + '">Suspend</button>');
-            if (u.status === 'suspended' || u.status === 'rejected')
-                a.push('<button class="adm-btn good" data-action="approve" data-id="' + id + '">Reactivate</button>');
-            if (isLocked || manualOff)
-                a.push('<button class="adm-btn good" data-action="resume" data-id="' + id + '">Resume login</button>');
-            else
-                a.push('<button class="adm-btn" data-action="disable-login" data-id="' + id + '">Disable login</button>');
-            a.push('<button class="adm-btn" data-action="edit" data-id="' + id + '">Edit</button>');
-            if (u.status !== 'rejected')
-                a.push('<button class="adm-btn" data-action="reject" data-id="' + id + '">Reject</button>');
-            a.push('<button class="adm-btn" data-action="revoke" data-id="' + id + '">Revoke sessions</button>');
-            a.push('<button class="adm-btn danger" data-action="delete" data-id="' + id + '">Delete</button>');
+            var a = [];
+            if (u.status === 'pending') {
+                a.push('<button class="adm-btn good" type="button" data-action="approve" data-id="' + id + '" aria-label="Approve ' + nm + '">Approve</button>');
+            }
+            if (u.status !== 'suspended' && u.status !== 'rejected') {
+                a.push('<button class="adm-btn" type="button" data-action="suspend" data-id="' + id + '" aria-label="Suspend ' + nm + '">Suspend</button>');
+            }
+            if (u.status === 'suspended' || u.status === 'rejected') {
+                a.push('<button class="adm-btn good" type="button" data-action="approve" data-id="' + id + '" aria-label="Reactivate ' + nm + '">Reactivate</button>');
+            }
+            if (isLocked || manualOff) {
+                a.push('<button class="adm-btn good" type="button" data-action="resume" data-id="' + id + '" aria-label="Resume login for ' + nm + '">Resume login</button>');
+            } else {
+                a.push('<button class="adm-btn" type="button" data-action="disable-login" data-id="' + id + '" aria-label="Disable login for ' + nm + '">Disable login</button>');
+            }
+            a.push('<button class="adm-btn" type="button" data-action="edit" data-id="' + id + '" aria-label="Edit profile for ' + nm + '">Edit</button>');
+            if (u.status !== 'rejected') {
+                a.push('<button class="adm-btn" type="button" data-action="reject" data-id="' + id + '" aria-label="Reject ' + nm + '">Reject</button>');
+            }
+            a.push('<button class="adm-btn" type="button" data-action="revoke" data-id="' + id + '" aria-label="Revoke sessions for ' + nm + '">Revoke sessions</button>');
+            a.push('<span class="adm-actions-sep" aria-hidden="true"></span>');
+            a.push('<button class="adm-btn danger" type="button" data-action="delete" data-id="' + id + '" aria-label="Delete ' + nm + '">Delete</button>');
 
             return '<tr>' +
-                '<td><strong>' + esc(u.name) + '</strong>' +
+                '<td data-label="Member">' +
+                    '<strong>' + esc(u.name) + '</strong>' +
                     '<div class="adm-muted">' + esc(u.email) + '</div>' +
                     '<div class="adm-muted">ID: ' + id + '</div>' +
                 '</td>' +
-                '<td>' +
+                '<td data-label="Account">' +
                     '<span class="adm-pill ' + esc(status) + '">' + esc(status) + '</span>' +
                     (flag ? '<div style="margin-top:6px"><span class="adm-pill suspicious">Security review</span></div>' : '') +
                 '</td>' +
-                '<td>' +
+                '<td data-label="Login security">' +
                     (isLocked || manualOff
                         ? '<span class="adm-pill locked">' + esc(lockText) + '</span>'
                         : '<span class="adm-muted">' + esc(lockText) + '</span>') +
                     (u.security_flagged
-                        ? '<div class="adm-muted">Incidents: ' + esc(u.security_incident_count || 0) + ' · Last: ' + esc(date(u.last_security_incident_at)) + '</div>'
+                        ? '<div class="adm-muted">Incidents: ' + esc(u.security_incident_count || 0) +
+                          ' · Last: ' + esc(date(u.last_security_incident_at)) + '</div>'
                         : '') +
                     '<div class="adm-muted">Login ' + (manualOff ? 'disabled' : 'enabled') + '</div>' +
                 '</td>' +
-                '<td>' + esc(date(u.created_at)) + '</td>' +
-                '<td>' + esc(date(u.last_login_at)) + '</td>' +
-                '<td><div class="adm-actions">' + a.join('') + '</div></td>' +
+                '<td data-label="Registered">' + esc(date(u.created_at)) + '</td>' +
+                '<td data-label="Last login">' + esc(date(u.last_login_at)) + '</td>' +
+                '<td data-label="Admin actions"><div class="adm-actions">' + a.join('') + '</div></td>' +
             '</tr>';
         }).join('');
     }
 
-    async function action(action, id) {
-        const labels = {
-            approve: 'Approve/reactivate this account?',
-            suspend: 'Suspend this account?',
-            reject: 'Reject this registration?',
-            resume: 'Clear the login lock and enable login?',
-            'disable-login': 'Manually disable member login?',
-            revoke: 'Revoke all active sessions?',
-            delete: 'Permanently delete this account? This cannot be undone.'
-        };
+    /* ---- Confirm dialog ---- */
+    function askConfirm(message, opts) {
+        opts = opts || {};
+        document.getElementById('confirmTitle').textContent = opts.title || 'Please confirm';
+        document.getElementById('confirmMessage').textContent = message;
+        var ok = document.getElementById('confirmOkBtn');
+        ok.textContent = opts.okLabel || 'Confirm';
+        ok.className = 'adm-btn ' + (opts.danger ? 'danger' : 'primary');
+        confirmDlg.returnValue = '';
+        return new Promise(function (resolve) {
+            var onClose = function () {
+                confirmDlg.removeEventListener('close', onClose);
+                resolve(confirmDlg.returnValue === 'ok');
+            };
+            confirmDlg.addEventListener('close', onClose);
+            confirmDlg.showModal();
+        });
+    }
+    confirmDlg.addEventListener('click', function (e) {
+        if (e.target === confirmDlg) confirmDlg.close('cancel');
+    });
 
-        if (action === 'edit') {
-            const u = users.find(x => x.user_id === id);
-            if (!u) return;
-            const name = prompt('Member name:', u.name || '');
-            if (name === null) return;
-            const email = prompt('Member email:', u.email || '');
-            if (email === null) return;
-            try {
-                const r = await fetch('/admin/users/' + id + '/profile', {
-                    method: 'PATCH',
-                    credentials: 'same-origin',
-                    headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-                    body: JSON.stringify({ name: name, email: email })
-                });
-                const d = await r.json();
-                if (!r.ok) throw new Error(d.detail || 'Update failed');
-                notice('Profile updated.');
-                await load();
-            } catch (e) {
-                notice(e.message, true);
-            }
+    /* ---- Edit dialog ---- */
+    function openEdit(id) {
+        var u = users.filter(function (x) { return String(x.user_id) === String(id); })[0];
+        if (!u) return;
+        editingId = u.user_id;
+        document.getElementById('editName').value  = u.name || '';
+        document.getElementById('editEmail').value = u.email || '';
+        document.getElementById('editNameErr').textContent  = '';
+        document.getElementById('editEmailErr').textContent = '';
+        document.getElementById('editName').removeAttribute('aria-invalid');
+        document.getElementById('editEmail').removeAttribute('aria-invalid');
+        editDialog.returnValue = '';
+        editDialog.showModal();
+        var nameInput = document.getElementById('editName');
+        nameInput.focus();
+        nameInput.select();
+    }
+    editDialog.addEventListener('click', function (e) {
+        if (e.target === editDialog) editDialog.close('cancel');
+    });
+    editDialog.addEventListener('click', function (e) {
+        if (e.target.closest('[data-close-dialog]')) editDialog.close('cancel');
+    });
+
+    document.getElementById('editForm').addEventListener('submit', async function (e) {
+        e.preventDefault();
+        var nameInput  = document.getElementById('editName');
+        var emailInput = document.getElementById('editEmail');
+        var nameErr    = document.getElementById('editNameErr');
+        var emailErr   = document.getElementById('editEmailErr');
+
+        var name  = nameInput.value.trim();
+        var email = emailInput.value.trim();
+        var bad   = false;
+
+        nameErr.textContent = '';
+        emailErr.textContent = '';
+        nameInput.removeAttribute('aria-invalid');
+        emailInput.removeAttribute('aria-invalid');
+
+        if (!name) { nameErr.textContent = 'Name is required.'; nameInput.setAttribute('aria-invalid', 'true'); bad = true; }
+        if (!email) {
+            emailErr.textContent = 'Email is required.'; emailInput.setAttribute('aria-invalid', 'true'); bad = true;
+        } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+            emailErr.textContent = 'Enter a valid email address.'; emailInput.setAttribute('aria-invalid', 'true'); bad = true;
+        }
+        if (bad) {
+            (nameErr.textContent ? nameInput : emailInput).focus();
             return;
         }
 
-        if (!confirm(labels[action])) return;
-        const endpoints = {
-            approve: '/admin/users/' + id + '/approve',
-            suspend: '/admin/users/' + id + '/suspend',
-            reject: '/admin/users/' + id + '/reject',
-            resume: '/admin/users/' + id + '/login-enable',
-            'disable-login': '/admin/users/' + id + '/login-disable',
-            revoke: '/admin/users/' + id + '/revoke-sessions',
-            delete: '/admin/users/' + id
-        };
+        var saveBtn = document.getElementById('editSaveBtn');
+        var origLabel = saveBtn.textContent;
+        saveBtn.disabled = true;
+        saveBtn.textContent = 'Saving…';
         try {
-            await api(endpoints[action], action === 'delete' ? 'DELETE' : 'POST');
+            var r = await fetch('/admin/users/' + enc(editingId) + '/profile', {
+                method: 'PATCH',
+                credentials: 'same-origin',
+                headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+                body: JSON.stringify({ name: name, email: email })
+            });
+            var d = {};
+            try { d = await r.json(); } catch (err) { /* ignore */ }
+            if (!r.ok) throw new Error(d.detail || 'Update failed');
+            editDialog.close('ok');
+            notice('Profile updated.');
+            await load();
+        } catch (err) {
+            notice(err.message, true);
+        } finally {
+            saveBtn.disabled = false;
+            saveBtn.textContent = origLabel;
+        }
+    });
+
+    /* ---- Action handler ---- */
+    async function action(name, id, btn) {
+        if (name === 'edit') {
+            openEdit(id);
+            return;
+        }
+
+        var confirmMap = {
+            approve:        { msg: 'Approve/reactivate this account?',        okLabel: 'Approve',  danger: false },
+            suspend:        { msg: 'Suspend this account?',                    okLabel: 'Suspend',  danger: true  },
+            reject:         { msg: 'Reject this registration?',                okLabel: 'Reject',   danger: true  },
+            resume:         { msg: 'Clear the login lock and enable login?',   okLabel: 'Resume',   danger: false },
+            'disable-login':{ msg: 'Manually disable member login?',           okLabel: 'Disable',  danger: true  },
+            revoke:         { msg: 'Revoke all active sessions?',              okLabel: 'Revoke',   danger: true  },
+            delete:         { msg: 'Permanently delete this account? This cannot be undone.', okLabel: 'Delete', danger: true }
+        };
+        var c = confirmMap[name];
+        if (!c) return;
+
+        var ok = await askConfirm(c.msg, { okLabel: c.okLabel, danger: c.danger });
+        if (!ok) return;
+
+        var endpoints = {
+            approve:         '/admin/users/' + enc(id) + '/approve',
+            suspend:         '/admin/users/' + enc(id) + '/suspend',
+            reject:          '/admin/users/' + enc(id) + '/reject',
+            resume:          '/admin/users/' + enc(id) + '/login-enable',
+            'disable-login': '/admin/users/' + enc(id) + '/login-disable',
+            revoke:          '/admin/users/' + enc(id) + '/revoke-sessions',
+            delete:          '/admin/users/' + enc(id)
+        };
+
+        if (btn) { btn.disabled = true; btn.dataset.busy = '1'; }
+        try {
+            await api(endpoints[name], name === 'delete' ? 'DELETE' : 'POST');
             notice('Account action completed.');
             await load();
         } catch (e) {
             notice(e.message, true);
+            if (btn) { btn.disabled = false; delete btn.dataset.busy; }
         }
     }
 
+    /* ---- Event wiring ---- */
     body.addEventListener('click', function (e) {
-        const b = e.target.closest('button[data-action]');
-        if (b) action(b.dataset.action, b.dataset.id);
+        var b = e.target.closest('button[data-action]');
+        if (!b || b.dataset.busy === '1') return;
+        action(b.dataset.action, b.dataset.id, b);
     });
 
-    document.getElementById('refreshBtn').addEventListener('click', load);
+    document.getElementById('refreshBtn').addEventListener('click', async function () {
+        var btn = this;
+        var orig = btn.innerHTML;
+        btn.disabled = true;
+        btn.innerHTML = '<i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refreshing…';
+        await load();
+        btn.disabled = false;
+        btn.innerHTML = orig;
+    });
+
     document.getElementById('searchBox').addEventListener('input', render);
     document.getElementById('statusFilter').addEventListener('change', render);
     document.getElementById('riskFilter').addEventListener('change', render);
+    document.getElementById('resetFilters').addEventListener('click', function () {
+        document.getElementById('searchBox').value = '';
+        document.getElementById('statusFilter').value = '';
+        document.getElementById('riskFilter').value = '';
+        render();
+        document.getElementById('searchBox').focus();
+    });
 
+    bindSortHeaders();
     load();
 })();
 </script>

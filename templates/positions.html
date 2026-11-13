@@ -395,8 +395,8 @@
   display:flex;justify-content:space-between;align-items:flex-start;gap:10px;
 }
 .ow-mobile-name{
-  font-weight:850;font-size:.85rem;color:var(--ow-ink);
-  overflow-wrap:anywhere;
+  font-weight:850;font-size:.9rem;color:var(--ow-ink);
+  overflow-wrap:anywhere;line-height:1.25;
 }
 .ow-mobile-grid{
   display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:12px;
@@ -414,6 +414,100 @@
   display:block;font-size:.8rem;margin-top:3px;
   font-variant-numeric:tabular-nums;overflow-wrap:anywhere;
   color:var(--ow-ink);
+}
+
+/* ============================================================
+   Colour-coded mobile order tiles
+   (applied by the enhancer script at the bottom)
+   ============================================================ */
+
+/* Timings (entry time / exit time) */
+.ow-mobile-grid > div.ow-t-time{
+  background:linear-gradient(180deg,#f8fafc,#eef2f7);
+  border-color:#e2e8f0;
+}
+.ow-mobile-grid > div.ow-t-time strong{
+  color:#334155;
+  font-size:.82rem;
+  font-weight:800;
+  letter-spacing:.01em;
+}
+
+/* Strategy — full-width header tile */
+.ow-mobile-grid > div.ow-t-strategy{
+  grid-column:1 / -1;
+  background:linear-gradient(180deg,#eef2ff,#e0e7ff);
+  border-color:#c7d2fe;
+}
+.ow-mobile-grid > div.ow-t-strategy strong{
+  color:#3730a3;
+  font-size:.86rem;
+  font-weight:850;
+}
+
+/* Date tile if ever rendered */
+.ow-mobile-grid > div.ow-t-date strong{
+  font-size:.8rem;
+  font-weight:800;
+}
+
+/* Entry price */
+.ow-mobile-grid > div.ow-t-entry{
+  background:linear-gradient(180deg,#eff6ff,#dbeafe);
+  border-color:#bfdbfe;
+}
+.ow-mobile-grid > div.ow-t-entry strong{
+  color:#1d4ed8;
+  font-size:1.05rem;
+  font-weight:850;
+}
+
+/* Stop-loss */
+.ow-mobile-grid > div.ow-t-stop{
+  background:linear-gradient(180deg,#fef2f2,#fee2e2);
+  border-color:#fecaca;
+}
+.ow-mobile-grid > div.ow-t-stop strong{
+  color:#b91c1c;
+  font-size:1rem;
+  font-weight:850;
+}
+
+/* Target */
+.ow-mobile-grid > div.ow-t-target{
+  background:linear-gradient(180deg,#ecfdf5,#d1fae5);
+  border-color:#a7f3d0;
+}
+.ow-mobile-grid > div.ow-t-target strong{
+  color:#047857;
+  font-size:1rem;
+  font-weight:850;
+}
+
+/* Exit price */
+.ow-mobile-grid > div.ow-t-exit{
+  background:linear-gradient(180deg,#f5f3ff,#ede9fe);
+  border-color:#ddd6fe;
+}
+.ow-mobile-grid > div.ow-t-exit strong{
+  color:#5b21b6;
+  font-size:1.05rem;
+  font-weight:850;
+}
+
+/* P&L — full width, emphasised */
+.ow-mobile-grid > div.ow-t-pnl{
+  grid-column:1 / -1;
+  background:linear-gradient(180deg,#f8fafc,#eef2f7);
+  border-color:#e2e8f0;
+}
+.ow-mobile-grid > div.ow-t-pnl strong{
+  font-size:1.05rem;
+  font-weight:850;
+}
+.ow-mobile-grid > div.ow-t-pnl .ow-row-inr{
+  font-size:.7rem !important;
+  margin-top:3px !important;
 }
 
 /* ---------- Footer ---------- */
@@ -443,10 +537,21 @@
   .ow-tabs{gap:6px}
   .ow-tab{flex:1;justify-content:center;font-size:.78rem;padding:9px 12px}
   .ow-mobile-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .ow-mobile-grid > div.ow-t-time strong{font-size:.78rem}
+  .ow-mobile-grid > div.ow-t-entry strong,
+  .ow-mobile-grid > div.ow-t-exit strong{font-size:1rem}
+  .ow-mobile-grid > div.ow-t-stop strong,
+  .ow-mobile-grid > div.ow-t-target strong{font-size:.95rem}
 }
 @media(max-width:480px){
   .ow-profit-banner{grid-template-columns:1fr;padding:14px 16px}
   .ow-profit-control input{max-width:none}
+  .ow-mobile-item{padding:12px}
+  .ow-mobile-grid{gap:8px;margin-top:10px}
+  .ow-mobile-grid > div{padding:7px 9px}
+  .ow-mobile-name{font-size:.85rem}
+  .ow-mobile-grid > div.ow-t-time strong{font-size:.74rem}
+  .ow-mobile-grid > div.ow-t-pnl strong{font-size:1rem}
 }
 </style>
 {% endblock %}
@@ -614,8 +719,6 @@
 
 <!-- ============================================================
      Lot-aware profit calculator for Orders & History
-     Computes per-row ₹ P&L and a live total across the
-     currently-visible page (works for Today + History tabs).
      ============================================================ -->
 <script>
 (function () {
@@ -656,7 +759,6 @@
 
   if (!rowsBody) return;
 
-  /* ---------- Desktop table rows ---------- */
   function applyDesktopRows(lots) {
     var rows = rowsBody.querySelectorAll("tr");
     var totalPts = 0, totalInr = 0, count = 0;
@@ -697,7 +799,6 @@
     return { count: count, totalPts: totalPts, totalInr: totalInr };
   }
 
-  /* ---------- Mobile cards ---------- */
   function applyMobileItems(lots) {
     var items = mobileList ? mobileList.querySelectorAll(".ow-mobile-item") : [];
     var totalPts = 0, totalInr = 0, count = 0;
@@ -757,8 +858,6 @@
     var d = applyDesktopRows(lots);
     var m = applyMobileItems(lots);
 
-    /* Prefer whichever view has more rendered rows (avoids double-counting
-       when the mobile list is hidden but still populated). */
     var count    = Math.max(d.count, m.count);
     var totalPts = count === d.count ? d.totalPts : m.totalPts;
     var totalInr = count === d.count ? d.totalInr : m.totalInr;
@@ -770,8 +869,6 @@
     }
   }
 
-  /* Re-run whenever the dashboard script re-renders either list
-     (tab switch, search, pagination, refresh). */
   if (typeof MutationObserver !== "undefined") {
     var obs = new MutationObserver(recalc);
     obs.observe(rowsBody, { childList: true, subtree: true });
@@ -786,6 +883,195 @@
   recalc();
   setTimeout(recalc, 100);
   setTimeout(recalc, 500);
+})();
+</script>
+
+<!-- ============================================================
+     Mobile order-card enhancer
+       - Reads Entry time / Exit time from the desktop table
+         (#ow-rows) using the instrument key as a match.
+       - Injects missing time tiles into each .ow-mobile-grid.
+       - Colour-codes all tiles and re-orders them to:
+           Strategy → Entry time | Exit time →
+           Entry | Stop → Target | Exit → P&L (full width).
+       - Idempotent: re-runs on MutationObserver but never
+         duplicates tiles.
+     ============================================================ -->
+<script>
+(function () {
+  "use strict";
+
+  var mobileList = document.getElementById("ow-mobile");
+  var rowsBody   = document.getElementById("ow-rows");
+  if (!mobileList) return;
+
+  /* ---------- classification ---------- */
+  var CLS = {
+    date:      "ow-t-date",
+    strategy:  "ow-t-strategy",
+    entryTime: "ow-t-time",
+    exitTime:  "ow-t-time",
+    entry:     "ow-t-entry",
+    stop:      "ow-t-stop",
+    target:    "ow-t-target",
+    exit:      "ow-t-exit",
+    pnl:       "ow-t-pnl"
+  };
+
+  var ORDER = ["date","strategy","entryTime","exitTime",
+               "entry","stop","target","exit","pnl"];
+
+  var ALL_CLASSES = [];
+  for (var k in CLS) if (CLS.hasOwnProperty(k)) ALL_CLASSES.push(CLS[k]);
+
+  function classify(label) {
+    var L = (label || "").toLowerCase();
+    if (/entry\s*time/.test(L))            return "entryTime";
+    if (/exit\s*time/.test(L))             return "exitTime";
+    if (/\btrading\s*date\b|^date\b/.test(L)) return "date";
+    if (/strategy/.test(L))                return "strategy";
+    if (/stop|\bsl\b/.test(L))             return "stop";
+    if (/target|\btp\b/.test(L))           return "target";
+    if (/p\s*&?\s*l|pnl|profit/.test(L))   return "pnl";
+    if (/^entry\b/.test(L))                return "entry";
+    if (/^exit\b/.test(L))                 return "exit";
+    return "";
+  }
+
+  /* ---------- instrument key helpers ---------- */
+  function keyFromText(text) {
+    var m = (text || "").match(/([A-Z][A-Z0-9_]*\|[0-9]+)/);
+    return m ? m[1] : "";
+  }
+
+  function buildDesktopTimeMap() {
+    var map = {};
+    if (!rowsBody) return map;
+    var rows = rowsBody.querySelectorAll("tr");
+    for (var i = 0; i < rows.length; i++) {
+      var cells = rows[i].querySelectorAll("td");
+      if (cells.length < 11) continue;
+      var key = keyFromText(cells[1].textContent);
+      if (!key) continue;
+      map[key] = {
+        entryTime: (cells[4].textContent || "").trim(),
+        exitTime:  (cells[8].textContent || "").trim()
+      };
+    }
+    return map;
+  }
+
+  /* ---------- tile factory ---------- */
+  function makeTile(cls, label, value) {
+    var div   = document.createElement("div");
+    div.className = cls;
+    var span  = document.createElement("span");
+    span.textContent = label;
+    var strong = document.createElement("strong");
+    strong.textContent = value;
+    div.appendChild(span);
+    div.appendChild(strong);
+    return div;
+  }
+
+  /* ---------- inject missing time tiles ---------- */
+  function injectTimes(grid, item, timeMap) {
+    var key = keyFromText(item.textContent);
+    if (!key) return;
+    var t = timeMap[key];
+    if (!t) return;
+
+    var hasEntry = false, hasExit = false;
+    var kids = grid.children;
+    for (var i = 0; i < kids.length; i++) {
+      var lblEl = kids[i].querySelector("span");
+      if (!lblEl) continue;
+      var k = classify(lblEl.textContent.trim());
+      if (k === "entryTime") hasEntry = true;
+      if (k === "exitTime")  hasExit  = true;
+    }
+
+    if (!hasEntry && t.entryTime) {
+      grid.appendChild(makeTile("ow-t-time", "Entry time", t.entryTime));
+    }
+    if (!hasExit && t.exitTime) {
+      grid.appendChild(makeTile("ow-t-time", "Exit time", t.exitTime));
+    }
+  }
+
+  /* ---------- ordering ---------- */
+  function computeExpectedOrder(kids) {
+    var grouped = {};
+    var others  = [];
+    kids.forEach(function (tile) {
+      var lblEl = tile.querySelector("span");
+      var k = lblEl ? classify(lblEl.textContent.trim()) : "";
+      if (ORDER.indexOf(k) === -1) others.push(tile);
+      else (grouped[k] = grouped[k] || []).push(tile);
+    });
+    var out = [];
+    ORDER.forEach(function (k) {
+      (grouped[k] || []).forEach(function (t) { out.push(t); });
+    });
+    others.forEach(function (t) { out.push(t); });
+    return out;
+  }
+
+  function enhanceItem(item, timeMap) {
+    var grid = item.querySelector(".ow-mobile-grid");
+    if (!grid) return;
+
+    /* 1) inject missing time tiles */
+    injectTimes(grid, item, timeMap);
+
+    /* 2) apply colour classes (cheap; do every pass) */
+    var kids = Array.prototype.slice.call(grid.children);
+    kids.forEach(function (tile) {
+      var lblEl = tile.querySelector("span");
+      if (!lblEl) return;
+      ALL_CLASSES.forEach(function (c) { tile.classList.remove(c); });
+      var k = classify(lblEl.textContent.trim());
+      if (k) tile.classList.add(CLS[k]);
+    });
+
+    /* 3) reorder only if needed */
+    var expected = computeExpectedOrder(kids);
+    var same = kids.length === expected.length;
+    if (same) {
+      for (var i = 0; i < kids.length; i++) {
+        if (kids[i] !== expected[i]) { same = false; break; }
+      }
+    }
+    if (!same) {
+      while (grid.firstChild) grid.removeChild(grid.firstChild);
+      expected.forEach(function (t) { grid.appendChild(t); });
+    }
+  }
+
+  function run() {
+    var timeMap = buildDesktopTimeMap();
+    var items = mobileList.querySelectorAll(".ow-mobile-item");
+    for (var i = 0; i < items.length; i++) enhanceItem(items[i], timeMap);
+  }
+
+  var pending = false;
+  function schedule() {
+    if (pending) return;
+    pending = true;
+    setTimeout(function () { pending = false; run(); }, 0);
+  }
+
+  if (typeof MutationObserver !== "undefined") {
+    new MutationObserver(schedule).observe(mobileList, {
+      childList: true, subtree: true
+    });
+  }
+
+  /* Multiple passes to catch late-rendering desktop table. */
+  run();
+  setTimeout(run, 100);
+  setTimeout(run, 300);
+  setTimeout(run, 700);
 })();
 </script>
 {% endblock %}
