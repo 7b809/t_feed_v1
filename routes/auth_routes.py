@@ -4,7 +4,8 @@ from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from core import config
-from core.auth import create_session_cookie_value, verify_login_credentials, require_any_auth
+from core.auth import create_session_cookie_value, verify_login_credentials, require_any_auth, is_authenticated
+from core.user_accounts import get_user_session
 from core.logger import get_logger
 
 logger = get_logger(__file__)
@@ -121,5 +122,17 @@ def logout(request: Request):
 
 
 @router.get("/auth/whoami")
-def whoami(_=Depends(require_any_auth)):
-    return JSONResponse({"authenticated": True})
+def whoami(request: Request):
+    """Return the active browser identity without forcing members through admin auth."""
+    member = get_user_session(request)
+    if member:
+        return JSONResponse({"authenticated": True, "role": "member", "user": {
+            "name": member.get("name"), "email": member.get("email")
+        }})
+    if is_authenticated(request):
+        return JSONResponse({"authenticated": True, "role": "admin"})
+    return JSONResponse(
+        {"authenticated": False, "role": None, "login_url": "/user/login"},
+        status_code=401,
+        headers={"Cache-Control": "no-store"},
+    )
