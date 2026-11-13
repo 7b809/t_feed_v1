@@ -61,19 +61,20 @@ class BackupDataService:
     # ------------------------------------------------------------------ #
     def _mongo(self) -> MongoClient:
         if self._client is None:
-            if not config.MONGO_URI or not config.MONGO_DB:
+            if not config.MONGO_URI or not config.BACKUP_MONGO_DB:
                 raise RuntimeError(
-                    "MONGO_URL / MONGO_DB must be set to extract the backup"
+                    "MONGO_URL and BACKUP_MONGO_DB (the V4 engine MONGO_DB) "
+                    "must be set to extract historical-candle backup data"
                 )
             self._client = MongoClient(config.MONGO_URI)
         return self._client
 
     def _blob_doc(self) -> dict[str, Any] | None:
-        coll = self._mongo()[config.MONGO_DB][config.BACKUP_BLOB_COLLECTION]
+        coll = self._mongo()[config.BACKUP_MONGO_DB][config.BACKUP_BLOB_COLLECTION]
         return coll.find_one({"_id": config.BACKUP_BLOB_DOC_ID})
 
     def _metadata_doc(self) -> dict[str, Any] | None:
-        coll = self._mongo()[config.MONGO_DB][config.BACKUP_METADATA_COLLECTION]
+        coll = self._mongo()[config.BACKUP_MONGO_DB][config.BACKUP_METADATA_COLLECTION]
         return coll.find_one({"_id": config.BACKUP_METADATA_DOC_ID})
 
     # ------------------------------------------------------------------ #
@@ -128,7 +129,7 @@ class BackupDataService:
                 summary["status"] = "no_blob_doc"
                 summary["error"] = (
                     f"blob doc {config.BACKUP_BLOB_DOC_ID!r} not found in "
-                    f"{config.MONGO_DB}.{config.BACKUP_BLOB_COLLECTION}"
+                    f"{config.BACKUP_MONGO_DB}.{config.BACKUP_BLOB_COLLECTION}"
                 )
                 logger.warning(summary["error"])
                 self._record(summary)
