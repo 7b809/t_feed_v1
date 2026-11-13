@@ -82,3 +82,21 @@ UPSTOX_TOKEN_DOC_ID=upstox_access_token
 ```
 
 Do not copy the token into the V5 member database. Member credentials and audit events remain in `MARKET_ENGINE_IDENTITY`; the Upstox access token remains in the existing V4-compatible store.
+
+
+## V4 historical-candle archive source
+
+V5 operational data and the V4 historical-candle archive are separate MongoDB databases. The startup refresh must read the archive documents from the database configured by `MONGO_DB` in the running V4 engine, not from V5's `MONGO_DB`.
+
+Set `BACKUP_MONGO_DB` in the V5 `.env` to the exact database name used by V4. The archive collections remain configurable through `BACKUP_BLOB_COLLECTION`, `BACKUP_BLOB_DOC_ID`, `BACKUP_METADATA_COLLECTION` and `BACKUP_METADATA_DOC_ID`.
+
+Example:
+
+```dotenv
+MONGO_DB=MARKET_ENGINE_V5
+BACKUP_MONGO_DB=<exact-MONGO_DB-from-V4>
+BACKUP_BLOB_COLLECTION=backup_collection
+BACKUP_BLOB_DOC_ID=backup_historical_candles
+```
+
+Do not guess the V4 database name: copy the value from the V4 deployment's `.env`. Startup configuration validation now reports an error when `BACKUP_MONGO_DB` is missing, rather than silently querying the V5 operational database.
