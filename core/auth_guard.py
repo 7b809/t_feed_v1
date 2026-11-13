@@ -66,11 +66,6 @@ class AuthGuardMiddleware(BaseHTTPMiddleware):
 
         member = get_user_session(request)
         if member:
-            allowed_exact = {
-                "/", "/charts", "/isolated", "/positions", "/user/me",
-                "/live/status", "/live/instruments", "/ws/live", "/ws/chart",
-            }
-            allowed_prefixes = ("/chart/", "/live/")
             read_only_methods = {"GET", "HEAD"}
 
             # Shared member workspace APIs. These are strictly read-only;
