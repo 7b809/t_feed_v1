@@ -109,9 +109,11 @@ class AuthGuardMiddleware(BaseHTTPMiddleware):
         # Member sessions receive read-only market access only.
         member = get_user_session(request)
         if member:
-            allowed_exact = {"/", "/charts", "/user/me", "/api/live/status",
-                             "/api/live/instruments", "/ws/live", "/ws/chart"}
-            allowed_prefixes = ("/chart/", "/api/live/snapshot")
+            allowed_exact = {"/", "/charts", "/user/me", "/live/status",
+                             "/live/instruments", "/ws/live", "/ws/chart"}
+            # The V4 live router is mounted without an /api prefix.
+            # Restrict members to read-only /live endpoints and chart pages.
+            allowed_prefixes = ("/chart/", "/live/")
             if path in allowed_exact or any(path.startswith(p) for p in allowed_prefixes):
                 request.state.member = member
                 return await call_next(request)
