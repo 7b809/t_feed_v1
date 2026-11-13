@@ -1,11 +1,8 @@
 """Persist combined live isolation and dummy-order state to MongoDB.
 
-One document is maintained per market-local trading date in the
-configured collection (default: UPSTOX_APP_V2.dummy_orders).
-
-The local JSON files remain the primary runtime/recovery state. This
-service asynchronously mirrors their latest contents to MongoDB so
-filesystem writes and market-data processing never wait on database I/O.
+One document is maintained per market-local trading date. Local JSON
+files remain the primary runtime/recovery state; this service mirrors
+their latest contents asynchronously and retries transient MongoDB errors.
 """
 
 from __future__ import annotations
@@ -27,14 +24,16 @@ logger = get_logger(__file__)
 
 
 class LiveOrderSnapshotService:
-    """Debounced, asynchronous daily snapshot writer."""
+    """Debounced daily snapshot writer with retry and shutdown flushing."""
 
     def __init__(self) -> None:
         self._client: MongoClient | None = None
         self._collection = None
         self._client_lock = threading.Lock()
         self._worker_lock = threading.Lock()
+        self._persist_lock = threading.Lock()
         self._requested = threading.Event()
+        self._stop_requested = threading.Event()
         self._worker: threading.Thread | None = None
         self._last_signature: str | None = None
         self._last_document_id: str | None = None
@@ -50,6 +49,24 @@ class LiveOrderSnapshotService:
     @classmethod
     def _now_market(cls) -> datetime:
         return datetime.now(cls._market_timezone())
+
+    @staticmethod
+    def _retry_initial_seconds() -> float:
+        return max(
+            0.1,
+            float(getattr(
+                config, "LIVE_ORDER_SNAPSHOT_RETRY_INITIAL_SECONDS", 1.0
+            )),
+        )
+
+    @staticmethod
+    def _retry_max_seconds() -> float:
+        return max(
+            LiveOrderSnapshotService._retry_initial_seconds(),
+            float(getattr(
+                config, "LIVE_ORDER_SNAPSHOT_RETRY_MAX_SECONDS", 30.0
+            )),
+        )
 
     def _source_paths(self) -> tuple[Path, Path]:
         root = Path(config.LIVE_DATA_DIR)
@@ -130,6 +147,11 @@ class LiveOrderSnapshotService:
             return
 
         with self._worker_lock:
+            if self._stop_requested.is_set():
+                logger.warning(
+                    "[live-order-snapshot] request ignored during shutdown"
+                )
+                return
             if self._worker is None or not self._worker.is_alive():
                 self._worker = threading.Thread(
                     target=self._worker_loop,
@@ -140,6 +162,15 @@ class LiveOrderSnapshotService:
 
         self._requested.set()
 
+    def _log_write_failure(self, exc: Exception) -> None:
+        now = time.monotonic()
+        if now - self._last_error_log_at >= 60:
+            logger.exception(
+                "[live-order-snapshot] MongoDB write failed; retry pending: %s",
+                exc,
+            )
+            self._last_error_log_at = now
+
     def _worker_loop(self) -> None:
         debounce = max(
             0.1,
@@ -147,35 +178,48 @@ class LiveOrderSnapshotService:
                 config, "LIVE_ORDER_SNAPSHOT_DEBOUNCE_SECONDS", 0.5
             )),
         )
-        while True:
-            self._requested.wait()
+        retry_delay = self._retry_initial_seconds()
+
+        while not self._stop_requested.is_set():
+            if not self._requested.wait(timeout=0.5):
+                continue
             self._requested.clear()
 
-            # Trailing-edge debounce: merge bursts of isolation/order writes
-            # and snapshot the newest complete pair of files only once.
+            # Trailing-edge debounce merges rapid isolation/order writes.
             while self._requested.wait(timeout=debounce):
                 self._requested.clear()
 
-            try:
-                self._persist_latest()
-            except Exception as exc:
-                now = time.monotonic()
-                if now - self._last_error_log_at >= 60:
-                    logger.exception(
-                        "[live-order-snapshot] MongoDB write failed: %s",
-                        exc,
+            while not self._stop_requested.is_set():
+                try:
+                    with self._persist_lock:
+                        self._persist_latest()
+                    retry_delay = self._retry_initial_seconds()
+                    break
+                except Exception as exc:
+                    self._log_write_failure(exc)
+                    # A new source update wakes the retry early. Otherwise
+                    # retry with capped exponential backoff until successful.
+                    self._requested.wait(timeout=retry_delay)
+                    self._requested.clear()
+                    retry_delay = min(
+                        retry_delay * 2.0, self._retry_max_seconds()
                     )
-                    self._last_error_log_at = now
 
-    def _persist_latest(self) -> None:
+        logger.info("[live-order-snapshot] background worker stopped")
+
+    def _persist_latest(self) -> bool:
         isolation_path, orders_path = self._source_paths()
         isolated_data = self._read_json(isolation_path)
         orders_data = self._read_json(orders_path)
 
-        # Do not create an empty daily record before either runtime source
-        # has produced data. Missing one source does not erase its prior value.
+        # Do not create an empty daily record before either source has data.
+        # If one source is temporarily absent/unreadable, do not erase its
+        # existing MongoDB value.
         if isolated_data is None and orders_data is None:
-            return
+            logger.debug(
+                "[live-order-snapshot] no source files available; nothing to save"
+            )
+            return False
 
         now = self._now_market()
         date_id = now.date().isoformat()
@@ -193,7 +237,7 @@ class LiveOrderSnapshotService:
             date_id == self._last_document_id
             and signature == self._last_signature
         ):
-            return
+            return True
 
         collection = self._get_collection()
         collection.update_one(
@@ -217,6 +261,94 @@ class LiveOrderSnapshotService:
             date_id,
             ",".join(sorted(values)),
         )
+        return True
+
+    def flush(self, timeout_seconds: float | None = None) -> bool:
+        """Synchronously persist the newest files, retrying until timeout.
+
+        Call this after stopping feed/scheduler producers during application
+        shutdown. Returns False if the final snapshot could not be confirmed.
+        """
+        if not bool(getattr(config, "LIVE_ORDER_SNAPSHOT_ENABLED", True)):
+            logger.info("[live-order-snapshot] disabled; shutdown flush skipped")
+            return True
+
+        if timeout_seconds is None:
+            timeout_seconds = float(getattr(
+                config, "LIVE_ORDER_SNAPSHOT_SHUTDOWN_TIMEOUT_SECONDS", 20.0
+            ))
+        timeout_seconds = max(0.1, float(timeout_seconds))
+        deadline = time.monotonic() + timeout_seconds
+        retry_delay = self._retry_initial_seconds()
+
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                logger.error(
+                    "[live-order-snapshot] final flush timed out after %.1fs",
+                    timeout_seconds,
+                )
+                return False
+
+            acquired = self._persist_lock.acquire(timeout=remaining)
+            if not acquired:
+                logger.error(
+                    "[live-order-snapshot] final flush could not acquire "
+                    "persistence lock before timeout"
+                )
+                return False
+
+            try:
+                self._persist_latest()
+                logger.info("[live-order-snapshot] final shutdown flush complete")
+                return True
+            except Exception as exc:
+                self._log_write_failure(exc)
+            finally:
+                self._persist_lock.release()
+
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                continue
+            time.sleep(min(retry_delay, remaining))
+            retry_delay = min(
+                retry_delay * 2.0, self._retry_max_seconds()
+            )
+
+    def shutdown(self, timeout_seconds: float | None = None) -> bool:
+        """Flush latest state, stop worker, then close MongoDB connection."""
+        if timeout_seconds is None:
+            timeout_seconds = float(getattr(
+                config, "LIVE_ORDER_SNAPSHOT_SHUTDOWN_TIMEOUT_SECONDS", 20.0
+            ))
+
+        flushed = self.flush(timeout_seconds=timeout_seconds)
+        self._stop_requested.set()
+        self._requested.set()
+
+        worker = self._worker
+        if worker is not None and worker.is_alive():
+            worker.join(timeout=max(0.1, float(timeout_seconds)))
+
+        worker_stopped = worker is None or not worker.is_alive()
+        if not worker_stopped:
+            logger.warning(
+                "[live-order-snapshot] worker did not stop within %.1fs",
+                timeout_seconds,
+            )
+
+        if worker_stopped and self._client is not None:
+            try:
+                self._client.close()
+            except Exception:
+                logger.exception(
+                    "[live-order-snapshot] MongoDB client close failed"
+                )
+            finally:
+                self._client = None
+                self._collection = None
+
+        return flushed and worker_stopped
 
 
 live_order_snapshot_service = LiveOrderSnapshotService()
