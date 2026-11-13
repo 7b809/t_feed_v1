@@ -8,12 +8,19 @@ workspace; administrator credentials retain access to protected routes.
 """
 from __future__ import annotations
 
+import os
+
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
-from starlette.responses import JSONResponse, RedirectResponse
+from starlette.responses import JSONResponse, RedirectResponse, Response
 
+from core import config
 from core.auth import is_authenticated
-from core.user_accounts import get_user_session
+from core.user_accounts import (
+    flag_user_security_incident,
+    get_security_revocation_notice,
+    get_user_session,
+)
 from core.logger import get_logger
 
 logger = get_logger(__file__)
@@ -65,6 +72,43 @@ class AuthGuardMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         member = get_user_session(request)
+
+        # Chrome DevTools requests this well-known resource when inspection
+        # tooling is opened. Only this exact signal is treated as suspicious.
+        devtools_path = "/.well-known/appspecific/com.chrome.devtools.json"
+        devtools_logout_enabled = os.getenv(
+            "USER_AUTH_DEVTOOLS_LOGOUT_ENABLED", "true"
+        ).strip().lower() in {"1", "true", "yes", "on"}
+        if (
+            member
+            and devtools_logout_enabled
+            and path == devtools_path
+            and request.method in {"GET", "HEAD"}
+        ):
+            client_ip = request.client.host if request.client else "unknown"
+            flagged = flag_user_security_incident(
+                member.get("user_id"),
+                {
+                    "reason": "Chrome DevTools inspection endpoint accessed",
+                    "path": path,
+                    "client_ip": client_ip,
+                    "user_agent": request.headers.get("user-agent", ""),
+                },
+            )
+            logger.warning(
+                "[security] member session revoked after DevTools inspection signal user_id=%s client=%s recorded=%s",
+                member.get("user_id"), client_ip, flagged,
+            )
+            response = Response(status_code=204)
+            response.delete_cookie(
+                os.getenv("USER_AUTH_COOKIE_NAME", "market_member"),
+                path="/",
+                httponly=True,
+                secure=bool(config.ADMIN_COOKIE_SECURE),
+                samesite="lax",
+            )
+            return response
+
         if member:
             read_only_methods = {"GET", "HEAD"}
 
@@ -146,6 +190,17 @@ class AuthGuardMiddleware(BaseHTTPMiddleware):
             request.state.is_admin = True
             request.state.member = None
             return await call_next(request)
+
+        if get_security_revocation_notice(request):
+            response = RedirectResponse("/user/login?security_logout=1", status_code=303)
+            response.delete_cookie(
+                os.getenv("USER_AUTH_COOKIE_NAME", "market_member"),
+                path="/",
+                httponly=True,
+                secure=bool(config.ADMIN_COOKIE_SECURE),
+                samesite="lax",
+            )
+            return response
 
         client = request.client.host if request.client else "?"
         if _client_wants_html(request):
