@@ -11,6 +11,7 @@ from core import config
 _DB_NAME = os.getenv("USER_AUTH_MONGO_DB", "MARKET_ENGINE_IDENTITY").strip()
 _USERS = os.getenv("USER_AUTH_USERS_COLLECTION", "users").strip()
 _AUDIT = os.getenv("USER_AUTH_AUDIT_COLLECTION", "auth_audit").strip()
+_SECURITY_INCIDENTS = os.getenv("USER_AUTH_SECURITY_INCIDENTS_COLLECTION", "security_incidents").strip()
 _COOKIE = os.getenv("USER_AUTH_COOKIE_NAME", "market_member")
 _TTL = max(900, int(os.getenv("USER_AUTH_SESSION_TTL_SECONDS", "28800")))
 _MAX_FAILED = max(1, int(os.getenv("USER_AUTH_MAX_FAILED_LOGINS", "3")))
@@ -38,13 +39,17 @@ def _database():
         _db[_USERS].create_index([("email", ASCENDING)], unique=True)
         _db[_USERS].create_index([("status", ASCENDING), ("created_at", ASCENDING)])
         _db[_AUDIT].create_index([("created_at", ASCENDING)])
+        _db[_SECURITY_INCIDENTS].create_index([("user_id", ASCENDING), ("created_at", -1)])
+        _db[_SECURITY_INCIDENTS].create_index([("created_at", ASCENDING)])
     return _db
 
 def _audit(event, email=None, detail=None):
     try:
         _database()[_AUDIT].insert_one({"event": event, "email": email, "detail": detail or {}, "created_at": _now()})
-    except Exception:
-        pass
+    except Exception as exc:
+        from core.logger import get_logger
+        get_logger(__file__).exception("MongoDB auth audit write failed: %s", event)
+        raise RuntimeError("Unable to persist authentication audit event") from exc
 
 
 def _notify_security_incident(email, name, detail):
@@ -122,6 +127,7 @@ def flag_user_security_incident(user_id, details=None):
             "security_incident_count": 1,
         }},
     )
+    _database()[_SECURITY_INCIDENTS].insert_one({**safe_details, "email": user.get("email"), "name": user.get("name"), "event": "security_devtools_detected", "created_at": now, "review_status": "flagged"})
     _audit("security_devtools_detected", user.get("email"), safe_details)
     _notify_security_incident(user.get("email"), user.get("name"), safe_details)
     return True
@@ -217,7 +223,7 @@ def register_user(name, email, password):
     email = _email(email)
     now = _now()
     doc = {
-        "name": name, "email": email, "password_hash": _hash(password),
+        "name": name, "username": name.strip().lower(), "email": email, "password_hash": _hash(password),
         "role": "member", "status": "pending", "created_at": now,
         "updated_at": now, "last_login_at": None, "session_version": 1,
         "failed_login_attempts": 0, "lock_until": None, "login_enabled": True,
@@ -231,23 +237,28 @@ def register_user(name, email, password):
     _notify_registration(name, email, user_id)
     return {"user_id": user_id, "name": name, "email": email, "status": "pending"}
 
-def authenticate_user(email, password):
-    email = _email(email)
+def authenticate_user(identifier, password):
+    """Authenticate by registered email or account name (username)."""
+    identifier = (identifier or "").strip()
+    if not identifier or len(identifier) > 254:
+        raise HTTPException(422, "Enter your username or email address")
+    normalized = identifier.lower()
     collection = _database()[_USERS]
-    user = collection.find_one({"email": email})
+    user = collection.find_one({"$or": [{"email": normalized}, {"username": normalized}, {"name": {"$regex": "^" + re.escape(identifier) + "$", "$options": "i"}}]})
+    audit_identity = normalized
     if not user:
-        _audit("login_failed", email)
+        _audit("login_failed", audit_identity, {"identifier_type": "username_or_email"})
         raise HTTPException(401, "Invalid email or password")
 
     if user.get("login_enabled") is False:
-        _audit("login_blocked_manual", email)
+        _audit("login_blocked_manual", audit_identity)
         raise HTTPException(403, "Login is disabled by an administrator. Contact support.")
 
     # Check an existing lock before password verification. Repeated attempts
     # during the lock window must not extend the two-hour timer.
     lock_until = user.get("lock_until")
     if lock_until and _utc(lock_until) > _now():
-        _audit("login_blocked_locked", email, {"lock_until": _utc(lock_until).isoformat()})
+        _audit("login_blocked_locked", audit_identity, {"lock_until": _utc(lock_until).isoformat()})
         raise HTTPException(423, f"Too many failed attempts. Login is locked until {_utc(lock_until).strftime('%Y-%m-%d %H:%M UTC')}.")
 
     if not _verify(password, user.get("password_hash", "")):
@@ -256,21 +267,21 @@ def authenticate_user(email, password):
         if attempts >= _MAX_FAILED:
             new_lock_until = _now() + timedelta(minutes=_LOCK_MINUTES)
             update["lock_until"] = new_lock_until
-            _audit("login_temporarily_locked", email, {"attempts": attempts, "lock_until": new_lock_until.isoformat()})
+            _audit("login_temporarily_locked", audit_identity, {"attempts": attempts, "lock_until": new_lock_until.isoformat()})
         collection.update_one({"_id": user["_id"]}, {"$set": update})
-        _audit("login_failed", email, {"attempts": attempts})
+        _audit("login_failed", audit_identity, {"attempts": attempts})
         raise HTTPException(401, "Invalid email or password")
 
     if lock_until and _utc(lock_until) <= _now():
         collection.update_one({"_id": user["_id"]}, {"$set": {"failed_login_attempts": 0, "lock_until": None}})
     if user.get("status") != "active":
-        _audit("login_blocked", email, {"status": user.get("status")})
+        _audit("login_blocked", audit_identity, {"status": user.get("status")})
         raise HTTPException(403, "Your account is awaiting approval or has been disabled")
     collection.update_one({"_id": user["_id"]}, {"$set": {
         "last_login_at": _now(), "failed_login_attempts": 0, "lock_until": None, "updated_at": _now()
     }})
-    _audit("login_success", email)
-    return {"user_id": str(user["_id"]), "email": email, "name": user["name"],
+    _audit("login_success", user.get("email"), {"identifier_type": "username_or_email"})
+    return {"user_id": str(user["_id"]), "email": user["email"], "name": user["name"],
             "role": "member", "session_version": int(user.get("session_version", 1))}
 
 def _secret():
@@ -408,3 +419,33 @@ def revoke_user_sessions(user_id):
         raise HTTPException(404, "User not found")
     _audit("sessions_revoked", user_id)
     return {"user_id": user_id, "sessions_revoked": True}
+
+ 
+def clear_user_security_flag(user_id, admin_actor="admin"):
+    """Clear active security flag and reset visible counters, preserving incident history."""
+    oid = _object_id(user_id)
+    now = _now()
+    collection = _database()[_USERS]
+    user = collection.find_one({"_id": oid}, {"name": 1, "email": 1})
+    if not user:
+        raise HTTPException(404, "User not found")
+    result = collection.update_one({"_id": oid}, {"$set": {
+        "security_flagged": False,
+        "security_incident_count": 0,
+        "failed_login_attempts": 0,
+        "lock_until": None,
+        "security_review_cleared_at": now,
+        "security_review_cleared_by": str(admin_actor)[:120],
+        "updated_at": now,
+    }, "$inc": {"session_version": 1}})
+    if not result.matched_count:
+        raise HTTPException(404, "User not found")
+    detail = {"user_id": user_id, "admin_actor": str(admin_actor)[:120],
+              "incident_history_preserved": True, "failed_login_attempts_reset": True}
+    _database()[_SECURITY_INCIDENTS].insert_one({
+        **detail, "email": user.get("email"), "name": user.get("name"),
+        "event": "security_flag_cleared", "created_at": now, "review_status": "cleared",
+    })
+    _audit("security_flag_cleared", user.get("email"), detail)
+    return {"user_id": user_id, "security_flagged": False, "security_incident_count": 0,
+            "failed_login_attempts": 0, "incident_history_preserved": True}
