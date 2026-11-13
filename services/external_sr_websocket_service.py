@@ -60,9 +60,8 @@ class ExternalSRWebSocketService:
         os.getenv("EXTERNAL_SR_WINDOW_END", "16:00"), (16, 0)
     )
 
-    # How often a quiet live connection re-checks the market window via
-    # ``asyncio.wait_for`` around ``ws.recv()``. Lower = more responsive
-    # close at 15:40, higher = fewer wake-ups on a silent feed.
+    # Maximum wait on a quiet socket before re-checking the configured
+    # market window. The close boundary is also used as a shorter timeout.
     RECV_WINDOW_CHECK_SECONDS = 60.0
 
     def __init__(self) -> None:
@@ -158,7 +157,7 @@ class ExternalSRWebSocketService:
             wait = self._seconds_until_next_window()
             # Cap at 1h so a system clock jump can't strand us for days.
             wait = max(1.0, min(wait, 3600.0))
-            # Small jitter so ~700 tasks don't all handshake at 09:15:00.000.
+            # Small jitter prevents a large batch of tasks handshaking together.
             jitter = random.uniform(0.0, 3.0)
             await asyncio.sleep(wait + jitter)
 
