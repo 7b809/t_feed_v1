@@ -461,6 +461,15 @@
             <span>Logs</span>
             <i class="bi bi-box-arrow-up-right ext-arrow"></i>
         </a>
+        <a href="/admin/users/panel" id="mobileAdminPanelLink" class="app-nav-button" style="display:none" title="Admin panel">
+            <span class="nav-icon-badge api-theme"><i class="bi bi-people-fill"></i></span>
+            <span>Admin Panel</span>
+        </a>
+
+        <a href="/admin/users/panel" id="navAdminPanelLink" class="app-nav-button" style="display:none" title="Admin panel">
+            <span class="nav-icon-badge api-theme"><i class="bi bi-people-fill"></i></span>
+            <span>Admin Panel</span>
+        </a>
 
         <!-- Auth entry — hidden until /auth/whoami resolves. On 200 it
              becomes a red-tinted "Logout" button; on 401 it becomes a
@@ -585,6 +594,10 @@
         <span class="nav-icon-badge logs-theme"><i class="bi bi-file-earmark-text-fill"></i></span>
         <span class="mobile-fab-menu-label">Logs</span>
     </a>
+    <a href="/admin/users/panel" id="fabAdminPanelLink" class="mobile-fab-menu-item" style="display:none" title="Admin Panel" aria-label="Admin Panel">
+        <span class="nav-icon-badge api-theme"><i class="bi bi-people-fill"></i></span>
+        <span class="mobile-fab-menu-label">Admin</span>
+    </a>
     <a
         href="/login"
         id="fabAuthLink"
@@ -619,49 +632,38 @@
     window.apiHost = window.apiHost || window.location.origin;
 </script>
 
-<!-- =============================================================
-     GLOBAL 401 FETCH INTERCEPTOR
-     Every fetch()/XHR that returns 401 is treated as "session
-     expired": we bounce the user to /login with ?next= so they
-     land back where they were after signing in again.
-     The interceptor is installed BEFORE any page-specific script
-     runs (this block is placed right after Bootstrap, which every
-     page loads first), so it wins the race for every fetch call.
-     ============================================================= -->
+<!-- GLOBAL 401 HANDLING: route expired sessions to the correct sign-in page. -->
 <script>
-    (function () {
-        if (window.__iso401Installed) return;
-        window.__iso401Installed = true;
+(function () {
+    if (window.__iso401Installed) return;
+    window.__iso401Installed = true;
 
-        function isAuthBypassPath(path) {
-            if (!path) return false;
-            return path.startsWith("/login") ||
-                   path.startsWith("/logout") ||
-                   path.startsWith("/auth/whoami");
-        }
+    function redirectToLogin(responseUrl) {
+        var current = window.location.pathname + window.location.search;
+        var responsePath = "";
+        try { responsePath = new URL(responseUrl || "", window.location.origin).pathname; } catch (_) {}
+        if (window.location.pathname.startsWith("/user/login") ||
+            window.location.pathname.startsWith("/admin/login") ||
+            window.location.pathname.startsWith("/register")) return;
+        var isAdmin = window.location.pathname.startsWith("/admin/") ||
+                      window.location.pathname.startsWith("/logs") ||
+                      responsePath.startsWith("/admin/");
+        var login = isAdmin ? "/admin/login" : "/user/login";
+        window.location.replace(login + "?next=" + encodeURIComponent(current));
+    }
 
-        function redirectToLogin() {
-            var here = window.location.pathname + window.location.search;
-            if (isAuthBypassPath(window.location.pathname)) return;
-            window.location.replace(
-                "/login?next=" + encodeURIComponent(here)
-            );
-        }
-
-        var _originalFetch = window.fetch;
-        if (typeof _originalFetch === "function") {
-            window.fetch = function (input, init) {
-                return _originalFetch.apply(this, arguments).then(function (response) {
-                    if (response && response.status === 401) {
-                        // Small grace period so the caller's own .catch()
-                        // can still run and log/notify if it wants to.
-                        setTimeout(redirectToLogin, 50);
-                    }
-                    return response;
-                });
-            };
-        }
-    })();
+    var originalFetch = window.fetch;
+    if (typeof originalFetch === "function") {
+        window.fetch = function () {
+            return originalFetch.apply(this, arguments).then(function (response) {
+                if (response && response.status === 401) {
+                    setTimeout(function () { redirectToLogin(response.url); }, 50);
+                }
+                return response;
+            });
+        };
+    }
+})();
 </script>
 
 <!-- Pill menu toggle -->
@@ -715,105 +717,61 @@
     })();
 </script>
 
-<!-- =============================================================
-     AUTH LINK TOGGLE
-     Resolves the session state once per page load AND re-checks
-     whenever the tab becomes visible again (so a user whose cookie
-     expired in the background sees the correct Login/Logout state
-     without needing a hard refresh).
-     ============================================================= -->
+<!-- ROLE-AWARE NAVIGATION: member and administrator sessions remain separate. -->
 <script>
-    (function () {
-        var desktopLink  = document.getElementById('navAuthLink');
-        var desktopLabel = document.getElementById('navAuthLabel');
-        var desktopIcon  = document.getElementById('navAuthIconBadge');
-        var drawerLink   = document.getElementById('mobileAuthLink');
-        var drawerLabel  = document.getElementById('mobileAuthLabel');
-        var drawerIcon   = document.getElementById('mobileAuthIconBadge');
-        var fabLink      = document.getElementById('fabAuthLink');
-        var fabLabel     = document.getElementById('fabAuthLabel');
-        var fabIcon      = document.getElementById('fabAuthIconBadge');
+(function () {
+    var adminLinks = [
+        document.getElementById("navAdminPanelLink"),
+        document.getElementById("mobileAdminPanelLink"),
+        document.getElementById("fabAdminPanelLink")
+    ];
+    var authLinks = [
+        {el:document.getElementById("navAuthLink"),label:document.getElementById("navAuthLabel"),icon:document.getElementById("navAuthIconBadge")},
+        {el:document.getElementById("mobileAuthLink"),label:document.getElementById("mobileAuthLabel"),icon:document.getElementById("mobileAuthIconBadge")},
+        {el:document.getElementById("fabAuthLink"),label:document.getElementById("fabAuthLabel"),icon:document.getElementById("fabAuthIconBadge")}
+    ];
 
-        function applyAuthState(authed) {
-            var href, label, title, iconClass, badgeClass, isLogout;
-
-            if (authed) {
-                href = '/logout';
-                label = 'Logout';
-                title = 'Sign out';
-                iconClass = 'bi bi-box-arrow-right';
-                badgeClass = 'nav-icon-badge logout-theme';
-                isLogout = true;
-            } else {
-                href = '/login?next=' + encodeURIComponent(
-                    window.location.pathname + window.location.search
-                );
-                label = 'Login';
-                title = 'Sign in';
-                iconClass = 'bi bi-shield-lock';
-                badgeClass = 'nav-icon-badge auth-theme';
-                isLogout = false;
-            }
-
-            var links = [
-                { el: desktopLink, lbl: desktopLabel, icon: desktopIcon },
-                { el: drawerLink,  lbl: drawerLabel,  icon: drawerIcon  },
-                { el: fabLink,     lbl: fabLabel,     icon: fabIcon     }
-            ];
-
-            links.forEach(function (pair) {
-                var el = pair.el;
-                if (!el) return;
-                el.href = href;
-                el.title = title;
-                el.setAttribute('aria-label', title);
-                el.style.display = '';
-                el.classList.toggle('is-logout', isLogout);
-
-                // Badge on the left of the button
-                var badge = pair.icon;
-                if (badge) {
-                    badge.className = badgeClass;
-                    var i = badge.querySelector('i');
-                    if (i) i.className = iconClass;
-                }
-
-                // Some pages use a second badge wrapper (mobile pill).
-                // Keep the label text in sync too.
-                if (pair.lbl) pair.lbl.textContent = label;
-            });
-        }
-
-        function refreshAuthState() {
-            try {
-                fetch('/auth/whoami', {
-                    method: 'GET',
-                    credentials: 'same-origin',
-                    cache: 'no-store',
-                    headers: { 'Accept': 'application/json' }
-                })
-                    .then(function (r) { applyAuthState(r.ok); })
-                    .catch(function () { applyAuthState(false); });
-            } catch (_) {
-                applyAuthState(false);
-            }
-        }
-
-        // Initial resolution
-        refreshAuthState();
-
-        // Re-check whenever the tab regains focus (covers cookie expiry
-        // while the user was on another tab, plus post-login navigation
-        // back to a page that was already open).
-        document.addEventListener('visibilitychange', function () {
-            if (!document.hidden) refreshAuthState();
+    function apply(role) {
+        var authenticated = role === "member" || role === "admin";
+        adminLinks.forEach(function (el) {
+            if (el) el.style.display = role === "admin" ? "" : "none";
         });
-
-        // Also re-check on BFCache restore (browser Back button)
-        window.addEventListener('pageshow', function (event) {
-            if (event.persisted) refreshAuthState();
+        authLinks.forEach(function (item) {
+            if (!item.el) return;
+            var href = role === "admin" ? "/logout" : (role === "member" ? "/user/logout" :
+                "/user/login?next=" + encodeURIComponent(location.pathname + location.search));
+            var label = authenticated ? "Logout" : "Member Login";
+            var iconClass = authenticated ? "bi bi-box-arrow-right" : "bi bi-person-circle";
+            item.el.href = href;
+            item.el.title = authenticated ? "Sign out" : "Member sign in";
+            item.el.setAttribute("aria-label", item.el.title);
+            item.el.style.display = "";
+            item.el.classList.toggle("is-logout", authenticated);
+            if (item.label) item.label.textContent = label;
+            if (item.icon) {
+                item.icon.className = authenticated ? "nav-icon-badge logout-theme" : "nav-icon-badge auth-theme";
+                var icon = item.icon.querySelector("i");
+                if (icon) icon.className = iconClass;
+            }
         });
-    })();
+    }
+
+    function refresh() {
+        fetch("/auth/whoami", {
+            method:"GET", credentials:"same-origin", cache:"no-store",
+            headers:{"Accept":"application/json"}
+        }).then(function (response) {
+            if (!response.ok) { apply(null); return null; }
+            return response.json();
+        }).then(function (data) {
+            if (data) apply(data.role || null);
+        }).catch(function () { apply(null); });
+    }
+
+    refresh();
+    document.addEventListener("visibilitychange", function () { if (!document.hidden) refresh(); });
+    window.addEventListener("pageshow", function (event) { if (event.persisted) refresh(); });
+})();
 </script>
 
 {% block scripts %}{% endblock %}
