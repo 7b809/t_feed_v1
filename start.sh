@@ -1,7 +1,7 @@
 #!/bin/bash
 
-APP_NAME="market_data_foundation"
-PORT=8010
+APP_NAME="NG7"
+PORT=8009
 
 PID_FILE="${APP_NAME}.pid"
 LOG_DIR="logs"
@@ -9,7 +9,7 @@ VENV_DIR="myenv"
 REQUIREMENTS_FILE="requirements.txt"
 
 echo "=========================================="
-echo "  Market Data Foundation"
+echo "  NG7"
 echo "=========================================="
 echo
 echo "Starting FastAPI application..."

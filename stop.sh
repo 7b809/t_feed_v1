@@ -1,10 +1,10 @@
 #!/bin/bash
 
-APP_NAME="market_data_foundation"
+APP_NAME="NG7"
 PID_FILE="${APP_NAME}.pid"
 
 echo "=========================================="
-echo "  Market Data Foundation"
+echo "  NG7"
 echo "=========================================="
 echo
 echo "Stopping FastAPI application..."

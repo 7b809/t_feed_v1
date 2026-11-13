@@ -157,7 +157,7 @@ CHART_LIVE_POLL_SECONDS = max(15, _int("CHART_LIVE_POLL_SECONDS", 30))
 # Historical-candle archive is produced/maintained by the V4 engine.
 # Read it from the same MongoDB database configured as MONGO_DB in the
 # running V4 deployment. Keep this independent from V5 operational MONGO_DB.
-BACKUP_MONGO_DB = _str("BACKUP_MONGO_DB") or _str("V4_ENGINE_MONGO_DB")
+BACKUP_MONGO_DB = _str("UPSTOX_TOKEN_MONGO_DB")
 BACKUP_METADATA_COLLECTION = _str("BACKUP_METADATA_COLLECTION", "app_tokens")
 BACKUP_METADATA_DOC_ID = _str("BACKUP_METADATA_DOC_ID", "backup_candles")
 BACKUP_BLOB_COLLECTION = _str("BACKUP_BLOB_COLLECTION", "backup_collection")
