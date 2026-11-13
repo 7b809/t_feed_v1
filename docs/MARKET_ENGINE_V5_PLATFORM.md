@@ -100,3 +100,10 @@ BACKUP_BLOB_DOC_ID=backup_historical_candles
 ```
 
 Do not guess the V4 database name: copy the value from the V4 deployment's `.env`. Startup configuration validation now reports an error when `BACKUP_MONGO_DB` is missing, rather than silently querying the V5 operational database.
+
+
+## External EMA/S/R WebSocket connection window
+
+The external S/R consumer connects Monday-Friday from **09:00 through 16:00 IST**. The end boundary is exclusive; an active connection is closed at 16:00, including when no frames are arriving. Saturday and Sunday are always outside the default window. Override the defaults with `EXTERNAL_SR_WINDOW_START` and `EXTERNAL_SR_WINDOW_END` in `.env` only when required. Off-hours bypass is disabled by default and should be enabled only for testing with `EXTERNAL_SR_TEST_EMA=true`.
+
+The external provider host is not embedded in source code or status responses. Configure `EXTERNAL_SR_WS_URL` in the private deployment `.env`; the committed `.env.example` uses the reserved `.invalid` placeholder and will not connect until a real endpoint is configured.
