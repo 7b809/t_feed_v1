@@ -700,8 +700,8 @@ class DummyOrderService:
                 encoding="utf-8",
             )
             tmp.replace(path)
-            # Queue a non-blocking combined MongoDB snapshot after the
-            # local JSON state is durable. The worker coalesces rapid writes.
+            # Queue the daily dummy_orders document update after the local JSON
+            # state is durable. The worker coalesces rapid writes.
             try:
                 from services.live_order_snapshot_service import (
                     live_order_snapshot_service,
