@@ -135,6 +135,11 @@ def validate_config() -> tuple[list[str], list[str]]:
         errors.append("TOKENS_COLLECTION is empty")
     if not config.UPSTOX_TOKEN_DOC_ID:
         errors.append("UPSTOX_TOKEN_DOC_ID is empty")
+    if not config.BACKUP_MONGO_DB:
+        errors.append(
+            "BACKUP_MONGO_DB is empty — set it to the MONGO_DB value "
+            "used by the running V4 engine so V5 can read its historical-candle archive"
+        )
 
     # ------------------------------------------------------------------ #
     # 5. Port sanity                                                     #
