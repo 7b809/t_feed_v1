@@ -392,7 +392,7 @@ class PerformanceSnapshotService:
                 )
 
             count_result = list(
-                collection.aggregate(pipeline + [{"$count": "total"}], allowDiskUse=False)
+                collection.aggregate(pipeline + [{"$count": "total"}], allowDiskUse=True)
             )
             total = int(count_result[0]["total"]) if count_result else 0
             data_pipeline = pipeline + [
@@ -417,7 +417,7 @@ class PerformanceSnapshotService:
             ]
             items = [
                 _json_safe(item)
-                for item in collection.aggregate(data_pipeline, allowDiskUse=False)
+                for item in collection.aggregate(data_pipeline, allowDiskUse=True)
             ]
             total_pages = math.ceil(total / page_size) if total else 0
             return {
