@@ -9,6 +9,8 @@ from __future__ import annotations
 import base64
 import logging
 import math
+import json
+import re
 import threading
 from datetime import date, datetime, time, timezone
 from decimal import Decimal
@@ -169,6 +171,277 @@ class PerformanceSnapshotService:
                     "The live index watch remains available."
                 ),
                 **base,
+            }
+
+
+    @staticmethod
+    def _extract_orders(orders_data: Any) -> list[dict[str, Any]]:
+        """Normalize supported daily-document order slots into one list."""
+        if not isinstance(orders_data, dict):
+            return []
+
+        candidates: list[Any] = []
+        listed = orders_data.get("orders")
+        if isinstance(listed, list):
+            candidates.extend(listed)
+
+        for key in ("order", "post_1130_order"):
+            item = orders_data.get(key)
+            if isinstance(item, dict):
+                candidates.append(item)
+
+        output: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for item in candidates:
+            if not isinstance(item, dict):
+                continue
+            safe = _json_safe(item)
+            identity = str(
+                safe.get("order_id")
+                or safe.get("trade_id")
+                or json.dumps(safe, sort_keys=True, separators=(",", ":"))
+            )
+            if identity in seen:
+                continue
+            seen.add(identity)
+            output.append(safe)
+        return output
+
+    @staticmethod
+    def _orders_summary(orders: list[dict[str, Any]]) -> dict[str, Any]:
+        open_count = 0
+        closed_count = 0
+        realised_points = 0.0
+        for order in orders:
+            status = str(
+                order.get("status")
+                or ("CLOSED" if order.get("closed_at") or order.get("closed_time") else "OPEN")
+            ).upper()
+            is_open = status == "OPEN"
+            if is_open:
+                open_count += 1
+            else:
+                closed_count += 1
+                try:
+                    value = float(
+                        order.get("closed_profit_pts")
+                        if order.get("closed_profit_pts") is not None
+                        else order.get("pnl_points", 0)
+                    )
+                    if math.isfinite(value):
+                        realised_points += value
+                except (TypeError, ValueError):
+                    pass
+        return {
+            "total_orders": len(orders),
+            "open_orders": open_count,
+            "closed_orders": closed_count,
+            "realised_points": round(realised_points, 4),
+        }
+
+    def get_today_orders(self) -> dict[str, Any]:
+        """Read today's saved dummy-order document and normalize its orders."""
+        now = datetime.now(_market_timezone())
+        today = now.date().isoformat()
+        base = {
+            "date": today,
+            "market": self._market_context(now),
+            "source": {
+                "database": config.PERFORMANCE_SNAPSHOT_MONGO_DB,
+                "collection": config.PERFORMANCE_SNAPSHOT_COLLECTION,
+                "mode": "read_only",
+            },
+            "checked_at": now.isoformat(),
+        }
+        if not config.PERFORMANCE_SNAPSHOT_ENABLED:
+            return {"status": "disabled", "orders": [], **base}
+        if not config.MONGO_URI:
+            return {
+                "status": "unavailable",
+                "orders": [],
+                "error": "MongoDB connection is not configured.",
+                **base,
+            }
+
+        try:
+            collection = self._mongo()[config.PERFORMANCE_SNAPSHOT_MONGO_DB][
+                config.PERFORMANCE_SNAPSHOT_COLLECTION
+            ]
+            document = collection.find_one(
+                {"_id": today},
+                {
+                    "_id": 1,
+                    "orders_data": 1,
+                    "created_datetime": 1,
+                    "last_updated_time": 1,
+                },
+            )
+            if not document:
+                return {"status": "not_found", "orders": [], **base}
+
+            orders = self._extract_orders(document.get("orders_data"))
+            return {
+                "status": "found",
+                "orders": orders,
+                "summary": self._orders_summary(orders),
+                "document": {
+                    "created_datetime": _json_safe(document.get("created_datetime")),
+                    "last_updated_time": _json_safe(document.get("last_updated_time")),
+                },
+                **base,
+            }
+        except Exception as exc:
+            logger.warning(
+                "[orders-viewer] today's orders lookup failed date=%s error=%s",
+                today,
+                type(exc).__name__,
+            )
+            return {
+                "status": "unavailable",
+                "orders": [],
+                "error": "Today's order data is temporarily unavailable.",
+                **base,
+            }
+
+    def get_order_history(
+        self,
+        page: int = 1,
+        page_size: int = 20,
+        search: str | None = None,
+    ) -> dict[str, Any]:
+        """Paginate flattened order records across daily documents."""
+        page = max(1, int(page))
+        page_size = max(1, min(100, int(page_size)))
+        base = {
+            "page": page,
+            "page_size": page_size,
+            "source": {
+                "database": config.PERFORMANCE_SNAPSHOT_MONGO_DB,
+                "collection": config.PERFORMANCE_SNAPSHOT_COLLECTION,
+                "mode": "read_only",
+            },
+        }
+        if not config.PERFORMANCE_SNAPSHOT_ENABLED:
+            return {"status": "disabled", "items": [], "total": 0, **base}
+        if not config.MONGO_URI:
+            return {
+                "status": "unavailable",
+                "items": [],
+                "total": 0,
+                "error": "MongoDB connection is not configured.",
+                **base,
+            }
+
+        try:
+            collection = self._mongo()[config.PERFORMANCE_SNAPSHOT_MONGO_DB][
+                config.PERFORMANCE_SNAPSHOT_COLLECTION
+            ]
+            pipeline: list[dict[str, Any]] = [
+                {
+                    "$project": {
+                        "trading_date": "$_id",
+                        "document_created_at": "$created_datetime",
+                        "document_updated_at": "$last_updated_time",
+                        "_orders": {
+                            "$setUnion": [
+                                {
+                                    "$cond": [
+                                        {"$isArray": "$orders_data.orders"},
+                                        "$orders_data.orders",
+                                        [],
+                                    ]
+                                },
+                                {
+                                    "$cond": [
+                                        {"$eq": [{"$type": "$orders_data.order"}, "object"]},
+                                        ["$orders_data.order"],
+                                        [],
+                                    ]
+                                },
+                                {
+                                    "$cond": [
+                                        {"$eq": [{"$type": "$orders_data.post_1130_order"}, "object"]},
+                                        ["$orders_data.post_1130_order"],
+                                        [],
+                                    ]
+                                },
+                            ]
+                        },
+                    }
+                },
+                {"$unwind": "$_orders"},
+            ]
+
+            query = (search or "").strip()[:100]
+            if query:
+                pattern = re.escape(query)
+                pipeline.append(
+                    {
+                        "$match": {
+                            "$or": [
+                                {"_orders.trading_symbol": {"$regex": pattern, "$options": "i"}},
+                                {"_orders.instrument_key": {"$regex": pattern, "$options": "i"}},
+                                {"_orders.status": {"$regex": pattern, "$options": "i"}},
+                                {"_orders.order_id": {"$regex": pattern, "$options": "i"}},
+                            ]
+                        }
+                    }
+                )
+
+            count_result = list(
+                collection.aggregate(pipeline + [{"$count": "total"}], allowDiskUse=False)
+            )
+            total = int(count_result[0]["total"]) if count_result else 0
+            data_pipeline = pipeline + [
+                {
+                    "$sort": {
+                        "trading_date": -1,
+                        "_orders.entry_time": -1,
+                        "_orders.created_at": -1,
+                    }
+                },
+                {"$skip": (page - 1) * page_size},
+                {"$limit": page_size},
+                {
+                    "$project": {
+                        "_id": 0,
+                        "trading_date": 1,
+                        "document_created_at": 1,
+                        "document_updated_at": 1,
+                        "order": "$_orders",
+                    }
+                },
+            ]
+            items = [
+                _json_safe(item)
+                for item in collection.aggregate(data_pipeline, allowDiskUse=False)
+            ]
+            total_pages = math.ceil(total / page_size) if total else 0
+            return {
+                "status": "ok",
+                "items": items,
+                "total": total,
+                "page": page,
+                "page_size": page_size,
+                "total_pages": total_pages,
+                "has_previous": page > 1 and total > 0,
+                "has_next": page < total_pages,
+                **{"source": base["source"]},
+            }
+        except Exception as exc:
+            logger.warning(
+                "[orders-viewer] order history lookup failed page=%s error=%s",
+                page,
+                type(exc).__name__,
+            )
+            return {
+                "status": "unavailable",
+                "items": [],
+                "total": 0,
+                "page": page,
+                "page_size": page_size,
+                "error": "Order history is temporarily unavailable.",
+                **{"source": base["source"]},
             }
 
     def close(self) -> None:
