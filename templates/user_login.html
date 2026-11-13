@@ -20,11 +20,11 @@
 {% endif %}
 <div class="form-kicker">Member workspace</div>
 <h1 class="form-title" id="authTitle">Welcome back</h1>
-<p class="form-subtitle">Sign in with the email address associated with your approved member account.</p>
+<p class="form-subtitle">Sign in using your username or email address and password.</p>
 {% if error %}<div class="notice error" role="alert"><i class="bi bi-exclamation-triangle-fill"></i><span>{{ error }}</span></div>{% endif %}
 {% if message %}<div class="notice success" role="status"><i class="bi bi-check-circle-fill"></i><span>{{ message }}</span></div>{% endif %}
 <form method="post" action="/user/login" autocomplete="on">
-  <div class="field"><label for="memberEmail">Email address</label><div class="input-wrap"><i class="bi bi-envelope"></i><input id="memberEmail" name="email" type="email" maxlength="254" placeholder="name@example.com" autocomplete="username" autocapitalize="none" required autofocus></div></div>
+  <div class="field"><label for="memberIdentifier">Username or email</label><div class="input-wrap"><i class="bi bi-person"></i><input id="memberIdentifier" name="identifier" type="text" maxlength="254" placeholder="Username or name@example.com" autocomplete="username" autocapitalize="none" required autofocus></div></div>
   <div class="field"><label for="memberPassword">Password</label><div class="input-wrap"><i class="bi bi-lock"></i><input id="memberPassword" name="password" type="password" placeholder="Enter your password" autocomplete="current-password" required></div></div>
   <button class="submit" type="submit"><i class="bi bi-box-arrow-in-right"></i>Sign in to workspace</button>
 </form>
