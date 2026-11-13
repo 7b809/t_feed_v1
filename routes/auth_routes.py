@@ -18,7 +18,7 @@ def _safe_next(value: str | None) -> str:
 
 
 def _render_admin_login(request: Request, next_path: str, error: str | None = None,
-                        form_action: str = "/login", status_code: int = 200):
+                        form_action: str = "/admin/login", status_code: int = 200):
     from routes.page_routes import templates
     return templates.TemplateResponse(
         request=request,
@@ -39,7 +39,7 @@ def default_login():
 
 
 @router.get("/admin/login", response_class=HTMLResponse)
-def login_page(request: Request, next: str = "/"):
+def login_page(request: Request, next: str = "/admin/users/panel"):
     action = "/admin/login"
     return _render_admin_login(request, next, form_action=action)
 
