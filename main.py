@@ -684,6 +684,9 @@ async def app_lifespan(app: FastAPI):
     # solely to populate the four-index watch before today's snapshot exists.
     if config.PERFORMANCE_VIEWER_MODE:
         config.LEVEL_ISOLATION_ENABLED = False
+        config.LIVE_SR_ENABLED = False
+        config.SR_BACKFILL_ENABLED = False
+        config.EXTERNAL_SR_WS_ENABLED = False
         config.DUMMY_ORDER_ENABLED = False
         config.SANDBOX_EXECUTION_ENABLED = False
         config.DAILY_REFRESH_ENABLED = False
