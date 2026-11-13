@@ -21,6 +21,12 @@ _client = _db = None
 def _now():
     return datetime.now(timezone.utc)
 
+def _utc(value):
+    """MongoDB may return naive UTC datetimes; normalize before comparing."""
+    if value is None:
+        return None
+    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+
 def _database():
     global _client, _db
     if _db is None:
@@ -135,10 +141,10 @@ def authenticate_user(email, password):
     if user.get("login_enabled") is False:
         _audit("login_blocked_manual", email)
         raise HTTPException(403, "Login is disabled by an administrator. Contact support.")
-    if lock_until and lock_until > _now():
+    if lock_until and _utc(lock_until) > _now():
         _audit("login_blocked_locked", email, {"lock_until": lock_until.isoformat()})
         raise HTTPException(423, f"Too many failed attempts. Login is locked until {lock_until.strftime('%Y-%m-%d %H:%M UTC')}.")
-    if lock_until and lock_until <= _now():
+    if lock_until and _utc(lock_until) <= _now():
         collection.update_one({"_id": user["_id"]}, {"$set": {"failed_login_attempts": 0, "lock_until": None}})
     if user.get("status") != "active":
         _audit("login_blocked", email, {"status": user.get("status")})
@@ -196,7 +202,7 @@ def list_users(status=None, limit=300):
     for row in rows:
         row["user_id"] = str(row.pop("_id"))
         lock_until = row.get("lock_until")
-        row["temporarily_locked"] = bool(lock_until and lock_until > now)
+        row["temporarily_locked"] = bool(lock_until and _utc(lock_until) > now)
         row["suspicious"] = row["temporarily_locked"] or int(row.get("failed_login_attempts", 0)) >= _MAX_FAILED
         output.append(row)
     return output
