@@ -109,7 +109,7 @@ def member_me(request: Request):
 def admin_users_panel(request: Request):
     return _templates().TemplateResponse(
         request=request, name="admin_users.html",
-        context={"app_name": "Market Data Foundation"},
+        context={"app_name": "NG7"},
     )
 
 @router.get("/admin/users")
