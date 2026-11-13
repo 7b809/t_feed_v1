@@ -99,15 +99,11 @@ class AuthGuardMiddleware(BaseHTTPMiddleware):
                 "[security] member session revoked after DevTools inspection signal user_id=%s client=%s recorded=%s",
                 member.get("user_id"), client_ip, flagged,
             )
-            response = Response(status_code=204)
-            response.delete_cookie(
-                os.getenv("USER_AUTH_COOKIE_NAME", "market_member"),
-                path="/",
-                httponly=True,
-                secure=bool(config.ADMIN_COOKIE_SECURE),
-                samesite="lax",
-            )
-            return response
+            # Keep the signed cookie for one final /auth/whoami check.
+            # The session_version has already been incremented, so protected
+            # requests are denied. The browser then receives security_logout
+            # and is redirected to the login page, which clears the cookie.
+            return Response(status_code=204)
 
         if member:
             read_only_methods = {"GET", "HEAD"}
