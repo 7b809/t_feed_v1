@@ -101,7 +101,10 @@ import asyncio
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
+
+from core import config
+from core.auth import require_any_auth
 
 from services.isolated_instrument_promotion_service import (
     isolated_instrument_promotion_service,
@@ -115,6 +118,11 @@ from services.level_isolated_instrument_service import (
 from services.strategy_entry_signal_service import (
     strategy_entry_signal_service,
 )
+
+# GET endpoints expose read-only isolation state to authenticated members
+# through AuthGuardMiddleware. Mutating endpoints retain the administrator
+# credential check in production. Keep development mode behaviour unchanged.
+_ADMIN_WRITE_AUTH = [Depends(require_any_auth)] if config.PROD_MODE else []
 
 router = APIRouter(prefix="/admin/level-isolation", tags=["level-isolation"])
 
@@ -311,7 +319,7 @@ def get_path_b_state() -> dict[str, Any]:
         }
 
 
-@router.post("/apply-promotion")
+@router.post("/apply-promotion", dependencies=_ADMIN_WRITE_AUTH)
 async def apply_promotion() -> dict[str, Any]:
     """Apply the promotion recommended by the current strategy signal.
 
@@ -350,7 +358,7 @@ async def apply_promotion() -> dict[str, Any]:
     return await asyncio.to_thread(_run)
 
 
-@router.post("/clear-promotion")
+@router.post("/clear-promotion", dependencies=_ADMIN_WRITE_AUTH)
 async def clear_promotion() -> dict[str, Any]:
     """Remove today's promotion record.  Used by tests / manual reset."""
     return await asyncio.to_thread(
@@ -438,7 +446,7 @@ def get_instrument_sr(instrument_key: str) -> dict[str, Any]:
     )
 
 
-@router.post("/backfill")
+@router.post("/backfill", dependencies=_ADMIN_WRITE_AUTH)
 async def run_backfill() -> dict[str, Any]:
     from token_tasks.level_isolated_instrument_task import (
         run_level_isolation_backfill_manual,
@@ -446,7 +454,7 @@ async def run_backfill() -> dict[str, Any]:
     return await asyncio.to_thread(run_level_isolation_backfill_manual)
 
 
-@router.post("/refresh-snapshot")
+@router.post("/refresh-snapshot", dependencies=_ADMIN_WRITE_AUTH)
 async def refresh_snapshot() -> dict[str, Any]:
     """Re-collect the isolated instrument's own data at the touch.
 
@@ -464,7 +472,7 @@ async def refresh_snapshot() -> dict[str, Any]:
     )
 
 
-@router.post("/reset")
+@router.post("/reset", dependencies=_ADMIN_WRITE_AUTH)
 async def reset() -> dict[str, Any]:
     # Clear the promotion first so the SR tracker resets to the base state.
     try:
