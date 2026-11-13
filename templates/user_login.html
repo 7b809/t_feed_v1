@@ -1,6 +1,23 @@
 {% extends "auth_base.html" %}
-{% block title %}Member sign in · Market Engine{% endblock %}
+{% block title %}Member sign in · NG7{% endblock %}
 {% block content %}
+{% if security_logout %}
+<div id="securityLogoutToast" role="status" aria-live="polite" style="position:fixed;z-index:9999;top:20px;right:20px;width:min(420px,calc(100vw - 32px));padding:15px 18px;border-radius:12px;background:#fff7ed;border:1px solid #fdba74;box-shadow:0 12px 36px rgba(15,23,42,.18);color:#9a3412;font-size:.9rem;line-height:1.5">
+  <strong style="display:block;margin-bottom:4px">Security logout</strong>
+  Your session was ended because suspicious browser inspection activity was detected. The administrator has been notified.
+</div>
+<script>
+(function () {
+  var toast = document.getElementById("securityLogoutToast");
+  if (toast) window.setTimeout(function () {
+    toast.style.transition = "opacity .35s ease, transform .35s ease";
+    toast.style.opacity = "0";
+    toast.style.transform = "translateY(-8px)";
+    window.setTimeout(function () { if (toast.parentNode) toast.parentNode.removeChild(toast); }, 400);
+  }, 9000);
+})();
+</script>
+{% endif %}
 <div class="form-kicker">Member workspace</div>
 <h1 class="form-title" id="authTitle">Welcome back</h1>
 <p class="form-subtitle">Sign in with the email address associated with your approved member account.</p>
@@ -11,5 +28,5 @@
   <div class="field"><label for="memberPassword">Password</label><div class="input-wrap"><i class="bi bi-lock"></i><input id="memberPassword" name="password" type="password" placeholder="Enter your password" autocomplete="current-password" required></div></div>
   <button class="submit" type="submit"><i class="bi bi-box-arrow-in-right"></i>Sign in to workspace</button>
 </form>
-<div class="form-links"><span>New to Market Engine? <a href="/register">Create an account</a></span><a href="/admin/login">Administrator login</a></div>
+<div class="form-links"><span>New to NG7? <a href="/register">Create an account</a></span><a href="/admin/login">Administrator login</a></div>
 {% endblock %}
