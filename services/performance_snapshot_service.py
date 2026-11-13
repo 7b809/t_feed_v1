@@ -10,7 +10,7 @@ import base64
 import logging
 import math
 import threading
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timezone
 from decimal import Decimal
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -33,6 +33,11 @@ def _market_timezone() -> ZoneInfo:
 def _json_safe(value: Any) -> Any:
     """Convert BSON/Python values into values safe for a JSON response."""
     if isinstance(value, datetime):
+        # PyMongo decodes BSON datetimes as naive UTC unless tz_aware is set.
+        # Preserve that UTC meaning so browser rendering does not shift it
+        # as though it were already in the viewer's local timezone.
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
         return value.isoformat()
     if isinstance(value, date):
         return value.isoformat()
@@ -75,6 +80,8 @@ class PerformanceSnapshotService:
                         socketTimeoutMS=config.PERFORMANCE_SNAPSHOT_CONNECT_TIMEOUT_MS,
                         retryReads=True,
                         appname="NG7-Performance-Viewer",
+                        tz_aware=True,
+                        tzinfo=timezone.utc,
                     )
         return self._client
 
