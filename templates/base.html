@@ -1,587 +1,787 @@
-{% extends "base.html" %}
-{% block title %}User management · Market Engine{% endblock %}
+{# templates/base.html #}
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
 
-{% block head %}
-<style>
-/* ============================================================
-   Admin Panel — Executive Slate Theme
-   Light card floats on base.html's dark body.
-   All classes prefixed "adm-" to avoid Bootstrap collisions.
-   ============================================================ */
-:root {
-    --adm-panel: #f9fbfd;
-    --adm-card: #ffffff;
-    --adm-border: #d5dee8;
-    --adm-border-soft: #e7edf3;
-    --adm-text: #1e293b;
-    --adm-heading: #172b45;
-    --adm-muted: #68788c;
-    --adm-blue: #315f9f;
-    --adm-success: #176b4d;
-    --adm-danger: #a33648;
-    --adm-warn: #875a13;
-}
+    <title>NG7</title>
 
-/* Shell: light gradient content area under the dark navbar */
-.adm-shell {
-    padding: 24px 20px 32px;
-    min-height: calc(100vh - var(--navbar-height));
-    min-height: calc(100dvh - var(--navbar-height));
-    background: linear-gradient(135deg, #e9eef4 0%, #f3f5f8 54%, #e8edf3 100%);
-    box-sizing: border-box;
-}
+    <link
+        rel="icon"
+        type="image/svg+xml"
+        href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%232563eb'/%3E%3Cstop offset='1' stop-color='%237c3aed'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='64' height='64' rx='14' fill='url(%23g)'/%3E%3Cpath d='M14 42 L24 30 L34 38 L50 18' fill='none' stroke='%23ffffff' stroke-width='5' stroke-linecap='round' stroke-linejoin='round'/%3E%3Ccircle cx='50' cy='18' r='4' fill='%23ffffff'/%3E%3C/svg%3E"
+    />
 
-/* Main panel card */
-.adm-wrap {
-    width: min(1240px, 100%);
-    margin: 0 auto;
-    background: var(--adm-panel);
-    border: 1px solid var(--adm-border);
-    border-radius: 18px;
-    padding: clamp(18px, 3vw, 32px);
-    box-shadow: 0 16px 42px rgba(32, 52, 76, 0.10), inset 0 1px #fff;
-    color: var(--adm-text);
-}
+    <link
+        href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
+        rel="stylesheet"
+    />
+    <link
+        rel="stylesheet"
+        href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css"
+    />
 
-/* ---- Header ---- */
-.adm-head {
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
-    gap: 16px;
-    flex-wrap: wrap;
-    margin-bottom: 22px;
-    padding-bottom: 18px;
-    border-bottom: 1px solid var(--adm-border-soft);
-}
-.adm-head h1 {
-    margin: 5px 0;
-    font-size: clamp(1.5rem, 3vw, 2rem);
-    color: var(--adm-heading);
-    font-weight: 800;
-    letter-spacing: -0.01em;
-}
-.adm-head p {
-    margin: 0;
-    color: var(--adm-muted);
-    font-size: 0.86rem;
-}
-.adm-kicker {
-    color: #476b9a;
-    font-size: 0.72rem;
-    font-weight: 800;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-}
-.adm-head-actions {
-    display: flex;
-    gap: 7px;
-    flex-wrap: wrap;
-}
+    <style>
+        :root {
+            --app-bg-dark: #0f172a;
+            --app-nav-bg: #1e293b;
+            --app-border-color: #334155;
+            --app-text-main: #f8fafc;
+            --app-text-muted: #94a3b8;
+            --navbar-height: 64px;
+        }
 
-/* ---- Buttons ---- */
-.adm-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    border: 1px solid #cbd6e2;
-    border-radius: 9px;
-    padding: 9px 14px;
-    background: #e8eef5;
-    color: #29415e;
-    font-weight: 700;
-    font-size: 0.78rem;
-    line-height: 1.2;
-    cursor: pointer;
-    text-decoration: none;
-    font-family: inherit;
-    transition: filter 0.15s ease, box-shadow 0.15s ease, transform 0.1s ease;
-    white-space: nowrap;
-}
-.adm-btn:hover {
-    color: #29415e;
-    filter: brightness(0.97);
-    box-shadow: 0 2px 7px rgba(31, 52, 76, 0.1);
-}
-.adm-btn:active { transform: scale(0.98); }
-.adm-btn.primary {
-    background: linear-gradient(135deg, #315f9f, #476f9e);
-    color: #ffffff;
-    border: 0;
-    box-shadow: 0 3px 10px rgba(49, 95, 159, 0.28);
-}
-.adm-btn.good {
-    background: #e1f2eb;
-    border-color: #b9dfce;
-    color: var(--adm-success);
-}
-.adm-btn.danger {
-    background: #fae9eb;
-    border-color: #efc8ce;
-    color: var(--adm-danger);
-}
+        *, *::before, *::after {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
 
-/* ---- Stats ---- */
-.adm-stats {
-    display: grid;
-    grid-template-columns: repeat(5, minmax(0, 1fr));
-    gap: 12px;
-    margin-bottom: 18px;
-}
-.adm-stat {
-    background: linear-gradient(180deg, #ffffff 0%, #f4f7fa 100%);
-    border: 1px solid var(--adm-border);
-    border-radius: 12px;
-    padding: 14px;
-    box-shadow: 0 3px 10px rgba(31, 52, 76, 0.04);
-}
-.adm-stat small {
-    display: block;
-    color: var(--adm-muted);
-    font-size: 0.7rem;
-    text-transform: uppercase;
-    font-weight: 800;
-    letter-spacing: 0.04em;
-}
-.adm-stat strong {
-    display: block;
-    margin-top: 7px;
-    font-size: 1.55rem;
-    color: #203650;
-    font-weight: 800;
-    font-variant-numeric: tabular-nums;
-}
+        html, body.app-root-body {
+            min-height: 100vh;
+            min-height: 100dvh;
+            background-color: var(--app-bg-dark);
+            color: var(--app-text-main);
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            -webkit-font-smoothing: antialiased;
+        }
 
-/* ---- Toolbar ---- */
-.adm-toolbar {
-    display: flex;
-    gap: 10px;
-    flex-wrap: wrap;
-    margin: 16px 0;
-}
-.adm-toolbar input,
-.adm-toolbar select {
-    min-height: 42px;
-    border: 1px solid #cbd6e2;
-    border-radius: 9px;
-    background: #ffffff;
-    color: #23364d;
-    padding: 0 12px;
-    font-size: 0.85rem;
-    font-family: inherit;
-    box-shadow: inset 0 1px 2px rgba(15, 23, 42, 0.03);
-    transition: border-color 0.15s ease, box-shadow 0.15s ease;
-}
-.adm-toolbar input:focus,
-.adm-toolbar select:focus {
-    outline: none;
-    border-color: var(--adm-blue);
-    box-shadow: 0 0 0 3px rgba(49, 95, 159, 0.15);
-}
-.adm-toolbar input { flex: 1; min-width: 200px; }
-.adm-toolbar input::placeholder { color: #8795a7; }
+        /* Fixed / Sticky Nav Bar */
+        .app-header-navbar {
+            height: var(--navbar-height);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 20px;
+            background: rgba(30, 41, 59, 0.95);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border-bottom: 1px solid var(--app-border-color);
+            position: sticky;
+            top: 0;
+            z-index: 1030;
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+        }
 
-/* ---- Table ---- */
-.adm-table-wrap {
-    overflow: auto;
-    border: 1px solid var(--adm-border);
-    border-radius: 12px;
-    background: #ffffff;
-    box-shadow: 0 5px 16px rgba(31, 52, 76, 0.045);
-}
-.adm-table {
-    width: 100%;
-    border-collapse: collapse;
-    min-width: 880px;
-    font-size: 0.82rem;
-    background: #ffffff;
-}
-.adm-table th,
-.adm-table td {
-    text-align: left;
-    padding: 12px 14px;
-    border-bottom: 1px solid var(--adm-border-soft);
-    vertical-align: middle;
-}
-.adm-table th {
-    background: #e8eef5;
-    color: #425a76;
-    font-size: 0.7rem;
-    text-transform: uppercase;
-    letter-spacing: 0.07em;
-    font-weight: 800;
-    position: sticky;
-    top: 0;
-    z-index: 1;
-    border-bottom: 1px solid #d2dce7;
-}
-.adm-table td { color: #26384d; }
-.adm-table tbody tr:nth-child(even) { background: #f7f9fb; }
-.adm-table tbody tr:hover { background: #eef4fa; }
-.adm-table tbody tr:last-child td { border-bottom: none; }
+        .app-brand-wrapper {
+            display: inline-flex;
+            align-items: center;
+            gap: 12px;
+            text-decoration: none;
+            user-select: none;
+        }
 
-.adm-muted {
-    color: var(--adm-muted);
-    font-size: 0.74rem;
-}
+        .app-brand-icon-box {
+            width: 38px;
+            height: 38px;
+            min-width: 38px;
+            border-radius: 10px;
+            background: linear-gradient(135deg, #2563eb, #7c3aed);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #ffffff;
+            font-size: 1.25rem;
+            box-shadow: 0 0 12px rgba(37, 99, 235, 0.35);
+        }
 
-/* ---- Pills ---- */
-.adm-pill {
-    display: inline-flex;
-    padding: 4px 9px;
-    border-radius: 99px;
-    font-size: 0.67rem;
-    font-weight: 800;
-    text-transform: uppercase;
-    letter-spacing: 0.03em;
-    background: #e7edf4;
-    color: #42566e;
-    line-height: 1.2;
-}
-.adm-pill.pending    { background: #fff1d6; color: var(--adm-warn); }
-.adm-pill.active     { background: #dff4eb; color: var(--adm-success); }
-.adm-pill.suspended,
-.adm-pill.rejected,
-.adm-pill.locked     { background: #fbe7e9; color: var(--adm-danger); }
-.adm-pill.suspicious { background: #ffeddc; color: #9a531b; }
+        .app-brand-title {
+            color: var(--app-text-main);
+            font-size: 1.1rem;
+            font-weight: 700;
+            letter-spacing: -0.2px;
+            white-space: nowrap;
+        }
 
-/* ---- Row actions ---- */
-.adm-actions {
-    display: flex;
-    gap: 6px;
-    flex-wrap: wrap;
-}
-.adm-actions .adm-btn {
-    padding: 6px 9px;
-    font-size: 0.7rem;
-}
+        .app-nav-item-group {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
 
-/* ---- Alerts & loading ---- */
-.adm-alert {
-    padding: 12px 14px;
-    border-radius: 9px;
-    margin: 12px 0;
-    background: #e1f2eb;
-    color: var(--adm-success);
-    border: 1px solid #c1e2d2;
-    font-size: 0.84rem;
-    display: none;
-}
-.adm-alert.error {
-    background: #fae9eb;
-    color: var(--adm-danger);
-    border: 1px solid #efc8ce;
-}
-.adm-empty,
-.adm-loading {
-    text-align: center;
-    padding: 32px;
-    color: #738399;
-}
+        .app-nav-button {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 7px 12px;
+            height: 38px;
+            background: rgba(255, 255, 255, 0.04);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 8px;
+            color: var(--app-text-main);
+            text-decoration: none;
+            font-size: 0.85rem;
+            font-weight: 600;
+            white-space: nowrap;
+            transition: all 0.2s ease-in-out;
+        }
 
-.adm-result-meta {
-    margin-top: 12px;
-    color: var(--adm-muted);
-    font-size: 0.74rem;
-}
+        .app-nav-button:hover {
+            background: rgba(255, 255, 255, 0.1);
+            color: #ffffff;
+            border-color: rgba(255, 255, 255, 0.2);
+        }
 
-/* ---- Responsive ---- */
-@media (max-width: 991px) {
-    .adm-shell {
-        padding: 16px 12px 20px;
-        min-height: auto;
-    }
-    .adm-wrap { padding: 16px; border-radius: 14px; }
-}
+        .app-nav-button.is-active {
+            background: rgba(255, 255, 255, 0.12);
+            border-color: rgba(255, 255, 255, 0.3);
+            box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1);
+        }
 
-@media (max-width: 760px) {
-    .adm-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-    .adm-stat:last-child { grid-column: span 2; }
-    .adm-head { display: block; }
-    .adm-head-actions { margin-top: 14px; }
-    .adm-toolbar > * { width: 100%; }
-    .adm-toolbar input { min-width: 0; }
-    .adm-wrap { padding: 14px; }
-    .adm-head h1 { font-size: 1.35rem; }
-    .adm-stat strong { font-size: 1.35rem; }
-}
-</style>
-{% endblock %}
+        /* Logout button gets a subtle danger tint so it reads as an exit */
+        .app-nav-button.is-logout {
+            border-color: rgba(244, 63, 94, 0.4);
+            background: rgba(244, 63, 94, 0.10);
+        }
+        .app-nav-button.is-logout:hover {
+            background: rgba(244, 63, 94, 0.22);
+            border-color: rgba(244, 63, 94, 0.6);
+            color: #fecaca;
+        }
 
-{% block content %}
-<div class="adm-shell">
-    <div class="adm-wrap">
+        .app-nav-button .ext-arrow {
+            font-size: 0.65rem;
+            opacity: 0.6;
+            margin-left: -2px;
+        }
 
-        <!-- Header -->
-        <div class="adm-head">
-            <div>
-                <div class="adm-kicker">Platform administration</div>
-                <h1 id="authTitle">Member management</h1>
-                <p>Review registrations, manage access and investigate suspicious login activity.</p>
+        .nav-icon-badge {
+            width: 26px;
+            height: 26px;
+            min-width: 26px;
+            border-radius: 6px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.85rem;
+            flex-shrink: 0;
+        }
+
+        .nav-icon-badge.home-theme      { background: rgba(59, 130, 246, 0.2);  color: #60a5fa; }
+        .nav-icon-badge.positions-theme { background: rgba(245, 158, 11, 0.22); color: #fbbf24; }
+        .nav-icon-badge.charts-theme    { background: rgba(34, 197, 94, 0.2);   color: #4ade80; }
+        .nav-icon-badge.layout-theme    { background: rgba(6, 182, 212, 0.2);   color: #22d3ee; }
+        .nav-icon-badge.iso-theme       { background: rgba(244, 63, 94, 0.2);   color: #fb7185; }
+        .nav-icon-badge.logs-theme      { background: rgba(251, 146, 60, 0.2);  color: #fb923c; }
+        .nav-icon-badge.expired-theme   { background: rgba(168, 85, 247, 0.2);  color: #c084fc; }
+        .nav-icon-badge.api-theme       { background: rgba(20, 184, 166, 0.2);  color: #2dd4bf; }
+        .nav-icon-badge.auth-theme      { background: rgba(124, 58, 237, 0.22); color: #a78bfa; }
+        .nav-icon-badge.logout-theme    { background: rgba(244, 63, 94, 0.22);  color: #fb7185; }
+
+        .mobile-nav-toggle {
+            display: none;
+            width: 38px;
+            height: 38px;
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid var(--app-border-color);
+            color: var(--app-text-main);
+            align-items: center;
+            justify-content: center;
+            font-size: 1.3rem;
+            cursor: pointer;
+        }
+
+        .mobile-nav-toggle:focus {
+            outline: none;
+            box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.5);
+        }
+
+        /* ---------- Mobile FAB ---------- */
+        .mobile-fab-nav {
+            display: none;
+            position: fixed;
+            right: 20px;
+            bottom: 24px;
+            width: 56px;
+            height: 56px;
+            min-width: 56px;
+            padding: 0;
+            border: none;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #2563eb, #7c3aed);
+            color: #ffffff;
+            font-size: 1.5rem;
+            line-height: 1;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            box-shadow:
+                0 6px 20px rgba(37, 99, 235, 0.45),
+                0 2px 8px rgba(0, 0, 0, 0.35);
+            z-index: 1036;
+            transition: transform 0.15s ease, box-shadow 0.2s ease;
+            -webkit-tap-highlight-color: transparent;
+            touch-action: manipulation;
+        }
+        .mobile-fab-nav:hover {
+            transform: translateY(-2px);
+            box-shadow:
+                0 8px 24px rgba(37, 99, 235, 0.55),
+                0 3px 10px rgba(0, 0, 0, 0.4);
+        }
+        .mobile-fab-nav:active {
+            transform: scale(0.94);
+            box-shadow:
+                0 4px 12px rgba(37, 99, 235, 0.4),
+                0 1px 4px rgba(0, 0, 0, 0.3);
+        }
+        .mobile-fab-nav:focus {
+            outline: none;
+            box-shadow:
+                0 0 0 3px rgba(37, 99, 235, 0.4),
+                0 6px 20px rgba(37, 99, 235, 0.45);
+        }
+        .mobile-fab-nav i {
+            display: block;
+            line-height: 1;
+            pointer-events: none;
+            transition: transform 0.2s ease;
+        }
+        .mobile-fab-nav.is-open i {
+            transform: rotate(90deg);
+        }
+
+        /* ---------- Mobile pill menu ---------- */
+        .mobile-fab-menu {
+            display: none;
+            position: fixed;
+            right: 16px;
+            bottom: 92px;
+            max-width: calc(100vw - 32px);
+            flex-direction: row;
+            flex-wrap: wrap-reverse;
+            justify-content: flex-end;
+            align-items: center;
+            gap: 8px;
+            z-index: 1035;
+            pointer-events: none;
+            padding: 4px;
+        }
+        .mobile-fab-menu.is-open {
+            pointer-events: auto;
+        }
+        .mobile-fab-menu-item {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            height: 40px;
+            padding: 0 14px 0 6px;
+            border-radius: 20px;
+            background: rgba(30, 41, 59, 0.98);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid var(--app-border-color);
+            color: var(--app-text-main);
+            text-decoration: none;
+            box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+            white-space: nowrap;
+            flex: 0 0 auto;
+            opacity: 0;
+            transform: translateY(10px) scale(0.92);
+            transition:
+                opacity 0.18s ease,
+                transform 0.18s ease,
+                background 0.15s ease,
+                border-color 0.15s ease;
+            -webkit-tap-highlight-color: transparent;
+            touch-action: manipulation;
+        }
+        .mobile-fab-menu.is-open .mobile-fab-menu-item {
+            opacity: 1;
+            transform: translateY(0) scale(1);
+        }
+        .mobile-fab-menu.is-open .mobile-fab-menu-item:nth-child(1) { transition-delay: 0.02s; }
+        .mobile-fab-menu.is-open .mobile-fab-menu-item:nth-child(2) { transition-delay: 0.04s; }
+        .mobile-fab-menu.is-open .mobile-fab-menu-item:nth-child(3) { transition-delay: 0.06s; }
+        .mobile-fab-menu.is-open .mobile-fab-menu-item:nth-child(4) { transition-delay: 0.08s; }
+        .mobile-fab-menu.is-open .mobile-fab-menu-item:nth-child(5) { transition-delay: 0.10s; }
+        .mobile-fab-menu.is-open .mobile-fab-menu-item:nth-child(6) { transition-delay: 0.12s; }
+        .mobile-fab-menu.is-open .mobile-fab-menu-item:nth-child(7) { transition-delay: 0.14s; }
+        .mobile-fab-menu.is-open .mobile-fab-menu-item:nth-child(8) { transition-delay: 0.16s; }
+        .mobile-fab-menu.is-open .mobile-fab-menu-item:nth-child(9) { transition-delay: 0.18s; }
+        .mobile-fab-menu-item:hover {
+            background: rgba(255, 255, 255, 0.08);
+            border-color: rgba(255, 255, 255, 0.2);
+        }
+        .mobile-fab-menu-item:active {
+            transform: translateY(0) scale(0.96);
+        }
+        .mobile-fab-menu-item .nav-icon-badge {
+            width: 28px;
+            height: 28px;
+            min-width: 28px;
+            font-size: 0.88rem;
+            border-radius: 8px;
+        }
+        .mobile-fab-menu-label {
+            font-size: 0.82rem;
+            font-weight: 600;
+            color: var(--app-text-main);
+            letter-spacing: -0.1px;
+            line-height: 1;
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            .mobile-fab-menu-item,
+            .mobile-fab-menu.is-open .mobile-fab-menu-item {
+                transition: none;
+                transform: none;
+            }
+            .mobile-fab-menu.is-open .mobile-fab-menu-item:nth-child(n) {
+                transition-delay: 0s;
+            }
+            .mobile-fab-nav i {
+                transition: none;
+            }
+        }
+
+        .offcanvas.mobile-drawer {
+            background-color: var(--app-bg-dark);
+            border-left: 1px solid var(--app-border-color);
+            max-width: 280px;
+        }
+        .offcanvas.mobile-drawer .offcanvas-header {
+            border-bottom: 1px solid var(--app-border-color);
+            padding: 16px;
+        }
+        .offcanvas.mobile-drawer .btn-close-custom {
+            background: none;
+            border: none;
+            color: var(--app-text-muted);
+            font-size: 1.35rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+        }
+        .mobile-drawer-body {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            padding: 16px;
+        }
+        .mobile-drawer-body .app-nav-button {
+            width: 100%;
+            height: 44px;
+            padding: 8px 14px;
+            font-size: 0.92rem;
+            justify-content: flex-start;
+        }
+        .mobile-drawer-body .app-nav-button .ext-arrow {
+            margin-left: auto;
+        }
+
+        .app-main-content-wrapper {
+            width: 100%;
+            min-height: calc(100vh - var(--navbar-height));
+            min-height: calc(100dvh - var(--navbar-height));
+            position: relative;
+        }
+
+        @media (max-width: 991px) {
+            .app-header-navbar {
+                padding: 0 14px;
+            }
+            .app-nav-item-group {
+                display: none;
+            }
+            .mobile-nav-toggle {
+                display: flex;
+            }
+            .mobile-fab-nav {
+                display: inline-flex;
+            }
+            .mobile-fab-menu {
+                display: flex;
+            }
+            .app-main-content-wrapper {
+                padding-bottom: 88px;
+            }
+        }
+    </style>
+
+    {% block head %}{% endblock %}
+</head>
+
+<body class="app-root-body">
+
+{% set active_path = request.path if request is defined and request else '' %}
+
+<!-- TOP NAVBAR -->
+<nav class="app-header-navbar">
+
+    <a href="/" class="app-brand-wrapper">
+        <div class="app-brand-icon-box">
+            <i class="bi bi-activity"></i>
+        </div>
+        <span class="app-brand-title">NG7</span>
+    </a>
+
+    <div class="app-nav-item-group">
+        <a href="/" class="app-nav-button {{ 'is-active' if active_path == '/' else '' }}">
+            <span class="nav-icon-badge home-theme"><i class="bi bi-house-door-fill"></i></span>
+            <span>Home</span>
+        </a>
+
+        <a href="/positions" class="app-nav-button {{ 'is-active' if active_path == '/positions' else '' }}">
+            <span class="nav-icon-badge positions-theme"><i class="bi bi-briefcase-fill"></i></span>
+            <span>Positions</span>
+        </a>
+
+        <a href="/isolated" target="_blank" rel="noopener noreferrer" class="app-nav-button">
+            <span class="nav-icon-badge iso-theme"><i class="bi bi-bullseye"></i></span>
+            <span>Isolated</span>
+            <i class="bi bi-box-arrow-up-right ext-arrow"></i>
+        </a>
+
+        <a href="/charts" class="app-nav-button {{ 'is-active' if active_path == '/charts' else '' }}">
+            <span class="nav-icon-badge charts-theme"><i class="bi bi-candlestick-fill"></i></span>
+            <span>Charts</span>
+        </a>
+
+        <a href="/expired-chart" class="admin-only-nav app-nav-button {{ 'is-active' if active_path == '/expired-chart' else '' }}" style="display:none">
+            <span class="nav-icon-badge expired-theme"><i class="bi bi-hourglass-split"></i></span>
+            <span>Expired</span>
+        </a>
+
+        <a href="/layout_1" class="admin-only-nav app-nav-button {{ 'is-active' if active_path == '/layout_1' else '' }}" style="display:none">
+            <span class="nav-icon-badge layout-theme"><i class="bi bi-grid-3x3-gap-fill"></i></span>
+            <span>Layout</span>
+        </a>
+
+        <a href="/api-explorer" class="admin-only-nav app-nav-button {{ 'is-active' if active_path == '/api-explorer' else '' }}" style="display:none">
+            <span class="nav-icon-badge api-theme"><i class="bi bi-code-square"></i></span>
+            <span>API Explorer</span>
+        </a>
+
+        <a href="/logs" target="_blank" rel="noopener noreferrer" class="admin-only-nav app-nav-button" style="display:none">
+            <span class="nav-icon-badge logs-theme"><i class="bi bi-file-earmark-text-fill"></i></span>
+            <span>Logs</span>
+            <i class="bi bi-box-arrow-up-right ext-arrow"></i>
+        </a>
+        <a href="/admin/users/panel" id="mobileAdminPanelLink" class="app-nav-button" style="display:none" title="Admin panel">
+            <span class="nav-icon-badge api-theme"><i class="bi bi-people-fill"></i></span>
+            <span>Admin Panel</span>
+        </a>
+
+        <a href="/admin/users/panel" id="navAdminPanelLink" class="app-nav-button" style="display:none" title="Admin panel">
+            <span class="nav-icon-badge api-theme"><i class="bi bi-people-fill"></i></span>
+            <span>Admin Panel</span>
+        </a>
+
+        <!-- Auth entry — hidden until /auth/whoami resolves. On 200 it
+             becomes a red-tinted "Logout" button; on 401 it becomes a
+             standard "Login" button with ?next= set to the current path. -->
+        <a
+            href="/login"
+            id="navAuthLink"
+            class="app-nav-button"
+            style="display:none"
+            title="Sign in"
+            aria-label="Sign in"
+        >
+            <span class="nav-icon-badge auth-theme" id="navAuthIconBadge"><i class="bi bi-shield-lock"></i></span>
+            <span id="navAuthLabel">Login</span>
+        </a>
+    </div>
+
+    <button class="mobile-nav-toggle" type="button" data-bs-toggle="offcanvas" data-bs-target="#mobileNavDrawer" aria-controls="mobileNavDrawer" aria-label="Open Navigation">
+        <i class="bi bi-list"></i>
+    </button>
+
+</nav>
+
+<!-- MOBILE OFFCANVAS DRAWER -->
+<div class="offcanvas offcanvas-end mobile-drawer" tabindex="-1" id="mobileNavDrawer" aria-labelledby="mobileNavDrawerLabel">
+    <div class="offcanvas-header">
+        <div class="app-brand-wrapper">
+            <div class="app-brand-icon-box">
+                <i class="bi bi-activity"></i>
             </div>
-            <div class="adm-head-actions">
-                <a class="adm-btn" href="/">
-                    <i class="bi bi-speedometer2"></i> Dashboard
-                </a>
-                <button class="adm-btn primary" id="refreshBtn" type="button">
-                    <i class="bi bi-arrow-clockwise"></i> Refresh
-                </button>
-                <a class="adm-btn danger" href="/logout">
-                    <i class="bi bi-box-arrow-right"></i> Admin logout
-                </a>
-            </div>
+            <span class="app-brand-title" id="mobileNavDrawerLabel">Navigation</span>
         </div>
-
-        <!-- Alert -->
-        <div id="alert" class="adm-alert" role="status"></div>
-
-        <!-- Stats -->
-        <div class="adm-stats">
-            <div class="adm-stat"><small>Total accounts</small><strong id="totalCount">—</strong></div>
-            <div class="adm-stat"><small>Pending approval</small><strong id="pendingCount">—</strong></div>
-            <div class="adm-stat"><small>Active</small><strong id="activeCount">—</strong></div>
-            <div class="adm-stat"><small>Suspended / rejected</small><strong id="disabledCount">—</strong></div>
-            <div class="adm-stat"><small>Locked / suspicious</small><strong id="riskCount">—</strong></div>
-        </div>
-
-        <!-- Toolbar -->
-        <div class="adm-toolbar">
-            <input id="searchBox" type="search" placeholder="Search name or email…" aria-label="Search users">
-            <select id="statusFilter" aria-label="Filter status">
-                <option value="">All account statuses</option>
-                <option value="pending">Pending</option>
-                <option value="active">Active</option>
-                <option value="suspended">Suspended</option>
-                <option value="rejected">Rejected</option>
-            </select>
-            <select id="riskFilter" aria-label="Filter risk">
-                <option value="">All risk states</option>
-                <option value="risk">Locked / suspicious only</option>
-            </select>
-        </div>
-
-        <!-- Table -->
-        <div class="adm-table-wrap">
-            <table class="adm-table">
-                <thead>
-                    <tr>
-                        <th>Member</th>
-                        <th>Account</th>
-                        <th>Login security</th>
-                        <th>Registered</th>
-                        <th>Last login</th>
-                        <th>Admin actions</th>
-                    </tr>
-                </thead>
-                <tbody id="usersBody">
-                    <tr><td colspan="6" class="adm-loading">Loading accounts…</td></tr>
-                </tbody>
-            </table>
-        </div>
-
-        <p class="adm-result-meta" id="resultMeta">
-            Account data is loaded from the member identity database.
-        </p>
+        <button type="button" class="btn-close-custom" data-bs-dismiss="offcanvas" aria-label="Close">
+            <i class="bi bi-x-lg"></i>
+        </button>
+    </div>
+    <div class="offcanvas-body mobile-drawer-body">
+        <a href="/" class="app-nav-button {{ 'is-active' if active_path == '/' else '' }}">
+            <span class="nav-icon-badge home-theme"><i class="bi bi-house-door-fill"></i></span>
+            <span>Home</span>
+        </a>
+        <a href="/positions" class="app-nav-button {{ 'is-active' if active_path == '/positions' else '' }}">
+            <span class="nav-icon-badge positions-theme"><i class="bi bi-briefcase-fill"></i></span>
+            <span>Positions</span>
+        </a>
+        <a href="/isolated" target="_blank" rel="noopener noreferrer" class="app-nav-button">
+            <span class="nav-icon-badge iso-theme"><i class="bi bi-bullseye"></i></span>
+            <span>Isolated</span>
+            <i class="bi bi-box-arrow-up-right ext-arrow"></i>
+        </a>
+        <a href="/charts" class="app-nav-button {{ 'is-active' if active_path == '/charts' else '' }}">
+            <span class="nav-icon-badge charts-theme"><i class="bi bi-candlestick-fill"></i></span>
+            <span>Charts</span>
+        </a>
+        <a href="/expired-chart" class="app-nav-button {{ 'is-active' if active_path == '/expired-chart' else '' }}">
+            <span class="nav-icon-badge expired-theme"><i class="bi bi-hourglass-split"></i></span>
+            <span>Expired</span>
+        </a>
+        <a href="/layout_1" class="app-nav-button {{ 'is-active' if active_path == '/layout_1' else '' }}">
+            <span class="nav-icon-badge layout-theme"><i class="bi bi-grid-3x3-gap-fill"></i></span>
+            <span>Layout</span>
+        </a>
+        <a href="/api-explorer" class="app-nav-button {{ 'is-active' if active_path == '/api-explorer' else '' }}">
+            <span class="nav-icon-badge api-theme"><i class="bi bi-code-square"></i></span>
+            <span>API Explorer</span>
+        </a>
+        <a href="/logs" target="_blank" rel="noopener noreferrer" class="app-nav-button">
+            <span class="nav-icon-badge logs-theme"><i class="bi bi-file-earmark-text-fill"></i></span>
+            <span>Logs</span>
+            <i class="bi bi-box-arrow-up-right ext-arrow"></i>
+        </a>
+        <a
+            href="/login"
+            id="mobileAuthLink"
+            class="app-nav-button"
+            style="display:none"
+            title="Sign in"
+            aria-label="Sign in"
+        >
+            <span class="nav-icon-badge auth-theme" id="mobileAuthIconBadge"><i class="bi bi-shield-lock"></i></span>
+            <span id="mobileAuthLabel">Login</span>
+        </a>
     </div>
 </div>
-{% endblock %}
 
-{% block scripts %}
+<!-- HORIZONTAL PILL MENU (mobile only) -->
+<nav
+    class="mobile-fab-menu"
+    id="mobileFabMenu"
+    aria-hidden="true"
+    aria-label="Quick navigation"
+>
+    <a href="/" class="mobile-fab-menu-item {{ 'is-active' if active_path == '/' else '' }}" title="Home" aria-label="Home">
+        <span class="nav-icon-badge home-theme"><i class="bi bi-house-door-fill"></i></span>
+        <span class="mobile-fab-menu-label">Home</span>
+    </a>
+    <a href="/positions" class="mobile-fab-menu-item {{ 'is-active' if active_path == '/positions' else '' }}" title="Positions" aria-label="Positions">
+        <span class="nav-icon-badge positions-theme"><i class="bi bi-briefcase-fill"></i></span>
+        <span class="mobile-fab-menu-label">Positions</span>
+    </a>
+    <a href="/isolated" target="_blank" rel="noopener noreferrer" class="mobile-fab-menu-item" title="Isolated" aria-label="Isolated">
+        <span class="nav-icon-badge iso-theme"><i class="bi bi-bullseye"></i></span>
+        <span class="mobile-fab-menu-label">Isolated</span>
+    </a>
+    <a href="/charts" class="mobile-fab-menu-item {{ 'is-active' if active_path == '/charts' else '' }}" title="Charts" aria-label="Charts">
+        <span class="nav-icon-badge charts-theme"><i class="bi bi-candlestick-fill"></i></span>
+        <span class="mobile-fab-menu-label">Charts</span>
+    </a>
+    <a href="/expired-chart" class="admin-only-nav mobile-fab-menu-item {{ 'is-active' if active_path == '/expired-chart' else '' }}" title="Expired" aria-label="Expired" style="display:none">
+        <span class="nav-icon-badge expired-theme"><i class="bi bi-hourglass-split"></i></span>
+        <span class="mobile-fab-menu-label">Expired</span>
+    </a>
+    <a href="/layout_1" class="admin-only-nav mobile-fab-menu-item {{ 'is-active' if active_path == '/layout_1' else '' }}" title="Layout" aria-label="Layout" style="display:none">
+        <span class="nav-icon-badge layout-theme"><i class="bi bi-grid-3x3-gap-fill"></i></span>
+        <span class="mobile-fab-menu-label">Layout</span>
+    </a>
+    <a href="/api-explorer" class="admin-only-nav mobile-fab-menu-item {{ 'is-active' if active_path == '/api-explorer' else '' }}" title="API Explorer" aria-label="API Explorer" style="display:none">
+        <span class="nav-icon-badge api-theme"><i class="bi bi-code-square"></i></span>
+        <span class="mobile-fab-menu-label">API</span>
+    </a>
+    <a href="/logs" target="_blank" rel="noopener noreferrer" class="admin-only-nav mobile-fab-menu-item" title="Logs" aria-label="Logs" style="display:none">
+        <span class="nav-icon-badge logs-theme"><i class="bi bi-file-earmark-text-fill"></i></span>
+        <span class="mobile-fab-menu-label">Logs</span>
+    </a>
+    <a href="/admin/users/panel" id="fabAdminPanelLink" class="mobile-fab-menu-item" style="display:none" title="Admin Panel" aria-label="Admin Panel">
+        <span class="nav-icon-badge api-theme"><i class="bi bi-people-fill"></i></span>
+        <span class="mobile-fab-menu-label">Admin</span>
+    </a>
+    <a
+        href="/login"
+        id="fabAuthLink"
+        class="mobile-fab-menu-item"
+        style="display:none"
+        title="Sign in"
+        aria-label="Sign in"
+    >
+        <span class="nav-icon-badge auth-theme" id="fabAuthIconBadge"><i class="bi bi-shield-lock"></i></span>
+        <span class="mobile-fab-menu-label" id="fabAuthLabel">Login</span>
+    </a>
+</nav>
+
+<button
+    class="mobile-fab-nav"
+    id="mobileFabBtn"
+    type="button"
+    aria-controls="mobileFabMenu"
+    aria-label="Open Navigation"
+    aria-expanded="false"
+>
+    <i class="bi bi-list"></i>
+</button>
+
+<div class="app-main-content-wrapper">
+    {% block content %}{% endblock %}
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+
+<script>
+    window.apiHost = window.apiHost || window.location.origin;
+</script>
+
+<!-- GLOBAL 401 HANDLING: route expired sessions to the correct sign-in page. -->
 <script>
 (function () {
-    const body = document.getElementById('usersBody');
-    const alertBox = document.getElementById('alert');
-    let users = [];
+    if (window.__iso401Installed) return;
+    window.__iso401Installed = true;
 
-    const esc = function (s) {
-        return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
-            return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
-        });
-    };
-    const date = function (v) {
-        if (!v) return '—';
-        const d = new Date(v);
-        return isNaN(d.getTime()) ? '—' : d.toLocaleString();
-    };
-    const locked = function (u) {
-        return !!(u.temporarily_locked || (u.lock_until && new Date(u.lock_until) > new Date()));
-    };
-    function notice(msg, error) {
-        alertBox.textContent = msg;
-        alertBox.classList.toggle('error', !!error);
-        alertBox.style.display = 'block';
-        setTimeout(function () { alertBox.style.display = 'none'; }, 5000);
-    }
-    async function api(url, method) {
-        const r = await fetch(url, {
-            method: method || 'GET',
-            credentials: 'same-origin',
-            headers: { 'Accept': 'application/json' }
-        });
-        let d = {};
-        try { d = await r.json(); } catch (e) {}
-        if (!r.ok) throw new Error(d.detail || ('Request failed: ' + r.status));
-        return d;
+    function redirectToLogin(responseUrl) {
+        var current = window.location.pathname + window.location.search;
+        var responsePath = "";
+        try { responsePath = new URL(responseUrl || "", window.location.origin).pathname; } catch (_) {}
+        if (window.location.pathname.startsWith("/user/login") ||
+            window.location.pathname.startsWith("/admin/login") ||
+            window.location.pathname.startsWith("/register")) return;
+        var isAdmin = window.location.pathname.startsWith("/admin/") ||
+                      window.location.pathname.startsWith("/logs") ||
+                      responsePath.startsWith("/admin/");
+        var login = isAdmin ? "/admin/login" : "/user/login";
+        window.location.replace(login + "?next=" + encodeURIComponent(current));
     }
 
-    async function load() {
-        body.innerHTML = '<tr><td colspan="6" class="adm-loading">Loading accounts…</td></tr>';
-        try {
-            const d = await api('/admin/users?limit=500');
-            users = d.users || [];
-            render();
-        } catch (e) {
-            body.innerHTML = '<tr><td colspan="6" class="adm-empty">' + esc(e.message) + '</td></tr>';
-            notice(e.message, true);
-        }
-    }
-
-    function render() {
-        const pending = users.filter(u => u.status === 'pending').length;
-        const active = users.filter(u => u.status === 'active').length;
-        const disabled = users.filter(u => ['suspended', 'rejected'].includes(u.status)).length;
-        const risk = users.filter(u => u.suspicious || locked(u) || u.login_enabled === false).length;
-
-        document.getElementById('totalCount').textContent = users.length;
-        document.getElementById('pendingCount').textContent = pending;
-        document.getElementById('activeCount').textContent = active;
-        document.getElementById('disabledCount').textContent = disabled;
-        document.getElementById('riskCount').textContent = risk;
-
-        const q = document.getElementById('searchBox').value.toLowerCase();
-        const s = document.getElementById('statusFilter').value;
-        const riskOnly = document.getElementById('riskFilter').value === 'risk';
-
-        const shown = users.filter(u =>
-            (!s || u.status === s) &&
-            (!riskOnly || u.suspicious || locked(u) || u.login_enabled === false) &&
-            (!q || (String(u.name) + ' ' + String(u.email)).toLowerCase().includes(q))
-        );
-
-        document.getElementById('resultMeta').textContent =
-            'Showing ' + shown.length + ' of ' + users.length + ' accounts';
-
-        if (!shown.length) {
-            body.innerHTML = '<tr><td colspan="6" class="adm-empty">No accounts match these filters.</td></tr>';
-            return;
-        }
-
-        body.innerHTML = shown.map(function (u) {
-            const isLocked = locked(u);
-            const manualOff = u.login_enabled === false;
-            const flag = u.suspicious || isLocked || manualOff;
-            const status = u.status || 'unknown';
-            const lockText = isLocked
-                ? 'Locked until ' + date(u.lock_until)
-                : manualOff
-                    ? 'Admin disabled'
-                    : Number(u.failed_login_attempts || 0) + ' failed attempts';
-            const id = esc(u.user_id);
-            const a = [];
-
-            if (u.status === 'pending')
-                a.push('<button class="adm-btn good" data-action="approve" data-id="' + id + '">Approve</button>');
-            if (u.status !== 'suspended' && u.status !== 'rejected')
-                a.push('<button class="adm-btn" data-action="suspend" data-id="' + id + '">Suspend</button>');
-            if (u.status === 'suspended' || u.status === 'rejected')
-                a.push('<button class="adm-btn good" data-action="approve" data-id="' + id + '">Reactivate</button>');
-            if (isLocked || manualOff)
-                a.push('<button class="adm-btn good" data-action="resume" data-id="' + id + '">Resume login</button>');
-            else
-                a.push('<button class="adm-btn" data-action="disable-login" data-id="' + id + '">Disable login</button>');
-            a.push('<button class="adm-btn" data-action="edit" data-id="' + id + '">Edit</button>');
-            if (u.status !== 'rejected')
-                a.push('<button class="adm-btn" data-action="reject" data-id="' + id + '">Reject</button>');
-            a.push('<button class="adm-btn" data-action="revoke" data-id="' + id + '">Revoke sessions</button>');
-            a.push('<button class="adm-btn danger" data-action="delete" data-id="' + id + '">Delete</button>');
-
-            return '<tr>' +
-                '<td><strong>' + esc(u.name) + '</strong>' +
-                    '<div class="adm-muted">' + esc(u.email) + '</div>' +
-                    '<div class="adm-muted">ID: ' + id + '</div>' +
-                '</td>' +
-                '<td>' +
-                    '<span class="adm-pill ' + esc(status) + '">' + esc(status) + '</span>' +
-                    (flag ? '<div style="margin-top:6px"><span class="adm-pill suspicious">Security review</span></div>' : '') +
-                '</td>' +
-                '<td>' +
-                    (isLocked || manualOff
-                        ? '<span class="adm-pill locked">' + esc(lockText) + '</span>'
-                        : '<span class="adm-muted">' + esc(lockText) + '</span>') +
-                    '<div class="adm-muted">Login ' + (manualOff ? 'disabled' : 'enabled') + '</div>' +
-                '</td>' +
-                '<td>' + esc(date(u.created_at)) + '</td>' +
-                '<td>' + esc(date(u.last_login_at)) + '</td>' +
-                '<td><div class="adm-actions">' + a.join('') + '</div></td>' +
-            '</tr>';
-        }).join('');
-    }
-
-    async function action(action, id) {
-        const labels = {
-            approve: 'Approve/reactivate this account?',
-            suspend: 'Suspend this account?',
-            reject: 'Reject this registration?',
-            resume: 'Clear the login lock and enable login?',
-            'disable-login': 'Manually disable member login?',
-            revoke: 'Revoke all active sessions?',
-            delete: 'Permanently delete this account? This cannot be undone.'
+    var originalFetch = window.fetch;
+    if (typeof originalFetch === "function") {
+        window.fetch = function () {
+            return originalFetch.apply(this, arguments).then(function (response) {
+                if (response && response.status === 401) {
+                    setTimeout(function () { redirectToLogin(response.url); }, 50);
+                }
+                return response;
+            });
         };
-
-        if (action === 'edit') {
-            const u = users.find(x => x.user_id === id);
-            if (!u) return;
-            const name = prompt('Member name:', u.name || '');
-            if (name === null) return;
-            const email = prompt('Member email:', u.email || '');
-            if (email === null) return;
-            try {
-                const r = await fetch('/admin/users/' + id + '/profile', {
-                    method: 'PATCH',
-                    credentials: 'same-origin',
-                    headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-                    body: JSON.stringify({ name: name, email: email })
-                });
-                const d = await r.json();
-                if (!r.ok) throw new Error(d.detail || 'Update failed');
-                notice('Profile updated.');
-                await load();
-            } catch (e) {
-                notice(e.message, true);
-            }
-            return;
-        }
-
-        if (!confirm(labels[action])) return;
-        const endpoints = {
-            approve: '/admin/users/' + id + '/approve',
-            suspend: '/admin/users/' + id + '/suspend',
-            reject: '/admin/users/' + id + '/reject',
-            resume: '/admin/users/' + id + '/login-enable',
-            'disable-login': '/admin/users/' + id + '/login-disable',
-            revoke: '/admin/users/' + id + '/revoke-sessions',
-            delete: '/admin/users/' + id
-        };
-        try {
-            await api(endpoints[action], action === 'delete' ? 'DELETE' : 'POST');
-            notice('Account action completed.');
-            await load();
-        } catch (e) {
-            notice(e.message, true);
-        }
     }
-
-    body.addEventListener('click', function (e) {
-        const b = e.target.closest('button[data-action]');
-        if (b) action(b.dataset.action, b.dataset.id);
-    });
-
-    document.getElementById('refreshBtn').addEventListener('click', load);
-    document.getElementById('searchBox').addEventListener('input', render);
-    document.getElementById('statusFilter').addEventListener('change', render);
-    document.getElementById('riskFilter').addEventListener('change', render);
-
-    load();
 })();
 </script>
-{% endblock %}
+
+<!-- Pill menu toggle -->
+<script>
+    (function () {
+        var fabBtn = document.getElementById('mobileFabBtn');
+        var fabMenu = document.getElementById('mobileFabMenu');
+        if (!fabBtn || !fabMenu) return;
+
+        var fabIcon = fabBtn.querySelector('i');
+        var isOpen = false;
+
+        function setOpen(open) {
+            isOpen = !!open;
+            fabMenu.classList.toggle('is-open', isOpen);
+            fabMenu.setAttribute('aria-hidden', isOpen ? 'false' : 'true');
+            fabBtn.classList.toggle('is-open', isOpen);
+            fabBtn.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+            fabBtn.setAttribute(
+                'aria-label',
+                isOpen ? 'Close Navigation' : 'Open Navigation'
+            );
+            if (fabIcon) {
+                fabIcon.className = isOpen ? 'bi bi-x-lg' : 'bi bi-list';
+            }
+        }
+
+        fabBtn.addEventListener('click', function (e) {
+            e.stopPropagation();
+            setOpen(!isOpen);
+        });
+
+        fabMenu.addEventListener('click', function (e) {
+            if (e.target.closest('a')) {
+                setOpen(false);
+            }
+        });
+
+        document.addEventListener('click', function (e) {
+            if (!isOpen) return;
+            if (fabBtn.contains(e.target)) return;
+            if (fabMenu.contains(e.target)) return;
+            setOpen(false);
+        });
+
+        document.addEventListener('keydown', function (e) {
+            if (isOpen && (e.key === 'Escape' || e.key === 'Esc')) {
+                setOpen(false);
+            }
+        });
+    })();
+</script>
+
+<!-- ROLE-AWARE NAVIGATION: member and administrator sessions remain separate. -->
+<script>
+(function () {
+    var adminLinks = [
+        document.getElementById("navAdminPanelLink"),
+        document.getElementById("mobileAdminPanelLink"),
+        document.getElementById("fabAdminPanelLink")
+    ];
+    var authLinks = [
+        {el:document.getElementById("navAuthLink"),label:document.getElementById("navAuthLabel"),icon:document.getElementById("navAuthIconBadge")},
+        {el:document.getElementById("mobileAuthLink"),label:document.getElementById("mobileAuthLabel"),icon:document.getElementById("mobileAuthIconBadge")},
+        {el:document.getElementById("fabAuthLink"),label:document.getElementById("fabAuthLabel"),icon:document.getElementById("fabAuthIconBadge")}
+    ];
+
+    var adminOnlyNavLinks = Array.prototype.slice.call(
+        document.querySelectorAll(".admin-only-nav")
+    );
+
+    function apply(role) {
+        var authenticated = role === "member" || role === "admin";
+        adminLinks.forEach(function (el) {
+            if (el) el.style.display = role === "admin" ? "" : "none";
+        });
+        adminOnlyNavLinks.forEach(function (el) {
+            el.style.display = role === "admin" ? "" : "none";
+        });
+        authLinks.forEach(function (item) {
+            if (!item.el) return;
+            var href = role === "admin" ? "/logout" : (role === "member" ? "/user/logout" :
+                "/user/login?next=" + encodeURIComponent(location.pathname + location.search));
+            var label = authenticated ? "Logout" : "Member Login";
+            var iconClass = authenticated ? "bi bi-box-arrow-right" : "bi bi-person-circle";
+            item.el.href = href;
+            item.el.title = authenticated ? "Sign out" : "Member sign in";
+            item.el.setAttribute("aria-label", item.el.title);
+            item.el.style.display = "";
+            item.el.classList.toggle("is-logout", authenticated);
+            if (item.label) item.label.textContent = label;
+            if (item.icon) {
+                item.icon.className = authenticated ? "nav-icon-badge logout-theme" : "nav-icon-badge auth-theme";
+                var icon = item.icon.querySelector("i");
+                if (icon) icon.className = iconClass;
+            }
+        });
+    }
+
+    function refresh() {
+        fetch("/auth/whoami", {
+            method:"GET", credentials:"same-origin", cache:"no-store",
+            headers:{"Accept":"application/json"}
+        }).then(function (response) {
+            if (!response.ok) { apply(null); return null; }
+            return response.json();
+        }).then(function (data) {
+            if (data) apply(data.role || null);
+        }).catch(function () { apply(null); });
+    }
+
+    refresh();
+    document.addEventListener("visibilitychange", function () { if (!document.hidden) refresh(); });
+    window.addEventListener("pageshow", function (event) { if (event.persisted) refresh(); });
+})();
+</script>
+
+{% block scripts %}{% endblock %}
+
+</body>
+</html>
