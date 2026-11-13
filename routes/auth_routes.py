@@ -32,14 +32,18 @@ def _render_admin_login(request: Request, next_path: str, error: str | None = No
     )
 
 
-@router.get("/login", response_class=HTMLResponse)
+@router.get("/login")
+def default_login():
+    """Default browser login is for members; admin login has its own route."""
+    return RedirectResponse("/user/login", status_code=303)
+
+
 @router.get("/admin/login", response_class=HTMLResponse)
 def login_page(request: Request, next: str = "/"):
-    action = "/admin/login" if request.url.path == "/admin/login" else "/login"
+    action = "/admin/login"
     return _render_admin_login(request, next, form_action=action)
 
 
-@router.post("/login", response_class=HTMLResponse)
 @router.post("/admin/login", response_class=HTMLResponse)
 def login_submit(
     request: Request,
@@ -93,7 +97,7 @@ def logout(request: Request):
     wants_html = "text/html" in accept and "application/json" not in accept
 
     if wants_html:
-        response = RedirectResponse("/login", status_code=303)
+        response = RedirectResponse("/admin/login", status_code=303)
     else:
         response = JSONResponse({
             "ok": True,
