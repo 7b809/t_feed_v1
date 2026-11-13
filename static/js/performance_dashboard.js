@@ -182,7 +182,7 @@
       var liveCount=results[0], response=results[1];
       if(!response.ok) throw new Error("Snapshot endpoint returned HTTP "+response.status);
       var data=await response.json();
-      el("pv-date").textContent=data.date || "—";
+      el("pv-date").textContent=(data.date || "—") + (data.market && data.market.label ? " · " + data.market.label : "");
       if(data.status==="found" && data.snapshot){
         el("pv-watch-section").hidden=false;
         renderSnapshot(data.snapshot,data);
