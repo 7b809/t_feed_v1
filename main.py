@@ -1136,7 +1136,9 @@ _AUTH = [Depends(require_any_auth)] if _PROD_MODE else []
 app.include_router(admin_router, dependencies=_AUTH)
 app.include_router(folder_router, dependencies=_AUTH)
 app.include_router(log_router, dependencies=_AUTH)
-app.include_router(isolated_instrument_router, dependencies=_AUTH)
+# Isolation router enforces admin auth on write operations itself. Its
+# read-only GET endpoints are available to signed-in member sessions.
+app.include_router(isolated_instrument_router)
 app.include_router(simulation_router, dependencies=_AUTH)
 app.include_router(dummy_order_router, dependencies=_AUTH)
 app.include_router(sandbox_router, dependencies=_AUTH)
