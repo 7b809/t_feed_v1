@@ -31,7 +31,7 @@ class TokenStore:
 
     def __init__(self):
         self.mongo_uri = config.MONGO_URI
-        self.mongo_db = config.MONGO_DB
+        self.mongo_db = config.UPSTOX_TOKEN_MONGO_DB
         self.collection_name = config.TOKENS_COLLECTION
 
         self.token_doc_id = getattr(

@@ -129,6 +129,12 @@ def validate_config() -> tuple[list[str], list[str]]:
         errors.append("MONGO_URL is empty")
     if not config.MONGO_DB:
         errors.append("MONGO_DB is empty")
+    if not config.UPSTOX_TOKEN_MONGO_DB:
+        errors.append("UPSTOX_TOKEN_MONGO_DB is empty")
+    if not config.TOKENS_COLLECTION:
+        errors.append("TOKENS_COLLECTION is empty")
+    if not config.UPSTOX_TOKEN_DOC_ID:
+        errors.append("UPSTOX_TOKEN_DOC_ID is empty")
 
     # ------------------------------------------------------------------ #
     # 5. Port sanity                                                     #

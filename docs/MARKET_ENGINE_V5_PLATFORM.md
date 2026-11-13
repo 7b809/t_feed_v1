@@ -57,3 +57,28 @@ V5 disables all outbound Telegram messages (including isolation, SR confirmation
 V5 retains MongoDB historical-candle extraction used by the existing startup market-data pipeline, daily market-data refresh, first-candle calculation, level-isolation recovery, live feed, external SR WebSocket, isolation and order-processing logic. These are operational inputs for chart history and strategy processing, not the daily archive/upload feature.
 
 Logging defaults to application lifecycle INFO from `main.py`, plus WARNING/ERROR/CRITICAL from every module. Set `V5_QUIET_LOGS=false` temporarily for detailed troubleshooting.
+
+
+## MongoDB separation and V4 Upstox token compatibility
+
+V5 uses the same MongoDB connection URI but separates database responsibilities:
+
+| Purpose | Database | Collection |
+| --- | --- | --- |
+| Legacy shared Upstox credential document (V4-compatible) | `UPSTOX_APP_V2` | `auth_tokens` |
+| V5 operational market data | `market_data` (configurable via `MONGO_DB`) | Feature-specific collections |
+| Member identity and access audit | `MARKET_ENGINE_IDENTITY` | `users`, `auth_audit` |
+
+Both `services/token_service.py` (live-feed connection) and `token_tasks/token_store.py` (token validation/status) use the same V4-compatible document contract: `_id = upstox_access_token`, with the `access_token` field. Token validation metadata is written back to this same document. The raw token is never written to application logs.
+
+Required environment settings:
+
+```dotenv
+MONGO_URL=<same MongoDB connection URI used by V4>
+MONGO_DB=market_data
+UPSTOX_TOKEN_MONGO_DB=UPSTOX_APP_V2
+TOKENS_COLLECTION=auth_tokens
+UPSTOX_TOKEN_DOC_ID=upstox_access_token
+```
+
+Do not copy the token into the V5 member database. Member credentials and audit events remain in `MARKET_ENGINE_IDENTITY`; the Upstox access token remains in the existing V4-compatible store.

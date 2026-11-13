@@ -18,7 +18,7 @@ class TokenService:
     def _get_collection(self):
         if self._collection is None:
             self._client = MongoClient(config.MONGO_URI)
-            self._collection = self._client[config.MONGO_DB][config.TOKENS_COLLECTION]
+            self._collection = self._client[config.UPSTOX_TOKEN_MONGO_DB][config.TOKENS_COLLECTION]
         return self._collection
 
     def refresh_tokens(self) -> None:

@@ -111,8 +111,13 @@ PORT = _int("PORT", 8010)
 # Token storage / lifecycle
 # ---------------------------------------------------------------------------
 MONGO_URI = _str("MONGO_URL") or _str("MONGO_URI")
-MONGO_DB = _str("MONGO_DB")
-TOKENS_COLLECTION = _str("TOKENS_COLLECTION")
+
+# Platform operational data lives separately from the legacy Upstox
+# credential store. V4 token compatibility is explicit: token readers and
+# token validation metadata use UPSTOX_APP_V2.auth_tokens by default.
+MONGO_DB = _str("MONGO_DB", "market_data")
+UPSTOX_TOKEN_MONGO_DB = _str("UPSTOX_TOKEN_MONGO_DB", "UPSTOX_APP_V2")
+TOKENS_COLLECTION = _str("TOKENS_COLLECTION", "auth_tokens")
 ORDER_LEDGER_COLLECTION = _str("ORDER_LEDGER_COLLECTION")
 UPSTOX_TOKEN_DOC_ID = _str("UPSTOX_TOKEN_DOC_ID", "upstox_access_token")
 UPSTOX_TOKEN_CHECK_INTERVAL_MINUTES = max(1, _int("UPSTOX_TOKEN_CHECK_INTERVAL_MINUTES", 30))
