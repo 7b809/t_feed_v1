@@ -1,0 +1,64 @@
+{% extends "auth_base.html" %}
+{% block title %}User management · Market Engine{% endblock %}
+{% block head %}
+<style>
+.auth-form-panel{align-items:flex-start;overflow:auto}.auth-card{max-width:none;width:100%;padding:clamp(16px,3vw,30px)}.admin-wrap{width:min(1180px,100%);margin:0 auto}
+.admin-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;margin-bottom:22px}.admin-head h1{margin:5px 0;font-size:clamp(1.5rem,3vw,2rem)}.admin-head p{margin:0;color:var(--muted);font-size:.86rem}.head-actions,.actions{display:flex;gap:7px;flex-wrap:wrap}
+.btn{border:1px solid #40516a;border-radius:9px;padding:9px 12px;background:#26364e;color:#eaf2ff;font-weight:750;font-size:.76rem;cursor:pointer;text-decoration:none}.btn.primary{background:linear-gradient(135deg,#2563eb,#7c3aed);border:0}.btn.danger{background:#542c39;border-color:#854052}.btn.good{background:#16483f;border-color:#246b5b}
+.stats{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin-bottom:18px}.stat{border:1px solid var(--border);border-radius:12px;padding:13px;background:rgba(15,23,42,.55)}.stat small{display:block;color:var(--muted);font-size:.7rem;text-transform:uppercase;font-weight:800}.stat strong{display:block;margin-top:7px;font-size:1.5rem}
+.toolbar{display:flex;gap:10px;flex-wrap:wrap;margin:15px 0}.toolbar input,.toolbar select{min-height:40px;border:1px solid #40516a;border-radius:9px;background:#0f172a;color:#f8fafc;padding:0 11px}.toolbar input{flex:1;min-width:180px}.table-wrap{overflow:auto;border:1px solid var(--border);border-radius:12px}table{width:100%;border-collapse:collapse;min-width:850px;font-size:.8rem}th,td{text-align:left;padding:12px 11px;border-bottom:1px solid rgba(51,65,85,.7);vertical-align:middle}th{color:#a9bbd1;background:#17243a;font-size:.68rem;text-transform:uppercase;letter-spacing:.08em;position:sticky;top:0}td{color:#e2e8f0}.muted{color:#94a3b8;font-size:.72rem}.pill{display:inline-flex;padding:4px 8px;border-radius:99px;font-size:.67rem;font-weight:800;text-transform:uppercase;background:#334155;color:#dbeafe}.pill.pending{background:#5b4219;color:#fde68a}.pill.active{background:#164e3d;color:#86efac}.pill.suspended,.pill.rejected,.pill.locked{background:#5b2634;color:#fecdd3}.pill.suspicious{background:#653d17;color:#fed7aa}.actions .btn{padding:6px 8px;font-size:.68rem}.empty,.loading{text-align:center;padding:30px;color:var(--muted)}.alert{padding:11px 13px;border-radius:9px;margin:12px 0;background:#173c35;color:#a7f3d0;font-size:.82rem;display:none}.alert.error{background:#4b2630;color:#fecdd3}
+@media(max-width:760px){.stats{grid-template-columns:repeat(2,minmax(0,1fr))}.stat:last-child{grid-column:span 2}.admin-head{display:block}.head-actions{margin-top:14px}.auth-form-panel{padding:12px 8px}.auth-card{padding:16px 12px}.toolbar>*{width:100%}.toolbar input{min-width:0}}
+</style>
+{% endblock %}
+{% block content %}
+<div class="admin-wrap">
+ <div class="admin-head"><div><div class="form-kicker">Platform administration</div><h1 id="authTitle">Member management</h1><p>Review registrations, manage access and investigate suspicious login activity.</p></div><div class="head-actions"><a class="btn" href="/">Dashboard</a><button class="btn primary" id="refreshBtn">↻ Refresh</button><a class="btn danger" href="/logout">Admin logout</a></div></div>
+ <div id="alert" class="alert" role="status"></div>
+ <div class="stats"><div class="stat"><small>Total accounts</small><strong id="totalCount">—</strong></div><div class="stat"><small>Pending approval</small><strong id="pendingCount">—</strong></div><div class="stat"><small>Active</small><strong id="activeCount">—</strong></div><div class="stat"><small>Suspended / rejected</small><strong id="disabledCount">—</strong></div><div class="stat"><small>Locked / suspicious</small><strong id="riskCount">—</strong></div></div>
+ <div class="toolbar"><input id="searchBox" type="search" placeholder="Search name or email…" aria-label="Search users"><select id="statusFilter" aria-label="Filter status"><option value="">All account statuses</option><option value="pending">Pending</option><option value="active">Active</option><option value="suspended">Suspended</option><option value="rejected">Rejected</option></select><select id="riskFilter" aria-label="Filter risk"><option value="">All risk states</option><option value="risk">Locked / suspicious only</option></select></div>
+ <div class="table-wrap"><table><thead><tr><th>Member</th><th>Account</th><th>Login security</th><th>Registered</th><th>Last login</th><th>Admin actions</th></tr></thead><tbody id="usersBody"><tr><td colspan="6" class="loading">Loading accounts…</td></tr></tbody></table></div>
+ <p class="muted" id="resultMeta" style="margin-top:10px">Account data is loaded from the member identity database.</p>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+(function(){
+ const body=document.getElementById('usersBody'), alertBox=document.getElementById('alert');let users=[];
+ const esc=function(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})};
+ const date=function(v){if(!v)return '—';const d=new Date(v);return isNaN(d.getTime())?'—':d.toLocaleString()};
+ const locked=function(u){return !!(u.temporarily_locked||(u.lock_until&&new Date(u.lock_until)>new Date()))};
+ function notice(msg,error){alertBox.textContent=msg;alertBox.classList.toggle('error',!!error);alertBox.style.display='block';setTimeout(function(){alertBox.style.display='none'},5000)}
+ async function api(url,method){const r=await fetch(url,{method:method||'GET',credentials:'same-origin',headers:{'Accept':'application/json'}});let d={};try{d=await r.json()}catch(e){}if(!r.ok)throw new Error(d.detail||('Request failed: '+r.status));return d}
+ async function load(){body.innerHTML='<tr><td colspan="6" class="loading">Loading accounts…</td></tr>';try{const d=await api('/admin/users?limit=500');users=d.users||[];render()}catch(e){body.innerHTML='<tr><td colspan="6" class="empty">'+esc(e.message)+'</td></tr>';notice(e.message,true)}}
+ function render(){
+  const pending=users.filter(u=>u.status==='pending').length,active=users.filter(u=>u.status==='active').length,disabled=users.filter(u=>['suspended','rejected'].includes(u.status)).length,risk=users.filter(u=>u.suspicious||locked(u)||u.login_enabled===false).length;
+  document.getElementById('totalCount').textContent=users.length;document.getElementById('pendingCount').textContent=pending;document.getElementById('activeCount').textContent=active;document.getElementById('disabledCount').textContent=disabled;document.getElementById('riskCount').textContent=risk;
+  const q=document.getElementById('searchBox').value.toLowerCase(),s=document.getElementById('statusFilter').value,riskOnly=document.getElementById('riskFilter').value==='risk';
+  const shown=users.filter(u=>(!s||u.status===s)&&(!riskOnly||u.suspicious||locked(u)||u.login_enabled===false)&&(!q||(String(u.name)+' '+String(u.email)).toLowerCase().includes(q)));
+  document.getElementById('resultMeta').textContent='Showing '+shown.length+' of '+users.length+' accounts';
+  if(!shown.length){body.innerHTML='<tr><td colspan="6" class="empty">No accounts match these filters.</td></tr>';return}
+  body.innerHTML=shown.map(function(u){
+   const isLocked=locked(u),manualOff=u.login_enabled===false,flag=u.suspicious||isLocked||manualOff,status=u.status||'unknown';
+   const lockText=isLocked?'Locked until '+date(u.lock_until):manualOff?'Admin disabled':Number(u.failed_login_attempts||0)+' failed attempts';
+   const id=esc(u.user_id),a=[];
+   if(u.status==='pending')a.push('<button class="btn good" data-action="approve" data-id="'+id+'">Approve</button>');
+   if(u.status!=='suspended'&&u.status!=='rejected')a.push('<button class="btn" data-action="suspend" data-id="'+id+'">Suspend</button>');
+   if(u.status==='suspended'||u.status==='rejected')a.push('<button class="btn good" data-action="approve" data-id="'+id+'">Reactivate</button>');
+   if(isLocked||manualOff)a.push('<button class="btn good" data-action="resume" data-id="'+id+'">Resume login</button>');
+   if(u.status!=='rejected')a.push('<button class="btn" data-action="reject" data-id="'+id+'">Reject</button>');
+   a.push('<button class="btn" data-action="revoke" data-id="'+id+'">Revoke sessions</button>');
+   a.push('<button class="btn danger" data-action="delete" data-id="'+id+'">Delete</button>');
+   return '<tr><td><strong>'+esc(u.name)+'</strong><div class="muted">'+esc(u.email)+'</div><div class="muted">ID: '+id+'</div></td><td><span class="pill '+esc(status)+'">'+esc(status)+'</span>'+(flag?'<div style="margin-top:6px"><span class="pill suspicious">Security review</span></div>':'')+'</td><td>'+(isLocked||manualOff?'<span class="pill locked">'+esc(lockText)+'</span>':'<span class="muted">'+esc(lockText)+'</span>')+'<div class="muted">Login '+(manualOff?'disabled':'enabled')+'</div></td><td>'+esc(date(u.created_at))+'</td><td>'+esc(date(u.last_login_at))+'</td><td><div class="actions">'+a.join('')+'</div></td></tr>';
+  }).join('');
+ }
+ async function action(action,id){
+  const labels={approve:'Approve/reactivate this account?',suspend:'Suspend this account?',reject:'Reject this registration?',resume:'Clear the login lock and enable login?',revoke:'Revoke all active sessions?',delete:'Permanently delete this account? This cannot be undone.'};
+  if(!confirm(labels[action]))return;
+  const endpoints={approve:'/admin/users/'+id+'/approve',suspend:'/admin/users/'+id+'/suspend',reject:'/admin/users/'+id+'/reject',resume:'/admin/users/'+id+'/login-enable',revoke:'/admin/users/'+id+'/revoke-sessions',delete:'/admin/users/'+id};
+  try{await api(endpoints[action],action==='delete'?'DELETE':'POST');notice('Account action completed.');await load()}catch(e){notice(e.message,true)}
+ }
+ body.addEventListener('click',function(e){const b=e.target.closest('button[data-action]');if(b)action(b.dataset.action,b.dataset.id)});
+ document.getElementById('refreshBtn').addEventListener('click',load);document.getElementById('searchBox').addEventListener('input',render);document.getElementById('statusFilter').addEventListener('change',render);document.getElementById('riskFilter').addEventListener('change',render);load();
+})();
+</script>
+{% endblock %}
