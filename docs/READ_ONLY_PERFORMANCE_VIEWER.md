@@ -72,3 +72,21 @@ The response includes the computed market date, market-session classification an
 ## Operational note
 
 This is a viewer, not an order simulator or broker execution surface. P&L values are displayed from the upstream saved fields. The dashboard does not recalculate trade outcomes from candles or infer missing order transitions.
+
+
+## Orders & History workspace
+
+The `/positions` page is a read-only orders workspace, not a broker positions/action console.
+
+- The default **Today's Orders** tab reads the daily document with `_id=YYYY-MM-DD` and normalizes `orders_data.orders`, `orders_data.order`, and `orders_data.post_1130_order` when present.
+- The **Order History** tab flattens the supported order slots across daily documents in the same collection, newest trading date first.
+- History pagination is server-side (10–100 rows per page) and search is applied in MongoDB before pagination. Supported search fields include trading symbol, instrument key, status, order ID and strategy/execution path.
+- The page refreshes today's orders every 15 seconds while the Today tab is active. Historical results refresh on demand, page navigation, or search.
+- Desktop uses a horizontally scrollable detail table; mobile uses compact order cards.
+
+Read-only endpoints:
+
+- `GET /live/performance/today-orders`
+- `GET /live/performance/order-history?page=1&page_size=20&search=NIFTY`
+
+Both endpoints use MongoDB read operations only. The old broker-position lock/exit APIs remain separate administrator surfaces and are not called by this workspace.
