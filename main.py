@@ -250,6 +250,7 @@ from core.logger import get_logger
 from routes.admin_routes import _run_full_refresh_sync
 from routes.admin_routes import router as admin_router
 from routes.auth_routes import router as auth_router
+from routes.user_auth_routes import router as user_auth_router
 from routes.daily_backup_routes import router as daily_backup_router
 from routes.dummy_order_routes import router as dummy_order_router
 from routes.ema_calc_routes import router as ema_calc_router
@@ -1108,7 +1109,8 @@ else:
 # gate — this block is simply "these routers don't add their own
 # per-route auth". Any path not on the guard's whitelist will still
 # be redirected / 401'd, even if the router itself is mounted here.
-app.include_router(auth_router)          # /login, /logout, /auth/whoami
+app.include_router(auth_router)          # legacy administrator login
+app.include_router(user_auth_router)     # member registration, login and account administration
 app.include_router(page_router)          # /, /charts, /chart, /isolated,
                                          # /positions, /favicon.ico
 app.include_router(live_router)

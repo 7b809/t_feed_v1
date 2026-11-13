@@ -33,6 +33,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, RedirectResponse
 
 from core.auth import is_authenticated
+from core.user_accounts import get_user_session
 from core.logger import get_logger
 
 logger = get_logger(__file__)
@@ -45,6 +46,9 @@ PUBLIC_EXACT = {
     "/login",
     "/logout",
     "/auth/whoami",
+    "/register",
+    "/user/login",
+    "/user/logout",
     "/favicon.ico",
     "/robots.txt",
 }
@@ -102,7 +106,20 @@ class AuthGuardMiddleware(BaseHTTPMiddleware):
         if _is_public(path):
             return await call_next(request)
 
-        # 2. Everything else requires a valid session cookie (or Basic auth).
+        # Member sessions receive read-only market access only.
+        member = get_user_session(request)
+        if member:
+            allowed_exact = {"/", "/charts", "/user/me", "/api/live/status",
+                             "/api/live/instruments", "/ws/live", "/ws/chart"}
+            allowed_prefixes = ("/chart/", "/api/live/snapshot")
+            if path in allowed_exact or any(path.startswith(p) for p in allowed_prefixes):
+                request.state.member = member
+                return await call_next(request)
+            return JSONResponse(status_code=403,
+                content={"detail": "This area is available to administrators only."},
+                headers={"Cache-Control": "no-store"})
+
+        # Existing administrator/API-key/Basic authentication remains unchanged.
         if is_authenticated(request):
             return await call_next(request)
 
