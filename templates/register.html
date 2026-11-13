@@ -1,0 +1,16 @@
+{% extends "auth_base.html" %}
+{% block title %}Create member account · Market Engine{% endblock %}
+{% block content %}
+<div class="form-kicker">Member access</div>
+<h1 class="form-title" id="authTitle">Create your account</h1>
+<p class="form-subtitle">Register for Market Engine. Your account will be reviewed by an administrator before access is enabled.</p>
+{% if error %}<div class="notice error" role="alert"><i class="bi bi-exclamation-triangle-fill"></i><span>{{ error }}</span></div>{% endif %}
+{% if success %}<div class="notice success" role="status"><i class="bi bi-check-circle-fill"></i><span>{{ success }}</span></div>{% endif %}
+<form method="post" action="/register" autocomplete="on">
+  <div class="field"><label for="registerName">Full name</label><div class="input-wrap"><i class="bi bi-person"></i><input id="registerName" name="name" type="text" maxlength="100" placeholder="Enter your full name" autocomplete="name" value="{{ name or '' }}" required></div></div>
+  <div class="field"><label for="registerEmail">Email address</label><div class="input-wrap"><i class="bi bi-envelope"></i><input id="registerEmail" name="email" type="email" maxlength="254" placeholder="name@example.com" autocomplete="email" autocapitalize="none" value="{{ email or '' }}" required></div></div>
+  <div class="field"><label for="registerPassword">Create password</label><div class="input-wrap"><i class="bi bi-lock"></i><input id="registerPassword" name="password" type="password" minlength="12" maxlength="128" placeholder="At least 12 characters" autocomplete="new-password" required></div><span class="field-hint">Use 12–128 characters. A longer, unique passphrase is recommended.</span></div>
+  <button class="submit" type="submit"><i class="bi bi-person-plus-fill"></i>Create account</button>
+</form>
+<div class="form-links"><span>Already registered? <a href="/user/login">Member sign in</a></span><a href="/login">Administrator login</a></div>
+{% endblock %}
