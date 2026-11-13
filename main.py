@@ -240,6 +240,7 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import Depends, FastAPI, Request
+from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
 
@@ -1032,6 +1033,9 @@ app = FastAPI(
     redoc_url="/redoc" if _DOCS_ENABLED else None,
     openapi_url="/openapi.json" if _DOCS_ENABLED else None,
 )
+
+# Static assets used by the read-only performance dashboard and shared UI.
+app.mount("/static", StaticFiles(directory=str(config.PROJECT_ROOT / "static")), name="static")
 
 
 # ---- CORS ------------------------------------------------------------------ #
