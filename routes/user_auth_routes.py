@@ -8,7 +8,7 @@ from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from core.user_accounts import (
-    authenticate_user, create_user_session, delete_user, get_security_revocation_notice,
+    authenticate_user, clear_user_security_flag, create_user_session, delete_user, get_security_revocation_notice,
     get_user_session, list_users, register_user, revoke_user_sessions, set_user_login_enabled,
     update_user_profile, update_user_status,
 )
@@ -216,13 +216,13 @@ def member_login_page(
 @router.post("/user/login", response_class=HTMLResponse)
 def member_login(
     request: Request,
-    email: str = Form(...),
+    identifier: str = Form("", alias="identifier"),
     password: str = Form(...),
     next: Optional[str] = Form(None),
 ):
     redirect_to = _safe_next(next)
     try:
-        user = authenticate_user(email, password)
+        user = authenticate_user(identifier, password)
         token = create_user_session(user)
     except HTTPException as exc:
         return _templates().TemplateResponse(
@@ -400,6 +400,24 @@ def admin_reject_user(user_id: str):
         raise
     except Exception as exc:
         raise HTTPException(500, f"Failed to reject user: {exc}")
+
+
+
+@router.post("/admin/users/{user_id}/clear-security-flag")
+def admin_clear_security_flag(user_id: str, request: Request):
+    try:
+        actor = "admin"
+        try:
+            from core.auth import is_authenticated
+            if is_authenticated(request):
+                actor = "authenticated_admin"
+        except Exception:
+            pass
+        return clear_user_security_flag(user_id, admin_actor=actor)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(500, f"Failed to clear security flag: {exc}")
 
 
 @router.patch("/admin/users/{user_id}/profile")
