@@ -126,24 +126,32 @@ def authenticate_user(email, password):
     email = _email(email)
     collection = _database()[_USERS]
     user = collection.find_one({"email": email})
-    if not user or not _verify(password, user.get("password_hash", "")):
-        if user:
-            attempts = int(user.get("failed_login_attempts", 0)) + 1
-            update = {"failed_login_attempts": attempts, "updated_at": _now()}
-            if attempts >= _MAX_FAILED:
-                lock_until = _now() + timedelta(minutes=_LOCK_MINUTES)
-                update["lock_until"] = lock_until
-                _audit("login_temporarily_locked", email, {"attempts": attempts, "lock_until": lock_until.isoformat()})
-            collection.update_one({"_id": user["_id"]}, {"$set": update})
+    if not user:
         _audit("login_failed", email)
         raise HTTPException(401, "Invalid email or password")
-    lock_until = user.get("lock_until")
+
     if user.get("login_enabled") is False:
         _audit("login_blocked_manual", email)
         raise HTTPException(403, "Login is disabled by an administrator. Contact support.")
+
+    # Check an existing lock before password verification. Repeated attempts
+    # during the lock window must not extend the two-hour timer.
+    lock_until = user.get("lock_until")
     if lock_until and _utc(lock_until) > _now():
-        _audit("login_blocked_locked", email, {"lock_until": lock_until.isoformat()})
-        raise HTTPException(423, f"Too many failed attempts. Login is locked until {lock_until.strftime('%Y-%m-%d %H:%M UTC')}.")
+        _audit("login_blocked_locked", email, {"lock_until": _utc(lock_until).isoformat()})
+        raise HTTPException(423, f"Too many failed attempts. Login is locked until {_utc(lock_until).strftime('%Y-%m-%d %H:%M UTC')}.")
+
+    if not _verify(password, user.get("password_hash", "")):
+        attempts = int(user.get("failed_login_attempts", 0)) + 1
+        update = {"failed_login_attempts": attempts, "updated_at": _now()}
+        if attempts >= _MAX_FAILED:
+            new_lock_until = _now() + timedelta(minutes=_LOCK_MINUTES)
+            update["lock_until"] = new_lock_until
+            _audit("login_temporarily_locked", email, {"attempts": attempts, "lock_until": new_lock_until.isoformat()})
+        collection.update_one({"_id": user["_id"]}, {"$set": update})
+        _audit("login_failed", email, {"attempts": attempts})
+        raise HTTPException(401, "Invalid email or password")
+
     if lock_until and _utc(lock_until) <= _now():
         collection.update_one({"_id": user["_id"]}, {"$set": {"failed_login_attempts": 0, "lock_until": None}})
     if user.get("status") != "active":
