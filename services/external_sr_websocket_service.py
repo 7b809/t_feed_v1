@@ -66,7 +66,11 @@ class ExternalSRWebSocketService:
 
     def __init__(self) -> None:
         configured_base_url = os.getenv("EXTERNAL_SR_WS_URL", "").strip()
-        self.endpoint_configured = bool(configured_base_url)
+        self.endpoint_configured = bool(
+            configured_base_url
+            and ".invalid" not in configured_base_url.lower()
+            and "your_external" not in configured_base_url.lower()
+        )
         self.base_url = (configured_base_url or "wss://external-sr.example.invalid").rstrip("/")
         if self.base_url.startswith("https://"):
             self.base_url = "wss://" + self.base_url[8:]
