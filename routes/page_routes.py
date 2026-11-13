@@ -177,33 +177,21 @@ def chart_page(request: Request, instrument_key: str) -> HTMLResponse:
 
 @router.get("/isolated", response_class=HTMLResponse)
 def isolated_page(request: Request) -> HTMLResponse:
-    """Level-isolation page.
+    """Read-only daily performance dashboard.
 
-    The page is driven entirely by the JSON returned from
-    ``GET /admin/level-isolation/detail``. The server-side fetch here
-    only supplies a first-paint payload so the page renders without a
-    visible "Loading…" flash; the JS re-fetches and re-renders on a
-    10-second poll.
+    The page no longer reads or renders this process's local isolation
+    engine state. Its browser reads today's upstream MongoDB snapshot
+    through /live/performance/today-snapshot and uses the live index
+    feed only while today's document has not yet been published.
     """
-    initial_detail: dict[str, Any] | None = None
-    try:
-        from services.level_isolated_instrument_service import (
-            level_isolated_instrument_service,
-        )
-        initial_detail = level_isolated_instrument_service.get_detail()
-    except Exception:
-        logger.exception("[isolated-page] get_detail failed")
-
     return templates.TemplateResponse(
         request=request,
         name="isolated_instrument.html",
         context={
             "app_name": "NG7",
-            "initial_detail": initial_detail,
             "is_member": bool(getattr(request.state, "member", None)),
         },
     )
-
 
 @router.get("/positions", response_class=HTMLResponse)
 def positions_page(request: Request) -> HTMLResponse:
