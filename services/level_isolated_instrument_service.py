@@ -366,6 +366,17 @@ class LevelIsolatedInstrumentService:
                 encoding="utf-8",
             )
             tmp.replace(path)
+            # Queue a non-blocking combined MongoDB snapshot after the
+            # local isolation JSON state is durable.
+            try:
+                from services.live_order_snapshot_service import (
+                    live_order_snapshot_service,
+                )
+                live_order_snapshot_service.request_snapshot()
+            except Exception:
+                logger.exception(
+                    "[level-isolation] Mongo snapshot request failed"
+                )
         except Exception:
             logger.exception("[level-isolation] failed saving state")
 

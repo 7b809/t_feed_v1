@@ -700,6 +700,15 @@ class DummyOrderService:
                 encoding="utf-8",
             )
             tmp.replace(path)
+            # Queue a non-blocking combined MongoDB snapshot after the
+            # local JSON state is durable. The worker coalesces rapid writes.
+            try:
+                from services.live_order_snapshot_service import (
+                    live_order_snapshot_service,
+                )
+                live_order_snapshot_service.request_snapshot()
+            except Exception:
+                logger.exception("[dummy-order] Mongo snapshot request failed")
         except Exception:
             logger.exception("[dummy-order] save failed")
 

@@ -775,6 +775,16 @@ async def app_lifespan(app: FastAPI):
         )
         result["sandbox_execution"] = sandbox_summary
 
+        # Capture the fully initialized live state once at startup as well
+        # as on subsequent writes from the two JSON-backed services.
+        try:
+            from services.live_order_snapshot_service import (
+                live_order_snapshot_service,
+            )
+            live_order_snapshot_service.request_snapshot()
+        except Exception:
+            logger.exception("[startup] live order Mongo snapshot request failed")
+
         registry_count = (result.get("registry") or {}).get("count", 0)
         telegram_running = _telegram_bot_running()
 

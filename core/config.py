@@ -256,6 +256,19 @@ DAILY_BACKUP_STATE_COLLECTION = _str(
     "DAILY_BACKUP_STATE_COLLECTION", "daily_backup_state"
 )
 DAILY_BACKUP_STATE_DAYS = max(1, _int("DAILY_BACKUP_STATE_DAYS", 7))
+
+# Live runtime snapshot: one combined document per IST trading date.
+# Defaults to the same database used by the daily archive configuration.
+LIVE_ORDER_SNAPSHOT_ENABLED = _bool("LIVE_ORDER_SNAPSHOT_ENABLED", True)
+LIVE_ORDER_SNAPSHOT_MONGO_DB = _str(
+    "LIVE_ORDER_SNAPSHOT_MONGO_DB", DAILY_BACKUP_MONGO_DB
+)
+LIVE_ORDER_SNAPSHOT_COLLECTION = _str(
+    "LIVE_ORDER_SNAPSHOT_COLLECTION", "dummy_orders"
+)
+LIVE_ORDER_SNAPSHOT_DEBOUNCE_SECONDS = max(
+    0.1, _float("LIVE_ORDER_SNAPSHOT_DEBOUNCE_SECONDS", 0.5)
+)
 DAILY_BACKUP_MAX_BLOB_MB = max(1, _int("DAILY_BACKUP_MAX_BLOB_MB", 15))
 
 # ===========================================================================
