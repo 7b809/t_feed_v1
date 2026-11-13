@@ -2399,6 +2399,14 @@
         }
     }
 
+{% if is_member %}
+    /* Member sessions can inspect the isolation workspace but cannot run
+       administrative refresh, backfill, simulation or dummy-order actions. */
+    #refresh-snapshot-btn,
+    #backfill-btn,
+    #iso-simulation,
+    #iso-dummy-orders { display: none !important; }
+{% endif %}
 </style>
 {% endblock %}
 
@@ -2760,6 +2768,7 @@
     /* ============================================================
        Multi-index boundary surveillance + NIFTY routing
        ============================================================ */
+    const IS_MEMBER = {{ 'true' if is_member else 'false' }};
     const DETAIL_URL = "/admin/level-isolation/detail";
     const BACKFILL_URL = "/admin/level-isolation/backfill";
     const REFRESH_SNAPSHOT_URL = "/admin/level-isolation/refresh-snapshot";
@@ -5031,6 +5040,7 @@
        SIMULATION — post-close order replay
        ============================================================ */
     (function attachSimulation() {
+        if (IS_MEMBER) return;
         const SIM_RUN_URL = "/admin/simulation/run";
 
         const runBtn = document.getElementById("sim-run-btn");
@@ -5453,6 +5463,7 @@
        DUMMY ORDERS — live tracking card
        ============================================================ */
     (function attachDummyOrders() {
+        if (IS_MEMBER) return;
         const STATE_URL = "/admin/dummy-orders";
         const SUMMARY_URL = "/admin/dummy-orders/summary";
         const POLL_MS = 15000;
