@@ -135,6 +135,6 @@ if(view==="today"){page=1;render(todayOrders,{server:false});return;}
 window.clearTimeout(searchTimer);searchTimer=window.setTimeout(function(){page=1;loadHistory();},350);
 });
 setView("today");
-refreshTimer=window.setInterval(function(){if(view==="today"&&!document.hidden)loadToday();},15000);
+refreshTimer=window.setInterval(function(){if(view==="today"&&!document.hidden&&!loading)loadToday();},15000);
 window.addEventListener("beforeunload",function(){if(refreshTimer)window.clearInterval(refreshTimer);});
 })();
