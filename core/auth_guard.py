@@ -71,8 +71,15 @@ class AuthGuardMiddleware(BaseHTTPMiddleware):
                 "/ws/live", "/ws/chart",
             }
             allowed_prefixes = ("/chart/", "/live/")
-            if path in allowed_exact or any(path.startswith(prefix) for prefix in allowed_prefixes):
+            # Live S/R endpoints are read-only dashboard data. Only GET/HEAD
+            # is available to members; operational POST actions stay admin-only.
+            member_read_only_sr = (
+                path.startswith("/live-sr/")
+                and request.method in {"GET", "HEAD"}
+            )
+            if path in allowed_exact or any(path.startswith(prefix) for prefix in allowed_prefixes) or member_read_only_sr:
                 request.state.member = member
+                request.state.is_admin = False
                 return await call_next(request)
             return JSONResponse(
                 status_code=403,
@@ -81,6 +88,8 @@ class AuthGuardMiddleware(BaseHTTPMiddleware):
             )
 
         if is_authenticated(request):
+            request.state.is_admin = True
+            request.state.member = None
             return await call_next(request)
 
         client = request.client.host if request.client else "?"
