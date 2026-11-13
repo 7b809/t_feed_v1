@@ -1,0 +1,16 @@
+{% extends "auth_base.html" %}
+{% block title %}Administrator sign in · Market Engine{% endblock %}
+{% block content %}
+<div class="form-kicker">Restricted administrator access</div>
+<h1 class="form-title" id="authTitle">Administrator sign in</h1>
+<p class="form-subtitle">Use the administrator credentials configured for this Market Engine instance.</p>
+{% if error %}<div class="notice error" role="alert"><i class="bi bi-exclamation-triangle-fill"></i><span>{{ error }}</span></div>{% endif %}
+<form method="post" action="{{ form_action or '/login' }}" autocomplete="on">
+  <input type="hidden" name="next" value="{{ next or '/' }}">
+  <div class="field"><label for="adminUsername">Username</label><div class="input-wrap"><i class="bi bi-person-badge"></i><input id="adminUsername" name="username" type="text" placeholder="Administrator username" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" required autofocus></div></div>
+  <div class="field"><label for="adminPassword">Password</label><div class="input-wrap"><i class="bi bi-shield-lock"></i><input id="adminPassword" name="password" type="password" placeholder="Enter administrator password" autocomplete="current-password" required></div></div>
+  <button class="submit" type="submit"><i class="bi bi-shield-lock-fill"></i>Sign in as administrator</button>
+</form>
+<div class="form-links"><a href="/user/login">Member sign in</a><a href="/register">Member registration</a></div>
+<div class="form-footnote">Administrator credentials are configured server-side. Member accounts cannot be used to access administrator routes.</div>
+{% endblock %}
