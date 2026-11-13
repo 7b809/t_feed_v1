@@ -37,6 +37,7 @@ def _database():
         _client = MongoClient(uri, serverSelectionTimeoutMS=5000)
         _db = _client[_DB_NAME]
         _db[_USERS].create_index([("email", ASCENDING)], unique=True)
+        _db[_USERS].create_index([("username", ASCENDING)], unique=True, sparse=True)
         _db[_USERS].create_index([("status", ASCENDING), ("created_at", ASCENDING)])
         _db[_AUDIT].create_index([("created_at", ASCENDING)])
         _db[_SECURITY_INCIDENTS].create_index([("user_id", ASCENDING), ("created_at", -1)])
@@ -386,6 +387,7 @@ def update_user_profile(user_id, name=None, email=None):
         if not clean_name or len(clean_name) > 100:
             raise HTTPException(422, "Name is required (maximum 100 characters)")
         updates["name"] = clean_name
+        updates["username"] = clean_name.lower()
     if email is not None:
         updates["email"] = _email(email)
     if len(updates) == 1:
