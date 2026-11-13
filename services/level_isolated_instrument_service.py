@@ -366,8 +366,8 @@ class LevelIsolatedInstrumentService:
                 encoding="utf-8",
             )
             tmp.replace(path)
-            # Queue a non-blocking combined MongoDB snapshot after the
-            # local isolation JSON state is durable.
+            # Queue an update to the isolated_instrument field in the same daily
+            # dummy_orders document after local state is durable.
             try:
                 from services.live_order_snapshot_service import (
                     live_order_snapshot_service,
