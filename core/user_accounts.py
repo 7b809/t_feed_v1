@@ -186,7 +186,7 @@ def get_user_session(request: Request):
         user = _database()[_USERS].find_one({"_id": ObjectId(user_id)})
         if not user or user.get("status") != "active" or user.get("login_enabled") is False:
             return None
-        if user.get("lock_until") and user["lock_until"] > _now():
+        if user.get("lock_until") and _utc(user["lock_until"]) > _now():
             return None
         if int(user.get("session_version", 1)) != int(version):
             return None
@@ -241,6 +241,30 @@ def set_user_login_enabled(user_id, enabled):
         raise HTTPException(404, "User not found")
     user = _database()[_USERS].find_one({"_id": oid}, {"password_hash": 0})
     _audit("admin_login_enabled" if enabled else "admin_login_disabled", user.get("email"))
+    user["user_id"] = str(user.pop("_id"))
+    return user
+
+
+def update_user_profile(user_id, name=None, email=None):
+    oid = _object_id(user_id)
+    updates = {"updated_at": _now()}
+    if name is not None:
+        clean_name = " ".join(str(name).split())
+        if not clean_name or len(clean_name) > 100:
+            raise HTTPException(422, "Name is required (maximum 100 characters)")
+        updates["name"] = clean_name
+    if email is not None:
+        updates["email"] = _email(email)
+    if len(updates) == 1:
+        raise HTTPException(422, "Provide a name or email to update")
+    try:
+        result = _database()[_USERS].update_one({"_id": oid}, {"$set": updates})
+    except DuplicateKeyError:
+        raise HTTPException(409, "Another account already uses this email")
+    if not result.matched_count:
+        raise HTTPException(404, "User not found")
+    user = _database()[_USERS].find_one({"_id": oid}, {"password_hash": 0})
+    _audit("account_profile_updated", user.get("email"))
     user["user_id"] = str(user.pop("_id"))
     return user
 
