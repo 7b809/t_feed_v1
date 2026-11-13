@@ -67,10 +67,10 @@
   }
   function renderOrders(data){
     var orders=collectOrders(data);
-    var open=orders.filter(function(o){return String(o.status || "OPEN").toUpperCase()==="OPEN";}).length;
+    var open=orders.filter(function(o){return String(o.status || (o.closed_at ? "CLOSED" : "OPEN")).toUpperCase()==="OPEN";}).length;
     var closed=orders.length-open;
     var realised=orders.reduce(function(sum,o){
-      var isOpen=String(o.status || "OPEN").toUpperCase()==="OPEN";
+      var isOpen=String(o.status || (o.closed_at ? "CLOSED" : "OPEN")).toUpperCase()==="OPEN";
       var v=Number(o.closed_profit_pts !== undefined ? o.closed_profit_pts : (o.pnl_points || 0));
       return sum+(!isOpen && Number.isFinite(v) ? v : 0);
     },0);
