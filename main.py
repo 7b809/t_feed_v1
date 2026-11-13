@@ -676,10 +676,38 @@ def _register_and_reconcile_sandbox(
 async def app_lifespan(app: FastAPI):
     loop = asyncio.get_running_loop()
 
-    # ---- Startup config validation (fail loud, not fast) ----------- #
-    _run_config_validation()
+    # The V5 performance viewer is a consumer of upstream daily snapshots.
+    # In this mode do not run the local cleanup/backfill/isolation/dummy-order
+    # pipeline, scheduler, or sandbox executor. The live feed is retained
+    # solely to populate the four-index watch before today's snapshot exists.
+    if config.PERFORMANCE_VIEWER_MODE:
+        config.LEVEL_ISOLATION_ENABLED = False
+        config.DUMMY_ORDER_ENABLED = False
+        config.SANDBOX_EXECUTION_ENABLED = False
+        config.DAILY_REFRESH_ENABLED = False
+        config.FIRST_CANDLE_ENABLED = False
+        config.READINESS_DIGEST_ENABLED = False
+        config.READINESS_PREFLIGHT_ENABLED = False
 
     try:
+        if not config.PERFORMANCE_VIEWER_MODE:
+            # Full strategy/market-engine startup remains available only
+            # when explicitly opting out of read-only viewer mode.
+            _run_config_validation()
+        else:
+            live_feed_service.set_loop(loop)
+            feed_started = await asyncio.to_thread(live_feed_service.start)
+            logger.info(
+                "[performance-viewer] read-only startup complete "
+                "snapshot_source=%s.%s live_index_feed_started=%s "
+                "local_isolation=disabled dummy_orders=disabled sandbox=disabled",
+                config.PERFORMANCE_SNAPSHOT_MONGO_DB,
+                config.PERFORMANCE_SNAPSHOT_COLLECTION,
+                feed_started,
+            )
+            yield
+            return
+
         # ---- Holiday gate --------------------------------------------- #
         holiday_gate = _holiday_gate_for_startup()
 
@@ -977,6 +1005,14 @@ async def app_lifespan(app: FastAPI):
             ),
             level="INFO",
         )
+        try:
+            from services.performance_snapshot_service import (
+                performance_snapshot_service,
+            )
+            performance_snapshot_service.close()
+        except Exception:
+            logger.exception("Performance snapshot MongoDB client close failed")
+
         logger.info("Application shutdown complete.")
 
 
