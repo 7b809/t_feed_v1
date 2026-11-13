@@ -775,8 +775,8 @@ async def app_lifespan(app: FastAPI):
         )
         result["sandbox_execution"] = sandbox_summary
 
-        # Capture the fully initialized live state once at startup as well
-        # as on subsequent writes from the two JSON-backed services.
+        # Capture the daily dummy_orders document once at startup, then keep
+        # its two intended fields current from their JSON-backed services.
         try:
             from services.live_order_snapshot_service import (
                 live_order_snapshot_service,
@@ -978,7 +978,7 @@ async def app_lifespan(app: FastAPI):
                 logger.exception("%s stop failed", name)
 
         # All snapshot producers (feed and scheduler) are stopped now.
-        # Retry the final combined JSON snapshot before closing MongoDB.
+        # Retry the final dummy_orders document update before closing MongoDB.
         try:
             from services.live_order_snapshot_service import (
                 live_order_snapshot_service,
