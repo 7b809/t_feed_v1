@@ -80,8 +80,14 @@ def member_login(request: Request, email: str = Form(...), password: str = Form(
         )
     return _set_cookie(RedirectResponse("/", status_code=303), token)
 
+@router.get("/user/logout")
 @router.post("/user/logout")
 def member_logout():
+    """End the member session and always return the browser to member sign-in.
+
+    GET is supported for compatibility with existing navbar links; POST is
+    also supported for form-based logout controls.
+    """
     from core import config
     response = RedirectResponse("/user/login", status_code=303)
     response.delete_cookie(
