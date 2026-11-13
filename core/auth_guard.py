@@ -67,20 +67,59 @@ class AuthGuardMiddleware(BaseHTTPMiddleware):
         member = get_user_session(request)
         if member:
             allowed_exact = {
-                "/", "/charts", "/user/me", "/live/status", "/live/instruments",
-                "/ws/live", "/ws/chart",
+                "/", "/charts", "/isolated", "/positions", "/user/me",
+                "/live/status", "/live/instruments", "/ws/live", "/ws/chart",
             }
             allowed_prefixes = ("/chart/", "/live/")
-            # Live S/R endpoints are read-only dashboard data. Only GET/HEAD
-            # is available to members; operational POST actions stay admin-only.
+            read_only_methods = {"GET", "HEAD"}
+
+            # Shared member workspace APIs. These are strictly read-only;
+            # subscription changes, order actions and all other writes remain
+            # administrator-only.
+            member_read_only_upstox = (
+                path in {
+                    "/api/upstox/search",
+                    "/api/upstox/instrument",
+                    "/api/upstox/intraday",
+                    "/api/upstox/historical",
+                    "/api/upstox/subscription-status",
+                }
+                and request.method in read_only_methods
+            )
+            member_read_only_isolation = (
+                path.startswith("/admin/level-isolation/")
+                and request.method in read_only_methods
+            )
             member_read_only_sr = (
                 path.startswith("/live-sr/")
-                and request.method in {"GET", "HEAD"}
+                and request.method in read_only_methods
             )
-            if path in allowed_exact or any(path.startswith(prefix) for prefix in allowed_prefixes) or member_read_only_sr:
+
+            if (
+                path in allowed_exact
+                or any(path.startswith(prefix) for prefix in allowed_prefixes)
+                or member_read_only_upstox
+                or member_read_only_isolation
+                or member_read_only_sr
+            ):
                 request.state.member = member
                 request.state.is_admin = False
                 return await call_next(request)
+
+            request.state.member = member
+            request.state.is_admin = False
+            if _client_wants_html(request):
+                from routes.page_routes import templates
+                return templates.TemplateResponse(
+                    request=request,
+                    name="restricted.html",
+                    context={
+                        "app_name": "NG7",
+                        "requested_path": path,
+                    },
+                    status_code=403,
+                    headers={"Cache-Control": "no-store"},
+                )
             return JSONResponse(
                 status_code=403,
                 content={"detail": "This area is available to administrators only."},
