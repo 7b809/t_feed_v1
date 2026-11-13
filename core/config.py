@@ -122,6 +122,23 @@ ORDER_LEDGER_COLLECTION = _str("ORDER_LEDGER_COLLECTION")
 UPSTOX_TOKEN_DOC_ID = _str("UPSTOX_TOKEN_DOC_ID", "upstox_access_token")
 UPSTOX_TOKEN_CHECK_INTERVAL_MINUTES = max(1, _int("UPSTOX_TOKEN_CHECK_INTERVAL_MINUTES", 30))
 
+# ---------------------------------------------------------------------------
+# Read-only daily performance viewer (upstream project owns all writes)
+# ---------------------------------------------------------------------------
+# The isolated page reads the upstream daily document keyed by YYYY-MM-DD.
+# It must not share V5 operational collections or write to the source DB.
+PERFORMANCE_VIEWER_MODE = _bool("PERFORMANCE_VIEWER_MODE", True)
+PERFORMANCE_SNAPSHOT_ENABLED = _bool("PERFORMANCE_SNAPSHOT_ENABLED", True)
+PERFORMANCE_SNAPSHOT_MONGO_DB = _str(
+    "PERFORMANCE_SNAPSHOT_MONGO_DB", "UPSTOX_APP_V2"
+)
+PERFORMANCE_SNAPSHOT_COLLECTION = _str(
+    "PERFORMANCE_SNAPSHOT_COLLECTION", "dummy_orders"
+)
+PERFORMANCE_SNAPSHOT_CONNECT_TIMEOUT_MS = max(
+    1000, _int("PERFORMANCE_SNAPSHOT_CONNECT_TIMEOUT_MS", 4000)
+)
+
 MARKET_TIMEZONE = _str("MARKET_TIMEZONE", "Asia/Kolkata")
 MARKET_TIME_FORMAT = _str("MARKET_TIME_FORMAT", "%Y-%m-%d %H:%M:%S %Z")
 
