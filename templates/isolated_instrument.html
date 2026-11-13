@@ -2,77 +2,811 @@
 {% block title %}Daily Performance · {{ app_name }}{% endblock %}
 {% block head %}
 <style>
-:root{--pv-bg:#f4f7fb;--pv-card:#fff;--pv-ink:#172033;--pv-muted:#718096;--pv-line:#e6ebf2;--pv-blue:#2563eb;--pv-green:#0f9f6e;--pv-red:#dc4c4c}
-.pv-page{width:min(100%,1480px);margin:auto;padding:clamp(14px,2.4vw,32px);color:var(--pv-ink)}
-.pv-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;margin-bottom:20px}
-.pv-kicker{font-size:.7rem;letter-spacing:.12em;font-weight:800;color:var(--pv-blue);text-transform:uppercase}
-.pv-title{font-size:clamp(1.4rem,2.4vw,2.1rem);font-weight:850;letter-spacing:-.04em;margin:4px 0}
-.pv-subtitle{color:var(--pv-muted);font-size:.88rem}
-.pv-actions{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
-.pv-date,.pv-refresh{border:1px solid var(--pv-line);border-radius:10px;background:#fff;padding:9px 12px;font-weight:700;font-size:.8rem}
-.pv-refresh{background:#1d4ed8;color:#fff;border-color:#1d4ed8;cursor:pointer}
-.pv-status{display:inline-flex;align-items:center;gap:7px;padding:7px 10px;border-radius:999px;background:#eef2f7;color:#536174;font-size:.68rem;font-weight:850;text-transform:uppercase}
-.pv-status:before{content:"";width:7px;height:7px;border-radius:50%;background:currentColor}
-.pv-status.live{background:#e8f7f0;color:#08784f}.pv-status.saved{background:#eaf1ff;color:#1d4ed8}.pv-status.waiting{background:#fff6df;color:#95620b}.pv-status.error{background:#fff0f0;color:#bd3333}
-.pv-notice{display:flex;gap:12px;padding:15px 17px;border:1px solid #dce7fa;background:#f0f6ff;border-radius:14px;margin-bottom:17px}
-.pv-notice i{font-size:1.15rem;color:var(--pv-blue)}.pv-notice strong{display:block;margin-bottom:3px}.pv-notice p{margin:0;color:#536174;font-size:.82rem;line-height:1.55}
-.pv-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:17px}
-.pv-card{background:#fff;border:1px solid var(--pv-line);border-radius:16px;box-shadow:0 3px 14px rgba(23,32,51,.035);overflow:hidden}
-.pv-stat{padding:16px 17px}.pv-label{font-size:.67rem;text-transform:uppercase;letter-spacing:.08em;color:var(--pv-muted);font-weight:850}
-.pv-value{font-size:clamp(1.2rem,2vw,1.7rem);font-weight:850;margin-top:7px;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
-.pv-hint{font-size:.73rem;color:var(--pv-muted);margin-top:4px}.pv-positive{color:var(--pv-green)!important}.pv-negative{color:var(--pv-red)!important}
-.pv-section{margin-bottom:17px}.pv-section-head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:14px 17px;border-bottom:1px solid var(--pv-line)}
-.pv-section-title{font-weight:850;font-size:.93rem;margin:0}.pv-section-title i{color:var(--pv-blue);margin-right:7px}.pv-section-body{padding:16px 17px}
-.pv-index-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
-.pv-index{padding:13px;border:1px solid var(--pv-line);border-radius:12px;background:#fbfcfe;min-width:0}
-.pv-index-top{display:flex;justify-content:space-between;gap:8px}.pv-index-name{font-weight:850;font-size:.78rem}
-.pv-index-key{font-size:.64rem;color:var(--pv-muted);overflow-wrap:anywhere;margin-top:5px}
-.pv-index-ltp{font-size:1.3rem;font-weight:850;margin-top:11px;font-variant-numeric:tabular-nums}.pv-index-time{font-size:.67rem;color:var(--pv-muted);margin-top:3px}
-.pv-dot{width:7px;height:7px;border-radius:50%;background:#cbd5e1}.pv-dot.ok{background:var(--pv-green)}
-.pv-two{display:grid;grid-template-columns:1.1fr .9fr;gap:16px}
-.pv-hero{background:linear-gradient(125deg,#111e36,#1c3762);color:#fff;border-radius:14px;padding:19px}
-.pv-hero-label{font-size:.66rem;text-transform:uppercase;letter-spacing:.12em;color:#a9c6fa;font-weight:850}
-.pv-hero-symbol{font-size:clamp(1.2rem,2.3vw,1.7rem);font-weight:850;margin:8px 0;overflow-wrap:anywhere}.pv-hero-key{font-size:.7rem;color:#aebdd2;overflow-wrap:anywhere}
-.pv-tags{display:flex;gap:7px;flex-wrap:wrap;margin-top:12px}.pv-tag{font-size:.65rem;font-weight:850;padding:5px 8px;border-radius:7px;background:rgba(255,255,255,.12);color:#eaf2ff}
-.pv-meta-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:16px}
-.pv-meta{border-top:1px solid rgba(255,255,255,.13);padding-top:8px;min-width:0}.pv-meta span{display:block;color:#aebdd2;font-size:.64rem;text-transform:uppercase;font-weight:750}.pv-meta strong{display:block;color:#fff;font-size:.86rem;margin-top:3px;overflow-wrap:anywhere}
-.pv-detail-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.pv-detail{border:1px solid var(--pv-line);border-radius:11px;padding:11px;min-width:0}
-.pv-detail span{display:block;color:var(--pv-muted);font-size:.65rem;font-weight:850;text-transform:uppercase}.pv-detail strong{display:block;margin-top:4px;font-size:.82rem;overflow-wrap:anywhere}
-.pv-table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}.pv-table{width:100%;border-collapse:collapse;min-width:820px;font-size:.77rem}
-.pv-table th{background:#f8fafc;color:#718096;text-transform:uppercase;font-size:.64rem;text-align:left;padding:10px;white-space:nowrap}
-.pv-table td{padding:11px 10px;border-top:1px solid #edf0f5;vertical-align:middle}.pv-table .num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
-.pv-subcell{display:block;color:var(--pv-muted);font-size:.66rem;margin-top:3px}.pv-pill{display:inline-flex;padding:4px 7px;border-radius:7px;font-size:.63rem;font-weight:850;text-transform:uppercase;background:#edf2f7;color:#526174;white-space:nowrap}
-.pv-pill.open{background:#eaf1ff;color:#2456bc}.pv-pill.closed{background:#e8f7f0;color:#08784f}.pv-pill.loss{background:#fff0f0;color:#bd3333}.pv-pill.skip{background:#fff6df;color:#95620b}
-.pv-levels{display:flex;flex-wrap:wrap;gap:8px}.pv-level{padding:8px 10px;border:1px solid var(--pv-line);border-radius:9px;background:#fbfcfe;font-size:.74rem}.pv-level strong{display:block;font-size:.87rem;margin-top:3px}
-.pv-event{border-left:3px solid #cbd5e1;padding:3px 0 12px 12px;margin-left:5px}.pv-event strong{font-size:.79rem}.pv-event small{display:block;color:var(--pv-muted);margin-top:3px}
-.pv-empty{text-align:center;padding:28px;color:var(--pv-muted)}.pv-raw{margin-top:14px;border-top:1px solid var(--pv-line);padding-top:12px}.pv-raw summary{cursor:pointer;font-weight:850;font-size:.77rem;color:#536174}
-.pv-raw pre{margin-top:10px;padding:12px;background:#101827;color:#dce8fa;border-radius:10px;max-height:450px;overflow:auto;font-size:.68rem;white-space:pre-wrap;overflow-wrap:anywhere}
-.pv-footer{text-align:center;color:var(--pv-muted);font-size:.7rem;padding:8px 0 20px}
-@media(max-width:1000px){.pv-grid,.pv-index-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.pv-two{grid-template-columns:1fr}}
-@media(max-width:560px){.pv-page{padding:12px}.pv-grid{gap:8px}.pv-stat{padding:12px}.pv-index-grid{gap:8px}.pv-index{padding:10px}.pv-index-ltp{font-size:1.1rem}.pv-section-body{padding:12px}.pv-section-head{padding:12px}.pv-detail-list{gap:7px}.pv-detail{padding:9px}}
+/* ============================================================
+   Daily Performance · colorful professional dashboard
+   ============================================================ */
+:root{
+  --pv-bg:#eef3fb;
+  --pv-card:#ffffff;
+  --pv-ink:#0f172a;
+  --pv-muted:#64748b;
+  --pv-line:#e2e8f0;
+  --pv-blue:#2563eb;
+  --pv-indigo:#4f46e5;
+  --pv-violet:#7c3aed;
+  --pv-green:#059669;
+  --pv-red:#dc2626;
+  --pv-amber:#d97706;
+  --pv-cyan:#0891b2;
+  --pv-pink:#db2777;
+  --pv-shadow-sm:0 2px 8px rgba(15,23,42,.05);
+  --pv-shadow:0 10px 30px rgba(15,23,42,.08);
+  --pv-shadow-lg:0 20px 48px rgba(15,23,42,.14);
+  --pv-radius:18px;
+}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+
+/* Page panel */
+.pv-page{
+  width:min(100%,1520px);
+  margin:16px auto;
+  padding:clamp(16px,2.4vw,34px);
+  color:var(--pv-ink);
+  background:
+    radial-gradient(1200px 400px at 100% -10%,rgba(79,70,229,.10),transparent 60%),
+    radial-gradient(900px 300px at -10% 0%,rgba(8,145,178,.10),transparent 60%),
+    linear-gradient(180deg,#f8fafd 0%,#eaf0f9 100%);
+  border-radius:26px;
+  min-height:calc(100vh - 96px);
+  box-shadow:0 24px 64px rgba(2,6,23,.35);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  -webkit-font-smoothing:antialiased;
+}
+
+/* ---------- Hero header ---------- */
+.pv-head{
+  position:relative;overflow:hidden;
+  display:flex;justify-content:space-between;align-items:center;
+  gap:20px;flex-wrap:wrap;
+  padding:26px 30px;margin-bottom:20px;
+  border-radius:22px;color:#fff;
+  background:
+    radial-gradient(700px 260px at 110% -40%,rgba(255,255,255,.28),transparent 60%),
+    linear-gradient(120deg,#1e3a8a 0%,#4338ca 45%,#7c3aed 100%);
+  box-shadow:0 20px 48px rgba(67,56,202,.40);
+}
+.pv-head::before{
+  content:"";position:absolute;width:360px;height:360px;right:-120px;top:-160px;
+  border-radius:50%;background:radial-gradient(circle,rgba(255,255,255,.22),transparent 70%);
+  pointer-events:none;
+}
+.pv-head::after{
+  content:"";position:absolute;width:240px;height:240px;right:80px;bottom:-170px;
+  border-radius:50%;background:radial-gradient(circle,rgba(255,255,255,.14),transparent 70%);
+  pointer-events:none;
+}
+.pv-head-text{position:relative;z-index:1;min-width:0}
+.pv-kicker{
+  font-size:.7rem;letter-spacing:.16em;font-weight:800;color:#bfdbfe;
+  text-transform:uppercase;margin-bottom:6px;
+}
+.pv-title{
+  font-size:clamp(1.5rem,2.6vw,2.25rem);
+  font-weight:850;letter-spacing:-.03em;margin:0 0 6px;line-height:1.1;
+}
+.pv-subtitle{color:#cbd5e1;font-size:.9rem;max-width:660px;line-height:1.5}
+.pv-actions{
+  display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+  position:relative;z-index:1;
+}
+.pv-date{
+  padding:9px 14px;border-radius:10px;
+  background:rgba(255,255,255,.14);
+  border:1px solid rgba(255,255,255,.24);
+  color:#fff;font-weight:700;font-size:.8rem;
+  backdrop-filter:blur(6px);
+}
+.pv-refresh{
+  padding:9px 16px;border-radius:10px;border:none;cursor:pointer;
+  background:#fff;color:#3730a3;font-weight:800;font-size:.82rem;
+  display:inline-flex;align-items:center;gap:8px;
+  transition:transform .15s,box-shadow .2s;
+  box-shadow:0 8px 22px rgba(0,0,0,.20);
+}
+.pv-refresh:hover{transform:translateY(-1px);box-shadow:0 12px 28px rgba(0,0,0,.26)}
+.pv-refresh:active{transform:scale(.97)}
+
+/* ---------- Status pills ---------- */
+.pv-status{
+  display:inline-flex;align-items:center;gap:8px;
+  padding:8px 14px;border-radius:999px;
+  font-size:.68rem;font-weight:850;text-transform:uppercase;letter-spacing:.04em;
+  background:#e2e8f0;color:#475569;
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.25);
+}
+.pv-status::before{
+  content:"";width:8px;height:8px;border-radius:50%;
+  background:currentColor;box-shadow:0 0 0 3px rgba(255,255,255,.35);
+}
+.pv-status.live{background:linear-gradient(135deg,#059669,#10b981);color:#fff}
+.pv-status.saved{background:linear-gradient(135deg,#2563eb,#4f46e5);color:#fff}
+.pv-status.waiting{background:linear-gradient(135deg,#d97706,#f59e0b);color:#fff}
+.pv-status.error{background:linear-gradient(135deg,#dc2626,#ef4444);color:#fff}
+
+/* ---------- Notice banner ---------- */
+.pv-notice{
+  display:flex;gap:14px;align-items:flex-start;
+  padding:14px 18px;margin-bottom:20px;border-radius:16px;
+  background:linear-gradient(135deg,#eff6ff,#e0f2fe);
+  border:1px solid #bfdbfe;
+  box-shadow:var(--pv-shadow-sm);
+}
+.pv-notice i{
+  font-size:1.2rem;color:#1d4ed8;flex-shrink:0;
+  width:36px;height:36px;border-radius:10px;
+  display:inline-flex;align-items:center;justify-content:center;
+  background:linear-gradient(135deg,#dbeafe,#bfdbfe);
+}
+.pv-notice strong{display:block;margin-bottom:3px;color:#1e3a8a;font-size:.9rem}
+.pv-notice p{margin:0;color:#475569;font-size:.8rem;line-height:1.5}
+
+/* ---------- Stat grid ---------- */
+.pv-grid{
+  display:grid;grid-template-columns:repeat(4,minmax(0,1fr));
+  gap:14px;margin-bottom:20px;
+}
+.pv-card{
+  background:var(--pv-card);border:1px solid var(--pv-line);
+  border-radius:var(--pv-radius);
+  box-shadow:var(--pv-shadow-sm);
+  overflow:hidden;
+}
+.pv-stat{
+  position:relative;display:flex;align-items:center;justify-content:space-between;
+  gap:14px;padding:20px 22px;
+  transition:transform .18s ease,box-shadow .22s ease,border-color .2s ease;
+}
+.pv-stat::before{
+  content:"";position:absolute;inset:0;pointer-events:none;opacity:0;transition:opacity .2s;
+}
+.pv-stat:hover{transform:translateY(-3px);box-shadow:var(--pv-shadow);border-color:#c7d2fe}
+.pv-stat:hover::before{opacity:1}
+.pv-stat-text{min-width:0;flex:1}
+.pv-label{
+  font-size:.66rem;text-transform:uppercase;letter-spacing:.09em;
+  color:var(--pv-muted);font-weight:850;
+}
+.pv-value{
+  font-size:clamp(1.35rem,2.1vw,1.85rem);font-weight:850;
+  margin-top:7px;overflow-wrap:anywhere;font-variant-numeric:tabular-nums;
+  color:var(--pv-ink);line-height:1.15;
+}
+.pv-hint{font-size:.73rem;color:var(--pv-muted);margin-top:5px;line-height:1.35}
+.pv-positive{color:var(--pv-green)!important}
+.pv-negative{color:var(--pv-red)!important}
+
+.pv-stat-icon{
+  width:54px;height:54px;min-width:54px;border-radius:15px;
+  display:flex;align-items:center;justify-content:center;
+  font-size:1.45rem;color:#fff;flex-shrink:0;
+  box-shadow:0 10px 22px rgba(15,23,42,.18);
+}
+.stat-blue  .pv-stat-icon{background:linear-gradient(135deg,#2563eb,#3b82f6)}
+.stat-blue::before{background:radial-gradient(180px 120px at 100% 0%,rgba(37,99,235,.10),transparent 70%)}
+.stat-amber .pv-stat-icon{background:linear-gradient(135deg,#d97706,#f59e0b)}
+.stat-amber::before{background:radial-gradient(180px 120px at 100% 0%,rgba(245,158,11,.12),transparent 70%)}
+.stat-green .pv-stat-icon{background:linear-gradient(135deg,#059669,#10b981)}
+.stat-green::before{background:radial-gradient(180px 120px at 100% 0%,rgba(16,185,129,.12),transparent 70%)}
+.stat-violet .pv-stat-icon{background:linear-gradient(135deg,#7c3aed,#a855f7)}
+.stat-violet::before{background:radial-gradient(180px 120px at 100% 0%,rgba(168,85,247,.12),transparent 70%)}
+
+/* ---------- Section cards ---------- */
+.pv-section{margin-bottom:20px;border-radius:var(--pv-radius)}
+.pv-section-head{
+  display:flex;align-items:center;justify-content:space-between;gap:12px;
+  padding:16px 20px;border-bottom:1px solid var(--pv-line);
+  background:linear-gradient(180deg,#f8fafd 0%,#ffffff 100%);
+}
+.pv-section-title{
+  font-weight:850;font-size:1rem;margin:0;
+  display:flex;align-items:center;gap:10px;color:var(--pv-ink);
+}
+.pv-section-title i{
+  display:inline-flex;align-items:center;justify-content:center;
+  width:32px;height:32px;border-radius:10px;
+  font-size:.95rem;color:#fff;flex-shrink:0;
+  background:linear-gradient(135deg,#2563eb,#4f46e5);
+  box-shadow:0 6px 16px rgba(37,99,235,.35);
+}
+#pv-watch-section     .pv-section-title i{background:linear-gradient(135deg,#0891b2,#06b6d4);box-shadow:0 6px 16px rgba(8,145,178,.35)}
+#pv-levels-section    .pv-section-title i{background:linear-gradient(135deg,#d97706,#f59e0b);box-shadow:0 6px 16px rgba(217,119,6,.35)}
+#pv-events-section    .pv-section-title i{background:linear-gradient(135deg,#db2777,#ec4899);box-shadow:0 6px 16px rgba(219,39,119,.35)}
+#pv-orders-section    .pv-section-title i{background:linear-gradient(135deg,#059669,#10b981);box-shadow:0 6px 16px rgba(5,150,105,.35)}
+.pv-section-body{padding:18px 20px}
+
+/* ---------- Index watch ---------- */
+.pv-index-grid{
+  display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;
+}
+.pv-index{
+  position:relative;padding:16px 14px 14px;
+  border:1px solid var(--pv-line);border-radius:14px;
+  background:linear-gradient(180deg,#fbfcfe,#f3f6fb);
+  min-width:0;overflow:hidden;
+  transition:transform .18s,box-shadow .22s;
+}
+.pv-index:hover{transform:translateY(-2px);box-shadow:var(--pv-shadow)}
+.pv-index::before{
+  content:"";position:absolute;top:0;left:0;right:0;height:4px;
+  background:linear-gradient(90deg,#2563eb,#4f46e5);
+}
+.pv-index:nth-child(2)::before{background:linear-gradient(90deg,#d97706,#f59e0b)}
+.pv-index:nth-child(3)::before{background:linear-gradient(90deg,#059669,#10b981)}
+.pv-index:nth-child(4)::before{background:linear-gradient(90deg,#7c3aed,#a855f7)}
+.pv-index:nth-child(5)::before{background:linear-gradient(90deg,#0891b2,#06b6d4)}
+.pv-index-top{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.pv-index-name{font-weight:850;font-size:.8rem;color:var(--pv-ink)}
+.pv-dot{width:9px;height:9px;border-radius:50%;background:#cbd5e1;flex-shrink:0}
+.pv-dot.ok{background:var(--pv-green);box-shadow:0 0 0 3px rgba(5,150,105,.15)}
+.pv-index-ltp{
+  font-size:1.35rem;font-weight:850;margin-top:12px;
+  font-variant-numeric:tabular-nums;color:var(--pv-ink);
+}
+.pv-index-key{
+  font-size:.64rem;color:var(--pv-muted);overflow-wrap:anywhere;margin-top:6px;
+}
+.pv-index-time{font-size:.67rem;color:var(--pv-muted);margin-top:4px}
+
+/* ---------- Two-column isolation ---------- */
+.pv-two{display:grid;grid-template-columns:1.15fr .85fr;gap:18px;margin-bottom:20px}
+
+/* Isolation hero card */
+.pv-hero{
+  position:relative;overflow:hidden;
+  background:
+    radial-gradient(500px 200px at 110% -20%,rgba(124,58,237,.35),transparent 60%),
+    linear-gradient(125deg,#0f1e3d,#1e3a8a 55%,#4c1d95 100%);
+  color:#fff;border-radius:16px;padding:22px;
+  box-shadow:0 18px 40px rgba(30,58,138,.35);
+}
+.pv-hero::after{
+  content:"";position:absolute;width:220px;height:220px;right:-80px;bottom:-120px;
+  border-radius:50%;background:radial-gradient(circle,rgba(255,255,255,.18),transparent 70%);
+  pointer-events:none;
+}
+.pv-hero-label{
+  font-size:.66rem;text-transform:uppercase;letter-spacing:.14em;
+  color:#a9c6fa;font-weight:850;position:relative;z-index:1;
+}
+.pv-hero-symbol{
+  font-size:clamp(1.25rem,2.3vw,1.75rem);font-weight:850;
+  margin:10px 0 6px;overflow-wrap:anywhere;line-height:1.2;
+  position:relative;z-index:1;
+}
+.pv-hero-key{
+  font-size:.72rem;color:#aebdd2;overflow-wrap:anywhere;position:relative;z-index:1;
+}
+.pv-tags{display:flex;gap:7px;flex-wrap:wrap;margin-top:14px;position:relative;z-index:1}
+.pv-tag{
+  font-size:.66rem;font-weight:850;padding:6px 10px;border-radius:8px;
+  background:rgba(255,255,255,.14);
+  border:1px solid rgba(255,255,255,.18);
+  color:#eaf2ff;letter-spacing:.02em;
+}
+.pv-meta-grid{
+  display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;
+  margin-top:18px;position:relative;z-index:1;
+}
+.pv-meta{
+  border-top:1px solid rgba(255,255,255,.16);
+  padding-top:10px;min-width:0;
+}
+.pv-meta span{
+  display:block;color:#aebdd2;font-size:.64rem;text-transform:uppercase;
+  font-weight:750;letter-spacing:.05em;
+}
+.pv-meta strong{
+  display:block;color:#fff;font-size:.88rem;margin-top:5px;
+  overflow-wrap:anywhere;font-variant-numeric:tabular-nums;
+}
+
+/* ---------- Trigger card (highlighted) ---------- */
+.pv-trigger-card{
+  border:2px solid #a5f3fc;
+  background:linear-gradient(180deg,#ffffff 0%,#ecfeff 100%);
+  box-shadow:0 12px 30px rgba(8,145,178,.12);
+}
+.pv-trigger-card .pv-section-head{
+  background:linear-gradient(135deg,#ecfeff,#cffafe);
+  border-bottom:1px solid #a5f3fc;
+}
+.pv-trigger-card .pv-section-title i{
+  background:linear-gradient(135deg,#0891b2,#06b6d4);
+  box-shadow:0 6px 16px rgba(8,145,178,.4);
+}
+.pv-detail-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.pv-detail{
+  position:relative;padding:12px 14px 12px 16px;
+  border:1px solid var(--pv-line);border-radius:12px;
+  background:linear-gradient(180deg,#ffffff,#f8fafd);
+  min-width:0;overflow:hidden;
+  transition:transform .15s,box-shadow .2s,border-color .2s;
+}
+.pv-detail::before{
+  content:"";position:absolute;top:0;left:0;bottom:0;width:4px;
+  background:linear-gradient(180deg,#2563eb,#4f46e5);
+}
+.pv-detail:nth-child(3n+2)::before{background:linear-gradient(180deg,#7c3aed,#a855f7)}
+.pv-detail:nth-child(3n+3)::before{background:linear-gradient(180deg,#0891b2,#06b6d4)}
+.pv-detail:hover{
+  transform:translateY(-1px);box-shadow:var(--pv-shadow-sm);
+  border-color:#c7d2fe;
+}
+.pv-detail span{
+  display:block;color:var(--pv-muted);font-size:.63rem;font-weight:850;
+  text-transform:uppercase;letter-spacing:.05em;
+}
+.pv-detail strong{
+  display:block;margin-top:5px;font-size:.85rem;overflow-wrap:anywhere;
+  color:var(--pv-ink);font-variant-numeric:tabular-nums;
+}
+
+/* ---------- Levels ---------- */
+.pv-levels{display:flex;flex-wrap:wrap;gap:9px}
+.pv-level{
+  padding:10px 13px;border-radius:12px;min-width:82px;
+  border:1px solid var(--pv-line);
+  background:linear-gradient(180deg,#ffffff,#f1f5fb);
+  font-size:.7rem;font-weight:800;color:var(--pv-muted);
+  text-transform:uppercase;letter-spacing:.04em;
+  display:flex;flex-direction:column;gap:4px;
+  transition:transform .15s,box-shadow .2s;
+}
+.pv-level:hover{transform:translateY(-2px);box-shadow:var(--pv-shadow-sm)}
+.pv-level strong{
+  display:block;font-size:.95rem;color:var(--pv-ink);
+  font-weight:850;margin:0;font-variant-numeric:tabular-nums;
+  text-transform:none;letter-spacing:0;
+}
+.pv-level:nth-child(4n+1){background:linear-gradient(180deg,#eff6ff,#dbeafe);border-color:#bfdbfe}
+.pv-level:nth-child(4n+2){background:linear-gradient(180deg,#f5f3ff,#ede9fe);border-color:#ddd6fe}
+.pv-level:nth-child(4n+3){background:linear-gradient(180deg,#ecfdf5,#d1fae5);border-color:#a7f3d0}
+.pv-level:nth-child(4n+4){background:linear-gradient(180deg,#fffbeb,#fef3c7);border-color:#fde68a}
+
+/* ---------- Events timeline ---------- */
+.pv-event{
+  position:relative;padding:16px 18px 16px 22px;margin:0 0 14px;
+  border-left:4px solid #7c3aed;border-radius:14px;
+  background:linear-gradient(135deg,#faf8ff,#f3f0ff);
+  border:1px solid #ede9fe;border-left-width:4px;
+  box-shadow:var(--pv-shadow-sm);
+}
+.pv-event::before{
+  content:"";position:absolute;width:12px;height:12px;border-radius:50%;
+  background:linear-gradient(135deg,#7c3aed,#a855f7);
+  left:-8px;top:20px;
+  box-shadow:0 0 0 4px #ede9fe;
+}
+.pv-event strong{font-size:.9rem;color:var(--pv-ink);display:block;font-weight:850}
+.pv-event small{
+  display:block;color:var(--pv-muted);font-size:.73rem;margin-top:6px;line-height:1.5;
+}
+
+/* ---------- Orders card (highlighted) ---------- */
+.pv-orders-card{
+  border:2px solid #a7f3d0;
+  background:linear-gradient(180deg,#ffffff 0%,#f0fdf4 100%);
+  box-shadow:0 12px 30px rgba(5,150,105,.14);
+}
+.pv-orders-card .pv-section-head{
+  background:linear-gradient(135deg,#ecfdf5,#d1fae5);
+  border-bottom:1px solid #a7f3d0;
+}
+
+/* ---------- Profit banner inside orders ---------- */
+.pv-profit-banner{
+  display:grid;
+  grid-template-columns:minmax(150px, auto) minmax(120px, 1fr) minmax(200px, 1.6fr);
+  gap:18px;
+  padding:20px 22px;
+  background:
+    radial-gradient(400px 200px at 100% -30%,rgba(255,255,255,.22),transparent 60%),
+    linear-gradient(135deg,#065f46,#059669 55%,#10b981);
+  color:#fff;
+  align-items:center;
+  border-bottom:1px solid #047857;
+}
+.pv-profit-control{display:flex;flex-direction:column;gap:6px}
+.pv-profit-control label{
+  font-size:.66rem;text-transform:uppercase;letter-spacing:.1em;
+  font-weight:850;color:#a7f3d0;
+}
+.pv-profit-control input{
+  padding:11px 14px;border-radius:10px;
+  border:1px solid rgba(255,255,255,.3);
+  background:rgba(255,255,255,.18);
+  color:#fff;font-weight:850;font-size:1.15rem;
+  width:100%;max-width:130px;
+  font-variant-numeric:tabular-nums;
+  transition:all .15s;
+}
+.pv-profit-control input:focus{
+  outline:none;
+  background:rgba(255,255,255,.28);
+  border-color:#fff;
+  box-shadow:0 0 0 3px rgba(16,185,129,.35);
+}
+.pv-profit-control-hint{
+  font-size:.63rem;color:#a7f3d0;line-height:1.4;
+}
+.pv-profit-stat-label{
+  font-size:.66rem;text-transform:uppercase;
+  letter-spacing:.1em;font-weight:850;color:#a7f3d0;
+  margin-bottom:8px;
+}
+.pv-profit-stat-value{
+  font-size:1.4rem;font-weight:850;
+  font-variant-numeric:tabular-nums;line-height:1.15;
+  overflow-wrap:anywhere;
+}
+.pv-profit-highlight .pv-profit-stat-value{
+  font-size:clamp(1.6rem, 3vw, 2.1rem);
+  color:#ecfdf5;
+  text-shadow:0 4px 18px rgba(0,0,0,.25);
+}
+
+/* Per-row INR subcell inside P&L pts column */
+.pv-row-inr{
+  font-size:.7rem !important;
+  font-weight:800 !important;
+  margin-top:4px !important;
+  display:block;
+  color:#047857;
+  font-variant-numeric:tabular-nums;
+  letter-spacing:.02em;
+}
+
+/* ---------- Table ---------- */
+.pv-table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+.pv-table{
+  width:100%;border-collapse:collapse;min-width:860px;font-size:.79rem;
+}
+.pv-table th{
+  background:linear-gradient(180deg,#f8fafc,#eef2f7);
+  color:#475569;text-transform:uppercase;letter-spacing:.06em;
+  font-size:.64rem;text-align:left;padding:12px 12px;white-space:nowrap;
+  font-weight:850;
+}
+.pv-table td{
+  padding:13px 12px;border-top:1px solid #edf0f5;vertical-align:middle;
+  color:var(--pv-ink);
+}
+.pv-table tbody tr:hover{background:rgba(5,150,105,.04)}
+.pv-table .num{
+  text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap;
+  font-weight:700;
+}
+.pv-subcell{
+  display:block;color:var(--pv-muted);font-size:.66rem;margin-top:4px;font-weight:600;
+}
+.pv-pill{
+  display:inline-flex;align-items:center;padding:5px 9px;border-radius:8px;
+  font-size:.62rem;font-weight:850;text-transform:uppercase;letter-spacing:.03em;
+  background:#edf2f7;color:#526174;white-space:nowrap;
+  line-height:1.3;
+}
+.pv-pill.open  {background:linear-gradient(135deg,#dbeafe,#bfdbfe);color:#1d4ed8}
+.pv-pill.closed{background:linear-gradient(135deg,#d1fae5,#a7f3d0);color:#047857}
+.pv-pill.loss  {background:linear-gradient(135deg,#fee2e2,#fecaca);color:#b91c1c}
+.pv-pill.skip  {background:linear-gradient(135deg,#fef3c7,#fde68a);color:#92400e}
+.pv-empty{text-align:center;padding:30px;color:var(--pv-muted);font-size:.85rem}
+
+/* ---------- Footer ---------- */
+.pv-footer{
+  text-align:center;color:var(--pv-muted);font-size:.72rem;
+  padding:10px 0 6px;line-height:1.5;
+}
+
+/* ---------- Responsive ---------- */
+@media(max-width:1100px){
+  .pv-grid,.pv-index-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .pv-two{grid-template-columns:1fr}
+}
+@media(max-width:760px){
+  .pv-profit-banner{grid-template-columns:1fr 1fr;gap:14px;padding:16px 18px}
+}
+@media(max-width:620px){
+  .pv-page{padding:12px;margin:8px auto;border-radius:18px}
+  .pv-head{padding:20px 18px;border-radius:18px}
+  .pv-actions{width:100%}
+  .pv-grid{gap:10px}
+  .pv-stat{padding:16px 16px}
+  .pv-stat-icon{width:46px;height:46px;min-width:46px;font-size:1.2rem}
+  .pv-index-grid{gap:10px}
+  .pv-index{padding:14px 12px 12px}
+  .pv-index-ltp{font-size:1.15rem}
+  .pv-section-head{padding:13px 14px;flex-wrap:wrap}
+  .pv-section-body{padding:14px}
+  .pv-detail-list{grid-template-columns:1fr;gap:8px}
+  .pv-meta-grid{grid-template-columns:1fr}
+  .pv-level{min-width:72px;padding:9px 11px}
+}
+@media(max-width:480px){
+  .pv-profit-banner{grid-template-columns:1fr;padding:14px 16px}
+  .pv-profit-control input{max-width:none}
+}
 </style>
 {% endblock %}
+
 {% block content %}
 <main class="pv-page">
-<header class="pv-head"><div><div class="pv-kicker">NG7 · Performance workspace</div><h1 class="pv-title">Daily Trading Performance</h1><div class="pv-subtitle">Read-only view of the upstream trading engine's daily isolation and dummy-order record.</div></div>
-<div class="pv-actions"><span class="pv-status waiting" id="pv-status">Checking today's record</span><span class="pv-date" id="pv-date">—</span><button class="pv-refresh" id="pv-refresh" type="button"><i class="bi bi-arrow-clockwise"></i> Refresh</button></div></header>
-<div class="pv-notice"><i class="bi bi-info-circle-fill"></i><div><strong id="pv-notice-title">Checking today's upstream snapshot</strong><p id="pv-notice-text">The dashboard reads only today's document. It never creates or changes orders.</p></div></div>
-<section class="pv-grid">
-<article class="pv-card pv-stat"><div class="pv-label">Orders recorded</div><div class="pv-value" id="pv-total-orders">—</div><div class="pv-hint">Today's saved order count</div></article>
-<article class="pv-card pv-stat"><div class="pv-label">Open orders</div><div class="pv-value" id="pv-open-orders">—</div><div class="pv-hint">Open in saved record</div></article>
-<article class="pv-card pv-stat"><div class="pv-label">Closed orders</div><div class="pv-value" id="pv-closed-orders">—</div><div class="pv-hint">Terminal order states</div></article>
-<article class="pv-card pv-stat"><div class="pv-label">Realised points</div><div class="pv-value" id="pv-pnl">—</div><div class="pv-hint">Sum of saved closed P&amp;L points</div></article>
-</section>
-<section class="pv-card pv-section" id="pv-watch-section"><div class="pv-section-head"><h2 class="pv-section-title"><i class="bi bi-broadcast"></i> Index watch</h2><span class="pv-hint" id="pv-feed-state">Waiting for live feed</span></div><div class="pv-section-body"><div class="pv-index-grid" id="pv-index-grid"></div></div></section>
-<section class="pv-two pv-section" id="pv-isolation-section" hidden>
-<article class="pv-card"><div class="pv-section-head"><h2 class="pv-section-title"><i class="bi bi-bullseye"></i> Today's isolated instrument</h2><span class="pv-pill" id="pv-mode">—</span></div><div class="pv-section-body"><div class="pv-hero"><div class="pv-hero-label">Upstream isolation snapshot</div><div class="pv-hero-symbol" id="pv-iso-symbol">—</div><div class="pv-hero-key" id="pv-iso-key">—</div><div class="pv-tags" id="pv-iso-tags"></div><div class="pv-meta-grid" id="pv-iso-meta"></div></div></div></article>
-<article class="pv-card"><div class="pv-section-head"><h2 class="pv-section-title"><i class="bi bi-diagram-3"></i> Trigger details</h2></div><div class="pv-section-body"><div class="pv-detail-list" id="pv-trigger-details"></div></div></article>
-</section>
-<section class="pv-card pv-section" id="pv-levels-section" hidden><div class="pv-section-head"><h2 class="pv-section-title"><i class="bi bi-bar-chart-line"></i> Instrument opening-range levels</h2></div><div class="pv-section-body"><div class="pv-levels" id="pv-levels"></div></div></section>
-<section class="pv-card pv-section" id="pv-events-section" hidden><div class="pv-section-head"><h2 class="pv-section-title"><i class="bi bi-lightning-charge"></i> Isolation events &amp; candidates</h2><span class="pv-hint" id="pv-event-count"></span></div><div class="pv-section-body" id="pv-events"></div></section>
-<section class="pv-card pv-section" id="pv-orders-section" hidden><div class="pv-section-head"><h2 class="pv-section-title"><i class="bi bi-receipt"></i> Dummy orders</h2><span class="pv-hint" id="pv-orders-updated">—</span></div><div class="pv-table-wrap"><table class="pv-table"><thead><tr><th>Instrument</th><th>State</th><th>Entry time</th><th class="num">Entry</th><th class="num">Stop</th><th class="num">Target</th><th>Exit time</th><th class="num">Exit</th><th class="num">P&amp;L pts</th><th class="num">P&amp;L %</th></tr></thead><tbody id="pv-orders-body"></tbody></table></div><div class="pv-section-body" id="pv-no-orders" hidden><div class="pv-empty">No order records have been saved for today yet.</div></div></section>
-<section class="pv-card pv-section" id="pv-source-section" hidden><div class="pv-section-head"><h2 class="pv-section-title"><i class="bi bi-database"></i> Snapshot information</h2></div><div class="pv-section-body"><div class="pv-detail-list" id="pv-source-details"></div><details class="pv-raw"><summary>View complete saved document (JSON)</summary><pre id="pv-raw-json"></pre></details></div></section>
-<div class="pv-footer">Read-only performance workspace · Source data is maintained by the upstream trading engine · Times displayed as stored in the source record.</div>
+
+  <!-- ============ HERO HEADER ============ -->
+  <header class="pv-head">
+    <div class="pv-head-text">
+      <div class="pv-kicker">NG7 · Performance workspace</div>
+      <h1 class="pv-title">Daily Trading Performance</h1>
+      <div class="pv-subtitle">
+        Read-only view of the upstream trading engine's daily isolation and dummy-order record.
+      </div>
+    </div>
+    <div class="pv-actions">
+      <span class="pv-status waiting" id="pv-status">Checking today's record</span>
+      <span class="pv-date" id="pv-date">—</span>
+      <button class="pv-refresh" id="pv-refresh" type="button">
+        <i class="bi bi-arrow-clockwise"></i> Refresh
+      </button>
+    </div>
+  </header>
+
+  <!-- ============ TODAY'S ORDERS (TOP) ============ -->
+  <section class="pv-card pv-section pv-orders-card" id="pv-orders-section" hidden>
+    <div class="pv-section-head">
+      <h2 class="pv-section-title"><i class="bi bi-receipt"></i> Today's Orders</h2>
+      <span class="pv-hint" id="pv-orders-updated">—</span>
+    </div>
+
+    <!-- Profit summary banner with lot control -->
+    <div class="pv-profit-banner" id="pv-profit-banner">
+      <div class="pv-profit-control">
+        <label for="pv-lot-input">Lot Size</label>
+        <input type="number" id="pv-lot-input" value="1" min="0" step="0.5"
+               inputmode="decimal" aria-label="Lot size" />
+        <div class="pv-profit-control-hint">
+          Qty/lot · NIFTY 65 · SENSEX 20 · BANKNIFTY 35
+        </div>
+      </div>
+      <div class="pv-profit-stat">
+        <div class="pv-profit-stat-label">Total P&amp;L Points</div>
+        <div class="pv-profit-stat-value" id="pv-profit-pts">—</div>
+      </div>
+      <div class="pv-profit-stat pv-profit-highlight">
+        <div class="pv-profit-stat-label">Estimated P&amp;L (₹)</div>
+        <div class="pv-profit-stat-value" id="pv-profit-inr">—</div>
+      </div>
+    </div>
+
+    <div class="pv-table-wrap">
+      <table class="pv-table">
+        <thead>
+          <tr>
+            <th>Instrument</th>
+            <th>State</th>
+            <th>Entry time</th>
+            <th class="num">Entry</th>
+            <th class="num">Stop</th>
+            <th class="num">Target</th>
+            <th>Exit time</th>
+            <th class="num">Exit</th>
+            <th class="num">P&amp;L pts</th>
+            <th class="num">P&amp;L %</th>
+          </tr>
+        </thead>
+        <tbody id="pv-orders-body"></tbody>
+      </table>
+    </div>
+    <div class="pv-section-body" id="pv-no-orders" hidden>
+      <div class="pv-empty">No order records have been saved for today yet.</div>
+    </div>
+  </section>
+
+  <!-- ============ NOTICE ============ -->
+  <div class="pv-notice">
+    <i class="bi bi-info-circle-fill"></i>
+    <div>
+      <strong id="pv-notice-title">Checking today's upstream snapshot</strong>
+      <p id="pv-notice-text">
+        The dashboard reads only today's document. It never creates or changes orders.
+      </p>
+    </div>
+  </div>
+
+  <!-- ============ STAT GRID ============ -->
+  <section class="pv-grid">
+    <article class="pv-card pv-stat stat-blue">
+      <div class="pv-stat-text">
+        <div class="pv-label">Orders recorded</div>
+        <div class="pv-value" id="pv-total-orders">—</div>
+        <div class="pv-hint">Today's saved order count</div>
+      </div>
+      <div class="pv-stat-icon"><i class="bi bi-receipt"></i></div>
+    </article>
+
+    <article class="pv-card pv-stat stat-amber">
+      <div class="pv-stat-text">
+        <div class="pv-label">Open orders</div>
+        <div class="pv-value" id="pv-open-orders">—</div>
+        <div class="pv-hint">Open in saved record</div>
+      </div>
+      <div class="pv-stat-icon"><i class="bi bi-hourglass-split"></i></div>
+    </article>
+
+    <article class="pv-card pv-stat stat-green">
+      <div class="pv-stat-text">
+        <div class="pv-label">Closed orders</div>
+        <div class="pv-value" id="pv-closed-orders">—</div>
+        <div class="pv-hint">Terminal order states</div>
+      </div>
+      <div class="pv-stat-icon"><i class="bi bi-check-circle-fill"></i></div>
+    </article>
+
+    <article class="pv-card pv-stat stat-violet">
+      <div class="pv-stat-text">
+        <div class="pv-label">Realised points</div>
+        <div class="pv-value" id="pv-pnl">—</div>
+        <div class="pv-hint">Sum of saved closed P&amp;L points</div>
+      </div>
+      <div class="pv-stat-icon"><i class="bi bi-graph-up-arrow"></i></div>
+    </article>
+  </section>
+
+  <!-- ============ INDEX WATCH ============ -->
+  <section class="pv-card pv-section" id="pv-watch-section">
+    <div class="pv-section-head">
+      <h2 class="pv-section-title"><i class="bi bi-broadcast"></i> Index watch</h2>
+      <span class="pv-hint" id="pv-feed-state">Waiting for live feed</span>
+    </div>
+    <div class="pv-section-body">
+      <div class="pv-index-grid" id="pv-index-grid"></div>
+    </div>
+  </section>
+
+  <!-- ============ ISOLATION + TRIGGER ============ -->
+  <section class="pv-two pv-section" id="pv-isolation-section" hidden>
+    <article class="pv-card">
+      <div class="pv-section-head">
+        <h2 class="pv-section-title"><i class="bi bi-bullseye"></i> Today's isolated instrument</h2>
+        <span class="pv-pill" id="pv-mode">—</span>
+      </div>
+      <div class="pv-section-body">
+        <div class="pv-hero">
+          <div class="pv-hero-label">Upstream isolation snapshot</div>
+          <div class="pv-hero-symbol" id="pv-iso-symbol">—</div>
+          <div class="pv-hero-key" id="pv-iso-key">—</div>
+          <div class="pv-tags" id="pv-iso-tags"></div>
+          <div class="pv-meta-grid" id="pv-iso-meta"></div>
+        </div>
+      </div>
+    </article>
+
+    <article class="pv-card pv-trigger-card">
+      <div class="pv-section-head">
+        <h2 class="pv-section-title"><i class="bi bi-diagram-3"></i> Trigger details</h2>
+      </div>
+      <div class="pv-section-body">
+        <div class="pv-detail-list" id="pv-trigger-details"></div>
+      </div>
+    </article>
+  </section>
+
+  <!-- ============ LEVELS ============ -->
+  <section class="pv-card pv-section" id="pv-levels-section" hidden>
+    <div class="pv-section-head">
+      <h2 class="pv-section-title"><i class="bi bi-bar-chart-line"></i> Instrument opening-range levels</h2>
+    </div>
+    <div class="pv-section-body">
+      <div class="pv-levels" id="pv-levels"></div>
+    </div>
+  </section>
+
+  <!-- ============ EVENTS ============ -->
+  <section class="pv-card pv-section" id="pv-events-section" hidden>
+    <div class="pv-section-head">
+      <h2 class="pv-section-title"><i class="bi bi-lightning-charge"></i> Isolation events &amp; candidates</h2>
+      <span class="pv-hint" id="pv-event-count"></span>
+    </div>
+    <div class="pv-section-body" id="pv-events"></div>
+  </section>
+
+  <div class="pv-footer">
+    Read-only performance workspace · Source data is maintained by the upstream trading engine · Times displayed as stored in the source record.
+  </div>
 </main>
 {% endblock %}
-{% block scripts %}<script src="/static/js/performance_dashboard.js"></script>{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/performance_dashboard.js"></script>
+
+<!-- ============================================================
+     Lot-aware profit calculator (runs after dashboard renders)
+     ============================================================ -->
+<script>
+(function () {
+  "use strict";
+
+  /* qty per lot, matched from the instrument trading symbol */
+  var QTY_RULES = [
+    { re: /BANKNIFTY/i,            qty: 35  },
+    { re: /MIDCPNIFTY|MIDCAP/i,    qty: 120 },
+    { re: /FINNIFTY/i,             qty: 65  },
+    { re: /SENSEX/i,               qty: 20  },
+    { re: /NIFTY/i,                qty: 65  }
+  ];
+
+  function qtyPerLot(symbol) {
+    if (!symbol) return 65;
+    for (var i = 0; i < QTY_RULES.length; i++) {
+      if (QTY_RULES[i].re.test(symbol)) return QTY_RULES[i].qty;
+    }
+    return 65;
+  }
+
+  function fmtInr(n) {
+    var sign = n >= 0 ? "+" : "\u2212";
+    return sign + "\u20B9" + Math.abs(n).toLocaleString("en-IN", {
+      maximumFractionDigits: 2, minimumFractionDigits: 2
+    });
+  }
+  function fmtPts(n) {
+    var sign = n >= 0 ? "+" : "\u2212";
+    return sign + Math.abs(n).toFixed(2);
+  }
+
+  var lotInput  = document.getElementById("pv-lot-input");
+  var ordersBody = document.getElementById("pv-orders-body");
+  var ptsEl     = document.getElementById("pv-profit-pts");
+  var inrEl     = document.getElementById("pv-profit-inr");
+
+  if (!ordersBody) return;
+
+  function recalc() {
+    var lots = Math.max(0, parseFloat(lotInput && lotInput.value) || 0);
+    var rows = ordersBody.querySelectorAll("tr");
+    var totalPts = 0, totalInr = 0;
+
+    for (var i = 0; i < rows.length; i++) {
+      var cells = rows[i].querySelectorAll("td");
+      if (cells.length < 9) continue;
+
+      var symbolEl = cells[0].querySelector("strong");
+      var symbol   = symbolEl ? symbolEl.textContent.trim() : "";
+
+      var ptsCell  = cells[8];
+      var priorSub = ptsCell.querySelector(".pv-row-inr");
+      var raw      = ptsCell.textContent || "";
+      if (priorSub) raw = raw.replace(priorSub.textContent, "");
+      var pts = parseFloat(raw.replace(/[^\d.\-+]/g, "")) || 0;
+
+      var qpl = qtyPerLot(symbol);
+      var qty = qpl * lots;
+      var inr = pts * qty;
+
+      totalPts += pts;
+      totalInr += inr;
+
+      var sub = priorSub;
+      if (!sub) {
+        sub = document.createElement("span");
+        sub.className = "pv-subcell pv-row-inr";
+        ptsCell.appendChild(sub);
+      }
+      var newText = fmtInr(inr);
+      if (sub.textContent !== newText) sub.textContent = newText;
+      sub.style.color = inr >= 0 ? "#047857" : "#b91c1c";
+    }
+
+    if (ptsEl) ptsEl.textContent = rows.length ? fmtPts(totalPts) : "\u2014";
+    if (inrEl) {
+      inrEl.textContent = rows.length ? fmtInr(totalInr) : "\u2014";
+      inrEl.style.color = totalInr >= 0 ? "#ecfdf5" : "#fecaca";
+    }
+  }
+
+  /* Watch for table re-renders by performance_dashboard.js */
+  if (typeof MutationObserver !== "undefined") {
+    var observer = new MutationObserver(recalc);
+    observer.observe(ordersBody, { childList: true, subtree: true });
+  }
+
+  if (lotInput) {
+    lotInput.addEventListener("input",  recalc);
+    lotInput.addEventListener("change", recalc);
+  }
+
+  recalc();
+  setTimeout(recalc, 100);
+  setTimeout(recalc, 500);
+})();
+</script>
+{% endblock %}

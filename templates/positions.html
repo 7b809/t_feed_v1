@@ -2,90 +2,790 @@
 {% block title %}Orders & History · {{ app_name }}{% endblock %}
 {% block head %}
 <style>
-.ow{width:min(100%,1500px);margin:auto;padding:clamp(14px,2.4vw,32px);color:var(--app-text-main)}
-.ow-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;margin-bottom:20px}
-.ow-kicker{font-size:.68rem;letter-spacing:.13em;text-transform:uppercase;font-weight:850;color:#60a5fa}
-.ow-title{font-size:clamp(1.5rem,2.5vw,2.15rem);font-weight:850;letter-spacing:-.04em;margin:4px 0}
-.ow-sub{font-size:.85rem;color:var(--app-text-muted)}
-.ow-actions{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
-.ow-date,.ow-refresh{border:1px solid var(--app-border-color);border-radius:10px;padding:9px 12px;font-size:.78rem;font-weight:750;background:var(--app-card-bg,#1e293b);color:var(--app-text-main)}
-.ow-refresh{background:#2563eb;color:white;border-color:#2563eb;cursor:pointer}
+/* ============================================================
+   Orders & History · colorful professional dashboard
+   ============================================================ */
+:root{
+  --ow-bg:#eef3fb;
+  --ow-card:#ffffff;
+  --ow-ink:#0f172a;
+  --ow-muted:#64748b;
+  --ow-line:#e2e8f0;
+  --ow-blue:#2563eb;
+  --ow-indigo:#4f46e5;
+  --ow-violet:#7c3aed;
+  --ow-green:#059669;
+  --ow-red:#dc2626;
+  --ow-amber:#d97706;
+  --ow-cyan:#0891b2;
+  --ow-pink:#db2777;
+  --ow-shadow-sm:0 2px 8px rgba(15,23,42,.05);
+  --ow-shadow:0 10px 30px rgba(15,23,42,.08);
+  --ow-shadow-lg:0 20px 48px rgba(15,23,42,.14);
+  --ow-radius:18px;
+}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+
+/* ---------- Page panel ---------- */
+.ow{
+  width:min(100%,1520px);
+  margin:16px auto;
+  padding:clamp(16px,2.4vw,34px);
+  color:var(--ow-ink);
+  background:
+    radial-gradient(1200px 400px at 100% -10%,rgba(79,70,229,.10),transparent 60%),
+    radial-gradient(900px 300px at -10% 0%,rgba(8,145,178,.10),transparent 60%),
+    linear-gradient(180deg,#f8fafd 0%,#eaf0f9 100%);
+  border-radius:26px;
+  min-height:calc(100vh - 96px);
+  box-shadow:0 24px 64px rgba(2,6,23,.35);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  -webkit-font-smoothing:antialiased;
+}
+
+/* ---------- Hero header ---------- */
+.ow-head{
+  position:relative;overflow:hidden;
+  display:flex;justify-content:space-between;align-items:center;
+  gap:20px;flex-wrap:wrap;
+  padding:26px 30px;margin-bottom:20px;
+  border-radius:22px;color:#fff;
+  background:
+    radial-gradient(700px 260px at 110% -40%,rgba(255,255,255,.28),transparent 60%),
+    linear-gradient(120deg,#1e3a8a 0%,#4338ca 45%,#7c3aed 100%);
+  box-shadow:0 20px 48px rgba(67,56,202,.40);
+}
+.ow-head::before{
+  content:"";position:absolute;width:360px;height:360px;right:-120px;top:-160px;
+  border-radius:50%;background:radial-gradient(circle,rgba(255,255,255,.22),transparent 70%);
+  pointer-events:none;
+}
+.ow-head::after{
+  content:"";position:absolute;width:240px;height:240px;right:80px;bottom:-170px;
+  border-radius:50%;background:radial-gradient(circle,rgba(255,255,255,.14),transparent 70%);
+  pointer-events:none;
+}
+.ow-head-text{position:relative;z-index:1;min-width:0}
+.ow-kicker{
+  font-size:.7rem;letter-spacing:.16em;font-weight:800;color:#bfdbfe;
+  text-transform:uppercase;margin-bottom:6px;
+}
+.ow-title{
+  font-size:clamp(1.5rem,2.6vw,2.25rem);
+  font-weight:850;letter-spacing:-.03em;margin:0 0 6px;line-height:1.1;
+}
+.ow-sub{color:#cbd5e1;font-size:.9rem;max-width:660px;line-height:1.5}
+.ow-actions{
+  display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+  position:relative;z-index:1;
+}
+.ow-date{
+  padding:9px 14px;border-radius:10px;
+  background:rgba(255,255,255,.14);
+  border:1px solid rgba(255,255,255,.24);
+  color:#fff;font-weight:700;font-size:.8rem;
+  backdrop-filter:blur(6px);
+}
+.ow-refresh{
+  padding:9px 16px;border-radius:10px;border:none;cursor:pointer;
+  background:#fff;color:#3730a3;font-weight:800;font-size:.82rem;
+  display:inline-flex;align-items:center;gap:8px;
+  transition:transform .15s,box-shadow .2s;
+  box-shadow:0 8px 22px rgba(0,0,0,.20);
+}
+.ow-refresh:hover{transform:translateY(-1px);box-shadow:0 12px 28px rgba(0,0,0,.26)}
+.ow-refresh:active{transform:scale(.97)}
 .ow-refresh:disabled{opacity:.55;cursor:wait}
-.ow-status{display:inline-flex;align-items:center;gap:7px;padding:7px 10px;border-radius:999px;font-size:.66rem;font-weight:850;text-transform:uppercase;background:rgba(148,163,184,.13);color:#94a3b8}
-.ow-status:before{content:"";width:7px;height:7px;border-radius:50%;background:currentColor}
-.ow-status.ok{background:rgba(16,185,129,.13);color:#34d399}.ow-status.wait{background:rgba(245,158,11,.13);color:#fbbf24}.ow-status.err{background:rgba(239,68,68,.13);color:#f87171}
-.ow-note{display:flex;gap:11px;padding:14px 16px;border:1px solid var(--app-border-color);border-radius:13px;background:rgba(37,99,235,.07);margin-bottom:17px}
-.ow-note i{color:#60a5fa;font-size:1.1rem}.ow-note strong{display:block;font-size:.83rem;margin-bottom:3px}.ow-note p{margin:0;color:var(--app-text-muted);font-size:.78rem;line-height:1.5}
-.ow-stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:11px;margin-bottom:17px}
-.ow-card{background:var(--app-card-bg,#1e293b);border:1px solid var(--app-border-color);border-radius:15px;overflow:hidden;min-width:0}
-.ow-stat{padding:15px 17px}.ow-label{font-size:.65rem;color:var(--app-text-muted);text-transform:uppercase;letter-spacing:.08em;font-weight:850}
-.ow-value{font-size:clamp(1.2rem,2vw,1.65rem);font-weight:850;margin-top:7px;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
-.ow-hint{font-size:.7rem;color:var(--app-text-muted);margin-top:3px}
-.ow-pos{color:#34d399!important}.ow-neg{color:#fb7185!important}
-.ow-tabs{display:flex;gap:7px;align-items:center;flex-wrap:wrap;margin-bottom:13px;border-bottom:1px solid var(--app-border-color);padding-bottom:10px}
-.ow-tab{border:1px solid var(--app-border-color);border-radius:9px;background:transparent;color:var(--app-text-muted);padding:8px 13px;font-size:.78rem;font-weight:800;cursor:pointer}
-.ow-tab.active{background:rgba(37,99,235,.15);border-color:rgba(59,130,246,.5);color:#93c5fd}
-.ow-toolbar{display:flex;align-items:center;gap:9px;flex-wrap:wrap;padding:12px 14px;border-bottom:1px solid var(--app-border-color)}
-.ow-search{flex:1;min-width:190px;max-width:360px;border:1px solid var(--app-border-color);border-radius:9px;padding:9px 11px;background:rgba(15,23,42,.55);color:var(--app-text-main);font-size:.8rem}
-.ow-select{border:1px solid var(--app-border-color);border-radius:9px;padding:8px 10px;background:rgba(15,23,42,.55);color:var(--app-text-main);font-size:.78rem}
+
+/* ---------- Status pills ---------- */
+.ow-status{
+  display:inline-flex;align-items:center;gap:8px;
+  padding:8px 14px;border-radius:999px;
+  font-size:.68rem;font-weight:850;text-transform:uppercase;letter-spacing:.04em;
+  background:rgba(148,163,184,.2);color:#e2e8f0;
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.15);
+}
+.ow-status::before{
+  content:"";width:8px;height:8px;border-radius:50%;
+  background:currentColor;box-shadow:0 0 0 3px rgba(255,255,255,.28);
+}
+.ow-status.ok   {background:linear-gradient(135deg,#059669,#10b981);color:#fff}
+.ow-status.wait {background:linear-gradient(135deg,#d97706,#f59e0b);color:#fff}
+.ow-status.err  {background:linear-gradient(135deg,#dc2626,#ef4444);color:#fff}
+
+/* ---------- Notice banner ---------- */
+.ow-note{
+  display:flex;gap:14px;align-items:flex-start;
+  padding:14px 18px;margin-bottom:20px;border-radius:16px;
+  background:linear-gradient(135deg,#eff6ff,#e0f2fe);
+  border:1px solid #bfdbfe;
+  box-shadow:var(--ow-shadow-sm);
+}
+.ow-note i{
+  font-size:1.2rem;color:#1d4ed8;flex-shrink:0;
+  width:36px;height:36px;border-radius:10px;
+  display:inline-flex;align-items:center;justify-content:center;
+  background:linear-gradient(135deg,#dbeafe,#bfdbfe);
+}
+.ow-note strong{display:block;margin-bottom:3px;color:#1e3a8a;font-size:.9rem}
+.ow-note p{margin:0;color:#475569;font-size:.8rem;line-height:1.5}
+
+/* ---------- Profit banner ---------- */
+.ow-profit-banner{
+  display:grid;
+  grid-template-columns:minmax(150px, auto) minmax(140px, 1fr) minmax(220px, 1.6fr);
+  gap:18px;
+  padding:20px 22px;
+  margin-bottom:20px;
+  border-radius:var(--ow-radius);
+  background:
+    radial-gradient(400px 200px at 100% -30%,rgba(255,255,255,.22),transparent 60%),
+    linear-gradient(135deg,#065f46,#059669 55%,#10b981);
+  color:#fff;
+  align-items:center;
+  box-shadow:0 16px 38px rgba(5,150,105,.28);
+  position:relative;overflow:hidden;
+}
+.ow-profit-banner::before{
+  content:"";position:absolute;width:300px;height:300px;right:-120px;top:-160px;
+  border-radius:50%;background:radial-gradient(circle,rgba(255,255,255,.16),transparent 70%);
+  pointer-events:none;
+}
+.ow-profit-control{display:flex;flex-direction:column;gap:6px;position:relative;z-index:1}
+.ow-profit-control label{
+  font-size:.66rem;text-transform:uppercase;letter-spacing:.1em;
+  font-weight:850;color:#a7f3d0;
+}
+.ow-profit-control input{
+  padding:11px 14px;border-radius:10px;
+  border:1px solid rgba(255,255,255,.3);
+  background:rgba(255,255,255,.18);
+  color:#fff;font-weight:850;font-size:1.15rem;
+  width:100%;max-width:140px;
+  font-variant-numeric:tabular-nums;
+  transition:all .15s;
+}
+.ow-profit-control input:focus{
+  outline:none;
+  background:rgba(255,255,255,.28);
+  border-color:#fff;
+  box-shadow:0 0 0 3px rgba(16,185,129,.35);
+}
+.ow-profit-control-hint{
+  font-size:.63rem;color:#a7f3d0;line-height:1.4;
+}
+.ow-profit-stat{position:relative;z-index:1}
+.ow-profit-stat-label{
+  font-size:.66rem;text-transform:uppercase;
+  letter-spacing:.1em;font-weight:850;color:#a7f3d0;
+  margin-bottom:8px;
+}
+.ow-profit-stat-value{
+  font-size:1.4rem;font-weight:850;
+  font-variant-numeric:tabular-nums;line-height:1.15;
+  overflow-wrap:anywhere;
+}
+.ow-profit-highlight .ow-profit-stat-value{
+  font-size:clamp(1.6rem, 3vw, 2.15rem);
+  color:#ecfdf5;
+  text-shadow:0 4px 18px rgba(0,0,0,.25);
+}
+
+/* ---------- Stats grid ---------- */
+.ow-stats{
+  display:grid;grid-template-columns:repeat(4,minmax(0,1fr));
+  gap:14px;margin-bottom:20px;
+}
+.ow-card{
+  background:var(--ow-card);border:1px solid var(--ow-line);
+  border-radius:var(--ow-radius);
+  box-shadow:var(--ow-shadow-sm);
+  overflow:hidden;min-width:0;
+}
+.ow-stat{
+  position:relative;display:flex;align-items:center;justify-content:space-between;
+  gap:14px;padding:20px 22px;
+  transition:transform .18s ease,box-shadow .22s ease,border-color .2s ease;
+}
+.ow-stat::before{
+  content:"";position:absolute;inset:0;pointer-events:none;opacity:0;transition:opacity .2s;
+}
+.ow-stat:hover{transform:translateY(-3px);box-shadow:var(--ow-shadow);border-color:#c7d2fe}
+.ow-stat:hover::before{opacity:1}
+.ow-stat-text{min-width:0;flex:1}
+.ow-label{
+  font-size:.66rem;text-transform:uppercase;letter-spacing:.09em;
+  color:var(--ow-muted);font-weight:850;
+}
+.ow-value{
+  font-size:clamp(1.35rem,2.1vw,1.85rem);font-weight:850;
+  margin-top:7px;overflow-wrap:anywhere;font-variant-numeric:tabular-nums;
+  color:var(--ow-ink);line-height:1.15;
+}
+.ow-hint{font-size:.73rem;color:var(--ow-muted);margin-top:5px;line-height:1.35}
+.ow-pos{color:var(--ow-green)!important}
+.ow-neg{color:var(--ow-red)!important}
+
+.ow-stat-icon{
+  width:54px;height:54px;min-width:54px;border-radius:15px;
+  display:flex;align-items:center;justify-content:center;
+  font-size:1.45rem;color:#fff;flex-shrink:0;
+  box-shadow:0 10px 22px rgba(15,23,42,.18);
+}
+.stat-blue   .ow-stat-icon{background:linear-gradient(135deg,#2563eb,#3b82f6)}
+.stat-blue::before{background:radial-gradient(180px 120px at 100% 0%,rgba(37,99,235,.10),transparent 70%)}
+.stat-amber  .ow-stat-icon{background:linear-gradient(135deg,#d97706,#f59e0b)}
+.stat-amber::before{background:radial-gradient(180px 120px at 100% 0%,rgba(245,158,11,.12),transparent 70%)}
+.stat-green  .ow-stat-icon{background:linear-gradient(135deg,#059669,#10b981)}
+.stat-green::before{background:radial-gradient(180px 120px at 100% 0%,rgba(16,185,129,.12),transparent 70%)}
+.stat-violet .ow-stat-icon{background:linear-gradient(135deg,#7c3aed,#a855f7)}
+.stat-violet::before{background:radial-gradient(180px 120px at 100% 0%,rgba(168,85,247,.12),transparent 70%)}
+
+/* ---------- Tabs ---------- */
+.ow-tabs{
+  display:flex;gap:8px;align-items:center;flex-wrap:wrap;
+  margin-bottom:16px;
+}
+.ow-tab{
+  display:inline-flex;align-items:center;gap:8px;
+  padding:10px 16px;border-radius:12px;
+  border:1px solid var(--ow-line);
+  background:#fff;color:#475569;
+  font-size:.83rem;font-weight:800;cursor:pointer;
+  transition:all .2s ease;
+  box-shadow:var(--ow-shadow-sm);
+}
+.ow-tab i{font-size:.9rem;opacity:.75}
+.ow-tab:hover{transform:translateY(-1px);box-shadow:var(--ow-shadow);color:#1d4ed8;border-color:#c7d2fe}
+.ow-tab.active{
+  background:linear-gradient(135deg,#2563eb,#4f46e5);
+  border-color:#4338ca;color:#fff;
+  box-shadow:0 10px 22px rgba(67,56,202,.35);
+}
+.ow-tab.active i{opacity:1}
+
+/* ---------- Main content card ---------- */
+.ow-main-card{
+  border:2px solid #c7d2fe;
+  box-shadow:0 12px 30px rgba(37,99,235,.14);
+  margin-bottom:20px;
+}
+
+/* ---------- Toolbar ---------- */
+.ow-toolbar{
+  display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+  padding:14px 16px;
+  border-bottom:1px solid var(--ow-line);
+  background:linear-gradient(180deg,#f8fafd 0%,#ffffff 100%);
+}
+.ow-search{
+  flex:1;min-width:210px;max-width:400px;
+  border:1px solid var(--ow-line);border-radius:10px;
+  padding:10px 13px;
+  background:#fff;color:var(--ow-ink);font-size:.82rem;
+  transition:all .15s;
+}
+.ow-search:focus{
+  outline:none;border-color:#93c5fd;
+  box-shadow:0 0 0 3px rgba(59,130,246,.15);
+}
+.ow-select{
+  border:1px solid var(--ow-line);border-radius:10px;
+  padding:9px 12px;
+  background:#fff;color:var(--ow-ink);font-size:.8rem;font-weight:700;
+  cursor:pointer;
+}
+.ow-select:focus{outline:none;border-color:#93c5fd;box-shadow:0 0 0 3px rgba(59,130,246,.15)}
 .ow-spacer{flex:1}
-.ow-count{font-size:.72rem;color:var(--app-text-muted)}
+.ow-count{
+  font-size:.74rem;color:var(--ow-muted);font-weight:700;
+  padding:7px 11px;border-radius:9px;
+  background:#f1f5f9;border:1px solid var(--ow-line);
+}
+
+/* ---------- Table ---------- */
 .ow-table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
-.ow-table{width:100%;border-collapse:collapse;min-width:980px;font-size:.76rem}
-.ow-table th{padding:11px 12px;text-align:left;background:rgba(15,23,42,.32);font-size:.63rem;letter-spacing:.06em;text-transform:uppercase;color:var(--app-text-muted);white-space:nowrap}
-.ow-table td{padding:12px;border-top:1px solid var(--app-border-color);vertical-align:middle}
-.ow-table .right{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
-.ow-table tbody tr:hover{background:rgba(148,163,184,.045)}
-.ow-symbol{font-weight:850;color:var(--app-text-main)}.ow-muted{display:block;font-size:.65rem;color:var(--app-text-muted);margin-top:3px;overflow-wrap:anywhere}
-.ow-badge{display:inline-flex;padding:4px 7px;border-radius:6px;font-size:.62rem;font-weight:850;text-transform:uppercase;white-space:nowrap;background:rgba(148,163,184,.13);color:#94a3b8}
-.ow-badge.open{background:rgba(59,130,246,.14);color:#93c5fd}.ow-badge.closed{background:rgba(16,185,129,.13);color:#34d399}.ow-badge.loss{background:rgba(244,63,94,.13);color:#fb7185}.ow-badge.skip{background:rgba(245,158,11,.13);color:#fbbf24}
-.ow-empty{text-align:center;padding:44px 18px;color:var(--app-text-muted)}.ow-empty i{font-size:1.8rem;display:block;margin-bottom:9px;opacity:.6}
-.ow-pagination{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;padding:13px 15px;border-top:1px solid var(--app-border-color)}
-.ow-pagebtn{border:1px solid var(--app-border-color);border-radius:8px;padding:7px 11px;background:transparent;color:var(--app-text-main);font-size:.75rem;font-weight:750;cursor:pointer}
-.ow-pagebtn:disabled{opacity:.35;cursor:not-allowed}
-.ow-pages{display:flex;align-items:center;gap:8px;font-size:.72rem;color:var(--app-text-muted)}
+.ow-table{
+  width:100%;border-collapse:collapse;min-width:1020px;font-size:.79rem;
+}
+.ow-table th{
+  background:linear-gradient(180deg,#f8fafc,#eef2f7);
+  color:#475569;text-transform:uppercase;letter-spacing:.06em;
+  font-size:.64rem;text-align:left;padding:12px 12px;white-space:nowrap;
+  font-weight:850;
+}
+.ow-table td{
+  padding:13px 12px;border-top:1px solid #edf0f5;vertical-align:middle;
+  color:var(--ow-ink);
+}
+.ow-table tbody tr:hover{background:rgba(37,99,235,.035)}
+.ow-table .right{
+  text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap;
+  font-weight:700;
+}
+.ow-symbol{
+  font-weight:850;color:var(--ow-ink);display:block;
+}
+.ow-muted{
+  display:block;font-size:.66rem;color:var(--ow-muted);
+  margin-top:4px;overflow-wrap:anywhere;font-weight:600;
+}
+.ow-row-inr{
+  font-size:.7rem !important;
+  font-weight:800 !important;
+  margin-top:4px !important;
+  display:block;
+  font-variant-numeric:tabular-nums;
+  letter-spacing:.02em;
+}
+
+/* ---------- Status badges ---------- */
+.ow-badge{
+  display:inline-flex;align-items:center;
+  padding:5px 9px;border-radius:8px;
+  font-size:.62rem;font-weight:850;text-transform:uppercase;
+  letter-spacing:.03em;white-space:nowrap;line-height:1.3;
+  background:#edf2f7;color:#526174;
+}
+.ow-badge.open  {background:linear-gradient(135deg,#dbeafe,#bfdbfe);color:#1d4ed8}
+.ow-badge.closed{background:linear-gradient(135deg,#d1fae5,#a7f3d0);color:#047857}
+.ow-badge.loss  {background:linear-gradient(135deg,#fee2e2,#fecaca);color:#b91c1c}
+.ow-badge.skip  {background:linear-gradient(135deg,#fef3c7,#fde68a);color:#92400e}
+
+/* ---------- Empty state ---------- */
+.ow-empty{
+  text-align:center;padding:44px 18px;color:var(--ow-muted);
+}
+.ow-empty i{
+  font-size:2rem;display:block;margin-bottom:10px;opacity:.55;
+  color:#94a3b8;
+}
+.ow-empty strong{display:block;color:#475569;font-size:.9rem;margin-bottom:4px}
+
+/* ---------- Pagination ---------- */
+.ow-pagination{
+  display:flex;align-items:center;justify-content:space-between;
+  gap:10px;flex-wrap:wrap;
+  padding:14px 16px;border-top:1px solid var(--ow-line);
+  background:linear-gradient(180deg,#ffffff 0%,#f8fafd 100%);
+}
+.ow-pagebtn{
+  border:1px solid var(--ow-line);border-radius:10px;
+  padding:8px 14px;background:#fff;color:var(--ow-ink);
+  font-size:.78rem;font-weight:800;cursor:pointer;
+  transition:all .15s;
+}
+.ow-pagebtn:hover:not(:disabled){
+  transform:translateY(-1px);box-shadow:var(--ow-shadow-sm);
+  border-color:#c7d2fe;color:#1d4ed8;
+}
+.ow-pagebtn:disabled{opacity:.4;cursor:not-allowed}
+.ow-pages{display:flex;align-items:center;gap:10px;font-size:.74rem;color:var(--ow-muted);font-weight:700}
+
+/* ---------- Mobile list ---------- */
 .ow-mobile-list{display:none}
-.ow-mobile-item{padding:13px;border-top:1px solid var(--app-border-color)}
-.ow-mobile-top{display:flex;justify-content:space-between;gap:10px}.ow-mobile-name{font-weight:850;font-size:.82rem}
-.ow-mobile-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px;margin-top:12px}
-.ow-mobile-grid span{display:block;color:var(--app-text-muted);font-size:.62rem;text-transform:uppercase;font-weight:800}
-.ow-mobile-grid strong{display:block;font-size:.78rem;margin-top:3px;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
-.ow-foot{text-align:center;color:var(--app-text-muted);font-size:.68rem;padding:14px 0}
-@media(max-width:900px){.ow-stats{grid-template-columns:repeat(2,minmax(0,1fr))}}
-@media(max-width:640px){.ow{padding:12px}.ow-stats{gap:8px}.ow-stat{padding:12px}.ow-table-wrap{display:none}.ow-mobile-list{display:block}.ow-toolbar{padding:10px}.ow-search{max-width:none;width:100%;flex-basis:100%}.ow-date{font-size:.7rem}.ow-mobile-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.ow-mobile-item{
+  padding:14px;
+  border-top:1px solid var(--ow-line);
+  background:linear-gradient(180deg,#ffffff,#f8fafd);
+}
+.ow-mobile-item:first-child{border-top:none}
+.ow-mobile-top{
+  display:flex;justify-content:space-between;align-items:flex-start;gap:10px;
+}
+.ow-mobile-name{
+  font-weight:850;font-size:.85rem;color:var(--ow-ink);
+  overflow-wrap:anywhere;
+}
+.ow-mobile-grid{
+  display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:12px;
+}
+.ow-mobile-grid > div{
+  padding:8px 10px;border-radius:9px;
+  background:#f1f5f9;border:1px solid var(--ow-line);
+  min-width:0;
+}
+.ow-mobile-grid span{
+  display:block;color:var(--ow-muted);font-size:.62rem;
+  text-transform:uppercase;font-weight:800;letter-spacing:.05em;
+}
+.ow-mobile-grid strong{
+  display:block;font-size:.8rem;margin-top:3px;
+  font-variant-numeric:tabular-nums;overflow-wrap:anywhere;
+  color:var(--ow-ink);
+}
+
+/* ---------- Footer ---------- */
+.ow-foot{
+  text-align:center;color:var(--ow-muted);font-size:.72rem;
+  padding:10px 0 6px;line-height:1.5;
+}
+
+/* ---------- Responsive ---------- */
+@media(max-width:1100px){
+  .ow-stats{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+@media(max-width:760px){
+  .ow-profit-banner{grid-template-columns:1fr 1fr;gap:14px;padding:16px 18px}
+}
+@media(max-width:620px){
+  .ow{padding:12px;margin:8px auto;border-radius:18px}
+  .ow-head{padding:20px 18px;border-radius:18px}
+  .ow-actions{width:100%}
+  .ow-stats{gap:10px}
+  .ow-stat{padding:16px 16px}
+  .ow-stat-icon{width:46px;height:46px;min-width:46px;font-size:1.2rem}
+  .ow-table-wrap{display:none}
+  .ow-mobile-list{display:block}
+  .ow-toolbar{padding:12px 14px}
+  .ow-search{max-width:none;width:100%;flex-basis:100%}
+  .ow-tabs{gap:6px}
+  .ow-tab{flex:1;justify-content:center;font-size:.78rem;padding:9px 12px}
+  .ow-mobile-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+@media(max-width:480px){
+  .ow-profit-banner{grid-template-columns:1fr;padding:14px 16px}
+  .ow-profit-control input{max-width:none}
+}
 </style>
 {% endblock %}
+
 {% block content %}
 <main class="ow">
-<header class="ow-head">
- <div><div class="ow-kicker">NG7 · Trading activity</div><h1 class="ow-title">Orders &amp; History</h1><div class="ow-sub">A read-only view of daily dummy orders and historical trading records.</div></div>
- <div class="ow-actions"><span id="ow-status" class="ow-status wait">Loading today's orders</span><span id="ow-date" class="ow-date">—</span><button id="ow-refresh" class="ow-refresh" type="button"><i class="bi bi-arrow-clockwise"></i> Refresh</button></div>
-</header>
-<div class="ow-note"><i class="bi bi-shield-check"></i><div><strong id="ow-note-title">Upstream order records</strong><p id="ow-note-text">This workspace reads daily documents from the upstream dummy_orders collection. It cannot create, modify or execute orders.</p></div></div>
-<section class="ow-stats">
- <article class="ow-card ow-stat"><div class="ow-label">Today's orders</div><div class="ow-value" id="ow-total">—</div><div class="ow-hint">Saved order records</div></article>
- <article class="ow-card ow-stat"><div class="ow-label">Open</div><div class="ow-value" id="ow-open">—</div><div class="ow-hint">Orders not yet closed</div></article>
- <article class="ow-card ow-stat"><div class="ow-label">Closed</div><div class="ow-value" id="ow-closed">—</div><div class="ow-hint">Completed order lifecycle</div></article>
- <article class="ow-card ow-stat"><div class="ow-label">Realised P&amp;L · points</div><div class="ow-value" id="ow-pnl">—</div><div class="ow-hint">Saved closed-order points</div></article>
-</section>
-<nav class="ow-tabs" aria-label="Order views">
- <button class="ow-tab active" id="ow-tab-today" type="button"><i class="bi bi-calendar-day"></i> Today's Orders</button>
- <button class="ow-tab" id="ow-tab-history" type="button"><i class="bi bi-clock-history"></i> Order History</button>
-</nav>
-<section class="ow-card" aria-live="polite">
- <div class="ow-toolbar">
-  <input id="ow-search" class="ow-search" type="search" placeholder="Search symbol, instrument key, status or order ID…" autocomplete="off">
-  <select id="ow-page-size" class="ow-select" aria-label="Rows per page"><option value="10">10 / page</option><option value="20" selected>20 / page</option><option value="50">50 / page</option><option value="100">100 / page</option></select>
-  <span class="ow-spacer"></span><span id="ow-count" class="ow-count">—</span>
- </div>
- <div id="ow-table-wrap" class="ow-table-wrap"><table class="ow-table"><thead><tr>
-  <th>Trading date</th><th>Instrument</th><th>Strategy</th><th>Status</th><th>Entry time</th><th class="right">Entry</th><th class="right">Stop</th><th class="right">Target</th><th>Exit time</th><th class="right">Exit</th><th class="right">P&amp;L pts</th>
- </tr></thead><tbody id="ow-rows"></tbody></table></div>
- <div id="ow-mobile" class="ow-mobile-list"></div>
- <div id="ow-empty" class="ow-empty" hidden><i class="bi bi-inbox"></i><strong id="ow-empty-title">No orders found</strong><div id="ow-empty-text" class="ow-hint">There are no saved order records for this view.</div></div>
- <footer class="ow-pagination" id="ow-pagination" hidden><span id="ow-page-info" class="ow-count">—</span><div class="ow-pages"><button id="ow-prev" class="ow-pagebtn" type="button">Previous</button><span id="ow-page-label">Page 1</span><button id="ow-next" class="ow-pagebtn" type="button">Next</button></div></footer>
-</section>
-<div class="ow-foot">Read-only performance workspace · Data is maintained by the upstream trading engine · Values are displayed from saved order records.</div>
+
+  <!-- ============ HERO HEADER ============ -->
+  <header class="ow-head">
+    <div class="ow-head-text">
+      <div class="ow-kicker">NG7 · Trading activity</div>
+      <h1 class="ow-title">Orders &amp; History</h1>
+      <div class="ow-sub">A read-only view of daily dummy orders and historical trading records.</div>
+    </div>
+    <div class="ow-actions">
+      <span id="ow-status" class="ow-status wait">Loading today's orders</span>
+      <span id="ow-date" class="ow-date">—</span>
+      <button id="ow-refresh" class="ow-refresh" type="button">
+        <i class="bi bi-arrow-clockwise"></i> Refresh
+      </button>
+    </div>
+  </header>
+
+  <!-- ============ NOTICE ============ -->
+  <div class="ow-note">
+    <i class="bi bi-shield-check"></i>
+    <div>
+      <strong id="ow-note-title">Upstream order records</strong>
+      <p id="ow-note-text">This workspace reads daily documents from the upstream dummy_orders collection. It cannot create, modify or execute orders.</p>
+    </div>
+  </div>
+
+  <!-- ============ PROFIT BANNER ============ -->
+  <section class="ow-profit-banner" id="ow-profit-banner">
+    <div class="ow-profit-control">
+      <label for="ow-lot-input">Lot Size</label>
+      <input type="number" id="ow-lot-input" value="1" min="0" step="0.5"
+             inputmode="decimal" aria-label="Lot size" />
+      <div class="ow-profit-control-hint">
+        Qty/lot · NIFTY 65 · SENSEX 20 · BANKNIFTY 35 · MIDCPNIFTY 120
+      </div>
+    </div>
+    <div class="ow-profit-stat">
+      <div class="ow-profit-stat-label">P&amp;L Points · this view</div>
+      <div class="ow-profit-stat-value" id="ow-profit-pts">—</div>
+    </div>
+    <div class="ow-profit-stat ow-profit-highlight">
+      <div class="ow-profit-stat-label">Estimated P&amp;L (₹) · this view</div>
+      <div class="ow-profit-stat-value" id="ow-profit-inr">—</div>
+    </div>
+  </section>
+
+  <!-- ============ STATS ============ -->
+  <section class="ow-stats">
+    <article class="ow-card ow-stat stat-blue">
+      <div class="ow-stat-text">
+        <div class="ow-label">Today's orders</div>
+        <div class="ow-value" id="ow-total">—</div>
+        <div class="ow-hint">Saved order records</div>
+      </div>
+      <div class="ow-stat-icon"><i class="bi bi-receipt"></i></div>
+    </article>
+
+    <article class="ow-card ow-stat stat-amber">
+      <div class="ow-stat-text">
+        <div class="ow-label">Open</div>
+        <div class="ow-value" id="ow-open">—</div>
+        <div class="ow-hint">Orders not yet closed</div>
+      </div>
+      <div class="ow-stat-icon"><i class="bi bi-hourglass-split"></i></div>
+    </article>
+
+    <article class="ow-card ow-stat stat-green">
+      <div class="ow-stat-text">
+        <div class="ow-label">Closed</div>
+        <div class="ow-value" id="ow-closed">—</div>
+        <div class="ow-hint">Completed order lifecycle</div>
+      </div>
+      <div class="ow-stat-icon"><i class="bi bi-check-circle-fill"></i></div>
+    </article>
+
+    <article class="ow-card ow-stat stat-violet">
+      <div class="ow-stat-text">
+        <div class="ow-label">Realised P&amp;L · points</div>
+        <div class="ow-value" id="ow-pnl">—</div>
+        <div class="ow-hint">Saved closed-order points</div>
+      </div>
+      <div class="ow-stat-icon"><i class="bi bi-graph-up-arrow"></i></div>
+    </article>
+  </section>
+
+  <!-- ============ TABS ============ -->
+  <nav class="ow-tabs" aria-label="Order views">
+    <button class="ow-tab active" id="ow-tab-today" type="button">
+      <i class="bi bi-calendar-day"></i> Today's Orders
+    </button>
+    <button class="ow-tab" id="ow-tab-history" type="button">
+      <i class="bi bi-clock-history"></i> Order History
+    </button>
+  </nav>
+
+  <!-- ============ MAIN TABLE CARD ============ -->
+  <section class="ow-card ow-main-card" aria-live="polite">
+    <div class="ow-toolbar">
+      <input id="ow-search" class="ow-search" type="search"
+             placeholder="Search symbol, instrument key, status or order ID…"
+             autocomplete="off">
+      <select id="ow-page-size" class="ow-select" aria-label="Rows per page">
+        <option value="10">10 / page</option>
+        <option value="20" selected>20 / page</option>
+        <option value="50">50 / page</option>
+        <option value="100">100 / page</option>
+      </select>
+      <span class="ow-spacer"></span>
+      <span id="ow-count" class="ow-count">—</span>
+    </div>
+
+    <div id="ow-table-wrap" class="ow-table-wrap">
+      <table class="ow-table">
+        <thead>
+          <tr>
+            <th>Trading date</th>
+            <th>Instrument</th>
+            <th>Strategy</th>
+            <th>Status</th>
+            <th>Entry time</th>
+            <th class="right">Entry</th>
+            <th class="right">Stop</th>
+            <th class="right">Target</th>
+            <th>Exit time</th>
+            <th class="right">Exit</th>
+            <th class="right">P&amp;L pts</th>
+          </tr>
+        </thead>
+        <tbody id="ow-rows"></tbody>
+      </table>
+    </div>
+
+    <div id="ow-mobile" class="ow-mobile-list"></div>
+
+    <div id="ow-empty" class="ow-empty" hidden>
+      <i class="bi bi-inbox"></i>
+      <strong id="ow-empty-title">No orders found</strong>
+      <div id="ow-empty-text" class="ow-hint">There are no saved order records for this view.</div>
+    </div>
+
+    <footer class="ow-pagination" id="ow-pagination" hidden>
+      <span id="ow-page-info" class="ow-count">—</span>
+      <div class="ow-pages">
+        <button id="ow-prev" class="ow-pagebtn" type="button">Previous</button>
+        <span id="ow-page-label">Page 1</span>
+        <button id="ow-next" class="ow-pagebtn" type="button">Next</button>
+      </div>
+    </footer>
+  </section>
+
+  <div class="ow-foot">
+    Read-only performance workspace · Data is maintained by the upstream trading engine · Values are displayed from saved order records.
+  </div>
 </main>
 {% endblock %}
-{% block scripts %}<script src="/static/js/orders_workspace.js"></script>{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/orders_workspace.js"></script>
+
+<!-- ============================================================
+     Lot-aware profit calculator for Orders & History
+     Computes per-row ₹ P&L and a live total across the
+     currently-visible page (works for Today + History tabs).
+     ============================================================ -->
+<script>
+(function () {
+  "use strict";
+
+  var QTY_RULES = [
+    { re: /BANKNIFTY/i,         qty: 35  },
+    { re: /MIDCPNIFTY|MIDCAP/i, qty: 120 },
+    { re: /FINNIFTY/i,          qty: 65  },
+    { re: /SENSEX/i,            qty: 20  },
+    { re: /NIFTY/i,             qty: 65  }
+  ];
+
+  function qtyPerLot(symbol) {
+    if (!symbol) return 65;
+    for (var i = 0; i < QTY_RULES.length; i++) {
+      if (QTY_RULES[i].re.test(symbol)) return QTY_RULES[i].qty;
+    }
+    return 65;
+  }
+
+  function fmtInr(n) {
+    var sign = n >= 0 ? "+" : "\u2212";
+    return sign + "\u20B9" + Math.abs(n).toLocaleString("en-IN", {
+      maximumFractionDigits: 2, minimumFractionDigits: 2
+    });
+  }
+  function fmtPts(n) {
+    var sign = n >= 0 ? "+" : "\u2212";
+    return sign + Math.abs(n).toFixed(2);
+  }
+
+  var lotInput   = document.getElementById("ow-lot-input");
+  var rowsBody   = document.getElementById("ow-rows");
+  var mobileList = document.getElementById("ow-mobile");
+  var ptsEl      = document.getElementById("ow-profit-pts");
+  var inrEl      = document.getElementById("ow-profit-inr");
+
+  if (!rowsBody) return;
+
+  /* ---------- Desktop table rows ---------- */
+  function applyDesktopRows(lots) {
+    var rows = rowsBody.querySelectorAll("tr");
+    var totalPts = 0, totalInr = 0, count = 0;
+
+    for (var i = 0; i < rows.length; i++) {
+      var cells = rows[i].querySelectorAll("td");
+      if (cells.length < 11) continue;
+
+      var symEl = cells[1].querySelector(".ow-symbol, strong");
+      var symbol = symEl ? symEl.textContent.trim() : "";
+
+      var ptsCell = cells[10];
+      if (!ptsCell) continue;
+
+      var priorSub = ptsCell.querySelector(".ow-row-inr");
+      var raw = ptsCell.textContent || "";
+      if (priorSub) raw = raw.replace(priorSub.textContent, "");
+      var pts = parseFloat(raw.replace(/[^\d.\-+]/g, "")) || 0;
+
+      var qty = qtyPerLot(symbol) * lots;
+      var inr = pts * qty;
+
+      totalPts += pts;
+      totalInr += inr;
+      count++;
+
+      var sub = priorSub;
+      if (!sub) {
+        sub = document.createElement("span");
+        sub.className = "ow-muted ow-row-inr";
+        ptsCell.appendChild(sub);
+      }
+      var txt = fmtInr(inr);
+      if (sub.textContent !== txt) sub.textContent = txt;
+      sub.style.color = inr >= 0 ? "#047857" : "#b91c1c";
+    }
+
+    return { count: count, totalPts: totalPts, totalInr: totalInr };
+  }
+
+  /* ---------- Mobile cards ---------- */
+  function applyMobileItems(lots) {
+    var items = mobileList ? mobileList.querySelectorAll(".ow-mobile-item") : [];
+    var totalPts = 0, totalInr = 0, count = 0;
+
+    for (var i = 0; i < items.length; i++) {
+      var item = items[i];
+
+      var nameEl = item.querySelector(".ow-mobile-name");
+      var symbol = nameEl ? nameEl.textContent.trim() : "";
+
+      var grid = item.querySelector(".ow-mobile-grid");
+      if (!grid) continue;
+
+      var pnlCell = null;
+      var kids = grid.children;
+      for (var k = 0; k < kids.length; k++) {
+        var lbl = kids[k].querySelector("span");
+        if (lbl && /p\s*&?\s*l|pnl|profit/i.test(lbl.textContent)) {
+          pnlCell = kids[k];
+          break;
+        }
+      }
+      if (!pnlCell && kids.length) pnlCell = kids[kids.length - 1];
+      if (!pnlCell) continue;
+
+      var strong = pnlCell.querySelector("strong");
+      if (!strong) continue;
+
+      var priorSub = pnlCell.querySelector(".ow-row-inr");
+      var raw = strong.textContent || "";
+      var pts = parseFloat(raw.replace(/[^\d.\-+]/g, "")) || 0;
+
+      var qty = qtyPerLot(symbol) * lots;
+      var inr = pts * qty;
+
+      totalPts += pts;
+      totalInr += inr;
+      count++;
+
+      var sub = priorSub;
+      if (!sub) {
+        sub = document.createElement("span");
+        sub.className = "ow-muted ow-row-inr";
+        pnlCell.appendChild(sub);
+      }
+      var txt = fmtInr(inr);
+      if (sub.textContent !== txt) sub.textContent = txt;
+      sub.style.color = inr >= 0 ? "#047857" : "#b91c1c";
+    }
+
+    return { count: count, totalPts: totalPts, totalInr: totalInr };
+  }
+
+  function recalc() {
+    var lots = Math.max(0, parseFloat(lotInput && lotInput.value) || 0);
+
+    var d = applyDesktopRows(lots);
+    var m = applyMobileItems(lots);
+
+    /* Prefer whichever view has more rendered rows (avoids double-counting
+       when the mobile list is hidden but still populated). */
+    var count    = Math.max(d.count, m.count);
+    var totalPts = count === d.count ? d.totalPts : m.totalPts;
+    var totalInr = count === d.count ? d.totalInr : m.totalInr;
+
+    if (ptsEl) ptsEl.textContent = count ? fmtPts(totalPts) : "\u2014";
+    if (inrEl) {
+      inrEl.textContent = count ? fmtInr(totalInr) : "\u2014";
+      inrEl.style.color = totalInr >= 0 ? "#ecfdf5" : "#fecaca";
+    }
+  }
+
+  /* Re-run whenever the dashboard script re-renders either list
+     (tab switch, search, pagination, refresh). */
+  if (typeof MutationObserver !== "undefined") {
+    var obs = new MutationObserver(recalc);
+    obs.observe(rowsBody, { childList: true, subtree: true });
+    if (mobileList) obs.observe(mobileList, { childList: true, subtree: true });
+  }
+
+  if (lotInput) {
+    lotInput.addEventListener("input",  recalc);
+    lotInput.addEventListener("change", recalc);
+  }
+
+  recalc();
+  setTimeout(recalc, 100);
+  setTimeout(recalc, 500);
+})();
+</script>
+{% endblock %}
