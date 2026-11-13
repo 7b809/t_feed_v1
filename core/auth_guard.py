@@ -95,9 +95,30 @@ class AuthGuardMiddleware(BaseHTTPMiddleware):
                 and request.method in read_only_methods
             )
 
+            member_page = (
+                path in {"/", "/charts", "/isolated", "/positions", "/user/me"}
+                and request.method in read_only_methods
+            )
+            member_live_api = (
+                path in {"/live/status", "/live/instruments"}
+                and request.method in read_only_methods
+            )
+            member_chart_page = (
+                path.startswith("/chart/")
+                and request.method in read_only_methods
+            )
+            member_live_read = (
+                path.startswith("/live/")
+                and request.method in read_only_methods
+            )
+            member_websocket = path in {"/ws/live", "/ws/chart"}
+
             if (
-                path in allowed_exact
-                or any(path.startswith(prefix) for prefix in allowed_prefixes)
+                member_page
+                or member_live_api
+                or member_chart_page
+                or member_live_read
+                or member_websocket
                 or member_read_only_upstox
                 or member_read_only_isolation
                 or member_read_only_sr
