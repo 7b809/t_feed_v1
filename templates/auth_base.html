@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0f172a">
+  <title>{% block title %}Market Engine · Secure access{% endblock %}</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%232563eb'/%3E%3Cpath d='M14 42 24 30 34 38 50 18' fill='none' stroke='white' stroke-width='5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+  <style>
+    :root{color-scheme:dark;--bg:#0f172a;--panel:#1e293b;--border:#334155;--text:#f8fafc;--muted:#94a3b8;--blue:#2563eb;--violet:#7c3aed;--teal:#2dd4bf;--success:#4ade80;--danger:#fca5a5}
+    *,*::before,*::after{box-sizing:border-box}
+    html,body{margin:0;min-height:100%;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+    body{min-height:100vh;min-height:100dvh}
+    a{color:#93c5fd}
+    .auth-shell{min-height:100vh;min-height:100dvh;display:grid;grid-template-columns:minmax(0,1.05fr) minmax(390px,.95fr);background:radial-gradient(circle at 12% 18%,rgba(37,99,235,.2),transparent 46%),radial-gradient(circle at 88% 82%,rgba(124,58,237,.2),transparent 46%),var(--bg)}
+    .auth-brand-panel{position:relative;display:flex;flex-direction:column;justify-content:space-between;padding:clamp(28px,5vw,64px);overflow:hidden}
+    .auth-brand-panel:before{content:"";position:absolute;inset:0;background-image:linear-gradient(rgba(148,163,184,.045) 1px,transparent 1px),linear-gradient(90deg,rgba(148,163,184,.045) 1px,transparent 1px);background-size:44px 44px;pointer-events:none}
+    .auth-brand-panel>*{position:relative;z-index:1}
+    .brand{display:inline-flex;align-items:center;gap:13px;text-decoration:none;color:var(--text);width:max-content}
+    .brand-icon{width:50px;height:50px;border-radius:14px;display:grid;place-items:center;background:linear-gradient(135deg,var(--blue),var(--violet));font-size:1.55rem;box-shadow:0 8px 26px rgba(37,99,235,.35)}
+    .brand-name{display:block;font-size:1.12rem;font-weight:800;letter-spacing:-.03em}
+    .brand-sub{display:block;margin-top:3px;color:var(--muted);font-size:.68rem;font-weight:700;letter-spacing:.13em;text-transform:uppercase}
+    .brand-copy{max-width:560px;margin:auto 0}
+    .eyebrow{display:inline-flex;align-items:center;gap:8px;padding:7px 11px;border:1px solid rgba(45,212,191,.25);border-radius:999px;background:rgba(45,212,191,.07);color:#99f6e4;font-size:.72rem;font-weight:800;letter-spacing:.1em;text-transform:uppercase}
+    .eyebrow:before{content:"";width:7px;height:7px;border-radius:50%;background:var(--teal);box-shadow:0 0 12px var(--teal)}
+    .brand-copy h1{max-width:560px;margin:24px 0 16px;font-size:clamp(2.25rem,4.4vw,4.2rem);line-height:1.04;letter-spacing:-.055em;font-weight:850}
+    .brand-copy h1 span{background:linear-gradient(110deg,var(--teal),#93c5fd 55%,#c4b5fd);background-clip:text;-webkit-background-clip:text;color:transparent}
+    .brand-copy p{max-width:510px;color:#aab8ca;font-size:1rem;line-height:1.8}
+    .feature-list{display:grid;gap:15px;margin:30px 0 0;padding:0;list-style:none}
+    .feature-list li{display:flex;gap:13px;align-items:flex-start;color:#dbe5f1;font-size:.9rem;line-height:1.55}
+    .feature-list i{width:34px;height:34px;flex:0 0 34px;display:grid;place-items:center;border:1px solid rgba(148,163,184,.18);border-radius:10px;background:rgba(255,255,255,.045);color:#93c5fd}
+    .brand-footer{display:flex;flex-wrap:wrap;gap:10px;align-items:center;color:#718198;font-size:.72rem}
+    .brand-footer .dot{width:4px;height:4px;border-radius:50%;background:#475569}
+    .auth-form-panel{display:flex;align-items:center;justify-content:center;padding:clamp(22px,4vw,56px);position:relative}
+    .auth-card{width:100%;max-width:440px;padding:clamp(24px,3vw,36px);border:1px solid var(--border);border-radius:20px;background:rgba(30,41,59,.86);box-shadow:0 24px 65px rgba(0,0,0,.42),inset 0 1px rgba(255,255,255,.04);backdrop-filter:blur(14px)}
+    .compact-brand{display:none;margin-bottom:24px}
+    .form-kicker{color:#93c5fd;font-size:.72rem;font-weight:800;letter-spacing:.12em;text-transform:uppercase}
+    .form-title{margin:8px 0 7px;font-size:1.65rem;font-weight:850;letter-spacing:-.04em}
+    .form-subtitle{margin:0 0 25px;color:var(--muted);font-size:.88rem;line-height:1.65}
+    .field{margin:0 0 17px}
+    .field label{display:block;margin:0 0 8px;color:#b6c3d3;font-size:.72rem;font-weight:800;letter-spacing:.09em;text-transform:uppercase}
+    .input-wrap{position:relative}
+    .input-wrap>i{position:absolute;left:14px;top:50%;transform:translateY(-50%);color:#8293aa;pointer-events:none}
+    .field input{width:100%;height:48px;padding:0 14px 0 42px;border:1px solid #40516a;border-radius:10px;outline:none;background:rgba(15,23,42,.72);color:var(--text);font:inherit;font-size:.92rem;transition:border-color .15s,box-shadow .15s}
+    .field input::placeholder{color:#64748b}
+    .field input:focus{border-color:#3b82f6;box-shadow:0 0 0 3px rgba(37,99,235,.2)}
+    .field-hint{display:block;margin-top:7px;color:#8293aa;font-size:.73rem;line-height:1.5}
+    .submit{width:100%;min-height:48px;margin-top:6px;border:0;border-radius:10px;background:linear-gradient(135deg,var(--blue),var(--violet));color:white;font:inherit;font-size:.94rem;font-weight:800;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:9px;box-shadow:0 8px 20px rgba(37,99,235,.2);transition:filter .15s,transform .15s}
+    .submit:hover{filter:brightness(1.1);transform:translateY(-1px)}
+    .submit:focus-visible{outline:3px solid rgba(147,197,253,.65);outline-offset:3px}
+    .notice{display:flex;gap:10px;padding:12px 13px;margin:0 0 18px;border-radius:10px;font-size:.83rem;line-height:1.5}
+    .notice.error{border:1px solid rgba(248,113,113,.35);background:rgba(239,68,68,.1);color:var(--danger)}
+    .notice.success{border:1px solid rgba(74,222,128,.3);background:rgba(34,197,94,.09);color:#86efac}
+    .notice i{flex:0 0 auto;margin-top:1px}
+    .form-links{display:flex;flex-wrap:wrap;justify-content:space-between;gap:10px;margin-top:20px;color:var(--muted);font-size:.8rem}
+    .form-links a{text-decoration:none;color:#a5c8ff}
+    .form-links a:hover{text-decoration:underline;color:white}
+    .secure-line{display:flex;align-items:center;gap:7px;margin-top:22px;padding-top:17px;border-top:1px solid rgba(51,65,85,.75);color:#8293aa;font-size:.72rem}
+    .secure-line i{color:var(--success)}
+    .form-footnote{margin-top:13px;color:#718198;font-size:.7rem;line-height:1.6}
+    @media(max-width:900px){.auth-shell{grid-template-columns:1fr}.auth-brand-panel{display:none}.compact-brand{display:inline-flex}.auth-form-panel{min-height:100vh;min-height:100dvh;padding:24px 16px;background:radial-gradient(circle at 50% 0,rgba(37,99,235,.13),transparent 45%),var(--bg)}}
+    @media(max-width:420px){.auth-card{padding:23px 19px;border-radius:15px}.form-title{font-size:1.45rem}.form-links{flex-direction:column}}
+    @media(prefers-reduced-motion:reduce){*,*:before,*:after{scroll-behavior:auto!important;transition:none!important}}
+  </style>
+  {% block head %}{% endblock %}
+</head>
+<body>
+<div class="auth-shell">
+  <aside class="auth-brand-panel" aria-label="Market Engine information">
+    <a class="brand" href="/" aria-label="Market Engine home">
+      <span class="brand-icon"><i class="bi bi-activity"></i></span>
+      <span><span class="brand-name">T - Dashboard</span><span class="brand-sub">Market Engine V5</span></span>
+    </a>
+    <div class="brand-copy">
+      <span class="eyebrow">Market intelligence workspace</span>
+      <h1>Trade with the <span>edge of clarity.</span></h1>
+      <p>A unified market cockpit for live market data, chart analysis, support and resistance levels, and a focused trading workflow.</p>
+      <ul class="feature-list">
+        <li><i class="bi bi-broadcast-pin"></i><span><strong>Live market feeds</strong><br>Real-time market visibility across supported indices and instruments.</span></li>
+        <li><i class="bi bi-graph-up-arrow"></i><span><strong>Structured market analysis</strong><br>Charts, levels, and instrument views in one workspace.</span></li>
+        <li><i class="bi bi-shield-check"></i><span><strong>Separate account access</strong><br>Member sessions and administrator access are handled independently.</span></li>
+      </ul>
+    </div>
+    <div class="brand-footer"><span>IST · Asia/Kolkata</span><span class="dot"></span><span>NSE · BSE</span><span class="dot"></span><span>Secure workspace</span></div>
+  </aside>
+  <main class="auth-form-panel">
+    <section class="auth-card" aria-labelledby="authTitle">
+      <a class="brand compact-brand" href="/">
+        <span class="brand-icon"><i class="bi bi-activity"></i></span>
+        <span><span class="brand-name">T - Dashboard</span><span class="brand-sub">Market Engine V5</span></span>
+      </a>
+      {% block content %}{% endblock %}
+      <div class="secure-line"><i class="bi bi-shield-lock-fill"></i><span>Protected session · HttpOnly cookie</span></div>
+      <div class="form-footnote">Access is monitored. Keep your credentials private and sign out when you finish.</div>
+    </section>
+  </main>
+</div>
+{% block scripts %}{% endblock %}
+</body>
+</html>
