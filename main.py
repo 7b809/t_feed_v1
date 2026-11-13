@@ -989,7 +989,7 @@ async def app_lifespan(app: FastAPI):
 # by ``_gate_docs`` below. In dev mode (PROD_MODE=False) docs are
 # always enabled and public.
 app = FastAPI(
-    title="Market Data Foundation",
+    title="NG7",
     lifespan=app_lifespan,
     docs_url="/docs" if _DOCS_ENABLED else None,
     redoc_url="/redoc" if _DOCS_ENABLED else None,
