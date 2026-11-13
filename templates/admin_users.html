@@ -787,6 +787,7 @@
             } else {
                 a.push('<button class="adm-btn" type="button" data-action="disable-login" data-id="' + id + '" aria-label="Disable login for ' + nm + '">Disable login</button>');
             }
+            if (u.security_flagged || Number(u.security_incident_count || 0) > 0) { a.push('<button class="adm-btn good" type="button" data-action="clear-security" data-id="' + id + '" aria-label="Clear security flag for ' + nm + '">Mark non-suspicious / reset count</button>'); }
             a.push('<button class="adm-btn" type="button" data-action="edit" data-id="' + id + '" aria-label="Edit profile for ' + nm + '">Edit</button>');
             if (u.status !== 'rejected') {
                 a.push('<button class="adm-btn" type="button" data-action="reject" data-id="' + id + '" aria-label="Reject ' + nm + '">Reject</button>');
@@ -928,6 +929,7 @@
         }
 
         var confirmMap = {
+            'clear-security': { msg: 'Mark this account as reviewed and non-suspicious? The incident audit history will be preserved, while the visible incident count and failed-login lock counters are reset.', okLabel: 'Clear flag', danger: false },
             approve:        { msg: 'Approve/reactivate this account?',        okLabel: 'Approve',  danger: false },
             suspend:        { msg: 'Suspend this account?',                    okLabel: 'Suspend',  danger: true  },
             reject:         { msg: 'Reject this registration?',                okLabel: 'Reject',   danger: true  },
@@ -943,6 +945,7 @@
         if (!ok) return;
 
         var endpoints = {
+            'clear-security': '/admin/users/' + enc(id) + '/clear-security-flag',
             approve:         '/admin/users/' + enc(id) + '/approve',
             suspend:         '/admin/users/' + enc(id) + '/suspend',
             reject:          '/admin/users/' + enc(id) + '/reject',
