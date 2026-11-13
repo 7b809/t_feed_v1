@@ -217,7 +217,7 @@ class PerformanceSnapshotService:
                 order.get("status")
                 or ("CLOSED" if order.get("closed_at") or order.get("closed_time") else "OPEN")
             ).upper()
-            is_open = status == "OPEN"
+            is_open = status in {"OPEN", "ACTIVE", "PENDING"}
             if is_open:
                 open_count += 1
             else:
@@ -382,7 +382,10 @@ class PerformanceSnapshotService:
                                 {"_orders.trading_symbol": {"$regex": pattern, "$options": "i"}},
                                 {"_orders.instrument_key": {"$regex": pattern, "$options": "i"}},
                                 {"_orders.status": {"$regex": pattern, "$options": "i"}},
+                                {"_orders.order_status": {"$regex": pattern, "$options": "i"}},
                                 {"_orders.order_id": {"$regex": pattern, "$options": "i"}},
+                                {"_orders.strategy": {"$regex": pattern, "$options": "i"}},
+                                {"_orders.execution_path": {"$regex": pattern, "$options": "i"}},
                             ]
                         }
                     }
