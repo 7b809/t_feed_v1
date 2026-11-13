@@ -8,8 +8,8 @@ from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from core.user_accounts import (
-    authenticate_user, create_user_session, delete_user, get_user_session,
-    list_users, register_user, revoke_user_sessions, set_user_login_enabled,
+    authenticate_user, create_user_session, delete_user, get_security_revocation_notice,
+    get_user_session, list_users, register_user, revoke_user_sessions, set_user_login_enabled,
     update_user_profile, update_user_status,
 )
 
@@ -182,14 +182,23 @@ def register_submit(
 # ---------------------------------------------------------------------------
 
 @router.get("/user/login", response_class=HTMLResponse)
-def member_login_page(request: Request, next: Optional[str] = None):
+def member_login_page(
+    request: Request,
+    next: Optional[str] = None,
+    security_logout: Optional[str] = None,
+):
     # The "next" value is rendered into the template so a hidden form field
     # can carry it through to the POST. Existing templates that ignore
     # {"next"} are unaffected.
     return _templates().TemplateResponse(
         request=request,
         name="user_login.html",
-        context={"error": None, "message": None, "next": _safe_next(next)},
+        context={
+            "error": None,
+            "message": None,
+            "next": _safe_next(next),
+            "security_logout": security_logout == "1",
+        },
     )
 
 
@@ -287,9 +296,11 @@ def auth_whoami(request: Request):
             headers={"Cache-Control": "no-store"},
         )
 
-    # 3. Unauthenticated — 200 with role:null (see docstring)
+    # 3. Unauthenticated — include the reason when a security incident
+    # invalidated the member's session.
+    security_logout = get_security_revocation_notice(request)
     return JSONResponse(
-        {"role": None, "authenticated": False},
+        {"role": None, "authenticated": False, "security_logout": security_logout},
         headers={"Cache-Control": "no-store"},
     )
 
