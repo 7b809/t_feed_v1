@@ -473,11 +473,13 @@
             const manualOff = u.login_enabled === false;
             const flag = u.suspicious || isLocked || manualOff;
             const status = u.status || 'unknown';
-            const lockText = isLocked
-                ? 'Locked until ' + date(u.lock_until)
-                : manualOff
-                    ? 'Admin disabled'
-                    : Number(u.failed_login_attempts || 0) + ' failed attempts';
+            const lockText = u.security_flagged
+                ? 'Security incident: ' + (u.last_security_incident_reason || 'suspicious browser activity')
+                : isLocked
+                    ? 'Locked until ' + date(u.lock_until)
+                    : manualOff
+                        ? 'Admin disabled'
+                        : Number(u.failed_login_attempts || 0) + ' failed attempts';
             const id = esc(u.user_id);
             const a = [];
 
@@ -510,6 +512,9 @@
                     (isLocked || manualOff
                         ? '<span class="adm-pill locked">' + esc(lockText) + '</span>'
                         : '<span class="adm-muted">' + esc(lockText) + '</span>') +
+                    (u.security_flagged
+                        ? '<div class="adm-muted">Incidents: ' + esc(u.security_incident_count || 0) + ' · Last: ' + esc(date(u.last_security_incident_at)) + '</div>'
+                        : '') +
                     '<div class="adm-muted">Login ' + (manualOff ? 'disabled' : 'enabled') + '</div>' +
                 '</td>' +
                 '<td>' + esc(date(u.created_at)) + '</td>' +
