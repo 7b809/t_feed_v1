@@ -9,7 +9,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from core.user_accounts import (
     authenticate_user, create_user_session, delete_user, get_user_session,
     list_users, register_user, revoke_user_sessions, set_user_login_enabled,
-    update_user_status,
+    update_user_profile, update_user_status,
 )
 
 router = APIRouter(tags=["platform-accounts"])
@@ -121,6 +121,10 @@ def admin_suspend_user(user_id: str):
 @router.post("/admin/users/{user_id}/reject")
 def admin_reject_user(user_id: str):
     return update_user_status(user_id, "rejected")
+
+@router.patch("/admin/users/{user_id}/profile")
+def admin_update_user_profile(user_id: str, payload: dict):
+    return update_user_profile(user_id, payload.get("name"), payload.get("email"))
 
 @router.post("/admin/users/{user_id}/login-enable")
 def admin_enable_user_login(user_id: str):
