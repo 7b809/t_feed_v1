@@ -1,8 +1,11 @@
-"""Persist combined live isolation and dummy-order state to MongoDB.
+"""Persist only the daily dummy-order/isolation snapshot to MongoDB.
 
-One document is maintained per market-local trading date. Local JSON
-files remain the primary runtime/recovery state; this service mirrors
-their latest contents asynchronously and retries transient MongoDB errors.
+This service writes exactly one document per market-local trading date
+into UPSTOX_APP_V2.dummy_orders. It never archives project folders, creates
+GridFS files, or writes backup manifests. MEGA remains responsible for the
+full project-folder backup. Local JSON files remain the primary runtime
+and recovery state; this service mirrors their latest contents asynchronously
+and retries transient MongoDB errors.
 """
 
 from __future__ import annotations
@@ -111,10 +114,8 @@ class LiveOrderSnapshotService:
                 or getattr(config, "DAILY_BACKUP_MONGO_DB", "")
                 or getattr(config, "MONGO_DB", "")
             ).strip()
-            collection_name = str(
-                getattr(config, "LIVE_ORDER_SNAPSHOT_COLLECTION",
-                        "dummy_orders")
-            ).strip()
+            # Deliberately fixed: this feature writes only to dummy_orders.
+            collection_name = "dummy_orders"
 
             if not mongo_uri:
                 raise RuntimeError("MONGO_URL/MONGO_URI is not configured")
