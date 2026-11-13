@@ -134,7 +134,7 @@ def home(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(
         request=request,
         name="index.html",
-        context={"app_name": "Market Data Foundation"},
+        context={"app_name": "NG7"},
     )
 
 
@@ -147,7 +147,7 @@ def charts_page(request: Request) -> HTMLResponse:
         context={
             "page_title": "Instrument Search",
             "instruments": [],
-            "app_name": "Market Data Foundation",
+            "app_name": "NG7",
         },
     )
 
@@ -162,7 +162,7 @@ def chart_page(request: Request, instrument_key: str) -> HTMLResponse:
         request=request,
         name="chart.html",
         context={
-            "app_name": "Market Data Foundation",
+            "app_name": "NG7",
             "instrument_key": instrument_key,
             "instrument_name": instrument_name,
             "instrument": instrument,
@@ -198,8 +198,9 @@ def isolated_page(request: Request) -> HTMLResponse:
         request=request,
         name="isolated_instrument.html",
         context={
-            "app_name": "Market Data Foundation",
+            "app_name": "NG7",
             "initial_detail": initial_detail,
+            "is_member": bool(getattr(request.state, "member", None)),
         },
     )
 
@@ -216,8 +217,19 @@ def positions_page(request: Request) -> HTMLResponse:
     MongoDB is degraded; the client-side code surfaces those errors
     in-place rather than via a broken HTTP response.
     """
+    is_member = bool(getattr(request.state, "member", None))
+    if is_member:
+        return templates.TemplateResponse(
+            request=request,
+            name="coming_soon.html",
+            context={
+                "app_name": "NG7",
+                "feature_name": "Positions",
+                "feature_description": "The member positions workspace is being prepared. Position monitoring and order actions will be introduced in a future release.",
+            },
+        )
     return templates.TemplateResponse(
         request=request,
         name="positions.html",
-        context={"app_name": "Market Data Foundation"},
+        context={"app_name": "NG7"},
     )
