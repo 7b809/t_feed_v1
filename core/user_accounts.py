@@ -46,6 +46,115 @@ def _audit(event, email=None, detail=None):
     except Exception:
         pass
 
+
+def _notify_security_incident(email, name, detail):
+    """Notify the configured administrator about a member security incident."""
+    enabled = os.getenv("USER_AUTH_SECURITY_TELEGRAM_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
+    token = (getattr(config, "TELEGRAM_BOT_TOKEN", "") or "").strip()
+    chat_id = (getattr(config, "TELEGRAM_CHAT_ID", "") or "").strip()
+    if not enabled or not token or not chat_id:
+        return False
+    try:
+        import requests
+        from html import escape
+        message = (
+            "🚨 <b>NG7 member security alert</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            f"👤 <b>Member:</b> {escape(str(name or 'Unknown'))}\n"
+            f"✉️ <b>Email:</b> {escape(str(email or 'Unknown'))}\n"
+            f"⚠️ <b>Event:</b> {escape(str(detail.get('reason') or 'Suspicious browser activity'))}\n"
+            f"🌐 <b>Client:</b> {escape(str(detail.get('client_ip') or 'Unknown'))}\n"
+            f"🧭 <b>Path:</b> {escape(str(detail.get('path') or 'Unknown'))}\n"
+            "🔒 <b>Action:</b> Member session revoked and user logged out.\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "Review the member account in the NG7 Admin Panel."
+        )
+        response = requests.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={"chat_id": chat_id, "text": message, "parse_mode": "HTML", "disable_web_page_preview": True},
+            timeout=8,
+        )
+        response.raise_for_status()
+        return True
+    except Exception as exc:
+        from core.logger import get_logger
+        get_logger(__file__).warning("Security incident Telegram alert failed (%s)", type(exc).__name__)
+        return False
+
+
+def flag_user_security_incident(user_id, details=None):
+    """Flag a member and revoke every active session after a security incident."""
+    from bson import ObjectId
+    from bson.errors import InvalidId
+
+    try:
+        oid = ObjectId(str(user_id))
+    except (InvalidId, TypeError):
+        return False
+
+    details = dict(details or {})
+    now = _now()
+    collection = _database()[_USERS]
+    user = collection.find_one({"_id": oid}, {"name": 1, "email": 1, "session_version": 1})
+    if not user:
+        return False
+
+    new_version = int(user.get("session_version", 1)) + 1
+    reason = str(details.get("reason") or "Suspicious browser inspection activity")[:200]
+    safe_details = {
+        "user_id": str(oid),
+        "reason": reason,
+        "path": str(details.get("path") or "")[:300],
+        "client_ip": str(details.get("client_ip") or "")[:100],
+        "user_agent": str(details.get("user_agent") or "")[:500],
+        "session_revoked": True,
+    }
+    collection.update_one(
+        {"_id": oid},
+        {"$set": {
+            "security_flagged": True,
+            "last_security_incident_at": now,
+            "last_security_incident_reason": reason,
+            "security_incident_version": new_version,
+            "updated_at": now,
+        }, "$inc": {
+            "session_version": 1,
+            "security_incident_count": 1,
+        }},
+    )
+    _audit("security_devtools_detected", user.get("email"), safe_details)
+    _notify_security_incident(user.get("email"), user.get("name"), safe_details)
+    return True
+
+
+def get_security_revocation_notice(request):
+    """Return True when this cookie was revoked by a recorded security incident."""
+    raw = request.cookies.get(_COOKIE, "")
+    if not raw or "." not in raw:
+        return False
+    try:
+        payload_hex, signature = raw.split(".", 1)
+        payload = bytes.fromhex(payload_hex)
+        secret = _secret()
+        expected = hmac.new(secret, payload, hashlib.sha256).hexdigest()
+        if len(secret) < 32 or not hmac.compare_digest(signature, expected):
+            return False
+        user_id, expiry, version = payload.decode().split(":")
+        if int(expiry) < int(time.time()):
+            return False
+        from bson import ObjectId
+        user = _database()[_USERS].find_one(
+            {"_id": ObjectId(user_id)},
+            {"session_version": 1, "security_flagged": 1, "security_incident_version": 1},
+        )
+        if not user or not user.get("security_flagged"):
+            return False
+        current_version = int(user.get("session_version", 1))
+        incident_version = int(user.get("security_incident_version", -1))
+        return current_version != int(version) and incident_version == current_version
+    except Exception:
+        return False
+
 def _email(value):
     value = (value or "").strip().lower()
     if len(value) > 254 or not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", value):
@@ -211,7 +320,12 @@ def list_users(status=None, limit=300):
         row["user_id"] = str(row.pop("_id"))
         lock_until = row.get("lock_until")
         row["temporarily_locked"] = bool(lock_until and _utc(lock_until) > now)
-        row["suspicious"] = row["temporarily_locked"] or int(row.get("failed_login_attempts", 0)) >= _MAX_FAILED
+        row["suspicious"] = (
+            row["temporarily_locked"]
+            or int(row.get("failed_login_attempts", 0)) >= _MAX_FAILED
+            or bool(row.get("security_flagged"))
+            or int(row.get("security_incident_count", 0)) > 0
+        )
         output.append(row)
     return output
 
