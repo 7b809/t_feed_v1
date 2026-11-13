@@ -205,8 +205,6 @@ class LiveOrderSnapshotService:
                 },
                 "$setOnInsert": {
                     "created_datetime": now,
-                    "isolated_instrument": {},
-                    "orders_data": {},
                 },
             },
             upsert=True,
