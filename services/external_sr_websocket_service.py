@@ -7,10 +7,11 @@ and a read-compatible levels API for the existing strategy/order services.
 
 Market-hours gate
 -----------------
-Connections are only *initiated* Mon-Fri, 09:15-15:40 IST. Existing
-connections are also gracefully closed if the window ends mid-stream.
-Set ``TEST_EMA=true`` (or ``EXTERNAL_SR_TEST_EMA=true``) to bypass the gate
-for off-hours testing / smoke runs. Default is **false**.
+Connections are only *initiated* Monday-Friday, 09:00-16:00 IST.
+Existing connections are gracefully closed at 16:00 IST, including when the
+upstream socket is silent. Set ``EXTERNAL_SR_TEST_EMA=true`` (or the legacy
+``TEST_EMA=true``) only for an intentional off-hours test. Default is **false**.
+The upstream host is supplied privately through ``EXTERNAL_SR_WS_URL``.
 """
 from __future__ import annotations
 
@@ -34,15 +35,30 @@ from websockets.exceptions import ConnectionClosed
 logger = logging.getLogger(__name__)
 
 
+def _parse_hhmm(value: str, fallback: tuple[int, int]) -> tuple[int, int]:
+    """Parse an HH:MM market-window setting without breaking startup."""
+    try:
+        hour_text, minute_text = str(value).strip().split(":", 1)
+        hour, minute = int(hour_text), int(minute_text)
+        if 0 <= hour <= 23 and 0 <= minute <= 59:
+            return hour, minute
+    except (TypeError, ValueError):
+        pass
+    logger.warning("Invalid external S/R market-window time %r; using %02d:%02d", value, *fallback)
+    return fallback
+
+
 class ExternalSRWebSocketService:
     CONFIGS = ("15/3", "15/15", "15/30")
 
-    # Market window (IST). Connections are only attempted inside this window
-    # unless ``self.test_ema`` is True (see __init__).
-    MARKET_OPEN_HOUR = 9
-    MARKET_OPEN_MIN = 15
-    MARKET_CLOSE_HOUR = 15
-    MARKET_CLOSE_MIN = 40
+    # Market window (IST), configurable but defaulting to 09:00-16:00.
+    # The close boundary is exclusive: an active socket is closed at 16:00.
+    MARKET_OPEN_HOUR, MARKET_OPEN_MIN = _parse_hhmm(
+        os.getenv("EXTERNAL_SR_WINDOW_START", "09:00"), (9, 0)
+    )
+    MARKET_CLOSE_HOUR, MARKET_CLOSE_MIN = _parse_hhmm(
+        os.getenv("EXTERNAL_SR_WINDOW_END", "16:00"), (16, 0)
+    )
 
     # How often a quiet live connection re-checks the market window via
     # ``asyncio.wait_for`` around ``ws.recv()``. Lower = more responsive
@@ -50,7 +66,9 @@ class ExternalSRWebSocketService:
     RECV_WINDOW_CHECK_SECONDS = 60.0
 
     def __init__(self) -> None:
-        self.base_url = os.getenv("EXTERNAL_SR_WS_URL", "wss://ema.novag7.in").strip().rstrip("/")
+        configured_base_url = os.getenv("EXTERNAL_SR_WS_URL", "").strip()
+        self.endpoint_configured = bool(configured_base_url)
+        self.base_url = (configured_base_url or "wss://external-sr.example.invalid").rstrip("/")
         if self.base_url.startswith("https://"):
             self.base_url = "wss://" + self.base_url[8:]
         elif self.base_url.startswith("http://"):
@@ -117,7 +135,7 @@ class ExternalSRWebSocketService:
         return start <= now < end
 
     def _seconds_until_next_window(self) -> float:
-        """Seconds until the next Mon-Fri 09:15 IST (0 if already inside)."""
+        """Seconds until the next configured weekday opening (0 if inside)."""
         now = datetime.now(self._market_tz)
         if self._within_market_window(now):
             return 0.0
@@ -144,12 +162,26 @@ class ExternalSRWebSocketService:
             jitter = random.uniform(0.0, 3.0)
             await asyncio.sleep(wait + jitter)
 
+    def _seconds_until_window_close(self, at: datetime | None = None) -> float:
+        """Seconds until today's configured close boundary; never negative."""
+        now = at or datetime.now(self._market_tz)
+        end = now.replace(
+            hour=self.MARKET_CLOSE_HOUR,
+            minute=self.MARKET_CLOSE_MIN,
+            second=0,
+            microsecond=0,
+        )
+        return max(0.0, (end - now).total_seconds())
+
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
     def start(self) -> None:
         if not self.enabled:
             logger.warning("[external-sr] disabled by EXTERNAL_SR_WS_ENABLED")
+            return
+        if not self.endpoint_configured:
+            logger.error("[external-sr] EXTERNAL_SR_WS_URL is not configured; refusing placeholder endpoint")
             return
         if self._thread and self._thread.is_alive():
             return
@@ -295,9 +327,15 @@ class ExternalSRWebSocketService:
                                 key, cfg,
                             )
                             break
+                        # Wake at the exact close boundary even when the
+                        # upstream is silent; do not wait for the full poll interval.
+                        recv_timeout = min(
+                            self.RECV_WINDOW_CHECK_SECONDS,
+                            max(0.05, self._seconds_until_window_close()),
+                        )
                         try:
                             raw = await asyncio.wait_for(
-                                ws.recv(), timeout=self.RECV_WINDOW_CHECK_SECONDS,
+                                ws.recv(), timeout=recv_timeout,
                             )
                         except asyncio.TimeoutError:
                             # Silent feed → re-check window and go again.
@@ -490,8 +528,12 @@ class ExternalSRWebSocketService:
             "enabled": self.enabled,
             "test_ema": self.test_ema,
             "market_window_open": self._within_market_window(),
-            "market_window": "09:15-15:40 IST (Mon-Fri); bypassed when TEST_EMA=true",
-            "base_url": self.base_url,
+            "market_window": (
+                f"{self.MARKET_OPEN_HOUR:02d}:{self.MARKET_OPEN_MIN:02d}-"
+                f"{self.MARKET_CLOSE_HOUR:02d}:{self.MARKET_CLOSE_MIN:02d} IST (Mon-Fri); "
+                "bypassed only when TEST_EMA=true"
+            ),
+            "endpoint_configured": self.endpoint_configured,
             "subscriptions": rows,
         }
 
