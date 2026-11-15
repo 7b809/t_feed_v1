@@ -1,3 +1,4 @@
+# app/services/daily_data_backup_service.py
 """Daily ZIP archive of DATA_DIR uploaded to a MEGA folder.
 
 Remote layout:
@@ -14,7 +15,6 @@ import asyncio
 import hashlib
 import logging
 import os
-import tempfile
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -227,55 +227,39 @@ class DailyDataBackupService:
     def _upload_archive(self, archive_path: Path, filename: str) -> tuple[str | None, str]:
         mega = self._login_mega()
         folder_id = self._ensure_remote_folder(mega)
-        # Upload under a unique temporary name first. The previous daily
-        # archive is retained unless the new upload is visible and size-verified.
-        temporary_name = f".{filename}.{uuid4().hex}.uploading"
-        mega.upload(str(archive_path), dest=folder_id, dest_filename=temporary_name)
 
+        # Upload directly under the final filename. Date-keyed names are
+        # unique per day, so no temporary-name + rename dance is needed.
+        mega.upload(str(archive_path), dest=folder_id, dest_filename=filename)
+
+        # Verify the upload by filename + size.
         files = mega.get_files()
-        uploaded_handle = None
         expected_size = archive_path.stat().st_size
+        uploaded_handle = None
         for handle, node in files.items():
             if node.get("p") != folder_id:
                 continue
-            if (node.get("a") or {}).get("n") != temporary_name:
+            if (node.get("a") or {}).get("n") != filename:
                 continue
             if int(node.get("s", -1)) == expected_size:
                 uploaded_handle = handle
                 break
+
         if not uploaded_handle:
+            # Best-effort cleanup of any residue with the same name, then fail.
+            for handle, node in files.items():
+                if node.get("p") == folder_id and (node.get("a") or {}).get("n") == filename:
+                    try:
+                        mega.destroy(handle)
+                    except Exception:
+                        logger.exception("could not clean failed MEGA upload node %s", handle)
             raise RuntimeError("MEGA upload could not be verified by remote filename and size")
 
-        # Promote the verified upload, then remove older same-name copies.
-        # Keep the exact handle returned by this upload; matching by size alone
-        # could accidentally retain an older archive with identical byte size.
-        try:
-            mega.rename(uploaded_handle, filename)
-        except Exception:
-            try:
-                mega.destroy(uploaded_handle)
-            except Exception:
-                logger.exception("could not clean failed temporary MEGA upload %s", temporary_name)
-            raise
-
-        refreshed = mega.get_files()
-        promoted = refreshed.get(uploaded_handle)
-        if (
-            promoted is None
-            or promoted.get("p") != folder_id
-            or (promoted.get("a") or {}).get("n") != filename
-            or int(promoted.get("s", -1)) != expected_size
-        ):
-            raise RuntimeError("MEGA final archive filename/size verification failed")
-
-        matches = [
-            handle for handle, node in refreshed.items()
-            if node.get("p") == folder_id
-            and (node.get("a") or {}).get("n") == filename
-        ]
-        keep_handle = uploaded_handle
-        for handle in matches:
-            if handle != keep_handle:
+        # Remove any older node with the same name (defensive re-run case).
+        for handle, node in files.items():
+            if handle == uploaded_handle:
+                continue
+            if node.get("p") == folder_id and (node.get("a") or {}).get("n") == filename:
                 try:
                     mega.destroy(handle)
                 except Exception:
@@ -283,11 +267,12 @@ class DailyDataBackupService:
 
         link = None
         try:
-            node = refreshed.get(keep_handle)
+            node = files.get(uploaded_handle)
             if node is not None:
-                link = mega.get_link((keep_handle, node))
+                link = mega.get_link((uploaded_handle, node))
         except Exception:
             logger.exception("could not create MEGA public link for %s", filename)
+
         return link, f"{self._config.mega_backup_root}/{filename}"
 
     def _write_state(self, result: dict[str, Any]) -> None:
