@@ -108,7 +108,7 @@ class GreeksRegimeMonitorTests(unittest.TestCase):
             )
         # Put delta moves toward zero: z_delta positive, z_bull negative.
         event = self.monitor.on_tick(
-            entry, option_tick(-.02, -1.5, 105, up=23200), self.at(21),
+            entry, option_tick(-.39, -1.5, 105, up=23200), self.at(21),
         )
         self.assertIsNotNone(event)
         self.assertEqual(event["side"], "PUT")
