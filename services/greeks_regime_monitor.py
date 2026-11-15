@@ -131,37 +131,92 @@ class GreeksRegimeMonitor:
             return "LOW"
         return "MEDIUM"
 
+    @staticmethod
+    def _classify(z_bull: float, moneyness: float | None, threshold: float) -> tuple[str, str]:
+        """Apply the portable verdict rules in greeks_regime_formula.md §4.4."""
+        if moneyness is not None:
+            if moneyness > 1.02 and z_bull > 0:
+                return "BULLISH", "moneyness>1.02_and_z_bull>0"
+            if moneyness < 0.98 and z_bull < 0:
+                return "BEARISH", "moneyness<0.98_and_z_bull<0"
+            if moneyness > 1.02 and z_bull <= 0:
+                return "LEAN_BULLISH", "moneyness_only_bullish"
+            if moneyness < 0.98 and z_bull >= 0:
+                return "LEAN_BEARISH", "moneyness_only_bearish"
+            return "NEUTRAL", "moneyness_neutral"
+
+        if z_bull > threshold:
+            return "BULLISH", f"z_bull>{threshold:g}"
+        if z_bull < -threshold:
+            return "BEARISH", f"z_bull<{-threshold:g}"
+        return "NEUTRAL", "z_bull_neutral"
+
+    @staticmethod
+    def _moneyness(spot: float | None, strike: float | None) -> float | None:
+        if spot is None or strike is None or spot <= 0 or strike <= 0:
+            return None
+        value = spot / strike
+        return value if math.isfinite(value) else None
+
     def _build_snapshot(
         self, *, entry: dict[str, Any], tick: dict[str, Any], side: str,
         greeks: dict[str, float], premium: float, received_at: datetime,
         bucket: datetime, history: deque, z_delta: float, z_bull: float,
         premium_delta_5m: float | None, mean: float, std: float,
+        spot: float | None, strike: float | None, moneyness: float | None,
     ) -> dict[str, Any]:
-        bullish = z_bull > self.z_threshold
-        verdict = "BULLISH" if bullish else "BEARISH"
-        # No spot/strike pair is available in this feed snapshot, so use
-        # the specification's delta-only portable score, scaled to 0..100.
-        score = 50.0 + 50.0 * math.tanh(z_bull)
+        verdict, condition = self._classify(z_bull, moneyness, self.z_threshold)
+
+        # Formula §3.7: side-signed delta z-score plus the side-independent
+        # true-moneyness term. z_bull already equals s * z_delta.
+        if moneyness is not None:
+            score = (
+                50.0
+                + 25.0 * math.tanh(z_bull / 1.0)
+                + 25.0 * math.tanh((moneyness - 1.0) / 0.05)
+            )
+        else:
+            score = 50.0 + 50.0 * math.tanh(z_bull / 1.0)
+
         premium_confirmation: str | None = None
         premium_conflict = False
-        if premium_delta_5m is not None:
-            premium_supports_bull = premium_delta_5m > 0 if side == "CALL" else premium_delta_5m < 0
-            premium_supports_bear = premium_delta_5m < 0 if side == "CALL" else premium_delta_5m > 0
-            if bullish:
-                premium_conflict = not premium_supports_bull
-                premium_confirmation = "SUPPORTS" if premium_supports_bull else "CONTRADICTS"
-                if premium_conflict:
-                    score = max(50.0, score - 15.0)
+        if premium_delta_5m is not None and verdict != "NEUTRAL":
+            if premium_delta_5m == 0:
+                premium_confirmation = "FLAT"
             else:
-                premium_conflict = not premium_supports_bear
-                premium_confirmation = "SUPPORTS" if premium_supports_bear else "CONTRADICTS"
+                premium_supports_bull = (
+                    premium_delta_5m > 0 if side == "CALL"
+                    else premium_delta_5m < 0
+                )
+                premium_supports_bear = (
+                    premium_delta_5m < 0 if side == "CALL"
+                    else premium_delta_5m > 0
+                )
+                is_bullish = verdict in {"BULLISH", "LEAN_BULLISH"}
+                premium_supports = (
+                    premium_supports_bull if is_bullish
+                    else premium_supports_bear
+                )
+                premium_conflict = not premium_supports
+                premium_confirmation = (
+                    "SUPPORTS" if premium_supports else "CONTRADICTS"
+                )
                 if premium_conflict:
-                    score = min(50.0, score + 15.0)
+                    score -= 15.0
+
         score = max(0.0, min(100.0, score))
+        if score > 65.0 or score < 35.0:
+            confidence = "HIGH"
+        elif 45.0 < score < 55.0:
+            confidence = "LOW"
+        else:
+            confidence = "MEDIUM"
+
         samples = list(history)
         return {
-            "schema_version": 1,
+            "schema_version": 2,
             "event_type": "GREEKS_REGIME_CONDITION_MET",
+            "feed_source": "OPTION_FULL",
             "received_at": received_at.isoformat(),
             "minute_bucket": bucket.isoformat(),
             "instrument_key": str(entry.get("instrument_key") or ""),
@@ -172,11 +227,18 @@ class GreeksRegimeMonitor:
             "expiry": entry.get("expiry"),
             "side": side,
             "verdict": verdict,
-            "condition": f"z_bull>{self.z_threshold:g}" if bullish else f"z_bull<{-self.z_threshold:g}",
+            "condition": condition,
             "score": round(score, 4),
-            "confidence": self._confidence(score),
+            "confidence": confidence,
             "z_delta": round(z_delta, 6),
             "z_bull": round(z_bull, 6),
+            "spot": spot,
+            "moneyness": round(moneyness, 8) if moneyness is not None else None,
+            "option_feed": {
+                "up": spot,
+                "iv": greeks.get("iv"),
+                "op": greeks.get("op"),
+            },
             "baseline": {
                 "lookback_observations": len(samples),
                 "delta_mean": round(mean, 8),
@@ -184,7 +246,10 @@ class GreeksRegimeMonitor:
                 "first_minute": samples[0]["bucket"].isoformat(),
                 "last_minute": samples[-1]["bucket"].isoformat(),
             },
-            "premium_delta_5m": round(premium_delta_5m, 4) if premium_delta_5m is not None else None,
+            "premium_delta_5m": (
+                round(premium_delta_5m, 4)
+                if premium_delta_5m is not None else None
+            ),
             "premium_confirmation": premium_confirmation,
             "premium_conflict": premium_conflict,
             "premium": premium,
@@ -193,11 +258,8 @@ class GreeksRegimeMonitor:
             "volume": tick.get("volume"),
             "candle_1m": tick.get("candle_1m"),
             "greeks": {
-                "delta": greeks.get("delta"),
-                "theta": greeks.get("theta"),
-                "gamma": greeks.get("gamma"),
-                "vega": greeks.get("vega"),
-                "rho": greeks.get("rho"),
+                name: greeks.get(name)
+                for name in ("delta", "theta", "gamma", "vega", "rho")
             },
             "exchange_ltt": tick.get("ltt"),
         }
@@ -233,32 +295,58 @@ class GreeksRegimeMonitor:
         )
         return True
 
-    def on_tick(self, entry: dict[str, Any], tick: dict[str, Any], received_at: datetime | None = None) -> dict[str, Any] | None:
-        """Evaluate one live tick. Returns the saved event, if a condition met."""
+    def on_tick(
+        self, entry: dict[str, Any], tick: dict[str, Any],
+        received_at: datetime | None = None,
+    ) -> dict[str, Any] | None:
+        """Evaluate one Option Full Feed tick; reject LTPC-only updates."""
         if not self.enabled or not isinstance(entry, dict) or not isinstance(tick, dict):
             return None
+
+        # This explicit parser marker is mandatory. Greeks from any other
+        # feed branch must not be treated as the required Option Full Feed.
+        if tick.get("option_full_feed") is not True:
+            self._skipped_count += 1
+            return None
+
         strike_type = normalize_strike_type(entry.get("strike_type"))
         if strike_type not in {"CE", "PE"} or bool(entry.get("is_index")):
             return None
+
         raw = tick.get("option_greeks")
         if not isinstance(raw, dict):
             return None
-        greeks = {name: self._number(raw.get(name)) for name in ("delta", "theta", "gamma", "vega", "rho")}
+        greeks = {
+            name: self._number(raw.get(name))
+            for name in ("delta", "theta", "gamma", "vega", "rho", "up", "iv", "op")
+        }
         delta, rho = greeks["delta"], greeks["rho"]
         if delta is None or rho is None:
             return None
+
         side = self._side_from_greeks(delta, rho)
         expected_side = "CALL" if strike_type == "CE" else "PUT"
         if side != expected_side:
             self._skipped_count += 1
             return None
+
         premium = self._number(tick.get("ltp"))
+        if premium is None:
+            premium = greeks.get("op")
         if premium is None and isinstance(tick.get("candle_1m"), dict):
             premium = self._number(tick["candle_1m"].get("close"))
         if premium is None or premium <= 0:
             return None
+
+        spot = greeks.get("up")
+        strike = self._number(entry.get("strike_price"))
+        moneyness = self._moneyness(spot, strike)
+
         now = received_at or datetime.now(self.timezone)
-        now = now.replace(tzinfo=self.timezone) if now.tzinfo is None else now.astimezone(self.timezone)
+        now = (
+            now.replace(tzinfo=self.timezone)
+            if now.tzinfo is None else now.astimezone(self.timezone)
+        )
         bucket = now.replace(second=0, microsecond=0)
         day_key = bucket.strftime("%Y%m%d")
         instrument_key = str(entry.get("instrument_key") or "").strip()
@@ -266,10 +354,11 @@ class GreeksRegimeMonitor:
             return None
 
         with self._lock:
-            # Start a fresh rolling baseline on each market date.
+            # A fresh rolling baseline is required for every market date.
             if self._state_date != day_key:
                 self._states.clear()
                 self._state_date = day_key
+
             state = self._get_state(instrument_key)
             current_bucket = state.get("current_bucket")
             if current_bucket is not None and bucket < current_bucket:
@@ -284,7 +373,9 @@ class GreeksRegimeMonitor:
 
             history = state["history"]
             if len(history) < self.lookback:
-                state["current_sample"] = {"bucket": bucket, "delta": delta, "premium": premium}
+                state["current_sample"] = {
+                    "bucket": bucket, "delta": delta, "premium": premium,
+                }
                 return None
 
             deltas = [float(item["delta"]) for item in history]
@@ -292,30 +383,52 @@ class GreeksRegimeMonitor:
             variance = sum((value - mean) ** 2 for value in deltas) / len(deltas)
             std = math.sqrt(variance)
             if not math.isfinite(std) or std < self.std_floor:
-                state["current_sample"] = {"bucket": bucket, "delta": delta, "premium": premium}
+                state["current_sample"] = {
+                    "bucket": bucket, "delta": delta, "premium": premium,
+                }
                 self._skipped_count += 1
                 return None
+
             z_delta = (delta - mean) / std
             z_bull = z_delta if side == "CALL" else -z_delta
-            if abs(z_bull) <= self.z_threshold:
-                state["current_sample"] = {"bucket": bucket, "delta": delta, "premium": premium}
+            verdict, _ = self._classify(z_bull, moneyness, self.z_threshold)
+            state["current_sample"] = {
+                "bucket": bucket, "delta": delta, "premium": premium,
+            }
+            if verdict == "NEUTRAL":
                 return None
 
             premium_delta_5m = self._premium_delta_5m(history, bucket, premium)
             snapshot = self._build_snapshot(
-                entry=entry, tick=tick, side=side,
-                greeks={key: value for key, value in greeks.items() if value is not None},
-                premium=premium, received_at=now, bucket=bucket,
-                history=history, z_delta=z_delta, z_bull=z_bull,
-                premium_delta_5m=premium_delta_5m, mean=mean, std=std,
+                entry=entry,
+                tick=tick,
+                side=side,
+                greeks={
+                    key: value for key, value in greeks.items()
+                    if value is not None
+                },
+                premium=premium,
+                received_at=now,
+                bucket=bucket,
+                history=history,
+                z_delta=z_delta,
+                z_bull=z_bull,
+                premium_delta_5m=premium_delta_5m,
+                mean=mean,
+                std=std,
+                spot=spot,
+                strike=strike,
+                moneyness=moneyness,
             )
-            state["current_sample"] = {"bucket": bucket, "delta": delta, "premium": premium}
             return snapshot if self._append_snapshot(snapshot, day_key) else None
 
     def status(self) -> dict[str, Any]:
         with self._lock:
             return {
                 "enabled": self.enabled,
+                "required_feed_source": "OPTION_FULL",
+                "moneyness_enabled": True,
+                "twin_leg_confirmation": False,
                 "tracked_options": len(self._states),
                 "saved_events": self._saved_count,
                 "deduplicated_events": self._skipped_count,

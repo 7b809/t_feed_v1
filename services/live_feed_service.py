@@ -465,15 +465,32 @@ class LiveFeedService:
     def _extract_tick(self, feed: dict[str, Any]) -> dict[str, Any] | None:
         if not isinstance(feed, dict):
             return None
+
         ff = feed.get("fullFeed") or feed.get("ff") or {}
-        oc = feed.get("oc") or {}
+        if not isinstance(ff, dict):
+            ff = {}
+        oc = feed.get("oc") or ff.get("oc") or {}
+        if not isinstance(oc, dict):
+            oc = {}
         market_ff = feed.get("marketFF") or ff.get("marketFF") or {}
         index_ff = feed.get("indexFF") or ff.get("indexFF") or {}
         market_level = feed.get("marketLevel") or ff.get("marketLevel") or {}
 
+        # Only this exact branch marks a tick as eligible for Greeks regime
+        # monitoring. Generic LTPC fallbacks below are for other consumers.
+        option_full_ltpc = oc.get("ltpc")
+        option_full_greeks = oc.get("optionGreeks")
+        option_full_feed = (
+            isinstance(option_full_ltpc, dict)
+            and self._flt(option_full_ltpc.get("ltp")) is not None
+            and isinstance(option_full_greeks, dict)
+        )
+
         ltpc = (
+            option_full_ltpc if option_full_feed else None
+        ) or (
             feed.get("ltpc") or ff.get("ltpc") or index_ff.get("ltpc")
-            or market_ff.get("ltpc") or oc.get("ltpc") or {}
+            or market_ff.get("ltpc") or {}
         )
         ltp = self._flt(
             ltpc.get("ltp") or feed.get("ltp") or market_ff.get("ltp")
@@ -510,16 +527,19 @@ class LiveFeedService:
             or (candle_1m.get("volume") if isinstance(candle_1m, dict) else None)
         )
 
-        # Normalize the optional Upstox full-feed optionGreeks payload.
+        # Retain all fields required for the formula and audit record.
+        # Non-oc Greeks may still be exposed to other feed consumers, but
+        # option_full_feed remains False unless oc.ltpc + oc.optionGreeks exist.
         option_greeks_raw = (
-            feed.get("optionGreeks") or ff.get("optionGreeks")
-            or market_ff.get("optionGreeks") or oc.get("optionGreeks") or {}
+            option_full_greeks if option_full_feed else
+            (feed.get("optionGreeks") or ff.get("optionGreeks")
+             or market_ff.get("optionGreeks") or oc.get("optionGreeks") or {})
         )
         if not isinstance(option_greeks_raw, dict):
             option_greeks_raw = {}
         option_greeks = {
             name: self._flt(option_greeks_raw.get(name))
-            for name in ("delta", "theta", "gamma", "vega", "rho")
+            for name in ("delta", "theta", "gamma", "vega", "rho", "up", "iv", "op")
         }
         if not any(value is not None for value in option_greeks.values()):
             option_greeks = None
@@ -534,6 +554,7 @@ class LiveFeedService:
             "prev_close": prev_close,
             "ltt": ltpc.get("ltt"),
             "option_greeks": option_greeks,
+            "option_full_feed": bool(option_full_feed),
         }
 
     @staticmethod
