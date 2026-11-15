@@ -15,6 +15,7 @@ from websockets.exceptions import ConnectionClosed
 
 from ..config import Settings
 from .live_feed_state_store import LiveFeedStateStore
+from .live_feed_candle_store import LiveFeedCandleStore
 
 logger = logging.getLogger(__name__)
 IST = ZoneInfo("Asia/Kolkata")
@@ -36,6 +37,8 @@ class LiveFeedWsClientService:
     def __init__(self, config: Settings, state_store: LiveFeedStateStore) -> None:
         self._config = config
         self._state_store = state_store
+        self._candle_store = LiveFeedCandleStore(config)
+        self._isolation_labels: dict[str, dict[str, str]] = {}
         self._isolation_legs: dict[str, dict[str, str]] = {}
         self._lock = asyncio.Lock()
         self._sync_event = asyncio.Event()
@@ -85,23 +88,32 @@ class LiveFeedWsClientService:
     def _desired_context(self) -> dict[str, dict[str, set[str]]]:
         context: dict[str, dict[str, set[str]]] = {}
 
-        def add(key: str, isolation_id: str, role: str) -> None:
-            item = context.setdefault(key, {"isolation_ids": set(), "roles": set()})
+        def add(key: str, isolation_id: str, role: str, label: str) -> None:
+            item = context.setdefault(
+                key, {"isolation_ids": set(), "roles": set(), "labels": set()}
+            )
             item["isolation_ids"].add(isolation_id)
             item["roles"].add(role)
+            item["labels"].add(label)
 
         for isolation_id, legs in self._isolation_legs.items():
             for role, key in legs.items():
                 if key:
-                    add(key, isolation_id, role)
-            add(self._config.nifty_instrument_key, isolation_id, "underlying")
+                    label = self._isolation_labels.get(isolation_id, {}).get(role, role)
+                    add(key, isolation_id, role, label)
+            add(self._config.nifty_instrument_key, isolation_id, "underlying", "nifty_50")
         return context
 
     async def _desired_context_snapshot(self) -> dict[str, dict[str, set[str]]]:
         async with self._lock:
             return self._desired_context()
 
-    async def register_isolation(self, isolation_id: str, legs: dict[str, str]) -> None:
+    async def register_isolation(
+        self,
+        isolation_id: str,
+        legs: dict[str, str],
+        instrument_labels: dict[str, str] | None = None,
+    ) -> None:
         if not self._config.live_feed_enabled:
             logger.info("Live feed disabled; not registering isolation=%s", isolation_id)
             return
@@ -109,6 +121,10 @@ class LiveFeedWsClientService:
         async with self._lock:
             previous = self._isolation_legs.get(isolation_id)
             self._isolation_legs[isolation_id] = normalized
+            self._isolation_labels[isolation_id] = {
+                role: str(label) for role, label in (instrument_labels or {}).items()
+                if label
+            }
         self._sync_event.set()
         logger.info(
             "Live feed isolation registered id=%s legs=%s changed=%s",
@@ -119,6 +135,7 @@ class LiveFeedWsClientService:
     async def unregister_isolation(self, isolation_id: str) -> None:
         async with self._lock:
             removed = self._isolation_legs.pop(isolation_id, None)
+            self._isolation_labels.pop(isolation_id, None)
         if removed:
             self._sync_event.set()
             logger.info("Live feed isolation unregistered id=%s", isolation_id)
@@ -150,6 +167,8 @@ class LiveFeedWsClientService:
             "ws_state": self._ws_state,
             "websocket_url": self._config.live_feed_ws_url_effective,
             "mode": self._config.live_feed_mode,
+            "save_raw_ticks": self._config.live_feed_save_raw,
+            "save_one_minute_candles": True,
             "session_window": {
                 "start": f"{start // 60:02d}:{start % 60:02d}",
                 "end_exclusive": f"{end // 60:02d}:{end % 60:02d}",
@@ -338,13 +357,22 @@ class LiveFeedWsClientService:
             association = context.get(key)
             if association is None:
                 continue
+            mode = str(payload.get("mode") or self._config.live_feed_mode)
+            isolation_ids = sorted(association["isolation_ids"])
+            roles = sorted(association["roles"])
+            labels = sorted(association.get("labels") or [])
+            instrument_label = labels[0] if labels else "instrument"
+
+            # Raw tick persistence is optional; one-minute candles are always
+            # calculated and saved while the shared live-feed socket is active.
+            if self._config.live_feed_save_raw:
+                await asyncio.to_thread(
+                    self._state_store.save_message,
+                    key, data, mode, isolation_ids, roles,
+                )
             await asyncio.to_thread(
-                self._state_store.save_message,
-                key,
-                data,
-                str(payload.get("mode") or self._config.live_feed_mode),
-                sorted(association["isolation_ids"]),
-                sorted(association["roles"]),
+                self._candle_store.update_tick,
+                key, data, mode, instrument_label, isolation_ids, roles,
             )
             self._message_counts[key] = self._message_counts.get(key, 0) + 1
             self._last_message_at[key] = _now_ist().isoformat()

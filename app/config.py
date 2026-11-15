@@ -61,6 +61,7 @@ class Settings:
     live_feed_ws_url: str
     live_feed_port: int
     live_feed_mode: str
+    live_feed_save_raw: bool
     live_feed_state_dir: str
     live_feed_start_hour: int
     live_feed_start_minute: int
@@ -171,6 +172,7 @@ def load_settings() -> Settings:
         live_feed_ws_url=os.getenv("LIVE_FEED_WS_URL", ""),
         live_feed_port=_env_int("LIVE_FEED_PORT", 8001),
         live_feed_mode=os.getenv("LIVE_FEED_MODE", "full").strip().lower(),
+        live_feed_save_raw=_env_bool("LIVE_FEED_SAVE_RAW", True),
         live_feed_state_dir=os.getenv("LIVE_FEED_STATE_DIR", "./data/live_feed"),
         live_feed_start_hour=_env_int("LIVE_FEED_START_HOUR", 9),
         live_feed_start_minute=_env_int("LIVE_FEED_START_MINUTE", 0),

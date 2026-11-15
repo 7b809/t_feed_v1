@@ -18,6 +18,22 @@ from .dummy_order_engine import DummyOrderEngine
 logger = logging.getLogger(__name__)
 
 
+
+def _instrument_label(instrument: Any, fallback: str) -> str:
+    """Build a readable candle-folder prefix from isolation instrument metadata."""
+    if not isinstance(instrument, dict):
+        return fallback
+    for field in ("trading_symbol", "tradingsymbol", "symbol", "instrument_name"):
+        value = instrument.get(field)
+        if isinstance(value, str) and value.strip():
+            return value.strip().lower()
+    strike = instrument.get("strike")
+    option_type = instrument.get("option_type") or instrument.get("optionType")
+    if strike not in (None, "") and option_type:
+        return f"{strike}_{str(option_type).strip().lower()}"
+    return fallback
+
+
 class IsolationSubscriber:
     """Orchestrates the two WS clients (isolated + opposite) per isolation."""
 
@@ -200,7 +216,16 @@ class IsolationSubscriber:
             # client. It adds NIFTY 50 once and de-duplicates shared keys.
             if self._config.live_feed_enabled:
                 try:
-                    await self._live_feed_client.register_isolation(isolation_id, new_legs)
+                    await self._live_feed_client.register_isolation(
+                        isolation_id,
+                        new_legs,
+                        instrument_labels={
+                            "isolated": _instrument_label(payload, "isolated"),
+                            "opposite": _instrument_label(
+                                payload.get("opposite_leg") or {}, "opposite"
+                            ),
+                        },
+                    )
                     for key in new_legs.values():
                         sessions.setdefault(key, {})["live_feed_state"] = "registered"
                 except Exception:
