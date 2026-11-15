@@ -2,7 +2,7 @@
 
 This document defines a standardized, scale-independent quantitative framework for scanning an entire option chain daily to detect high-momentum directional moves ("Big Moves") using Option Greeks and Order Book/Volume confirmation.
 
----
+--- 
 
 ## 1. Core Concept: Why Universal Rules Beat Static Numbers
 
