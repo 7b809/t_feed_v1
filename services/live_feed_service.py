@@ -40,6 +40,7 @@ from services.level_isolated_instrument_service import (
 from services.live_broadcast import live_broadcast
 from services.live_sr_levels_service import live_sr_levels_service
 from services.token_service import token_service
+from services.greeks_regime_monitor import greeks_regime_monitor
 
 logger = get_logger(__file__)
 
@@ -387,6 +388,15 @@ class LiveFeedService:
             if tick is None:
                 continue
 
+            # Independent read-only options monitor; it cannot trigger orders.
+            try:
+                greeks_regime_monitor.on_tick(entry, tick)
+            except Exception:
+                logger.exception(
+                    "[greeks-regime] live tick evaluation failed for %s",
+                    instrument_key,
+                )
+
             self._last_tick_at[instrument_key] = datetime.now(timezone.utc)
             ltp = tick.get("ltp")
             if ltp is not None:
@@ -500,6 +510,20 @@ class LiveFeedService:
             or (candle_1m.get("volume") if isinstance(candle_1m, dict) else None)
         )
 
+        # Normalize the optional Upstox full-feed optionGreeks payload.
+        option_greeks_raw = (
+            feed.get("optionGreeks") or ff.get("optionGreeks")
+            or market_ff.get("optionGreeks") or oc.get("optionGreeks") or {}
+        )
+        if not isinstance(option_greeks_raw, dict):
+            option_greeks_raw = {}
+        option_greeks = {
+            name: self._flt(option_greeks_raw.get(name))
+            for name in ("delta", "theta", "gamma", "vega", "rho")
+        }
+        if not any(value is not None for value in option_greeks.values()):
+            option_greeks = None
+
         if ltp is None and candle_1m is None:
             return None
 
@@ -509,6 +533,7 @@ class LiveFeedService:
             "candle_1m": candle_1m,
             "prev_close": prev_close,
             "ltt": ltpc.get("ltt"),
+            "option_greeks": option_greeks,
         }
 
     @staticmethod
