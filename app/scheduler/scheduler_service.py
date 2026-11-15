@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 
 class SchedulerService:
-    """APScheduler wrapper — one job: sr_watchdog every 30 s."""
+    """APScheduler wrapper for SR watchdog and daily MEGA data archive."""
 
     def __init__(
         self,
@@ -30,6 +30,10 @@ class SchedulerService:
         self._scheduler: Optional[AsyncIOScheduler] = None
 
     def start(self) -> None:
+        if self._scheduler is not None and self._scheduler.running:
+            logger.info("scheduler already running; skipping start")
+            return
+
         self._scheduler = AsyncIOScheduler(timezone="Asia/Kolkata")
         self._scheduler.add_job(
             self._sr_watchdog,
@@ -40,23 +44,31 @@ class SchedulerService:
             coalesce=True,
             replace_existing=True,
         )
+
         if self._config.daily_data_backup_enabled and self._daily_backup_service is not None:
             try:
                 self._scheduler.add_job(
                     self._daily_backup,
                     "cron",
-                    hour=16,
-                    minute=0,
+                    day_of_week=self._config.daily_data_backup_days,
+                    hour=self._config.daily_data_backup_hour,
+                    minute=self._config.daily_data_backup_minute,
                     timezone="Asia/Kolkata",
-                    id="daily_project_data_backup",
+                    id="daily_orderflow_mega_backup",
                     max_instances=1,
                     coalesce=True,
                     misfire_grace_time=3600,
                     replace_existing=True,
                 )
-                logger.info("daily project backup scheduled for 16:00 IST")
+                logger.info(
+                    "daily MEGA backup scheduled for %02d:%02d IST (%s)",
+                    self._config.daily_data_backup_hour,
+                    self._config.daily_data_backup_minute,
+                    self._config.daily_data_backup_days,
+                )
             except Exception:
-                logger.exception("could not register daily project backup; other jobs continue")
+                logger.exception("could not register daily MEGA backup; other jobs continue")
+
         self._scheduler.start()
         logger.info("scheduler started (sr_watchdog every 30s)")
 
@@ -74,11 +86,12 @@ class SchedulerService:
             await self._subscriber.restart_dead_clients()
         except Exception:
             logger.exception("sr_watchdog error")
+
     async def _daily_backup(self) -> None:
-        """Isolated scheduled task: backup errors must never affect watchdog."""
+        """Backup is isolated; a failure never interrupts the SR watchdog."""
         try:
             if self._daily_backup_service is None:
                 return
-            await self._daily_backup_service.run_daily_backup()
+            await self._daily_backup_service.run_daily_backup(reason="scheduled")
         except Exception:
-            logger.exception("daily project backup scheduler job failed; continuing")
+            logger.exception("daily MEGA backup scheduler job failed; continuing")

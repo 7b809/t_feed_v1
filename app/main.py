@@ -45,7 +45,8 @@ async def lifespan(app: FastAPI):
     telegram = TelegramService(config)
     dummy_order_store = DummyOrderStore(config)
     dummy_order_engine = DummyOrderEngine(config, dummy_order_store, live_feed_state_store, telegram)
-    daily_backup_service = DailyDataBackupService(config, telegram)
+    backup_collection = mongo.db[config.daily_data_backup_collection]
+    daily_backup_service = DailyDataBackupService(config, telegram, backup_collection)
     subscriber = IsolationSubscriber(
         config, isolation_store, sr_state_store, supertrend_state_store,
         live_feed_state_store, dummy_order_engine,
@@ -88,9 +89,6 @@ async def lifespan(app: FastAPI):
             derived_id = IsolationStore.make_isolation_id(td, ik)
             raw_id = doc.get("_id")
 
-            # Adopt app1's singleton into our own tracking doc first, so the
-            # consumer has a proper record (with consumer_status) on the next
-            # restart. app1's doc itself is never modified.
             if raw_id != derived_id:
                 logger.info(
                     "adopting upstream isolation _id=%s → %s",
@@ -117,12 +115,6 @@ async def lifespan(app: FastAPI):
             except Exception:
                 logger.exception("resubscribe failed for %s", derived_id)
 
-        # ---- refresh on-disk mirror (data/instrument_isolation.json)
-        # ``run.bat`` wipes ``data/`` on every start. When the doc was
-        # already a consumer-owned one, the adoption branch above is
-        # skipped and ``upsert()`` is never called — so nothing would
-        # write the mirror otherwise. Mirror reflects the most recently
-        # received isolation for today (latest-wins).
         try:
             latest = max(
                 active_today,
@@ -131,24 +123,19 @@ async def lifespan(app: FastAPI):
             isolation_store.write_mirror(latest)
             logger.info(
                 "isolation mirror refreshed from _id=%s → %s/%s",
-                latest.get("_id"),
-                config.data_dir,
-                "instrument_isolation.json",
+                latest.get("_id"), config.data_dir, "instrument_isolation.json",
             )
         except Exception:
             logger.exception("failed to refresh isolation mirror on startup")
 
-    # -------- scheduler
     scheduler = SchedulerService(config, subscriber, isolation_store, daily_backup_service)
     scheduler.start()
 
-    # -------- telegram (best-effort)
     try:
         await telegram.notify_startup(config.app_name)
     except Exception:
         logger.exception("telegram startup notify failed")
 
-    # -------- expose on app.state
     app.state.config = config
     app.state.mongo = mongo
     app.state.isolation_store = isolation_store
@@ -193,7 +180,6 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# ---- routers
 app.include_router(health_api.router)
 app.include_router(isolation_incoming.router, prefix="/api/v1", tags=["isolation"])
 app.include_router(isolation_query.router, prefix="/api/v1", tags=["isolation"])
@@ -203,7 +189,6 @@ app.include_router(live_feed_query.router, prefix="/api/v1", tags=["live-feed"])
 app.include_router(dummy_orders_query.router, prefix="/api/v1", tags=["dummy-orders"])
 
 
-# ---- optional dashboard
 @app.get("/", include_in_schema=False)
 async def dashboard():
     path = Path(__file__).resolve().parent.parent / "templates" / "index.html"

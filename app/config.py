@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Optional
 from urllib.parse import urlparse
 
 from dotenv import load_dotenv
@@ -27,36 +26,28 @@ def _env_int(name: str, default: int) -> int:
 
 @dataclass(frozen=True)
 class Settings:
-    # App
     app_name: str
     app_env: str
     app_host: str
     app_port: int
 
-    # Mongo — isolation documents only
     mongo_url: str
     mongo_database: str
     isolation_events_collection: str
 
-    # Local SR state (filesystem — replaces the old Mongo sr_state collection)
     sr_state_dir: str
     sr_store_heartbeats: bool
-
-    # Local JSON mirror of isolation documents (empty string → disabled)
     data_dir: str
 
-    # Upstream SR feed
     sr_ws_base_url: str
     sr_ws_base_url_local: str
     sr_ws_default_config: str
     sr_ws_keepalive_seconds: int
     sr_ws_reconnect_max_backoff_seconds: int
 
-    # Supertrend feed and local state (parallel to SR feed)
     supertrend_enabled: bool
     supertrend_state_dir: str
 
-    # Local isolation live-feed consumer (app1 /ws/market)
     live_feed_enabled: bool
     live_feed_ws_url: str
     live_feed_port: int
@@ -70,32 +61,31 @@ class Settings:
     live_feed_reconnect_max_backoff_seconds: int
     nifty_instrument_key: str
 
-    # Dummy order simulation (local filesystem only; no broker execution)
     dummy_orders_enabled: bool
     dummy_order_quantity: int
     dummy_order_state_dir: str
 
-    # Daily project data backup (Telegram document delivery)
+    # Daily MEGA archive
     daily_data_backup_enabled: bool
     daily_data_backup_dir: str
+    daily_data_backup_hour: int
+    daily_data_backup_minute: int
+    daily_data_backup_days: str
+    daily_data_backup_collection: str
+    mega_enabled: bool
+    mega_email: str
+    mega_password: str
+    mega_backup_root: str
 
-    # Inbound auth
     isolation_notify_client_key: str
     isolation_notify_client_key_header: str
-
-    # Scope enforcement
     require_today_only_scope: bool
-
-    # Verbose per-frame logging (connection_ack / snapshot / sr_update)
-    # false → those frames are logged at DEBUG instead of INFO
     verbose: bool
 
-    # Telegram
     telegram_enabled: bool
     telegram_bot_token: str
     telegram_chat_id: str
 
-    # Logging
     log_level: str
     logs_dir: str
 
@@ -125,13 +115,16 @@ class Settings:
             raise ValueError("LIVE_FEED_RECONNECT_MAX_BACKOFF_SECONDS must be >= 1")
         if self.dummy_order_quantity < 1:
             raise ValueError("DUMMY_ORDER_QUANTITY must be >= 1")
+        if not 0 <= self.daily_data_backup_hour < 24:
+            raise ValueError("DAILY_DATA_BACKUP_HOUR must be 0..23")
+        if not 0 <= self.daily_data_backup_minute < 60:
+            raise ValueError("DAILY_DATA_BACKUP_MINUTE must be 0..59")
+
 
     @property
     def live_feed_ws_url_effective(self) -> str:
         base = (self.live_feed_ws_url or "").strip()
-        if base:
-            return base.rstrip("/")
-        return f"ws://127.0.0.1:{self.live_feed_port}"
+        return base.rstrip("/") if base else f"ws://127.0.0.1:{self.live_feed_port}"
 
     @property
     def supertrend_ws_base_url_effective(self) -> str:
@@ -155,17 +148,21 @@ class Settings:
 
 def load_settings() -> Settings:
     return Settings(
-        app_name=os.getenv("APP_NAME", "isolation_consumer_service"),
+        app_name=os.getenv("APP_NAME", "orderflow"),
         app_env=os.getenv("APP_ENV", "development"),
         app_host=os.getenv("APP_HOST", "0.0.0.0"),
         app_port=_env_int("APP_PORT", 8003),
         mongo_url=os.getenv("MONGO_URL", "mongodb://localhost:27017"),
         mongo_database=os.getenv("MONGO_DATABASE", "ISOLATION_CONSUMER"),
-        isolation_events_collection=os.getenv(
-            "ISOLATION_EVENTS_COLLECTION", "isolation_events"
-        ),
+        isolation_events_collection=os.getenv("ISOLATION_EVENTS_COLLECTION", "isolation_events"),
         sr_state_dir=os.getenv("SR_STATE_DIR", "./data/sr_state"),
         sr_store_heartbeats=_env_bool("SR_STORE_HEARTBEATS", False),
+        data_dir=os.getenv("DATA_DIR", "./data"),
+        sr_ws_base_url=os.getenv("SR_WS_BASE_URL", "wss://ema.novag7.in"),
+        sr_ws_base_url_local=os.getenv("SR_WS_BASE_URL_LOCAL", ""),
+        sr_ws_default_config=os.getenv("SR_WS_DEFAULT_CONFIG", "all"),
+        sr_ws_keepalive_seconds=_env_int("SR_WS_KEEPALIVE_SECONDS", 30),
+        sr_ws_reconnect_max_backoff_seconds=_env_int("SR_WS_RECONNECT_MAX_BACKOFF_SECONDS", 30),
         supertrend_enabled=_env_bool("SUPERTREND_ENABLED", True),
         supertrend_state_dir=os.getenv("SUPERTREND_STATE_DIR", "./data/supertrend_state"),
         live_feed_enabled=_env_bool("LIVE_FEED_ENABLED", True),
@@ -180,23 +177,21 @@ def load_settings() -> Settings:
         live_feed_end_minute=_env_int("LIVE_FEED_END_MINUTE", 0),
         live_feed_reconnect_max_backoff_seconds=_env_int("LIVE_FEED_RECONNECT_MAX_BACKOFF_SECONDS", 30),
         nifty_instrument_key=os.getenv("NIFTY_INSTRUMENT_KEY", "NSE_INDEX|Nifty 50"),
-        data_dir=os.getenv("DATA_DIR", "./data"),
-        sr_ws_base_url=os.getenv("SR_WS_BASE_URL", "wss://ema.novag7.in"),
-        sr_ws_base_url_local=os.getenv("SR_WS_BASE_URL_LOCAL", ""),
-        sr_ws_default_config=os.getenv("SR_WS_DEFAULT_CONFIG", "all"),
-        sr_ws_keepalive_seconds=_env_int("SR_WS_KEEPALIVE_SECONDS", 30),
-        sr_ws_reconnect_max_backoff_seconds=_env_int(
-            "SR_WS_RECONNECT_MAX_BACKOFF_SECONDS", 30
-        ),
         dummy_orders_enabled=_env_bool("DUMMY_ORDERS_ENABLED", True),
         dummy_order_quantity=_env_int("DUMMY_ORDER_QUANTITY", 1),
-dummy_order_state_dir=os.getenv("DUMMY_ORDER_STATE_DIR", "./data/dummy_orders"),
+        dummy_order_state_dir=os.getenv("DUMMY_ORDER_STATE_DIR", "./data/dummy_orders"),
         daily_data_backup_enabled=_env_bool("DAILY_DATA_BACKUP_ENABLED", False),
         daily_data_backup_dir=os.getenv("DAILY_DATA_BACKUP_DIR", "./backups"),
+        daily_data_backup_hour=_env_int("DAILY_DATA_BACKUP_HOUR", 16),
+        daily_data_backup_minute=_env_int("DAILY_DATA_BACKUP_MINUTE", 5),
+        daily_data_backup_days=os.getenv("DAILY_DATA_BACKUP_DAYS", "mon-fri").strip(),
+        daily_data_backup_collection=os.getenv("DAILY_DATA_BACKUP_COLLECTION", "daily_data_backup_state"),
+        mega_enabled=_env_bool("MEGA_ENABLED", True),
+        mega_email=os.getenv("MEGA_EMAIL", ""),
+        mega_password=os.getenv("MEGA_PASSWORD", ""),
+        mega_backup_root=os.getenv("MEGA_BACKUP_ROOT", "orderflow").strip().strip("/"),
         isolation_notify_client_key=os.getenv("ISOLATION_NOTIFY_CLIENT_KEY", ""),
-        isolation_notify_client_key_header=os.getenv(
-            "ISOLATION_NOTIFY_CLIENT_KEY_HEADER", "X-Isolation-Key"
-        ),
+        isolation_notify_client_key_header=os.getenv("ISOLATION_NOTIFY_CLIENT_KEY_HEADER", "X-Isolation-Key"),
         require_today_only_scope=_env_bool("REQUIRE_TODAY_ONLY_SCOPE", True),
         verbose=_env_bool("VERBOSE", False),
         telegram_enabled=_env_bool("TELEGRAM_ENABLED", False),

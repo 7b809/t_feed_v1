@@ -1,211 +1,337 @@
-"""Daily ZIP backup of DATA_DIR and best-effort Telegram delivery."""
+"""Daily ZIP archive of DATA_DIR uploaded to a MEGA folder.
+
+Remote layout:
+    <MEGA_BACKUP_ROOT>/<YYYYMMDD>_data.zip
+
+The service runs independently of market-data processing. It writes a
+date-keyed status document to MongoDB and sends best-effort Telegram
+notifications. The local ZIP is staged outside DATA_DIR and removed after
+the upload attempt.
+"""
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import os
-import shutil
+import tempfile
 import zipfile
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any, Callable
+from uuid import uuid4
 from zoneinfo import ZoneInfo
-from typing import Any
-
-from ..config import Settings
 
 logger = logging.getLogger(__name__)
 IST = ZoneInfo("Asia/Kolkata")
-DEFAULT_PART_SIZE = 45 * 1024 * 1024
 
 
 class DailyDataBackupService:
-    """Create one daily project-data ZIP and send it in <=45 MiB Telegram parts.
+    """Create one daily data ZIP and upload it to MEGA."""
 
-    The archive is stored outside DATA_DIR by default so it can never include
-    itself in tomorrow's archive. Failures are contained inside this service.
-    """
-
-    def __init__(self, config: Settings, telegram: Any,
-                 part_size_bytes: int = DEFAULT_PART_SIZE) -> None:
+    def __init__(
+        self,
+        config: Any,
+        telegram: Any,
+        state_collection: Any,
+        mega_factory: Callable[[], Any] | None = None,
+    ) -> None:
         self._config = config
         self._telegram = telegram
-        self._part_size = max(1, int(part_size_bytes))
+        self._state_collection = state_collection
+        self._mega_factory = mega_factory
         self._lock = asyncio.Lock()
 
-    async def run_daily_backup(self) -> dict[str, Any]:
+    async def run_daily_backup(self, reason: str = "scheduled") -> dict[str, Any]:
         if not self._config.daily_data_backup_enabled:
-            logger.info("daily data backup skipped: DAILY_DATA_BACKUP_ENABLED=false")
-            return {"status": "disabled"}
+            return {"status": "disabled", "reason": "backup_disabled"}
+
+        if not self._config.mega_enabled:
+            return {"status": "disabled", "reason": "mega_disabled"}
 
         async with self._lock:
-            try:
-                archive, stats = await asyncio.to_thread(self._create_archive)
-                result = await self._send_archive(archive, stats)
-                result.update({
-                    "archive": str(archive),
-                    "archive_size_bytes": archive.stat().st_size,
-                    "files_added": stats["files_added"],
-                    "files_skipped": stats["files_skipped"],
-                })
-                logger.info("daily project backup completed: %s", result)
-                return result
-            except Exception:
-                logger.exception("daily project backup failed; application continues")
-                try:
-                    await self._telegram.send_message(
-                        "Daily project backup failed",
-                        "The scheduled data backup encountered an error. "
-                        "The trading application and other scheduled jobs will continue. "
-                        "Check application logs for details.",
-                        level="ERROR",
-                    )
-                except Exception:
-                    logger.exception("failed to send daily backup failure notification")
-                return {"status": "failed"}
-
-    def _create_archive(self) -> tuple[Path, dict[str, int]]:
-        source = Path(self._config.data_dir).expanduser().resolve()
-        backup_dir = Path(self._config.daily_data_backup_dir).expanduser().resolve()
-        if not source.exists() or not source.is_dir():
-            raise FileNotFoundError(f"DATA_DIR does not exist or is not a directory: {source}")
-        if backup_dir == source or source in backup_dir.parents:
-            raise ValueError(
-                "DAILY_DATA_BACKUP_DIR must be outside DATA_DIR to prevent archive recursion"
+            await self._notify(
+                "Daily data backup started",
+                f"Source: {self._config.data_dir}\n"
+                f"Destination: {self._config.mega_backup_root}/\n"
+                f"Reason: {reason}",
+                "INFO",
             )
+            try:
+                result = await asyncio.to_thread(self._run_sync, reason)
+            except Exception as exc:
+                logger.exception("daily MEGA data backup failed")
+                result = {
+                    "status": "failed",
+                    "reason": reason,
+                    "date": datetime.now(IST).strftime("%Y%m%d"),
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+                self._write_state(result)
 
-        backup_dir.mkdir(parents=True, exist_ok=True)
-        day = datetime.now(IST).strftime("%Y%m%d")
-        final_path = backup_dir / f"project_data_lifeline_{day}.zip"
-        temp_path = backup_dir / f".{final_path.name}.tmp"
+            level = "SUCCESS" if result.get("status") == "uploaded" else "ERROR"
+            await self._notify(
+                "Daily data backup " + str(result.get("status", "unknown")),
+                self._format_result(result),
+                level,
+            )
+            return result
+
+    def _run_sync(self, reason: str) -> dict[str, Any]:
+        now = datetime.now(IST)
+        date_key = now.strftime("%Y%m%d")
+        filename = f"{date_key}_data.zip"
+        archive_path: Path | None = None
+        try:
+            archive_path, stats = self._create_archive(date_key)
+            checksum = self._sha256(archive_path)
+            size_bytes = archive_path.stat().st_size
+            mega_link, remote_path = self._upload_archive(archive_path, filename)
+            result = {
+                "status": "uploaded",
+                "reason": reason,
+                "date": date_key,
+                "filename": filename,
+                "remote_path": remote_path,
+                "mega_link": mega_link,
+                "size_bytes": size_bytes,
+                "size_human": self._human_size(size_bytes),
+                "sha256": checksum,
+                "files_added": stats["files_added"],
+                "files_skipped": stats["files_skipped"],
+                "updated_at": datetime.now(timezone.utc),
+                "updated_at_ist": datetime.now(IST).isoformat(),
+            }
+            self._write_state(result)
+            logger.info(
+                "[daily-backup] uploaded %s -> %s (%s, files=%d)",
+                filename, remote_path, result["size_human"], stats["files_added"],
+            )
+            return result
+        except Exception as exc:
+            result = {
+                "status": "failed",
+                "reason": reason,
+                "date": date_key,
+                "filename": filename,
+                "remote_path": f"{self._config.mega_backup_root}/{filename}",
+                "error": f"{type(exc).__name__}: {exc}",
+                "updated_at": datetime.now(timezone.utc),
+                "updated_at_ist": datetime.now(IST).isoformat(),
+            }
+            self._write_state(result)
+            raise
+        finally:
+            if archive_path is not None:
+                try:
+                    archive_path.unlink(missing_ok=True)
+                except OSError:
+                    logger.exception("could not remove staged backup ZIP: %s", archive_path)
+
+    def _create_archive(self, date_key: str) -> tuple[Path, dict[str, int]]:
+        source = Path(self._config.data_dir).expanduser().resolve()
+        staging = Path(self._config.daily_data_backup_dir).expanduser().resolve()
+        if not source.exists() or not source.is_dir():
+            raise FileNotFoundError(f"DATA_DIR does not exist: {source}")
+        if staging == source or source in staging.parents:
+            raise ValueError("DAILY_DATA_BACKUP_DIR must be outside DATA_DIR")
+
+        staging.mkdir(parents=True, exist_ok=True)
+        final_path = staging / f"{date_key}_data.zip"
+        temp_path = staging / f".{date_key}_data.{uuid4().hex}.tmp"
         files_added = 0
         files_skipped = 0
-
         try:
             with zipfile.ZipFile(
-                temp_path, mode="w", compression=zipfile.ZIP_DEFLATED, compresslevel=6
+                temp_path, "w", compression=zipfile.ZIP_DEFLATED,
+                compresslevel=6, allowZip64=True,
             ) as archive:
-                # Keep the data/ root directory in the ZIP for easy restoration.
-                for root, dirs, files in os.walk(source, topdown=True, followlinks=False):
-                    root_path = Path(root)
-                    dirs[:] = [
-                        name for name in dirs
-                        if not (root_path / name).is_symlink()
-                    ]
-                    for name in files:
-                        file_path = root_path / name
-                        if file_path.is_symlink() or not file_path.is_file():
+                for current_root, dirs, filenames in os.walk(
+                    source, topdown=True, followlinks=False
+                ):
+                    current = Path(current_root)
+                    dirs[:] = [d for d in dirs if not (current / d).is_symlink()]
+                    for name in filenames:
+                        path = current / name
+                        if path.is_symlink() or not path.is_file() or name.endswith(".tmp"):
                             files_skipped += 1
                             continue
-                        arcname = (Path(source.name) / file_path.relative_to(source)).as_posix()
                         try:
-                            archive.write(file_path, arcname=arcname)
+                            archive.write(
+                                path,
+                                arcname=(Path(source.name) / path.relative_to(source)).as_posix(),
+                            )
                             files_added += 1
                         except (OSError, PermissionError, zipfile.BadZipFile):
                             files_skipped += 1
-                            logger.exception("Skipping unreadable backup file: %s", file_path)
+                            logger.exception("skipping unreadable backup file: %s", path)
 
+                if files_added == 0:
+                    raise ValueError("DATA_DIR contains no readable files; refusing empty backup")
                 archive.writestr(
                     f"{source.name}/BACKUP_MANIFEST.txt",
-                    (
-                        f"Project: {self._config.app_name}\n"
-                        f"Created (IST): {datetime.now(IST).isoformat()}\n"
-                        f"Source directory: {source}\n"
-                        f"Files included: {files_added}\n"
-                        f"Files skipped: {files_skipped}\n"
-                    ),
+                    f"Project: {self._config.app_name}\n"
+                    f"Date (IST): {date_key}\n"
+                    f"Created (IST): {datetime.now(IST).isoformat()}\n"
+                    f"Files included: {files_added}\n"
+                    f"Files skipped: {files_skipped}\n",
                 )
+            with zipfile.ZipFile(temp_path, "r") as check:
+                bad_member = check.testzip()
+                if bad_member:
+                    raise zipfile.BadZipFile(f"ZIP verification failed: {bad_member}")
             temp_path.replace(final_path)
+            return final_path, {"files_added": files_added, "files_skipped": files_skipped}
         except Exception:
             temp_path.unlink(missing_ok=True)
+            final_path.unlink(missing_ok=True)
             raise
 
-        return final_path, {"files_added": files_added, "files_skipped": files_skipped}
+    def _login_mega(self) -> Any:
+        if self._mega_factory is not None:
+            mega = self._mega_factory()
+        else:
+            try:
+                from mega_sdk import Mega
+            except ImportError as exc:
+                raise RuntimeError("Install mega-sdk>=0.1.1 to enable MEGA backups") from exc
+            mega = Mega()
 
-    async def _send_archive(self, archive: Path, stats: dict[str, int]) -> dict[str, Any]:
-        size = archive.stat().st_size
-        day = datetime.now(IST).strftime("%d %B %Y")
-        project = self._config.app_name
-        if size <= self._part_size:
-            caption = (
-                f"📦 {project} — Daily Project Lifeline Backup\n"
-                f"Date: {day} (IST)\n"
-                f"Files: {stats['files_added']} | Skipped: {stats['files_skipped']}\n"
-                f"Archive: {archive.name}\n"
-                "This ZIP contains the project's complete data/ directory."
-            )
-            ok = await self._telegram.send_document(str(archive), caption)
-            return {"status": "sent" if ok else "telegram_failed",
-                    "parts_total": 1, "parts_sent": 1 if ok else 0}
+        email = (self._config.mega_email or "").strip()
+        password = (self._config.mega_password or "").strip()
+        if not email or not password:
+            raise RuntimeError("MEGA_EMAIL and MEGA_PASSWORD must be configured in .env")
+        mega.login(email, password)
+        mega.get_files()
+        return mega
 
-        parts = await asyncio.to_thread(self._split_archive, archive)
-        sent = 0
-        failed_parts: list[str] = []
-        total = len(parts)
-        intro = (
-            f"📦 {project} — Daily Project Lifeline Backup\n"
-            f"Date: {day} (IST)\n"
-            f"Original ZIP: {archive.name}\n"
-            f"ZIP size: {size / (1024 * 1024):.2f} MiB\n"
-            f"Split into {total} parts (maximum 45 MiB each).\n"
-            "Download every part and concatenate them in part-number order "
-            "to reconstruct the original ZIP."
+    @staticmethod
+    def _find_folder(files: dict[str, Any], parent_id: str, name: str) -> str | None:
+        for handle, node in files.items():
+            if node.get("p") == parent_id and node.get("t") == 1:
+                if (node.get("a") or {}).get("n") == name:
+                    return handle
+        return None
+
+    def _ensure_remote_folder(self, mega: Any) -> str:
+        parent_id = mega.root_id
+        for folder_name in [self._config.mega_backup_root]:
+            files = mega.get_files()
+            found = self._find_folder(files, parent_id, folder_name)
+            if found:
+                parent_id = found
+            else:
+                parent_id = mega.create_folder_at(folder_name, parent_id)
+        return parent_id
+
+    def _upload_archive(self, archive_path: Path, filename: str) -> tuple[str | None, str]:
+        mega = self._login_mega()
+        folder_id = self._ensure_remote_folder(mega)
+        # Upload under a unique temporary name first. The previous daily
+        # archive is retained unless the new upload is visible and size-verified.
+        temporary_name = f".{filename}.{uuid4().hex}.uploading"
+        mega.upload(str(archive_path), dest=folder_id, dest_filename=temporary_name)
+
+        files = mega.get_files()
+        uploaded_handle = None
+        expected_size = archive_path.stat().st_size
+        for handle, node in files.items():
+            if node.get("p") != folder_id:
+                continue
+            if (node.get("a") or {}).get("n") != temporary_name:
+                continue
+            if int(node.get("s", -1)) == expected_size:
+                uploaded_handle = handle
+                break
+        if not uploaded_handle:
+            raise RuntimeError("MEGA upload could not be verified by remote filename and size")
+
+        # Promote the verified upload, then remove older same-name copies.
+        mega.rename(uploaded_handle, filename)
+        refreshed = mega.get_files()
+        matches = [
+            handle for handle, node in refreshed.items()
+            if node.get("p") == folder_id
+            and (node.get("a") or {}).get("n") == filename
+        ]
+        if not matches:
+            raise RuntimeError("MEGA archive promotion failed: final filename not found")
+
+        # Keep the newly uploaded item (matching expected size); remove
+        # stale duplicates only after the replacement has been verified.
+        keep_handle = next(
+            (handle for handle in matches
+             if int(refreshed[handle].get("s", -1)) == expected_size),
+            None,
         )
+        if keep_handle is None:
+            raise RuntimeError("MEGA final archive size verification failed")
+        for handle in matches:
+            if handle != keep_handle:
+                try:
+                    mega.destroy(handle)
+                except Exception:
+                    logger.exception("could not remove older MEGA archive node %s", handle)
+
+        link = None
         try:
-            await self._telegram.send_message("Daily project backup", intro, level="INFO")
+            node = refreshed.get(keep_handle)
+            if node is not None:
+                link = mega.get_link((keep_handle, node))
         except Exception:
-            logger.exception("backup introduction message failed; continuing with file parts")
+            logger.exception("could not create MEGA public link for %s", filename)
+        return link, f"{self._config.mega_backup_root}/{filename}"
 
-        for index, part in enumerate(parts, start=1):
-            caption = (
-                f"📦 {project} — Lifeline Backup\n"
-                f"Date: {day} | Part {index}/{total}\n"
-                f"File: {part.name}\n"
-                "Reassemble parts in ascending numeric order."
-            )
-            try:
-                if await self._telegram.send_document(str(part), caption):
-                    sent += 1
-                else:
-                    failed_parts.append(part.name)
-            except Exception:
-                logger.exception("Telegram backup part failed: %s", part.name)
-                failed_parts.append(part.name)
-
-        for part in parts:
-            try:
-                part.unlink(missing_ok=True)
-            except OSError:
-                logger.exception("Could not remove temporary backup part: %s", part)
-
-        status = "sent" if not failed_parts else ("partially_sent" if sent else "telegram_failed")
+    def _write_state(self, result: dict[str, Any]) -> None:
+        if self._state_collection is None:
+            logger.error("daily backup MongoDB collection is unavailable")
+            return
+        date_key = str(result.get("date") or datetime.now(IST).strftime("%Y%m%d"))
+        document = dict(result)
+        document["_id"] = date_key
+        document["date"] = date_key
         try:
-            await self._telegram.send_message(
-                "Daily project backup delivery result",
-                f"Archive: {archive.name}\nParts sent: {sent}/{total}\n"
-                f"Failed parts: {', '.join(failed_parts) if failed_parts else 'None'}",
-                level="SUCCESS" if not failed_parts else "WARNING",
-            )
+            self._state_collection.replace_one({"_id": date_key}, document, upsert=True)
         except Exception:
-            logger.exception("backup delivery result notification failed")
-        return {"status": status, "parts_total": total, "parts_sent": sent,
-                "failed_parts": failed_parts}
+            logger.exception("could not persist daily backup state for %s", date_key)
 
-    def _split_archive(self, archive: Path) -> list[Path]:
-        parts: list[Path] = []
-        part_index = 0
+    async def _notify(self, title: str, message: str, level: str) -> None:
         try:
-            with archive.open("rb") as source:
-                while True:
-                    chunk = source.read(self._part_size)
-                    if not chunk:
-                        break
-                    part_index += 1
-                    part_path = archive.with_name(f"{archive.name}.part{part_index:03d}")
-                    with part_path.open("wb") as target:
-                        target.write(chunk)
-                    parts.append(part_path)
+            await self._telegram.send_message(title, message, level=level)
         except Exception:
-            for part in parts:
-                part.unlink(missing_ok=True)
-            raise
-        return parts
+            logger.exception("daily backup Telegram notification failed")
+
+    @staticmethod
+    def _format_result(result: dict[str, Any]) -> str:
+        lines = [
+            f"Date: {result.get('date', '—')} (IST)",
+            f"Status: {result.get('status', 'unknown')}",
+        ]
+        if result.get("remote_path"):
+            lines.append(f"MEGA path: {result['remote_path']}")
+        if result.get("size_human"):
+            lines.append(f"Archive size: {result['size_human']}")
+        if result.get("files_added") is not None:
+            lines.append(f"Files: {result['files_added']} (skipped: {result.get('files_skipped', 0)})")
+        if result.get("mega_link"):
+            lines.append(f"MEGA link: {result['mega_link']}")
+        if result.get("error"):
+            lines.append(f"Error: {result['error']}")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _sha256(path: Path) -> str:
+        digest = hashlib.sha256()
+        with path.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+
+    @staticmethod
+    def _human_size(size: int) -> str:
+        value = float(size)
+        for unit in ("B", "KB", "MB", "GB", "TB"):
+            if value < 1024 or unit == "TB":
+                return f"{value:.1f} {unit}"
+            value /= 1024
+        return f"{size} B"
