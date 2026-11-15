@@ -247,25 +247,33 @@ class DailyDataBackupService:
             raise RuntimeError("MEGA upload could not be verified by remote filename and size")
 
         # Promote the verified upload, then remove older same-name copies.
-        mega.rename(uploaded_handle, filename)
+        # Keep the exact handle returned by this upload; matching by size alone
+        # could accidentally retain an older archive with identical byte size.
+        try:
+            mega.rename(uploaded_handle, filename)
+        except Exception:
+            try:
+                mega.destroy(uploaded_handle)
+            except Exception:
+                logger.exception("could not clean failed temporary MEGA upload %s", temporary_name)
+            raise
+
         refreshed = mega.get_files()
+        promoted = refreshed.get(uploaded_handle)
+        if (
+            promoted is None
+            or promoted.get("p") != folder_id
+            or (promoted.get("a") or {}).get("n") != filename
+            or int(promoted.get("s", -1)) != expected_size
+        ):
+            raise RuntimeError("MEGA final archive filename/size verification failed")
+
         matches = [
             handle for handle, node in refreshed.items()
             if node.get("p") == folder_id
             and (node.get("a") or {}).get("n") == filename
         ]
-        if not matches:
-            raise RuntimeError("MEGA archive promotion failed: final filename not found")
-
-        # Keep the newly uploaded item (matching expected size); remove
-        # stale duplicates only after the replacement has been verified.
-        keep_handle = next(
-            (handle for handle in matches
-             if int(refreshed[handle].get("s", -1)) == expected_size),
-            None,
-        )
-        if keep_handle is None:
-            raise RuntimeError("MEGA final archive size verification failed")
+        keep_handle = uploaded_handle
         for handle in matches:
             if handle != keep_handle:
                 try:
