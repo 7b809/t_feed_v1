@@ -575,6 +575,7 @@ class LiveFeedService:
                 k: v.isoformat()
                 for k, v in list(self._last_tick_at.items())[:50]
             },
+            "greeks_regime": greeks_regime_monitor.status(),
         }
 
 

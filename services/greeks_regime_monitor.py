@@ -51,6 +51,7 @@ class GreeksRegimeMonitor:
         self._lock = threading.RLock()
         self._states: dict[str, dict[str, Any]] = {}
         self._loaded_date: str | None = None
+        self._state_date: str | None = None
         self._saved_minute_keys: set[tuple[str, str]] = set()
         self._saved_count = 0
         self._skipped_count = 0
@@ -265,6 +266,10 @@ class GreeksRegimeMonitor:
             return None
 
         with self._lock:
+            # Start a fresh rolling baseline on each market date.
+            if self._state_date != day_key:
+                self._states.clear()
+                self._state_date = day_key
             state = self._get_state(instrument_key)
             current_bucket = state.get("current_bucket")
             if current_bucket is not None and bucket < current_bucket:
