@@ -20,17 +20,21 @@ logger = logging.getLogger(__name__)
 
 
 def _instrument_label(instrument: Any, fallback: str) -> str:
-    """Build a readable candle-folder prefix from isolation instrument metadata."""
+    """Prefer a compact strike/type label, then provider symbol metadata."""
     if not isinstance(instrument, dict):
         return fallback
+    strike = instrument.get("strike")
+    option_type = instrument.get("option_type") or instrument.get("optionType")
+    if strike not in (None, "") and option_type:
+        try:
+            strike_text = str(int(float(strike)))
+        except (TypeError, ValueError):
+            strike_text = str(strike).strip()
+        return f"{strike_text}_{str(option_type).strip().lower()}"
     for field in ("trading_symbol", "tradingsymbol", "symbol", "instrument_name"):
         value = instrument.get(field)
         if isinstance(value, str) and value.strip():
             return value.strip().lower()
-    strike = instrument.get("strike")
-    option_type = instrument.get("option_type") or instrument.get("optionType")
-    if strike not in (None, "") and option_type:
-        return f"{strike}_{str(option_type).strip().lower()}"
     return fallback
 
 
