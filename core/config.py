@@ -123,7 +123,8 @@ MARKET_TIME_FORMAT = _str("MARKET_TIME_FORMAT", "%Y-%m-%d %H:%M:%S %Z")
 # ---------------------------------------------------------------------------
 # Telegram
 # ---------------------------------------------------------------------------
-TELEGRAM_ENABLED = _bool("TELEGRAM_ENABLED", False)
+
+TELEGRAM_ENABLED = (os.name != "nt") or _bool("TELEGRAM_ENABLED", False)
 TELEGRAM_BOT_TOKEN = _str("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = _str("TELEGRAM_CHAT_ID")
 TELEGRAM_TIMEOUT_SECONDS = max(1, _int("TELEGRAM_TIMEOUT_SECONDS", 10))
