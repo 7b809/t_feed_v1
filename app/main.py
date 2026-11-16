@@ -23,6 +23,7 @@ from .services.sr_state_store import SrStateStore
 from .services.supertrend_state_store import SupertrendStateStore
 from .services.telegram_service import TelegramService
 from .services.dummy_order_store import DummyOrderStore
+from .services.dummy_order_mongo_store import DummyOrderMongoStore
 from .services.dummy_order_engine import DummyOrderEngine
 from .services.daily_data_backup_service import DailyDataBackupService
 
@@ -44,7 +45,11 @@ async def lifespan(app: FastAPI):
     live_feed_state_store = LiveFeedStateStore(config)
     telegram = TelegramService(config)
     dummy_order_store = DummyOrderStore(config)
-    dummy_order_engine = DummyOrderEngine(config, dummy_order_store, live_feed_state_store, telegram)
+    dummy_order_mongo_store = DummyOrderMongoStore(mongo.db["dummy_orders"])
+    dummy_order_engine = DummyOrderEngine(
+        config, dummy_order_store, live_feed_state_store, telegram,
+        mongo_store=dummy_order_mongo_store,
+    )
     backup_collection = mongo.db[config.daily_data_backup_collection]
     daily_backup_service = DailyDataBackupService(config, telegram, backup_collection)
     subscriber = IsolationSubscriber(
@@ -146,6 +151,7 @@ async def lifespan(app: FastAPI):
     app.state.scheduler = scheduler
     app.state.telegram = telegram
     app.state.dummy_order_store = dummy_order_store
+    app.state.dummy_order_mongo_store = dummy_order_mongo_store
     app.state.dummy_order_engine = dummy_order_engine
     app.state.daily_backup_service = daily_backup_service
 

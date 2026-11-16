@@ -116,44 +116,153 @@ def _price(value: Any) -> float | None:
 
 class DummyOrderEngine:
     def __init__(self, config: Settings, store: DummyOrderStore,
-                 live_feed_store: LiveFeedStateStore, telegram: Any = None) -> None:
+                 live_feed_store: LiveFeedStateStore, telegram: Any = None,
+                 mongo_store: Any = None) -> None:
         self._config, self._store = config, store
         self._live_feed, self._telegram = live_feed_store, telegram
+        self._mongo_store = mongo_store
         self._meta: dict[str, dict] = {}
         self._locks: dict[str, asyncio.Lock] = {}
 
     def _lock(self, key: str) -> asyncio.Lock:
         return self._locks.setdefault(key, asyncio.Lock())
 
+    @staticmethod
+    def _symbol(instrument: Any) -> str | None:
+        if not isinstance(instrument, dict):
+            return None
+        for field in ("trading_symbol", "tradingsymbol", "symbol", "instrument_name"):
+            value = instrument.get(field)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return None
+
+    def _indicator_enabled(self, indicator: str) -> bool:
+        if not getattr(self._config, "dummy_orders_enabled", True):
+            return False
+        field = "dummy_sr_orders_enabled" if indicator == "sr" else "dummy_supertrend_orders_enabled"
+        return bool(getattr(self._config, field, True))
+
+    def _date_key(self, payload: dict, isolation_id: str) -> str:
+        raw = payload.get("trade_date_ist") or isolation_id.split("__", 1)[0]
+        try:
+            return datetime.fromisoformat(str(raw)[:10]).strftime("%Y-%m-%d")
+        except ValueError:
+            return _now().strftime("%Y-%m-%d")
+
+    def _instrument_context(self, payload: dict, legs: dict[str, str],
+                            isolation_id: str, iso_time: str) -> dict:
+        opposite = payload.get("opposite_leg") or {}
+        return {
+            "isolation_id": isolation_id,
+            "instrument_key": legs.get("isolated"),
+            "trading_symbol": self._symbol(payload),
+            "opposite_instrument_key": legs.get("opposite"),
+            "opposite_trading_symbol": self._symbol(opposite),
+            "isolated_time_ist": iso_time,
+        }
+
+    def _target_points(self, entry: float) -> float:
+        if entry > float(getattr(self._config, "dummy_target_upper_threshold", 200)):
+            return float(getattr(self._config, "dummy_target_points_above_upper", 50))
+        if entry >= float(getattr(self._config, "dummy_target_lower_threshold", 100)):
+            return float(getattr(self._config, "dummy_target_points_middle", 30))
+        return float(getattr(self._config, "dummy_target_points_below_lower", 15))
+
+    async def _persist_mongo_isolation(self, date_key: str, isolation_id: str,
+                                       isolated_instrument: dict) -> None:
+        if self._mongo_store is None:
+            return
+        try:
+            await asyncio.to_thread(
+                self._mongo_store.save_isolation, date_key, isolation_id, isolated_instrument
+            )
+        except Exception:
+            logger.exception("Mongo dummy-order isolation persistence failed date=%s iso=%s",
+                             date_key, isolation_id)
+
+    async def _persist_mongo_order(self, date_key: str, isolation_id: str,
+                                   indicator: str, order: dict,
+                                   isolated_instrument: dict) -> None:
+        if self._mongo_store is None:
+            return
+        try:
+            await asyncio.to_thread(
+                self._mongo_store.save_order, date_key, isolation_id,
+                indicator, order, isolated_instrument
+            )
+        except Exception:
+            logger.exception("Mongo dummy-order persistence failed date=%s iso=%s indicator=%s",
+                             date_key, isolation_id, indicator)
+
     async def register_isolation(self, isolation_id: str, payload: dict,
                                  legs: dict[str, str], overwrite: bool = False) -> None:
-        if not self._config.dummy_orders_enabled:
-            return
         async with self._lock(isolation_id):
             old = await asyncio.to_thread(self._store.load, isolation_id)
             if overwrite:
                 await asyncio.to_thread(self._store.delete, isolation_id)
                 old = None
+
+            iso_time_raw = next((payload.get(k) for k in
+                ("isolation_time", "isolated_at", "isolation_timestamp",
+                 "created_at", "received_at", "timestamp") if payload.get(k)), None)
+            iso_time = _text_time(iso_time_raw) or _now().isoformat()
+            instrument_context = self._instrument_context(payload, legs, isolation_id, iso_time)
+
             if old is None or old.get("legs") != legs:
-                iso_time = next((payload.get(k) for k in
-                    ("isolation_time", "isolated_at", "isolation_timestamp",
-                     "created_at", "received_at", "timestamp") if payload.get(k)), None)
                 state = {
-                    "schema_version": 1, "isolation_id": isolation_id,
-                    "trade_date_ist": payload.get("trade_date_ist"),
-                    "isolation_time": _text_time(iso_time) or _now().isoformat(),
-                    "legs": dict(legs), "trading_symbol": payload.get("trading_symbol"),
+                    "schema_version": 2, "isolation_id": isolation_id,
+                    "trade_date_ist": payload.get("trade_date_ist") or self._date_key(payload, isolation_id),
+                    "isolation_time": iso_time,
+                    "legs": dict(legs), "trading_symbol": self._symbol(payload),
+                    "isolated_instrument": instrument_context,
                     "status": "ACTIVE", "orders": {"sr": None, "supertrend": None},
                     "created_at": _now().isoformat(), "updated_at": _now().isoformat(),
                 }
             else:
                 state = old
                 state["status"] = "ACTIVE"
-                state["trading_symbol"] = payload.get("trading_symbol") or state.get("trading_symbol")
+                state["trading_symbol"] = self._symbol(payload) or state.get("trading_symbol")
+                state["isolated_instrument"] = instrument_context
                 state["updated_at"] = _now().isoformat()
+
+            # Per-indicator flags are independent. A disabled strategy is
+            # explicitly recorded, rather than silently appearing to wait.
+            for indicator in ("sr", "supertrend"):
+                if self._indicator_enabled(indicator):
+                    existing = (state.get("orders") or {}).get(indicator)
+                    if isinstance(existing, dict) and existing.get("status") == "DISABLED":
+                        state["orders"][indicator] = None
+                else:
+                    state.setdefault("orders", {})[indicator] = {
+                        "indicator": indicator.upper(),
+                        "status": "DISABLED",
+                        "reason": "orders disabled due to flag false",
+                        "placed_at": None,
+                        "real_order_submitted": False,
+                    }
+
             await asyncio.to_thread(self._store.save, isolation_id, state)
+            date_key = self._date_key(payload, isolation_id)
+            await self._persist_mongo_isolation(date_key, isolation_id, instrument_context)
+            for indicator in ("sr", "supertrend"):
+                disabled = (state.get("orders") or {}).get(indicator)
+                if isinstance(disabled, dict) and disabled.get("status") == "DISABLED":
+                    await self._persist_mongo_order(
+                        date_key, isolation_id, indicator, disabled, instrument_context
+                    )
+
             self._meta[isolation_id] = {
-                "legs": dict(legs), "cutoff": _dt(state.get("isolation_time")) or _now()
+                "legs": dict(legs),
+                "cutoff": _dt(state.get("isolation_time")) or _now(),
+                "instrument_context": instrument_context,
+                "instrument_meta": {
+                    "isolated": {"instrument_key": legs.get("isolated"),
+                                 "trading_symbol": instrument_context.get("trading_symbol")},
+                    "opposite": {"instrument_key": legs.get("opposite"),
+                                 "trading_symbol": instrument_context.get("opposite_trading_symbol")},
+                },
+                "date_key": date_key,
             }
 
     async def mark_closed(self, isolation_id: str) -> None:
@@ -164,7 +273,7 @@ class DummyOrderEngine:
 
     async def on_sr_frame(self, payload: dict, instrument_key: str,
                           leg_role: str, isolation_id: str) -> None:
-        if not self._config.dummy_orders_enabled or payload.get("event") not in {"snapshot", "sr_update"}:
+        if not self._indicator_enabled("sr") or payload.get("event") not in {"snapshot", "sr_update"}:
             return
         if leg_role != "isolated":
             return
@@ -175,7 +284,7 @@ class DummyOrderEngine:
 
     async def on_supertrend_frame(self, payload: dict, instrument_key: str,
                                   leg_role: str, isolation_id: str) -> None:
-        if not self._config.dummy_orders_enabled or payload.get("event") not in {"snapshot", "supertrend_signal"}:
+        if not self._indicator_enabled("supertrend") or payload.get("event") not in {"snapshot", "supertrend_signal"}:
             return
         if leg_role != "isolated":
             return
@@ -190,11 +299,17 @@ class DummyOrderEngine:
             state = await asyncio.to_thread(self._store.load, isolation_id)
             if not state or state.get("status") != "ACTIVE":
                 return
-            if (state.get("orders") or {}).get(indicator):
+            if not self._indicator_enabled(indicator):
+                return
+            existing_order = (state.get("orders") or {}).get(indicator)
+            if existing_order and existing_order.get("status") != "DISABLED":
                 return
             meta = self._meta.get(isolation_id) or {
                 "legs": state.get("legs") or {},
                 "cutoff": _dt(state.get("isolation_time")) or _now(),
+                "instrument_context": state.get("isolated_instrument") or {},
+                "instrument_meta": {},
+                "date_key": self._date_key(state, isolation_id),
             }
             if indicator == "sr":
                 eligible = [x for x in _sr_candidates(payload) if x["dt"] > meta["cutoff"]]
@@ -236,24 +351,47 @@ class DummyOrderEngine:
                 fallback = trigger.get("signal_price", payload.get("current_price"))
                 if isinstance(fallback, (int, float)) and fallback > 0:
                     entry = float(fallback)
+            now_ist = _now()
+            target_meta = (meta.get("instrument_meta") or {}).get(role) or {}
+            stop_loss_percent = float(getattr(self._config, "dummy_order_stop_loss_percent", 30))
+            target_points = self._target_points(entry) if entry is not None else None
             order = {
                 "order_id": f"DUMMY-{indicator.upper()}-{isolation_id}",
                 "mode": "DUMMY_ONLY", "indicator": indicator.upper(), "side": "BUY",
                 "signal_direction": direction, "source_instrument_key": source_key,
-                "source_leg_role": source_role, "target_instrument_key": target_key,
+                "source_leg_role": source_role, "source_trading_symbol": (
+                    (meta.get("instrument_meta") or {}).get(source_role) or {}
+                ).get("trading_symbol"),
+                "instrument_key": target_key,
+                "trading_symbol": target_meta.get("trading_symbol"),
+                "target_instrument_key": target_key,
                 "target_leg_role": role, "quantity": self._config.dummy_order_quantity,
                 "entry_price": entry,
+                "entry_time_ist": now_ist.isoformat(),
+                "stop_loss_percent": stop_loss_percent,
+                "stop_loss_price": round(entry * (1 - stop_loss_percent / 100), 2) if entry is not None else None,
+                "target_points": target_points,
+                "target_price": round(entry + target_points, 2) if entry is not None and target_points is not None else None,
+                "target_rule": (
+                    "entry > upper threshold" if entry is not None and entry > float(getattr(self._config, "dummy_target_upper_threshold", 200))
+                    else "lower threshold <= entry <= upper threshold" if entry is not None and entry >= float(getattr(self._config, "dummy_target_lower_threshold", 100))
+                    else "entry < lower threshold" if entry is not None else None
+                ),
                 "price_source": ("latest_local_market_feed" if quote and entry is not None else
                                  "indicator_payload_fallback" if entry is not None else None),
                 "quote_received_at": quote_received_at if quote_is_today else None,
                 "quote_age_seconds": round((_now() - quote_time).total_seconds(), 3) if quote_is_today else None,
-                "trigger": trigger, "placed_at": _now().isoformat(),
+                "trigger": trigger, "placed_at": now_ist.isoformat(),
                 "status": "DUMMY_PLACED" if entry is not None else "DUMMY_SIGNAL_RECORDED_NO_QUOTE",
                 "broker_order_id": None, "real_order_submitted": False,
             }
             state.setdefault("orders", {})[indicator] = order
-            state["updated_at"] = _now().isoformat()
+            state["updated_at"] = now_ist.isoformat()
             await asyncio.to_thread(self._store.save, isolation_id, state)
+            await self._persist_mongo_order(
+                meta.get("date_key") or self._date_key(state, isolation_id),
+                isolation_id, indicator, order, meta.get("instrument_context") or {}
+            )
             logger.info("Dummy %s entry saved iso=%s target=%s trigger=%s",
                         indicator, isolation_id, target_key, trigger.get("confirmed_time"))
             await self._notify(state)
@@ -301,4 +439,6 @@ class DummyOrderEngine:
     async def status(self) -> dict:
         result = await asyncio.to_thread(self._store.status)
         result["enabled"] = self._config.dummy_orders_enabled
+        result["sr_orders_enabled"] = self._indicator_enabled("sr")
+        result["supertrend_orders_enabled"] = self._indicator_enabled("supertrend")
         return result

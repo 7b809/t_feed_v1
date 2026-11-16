@@ -62,8 +62,16 @@ class Settings:
     nifty_instrument_key: str
 
     dummy_orders_enabled: bool
+    dummy_sr_orders_enabled: bool
+    dummy_supertrend_orders_enabled: bool
     dummy_order_quantity: int
     dummy_order_state_dir: str
+    dummy_order_stop_loss_percent: float
+    dummy_target_upper_threshold: float
+    dummy_target_lower_threshold: float
+    dummy_target_points_above_upper: float
+    dummy_target_points_middle: float
+    dummy_target_points_below_lower: float
 
     # Daily MEGA archive
     daily_data_backup_enabled: bool
@@ -115,6 +123,13 @@ class Settings:
             raise ValueError("LIVE_FEED_RECONNECT_MAX_BACKOFF_SECONDS must be >= 1")
         if self.dummy_order_quantity < 1:
             raise ValueError("DUMMY_ORDER_QUANTITY must be >= 1")
+        if not 0 < self.dummy_order_stop_loss_percent < 100:
+            raise ValueError("DUMMY_ORDER_STOP_LOSS_PERCENT must be between 0 and 100")
+        if self.dummy_target_lower_threshold <= 0 or self.dummy_target_upper_threshold <= self.dummy_target_lower_threshold:
+            raise ValueError("Dummy target thresholds must be positive and upper > lower")
+        if min(self.dummy_target_points_above_upper, self.dummy_target_points_middle,
+               self.dummy_target_points_below_lower) <= 0:
+            raise ValueError("Dummy target point bands must be positive")
         if not 0 <= self.daily_data_backup_hour < 24:
             raise ValueError("DAILY_DATA_BACKUP_HOUR must be 0..23")
         if not 0 <= self.daily_data_backup_minute < 60:
@@ -178,8 +193,16 @@ def load_settings() -> Settings:
         live_feed_reconnect_max_backoff_seconds=_env_int("LIVE_FEED_RECONNECT_MAX_BACKOFF_SECONDS", 30),
         nifty_instrument_key=os.getenv("NIFTY_INSTRUMENT_KEY", "NSE_INDEX|Nifty 50"),
         dummy_orders_enabled=_env_bool("DUMMY_ORDERS_ENABLED", True),
+        dummy_sr_orders_enabled=_env_bool("DUMMY_SR_ORDERS_ENABLED", True),
+        dummy_supertrend_orders_enabled=_env_bool("DUMMY_SUPERTREND_ORDERS_ENABLED", True),
         dummy_order_quantity=_env_int("DUMMY_ORDER_QUANTITY", 1),
         dummy_order_state_dir=os.getenv("DUMMY_ORDER_STATE_DIR", "./data/dummy_orders"),
+        dummy_order_stop_loss_percent=float(os.getenv("DUMMY_ORDER_STOP_LOSS_PERCENT", "30")),
+        dummy_target_upper_threshold=float(os.getenv("DUMMY_TARGET_UPPER_THRESHOLD", "200")),
+        dummy_target_lower_threshold=float(os.getenv("DUMMY_TARGET_LOWER_THRESHOLD", "100")),
+        dummy_target_points_above_upper=float(os.getenv("DUMMY_TARGET_POINTS_ABOVE_UPPER", "50")),
+        dummy_target_points_middle=float(os.getenv("DUMMY_TARGET_POINTS_MIDDLE", "30")),
+        dummy_target_points_below_lower=float(os.getenv("DUMMY_TARGET_POINTS_BELOW_LOWER", "15")),
         daily_data_backup_enabled=_env_bool("DAILY_DATA_BACKUP_ENABLED", False),
         daily_data_backup_dir=os.getenv("DAILY_DATA_BACKUP_DIR", "./backups"),
         daily_data_backup_hour=_env_int("DAILY_DATA_BACKUP_HOUR", 16),
