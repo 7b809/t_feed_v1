@@ -81,6 +81,31 @@ class DummyOrderMongoStore:
             upsert=True,
         )
 
+    def update_order(self, date_key: str, isolation_id: str, indicator: str,
+                     order: dict, isolated_instrument: dict,
+                     completed: bool = False) -> None:
+        now = self._now_utc()
+        key = self._isolation_key(isolation_id)
+        indicator_key = "sr_order" if indicator == "sr" else "supertrend_order"
+        safe_order = self._json_safe(order)
+        fields = {
+            "last_updated_time": now,
+            "orders_data.last_updated_at": now.isoformat(),
+            "isolated_instrument": isolated_instrument,
+            f"orders_data.{indicator_key}": safe_order,
+            f"orders_data.by_isolation.{key}.{indicator_key}": safe_order,
+        }
+        update = {
+            "$setOnInsert": {"created_datetime": now, "orders_data.created_at": now.isoformat()},
+            "$set": fields,
+        }
+        if completed:
+            update["$push"] = {"orders_data.orders_history": {"$each": [{
+                "isolation_id": isolation_id, "indicator": indicator_key,
+                "event": "COMPLETED", "order": safe_order, "recorded_at": now.isoformat(),
+            }], "$slice": -5000}}
+        self._collection.update_one({"_id": date_key}, update, upsert=True)
+
     @classmethod
     def _json_safe(cls, value: Any) -> Any:
         if isinstance(value, dict):

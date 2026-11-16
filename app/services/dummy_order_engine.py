@@ -114,6 +114,26 @@ def _price(value: Any) -> float | None:
                 return result
     return None
 
+
+def _market_ltp(value: Any) -> float | None:
+    """Read only traded LTP fields, never bid/ask/volume values."""
+    if isinstance(value, dict):
+        for key in ("ltp", "last_price", "lastPrice"):
+            candidate = value.get(key)
+            if isinstance(candidate, (int, float)) and not isinstance(candidate, bool) and candidate > 0:
+                return float(candidate)
+        for child in value.values():
+            result = _market_ltp(child)
+            if result is not None:
+                return result
+    elif isinstance(value, list):
+        for child in value:
+            result = _market_ltp(child)
+            if result is not None:
+                return result
+    return None
+
+
 class DummyOrderEngine:
     def __init__(self, config: Settings, store: DummyOrderStore,
                  live_feed_store: LiveFeedStateStore, telegram: Any = None,
@@ -123,6 +143,7 @@ class DummyOrderEngine:
         self._mongo_store = mongo_store
         self._meta: dict[str, dict] = {}
         self._locks: dict[str, asyncio.Lock] = {}
+        self._watch_index: dict[str, set[tuple[str, str]]] = {}
 
     def _lock(self, key: str) -> asyncio.Lock:
         return self._locks.setdefault(key, asyncio.Lock())
@@ -195,6 +216,17 @@ class DummyOrderEngine:
             logger.exception("Mongo dummy-order persistence failed date=%s iso=%s indicator=%s",
                              date_key, isolation_id, indicator)
 
+    def _index_open_orders(self, isolation_id: str, state: dict) -> None:
+        for key in list(self._watch_index):
+            self._watch_index[key] = {item for item in self._watch_index[key] if item[0] != isolation_id}
+            if not self._watch_index[key]:
+                self._watch_index.pop(key, None)
+        for indicator, order in (state.get("orders") or {}).items():
+            if isinstance(order, dict) and order.get("status") == "DUMMY_PLACED":
+                key = order.get("target_instrument_key") or order.get("instrument_key")
+                if key and order.get("entry_price") is not None:
+                    self._watch_index.setdefault(key, set()).add((isolation_id, indicator))
+
     async def register_isolation(self, isolation_id: str, payload: dict,
                                  legs: dict[str, str], overwrite: bool = False) -> None:
         async with self._lock(isolation_id):
@@ -252,6 +284,7 @@ class DummyOrderEngine:
                         date_key, isolation_id, indicator, disabled, instrument_context
                     )
 
+            self._index_open_orders(isolation_id, state)
             self._meta[isolation_id] = {
                 "legs": dict(legs),
                 "cutoff": _dt(state.get("isolation_time")) or _now(),
@@ -368,6 +401,15 @@ class DummyOrderEngine:
                 "target_leg_role": role, "quantity": self._config.dummy_order_quantity,
                 "entry_price": entry,
                 "entry_time_ist": now_ist.isoformat(),
+                "started_at_ist": now_ist.isoformat(),
+                "high_price": entry,
+                "high_time_ist": now_ist.isoformat() if entry is not None else None,
+                "low_price": entry,
+                "low_time_ist": now_ist.isoformat() if entry is not None else None,
+                "completed_at_ist": None,
+                "duration_seconds": None,
+                "exit_reason": None,
+                "exit_price": None,
                 "stop_loss_percent": stop_loss_percent,
                 "stop_loss_price": round(entry * (1 - stop_loss_percent / 100), 2) if entry is not None else None,
                 "target_points": target_points,
@@ -392,9 +434,112 @@ class DummyOrderEngine:
                 meta.get("date_key") or self._date_key(state, isolation_id),
                 isolation_id, indicator, order, meta.get("instrument_context") or {}
             )
+            self._index_open_orders(isolation_id, state)
             logger.info("Dummy %s entry saved iso=%s target=%s trigger=%s",
                         indicator, isolation_id, target_key, trigger.get("confirmed_time"))
             await self._notify(state)
+
+
+    async def on_market_tick(self, instrument_key: str, data: dict,
+                             received_at: str | None = None) -> None:
+        price = _market_ltp(data)
+        if price is None or price <= 0:
+            return
+        tick_time = _dt(received_at) or _now()
+        for isolation_id, indicator in list(self._watch_index.get(instrument_key, set())):
+            try:
+                await self._update_order_from_tick(isolation_id, indicator, instrument_key, price, tick_time)
+            except Exception:
+                logger.exception("Dummy order tick failed iso=%s indicator=%s key=%s",
+                                 isolation_id, indicator, instrument_key)
+
+    async def _update_order_from_tick(self, isolation_id: str, indicator: str,
+                                      instrument_key: str, price: float,
+                                      tick_time: datetime) -> None:
+        async with self._lock(isolation_id):
+            state = await asyncio.to_thread(self._store.load, isolation_id)
+            if not state:
+                self._index_open_orders(isolation_id, {})
+                return
+            order = (state.get("orders") or {}).get(indicator)
+            if not isinstance(order, dict) or order.get("status") != "DUMMY_PLACED":
+                self._index_open_orders(isolation_id, state)
+                return
+            if (order.get("target_instrument_key") or order.get("instrument_key")) != instrument_key:
+                return
+            stamp = tick_time.isoformat()
+            changed = False
+            high, low = order.get("high_price"), order.get("low_price")
+            if high is None or price > float(high):
+                order["high_price"], order["high_time_ist"] = price, stamp
+                changed = True
+            if low is None or price < float(low):
+                order["low_price"], order["low_time_ist"] = price, stamp
+                changed = True
+            reason = None
+            stop, target = order.get("stop_loss_price"), order.get("target_price")
+            if stop is not None and price <= float(stop):
+                reason = "STOP_LOSS"
+            elif target is not None and price >= float(target):
+                reason = "TARGET"
+            if reason:
+                started = _dt(order.get("started_at_ist") or order.get("entry_time_ist"))
+                order.update({
+                    "status": "COMPLETED_STOP_LOSS" if reason == "STOP_LOSS" else "COMPLETED_TARGET",
+                    "exit_reason": reason, "exit_price": price,
+                    "completed_at_ist": stamp,
+                    "duration_seconds": round((tick_time - started).total_seconds(), 3) if started else None,
+                })
+                changed = True
+            if not changed:
+                return
+            state["updated_at"] = stamp
+            await asyncio.to_thread(self._store.save, isolation_id, state)
+            await self._persist_mongo_order_update(
+                self._date_key(state, isolation_id), isolation_id, indicator,
+                order, state.get("isolated_instrument") or {}, completed=bool(reason),
+            )
+            if reason:
+                self._index_open_orders(isolation_id, state)
+                logger.info("Dummy %s completed iso=%s reason=%s entry=%s exit=%s high=%s low=%s duration=%s",
+                            indicator, isolation_id, reason, order.get("entry_price"),
+                            price, order.get("high_price"), order.get("low_price"),
+                            order.get("duration_seconds"))
+                await self._notify_completion(state, indicator, order)
+
+    async def _persist_mongo_order_update(self, date_key: str, isolation_id: str,
+                                          indicator: str, order: dict,
+                                          isolated_instrument: dict,
+                                          completed: bool) -> None:
+        if self._mongo_store is None:
+            return
+        try:
+            await asyncio.to_thread(self._mongo_store.update_order, date_key, isolation_id,
+                                    indicator, order, isolated_instrument, completed)
+        except Exception:
+            logger.exception("Mongo dummy-order update failed date=%s iso=%s indicator=%s",
+                             date_key, isolation_id, indicator)
+
+    async def _notify_completion(self, state: dict, indicator: str, order: dict) -> None:
+        if self._telegram is None:
+            return
+        message = "\n".join([
+            "🧪 DUMMY ORDER COMPLETED", f"Isolation: {state.get('isolation_id')}",
+            f"Strategy: {indicator.upper()}",
+            f"Instrument: {order.get('trading_symbol') or order.get('target_instrument_key')}",
+            f"Result: {order.get('exit_reason')}", f"Entry: {order.get('entry_price')}",
+            f"Exit: {order.get('exit_price')}",
+            f"High: {order.get('high_price')} at {order.get('high_time_ist')}",
+            f"Low: {order.get('low_price')} at {order.get('low_time_ist')}",
+            f"Started: {order.get('started_at_ist')}",
+            f"Completed: {order.get('completed_at_ist')}",
+            f"Duration (seconds): {order.get('duration_seconds')}",
+            "Execution: LOCAL SIMULATION ONLY",
+        ])
+        try:
+            await self._telegram.send_message("Dummy order completed", message, level="SUCCESS")
+        except Exception:
+            logger.exception("Dummy order completion Telegram send failed")
 
     async def _notify(self, state: dict) -> None:
         if self._telegram is None:

@@ -54,7 +54,9 @@ class IsolationSubscriber:
         self._isolation_store = isolation_store
         self._state_store = state_store
         self._supertrend_state_store = supertrend_state_store
-        self._live_feed_client = LiveFeedWsClientService(config, live_feed_state_store)
+        self._live_feed_client = LiveFeedWsClientService(
+            config, live_feed_state_store, order_engine=dummy_order_engine
+        )
         self._dummy_order_engine = dummy_order_engine
 
         self._clients: Dict[str, SrWsClientService] = {}

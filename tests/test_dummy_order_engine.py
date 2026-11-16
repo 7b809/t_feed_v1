@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 
 from app.services.dummy_order_engine import DummyOrderEngine
@@ -28,8 +29,8 @@ def build(tmp_path, **overrides):
         dummy_supertrend_orders_enabled=True, dummy_order_quantity=1,
         dummy_order_state_dir=str(tmp_path), dummy_order_stop_loss_percent=30,
         dummy_target_upper_threshold=200, dummy_target_lower_threshold=100,
-        dummy_target_points_above_upper=50, dummy_target_points_middle=30,
-        dummy_target_points_below_lower=15,
+        dummy_target_points_above_upper=60, dummy_target_points_middle=50,
+        dummy_target_points_below_lower=40,
     )
     values.update(overrides)
     config = SimpleNamespace(**values)
@@ -62,8 +63,8 @@ def test_resistance_routes_opposite_and_is_idempotent(tmp_path):
         assert order["trading_symbol"] == "NIFTY 25000 PE"
         assert order["entry_price"] == 123.45
         assert order["stop_loss_price"] == 86.42
-        assert order["target_points"] == 30
-        assert order["target_price"] == 153.45
+        assert order["target_points"] == 50
+        assert order["target_price"] == 173.45
         assert order["real_order_submitted"] is False
     asyncio.run(run())
 
@@ -71,10 +72,10 @@ def test_resistance_routes_opposite_and_is_idempotent(tmp_path):
 def test_target_point_bands(tmp_path):
     async def run():
         engine, _ = build(tmp_path)
-        assert engine._target_points(250) == 50
-        assert engine._target_points(150) == 30
-        assert engine._target_points(100) == 30
-        assert engine._target_points(99.99) == 15
+        assert engine._target_points(250) == 60
+        assert engine._target_points(150) == 50
+        assert engine._target_points(100) == 50
+        assert engine._target_points(99.99) == 40
     asyncio.run(run())
 
 
@@ -145,4 +146,51 @@ def test_signals_from_opposite_leg_are_ignored(tmp_path):
             {"price": 100, "confirmed_at": "2026-11-12T09:35:00+05:30"}]},
             "PE", "opposite", "2026-11-12__CE")
         assert store.load("2026-11-12__CE")["orders"]["sr"] is None
+    asyncio.run(run())
+
+
+def test_order_completes_at_target_and_tracks_high_low_and_duration(tmp_path):
+    async def run():
+        engine, store = build(tmp_path)
+        isolation_id = "2026-11-12__CE"
+        await engine.register_isolation(isolation_id, isolation_payload(),
+                                        {"isolated": "CE", "opposite": "PE"})
+        await engine.on_supertrend_frame({
+            "event": "supertrend_signal", "signal": "BULLISH",
+            "confirmed_time": "2026-11-12T09:40:00+05:30", "price": 123.45,
+        }, "CE", "isolated", isolation_id)
+        order = store.load(isolation_id)["orders"]["supertrend"]
+        started = datetime.fromisoformat(order["started_at_ist"])
+        tick1, tick2, tick3 = [(started + timedelta(seconds=s)).isoformat()
+                              for s in (60, 90, 120)]
+        await engine.on_market_tick("CE", {"ltpc": {"ltp": 140.0}}, tick1)
+        await engine.on_market_tick("CE", {"ltpc": {"ltp": 110.0}}, tick2)
+        await engine.on_market_tick("CE", {"ltpc": {"ltp": 173.45}}, tick3)
+        order = store.load(isolation_id)["orders"]["supertrend"]
+        assert order["status"] == "COMPLETED_TARGET"
+        assert order["exit_reason"] == "TARGET" and order["exit_price"] == 173.45
+        assert order["high_price"] == 173.45 and order["high_time_ist"] == tick3
+        assert order["low_price"] == 110.0 and order["low_time_ist"] == tick2
+        assert order["completed_at_ist"] == tick3 and order["duration_seconds"] == 120.0
+        assert not engine._watch_index.get("CE")
+    asyncio.run(run())
+
+
+def test_order_completes_at_stop_loss(tmp_path):
+    async def run():
+        engine, store = build(tmp_path)
+        isolation_id = "2026-11-12__CE"
+        await engine.register_isolation(isolation_id, isolation_payload(),
+                                        {"isolated": "CE", "opposite": "PE"})
+        await engine.on_supertrend_frame({
+            "event": "supertrend_signal", "signal": "BULLISH",
+            "confirmed_time": "2026-11-12T09:40:00+05:30", "price": 123.45,
+        }, "CE", "isolated", isolation_id)
+        order = store.load(isolation_id)["orders"]["supertrend"]
+        tick = (datetime.fromisoformat(order["started_at_ist"]) + timedelta(seconds=60)).isoformat()
+        await engine.on_market_tick("CE", {"ltpc": {"ltp": 86.41}}, tick)
+        order = store.load(isolation_id)["orders"]["supertrend"]
+        assert order["status"] == "COMPLETED_STOP_LOSS"
+        assert order["exit_reason"] == "STOP_LOSS" and order["exit_price"] == 86.41
+        assert order["low_price"] == 86.41
     asyncio.run(run())

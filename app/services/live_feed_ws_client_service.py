@@ -34,9 +34,11 @@ class LiveFeedWsClientService:
     isolation and option subscriptions are reference-counted implicitly.
     """
 
-    def __init__(self, config: Settings, state_store: LiveFeedStateStore) -> None:
+    def __init__(self, config: Settings, state_store: LiveFeedStateStore,
+                 order_engine: Any = None) -> None:
         self._config = config
         self._state_store = state_store
+        self._order_engine = order_engine
         self._candle_store = LiveFeedCandleStore(config)
         self._isolation_labels: dict[str, dict[str, str]] = {}
         self._isolation_legs: dict[str, dict[str, str]] = {}
@@ -374,5 +376,10 @@ class LiveFeedWsClientService:
                 self._candle_store.update_tick,
                 key, data, mode, instrument_label, isolation_ids, roles,
             )
+            if self._order_engine is not None:
+                try:
+                    await self._order_engine.on_market_tick(key, data, _now_ist().isoformat())
+                except Exception:
+                    logger.exception("Dummy order monitor callback failed for %s", key)
             self._message_counts[key] = self._message_counts.get(key, 0) + 1
             self._last_message_at[key] = _now_ist().isoformat()

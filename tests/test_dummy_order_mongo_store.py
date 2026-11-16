@@ -65,3 +65,24 @@ def test_one_document_per_date_preserves_multiple_isolations():
     assert doc["orders_data"]["supertrend_order"]["entry_price"] == 234.0
     assert len(doc["orders_data"]["orders_history"]) == 2
     assert len(doc["orders_data"]["by_isolation"]) == 2
+
+
+def test_order_updates_write_completion_metrics_to_daily_document():
+    collection = FakeCollection()
+    store = DummyOrderMongoStore(collection)
+    instrument = {"instrument_key": "CE", "trading_symbol": "NIFTY CE"}
+    order = {"status": "DUMMY_PLACED", "entry_price": 123.0,
+             "high_price": 140.0, "low_price": 110.0}
+    store.save_isolation("2026-11-13", "iso", instrument)
+    store.save_order("2026-11-13", "iso", "sr", order, instrument)
+    completed = {**order, "status": "COMPLETED_TARGET", "exit_reason": "TARGET",
+        "exit_price": 173.0, "high_price": 173.0, "low_price": 105.0,
+        "started_at_ist": "2026-11-13T09:30:00+05:30",
+        "completed_at_ist": "2026-11-13T09:35:00+05:30", "duration_seconds": 300.0}
+    store.update_order("2026-11-13", "iso", "sr", completed, instrument, True)
+    doc = collection.doc
+    assert doc["orders_data"]["sr_order"]["status"] == "COMPLETED_TARGET"
+    assert doc["orders_data"]["sr_order"]["high_price"] == 173.0
+    assert doc["orders_data"]["sr_order"]["low_price"] == 105.0
+    assert doc["orders_data"]["sr_order"]["duration_seconds"] == 300.0
+    assert doc["orders_data"]["orders_history"][-1]["event"] == "COMPLETED"
