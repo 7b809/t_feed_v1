@@ -1,1 +1,17 @@
-How to Define "15m Bullish / Bearish" in CodeDo not rely on a subjective definition; use clear quantitative conditions:MethodBullish Condition (Validate Support)Bearish Condition (Validate Resistance)Option A: 15m EMAs (Recommended)15m Close > 15m 9 EMA and 9 EMA slope is positive15m Close < 15m 9 EMA and 9 EMA slope is negativeOption B: 15m Candle Color / StructureLast closed 15m candle is Green (Close > Open) with Close in top 50% of rangeLast closed 15m candle is Red (Close < Open) OR long upper rejection wickOption C: Supertrend / VWAPPrice above 15m VWAPPrice below 15m VWAP3.
+Greek-rule trail logic (rule stated in advance, applied only to completed candles)
+A non-future-biased Greek trail rule could be:
+
+Rule A (Delta trail): Once Δ ≤ -0.60 (more negative = more ITM for PE), raise the stop to entry + 20 and trail by 15 points below the last completed close.
+
+Rule B (Gamma/Theta profit-jump): If Δ ≤ -0.65 and Θ is less negative than -38, jump the target by +15 points (i.e. let the winner run) and move the stop to last close − 10.
+
+Rule C (Vega warning): If Vega drops > 0.25 from entry while Δ is still improving, do not tighten — Vega crush can mask Delta gains; keep the original trail.
+
+Applying these only to completed candles:
+
+Time	Completed candle	Δ	Θ	Rule fired	Action (no future data)
+10:08	10:08 close 126.85	-0.5893	-38.65	A nearly (Δ -0.589)	Watch
+10:09	10:09 close 126.65	-0.5921	-37.89	A + B	Stop → entry+20; target jump +15
+10:24	10:24 close 139.40	-0.6165	-38.44	A	Stop → entry+20 (already), trail to close−15 = 124.40
+10:30	10:30 close 151.35	-0.6487	-37.17	A + B	Target jump again; trail to 136.35
+10:33	10:33 close 168.75	-0.6849	-35.77	A + B	Trail to 153.75; target extended
