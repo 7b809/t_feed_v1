@@ -230,6 +230,8 @@ let historyPage = 1;
 const historyPageSize = 24;
 let historyTotal = 0;
 let historyTotalPages = 0;
+let orderRequestSequence = 0;
+let historySearchTimer = null;
 
 /* --------------------------------------------------------------------------
    Helpers
@@ -439,7 +441,7 @@ function renderOrders() {
   const s  = document.getElementById('order-strategy').value;
   const st = document.getElementById('order-status').value;
 
-  const rows = allOrders.filter(o =>
+  const rows = ordersView === 'history' ? allOrders : allOrders.filter(o =>
     (!s  || o.strategy === s) &&
     (!st || o.status   === st) &&
     (!q  || [o.trading_symbol, o.instrument_key, o.isolation_id, o.order_id]
@@ -555,7 +557,9 @@ function refreshSummary() {
   const anyAdjusted = Object.values(lotMultipliers).some(v => Number(v) !== 1);
 
   let value;
-  if (!anyAdjusted) {
+  if (ordersView === 'history' || !anyAdjusted) {
+    // History API P&L covers every matching order for the selected date,
+    // not only the current page. Lot multipliers remain a per-card preview.
     value = apiRealizedPnl;
   } else {
     let total = 0, hasAny = false;
@@ -644,8 +648,18 @@ document.addEventListener('focusout', e => {
   if (e.target.classList.contains('lot-input')) isUserEditing = false;
 });
 
-['order-search', 'order-strategy', 'order-status'].forEach(id =>
-  document.getElementById(id).addEventListener('input', () => {
+document.getElementById('order-search').addEventListener('input', () => {
+  if (ordersView === 'history') {
+    clearTimeout(historySearchTimer);
+    historyPage = 1;
+    historySearchTimer = setTimeout(() => loadOrders(false), 250);
+  } else {
+    renderOrders();
+  }
+});
+
+['order-strategy', 'order-status'].forEach(id =>
+  document.getElementById(id).addEventListener('change', () => {
     if (ordersView === 'history') {
       historyPage = 1;
       loadOrders(false);
@@ -706,6 +720,7 @@ function updateHistoryPagination() {
 
 async function setOrdersView(view) {
   if (['today', 'history'].indexOf(view) < 0 || view === ordersView) return;
+  orderRequestSequence += 1;
   ordersView = view;
   historyPage = 1;
 
@@ -733,6 +748,7 @@ function changeHistoryPage(delta) {
 
 async function loadOrders(silent = false) {
   if (silent && (isUserEditing || ordersView !== 'today')) return;
+  const requestSequence = ++orderRequestSequence;
 
   try {
     let url = '/api/v1/dashboard/orders';
@@ -752,6 +768,7 @@ async function loadOrders(silent = false) {
     }
 
     const r = await fetch(url, { cache: 'no-store' });
+    if (requestSequence !== orderRequestSequence) return;
     if (!r.ok) {
       let detail = 'Dashboard API ' + r.status;
       try {
@@ -762,6 +779,7 @@ async function loadOrders(silent = false) {
     }
 
     const d = await r.json();
+    if (requestSequence !== orderRequestSequence) return;
     const summary = d.summary || {};
     allOrders = d.orders || [];
     if (ordersView === 'history') {
@@ -791,6 +809,7 @@ async function loadOrders(silent = false) {
     updateHistoryPagination();
     setRefreshTime();
   } catch (e) {
+    if (requestSequence !== orderRequestSequence) return;
     document.getElementById('order-grid').innerHTML =
       '<div class="col-12"><div class="alert alert-danger shadow-sm mb-0">' +
       '<i class="bi bi-exclamation-triangle me-1"></i>' + escapeHtml(e.message) +
