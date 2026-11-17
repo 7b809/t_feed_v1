@@ -90,7 +90,14 @@ def flatten_daily_orders(document: dict[str, Any] | None) -> list[dict[str, Any]
     # Older daily documents may predate by_isolation; retain their root snapshots.
     # When per-isolation data exists, the root fields are only a last-writer
     # compatibility mirror and must not override or duplicate other isolations.
-    if not by_isolation:
+    has_isolation_order_snapshots = isinstance(by_isolation, dict) and any(
+        isinstance(entry, dict) and (
+            isinstance(entry.get("sr_order"), dict)
+            or isinstance(entry.get("supertrend_order"), dict)
+        )
+        for entry in by_isolation.values()
+    )
+    if not has_isolation_order_snapshots:
         add(orders_data.get("sr_order"), None, "SR", live_snapshot=True)
         add(orders_data.get("supertrend_order"), None, "SUPERTREND", live_snapshot=True)
 
