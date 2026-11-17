@@ -395,7 +395,7 @@ jq '{last_event, update_count, current_price}' \
   data/sr_state/isolated__25400_ce_NSE_FO_45406/15_3/today_snapshot.json
 
 # API returns the freshest (live)
-curl -s 'http://localhost:8004/api/v1/sr/NSE_FO%7C45406/latest?config=all' | jq '.configs | keys'
+curl -s 'http://localhost:8010/api/v1/sr/NSE_FO%7C45406/latest?config=all' | jq '.configs | keys'
 
 # Tests
 pytest -q
@@ -501,12 +501,12 @@ for all active isolations, not one session per option leg.
 Default local URL:
 
 ```
-ws://127.0.0.1:8004/ws/market
+ws://127.0.0.1:8010/ws/market
 ```
 
 The orderflow FastAPI application itself defaults to `APP_PORT=8003`.
 Keep that API port separate from the local live-feed gateway port
-(`LIVE_FEED_PORT=8004` by default); the Windows and Linux launch scripts
+(`LIVE_FEED_PORT=8010` by default); the Windows and Linux launch scripts
 now use the 8003 consumer default so both local services can run together.
 
 The URL can be overridden with `LIVE_FEED_WS_URL`; otherwise the host is
@@ -570,7 +570,7 @@ message for each instrument is also atomically written to `latest.json`.
 ```env
 LIVE_FEED_ENABLED=true
 LIVE_FEED_WS_URL=
-LIVE_FEED_PORT=8004
+LIVE_FEED_PORT=8010
 LIVE_FEED_MODE=full
 LIVE_FEED_STATE_DIR=./data/live_feed
 LIVE_FEED_START_HOUR=9
@@ -583,7 +583,7 @@ NIFTY_INSTRUMENT_KEY=NSE_INDEX|Nifty 50
 ```
 
 `LIVE_FEED_WS_URL` is an optional WebSocket base URL (for example
-`ws://127.0.0.1:8004`); when empty, `LIVE_FEED_PORT` builds the local URL.
+`ws://127.0.0.1:8010`); when empty, `LIVE_FEED_PORT` builds the local URL.
 Supported modes are `ltpc`, `full`, `full_d30`, and `option_greeks`.
 
 ### Live-feed REST APIs

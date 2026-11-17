@@ -16,7 +16,7 @@ def _client() -> LiveFeedWsClientService:
     config = SimpleNamespace(
         live_feed_enabled=True,
         live_feed_ws_url="",
-        live_feed_port=8004,
+        live_feed_port=8010,
         live_feed_mode="full",
         live_feed_state_dir="./data/live_feed",
         live_feed_start_hour=9,
