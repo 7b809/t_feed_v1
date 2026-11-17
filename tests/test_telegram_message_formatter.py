@@ -85,6 +85,7 @@ def test_unpriced_signal_is_not_reported_as_a_filled_entry():
 
     assert "SIGNAL RECORDED • ENTRY WAITING" in message
     assert "No simulated fill was recorded" in message
+    assert "SR level: ₹33.65" in message
     assert "Entry:" not in message
 
 
