@@ -124,6 +124,7 @@ class DummyOrderMongoStore:
         """Load one daily archive document by its YYYY-MM-DD key."""
         result = self._collection.find_one({"_id": date_key})
         return result if isinstance(result, dict) else None
+
     @classmethod
     def _json_safe(cls, value: Any) -> Any:
         if isinstance(value, dict):
