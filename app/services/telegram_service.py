@@ -192,8 +192,27 @@ class TelegramService:
         emoji = self._EMOJI.get(str(level).upper(), "ℹ️")
         return await self._send(f"{emoji} {title}\n\n{message}")
 
-    async def notify_startup(self, app_name: str) -> bool:
-        return await self._send(f"✅ {app_name} started")
+    async def notify_startup(self, app_name: str, session: dict | None = None,
+                             today_summary: dict | None = None) -> bool:
+        lines = [f"🚀 {app_name} started"]
+        if session:
+            lines.extend([
+                "",
+                f"🕒 Mode: {session.get('label', session.get('state', 'Unknown'))}",
+                f"📅 IST trade date: {session.get('trade_date_ist', '—')}",
+                f"⏱ Session: {session.get('session_start', '09:15')}–{session.get('session_end', '15:30')} IST",
+                f"ℹ️ {session.get('reason', '')}",
+            ])
+        if today_summary:
+            lines.extend([
+                "",
+                "📊 TODAY'S SIMULATION LEDGER",
+                f"🧩 Active isolations: {today_summary.get('active_isolations', 0)}",
+                f"📂 Orders restored: {today_summary.get('orders', 0)}",
+                f"🟡 Open orders: {today_summary.get('open_orders', 0)}",
+                f"✅ Completed orders: {today_summary.get('completed_orders', 0)}",
+            ])
+        return await self._send("\n".join(lines))
 
     async def notify_shutdown(self, app_name: str) -> bool:
         return await self._send(f"🛑 {app_name} stopped")
