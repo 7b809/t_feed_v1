@@ -13,6 +13,7 @@ import websockets
 from websockets.exceptions import ConnectionClosed
 
 from ..config import Settings
+from .market_session import is_market_session_open, seconds_until_session_boundary
 from .sr_state_store import SrStateStore
 from .dummy_order_engine import DummyOrderEngine
 
@@ -144,6 +145,12 @@ class SrWsClientService:
         max_backoff = self._config.sr_ws_reconnect_max_backoff_seconds
 
         while not self._stopped:
+            if not is_market_session_open(self._config):
+                self._ws_state = "outside_window"
+                delay = seconds_until_session_boundary(self._config)
+                logger.info("SR WS parked outside market session key=%s next_boundary_in=%.0fs", self._instrument_key, delay)
+                await asyncio.sleep(delay)
+                continue
             try:
                 await self._connect_and_consume()
                 backoff = 1
@@ -201,8 +208,11 @@ class SrWsClientService:
             self._last_error = None
             keepalive = asyncio.create_task(self._keepalive(ws))
             try:
-                async for raw in ws:
-                    await self._handle_raw_frame(raw)
+                try:
+                    await asyncio.wait_for(self._consume_frames(ws), timeout=seconds_until_session_boundary(self._config))
+                except asyncio.TimeoutError:
+                    self._ws_state = "outside_window"
+                    logger.info("SR WS session ended; closing key=%s", self._instrument_key)
             finally:
                 keepalive.cancel()
                 try:
@@ -210,6 +220,10 @@ class SrWsClientService:
                 except (asyncio.CancelledError, Exception):
                     pass
                 self._ws = None
+
+    async def _consume_frames(self, ws) -> None:
+        async for raw in ws:
+            await self._handle_raw_frame(raw)
 
     async def _keepalive(self, ws) -> None:
         try:
