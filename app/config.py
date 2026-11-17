@@ -182,7 +182,7 @@ def load_settings() -> Settings:
         supertrend_state_dir=os.getenv("SUPERTREND_STATE_DIR", "./data/supertrend_state"),
         live_feed_enabled=_env_bool("LIVE_FEED_ENABLED", True),
         live_feed_ws_url=os.getenv("LIVE_FEED_WS_URL", ""),
-        live_feed_port=_env_int("LIVE_FEED_PORT", 8001),
+        live_feed_port=_env_int("LIVE_FEED_PORT", 8004),
         live_feed_mode=os.getenv("LIVE_FEED_MODE", "full").strip().lower(),
         live_feed_save_raw=_env_bool("LIVE_FEED_SAVE_RAW", True),
         live_feed_state_dir=os.getenv("LIVE_FEED_STATE_DIR", "./data/live_feed"),
