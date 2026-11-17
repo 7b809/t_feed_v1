@@ -1,0 +1,326 @@
+Full Modified GATEE Logic — Global CE + PE — With Dummy NIFTY Legs
+0 · TL;DR
+The PE rule you wrote is the canonical form. CE is not a new rule — it is the same rule applied to a sign-flipped ITM delta. Below I give you (a) the global spec, (b) two fully-worked dummy NIFTY examples (one PE bearish, one CE bullish) that mirror each other exactly, (c) the changed config/persistence/dashboard contract, and (d) the modified engine pseudocode.
+
+The only thing I cannot verify without dummy_order_engine.py is where exactly the branch sits — the rest is rule-level and provable.
+
+1 · Full global rule — one rule, two legs
+Let option_type ∈ {"CE", "PE"} and define the direction-free ITM delta:
+
+text
+itm_delta = +Δ    if option_type == "CE"
+itm_delta = −Δ    if option_type == "PE"
+Then every PE statement maps 1-to-1 to CE:
+
+Rule A — Delta trail (continuous, once active)
+PE (as you wrote)	CE (mirror)	Unified
+Trigger	Δ ≤ −0.60	Δ ≥ +0.60	itm_delta ≥ 0.60
+On first fire	stop = max(stop, entry + 20)	identical	identical
+Every subsequent completed candle	stop = max(stop, close − 15)	identical	identical
+Ratchet	stop only goes up	identical	new_stop = max(prev_stop, candidates…)
+Rule B — Gamma/Theta profit-jump (event trigger, may repeat)
+PE	CE	Unified
+Trigger	Δ ≤ −0.65 ∧ Θ > −38	Δ ≥ +0.65 ∧ Θ > −38	itm_delta ≥ 0.65 ∧ Θ > −38
+Target	target += 15	identical	identical
+Stop	stop = max(stop, close − 10)	identical	identical
+Stacking	Yes — fires again on each qualifying candle	identical	store target_extension_count
+Rule C — Vega-crush guard (per-candle veto on tightening)
+PE	CE	Unified
+Condition	(vega_entry − vega_now) / vega_entry > 0.25 ∧ itm_delta improving	identical	identical
+Action	Block A's stop tightening for this candle only; B's target extension still allowed; trail resumes next candle	identical	identical
+Note on C's "0.25": your spec literally says "drops > 0.25 from entry". If vega is quoted on a 10-25 absolute scale (typical NIFTY), that is a 25 % relative drop (≈ 6 points on an entry of 24). If your provider quotes vega on a 0.1-0.3 scale, it is an absolute 0.25 (which for typical entries never fires). I default to 25 % relative (VEGA_CRUSH_DROP_FRACTION=0.25) and flag this as item #1 in §8.
+
+Scope guard (both rules)
+text
+if order.indicator != "supertrend": return          # SR orders never trail
+if not config.dummy_supertrend_greek_trail_enabled: return
+if candle is not completed: return                  # only completed candles
+if candle.greeks.delta is None: skip + log
+2 · Dummy NIFTY scenario setup
+To prove the symmetry I use two mirrored legs of the same underlying, same strike, same entry premium, same Greek magnitudes — only the sign of Δ and the direction of the underlying move differ.
+
+Field	PE leg (bearish)	CE leg (bullish)
+Isolation	2026-11-17__NSE_FO_25400_PE	2026-11-17__NSE_FO_25400_CE
+Trading symbol	NIFTY 25400 PE 20 NOV 26	NIFTY 25400 CE 20 NOV 26
+NIFTY at entry (09:20)	25,420 (strike + 20)	25,380 (strike − 20)
+Entry premium	95.00	95.00
+Δ at entry	−0.42	+0.42
+Θ at entry	−44.0	−44.0
+Vega at entry	24.0	24.0
+Initial SL (−30 %)	66.50	66.50
+Initial target (entry < 100 ⇒ +40)	135.00	135.00
+Trigger for C (25 % drop)	vega < 18.0	vega < 18.0
+Underlying path	25,420 → 24,880 (drops)	25,380 → 25,920 (rises)
+Both scenarios produce an identical premium trajectory (95 → 192). Only the underlying and the sign of Δ flip. That is the proof.
+
+3 · PE leg — full worked example (bearish NIFTY)
+entry = 95.00, option_type = PE, entry_greeks = { Δ: −0.42, Θ: −44.0, vega: 24.0 }, C threshold = 25 % drop ⇒ vega < 18.0.
+
+itm_delta = −Δ (positive when PE is going ITM).
+
+Time	NIFTY	Close	Δ	Θ	Vega	itm_delta	A	B	C	Stop (after)	Target (after)	Fired
+09:20	25420	95.00	−0.42	−44.0	24.0	0.42	—	—	—	66.50	135.00	entry
+10:08	25310	126.85	−0.5893	−38.65	19.5	0.5893	✗ (0.589<0.60)	✗	✗ (drop 4.5)	66.50	135.00	watch
+10:09	25295	128.50	−0.6032	−37.89	18.8	0.6032	✓	✗ (0.603<0.65)	✗ (drop 5.2)	max(66.50, 115, 128.50−15)=115.00	135.00	A
+10:15	25250	132.00	−0.6055	−38.20	18.5	0.6055	✓	✗	✗ (drop 5.5)	max(115, 117)=117.00	135.00	A
+10:24	25180	139.40	−0.6165	−38.44	18.4	0.6165	✓	✗ (Θ < −38)	✗ (drop 5.6)	max(117, 124.40)=124.40	135.00	A
+10:30	25120	151.35	−0.6487	−37.17	18.2	0.6487	✓	✗ (0.649<0.65)	✗ (drop 5.8)	max(124.40, 136.35)=136.35	135.00	A
+10:33	25060	168.75	−0.6849	−35.77	18.0	0.6849	✓	✓ (≥0.65, Θ>−38)	✗ (drop = 6.0, strict > not met)	max(136.35, 153.75, 158.75)=158.75	150.00	A+B
+10:40	25020	162.50	−0.6750	−36.80	16.5	0.6750	✓	✗ (0.675 ≥0.65 but Θ>−38 yes — B fires? ✗ because itm_delta decreased to 0.675 from 0.6849? no B has no monotone requirement) → B ✓	✓ C (drop 7.5>6.0, but Δ not improving: 0.675<0.6849 ⇒ C does not fire per "while Δ is still improving")	max(158.75, 147.50, 152.50)=158.75	165.00	A+B
+10:45	24980	170.00	−0.6950	−36.20	14.8	0.6950	✓	✓	✓ (drop 9.2>6.0 ∧ Δ improving 0.695>0.675 ⇒ C fires)	C blocks A ⇒ stays 158.75; B allowed	180.00	A(blocked)+B+C
+11:00	24920	185.50	−0.7218	−35.10	13.5	0.7218	✓	✓	✓ (drop 10.5>6.0 ∧ Δ improving ⇒ C)	158.75 (A blocked)	195.00	A(blocked)+B+C
+11:15	24880	192.00	−0.7350	−34.80	12.0	0.7350	✓	✓	✓ (Δ improving)	158.75	210.00	A(blocked)+B+C
+11:30	24910	186.00	−0.7120	−36.50	14.0	0.7120	✓	✓	✗ (Δ worsened 0.712<0.735 ⇒ C releases)	A resumes: max(158.75, 171.00)=171.00	210.00	A+B (C released)
+Commentary on what the PE run proves
+A is a state, not an event. Once itm_delta ≥ 0.60 at 10:09, every subsequent candle trails to close − 15 — unless C vetoes.
+
+B stacks and is independent of A. B fires at 10:09? — no, 10:09 Δ 0.603 < 0.65. B fires at 10:33, 10:40, 10:45, 11:00, 11:15 — five extensions = +75 cumulative, taking target 135 → 210.
+
+C is a per-candle veto on A, not a lock. At 10:45–11:15 it froze A (stop stayed 158.75) because vega was crashing while Δ kept improving. At 11:30 Δ turned down, C released, A resumed and jumped the stop to 171.00. Winner was protected.
+
+Profit floor (entry + 20 = 115) entered max(…) from the very first A fire — it is the safety net that never moves down.
+
+4 · CE leg — full worked example (bullish NIFTY) — the mirror
+entry = 95.00, option_type = CE, entry_greeks = { Δ: +0.42, Θ: −44.0, vega: 24.0 }, same C threshold.
+
+itm_delta = +Δ (positive when CE is going ITM).
+
+Time	NIFTY	Close	Δ	Θ	Vega	itm_delta	A	B	C	Stop (after)	Target (after)	Fired
+09:20	25380	95.00	+0.42	−44.0	24.0	0.42	—	—	—	66.50	135.00	entry
+10:08	25490	126.85	+0.5893	−38.65	19.5	0.5893	✗	✗	✗	66.50	135.00	watch
+10:09	25505	128.50	+0.6032	−37.89	18.8	0.6032	✓	✗	✗	max(66.50, 115, 113.50)=115.00	135.00	A
+10:15	25550	132.00	+0.6055	−38.20	18.5	0.6055	✓	✗	✗	max(115, 117)=117.00	135.00	A
+10:24	25620	139.40	+0.6165	−38.44	18.4	0.6165	✓	✗	✗	max(117, 124.40)=124.40	135.00	A
+10:30	25680	151.35	+0.6487	−37.17	18.2	0.6487	✓	✗	✗	max(124.40, 136.35)=136.35	135.00	A
+10:33	25740	168.75	+0.6849	−35.77	18.0	0.6849	✓	✓	✗ (drop = 6.0, not >)	max(136.35, 153.75, 158.75)=158.75	150.00	A+B
+10:40	25780	162.50	+0.6750	−36.80	16.5	0.6750	✓	✓	✗ (Δ not improving)	max(158.75, 147.50, 152.50)=158.75	165.00	A+B
+10:45	25820	170.00	+0.6950	−36.20	14.8	0.6950	✓	✓	✓	158.75 (A blocked)	180.00	A(blocked)+B+C
+11:00	25880	185.50	+0.7218	−35.10	13.5	0.7218	✓	✓	✓	158.75	195.00	A(blocked)+B+C
+11:15	25920	192.00	+0.7350	−34.80	12.0	0.7350	✓	✓	✓	158.75	210.00	A(blocked)+B+C
+11:30	25890	186.00	+0.7120	−36.50	14.0	0.7120	✓	✓	✗ (Δ worsened)	max(158.75, 171.00)=171.00	210.00	A+B (C released)
+Every stop, target, and rule-firing timestamp is identical to the PE run. Only the Δ column's sign and the NIFTY column's direction flipped. That is the proof the global formula is correct.
+
+5 · PE vs CE — side-by-side proof of symmetry
+Observation	PE run	CE run	Same?
+First A fire	10:09 at itm_delta 0.6032	10:09 at itm_delta 0.6032	✅
+First B fire	10:33 at 0.6849	10:33 at 0.6849	✅
+Stop after 10:33	158.75	158.75	✅
+Target after 10:33	150.00	150.00	✅
+C fires	10:45, 11:00, 11:15	10:45, 11:00, 11:15	✅
+C releases	11:30	11:30	✅
+Final stop	171.00	171.00	✅
+Final target	210.00	210.00	✅
+Cumulative target extensions	5 (+75)	5 (+75)	✅
+PnL on completion (if target 210 hit)	+115 on entry 95	+115 on entry 95	✅
+The single itm_delta = +Δ if CE else −Δ line makes the two legs numerically indistinguishable downstream.
+
+6 · Config, persistence, and dashboard contract changes
+6.1 .env.example additions (all optional; defaults below)
+env
+# GATEE v1.1 — global Greek trail (PE + CE symmetric)
+GREEK_TRAIL_DELTA_A=0.60
+GREEK_TRAIL_DELTA_B=0.65
+GREEK_TRAIL_THETA_B_FLOOR=-38.0
+GREEK_TRAIL_VEGA_CRUSH_DROP_FRACTION=0.25
+GREEK_TRAIL_PROFIT_FLOOR_POINTS=20.0
+GREEK_TRAIL_TRAIL_A_POINTS=15.0
+GREEK_TRAIL_TRAIL_B_POINTS=10.0
+GREEK_TRAIL_TARGET_JUMP_POINTS=15.0
+6.2 app/config.py — add to Settings (with __post_init__ validation)
+python
+greek_trail_delta_a: float
+greek_trail_delta_b: float
+greek_trail_theta_b_floor: float
+greek_trail_vega_crush_drop_fraction: float
+greek_trail_profit_floor_points: float
+greek_trail_trail_a_points: float
+greek_trail_trail_b_points: float
+greek_trail_target_jump_points: float
+Validation to add:
+
+python
+if not 0 < self.greek_trail_delta_a < self.greek_trail_delta_b < 1:
+    raise ValueError("GREEK_TRAIL_DELTA_A must be < DELTA_B and both in (0,1)")
+if not 0 < self.greek_trail_vega_crush_drop_fraction < 1:
+    raise ValueError("GREEK_TRAIL_VEGA_CRUSH_DROP_FRACTION must be in (0,1)")
+And in load_settings():
+
+python
+greek_trail_delta_a=float(os.getenv("GREEK_TRAIL_DELTA_A", "0.60")),
+greek_trail_delta_b=float(os.getenv("GREEK_TRAIL_DELTA_B", "0.65")),
+greek_trail_theta_b_floor=float(os.getenv("GREEK_TRAIL_THETA_B_FLOOR", "-38.0")),
+greek_trail_vega_crush_drop_fraction=float(os.getenv("GREEK_TRAIL_VEGA_CRUSH_DROP_FRACTION", "0.25")),
+greek_trail_profit_floor_points=float(os.getenv("GREEK_TRAIL_PROFIT_FLOOR_POINTS", "20")),
+greek_trail_trail_a_points=float(os.getenv("GREEK_TRAIL_TRAIL_A_POINTS", "15")),
+greek_trail_trail_b_points=float(os.getenv("GREEK_TRAIL_TRAIL_B_POINTS", "10")),
+greek_trail_target_jump_points=float(os.getenv("GREEK_TRAIL_TARGET_JUMP_POINTS", "15")),
+6.3 Persistence additions (both FS dummy_orders and Mongo dummy_orders)
+Every supertrend order doc gains:
+
+json
+{
+  "option_type": "CE" | "PE",
+  "entry_greeks": { "delta": -0.42, "theta": -44.0, "vega": 24.0 },
+  "last_itm_delta": 0.7350,
+  "target_extension_count": 5,
+  "trail_jumps": [
+    {
+      "at": "2026-11-17T10:09:00+05:30",
+      "close": 128.50,
+      "itm_delta": 0.6032,
+      "theta": -37.89,
+      "vega": 18.8,
+      "a": true, "b": false, "c": false,
+      "new_stop": 115.00,
+      "new_target": 135.00
+    }
+  ]
+}
+option_type is already derivable from strike_option ("25400_pe") — persist it explicitly for cheapness.
+
+entry_greeks is captured at entry time from live_feed_state_store.
+
+last_itm_delta is monotone; on restart it is rebuilt from the value stored on the order — no candle replay needed.
+
+target_extension_count drives the dashboard and target verification.
+
+6.4 dashboard_query.py — bump version in 3 places + surface trail
+In all three strategy_features blobs:
+
+python
+"greek_trail_version": "1.1"
+Add to each order object returned by _flatten_orders:
+
+python
+item["trail_jumps"]             = order.get("trail_jumps") or []
+item["target_extension_count"]  = order.get("target_extension_count", 0)
+item["last_itm_delta"]          = order.get("last_itm_delta")
+No breaking change to existing fields.
+
+7 · Full modified pseudocode for the engine
+Drop this into app/services/dummy_order_engine.py. It slots in where the current PE-only block sits — I've marked the integration points.
+
+python
+# ---------- module-level helpers ----------------------------------------
+
+def compute_itm_delta(option_type: str, delta: float | None) -> float | None:
+    """Direction-free ITM delta: +Δ for CE, −Δ for PE."""
+    if delta is None:
+        return None
+    return delta if option_type.upper() == "CE" else -delta
+
+
+def apply_greek_trail(
+    *,
+    order: dict,
+    candle: dict,
+    config: "Settings",
+    on_event: Callable[[dict], None],
+) -> None:
+    """
+    Apply Rules A / B / C to a SUPERSTREND dummy order on a completed candle.
+    No-op for SR orders, disabled flag, non-completed candles, or missing Δ.
+    """
+    # --- scope guards
+    if order.get("indicator") != "supertrend":
+        return
+    if not config.dummy_supertrend_greek_trail_enabled:
+        return
+    if not candle.get("is_completed"):
+        return
+
+    greeks = candle.get("greeks") or {}
+    delta  = greeks.get("delta")
+    theta  = greeks.get("theta")
+    vega   = greeks.get("vega")
+    if delta is None:
+        on_event({"type": "trail_skip", "reason": "delta_missing", "at": candle.get("close_ts")})
+        return
+
+    option_type = order["option_type"]                # "CE" or "PE"
+    entry       = float(order["entry_price"])
+    entry_vg    = float(order["entry_greeks"]["vega"])
+    close       = float(candle["close"])
+
+    itm_delta = compute_itm_delta(option_type, float(delta))
+    prev_itm  = float(order.get("last_itm_delta") or compute_itm_delta(option_type, float(order["entry_greeks"]["delta"])))
+
+    # --- Rule C precondition: vega crash AND delta improving
+    vega_crash = (entry_vg - float(vega)) / entry_vg > config.greek_trail_vega_crush_drop_fraction if entry_vg else False
+    delta_improving = itm_delta > prev_itm
+    c_guard = vega_crash and delta_improving
+
+    # --- Rule A: delta trail (state, per-candle)
+    a_active = itm_delta >= config.greek_trail_delta_a
+
+    # --- Rule B: gamma/theta profit-jump (event)
+    b_fires = (
+        itm_delta >= config.greek_trail_delta_b
+        and theta is not None
+        and float(theta) > config.greek_trail_theta_b_floor
+    )
+
+    # --- compute new stop: max of {prev, profit floor, A trail, B trail}
+    candidates = [float(order["stop_price"]), entry + config.greek_trail_profit_floor_points]
+    if a_active and not c_guard:
+        candidates.append(close - config.greek_trail_trail_a_points)
+    if b_fires and not c_guard:
+        candidates.append(close - config.greek_trail_trail_b_points)
+    new_stop = max(candidates)
+
+    # --- Rule B target extension — allowed even under C
+    new_target = float(order["target_price"])
+    if b_fires:
+        new_target += config.greek_trail_target_jump_points
+        order["target_extension_count"] = int(order.get("target_extension_count", 0)) + 1
+
+    # --- persist + audit
+    order["last_itm_delta"] = max(prev_itm, itm_delta)   # monotone watermark
+    if new_stop > float(order["stop_price"]) or new_target > float(order["target_price"]):
+        order["stop_price"]   = new_stop
+        order["target_price"] = new_target
+        order.setdefault("trail_jumps", []).append({
+            "at":        candle.get("close_ts"),
+            "close":     close,
+            "itm_delta": itm_delta,
+            "theta":     theta,
+            "vega":      vega,
+            "a":         a_active,
+            "b":         b_fires,
+            "c":         c_guard,
+            "new_stop":  new_stop,
+            "new_target": new_target,
+        })
+        on_event({
+            "type": "trail_jump",
+            "order_id": order.get("order_id"),
+            "new_stop": new_stop,
+            "new_target": new_target,
+            "a": a_active, "b": b_fires, "c": c_guard,
+        })
+7.1 Integration hook — where this gets called
+In the same place your current PE-only trail runs (completed-candle handler inside the engine), replace the branch:
+
+python
+# BEFORE (PE-only):
+if order["option_type"] == "PE":
+    apply_pe_trail(...)
+
+# AFTER (global):
+apply_greek_trail(order=order, candle=candle, config=self._config,
+                  on_event=self._emit_trail_event)
+self._persist_order(order)          # existing method, already writes FS + Mongo
+That's the only call-site change. Everything else (option_type per order, entry_greeks capture at entry, trail_jumps persistence) is additive plumbing.
+
+8 · Open flags — confirm before merge
+#	Flag	Recommendation
+1	C's "0.25" units — absolute vs 25 % relative?	I default to 25 % relative (VEGA_CRUSH_DROP_FRACTION=0.25). If your provider's vega is on the 0.1-0.3 scale, flip to absolute and set threshold 0.25 directly. Confirm which.
+2	C blocking A vs both A and B	My impl blocks A only, B target extension always fires. If C should also block B, change one line: if b_fires and not c_guard: candidates.append(...) → if b_fires: candidates.append(...) and skip the new_target += under C.
+3	C persistent vs per-candle	My impl is per-candle (re-evaluated every candle). In the PE run, C fired 10:45–11:15 and released at 11:30 when Δ stopped improving. Confirm that's the intent.
+4	B re-fires when Δ worsens	In the PE run, B fired at 10:40 even though itm_delta fell from 0.6849 to 0.6750, because B has no monotone requirement. If B should require monotone improvement, add and itm_delta > prev_itm.
+5	Profit floor applied before A first fires	My impl includes entry + 20 in max(...) from the very first candle — so even before A activates, if close − 15 > entry + 20, stop could exceed the floor. In practice A and the profit floor coincide on the A-fire candle. Confirm.
+6	Entry greeks availability	Entry greeks must be captured at entry time from live_feed_state_store. If they're missing for a leg, we should not start the trail (trail_unavailable_no_entry_greeks event) rather than fall back to zeros.
+7	option_type source of truth	Derived from strike_option ("25400_pe" → pe) or persisted explicitly. I persist explicitly on order creation — cheaper and less error-prone.
+8	θ sign convention	Your spec assumes negative θ = time decay (so "less negative is better"). Some feeds send θ as positive decay. The engine must normalise before comparing to THETA_B_FLOOR = −38. Add a THETA_IS_POSITIVE_DECAY env flag if your feed flips.
+9	Dashboard version bump	"greek_trail_version": "1.0" → "1.1" in three places. Stored historical orders tagged "1.0" remain interpretable.
+10	Restart behaviour	My impl rebuilds nothing from candles — stop_price, target_price, last_itm_delta, target_extension_count are read from the persisted order. Verify dummy_order_store.py and dummy_order_mongo_store.py round-trip these fields.
