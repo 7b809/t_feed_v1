@@ -103,11 +103,15 @@ async def dashboard_home(request: Request) -> dict:
     instruments, isolations = await _build_instruments(request)
     orders = _today_orders(_flatten_orders(await request.app.state.dummy_order_engine.get_orders()))
     session = market_session_status(request.app.state.config)
+    completed = [order for order in orders if str(order.get("status", "")).startswith("COMPLETED")]
     return {"market_session": session, "summary": {
         "active_isolations": len(isolations),
         "subscribed_instruments": len(live.get("desired_instrument_keys") or []),
         "instruments_with_ltp": sum(1 for item in instruments if item.get("ltp") is not None),
+        "today_orders": len(orders),
         "open_orders": sum(1 for order in orders if order.get("status") == "DUMMY_PLACED"),
+        "completed_orders": len(completed),
+        "realized_pnl": round(sum(float(order.get("pnl_net") or 0) for order in completed), 2),
     }, "live_feed": live, "instruments": instruments}
 
 @router.get("/dashboard/isolations")
