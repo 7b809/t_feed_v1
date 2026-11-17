@@ -137,6 +137,18 @@
       <span class="badge text-bg-light border fw-normal px-3 py-2" id="order-count">0 orders</span>
     </div>
 
+    <div class="d-flex flex-wrap justify-content-between align-items-center gap-3 mb-3">
+      <div class="btn-group" role="group" aria-label="Orders view">
+        <button type="button" class="btn btn-sm btn-primary" id="view-today" onclick="setOrdersView('today')">Today</button>
+        <button type="button" class="btn btn-sm btn-outline-primary" id="view-history" onclick="setOrdersView('history')">History</button>
+      </div>
+      <div id="history-controls" class="d-none align-items-center flex-wrap gap-2">
+        <label for="history-date" class="form-label small fw-semibold mb-0">Trading date (IST)</label>
+        <input type="date" id="history-date" class="form-control form-control-sm" style="width:auto">
+        <span class="text-muted small" id="history-date-note">Archived dates</span>
+      </div>
+    </div>
+
     <div class="row g-2">
       <div class="col-12 col-md-5">
         <div class="input-group">
@@ -179,6 +191,18 @@
     </div>
   </div>
 
+  <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 px-3 px-lg-4 pb-3" id="history-pagination" hidden>
+    <div class="text-muted small" id="history-page-label">Page 1 of 1</div>
+    <div class="btn-group btn-group-sm" role="group" aria-label="History pagination">
+      <button type="button" class="btn btn-outline-secondary" id="history-prev" onclick="changeHistoryPage(-1)" disabled>
+        <i class="bi bi-chevron-left me-1"></i>Previous
+      </button>
+      <button type="button" class="btn btn-outline-secondary" id="history-next" onclick="changeHistoryPage(1)" disabled>
+        Next<i class="bi bi-chevron-right ms-1"></i>
+      </button>
+    </div>
+  </div>
+
   <div class="card-footer bg-white border-0 px-3 px-lg-4 py-3">
     <p class="text-muted small mb-0">
       <i class="bi bi-info-circle me-1"></i>
@@ -201,6 +225,11 @@ let allOrders = [];
 let lotMultipliers = {};
 let apiRealizedPnl = null;
 let isUserEditing = false;
+let ordersView = 'today';
+let historyPage = 1;
+const historyPageSize = 24;
+let historyTotal = 0;
+let historyTotalPages = 0;
 
 /* --------------------------------------------------------------------------
    Helpers
@@ -417,8 +446,9 @@ function renderOrders() {
               .some(v => String(v || '').toLowerCase().includes(q)))
   );
 
-  document.getElementById('order-count').textContent =
-    rows.length + (rows.length === 1 ? ' order' : ' orders');
+  document.getElementById('order-count').textContent = ordersView === 'history'
+    ? (historyTotal ? historyTotal + (historyTotal === 1 ? ' order' : ' orders') : '0 orders')
+    : rows.length + (rows.length === 1 ? ' order' : ' orders');
 
   const grid = document.getElementById('order-grid');
 
@@ -615,55 +645,157 @@ document.addEventListener('focusout', e => {
 });
 
 ['order-search', 'order-strategy', 'order-status'].forEach(id =>
-  document.getElementById(id).addEventListener('input', renderOrders)
+  document.getElementById(id).addEventListener('input', () => {
+    if (ordersView === 'history') {
+      historyPage = 1;
+      loadOrders(false);
+    } else {
+      renderOrders();
+    }
+  })
 );
+
+document.getElementById('history-date').addEventListener('change', () => {
+  historyPage = 1;
+  loadOrders(false);
+});
 
 /* --------------------------------------------------------------------------
    Load
    -------------------------------------------------------------------------- */
+async function loadHistoryDates() {
+  const note = document.getElementById('history-date-note');
+  try {
+    const response = await fetch('/api/v1/dummy-orders/history/dates', { cache: 'no-store' });
+    if (!response.ok) throw Error('History dates API ' + response.status);
+    const data = await response.json();
+    const dates = Array.isArray(data.dates) ? data.dates : [];
+    const picker = document.getElementById('history-date');
+    const today = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit'
+    }).format(new Date());
+    picker.max = today;
+
+    if (!picker.value && dates.length) picker.value = dates[0];
+    if (!picker.value) picker.value = today;
+    if (dates.length && !dates.includes(picker.value)) picker.value = dates[0];
+    note.textContent = dates.length
+      ? dates.length + ' archived trading day(s)'
+      : 'No archived trading dates';
+  } catch (error) {
+    note.textContent = 'Archive dates unavailable';
+    console.error(error);
+  }
+}
+
+function updateHistoryPagination() {
+  const container = document.getElementById('history-pagination');
+  const label = document.getElementById('history-page-label');
+  const previous = document.getElementById('history-prev');
+  const next = document.getElementById('history-next');
+  container.hidden = ordersView !== 'history';
+  const start = historyTotal ? ((historyPage - 1) * historyPageSize) + 1 : 0;
+  const end = Math.min(historyPage * historyPageSize, historyTotal);
+  label.textContent = historyTotal
+    ? 'Showing ' + start + '–' + end + ' of ' + historyTotal +
+      ' orders · Page ' + historyPage + ' of ' + Math.max(historyTotalPages, 1)
+    : 'No orders for this trading date';
+  previous.disabled = historyPage <= 1 || historyTotal === 0;
+  next.disabled = historyPage >= historyTotalPages || historyTotal === 0;
+}
+
+async function setOrdersView(view) {
+  if (['today', 'history'].indexOf(view) < 0 || view === ordersView) return;
+  ordersView = view;
+  historyPage = 1;
+
+  const todayButton = document.getElementById('view-today');
+  const historyButton = document.getElementById('view-history');
+  const historyControls = document.getElementById('history-controls');
+
+  todayButton.className = view === 'today'
+    ? 'btn btn-sm btn-primary' : 'btn btn-sm btn-outline-primary';
+  historyButton.className = view === 'history'
+    ? 'btn btn-sm btn-primary' : 'btn btn-sm btn-outline-primary';
+  historyControls.classList.toggle('d-none', view !== 'history');
+  historyControls.classList.toggle('d-flex', view === 'history');
+
+  if (view === 'history') await loadHistoryDates();
+  await loadOrders(false);
+}
+
+function changeHistoryPage(delta) {
+  const nextPage = historyPage + Number(delta || 0);
+  if (nextPage < 1 || (historyTotalPages && nextPage > historyTotalPages)) return;
+  historyPage = nextPage;
+  loadOrders(false);
+}
+
 async function loadOrders(silent = false) {
-  if (silent && isUserEditing) return;
+  if (silent && (isUserEditing || ordersView !== 'today')) return;
 
   try {
-    const r = await fetch('/api/v1/dashboard/orders', { cache: 'no-store' });
-    if (!r.ok) throw Error('Dashboard API ' + r.status);
+    let url = '/api/v1/dashboard/orders';
+    if (ordersView === 'history') {
+      const params = new URLSearchParams({
+        trade_date: document.getElementById('history-date').value,
+        page: String(historyPage),
+        page_size: String(historyPageSize)
+      });
+      const strategy = document.getElementById('order-strategy').value;
+      const status = document.getElementById('order-status').value;
+      const search = document.getElementById('order-search').value.trim();
+      if (strategy) params.set('strategy', strategy);
+      if (status) params.set('status', status);
+      if (search) params.set('search', search);
+      url = '/api/v1/dummy-orders/history?' + params.toString();
+    }
+
+    const r = await fetch(url, { cache: 'no-store' });
+    if (!r.ok) {
+      let detail = 'Dashboard API ' + r.status;
+      try {
+        const error = await r.json();
+        detail = error.detail || detail;
+      } catch (_) {}
+      throw Error(detail);
+    }
 
     const d = await r.json();
-    const s = d.summary || {};
+    const summary = d.summary || {};
     allOrders = d.orders || [];
+    if (ordersView === 'history') {
+      historyTotal = Number(d.total || 0);
+      historyTotalPages = Number(d.total_pages || 0);
+      historyPage = Number(d.page || historyPage);
+    } else {
+      historyTotal = allOrders.length;
+      historyTotalPages = 1;
+    }
 
     const activeKeys = new Set(allOrders.map((o, i) => orderKey(o, i)));
     Object.keys(lotMultipliers).forEach(k => {
       if (!activeKeys.has(k)) delete lotMultipliers[k];
     });
 
-    document.getElementById('o-total').textContent     = s.total_orders ?? 0;
-    document.getElementById('o-open').textContent      = s.open_orders ?? 0;
-    document.getElementById('o-completed').textContent = s.completed_orders ?? 0;
-    document.getElementById('o-targets').textContent   = s.target_hits ?? 0;
-    document.getElementById('o-stops').textContent     = s.stop_losses ?? 0;
+    document.getElementById('o-total').textContent = summary.total_orders ?? allOrders.length;
+    document.getElementById('o-open').textContent = summary.open_orders ?? 0;
+    document.getElementById('o-completed').textContent = summary.completed_orders ?? 0;
+    document.getElementById('o-targets').textContent = summary.target_hits ?? 0;
+    document.getElementById('o-stops').textContent = summary.stop_losses ?? 0;
 
-    apiRealizedPnl = s.realized_pnl ?? null;
-
-    const focusedKey = document.activeElement?.classList.contains('lot-input')
-      ? document.activeElement.dataset.key
-      : null;
+    apiRealizedPnl = summary.realized_pnl ?? null;
 
     renderOrders();
     refreshSummary();
+    updateHistoryPagination();
     setRefreshTime();
-
-    if (focusedKey && !silent) {
-      const inp = document.querySelector(`.lot-input[data-key="${focusedKey}"]`);
-      if (inp) inp.focus();
-    }
   } catch (e) {
-    document.getElementById('order-grid').innerHTML = `
-      <div class="col-12">
-        <div class="alert alert-danger shadow-sm mb-0">
-          <i class="bi bi-exclamation-triangle me-1"></i>${escapeHtml(e.message)}
-        </div>
-      </div>`;
+    document.getElementById('order-grid').innerHTML =
+      '<div class="col-12"><div class="alert alert-danger shadow-sm mb-0">' +
+      '<i class="bi bi-exclamation-triangle me-1"></i>' + escapeHtml(e.message) +
+      '</div></div>';
+    if (ordersView === 'history') updateHistoryPagination();
   }
 }
 
@@ -671,6 +803,8 @@ async function loadOrders(silent = false) {
    Bootstrap
    -------------------------------------------------------------------------- */
 loadOrders(false);
-setInterval(() => loadOrders(true), 5000);
+setInterval(() => {
+  if (ordersView === 'today') loadOrders(true);
+}, 5000);
 </script>
 {% endblock %}
