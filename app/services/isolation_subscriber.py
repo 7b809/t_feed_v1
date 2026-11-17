@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime
 from typing import Any, Dict, List, Optional
+from zoneinfo import ZoneInfo
 
 from ..config import Settings
 from .market_session import is_market_session_open
@@ -233,9 +235,7 @@ class IsolationSubscriber:
                     history = await asyncio.to_thread(
                         self._supertrend_state_store.get_latest, iso_key, "isolated"
                     )
-                    today = __import__("datetime").datetime.now(
-                        __import__("zoneinfo").ZoneInfo("Asia/Kolkata")
-                    ).date().isoformat()
+                    today = datetime.now(ZoneInfo("Asia/Kolkata")).date().isoformat()
                     if isinstance(history, dict) and history.get("today_ist_date") == today:
                         await self._dummy_order_engine._recover_supertrend_history(
                             isolation_id, {"event": "snapshot", "signals": history.get("signals") or []}
