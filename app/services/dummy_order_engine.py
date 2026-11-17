@@ -11,6 +11,11 @@ from zoneinfo import ZoneInfo
 from ..config import Settings
 from .dummy_order_store import DummyOrderStore
 from .live_feed_state_store import LiveFeedStateStore
+from .telegram_message_formatter import (
+    format_order_completion_notification,
+    format_order_entry_notification,
+    format_recovery_notification,
+)
 
 logger = logging.getLogger(__name__)
 IST = ZoneInfo("Asia/Kolkata")
@@ -521,7 +526,7 @@ class DummyOrderEngine:
             self._index_open_orders(isolation_id, state)
             logger.info("Dummy %s entry saved iso=%s target=%s trigger=%s",
                         indicator, isolation_id, target_key, trigger.get("confirmed_time"))
-            await self._notify(state)
+            await self._notify_entry(state, order)
 
 
 
@@ -749,7 +754,7 @@ class DummyOrderEngine:
             self._index_open_orders(isolation_id, state)
             logger.info("Supertrend startup recovery complete iso=%s signals=%d replayed=%d completed=%d locked=%s",
                         isolation_id, len(signals), replayed, len(history), locked)
-            await self._notify(state)
+            await self._notify_recovery(state)
 
     async def on_market_tick(self, instrument_key: str, data: dict,
                              received_at: str | None = None) -> None:
@@ -840,61 +845,35 @@ class DummyOrderEngine:
             logger.exception("Mongo dummy-order update failed date=%s iso=%s indicator=%s",
                              date_key, isolation_id, indicator)
 
+    async def _notify_entry(self, state: dict, order: dict) -> None:
+        if self._telegram is None:
+            return
+        try:
+            await self._telegram.send_formatted_message(
+                format_order_entry_notification(state, order)
+            )
+        except Exception:
+            logger.exception("Dummy order entry Telegram notification failed")
+
     async def _notify_completion(self, state: dict, indicator: str, order: dict) -> None:
         if self._telegram is None:
             return
-        message = "\n".join([
-            "🧪 DUMMY ORDER COMPLETED", f"Isolation: {state.get('isolation_id')}",
-            f"Strategy: {indicator.upper()}",
-            f"Instrument: {order.get('trading_symbol') or order.get('target_instrument_key')}",
-            f"Result: {order.get('exit_reason')}", f"Entry: {order.get('entry_price')}",
-            f"Exit: {order.get('exit_price')}",
-            f"High: {order.get('high_price')} at {order.get('high_time_ist')}",
-            f"Low: {order.get('low_price')} at {order.get('low_time_ist')}",
-            f"Started: {order.get('started_at_ist')}",
-            f"Completed: {order.get('completed_at_ist')}",
-            f"Duration (seconds): {order.get('duration_seconds')}",
-            "Execution: LOCAL SIMULATION ONLY",
-        ])
         try:
-            await self._telegram.send_message("Dummy order completed", message, level="SUCCESS")
+            await self._telegram.send_formatted_message(
+                format_order_completion_notification(state, indicator, order)
+            )
         except Exception:
-            logger.exception("Dummy order completion Telegram send failed")
+            logger.exception("Dummy order completion Telegram notification failed")
 
-    async def _notify(self, state: dict) -> None:
+    async def _notify_recovery(self, state: dict) -> None:
         if self._telegram is None:
             return
-        lines = [
-            "🧪 DUMMY ORDER UPDATE", f"Isolation: {state.get('isolation_id')}",
-            f"Trade date (IST): {state.get('trade_date_ist') or '—'}",
-            f"Isolation time: {state.get('isolation_time') or '—'}", "",
-        ]
-        for key, title in (("sr", "SR-BASED ENTRY"), ("supertrend", "SUPERTREND ENTRY")):
-            order = (state.get("orders") or {}).get(key)
-            lines.append(f"━━ {title} ━━")
-            if not order:
-                lines.append("Status: WAITING FOR FIRST CONFIRMED SIGNAL")
-            else:
-                trigger = order.get("trigger") or {}
-                lines.extend([
-                    f"Status: {order.get('status')}",
-                    f"Signal: {order.get('signal_direction')}",
-                    f"Confirmed candle: {trigger.get('confirmed_time') or '—'}",
-                    f"Target: BUY {order.get('target_leg_role')} ({order.get('target_instrument_key')})",
-                    f"Quantity: {order.get('quantity')}",
-                    f"Entry reference: {order.get('entry_price') if order.get('entry_price') is not None else 'QUOTE NOT AVAILABLE'}",
-                ])
-                if trigger.get("level_price") is not None:
-                    lines.append(f"SR level: {trigger['level_price']} | config: {trigger.get('config') or '—'}")
-                if trigger.get("signal_price") is not None:
-                    lines.append(f"Signal price: {trigger['signal_price']}")
-            lines.append("")
-        lines.extend(["Execution: LOCAL SIMULATION ONLY",
-                      "No broker API call or real order was submitted."])
         try:
-            await self._telegram.send_message("Dummy order update", "\n".join(lines), level="SUCCESS")
+            await self._telegram.send_formatted_message(
+                format_recovery_notification(state)
+            )
         except Exception:
-            logger.exception("Dummy order Telegram send failed")
+            logger.exception("Dummy order recovery Telegram notification failed")
 
     async def get_orders(self, isolation_id: str | None = None) -> Any:
         if isolation_id:
