@@ -176,7 +176,11 @@ def format_order_entry_notification(
 
     source_symbol = _first_text(order, "source_trading_symbol")
     source_key = _first_text(order, "source_instrument_key")
-    if (source_symbol or source_key) and source_symbol != symbol and source_key != instrument_key:
+    same_source = bool(
+        (source_key and source_key == instrument_key)
+        or (source_symbol and source_symbol == symbol)
+    )
+    if (source_symbol or source_key) and not same_source:
         source_label = source_symbol or source_key
         lines.append(f"Signal source: {source_label}")
     lines.append("SIMULATION ONLY • No live order sent")
