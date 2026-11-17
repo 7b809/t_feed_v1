@@ -653,3 +653,15 @@ curl -s 'http://localhost:8003/api/v1/dummy-orders/history?trade_date=2026-11-17
 ```
 
 History availability depends on archived documents already present in MongoDB. It does not backfill missing historical data from local state files.
+
+## Telegram notification format
+
+Telegram alerts are event-based and designed to remain readable in desktop and mobile chat clients:
+
+- **Isolation received/updated:** isolated trading symbol first, instrument key second, opposite-leg symbol/key, and IST date/time.
+- **Simulated entry:** only the order that was just created; strategy, signal direction, target instrument, entry price, quantity/lot units, target/stop and confirmation time.
+- **Signal without a usable quote:** clearly marked as `SIGNAL RECORDED • ENTRY WAITING`; it does not imply a simulated fill.
+- **Order completed:** exit reason, entry-to-exit prices, simulated P&L and duration. High/low tick diagnostics are intentionally omitted.
+- **Startup recovery:** one compact reconciliation summary instead of a repeated dump of every strategy's state.
+
+All simulated-order notifications retain an explicit `SIMULATION ONLY • No live order sent` notice. Instrument keys are retained for traceability, while the trading symbol is the primary human-readable label.
