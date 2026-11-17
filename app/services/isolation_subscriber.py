@@ -6,6 +6,7 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from ..config import Settings
+from .market_session import is_market_session_open
 from .isolation_store import IsolationStore
 from .sr_state_store import SrStateStore
 from .sr_ws_client_service import SrWsClientService
@@ -219,6 +220,33 @@ class IsolationSubscriber:
                 logger.info("Supertrend WS disabled; skipping both legs for %s", isolation_id)
 
             self._isolation_legs[isolation_id] = new_legs
+
+            # After-hours startup: replay today's persisted Supertrend signals
+            # against the saved one-minute candle files. No socket is opened and
+            # no synthetic fill is generated when the candle history is missing.
+            if (
+                not is_market_session_open(self._config)
+                and self._config.supertrend_enabled
+                and self._dummy_order_engine is not None
+            ):
+                try:
+                    history = await asyncio.to_thread(
+                        self._supertrend_state_store.get_latest, iso_key, "isolated"
+                    )
+                    today = __import__("datetime").datetime.now(
+                        __import__("zoneinfo").ZoneInfo("Asia/Kolkata")
+                    ).date().isoformat()
+                    if isinstance(history, dict) and history.get("today_ist_date") == today:
+                        await self._dummy_order_engine._recover_supertrend_history(
+                            isolation_id, {"event": "snapshot", "signals": history.get("signals") or []}
+                        )
+                        logger.info("After-hours Supertrend replay checked isolation=%s signals=%d",
+                                    isolation_id, len(history.get("signals") or []))
+                    else:
+                        logger.info("After-hours Supertrend replay skipped isolation=%s reason=no today's persisted signal snapshot",
+                                    isolation_id)
+                except Exception:
+                    logger.exception("After-hours Supertrend replay failed for %s", isolation_id)
 
             # Register both option legs with the shared local market-feed
             # client. It adds NIFTY 50 once and de-duplicates shared keys.
