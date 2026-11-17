@@ -16,7 +16,7 @@ def _normalise_strategy(value: Any) -> str:
 def _order_identity(order: dict[str, Any], isolation_id: str, strategy: str) -> str:
     explicit = order.get("order_id")
     if explicit not in (None, ""):
-        return str(explicit)
+        return f"{isolation_id}:{explicit}"
     started = order.get("started_at_ist") or order.get("entry_time_ist") or order.get("placed_at") or ""
     return f"{isolation_id}:{strategy}:{started}"
 
@@ -51,6 +51,7 @@ def flatten_daily_orders(document: dict[str, Any] | None) -> list[dict[str, Any]
         item["strategy"] = strategy
         item.setdefault("trade_date_ist", date_key or None)
         identity = _order_identity(item, iso, strategy)
+        item["history_key"] = identity
         marker = str(
             item.get("completed_at_ist")
             or item.get("updated_at")
@@ -87,16 +88,18 @@ def flatten_daily_orders(document: dict[str, Any] | None) -> list[dict[str, Any]
             add(entry.get("supertrend_order"), isolation_id, "SUPERTREND", live_snapshot=True)
 
     # Older daily documents may predate by_isolation; retain their root snapshots.
-    add(orders_data.get("sr_order"), None, "SR", live_snapshot=True)
-    add(orders_data.get("supertrend_order"), None, "SUPERTREND", live_snapshot=True)
+    # When per-isolation data exists, the root fields are only a last-writer
+    # compatibility mirror and must not override or duplicate other isolations.
+    if not by_isolation:
+        add(orders_data.get("sr_order"), None, "SR", live_snapshot=True)
+        add(orders_data.get("supertrend_order"), None, "SUPERTREND", live_snapshot=True)
 
     result = [row[2] for row in flattened.values()]
     result.sort(
-        key=lambda order: str(
-            order.get("completed_at_ist")
-            or order.get("entry_time_ist")
-            or order.get("started_at_ist")
-            or ""
+        key=lambda order: (
+            str(order.get("entry_time_ist") or order.get("started_at_ist")
+                or order.get("placed_at") or order.get("completed_at_ist") or ""),
+            str(order.get("order_id") or ""),
         ),
         reverse=True,
     )
