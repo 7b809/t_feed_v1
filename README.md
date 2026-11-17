@@ -336,7 +336,8 @@ Key `.env` fields:
 - `DATA_DIR` — isolation JSON mirror (empty = disabled)
 - `SR_WS_BASE_URL` / `SR_WS_BASE_URL_LOCAL` — upstream SR/Supertrend feed
 - `LIVE_FEED_PORT` / `LIVE_FEED_WS_URL` — local app1 market-feed WebSocket
-- `LIVE_FEED_START_*` / `LIVE_FEED_END_*` — IST live-feed connection window
+- `LIVE_FEED_START_*` / `LIVE_FEED_END_*` — shared IST session window for all WebSockets (defaults 09:15–15:30)
+- `MARKET_HOLIDAYS` — optional comma-separated NSE holiday dates (`YYYY-MM-DD`)
 - `LIVE_FEED_STATE_DIR` — raw market-feed JSONL/latest storage
 - `ISOLATION_NOTIFY_CLIENT_KEY` — shared secret with app1
 - `REQUIRE_TODAY_ONLY_SCOPE` — default `true`
@@ -523,13 +524,27 @@ keys are sent with a dynamic `{"action":"subscribe","instrument_keys":[...]}`
 message. Keys are de-duplicated; NIFTY 50 is shared. When an isolation is
 closed, keys no longer used by any active isolation are unsubscribed.
 
-### Connection time window
+### Shared market-session gate
 
-Only the live-market feed is gated by the configured Asia/Kolkata window.
-Defaults are **09:00 inclusive to 16:00 exclusive**. At 16:00 the socket
-closes; the supervisor waits until 09:00 on the next day before reconnecting.
-SR and Supertrend clients are not controlled by this time-window gate and
-continue to operate according to their own lifecycle.
+All three WebSocket services use the same Asia/Kolkata market-session gate.
+Defaults are **09:15 inclusive to 15:30 exclusive**, Monday to Friday.
+At 15:30, SR, Supertrend and the shared live-feed sockets close. Before the
+next session, the clients remain parked and do not attempt upstream connects.
+Weekends are automatically treated as closed. Add exchange holidays to
+`MARKET_HOLIDAYS` as comma-separated `YYYY-MM-DD` dates; this is a
+deployment-maintained list, not a live exchange-calendar integration.
+
+If the application starts after market close, today's persisted isolation
+records and simulated orders are restored first. The subscriber then checks
+the latest persisted Supertrend signals against saved one-minute candles.
+If required candles are missing, recovery is marked `WAITING_FOR_HISTORY`;
+the engine does not fabricate fills. Historical SR replay is not currently
+implemented. The dashboard shows today's order ledger separately from live
+socket status, and the global banner displays live, standby or recovery mode.
+
+This gate controls connection attempts and connection lifetime for SR,
+Supertrend and Live Feed. It does not create live market ticks outside the
+configured session.
 
 ### Raw feed persistence
 
@@ -559,9 +574,10 @@ LIVE_FEED_PORT=8004
 LIVE_FEED_MODE=full
 LIVE_FEED_STATE_DIR=./data/live_feed
 LIVE_FEED_START_HOUR=9
-LIVE_FEED_START_MINUTE=0
-LIVE_FEED_END_HOUR=16
-LIVE_FEED_END_MINUTE=0
+LIVE_FEED_START_MINUTE=15
+LIVE_FEED_END_HOUR=15
+LIVE_FEED_END_MINUTE=30
+MARKET_HOLIDAYS=2026-12-25,2027-01-26
 LIVE_FEED_RECONNECT_MAX_BACKOFF_SECONDS=30
 NIFTY_INSTRUMENT_KEY=NSE_INDEX|Nifty 50
 ```

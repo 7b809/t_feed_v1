@@ -14,6 +14,7 @@ import websockets
 from websockets.exceptions import ConnectionClosed
 
 from ..config import Settings
+from .market_session import is_market_session_open, seconds_until_session_boundary
 from .live_feed_state_store import LiveFeedStateStore
 from .live_feed_candle_store import LiveFeedCandleStore
 
@@ -63,30 +64,10 @@ class LiveFeedWsClientService:
         return start, end
 
     def _inside_window(self, now: datetime | None = None) -> bool:
-        local = (now or _now_ist()).astimezone(IST)
-        minute = local.hour * 60 + local.minute
-        start, end = self._window_bounds()
-        return start <= minute < end
+        return is_market_session_open(self._config, now)
 
     def _seconds_until_boundary(self, now: datetime | None = None) -> float:
-        local = (now or _now_ist()).astimezone(IST)
-        if self._inside_window(local):
-            target = local.replace(
-                hour=self._config.live_feed_end_hour,
-                minute=self._config.live_feed_end_minute,
-                second=0,
-                microsecond=0,
-            )
-        else:
-            target = local.replace(
-                hour=self._config.live_feed_start_hour,
-                minute=self._config.live_feed_start_minute,
-                second=0,
-                microsecond=0,
-            )
-            if target <= local:
-                target += timedelta(days=1)
-        return max(0.1, (target - local).total_seconds())
+        return seconds_until_session_boundary(self._config, now)
 
     def _desired_context(self) -> dict[str, dict[str, set[str]]]:
         context: dict[str, dict[str, set[str]]] = {}

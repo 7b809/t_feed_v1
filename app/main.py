@@ -29,6 +29,7 @@ from .services.dummy_order_store import DummyOrderStore
 from .services.dummy_order_mongo_store import DummyOrderMongoStore
 from .services.dummy_order_engine import DummyOrderEngine
 from .services.daily_data_backup_service import DailyDataBackupService
+from .services.market_session import market_session_status
 
 logger = logging.getLogger(__name__)
 
@@ -138,13 +139,46 @@ async def lifespan(app: FastAPI):
         except Exception:
             logger.exception("failed to refresh isolation mirror on startup")
 
-    scheduler = SchedulerService(config, subscriber, isolation_store, daily_backup_service)
+    scheduler = SchedulerService(config, subscriber, isolation_store, daily_backup_service, telegram)
     scheduler.start()
 
     try:
-        await telegram.notify_startup(config.app_name)
+        session_status = market_session_status(config)
+        states_today = await dummy_order_engine.get_orders()
+        states_today = [
+            state for state in (states_today or [])
+            if str(state.get("trade_date_ist") or state.get("isolation_id", "").split("__", 1)[0])[:10] == today_ist
+        ]
+        restored_orders = {}
+        for state in states_today:
+            for order in list(state.get("order_history") or []) + list((state.get("orders") or {}).values()):
+                if not isinstance(order, dict):
+                    continue
+                identity = str(
+                    order.get("order_id")
+                    or f"{order.get('indicator', 'order')}:{order.get('started_at_ist') or order.get('entry_time_ist')}"
+                )
+                restored_orders[identity] = order
+        open_count = sum(
+            1 for order in restored_orders.values()
+            if order.get("status") == "DUMMY_PLACED"
+        )
+        completed_count = sum(
+            1 for order in restored_orders.values()
+            if str(order.get("status", "")).startswith("COMPLETED")
+        )
+        await telegram.notify_startup(
+            config.app_name,
+            session=session_status,
+            today_summary={
+                "active_isolations": len(active_today),
+                "orders": len(restored_orders),
+                "open_orders": open_count,
+                "completed_orders": completed_count,
+            },
+        )
     except Exception:
-        logger.exception("telegram startup notify failed")
+        logger.exception("telegram startup recovery notify failed")
 
     app.state.config = config
     app.state.mongo = mongo

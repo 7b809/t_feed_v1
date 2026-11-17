@@ -608,7 +608,10 @@ class DummyOrderEngine:
             return
         async with self._lock(isolation_id):
             state = await asyncio.to_thread(self._store.load, isolation_id)
-            if not state or state.get("status") != "ACTIVE" or state.get("supertrend_startup_recovery"):
+            if not state or state.get("status") != "ACTIVE":
+                return
+            previous_recovery = state.get("supertrend_startup_recovery") or {}
+            if previous_recovery.get("status") in {"COMPLETED", "SKIPPED_EXISTING_ORDER"}:
                 return
             trade_date = state.get("trade_date_ist") or isolation_id.split("__", 1)[0]
             cutoff = _dt(state.get("isolation_time")) or self._startup_at
