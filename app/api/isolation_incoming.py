@@ -88,7 +88,10 @@ async def receive_isolation(
         telegram = request.app.state.telegram
         if telegram is not None:
             await telegram.notify_isolation(
-                isolation_id, body["instrument_key"]
+                isolation_id,
+                body["instrument_key"],
+                payload=body,
+                overwrite=overwrite,
             )
     except Exception:
         logger.exception("telegram isolation notify failed")
