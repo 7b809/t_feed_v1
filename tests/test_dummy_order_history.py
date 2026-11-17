@@ -90,6 +90,9 @@ def test_legacy_root_snapshot_and_filters_and_summary():
     document = {
         "_id": "2026-11-17",
         "orders_data": {
+            "by_isolation": {
+                "isolation-only": {"isolation_id": "2026-11-17__NSE_FO_legacy"}
+            },
             "sr_order": {
                 "order_id": "legacy-sr",
                 "indicator": "SR",
