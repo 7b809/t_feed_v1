@@ -35,11 +35,12 @@ class LiveFeedWsClientService:
     """
 
     def __init__(self, config: Settings, state_store: LiveFeedStateStore,
-                 order_engine: Any = None) -> None:
+                 order_engine: Any = None,
+                 candle_store: LiveFeedCandleStore | None = None) -> None:
         self._config = config
         self._state_store = state_store
         self._order_engine = order_engine
-        self._candle_store = LiveFeedCandleStore(config)
+        self._candle_store = candle_store or LiveFeedCandleStore(config)
         self._isolation_labels: dict[str, dict[str, str]] = {}
         self._isolation_legs: dict[str, dict[str, str]] = {}
         self._lock = asyncio.Lock()

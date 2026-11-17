@@ -234,3 +234,17 @@ class LiveFeedCandleStore:
                 "Live one-minute candle update failed instrument=%s output=%s",
                 instrument_key, output,
             )
+
+    def read_day(self, instrument_key: str, day: str) -> list[dict[str, Any]]:
+        """Read persisted one-minute candles for an instrument and IST date."""
+        matches = []
+        for folder in self.base_dir.glob(f"*_{_safe(instrument_key)}"):
+            path = folder / f"{day}_1min.json"
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (FileNotFoundError, json.JSONDecodeError, OSError):
+                continue
+            if payload.get("instrument_key") == instrument_key and isinstance(payload.get("candles"), list):
+                matches.extend(item for item in payload["candles"] if isinstance(item, dict))
+        unique = {str(item.get("ts")): item for item in matches if item.get("ts")}
+        return [unique[key] for key in sorted(unique)]

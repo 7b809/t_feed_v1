@@ -275,3 +275,68 @@ def test_supertrend_does_not_reverse_when_existing_target_is_already_met(tmp_pat
         assert len(state.get("order_history", [])) == 1
 
     asyncio.run(run())
+
+
+
+def test_startup_recovery_replays_stop_then_target_and_locks_day(tmp_path):
+    async def run():
+        class CandleHistory:
+            def read_day(self, key, day):
+                if key == "PE":
+                    return [
+                        {"ts": "2026-11-12T09:23:00+05:30", "open": 100, "high": 102, "low": 98, "close": 99},
+                        {"ts": "2026-11-12T09:24:00+05:30", "open": 99, "high": 100, "low": 69, "close": 70},
+                    ]
+                return [
+                    {"ts": "2026-11-12T09:44:00+05:30", "open": 100, "high": 102, "low": 98, "close": 101},
+                    {"ts": "2026-11-12T09:45:00+05:30", "open": 101, "high": 151, "low": 100, "close": 150},
+                ]
+
+        engine, store = build(tmp_path)
+        engine._candle_store = CandleHistory()
+        isolation_id = "2026-11-12__CE"
+        payload = isolation_payload()
+        payload["isolation_time"] = "2026-11-12T09:00:00+05:30"
+        await engine.register_isolation(isolation_id, payload,
+                                        {"isolated": "CE", "opposite": "PE"})
+        await engine._recover_supertrend_history(isolation_id, {
+            "event": "snapshot", "signals": [
+                {"signal": "BEARISH", "confirmed_time": "2026-11-12T09:22:00+05:30"},
+                {"signal": "BULLISH", "confirmed_time": "2026-11-12T09:43:00+05:30"},
+            ]
+        })
+        state = store.load(isolation_id)
+        assert state["supertrend_startup_recovery"]["status"] == "COMPLETED"
+        assert state["supertrend_daily_target_locked"] is True
+        assert len(state["order_history"]) == 2
+        assert state["order_history"][0]["exit_reason"] == "STOP_LOSS"
+        assert state["order_history"][1]["exit_reason"] == "TARGET"
+        assert state["order_history"][1]["target_leg_role"] == "isolated"
+        assert state["orders"]["supertrend"]["status"] == "COMPLETED_TARGET"
+
+    asyncio.run(run())
+
+
+def test_startup_recovery_waits_when_candle_history_is_missing(tmp_path):
+    async def run():
+        class EmptyHistory:
+            def read_day(self, key, day):
+                return []
+
+        engine, store = build(tmp_path)
+        engine._candle_store = EmptyHistory()
+        isolation_id = "2026-11-12__CE"
+        payload = isolation_payload()
+        payload["isolation_time"] = "2026-11-12T09:00:00+05:30"
+        await engine.register_isolation(isolation_id, payload,
+                                        {"isolated": "CE", "opposite": "PE"})
+        await engine._recover_supertrend_history(isolation_id, {
+            "event": "snapshot", "signals": [
+                {"signal": "BEARISH", "confirmed_time": "2026-11-12T09:22:00+05:30"}
+            ]
+        })
+        state = store.load(isolation_id)
+        assert state["supertrend_startup_recovery"]["status"] == "WAITING_FOR_HISTORY"
+        assert state["orders"]["supertrend"] is None
+
+    asyncio.run(run())

@@ -5,7 +5,7 @@ Only local simulation records are created. This module has no broker client.
 from __future__ import annotations
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 from ..config import Settings
@@ -137,10 +137,12 @@ def _market_ltp(value: Any) -> float | None:
 class DummyOrderEngine:
     def __init__(self, config: Settings, store: DummyOrderStore,
                  live_feed_store: LiveFeedStateStore, telegram: Any = None,
-                 mongo_store: Any = None) -> None:
+                 mongo_store: Any = None, candle_store: Any = None) -> None:
         self._config, self._store = config, store
         self._live_feed, self._telegram = live_feed_store, telegram
         self._mongo_store = mongo_store
+        self._candle_store = candle_store
+        self._startup_at = _now()
         self._meta: dict[str, dict] = {}
         self._locks: dict[str, asyncio.Lock] = {}
         self._watch_index: dict[str, set[tuple[str, str]]] = {}
@@ -181,6 +183,8 @@ class DummyOrderEngine:
             "opposite_instrument_key": legs.get("opposite"),
             "opposite_trading_symbol": self._symbol(opposite),
             "isolated_time_ist": iso_time,
+            "lot_size": payload.get("lot_size") or (payload.get("meta") or {}).get("lot_size"),
+            "opposite_lot_size": opposite.get("lot_size") or (opposite.get("meta") or {}).get("lot_size"),
         }
 
     def _target_points(self, entry: float) -> float:
@@ -291,9 +295,11 @@ class DummyOrderEngine:
                 "instrument_context": instrument_context,
                 "instrument_meta": {
                     "isolated": {"instrument_key": legs.get("isolated"),
-                                 "trading_symbol": instrument_context.get("trading_symbol")},
+                                 "trading_symbol": instrument_context.get("trading_symbol"),
+                                 "lot_size": instrument_context.get("lot_size")},
                     "opposite": {"instrument_key": legs.get("opposite"),
-                                 "trading_symbol": instrument_context.get("opposite_trading_symbol")},
+                                 "trading_symbol": instrument_context.get("opposite_trading_symbol"),
+                                 "lot_size": instrument_context.get("opposite_lot_size")},
                 },
                 "date_key": date_key,
             }
@@ -322,6 +328,12 @@ class DummyOrderEngine:
         if leg_role != "isolated":
             return
         try:
+            if payload.get("event") == "snapshot" and self._is_mid_session_startup():
+                await self._recover_supertrend_history(isolation_id, payload)
+                recovered = await asyncio.to_thread(self._store.load, isolation_id)
+                recovery_status = (recovered or {}).get("supertrend_startup_recovery", {}).get("status")
+                if recovery_status in {"COMPLETED", "SKIPPED_EXISTING_ORDER"}:
+                    return
             await self._process("supertrend", payload, instrument_key, leg_role, isolation_id)
         except Exception:
             logger.exception("Dummy Supertrend entry failed for %s", isolation_id)
@@ -333,6 +345,11 @@ class DummyOrderEngine:
             if not state or state.get("status") != "ACTIVE":
                 return
             if not self._indicator_enabled(indicator):
+                return
+            if indicator == "supertrend" and state.get("supertrend_daily_target_locked"):
+                return
+            recovery = state.get("supertrend_startup_recovery") or {}
+            if indicator == "supertrend" and recovery.get("status") == "WAITING_FOR_HISTORY":
                 return
             existing_order = (state.get("orders") or {}).get(indicator)
             # SR orders remain one-shot. Supertrend orders may be reversed by
@@ -411,6 +428,15 @@ class DummyOrderEngine:
                     "reversed_by_signal": trigger,
                     "replaced_by_target_instrument_key": target_key if close_reason == "SIGNAL_REVERSAL" else None,
                 })
+                units = int(existing_order.get("quantity_units") or existing_order.get("quantity") or 1)
+                pnl_points = round(old_price - float(existing_order.get("entry_price") or 0), 4)
+                existing_order.update({"pnl_points": pnl_points, "pnl_gross": round(pnl_points * units, 2),
+                                       "estimated_costs": 0.0, "pnl_net": round(pnl_points * units, 2),
+                                       "pnl_currency": "INR", "pnl_cost_model": "gross_only_costs_not_configured"})
+                if close_reason == "TARGET":
+                    state["supertrend_daily_target_locked"] = True
+                    state["supertrend_daily_target_locked_at"] = close_time.isoformat()
+                    state["supertrend_daily_target_order_id"] = existing_order.get("order_id")
                 state.setdefault("order_history", []).append(dict(existing_order))
                 state["updated_at"] = close_time.isoformat()
                 await asyncio.to_thread(self._store.save, isolation_id, state)
@@ -455,6 +481,8 @@ class DummyOrderEngine:
                 "trading_symbol": target_meta.get("trading_symbol"),
                 "target_instrument_key": target_key,
                 "target_leg_role": role, "quantity": self._config.dummy_order_quantity,
+                "lot_size": int(target_meta.get("lot_size") or 1),
+                "quantity_units": int(self._config.dummy_order_quantity) * int(target_meta.get("lot_size") or 1),
                 "entry_price": entry,
                 "entry_time_ist": now_ist.isoformat(),
                 "started_at_ist": now_ist.isoformat(),
@@ -495,6 +523,230 @@ class DummyOrderEngine:
                         indicator, isolation_id, target_key, trigger.get("confirmed_time"))
             await self._notify(state)
 
+
+
+    def _is_mid_session_startup(self) -> bool:
+        start = self._config.live_feed_start_hour * 60 + self._config.live_feed_start_minute
+        return self._startup_at.hour * 60 + self._startup_at.minute > start + 2
+
+    @staticmethod
+    def _candle_dt(candle: dict) -> datetime | None:
+        return _dt(candle.get("ts") or candle.get("timestamp"))
+
+    def _simulate_candles(self, order: dict, candles: list[dict],
+                          after: datetime, until: datetime) -> tuple[bool, dict | None, datetime | None]:
+        """Replay OHLC conservatively: stop-loss wins if both levels touch in one bar."""
+        stop, target = float(order["stop_loss_price"]), float(order["target_price"])
+        last_stamp = None
+        for candle in candles:
+            stamp = self._candle_dt(candle)
+            if stamp is None or stamp < after or stamp >= until:
+                continue
+            last_stamp = stamp
+            high = float(candle.get("high", candle.get("close", 0)) or 0)
+            low = float(candle.get("low", candle.get("close", 0)) or 0)
+            if high > float(order.get("high_price") or high):
+                order["high_price"], order["high_time_ist"] = high, stamp.isoformat()
+            if low < float(order.get("low_price") or low):
+                order["low_price"], order["low_time_ist"] = low, stamp.isoformat()
+            if low <= stop:
+                return True, {"reason": "STOP_LOSS", "price": stop, "time": stamp}, stamp
+            if high >= target:
+                return True, {"reason": "TARGET", "price": target, "time": stamp}, stamp
+        return False, None, last_stamp
+
+    def _recovery_order(self, isolation_id: str, signal: dict, role: str,
+                        key: str, candle: dict, meta: dict) -> dict:
+        entry = float(candle.get("open") or candle.get("close"))
+        entry_time = self._candle_dt(candle) or signal["dt"]
+        target_points = self._target_points(entry)
+        stop_percent = float(getattr(self._config, "dummy_order_stop_loss_percent", 30))
+        quantity = int(getattr(self._config, "dummy_order_quantity", 1))
+        lot_size = int((meta.get("instrument_meta") or {}).get(role, {}).get("lot_size") or 1)
+        return {
+            "order_id": f"RECOVERY-SUPERTREND-{isolation_id}-{signal['dt'].strftime('%H%M%S')}",
+            "mode": "DUMMY_ONLY", "simulation_mode": "STARTUP_RECOVERY",
+            "indicator": "SUPERTREND", "side": "BUY", "signal_direction": signal["direction"],
+            "source_instrument_key": meta["legs"].get("isolated"), "source_leg_role": "isolated",
+            "instrument_key": key, "target_instrument_key": key, "target_leg_role": role,
+            "trading_symbol": (meta.get("instrument_meta") or {}).get(role, {}).get("trading_symbol"),
+            "quantity": quantity, "lot_size": lot_size, "quantity_units": quantity * lot_size,
+            "entry_price": entry, "entry_time_ist": entry_time.isoformat(),
+            "started_at_ist": entry_time.isoformat(), "high_price": entry,
+            "high_time_ist": entry_time.isoformat(), "low_price": entry,
+            "low_time_ist": entry_time.isoformat(), "stop_loss_percent": stop_percent,
+            "stop_loss_price": round(entry * (1 - stop_percent / 100), 2),
+            "target_points": target_points, "target_price": round(entry + target_points, 2),
+            "target_rule": "configured entry-price target bands",
+            "trigger": {"direction": signal["direction"], "confirmed_time": signal["time"],
+                        "source_event": "startup_history_replay"},
+            "price_source": "persisted_one_minute_ohlc", "status": "DUMMY_PLACED",
+            "exit_reason": None, "exit_price": None, "completed_at_ist": None,
+            "duration_seconds": None, "broker_order_id": None, "real_order_submitted": False,
+        }
+
+    def _finish_recovery_order(self, order: dict, reason: str,
+                               price: float, stamp: datetime) -> None:
+        started = _dt(order.get("started_at_ist"))
+        units = int(order.get("quantity_units") or order.get("quantity") or 1)
+        points = round(float(price) - float(order["entry_price"]), 4)
+        gross = round(points * units, 2)
+        order.update({
+            "status": ("COMPLETED_TARGET" if reason == "TARGET" else
+                       "COMPLETED_STOP_LOSS" if reason == "STOP_LOSS" else
+                       "COMPLETED_SIGNAL_REVERSAL"),
+            "exit_reason": reason, "exit_price": round(float(price), 2),
+            "completed_at_ist": stamp.isoformat(),
+            "duration_seconds": round((stamp - started).total_seconds(), 3) if started else None,
+            "pnl_points": points, "pnl_gross": gross, "estimated_costs": 0.0,
+            "pnl_net": gross, "pnl_currency": "INR",
+            "pnl_cost_model": "gross_only_costs_not_configured",
+        })
+
+    async def _recover_supertrend_history(self, isolation_id: str, payload: dict) -> None:
+        if self._candle_store is None:
+            return
+        async with self._lock(isolation_id):
+            state = await asyncio.to_thread(self._store.load, isolation_id)
+            if not state or state.get("status") != "ACTIVE" or state.get("supertrend_startup_recovery"):
+                return
+            trade_date = state.get("trade_date_ist") or isolation_id.split("__", 1)[0]
+            cutoff = _dt(state.get("isolation_time")) or self._startup_at
+            signals = sorted((item for item in _st_candidates(payload)
+                              if cutoff < item["dt"] <= self._startup_at),
+                             key=lambda item: item["dt"])
+            meta = self._meta.get(isolation_id) or {
+                "legs": state.get("legs") or {}, "instrument_context": state.get("isolated_instrument") or {},
+                "instrument_meta": {}, "date_key": trade_date,
+            }
+            keys = {role: meta["legs"].get(role) for role in ("isolated", "opposite")}
+            candles = {role: self._candle_store.read_day(key, trade_date) if key else []
+                       for role, key in keys.items()}
+            required_roles = {("isolated" if x["direction"] == "BULLISH" else "opposite") for x in signals}
+            missing = [role for role in required_roles if not candles.get(role)]
+            if missing:
+                state["supertrend_startup_recovery"] = {
+                    "status": "WAITING_FOR_HISTORY", "started_at_ist": self._startup_at.isoformat(),
+                    "trade_date_ist": trade_date, "signals_found": len(signals),
+                    "missing_candle_roles": sorted(missing),
+                    "message": "Historical one-minute candles are required; Supertrend entries are paused rather than estimating unavailable prices.",
+                }
+                state["updated_at"] = _now().isoformat()
+                await asyncio.to_thread(self._store.save, isolation_id, state)
+                logger.error("Supertrend startup recovery waiting for candles iso=%s missing=%s",
+                             isolation_id, missing)
+                return
+
+            persisted_order = (state.get("orders") or {}).get("supertrend")
+            if isinstance(persisted_order, dict) and persisted_order.get("status") == "DUMMY_PLACED":
+                state["supertrend_startup_recovery"] = {
+                    "status": "SKIPPED_EXISTING_ORDER", "started_at_ist": self._startup_at.isoformat(),
+                    "message": "An open order already exists; preserving it prevents duplicate replay. Gap reconciliation for this pre-existing order is not performed.",
+                }
+                await asyncio.to_thread(self._store.save, isolation_id, state)
+                self._index_open_orders(isolation_id, state)
+                return
+
+            history = list(state.get("order_history") or [])
+            active, active_role, active_candles, last_processed = None, None, None, None
+            locked, replayed = False, 0
+
+            async def persist_closed(order: dict):
+                self._finish_recovery_order(order, order["exit_reason"],
+                                            float(order["exit_price"]), _dt(order["completed_at_ist"]))
+                history.append(dict(order))
+                await self._persist_mongo_order(trade_date, isolation_id, "supertrend",
+                                                order, meta.get("instrument_context") or {})
+                await self._persist_mongo_order_update(trade_date, isolation_id, "supertrend",
+                                                       order, meta.get("instrument_context") or {}, completed=True)
+
+            for signal in signals:
+                role = "isolated" if signal["direction"] == "BULLISH" else "opposite"
+                key, role_candles = keys.get(role), candles.get(role) or []
+                if active is not None:
+                    hit, result, _ = self._simulate_candles(
+                        active, active_candles or [], last_processed or _dt(active["started_at_ist"]),
+                        signal["dt"])
+                    if hit:
+                        active["exit_reason"], active["exit_price"] = result["reason"], result["price"]
+                        active["completed_at_ist"] = result["time"].isoformat()
+                        await persist_closed(active)
+                        if result["reason"] == "TARGET":
+                            locked = True
+                            break
+                        active = active_role = active_candles = last_processed = None
+                    elif role != active_role:
+                        prior = [bar for bar in (active_candles or [])
+                                 if (self._candle_dt(bar) or self._startup_at) < signal["dt"]]
+                        if not prior:
+                            state["supertrend_startup_recovery"] = {
+                                "status": "WAITING_FOR_HISTORY",
+                                "message": "No completed candle exists to price a historical reversal.",
+                                "signals_found": len(signals)}
+                            await asyncio.to_thread(self._store.save, isolation_id, state)
+                            return
+                        last = prior[-1]
+                        active["exit_reason"], active["exit_price"] = "SIGNAL_REVERSAL", float(last["close"])
+                        active["completed_at_ist"] = self._candle_dt(last).isoformat()
+                        await persist_closed(active)
+                        active = active_role = active_candles = last_processed = None
+                    else:
+                        continue
+                if locked:
+                    break
+                entry_candle = next((bar for bar in role_candles
+                                     if self._candle_dt(bar) is not None and
+                                     self._candle_dt(bar) > signal["dt"] and
+                                     self._candle_dt(bar) <= self._startup_at), None)
+                if entry_candle is None:
+                    state["supertrend_startup_recovery"] = {
+                        "status": "WAITING_FOR_HISTORY", "started_at_ist": self._startup_at.isoformat(),
+                        "message": f"No post-confirmation entry candle is available for signal at {signal['time']}.",
+                        "unpriced_signal_time": signal["time"],
+                    }
+                    await asyncio.to_thread(self._store.save, isolation_id, state)
+                    return
+                active = self._recovery_order(isolation_id, signal, role, key, entry_candle, meta)
+                active_role, active_candles = role, role_candles
+                last_processed = self._candle_dt(entry_candle)
+                replayed += 1
+
+            if active is not None and not locked:
+                hit, result, _ = self._simulate_candles(
+                    active, active_candles or [], last_processed or _dt(active["started_at_ist"]),
+                    self._startup_at + timedelta(seconds=1))
+                if hit:
+                    active["exit_reason"], active["exit_price"] = result["reason"], result["price"]
+                    active["completed_at_ist"] = result["time"].isoformat()
+                    await persist_closed(active)
+                    if result["reason"] == "TARGET":
+                        locked = True
+                    active = None
+
+            if locked:
+                state["supertrend_daily_target_locked"] = True
+                state["supertrend_daily_target_locked_at"] = _now().isoformat()
+                state["supertrend_daily_target_lock_reason"] = "STARTUP_RECOVERY_TARGET"
+            if active is not None:
+                state.setdefault("orders", {})["supertrend"] = active
+                await self._persist_mongo_order(trade_date, isolation_id, "supertrend",
+                                                active, meta.get("instrument_context") or {})
+            elif history:
+                state.setdefault("orders", {})["supertrend"] = history[-1]
+            state["order_history"] = history[-500:]
+            state["supertrend_startup_recovery"] = {
+                "status": "COMPLETED", "started_at_ist": self._startup_at.isoformat(),
+                "completed_at_ist": _now().isoformat(), "signals_found": len(signals),
+                "orders_replayed": replayed, "orders_completed": len(history),
+                "daily_target_locked": locked,
+                "method": "one_minute_ohlc_stop_first_if_both_levels_touch",
+            }
+            state["updated_at"] = _now().isoformat()
+            await asyncio.to_thread(self._store.save, isolation_id, state)
+            self._index_open_orders(isolation_id, state)
+            logger.info("Supertrend startup recovery complete iso=%s signals=%d replayed=%d completed=%d locked=%s",
+                        isolation_id, len(signals), replayed, len(history), locked)
+            await self._notify(state)
 
     async def on_market_tick(self, instrument_key: str, data: dict,
                              received_at: str | None = None) -> None:
@@ -546,6 +798,15 @@ class DummyOrderEngine:
                     "completed_at_ist": stamp,
                     "duration_seconds": round((tick_time - started).total_seconds(), 3) if started else None,
                 })
+                if indicator == "supertrend" and reason == "TARGET":
+                    state["supertrend_daily_target_locked"] = True
+                    state["supertrend_daily_target_locked_at"] = stamp
+                    state["supertrend_daily_target_order_id"] = order.get("order_id")
+                units = int(order.get("quantity_units") or order.get("quantity") or 1)
+                pnl_points = round(price - float(order.get("entry_price") or 0), 4)
+                order.update({"pnl_points": pnl_points, "pnl_gross": round(pnl_points * units, 2),
+                              "estimated_costs": 0.0, "pnl_net": round(pnl_points * units, 2),
+                              "pnl_currency": "INR", "pnl_cost_model": "gross_only_costs_not_configured"})
                 changed = True
             if not changed:
                 return
@@ -642,4 +903,9 @@ class DummyOrderEngine:
         result["enabled"] = self._config.dummy_orders_enabled
         result["sr_orders_enabled"] = self._indicator_enabled("sr")
         result["supertrend_orders_enabled"] = self._indicator_enabled("supertrend")
+        states = await asyncio.to_thread(self._store.list_all)
+        result["supertrend_daily_target_locked_count"] = sum(bool(x.get("supertrend_daily_target_locked")) for x in states)
+        result["startup_recovery_waiting_count"] = sum(
+            (x.get("supertrend_startup_recovery") or {}).get("status") == "WAITING_FOR_HISTORY"
+            for x in states)
         return result

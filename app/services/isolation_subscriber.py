@@ -49,13 +49,15 @@ class IsolationSubscriber:
         supertrend_state_store: SupertrendStateStore,
         live_feed_state_store: LiveFeedStateStore,
         dummy_order_engine: DummyOrderEngine | None = None,
+        live_feed_candle_store=None,
     ) -> None:
         self._config = config
         self._isolation_store = isolation_store
         self._state_store = state_store
         self._supertrend_state_store = supertrend_state_store
         self._live_feed_client = LiveFeedWsClientService(
-            config, live_feed_state_store, order_engine=dummy_order_engine
+            config, live_feed_state_store, order_engine=dummy_order_engine,
+            candle_store=live_feed_candle_store,
         )
         self._dummy_order_engine = dummy_order_engine
 

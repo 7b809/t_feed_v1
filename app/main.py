@@ -18,6 +18,7 @@ from .scheduler.scheduler_service import SchedulerService
 from .services.isolation_store import IsolationStore, today_ist_date
 from .services.isolation_subscriber import IsolationSubscriber
 from .services.live_feed_state_store import LiveFeedStateStore
+from .services.live_feed_candle_store import LiveFeedCandleStore
 from .services.mongodb_service import MongoDbService
 from .services.sr_state_store import SrStateStore
 from .services.supertrend_state_store import SupertrendStateStore
@@ -43,18 +44,20 @@ async def lifespan(app: FastAPI):
     sr_state_store = SrStateStore(config)
     supertrend_state_store = SupertrendStateStore(config)
     live_feed_state_store = LiveFeedStateStore(config)
+    live_feed_candle_store = LiveFeedCandleStore(config)
     telegram = TelegramService(config)
     dummy_order_store = DummyOrderStore(config)
     dummy_order_mongo_store = DummyOrderMongoStore(mongo.db["dummy_orders"])
     dummy_order_engine = DummyOrderEngine(
         config, dummy_order_store, live_feed_state_store, telegram,
         mongo_store=dummy_order_mongo_store,
+        candle_store=live_feed_candle_store,
     )
     backup_collection = mongo.db[config.daily_data_backup_collection]
     daily_backup_service = DailyDataBackupService(config, telegram, backup_collection)
     subscriber = IsolationSubscriber(
         config, isolation_store, sr_state_store, supertrend_state_store,
-        live_feed_state_store, dummy_order_engine,
+        live_feed_state_store, dummy_order_engine, live_feed_candle_store,
     )
 
     # -------- startup: today-only re-subscription
