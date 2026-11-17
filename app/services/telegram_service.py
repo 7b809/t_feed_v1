@@ -12,6 +12,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from ..config import Settings
+from .telegram_message_formatter import format_isolation_notification
 
 logger = logging.getLogger(__name__)
 
@@ -217,12 +218,21 @@ class TelegramService:
     async def notify_shutdown(self, app_name: str) -> bool:
         return await self._send(f"🛑 {app_name} stopped")
 
+    async def send_formatted_message(self, message: str) -> bool:
+        """Send a preformatted event notification without adding another title."""
+        return await self._send(str(message))
+
     async def notify_isolation(
-        self, isolation_id: str, instrument_key: str
+        self,
+        isolation_id: str,
+        instrument_key: str,
+        payload: dict | None = None,
+        overwrite: bool = False,
     ) -> bool:
-        return await self._send(
-            f"📥 Isolation received: {isolation_id} | leg={instrument_key}"
-        )
+        details = dict(payload or {})
+        details.setdefault("instrument_key", instrument_key)
+        message = format_isolation_notification(isolation_id, details, overwrite)
+        return await self._send(message)
 
     async def notify_ws_state(
         self,
