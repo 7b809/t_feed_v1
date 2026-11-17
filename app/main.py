@@ -7,9 +7,11 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.templating import Jinja2Templates
+from fastapi import Request
 
 from .api import health as health_api
+from .api import dashboard_query
 from .api import dummy_orders_query
 from .api import isolation_incoming, isolation_query, sr_query, supertrend_query, live_feed_query
 from .config import load_settings
@@ -150,6 +152,7 @@ async def lifespan(app: FastAPI):
     app.state.sr_state_store = sr_state_store
     app.state.supertrend_state_store = supertrend_state_store
     app.state.live_feed_state_store = live_feed_state_store
+    app.state.live_feed_candle_store = live_feed_candle_store
     app.state.subscriber = subscriber
     app.state.scheduler = scheduler
     app.state.telegram = telegram
@@ -196,11 +199,22 @@ app.include_router(sr_query.router, prefix="/api/v1", tags=["sr"])
 app.include_router(supertrend_query.router, prefix="/api/v1", tags=["supertrend"])
 app.include_router(live_feed_query.router, prefix="/api/v1", tags=["live-feed"])
 app.include_router(dummy_orders_query.router, prefix="/api/v1", tags=["dummy-orders"])
+app.include_router(dashboard_query.router, prefix="/api/v1", tags=["dashboard"])
+
+TEMPLATES = Jinja2Templates(directory=str(Path(__file__).resolve().parent.parent / "templates"))
 
 
 @app.get("/", include_in_schema=False)
-async def dashboard():
-    path = Path(__file__).resolve().parent.parent / "templates" / "index.html"
-    if path.exists():
-        return FileResponse(path, media_type="text/html")
-    return JSONResponse({"message": "isolation_consumer_service is running"})
+async def dashboard_home_page(request: Request):
+    return TEMPLATES.TemplateResponse(request=request, name="home.html",
+        context={"request": request, "active_page": "home", "page_title": "Live Operations"})
+
+@app.get("/isolated", include_in_schema=False)
+async def dashboard_isolated_page(request: Request):
+    return TEMPLATES.TemplateResponse(request=request, name="isolated.html",
+        context={"request": request, "active_page": "isolated", "page_title": "Isolated Instruments"})
+
+@app.get("/orders", include_in_schema=False)
+async def dashboard_orders_page(request: Request):
+    return TEMPLATES.TemplateResponse(request=request, name="orders.html",
+        context={"request": request, "active_page": "orders", "page_title": "Dummy Orders"})

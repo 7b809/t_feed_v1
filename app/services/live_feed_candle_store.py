@@ -248,3 +248,31 @@ class LiveFeedCandleStore:
                 matches.extend(item for item in payload["candles"] if isinstance(item, dict))
         unique = {str(item.get("ts")): item for item in matches if item.get("ts")}
         return [unique[key] for key in sorted(unique)]
+
+
+    def latest_tick(self, instrument_key: str) -> dict[str, Any] | None:
+        """Return the latest persisted one-minute candle snapshot for an instrument."""
+        candidates = []
+        for folder in self.base_dir.glob(f"*_{_safe(instrument_key)}"):
+            if folder.is_dir():
+                candidates.extend(folder.glob("*_1min.json"))
+        for path in sorted(candidates, key=lambda item: item.name, reverse=True):
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if payload.get("instrument_key") != instrument_key:
+                continue
+            candles = payload.get("candles") or []
+            if not candles:
+                continue
+            latest = max(candles, key=lambda item: str(item.get("ts") or ""))
+            return {
+                "ltp": latest.get("close"), "last_tick_at": payload.get("last_tick") or latest.get("ts"),
+                "date": payload.get("date"), "open": latest.get("open"), "high": latest.get("high"),
+                "low": latest.get("low"), "close": latest.get("close"), "volume": latest.get("volume"),
+                "oi": latest.get("oi"), "iv": latest.get("iv"), "bid": latest.get("bid"),
+                "ask": latest.get("ask"), "greeks": latest.get("greeks"),
+                "tick_count": payload.get("tick_count"), "source": "persisted_one_minute_candle",
+            }
+        return None
