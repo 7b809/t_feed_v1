@@ -237,9 +237,16 @@ def test_supertrend_opposite_signal_closes_and_replaces_open_order(tmp_path):
 def test_supertrend_does_not_reverse_when_existing_target_is_already_met(tmp_path):
     async def run():
         class TargetFeed:
+            def __init__(self):
+                self.calls = 0
+
             def latest(self, key):
+                self.calls += 1
+                # First read supplies the entry; second read is the reversal
+                # check against the already-open order's target.
+                price = 123.45 if self.calls == 1 else 200.0
                 return {"received_at": "2026-11-12T09:50:00+05:30",
-                        "data": {"ltpc": {"ltp": 200.0}}}
+                        "data": {"ltpc": {"ltp": price}}}
 
         config = SimpleNamespace(
             dummy_orders_enabled=True, dummy_sr_orders_enabled=True,
