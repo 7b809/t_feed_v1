@@ -149,30 +149,30 @@ async def lifespan(app: FastAPI):
             state for state in (states_today or [])
             if str(state.get("trade_date_ist") or state.get("isolation_id", "").split("__", 1)[0])[:10] == today_ist
         ]
+        restored_orders = {}
+        for state in states_today:
+            for order in list(state.get("order_history") or []) + list((state.get("orders") or {}).values()):
+                if not isinstance(order, dict):
+                    continue
+                identity = str(
+                    order.get("order_id")
+                    or f"{order.get('indicator', 'order')}:{order.get('started_at_ist') or order.get('entry_time_ist')}"
+                )
+                restored_orders[identity] = order
         open_count = sum(
-            1 for state in states_today
-            for order in (state.get("orders") or {}).values()
-            if isinstance(order, dict) and order.get("status") == "DUMMY_PLACED"
+            1 for order in restored_orders.values()
+            if order.get("status") == "DUMMY_PLACED"
         )
         completed_count = sum(
-            sum(1 for order in (state.get("order_history") or [])
-                if isinstance(order, dict) and str(order.get("status", "")).startswith("COMPLETED"))
-            for state in states_today
-        ) + sum(
-            1 for state in states_today
-            for order in (state.get("orders") or {}).values()
-            if isinstance(order, dict) and str(order.get("status", "")).startswith("COMPLETED")
+            1 for order in restored_orders.values()
+            if str(order.get("status", "")).startswith("COMPLETED")
         )
         await telegram.notify_startup(
             config.app_name,
             session=session_status,
             today_summary={
                 "active_isolations": len(active_today),
-                "orders": sum(
-                    len(state.get("order_history") or []) +
-                    sum(1 for order in (state.get("orders") or {}).values() if isinstance(order, dict))
-                    for state in states_today
-                ),
+                "orders": len(restored_orders),
                 "open_orders": open_count,
                 "completed_orders": completed_count,
             },
