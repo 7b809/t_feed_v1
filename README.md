@@ -336,7 +336,8 @@ Key `.env` fields:
 - `DATA_DIR` — isolation JSON mirror (empty = disabled)
 - `SR_WS_BASE_URL` / `SR_WS_BASE_URL_LOCAL` — upstream SR/Supertrend feed
 - `LIVE_FEED_PORT` / `LIVE_FEED_WS_URL` — local app1 market-feed WebSocket
-- `LIVE_FEED_START_*` / `LIVE_FEED_END_*` — IST live-feed connection window
+- `LIVE_FEED_START_*` / `LIVE_FEED_END_*` — shared IST session window for all WebSockets (defaults 09:15–15:30)
+- `MARKET_HOLIDAYS` — optional comma-separated NSE holiday dates (`YYYY-MM-DD`)
 - `LIVE_FEED_STATE_DIR` — raw market-feed JSONL/latest storage
 - `ISOLATION_NOTIFY_CLIENT_KEY` — shared secret with app1
 - `REQUIRE_TODAY_ONLY_SCOPE` — default `true`
