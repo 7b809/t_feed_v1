@@ -235,7 +235,7 @@ let historyTotalPages = 0;
    Helpers
    -------------------------------------------------------------------------- */
 function orderKey(o, idx) {
-  return o.order_id ? String(o.order_id) : `__idx_${idx}`;
+  return o.history_key || (o.order_id ? String(o.order_id) : `__idx_${idx}`);
 }
 
 function statusLabel(o) {
