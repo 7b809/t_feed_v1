@@ -106,6 +106,24 @@ class DummyOrderMongoStore:
             }], "$slice": -5000}}
         self._collection.update_one({"_id": date_key}, update, upsert=True)
 
+    def list_date_keys(self, limit: int = 365) -> list[str]:
+        """Return archived IST trading dates, newest first."""
+        safe_limit = max(1, min(int(limit), 3650))
+        cursor = self._collection.find({}, {"_id": 1}).sort("_id", -1).limit(safe_limit)
+        dates: list[str] = []
+        for document in cursor:
+            value = str(document.get("_id") or "")
+            try:
+                datetime.strptime(value, "%Y-%m-%d")
+            except ValueError:
+                continue
+            dates.append(value)
+        return dates
+
+    def get_day(self, date_key: str) -> dict[str, Any] | None:
+        """Load one daily archive document by its YYYY-MM-DD key."""
+        result = self._collection.find_one({"_id": date_key})
+        return result if isinstance(result, dict) else None
     @classmethod
     def _json_safe(cls, value: Any) -> Any:
         if isinstance(value, dict):
