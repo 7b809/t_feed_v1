@@ -161,6 +161,14 @@ def format_order_entry_notification(
     else:
         lines.append("No same-session quote was available; no simulated fill was recorded.")
 
+    level_price = trigger.get("level_price")
+    if level_price is not None:
+        level_detail = f"SR level: {_money(level_price)}"
+        config = _first_text(trigger, "config")
+        if config:
+            level_detail += f" • Config {config}"
+        lines.append(level_detail)
+
     confirmed = _time(trigger.get("confirmed_time"))
     if confirmed:
         lines.append(f"Confirmed: {confirmed}")
@@ -168,7 +176,7 @@ def format_order_entry_notification(
 
     source_symbol = _first_text(order, "source_trading_symbol")
     source_key = _first_text(order, "source_instrument_key")
-    if source_symbol or source_key:
+    if (source_symbol or source_key) and source_symbol != symbol and source_key != instrument_key:
         source_label = source_symbol or source_key
         lines.append(f"Signal source: {source_label}")
     lines.append("SIMULATION ONLY • No live order sent")
