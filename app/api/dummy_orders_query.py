@@ -46,10 +46,12 @@ async def list_dummy_order_history(
     except (TypeError, ValueError):
         raise HTTPException(status_code=400, detail="trade_date must be YYYY-MM-DD")
 
-    if page < 1:
-        raise HTTPException(status_code=400, detail="page must be >= 1")
+    if page < 1 or page > 1000000:
+        raise HTTPException(status_code=400, detail="page must be between 1 and 1000000")
     if page_size < 1 or page_size > 100:
         raise HTTPException(status_code=400, detail="page_size must be between 1 and 100")
+    if search and len(search) > 120:
+        raise HTTPException(status_code=400, detail="search must be 120 characters or fewer")
     if strategy and strategy.strip().upper() not in {"SR", "SUPERTREND"}:
         raise HTTPException(status_code=400, detail="strategy must be SR or SUPERTREND")
     allowed_statuses = {
@@ -72,18 +74,19 @@ async def list_dummy_order_history(
         search=search,
     )
     total = len(filtered_orders)
-    start = (page - 1) * page_size
-    items = filtered_orders[start:start + page_size]
     total_pages = (total + page_size - 1) // page_size
+    effective_page = min(page, total_pages) if total_pages else 1
+    start = (effective_page - 1) * page_size
+    items = filtered_orders[start:start + page_size]
 
     return {
         "trade_date": trade_date,
-        "page": page,
+        "page": effective_page,
         "page_size": page_size,
         "total": total,
         "total_pages": total_pages,
-        "has_previous": page > 1,
-        "has_next": page < total_pages,
+        "has_previous": effective_page > 1,
+        "has_next": effective_page < total_pages,
         "summary": summarize_orders(filtered_orders),
         "orders": items,
     }
