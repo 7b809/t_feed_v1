@@ -629,3 +629,27 @@ DUMMY_ORDERS_ENABLED=true
 DUMMY_ORDER_QUANTITY=1
 DUMMY_ORDER_STATE_DIR=./data/dummy_orders
 ```
+## Dummy order history dashboard and API
+
+The Orders dashboard provides two views:
+
+- **Today** reads the current local order-state files and refreshes automatically.
+- **History** reads the daily MongoDB archive (`dummy_orders` collection), with an IST trading-date picker, server-side strategy/status/search filters, 24-order pages, and date-wise summary metrics.
+
+History API endpoints (application base path `/api/v1`):
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| `GET` | `/dummy-orders/history/dates` | List up to 365 archived IST trading dates, newest first |
+| `GET` | `/dummy-orders/history?trade_date=YYYY-MM-DD&page=1&page_size=24` | Retrieve one date's filtered order history |
+
+Optional history query parameters: `strategy=SR|SUPERTREND`, `status=DUMMY_PLACED|COMPLETED_TARGET|COMPLETED_STOP_LOSS|COMPLETED_SIGNAL_REVERSAL`, and `search=<symbol-or-order-text>`. Page size is limited to 100. The API merges each day's `orders_history` events with the latest per-isolation order snapshots and de-duplicates them by isolation and order ID.
+
+Example:
+
+```bash
+curl -s 'http://localhost:8003/api/v1/dummy-orders/history/dates'
+curl -s 'http://localhost:8003/api/v1/dummy-orders/history?trade_date=2026-11-17&page=1&page_size=24'
+```
+
+History availability depends on archived documents already present in MongoDB. It does not backfill missing historical data from local state files.
