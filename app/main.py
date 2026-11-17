@@ -139,7 +139,7 @@ async def lifespan(app: FastAPI):
         except Exception:
             logger.exception("failed to refresh isolation mirror on startup")
 
-    scheduler = SchedulerService(config, subscriber, isolation_store, daily_backup_service)
+    scheduler = SchedulerService(config, subscriber, isolation_store, daily_backup_service, telegram)
     scheduler.start()
 
     try:
