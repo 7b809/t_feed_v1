@@ -23,12 +23,14 @@ def _first_text(source: Any, *keys: str) -> str | None:
 def _instrument_name(source: Any, fallback_key: str | None = None) -> str:
     if not isinstance(source, dict):
         return str(fallback_key or "Unknown instrument")
+    meta = source.get("meta") if isinstance(source.get("meta"), dict) else {}
     name = _first_text(
         source, "trading_symbol", "tradingsymbol", "symbol", "instrument_name",
+    ) or _first_text(
+        meta, "trading_symbol", "tradingsymbol", "symbol", "instrument_name",
     )
     if name:
         return name
-    meta = source.get("meta") if isinstance(source.get("meta"), dict) else {}
     strike = _first_text(source, "strike", "strike_price") or _first_text(
         meta, "strike_price", "strike",
     )
