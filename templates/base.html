@@ -1,26 +1,489 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#101828"><title>{{ page_title }} · OrderFlow</title>
-<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet"><link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
-<style>
-:root{--ink:#172033;--muted:#667085;--line:#e7ebf1;--bg:#f5f7fb;--navy:#101828;--blue:#315efb}
-body{background:var(--bg);color:var(--ink);font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}.navbar{background:var(--navy);box-shadow:0 4px 18px #10182820}.brand-mark{width:34px;height:34px;display:inline-grid;place-items:center;border-radius:10px;background:var(--blue);color:#fff;font-weight:800}.navbar .nav-link{color:#b9c3d2;border-radius:8px;padding:.55rem .85rem;font-weight:600}.navbar .nav-link.active,.navbar .nav-link:hover{color:#fff;background:#ffffff1a}
-.page-wrap{max-width:1500px;margin:auto;padding:30px 22px 50px}.page-heading{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-bottom:24px}.eyebrow{color:var(--blue);font-size:.72rem;font-weight:800;letter-spacing:.12em;text-transform:uppercase}.page-heading h1{font-size:clamp(1.55rem,3vw,2rem);font-weight:800;letter-spacing:-.04em;margin:.25rem 0 .35rem}.subheading{color:var(--muted);font-size:.92rem;margin:0}
-.surface,.metric-card,.instrument-card,.isolation-card{background:#fff;border:1px solid var(--line);border-radius:15px;box-shadow:0 3px 14px #10182809}.surface{padding:20px}.metric-card{padding:18px 20px;height:100%}.metric-label,.meta-label{color:var(--muted);font-size:.74rem;font-weight:750;text-transform:uppercase;letter-spacing:.06em}.metric-value{font-size:1.8rem;font-weight:800;letter-spacing:-.04em;margin-top:6px}.section-title{font-size:1rem;font-weight:800;margin:0}.section-note{color:var(--muted);font-size:.82rem}.instrument-card{padding:18px;height:100%;transition:.15s}.instrument-card:hover{transform:translateY(-2px);box-shadow:0 8px 24px #10182814}.instrument-symbol{font-weight:800;font-size:1rem}.instrument-key{font-size:.72rem;color:var(--muted);word-break:break-all}.ltp{font-size:1.8rem;font-weight:800;letter-spacing:-.05em}.meta-value{font-size:.84rem;font-weight:650}.badge-soft{background:#f2f4f7;color:#475467;border:1px solid #eaecf0}.badge-success-soft{background:#ecfdf3;color:#027a48;border:1px solid #abefc6}.badge-warning-soft{background:#fffaeb;color:#b54708;border:1px solid #fedf89}.badge-danger-soft{background:#fef3f2;color:#b42318;border:1px solid #fecdca}.table{--bs-table-bg:transparent;vertical-align:middle}.table thead th{color:var(--muted);font-size:.7rem;text-transform:uppercase;letter-spacing:.07em;font-weight:800;white-space:nowrap}.table td{font-size:.84rem}.form-control,.form-select,.btn{border-radius:9px}.empty-state{padding:42px 18px;text-align:center;color:var(--muted)}.chart-link{display:inline-flex;align-items:center;justify-content:center;gap:.35rem;white-space:nowrap}.chart-link i{font-size:1rem}.empty-state i{font-size:2rem;display:block;margin-bottom:10px;color:#98a2b3}.footer-note{color:#98a2b3;font-size:.75rem;text-align:center;padding-top:26px}.market-banner{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px max(14px,calc((100vw - 1456px)/2));font-size:.84rem;border-bottom:1px solid var(--line);background:#fff}.market-banner strong{font-weight:800}.market-banner.live{background:#ecfdf3;color:#027a48}.market-banner.closed{background:#fffaeb;color:#92400e}.market-banner .market-detail{color:inherit;opacity:.8}@media(max-width:767.98px){.market-banner{align-items:flex-start;flex-direction:column;gap:3px;padding:10px 14px}.page-wrap{padding:18px 12px 34px}.metric-card{padding:14px}.table-responsive{font-size:.8rem}}
-@media(max-width:767.98px){.page-wrap{padding:22px 14px 38px}.page-heading{flex-direction:column}.surface{padding:15px}.metric-value{font-size:1.55rem}}
-</style>{% block head %}{% endblock %}</head><body>
-<nav class="navbar navbar-expand-lg navbar-dark sticky-top"><div class="container-fluid px-lg-4"><a class="navbar-brand d-flex align-items-center gap-2 fw-bold" href="/"><span class="brand-mark">OF</span><span>OrderFlow<small class="fw-normal text-white-50 d-block" style="font-size:.62rem;letter-spacing:.12em">TRADING OPERATIONS</small></span></a>
-<button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#mainNav"><span class="navbar-toggler-icon"></span></button><div class="collapse navbar-collapse" id="mainNav"><div class="navbar-nav ms-auto gap-lg-1 mt-3 mt-lg-0"><a class="nav-link {% if active_page == 'home' %}active{% endif %}" href="/"><i class="bi bi-grid-1x2-fill me-1"></i>Overview</a><a class="nav-link {% if active_page == 'isolated' %}active{% endif %}" href="/isolated"><i class="bi bi-intersect me-1"></i>Isolated</a><a class="nav-link {% if active_page == 'orders' %}active{% endif %}" href="/orders"><i class="bi bi-receipt me-1"></i>Orders</a></div><div class="ms-lg-4 mt-3 mt-lg-0 small text-white-50"><span class="text-success">●</span> Dashboard online</div></div></div></nav>
-<div id="market-session-banner" class="market-banner closed" role="status" aria-live="polite"><strong>🕒 Checking market session…</strong><span class="market-detail">Asia/Kolkata</span></div>
-<main class="page-wrap">{% block content %}{% endblock %}<div class="footer-note">OrderFlow · Monitoring and local simulation dashboard · Times shown in Asia/Kolkata</div></main>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#101828">
+  <title>{{ page_title }} · OrderFlow</title>
+
+  <!-- ============================ FONTS & ICONS ============================ -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+
+  <style>
+    /* ============================ DESIGN TOKENS ============================ */
+    :root {
+      --ink: #172033;
+      --muted: #667085;
+      --line: #e7ebf1;
+      --bg: #f5f7fb;
+      --navy: #101828;
+      --blue: #315efb;
+      --blue-dark: #2349d1;
+      --shadow-sm: 0 3px 14px #10182809;
+      --shadow-md: 0 8px 24px #10182814;
+      --radius-lg: 15px;
+      --radius-md: 12px;
+      --radius-sm: 9px;
+    }
+
+    /* ================================ BASE ================================= */
+    body {
+      background: var(--bg);
+      color: var(--ink);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+      font-size: .925rem;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* =============================== NAVBAR ================================ */
+    .navbar {
+      background: var(--navy);
+      box-shadow: 0 4px 18px #10182820;
+    }
+
+    .brand-mark {
+      width: 36px; height: 36px;
+      display: inline-grid; place-items: center;
+      border-radius: 10px;
+      background: linear-gradient(135deg, var(--blue), var(--blue-dark));
+      color: #fff; font-weight: 800;
+      letter-spacing: -.02em;
+      box-shadow: 0 4px 12px #315efb55;
+    }
+
+    .navbar .navbar-brand small {
+      letter-spacing: .14em;
+      font-size: .58rem;
+      margin-top: 2px;
+    }
+
+    .navbar .nav-link {
+      color: #b9c3d2;
+      border-radius: var(--radius-sm);
+      padding: .5rem .9rem;
+      font-weight: 600;
+      font-size: .875rem;
+      transition: background-color .15s ease, color .15s ease;
+    }
+
+    .navbar .nav-link:hover { color: #fff; background: #ffffff14; }
+    .navbar .nav-link.active { color: #fff; background: #ffffff1f; }
+    .navbar .nav-link i { opacity: .9; }
+
+    .navbar-status {
+      font-size: .78rem;
+      color: #b9c3d2;
+    }
+
+    .navbar-status .dot {
+      display: inline-block;
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      background: #42d392;
+      margin-right: 6px;
+      box-shadow: 0 0 0 3px #42d39233;
+      vertical-align: middle;
+    }
+
+    /* ============================ MARKET BANNER ============================ */
+    .market-banner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 10px max(14px, calc((100vw - 1456px) / 2));
+      font-size: .84rem;
+      border-bottom: 1px solid var(--line);
+      background: #fff;
+      transition: background-color .25s ease, color .25s ease;
+    }
+
+    .market-banner strong { font-weight: 700; }
+
+    .market-banner.live   { background: #ecfdf3; color: #027a48; border-bottom-color: #abefc6; }
+    .market-banner.closed { background: #fffaeb; color: #92400e; border-bottom-color: #fedf89; }
+
+    .market-banner .market-detail {
+      color: inherit;
+      opacity: .8;
+      font-size: .8rem;
+    }
+
+    /* ============================= PAGE WRAP ============================== */
+    .page-wrap {
+      max-width: 1500px;
+      margin: auto;
+      padding: 28px 22px 48px;
+    }
+
+    /* =========================== PAGE HEADING ============================= */
+    .page-heading {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 16px;
+      margin-bottom: 22px;
+      padding-bottom: 18px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .eyebrow {
+      color: var(--blue);
+      font-size: .72rem;
+      font-weight: 800;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+    }
+
+    .page-heading h1 {
+      font-size: clamp(1.55rem, 3vw, 2rem);
+      font-weight: 800;
+      letter-spacing: -.04em;
+      margin: .25rem 0 .4rem;
+    }
+
+    .subheading {
+      color: var(--muted);
+      font-size: .92rem;
+      margin: 0;
+      max-width: 62ch;
+    }
+
+    /* ============================== SURFACES ============================== */
+    .surface,
+    .metric-card,
+    .instrument-card,
+    .isolation-card {
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-lg);
+      box-shadow: var(--shadow-sm);
+    }
+
+    .surface { padding: 20px; }
+
+    .metric-card {
+      padding: 18px 20px;
+      height: 100%;
+      transition: transform .15s ease, box-shadow .15s ease;
+    }
+    .metric-card:hover {
+      transform: translateY(-2px);
+      box-shadow: var(--shadow-md);
+    }
+
+    .metric-label, .meta-label {
+      color: var(--muted);
+      font-size: .74rem;
+      font-weight: 750;
+      text-transform: uppercase;
+      letter-spacing: .06em;
+    }
+
+    .metric-value {
+      font-size: 1.8rem;
+      font-weight: 800;
+      letter-spacing: -.04em;
+      margin-top: 6px;
+      line-height: 1.1;
+    }
+
+    .section-title {
+      font-size: 1rem;
+      font-weight: 800;
+      margin: 0;
+    }
+
+    .section-note {
+      color: var(--muted);
+      font-size: .82rem;
+    }
+
+    .instrument-card {
+      padding: 18px;
+      height: 100%;
+      transition: transform .15s ease, box-shadow .15s ease;
+    }
+    .instrument-card:hover {
+      transform: translateY(-2px);
+      box-shadow: var(--shadow-md);
+    }
+
+    .instrument-symbol {
+      font-weight: 800;
+      font-size: 1rem;
+    }
+
+    .instrument-key {
+      font-size: .72rem;
+      color: var(--muted);
+      word-break: break-all;
+    }
+
+    .ltp {
+      font-size: 1.8rem;
+      font-weight: 800;
+      letter-spacing: -.05em;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .meta-value {
+      font-size: .84rem;
+      font-weight: 650;
+    }
+
+    /* ============================== BADGES =============================== */
+    .badge-soft {
+      background: #f2f4f7;
+      color: #475467;
+      border: 1px solid #eaecf0;
+    }
+    .badge-success-soft {
+      background: #ecfdf3;
+      color: #027a48;
+      border: 1px solid #abefc6;
+    }
+    .badge-warning-soft {
+      background: #fffaeb;
+      color: #b54708;
+      border: 1px solid #fedf89;
+    }
+    .badge-danger-soft {
+      background: #fef3f2;
+      color: #b42318;
+      border: 1px solid #fecdca;
+    }
+
+    /* ============================== TABLES =============================== */
+    .table {
+      --bs-table-bg: transparent;
+      vertical-align: middle;
+    }
+    .table thead th {
+      color: var(--muted);
+      font-size: .7rem;
+      text-transform: uppercase;
+      letter-spacing: .07em;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+    .table td { font-size: .84rem; }
+    .table > :not(caption) > * > * { padding: .75rem .9rem; }
+
+    /* ============================== FORMS ================================ */
+    .form-control, .form-select, .btn { border-radius: var(--radius-sm); }
+    .form-control:focus, .form-select:focus {
+      border-color: var(--blue);
+      box-shadow: 0 0 0 .2rem #315efb22;
+    }
+
+    /* =========================== EMPTY STATES ============================ */
+    .empty-state {
+      padding: 42px 18px;
+      text-align: center;
+      color: var(--muted);
+    }
+    .empty-state i {
+      font-size: 2rem;
+      display: block;
+      margin-bottom: 10px;
+      color: #98a2b3;
+    }
+
+    /* ============================ CHART LINK ============================= */
+    .chart-link {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: .35rem;
+      white-space: nowrap;
+    }
+    .chart-link i { font-size: 1rem; }
+
+    /* ============================== FOOTER =============================== */
+    .footer-note {
+      color: #98a2b3;
+      font-size: .75rem;
+      text-align: center;
+      padding-top: 26px;
+      border-top: 1px solid var(--line);
+      margin-top: 28px;
+    }
+
+    /* ============================ RESPONSIVE ============================= */
+    @media (max-width: 767.98px) {
+      .market-banner {
+        align-items: flex-start;
+        flex-direction: column;
+        gap: 3px;
+        padding: 10px 14px;
+      }
+      .page-wrap { padding: 20px 14px 38px; }
+      .page-heading { flex-direction: column; }
+      .surface { padding: 15px; }
+      .metric-card { padding: 14px; }
+      .metric-value { font-size: 1.55rem; }
+      .table-responsive { font-size: .8rem; }
+      .footer-note { margin-top: 20px; }
+    }
+  </style>
+
+  {% block head %}{% endblock %}
+</head>
+
+<body>
+
+<!-- ================================ NAVBAR ================================ -->
+<nav class="navbar navbar-expand-lg navbar-dark sticky-top">
+  <div class="container-fluid px-lg-4">
+
+    <a class="navbar-brand d-flex align-items-center gap-2 fw-bold" href="/">
+      <span class="brand-mark">OF</span>
+      <span class="d-flex flex-column lh-1">
+        <span>OrderFlow</span>
+        <small class="fw-normal text-white-50 text-uppercase">Trading operations</small>
+      </span>
+    </a>
+
+    <button class="navbar-toggler border-0" type="button" data-bs-toggle="collapse" data-bs-target="#mainNav" aria-controls="mainNav" aria-expanded="false" aria-label="Toggle navigation">
+      <span class="navbar-toggler-icon"></span>
+    </button>
+
+    <div class="collapse navbar-collapse" id="mainNav">
+      <div class="navbar-nav ms-auto gap-lg-1 mt-3 mt-lg-0">
+        <a class="nav-link {% if active_page == 'home' %}active{% endif %}" href="/">
+          <i class="bi bi-grid-1x2-fill me-1"></i>Overview
+        </a>
+        <a class="nav-link {% if active_page == 'isolated' %}active{% endif %}" href="/isolated">
+          <i class="bi bi-intersect me-1"></i>Isolated
+        </a>
+        <a class="nav-link {% if active_page == 'orders' %}active{% endif %}" href="/orders">
+          <i class="bi bi-receipt me-1"></i>Orders
+        </a>
+      </div>
+
+      <div class="ms-lg-4 mt-3 mt-lg-0 navbar-status">
+        <span class="dot"></span>Dashboard online
+      </div>
+    </div>
+
+  </div>
+</nav>
+
+<!-- =========================== MARKET SESSION =========================== -->
+<div id="market-session-banner" class="market-banner closed" role="status" aria-live="polite">
+  <strong>🕒 Checking market session…</strong>
+  <span class="market-detail">Asia/Kolkata</span>
+</div>
+
+<!-- ================================= MAIN =============================== -->
+<main class="page-wrap">
+  {% block content %}{% endblock %}
+
+  <div class="footer-note">
+    <i class="bi bi-clock me-1"></i>
+    OrderFlow · Monitoring and local simulation dashboard · Times shown in Asia/Kolkata
+  </div>
+</main>
+
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+
 <script>
-const LIVE_CHART_BASE_URL='https://ng7.up.railway.app/chart/';
-function chartUrl(instrumentKey){return LIVE_CHART_BASE_URL+encodeURIComponent(String(instrumentKey||'').trim());}
-function chartLink(instrumentKey){if(!instrumentKey)return '';return '<a class="btn btn-sm btn-outline-primary chart-link" href="'+chartUrl(instrumentKey)+'" target="_blank" rel="noopener noreferrer" title="Open live chart" aria-label="Open live chart for '+escapeHtml(instrumentKey)+'"><i class="bi bi-graph-up-arrow"></i><span class="d-none d-sm-inline">Chart</span></a>';}
-function escapeHtml(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
-function formatPrice(v){return v===null||v===undefined||v===''?'—':Number(v).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2});}
-function formatDate(v){if(!v)return'—';const d=new Date(v);return Number.isNaN(d.getTime())?escapeHtml(v):d.toLocaleString('en-IN',{timeZone:'Asia/Kolkata',day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit',second:'2-digit'});}
-function stateBadge(v){const s=String(v||'unknown').toLowerCase(),c=(s==='connected'||s==='live'||s==='target'||s==='completed_target')?'badge-success-soft':(s.includes('fail')||s.includes('stop_loss')?'badge-danger-soft':(s.includes('connect')||s.includes('reconnect')||s==='subscribing'?'badge-warning-soft':'badge-soft'));return '<span class="badge rounded-pill '+c+'">'+escapeHtml(v||'unknown')+'</span>';}
-function setRefreshTime(){const e=document.getElementById('last-refresh');if(e)e.textContent='Updated '+new Date().toLocaleTimeString('en-IN');}
-async function refreshMarketSession(){const banner=document.getElementById('market-session-banner');if(!banner)return;try{const r=await fetch('/api/v1/dashboard/session',{cache:'no-store'});if(!r.ok)throw Error('session status unavailable');const s=(await r.json()).market_session||{};banner.className='market-banner '+(s.is_open?'live':'closed');const icon=s.is_open?'🟢':(s.state==='STANDBY'?'🕘':'🌙');banner.innerHTML='<strong>'+icon+' '+escapeHtml(s.label||s.state||'Market status')+'</strong><span class="market-detail">'+escapeHtml(s.reason||'')+' · '+escapeHtml(s.current_time_ist||'')+' · Session '+escapeHtml(s.session_start||'09:15')+'–'+escapeHtml(s.session_end||'15:30')+' IST</span>';}catch(e){banner.className='market-banner closed';banner.textContent='⚠️ Market session status unavailable';}}
-refreshMarketSession();setInterval(refreshMarketSession,15000);
-</script>{% block scripts %}{% endblock %}</body></html>
+/* ------------------------------- constants ------------------------------- */
+const LIVE_CHART_BASE_URL = 'https://ng7.up.railway.app/chart/';
+
+/* -------------------------------- helpers -------------------------------- */
+function chartUrl(instrumentKey) {
+  return LIVE_CHART_BASE_URL + encodeURIComponent(String(instrumentKey || '').trim());
+}
+
+function chartLink(instrumentKey) {
+  if (!instrumentKey) return '';
+  return `<a class="btn btn-sm btn-outline-primary chart-link"
+             href="${chartUrl(instrumentKey)}"
+             target="_blank" rel="noopener noreferrer"
+             title="Open live chart"
+             aria-label="Open live chart for ${escapeHtml(instrumentKey)}">
+            <i class="bi bi-graph-up-arrow"></i>
+            <span class="d-none d-sm-inline">Chart</span>
+          </a>`;
+}
+
+function escapeHtml(v) {
+  return String(v ?? '').replace(/[&<>"']/g, c => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[c]));
+}
+
+function formatPrice(v) {
+  return (v === null || v === undefined || v === '')
+    ? '—'
+    : Number(v).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function formatDate(v) {
+  if (!v) return '—';
+  const d = new Date(v);
+  return Number.isNaN(d.getTime())
+    ? escapeHtml(v)
+    : d.toLocaleString('en-IN', {
+        timeZone: 'Asia/Kolkata',
+        day: '2-digit', month: 'short',
+        hour: '2-digit', minute: '2-digit', second: '2-digit'
+      });
+}
+
+function stateBadge(v) {
+  const s = String(v || 'unknown').toLowerCase();
+  const cls = (s === 'connected' || s === 'live' || s === 'target' || s === 'completed_target')
+    ? 'badge-success-soft'
+    : (s.includes('fail') || s.includes('stop_loss'))
+      ? 'badge-danger-soft'
+      : (s.includes('connect') || s.includes('reconnect') || s === 'subscribing')
+        ? 'badge-warning-soft'
+        : 'badge-soft';
+  return `<span class="badge rounded-pill ${cls}">${escapeHtml(v || 'unknown')}</span>`;
+}
+
+function setRefreshTime() {
+  const el = document.getElementById('last-refresh');
+  if (el) el.textContent = 'Updated ' + new Date().toLocaleTimeString('en-IN');
+}
+
+/* --------------------------- market session ----------------------------- */
+async function refreshMarketSession() {
+  const banner = document.getElementById('market-session-banner');
+  if (!banner) return;
+
+  try {
+    const r = await fetch('/api/v1/dashboard/session', { cache: 'no-store' });
+    if (!r.ok) throw Error('session status unavailable');
+
+    const s = (await r.json()).market_session || {};
+    banner.className = 'market-banner ' + (s.is_open ? 'live' : 'closed');
+
+    const icon = s.is_open ? '🟢' : (s.state === 'STANDBY' ? '🕘' : '🌙');
+    banner.innerHTML = `
+      <strong>${icon} ${escapeHtml(s.label || s.state || 'Market status')}</strong>
+      <span class="market-detail">
+        ${escapeHtml(s.reason || '')} · ${escapeHtml(s.current_time_ist || '')}
+        · Session ${escapeHtml(s.session_start || '09:15')}–${escapeHtml(s.session_end || '15:30')} IST
+      </span>`;
+  } catch (e) {
+    banner.className = 'market-banner closed';
+    banner.innerHTML = '<strong>⚠️ Market session status unavailable</strong>';
+  }
+}
+
+refreshMarketSession();
+setInterval(refreshMarketSession, 15000);
+</script>
+
+{% block scripts %}{% endblock %}
+
+</body>
+</html>

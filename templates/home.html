@@ -1,9 +1,290 @@
-{% extends "base.html" %}{% block content %}
-<div class="page-heading"><div><div class="eyebrow">Live operations</div><h1>Market overview</h1><p class="subheading">Shared WebSocket health, subscribed instruments and live market prices.</p></div><div class="d-flex align-items-center gap-2"><span class="small text-secondary" id="last-refresh">Connecting…</span><button class="btn btn-outline-primary btn-sm" onclick="loadHome()"><i class="bi bi-arrow-clockwise me-1"></i>Refresh</button></div></div>
-<div class="row g-3 mb-4"><div class="col-6 col-xl-3"><div class="metric-card"><div class="metric-label">Active isolations</div><div class="metric-value" id="m-iso">—</div></div></div><div class="col-6 col-xl-3"><div class="metric-card"><div class="metric-label">Subscribed instruments</div><div class="metric-value" id="m-inst">—</div></div></div><div class="col-6 col-xl-3"><div class="metric-card"><div class="metric-label">Live prices available</div><div class="metric-value" id="m-live">—</div></div></div><div class="col-6 col-xl-3"><div class="metric-card"><div class="metric-label">Today's orders</div><div class="metric-value" id="m-today-orders">—</div></div></div><div class="col-6 col-xl-3"><div class="metric-card"><div class="metric-label">Open dummy orders</div><div class="metric-value" id="m-orders">—</div></div></div><div class="col-6 col-xl-3"><div class="metric-card"><div class="metric-label">Completed today</div><div class="metric-value" id="m-completed">—</div></div></div></div>
-<div class="surface mb-4"><div class="d-flex flex-wrap justify-content-between align-items-center gap-2"><div><h2 class="section-title">Shared live-feed WebSocket</h2><div class="section-note">One market-data connection shared across active instruments</div></div><div id="socket-state">Loading…</div></div><div class="row g-3 mt-2"><div class="col-6 col-lg-3"><div class="meta-label">Mode</div><div class="meta-value" id="feed-mode">—</div></div><div class="col-6 col-lg-3"><div class="meta-label">Connected at</div><div class="meta-value" id="feed-connected">—</div></div><div class="col-6 col-lg-3"><div class="meta-label">Last frame</div><div class="meta-value" id="feed-frame">—</div></div><div class="col-6 col-lg-3"><div class="meta-label">Reconnect attempts</div><div class="meta-value" id="feed-reconnects">—</div></div></div><div class="small text-danger mt-3" id="feed-error"></div></div>
-<div class="d-flex justify-content-between align-items-end mb-3"><div><h2 class="section-title">Subscribed instruments</h2><div class="section-note">LTP, contract details and last tick · auto-refreshes every 3 seconds</div></div><span class="badge badge-soft" id="inst-count">0 instruments</span></div><div class="row g-3" id="instrument-grid"><div class="col-12"><div class="surface empty-state">Waiting for live-feed data…</div></div></div>{% endblock %}
-{% block scripts %}<script>
-async function loadHome(){try{const r=await fetch('/api/v1/dashboard/home',{cache:'no-store'});if(!r.ok)throw Error('Dashboard API '+r.status);const d=await r.json(),s=d.summary||{},w=d.live_feed||{};document.getElementById('m-iso').textContent=s.active_isolations??0;document.getElementById('m-inst').textContent=s.subscribed_instruments??0;document.getElementById('m-live').textContent=s.instruments_with_ltp??0;document.getElementById('m-orders').textContent=s.open_orders??0;document.getElementById('m-today-orders').textContent=s.today_orders??0;document.getElementById('m-completed').textContent=s.completed_orders??0;document.getElementById('socket-state').innerHTML=stateBadge(w.ws_state);document.getElementById('feed-mode').textContent=(w.mode||'—')+' · '+(w.enabled?'enabled':'disabled');document.getElementById('feed-connected').textContent=formatDate(w.last_connected_at);document.getElementById('feed-frame').textContent=formatDate(w.last_frame_at);document.getElementById('feed-reconnects').textContent=w.reconnect_attempts??0;document.getElementById('feed-error').textContent=w.last_error||'';const items=d.instruments||[];document.getElementById('inst-count').textContent=items.length+' instruments';document.getElementById('instrument-grid').innerHTML=items.length?items.map(x=>{const q=x.feed_details||{};return '<div class="col-12 col-md-6 col-xl-4"><div class="instrument-card"><div class="d-flex justify-content-between gap-2"><div><div class="instrument-symbol">'+escapeHtml(x.trading_symbol)+'</div><div class="instrument-key mt-1">'+escapeHtml(x.instrument_key)+'</div></div><div class="d-flex align-items-center gap-2">'+stateBadge(x.ltp==null?'awaiting tick':'live price')+chartLink(x.instrument_key)+'</div></div><div class="d-flex justify-content-between align-items-end mt-4"><div><div class="meta-label">Last traded price</div><div class="ltp">'+(x.ltp==null?'—':'₹'+formatPrice(x.ltp))+'</div></div><div class="text-end"><div class="meta-label">Last tick</div><div class="meta-value">'+formatDate(x.last_tick_at)+'</div></div></div><hr class="my-3"><div class="row g-2"><div class="col-6"><div class="meta-label">Roles</div><div class="meta-value">'+escapeHtml((x.roles||[]).join(' · ')||'—')+'</div></div><div class="col-6"><div class="meta-label">Isolation links</div><div class="meta-value">'+(x.isolation_ids||[]).length+'</div></div><div class="col-6"><div class="meta-label">Bid / Ask</div><div class="meta-value">'+formatPrice(q.bid)+' / '+formatPrice(q.ask)+'</div></div><div class="col-6"><div class="meta-label">Volume / OI</div><div class="meta-value">'+(q.volume??'—')+' / '+(q.oi??'—')+'</div></div></div></div></div>';}).join(''):'<div class="col-12"><div class="surface empty-state"><i class="bi bi-broadcast"></i>No subscribed instruments yet.</div></div>';setRefreshTime();}catch(e){document.getElementById('instrument-grid').innerHTML='<div class="col-12 alert alert-danger">'+escapeHtml(e.message)+'</div>';}}
-loadHome();setInterval(loadHome,3000);
-</script>{% endblock %}
+{% extends "base.html" %}
+{% block content %}
+
+<style>
+  .metric-card { transition: transform .15s ease, box-shadow .15s ease; }
+  .metric-card:hover { transform: translateY(-2px); box-shadow: 0 .5rem 1.25rem rgba(0,0,0,.08) !important; }
+  .metric-icon { width: 38px; height: 38px; display: inline-flex; align-items: center; justify-content: center; }
+  .instrument-card { transition: transform .15s ease, box-shadow .15s ease; }
+  .instrument-card:hover { transform: translateY(-2px); box-shadow: 0 .5rem 1.25rem rgba(0,0,0,.08) !important; }
+  .eyebrow { letter-spacing: .08em; }
+  .ltp { font-variant-numeric: tabular-nums; }
+</style>
+
+<!-- ============================= PAGE HEADING ============================= -->
+<div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-4 pb-3 border-bottom">
+  <div>
+    <div class="eyebrow text-uppercase text-primary fw-semibold small mb-1">Live operations</div>
+    <h1 class="h3 fw-bold mb-2">Market overview</h1>
+    <p class="text-muted mb-0">Shared WebSocket health, subscribed instruments and live market prices.</p>
+  </div>
+  <div class="d-flex align-items-center gap-2">
+    <span class="badge text-bg-light border fw-normal px-3 py-2" id="last-refresh">Connecting…</span>
+    <button class="btn btn-primary btn-sm px-3 py-2" onclick="loadHome()">
+      <i class="bi bi-arrow-clockwise me-1"></i>Refresh
+    </button>
+  </div>
+</div>
+
+<!-- ============================== METRIC CARDS ============================= -->
+<div class="row g-3 g-lg-4 mb-4">
+
+  <div class="col-6 col-md-4 col-xl-2">
+    <div class="card h-100 border-0 shadow-sm metric-card">
+      <div class="card-body d-flex flex-column justify-content-between p-3 p-lg-4">
+        <div class="d-flex justify-content-between align-items-start mb-3">
+          <span class="metric-label text-uppercase text-muted small fw-semibold">Active isolations</span>
+          <span class="metric-icon rounded-3 bg-primary-subtle text-primary"><i class="bi bi-layers"></i></span>
+        </div>
+        <div class="metric-value fw-bold fs-3 lh-1" id="m-iso">—</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-6 col-md-4 col-xl-2">
+    <div class="card h-100 border-0 shadow-sm metric-card">
+      <div class="card-body d-flex flex-column justify-content-between p-3 p-lg-4">
+        <div class="d-flex justify-content-between align-items-start mb-3">
+          <span class="metric-label text-uppercase text-muted small fw-semibold">Subscribed instruments</span>
+          <span class="metric-icon rounded-3 bg-info-subtle text-info"><i class="bi bi-broadcast"></i></span>
+        </div>
+        <div class="metric-value fw-bold fs-3 lh-1" id="m-inst">—</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-6 col-md-4 col-xl-2">
+    <div class="card h-100 border-0 shadow-sm metric-card">
+      <div class="card-body d-flex flex-column justify-content-between p-3 p-lg-4">
+        <div class="d-flex justify-content-between align-items-start mb-3">
+          <span class="metric-label text-uppercase text-muted small fw-semibold">Live prices available</span>
+          <span class="metric-icon rounded-3 bg-success-subtle text-success"><i class="bi bi-activity"></i></span>
+        </div>
+        <div class="metric-value fw-bold fs-3 lh-1" id="m-live">—</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-6 col-md-4 col-xl-2">
+    <div class="card h-100 border-0 shadow-sm metric-card">
+      <div class="card-body d-flex flex-column justify-content-between p-3 p-lg-4">
+        <div class="d-flex justify-content-between align-items-start mb-3">
+          <span class="metric-label text-uppercase text-muted small fw-semibold">Today's orders</span>
+          <span class="metric-icon rounded-3 bg-secondary-subtle text-secondary"><i class="bi bi-calendar-check"></i></span>
+        </div>
+        <div class="metric-value fw-bold fs-3 lh-1" id="m-today-orders">—</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-6 col-md-4 col-xl-2">
+    <div class="card h-100 border-0 shadow-sm metric-card">
+      <div class="card-body d-flex flex-column justify-content-between p-3 p-lg-4">
+        <div class="d-flex justify-content-between align-items-start mb-3">
+          <span class="metric-label text-uppercase text-muted small fw-semibold">Open dummy orders</span>
+          <span class="metric-icon rounded-3 bg-warning-subtle text-warning"><i class="bi bi-hourglass-split"></i></span>
+        </div>
+        <div class="metric-value fw-bold fs-3 lh-1" id="m-orders">—</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-6 col-md-4 col-xl-2">
+    <div class="card h-100 border-0 shadow-sm metric-card">
+      <div class="card-body d-flex flex-column justify-content-between p-3 p-lg-4">
+        <div class="d-flex justify-content-between align-items-start mb-3">
+          <span class="metric-label text-uppercase text-muted small fw-semibold">Completed today</span>
+          <span class="metric-icon rounded-3 bg-success-subtle text-success"><i class="bi bi-check2-circle"></i></span>
+        </div>
+        <div class="metric-value fw-bold fs-3 lh-1" id="m-completed">—</div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- ========================== LIVE FEED WEBSOCKET ========================== -->
+<div class="card border-0 shadow-sm mb-4">
+  <div class="card-header bg-white border-0 d-flex flex-wrap justify-content-between align-items-start gap-2 px-3 px-lg-4 pt-3 pt-lg-4 pb-0">
+    <div>
+      <h2 class="h5 fw-semibold mb-1">Shared live-feed WebSocket</h2>
+      <p class="text-muted small mb-0">One market-data connection shared across active instruments</p>
+    </div>
+    <div id="socket-state">Loading…</div>
+  </div>
+  <div class="card-body px-3 px-lg-4 py-3 py-lg-4">
+    <div class="row g-3">
+
+      <div class="col-6 col-lg-3">
+        <div class="h-100 p-3 bg-light rounded-3 border">
+          <div class="meta-label text-uppercase text-muted small fw-semibold mb-1">Mode</div>
+          <div class="meta-value fw-medium" id="feed-mode">—</div>
+        </div>
+      </div>
+
+      <div class="col-6 col-lg-3">
+        <div class="h-100 p-3 bg-light rounded-3 border">
+          <div class="meta-label text-uppercase text-muted small fw-semibold mb-1">Connected at</div>
+          <div class="meta-value fw-medium" id="feed-connected">—</div>
+        </div>
+      </div>
+
+      <div class="col-6 col-lg-3">
+        <div class="h-100 p-3 bg-light rounded-3 border">
+          <div class="meta-label text-uppercase text-muted small fw-semibold mb-1">Last frame</div>
+          <div class="meta-value fw-medium" id="feed-frame">—</div>
+        </div>
+      </div>
+
+      <div class="col-6 col-lg-3">
+        <div class="h-100 p-3 bg-light rounded-3 border">
+          <div class="meta-label text-uppercase text-muted small fw-semibold mb-1">Reconnect attempts</div>
+          <div class="meta-value fw-medium" id="feed-reconnects">—</div>
+        </div>
+      </div>
+
+    </div>
+
+    <div class="small text-danger mt-3 mb-0" id="feed-error"></div>
+  </div>
+</div>
+
+<!-- ========================= SUBSCRIBED INSTRUMENTS ======================== -->
+<div class="d-flex flex-wrap justify-content-between align-items-end gap-2 mb-3">
+  <div>
+    <h2 class="h5 fw-semibold mb-1">Subscribed instruments</h2>
+    <p class="text-muted small mb-0">LTP, contract details and last tick · auto-refreshes every 3 seconds</p>
+  </div>
+  <span class="badge text-bg-light border fw-normal px-3 py-2" id="inst-count">0 instruments</span>
+</div>
+
+<div class="row g-3 g-lg-4" id="instrument-grid">
+  <div class="col-12">
+    <div class="card border-0 shadow-sm">
+      <div class="card-body text-center text-muted py-5">
+        <i class="bi bi-hourglass-split d-block fs-3 mb-2"></i>
+        Waiting for live-feed data…
+      </div>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function loadHome() {
+  try {
+    const r = await fetch('/api/v1/dashboard/home', { cache: 'no-store' });
+    if (!r.ok) throw Error('Dashboard API ' + r.status);
+
+    const d = await r.json();
+    const s = d.summary || {};
+    const w = d.live_feed || {};
+
+    // ---------- metric cards ----------
+    document.getElementById('m-iso').textContent          = s.active_isolations ?? 0;
+    document.getElementById('m-inst').textContent         = s.subscribed_instruments ?? 0;
+    document.getElementById('m-live').textContent         = s.instruments_with_ltp ?? 0;
+    document.getElementById('m-orders').textContent       = s.open_orders ?? 0;
+    document.getElementById('m-today-orders').textContent = s.today_orders ?? 0;
+    document.getElementById('m-completed').textContent    = s.completed_orders ?? 0;
+
+    // ---------- websocket health ----------
+    document.getElementById('socket-state').innerHTML   = stateBadge(w.ws_state);
+    document.getElementById('feed-mode').textContent    = (w.mode || '—') + ' · ' + (w.enabled ? 'enabled' : 'disabled');
+    document.getElementById('feed-connected').textContent = formatDate(w.last_connected_at);
+    document.getElementById('feed-frame').textContent   = formatDate(w.last_frame_at);
+    document.getElementById('feed-reconnects').textContent = w.reconnect_attempts ?? 0;
+    document.getElementById('feed-error').textContent   = w.last_error || '';
+
+    // ---------- instruments ----------
+    const items = d.instruments || [];
+    document.getElementById('inst-count').textContent = items.length + ' instruments';
+    document.getElementById('instrument-grid').innerHTML = items.length
+      ? items.map(instrumentCard).join('')
+      : `<div class="col-12">
+           <div class="card border-0 shadow-sm">
+             <div class="card-body text-center text-muted py-5">
+               <i class="bi bi-broadcast d-block fs-3 mb-2"></i>
+               No subscribed instruments yet.
+             </div>
+           </div>
+         </div>`;
+
+    setRefreshTime();
+  } catch (e) {
+    document.getElementById('instrument-grid').innerHTML =
+      `<div class="col-12">
+         <div class="alert alert-danger shadow-sm mb-0">
+           <i class="bi bi-exclamation-triangle me-1"></i>${escapeHtml(e.message)}
+         </div>
+       </div>`;
+  }
+}
+
+function instrumentCard(x) {
+  const q = x.feed_details || {};
+  const roles = (x.roles || []).join(' · ') || '—';
+  const isoCount = (x.isolation_ids || []).length;
+
+  return `
+  <div class="col-12 col-md-6 col-xl-4">
+    <div class="card h-100 border-0 shadow-sm instrument-card">
+      <div class="card-body p-3 p-lg-4 d-flex flex-column">
+
+        <!-- header -->
+        <div class="d-flex justify-content-between align-items-start gap-2 mb-3">
+          <div class="overflow-hidden">
+            <div class="instrument-symbol fw-semibold fs-5 text-truncate">${escapeHtml(x.trading_symbol)}</div>
+            <div class="instrument-key text-muted small mt-1 text-truncate" title="${escapeHtml(x.instrument_key)}">
+              ${escapeHtml(x.instrument_key)}
+            </div>
+          </div>
+          <div class="d-flex align-items-center gap-2 flex-shrink-0">
+            ${stateBadge(x.ltp == null ? 'awaiting tick' : 'live price')}
+            ${chartLink(x.instrument_key)}
+          </div>
+        </div>
+
+        <!-- price block -->
+        <div class="d-flex justify-content-between align-items-end gap-3 p-3 bg-light border rounded-3 mb-3">
+          <div>
+            <div class="meta-label text-uppercase text-muted small fw-semibold mb-1">Last traded price</div>
+            <div class="ltp fw-bold fs-4 lh-1">${x.ltp == null ? '—' : '₹' + formatPrice(x.ltp)}</div>
+          </div>
+          <div class="text-end">
+            <div class="meta-label text-uppercase text-muted small fw-semibold mb-1">Last tick</div>
+            <div class="meta-value small fw-medium">${formatDate(x.last_tick_at)}</div>
+          </div>
+        </div>
+
+        <!-- details grid -->
+        <div class="row g-3 mt-auto pt-3 border-top">
+          <div class="col-6">
+            <div class="meta-label text-uppercase text-muted small fw-semibold mb-1">Roles</div>
+            <div class="meta-value small fw-medium">${escapeHtml(roles)}</div>
+          </div>
+          <div class="col-6">
+            <div class="meta-label text-uppercase text-muted small fw-semibold mb-1">Isolation links</div>
+            <div class="meta-value small fw-medium">${isoCount}</div>
+          </div>
+          <div class="col-6">
+            <div class="meta-label text-uppercase text-muted small fw-semibold mb-1">Bid / Ask</div>
+            <div class="meta-value small fw-medium">${formatPrice(q.bid)} / ${formatPrice(q.ask)}</div>
+          </div>
+          <div class="col-6">
+            <div class="meta-label text-uppercase text-muted small fw-semibold mb-1">Volume / OI</div>
+            <div class="meta-value small fw-medium">${q.volume ?? '—'} / ${q.oi ?? '—'}</div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>`;
+}
+
+loadHome();
+setInterval(loadHome, 3000);
+</script>
+{% endblock %}
