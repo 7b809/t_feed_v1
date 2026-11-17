@@ -76,9 +76,9 @@ def _sr_candidates(payload: dict) -> list[dict]:
 
 def _direction(value: Any) -> str | None:
     value = str(value or "").strip().upper().replace("-", "_").replace(" ", "_")
-    if value in {"BULLISH", "BULL", "BUY", "UP", "UPTREND", "GREEN"}:
+    if value in {"BULLISH", "BULL", "BUY", "UP", "UPTREND", "GREEN", "SUPPORT"}:
         return "BULLISH"
-    if value in {"BEARISH", "BEAR", "SELL", "DOWN", "DOWNTREND", "RED"}:
+    if value in {"BEARISH", "BEAR", "SELL", "DOWN", "DOWNTREND", "RED", "RESISTANCE"}:
         return "BEARISH"
     return None
 
@@ -335,8 +335,11 @@ class DummyOrderEngine:
             if not self._indicator_enabled(indicator):
                 return
             existing_order = (state.get("orders") or {}).get(indicator)
+            # SR orders remain one-shot. Supertrend orders may be reversed by
+            # a later opposite confirmed signal while the current order is open.
             if existing_order and existing_order.get("status") != "DISABLED":
-                return
+                if indicator != "supertrend" or existing_order.get("status") != "DUMMY_PLACED":
+                    return
             meta = self._meta.get(isolation_id) or {
                 "legs": state.get("legs") or {},
                 "cutoff": _dt(state.get("isolation_time")) or _now(),
@@ -370,6 +373,59 @@ class DummyOrderEngine:
             if not target_key:
                 logger.warning("Dummy order target role %s missing for %s", role, isolation_id)
                 return
+            # A new opposite Supertrend signal reverses an open dummy order.
+            # Close at the latest same-session LTP, but never replace an order
+            # if that quote already satisfies its target or stop.
+            if isinstance(existing_order, dict) and existing_order.get("status") == "DUMMY_PLACED":
+                old_key = existing_order.get("target_instrument_key") or existing_order.get("instrument_key")
+                if old_key == target_key:
+                    return  # duplicate/same-side signal; keep the current trade open
+                old_quote = await asyncio.to_thread(self._live_feed.latest, old_key)
+                old_quote_time = _dt((old_quote or {}).get("received_at"))
+                trade_date = state.get("trade_date_ist") or isolation_id.split("__", 1)[0]
+                old_price = (_price((old_quote or {}).get("data") or {})
+                             if old_quote_time and old_quote_time.strftime("%Y-%m-%d") == trade_date
+                             else None)
+                if old_price is None:
+                    logger.warning("Cannot reverse Supertrend order without a same-session LTP iso=%s key=%s",
+                                   isolation_id, old_key)
+                    return
+                old_stop = existing_order.get("stop_loss_price")
+                old_target = existing_order.get("target_price")
+                if old_target is not None and old_price >= float(old_target):
+                    close_reason = "TARGET"
+                elif old_stop is not None and old_price <= float(old_stop):
+                    close_reason = "STOP_LOSS"
+                else:
+                    close_reason = "SIGNAL_REVERSAL"
+                close_time = _now()
+                started = _dt(existing_order.get("started_at_ist") or existing_order.get("entry_time_ist"))
+                existing_order.update({
+                    "status": ("COMPLETED_TARGET" if close_reason == "TARGET" else
+                               "COMPLETED_STOP_LOSS" if close_reason == "STOP_LOSS" else
+                               "COMPLETED_SIGNAL_REVERSAL"),
+                    "exit_reason": close_reason,
+                    "exit_price": old_price,
+                    "completed_at_ist": close_time.isoformat(),
+                    "duration_seconds": round((close_time - started).total_seconds(), 3) if started else None,
+                    "reversed_by_signal": trigger,
+                    "replaced_by_target_instrument_key": target_key if close_reason == "SIGNAL_REVERSAL" else None,
+                })
+                state.setdefault("order_history", []).append(dict(existing_order))
+                state["updated_at"] = close_time.isoformat()
+                await asyncio.to_thread(self._store.save, isolation_id, state)
+                await self._persist_mongo_order_update(
+                    meta.get("date_key") or self._date_key(state, isolation_id),
+                    isolation_id, indicator, existing_order,
+                    meta.get("instrument_context") or {}, completed=True,
+                )
+                self._index_open_orders(isolation_id, state)
+                await self._notify_completion(state, indicator, existing_order)
+                if close_reason != "SIGNAL_REVERSAL":
+                    logger.info("Supertrend signal arrived after existing order exit threshold iso=%s reason=%s",
+                                isolation_id, close_reason)
+                    return
+
             quote = await asyncio.to_thread(self._live_feed.latest, target_key)
             quote_received_at = (quote or {}).get("received_at")
             quote_time = _dt(quote_received_at)
@@ -389,7 +445,7 @@ class DummyOrderEngine:
             stop_loss_percent = float(getattr(self._config, "dummy_order_stop_loss_percent", 30))
             target_points = self._target_points(entry) if entry is not None else None
             order = {
-                "order_id": f"DUMMY-{indicator.upper()}-{isolation_id}",
+                "order_id": f"DUMMY-{indicator.upper()}-{isolation_id}-{signal['dt'].strftime('%H%M%S')}",
                 "mode": "DUMMY_ONLY", "indicator": indicator.upper(), "side": "BUY",
                 "signal_direction": direction, "source_instrument_key": source_key,
                 "source_leg_role": source_role, "source_trading_symbol": (
