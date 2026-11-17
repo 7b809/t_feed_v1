@@ -845,12 +845,24 @@ class DummyOrderEngine:
             logger.exception("Mongo dummy-order update failed date=%s iso=%s indicator=%s",
                              date_key, isolation_id, indicator)
 
+    async def _send_formatted_telegram(self, message: str, title: str,
+                                       level: str = "INFO") -> None:
+        sender = getattr(self._telegram, "send_formatted_message", None)
+        if callable(sender):
+            await sender(message)
+        else:
+            # Backward compatibility for small notifier adapters used by tests
+            # or deployments that still expose only send_message(title, body).
+            await self._telegram.send_message(title, message, level=level)
+
     async def _notify_entry(self, state: dict, order: dict) -> None:
         if self._telegram is None:
             return
         try:
-            await self._telegram.send_formatted_message(
-                format_order_entry_notification(state, order)
+            await self._send_formatted_telegram(
+                format_order_entry_notification(state, order),
+                "Simulated entry",
+                "SUCCESS",
             )
         except Exception:
             logger.exception("Dummy order entry Telegram notification failed")
@@ -859,8 +871,10 @@ class DummyOrderEngine:
         if self._telegram is None:
             return
         try:
-            await self._telegram.send_formatted_message(
-                format_order_completion_notification(state, indicator, order)
+            await self._send_formatted_telegram(
+                format_order_completion_notification(state, indicator, order),
+                "Simulated order closed",
+                "SUCCESS",
             )
         except Exception:
             logger.exception("Dummy order completion Telegram notification failed")
@@ -869,8 +883,10 @@ class DummyOrderEngine:
         if self._telegram is None:
             return
         try:
-            await self._telegram.send_formatted_message(
-                format_recovery_notification(state)
+            await self._send_formatted_telegram(
+                format_recovery_notification(state),
+                "Startup recovery",
+                "INFO",
             )
         except Exception:
             logger.exception("Dummy order recovery Telegram notification failed")
