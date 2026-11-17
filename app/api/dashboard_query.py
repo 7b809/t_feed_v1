@@ -1,7 +1,10 @@
 """Read-only dashboard data APIs for live feed, isolations and dummy orders."""
 from __future__ import annotations
 import asyncio
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from typing import Any
+from ..services.market_session import market_session_status
 from fastapi import APIRouter, Request
 
 router = APIRouter()
@@ -98,8 +101,9 @@ async def dashboard_home(request: Request) -> dict:
     subscriber = request.app.state.subscriber
     live = subscriber.get_live_feed_client().status()
     instruments, isolations = await _build_instruments(request)
-    orders = _flatten_orders(await request.app.state.dummy_order_engine.get_orders())
-    return {"summary": {
+    orders = _today_orders(_flatten_orders(await request.app.state.dummy_order_engine.get_orders()))
+    session = market_session_status(request.app.state.config)
+    return {"market_session": session, "summary": {
         "active_isolations": len(isolations),
         "subscribed_instruments": len(live.get("desired_instrument_keys") or []),
         "instruments_with_ltp": sum(1 for item in instruments if item.get("ltp") is not None),
@@ -109,11 +113,16 @@ async def dashboard_home(request: Request) -> dict:
 @router.get("/dashboard/isolations")
 async def dashboard_isolations(request: Request) -> dict:
     instruments, isolations = await _build_instruments(request)
-    return {"count": len(isolations), "isolations": isolations, "instruments": instruments}
+    return {"market_session": market_session_status(request.app.state.config),
+            "count": len(isolations), "isolations": isolations, "instruments": instruments}
+
+@router.get("/dashboard/session")
+async def dashboard_session(request: Request) -> dict:
+    return {"market_session": market_session_status(request.app.state.config)}
 
 @router.get("/dashboard/orders")
 async def dashboard_orders(request: Request) -> dict:
-    orders = _flatten_orders(await request.app.state.dummy_order_engine.get_orders())
+    orders = _today_orders(_flatten_orders(await request.app.state.dummy_order_engine.get_orders()))
     completed = [x for x in orders if str(x.get("status", "")).startswith("COMPLETED")]
     pnl_values = [float(x["pnl_net"]) for x in completed if isinstance(x.get("pnl_net"), (int, float))]
     return {"summary": {
@@ -124,6 +133,13 @@ async def dashboard_orders(request: Request) -> dict:
         "stop_losses": sum(1 for x in completed if x.get("exit_reason") == "STOP_LOSS"),
         "realized_pnl": round(sum(pnl_values), 2) if pnl_values else None,
     }, "orders": orders}
+
+def _today_orders(orders: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    today = datetime.now(ZoneInfo("Asia/Kolkata")).date().isoformat()
+    return [item for item in orders if str(
+        item.get("trade_date_ist") or item.get("trade_date") or
+        (item.get("isolation_id") or "").split("__", 1)[0]
+    )[:10] == today]
 
 def _flatten_orders(states: list[dict[str, Any]]) -> list[dict[str, Any]]:
     flattened: dict[str, dict[str, Any]] = {}
