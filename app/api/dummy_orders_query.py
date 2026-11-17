@@ -12,13 +12,6 @@ async def dummy_orders_status(request: Request) -> dict:
 async def list_dummy_orders(request: Request) -> list:
     return await request.app.state.dummy_order_engine.get_orders()
 
-@router.get("/dummy-orders/{isolation_id}")
-async def get_dummy_orders(isolation_id: str, request: Request) -> dict:
-    state = await request.app.state.dummy_order_engine.get_orders(isolation_id)
-    if state is None:
-        raise HTTPException(status_code=404, detail="no dummy-order state for isolation")
-    return state
-
 
 @router.get("/dummy-orders/history/dates")
 async def list_dummy_order_history_dates(request: Request) -> dict:
@@ -94,3 +87,10 @@ async def list_dummy_order_history(
         "summary": summarize_orders(filtered_orders),
         "orders": items,
     }
+
+@router.get("/dummy-orders/{isolation_id}")
+async def get_dummy_orders(isolation_id: str, request: Request) -> dict:
+    state = await request.app.state.dummy_order_engine.get_orders(isolation_id)
+    if state is None:
+        raise HTTPException(status_code=404, detail="no dummy-order state for isolation")
+    return state
