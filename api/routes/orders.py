@@ -53,6 +53,7 @@ def search_instruments(
     segments: str = "ALL",
     instrument_types: str | None = None,
     expiry: str | None = None,
+    atm_offset: int | None = None,
     page_number: int = Query(default=1, ge=1),
     records: int = Query(default=15, ge=1, le=30),
 ):
@@ -65,6 +66,8 @@ def search_instruments(
         params["instrument_types"] = instrument_types
     if expiry:
         params["expiry"] = expiry
+    if atm_offset is not None:
+        params["atm_offset"] = atm_offset
     request = Request(
         "https://api.upstox.com/v2/instruments/search?" + urlencode(params),
         headers={

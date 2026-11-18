@@ -11,6 +11,8 @@ from core.config import (
 
 class PlaceOrderRequest(BaseModel):
     instrument_token: str = Field(min_length=3, max_length=100)
+    trading_symbol: str | None = Field(default=None, max_length=100)
+    segment: str | None = Field(default=None, max_length=30)
     quantity: int = Field(default=DEFAULT_ORDER_QUANTITY, gt=0)
     # This service's browser workflow is BUY-only; SELL is reserved for exit logic.
     transaction_type: Literal["BUY"] = "BUY"

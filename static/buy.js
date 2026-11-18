@@ -53,7 +53,7 @@
     try {
       const response = await apiRequest("/api/v1/orders/place", {
         method:"POST",
-        body:JSON.stringify({instrument_token:selected.instrument_key, quantity, transaction_type:"BUY", product:"I", order_type:"MARKET", validity:"DAY", price:0, slice:true})
+        body:JSON.stringify({instrument_token:selected.instrument_key, trading_symbol:selected.trading_symbol || selected.short_name || selected.name, segment:selected.segment, quantity, transaction_type:"BUY", product:"I", order_type:"MARKET", validity:"DAY", price:0, slice:true})
       });
       showToast("BUY order submitted. Order IDs: " + ((response.order_ids || []).join(", ") || response.order_id || "See dashboard"), "success");
       console.info("Place order response", response);

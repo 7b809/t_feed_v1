@@ -184,6 +184,8 @@ class OrderService:
         entry = self._new_entry(
             "ORDER",
             instrument_token=request.instrument_token,
+            trading_symbol=request.trading_symbol,
+            segment=request.segment,
             quantity=request.quantity or DEFAULT_ORDER_QUANTITY,
             transaction_type=request.transaction_type or "BUY",
             product=request.product or DEFAULT_PRODUCT,
