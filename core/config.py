@@ -68,3 +68,17 @@ APP_NAME = os.getenv("APP_NAME", "sandbox_v1").strip() or "sandbox_v1"
 TELEGRAM_ENABLED = env_bool("TELEGRAM_ENABLED", True)
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+
+# Upstox instrument search client and local cache.
+UPSTOX_USER_AGENT = os.getenv(
+    "UPSTOX_USER_AGENT", "sandbox_v1/1.0 (Upstox instrument-search integration)"
+).strip()
+UPSTOX_HTTP_TIMEOUT_SECONDS = max(3, int(os.getenv("UPSTOX_HTTP_TIMEOUT_SECONDS", "12")))
+UPSTOX_INSTRUMENT_CACHE_ENABLED = env_bool("UPSTOX_INSTRUMENT_CACHE_ENABLED", True)
+UPSTOX_INSTRUMENT_CACHE_TTL_SECONDS = max(
+    0, int(os.getenv("UPSTOX_INSTRUMENT_CACHE_TTL_SECONDS", "86400"))
+)
+UPSTOX_INSTRUMENT_CACHE_MAX_STALE_SECONDS = max(
+    UPSTOX_INSTRUMENT_CACHE_TTL_SECONDS,
+    int(os.getenv("UPSTOX_INSTRUMENT_CACHE_MAX_STALE_SECONDS", "604800")),
+)
