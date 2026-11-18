@@ -1,4 +1,4 @@
-"""First post-isolation SR and Supertrend dummy-entry logic.
+"""Post-isolation Supertrend-only dummy-entry logic.
 
 Only local simulation records are created. This module has no broker client.
 """
