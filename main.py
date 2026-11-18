@@ -75,7 +75,9 @@ from services.isolated_feed_manager import (
     start_isolated_feeds, get_isolated_feed_status, stop_isolated_feeds,
 )
 from services.isolation_telegram_service import notify_runtime_event
-from services.option_chain_capture_service import get_option_chain_capture_status
+from services.option_chain_capture_service import (
+    get_option_chain_capture_status, stop_option_chain_capture,
+)
 from services.log_file_service import (
     DEFAULT_TAIL_LINES,
     HARD_MAX_TAIL_LINES,
@@ -201,6 +203,11 @@ async def lifespan(app: FastAPI):
     # Shutdown
     # ------------------------------------------------------------------ #
     logger.info("Shutting down…")
+
+    try:
+        stop_option_chain_capture()
+    except Exception:
+        logger.exception("Option-chain capture shutdown failed")
 
     try:
         stop_isolated_feeds()
