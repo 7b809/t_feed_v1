@@ -349,6 +349,10 @@ class OrderService:
                     )
                 except Exception:
                     logger.exception("Could not save cancel exception")
+                notify_event("Order cancellation failed", [
+                    f"Order ID: {order_id}",
+                    f"Error: {_exception_text(exc)}",
+                ], "ERROR")
                 raise
 
     def cancel_orders(self, order_ids: list[str]) -> list[dict]:
