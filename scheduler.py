@@ -17,6 +17,8 @@ runs the startup pipeline. Both the deferred kickoff and the recurring
 pipeline.
 """
 
+import os
+
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
@@ -28,6 +30,10 @@ from core.config import (
     PIVOT_CHECK_HOUR, PIVOT_CHECK_MINUTE,
     DISCONNECT_HOUR, DISCONNECT_MINUTE,
     ISOLATION_SCAN_INTERVAL_SECONDS,
+    DAILY_DATA_BACKUP_ENABLED, DAILY_DATA_BACKUP_DIR,
+    DAILY_DATA_BACKUP_HOUR, DAILY_DATA_BACKUP_MINUTE,
+    DAILY_DATA_BACKUP_DAYS, DAILY_DATA_BACKUP_COLLECTION,
+    MEGA_ENABLED, MEGA_EMAIL, MEGA_PASSWORD, MEGA_BACKUP_ROOT,
 )
 from core.logger import get_logger
 from core.telegram_notifier import send_telegram_message
@@ -36,6 +42,8 @@ from jobs.daily_refresh import (
 )
 from jobs.deferred_startup import run_deferred_startup_sequence
 from jobs.isolation_scan import run_isolation_scan
+from services.daily_data_backup_service import DailyDataBackupService
+from core.mongo_client import get_mongo_db
 
 logger = get_logger(__file__)
 
@@ -73,6 +81,27 @@ def start_scheduler(deferred_until=None) -> BackgroundScheduler:
         instant which runs the deferred startup sequence.
     """
     scheduler = BackgroundScheduler(timezone=TIMEZONE)
+
+    # MEGA backup is optional and isolated: a Mongo/MEGA setup failure
+    # must never prevent the market and isolation jobs from starting.
+    backup_service = None
+    if DAILY_DATA_BACKUP_ENABLED and MEGA_ENABLED:
+        try:
+            backup_service = DailyDataBackupService(
+                data_dir=os.getenv("DATA_DIR", "data"),
+                staging_dir=DAILY_DATA_BACKUP_DIR,
+                app_name=os.getenv("APP_NAME", "isolation_app"),
+                mega_enabled=MEGA_ENABLED,
+                mega_email=MEGA_EMAIL,
+                mega_password=MEGA_PASSWORD,
+                mega_backup_root=MEGA_BACKUP_ROOT,
+                telegram_sender=send_telegram_message,
+                state_collection=get_mongo_db()[DAILY_DATA_BACKUP_COLLECTION],
+            )
+        except Exception:
+            logger.exception(
+                "MEGA backup service could not initialise; other jobs continue"
+            )
 
     # Daily refresh (idempotent per day, so concurrent kickoff is safe)
     scheduler.add_job(
@@ -128,6 +157,30 @@ def start_scheduler(deferred_until=None) -> BackgroundScheduler:
         name="Disconnect Feed",
         replace_existing=True,
     )
+
+    # Daily data ZIP upload to the dedicated MEGA folder.
+    if backup_service is not None:
+        scheduler.add_job(
+            backup_service.run_daily_backup,
+            CronTrigger(
+                day_of_week=DAILY_DATA_BACKUP_DAYS,
+                hour=DAILY_DATA_BACKUP_HOUR,
+                minute=DAILY_DATA_BACKUP_MINUTE,
+                timezone=TIMEZONE,
+            ),
+            id="daily_isolation_mega_backup",
+            name="Daily Isolation MEGA Backup",
+            kwargs={"reason": "scheduled"},
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=3600,
+        )
+        logger.info(
+            "Daily MEGA backup scheduled @ %02d:%02d IST (%s) -> %s/",
+            DAILY_DATA_BACKUP_HOUR, DAILY_DATA_BACKUP_MINUTE,
+            DAILY_DATA_BACKUP_DAYS, MEGA_BACKUP_ROOT,
+        )
 
     # Deferred startup one-shot (only when the caller requested it)
     if deferred_until is not None:
