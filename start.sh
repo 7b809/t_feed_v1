@@ -198,7 +198,7 @@ echo
 # Keep startup errors in a dedicated log instead of /dev/null.
 STARTUP_LOG="$LOG_DIR/fastapi_startup.log"
 
-nohup "$PYTHON" -m uvicorn app.main:app \
+nohup "$PYTHON" -m uvicorn main:app \
     --host "$HOST" \
     --port "$PORT" \
     >"$STARTUP_LOG" 2>&1 &
