@@ -64,7 +64,7 @@ def test_supertrend_bullish_routes_same_leg(tmp_path):
         await engine.register_isolation("2026-11-12__CE", isolation_payload(),
                                         {"isolated": "CE", "opposite": "PE"})
         await engine.on_supertrend_frame({"event": "supertrend_signal", "signal": "BULLISH",
-            "confirmed_time": "2026-11-12T09:40:00+05:30", "price": 110},
+            "confirmed_time": "2026-11-12T09:18:00+05:30", "price": 110},
             "CE", "isolated", "2026-11-12__CE")
         assert store.load("2026-11-12__CE")["orders"]["supertrend"]["target_instrument_key"] == "CE"
     asyncio.run(run())
@@ -74,7 +74,7 @@ def test_pre_isolation_signal_is_ignored(tmp_path):
     async def run():
         engine, store = build(tmp_path)
         payload = isolation_payload()
-        payload["isolation_time"] = "2026-11-12T09:40:00+05:30"
+        payload["isolation_time"] = "2026-11-12T09:18:00+05:30"
         await engine.register_isolation("2026-11-12__CE", payload,
                                         {"isolated": "CE", "opposite": "PE"})
         await engine.on_supertrend_frame({"event": "supertrend_signal", "signal": "BEARISH",
@@ -90,7 +90,7 @@ def test_supertrend_bearish_routes_opposite(tmp_path):
         await engine.register_isolation("2026-11-12__CE", isolation_payload(),
                                         {"isolated": "CE", "opposite": "PE"})
         await engine.on_supertrend_frame({"event": "supertrend_signal", "signal": "BEARISH",
-            "confirmed_time": "2026-11-12T09:40:00+05:30", "price": 110},
+            "confirmed_time": "2026-11-12T09:18:00+05:30", "price": 110},
             "CE", "isolated", "2026-11-12__CE")
         assert store.load("2026-11-12__CE")["orders"]["supertrend"]["target_instrument_key"] == "PE"
     asyncio.run(run())
@@ -104,7 +104,7 @@ def test_order_completes_at_target_and_tracks_high_low_and_duration(tmp_path):
                                         {"isolated": "CE", "opposite": "PE"})
         await engine.on_supertrend_frame({
             "event": "supertrend_signal", "signal": "BULLISH",
-            "confirmed_time": "2026-11-12T09:40:00+05:30", "price": 123.45,
+            "confirmed_time": "2026-11-12T09:18:00+05:30", "price": 123.45,
         }, "CE", "isolated", isolation_id)
         order = store.load(isolation_id)["orders"]["supertrend"]
         started = datetime.fromisoformat(order["started_at_ist"])
@@ -131,7 +131,7 @@ def test_order_completes_at_stop_loss(tmp_path):
                                         {"isolated": "CE", "opposite": "PE"})
         await engine.on_supertrend_frame({
             "event": "supertrend_signal", "signal": "BULLISH",
-            "confirmed_time": "2026-11-12T09:40:00+05:30", "price": 123.45,
+            "confirmed_time": "2026-11-12T09:18:00+05:30", "price": 123.45,
         }, "CE", "isolated", isolation_id)
         order = store.load(isolation_id)["orders"]["supertrend"]
         tick = (datetime.fromisoformat(order["started_at_ist"]) + timedelta(seconds=60)).isoformat()
@@ -154,7 +154,7 @@ def test_supertrend_opposite_signal_closes_and_replaces_open_order(tmp_path):
         # Resistance is the bearish setup and enters on the opposite leg.
         await engine.on_supertrend_frame({
             "event": "supertrend_signal", "signal": "RESISTANCE",
-            "confirmed_time": "2026-11-12T09:40:00+05:30", "price": 123.45,
+            "confirmed_time": "2026-11-12T09:18:00+05:30", "price": 123.45,
         }, "CE", "isolated", isolation_id)
         first = store.load(isolation_id)["orders"]["supertrend"]
         assert first["target_instrument_key"] == "PE"
@@ -163,7 +163,7 @@ def test_supertrend_opposite_signal_closes_and_replaces_open_order(tmp_path):
         # A later support signal is bullish and routes to the isolated leg.
         await engine.on_supertrend_frame({
             "event": "supertrend_signal", "signal": "SUPPORT",
-            "confirmed_time": "2026-11-12T09:45:00+05:30", "price": 123.45,
+            "confirmed_time": "2026-11-12T09:24:00+05:30", "price": 123.45,
         }, "CE", "isolated", isolation_id)
 
         state = store.load(isolation_id)
@@ -192,7 +192,7 @@ def test_supertrend_does_not_reverse_when_existing_target_is_already_met(tmp_pat
                 # First read supplies the entry; second read is the reversal
                 # check against the already-open order's target.
                 price = 123.45 if self.calls == 1 else 200.0
-                return {"received_at": "2026-11-12T09:50:00+05:30",
+                return {"received_at": "2026-11-12T09:35:00+05:30",
                         "data": {"ltpc": {"ltp": price}}}
 
         config = SimpleNamespace(
@@ -210,11 +210,11 @@ def test_supertrend_does_not_reverse_when_existing_target_is_already_met(tmp_pat
                                         {"isolated": "CE", "opposite": "PE"})
         await engine.on_supertrend_frame({
             "event": "supertrend_signal", "signal": "RESISTANCE",
-            "confirmed_time": "2026-11-12T09:40:00+05:30", "price": 123.45,
+            "confirmed_time": "2026-11-12T09:18:00+05:30", "price": 123.45,
         }, "CE", "isolated", isolation_id)
         await engine.on_supertrend_frame({
             "event": "supertrend_signal", "signal": "SUPPORT",
-            "confirmed_time": "2026-11-12T09:45:00+05:30", "price": 123.45,
+            "confirmed_time": "2026-11-12T09:24:00+05:30", "price": 123.45,
         }, "CE", "isolated", isolation_id)
         state = store.load(isolation_id)
         assert state["orders"]["supertrend"]["status"] == "COMPLETED_TARGET"
@@ -236,7 +236,7 @@ def test_startup_recovery_replays_two_entries_stop_then_target(tmp_path):
                     ]
                 return [
                     {"ts": "2026-11-12T09:44:00+05:30", "open": 100, "high": 102, "low": 98, "close": 101},
-                    {"ts": "2026-11-12T09:45:00+05:30", "open": 101, "high": 151, "low": 100, "close": 150},
+                    {"ts": "2026-11-12T09:24:00+05:30", "open": 101, "high": 151, "low": 100, "close": 150},
                 ]
 
         engine, store = build(tmp_path)
@@ -249,7 +249,7 @@ def test_startup_recovery_replays_two_entries_stop_then_target(tmp_path):
         await engine._recover_supertrend_history(isolation_id, {
             "event": "snapshot", "signals": [
                 {"signal": "BEARISH", "confirmed_time": "2026-11-12T09:22:00+05:30"},
-                {"signal": "BULLISH", "confirmed_time": "2026-11-12T09:43:00+05:30"},
+                {"signal": "BULLISH", "confirmed_time": "2026-11-12T09:23:30+05:30"},
             ]
         })
         state = store.load(isolation_id)
@@ -299,7 +299,7 @@ def test_supertrend_allows_only_two_entries_per_isolation(tmp_path):
         # Entry 1: bullish signal buys the isolated leg.
         await engine.on_supertrend_frame({
             "event": "supertrend_signal", "signal": "BULLISH",
-            "confirmed_time": "2026-11-12T09:40:00+05:30", "price": 123.45,
+            "confirmed_time": "2026-11-12T09:18:00+05:30", "price": 123.45,
         }, "CE", "isolated", isolation_id)
         first = store.load(isolation_id)["orders"]["supertrend"]
         assert first["order_sequence"] == 1
@@ -309,7 +309,7 @@ def test_supertrend_allows_only_two_entries_per_isolation(tmp_path):
         await engine.on_market_tick("CE", {"ltpc": {"ltp": 173.45}}, first_tick)
         await engine.on_supertrend_frame({
             "event": "supertrend_signal", "signal": "BEARISH",
-            "confirmed_time": "2026-11-12T09:45:00+05:30", "price": 123.45,
+            "confirmed_time": "2026-11-12T09:24:00+05:30", "price": 123.45,
         }, "CE", "isolated", isolation_id)
         second = store.load(isolation_id)["orders"]["supertrend"]
         assert second["order_sequence"] == 2
@@ -326,7 +326,7 @@ def test_supertrend_allows_only_two_entries_per_isolation(tmp_path):
                                                   {"isolated": "CE", "opposite": "PE"})
         await restarted_engine.on_supertrend_frame({
             "event": "supertrend_signal", "signal": "BULLISH",
-            "confirmed_time": "2026-11-12T09:50:00+05:30", "price": 123.45,
+            "confirmed_time": "2026-11-12T09:35:00+05:30", "price": 123.45,
         }, "CE", "isolated", isolation_id)
 
         state = restarted_store.load(isolation_id)
@@ -339,3 +339,75 @@ def test_supertrend_allows_only_two_entries_per_isolation(tmp_path):
         assert [item["order_sequence"] for item in state["order_history"]] == [1, 2]
 
     asyncio.run(run())
+
+def test_late_first_signal_allows_only_one_entry_and_preserves_it(tmp_path):
+    async def run():
+        engine, store = build(tmp_path)
+        isolation_id = "2026-11-12__CE"
+        await engine.register_isolation(isolation_id, isolation_payload(),
+                                        {"isolated": "CE", "opposite": "PE"})
+        await engine.on_supertrend_frame({
+            "event": "supertrend_signal", "signal": "BULLISH",
+            "confirmed_time": "2026-11-12T10:12:00+05:30", "price": 123.45,
+        }, "CE", "isolated", isolation_id)
+        first = store.load(isolation_id)["orders"]["supertrend"]
+        assert first["status"] == "DUMMY_PLACED"
+        assert first["order_sequence"] == 1
+        assert store.load(isolation_id)["supertrend_order_limit"] == 1
+
+        # Opposite late signal is rejected before reversal; the first order
+        # remains open and its target/stop-loss monitoring remains registered.
+        await engine.on_supertrend_frame({
+            "event": "supertrend_signal", "signal": "BEARISH",
+            "confirmed_time": "2026-11-12T10:20:00+05:30", "price": 123.45,
+        }, "CE", "isolated", isolation_id)
+        state = store.load(isolation_id)
+        current = state["orders"]["supertrend"]
+        assert current["order_id"] == first["order_id"]
+        assert current["status"] == "DUMMY_PLACED"
+        assert current["target_instrument_key"] == "CE"
+        assert state["supertrend_order_count"] == 1
+        assert state.get("order_history", []) == []
+        assert ("2026-11-12__CE", "supertrend") in engine._watch_index["CE"]
+    asyncio.run(run())
+
+
+def test_early_entry_window_rejects_signals_at_or_after_0940_without_reversal(tmp_path):
+    async def run():
+        engine, store = build(tmp_path)
+        isolation_id = "2026-11-12__CE"
+        await engine.register_isolation(isolation_id, isolation_payload(),
+                                        {"isolated": "CE", "opposite": "PE"})
+        await engine.on_supertrend_frame({
+            "event": "supertrend_signal", "signal": "BULLISH",
+            "confirmed_time": "2026-11-12T09:20:00+05:30", "price": 123.45,
+        }, "CE", "isolated", isolation_id)
+        first = store.load(isolation_id)["orders"]["supertrend"]
+        await engine.on_supertrend_frame({
+            "event": "supertrend_signal", "signal": "BEARISH",
+            "confirmed_time": "2026-11-12T09:40:00+05:30", "price": 123.45,
+        }, "CE", "isolated", isolation_id)
+        state = store.load(isolation_id)
+        assert state["orders"]["supertrend"]["order_id"] == first["order_id"]
+        assert state["orders"]["supertrend"]["status"] == "DUMMY_PLACED"
+        assert state["supertrend_order_count"] == 1
+        assert state["supertrend_order_limit"] == 2
+        assert state.get("order_history", []) == []
+    asyncio.run(run())
+
+
+def test_signal_before_0915_is_ignored(tmp_path):
+    async def run():
+        engine, store = build(tmp_path)
+        isolation_id = "2026-11-12__CE"
+        payload = isolation_payload()
+        payload["isolation_time"] = "2026-11-12T09:00:00+05:30"
+        await engine.register_isolation(isolation_id, payload,
+                                        {"isolated": "CE", "opposite": "PE"})
+        await engine.on_supertrend_frame({
+            "event": "supertrend_signal", "signal": "BULLISH",
+            "confirmed_time": "2026-11-12T09:14:59+05:30", "price": 123.45,
+        }, "CE", "isolated", isolation_id)
+        assert store.load(isolation_id)["orders"]["supertrend"] is None
+    asyncio.run(run())
+
