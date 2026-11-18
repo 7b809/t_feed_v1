@@ -93,11 +93,31 @@ def send_telegram(title: str, message: str, level: str = "INFO") -> None:
     if level.upper() == "INFO" and not DEBUG_MODE:
         return
 
-    text = f"{_LEVEL_EMOJI.get(level.upper(), 'ℹ️')} {title}\n{message}"
+    text = f"{_LEVEL_EMOJI.get(level.upper(), 'ℹ️')} {title}\\n{message}"
     try:
         sys.path.insert(0, str(PROJECT_DIR))
         from core.telegram_notifier import send_telegram_message
         send_telegram_message(text)
+        return
+    except Exception as error:
+        print(f"WARNING: Shared Telegram notifier unavailable: {error}")
+
+    # Keep the updater usable with system Python if app dependencies are
+    # installed only inside myenv.
+    token = os.getenv("TELEGRAM_BOT_TOKEN", "")
+    chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
+    if not token or not chat_id:
+        return
+    try:
+        payload = urllib.parse.urlencode({"chat_id": chat_id, "text": text}).encode()
+        request = urllib.request.Request(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            data=payload,
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=8) as response:
+            if response.status >= 300:
+                raise RuntimeError(f"Telegram HTTP status {response.status}")
     except Exception as error:
         print(f"WARNING: Telegram notification failed: {error}")
 
