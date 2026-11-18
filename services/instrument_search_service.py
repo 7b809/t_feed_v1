@@ -95,7 +95,22 @@ def _cache_response(payload: dict, *, age: int, stale: bool) -> dict:
 def search_upstox_instruments(params: dict[str, Any]) -> dict:
     """Search Upstox; on upstream failure serve a recent cached result if available."""
     cached_payload, cache_age = _read_cache(params)
-    token = fetch_access_token()
+    try:
+        token = fetch_access_token()
+    except Exception as exc:
+        if cached_payload is not None:
+            logger.warning(
+                "Serving cached instrument results because the MongoDB token could not be loaded; age_seconds=%s",
+                cache_age,
+            )
+            return _cache_response(cached_payload, age=cache_age or 0, stale=True)
+        logger.exception("Could not load Upstox access token for instrument search")
+        raise InstrumentSearchError(
+            "Upstox access token is unavailable and no usable cached result exists.",
+            status_code=503,
+            details={"upstream": "token_store", "retryable": True},
+        ) from exc
+
     headers = {
         "Accept": "application/json",
         "Content-Type": "application/json",
@@ -163,6 +178,14 @@ def search_upstox_instruments(params: dict[str, Any]) -> dict:
         if cached_payload is not None:
             logger.warning(
                 "Serving cached instrument results after Upstox Error 1010; cache_age_seconds=%s",
+                cache_age,
+            )
+            return _cache_response(cached_payload, age=cache_age or 0, stale=True)
+        raise
+    except InstrumentSearchError as exc:
+        if cached_payload is not None:
+            logger.warning(
+                "Serving cached instrument results after an upstream response error; age_seconds=%s",
                 cache_age,
             )
             return _cache_response(cached_payload, age=cache_age or 0, stale=True)
