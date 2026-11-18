@@ -150,7 +150,10 @@ class DummyOrderEngine:
         if isinstance(current, dict):
             candidates.append(current)
         for order in candidates:
-            if not isinstance(order, dict) or str(order.get("status") or "").upper() == "DISABLED":
+            if not isinstance(order, dict):
+                continue
+            status = str(order.get("status") or "").upper()
+            if status != "DUMMY_PLACED" and not status.startswith("COMPLETED"):
                 continue
             indicator = str(order.get("indicator") or "").upper()
             if indicator and "SUPERTREND" not in indicator:
@@ -359,9 +362,10 @@ class DummyOrderEngine:
             # followed by another entry until the per-isolation cap is reached.
             if existing_order and existing_order.get("status") != "DISABLED":
                 existing_status = str(existing_order.get("status") or "").upper()
-                if existing_status == "DUMMY_SIGNAL_RECORDED_NO_QUOTE":
-                    return
-                if not (existing_status == "DUMMY_PLACED" or existing_status.startswith("COMPLETED")):
+                if not (
+                    existing_status in {"DUMMY_PLACED", "DUMMY_SIGNAL_RECORDED_NO_QUOTE"}
+                    or existing_status.startswith("COMPLETED")
+                ):
                     return
             meta = self._meta.get(isolation_id) or {
                 "legs": state.get("legs") or {},
@@ -445,7 +449,7 @@ class DummyOrderEngine:
 
             # Completed orders can be followed by another confirmed signal,
             # but the per-isolation entry cap remains authoritative.
-            if isinstance(existing_order, dict) and existing_order.get("status") not in {"DUMMY_PLACED", "DISABLED"}:
+            if isinstance(existing_order, dict) and str(existing_order.get("status") or "").startswith("COMPLETED"):
                 self._archive_supertrend_order(state, existing_order)
 
             order_count = self._supertrend_order_count(state)
@@ -514,13 +518,13 @@ class DummyOrderEngine:
                 "quote_received_at": quote_received_at if quote_is_today else None,
                 "quote_age_seconds": round((_now() - quote_time).total_seconds(), 3) if quote_is_today else None,
                 "trigger": trigger, "placed_at": now_ist.isoformat(),
-                "order_sequence": order_count + 1,
+                "order_sequence": order_count + 1 if entry is not None else None,
                 "max_orders_per_isolation": MAX_SUPERTREND_ORDERS_PER_ISOLATION,
                 "status": "DUMMY_PLACED" if entry is not None else "DUMMY_SIGNAL_RECORDED_NO_QUOTE",
                 "broker_order_id": None, "real_order_submitted": False,
             }
             state.setdefault("orders", {})[indicator] = order
-            state["supertrend_order_count"] = order_count + 1
+            state["supertrend_order_count"] = order_count + (1 if entry is not None else 0)
             state["supertrend_order_limit"] = MAX_SUPERTREND_ORDERS_PER_ISOLATION
             state["updated_at"] = now_ist.isoformat()
             await asyncio.to_thread(self._store.save, isolation_id, state)
