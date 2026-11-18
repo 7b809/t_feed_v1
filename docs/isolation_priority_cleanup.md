@@ -47,9 +47,8 @@ By default, when the application process starts between **01:00 and 09:00 IST**,
 - data
 - logs
 - logs_text
-- backups (MEGA backup staging directory)
 
-The directories themselves are retained. Current open log files are truncated in place so active file handlers remain valid; rotated and inactive log files are removed. The cleanup state file is stored in the project root and is not inside a cleanup target.
+The MEGA backup staging directory is deliberately excluded so a pending backup is not deleted. The directories themselves are retained. Current open log files are truncated in place so active file handlers remain valid; rotated and inactive log files are removed. The cleanup state file is stored in the project root and is not inside a cleanup target.
 
 Only explicitly configured direct child directories of the project root can be targeted. Path traversal, hidden paths, symlinks and known source/config directories are rejected. Do not configure source folders, .git, virtual environments, .env files, or deployment configuration for cleanup.
 
@@ -60,7 +59,7 @@ Configure the list in .env:
     DAILY_CLEANUP_ENABLED=true
     DAILY_CLEANUP_START_HOUR=1
     DAILY_CLEANUP_END_HOUR=9
-    DAILY_CLEANUP_DIRS=data,logs,logs_text,backups
+    DAILY_CLEANUP_DIRS=data,logs,logs_text
 
     ISOLATED_LIVE_FEED_ENABLED=true
     ISOLATED_LIVE_FEED_QUEUE_SIZE=20000
