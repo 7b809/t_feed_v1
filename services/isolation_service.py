@@ -62,6 +62,9 @@ from services.execution_mode_service import pin_execution_mode
 from services.index_touch_detector import IndexTouchDetector
 from services.touch_arbitration_service import arbitrate_touches
 from services.isolation_notification_service import notify_isolation_clients
+from services.isolated_archive_service import IsolatedArchiveService
+from services.isolated_feed_manager import start_isolated_feeds
+from services.isolation_telegram_service import notify_isolation_created
 
 logger = get_logger(__file__)
 
@@ -82,6 +85,7 @@ class IsolationService:
         self.search = InstrumentSearchService(access_token)
         self.trend = NiftyTrendService(access_token)
         self.repo = IsolationRepository()
+        self.archive = IsolatedArchiveService()
 
         # Touches that have produced a successful isolation. Never
         # re-attempted.
@@ -309,6 +313,20 @@ class IsolationService:
         )
         self.repo.upsert_current(record)
         self.repo.append_history(record)
+        # Persist the complete two-leg snapshot locally before starting feeds.
+        archive_path = None
+        try:
+            archive_path = self.archive.save_isolation(record)
+        except Exception:
+            logger.exception("Local isolation archive failed; Mongo record remains saved")
+        try:
+            start_isolated_feeds(record)
+        except Exception:
+            logger.exception("Could not start SR/Supertrend capture for new isolation")
+        try:
+            notify_isolation_created(record, archive_path)
+        except Exception:
+            logger.exception("Isolation Telegram notification failed")
         # Best-effort notification starts only after Mongo persistence.
         # Worker threads do not block this isolation flow waiting for clients.
         notify_isolation_clients(record)
