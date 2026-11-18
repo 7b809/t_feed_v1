@@ -439,7 +439,7 @@ class DummyOrderEngine:
                 self._index_open_orders(isolation_id, state)
                 await self._notify_completion(state, indicator, existing_order)
                 if close_reason == "TARGET":
-                    logger.info("Supertrend target reached during signal evaluation; daily entries locked iso=%s",
+                    logger.info("Supertrend target already reached before reversal signal; replacement skipped iso=%s",
                                 isolation_id)
                     return
 
