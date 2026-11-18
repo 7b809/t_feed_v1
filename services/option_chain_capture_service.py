@@ -335,7 +335,11 @@ class OptionChainCaptureService:
         tmp.write_text(json.dumps(manifest, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
         tmp.replace(path)
         for row in contracts:
-            folder = self.root / str(row.get("index_folder") or _safe(row.get("index_canonical") or "unknown"))
+            folder = (
+                self.root
+                / str(row.get("index_folder") or _safe(row.get("index_canonical") or "unknown"))
+                / date_key
+            )
             folder.mkdir(parents=True, exist_ok=True)
             strike_label = f"{row['strike_price']:g}"
             side = str(row["instrument_type"]).lower()
