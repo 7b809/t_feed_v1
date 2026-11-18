@@ -87,6 +87,17 @@ from services.log_file_service import (
 
 logger = get_logger(__file__)
 
+
+def _get_option_chain_capture_status_safe() -> dict:
+    """Optional feature health must never make the API unavailable."""
+    try:
+        from services.option_chain_capture_service import get_option_chain_capture_status
+        return get_option_chain_capture_status()
+    except Exception:
+        logger.exception("Optional option-chain status unavailable")
+        return {"enabled": True, "state": "unavailable"}
+
+
 _scheduler = None                       # populated in lifespan
 _startup_mode: str = "unknown"          # "immediate" | "deferred" | "test"
 _startup_cutoff_iso: str | None = None  # populated in deferred mode
@@ -270,6 +281,7 @@ def health():
         "status": "ok",
         "isolated_feeds": get_isolated_feed_status(),
         "isolated_live_feed": get_isolated_live_feed_status(),
+        "option_chain_capture": _get_option_chain_capture_status_safe(),
     }
 
 
@@ -293,7 +305,7 @@ def _restore_isolation_capture() -> None:
             start_isolated_feeds(record)
             notify_runtime_event(
                 "ISOLATION CAPTURE RESTORED",
-                f"{record.get('trading_symbol') or record.get('instrument_key')} · SR and Supertrend recovery requested.",
+                f"{record.get('trading_symbol') or record.get('instrument_key')} · live feed, SR and Supertrend recovery requested.",
                 "🔄",
             )
     except Exception:
@@ -313,7 +325,8 @@ def status():
             )
     return {"scheduler_running": _scheduler is not None, "jobs": jobs,
             "isolated_feeds": get_isolated_feed_status(),
-            "isolated_live_feed": get_isolated_live_feed_status()}
+            "isolated_live_feed": get_isolated_live_feed_status(),
+            "option_chain_capture": _get_option_chain_capture_status_safe()}
 
 @app.get("/startup-state")
 def startup_state():
