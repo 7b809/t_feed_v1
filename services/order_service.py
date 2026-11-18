@@ -16,6 +16,7 @@ from core.config import (
 )
 from core.logger import get_logger
 from core.token_service import fetch_access_token
+from core.telegram_notifier import notify_event
 from models.order_models import PlaceOrderRequest
 from repositories.order_repository import OrderRepository, now_iso
 
@@ -207,6 +208,11 @@ class OrderService:
                 status="BLOCKED",
                 require_mongo=False,
             )
+            notify_event("Order blocked — trading disabled", [
+                f"Instrument: {request.trading_symbol or request.instrument_token}",
+                f"Quantity: {request.quantity}",
+                "Reason: TRADING_ENABLED=false",
+            ], "WARNING")
             raise TradingDisabledError(
                 "Order execution is disabled. Set TRADING_ENABLED=true only "
                 "after verifying sandbox/live settings."
@@ -258,6 +264,13 @@ class OrderService:
                 "Upstox order accepted | ids=%s | side=%s | qty=%s | instrument=%s",
                 ids, request.transaction_type, request.quantity, request.instrument_token,
             )
+            notify_event("Order placed", [
+                f"Symbol: {request.trading_symbol or request.instrument_token}",
+                f"Side: {request.transaction_type} | Qty: {request.quantity}",
+                f"Type: {request.order_type} | Product: {request.product}",
+                "Order ID(s): " + ", ".join(ids),
+                "Mode: " + ("Sandbox" if UPSTOX_SANDBOX else "Live"),
+            ], "ORDER")
             return {
                 "status": "placed",
                 "order_ids": ids,
@@ -276,6 +289,11 @@ class OrderService:
             except Exception:
                 logger.exception("Could not save order exception audit")
             logger.exception("Upstox order placement failed")
+            notify_event("Order placement failed", [
+                f"Symbol: {request.trading_symbol or request.instrument_token}",
+                f"Quantity: {request.quantity}",
+                f"Error: {_exception_text(exc)}",
+            ], "ERROR")
             raise
 
     def _get_or_create_order_entry(self, order_id: str) -> dict:
@@ -311,6 +329,10 @@ class OrderService:
                     status="CANCEL_SUBMITTED",
                     require_mongo=False,
                 )
+                notify_event("Order cancellation submitted", [
+                    f"Order ID: {order_id}",
+                    "Broker cancellation request submitted.",
+                ], "CANCEL")
                 return {
                     "status": "cancel_submitted",
                     "order_id": order_id,
@@ -385,6 +407,11 @@ class OrderService:
                     )
                 remaining_qty = filled_qty - exited_qty
                 if remaining_qty <= 0:
+                    notify_event("Position already exited", [
+                        f"Original order ID: {order_id}",
+                        f"Filled quantity: {filled_qty}",
+                        f"Exited quantity: {exited_qty}",
+                    ], "INFO")
                     return {
                         "status": "already_exited",
                         "order_id": order_id,
@@ -461,6 +488,12 @@ class OrderService:
                         self.repository.append_entry(exit_entry, require_mongo=False)
                     except Exception:
                         logger.exception("Could not persist exit order audit entry %s", exit_id)
+                notify_event("Exit order submitted", [
+                    f"Original order ID: {order_id}",
+                    "Exit order ID(s): " + ", ".join(exit_ids),
+                    f"Quantity: {remaining_qty} | Side: {reverse_side}",
+                    f"Instrument: {instrument}",
+                ], "EXIT")
                 return {
                     "status": "exit_submitted",
                     "source_order_id": order_id,
@@ -480,6 +513,10 @@ class OrderService:
                     )
                 except Exception:
                     logger.exception("Could not save exit exception")
+                notify_event("Exit request failed", [
+                    f"Order ID: {order_id}",
+                    f"Error: {_exception_text(exc)}",
+                ], "ERROR")
                 raise
 
     def exit_orders(self, order_ids: list[str]) -> list[dict]:
@@ -536,6 +573,11 @@ class OrderService:
                     self.repository.append_entry(audit, require_mongo=False)
                 except Exception:
                     logger.exception("Could not persist exit-all order %s", exit_id)
+            notify_event("Exit all positions submitted", [
+                "Exit order ID(s): " + (", ".join(ids) if ids else "Not returned"),
+                f"Tag: {tag or 'All'} | Segment: {segment or 'All'}",
+                "Broker-native exit_positions request submitted.",
+            ], "EXIT")
             return {
                 "status": "exit_all_submitted",
                 "order_ids": ids,
@@ -552,4 +594,7 @@ class OrderService:
                 )
             except Exception:
                 logger.exception("Could not save exit-all exception")
+            notify_event("Exit all positions failed", [
+                f"Error: {_exception_text(exc)}",
+            ], "ERROR")
             raise
