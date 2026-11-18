@@ -46,7 +46,16 @@ class ORLevelsService:
         existing = self._load_from_mongo()
         if existing and existing.get("trade_date_ist") == today:
             existing_indexes = existing.get("indexes") or {}
-            missing_keys = [key for key in INSTRUMENT_KEYS if key not in existing_indexes]
+            missing_keys = [
+                key for key in INSTRUMENT_KEYS
+                if (
+                    key not in existing_indexes
+                    or not (existing_indexes.get(key) or {}).get("levels")
+                    or (existing_indexes.get(key) or {}).get("levels", {}).get(
+                        "A", (existing_indexes.get(key) or {}).get("levels", {}).get("avg")
+                    ) is None
+                )
+            ]
             if not missing_keys:
                 logger.info(
                     "OR levels present in Mongo for %s; all %d indexes are available",
