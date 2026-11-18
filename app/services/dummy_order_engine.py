@@ -164,6 +164,33 @@ class DummyOrderEngine:
         return max(stored_count, len(identities))
 
     @staticmethod
+    def _resolve_supertrend_entry_limit(state: dict, first_signal: dict | None = None) -> int:
+        """Return the durable limit selected by the first eligible signal."""
+        mode = state.get("supertrend_entry_window_mode")
+        if mode == "LATE_SINGLE":
+            return 1
+        if mode == "EARLY_TWO":
+            return 2
+        prior = list(state.get("order_history") or [])
+        current = (state.get("orders") or {}).get("supertrend")
+        if isinstance(current, dict):
+            prior.append(current)
+        confirmed_times = [
+            parsed for order in prior if isinstance(order, dict)
+            if (parsed := _dt((order.get("trigger") or {}).get("confirmed_time"))) is not None
+        ]
+        first_time = min(confirmed_times) if confirmed_times else (
+            first_signal.get("dt") if isinstance(first_signal, dict) else None
+        )
+        if first_time is not None and first_time.timetz().replace(tzinfo=None) >= SUPERTREND_ENTRY_CUTOFF:
+            return 1
+        return 2
+
+    @staticmethod
+    def _signal_in_entry_session(signal: dict) -> bool:
+        return signal["dt"].timetz().replace(tzinfo=None) >= SUPERTREND_ENTRY_START
+
+    @staticmethod
     def _archive_supertrend_order(state: dict, order: dict) -> None:
         """Keep a completed current-slot order before replacing it with a new entry."""
         if not isinstance(order, dict):
