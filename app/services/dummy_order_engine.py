@@ -767,8 +767,9 @@ class DummyOrderEngine:
             state["updated_at"] = _now().isoformat()
             await asyncio.to_thread(self._store.save, isolation_id, state)
             self._index_open_orders(isolation_id, state)
-            logger.info("Supertrend startup recovery complete iso=%s signals=%d replayed=%d completed=%d locked=%s",
-                        isolation_id, len(signals), replayed, len(history), locked)
+            logger.info("Supertrend startup recovery complete iso=%s signals=%d replayed=%d completed=%d limit_reached=%s",
+                        isolation_id, len(signals), replayed, len(history),
+                        limit_reached or order_count >= MAX_SUPERTREND_ORDERS_PER_ISOLATION)
             await self._notify_recovery(state)
 
     async def on_market_tick(self, instrument_key: str, data: dict,
