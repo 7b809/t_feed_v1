@@ -25,7 +25,7 @@ class FakeTelegram:
 
 def build(tmp_path, **overrides):
     values = dict(
-        dummy_orders_enabled=True, dummy_sr_orders_enabled=True,
+        dummy_orders_enabled=True,
         dummy_supertrend_orders_enabled=True, dummy_order_quantity=1,
         dummy_order_state_dir=str(tmp_path), dummy_order_stop_loss_percent=30,
         dummy_target_upper_threshold=200, dummy_target_lower_threshold=100,
@@ -48,27 +48,6 @@ def isolation_payload():
     }
 
 
-def test_resistance_routes_opposite_and_is_idempotent(tmp_path):
-    async def run():
-        engine, store = build(tmp_path)
-        await engine.register_isolation("2026-11-12__CE", isolation_payload(),
-                                        {"isolated": "CE", "opposite": "PE"})
-        event = {"event": "sr_update", "config": "15/3", "levels": [
-            {"type": "RESISTANCE", "price": 216.6,
-             "confirmed_time": "2026-11-12T09:41:00+05:30"}]}
-        await engine.on_sr_frame(event, "CE", "isolated", "2026-11-12__CE")
-        await engine.on_sr_frame(event, "CE", "isolated", "2026-11-12__CE")
-        order = store.load("2026-11-12__CE")["orders"]["sr"]
-        assert order["target_instrument_key"] == "PE"
-        assert order["trading_symbol"] == "NIFTY 25000 PE"
-        assert order["entry_price"] == 123.45
-        assert order["stop_loss_price"] == 86.42
-        assert order["target_points"] == 50
-        assert order["target_price"] == 173.45
-        assert order["real_order_submitted"] is False
-    asyncio.run(run())
-
-
 def test_target_point_bands(tmp_path):
     async def run():
         engine, _ = build(tmp_path)
@@ -76,26 +55,6 @@ def test_target_point_bands(tmp_path):
         assert engine._target_points(150) == 50
         assert engine._target_points(100) == 50
         assert engine._target_points(99.99) == 40
-    asyncio.run(run())
-
-
-def test_disabled_sr_flag_is_persisted_locally_and_does_not_block_supertrend(tmp_path):
-    async def run():
-        engine, store = build(tmp_path, dummy_sr_orders_enabled=False)
-        await engine.register_isolation("2026-11-12__CE", isolation_payload(),
-                                        {"isolated": "CE", "opposite": "PE"})
-        state = store.load("2026-11-12__CE")
-        assert state["orders"]["sr"]["status"] == "DISABLED"
-        assert state["orders"]["sr"]["reason"] == "orders disabled due to flag false"
-        await engine.on_sr_frame({"event": "sr_update", "supports": [{
-            "price": 100, "confirmed_at": "2026-11-12T09:35:00+05:30"}]},
-            "CE", "isolated", "2026-11-12__CE")
-        await engine.on_supertrend_frame({"event": "supertrend_signal", "signal": "BULLISH",
-            "confirmed_time": "2026-11-12T09:40:00+05:30", "price": 110},
-            "CE", "isolated", "2026-11-12__CE")
-        state = store.load("2026-11-12__CE")
-        assert state["orders"]["sr"]["status"] == "DISABLED"
-        assert state["orders"]["supertrend"]["target_instrument_key"] == "CE"
     asyncio.run(run())
 
 
@@ -134,18 +93,6 @@ def test_supertrend_bearish_routes_opposite(tmp_path):
             "confirmed_time": "2026-11-12T09:40:00+05:30", "price": 110},
             "CE", "isolated", "2026-11-12__CE")
         assert store.load("2026-11-12__CE")["orders"]["supertrend"]["target_instrument_key"] == "PE"
-    asyncio.run(run())
-
-
-def test_signals_from_opposite_leg_are_ignored(tmp_path):
-    async def run():
-        engine, store = build(tmp_path)
-        await engine.register_isolation("2026-11-12__CE", isolation_payload(),
-                                        {"isolated": "CE", "opposite": "PE"})
-        await engine.on_sr_frame({"event": "sr_update", "supports": [
-            {"price": 100, "confirmed_at": "2026-11-12T09:35:00+05:30"}]},
-            "PE", "opposite", "2026-11-12__CE")
-        assert store.load("2026-11-12__CE")["orders"]["sr"] is None
     asyncio.run(run())
 
 
@@ -249,7 +196,7 @@ def test_supertrend_does_not_reverse_when_existing_target_is_already_met(tmp_pat
                         "data": {"ltpc": {"ltp": price}}}
 
         config = SimpleNamespace(
-            dummy_orders_enabled=True, dummy_sr_orders_enabled=True,
+            dummy_orders_enabled=True,
             dummy_supertrend_orders_enabled=True, dummy_order_quantity=1,
             dummy_order_state_dir=str(tmp_path), dummy_order_stop_loss_percent=30,
             dummy_target_upper_threshold=200, dummy_target_lower_threshold=100,
@@ -338,5 +285,50 @@ def test_startup_recovery_waits_when_candle_history_is_missing(tmp_path):
         state = store.load(isolation_id)
         assert state["supertrend_startup_recovery"]["status"] == "WAITING_FOR_HISTORY"
         assert state["orders"]["supertrend"] is None
+
+    asyncio.run(run())
+
+
+def test_supertrend_allows_only_two_entries_per_isolation(tmp_path):
+    async def run():
+        engine, store = build(tmp_path)
+        isolation_id = "2026-11-12__CE"
+        await engine.register_isolation(isolation_id, isolation_payload(),
+                                        {"isolated": "CE", "opposite": "PE"})
+
+        # Entry 1: bullish signal buys the isolated leg.
+        await engine.on_supertrend_frame({
+            "event": "supertrend_signal", "signal": "BULLISH",
+            "confirmed_time": "2026-11-12T09:40:00+05:30", "price": 123.45,
+        }, "CE", "isolated", isolation_id)
+        first = store.load(isolation_id)["orders"]["supertrend"]
+        assert first["order_sequence"] == 1
+
+        # Stop-loss closes entry 1; the next signal may create entry 2.
+        first_tick = (datetime.fromisoformat(first["started_at_ist"]) + timedelta(seconds=60)).isoformat()
+        await engine.on_market_tick("CE", {"ltpc": {"ltp": 86.41}}, first_tick)
+        await engine.on_supertrend_frame({
+            "event": "supertrend_signal", "signal": "BEARISH",
+            "confirmed_time": "2026-11-12T09:45:00+05:30", "price": 123.45,
+        }, "CE", "isolated", isolation_id)
+        second = store.load(isolation_id)["orders"]["supertrend"]
+        assert second["order_sequence"] == 2
+        assert second["target_instrument_key"] == "PE"
+
+        # Close entry 2. A third confirmed signal must not create another order.
+        second_tick = (datetime.fromisoformat(second["started_at_ist"]) + timedelta(seconds=60)).isoformat()
+        await engine.on_market_tick("PE", {"ltpc": {"ltp": 86.41}}, second_tick)
+        await engine.on_supertrend_frame({
+            "event": "supertrend_signal", "signal": "BULLISH",
+            "confirmed_time": "2026-11-12T09:50:00+05:30", "price": 123.45,
+        }, "CE", "isolated", isolation_id)
+
+        state = store.load(isolation_id)
+        current = state["orders"]["supertrend"]
+        assert current["order_id"] == second["order_id"]
+        assert current["status"] == "COMPLETED_STOP_LOSS"
+        assert state["supertrend_order_count"] == 2
+        assert state["supertrend_order_limit"] == 2
+        assert len(state["order_history"]) == 1
 
     asyncio.run(run())
