@@ -13,6 +13,7 @@ from api.routes.orders import router as orders_router
 from core.config import API_PORT, API_HOST, UPSTOX_SANDBOX, TRADING_ENABLED, PROJECT_ROOT
 from core.logger import get_logger
 from core.mongo_client import close_mongo_connection, get_mongo_db
+from core.telegram_notifier import notify_event
 
 logger = get_logger(__file__)
 TEMPLATES = Jinja2Templates(directory=str(PROJECT_ROOT / "templates"))
@@ -25,9 +26,17 @@ async def lifespan(app: FastAPI):
         UPSTOX_SANDBOX, TRADING_ENABLED, API_HOST, API_PORT,
     )
     get_mongo_db()
-    yield
-    logger.info("Stopping Upstox Order Service")
-    close_mongo_connection()
+    notify_event("Sandbox service started", [
+        f"Port: {API_PORT}",
+        "Upstox mode: " + ("Sandbox" if UPSTOX_SANDBOX else "Live"),
+        f"Trading enabled: {TRADING_ENABLED}",
+    ], "STARTUP")
+    try:
+        yield
+    finally:
+        logger.info("Stopping Upstox Order Service")
+        notify_event("Sandbox service stopped", [f"Port: {API_PORT}"], "WARNING")
+        close_mongo_connection()
 
 
 app = FastAPI(
