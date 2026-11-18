@@ -6,3 +6,4 @@ python-dotenv
 uvicorn[standard]
 fastapi
 websockets>=12.0
+mega-sdk>=0.1.1
