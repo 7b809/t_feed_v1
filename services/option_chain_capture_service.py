@@ -315,7 +315,11 @@ class OptionChainCaptureService:
                 meta = self._contract_meta.get(instrument_key)
                 if not meta:
                     continue
-                folder = self.root / str(meta.get("index_folder") or "unknown")
+                folder = (
+                    self.root
+                    / str(meta.get("index_folder") or "unknown")
+                    / datetime.now(IST).strftime("%Y%m%d")
+                )
                 folder.mkdir(parents=True, exist_ok=True)
                 strike_label = f"{meta['strike_price']:g}"
                 side = str(meta["instrument_type"]).lower()
