@@ -208,9 +208,10 @@ class OptionChainCaptureService:
                         contracts, today, average, window
                     )
                     if not selected:
+                        # No result can be transient (provider refresh, expiry
+                        # roll, incomplete contracts). Keep this index eligible
+                        # for a later low-priority retry.
                         skipped.append({"index": instrument_key, "reason": "no_contracts_in_nearest_expiry_range"})
-                        with self._lock:
-                            self._processed_indexes.add(instrument_key)
                         continue
                     for row in selected:
                         row.update({
